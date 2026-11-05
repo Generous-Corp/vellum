@@ -2,6 +2,11 @@ name: Locked macOS GPU proof
 
 on:
   workflow_dispatch:
+    inputs:
+      html_import_repeats:
+        description: Extra installed HTML imports to time (measurement runs only)
+        required: false
+        default: '0'
   pull_request:
   # Merge-queue builds: the queue merges main's tip with the PR head on a
   # gh-readonly-queue/* ref and needs every required check on that commit.
@@ -163,16 +168,28 @@ jobs:
         run: |
           set -euo pipefail
           # gpu-runtime/renderer-lock.json is the only place the pin is written.
-          read -r url asset sha256 < <(python3 -I - <<'PY'
-          import json
+          # The reader is a file, not a heredoc inside <( ): bash 3.2 (macOS's
+          # /bin/bash) cannot parse a quoted heredoc within a substitution.
+          reader="$RUNNER_TEMP/read_renderer_lock.py"
+          cat > "$reader" <<'PY'
+          import json, re, sys
           lock = json.load(open("gpu-runtime/renderer-lock.json", encoding="utf-8"))
           platform = lock["platforms"]["macos-arm64"]
-          url = "/".join((lock["builder"]["repository"], "releases/download",
-                          lock["milestone"], platform["asset"]))
-          print(url, platform["asset"], platform["sha256"])
+          repository, milestone = lock["builder"]["repository"], lock["milestone"]
+          asset, sha256 = platform["asset"], platform["sha256"]
+          # Fail closed on anything but the pinned builder's chrome/mNNN asset,
+          # so no lock field can reach curl as an option or another path.
+          if (repository != "https://github.com/danielraffel/skia-builder"
+                  or not re.fullmatch(r"chrome/m[0-9]+", milestone)
+                  or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", asset)
+                  or not re.fullmatch(r"[0-9a-f]{64}", sha256)):
+              sys.exit("renderer lock names an unexpected skia-builder asset")
+          print("/".join((repository, "releases/download", milestone, asset)), asset, sha256)
           PY
-          )
-          [[ "$sha256" =~ ^[0-9a-f]{64}$ && "$asset" =~ ^[A-Za-z0-9_.-]+$ ]]
+          python3 -I "$reader" > "$RUNNER_TEMP/renderer-lock-asset.txt"
+          read -r url asset sha256 < "$RUNNER_TEMP/renderer-lock-asset.txt"
+          [[ "$url" =~ ^https://github\.com/danielraffel/skia-builder/releases/download/chrome/m[0-9]+/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
+          [[ "$sha256" =~ ^[0-9a-f]{64}$ && "$asset" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
           archive="$RUNNER_TEMP/$asset"
           curl --fail --location --silent --show-error \
             --retry 5 --retry-delay 2 --retry-all-errors \
@@ -211,6 +228,7 @@ jobs:
           python3 -m unittest discover -s tools/mirror -p 'test_*.py'
           python3 -I scripts/test_check_renderer_lock.py
           python3 -I scripts/check_renderer_lock.py
+          python3 -I scripts/test_verify_gpu_runtime_artifact.py
           python3 scripts/test_select_exact_provenance_run.py
           python3 scripts/test_verify_exact_provenance_artifact.py
           python3 scripts/test_run_parity_proofs.py
@@ -546,6 +564,33 @@ jobs:
             --output "$RUNNER_TEMP/vellum-sterile-acceptance.tar.gz" \
             --json > "$RUNNER_TEMP/sterile-acceptance-bundle.json"
 
+      - name: Prove the gpu-runtime archive is reproducible and consumable
+        if: steps.reuse.outputs.run_id == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          # vellum-gpu-runtime-<version>-darwin-arm64.tar.gz is published beside
+          # the SDK. Two builds of this commit must match byte for byte, and an
+          # audio-only consumer must find it by exact version and link Device
+          # against the Dawn build it ships, with nothing else supplied.
+          for build in first second; do
+            python3 scripts/build_gpu_runtime_artifact.py \
+              --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
+              --source-commit "$GITHUB_SHA" \
+              --output-dir "$RUNNER_TEMP/gpu-runtime-$build" \
+              --json > "$RUNNER_TEMP/gpu-runtime-$build.json"
+          done
+          archive="vellum-gpu-runtime-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
+          cmp "$RUNNER_TEMP/gpu-runtime-first/$archive" "$RUNNER_TEMP/gpu-runtime-second/$archive"
+          cp "$RUNNER_TEMP/gpu-runtime-first/$archive" "$RUNNER_TEMP/$archive"
+          python3 scripts/verify_gpu_runtime_artifact.py \
+            --archive "$RUNNER_TEMP/$archive" \
+            --repo "$GITHUB_WORKSPACE" \
+            --renderer-archive "$VELLUM_SKIA_ARCHIVE" \
+            --consumer --require-adapter \
+            --output "$RUNNER_TEMP/gpu-runtime-verification.json"
+          (cd "$RUNNER_TEMP" && shasum -a 256 "$archive" > vellum-gpu-runtime.sha256)
+
       - name: Verify the binary deployment boundary
         if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
@@ -576,11 +621,16 @@ jobs:
       - name: Prove installed HTML import through DesignIR and GPU capture
         if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
+        env:
+          HTML_IMPORT_REPEATS: ${{ github.event_name == 'workflow_dispatch' && inputs.html_import_repeats || '0' }}
         run: |
           set -euo pipefail
           prefix="$RUNNER_TEMP/templates-smoke-sdk"
           project="$RUNNER_TEMP/html-import-proof"
           source="$GITHUB_WORKSPACE/fixtures/html-import/index.html"
+          # Every browser capture command's duration, so the capture bound
+          # stays sized to what fleet VMs actually take.
+          export VELLUM_CDP_TIMING_LOG="$RUNNER_TEMP/cdp-timings.jsonl"
           # Keep each command's stderr beside its JSON and report the exit
           # status when it fails: a command killed by a signal or one that dies
           # before writing JSON otherwise leaves no trace.
@@ -640,6 +690,48 @@ jobs:
           file "$project/artifacts/html-import-proof.png"
           shasum -a 256 "$project/artifacts/html-import-proof.png" \
             > "$project/artifacts/html-import-proof.png.sha256"
+          # Negative control: invalid HTML is still refused, before any browser
+          # starts, rather than waiting out a capture bound.
+          invalid="$RUNNER_TEMP/invalid-html-source"
+          mkdir -p "$invalid"
+          printf '<link rel="stylesheet" href="../outside.css"><p>x</p>\n' > "$invalid/index.html"
+          run_json "$RUNNER_TEMP/invalid-html-create.json" \
+            "$prefix/bin/vellum" --json create "Invalid HTML Control" \
+              --directory "$RUNNER_TEMP/invalid-html-project" --no-verify
+          started=$SECONDS
+          status=0
+          "$prefix/bin/vellum" --json import "$invalid/index.html" \
+            --project "$RUNNER_TEMP/invalid-html-project" --source-type html --as main \
+            > "$RUNNER_TEMP/invalid-html-import.json" || status=$?
+          elapsed=$(( SECONDS - started ))
+          cat "$RUNNER_TEMP/invalid-html-import.json"
+          test "$status" -eq 3
+          test "$(jq -r .status "$RUNNER_TEMP/invalid-html-import.json")" = invalid_html_source
+          test "$elapsed" -lt 10
+          # Measurement runs time more imports on the same VM.
+          repeats="${HTML_IMPORT_REPEATS:-0}"
+          [[ "$repeats" =~ ^[0-9]+$ ]] && [ "$repeats" -le 50 ]
+          for index in $(seq 1 "$repeats"); do
+            extra="$RUNNER_TEMP/html-import-repeat-$index"
+            run_json "$RUNNER_TEMP/html-import-repeat-$index-create.json" \
+              "$prefix/bin/vellum" --json create "HTML Import Repeat $index" \
+                --directory "$extra" --no-verify
+            run_json "$RUNNER_TEMP/html-import-repeat-$index.json" \
+              "$prefix/bin/vellum" --json import "$source" --project "$extra" \
+                --source-type html --as main
+          done
+          python3 - "$VELLUM_CDP_TIMING_LOG" <<'PY'
+          import json, sys
+          rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+          by = {}
+          for row in rows:
+              by.setdefault(row["method"], []).append(row["seconds"])
+          for method, values in sorted(by.items()):
+              values.sort()
+              p99 = values[min(len(values) - 1, round(0.99 * (len(values) - 1)))]
+              print(f"CDP {method}: n={len(values)} median={values[len(values) // 2]:.3f}s "
+                    f"p99={p99:.3f}s max={values[-1]:.3f}s")
+          PY
 
       # The receipt a later merge-queue run compares its own tree against.
       # Written only after every proof step above has passed.
@@ -845,6 +937,7 @@ jobs:
             ${{ runner.temp }}/html-import-build.json
             ${{ runner.temp }}/html-import-capture.json
             ${{ runner.temp }}/html-import*.json.stderr
+            ${{ runner.temp }}/cdp-timings.jsonl
             ${{ runner.temp }}/${{ env.VELLUM_RELEASE_ARCHIVE }}
             ${{ runner.temp }}/install.sh
             ${{ runner.temp }}/install_core.py
@@ -854,6 +947,11 @@ jobs:
             ${{ runner.temp }}/sdk-second.json
             ${{ runner.temp }}/sdk-build-memory.log
             ${{ runner.temp }}/sdk-verification.json
+            ${{ runner.temp }}/vellum-gpu-runtime-${{ env.VELLUM_RELEASE_VERSION }}-darwin-arm64.tar.gz
+            ${{ runner.temp }}/vellum-gpu-runtime.sha256
+            ${{ runner.temp }}/gpu-runtime-first.json
+            ${{ runner.temp }}/gpu-runtime-second.json
+            ${{ runner.temp }}/gpu-runtime-verification.json
             ${{ runner.temp }}/templates-smoke.json
             ${{ runner.temp }}/templates-smoke.stdout.json
             ${{ runner.temp }}/vellum-sterile-acceptance.tar.gz

@@ -152,16 +152,65 @@ class ObservatoryMirrorImportTests(MirrorImportCase):
         self.assertIn("Pulp identity cannot be proved without the Pulp repository", str(caught.exception))
 
     def test_an_import_whose_receipt_disagrees_with_pulp_is_rejected(self) -> None:
-        fixture = self.fixture()
-        # The receipt still verifies on its own; only Pulp itself refutes it:
-        # Pulp main is a history that never contained the receipt's pulp_sha.
+        # The mirror carries a file that is not Pulp's blob at the exported
+        # commit, and the receipt records the mirror's blob. The receipt is
+        # consistent with the mirror on its own; only Pulp's content refutes it.
+        path = "core/canvas/src/canvas.cpp"
+        fixture = self.fixture(mirror_overrides={path: b"// edited after export\n"})
         self.assertEqual(fixture.errors(), [])
+        self.assertTrue(
+            any(f"mirror/{path} is not Pulp {fixture.pulp_sha}:{path}" in error for error in fixture.errors(pulp=True)),
+            fixture.errors(pulp=True),
+        )
+        with self.assertRaises(observatory.ObservatoryError) as caught:
+            self.verify(fixture)
+        message = str(caught.exception)
+        self.assertIn("observatory cursor must exist on every history edge", message)
+        self.assertIn(f"mirror/{path} is not Pulp {fixture.pulp_sha}:{path}", message)
+
+    def test_a_receipt_whose_commit_pulp_main_does_not_contain_is_rejected(self) -> None:
+        fixture = self.fixture()
         self.assertEqual(fixture.errors(pulp=True), [])
         other = run(fixture.pulp, "commit-tree", "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "-m", "other main")
         run(fixture.pulp, "update-ref", "refs/remotes/origin/main", other)
         with self.assertRaises(observatory.ObservatoryError) as caught:
             self.verify(fixture)
         self.assertIn(f"Pulp commit {fixture.pulp_sha} is not reachable from Pulp main", str(caught.exception))
+
+    def commit_dropping_the_cursor(self, fixture: Fixture) -> str:
+        """An ordinary commit, not a mirror-only one, whose tree has no cursor."""
+        start = run(fixture.vellum, "rev-parse", "HEAD")
+        run(fixture.vellum, "rm", "-q", CURSOR)
+        write(fixture.vellum, "tools/stray.py", "x = 1\n")
+        run(fixture.vellum, "add", "-A")
+        run(fixture.vellum, "commit", "-q", "-m", "drop cursor")
+        return start
+
+    def test_a_cursorless_commit_is_refused_when_pulp_refutes_the_receipts(self) -> None:
+        path = "core/canvas/src/canvas.cpp"
+        fixture = self.fixture(mirror_overrides={path: b"// edited after export\n"})
+        start = self.commit_dropping_the_cursor(fixture)
+        self.assertFalse(observatory.mirror_only_tree(fixture.vellum, "HEAD")[0])
+        with self.assertRaises(observatory.ObservatoryError) as caught:
+            observatory.imported_mirror_history(fixture.vellum, start, "HEAD", fixture.pulp)
+        message = str(caught.exception)
+        self.assertIn("without the observatory cursor", message)
+        self.assertIn(f"mirror/{path} is not Pulp {fixture.pulp_sha}:{path}", message)
+
+    def test_a_cursorless_commit_is_refused_when_pulp_is_not_supplied(self) -> None:
+        fixture = self.fixture()
+        start = self.commit_dropping_the_cursor(fixture)
+        with self.assertRaises(observatory.ObservatoryError) as caught:
+            observatory.imported_mirror_history(fixture.vellum, start, "HEAD", None)
+        self.assertIn("Pulp identity cannot be proved without the Pulp repository", str(caught.exception))
+
+    def test_a_range_with_every_cursor_needs_no_receipt_verification(self) -> None:
+        fixture = self.fixture(mirror_overrides={"core/canvas/src/canvas.cpp": b"// edited after export\n"})
+        start = run(fixture.vellum, "rev-parse", "HEAD")
+        write(fixture.vellum, "README.md", "changed\n")
+        run(fixture.vellum, "add", "-A")
+        run(fixture.vellum, "commit", "-q", "-m", "ordinary")
+        self.assertEqual(observatory.imported_mirror_history(fixture.vellum, start, "HEAD", fixture.pulp), set())
 
     def test_mirror_that_is_not_a_directory_is_rejected(self) -> None:
         for mode, kind in (("120000", "blob"), ("160000", "commit")):

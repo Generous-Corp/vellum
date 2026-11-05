@@ -1,0 +1,75 @@
+# Pull requests and queue entries only report overdue observatory events
+# (Decision 0013), so ask for their classification here: one issue, its body
+# kept current with the overdue list, closed once none is overdue. It runs the
+# default branch's code with GITHUB_TOKEN, which can write issues and nothing
+# else in this workflow.
+name: Observatory overdue issue
+
+on:
+  schedule:
+    - cron: '41 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: vellum-observatory-overdue-issue
+  cancel-in-progress: false
+
+jobs:
+  overdue-issue:
+    name: overdue-issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Keep the overdue-classification issue current
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -I tools/provenance/overdue_events.py --root . > "$RUNNER_TEMP/overdue.json" || {
+            echo "::error::could not read main's observatory events; the overdue issue was not updated"
+            exit 1
+          }
+          count="$(jq '(.overdue | length) + (if .pending_age_exceeded then 1 else 0 end)' "$RUNNER_TEMP/overdue.json")"
+          title="Observatory events overdue for classification"
+          # Every open issue with the title, oldest first: the oldest is kept
+          # current and any duplicate is closed.
+          mapfile -t numbers < <(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
+            --json number,title --jq "map(select(.title == \"$title\")) | sort_by(.number) | .[].number")
+          if [ "$count" -eq 0 ]; then
+            for open_number in "${numbers[@]}"; do
+              gh issue close "$open_number" --repo "$GITHUB_REPOSITORY" \
+                --comment "No pending event is past its classification deadline or age budget."
+            done
+            exit 0
+          fi
+          number="${numbers[0]:-}"
+          for duplicate in "${numbers[@]:1}"; do
+            gh issue close "$duplicate" --repo "$GITHUB_REPOSITORY" --reason "not planned" \
+              --comment "Duplicate of #$number."
+          done
+          {
+            echo "$(jq '.overdue | length' "$RUNNER_TEMP/overdue.json") pending observation event(s) are past their classification deadline."
+            echo "The oldest pending event is $(jq .oldest_pending_days "$RUNNER_TEMP/overdue.json") days old (budget: $(jq .maximum_pending_event_age_days "$RUNNER_TEMP/overdue.json") days)."
+            echo "Pull requests and queue entries report this; pushes to \`main\` and release"
+            echo "tags fail \`provenance-verify\` until each is classified with a resolution"
+            echo "event (provenance/pulp-observatory/README.md)."
+            echo
+            echo "| event | class | deadline |"
+            echo "| --- | --- | --- |"
+            jq -r '.overdue[] | "| \(.event_id) | \(.class) | \(.deadline) |"' "$RUNNER_TEMP/overdue.json"
+          } > "$RUNNER_TEMP/overdue.md"
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/overdue.md"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/overdue.md"
+          fi

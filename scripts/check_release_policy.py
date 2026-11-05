@@ -18,9 +18,11 @@ fails when:
   the policy list does not name, so the two lists stay one inventory;
 - a policy script imports a repository module that is not itself a policy
   file, so the release decision never runs code the owner does not own;
-- a release workflow runs Python without `-I`, a step that holds a secret runs
-  Python at all, or a repository Python file is named like a standard-library
-  module, so checked-out code cannot run with the signing key or App token.
+- a release workflow runs Python without `-I`, a step of release-tag.yml or
+  version-at-land.yml that holds a secret runs Python at all, a job of
+  version-at-land.yml that holds a secret runs Python in any step, or a repository
+  Python file is named like a standard-library module, so checked-out code
+  cannot run with the signing key or an App token.
 
 `signer` prints the principal and fingerprint the policy names, for the
 release job to verify the tag it just signed.
@@ -42,21 +44,24 @@ CODEOWNERS = Path(".github/CODEOWNERS")
 RELEASE_ENVIRONMENT = "release"
 SIGNING_WORKFLOW = "release-tag.yml"
 OWNER = "@danielraffel"
-# The signing policy, the code that enforces it, and the committed records the
-# release decision trusts (the release request and the retired tags).
+# The signing policy, the code that enforces it, the committed record the
+# release decision trusts (the retired tags), and the workflow that holds an
+# App token to propose each version (version-at-land.yml).
 POLICY_FILES = (
     "/.github/CODEOWNERS",
-    "/.github/workflows/release-tag.yml",
     "/.github/workflows/release-policy.yml",
+    "/.github/workflows/release-tag.yml",
+    "/.github/workflows/version-at-land.yml",
     "/provenance/authority-signers.allowed_signers",
-    "/provenance/release-request.json",
     "/provenance/release-signers.allowed_signers",
     "/provenance/retired-release-tags.json",
     "/scripts/check_release_policy.py",
     "/scripts/pretag_checks.py",
+    "/scripts/release_cadence.py",
     "/scripts/release_request.py",
     "/scripts/verify_immutable_release_preflight.py",
     "/scripts/verify_release_tag.py",
+    "/scripts/version_at_land.py",
     "/tools/provenance/verify_authority_expansion.py",
     "/tools/provenance/verify_renderer_dependency.py",
 )
@@ -68,7 +73,10 @@ ENVIRONMENT_KEY = re.compile(
     re.MULTILINE,
 )
 ENVIRONMENT_NAME = re.compile(r"\bname:\s*['\"]?(?P<name>[A-Za-z0-9_-]+)")
-RELEASE_WORKFLOWS = (SIGNING_WORKFLOW, "release-policy.yml")
+VERSION_WORKFLOW = "version-at-land.yml"
+RELEASE_WORKFLOWS = (SIGNING_WORKFLOW, "release-policy.yml", VERSION_WORKFLOW)
+# Workflows whose secret-holding steps must run no Python at all.
+SECRET_ISOLATED = (SIGNING_WORKFLOW, VERSION_WORKFLOW)
 # Endpoints only an Administration-read token may call; the Actions token gets 403.
 ADMIN_READ = re.compile(r"gh api [^\n]*(?:branches/main/protection|rules/branches/|/rulesets|immutable-releases)")
 APP_TOKEN = re.compile(r"GH_TOKEN:\s*\$\{\{\s*steps\.(?:app-token|push-token)\.outputs\.token\s*\}\}")
@@ -394,15 +402,35 @@ def steps(workflow: str) -> list[str]:
     return [block for block in re.split(r"\n(?=\s+- name:)", workflow)[1:] if block.strip()]
 
 
+JOB_HEADER = re.compile(r"^  (?P<name>[A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
+
+
+def jobs(workflow: str) -> dict[str, str]:
+    """The workflow's jobs, as text blocks keyed by job id."""
+    found = re.search(r"(?:^|\n)jobs:[ \t]*\n", workflow)
+    body = workflow[found.end():] if found else ""
+    marks = list(JOB_HEADER.finditer(body))
+    return {mark["name"]: body[mark.start():(marks[index + 1].start() if index + 1 < len(marks) else None)]
+            for index, mark in enumerate(marks)}
+
+
 def isolation_problems(workflows: dict[str, str], root: Path) -> list[str]:
     found = []
+    # A job that holds a token runs no repository Python in any step: an
+    # earlier step could otherwise plant code (a hook, GITHUB_PATH, GITHUB_ENV)
+    # that a later token-holding step runs.
+    if VERSION_WORKFLOW in workflows and not jobs(workflows[VERSION_WORKFLOW]):
+        found.append(f"{VERSION_WORKFLOW}: no jobs could be read")
+    for job, text in jobs(workflows.get(VERSION_WORKFLOW, "")).items():
+        if SECRET.search(text) and PYTHON_CALL.search(text):
+            found.append(f"{VERSION_WORKFLOW}: job {job} holds a secret and runs Python in one of its steps")
     for name in RELEASE_WORKFLOWS:
         for step in steps(workflows.get(name, "")):
             title = step.strip().splitlines()[0]
             for call in PYTHON_CALL.finditer(step):
                 if "I" not in call["flags"].replace("-", ""):
                     found.append(f"{name}: {title} runs `{call.group(0).strip()}` without -I")
-            if name == SIGNING_WORKFLOW and SECRET.search(step) and PYTHON_CALL.search(step):
+            if name in SECRET_ISOLATED and SECRET.search(step) and PYTHON_CALL.search(step):
                 found.append(f"{name}: {title} holds a secret and runs Python")
             if name == SIGNING_WORKFLOW and ADMIN_READ.search(step) and not APP_TOKEN.search(step):
                 found.append(f"{name}: {title} reads an Administration-only endpoint without the App token")

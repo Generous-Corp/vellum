@@ -9,7 +9,7 @@ modules and remain re-exported here for compatibility with existing callers.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
@@ -314,6 +314,17 @@ def coverage_tail_start(repo: Path, cursor: str, target: str) -> str:
 
 
 VELLUM_TAIL_POLICIES = frozenset({"reconciled", "coverage"})
+# Budgets that only the passage of time can break: an event is overdue, or the
+# oldest pending event is old, whatever the change under test does. A pull
+# request or queue entry cannot fix them by re-running or by any change of its
+# own, so `--time-budgets report` reports them instead of failing; pushes to
+# main and release tags keep enforcing them.
+TIME_BUDGET_VIOLATIONS = frozenset({
+    "overdue-event-count-exceeded",
+    "pending-event-age-exceeded",
+})
+TIME_BUDGET_MODES = frozenset({"enforce", "report"})
+MIRROR_RECEIPT_INDEX = Path("provenance/mirror/receipts/index.json")
 
 
 def coverage_gaps(
@@ -769,10 +780,15 @@ def imported_mirror_history(
         if not cursorless:
             return set()
         imported, errors = imported_mirror_commits(root, start, target, pulp_repo)
-        if errors and any(mirror_only_tree(root, commit)[0] for commit in cursorless):
-            # A mirror-only commit can enter only as an approved import, and
-            # nothing was approved: refuse rather than walk it as ordinary
-            # history.
+        if errors and (
+            lands_mirror_receipts(root, target)
+            or any(mirror_only_tree(root, commit)[0] for commit in cursorless)
+        ):
+            # A commit without the cursor can enter only as part of an approved
+            # import, and nothing was approved: refuse rather than walk it as
+            # ordinary history, whether or not its tree looks like a mirror.
+            # A repository with no landed receipts has no import to approve,
+            # so the same errors are not a contradiction there.
             raise ObservatoryError(
                 f"{start}..{target} has commits without the observatory cursor "
                 f"and no approved imported mirror history; mirror-export "
@@ -788,6 +804,15 @@ def imported_mirror_history(
             f"that is not an approved imported mirror history{detail}"
         )
     return imported
+
+
+def lands_mirror_receipts(root: Path, commit: str) -> bool:
+    """Whether `commit`'s tree lists at least one landed mirror-export receipt."""
+    try:
+        index = json.loads(git(root, "show", f"{commit}:{MIRROR_RECEIPT_INDEX.as_posix()}"))
+    except (ObservatoryError, ValueError):
+        return False
+    return isinstance(index, dict) and bool(index.get("receipts"))
 
 
 def has_cursor(root: Path, commit: str) -> bool:
@@ -956,6 +981,7 @@ def verify(
     vellum_tail_policy: str = "reconciled",
     vellum_pr_main: str | None = None,
     check_now: datetime | None = None,
+    time_budgets: str = "enforce",
 ) -> dict[str, object]:
     """Verify the ledger; with `check_now`, judge the health budgets at that time.
 
@@ -973,6 +999,9 @@ def verify(
         git_base,
         pulp_repo=pulp_repo,
         vellum_repo=vellum_repo,
+    )
+    verify_new_event_times(
+        root, git_base, events, pulp_repo=pulp_repo, vellum_repo=vellum_repo, now=check_now,
     )
     gaps = coverage_gaps(
         root=root, mapping=mapping, cursor=cursor, events=events,
@@ -1051,12 +1080,102 @@ def verify(
     if check_now is not None:
         report = build_report(root=root, lock=lock, cursor=cursor, events=events, budgets=budgets,
                               now=check_now, coverage_gaps=gaps)
-    if report["health"] != "pass":
+    if time_budgets not in TIME_BUDGET_MODES:
+        raise ObservatoryError(f"unknown time-budget mode: {time_budgets}")
+    violations = list(report["budget_violations"])
+    if time_budgets == "report":
+        fatal = [item for item in violations if item not in TIME_BUDGET_VIOLATIONS]
+        reported = [item for item in violations if item in TIME_BUDGET_VIOLATIONS]
+        late = late_new_events(root, git_base, events, budgets, check_now) if reported else []
+        if reported and (git_base is None or late):
+            # Only debt the change did not bring is reported: without a base
+            # to tell old events from new ones, or when an event the change
+            # adds is itself overdue or over age, the budgets are enforced.
+            fatal, reported = violations, []
+            if late:
+                fatal.append("new-event-already-late: " + ", ".join(late))
+    else:
+        fatal, reported = violations, []
+    if fatal:
         raise ObservatoryError(
-            "observatory health budgets failed: " + ", ".join(report["budget_violations"])
+            "observatory health budgets failed: " + ", ".join(fatal)
             + describe_coverage_gaps(gaps, cursor)
         )
+    if reported:
+        report = {**report, "reported_time_budget_violations": reported}
     return report
+
+
+# Clock skew allowed between a commit's committer time, a discovery stamp and
+# the verifying runner.
+DISCOVERY_SKEW = timedelta(hours=1)
+
+
+def new_event_ids(root: Path, git_base: str | None,
+                  events: list[tuple[Path, dict[str, object]]]) -> set[str]:
+    """IDs of the events whose files are absent from git_base."""
+    if git_base is None:
+        return set()
+    prefix = EVENTS_PATH.as_posix()
+    existing = set(git(root, "ls-tree", "-r", "--name-only", git_base, "--", prefix).splitlines())
+    return {
+        str(event["event_id"]) for path, event in events
+        if path.resolve().relative_to(root.resolve()).as_posix() not in existing
+    }
+
+
+def verify_new_event_times(
+    root: Path, git_base: str | None, events: list[tuple[Path, dict[str, object]]], *,
+    pulp_repo: Path | None, vellum_repo: Path | None, now: datetime | None,
+) -> None:
+    """A new observation cannot be discovered before its commit, or in the future.
+
+    Deadlines count from discovered_at, so a backdated stamp would make an
+    event overdue (or a future one keep it from ever being) by choice.
+    """
+    new_ids = new_event_ids(root, git_base, events)
+    repos = {"Generous-Corp/pulp": pulp_repo, "Generous-Corp/vellum": vellum_repo}
+    for _, event in events:
+        if event["kind"] != "observation" or str(event["event_id"]) not in new_ids:
+            continue
+        discovered = parse_utc(event["discovered_at"], "event.discovered_at")
+        if now is not None and discovered > now + DISCOVERY_SKEW:
+            raise ObservatoryError(f"{event['event_id']}: discovered_at is in the future")
+        repo = repos.get(str(event["source_repository"]))
+        if repo is None:
+            continue
+        committed = datetime.fromtimestamp(
+            int(git(repo, "show", "-s", "--format=%ct", str(event["source_commit"]))),
+            timezone.utc,
+        )
+        if discovered < committed - DISCOVERY_SKEW:
+            raise ObservatoryError(
+                f"{event['event_id']}: discovered_at {event['discovered_at']} precedes its "
+                f"commit ({committed.isoformat()})"
+            )
+
+
+def late_new_events(
+    root: Path, git_base: str | None, events: list[tuple[Path, dict[str, object]]],
+    budgets: dict[str, int], now: datetime | None,
+) -> list[str]:
+    """Event IDs this change adds that are pending and already overdue or old.
+
+    A backdated or long-unclassified event a change brings must fail that
+    change, not wait for main.
+    """
+    if git_base is None or now is None:
+        return []
+    new_ids = new_event_ids(root, git_base, events)
+    late = []
+    for event in effective_observations(events):
+        if event["disposition"] != "pending" or str(event["event_id"]) not in new_ids:
+            continue
+        discovered = parse_utc(event["discovered_at"], "event.discovered_at")
+        age_days = (now - discovered).total_seconds() / 86400
+        if now > deadline(event, budgets) or age_days > budgets["maximum_pending_event_age_days"]:
+            late.append(str(event["event_id"]))
+    return sorted(late)
 
 
 def describe_coverage_gaps(gaps: list[dict[str, str]], cursor: dict[str, object]) -> str:
@@ -1214,6 +1333,16 @@ def main(argv: list[str] | None = None) -> int:
         "--now",
         help="UTC time at which to judge overdue events (default: the current time)",
     )
+    verify_parser.add_argument(
+        "--time-budgets",
+        choices=sorted(TIME_BUDGET_MODES),
+        default="enforce",
+        help=(
+            "enforce: overdue and pending-age budgets fail verification; "
+            "report: they are returned in the report instead (pull requests and "
+            "queue entries, which cannot change them)"
+        ),
+    )
     verify_parser.add_argument("--output", type=Path)
     reconcile_parser = subparsers.add_parser("reconcile")
     reconcile_parser.add_argument("--pulp-repo", type=Path, required=True)
@@ -1246,6 +1375,7 @@ def main(argv: list[str] | None = None) -> int:
                     parse_utc(args.now, "--now") if args.now
                     else datetime.now(timezone.utc).replace(microsecond=0)
                 ),
+                time_budgets=args.time_budgets,
             )
         else:
             if args.events_only and not args.write:

@@ -1,13 +1,15 @@
-name: Sign the requested release tag
+name: Sign the release tag
 
-# A release is a reviewed pull request that changes
-# provenance/release-request.json. The commit that lands it is never tagged:
+# A release is a landed change to the project VERSION in CMakeLists.txt that is
+# newer than every release tag, existing or retired. version-at-land.yml opens
+# that change as a pull request from the landed changes; it lands through the
+# merge queue like any other change. The commit that lands it is never tagged:
 # the tag's provenance run requires everything after the Pulp observatory's
 # Vellum cursor to be observatory evidence, and a tree cannot name its own
 # commit as that cursor. The observatory receiver then lands a reconcile commit
-# whose cursor covers the request; this job tags that commit, signed with the
-# key that exists only in the `release` environment, and freezes the tag.
-# Pushing the tag starts the release pipeline (gpu-macos, then sdk-release).
+# whose cursor covers the bump; this job tags that commit, signed with the key
+# that exists only in the `release` environment, and freezes the tag. Pushing
+# the tag starts the release pipeline (gpu-macos, then sdk-release).
 on:
   push:
     branches: [main]
@@ -147,8 +149,8 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"
           date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNNER_TEMP/immutable-releases-read-at.txt"
 
-      - name: Decide whether the request may be tagged
-        id: request
+      - name: Decide whether the version may be tagged
+        id: decision
         env:
           GH_TOKEN: ${{ github.token }}
           SELECTED_TAG: ${{ needs.select-release-commit.outputs.tag }}
@@ -157,7 +159,7 @@ jobs:
           test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
           test "$GITHUB_REF" = refs/heads/main
           # Decide again in this job, and require the same answer: the commit
-          # must still be the release's reconcile and the tag must still be absent.
+          # must still be the version's reconcile and the tag must still be absent.
           python3 -I scripts/release_request.py select --commit "$GITHUB_SHA" --remote origin \
             > "$RUNNER_TEMP/selection.txt"
           test "$(sed -n 's/^tag=//p' "$RUNNER_TEMP/selection.txt")" = "$SELECTED_TAG"
@@ -187,7 +189,6 @@ jobs:
             echo "waiting for: $(printf '%s' "$running" | paste -sd, -)"
             sleep 60
           done
-          version="$(python3 -I -c 'import json; print(json.load(open("provenance/release-request.json"))["version"])')"
           tag="$(python3 -I scripts/release_request.py check --commit "$GITHUB_SHA" --remote origin \
             --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \
             --protection "$RUNNER_TEMP/required-checks.json" \
@@ -196,6 +197,7 @@ jobs:
           test "$tag" = "$SELECTED_TAG"
           python3 -I scripts/check_release_policy.py check
           python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
+          version="${tag#v}"
           python3 -I scripts/release_request.py freeze --tag "$tag" > "$RUNNER_TEMP/freeze.json"
           python3 -I scripts/release_request.py attestation --commit "$GITHUB_SHA" \
             --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$tag" > "$RUNNER_TEMP/promotion-attestation.json"
@@ -205,8 +207,8 @@ jobs:
         id: sign
         env:
           RELEASE_TAG_SIGNING_KEY: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}
-          TAG: ${{ steps.request.outputs.tag }}
-          PRINCIPAL: ${{ steps.request.outputs.principal }}
+          TAG: ${{ steps.decision.outputs.tag }}
+          PRINCIPAL: ${{ steps.decision.outputs.principal }}
         run: |
           set -euo pipefail
           test -n "$RELEASE_TAG_SIGNING_KEY"
@@ -222,10 +224,10 @@ jobs:
 
       - name: Verify the tag against the policy
         env:
-          TAG: ${{ steps.request.outputs.tag }}
+          TAG: ${{ steps.decision.outputs.tag }}
           OBJECT: ${{ steps.sign.outputs.object }}
-          PRINCIPAL: ${{ steps.request.outputs.principal }}
-          FINGERPRINT: ${{ steps.request.outputs.fingerprint }}
+          PRINCIPAL: ${{ steps.decision.outputs.principal }}
+          FINGERPRINT: ${{ steps.decision.outputs.fingerprint }}
         run: |
           set -euo pipefail
           python3 -I scripts/verify_release_tag.py --repo . --repository "$GITHUB_REPOSITORY" \
@@ -246,7 +248,7 @@ jobs:
       - name: Push the tag and freeze it
         env:
           GH_TOKEN: ${{ steps.push-token.outputs.token }}
-          TAG: ${{ steps.request.outputs.tag }}
+          TAG: ${{ steps.decision.outputs.tag }}
           OBJECT: ${{ steps.sign.outputs.object }}
         run: |
           set -euo pipefail

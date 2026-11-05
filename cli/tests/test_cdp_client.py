@@ -19,6 +19,11 @@ from vellum_cdp_client import CdpClient, CdpClientError
 sys.path.pop(0)
 
 
+def vellum_cdp_client_module():
+    import vellum_cdp_client
+    return vellum_cdp_client
+
+
 def _read_headers(connection: socket.socket) -> bytes:
     value = bytearray()
     while b"\r\n\r\n" not in value:
@@ -45,6 +50,10 @@ def _send_server_frame(connection: socket.socket, payload: bytes) -> None:
 
 
 class _FakeCdpHandler(socketserver.BaseRequestHandler):
+    screenshot_delay = 0.0
+    loading_polls = 0
+    evaluations = 0
+
     def handle(self) -> None:
         headers = _read_headers(self.request)
         first_line = headers.split(b"\r\n", 1)[0]
@@ -91,13 +100,30 @@ class _FakeCdpHandler(socketserver.BaseRequestHandler):
             b"Upgrade: websocket\r\nConnection: Upgrade\r\n"
             b"Sec-WebSocket-Accept: " + accept + b"\r\n\r\n"
         )
+        paused = False
         while True:
             try:
                 command = json.loads(_read_client_frame(self.request))
             except (OSError, ValueError):
                 return
             method = command["method"]
-            if method == "Page.navigate":
+            if method == "Emulation.setVirtualTimePolicy":
+                paused = command["params"].get("policy") != "advance"
+            if method == "Page.captureScreenshot" and paused:
+                # Chrome never produces the frame while virtual time is paused.
+                import time
+                time.sleep(5)
+                continue
+            if method == "Page.captureScreenshot":
+                # A loaded VM's software compositor: a healthy browser that
+                # answers this one command slowly.
+                import time
+                time.sleep(_FakeCdpHandler.screenshot_delay)
+            if method == "Runtime.evaluate":
+                _FakeCdpHandler.evaluations += 1
+                ready = _FakeCdpHandler.evaluations > _FakeCdpHandler.loading_polls
+                result = {"result": {"type": "boolean", "value": ready}}
+            elif method == "Page.navigate":
                 result = {"frameId": "frame-1"}
             elif method == "DOMSnapshot.captureSnapshot":
                 result = {"documents": [{"computedStyles": ["color"]}]}
@@ -134,6 +160,108 @@ class CdpClientTests(unittest.TestCase):
                 self.assertIn("documents", snapshot)
             finally:
                 client.close()
+
+    def test_a_slow_command_names_itself_and_a_longer_bound_waits_for_it(self) -> None:
+        # The HTML import failures said only "timed out": the 2 s readiness
+        # poll bound also bounded every capture command. A command now names
+        # itself and its bound, and the capture's longer bound waits for it.
+        _FakeCdpHandler.screenshot_delay = 0.6
+        log = Path(self.temporary.name) / "timings.jsonl"
+        try:
+            with CdpAdmission(str(self.socket_path)) as admission:
+                client = CdpClient(admission.endpoint, timeout=0.2)
+                client.connect()
+                try:
+                    with self.assertRaisesRegex(
+                        CdpClientError, r"CDP Page.captureScreenshot got no response within 0.2 s"
+                    ):
+                        client.capture_screenshot()
+                finally:
+                    client.close()
+                # The fake serves one connection at a time; let it finish the
+                # slow answer to the closed session before connecting again.
+                client = CdpClient(admission.endpoint, timeout=2.0)
+                client.connect()
+                try:
+                    client.set_timeout(0.2)
+                    client.set_timeout(5.0)
+                    import os
+                    os.environ["VELLUM_CDP_TIMING_LOG"] = str(log)
+                    try:
+                        with self.assertRaisesRegex(CdpClientError, "not a PNG|omitted PNG"):
+                            client.capture_screenshot()
+                    finally:
+                        del os.environ["VELLUM_CDP_TIMING_LOG"]
+                finally:
+                    client.close()
+        finally:
+            _FakeCdpHandler.screenshot_delay = 0.0
+        rows = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertEqual([row["method"] for row in rows], ["Page.captureScreenshot"])
+        self.assertGreaterEqual(rows[-1]["seconds"], 0.5)
+        with self.assertRaises(CdpClientError):
+            client.set_timeout(0)
+
+    def test_settling_then_a_screenshot_is_answered(self) -> None:
+        # settle_idle no longer pauses virtual time, so the surface screenshot
+        # that follows it is answered.
+        with CdpAdmission(str(self.socket_path)) as admission:
+            client = CdpClient(admission.endpoint, timeout=1.0)
+            client.connect()
+            try:
+                client.settle_idle(quiet_period=0.05, timeout=2, budget_ms=50)
+                with self.assertRaisesRegex(CdpClientError, "not a PNG|omitted PNG"):
+                    client.capture_screenshot()
+            finally:
+                client.close()
+
+    def test_settle_waits_for_the_page_to_finish_loading(self) -> None:
+        _FakeCdpHandler.loading_polls = 3
+        _FakeCdpHandler.evaluations = 0
+        try:
+            with CdpAdmission(str(self.socket_path)) as admission:
+                client = CdpClient(admission.endpoint, timeout=1.0)
+                client.connect()
+                try:
+                    client.settle_idle(quiet_period=0.05, timeout=2, budget_ms=50)
+                    self.assertEqual(_FakeCdpHandler.evaluations, 4)
+                    _FakeCdpHandler.loading_polls = 10 ** 6
+                    with self.assertRaisesRegex(CdpClientError, "did not finish loading"):
+                        client.settle_idle(quiet_period=0.05, timeout=0.3, budget_ms=50)
+                finally:
+                    client.close()
+        finally:
+            _FakeCdpHandler.loading_polls = 0
+
+    def test_runtime_evaluate_runs_only_the_fixed_readiness_check(self) -> None:
+        client = object.__new__(CdpClient)
+        client._socket = None
+        for params in ({"expression": "fetch('/x')", "returnByValue": True},
+                       {"expression": vellum_cdp_client_module().READINESS_EXPRESSION},
+                       {"expression": vellum_cdp_client_module().READINESS_EXPRESSION,
+                        "returnByValue": True, "awaitPromise": True}):
+            with self.subTest(params=params):
+                with self.assertRaisesRegex(CdpClientError, "limited to the fixed readiness check"):
+                    client.command("Runtime.evaluate", params)
+
+    def test_paused_virtual_time_hangs_the_screenshot(self) -> None:
+        # The negative control: what the old settle left behind.
+        import vellum_cdp_client
+        vellum_cdp_client.ALLOWED_COMMANDS.add("Emulation.setVirtualTimePolicy")
+        try:
+            with CdpAdmission(str(self.socket_path)) as admission:
+                client = CdpClient(admission.endpoint, timeout=0.5)
+                client.connect()
+                try:
+                    client.command("Emulation.setVirtualTimePolicy", {
+                        "policy": "pauseIfNetworkFetchesPending", "budget": 1000,
+                    })
+                    with self.assertRaisesRegex(CdpClientError, "Page.captureScreenshot got no response"):
+                        client.capture_screenshot()
+                finally:
+                    client.close()
+        finally:
+            vellum_cdp_client.ALLOWED_COMMANDS.discard("Emulation.setVirtualTimePolicy")
 
     def test_wait_for_dom_is_bounded_and_retries_until_document_is_ready(self) -> None:
         client = object.__new__(CdpClient)
@@ -178,22 +306,27 @@ class CdpClientTests(unittest.TestCase):
         with self.assertRaisesRegex(CdpClientError, "not a PNG"):
             client.capture_screenshot()
 
-    def test_settle_idle_uses_virtual_time_and_returns_stable_snapshot(self) -> None:
+    def test_settle_idle_uses_real_time_and_returns_stable_snapshot(self) -> None:
         client = object.__new__(CdpClient)
-        client._events = [{"method": "Emulation.virtualTimeBudgetExpired"}]
+        client._events = []
         calls: list[str] = []
 
         def command(method: str, params: dict[str, object] | None = None) -> dict[str, object]:
             del params
             calls.append(method)
+            if method == "Runtime.evaluate":
+                return {"result": {"value": calls.count("Runtime.evaluate") > 2}}
             if method == "DOMSnapshot.captureSnapshot":
                 return {"documents": [{"nodes": {"nodeName": ["HTML"]}}]}
             return {}
 
         client.command = command  # type: ignore[method-assign]
-        snapshot = client.settle_idle(quiet_period=0.05, timeout=1)
+        snapshot = client.settle_idle(quiet_period=0.05, timeout=2, budget_ms=50)
         self.assertIn("documents", snapshot)
-        self.assertIn("Emulation.setVirtualTimePolicy", calls)
+        self.assertNotIn("Emulation.setVirtualTimePolicy", calls)
+        # It polled the load and font readiness until it held, then settled.
+        self.assertEqual(calls.count("Runtime.evaluate"), 3)
+        self.assertLess(calls.index("Runtime.evaluate"), calls.index("DOMSnapshot.captureSnapshot"))
 
     def test_client_rejects_public_navigation_and_unbounded_styles(self) -> None:
         with CdpAdmission(str(self.socket_path)) as admission:

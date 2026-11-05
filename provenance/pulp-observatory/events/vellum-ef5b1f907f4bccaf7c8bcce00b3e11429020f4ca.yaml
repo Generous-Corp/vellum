@@ -1,0 +1,44 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel"
+  ],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-05T00:05:09Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-ef5b1f907f4bccaf7c8bcce00b3e11429020f4ca",
+  "include_dependency_deltas": [
+    "graphics/CMakeLists.txt"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel"
+  ],
+  "mapped_paths": [
+    "graphics/CMakeLists.txt",
+    "graphics/src/dawn_bootstrap.cpp",
+    "graphics/tests/test_dawn_bootstrap_source.py"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "14bd4c5e430bc8da6b4204f1daa8a1bdbc6b7f3a",
+    "to_commit": "8dcb06b0f5a2c1b8f2368432474765220cae676b"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "ef5b1f907f4bccaf7c8bcce00b3e11429020f4ca",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

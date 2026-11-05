@@ -5,7 +5,12 @@ if(NOT DEFINED VELLUM_SOURCE_DIR OR
     message(FATAL_ERROR "install-consumer paths were not supplied")
 endif()
 
-set(_work "${VELLUM_BUILD_DIR}/install-consumer-test")
+# A distinct work directory per consumer lets several consumer tests run at
+# once without removing each other's prefix.
+if(NOT DEFINED VELLUM_INSTALL_CONSUMER_WORK OR VELLUM_INSTALL_CONSUMER_WORK STREQUAL "")
+    set(VELLUM_INSTALL_CONSUMER_WORK "install-consumer-test")
+endif()
+set(_work "${VELLUM_BUILD_DIR}/${VELLUM_INSTALL_CONSUMER_WORK}")
 set(_prefix "${_work}/prefix")
 set(_consumer_build "${_work}/build")
 file(REMOVE_RECURSE "${_work}")

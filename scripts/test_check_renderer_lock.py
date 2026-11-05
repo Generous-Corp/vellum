@@ -106,6 +106,15 @@ class RendererLockDriftTest(unittest.TestCase):
             f'set(_pin "{self.platform["archives"]["libdawn_combined.a"]}")\n', encoding="utf-8")
         self.assert_drift("cmake/Other.cmake: holds locked digest")
 
+    def test_an_uppercase_hand_copy_is_drift(self) -> None:
+        digest = self.platform["archives"]["libskia.a"].upper()
+        (self.root / "cmake/Other.cmake").write_text(f'set(_pin "{digest}")\n', encoding="utf-8")
+        self.assert_drift("cmake/Other.cmake: holds locked digest")
+        self.edit_text("cmake/VellumSkiaDawn.cmake",
+                       'set(_vellum_expected_archive_sha256 "${_vellum_renderer_SHA256}")',
+                       f'set(_vellum_expected_archive_sha256 "{self.platform["sha256"].upper()}")')
+        self.assert_drift("VellumSkiaDawn.cmake: restates locked digest")
+
     def test_recorded_evidence_may_hold_a_digest(self) -> None:
         closure = self.root / "provenance/mirror/closures/x/unit.json"
         closure.parent.mkdir(parents=True)
