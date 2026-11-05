@@ -582,8 +582,8 @@ class VerifyExtractionTests(unittest.TestCase):
         )
         self.assertEqual(verify_extraction.MIRROR_EDGE_SUFFIXES, set(table["suffixes"]))
         self.assertTrue({"", ".md", ".ps1", ".sh", ".ts", ".tsx", ".yaml", ".yml"} <= verify_extraction.MIRROR_EDGE_SUFFIXES)
-        self.assertEqual(set(table), {"schema", "description", "suffixes", "binary_suffixes",
-                                      "content_patterns", "path_patterns", "approved_exceptions"})
+        self.assertEqual(set(table), {"schema", "description", "roots", "suffixes", "binary_suffixes",
+                                      "content_patterns", "path_patterns", "approved_exceptions", "controls"})
         self.assertEqual(set(table["content_patterns"]), {
             "mirror-product-include", "mirror-product-symbol", "mirror-audio-framework-link",
             "mirror-pulp-kept-include", "mirror-pulp-kept-symbol"})
@@ -596,6 +596,32 @@ class VerifyExtractionTests(unittest.TestCase):
             verify_extraction.MIRROR_EDGE_EXCEPTIONS,
             {(row["rule"], row["path"], row["line"]) for row in table["approved_exceptions"]},
         )
+
+    def test_every_mirror_edge_rule_matches_its_controls(self) -> None:
+        # The vendored rules are spelled from the table's roots; Pulp's
+        # generator test proves they follow a respelling. Here each rule must
+        # match every control the table gives it, under every root it names,
+        # so a rule the scan applies can never silently match nothing.
+        table = json.loads(verify_extraction.MIRROR_EDGE_TABLE.read_text(encoding="utf-8"))
+        roots = table["roots"]
+        self.assertEqual(set(roots), {"namespace", "include", "target"})
+        # Controls are instantiated with one spelling for every placeholder.
+        self.assertEqual(roots["namespace"], roots["include"])
+        self.assertEqual(roots["namespace"], roots["target"])
+        rules = {**verify_extraction.FORBIDDEN_MIRROR_EDGE_PATTERNS, **verify_extraction.MIRROR_EDGE_PATH_PATTERNS}
+        self.assertEqual(set(table["controls"]), set(rules))
+        spellings = set(roots["namespace"])
+        for rule, compiled in rules.items():
+            templates = table["controls"].get(rule, [])
+            self.assertTrue(templates, rule)
+            for template in templates:
+                for name in sorted(spellings):
+                    text = template
+                    for kind in roots:
+                        text = text.replace(f"@{kind}@", name)
+                    with self.subTest(rule=rule, control=text):
+                        self.assertNotIn("@", text)
+                        self.assertTrue(compiled.search(text))
 
     def test_pulp_kept_view_audio_edges_are_findings(self) -> None:
         # The edges the Vellum #92 review planted: five kept view-audio

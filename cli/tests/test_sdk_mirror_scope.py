@@ -164,6 +164,33 @@ class SdkMirrorScopeTests(unittest.TestCase):
         )
         self.assertEqual(set(table["path_patterns"]), {"mirror-pulp-kept-file"})
 
+    def test_installer_mirror_rules_follow_the_table_roots(self) -> None:
+        # The installer cannot read the table, so its edge rules are literals
+        # (held equal to the table above) and its own mirror path rules spell
+        # the include root. Under each include root the table names, a
+        # product header path and a Pulp-kept header path must still be
+        # refused; a rename that re-vendors the table fails here until the
+        # installer's literals follow it.
+        import json
+        table = json.loads((REPO / "tools/provenance/mirror_edge_patterns.json").read_text(encoding="utf-8"))
+        product_path = install_core.MIRROR_PAYLOAD_PATH_PATTERNS["mirror-product-path"]
+        for root in table["roots"]["include"]:
+            with self.subTest(root=root):
+                self.assertTrue(product_path.search(f"include/{root}/audio/buffer_view.hpp"))
+                self.assertTrue(install_core.mirror_kept_path(f"include/{root}/view/audio_widgets.hpp"))
+                self.assertFalse(install_core.mirror_kept_path(f"include/{root}/view/view.hpp"))
+        for rule, templates in table["controls"].items():
+            pattern = (install_core.MIRROR_KEPT_FILE_PATH if rule == "mirror-pulp-kept-file"
+                       else install_core.MIRROR_PAYLOAD_CONTENT_PATTERNS[rule])
+            for template in templates:
+                for root in table["roots"]["namespace"]:
+                    text = template
+                    for kind in table["roots"]:
+                        text = text.replace(f"@{kind}@", root)
+                    data = text if rule == "mirror-pulp-kept-file" else text.encode("utf-8")
+                    with self.subTest(rule=rule, control=text):
+                        self.assertTrue(pattern.search(data))
+
     def test_streaming_inspection_uses_scoped_rules(self) -> None:
         def stream_rules(name: str, content: bytes) -> set[str]:
             _size, _digest, _retained, findings = install_core.inspect_payload_stream(

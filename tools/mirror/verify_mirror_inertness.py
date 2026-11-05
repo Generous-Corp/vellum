@@ -66,11 +66,36 @@ from typing import Any, Iterable
 
 
 SCHEMA = "vellum.mirror-inertness-proof.v1"
-GUARD = "PULP_VIEW_HAS_AUDIO_WIDGETS"
-DEBTS = {
-    "vellum-header-audio-widgets-include": "pulp/view/widgets.hpp",
-    "design-import-audio-forward-decls": "pulp/view/design_import.hpp",
+# The namespaces and include roots the mirrored units are spelled with. Every
+# rule below is built from them, so renaming the mirror is one edit here. They
+# are the `roots` of the vendored mirror-edge table
+# (tools/provenance/mirror_edge_patterns.json), carried as a literal because
+# this checker ships alone in the sterile acceptance bundle;
+# test_verify_mirror_inertness.py holds them equal to the table. Each is a
+# list, so a package part-way through a rename is checked under every spelling.
+MIRROR_ROOTS = {"namespace": ("pulp",), "include": ("pulp",)}
+
+
+def root_pattern(names: tuple[str, ...]) -> str:
+    """One spelling as itself, several as a non-capturing alternation."""
+    escaped = [re.escape(name) for name in names]
+    return escaped[0] if len(escaped) == 1 else "(?:" + "|".join(escaped) + ")"
+
+
+_NS = root_pattern(MIRROR_ROOTS["namespace"])
+_INC = root_pattern(MIRROR_ROOTS["include"])
+GUARDS = tuple(f"{name.upper()}_VIEW_HAS_AUDIO_WIDGETS" for name in MIRROR_ROOTS["namespace"])
+GUARD = GUARDS[0]
+# Each debt's header below an include root, and its spelling under each root.
+DEBT_HEADERS = {
+    "vellum-header-audio-widgets-include": "view/widgets.hpp",
+    "design-import-audio-forward-decls": "view/design_import.hpp",
 }
+DEBT_SPELLINGS = {
+    debt: tuple(f"{root}/{header}" for root in MIRROR_ROOTS["include"])
+    for debt, header in DEBT_HEADERS.items()
+}
+DEBTS = {debt: spellings[0] for debt, spellings in DEBT_SPELLINGS.items()}
 # Declared Phase-6 name debts (owner ruling 2026-10-25). Each matches the
 # demangled symbols of one Pulp view-core definition whose name reads as audio
 # but which no view-audio floor rule attributes to view-audio. `rules` names the
@@ -79,31 +104,31 @@ _RTTI_PREFIX = r"(?:(?:typeinfo name for|typeinfo for|vtable for) )?"
 NAME_DEBTS = {
     "view-core-level-display": {
         "rules": ["no-audio-symbols"],
-        "pattern": rf"^{_RTTI_PREFIX}pulp::view::LevelDisplay(?:::|$)",
+        "pattern": rf"^{_RTTI_PREFIX}{_NS}::view::LevelDisplay(?:::|$)",
         "file": "core/view/src/data_display.cpp",
         "owner": "Phase 6",
     },
     "view-core-waveform-recorder": {
         "rules": ["no-audio-symbols"],
-        "pattern": rf"^{_RTTI_PREFIX}(?:std::__1::__function::__func<)?pulp::view::WaveformRecorder(?:::|$)",
+        "pattern": rf"^{_RTTI_PREFIX}(?:std::__1::__function::__func<)?{_NS}::view::WaveformRecorder(?:::|$)",
         "file": "core/view/src/widgets.cpp",
         "owner": "Phase 6",
     },
     "view-core-paint-waveform": {
         "rules": ["no-audio-symbols"],
-        "pattern": r"^pulp::view::painters::paint_waveform\(",
+        "pattern": rf"^{_NS}::view::painters::paint_waveform\(",
         "file": "core/view/src/control_painters.cpp",
         "owner": "Phase 6",
     },
     "design-import-level-display-binding": {
         "rules": ["no-audio-symbols"],
-        "pattern": r"^pulp::view::(?:NativeImportBindingContext::bind_level_display|bind_imported_level_display)\(",
+        "pattern": rf"^{_NS}::view::(?:NativeImportBindingContext::bind_level_display|bind_imported_level_display)\(",
         "file": "core/view/src/design_import_legacy_registry.cpp",
         "owner": "Phase 6",
     },
     "design-import-deprecated-bind-virtuals": {
         "rules": ["no-audio-symbols", "name-only-forward-declarations"],
-        "pattern": r"^pulp::view::NativeImportBindingContext::(?:bind_meter|bind_waveform_display)\(",
+        "pattern": rf"^{_NS}::view::NativeImportBindingContext::(?:bind_meter|bind_waveform_display)\(",
         "file": "core/view/include/pulp/view/design_import.hpp",
         "owner": "Phase 6",
     },
@@ -115,7 +140,7 @@ NAME_DEBTS = {
 REFERENCE_DEBTS = {
     "view-core-plugin-view-host-declarations": {
         "rules": ["no-pulp-kept-references"],
-        "pattern": r"^pulp::view::(?:PluginViewHost::(?:create|set_factory|clear_factory|has_factory)"
+        "pattern": rf"^{_NS}::view::(?:PluginViewHost::(?:create|set_factory|clear_factory|has_factory)"
                    r"|register_platform_plugin_view_host)\(",
         "file": "core/view/include/pulp/view/plugin_view_host.hpp",
         "owner": "Phase 6",
@@ -124,29 +149,33 @@ REFERENCE_DEBTS = {
 # Headers of Pulp's view-audio target and its Pulp-kept siblings: the
 # audio/ subtree, the meter/waveform/spectrum family and the named widgets.
 AUDIO_HEADER = re.compile(
-    r"(?:^|/)pulp/view/(?:audio/|(?:widgets/)?(?:"
+    rf"(?:^|/){_INC}/view/(?:audio/|(?:widgets/)?(?:"
     r"audio\w*|meter\w*|level_display\w*|spectrum\w*|visuali[sz]\w*|waveform\w*"
     r"|eq_curve_view|midi_\w+|musical_typing_keyboard\w*|plugin_manager_panel"
     r"|sample_asset_drop_target|step_grid_view|graph_editor_view"
     r"|register_audio_widgets|hosted_editor_attachment)\.h\w*\Z)"
 )
-VIEW_HEADER = re.compile(r"(?:^|/)pulp/view/")
+VIEW_HEADER = re.compile(rf"(?:^|/){_INC}/view/")
 # Demangled view-audio symbols: the widget classes and their registration.
 AUDIO_SYMBOL = re.compile(
-    r"\bpulp::view::(?:\w+::)*(?:"
+    rf"\b{_NS}::view::(?:\w+::)*(?:"
     r"Meter|LevelDisplay|WaveformView|Waveform\w*|Spectrum\w*|Visualiz\w*"
     r"|EqCurveView|AudioBridge|AudioInspector\w*|MidiBinding|MidiKeyboard\w*"
     r"|MusicalTypingKeyboard\w*|StepGridView|GraphEditorView|PluginManagerPanel"
     r"|SampleAssetDropTarget|HostedEditorAttachment|register_audio_widgets"
     r"|bind_meter|bind_waveform_display)\b"
 )
-FORWARD_DECLARED = re.compile(r"\bpulp::view::(?:Meter|WaveformView|\w+::bind_meter|\w+::bind_waveform_display)\b")
-VIEW_SYMBOL = re.compile(r"\bpulp::view::")
+FORWARD_DECLARED = re.compile(rf"\b{_NS}::view::(?:Meter|WaveformView|\w+::bind_meter|\w+::bind_waveform_display)\b")
+VIEW_SYMBOL = re.compile(rf"\b{_NS}::view::")
 # Namespaces the pulp-view-audio target owns: its own widgets and the product
 # subsystems it links. Every other floor symbol is an inline definition the
 # archive shares with any user of canvas, runtime or the C++ library.
 VIEW_AUDIO_OWNED = re.compile(
-    r"\bpulp::(?:view|audio|signal|midi|music|format|host|gpu_audio|content)::")
+    rf"\b{_NS}::(?:view|audio|signal|midi|music|format|host|gpu_audio|content)::")
+# Any packaged header include and any packaged symbol: the evidence that the
+# consumer used the package at all.
+PACKAGE_INCLUDE = re.compile(rf"{_INC}/")
+PACKAGE_SYMBOL = re.compile(rf"{_NS}::")
 # The floor reads strength with nm_symbols.py and class ownership with
 # rtti_ownership.py, both vendored byte for byte from Pulp (*.pin.json). Apple's
 # nm prints a Mach-O weak definition with a strong letter, so weakness comes
@@ -178,22 +207,22 @@ def packages_view_source(receipt: dict[str, Any]) -> bool:
 
 def compile_command_findings(commands: list[dict[str, Any]]) -> list[str]:
     findings = []
-    pattern = re.compile(rf"-D\s*{GUARD}\b")
     for entry in commands:
         text = entry.get("command") or " ".join(entry.get("arguments", []))
-        if pattern.search(text) or GUARD in text:
-            findings.append(f"{entry.get('file')}: compile command defines or names {GUARD}")
+        for guard in GUARDS:
+            if re.search(rf"-D\s*{guard}\b", text) or guard in text:
+                findings.append(f"{entry.get('file')}: compile command defines or names {guard}")
     return findings
 
 
 def package_definition_findings(package_files: Iterable[tuple[str, str]]) -> list[str]:
     findings = []
-    define = re.compile(rf"^\s*#\s*define\s+{GUARD}\b", re.M)
     for name, text in package_files:
-        if name.endswith(".cmake") and GUARD in text:
-            findings.append(f"{name}: exported package names {GUARD}")
-        elif define.search(text):
-            findings.append(f"{name}: header defines {GUARD}")
+        for guard in GUARDS:
+            if name.endswith(".cmake") and guard in text:
+                findings.append(f"{name}: exported package names {guard}")
+            elif re.search(rf"^\s*#\s*define\s+{guard}\b", text, re.M):
+                findings.append(f"{name}: header defines {guard}")
     return findings
 
 
@@ -397,10 +426,10 @@ def image_symbols(path: Path) -> list[str]:
 def shipped_debt_headers(prefix: Path) -> dict[str, list[Path]]:
     """Each debt's header as the package ships it, under an include root."""
     shipped: dict[str, list[Path]] = {}
-    for debt, header in DEBTS.items():
+    for debt, spellings in DEBT_SPELLINGS.items():
         shipped[debt] = sorted(
-            path for path in prefix.rglob(Path(header).name)
-            if path.is_file() and path.as_posix().endswith(f"/include/{header}")
+            path for path in prefix.rglob(Path(DEBT_HEADERS[debt]).name)
+            if path.is_file() and any(path.as_posix().endswith(f"/include/{header}") for header in spellings)
         )
     return shipped
 
@@ -411,7 +440,12 @@ def write_debt_probe(prefix: Path, output: Path) -> list[str]:
     Generated from DEBTS so the probe cannot drift from the debts the proof
     names. With no debt header in the package it includes nothing.
     """
-    included = sorted({header for debt, header in DEBTS.items() if shipped_debt_headers(prefix)[debt]})
+    included = sorted({
+        header
+        for debt, paths in shipped_debt_headers(prefix).items()
+        for header in DEBT_SPELLINGS[debt]
+        if any(path.as_posix().endswith(f"/include/{header}") for path in paths)
+    })
     lines = [
         "// Generated by tools/mirror/verify_mirror_inertness.py --write-debt-probe.",
         "// Compiles every Phase-6 debt header the installed package ships.",
@@ -458,7 +492,7 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
     depfiles = consumer_dependencies(consumer_build)
     if len(depfiles) < len(commands) or not all(depfiles.values()):
         raise EvidenceError("not every consumer translation unit left a depfile")
-    if not any("pulp/" in include for includes in depfiles.values() for include in includes):
+    if not any(PACKAGE_INCLUDE.search(include) for includes in depfiles.values() for include in includes):
         raise EvidenceError("consumer depfiles name no packaged header; the consumer did not use the package")
 
     package_files = []
@@ -485,7 +519,7 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
         if not names:
             raise EvidenceError(f"{path} lists no symbols")
         symbols[path.name] = names
-    if not any("pulp::" in name for name in symbols[image.name]):
+    if not any(PACKAGE_SYMBOL.search(name) for name in symbols[image.name]):
         raise EvidenceError("the consumer image references no packaged symbol")
 
     # A shipped debt header proves nothing unless a consumer compiled it.
