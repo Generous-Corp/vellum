@@ -95,6 +95,17 @@ jobs:
           printf 'tag-object=%s\n' "$tag_object" >> "$GITHUB_OUTPUT"
           echo "tagged $GITHUB_SHA as $RELEASE_TAG (tag object $tag_object)" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Extract the finalizer's publish step from sdk-release.yml
+        run: |
+          set -euo pipefail
+          python3 -I scripts/extract_workflow_step.py \
+            --workflow .github/workflows/sdk-release.yml \
+            --job finalize-sdk-release \
+            --step "Publish only through live no-bypass controls" \
+            --output "$RUNNER_TEMP/publish-step.sh"
+          echo "publish step sha256 $(shasum -a 256 "$RUNNER_TEMP/publish-step.sh" | awk '{print $1}') from $GITHUB_SHA" \
+            >> "$GITHUB_STEP_SUMMARY"
+
       - name: Stage synthetic release assets
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
@@ -112,28 +123,30 @@ jobs:
             "$(shasum -a 256 "$RUNNER_TEMP/trusted/install.sh" | awk '{print $1}')" install.sh \
             "$(shasum -a 256 "$RUNNER_TEMP/trusted/install_core.py" | awk '{print $1}')" install_core.py \
             | LC_ALL=C sort > "$RUNNER_TEMP/trusted/SHA256SUMS"
-          for name in trusted/trusted-sdk-verification.json trusted/trusted-sdk-installed-validation.json \
-              trusted/web-payload.json release-trust.json; do
-            printf '{"schema": "vellum.publish-rehearsal.synthetic.v1", "tag": "%s", "asset": "%s"}\n' \
-              "$RELEASE_TAG" "$name" > "$RUNNER_TEMP/$name"
-          done
           # The live immutable-release read, as the finalizer makes it.
           gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"
           python3 -I scripts/verify_immutable_release_preflight.py \
             --input "$RUNNER_TEMP/immutable-releases.json" \
             --repository "$GITHUB_REPOSITORY" --release-tag v0.0.0 \
             --output "$RUNNER_TEMP/immutable-release-preflight.json"
-
-      - name: Extract the finalizer's publish step from sdk-release.yml
-        run: |
-          set -euo pipefail
-          python3 -I scripts/extract_workflow_step.py \
-            --workflow .github/workflows/sdk-release.yml \
-            --job finalize-sdk-release \
-            --step "Publish only through live no-bypass controls" \
-            --output "$RUNNER_TEMP/publish-step.sh"
-          echo "publish step sha256 $(shasum -a 256 "$RUNNER_TEMP/publish-step.sh" | awk '{print $1}') from $GITHUB_SHA" \
-            >> "$GITHUB_STEP_SUMMARY"
+          # Every other asset the publish step lists gets a synthetic stand-in,
+          # read from the step's own allowed=( ) list so a new asset is staged
+          # without a change here. release-tag-protection.json is written by
+          # the step's own guard.
+          allowed_block="$(awk '/^allowed=\($/ {p=1; next} p && /^\)$/ {exit} p' "$RUNNER_TEMP/publish-step.sh")"
+          test -n "$allowed_block"
+          eval "allowed=( $allowed_block )"
+          for asset in "${allowed[@]}"; do
+            name="${asset%%=*}" path="${asset#*=}"
+            [[ "$path" == "$RUNNER_TEMP"/* ]]
+            if [ "$name" = release-tag-protection.json ] || [ -e "$path" ]; then
+              continue
+            fi
+            mkdir -p "$(dirname "$path")"
+            printf '{"schema": "vellum.publish-rehearsal.synthetic.v1", "tag": "%s", "asset": "%s"}\n' \
+              "$RELEASE_TAG" "$name" > "$path"
+            echo "synthetic stand-in: $name" >> "$GITHUB_STEP_SUMMARY"
+          done
 
       - name: "Pass 1: build and verify the draft, stop before publication"
         env:
