@@ -121,12 +121,13 @@ FORBIDDEN_NATIVE_CONTENT_PATTERNS: dict[str, tuple[str, int]] = {
     # quoted (also relative) path containing `vellum/<unit>/`; and
     # `__has_include`.
     #
-    # It is a spelling check, not a similarity check. A copy laundered with one
-    # rename of the unit itself (`canvas` -> `graphics`) passes it, and the
-    # whole-file normalized quarantine in verify_extraction.py misses a copy
-    # with one identifier changed, a line appended or half the file taken. A
-    # winnowing check over normalized token k-grams against the mirror is the
-    # recorded follow-up for partial and laundered copies (M2 8b plan, §3.7).
+    # It is a spelling check aimed at accidental copies, not a similarity
+    # check. Accepted blind spot: a copy laundered with one rename of the unit
+    # itself (`canvas` -> `graphics`), or with one identifier changed, a line
+    # appended or half the file taken, passes both this rule and the
+    # whole-file normalized quarantine in verify_extraction.py. Similarity
+    # matching (token k-gram winnowing) is deliberately not built (integrator
+    # decision, M2 8b plan §3.7).
     #
     # The units are the mirror's top-level `pulp::<unit>` namespaces and include
     # units, less those native Vellum owns; test_verify_extraction.py holds

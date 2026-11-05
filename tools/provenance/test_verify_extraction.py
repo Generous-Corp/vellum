@@ -315,6 +315,9 @@ class VerifyExtractionTests(unittest.TestCase):
                                       b"int canvas_size = 0; int view_count = state_of(1);\n}\n",
             "tools/mirror/consumer/main.cpp": b"#include <vellum/view/view.hpp>\n",
         }
+        # The consumer exemption is per file: a new file there is scanned.
+        evasions["tools/mirror/consumer/new_helper.cpp"] = b"#include <vellum/view/view.hpp>\n"
+        evasions["tools/mirror/consumer/sub/deep.hpp"] = b"namespace vellum::canvas { int x; }\n"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.write_mirror(root, "mirror/core/view/src/a.cpp", b"namespace vellum::view { int x; }\n")
@@ -348,6 +351,51 @@ class VerifyExtractionTests(unittest.TestCase):
                   for p in (ROOT / top / "include/vellum").glob("*") if p.is_dir()}
         self.assertIn("android", census)
         self.assertEqual(refused, census - native)
+
+    def test_renamed_mirror_exemptions_are_pinned(self) -> None:
+        # Any change to what the rule skips must show up as an edit here.
+        self.assertEqual(verify_extraction.RENAMED_MIRROR_EXEMPT_PREFIXES, ())
+        self.assertEqual(verify_extraction.RENAMED_MIRROR_EXEMPT_PATHS, {
+            "tools/mirror/consumer/cross_image_main.cpp",
+            "tools/mirror/consumer/direct_gpu_main.cpp",
+            "tools/mirror/consumer/direct_main.cpp",
+            "tools/mirror/consumer/main.cpp",
+            "tools/mirror/consumer/runtime_image_census_main.cpp",
+            "scripts/install_core.py",
+            "tools/provenance/content_scan_policy.py",
+            "tools/provenance/test_verify_extraction.py",
+            "tools/provenance/verify_extraction.py",
+            "tools/provenance/mirror_edge_patterns.json",
+            "tools/mirror/verify_mirror_inertness.py",
+            "tools/mirror/test_verify_mirror_inertness.py",
+        })
+        self.assertEqual(verify_extraction.RENAMED_MIRROR_SCAN_ROOTS,
+                         verify_extraction.EXPECTED_ACTIVE_ROOTS + ("components", "product", "tools", "web"))
+
+    def test_symlinks_in_native_trees_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_mirror(root, "mirror/core/view/src/a.cpp", b"namespace vellum::view { int x; }\n")
+            (root / "graphics").mkdir()
+            (root / "graphics/linkdir").symlink_to(root / "mirror/core/view/src", target_is_directory=True)
+            (root / "tools").mkdir()
+            (root / "tools/linkfile.cpp").symlink_to(root / "mirror/core/view/src/a.cpp")
+            # Behind the directory link the file is invisible to the content scan ...
+            self.assertEqual(verify_extraction.scan_renamed_mirror(root, ("graphics",)), [])
+            # ... so the link itself is refused.
+            self.assertEqual(verify_extraction.symlink_findings(root, ("graphics", "tools")),
+                             ["graphics/linkdir", "tools/linkfile.cpp"])
+
+    def test_comment_stripping_keeps_string_literals(self) -> None:
+        source = (b'const char* glob = "include/*.hpp";\nint keep_this_function_body(int a) { return a * 1234567; }\n'
+                  b'const char* end = "*/";\n')
+        stripped = verify_extraction._strip_comments(source)
+        self.assertIn(b"keep_this_function_body", stripped)
+        self.assertIn(b'"include/*.hpp"', stripped)
+        self.assertEqual(verify_extraction._strip_comments(b"a /* x */ b // y\n'/*' c"), b"a  b \n'/*' c")
+        self.assertIsNotNone(verify_extraction.normalized_fingerprint(source))
+        self.assertIn(".inc", verify_extraction.NORMALIZED_SUFFIXES)
+        self.assertIn(".in", verify_extraction.NORMALIZED_SUFFIXES)
 
     def test_undecodable_native_text_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

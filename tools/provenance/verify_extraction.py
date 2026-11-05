@@ -19,6 +19,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -95,10 +96,15 @@ RENAMED_MIRROR_PATTERN = _ALL_NATIVE_PATTERNS[RENAMED_MIRROR_RULE]
 RENAMED_MIRROR_SCAN_ROOTS = EXPECTED_ACTIVE_ROOTS + ("components", "product", "tools", "web")
 # Paths that must spell the forbidden names: the consumer built against the
 # installed mirror, and the policy, its installer copy and their tests.
-RENAMED_MIRROR_EXEMPT_PREFIXES = (
-    "tools/mirror/consumer/",
-)
+RENAMED_MIRROR_EXEMPT_PREFIXES: tuple[str, ...] = ()
 RENAMED_MIRROR_EXEMPT_PATHS = {
+    # The consumer built against the installed mirror, file by file: a new
+    # file under tools/mirror/consumer/ is scanned like any other.
+    "tools/mirror/consumer/cross_image_main.cpp",
+    "tools/mirror/consumer/direct_gpu_main.cpp",
+    "tools/mirror/consumer/direct_main.cpp",
+    "tools/mirror/consumer/main.cpp",
+    "tools/mirror/consumer/runtime_image_census_main.cpp",
     # The rule itself, its installer copy and its tests.
     "scripts/install_core.py",
     "tools/provenance/content_scan_policy.py",
@@ -294,14 +300,23 @@ def scan_renamed_mirror(root: Path, roots: Iterable[str] = RENAMED_MIRROR_SCAN_R
 # file are one fingerprint. Files whose normalized form is shorter than this
 # carry too little to fingerprint (`#pragma once`, empty initializers).
 NORMALIZED_MIN_BYTES = 64
-NORMALIZED_SUFFIXES = {".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp", ".c", ".cc", ".cpp", ".cxx", ".m", ".mm",
-                       ".cmake", ".py", ".js", ".mjs", ".ts"}
-_COMMENTS = re.compile(rb"//[^\n]*|/\*.*?\*/|(?m:^\s*#(?!\s*(?:include|import|define|if|ifdef|ifndef|else|elif|endif|pragma|undef))[^\n]*)", re.S)
+NORMALIZED_SUFFIXES = {".h", ".hh", ".hpp", ".hxx", ".inl", ".inc", ".ipp", ".in", ".c", ".cc", ".cpp", ".cxx",
+                       ".m", ".mm", ".cmake", ".py", ".js", ".mjs", ".ts"}
+# String and character literals are matched first and kept, so a `/*` or
+# `//` inside one ("include/*.hpp") cannot swallow the code after it.
+_COMMENTS = re.compile(
+    rb'("(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\')'
+    rb"|//[^\n]*|/\*.*?\*/"
+    rb"|(?m:^\s*#(?!\s*(?:include|import|define|if|ifdef|ifndef|else|elif|endif|pragma|undef))[^\n]*)", re.S)
+
+
+def _strip_comments(data: bytes) -> bytes:
+    return _COMMENTS.sub(lambda m: m.group(1) or b"", data)
 _SPACE = re.compile(rb"\s+")
 
 
 def normalized_fingerprint(data: bytes) -> str | None:
-    text = _SPACE.sub(b"", _COMMENTS.sub(b"", data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")))
+    text = _SPACE.sub(b"", _strip_comments(data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")))
     text = text.replace(b"namespacepulp", b"namespacevellum").replace(b"pulp::", b"vellum::")
     text = text.replace(b"pulp/", b"vellum/")
     if len(text) < NORMALIZED_MIN_BYTES:
@@ -328,6 +343,36 @@ def normalized_copy_findings(root: Path, roots: Iterable[str] = RENAMED_MIRROR_S
         if fingerprint and fingerprint in mirror:
             findings.append({"path": relative, "mirror": mirror[fingerprint]})
     return findings
+
+
+def symlink_findings(root: Path, roots: Iterable[str] = RENAMED_MIRROR_SCAN_ROOTS) -> list[str]:
+    """Symlinks in the scanned native trees, tracked or on disk.
+
+    The scans walk with rglob, which does not descend into a symlinked
+    directory, so `graphics/linkdir -> ../mirror/core/view/src` would hide its
+    files from every native check. None is allowed.
+    """
+    found: set[str] = set()
+    for relative in roots:
+        top = root / relative
+        if top.is_symlink():
+            found.add(relative)
+            continue
+        if not top.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(top, followlinks=False):
+            for name in dirnames + filenames:
+                path = Path(dirpath) / name
+                if path.is_symlink():
+                    found.add(path.relative_to(root).as_posix())
+    try:
+        staged = git(root, "ls-files", "-s", "--", *roots)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        staged = ""
+    for line in staged.splitlines():
+        if line.startswith("120000 "):
+            found.add(line.split("\t", 1)[1])
+    return sorted(found)
 
 
 def retired_path_findings(root: Path, prefixes: Iterable[str]) -> list[str]:
@@ -939,6 +984,10 @@ def verify(
     if active_findings:
         errors.append(f"native build/authoring surface has {len(active_findings)} forbidden references")
 
+    symlinks = symlink_findings(root)
+    checks["native_tree_symlinks"] = symlinks
+    if symlinks:
+        errors.append(f"native trees hold {len(symlinks)} symlinks, which the native scans cannot see through")
     renamed_findings = scan_renamed_mirror(root)
     checks["renamed_mirror_findings"] = renamed_findings
     if renamed_findings:
