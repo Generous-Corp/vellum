@@ -22,7 +22,10 @@ fails when:
   version-at-land.yml that holds a secret runs Python at all, a job of
   version-at-land.yml that holds a secret runs Python in any step, or a repository
   Python file is named like a standard-library module, so checked-out code
-  cannot run with the signing key or an App token.
+  cannot run with the signing key or an App token;
+- the release-policy lane of scripts/ci_lanes.json stops running
+  scripts/test_ci_lanes.py or this check, so a release test dropped from every
+  lane still fails CI without the manifest being owner-owned.
 
 `signer` prints the principal and fingerprint the policy names, for the
 release job to verify the tag it just signed.
@@ -31,6 +34,7 @@ release job to verify the tag it just signed.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shlex
 import subprocess
@@ -46,7 +50,8 @@ SIGNING_WORKFLOW = "release-tag.yml"
 OWNER = "@danielraffel"
 # The signing policy, the code that enforces it, the committed record the
 # release decision trusts (the retired tags) and its one loader, the lane
-# manifest and runner that decide which release-path tests CI runs, and the
+# runner that decides which release-path tests CI runs (the lane manifest is not
+# owned; lane_problems holds the release-policy lane's contents instead), and the
 # workflow that holds an App token to propose each version (version-at-land.yml).
 POLICY_FILES = (
     "/.github/CODEOWNERS",
@@ -57,7 +62,6 @@ POLICY_FILES = (
     "/provenance/release-signers.allowed_signers",
     "/provenance/retired-release-tags.json",
     "/scripts/check_release_policy.py",
-    "/scripts/ci_lanes.json",
     "/scripts/pretag_checks.py",
     "/scripts/release_cadence.py",
     "/scripts/release_dry_run.py",
@@ -460,13 +464,34 @@ def isolation_problems(workflows: dict[str, str], root: Path) -> list[str]:
     return found
 
 
+LANE_MANIFEST = Path("scripts/ci_lanes.json")
+POLICY_LANE = "release-policy"
+# Entries the release-policy lane must keep: the test that every test_*.py sits
+# in a lane, and this check.
+REQUIRED_LANE_SCRIPTS = ("scripts/test_ci_lanes.py", "scripts/check_release_policy.py")
+
+
+def lane_problems(root: Path) -> list[str]:
+    """The release-policy lane must keep running the lane-coverage test and this check."""
+    path = root / LANE_MANIFEST
+    if not path.is_file():
+        return []  # run_ci_lane.py cannot run the required lane without it
+    try:
+        lane = json.loads(path.read_text(encoding="utf-8"))["lanes"][POLICY_LANE]
+    except (ValueError, KeyError, TypeError):
+        return [f"{LANE_MANIFEST} has no readable `{POLICY_LANE}` lane"]
+    scripts = [entry.get("script") for entry in lane if isinstance(entry, dict)]
+    return [f"{LANE_MANIFEST} lane `{POLICY_LANE}` does not run {script}"
+            for script in REQUIRED_LANE_SCRIPTS if script not in scripts]
+
+
 def problems(root: Path) -> list[str]:
     workflows = load_workflows(root)
     if SIGNING_WORKFLOW not in workflows:
         return [f"{WORKFLOWS / SIGNING_WORKFLOW} is missing"]
     codeowners_path = root / CODEOWNERS
     codeowners = codeowners_path.read_text(encoding="utf-8") if codeowners_path.is_file() else None
-    found = environment_problems(workflows) + codeowner_problems(codeowners) + import_problems(root)
+    found = environment_problems(workflows) + codeowner_problems(codeowners) + import_problems(root) + lane_problems(root)
     found += isolation_problems(workflows, root)
     if RELEASE_ENVIRONMENT not in environment_names(workflows[SIGNING_WORKFLOW]):
         found.append(f"{SIGNING_WORKFLOW} does not run in the `{RELEASE_ENVIRONMENT}` environment")
