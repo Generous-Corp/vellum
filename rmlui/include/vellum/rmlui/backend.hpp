@@ -12,6 +12,10 @@
 #include <utility>
 #include <vector>
 
+// Defined when Backend provides set_log_sink() and last_load_diagnostics(), so
+// a consumer can build against module versions from before and after them.
+#define VELLUM_RMLUI_HAS_LOG_SINK 1
+
 // The RmlUi backend. RmlUi and Lua headers stay behind this interface, so a
 // consumer sees only renderer-neutral draw commands, an asset seam and typed
 // model/action/extension hosts.
@@ -210,6 +214,32 @@ class VELLUM_RMLUI_API ModelHost {
     virtual Status write(std::string_view field, const ModelValue& value) = 0;
 };
 
+// Severity of a message RmlUi logs.
+enum class LogLevel : std::uint8_t { always, error, assertion, warning, info, debug };
+
+struct LogMessage {
+    LogLevel level = LogLevel::info;
+    // Valid only for the duration of the sink call.
+    std::string_view text;
+};
+
+// Receives the messages RmlUi logs while its Backend is calling into RmlUi
+// (opening, loading a document, handling input, rendering, closing), on that
+// calling thread. Messages are attributed by that call, so two open Backends
+// each see only their own.
+using LogSink = std::function<void(const LogMessage&)>;
+
+// What RmlUi reported while parsing the most recent RML document passed to
+// Backend::load_document(). `dropped_declarations` counts style declarations
+// RmlUi rejected as syntax errors and discarded (for example a value carrying
+// `!important`, which RmlUi does not support). The document still loads, so a
+// non-zero count is the only trace of the lost rule.
+struct LoadDiagnostics {
+    std::uint32_t errors = 0;
+    std::uint32_t warnings = 0;
+    std::uint32_t dropped_declarations = 0;
+};
+
 // One RmlUi context. Any number of Backends may be open in one process: the
 // first open() initialises RmlUi, the last close() shuts it down, and file
 // reads made while a Backend calls into RmlUi resolve through that Backend's
@@ -257,6 +287,17 @@ class VELLUM_RMLUI_API Backend {
     Status process_key_up(int key_identifier, int key_modifier_state = 0);
     Status process_text_input(std::string_view text);
     [[nodiscard]] bool mouse_interacting() const noexcept;
+    // Installs, or with an empty function removes, this Backend's log sink. It
+    // stays in effect across close() and open(). Installing a sink never hides
+    // output: every message still reaches the RmlUi system interface that was
+    // installed before the first Backend opened (RmlUi's default otherwise).
+    void set_log_sink(LogSink sink);
+    // Diagnostics for the most recent load_document() of an RML document,
+    // counted from what RmlUi logged while it parsed the document and its
+    // style sheets.
+    [[nodiscard]] LoadDiagnostics last_load_diagnostics() const noexcept {
+        return last_load_;
+    }
     void render();
     void close();
     [[nodiscard]] bool is_open() const noexcept {
@@ -270,6 +311,7 @@ class VELLUM_RMLUI_API Backend {
 
   private:
     struct Runtime;
+    void record_log(LogLevel level, std::string_view text);
     AssetProvider& assets_;
     RenderInterface& renderer_;
     LuaInterface& lua_;
@@ -281,6 +323,10 @@ class VELLUM_RMLUI_API Backend {
     Asset document_;
     std::vector<CustomPropertyRegistration> custom_properties_;
     std::vector<ElementInstancerRegistration> element_instancers_;
+    LogSink log_sink_;
+    LoadDiagnostics loading_;
+    LoadDiagnostics last_load_;
+    bool counting_load_ = false;
     std::unique_ptr<Runtime> runtime_;
 };
 

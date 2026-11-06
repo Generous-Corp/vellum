@@ -19,6 +19,9 @@ add_test(NAME vellum.rmlui.backend COMMAND vellum-rmlui-backend-test)
 vellum_rmlui_add_test(vellum-rmlui-two-instances-test two_instances_test.cpp VellumRmlUi::Core)
 add_test(NAME vellum.rmlui.two-instances COMMAND vellum-rmlui-two-instances-test)
 
+vellum_rmlui_add_test(vellum-rmlui-log-sink-test log_sink_test.cpp VellumRmlUi::Core)
+add_test(NAME vellum.rmlui.log-sink COMMAND vellum-rmlui-log-sink-test)
+
 vellum_rmlui_add_test(vellum-rmlui-hot-reload-test hot_reload_test.cpp VellumRmlUi::DevAssets)
 add_test(NAME vellum.rmlui.hot-reload COMMAND vellum-rmlui-hot-reload-test)
 

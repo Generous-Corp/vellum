@@ -28,9 +28,22 @@ std::size_t runtime_references() noexcept;
 // resolved path; the prefix keeps two instances whose skins use the same
 // relative names from sharing each other's cached sheets. The prefix is
 // removed again before the path reaches the AssetProvider.
+//
+// The same scope attributes RmlUi's log: the system interface installed with
+// the runtime forwards each message to the scope's LogTarget (the Backend
+// making the call) and then to the interface that was installed before.
+class LogTarget {
+  public:
+    virtual void record_log(LogLevel level, std::string_view text) = 0;
+
+  protected:
+    ~LogTarget() = default;
+};
+
 class AssetScope {
   public:
-    AssetScope(AssetProvider* assets, std::string_view prefix = {}) noexcept;
+    AssetScope(AssetProvider* assets, std::string_view prefix = {},
+               LogTarget* log = nullptr) noexcept;
     ~AssetScope();
     AssetScope(const AssetScope&) = delete;
     AssetScope& operator=(const AssetScope&) = delete;
@@ -38,6 +51,7 @@ class AssetScope {
   private:
     AssetProvider* previous_;
     std::string_view previous_prefix_;
+    LogTarget* previous_log_;
 };
 
 std::string_view strip_scope_prefix(std::string_view path, std::string_view prefix) noexcept;
