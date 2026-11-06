@@ -277,10 +277,17 @@ std::atomic_uint64_t next_context_id{1};
 
 } // namespace
 
-struct Backend::Runtime {
-    Runtime(AssetProvider& assets, vellum::rmlui::RenderInterface& renderer)
-        : context_name("vellum-rmlui-" + std::to_string(next_context_id.fetch_add(1))),
+struct Backend::Runtime final : detail::LogTarget {
+    Runtime(Backend& owner, AssetProvider& assets, vellum::rmlui::RenderInterface& renderer)
+        : owner(owner),
+          context_name("vellum-rmlui-" + std::to_string(next_context_id.fetch_add(1))),
           scope_prefix(context_name + "/"), render(assets, renderer, scope_prefix) {}
+
+    void record_log(LogLevel level, std::string_view text) override {
+        owner.record_log(level, text);
+    }
+
+    Backend& owner;
 
     std::string context_name;
     std::string scope_prefix;
@@ -311,6 +318,25 @@ std::size_t Backend::open_instances() noexcept {
     return detail::runtime_references();
 }
 
+void Backend::set_log_sink(LogSink sink) {
+    log_sink_ = std::move(sink);
+}
+
+void Backend::record_log(LogLevel level, std::string_view text) {
+    if (counting_load_) {
+        if (level == LogLevel::error || level == LogLevel::assertion)
+            ++loading_.errors;
+        else if (level == LogLevel::warning)
+            ++loading_.warnings;
+        // RmlUi's style sheet parser reports a declaration it could not parse
+        // with this fixed prefix and then drops it.
+        if (text.find("Syntax error parsing property declaration") != std::string_view::npos)
+            ++loading_.dropped_declarations;
+    }
+    if (log_sink_)
+        log_sink_(LogMessage{level, text});
+}
+
 Status Backend::open(std::uint32_t width, std::uint32_t height) {
     if (open_)
         return Status::already_open;
@@ -318,13 +344,13 @@ Status Backend::open(std::uint32_t width, std::uint32_t height) {
         return Status::rejected;
     if ((!custom_properties_.empty() || !element_instancers_.empty()) && !extensions_)
         return Status::rejected;
-    auto runtime = std::make_unique<Runtime>(assets_, renderer_);
+    auto runtime = std::make_unique<Runtime>(*this, assets_, renderer_);
     if (!detail::acquire_runtime())
         return Status::rejected;
     runtime->holds_runtime = true;
     // From here a failure must hand the reference back through close().
     runtime_ = std::move(runtime);
-    detail::AssetScope scope(&assets_, runtime_->scope_prefix);
+    detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
     try {
         if (extensions_) {
             for (const auto& registration : custom_properties_) {
@@ -387,8 +413,14 @@ Status Backend::load_document(std::string_view path) {
         if (status != Status::ok)
             return status;
     } else {
-        detail::AssetScope scope(&assets_, runtime_->scope_prefix);
+        detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
+        // Count what RmlUi reports while it parses the document and its style
+        // sheets; a rejected declaration is otherwise invisible.
+        loading_ = {};
+        counting_load_ = true;
         auto* document = runtime_->context->LoadDocumentFromMemory(asset.bytes, runtime_->scope_prefix + asset.path);
+        counting_load_ = false;
+        last_load_ = loading_;
         if (!document)
             return Status::rejected;
         if (runtime_->document)
@@ -429,6 +461,7 @@ Status Backend::load_font_face(std::string_view path, std::string_view family,
     const auto status = assets_.load(path, asset);
     if (status != Status::ok)
         return status;
+    detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
     const auto& owned = detail::retain_font_bytes(std::move(asset.bytes));
     const auto* bytes = reinterpret_cast<const Rml::byte*>(owned.data());
     const auto style = options.style == FontStyle::italic ? Rml::Style::FontStyle::Italic
@@ -537,7 +570,7 @@ Status Backend::invoke_action(std::string_view action) {
 Status Backend::process_mouse_move(int x, int y, int key_modifier_state) {
     if (!open_ || !runtime_ || !runtime_->context)
         return Status::not_open;
-    detail::AssetScope scope(&assets_, runtime_->scope_prefix);
+    detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
     runtime_->context->ProcessMouseMove(x, y, key_modifier_state);
     return Status::ok;
 }
@@ -545,7 +578,7 @@ Status Backend::process_mouse_move(int x, int y, int key_modifier_state) {
 Status Backend::process_mouse_button_down(int button_index, int key_modifier_state) {
     if (!open_ || !runtime_ || !runtime_->context)
         return Status::not_open;
-    detail::AssetScope scope(&assets_, runtime_->scope_prefix);
+    detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
     runtime_->context->ProcessMouseButtonDown(button_index, key_modifier_state);
     return Status::ok;
 }
@@ -553,7 +586,7 @@ Status Backend::process_mouse_button_down(int button_index, int key_modifier_sta
 Status Backend::process_mouse_button_up(int button_index, int key_modifier_state) {
     if (!open_ || !runtime_ || !runtime_->context)
         return Status::not_open;
-    detail::AssetScope scope(&assets_, runtime_->scope_prefix);
+    detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
     runtime_->context->ProcessMouseButtonUp(button_index, key_modifier_state);
     return Status::ok;
 }
@@ -561,7 +594,7 @@ Status Backend::process_mouse_button_up(int button_index, int key_modifier_state
 Status Backend::process_mouse_wheel(float x, float y, int key_modifier_state) {
     if (!open_ || !runtime_ || !runtime_->context)
         return Status::not_open;
-    detail::AssetScope scope(&assets_, runtime_->scope_prefix);
+    detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
     runtime_->context->ProcessMouseWheel({x, y}, key_modifier_state);
     return Status::ok;
 }
@@ -569,7 +602,7 @@ Status Backend::process_mouse_wheel(float x, float y, int key_modifier_state) {
 Status Backend::process_mouse_leave() {
     if (!open_ || !runtime_ || !runtime_->context)
         return Status::not_open;
-    detail::AssetScope scope(&assets_, runtime_->scope_prefix);
+    detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
     runtime_->context->ProcessMouseLeave();
     return Status::ok;
 }
@@ -577,7 +610,7 @@ Status Backend::process_mouse_leave() {
 Status Backend::process_key_down(int key_identifier, int key_modifier_state) {
     if (!open_ || !runtime_ || !runtime_->context)
         return Status::not_open;
-    detail::AssetScope scope(&assets_, runtime_->scope_prefix);
+    detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
     runtime_->context->ProcessKeyDown(static_cast<Rml::Input::KeyIdentifier>(key_identifier),
                                       key_modifier_state);
     return Status::ok;
@@ -586,7 +619,7 @@ Status Backend::process_key_down(int key_identifier, int key_modifier_state) {
 Status Backend::process_key_up(int key_identifier, int key_modifier_state) {
     if (!open_ || !runtime_ || !runtime_->context)
         return Status::not_open;
-    detail::AssetScope scope(&assets_, runtime_->scope_prefix);
+    detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
     runtime_->context->ProcessKeyUp(static_cast<Rml::Input::KeyIdentifier>(key_identifier),
                                     key_modifier_state);
     return Status::ok;
@@ -597,7 +630,7 @@ Status Backend::process_text_input(std::string_view text) {
         return Status::not_open;
     if (text.empty())
         return Status::rejected;
-    detail::AssetScope scope(&assets_, runtime_->scope_prefix);
+    detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
     runtime_->context->ProcessTextInput(Rml::String{text});
     return Status::ok;
 }
@@ -611,7 +644,7 @@ void Backend::render() {
         return;
     renderer_.begin_frame(width_, height_);
     if (runtime_ && runtime_->context) {
-        detail::AssetScope scope(&assets_, runtime_->scope_prefix);
+        detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
         runtime_->context->Update();
         runtime_->context->Render();
     }
@@ -621,7 +654,7 @@ void Backend::render() {
 void Backend::close() {
     if (runtime_) {
         if (runtime_->context) {
-            detail::AssetScope scope(&assets_, runtime_->scope_prefix);
+            detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
             Rml::RemoveContext(runtime_->context_name);
             runtime_->context = nullptr;
             runtime_->document = nullptr;
