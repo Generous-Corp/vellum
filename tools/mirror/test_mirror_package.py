@@ -589,6 +589,25 @@ class InTreeGpuRuntimeTest(unittest.TestCase):
         self.fixture.write_receipt()
         self.assertRefused("names vellum-gpu-runtime, but no closure pins it")
 
+    def test_header_only_use_of_an_edited_build_tree_header_is_refused(self) -> None:
+        # The closure records the digest of each gpu-runtime header Pulp read
+        # from its FetchContent tree; a header edited there differs from the
+        # in-tree file at the pin.
+        self.header_only_without_skia()
+        row = next(r for r in self.fixture.closure["external_inputs"] if "gpu-runtime" in r["path"])
+        row["sha256"] = sha(b"struct GpuSurface { int edited_in_the_build_tree; };\n")
+        self.fixture.write_receipt()
+        self.assertRefused("does not match the closure digest")
+
+    def test_header_only_use_of_an_extra_build_tree_header_is_refused(self) -> None:
+        self.header_only_without_skia()
+        self.fixture.closure["external_inputs"].append({
+            "path": f"@external/vellum-gpu-runtime/{self.pin}/gpu-runtime/include/gpu_runtime/extra.hpp",
+            "pin": self.pin, "source": VELLUM_SOURCE, "sha256": sha(b"// only in the build tree\n"),
+        })
+        self.fixture.write_receipt()
+        self.assertRefused("has no gpu-runtime/include/gpu_runtime/extra.hpp")
+
     def test_static_link_from_a_unit_without_skia_is_still_refused(self) -> None:
         self.header_only_without_skia()
         self.fixture.closure["targets"][0]["link_targets"] = ["gpu-runtime-device"]
