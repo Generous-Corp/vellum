@@ -133,9 +133,19 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
     # exceptions, the libc++ ABI namespace) are not compared. Both builds use
     # the toolchain and flags Vellum's root project sets for every target.
     #
-    # The links may only reach the one Skia/Dawn provider image: a unit that
-    # does not route into vellum-skia-dawn-provider would link its own static
-    # copy, a second coordinator and Dawn proc table in one process.
+    # The static links may only reach the one Skia/Dawn provider image: a
+    # unit that does not route into vellum-skia-dawn-provider would link its
+    # own static copy, a second coordinator and Dawn proc table in one process.
+    #
+    # Headers reach far more targets than the links do. Pulp's pulp-platform
+    # carries the header-only interface target in its link interface, and the
+    # CMake file API reports an INTERFACE library to its consumers only as an
+    # include directory, never as a link dependency. So a target that compiles
+    # with gpu-runtime's include directory (`build_include_dirs` names the
+    # FetchContent spelling the closures record) is bound like a linking one:
+    # it compiles against `interface_target` and is held to the GPU_RUNTIME_*
+    # comparison. The header-only use carries no objects, so it needs no
+    # provider routing.
     "vellum-gpu-runtime": {
         "kind": "in-tree",
         "subtree": "gpu-runtime",
@@ -144,6 +154,7 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
         "interface_target": "VellumGpuRuntime::DeviceApi",
         "sources": ["https://github.com/Generous-Corp/vellum.git", "https://github.com/Generous-Corp/vellum"],
         "provides": ["gpu-runtime-bootstrap", "gpu-runtime-device", "gpu-runtime-skia-log-bridge"],
+        "build_include_dirs": {"@build/_deps/vellum_gpu_runtime-src/gpu-runtime/include": "gpu-runtime/include"},
     },
     "yaml-cpp": {"kind": "cmake", "provides": ["yaml-cpp"], "options": {"YAML_CPP_BUILD_TESTS": "OFF", "YAML_CPP_BUILD_TOOLS": "OFF", "YAML_CPP_BUILD_CONTRIB": "OFF", "YAML_BUILD_SHARED_LIBS": "OFF", "YAML_CPP_INSTALL": "OFF", "CMAKE_POLICY_VERSION_MINIMUM": "3.5"}},
 }
@@ -761,6 +772,19 @@ def prepare_generated(repo: Path, receipt: dict[str, Any], units: list[tuple[str
     return {"build_info_dir": build_info_dir, "prelude_dir": prelude_dir, "binary_data": used_binary}
 
 
+def in_tree_include_dependency(path: str) -> tuple[str, str] | None:
+    """The in-tree dependency, and its repository-relative directory, an include path names."""
+    for name, recipe in DEPENDENCIES.items():
+        if recipe["kind"] != "in-tree":
+            continue
+        if path in recipe.get("build_include_dirs", {}):
+            return name, recipe["build_include_dirs"][path]
+        match = re.match(rf"@external/{re.escape(name)}/[^/]+(?:/(?P<rel>.*))?\Z", path)
+        if match:
+            return name, match.group("rel") or ""
+    return None
+
+
 def map_include(path: str, repo: Path, roots: dict[str, Path], generated: dict[str, Any],
                 generated_binary_dir: str) -> str:
     if path in BUILD_INCLUDE_DIRS:
@@ -772,6 +796,12 @@ def map_include(path: str, repo: Path, roots: dict[str, Path], generated: dict[s
         if kind == "preludes":
             return str(generated["prelude_dir"])
         return generated_binary_dir
+    in_tree = in_tree_include_dependency(path)
+    if in_tree is not None:
+        name, relative = in_tree
+        if name not in roots:
+            raise PlanError(f"include directory {path} names {name}, but no closure pins it")
+        return str(roots[name] / relative)
     if path.startswith("@build/"):
         raise PlanError(f"closure names an unmapped build-tree include directory: {path}")
     match = re.match(r"@external/(?P<name>[A-Za-z0-9_.-]+)/(?P<root>[^/]+)(?:/(?P<rel>.*))?\Z", path)
@@ -827,6 +857,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
             all_targets[target["name"]] = unit
     for unit, closure in units:
         targets = []
+        static_in_tree = False
         for target in closure.get("targets", []):
             name = target["name"]
             if target.get("type") != "STATIC_LIBRARY":
@@ -882,7 +913,11 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
             if others:
                 raise PlanError(f"{unit}/{name} has external link inputs with no recipe: {others}")
             in_tree_interfaces = []
-            for dep in sorted({provided[link] for link in external if DEPENDENCIES[provided[link]]["kind"] == "in-tree"}):
+            static_deps = {provided[link] for link in external if DEPENDENCIES[provided[link]]["kind"] == "in-tree"}
+            static_in_tree = static_in_tree or bool(static_deps)
+            header_deps = {found[0] for p in target.get("include_dirs", [])
+                           if (found := in_tree_include_dependency(p)) is not None}
+            for dep in sorted(static_deps | header_deps):
                 problem = in_tree_abi_violations(
                     dep, f"{unit}/{name}", target.get("compile_definitions", []),
                     (in_tree_definitions or {}).get(dep))
@@ -910,8 +945,9 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         # VellumMirror.cmake links a unit's third-party targets into
         # vellum-skia-dawn-provider when any of its targets uses Skia, and into
         # the unit's own dylib otherwise. An in-tree static target linked into
-        # a unit dylib would be a second copy beside the provider's.
-        if any(t["in_tree_interfaces"] for t in targets) and not any(t["skia"] for t in targets):
+        # a unit dylib would be a second copy beside the provider's; header-only
+        # use carries no objects, so it is exempt.
+        if static_in_tree and not any(t["skia"] for t in targets):
             raise PlanError(
                 f"{unit} links an in-tree dependency but does not route into "
                 "vellum-skia-dawn-provider; its own dylib would carry a second copy")

@@ -379,6 +379,7 @@ class MirrorPackagePlanTest(unittest.TestCase):
 
 VELLUM_SOURCE = "https://github.com/Generous-Corp/vellum.git"
 GPU_RUNTIME_HEADER = "gpu-runtime/include/gpu_runtime/gpu_surface.hpp"
+GPU_RUNTIME_BUILD_INCLUDE = "@build/_deps/vellum_gpu_runtime-src/gpu-runtime/include"
 
 
 class InTreeGpuRuntimeTest(unittest.TestCase):
@@ -547,8 +548,52 @@ class InTreeGpuRuntimeTest(unittest.TestCase):
         self.assertRefused("has no Vellum build recipe")
 
     def test_unlisted_gpu_runtime_target_is_refused(self) -> None:
+        # The CMake file API never reports the header-only interface target
+        # as a link; one that appears is unexplained and refused.
         self.use_pin(self.pin, link="gpu-runtime-device-api")
         self.assertRefused("neither mirrored nor a recipe target")
+
+    def header_only_without_skia(self) -> None:
+        # The shape Pulp's closures record for every target that reaches
+        # pulp-platform: gpu-runtime's include directory under the build
+        # tree's FetchContent spelling, and no gpu-runtime link.
+        self.use_pin(self.pin)
+        target = self.fixture.closure["targets"][0]
+        target["link_targets"] = []
+        target["include_dirs"] = [d for d in target["include_dirs"] if "gpu-runtime" not in d]
+        target["include_dirs"].append(GPU_RUNTIME_BUILD_INCLUDE)
+        target["external_link_inputs"] = []
+        target["include_dirs"] = [d for d in target["include_dirs"] if "skia" not in d]
+        self.fixture.closure["external_inputs"] = [r for r in self.fixture.closure["external_inputs"]
+                                                   if "skia" not in r["path"]]
+        self.fixture.write_receipt()
+
+    def test_header_only_use_from_a_unit_without_skia_plans(self) -> None:
+        self.header_only_without_skia()
+        target = self.plan()["units"][0]["targets"][0]
+        self.assertEqual(target["external_links"], [])
+        self.assertEqual(target["in_tree_interfaces"], ["VellumGpuRuntime::DeviceApi"])
+        self.assertIn(str(self.fixture.repo.resolve() / "gpu-runtime/include"), target["include_dirs"])
+
+    def test_header_only_use_is_held_to_the_definitions_comparison(self) -> None:
+        self.header_only_without_skia()
+        self.assertRefused("was exported with GPU_RUNTIME_* definitions []", ["GPU_RUNTIME_BENCHMARK=1"])
+        self.set_definitions(["GPU_RUNTIME_BENCHMARK=1"])
+        self.assertRefused("in-tree vellum-gpu-runtime carries []", [])
+        self.plan(["GPU_RUNTIME_BENCHMARK=1"])
+
+    def test_header_only_use_with_no_pinning_closure_is_refused(self) -> None:
+        self.header_only_without_skia()
+        self.fixture.closure["external_inputs"] = [r for r in self.fixture.closure["external_inputs"]
+                                                   if "gpu-runtime" not in r["path"]]
+        self.fixture.write_receipt()
+        self.assertRefused("names vellum-gpu-runtime, but no closure pins it")
+
+    def test_static_link_from_a_unit_without_skia_is_still_refused(self) -> None:
+        self.header_only_without_skia()
+        self.fixture.closure["targets"][0]["link_targets"] = ["gpu-runtime-device"]
+        self.fixture.write_receipt()
+        self.assertRefused("does not route into vellum-skia-dawn-provider")
 
 
 class PreludeHeaderTest(unittest.TestCase):
