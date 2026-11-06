@@ -59,6 +59,12 @@ BUILD_TIMESTAMP_PLACEHOLDER = "<build-timestamp>"
 #             directories name the dependency.
 #   archive - the pinned Skia/Dawn release archive Vellum already locks in
 #             cmake/VellumSkiaDawn.cmake (identified by its asset digest).
+#   in-tree - a project in this repository that Vellum's own build already
+#             adds before the mirror, so nothing is fetched or built twice:
+#             the mirror links the targets in `provides` directly. The
+#             closure's pin must be a commit of this repository, an ancestor
+#             of HEAD, whose `abi_tree` equals HEAD's, so the mirror compiles
+#             exactly the interface Pulp exported against.
 # `patches` names Vellum transformations applied after checkout. Each is
 # proved only by the closure: the patched bytes must hash to the recorded
 # digest, so a patch that drifts from the export fails the plan.
@@ -108,6 +114,37 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
     # on yogacore (PulpDependencies.cmake), and the mirror build does the same.
     "yoga": {"kind": "cmake", "source_subdir": "yoga", "provides": ["yogacore"], "options": {},
              "cxx_options": ["-frtti"]},
+    # Pulp's device layer forwards to gpu-runtime, which lives in this
+    # repository. A second, fetched copy would put two Dawn proc tables and two
+    # device coordinators in one image, so the mirror links Vellum's own build.
+    # The pin is bound through `abi_tree`, the public headers, not the whole
+    # subtree: the mirror compiles only against that interface, and Vellum owns
+    # gpu-runtime, so an implementation, test or build change here must not
+    # wait on Pulp re-pinning. A header change does, because the mirror would
+    # otherwise compile against an interface Pulp never exported against.
+    #
+    # The interface is also configuration: GPU_RUNTIME_* definitions change
+    # what those headers declare (GPU_RUNTIME_BENCHMARK changes the GpuCompute
+    # vtable). Every mirrored target that links gpu-runtime must have been
+    # exported with exactly the GPU_RUNTIME_* definitions the in-tree targets
+    # carry in their INTERFACE_COMPILE_DEFINITIONS (VellumMirror.cmake passes
+    # them in), and it compiles against `interface_target` so they apply.
+    # Accepted residual: compile options that also change the ABI (RTTI,
+    # exceptions, the libc++ ABI namespace) are not compared. Both builds use
+    # the toolchain and flags Vellum's root project sets for every target.
+    #
+    # The links may only reach the one Skia/Dawn provider image: a unit that
+    # does not route into vellum-skia-dawn-provider would link its own static
+    # copy, a second coordinator and Dawn proc table in one process.
+    "vellum-gpu-runtime": {
+        "kind": "in-tree",
+        "subtree": "gpu-runtime",
+        "abi_tree": "gpu-runtime/include",
+        "abi_definition_prefix": "GPU_RUNTIME_",
+        "interface_target": "VellumGpuRuntime::DeviceApi",
+        "sources": ["https://github.com/Generous-Corp/vellum.git", "https://github.com/Generous-Corp/vellum"],
+        "provides": ["gpu-runtime-bootstrap", "gpu-runtime-device", "gpu-runtime-skia-log-bridge"],
+    },
     "yaml-cpp": {"kind": "cmake", "provides": ["yaml-cpp"], "options": {"YAML_CPP_BUILD_TESTS": "OFF", "YAML_CPP_BUILD_TOOLS": "OFF", "YAML_CPP_BUILD_CONTRIB": "OFF", "YAML_BUILD_SHARED_LIBS": "OFF", "YAML_CPP_INSTALL": "OFF", "CMAKE_POLICY_VERSION_MINIMUM": "3.5"}},
 }
 
@@ -480,12 +517,60 @@ def dependency_source_dir(name: str, root: Path) -> Path:
     return candidate
 
 
+def git_output(repo: Path, *args: str) -> tuple[int, str]:
+    completed = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=False)
+    return completed.returncode, completed.stdout.strip()
+
+
+def prepare_in_tree(name: str, entry: dict[str, Any], repo: Path) -> Path:
+    """Resolve an in-tree dependency to this repository, or refuse.
+
+    The closure recorded a commit of this repository and the exact files it
+    read. The mirror uses the working tree, so each check binds that tree to
+    the recorded commit: the commit is in this history before HEAD, the ABI
+    tree is the same object at both commits, nothing under it is modified or
+    untracked, and every recorded file is inside the subtree.
+    """
+    recipe = DEPENDENCIES[name]
+    pin = entry["pin"]
+    # Metadata consistency, not a guard: the URL is whatever Pulp's configure
+    # recorded. The binding is the pin's history, the ABI tree and the digests.
+    if entry.get("source") not in recipe["sources"]:
+        raise PlanError(f"{name} metadata names source {entry.get('source')!r}, not this repository")
+    subtree, abi_tree = recipe["subtree"], recipe["abi_tree"]
+    for relative in entry["files"]:
+        if not relative.startswith(f"{subtree}/") or ".." in Path(relative).parts:
+            raise PlanError(f"{name} closure reads {relative}, outside {subtree}/")
+    code, _ = git_output(repo, "cat-file", "-e", f"{pin}^{{commit}}")
+    if code:
+        raise PlanError(f"{name}@{pin[:12]} is not a commit of this repository")
+    code, _ = git_output(repo, "merge-base", "--is-ancestor", pin, "HEAD")
+    if code:
+        raise PlanError(f"{name}@{pin[:12]} is not an ancestor of HEAD")
+    pinned = git_output(repo, "rev-parse", f"{pin}:{abi_tree}")
+    current = git_output(repo, "rev-parse", f"HEAD:{abi_tree}")
+    if pinned[0] or current[0] or pinned[1] != current[1]:
+        raise PlanError(
+            f"{name}: {abi_tree} at {pin[:12]} ({pinned[1] or 'absent'}) is not the tree at HEAD "
+            f"({current[1] or 'absent'}); Pulp must re-pin and re-export")
+    # --ignored as well: an ignored header is still on the include path.
+    code, dirty = git_output(repo, "status", "--porcelain", "--untracked-files=all", "--ignored",
+                             "--", abi_tree)
+    if code or dirty:
+        raise PlanError(f"{name}: {abi_tree} has uncommitted changes: {dirty or 'git status failed'}")
+    return repo
+
+
 def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_dir: Path | None,
-                         skia_asset_sha256: str | None) -> dict[str, Path]:
+                         skia_asset_sha256: str | None, repo: Path | None = None) -> dict[str, Path]:
     roots: dict[str, Path] = {}
     for name, entry in sorted(deps.items()):
         recipe = DEPENDENCIES[name]
-        if recipe["kind"] == "archive":
+        if recipe["kind"] == "in-tree":
+            if repo is None:
+                raise PlanError(f"{name} is an in-tree dependency but no repository was given")
+            root = prepare_in_tree(name, entry, repo)
+        elif recipe["kind"] == "archive":
             if skia_dir is None or not skia_asset_sha256:
                 raise PlanError(f"closure needs {name} but no extracted Skia/Dawn archive was given")
             if entry["asset_sha256"] != skia_asset_sha256:
@@ -703,8 +788,24 @@ def map_include(path: str, repo: Path, roots: dict[str, Path], generated: dict[s
     return str(candidate)
 
 
+def in_tree_abi_violations(name: str, target: str, closure_definitions: list[str],
+                           in_tree_definitions: list[str] | None) -> str | None:
+    """Why a target's exported ABI configuration differs from the in-tree build."""
+    prefix = DEPENDENCIES[name]["abi_definition_prefix"]
+    if in_tree_definitions is None:
+        return (f"{target} links {name}, but the build passed no in-tree interface definitions "
+                f"to compare its {prefix}* configuration with")
+    exported = sorted(d for d in closure_definitions if d.startswith(prefix))
+    built = sorted(d for d in in_tree_definitions if d.startswith(prefix))
+    if exported != built:
+        return (f"{target} was exported with {prefix}* definitions {exported}, "
+                f"but the in-tree {name} carries {built}")
+    return None
+
+
 def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
-         skia_asset_sha256: str | None = None) -> dict[str, Any]:
+         skia_asset_sha256: str | None = None,
+         in_tree_definitions: dict[str, list[str]] | None = None) -> dict[str, Any]:
     repo = repo.resolve()
     receipt_path, receipt = newest_receipt(repo)
     file_count = verify_mirror_identity(repo, receipt)
@@ -712,7 +813,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     source_options = source_compile_options_for(repo, receipt, units)
     attached: set[str] = set()
     deps = external_dependencies(units)
-    roots = prepare_dependencies(deps, deps_dir, skia_dir, skia_asset_sha256)
+    roots = prepare_dependencies(deps, deps_dir, skia_dir, skia_asset_sha256, repo)
     generated = prepare_generated(repo, receipt, units, generated_dir)
     binary_dir_token = "@VELLUM_MIRROR_BINARY_DATA_DIR@"
 
@@ -780,6 +881,14 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
             others = [row for row in target.get("external_link_inputs", []) if row.get("dependency") != "skia"]
             if others:
                 raise PlanError(f"{unit}/{name} has external link inputs with no recipe: {others}")
+            in_tree_interfaces = []
+            for dep in sorted({provided[link] for link in external if DEPENDENCIES[provided[link]]["kind"] == "in-tree"}):
+                problem = in_tree_abi_violations(
+                    dep, f"{unit}/{name}", target.get("compile_definitions", []),
+                    (in_tree_definitions or {}).get(dep))
+                if problem:
+                    raise PlanError(problem)
+                in_tree_interfaces.append(DEPENDENCIES[dep]["interface_target"])
             option_sources = []
             for source in target.get("sources", []):
                 if source in source_options:
@@ -796,7 +905,16 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                 "external_links": external,
                 "skia": bool(skia),
                 "skia_asset_sha256": skia[0].get("asset_sha256") if skia else None,
+                "in_tree_interfaces": in_tree_interfaces,
             })
+        # VellumMirror.cmake links a unit's third-party targets into
+        # vellum-skia-dawn-provider when any of its targets uses Skia, and into
+        # the unit's own dylib otherwise. An in-tree static target linked into
+        # a unit dylib would be a second copy beside the provider's.
+        if any(t["in_tree_interfaces"] for t in targets) and not any(t["skia"] for t in targets):
+            raise PlanError(
+                f"{unit} links an in-tree dependency but does not route into "
+                "vellum-skia-dawn-provider; its own dylib would carry a second copy")
         unit_rows.append({
             "name": unit,
             "targets": targets,
@@ -817,7 +935,9 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     # so its license travels with it.
     licenses = {}
     for name in sorted(roots):
-        if DEPENDENCIES[name]["kind"] == "archive":
+        # The archive's notices ship with it; an in-tree project is this
+        # repository's own code under its license.
+        if DEPENDENCIES[name]["kind"] in ("archive", "in-tree"):
             continue
         found = sorted(
             str(path) for path in roots[name].iterdir()
@@ -909,6 +1029,8 @@ def write_cmake(build_plan: dict[str, Any], output: Path) -> None:
             lines += cmake_list(f"VELLUM_MIRROR_TARGET_{tkey}_INTERNAL_LINKS", target["internal_links"])
             lines += cmake_list(f"VELLUM_MIRROR_TARGET_{tkey}_EXTERNAL_LINKS", target["external_links"])
             lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_SKIA {'ON' if target['skia'] else 'OFF'})")
+            lines += cmake_list(f"VELLUM_MIRROR_TARGET_{tkey}_IN_TREE_INTERFACES",
+                                target.get("in_tree_interfaces", []))
             option_sources = target.get("source_compile_options", [])
             lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_OPTION_SOURCE_COUNT {len(option_sources)})")
             for index, entry in enumerate(option_sources):
@@ -930,11 +1052,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skia-asset-sha256", help="digest of the Skia/Dawn archive Vellum locks")
     parser.add_argument("--cmake-output", type=Path, required=True)
     parser.add_argument("--json-output", type=Path)
+    parser.add_argument(
+        "--in-tree-definitions", action="append", default=[], metavar="NAME=DEF|DEF",
+        help="an in-tree dependency's INTERFACE_COMPILE_DEFINITIONS, from the configured targets")
     args = parser.parse_args(argv)
+    in_tree_definitions: dict[str, list[str]] = {}
+    for item in args.in_tree_definitions:
+        name, _, values = item.partition("=")
+        in_tree_definitions[name] = [v for v in values.split("|") if v]
     try:
         build_plan = plan(args.repo, args.deps_dir.resolve(), args.generated_dir.resolve(),
                           args.skia_dir.resolve() if args.skia_dir else None,
-                          args.skia_asset_sha256)
+                          args.skia_asset_sha256, in_tree_definitions)
     except PlanError as error:
         print(f"vellum-mirror-package: {error}", file=sys.stderr)
         return 1

@@ -68,6 +68,12 @@ file(GLOB _installed_libraries "${_prefix}/${VELLUM_INSTALL_LIBDIR}/*.dylib")
 _run("libc++ availability" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/tools/mirror/check_libcxx_availability.py"
     ${_libraries} ${_installed_libraries})
+# One gpu-runtime coordinator and one Dawn proc table across every installed
+# image, the mirror's units included (mirror_package links the in-tree
+# gpu-runtime only into vellum-skia-dawn-provider).
+_run("gpu-runtime census" "${Python3_EXECUTABLE}"
+    "${VELLUM_SOURCE_DIR}/tools/mirror/gpu_runtime_census.py"
+    ${_libraries} ${_installed_libraries})
 
 set(_generator)
 find_program(_ninja ninja)

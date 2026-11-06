@@ -39,5 +39,12 @@
     "core/timebase/",
     "core/timeline/"
   ],
-  "forbidden_definition_pattern": "^PULP_(?:HAS_|BUILD_|ENABLE_)?(?:AUDIO|MIDI|SIGNAL|FORMAT|HOST|VST3|CLAP|AU|AUV2|AUV3|LV2|AAX|GPU_AUDIO)(?:$|[_=])"
+  "forbidden_definition_pattern": "^PULP_(?:HAS_|BUILD_|ENABLE_)?(?:AUDIO|MIDI|SIGNAL|FORMAT|HOST|VST3|CLAP|AU|AUV2|AUV3|LV2|AAX|GPU_AUDIO)(?:$|[_=])",
+  "scoped_external_targets": [
+    {
+      "targets": ["gpu-runtime-bootstrap", "gpu-runtime-device", "gpu-runtime-skia-log-bridge"],
+      "via": "pulp-gpu-device",
+      "reason": "gpu-runtime is linked through pulp-gpu-device only; a closure may name it on pulp-gpu-device and on a target that links pulp-gpu-device, which CMake reports with its link interface"
+    }
+  ]
 }

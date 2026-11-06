@@ -83,6 +83,7 @@ EMBEDDED_PIN = re.compile(r"(?:^|[-_/])([0-9a-f]{40})(?=$|[-_/])", re.IGNORECASE
 POLICY_KEYS = {
     "schema", "allowed_external_targets", "forbidden_target_pattern",
     "forbidden_path_prefixes", "forbidden_definition_pattern", "approved_unmirrored_edges",
+    "scoped_external_targets",
 }
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -774,6 +775,20 @@ def load_policy(root: Path) -> tuple[dict[str, Any] | None, list[str]]:
             errors.append(f"{POLICY_PATH}: {key} must be a list of strings")
     if any(is_pulp_target(x) for x in policy.get("allowed_external_targets", [])):
         errors.append(f"{POLICY_PATH}: allowed_external_targets cannot contain Pulp targets")
+    scoped = policy.get("scoped_external_targets")
+    if not isinstance(scoped, list):
+        errors.append(f"{POLICY_PATH}: scoped_external_targets must be a list")
+    else:
+        for index, entry in enumerate(scoped):
+            where = f"{POLICY_PATH}: scoped_external_targets[{index}]"
+            if not isinstance(entry, dict) or set(entry) != {"targets", "via", "reason"} \
+                    or not isinstance(entry["targets"], list) or not entry["targets"] \
+                    or not all(isinstance(t, str) and t for t in entry["targets"]) \
+                    or not isinstance(entry["via"], str) or not is_pulp_target(entry["via"]) \
+                    or not isinstance(entry["reason"], str) or not entry["reason"].strip():
+                errors.append(f"{where} must name targets, a Pulp via target and a reason")
+            elif set(entry["targets"]) & set(policy.get("allowed_external_targets", [])):
+                errors.append(f"{where} targets are also allowed everywhere")
     exceptions = policy.get("approved_unmirrored_edges")
     required = {"id", "source", "target", "platforms", "owner", "approver", "exit_criterion"}
     if not isinstance(exceptions, list):
@@ -823,6 +838,10 @@ def link_closure_findings(
     forbidden_target = re.compile(policy["forbidden_target_pattern"], re.IGNORECASE)
     forbidden_define = re.compile(policy["forbidden_definition_pattern"])
     allowed_external = set(policy["allowed_external_targets"])
+    # A scoped external is allowed only where its `via` target is: on the via
+    # target itself, or on a target (or closure) that also links it.
+    scoped_via = {target: entry["via"] for entry in policy.get("scoped_external_targets", [])
+                  for target in entry["targets"]}
     used_exceptions: set[str] = set()
     exported_targets = {
         canonical_target(str(target.get("name", "")))
@@ -845,6 +864,11 @@ def link_closure_findings(
                 continue
             if is_pulp_target(canonical) and canonical not in exported_targets:
                 findings.append(f"{unit}: transitive unmirrored target {canonical} lacks an exact source edge exception")
+            elif canonical in scoped_via:
+                if scoped_via[canonical] not in direct_links and scoped_via[canonical] not in {
+                        canonical_target(str(t.get("name", ""))) for t in closure.get("targets", [])
+                        if isinstance(t, dict)}:
+                    findings.append(f"{unit}: link target {canonical} is allowed only via {scoped_via[canonical]}")
             elif canonical not in exported_targets and canonical not in allowed_external:
                 if forbidden_target.search(canonical):
                     findings.append(f"{unit}: forbidden link target {canonical}")
@@ -864,7 +888,12 @@ def link_closure_findings(
                     continue
                 if is_pulp_target(canonical) and approved_unmirrored_edge(policy, source, canonical, system, used_exceptions):
                     continue
-                if forbidden_target.search(canonical):
+                if canonical in scoped_via:
+                    via = scoped_via[canonical]
+                    links = {canonical_target(str(x)) for x in target.get("link_targets", [])}
+                    if source != via and via not in links:
+                        findings.append(f"{unit}: link target {canonical} is allowed only via {via}, not from {source}")
+                elif forbidden_target.search(canonical):
                     findings.append(f"{unit}: forbidden link target {canonical}")
                 elif is_pulp_target(canonical):
                     findings.append(f"{unit}: unmirrored edge {source}->{canonical} lacks a current approved exception")
