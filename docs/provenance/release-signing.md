@@ -172,17 +172,24 @@ promotion attestation and prove full-matrix parity.
   request and branch workflows cannot read it, and no fleet host holds it.
 - **Only `release-tag.yml` may use the environment.** The required `release-policy` check
   (`scripts/check_release_policy.py`) fails when any other workflow names it.
-- **The signing policy is owner-reviewed.** `.github/CODEOWNERS` gives these files to the owner, and `main` requires
-  code-owner review:
+- **The signing policy needs two automated reviews.** `.github/CODEOWNERS` lists these files. A pull request that
+  changes one, or any workflow or local action, needs the `release-path-review` status: two counted reviewer APPROVEs
+  of its exact head, from `pulp-review` and the adversarial pass `infra-review2`, with no HOLD
+  ([Decision 0014](../../decisions/0014-release-path-accident-guard.md)). This is an accident guard, not a security
+  boundary: anyone holding the fleet App's key can post the verdicts it counts. Code-owner review stays on until the
+  owner turns it off, after the status has gated one release-path pull request. The list covers:
   - the signer files: release, authority and renderer;
   - the release workflows: `release-tag.yml`, `release-policy.yml` and `version-at-land.yml`, which holds the App
     token that pushes the bump branch;
   - the release scripts;
   - the verifiers, including the immutable-release verifier;
   - the committed record the release decision trusts: the retired tags;
+  - the release-path review's rule, its two workflows, and `.shipyard/config.toml`, which names the reviewer signers
+    and sessions it counts;
   - CODEOWNERS itself.
   `release-policy` keeps that list complete: CODEOWNERS and the check's own list must name the same files, and a
-  policy script may import only modules that are themselves on the list.
+  policy script may import only modules that are themselves on the list. It then runs the base branch's copy of the
+  check on the pull request's tree (`--from-base`), so a pull request cannot weaken the check that judges it.
 - **Checked-out code never runs next to a secret.** In `release-tag.yml` and `version-at-land.yml`, each secret
   lives in a step that runs no repository Python:
   - signing runs only `git tag`;

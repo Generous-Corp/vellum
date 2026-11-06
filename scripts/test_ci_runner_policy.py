@@ -43,6 +43,8 @@ EXPECTED_RUNNERS = {
     "review-verdict.yml": ("__hosted__", "ubuntu-24.04"),
     "review-verdict-trigger.yml": ("__hosted__", "ubuntu-24.04"),
     "release-cadence-check.yml": ("__hosted__", "ubuntu-latest"),
+    "release-path-review.yml": ("__hosted__", "ubuntu-24.04"),
+    "release-path-review-trigger.yml": ("__hosted__", "ubuntu-24.04"),
     "release-policy.yml": ("__hosted__", "ubuntu-latest"),
     "release-publish-rehearsal.yml": (
         "VELLUM_AUTHORITY_RUNS_ON_JSON",
@@ -1115,6 +1117,10 @@ class RunnerPolicyTests(unittest.TestCase):
             "readme-quick-start.yml",
             "release-policy.yml",
         }
+        # A required context posted from the default branch's copy is started
+        # on the queue by a permission-less trigger workflow; neither runs on
+        # pull_request, which would run the pull request's own copy.
+        required_from_base = {"release-path-review-trigger.yml"}
         for path in sorted(WORKFLOWS.glob("*.yml")):
             text = path.read_text(encoding="utf-8")
             _, marker, triggers = text.partition("\non:\n")
@@ -1127,6 +1133,9 @@ class RunnerPolicyTests(unittest.TestCase):
                     self.assertIsNotNone(
                         re.search(r"^  pull_request:\s*$", triggers, re.M), path.name
                     )
+                elif path.name in required_from_base:
+                    self.assertTrue(declares, f"{path.name} lacks a merge_group trigger")
+                    self.assertIsNone(re.search(r"^  pull_request:\s*$", triggers, re.M), path.name)
                 else:
                     self.assertFalse(declares, f"{path.name} must not run on merge_group")
 

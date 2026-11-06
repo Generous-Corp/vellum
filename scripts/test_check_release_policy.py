@@ -25,6 +25,9 @@ class Policy(unittest.TestCase):
     SIGNING = ("jobs:\n  sign:\n    environment: release\n    steps:\n      - name: v\n        run: |\n" + CALL
                + "      - name: d\n        run: |\n" + CALL)
 
+    BASE_JUDGE = ("jobs:\n  release-policy:\n    steps:\n      - name: base\n        run: |\n"
+                  f"          python3 -I {policy.BASE_JUDGE}\n")
+
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="release-policy-"))
         (self.tmp / ".github/workflows").mkdir(parents=True)
@@ -34,6 +37,7 @@ class Policy(unittest.TestCase):
         self.fingerprint = self.release[1]
         shutil.copy(ROOT / policy.CODEOWNERS, self.tmp / policy.CODEOWNERS)
         self.workflow("release-tag.yml", self.SIGNING)
+        self.workflow("release-policy.yml", self.BASE_JUDGE)
         self.workflow("verify.yml", self.call("release-signers.allowed_signers", *self.release))
 
     def make_signer(self, principal: str, relative: Path) -> tuple[str, str]:
@@ -279,6 +283,101 @@ class Policy(unittest.TestCase):
         self.assertNotIn("ci_lanes.json", (ROOT / policy.CODEOWNERS).read_text())
         # Still named by the real manifest the check reads.
         self.assertEqual(policy.lane_problems(ROOT), [])
+
+    def test_the_policy_workflow_must_run_the_base_copy(self) -> None:
+        self.assertEqual(policy.problems(self.tmp), [])  # control: the fixture runs it
+        for text in ("jobs:\n  release-policy:\n    steps:\n      - run: python3 -I scripts/check_release_policy.py check\n",
+                     self.BASE_JUDGE.replace(" --from-base", "")):
+            with self.subTest(text=text):
+                self.workflow("release-policy.yml", text)
+                self.assertIn("release-policy.yml does not run the base branch's check_release_policy.py on the tree",
+                              policy.problems(self.tmp))
+        (self.tmp / ".github/workflows/release-policy.yml").unlink()
+        self.assertTrue(any("release-policy.yml is missing" in p for p in policy.problems(self.tmp)))
+
+    def owners(self, extra: str = "", drop: str | None = None) -> None:
+        lines = [line for line in (ROOT / policy.CODEOWNERS).read_text().splitlines()
+                 if drop is None or not line.startswith(drop + " ")]
+        (self.tmp / policy.CODEOWNERS).write_text("\n".join(lines) + "\n" + extra)
+
+    def test_from_the_base_a_tree_may_own_more_files(self) -> None:
+        self.owners(extra="/scripts/new_release_step.py @danielraffel\n")
+        strict = policy.problems(self.tmp)
+        self.assertIn(f"{policy.CODEOWNERS} owns /scripts/new_release_step.py, which POLICY_FILES does not name",
+                      strict)  # control: the tree's own copy wants the two lists equal
+        self.assertEqual(policy.problems(self.tmp, ROOT), [])
+
+    def test_from_the_base_a_tree_cannot_disown_a_policy_file_it_keeps(self) -> None:
+        kept = "/scripts/verify_release_tag.py"
+        self.owners(drop=kept)
+        (self.tmp / "scripts").mkdir(exist_ok=True)
+        (self.tmp / kept.lstrip("/")).write_text("# still here\n")
+        self.assertIn(f"{policy.CODEOWNERS} does not give the base branch's policy file {kept} to {policy.OWNER}",
+                      policy.problems(self.tmp, ROOT))
+        (self.tmp / kept.lstrip("/")).unlink()  # a file the tree deletes is retired, not weakened
+        self.assertEqual(policy.problems(self.tmp, ROOT), [])
+
+    def test_from_the_base_a_policy_script_may_import_a_module_the_tree_adds(self) -> None:
+        self.owners(extra="/scripts/release_helper.py @danielraffel\n")
+        (self.tmp / "scripts").mkdir(exist_ok=True)
+        (self.tmp / "scripts/release_helper.py").write_text("VALUE = 1\n")
+        (self.tmp / "scripts/verify_release_tag.py").write_text("import release_helper\n")
+        self.assertEqual(policy.problems(self.tmp, ROOT), [])
+        self.owners()  # control: a module nobody owns is still refused
+        self.assertIn("scripts/verify_release_tag.py imports scripts/release_helper.py, which is not a policy file",
+                      policy.problems(self.tmp, ROOT))
+
+    def base_lane(self, entries: list[dict]) -> Path:
+        base = Path(tempfile.mkdtemp(prefix="release-policy-base-"))
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        (base / "scripts").mkdir()
+        (base / policy.LANE_MANIFEST).write_text(json.dumps({"lanes": {policy.POLICY_LANE: entries}}))
+        return base
+
+    def test_from_the_base_the_lane_keeps_every_base_entry_unchanged(self) -> None:
+        required = [{"script": s} for s in policy.REQUIRED_LANE_SCRIPTS]
+        kept = {"script": "scripts/test_release_cadence.py", "isolated": True}
+        base = self.base_lane(required + [kept])
+        (self.tmp / "scripts").mkdir(exist_ok=True)
+        (self.tmp / kept["script"]).write_text("# test\n")
+        manifest = self.tmp / policy.LANE_MANIFEST
+        for lane, ok in ((required + [kept], True), (required + [kept, {"script": "scripts/test_new.py"}], True),
+                         (required + [{"script": kept["script"], "isolated": True, "args": []}], False),
+                         (required + [{**kept, "args": ["--help"]}], False),
+                         (required, False), (required + [{"script": kept["script"]}], False),
+                         (required + [{**kept, "isolated": False}], False)):
+            with self.subTest(lane=lane):
+                manifest.write_text(json.dumps({"lanes": {policy.POLICY_LANE: lane}}))
+                self.assertEqual(policy.lane_problems(self.tmp), [])  # the tree's own copy has no baseline
+                found = policy.lane_problems(self.tmp, base)
+                self.assertEqual(found == [], ok, found)
+        (self.tmp / kept["script"]).unlink()  # a deleted test is retired, not dropped
+        manifest.write_text(json.dumps({"lanes": {policy.POLICY_LANE: required}}))
+        self.assertEqual(policy.lane_problems(self.tmp, base), [])
+
+    def test_from_the_base_a_lane_entry_may_become_isolated(self) -> None:
+        required = [{"script": s} for s in policy.REQUIRED_LANE_SCRIPTS]
+        base = self.base_lane(required + [{"script": "scripts/test_check_release_policy.py"}])
+        (self.tmp / "scripts").mkdir(exist_ok=True)
+        (self.tmp / "scripts/test_check_release_policy.py").write_text("# test\n")
+        self.lanes(list(policy.REQUIRED_LANE_SCRIPTS))
+        self.assertTrue(policy.lane_problems(self.tmp, base))  # control: dropped
+        manifest = self.tmp / policy.LANE_MANIFEST
+        manifest.write_text(json.dumps({"lanes": {policy.POLICY_LANE: required + [
+            {"script": "scripts/test_check_release_policy.py", "isolated": True}]}}))
+        self.assertEqual(policy.lane_problems(self.tmp, base), [])
+
+    def test_from_the_base_an_unreadable_base_lane_fails(self) -> None:
+        self.lanes(list(policy.REQUIRED_LANE_SCRIPTS))
+        base = Path(tempfile.mkdtemp(prefix="release-policy-base-"))
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        self.assertTrue(any("base branch's" in p for p in policy.lane_problems(self.tmp, base)))
+
+    def test_from_base_refuses_to_judge_its_own_checkout(self) -> None:
+        done = subprocess.run([sys.executable, "-I", str(ROOT / "scripts/check_release_policy.py"),
+                               "--root", str(ROOT), "--from-base", "check"], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("--from-base judges another checkout", done.stderr)
 
     def test_the_signing_workflow_must_use_the_environment(self) -> None:
         self.workflow("release-tag.yml", "jobs:\n  sign:\n    runs-on: x\n")

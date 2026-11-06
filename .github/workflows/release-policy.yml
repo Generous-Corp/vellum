@@ -28,6 +28,27 @@ jobs:
           set -euo pipefail
           python3 -I scripts/run_ci_lane.py --lane release-policy
 
+      # The check above is the pull request's own copy. The base branch's copy
+      # then judges the same tree, so a pull request cannot weaken the check
+      # that decides it. An accident guard, not a security boundary
+      # (pulp-planning architecture/2026-11-05-release-path-gate.md, option A):
+      # a pull request can still edit this step, which is why changing this
+      # file needs two reviews (release-path-review).
+      - name: Judge the tree with the base branch's policy
+        if: github.event_name != 'push'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          base="$RUNNER_TEMP/policy-base"
+          git worktree add --detach "$base" "$BASE_SHA"
+          if ! grep -q -- '--from-base' "$base/scripts/check_release_policy.py"; then
+            echo "::notice::the base branch's check_release_policy.py predates --from-base; nothing to run"
+            exit 0
+          fi
+          python3 -I "$base/scripts/check_release_policy.py" --root "$GITHUB_WORKSPACE" --from-base check
+
       # Advisory: a Version-Bump trailer that version-at-land cannot read is
       # skipped there with a warning, so name it here while it can still be fixed.
       - name: Lint Version-Bump trailers (advisory)
