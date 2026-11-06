@@ -48,6 +48,10 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_release_path_review.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_ci_lanes.py",
         "isolated": true
       },

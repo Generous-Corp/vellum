@@ -25,7 +25,27 @@ fails when:
   cannot run with the signing key or an App token;
 - the release-policy lane of scripts/ci_lanes.json stops running
   scripts/test_ci_lanes.py or this check, so a release test dropped from every
-  lane still fails CI without the manifest being owner-owned.
+  lane still fails CI without the manifest being owner-owned;
+- release-policy.yml stops running the base branch's copy of this script on
+  a pull request's tree (`--from-base`).
+
+With `--from-base`, this copy is the base branch's and `--root` is a pull
+request's tree. Every rule above then runs as the base wrote it, so a pull
+request cannot weaken the check that judges it. The tree may grow: CODEOWNERS
+may own files the base's POLICY_FILES does not name yet (the tree's own copy
+holds the two lists equal), a policy script may import one of them, and the
+release-policy lane may add entries or keys. It may not lose what the base
+has: every base policy file the tree still has stays owned, and every base
+lane entry whose script the tree still has keeps its keys, values and
+arguments. A deliberate loosening (disowning a file that stays, changing a lane entry's
+arguments, moving a test out of the lane) therefore also changes the
+release-policy.yml step that runs this, which is a release-path change and
+needs both reviews; see Decision 0014.
+
+The base-branch run is an accident guard, not a security boundary
+(pulp-planning architecture/2026-11-05-release-path-gate.md, option A): a pull
+request still edits the workflow that runs it, and two reviews of that edit
+(the `release-path-review` status) are what catch it.
 
 `signer` prints the principal and fingerprint the policy names, for the
 release job to verify the tag it just signed.
@@ -51,13 +71,18 @@ OWNER = "@danielraffel"
 # The signing policy, the code that enforces it, the committed record the
 # release decision trusts (the retired tags) and its one loader, the lane
 # runner that decides which release-path tests CI runs (the lane manifest is not
-# owned; lane_problems holds the release-policy lane's contents instead), and the
-# workflow that holds an App token to propose each version (version-at-land.yml).
+# owned; lane_problems holds the release-policy lane's contents instead), the
+# workflow that holds an App token to propose each version (version-at-land.yml),
+# and the release-path review: its rule, its two workflows and the Shipyard
+# config naming the reviewer signers and sessions it counts.
 POLICY_FILES = (
     "/.github/CODEOWNERS",
+    "/.github/workflows/release-path-review-trigger.yml",
+    "/.github/workflows/release-path-review.yml",
     "/.github/workflows/release-policy.yml",
     "/.github/workflows/release-tag.yml",
     "/.github/workflows/version-at-land.yml",
+    "/.shipyard/config.toml",
     "/provenance/authority-signers.allowed_signers",
     "/provenance/release-signers.allowed_signers",
     "/provenance/retired-release-tags.json",
@@ -65,6 +90,7 @@ POLICY_FILES = (
     "/scripts/pretag_checks.py",
     "/scripts/release_cadence.py",
     "/scripts/release_dry_run.py",
+    "/scripts/release_path_review.py",
     "/scripts/release_request.py",
     "/scripts/retired_release_tags.py",
     "/scripts/run_ci_lane.py",
@@ -377,7 +403,10 @@ def reusable_problems(workflows: dict[str, str]) -> list[str]:
     return found
 
 
-def codeowner_problems(codeowners: str | None) -> list[str]:
+def codeowner_problems(codeowners: str | None, root: Path | None = None) -> list[str]:
+    """CODEOWNERS and POLICY_FILES are one list. With `root` (this copy is the
+    base's, judging a pull request's tree), CODEOWNERS may own more, but every
+    base policy file the tree still has stays owned."""
     if codeowners is None:
         return [f"{CODEOWNERS} is missing"]
     owned = {}
@@ -385,14 +414,32 @@ def codeowner_problems(codeowners: str | None) -> list[str]:
         fields = line.split("#", 1)[0].split()
         if fields:
             owned[fields[0]] = fields[1:]
+    if root is not None:
+        return [f"{CODEOWNERS} does not give the base branch's policy file {path} to {OWNER}"
+                for path in POLICY_FILES
+                if owned.get(path) != [OWNER] and (root / path.lstrip("/")).exists()]
     found = [f"{CODEOWNERS} does not give {path} to {OWNER}" for path in POLICY_FILES
              if owned.get(path) != [OWNER]]
     return found + [f"{CODEOWNERS} owns {path}, which POLICY_FILES does not name" for path in owned
                     if path not in POLICY_FILES]
 
 
-def import_problems(root: Path) -> list[str]:
-    """Repository modules a policy script imports must themselves be policy files."""
+def owned_paths(codeowners: str | None) -> frozenset[str]:
+    """The anchored paths CODEOWNERS gives to the owner."""
+    owned = set()
+    for line in (codeowners or "").splitlines():
+        fields = line.split("#", 1)[0].split()
+        if fields and fields[1:] == [OWNER]:
+            owned.add(fields[0])
+    return frozenset(owned)
+
+
+def import_problems(root: Path, also_policy: frozenset[str] = frozenset()) -> list[str]:
+    """Repository modules a policy script imports must themselves be policy files.
+
+    `also_policy` names more files that count: from the base, the files the
+    tree's CODEOWNERS owns, so a pull request may add a policy module and
+    import it in the same change."""
     found = []
     for path in POLICY_FILES:
         source = root / path.lstrip("/")
@@ -401,7 +448,8 @@ def import_problems(root: Path) -> list[str]:
         for module in sorted(set(LOCAL_IMPORT.findall(source.read_text(encoding="utf-8")))):
             for directory in PYTHON_DIRS:
                 target = f"/{directory}/{module}.py".replace("/./", "/")
-                if (root / target.lstrip("/")).is_file() and target not in POLICY_FILES:
+                if (root / target.lstrip("/")).is_file() and target not in POLICY_FILES \
+                        and target not in also_policy:
                     found.append(f"{path.lstrip('/')} imports {target.lstrip('/')}, which is not a policy file")
     return found
 
@@ -471,27 +519,75 @@ POLICY_LANE = "release-policy"
 REQUIRED_LANE_SCRIPTS = ("scripts/test_ci_lanes.py", "scripts/check_release_policy.py")
 
 
-def lane_problems(root: Path) -> list[str]:
-    """The release-policy lane must keep running the lane-coverage test and this check."""
-    path = root / LANE_MANIFEST
-    if not path.is_file():
-        return []  # run_ci_lane.py cannot run the required lane without it
+def policy_lane(root: Path) -> list | None:
+    """The release-policy lane's entries, or None when the manifest is unreadable."""
     try:
-        lane = json.loads(path.read_text(encoding="utf-8"))["lanes"][POLICY_LANE]
-    except (ValueError, KeyError, TypeError):
+        lane = json.loads((root / LANE_MANIFEST).read_text(encoding="utf-8"))["lanes"][POLICY_LANE]
+    except (ValueError, KeyError, TypeError, OSError):
+        return None
+    return lane if isinstance(lane, list) else None
+
+
+def lane_problems(root: Path, baseline: Path | None = None) -> list[str]:
+    """The release-policy lane must keep running the lane-coverage test and this check.
+
+    With `baseline` (the base branch's checkout, when its copy judges a pull
+    request's tree), the lane must also keep every entry of the base's lane
+    whose script the tree still has, with every key, value and argument it had."""
+    if not (root / LANE_MANIFEST).is_file():
+        return []  # run_ci_lane.py cannot run the required lane without it
+    lane = policy_lane(root)
+    if lane is None:
         return [f"{LANE_MANIFEST} has no readable `{POLICY_LANE}` lane"]
     scripts = [entry.get("script") for entry in lane if isinstance(entry, dict)]
-    return [f"{LANE_MANIFEST} lane `{POLICY_LANE}` does not run {script}"
-            for script in REQUIRED_LANE_SCRIPTS if script not in scripts]
+    found = [f"{LANE_MANIFEST} lane `{POLICY_LANE}` does not run {script}"
+             for script in REQUIRED_LANE_SCRIPTS if script not in scripts]
+    if baseline is not None:
+        base_lane = policy_lane(baseline)
+        if base_lane is None:
+            return found + [f"the base branch's {LANE_MANIFEST} has no readable `{POLICY_LANE}` lane"]
+        for entry in base_lane:
+            script = entry.get("script") if isinstance(entry, dict) else None
+            retired = isinstance(script, str) and not (root / script).exists()
+            # An entry may gain keys (`isolated`), never lose or change one; its
+            # arguments stay exactly as they were, since an added argument can
+            # change what a test runs.
+            kept = any(isinstance(entry, dict) and isinstance(mine, dict)
+                       and all(mine.get(key) == value for key, value in entry.items())
+                       and mine.get("args") == entry.get("args") for mine in lane)
+            if not kept and not retired:
+                found.append(f"{LANE_MANIFEST} lane `{POLICY_LANE}` drops or changes the base branch's entry "
+                             f"{json.dumps(entry, sort_keys=True)}")
+    return found
 
 
-def problems(root: Path) -> list[str]:
+POLICY_WORKFLOW = "release-policy.yml"
+# How release-policy.yml runs the base branch's copy of this check on a pull
+# request's tree (`$base` is a checkout of the base commit).
+BASE_JUDGE = '"$base/scripts/check_release_policy.py" --root "$GITHUB_WORKSPACE" --from-base check'
+
+
+def base_judge_problems(workflows: dict[str, str]) -> list[str]:
+    text = workflows.get(POLICY_WORKFLOW)
+    if text is None:
+        return [f"{WORKFLOWS / POLICY_WORKFLOW} is missing"]
+    if BASE_JUDGE not in text:
+        return [f"{POLICY_WORKFLOW} does not run the base branch's check_release_policy.py on the tree"]
+    return []
+
+
+def problems(root: Path, baseline: Path | None = None) -> list[str]:
+    """Every policy violation in `root`. `baseline` is this copy's own
+    checkout when it is the base branch's, judging a pull request's tree."""
     workflows = load_workflows(root)
     if SIGNING_WORKFLOW not in workflows:
         return [f"{WORKFLOWS / SIGNING_WORKFLOW} is missing"]
     codeowners_path = root / CODEOWNERS
     codeowners = codeowners_path.read_text(encoding="utf-8") if codeowners_path.is_file() else None
-    found = environment_problems(workflows) + codeowner_problems(codeowners) + import_problems(root) + lane_problems(root)
+    found = (environment_problems(workflows) + codeowner_problems(codeowners, root if baseline else None)
+             + import_problems(root, owned_paths(codeowners) if baseline else frozenset())
+             + lane_problems(root, baseline))
+    found += base_judge_problems(workflows)
     found += isolation_problems(workflows, root)
     if RELEASE_ENVIRONMENT not in environment_names(workflows[SIGNING_WORKFLOW]):
         found.append(f"{SIGNING_WORKFLOW} does not run in the `{RELEASE_ENVIRONMENT}` environment")
@@ -502,13 +598,17 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("command", choices=("check", "signer"))
     parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument("--from-base", action="store_true",
+                        help="this copy is the base branch's; judge the tree at --root against it")
     args = parser.parse_args(argv)
     try:
         if args.command == "signer":
             principal, fingerprint = signer(args.root)
             print(f"principal={principal}\nfingerprint={fingerprint}")
             return 0
-        found = problems(args.root)
+        if args.from_base and args.root.resolve() == ROOT.resolve():
+            raise PolicyError("--from-base judges another checkout; --root names this one")
+        found = problems(args.root, ROOT if args.from_base else None)
     except (OSError, PolicyError) as error:
         print(f"release policy: {error}", file=sys.stderr)
         return 1
