@@ -772,21 +772,33 @@ def prepare_generated(repo: Path, receipt: dict[str, Any], units: list[tuple[str
     return {"build_info_dir": build_info_dir, "prelude_dir": prelude_dir, "binary_data": used_binary}
 
 
-def in_tree_include_dependency(path: str) -> tuple[str, str] | None:
-    """The in-tree dependency, and its repository-relative directory, an include path names."""
+def in_tree_include_dependency(path: str) -> tuple[str, str, str | None] | None:
+    """The in-tree dependency an include path names: (name, repository-relative dir, root segment).
+
+    The root segment is None for a `build_include_dirs` spelling, which names
+    no commit; map_include binds every other spelling to the closure's pin.
+    """
     for name, recipe in DEPENDENCIES.items():
         if recipe["kind"] != "in-tree":
             continue
         if path in recipe.get("build_include_dirs", {}):
-            return name, recipe["build_include_dirs"][path]
-        match = re.match(rf"@external/{re.escape(name)}/[^/]+(?:/(?P<rel>.*))?\Z", path)
+            return name, recipe["build_include_dirs"][path], None
+        match = re.match(rf"@external/{re.escape(name)}/(?P<root>[^/]+)(?:/(?P<rel>.*))?\Z", path)
         if match:
-            return name, match.group("rel") or ""
+            return name, match.group("rel") or "", match.group("root")
     return None
 
 
+def confined_relative(path: str, relative: str) -> str:
+    """Refuse a dependency-relative directory that is absolute or has an empty, '.' or '..' segment."""
+    if relative and (relative.startswith("/") or any(part in ("", ".", "..") for part in relative.split("/"))):
+        raise PlanError(f"include directory {path} is not confined to its dependency")
+    return relative
+
+
 def map_include(path: str, repo: Path, roots: dict[str, Path], generated: dict[str, Any],
-                generated_binary_dir: str) -> str:
+                generated_binary_dir: str, deps: dict[str, dict[str, Any]] | None = None) -> str:
+    deps = deps or {}
     if path in BUILD_INCLUDE_DIRS:
         kind = BUILD_INCLUDE_DIRS[path]
         if kind == "choc":
@@ -798,9 +810,16 @@ def map_include(path: str, repo: Path, roots: dict[str, Path], generated: dict[s
         return generated_binary_dir
     in_tree = in_tree_include_dependency(path)
     if in_tree is not None:
-        name, relative = in_tree
-        if name not in roots:
+        name, relative, root = in_tree
+        if name not in roots or name not in deps:
             raise PlanError(f"include directory {path} names {name}, but no closure pins it")
+        if root is not None and root != deps[name]["pin"]:
+            raise PlanError(f"include directory {path} names {name} at {root}, not its pin {deps[name]['pin']}")
+        relative = confined_relative(path, relative)
+        abi_tree = DEPENDENCIES[name]["abi_tree"]
+        if relative != abi_tree and not relative.startswith(abi_tree + "/"):
+            # The ABI tree is the only part of this repository bound to the pin.
+            raise PlanError(f"include directory {path} is outside {name}'s interface tree {abi_tree}")
         return str(roots[name] / relative)
     if path.startswith("@build/"):
         raise PlanError(f"closure names an unmapped build-tree include directory: {path}")
@@ -809,7 +828,10 @@ def map_include(path: str, repo: Path, roots: dict[str, Path], generated: dict[s
         root = roots.get(match.group("name"))
         if root is None:
             raise PlanError(f"include directory {path} names a dependency with no prepared source")
-        return str(root / (match.group("rel") or ""))
+        entry = deps.get(match.group("name"))
+        if entry is None or match.group("root") != entry["root"]:
+            raise PlanError(f"include directory {path} is not at the root the closures pin")
+        return str(root / confined_relative(path, match.group("rel") or ""))
     if path.startswith("@") or path.startswith("/") or ".." in Path(path).parts:
         raise PlanError(f"include directory is not a mirror-relative path: {path}")
     candidate = repo / MIRROR_DIR / path
@@ -877,7 +899,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                     raise PlanError(f"{unit}/{name}: source {source} is not in the landed mirror")
                 if candidate.suffix in SOURCE_SUFFIXES:
                     sources.append(str(candidate))
-            include_dirs = [map_include(p, repo, roots, generated, binary_dir_token) for p in target.get("include_dirs", [])]
+            include_dirs = [map_include(p, repo, roots, generated, binary_dir_token, deps) for p in target.get("include_dirs", [])]
             # Compilable inputs the closure attributes to a dependency whose
             # headers only this target reads are compiled into it.
             dep_names = {

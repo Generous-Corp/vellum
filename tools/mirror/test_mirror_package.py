@@ -608,11 +608,66 @@ class InTreeGpuRuntimeTest(unittest.TestCase):
         self.fixture.write_receipt()
         self.assertRefused("has no gpu-runtime/include/gpu_runtime/extra.hpp")
 
+    def add_include(self, include: str) -> None:
+        self.fixture.closure["targets"][0]["include_dirs"].append(include)
+        self.fixture.write_receipt()
+
+    def test_pinned_interface_include_still_maps(self) -> None:
+        self.add_include(f"@external/vellum-gpu-runtime/{self.pin}/gpu-runtime/include/gpu_runtime")
+        target = self.plan()["units"][0]["targets"][0]
+        self.assertIn(str(self.fixture.repo.resolve() / "gpu-runtime/include/gpu_runtime"), target["include_dirs"])
+
+    def test_include_at_a_root_other_than_the_pin_is_refused(self) -> None:
+        # Would otherwise map to native Vellum headers.
+        self.add_include("@external/vellum-gpu-runtime/NOT-THE-PIN/runtime/include")
+        self.assertRefused("at NOT-THE-PIN, not its pin")
+
+    def test_include_outside_the_interface_tree_is_refused(self) -> None:
+        # gpu-runtime/src is in this repository but not bound to the pin.
+        self.add_include(f"@external/vellum-gpu-runtime/{self.pin}/gpu-runtime/src")
+        self.assertRefused("outside vellum-gpu-runtime's interface tree gpu-runtime/include")
+
+    def test_include_that_climbs_out_is_refused(self) -> None:
+        for rel in ("gpu-runtime/include/../../../etc", "gpu-runtime/include//gpu_runtime",
+                    "gpu-runtime/include/./gpu_runtime"):
+            with self.subTest(rel=rel):
+                target = self.fixture.closure["targets"][0]
+                target["include_dirs"] = [d for d in target["include_dirs"] if "NOT" not in d and rel not in d]
+                self.add_include(f"@external/vellum-gpu-runtime/{self.pin}/{rel}")
+                self.assertRefused("is not confined to its dependency")
+                target["include_dirs"].remove(f"@external/vellum-gpu-runtime/{self.pin}/{rel}")
+                self.fixture.write_receipt()
+
     def test_static_link_from_a_unit_without_skia_is_still_refused(self) -> None:
         self.header_only_without_skia()
         self.fixture.closure["targets"][0]["link_targets"] = ["gpu-runtime-device"]
         self.fixture.write_receipt()
         self.assertRefused("does not route into vellum-skia-dawn-provider")
+
+
+class ExternalIncludeConfinementTest(unittest.TestCase):
+    """The generic @external include branch maps only the pinned root, inside it."""
+
+    PIN = "1" * 40
+
+    def map(self, path: str) -> str:
+        deps = {"highway": {"pin": self.PIN, "root": self.PIN, "files": {}}}
+        return mp.map_include(path, Path("/repo"), {"highway": Path("/deps/highway")}, {}, "B", deps)
+
+    def test_pinned_root_maps(self) -> None:
+        self.assertEqual(self.map(f"@external/highway/{self.PIN}"), "/deps/highway")
+        self.assertEqual(self.map(f"@external/highway/{self.PIN}/hwy"), "/deps/highway/hwy")
+
+    def test_other_root_is_refused(self) -> None:
+        with self.assertRaises(mp.PlanError) as caught:
+            self.map("@external/highway/" + "2" * 40 + "/hwy")
+        self.assertIn("is not at the root the closures pin", str(caught.exception))
+
+    def test_climbing_or_empty_segment_is_refused(self) -> None:
+        for rel in ("../../etc", "hwy/../..", "hwy//x", "./hwy"):
+            with self.subTest(rel=rel), self.assertRaises(mp.PlanError) as caught:
+                self.map(f"@external/highway/{self.PIN}/{rel}")
+            self.assertIn("is not confined to its dependency", str(caught.exception))
 
 
 class PreludeHeaderTest(unittest.TestCase):
