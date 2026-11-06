@@ -385,6 +385,29 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(waits, list(gate.RETRY_WAITS))
 
 
+class FailureStatusTests(GateCase):
+    """Once the event names a head, no failure leaves it without a status."""
+
+    def test_an_unreadable_pull_request_is_an_error_on_the_events_head(self) -> None:
+        event = {"pull_request": {"number": 7, "head": {"sha": HEAD}}}
+        decision = gate.decide("pull_request_target", event, REPO, FakeApi({}), self.root, log=lambda _: None)
+        self.assertEqual(decision[:2], (HEAD, "error"))
+
+    def test_an_unexpected_failure_is_an_error_not_a_crash(self) -> None:
+        class Broken(FakeApi):
+            def request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
+                raise KeyError("surprise")
+        event = {"workflow_run": {"event": "pull_request_review", "head_sha": HEAD, "pull_requests": []}}
+        decision = gate.decide("workflow_run", event, REPO, Broken({}), self.root, log=lambda _: None)
+        self.assertEqual(decision[:2], (HEAD, "error"))
+        self.assertIn("KeyError", decision[2])
+
+    def test_without_a_head_the_run_fails_rather_than_posting(self) -> None:
+        with self.assertRaises(gate.GateError):
+            gate.decide("issue_comment", {"issue": {"number": 7, "pull_request": {}}}, REPO, FakeApi({}),
+                        self.root, log=lambda _: None)
+
+
 class OutputTests(GateCase):
     def test_a_description_cannot_add_output_lines(self) -> None:
         import os

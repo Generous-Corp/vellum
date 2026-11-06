@@ -99,7 +99,10 @@ this lands:
 - **Transient API failures are retried.** The gate retries a 5xx, a timeout
   or a reset connection three times (2, 5 and 10 seconds) before it posts
   `error`. A queue batch makes a few dozen reads, and one bad read would
-  otherwise eject the whole batch.
+  otherwise eject the whole batch. Once the event names a head (a pull
+  request event or a trigger run), any failure is an `error` status on that
+  head, never a silent exit. Only a comment event that cannot read its pull
+  request fails the run without a status.
 - **The signer is the posting agent.** A verdict counts only when its
   `reviewer:` line names the ghapp stamp's `agent:`, so one reviewer session
   cannot sign as the other.

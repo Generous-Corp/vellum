@@ -457,10 +457,14 @@ def decide(event_name: str, event: dict[str, Any], repo: str, api: Api, root: Pa
     def log(message: str) -> None:
         raw_log(one_line(message))
 
-    head = None
+    # The head the event names, so that a failure before the API names it is
+    # still an `error` status on that head rather than a silent exit.
+    named = ""
     if event_name == "workflow_run":
         named = str((event.get("workflow_run") or {}).get("head_sha") or "").lower()
-        head = named if re.fullmatch(r"[0-9a-f]{40}", named) else None
+    elif event_name == "pull_request_target":
+        named = str(((event.get("pull_request") or {}).get("head") or {}).get("sha") or "").lower()
+    head = named if re.fullmatch(r"[0-9a-f]{40}", named) else None
     try:
         kind, head, numbers = target(event_name, event, api, repo)
         if kind == "none" or head is None:
@@ -478,10 +482,12 @@ def decide(event_name: str, event: dict[str, Any], repo: str, api: Api, root: Pa
                 log(f"release-path-review: no open pull request has head {head}")
                 return None
             allowed, why = result
-    except GateError as error:
+    except Exception as error:  # noqa: BLE001 - any failure on a known head is an error status, never silence
+        if not isinstance(error, GateError):
+            error = GateError(f"{type(error).__name__}: {error}")
         log(f"release-path-review: error: {error}")
         if head is None:
-            raise
+            raise error
         return head, "error", describe(one_line(f"cannot judge: {error}"))
     state = "success" if allowed else "failure"
     log(f"release-path-review: {state} on {head}: {why}")
