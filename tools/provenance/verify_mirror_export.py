@@ -1235,6 +1235,27 @@ def landed_receipts(root: Path) -> list[str]:
     return [r for r in receipts if isinstance(r, str)] if isinstance(receipts, list) else []
 
 
+def history_base(root: Path) -> tuple[str | None, str | None]:
+    """The commit append-only provenance is compared against: (base, error).
+
+    The merge base of HEAD with VELLUM_GIT_BASE, the CI base commit. When that
+    names nothing this repository has (a push's all-zero `before`), HEAD's
+    first parent, the tip the push replaced; a root commit then has no base and
+    fails closed. Without VELLUM_GIT_BASE (a local run) the merge base with
+    main or origin/main, whichever resolves first; with neither, (None, None):
+    there is nothing to compare.
+    """
+    configured = os.environ.get("VELLUM_GIT_BASE")
+    if configured:
+        base = git_try(root, "merge-base", "HEAD", configured) or git_try(
+            root, "rev-parse", "--verify", "--quiet", "HEAD^1")
+        if base is None:
+            return None, f"history base is unavailable: {configured} names no commit and HEAD has no parent"
+        return base, None
+    return next((found for found in (git_try(root, "merge-base", "HEAD", ref)
+                                     for ref in ("main", "origin/main")) if found), None), None
+
+
 def receipt_history_errors(root: Path, receipts: list[str], stored: list[str]) -> list[str]:
     """Reject removal or mutation of receipts present at the merge base.
 
@@ -1245,17 +1266,11 @@ def receipt_history_errors(root: Path, receipts: list[str], stored: list[str]) -
     (a local run) the base is the merge base with main or origin/main,
     whichever resolves first, and with neither there is nothing to compare.
     """
-    configured = os.environ.get("VELLUM_GIT_BASE")
-    if configured:
-        base = git_try(root, "merge-base", "HEAD", configured) or git_try(
-            root, "rev-parse", "--verify", "--quiet", "HEAD^1")
-        if base is None:
-            return [f"receipt history base is unavailable: {configured} names no commit and HEAD has no parent"]
-    else:
-        base = next((found for found in (git_try(root, "merge-base", "HEAD", ref)
-                                         for ref in ("main", "origin/main")) if found), None)
-        if base is None:
-            return []
+    base, error = history_base(root)
+    if error:
+        return [f"receipt {error}"]
+    if base is None:
+        return []
     base_index_text = git_try(root, "show", f"{base}:{INDEX_PATH}")
     if base_index_text is None:
         return [f"receipt history index is unavailable at {base}"]
