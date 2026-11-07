@@ -52,7 +52,11 @@ int main() {
         return 1;
     native.update();
     native.render();
-    const bool debugger_linked = native.attach_debugger() == vellum::rmlui::Status::ok;
+    // The Debugger library links either way; attaching it needs fonts.
+    const bool debugger_linked =
+        native.attach_debugger() == (vellum::rmlui::NativeContext::fonts_enabled()
+                                         ? vellum::rmlui::Status::ok
+                                         : vellum::rmlui::Status::rejected);
     native.close();
     if (renderer.draws == 0 || !debugger_linked)
         return 1;

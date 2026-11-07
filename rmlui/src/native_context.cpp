@@ -60,6 +60,10 @@ NativeContext::~NativeContext() {
     close();
 }
 
+bool NativeContext::fonts_enabled() noexcept {
+    return VELLUM_RMLUI_FONTS_ENABLED != 0;
+}
+
 std::size_t NativeContext::open_instances() noexcept {
     return detail::runtime_references();
 }
@@ -143,6 +147,8 @@ void NativeContext::render() {
 Status NativeContext::attach_debugger() {
     if (!context_)
         return Status::not_open;
+    if (!fonts_enabled())
+        return Status::rejected;
     Scope scope(*this);
     if (debugger_owner == nullptr) {
         if (!Rml::Debugger::Initialise(context_))

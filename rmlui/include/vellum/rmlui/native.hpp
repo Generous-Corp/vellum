@@ -96,8 +96,12 @@ class NativeContext {
     };
 
     // Opens RmlUi's visual debugger on this context. RmlUi's debugger is
-    // process-wide: it attaches to one context at a time.
+    // process-wide: it attaches to one context at a time. It draws text, so
+    // it needs the FreeType font engine; without it this returns rejected.
     Status attach_debugger();
+
+    // Whether this build carries RmlUi's FreeType font engine.
+    [[nodiscard]] static bool fonts_enabled() noexcept;
 
     void set_log_sink(LogSink sink);
     [[nodiscard]] LoadDiagnostics last_load_diagnostics() const noexcept {

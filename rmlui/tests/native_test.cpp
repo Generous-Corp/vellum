@@ -250,6 +250,12 @@ void test_debugger_attaches_and_detaches_with_its_context() {
     VELLUM_RMLUI_CHECK(native.attach_debugger() == Status::not_open);
     VELLUM_RMLUI_CHECK(native.open(320, 240) == Status::ok);
     VELLUM_RMLUI_CHECK(native.load_document("plain.rml") == Status::ok);
+    if (!NativeContext::fonts_enabled()) {
+        // The debugger draws text; without a font engine it is refused.
+        VELLUM_RMLUI_CHECK(native.attach_debugger() == Status::rejected);
+        native.close();
+        return;
+    }
     VELLUM_RMLUI_CHECK(native.attach_debugger() == Status::ok);
     native.update();
     native.render();
