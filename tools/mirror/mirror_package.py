@@ -183,6 +183,7 @@ BUILD_INFO_INPUTS = {
     "20261014-34d16417a460": {"version": "0.964.1"},
     "20261025-46cee5e4e6e2": {"version": "1.11.0"},
     "20261102-0f616a440cec": {"version": "1.46.1"},
+    "20261107-f0ac0a4ff392": {"version": "1.88.0"},
 }
 
 # Pulp's CHOC standards patch, re-expressed: the JSON number parser accepts a
