@@ -219,6 +219,24 @@ if(VELLUM_RMLUI_INSTALL)
                 COMPONENT VellumRmlUiNative
                 ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
         endif()
+        # The notices for what this component redistributes. A package built
+        # with fonts carries FreeType's archive, so it carries the FTL too.
+        set(_vellum_rmlui_doc_dir "${CMAKE_INSTALL_DATADIR}/doc/VellumRmlUi")
+        FetchContent_GetProperties(vellum_rmlui_rmlui SOURCE_DIR _vellum_rmlui_rmlui_src)
+        install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/NOTICE-Native.md"
+            DESTINATION ${_vellum_rmlui_doc_dir}
+            COMPONENT VellumRmlUiNative)
+        install(FILES "${_vellum_rmlui_rmlui_src}/LICENSE.txt"
+            DESTINATION ${_vellum_rmlui_doc_dir}
+            RENAME RmlUi-LICENSE.txt
+            COMPONENT VellumRmlUiNative)
+        if(VELLUM_RMLUI_FONTS)
+            FetchContent_GetProperties(vellum_rmlui_freetype SOURCE_DIR _vellum_rmlui_freetype_src)
+            install(FILES "${_vellum_rmlui_freetype_src}/docs/FTL.TXT"
+                DESTINATION ${_vellum_rmlui_doc_dir}
+                RENAME FreeType-FTL.TXT
+                COMPONENT VellumRmlUiNative)
+        endif()
         install(EXPORT RmlUiTargets
             NAMESPACE RmlUi::
             FILE VellumRmlUiRmlUiTargets.cmake

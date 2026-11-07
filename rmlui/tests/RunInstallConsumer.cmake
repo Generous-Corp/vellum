@@ -50,6 +50,41 @@ if(_native)
     if(NOT EXISTS "${_prefix}/include/RmlUi/Core.h")
         message(FATAL_ERROR "the Native component did not install RmlUi's headers")
     endif()
+    # What the component redistributes must ship with its notices: RmlUi's
+    # MIT notice always, and the FreeType credit, FTL election and FTL text
+    # whenever FreeType's archive is in the package.
+    set(_docs "${_prefix}/share/doc/VellumRmlUi")
+    set(_required_notice_lines
+        "Copyright (c) 2019-2025 The RmlUi Team, and contributors"
+        "MIT License")
+    if(NOT EXISTS "${_docs}/RmlUi-LICENSE.txt")
+        message(FATAL_ERROR "the Native component did not install RmlUi's licence file")
+    endif()
+    file(GLOB_RECURSE _freetype_archives "${_prefix}/*/libfreetype*" "${_prefix}/*/freetype*.lib")
+    # The glob is cross-checked against the build's font option, so a renamed
+    # archive cannot make the FreeType notice check pass by finding nothing.
+    if(VELLUM_RMLUI_FONTS AND NOT _freetype_archives)
+        message(FATAL_ERROR "fonts are on but the Native package carries no FreeType archive")
+    endif()
+    if(_freetype_archives)
+        list(APPEND _required_notice_lines
+            "Portions of this software are copyright © 2024 The FreeType Project"
+            "under the FreeType License (FTL)"
+            "the GPLv2 alternative")
+        if(NOT EXISTS "${_docs}/FreeType-FTL.TXT")
+            message(FATAL_ERROR "the Native package ships FreeType without FreeType-FTL.TXT")
+        endif()
+    endif()
+    if(NOT EXISTS "${_docs}/NOTICE-Native.md")
+        message(FATAL_ERROR "the Native component did not install NOTICE-Native.md")
+    endif()
+    file(READ "${_docs}/NOTICE-Native.md" _notice)
+    foreach(_line IN LISTS _required_notice_lines)
+        string(FIND "${_notice}" "${_line}" _at)
+        if(_at EQUAL -1)
+            message(FATAL_ERROR "NOTICE-Native.md is missing a required entry: ${_line}")
+        endif()
+    endforeach()
 endif()
 set(_package_dir "${_prefix}/${VELLUM_RMLUI_INSTALL_LIBDIR}/cmake/VellumRmlUi")
 file(GLOB _package_files "${_package_dir}/*.cmake")

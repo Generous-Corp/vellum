@@ -80,6 +80,7 @@ if(VELLUM_RMLUI_INSTALL AND NOT CMAKE_CROSSCOMPILING)
                 "-DVELLUM_RMLUI_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
                 "-DVELLUM_RMLUI_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                 "-DVELLUM_RMLUI_CONSUMER=native"
+                "-DVELLUM_RMLUI_FONTS=${VELLUM_RMLUI_FONTS}"
                 "-DTEST_CONFIG=$<CONFIG>"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/RunInstallConsumer.cmake")
     endif()
