@@ -1038,10 +1038,18 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
 
 def load_rename_tool():
     path = Path(__file__).resolve().parents[1] / "mirror/rename_mirror_namespace.py"
+    if "rename_mirror_namespace" in sys.modules:
+        return sys.modules["rename_mirror_namespace"]
     spec = importlib.util.spec_from_file_location("rename_mirror_namespace", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # Its dataclasses resolve their annotations through sys.modules.
+    sys.modules["rename_mirror_namespace"] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        del sys.modules["rename_mirror_namespace"]
+        raise
     return module
 
 
