@@ -1,3 +1,7 @@
+// Provenance: an independent implementation, written from the Lua 5.4
+// reference manual and a behaviour specification (six standard libraries, a
+// 3 s wall-clock budget). It contains no code from any GPL-licensed project.
+
 #include <vellum/rmlui/lua.hpp>
 
 #include "lua_sandbox.hpp"

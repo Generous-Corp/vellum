@@ -4,6 +4,10 @@
 // budgets on every entry point (including coroutine resume and close), and a
 // refusal of skin-authored __gc finalizers, which Lua runs with hooks
 // disabled and so could not be bounded.
+//
+// Provenance: an independent implementation, written from the Lua 5.4
+// reference manual and a behaviour specification (six standard libraries, a
+// 3 s wall-clock budget). It contains no code from any GPL-licensed project.
 
 extern "C" {
 #include <lauxlib.h>
