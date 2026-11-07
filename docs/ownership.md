@@ -61,7 +61,9 @@ spelling, no symlinks, and no second copy of its files elsewhere in Vellum. The
 units' kept `PULP_*` macros, `pulp-*` target names and plug-in-host prose are a
 counted debt in
 [`provenance/framework-name-debt.json`](../provenance/framework-name-debt.json)
-that may only fall. Native roots outside `framework/` keep the full rules and may
+that may only fall. Until the closures are regenerated from Vellum, an edit may
+change a file's bytes but not the transferred file set, and the generated-input
+sources (preludes, embedded data, build info) stay as Pulp produced them. Native roots outside `framework/` keep the full rules and may
 not define or copy the units' namespaces.
 
 ## Active ownership and change routing
