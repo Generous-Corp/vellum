@@ -137,6 +137,15 @@ class Fixture:
         }
         self.write_receipt()
 
+    def add_mirror_file(self, path: str, data: bytes) -> None:
+        self.files[path] = data
+        (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / path).write_bytes(data)
+
+    def remove_mirror_file(self, path: str) -> None:
+        del self.files[path]
+        (self.repo / path).unlink()
+
     def write_receipt(self) -> None:
         closure_path = self.repo / f"provenance/mirror/closures/{EXPORT_ID}/foundation.json"
         closure_path.parent.mkdir(parents=True, exist_ok=True)
@@ -379,6 +388,8 @@ class MirrorPackagePlanTest(unittest.TestCase):
 
 VELLUM_SOURCE = "https://github.com/Generous-Corp/vellum.git"
 GPU_RUNTIME_HEADER = "gpu-runtime/include/gpu_runtime/gpu_surface.hpp"
+MIRRORED_CHOKE_HEADER = "mirror/core/runtime/include/pulp/runtime/gpu_fwd.hpp"
+MIRRORED_CHOKE_BYTES = b"#pragma once\nnamespace gpu_runtime { class GpuSurface; }\n"
 GPU_RUNTIME_BUILD_INCLUDE = "@build/_deps/vellum_gpu_runtime-src/gpu-runtime/include"
 
 
@@ -392,6 +403,8 @@ class InTreeGpuRuntimeTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.fixture = Fixture(Path(self.temporary.name))
+        # A mirrored choke header: the in-tree gpu-runtime makes the GPU guard mandatory.
+        self.fixture.add_mirror_file(MIRRORED_CHOKE_HEADER, MIRRORED_CHOKE_BYTES)
         mp.BUILD_INFO_INPUTS[EXPORT_ID] = {"version": "1.2.3"}
         repo = self.fixture.repo
         self.git("init", "-q", "-b", "main")
@@ -546,6 +559,27 @@ class InTreeGpuRuntimeTest(unittest.TestCase):
     def test_unknown_external_is_refused(self) -> None:
         self.use_pin(self.pin, name="vellum-gpu-runtime-copy")
         self.assertRefused("has no Vellum build recipe")
+
+    def test_mirrored_choke_header_is_guarded_in_the_plan(self) -> None:
+        plan = self.plan()
+        headers = plan["gpu_guard"]["headers"]
+        self.assertEqual([h["relative"] for h in headers], ["pulp/runtime/gpu_fwd.hpp"])
+        copy = Path(headers[0]["copy"]).read_text()
+        self.assertEqual(copy, "#pragma once\n#include <vellum/mirror/gpu_surface_unsupported.hpp>\n"
+                               "namespace gpu_runtime { class GpuSurface; }\n")
+        # The mirrored file itself is untouched.
+        self.assertEqual((self.fixture.repo / MIRRORED_CHOKE_HEADER).read_bytes(), MIRRORED_CHOKE_BYTES)
+        output = Path(self.temporary.name) / "plan.cmake"
+        mp.write_cmake(plan, output)
+        text = output.read_text()
+        self.assertIn("set(VELLUM_MIRROR_GPU_GUARD_COUNT 1)", text)
+        # cmake_quote escapes the backslash and the dollar; CMake reads /pulp/runtime/gpu_fwd\\.hpp$.
+        self.assertIn('set(VELLUM_MIRROR_GPU_GUARD_0_EXCLUDE "/pulp/runtime/gpu_fwd\\\\.hpp\\$")', text)
+
+    def test_pinned_gpu_runtime_with_no_header_to_guard_is_refused(self) -> None:
+        self.fixture.remove_mirror_file(MIRRORED_CHOKE_HEADER)
+        self.fixture.write_receipt()
+        self.assertRefused("no mirrored header was found to guard")
 
     def test_unlisted_gpu_runtime_target_is_refused(self) -> None:
         # The CMake file API never reports the header-only interface target
