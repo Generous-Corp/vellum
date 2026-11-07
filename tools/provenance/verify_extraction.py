@@ -58,6 +58,10 @@ MIRROR_ROOT = "mirror/"
 # own content regime (verify_framework below).
 FRAMEWORK_ROOT = "framework/"
 FRAMEWORK_TRANSFER_RECORD = "provenance/framework/transfer.json"
+# The transfer record is immutable once it lands: its bytes are pinned here,
+# so repointing it (at another receipt, records or tree) is an edit to this
+# verifier, not to data, and it must also equal its copy at the merge base.
+FRAMEWORK_TRANSFER_SHA256 = "81e8916ef73d0bf9b4d3a31409208524897ba2795e17fd749fea69756547e65c"
 FRAMEWORK_TRANSFER_SCHEMA = "vellum.framework-transfer.v1"
 FRAMEWORK_NAME_DEBT = "provenance/framework-name-debt.json"
 # The native name rules framework/ carries as a counted debt until 8c respells
@@ -845,38 +849,76 @@ def verify_authority_phase(
     return not errors, errors
 
 
-def framework_name_debt(root: Path) -> dict[str, dict[str, int]]:
-    """Hits of the ratcheted native name rules in framework/, per rule and file (external/ excluded)."""
+def framework_counts_content(relative: str) -> bool:
+    """Whether the ratchet reads a framework/ path: the native scan's text, plus the units' Python generators."""
+    return scans_active_content(relative) or Path(relative).suffix.lower() == ".py"
+
+
+def framework_name_debt(root: Path) -> tuple[dict[str, dict[str, int]], list[str]]:
+    """Hits of the ratcheted native name rules in framework/, per rule and file (external/ excluded).
+
+    Returns (counts, undecodable): a file the ratchet should read but cannot
+    decode is reported rather than skipped, so it cannot leave the count.
+    """
     counts: dict[str, dict[str, int]] = {name: {} for name in FRAMEWORK_RATCHETED_RULES}
+    undecodable: list[str] = []
     for path in active_files(root, (FRAMEWORK_ROOT.rstrip("/"),)):
         relative = path.relative_to(root).as_posix()
-        if relative.startswith(FRAMEWORK_ROOT + "external/") or not scans_active_content(relative):
+        if relative.startswith(FRAMEWORK_ROOT + "external/") or not framework_counts_content(relative):
             continue
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
+            undecodable.append(relative)
             continue
         for name in FRAMEWORK_RATCHETED_RULES:
             hits = len(_ALL_NATIVE_PATTERNS[name].findall(text))
             if hits:
                 counts[name][relative] = hits
-    return counts
+    return counts, undecodable
+
+
+def framework_debt_baseline_at_base(root: Path) -> tuple[dict | None, list[str]]:
+    """The committed name-debt baseline at the history base, or None where there is none to compare."""
+    base, error = load_mirror_export_verifier().history_base(root)
+    if error:
+        return None, [f"{FRAMEWORK_NAME_DEBT}: {error}"]
+    if base is None:
+        return None, []
+    shown = subprocess.run(["git", "-C", str(root), "show", f"{base}:{FRAMEWORK_NAME_DEBT}"],
+                           capture_output=True, check=False)
+    if shown.returncode != 0:
+        return None, []  # the change that introduces the baseline
+    try:
+        return json.loads(shown.stdout)["rules"], []
+    except (ValueError, KeyError) as exc:
+        return None, [f"{FRAMEWORK_NAME_DEBT}: unreadable at {base}: {exc}"]
 
 
 def framework_debt_errors(root: Path) -> tuple[list[str], dict[str, int]]:
-    """The ratchet: no (rule, file) count may rise above the committed baseline."""
-    current = framework_name_debt(root)
+    """The ratchet: no (rule, file) count may rise above the committed baseline,
+    and the committed baseline may not rise above its value at the history base."""
+    current, undecodable = framework_name_debt(root)
     totals = {rule: sum(files.values()) for rule, files in current.items()}
+    errors = [f"framework name debt: {path} is not UTF-8, so the ratchet cannot count it" for path in undecodable]
     try:
         baseline = json.loads((root / FRAMEWORK_NAME_DEBT).read_text(encoding="utf-8"))["rules"]
     except (OSError, ValueError, KeyError) as exc:
-        return [f"{FRAMEWORK_NAME_DEBT}: unreadable: {exc}"], totals
-    errors = []
+        return errors + [f"{FRAMEWORK_NAME_DEBT}: unreadable: {exc}"], totals
     for rule, files in current.items():
         known = baseline.get(rule, {})
         for path, n in sorted(files.items()):
             if n > known.get(path, 0):
                 errors.append(f"framework name debt rose: {rule} in {path} is {n}, baseline {known.get(path, 0)}")
+    base_rules, base_errors = framework_debt_baseline_at_base(root)
+    errors.extend(base_errors)
+    if base_rules is not None:
+        for rule, files in sorted(baseline.items()):
+            before = base_rules.get(rule, {})
+            for path, n in sorted(files.items()):
+                if not isinstance(n, int) or n > before.get(path, 0):
+                    errors.append(f"{FRAMEWORK_NAME_DEBT} raised {rule} in {path} to {n}, "
+                                  f"above {before.get(path, 0)} at the merge base; the baseline may only fall")
     return errors, totals
 
 
@@ -923,6 +965,26 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
     if transfer.get("schema") != FRAMEWORK_TRANSFER_SCHEMA:
         errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: schema must be {FRAMEWORK_TRANSFER_SCHEMA}")
         return errors, checks
+    transfer_bytes = (root / FRAMEWORK_TRANSFER_RECORD).read_bytes()
+    if hashlib.sha256(transfer_bytes).hexdigest() != FRAMEWORK_TRANSFER_SHA256:
+        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: bytes differ from the pinned transfer record; it is immutable")
+    base, base_error = load_mirror_export_verifier().history_base(root)
+    if base_error:
+        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: {base_error}")
+    elif base is not None:
+        before = subprocess.run(["git", "-C", str(root), "show", f"{base}:{FRAMEWORK_TRANSFER_RECORD}"],
+                                capture_output=True, check=False)
+        if before.returncode == 0 and before.stdout != transfer_bytes:
+            errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: changed from the merge base; it is immutable")
+    # framework/external/ is skipped by the ratchet, so it may hold only the
+    # transferred third-party files.
+    recorded = {r.get("framework_path") for r in transfer.get("records", [])}
+    stray = sorted(p.relative_to(root).as_posix() for p in (framework / "external").rglob("*")
+                   if (p.is_file() or p.is_symlink()) and p.relative_to(root).as_posix() not in recorded) \
+        if (framework / "external").is_dir() else []
+    checks["framework_external_unrecorded"] = stray
+    if stray:
+        errors.append(f"framework/external/ holds {len(stray)} files the transfer record does not list")
     identity = load_rename_identity_verifier()
     tree = transfer.get("framework_tree", "")
     if not SHA_RE.fullmatch(str(tree)) or subprocess.run(

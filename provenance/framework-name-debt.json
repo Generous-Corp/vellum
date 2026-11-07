@@ -1,5 +1,5 @@
 {
-  "note": "Hits of the native name rules in framework/ (external/ excluded), per rule and file. The count may only fall; 8c retires it. Recorded at the 8b transfer.",
+  "note": "Hits of the native name rules in framework/ (external/ excluded), per rule and file, including the units' Python generators. The count may only fall, and the committed baseline may only fall from its value at the merge base; 8c retires it. Recorded at the 8b transfer.",
   "rules": {
     "audio-plugin-sdk": {
       "framework/core/dataplane/include/vellum/dataplane/host_surfaces.hpp": 2,
@@ -251,7 +251,8 @@
       "framework/core/view/src/widgets/label.cpp": 3,
       "framework/core/view/src/window_host_stub.cpp": 4,
       "framework/core/view/src/yoga_layout.cpp": 14,
-      "framework/tools/cmake/PulpEmbedData.cmake": 11
+      "framework/tools/cmake/PulpEmbedData.cmake": 11,
+      "framework/tools/cmake/scripts/encode_binary_data.py": 1
     },
     "pulp-public-namespace": {
       "framework/core/view/include/vellum/design/design_system.hpp": 1
@@ -260,7 +261,7 @@
   "schema": "vellum.framework-name-debt.v1",
   "totals": {
     "audio-plugin-sdk": 73,
-    "pulp-package-or-target": 1353,
+    "pulp-package-or-target": 1354,
     "pulp-public-namespace": 1
   }
 }

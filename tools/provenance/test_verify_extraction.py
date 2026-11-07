@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -390,12 +391,79 @@ class VerifyExtractionTests(unittest.TestCase):
         self.assertEqual(verify_extraction.RENAMED_MIRROR_SCAN_ROOTS,
                          verify_extraction.EXPECTED_ACTIVE_ROOTS + ("components", "product", "tools", "web"))
 
+    def hide_ci_git_base(self) -> None:
+        # Fixture repositories do not contain the CI's VELLUM_GIT_BASE commit.
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("VELLUM_GIT_BASE", None)
+
+    def git_commit_all(self, root: Path, message: str) -> str:
+        git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t"]
+        if not (root / ".git").exists():
+            subprocess.run(git + ["init", "-q", "-b", "main"], check=True)
+        subprocess.run(git + ["add", "-A"], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", message], check=True)
+        return subprocess.run(git + ["rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+
+    def test_framework_debt_baseline_may_not_rise_from_the_merge_base(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "framework/core/a/src/a.cpp"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"#if PULP_HAS_SKIA\n#endif\n")
+            self.write_framework_debt(root, {"pulp-package-or-target": {"framework/core/a/src/a.cpp": 1}})
+            base = self.git_commit_all(root, "base")
+            subprocess.run(["git", "-C", str(root), "checkout", "-q", "-b", "change"], check=True)
+            os.environ["VELLUM_GIT_BASE"] = base
+            # Control: the base itself passes.
+            self.assertEqual(verify_extraction.framework_debt_errors(root)[0], [])
+            # Adding a macro and raising the baseline with it is refused.
+            source.write_bytes(b"#if PULP_HAS_SKIA && PULP_HAS_DAWN\n#endif\n")
+            self.write_framework_debt(root, {"pulp-package-or-target": {"framework/core/a/src/a.cpp": 2}})
+            self.git_commit_all(root, "raise")
+            errors = verify_extraction.framework_debt_errors(root)[0]
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("the baseline may only fall", errors[0])
+            # So is a new baseline entry for a file the base did not owe.
+            source.write_bytes(b"#if PULP_HAS_SKIA\n#endif\n")
+            (root / "framework/core/a/src/b.cpp").write_bytes(b"// VST3\n")
+            self.write_framework_debt(root, {"pulp-package-or-target": {"framework/core/a/src/a.cpp": 1},
+                                             "audio-plugin-sdk": {"framework/core/a/src/b.cpp": 1}})
+            self.git_commit_all(root, "new entry")
+            self.assertIn("audio-plugin-sdk in framework/core/a/src/b.cpp",
+                          " ".join(verify_extraction.framework_debt_errors(root)[0]))
+            # Lowering it, or dropping the entry, passes.
+            (root / "framework/core/a/src/b.cpp").unlink()
+            source.write_bytes(b"int a;\n")
+            self.write_framework_debt(root, {})
+            self.git_commit_all(root, "retire")
+            self.assertEqual(verify_extraction.framework_debt_errors(root)[0], [])
+
+    def test_framework_debt_counts_generators_and_refuses_undecodable_text(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "framework/tools").mkdir(parents=True)
+            (root / "framework/tools/gen.py").write_bytes(b"NAME = 'PULP_EMBED'\n")
+            self.write_framework_debt(root, {})
+            errors = verify_extraction.framework_debt_errors(root)[0]
+            self.assertEqual([e.split(" in ")[1].split(" is ")[0] for e in errors], ["framework/tools/gen.py"])
+            (root / "framework/tools/gen.py").unlink()
+            (root / "framework/core/a/src").mkdir(parents=True)
+            (root / "framework/core/a/src/bad.cpp").write_bytes(b"int a; // \xff PULP_X\n")
+            errors = verify_extraction.framework_debt_errors(root)[0]
+            self.assertEqual(errors, ["framework name debt: framework/core/a/src/bad.cpp is not UTF-8, "
+                                      "so the ratchet cannot count it"])
+
     def write_framework_debt(self, root: Path, rules: dict[str, dict[str, int]]) -> None:
         path = root / verify_extraction.FRAMEWORK_NAME_DEBT
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"schema": "vellum.framework-name-debt.v1", "rules": rules}), encoding="utf-8")
 
     def test_framework_name_debt_may_only_fall(self) -> None:
+        self.hide_ci_git_base()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "framework/core/a/src/a.cpp"
@@ -433,6 +501,7 @@ class VerifyExtractionTests(unittest.TestCase):
         self.assertGreater(totals["pulp-package-or-target"], 0)  # control: the scan reads framework/
 
     def test_framework_refuses_residual_pulp_spellings_and_unknown_trees(self) -> None:
+        self.hide_ci_git_base()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             subprocess.run(["git", "init", "-q", str(root)], check=True)
@@ -464,9 +533,50 @@ class VerifyExtractionTests(unittest.TestCase):
             errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
             self.assertFalse(any("no Pulp checkout" in e for e in errors), errors)
             self.assertEqual(checks["framework_transfer_proved"], "deferred: no Pulp checkout")
+            # This fixture's record is not the pinned one.
+            self.assertTrue(any("differ from the pinned transfer record" in e for e in errors), errors)
             (root / "mirror").mkdir()
             errors, _ = verify_extraction.verify_framework(root, None, "origin/main")
             self.assertTrue(any("mirror/ and framework/ both exist" in e for e in errors), errors)
+
+    def test_framework_transfer_record_is_immutable_and_confines_external(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "framework/external/x").mkdir(parents=True)
+            (root / "framework/external/x/x.c").write_bytes(b"int x;\n")
+            self.write_framework_debt(root, {})
+            record = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+            record.parent.mkdir(parents=True)
+            body = {"schema": verify_extraction.FRAMEWORK_TRANSFER_SCHEMA, "framework_tree": "f" * 40,
+                    "records": [{"framework_path": "framework/external/x/x.c"}]}
+            record.write_text(json.dumps(body), encoding="utf-8")
+            pinned = hashlib.sha256(record.read_bytes()).hexdigest()
+            base = self.git_commit_all(root, "transfer")
+            subprocess.run(["git", "-C", str(root), "checkout", "-q", "-b", "change"], check=True)
+            os.environ["VELLUM_GIT_BASE"] = base
+            with mock.patch.object(verify_extraction, "FRAMEWORK_TRANSFER_SHA256", pinned):
+                errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+                # Control: unchanged and pinned, and external/ holds only recorded files.
+                self.assertFalse(any("immutable" in e or "external" in e for e in errors), errors)
+                self.assertEqual(checks["framework_external_unrecorded"], [])
+                (root / "framework/external/x/first_party.cpp").write_bytes(b"int y;\n")
+                errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+                self.assertEqual(checks["framework_external_unrecorded"], ["framework/external/x/first_party.cpp"])
+                (root / "framework/external/x/first_party.cpp").unlink()
+                # Repointing the record changes its bytes: refused against the
+                # pin and against the merge base.
+                record.write_text(json.dumps(dict(body, export_receipt="provenance/mirror/receipts/older.json")),
+                                  encoding="utf-8")
+                errors, _ = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+                self.assertTrue(any("differ from the pinned transfer record" in e for e in errors), errors)
+                self.assertTrue(any("changed from the merge base" in e for e in errors), errors)
+
+    def test_landed_transfer_record_matches_its_pin(self) -> None:
+        record = ROOT / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+        if not record.is_file():
+            self.skipTest("this checkout records no framework transfer")
+        self.assertEqual(hashlib.sha256(record.read_bytes()).hexdigest(), verify_extraction.FRAMEWORK_TRANSFER_SHA256)
 
     def test_symlinks_in_native_trees_are_refused(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
