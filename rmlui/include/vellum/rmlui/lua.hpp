@@ -23,6 +23,11 @@ namespace vellum::rmlui {
 // RmlUi's own Lua element bindings (the RmlUi::Lua plugin) are not attached:
 // that plugin keeps a single process-wide lua_State, which cannot be shared
 // between independent editors.
+//
+// Provenance: an independent implementation, written from the Lua 5.4
+// reference manual and a behaviour specification (six standard libraries, a
+// 3 s wall-clock budget). It contains no code from any GPL-licensed project.
+// Audit record: pulp-planning usual-suspects-port/DECISIONS.md, L10.
 class SandboxedLua final : public LuaInterface {
   public:
     SandboxedLua();
