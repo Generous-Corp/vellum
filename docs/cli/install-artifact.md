@@ -351,10 +351,17 @@ surface.
 **Which headers are guarded.** `tools/mirror/gpu_surface_guard.py` computes the
 guarded set from the landed mirror; nobody lists it by hand. The package records
 it in `mirror/share/provenance/gpu-guarded-headers.txt`. Every header that
-reaches a choke header through its includes is unsupported too. At export
-`20261102-0f616a440cec`'s successor that includes:
-- `pulp/view/window_host.hpp`, `widget_bridge.hpp`, `scripted_ui.hpp`,
-  `scripted_editor_session.hpp`, `plugin_view_host.hpp` and `window_classes.hpp`;
+reaches a choke header through its includes is unsupported too.
+
+At export `20261107-f0ac0a4ff392`, 6 choke headers are guarded:
+- `pulp/platform/gpu_fwd.hpp`;
+- `pulp/render/gpu_surface.hpp`, `gpu_diagnostics.hpp`, `gpu_render_time.hpp`,
+  `gpu_startup_report.hpp` and `bench/perf_counters.hpp`.
+
+9 more headers reach them:
+- `pulp/view/window_host.hpp`, `window_classes.hpp`, `window_manager.hpp`,
+  `widget_bridge.hpp`, `scripted_ui.hpp`, `scripted_editor_session.hpp` and
+  `plugin_view_host.hpp`;
 - `pulp/render/headless_surface.hpp` and `skia_surface.hpp`.
 
 **What stays byte for byte.** Apart from the one guard line in each choke header,
