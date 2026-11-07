@@ -1,7 +1,6 @@
 // Provenance: an independent implementation, written from the Lua 5.4
 // reference manual and a behaviour specification (six standard libraries, a
 // 3 s wall-clock budget). It contains no code from any GPL-licensed project.
-// Audit record: pulp-planning usual-suspects-port/DECISIONS.md, L10.
 
 #include <vellum/rmlui/lua.hpp>
 
