@@ -1,6 +1,6 @@
 @PACKAGE_INIT@
 
-# find_package(VellumRmlUi [COMPONENTS Core SoftRenderer DevAssets VellumRenderer])
+# find_package(VellumRmlUi [COMPONENTS Core SoftRenderer DevAssets VellumRenderer Native])
 #
 # RmlUi and its font engine are linked privately into the VellumRmlUi::Core
 # shared library, so this package needs no further dependency. Core is always
@@ -14,6 +14,15 @@ if("VellumRenderer" IN_LIST VellumRmlUi_FIND_COMPONENTS AND
     include(CMakeFindDependencyMacro)
     find_dependency(Vellum CONFIG)
     include("${CMAKE_CURRENT_LIST_DIR}/VellumRmlUiVellumRendererTargets.cmake")
+endif()
+
+# Native carries its own copy of RmlUi under RmlUi's target names.
+if("Native" IN_LIST VellumRmlUi_FIND_COMPONENTS AND
+   EXISTS "${CMAKE_CURRENT_LIST_DIR}/VellumRmlUiNativeTargets.cmake")
+    if(NOT TARGET RmlUi::Core)
+        include("${CMAKE_CURRENT_LIST_DIR}/VellumRmlUiRmlUiTargets.cmake")
+    endif()
+    include("${CMAKE_CURRENT_LIST_DIR}/VellumRmlUiNativeTargets.cmake")
 endif()
 
 if(NOT VellumRmlUi_FIND_COMPONENTS)

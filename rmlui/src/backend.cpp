@@ -20,7 +20,6 @@
 
 namespace vellum::rmlui {
 
-AssetProvider::~AssetProvider() = default;
 RenderInterface::~RenderInterface() = default;
 LuaInterface::~LuaInterface() = default;
 ActionSink::~ActionSink() = default;
@@ -323,16 +322,8 @@ void Backend::set_log_sink(LogSink sink) {
 }
 
 void Backend::record_log(LogLevel level, std::string_view text) {
-    if (counting_load_) {
-        if (level == LogLevel::error || level == LogLevel::assertion)
-            ++loading_.errors;
-        else if (level == LogLevel::warning)
-            ++loading_.warnings;
-        // RmlUi's style sheet parser reports a declaration it could not parse
-        // with this fixed prefix and then drops it.
-        if (text.find("Syntax error parsing property declaration") != std::string_view::npos)
-            ++loading_.dropped_declarations;
-    }
+    if (counting_load_)
+        detail::count_load_message(loading_, level, text);
     if (log_sink_)
         log_sink_(LogMessage{level, text});
 }

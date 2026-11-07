@@ -149,13 +149,17 @@ for stb_image_write, the `VellumRmlUi::SoftRenderer` archive, and for Lua the
 `VellumRmlUi::Lua` archive). The installed `VellumRmlUi` package carries none
 of their headers and the Core library exports none of their symbols; when the
 Lua host is built, the static Lua archive is installed beside it for linking.
+The opt-in `VellumRmlUi::Native` component (`VELLUM_RMLUI_NATIVE=ON`) is the
+exception: it links RmlUi publicly, so its install component redistributes
+RmlUi's headers and archives, and FreeType's archive when fonts are on, with
+`rmlui/NOTICE-Native.md` and their licence files under `share/doc/VellumRmlUi/`.
 Nothing here enters the default Vellum build or the Vellum SDK artifact.
 
 | Dependency | Pinned identity | License | Used by | Notes |
 |---|---|---|---|---|
-| FreeType | `2.13.3`, `freetype-2.13.3.tar.gz` SHA-256 `5c3a8e78f7b24c20b25b54ee575d6daa40007a5f4eea2845861c3409b3021747` | FTL (FreeType License; the GPLv2 alternative is not used) | RmlUi font engine, only with `VELLUM_RMLUI_FONTS=ON` | PNG, zlib, bzip2, Brotli and HarfBuzz integrations disabled; FTL credit in `NOTICE.md` |
+| FreeType | `2.13.3`, `freetype-2.13.3.tar.gz` SHA-256 `5c3a8e78f7b24c20b25b54ee575d6daa40007a5f4eea2845861c3409b3021747` | FTL (FreeType License; the GPLv2 alternative is not used) | RmlUi font engine, only with `VELLUM_RMLUI_FONTS=ON` | PNG, zlib, bzip2, Brotli and HarfBuzz integrations disabled; FTL credit in `NOTICE.md` and, for the redistributed Native archive, `rmlui/NOTICE-Native.md` with `FTL.TXT` |
 | Lua | `5.4.7`, `lua-5.4.7.tar.gz` SHA-256 `9fbf5e28ef86c69858f6d3d34eccc32e911c1a28b4120ff3e84aaa70cfbf1e30` | MIT | The sandboxed `VellumRmlUi::Lua` host, only with `VELLUM_RMLUI_LUA=ON` | Library only; the `lua` and `luac` front ends are not built. RmlUi's own Lua plugin is not built, since it keeps one process-wide `lua_State` |
-| RmlUi | `6.1`, commit `58c751531f4c1a1eb2dc56f409b8e8a323a0c9ad` | MIT | `VellumRmlUi::Core` | Samples, third-party containers, SVG, Lottie and Tracy disabled |
+| RmlUi | `6.1`, commit `58c751531f4c1a1eb2dc56f409b8e8a323a0c9ad` | MIT | `VellumRmlUi::Core`; `VellumRmlUi::Native` (redistributed headers and archives) | Samples, third-party containers, SVG, Lottie and Tracy disabled; notice in `rmlui/NOTICE-Native.md` with RmlUi's `LICENSE.txt` |
 | stb_image_write | `v1.16`, `nothings/stb` commit `d14d46f6b44456eb88beac58cba833a4135d4c89`, `stb_image_write.h` SHA-256 `cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05` | MIT (chosen of MIT or public domain) | `VellumRmlUi::SoftRenderer` PNG encoder | Single header, compiled into one translation unit |
 
 ## Developer prerequisites

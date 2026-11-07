@@ -1352,7 +1352,11 @@ The components below are fetched at pinned identities and built from source
 only when the optional `rmlui/` module is built (`VELLUM_ENABLE_RMLUI=ON`, or
 a standalone `cmake -S rmlui` build). They are linked privately into the
 `VellumRmlUi::Core` shared library or the `VellumRmlUi::SoftRenderer` and
-`VellumRmlUi::Lua` archives. The default Vellum build and the Vellum SDK artifact contain none of
+`VellumRmlUi::Lua` archives. With `VELLUM_RMLUI_NATIVE=ON`, RmlUi and FreeType
+are also linked publicly into the `VellumRmlUi::Native` archive, whose
+installed package carries RmlUi's headers, the RmlUi and FreeType archives,
+`rmlui/NOTICE-Native.md` and each component's licence file under
+`share/doc/VellumRmlUi/`. The default Vellum build and the Vellum SDK artifact contain none of
 them. Exact identities are recorded in `DEPENDENCIES.md` and
 `provenance/third-party-lock.json`.
 

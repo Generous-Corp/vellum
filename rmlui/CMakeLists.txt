@@ -14,6 +14,11 @@ cmake_minimum_required(VERSION 3.24)
 #   VellumRmlUi::DevAssets     development-only hot-reload asset provider.
 #   VellumRmlUi::Lua           sandboxed per-instance Lua 5.4 host for skins
 #                              (VELLUM_RMLUI_LUA=ON).
+#   VellumRmlUi::Native        static library; the open entry point. Links RmlUi
+#                              publicly (RmlUi::Core, RmlUi::Debugger), so any
+#                              Rml::RenderInterface draws it and the caller uses
+#                              RmlUi's own API (VELLUM_RMLUI_NATIVE=ON). It never
+#                              links Core: a process uses one or the other.
 #   VellumRmlUi::VellumRenderer draws the backend's commands as triangle meshes
 #                              through Vellum's SkiaDawnSurface
 #                              (VELLUM_RMLUI_VELLUM_RENDERER=ON). It is the only
@@ -39,12 +44,15 @@ option(VELLUM_RMLUI_LUA
     "Build the sandboxed Lua host (VellumRmlUi::Lua) from the pinned Lua source" OFF)
 option(VELLUM_RMLUI_VELLUM_RENDERER
     "Build VellumRmlUi::VellumRenderer, which draws through Vellum's GPU renderer (needs Vellum::Gpu)" OFF)
+option(VELLUM_RMLUI_NATIVE
+    "Build VellumRmlUi::Native, which links RmlUi publicly and accepts any Rml::RenderInterface" OFF)
 option(VELLUM_RMLUI_BUILD_TESTS "Build the RmlUi module tests" ${BUILD_TESTING})
 option(VELLUM_RMLUI_INSTALL "Install the VellumRmlUi CMake package" ON)
 
 include(cmake/VellumRmlUiDependencies.cmake)
 
 add_library(vellum-rmlui-core SHARED
+    src/assets.cpp
     src/backend.cpp
     src/headless_recorder.cpp
     src/rooted_assets.cpp
@@ -119,6 +127,29 @@ if(VELLUM_RMLUI_LUA)
     list(APPEND _vellum_rmlui_install_targets vellum-rmlui-lua vellum-rmlui-lua54)
 endif()
 
+if(VELLUM_RMLUI_NATIVE)
+    # The same runtime, asset and log sources as Core, compiled again into a
+    # static library that exposes RmlUi instead of hiding it.
+    add_library(vellum-rmlui-native STATIC
+        src/assets.cpp
+        src/native_context.cpp
+        src/rooted_assets.cpp
+        src/session.cpp)
+    add_library(VellumRmlUi::Native ALIAS vellum-rmlui-native)
+    set_target_properties(vellum-rmlui-native PROPERTIES
+        EXPORT_NAME Native
+        POSITION_INDEPENDENT_CODE ON)
+    target_compile_features(vellum-rmlui-native PUBLIC cxx_std_20)
+    target_include_directories(vellum-rmlui-native PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    target_compile_definitions(vellum-rmlui-native
+        PUBLIC VELLUM_RMLUI_STATIC
+        PRIVATE VELLUM_RMLUI_FONTS_ENABLED=$<BOOL:${VELLUM_RMLUI_FONTS}>)
+    target_link_libraries(vellum-rmlui-native PUBLIC RmlUi::Core RmlUi::Debugger)
+    list(APPEND VELLUM_RMLUI_COMPONENTS Native)
+endif()
+
 if(VELLUM_RMLUI_VELLUM_RENDERER)
     # Inside a Vellum build the GPU target already exists; on its own the
     # module takes it from an installed Vellum package.
@@ -166,6 +197,51 @@ if(VELLUM_RMLUI_INSTALL)
             NAMESPACE VellumRmlUi::
             DESTINATION ${_vellum_rmlui_cmake_dir}
             COMPONENT VellumRmlUi)
+    endif()
+    if(VELLUM_RMLUI_NATIVE)
+        # Native exposes RmlUi, so its package carries RmlUi: the pinned
+        # static archives and headers, exported under RmlUi's own names
+        # (RmlUi::Core, RmlUi::Debugger). It is a separate component and
+        # export set, so the Core package stays free of RmlUi files.
+        install(TARGETS vellum-rmlui-native
+            EXPORT VellumRmlUiNativeTargets
+            COMPONENT VellumRmlUiNative
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+        install(EXPORT VellumRmlUiNativeTargets
+            NAMESPACE VellumRmlUi::
+            DESTINATION ${_vellum_rmlui_cmake_dir}
+            COMPONENT VellumRmlUiNative)
+        if(VELLUM_RMLUI_FONTS)
+            # RmlUi's static archive links FreeType privately; a consumer's
+            # final link needs the pinned archive too.
+            install(TARGETS freetype
+                EXPORT RmlUiTargets
+                COMPONENT VellumRmlUiNative
+                ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+        endif()
+        # The notices for what this component redistributes. A package built
+        # with fonts carries FreeType's archive, so it carries the FTL too.
+        set(_vellum_rmlui_doc_dir "${CMAKE_INSTALL_DATADIR}/doc/VellumRmlUi")
+        FetchContent_GetProperties(vellum_rmlui_rmlui SOURCE_DIR _vellum_rmlui_rmlui_src)
+        install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/NOTICE-Native.md"
+            DESTINATION ${_vellum_rmlui_doc_dir}
+            COMPONENT VellumRmlUiNative)
+        install(FILES "${_vellum_rmlui_rmlui_src}/LICENSE.txt"
+            DESTINATION ${_vellum_rmlui_doc_dir}
+            RENAME RmlUi-LICENSE.txt
+            COMPONENT VellumRmlUiNative)
+        if(VELLUM_RMLUI_FONTS)
+            FetchContent_GetProperties(vellum_rmlui_freetype SOURCE_DIR _vellum_rmlui_freetype_src)
+            install(FILES "${_vellum_rmlui_freetype_src}/docs/FTL.TXT"
+                DESTINATION ${_vellum_rmlui_doc_dir}
+                RENAME FreeType-FTL.TXT
+                COMPONENT VellumRmlUiNative)
+        endif()
+        install(EXPORT RmlUiTargets
+            NAMESPACE RmlUi::
+            FILE VellumRmlUiRmlUiTargets.cmake
+            DESTINATION ${_vellum_rmlui_cmake_dir}
+            COMPONENT VellumRmlUiNative)
     endif()
     configure_package_config_file(cmake/VellumRmlUiConfig.cmake.in
         "${CMAKE_CURRENT_BINARY_DIR}/VellumRmlUiConfig.cmake"

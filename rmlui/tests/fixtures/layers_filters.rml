@@ -1,0 +1,62 @@
+<rml>
+<head>
+<title>Layers, masks, filters and shaders</title>
+<style>
+body {
+    display: block;
+    width: 160px;
+    height: 120px;
+    margin: 0;
+    background-color: #1b1e24;
+}
+div { display: block; }
+/* A rounded box that clips its child: a clip mask. */
+#clip {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    width: 48px;
+    height: 48px;
+    border-radius: 16px;
+    overflow: hidden;
+    background-color: #3a4150;
+}
+#clip div { width: 96px; height: 96px; background-color: #9aa4b8; }
+/* A blurred box: a layer composited through a filter. */
+#blur {
+    position: absolute;
+    left: 72px;
+    top: 8px;
+    width: 32px;
+    height: 32px;
+    background-color: #ff3b30;
+    filter: blur(2px);
+}
+/* A gradient decorator: a shader. */
+#gradient {
+    position: absolute;
+    left: 8px;
+    top: 72px;
+    width: 64px;
+    height: 32px;
+    decorator: linear-gradient(90deg, #ff3b30, #3b82f6);
+}
+/* A rotated box: a transform. */
+#rotated {
+    position: absolute;
+    left: 96px;
+    top: 72px;
+    width: 24px;
+    height: 24px;
+    background-color: #f2f2f2;
+    transform: rotate(30deg);
+}
+</style>
+</head>
+<body>
+<div id="clip"><div/></div>
+<div id="blur"/>
+<div id="gradient"/>
+<div id="rotated"/>
+</body>
+</rml>

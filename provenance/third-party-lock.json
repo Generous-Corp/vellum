@@ -89,7 +89,7 @@
       "license": "FTL",
       "source": "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.gz",
       "sha256": "5c3a8e78f7b24c20b25b54ee575d6daa40007a5f4eea2845861c3409b3021747",
-      "surface": "optional rmlui/ module only (VELLUM_ENABLE_RMLUI or a standalone rmlui build); built from source as a static hidden-visibility archive linked privately into VellumRmlUi::Core when VELLUM_RMLUI_FONTS=ON; PNG, zlib, bzip2, Brotli and HarfBuzz disabled"
+      "surface": "optional rmlui/ module only (VELLUM_ENABLE_RMLUI or a standalone rmlui build); built from source as a static hidden-visibility archive linked privately into VellumRmlUi::Core when VELLUM_RMLUI_FONTS=ON, and redistributed as an archive in the opt-in VellumRmlUi::Native package under FTL; PNG, zlib, bzip2, Brotli and HarfBuzz disabled"
     },
     {
       "name": "Lua",
@@ -105,7 +105,7 @@
       "license": "MIT",
       "source": "https://github.com/mikke89/RmlUi",
       "commit": "58c751531f4c1a1eb2dc56f409b8e8a323a0c9ad",
-      "surface": "optional rmlui/ module only (VELLUM_ENABLE_RMLUI or a standalone rmlui build); built from source as a static hidden-visibility archive linked privately into VellumRmlUi::Core"
+      "surface": "optional rmlui/ module only (VELLUM_ENABLE_RMLUI or a standalone rmlui build); built from source as a static hidden-visibility archive linked privately into VellumRmlUi::Core; with VELLUM_RMLUI_NATIVE=ON its headers and archives are redistributed in the opt-in VellumRmlUi::Native package"
     },
     {
       "name": "stb_image_write",

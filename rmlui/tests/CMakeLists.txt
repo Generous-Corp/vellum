@@ -22,6 +22,15 @@ add_test(NAME vellum.rmlui.two-instances COMMAND vellum-rmlui-two-instances-test
 vellum_rmlui_add_test(vellum-rmlui-log-sink-test log_sink_test.cpp VellumRmlUi::Core)
 add_test(NAME vellum.rmlui.log-sink COMMAND vellum-rmlui-log-sink-test)
 
+# Control for the open target: Core flattens layers and filters away.
+vellum_rmlui_add_test(vellum-rmlui-core-flattening-test core_flattening_test.cpp VellumRmlUi::Core)
+add_test(NAME vellum.rmlui.core-flattening COMMAND vellum-rmlui-core-flattening-test)
+
+if(VELLUM_RMLUI_NATIVE)
+    vellum_rmlui_add_test(vellum-rmlui-native-test native_test.cpp VellumRmlUi::Native)
+    add_test(NAME vellum.rmlui.native COMMAND vellum-rmlui-native-test)
+endif()
+
 vellum_rmlui_add_test(vellum-rmlui-hot-reload-test hot_reload_test.cpp VellumRmlUi::DevAssets)
 add_test(NAME vellum.rmlui.hot-reload COMMAND vellum-rmlui-hot-reload-test)
 
@@ -64,4 +73,15 @@ if(VELLUM_RMLUI_INSTALL AND NOT CMAKE_CROSSCOMPILING)
             "-DVELLUM_RMLUI_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
             "-DTEST_CONFIG=$<CONFIG>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/RunInstallConsumer.cmake")
+    if(VELLUM_RMLUI_NATIVE)
+        add_test(NAME vellum.rmlui.install-consumer-native
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_RMLUI_BUILD_DIR=${PROJECT_BINARY_DIR}"
+                "-DVELLUM_RMLUI_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+                "-DVELLUM_RMLUI_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+                "-DVELLUM_RMLUI_CONSUMER=native"
+                "-DVELLUM_RMLUI_FONTS=${VELLUM_RMLUI_FONTS}"
+                "-DTEST_CONFIG=$<CONFIG>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/RunInstallConsumer.cmake")
+    endif()
 endif()

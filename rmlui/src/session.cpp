@@ -230,6 +230,18 @@ std::size_t runtime_references() noexcept {
     return runtime.references;
 }
 
+void count_load_message(LoadDiagnostics& diagnostics, LogLevel level,
+                        std::string_view text) noexcept {
+    if (level == LogLevel::error || level == LogLevel::assertion)
+        ++diagnostics.errors;
+    else if (level == LogLevel::warning)
+        ++diagnostics.warnings;
+    // RmlUi's style sheet parser reports a declaration it could not parse with
+    // this fixed prefix and then drops it.
+    if (text.find("Syntax error parsing property declaration") != std::string_view::npos)
+        ++diagnostics.dropped_declarations;
+}
+
 std::string_view strip_scope_prefix(std::string_view path, std::string_view prefix) noexcept {
     if (!prefix.empty() && path.size() > prefix.size() && path.starts_with(prefix))
         path.remove_prefix(prefix.size());
