@@ -154,3 +154,50 @@ Rejected alternatives:
   identity before it has served as the oracle;
 - a bidirectional flow, or a Vellum-to-Pulp backport before the flip, which
   creates two editable owners.
+
+## Amendment: the rename moves the units to `framework/` (2026-11-07)
+
+The rename this decision deferred to "after the flip" lands as one commit for
+every unit of the newest export, and that commit is the ownership flip for
+those units. It supersedes, for them, the flip sequence in "One editable owner,
+one direction" and the per-unit forwarding-header rename in "Relationship to
+earlier decisions".
+
+- **Where the units go.** The rename tool renames `pulp` to `vellum` and moves
+  the whole export into the native root `framework/`, keeping its layout:
+  `mirror/<path>` becomes `framework/<renamed path>`, where only
+  `include/pulp/` becomes `include/vellum/`. The mirror root never holds a
+  renamed file, and `mirror/` is gone once the move lands. Vellum code reaches
+  no `pulp::` name, so no forwarding header is needed.
+- **The transfer record.** `provenance/framework/transfer.json` pairs each Pulp
+  path and blob at the export receipt's commit with its `framework/` path and
+  blob, and carries the rename's specification and tool blobs. The required
+  provenance lane proves that record against a Pulp checkout through the
+  tool-free identity verifier: the inverse of the rename reproduces Pulp's
+  bytes, and an independent forward pass reproduces the recorded tree. The
+  proof is of the transfer commit's tree, not of `HEAD`'s.
+- **Three rules, the same in Pulp's freeze contract:**
+  1. The renamed units are Vellum-native and editable. Generic work on them
+     starts in Vellum.
+  2. Pulp's frozen copies change only by `framework-backport` from a named
+     Vellum commit.
+  3. Pulp's copies are deleted when Pulp consumes Vellum.
+- **The `framework/` content regime.** `framework/` is a native root with its
+  own rules, checked by `verify_extraction.py`:
+  - the mirror-edge table's rules, exactly as `mirror/` had them: no audio, DSP,
+    MIDI, product, plug-in SDK or audio-framework edges, and no Pulp-kept file;
+  - no `pulp::`, `namespace pulp` or `<pulp/` spelling anywhere in it,
+    case-sensitive;
+  - the native-tree checks: no symlinks, fail-closed decoding, and no
+    normalized second copy of a `framework/` file in any other native root.
+- **Name debt, ratcheted.** The units keep Pulp's `PULP_*` macros and `pulp-*`
+  target names, and their prose names plug-in hosts. The native name rules
+  `pulp-package-or-target`, `audio-plugin-sdk` and `pulp-public-namespace`
+  therefore hold as a counted debt in `provenance/framework-name-debt.json`, per
+  rule and file. A count may fall but never rise, and the respelling that
+  retires the debt is a later, separate change.
+- **Unchanged.** The installed SDK keeps its `mirror/` directory and the
+  `Vellum::Mirror*` target names. The runtime collision census and the
+  symbol-intersection gate stay permanent, because the units now share the
+  `vellum` namespace with native code. The export receipts and blob-origin
+  records stay as history; no later export applies to these units.
