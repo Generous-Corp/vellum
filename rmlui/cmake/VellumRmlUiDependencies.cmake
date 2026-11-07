@@ -31,7 +31,13 @@ function(vellum_rmlui_fetch_dependencies)
     set(CMAKE_CXX_VISIBILITY_PRESET hidden)
     set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
     set(BUILD_SHARED_LIBS OFF)
+    # Native's package installs RmlUi, so with Native on, RmlUi's archives and
+    # headers go to its component; otherwise nothing of theirs is installed.
     set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME VellumRmlUiUpstream)
+    set(_vellum_rmlui_rmlui_component VellumRmlUiUpstream)
+    if(VELLUM_RMLUI_NATIVE)
+        set(_vellum_rmlui_rmlui_component VellumRmlUiNative)
+    endif()
 
     if(VELLUM_RMLUI_FONTS)
         # FreeType under the FreeType License (FTL). Only the font formats
@@ -69,6 +75,7 @@ function(vellum_rmlui_fetch_dependencies)
     # RmlUi's Lua plugin keeps one process-wide lua_State, so it is not built;
     # VellumRmlUi::Lua drives its own per-instance sandboxed state instead.
     set(RMLUI_LUA_BINDINGS OFF CACHE BOOL "" FORCE)
+    set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${_vellum_rmlui_rmlui_component})
     FetchContent_Declare(vellum_rmlui_rmlui
         GIT_REPOSITORY https://github.com/mikke89/RmlUi.git
         GIT_TAG "${VELLUM_RMLUI_RMLUI_COMMIT}")
@@ -80,6 +87,8 @@ function(vellum_rmlui_fetch_dependencies)
     if(NOT _rmlui_type STREQUAL "STATIC_LIBRARY")
         message(FATAL_ERROR "RmlUi must build as a static library here, got ${_rmlui_type}")
     endif()
+
+    set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME VellumRmlUiUpstream)
 
     if(VELLUM_RMLUI_LUA)
         # Lua 5.4.7 from the official source archive. Only the library is
