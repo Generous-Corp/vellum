@@ -21,8 +21,20 @@
 // RmlUi::Debugger. A consumer that brings its own RmlUi build cannot mix it
 // with Native in one binary; it uses its own build directly instead.
 //
-// Threading: as for Core, every instance in a process is driven from one UI
-// thread.
+// System interface: Native forwards time, translation, clipboard, cursor and
+// keyboard calls to the Rml::SystemInterface installed before the first
+// instance opens (a host's own, for example a frame clock and the platform
+// pasteboard). With none installed it falls back to RmlUi's defaults: a steady
+// clock and an in-process clipboard. Native only adds per-instance log
+// attribution on top.
+//
+// Threading: RmlUi's state is process-wide and not thread-safe, so calls into
+// all instances in a process must never run concurrently. They need not be
+// made on the main thread: a host may drive an instance, including render(),
+// from a render thread it owns, as long as it serializes every RmlUi call in
+// the process. Native itself calls no platform UI API (no AppKit), and per-call
+// asset and log routing is thread-local, so it follows whichever thread makes
+// the call.
 
 #include <vellum/rmlui/assets.hpp>
 
