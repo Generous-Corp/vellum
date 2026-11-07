@@ -194,7 +194,9 @@ earlier decisions".
   - the native-tree checks: no symlinks, fail-closed decoding (a file the
     ratchet cannot decode is an error, not a skip), and no normalized second
     copy of a `framework/` file in any other native root;
-  - `framework/external/` holds only the transferred third-party files.
+  - `framework/external/` is third-party source, outside the name-debt
+    ratchet's scope; it may hold only the transferred files, so first-party
+    code cannot be placed there to escape the count.
 - **Name debt, ratcheted.** The units keep Pulp's `PULP_*` macros and `pulp-*`
   target names, and their prose names plug-in hosts. The native name rules
   `pulp-package-or-target`, `audio-plugin-sdk` and `pulp-public-namespace`
@@ -210,9 +212,8 @@ earlier decisions".
   header is policed by the edge table alone. Generated inputs (the JavaScript
   preludes, embedded data, the build-info template) are still checked against
   Pulp's closure digests through the rename's inverse, so their sources are not
-  yet natively editable, and that check is no pure-rename proof once a
-  generator is edited. Regenerating those digests from Vellum's own build is
-  part of the closure work that follows.
+  yet natively editable until 8c regenerates those digests from Vellum's own
+  build, and the check is no pure-rename proof once a generator is edited.
 - **Unchanged.** The installed SDK keeps its `mirror/` directory and the
   `Vellum::Mirror*` target names. The runtime collision census and the
   symbol-intersection gate stay permanent, because the units now share the
