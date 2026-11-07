@@ -98,7 +98,7 @@ _run("installed headers match the mirror" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/tools/mirror/gpu_surface_guard.py" check
     --include-dir "${_prefix}/mirror/include" --repo "${VELLUM_SOURCE_DIR}" ${_gpu_guard_args})
 if(_gpu_guarded)
-    foreach(_case "pulp/view/window_host.hpp" "pulp/render/gpu_surface.hpp")
+    foreach(_case "vellum/view/window_host.hpp" "vellum/render/gpu_surface.hpp")
         string(MAKE_C_IDENTIFIER "${_case}" _case_key)
         set(_case_dir "${_work}/gpu-guard-${_case_key}")
         file(MAKE_DIRECTORY "${_case_dir}")

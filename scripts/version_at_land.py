@@ -69,7 +69,7 @@ LEVELS = ("none", "patch", "minor", "major")
 # What ships in the SDK archive or decides its contents.
 SHIP_PATHS = (
     "CMakeLists.txt", "LICENSE.md", "NOTICE.md", "DEPENDENCIES.md",
-    "apps/**", "assets/**", "authoring/**", "cli/**", "cmake/**", "components/**", "foundation/**",
+    "apps/**", "assets/**", "authoring/**", "cli/**", "cmake/**", "components/**", "foundation/**", "framework/**",
     "gpu-runtime/**", "graphics/**", "mirror/**", "packages/**", "rmlui/**", "runtime/**", "templates/**", "web/**",
     "tools/mirror/**", "tools/agent_instructions/**",
     "scripts/install.sh", "scripts/install.ps1", "scripts/install_core.py", "scripts/INSTALLER_SHA256SUMS",

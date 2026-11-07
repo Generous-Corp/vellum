@@ -275,6 +275,20 @@ class VerifyExtractionTests(unittest.TestCase):
                 sum(finding["path"].endswith("meter.cpp") for finding in findings), 3
             )
 
+    def test_framework_rejects_renamed_product_edges(self) -> None:
+        # framework/ keeps the mirror-edge rules, in the renamed spelling.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_mirror(root, "framework/core/view/src/meter.cpp",
+                              b"#include <vellum/audio/buffer.hpp>\nauto x = vellum::signal::gain(1.0f);\n")
+            self.write_mirror(root, "framework/core/view/src/host.mm", b"#import <AudioToolbox/AudioToolbox.h>\n")
+            self.write_mirror(root, "framework/core/view/src/clean.cpp", b"#include <vellum/view/view.hpp>\n")
+            findings = verify_extraction.mirror_edge_findings(root, prefix=verify_extraction.FRAMEWORK_ROOT)
+            self.assertEqual({f["path"] for f in findings},
+                             {"framework/core/view/src/meter.cpp", "framework/core/view/src/host.mm"})
+            # The mirror-root scan does not read framework/.
+            self.assertEqual(verify_extraction.mirror_edge_findings(root), [])
+
     def test_pulp_namespace_is_scoped_to_the_mirror_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -339,13 +353,14 @@ class VerifyExtractionTests(unittest.TestCase):
         rule = content_scan_policy.FORBIDDEN_NATIVE_CONTENT_PATTERNS["renamed-mirror-namespace"][0]
         refused = set(re.search(r"vellum\\s\*::\\s\*\(\?:([^)]*)\)", rule).group(1).split("|"))
         census: set[str] = set()
-        for path in (ROOT / "mirror").rglob("*"):
-            if path.is_file() and not path.relative_to(ROOT).as_posix().startswith("mirror/external/"):
+        units = ROOT / ("framework" if (ROOT / "framework").is_dir() else "mirror")
+        for path in units.rglob("*"):
+            if path.is_file() and not path.relative_to(units).as_posix().startswith("external/"):
                 text = path.read_bytes().decode("utf-8", errors="replace")
                 for spelling in ("pulp", "vellum"):
                     census.update(re.findall(rf"namespace\s+{spelling}\s*::\s*(\w+)", text))
                     census.update(re.findall(rf"namespace\s+{spelling}\s*\{{\s*namespace\s+(\w+)", text))
-        census |= {p.name for p in (ROOT / "mirror").glob("core/*/include/*/*")
+        census |= {p.name for p in units.glob("core/*/include/*/*")
                    if p.is_dir() and p.parent.name in {"pulp", "vellum"}}
         native = {p.name for top in ("foundation", "runtime", "graphics", "authoring")
                   for p in (ROOT / top / "include/vellum").glob("*") if p.is_dir()}
@@ -361,6 +376,8 @@ class VerifyExtractionTests(unittest.TestCase):
             "tools/mirror/consumer/direct_main.cpp",
             "tools/mirror/consumer/main.cpp",
             "tools/mirror/consumer/runtime_image_census_main.cpp",
+            "tools/mirror/canvas_provider_anchor.cpp",
+            "tools/mirror/gpu_surface_guard.py",
             "scripts/install_core.py",
             "tools/provenance/content_scan_policy.py",
             "tools/provenance/test_verify_extraction.py",
@@ -368,9 +385,88 @@ class VerifyExtractionTests(unittest.TestCase):
             "tools/provenance/mirror_edge_patterns.json",
             "tools/mirror/verify_mirror_inertness.py",
             "tools/mirror/test_verify_mirror_inertness.py",
+            "tools/mirror/test_rename_mirror_namespace.py",
         })
         self.assertEqual(verify_extraction.RENAMED_MIRROR_SCAN_ROOTS,
                          verify_extraction.EXPECTED_ACTIVE_ROOTS + ("components", "product", "tools", "web"))
+
+    def write_framework_debt(self, root: Path, rules: dict[str, dict[str, int]]) -> None:
+        path = root / verify_extraction.FRAMEWORK_NAME_DEBT
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"schema": "vellum.framework-name-debt.v1", "rules": rules}), encoding="utf-8")
+
+    def test_framework_name_debt_may_only_fall(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "framework/core/a/src/a.cpp"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"#if PULP_HAS_SKIA\nint a();\n#endif\n")
+            (root / "framework/external/x").mkdir(parents=True)
+            (root / "framework/external/x/x.c").write_bytes(b"#define PULP_THIRD_PARTY 1\n")
+            self.write_framework_debt(root, {"pulp-package-or-target": {"framework/core/a/src/a.cpp": 1}})
+            errors, totals = verify_extraction.framework_debt_errors(root)
+            self.assertEqual(errors, [])
+            # Control: the baseline's hit is counted, and external/ is not.
+            self.assertEqual(totals["pulp-package-or-target"], 1)
+            # An added PULP_ macro raises the file's count past its baseline.
+            source.write_bytes(b"#if PULP_HAS_SKIA && PULP_HAS_DAWN\nint a();\n#endif\n")
+            errors, _ = verify_extraction.framework_debt_errors(root)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("pulp-package-or-target in framework/core/a/src/a.cpp is 2, baseline 1", errors[0])
+            # So does a new file, and a newly ratcheted rule in an old one.
+            source.write_bytes(b"#if PULP_HAS_SKIA\nint a();\n#endif\n")
+            (root / "framework/core/a/src/b.cpp").write_bytes(b"// VST3 host\n")
+            errors, _ = verify_extraction.framework_debt_errors(root)
+            self.assertEqual([e.split(" in ")[0] for e in errors], ["framework name debt rose: audio-plugin-sdk"])
+            # Falling below the baseline passes.
+            (root / "framework/core/a/src/b.cpp").unlink()
+            source.write_bytes(b"int a();\n")
+            self.assertEqual(verify_extraction.framework_debt_errors(root)[0], [])
+            (root / verify_extraction.FRAMEWORK_NAME_DEBT).write_text("{", encoding="utf-8")
+            self.assertIn("unreadable", verify_extraction.framework_debt_errors(root)[0][0])
+
+    def test_recorded_framework_name_debt_holds_on_this_tree(self) -> None:
+        if not (ROOT / "framework").is_dir():
+            self.skipTest("this checkout has no framework/")
+        errors, totals = verify_extraction.framework_debt_errors(ROOT)
+        self.assertEqual(errors, [])
+        self.assertGreater(totals["pulp-package-or-target"], 0)  # control: the scan reads framework/
+
+    def test_framework_refuses_residual_pulp_spellings_and_unknown_trees(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / "framework/core/a/src").mkdir(parents=True)
+            (root / "framework/core/a/src/a.cpp").write_bytes(b"namespace vellum::a { int x; }\n")
+            (root / "framework/core/a/src/b.cpp").write_bytes(b"#include <pulp/a/a.hpp>\n")
+            self.write_framework_debt(root, {})
+            record = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+            record.parent.mkdir(parents=True)
+            record.write_text(json.dumps({"schema": verify_extraction.FRAMEWORK_TRANSFER_SCHEMA,
+                                          "framework_tree": "f" * 40}), encoding="utf-8")
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main")
+            self.assertEqual(checks["framework_residual_pulp_spellings"], ["framework/core/a/src/b.cpp"])
+            self.assertTrue(any("still spells pulp::" in e for e in errors), errors)
+            self.assertTrue(any("is not a tree in this repository" in e for e in errors), errors)
+            # A real tree with no Pulp checkout fails unless the proof is deferred.
+            subprocess.run(["git", "-C", str(root), "add", "framework"], check=True)
+            tree = subprocess.run(["git", "-C", str(root), "write-tree", "--prefix=framework/"], check=True,
+                                  capture_output=True, text=True).stdout.strip()
+            receipt = root / "provenance/mirror/receipts/r.json"
+            receipt.parent.mkdir(parents=True)
+            receipt.write_text(json.dumps({"pulp_sha": "a" * 40, "mirror_tree": "b" * 40, "files": []}), encoding="utf-8")
+            record.write_text(json.dumps({"schema": verify_extraction.FRAMEWORK_TRANSFER_SCHEMA, "framework_tree": tree,
+                                          "export_receipt": "provenance/mirror/receipts/r.json",
+                                          "pulp_sha": "a" * 40, "mirror_tree": "b" * 40, "records": []}),
+                              encoding="utf-8")
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main")
+            self.assertTrue(any("no Pulp checkout proved the transfer" in e for e in errors), errors)
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertFalse(any("no Pulp checkout" in e for e in errors), errors)
+            self.assertEqual(checks["framework_transfer_proved"], "deferred: no Pulp checkout")
+            (root / "mirror").mkdir()
+            errors, _ = verify_extraction.verify_framework(root, None, "origin/main")
+            self.assertTrue(any("mirror/ and framework/ both exist" in e for e in errors), errors)
 
     def test_symlinks_in_native_trees_are_refused(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -674,7 +770,9 @@ class VerifyExtractionTests(unittest.TestCase):
                 (clone / "provenance/mirror/receipts/index.json").read_text(encoding="utf-8")
             )["receipts"]
             forged_export_error = (
-                f"mirror export: {landed[-1]}: HEAD:mirror is not the newest receipt's mirror tree"
+                f"mirror export: {landed[-1]}: mirror/ still exists at HEAD after the framework transfer"
+                if (clone / verify_extraction.FRAMEWORK_TRANSFER_RECORD).is_file()
+                else f"mirror export: {landed[-1]}: HEAD:mirror is not the newest receipt's mirror tree"
                 if landed
                 else "mirror export: mirror/ exists at HEAD without an export receipt"
             )
@@ -944,7 +1042,9 @@ class VerifyExtractionTests(unittest.TestCase):
             # refuses something in today's mirror the vendored table admits.
             pulp = root / "pulp"
             export_table = json.loads(json.dumps(table))
-            export_table["content_patterns"]["mirror-pulp-kept-include"] = r"#\s*include\s*<pulp/"
+            # Today's units spell vellum once transferred to framework/.
+            spelling = "vellum" if (MODULE_PATH.parents[2] / "framework").is_dir() else "pulp"
+            export_table["content_patterns"]["mirror-pulp-kept-include"] = rf"#\s*include\s*<{spelling}/"
             (pulp / verify_extraction.PULP_MIRROR_EDGE_TABLE).parent.mkdir(parents=True)
             (pulp / verify_extraction.PULP_MIRROR_EDGE_TABLE).write_text(json.dumps(export_table), encoding="utf-8")
             with mock.patch.object(verify_extraction, "mirror_edge_table_drift", return_value=[]), \
@@ -1172,6 +1272,29 @@ class RendererPinTests(unittest.TestCase):
         errors, rows = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [stale])
         self.assertEqual(len(errors), 1)
         self.assertIn("0 landed receipts name HEAD:mirror", errors[0])
+
+    def test_transferred_receipt_is_current_after_mirror_is_gone(self) -> None:
+        old_tree = self.commit_mirror(b"old\n")
+        older = self.landed("older", self.pulp_commit(self.other_milestone()), old_tree)
+        new_tree = self.commit_mirror(b"new\n")
+        newest = self.landed("newest", self.pulp_commit(self.matching_pin), new_tree)
+        git = ["git", "-C", str(self.root), "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run(git + ["rm", "-q", "-r", "mirror"], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", "transfer"], check=True)
+        # No transfer record: nothing names the current receipt.
+        errors, _ = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
+        self.assertIn("HEAD has no mirror/ tree", errors[0])
+        record = self.root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps({"export_receipt": newest, "mirror_tree": new_tree}), encoding="utf-8")
+        errors, rows = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
+        self.assertEqual(errors, [])
+        self.assertEqual({row["receipt"]: row["matches_lock"] for row in rows}, {newest: True, older: None})
+        # The record must name a landed receipt.
+        record.write_text(json.dumps({"export_receipt": "provenance/mirror/receipts/x.json",
+                                      "mirror_tree": new_tree}), encoding="utf-8")
+        errors, _ = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
+        self.assertIn("which is not a landed receipt", errors[0])
 
 
 if __name__ == "__main__":

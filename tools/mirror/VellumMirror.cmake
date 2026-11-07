@@ -137,12 +137,12 @@ endforeach()
 
 # Generated binary data comes from the mirrored producer itself.
 file(MAKE_DIRECTORY "${VELLUM_MIRROR_BINARY_DATA_DIR}")
-include("${PROJECT_SOURCE_DIR}/mirror/tools/cmake/PulpEmbedData.cmake")
+include("${VELLUM_MIRROR_SOURCE_DIR}/tools/cmake/PulpEmbedData.cmake")
 function(_vellum_mirror_add_binary_data name)
     _vellum_mirror_key(_key "${name}")
     set(_sources)
     foreach(_source IN LISTS VELLUM_MIRROR_BINARY_${_key}_SOURCES)
-        list(APPEND _sources "${PROJECT_SOURCE_DIR}/mirror/${_source}")
+        list(APPEND _sources "${VELLUM_MIRROR_SOURCE_DIR}/${_source}")
     endforeach()
     # The producer writes next to CMAKE_CURRENT_BINARY_DIR; give it its own.
     set(CMAKE_CURRENT_BINARY_DIR "${VELLUM_MIRROR_BINARY_DATA_DIR}")
@@ -337,7 +337,7 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         target_sources("${_library}" PRIVATE
             "${PROJECT_SOURCE_DIR}/tools/mirror/canvas_provider_anchor.cpp")
         target_include_directories("${_library}" PRIVATE
-            "${PROJECT_SOURCE_DIR}/mirror/core/canvas/include")
+            "${VELLUM_MIRROR_SOURCE_DIR}/core/canvas/include")
         target_compile_features("${_library}" PRIVATE cxx_std_20)
         # MirrorCanvas forwards its public mirrored symbols from the shared
         # provider while retaining a standalone direct-link contract.
@@ -373,8 +373,8 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         # Export only the mirrored namespaces this unit defines.
         set(_exports "${CMAKE_CURRENT_BINARY_DIR}/vellum-mirror-${_vellum_mirror_unit}.exports")
         file(WRITE "${_exports}"
-            "__ZN4pulp*\n__ZNK4pulp*\n__ZTVN4pulp*\n__ZTIN4pulp*\n__ZTSN4pulp*\n"
-            "__ZZN4pulp*\n__ZZNK4pulp*\n__ZGVZN4pulp*\n__ZGVZNK4pulp*\n__ZTHN4pulp*\n__ZTWN4pulp*\n")
+            "__ZN6vellum*\n__ZNK6vellum*\n__ZTVN6vellum*\n__ZTIN6vellum*\n__ZTSN6vellum*\n"
+            "__ZZN6vellum*\n__ZZNK6vellum*\n__ZGVZN6vellum*\n__ZGVZNK6vellum*\n__ZTHN6vellum*\n__ZTWN6vellum*\n")
         foreach(_binary IN LISTS VELLUM_MIRROR_BINARY_DATA_TARGETS)
             _vellum_mirror_key(_bkey "${_binary}")
             string(LENGTH "${VELLUM_MIRROR_BINARY_${_bkey}_NAMESPACE}" _length)
@@ -401,7 +401,7 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     foreach(_target IN LISTS VELLUM_MIRROR_UNIT_${_ukey}_TARGETS)
         _vellum_mirror_key(_tkey "${_target}")
         foreach(_include IN LISTS VELLUM_MIRROR_TARGET_${_tkey}_INCLUDE_DIRS)
-            if(_include MATCHES "^${PROJECT_SOURCE_DIR}/mirror/core/[^/]+/include$")
+            if(_include MATCHES "^${VELLUM_MIRROR_SOURCE_DIR}/core/[^/]+/include$")
                 list(APPEND _vellum_mirror_public_includes "${_include}")
             endif()
         endforeach()

@@ -912,6 +912,19 @@ def link_closure_findings(
     return findings
 
 
+FRAMEWORK_TRANSFER_RECORD = "provenance/framework/transfer.json"
+
+
+def transferred_receipt(root: Path) -> str | None:
+    """The export receipt the framework transfer record names, if the units were transferred."""
+    try:
+        record = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = record.get("export_receipt") if isinstance(record, dict) else None
+    return value if isinstance(value, str) else None
+
+
 def verify_receipt(
     root: Path, receipt_path: str, receipt: dict[str, Any], policy: dict[str, Any] | None,
     origins: list[dict[str, Any]], *, newest: bool, head: str, pulp_root: Path | None = None,
@@ -933,7 +946,16 @@ def verify_receipt(
         errors.append(f"{label}: mirror_sha root tree must contain only mirror/")
     if git_try(root, "rev-parse", f"{mirror_sha}:{MIRROR_DIR}") != receipt["mirror_tree"]:
         errors.append(f"{label}: mirror_tree differs from {mirror_sha}:mirror")
-    if newest and git_try(root, "rev-parse", f"{head}:{MIRROR_DIR}") != receipt["mirror_tree"]:
+    if newest and transferred_receipt(root) == receipt_path:
+        # Decision 0010 option (a): the 8b transfer moved the renamed units to
+        # framework/, so HEAD holds no mirror/. The export is proved through
+        # the transfer record instead: it names this receipt and its tree, and
+        # verify_extraction's framework check proves the renamed tree.
+        if git_ok(root, "cat-file", "-e", f"{head}:{MIRROR_DIR}"):
+            errors.append(f"{label}: mirror/ still exists at HEAD after the framework transfer")
+        if not git_ok(root, "cat-file", "-e", f"{receipt['mirror_tree']}^{{tree}}"):
+            errors.append(f"{label}: the transferred mirror tree is not in this repository")
+    elif newest and git_try(root, "rev-parse", f"{head}:{MIRROR_DIR}") != receipt["mirror_tree"]:
         errors.append(f"{label}: HEAD:mirror is not the newest receipt's mirror tree")
     entries = tree_entries(root, mirror_sha) or []
     projected = [

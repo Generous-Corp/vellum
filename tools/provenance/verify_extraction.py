@@ -52,6 +52,17 @@ EXPECTED_ACTIVE_ROOTS = (
     "templates",
 )
 MIRROR_ROOT = "mirror/"
+# Decision 0010 option (a), M2 8b: the renamed, formerly mirrored units live in
+# this native root. Its content is proved once, at the transfer commit, by the
+# transfer record; from then on it is ordinary editable Vellum source under its
+# own content regime (verify_framework below).
+FRAMEWORK_ROOT = "framework/"
+FRAMEWORK_TRANSFER_RECORD = "provenance/framework/transfer.json"
+FRAMEWORK_TRANSFER_SCHEMA = "vellum.framework-transfer.v1"
+FRAMEWORK_NAME_DEBT = "provenance/framework-name-debt.json"
+# The native name rules framework/ carries as a counted debt until 8c respells
+# its kept PULP_* macros, pulp-* targets and plug-in-host prose.
+FRAMEWORK_RATCHETED_RULES = ("pulp-package-or-target", "audio-plugin-sdk", "pulp-public-namespace")
 MIRROR_ORIGIN_RECORDS = "provenance/mirror/blob-origins.json"
 MIRROR_ORIGIN_SCHEMA = "vellum.mirror-blob-origins.v1"
 MIRROR_DECISION = "decisions/0010-mirror-extracted-pulp-framework-source.md"
@@ -105,6 +116,10 @@ RENAMED_MIRROR_EXEMPT_PATHS = {
     "tools/mirror/consumer/direct_main.cpp",
     "tools/mirror/consumer/main.cpp",
     "tools/mirror/consumer/runtime_image_census_main.cpp",
+    # The mirror package's own build glue: the provider anchor compiled into
+    # the canvas unit, and the GPU guard whose #error names the guarded header.
+    "tools/mirror/canvas_provider_anchor.cpp",
+    "tools/mirror/gpu_surface_guard.py",
     # The rule itself, its installer copy and its tests.
     "scripts/install_core.py",
     "tools/provenance/content_scan_policy.py",
@@ -115,6 +130,8 @@ RENAMED_MIRROR_EXEMPT_PATHS = {
     "tools/provenance/mirror_edge_patterns.json",
     "tools/mirror/verify_mirror_inertness.py",
     "tools/mirror/test_verify_mirror_inertness.py",
+    # The 8b rename tool's tests plant the renamed spellings they check for.
+    "tools/mirror/test_rename_mirror_namespace.py",
 }
 
 
@@ -324,12 +341,25 @@ def normalized_fingerprint(data: bytes) -> str | None:
     return hashlib.sha256(text).hexdigest()
 
 
+def framework_or_mirror_files(root: Path) -> tuple[str, list[Path]]:
+    """The renamed units' files: framework/ once transferred, mirror/ before."""
+    if (root / FRAMEWORK_ROOT.rstrip("/")).is_dir():
+        return FRAMEWORK_ROOT, list(active_files(root, (FRAMEWORK_ROOT.rstrip("/"),)))
+    return MIRROR_ROOT, list(mirror_files(root))
+
+
 def normalized_copy_findings(root: Path, roots: Iterable[str] = RENAMED_MIRROR_SCAN_ROOTS) -> list[dict[str, str]]:
-    """Native files whose normalized content equals a Pulp-authored mirror file's."""
+    """Native files whose normalized content equals a renamed unit's (a second copy).
+
+    The units are framework/ after the 8b transfer and mirror/ before it.
+    Normalizing respells pulp -> vellum, so a copy of Pulp's frozen source is
+    the same fingerprint as a copy of the renamed unit.
+    """
     mirror: dict[str, str] = {}
-    for path in mirror_files(root):
+    prefix, units = framework_or_mirror_files(root)
+    for path in units:
         relative = path.relative_to(root).as_posix()
-        if relative.startswith(MIRROR_ROOT + "external/") or path.suffix.lower() not in NORMALIZED_SUFFIXES:
+        if relative.startswith(prefix + "external/") or path.suffix.lower() not in NORMALIZED_SUFFIXES:
             continue
         fingerprint = normalized_fingerprint(path.read_bytes())
         if fingerprint:
@@ -337,7 +367,7 @@ def normalized_copy_findings(root: Path, roots: Iterable[str] = RENAMED_MIRROR_S
     findings: list[dict[str, str]] = []
     for path in active_files(root, roots):
         relative = path.relative_to(root).as_posix()
-        if relative.startswith(MIRROR_ROOT) or path.suffix.lower() not in NORMALIZED_SUFFIXES:
+        if relative.startswith((MIRROR_ROOT, FRAMEWORK_ROOT)) or path.suffix.lower() not in NORMALIZED_SUFFIXES:
             continue
         fingerprint = normalized_fingerprint(path.read_bytes())
         if fingerprint and fingerprint in mirror:
@@ -575,8 +605,12 @@ def compile_mirror_edge_table(table: dict) -> dict[str, object]:
     }
 
 
-def mirror_edge_findings(root: Path, table: dict | None = None) -> list[dict[str, object]]:
-    """Mirror edges under the vendored table, or under another table's rules."""
+def mirror_edge_findings(root: Path, table: dict | None = None, prefix: str = MIRROR_ROOT) -> list[dict[str, object]]:
+    """Mirror edges under the vendored table, or under another table's rules.
+
+    `prefix` is the root scanned: mirror/, or framework/ after the transfer,
+    whose paths keep the export's layout below it.
+    """
     if table is not None:
         rules = compile_mirror_edge_table(table)
         content_rules, path_rules = rules["content"], rules["path"]
@@ -585,9 +619,9 @@ def mirror_edge_findings(root: Path, table: dict | None = None) -> list[dict[str
         content_rules, path_rules = FORBIDDEN_MIRROR_EDGE_PATTERNS, MIRROR_EDGE_PATH_PATTERNS
         suffixes, binary, exceptions = MIRROR_EDGE_SUFFIXES, MIRROR_EDGE_BINARY_SUFFIXES, MIRROR_EDGE_EXCEPTIONS
     findings: list[dict[str, object]] = []
-    for path in mirror_files(root):
+    for path in active_files(root, (prefix.rstrip("/"),)):
         relative = path.relative_to(root).as_posix()
-        in_mirror = relative.removeprefix(MIRROR_ROOT)
+        in_mirror = relative.removeprefix(prefix)
         for name, pattern in path_rules.items():
             if pattern.search(in_mirror):
                 findings.append({"rule": name, "path": relative, "line": 0, "match": relative})
@@ -632,7 +666,18 @@ def current_mirror_receipts(
     try:
         head_tree = git(root, "rev-parse", "HEAD:mirror")
     except subprocess.CalledProcessError:
-        return [], [], ["HEAD has no mirror/ tree to name the current export receipt"]
+        head_tree = None
+    if head_tree is None:
+        # After the 8b transfer the receipt Vellum builds from is the one the
+        # transfer record names, and its mirror_tree is the record's.
+        try:
+            transfer = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return [], [], ["HEAD has no mirror/ tree to name the current export receipt"]
+        named = transfer.get("export_receipt") if isinstance(transfer, dict) else None
+        if named not in receipts:
+            return [], receipts, [f"{FRAMEWORK_TRANSFER_RECORD} names {named!r}, which is not a landed receipt"]
+        head_tree = transfer.get("mirror_tree")
     current: list[str] = []
     older: list[str] = []
     for receipt_path in receipts:
@@ -800,11 +845,131 @@ def verify_authority_phase(
     return not errors, errors
 
 
+def framework_name_debt(root: Path) -> dict[str, dict[str, int]]:
+    """Hits of the ratcheted native name rules in framework/, per rule and file (external/ excluded)."""
+    counts: dict[str, dict[str, int]] = {name: {} for name in FRAMEWORK_RATCHETED_RULES}
+    for path in active_files(root, (FRAMEWORK_ROOT.rstrip("/"),)):
+        relative = path.relative_to(root).as_posix()
+        if relative.startswith(FRAMEWORK_ROOT + "external/") or not scans_active_content(relative):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for name in FRAMEWORK_RATCHETED_RULES:
+            hits = len(_ALL_NATIVE_PATTERNS[name].findall(text))
+            if hits:
+                counts[name][relative] = hits
+    return counts
+
+
+def framework_debt_errors(root: Path) -> tuple[list[str], dict[str, int]]:
+    """The ratchet: no (rule, file) count may rise above the committed baseline."""
+    current = framework_name_debt(root)
+    totals = {rule: sum(files.values()) for rule, files in current.items()}
+    try:
+        baseline = json.loads((root / FRAMEWORK_NAME_DEBT).read_text(encoding="utf-8"))["rules"]
+    except (OSError, ValueError, KeyError) as exc:
+        return [f"{FRAMEWORK_NAME_DEBT}: unreadable: {exc}"], totals
+    errors = []
+    for rule, files in current.items():
+        known = baseline.get(rule, {})
+        for path, n in sorted(files.items()):
+            if n > known.get(path, 0):
+                errors.append(f"framework name debt rose: {rule} in {path} is {n}, baseline {known.get(path, 0)}")
+    return errors, totals
+
+
+# Spellings that must be gone from framework/ entirely: the rename made them
+# vellum. Case-sensitive and boundary-free over all bytes.
+FRAMEWORK_RESIDUAL_PULP = re.compile(rb"pulp::|namespace\s+pulp(?![A-Za-z0-9_])|[<\"]pulp/|include/pulp/")
+
+
+def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
+                     defer_identity: bool = False) -> tuple[list[str], dict[str, object]]:
+    """framework/'s content regime and its transfer proof (Decision 0010 option a)."""
+    errors: list[str] = []
+    checks: dict[str, object] = {}
+    framework = root / FRAMEWORK_ROOT.rstrip("/")
+    if not framework.is_dir():
+        checks["framework"] = "absent"
+        return errors, checks
+    if (root / MIRROR_ROOT.rstrip("/")).exists():
+        errors.append("mirror/ and framework/ both exist: the transfer moves the renamed units out of mirror/")
+    # 1. Edges: the mirror-edge table's rules, exactly as mirror/ had them.
+    edges = mirror_edge_findings(root, prefix=FRAMEWORK_ROOT)
+    checks["framework_edge_findings"] = edges
+    if edges:
+        errors.append(f"framework/ has {len(edges)} audio, plug-in, host, or product edges")
+    # 2. No old spelling left anywhere in it.
+    residual = []
+    for path in active_files(root, (FRAMEWORK_ROOT.rstrip("/"),)):
+        if FRAMEWORK_RESIDUAL_PULP.search(path.read_bytes()):
+            residual.append(path.relative_to(root).as_posix())
+    checks["framework_residual_pulp_spellings"] = residual
+    if residual:
+        errors.append(f"framework/ still spells pulp::, namespace pulp or <pulp/ in {len(residual)} files")
+    # 3. The ratchet on the native name rules.
+    debt_errors, totals = framework_debt_errors(root)
+    checks["framework_name_debt"] = totals
+    errors.extend(debt_errors)
+    # 4. The transfer proof: the recorded framework tree is a pure rename of
+    # authoritative Pulp at the export receipt's commit.
+    try:
+        transfer = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: unreadable: {exc}")
+        return errors, checks
+    if transfer.get("schema") != FRAMEWORK_TRANSFER_SCHEMA:
+        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: schema must be {FRAMEWORK_TRANSFER_SCHEMA}")
+        return errors, checks
+    identity = load_rename_identity_verifier()
+    tree = transfer.get("framework_tree", "")
+    if not SHA_RE.fullmatch(str(tree)) or subprocess.run(
+            ["git", "-C", str(root), "cat-file", "-e", f"{tree}^{{tree}}"], capture_output=True).returncode:
+        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: framework_tree {tree!r} is not a tree in this repository")
+        return errors, checks
+    try:
+        receipt = json.loads((root / transfer["export_receipt"]).read_text(encoding="utf-8"))
+    except (OSError, ValueError, KeyError) as exc:
+        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: export receipt unreadable: {exc}")
+        return errors, checks
+    if receipt.get("pulp_sha") != transfer.get("pulp_sha") or receipt.get("mirror_tree") != transfer.get("mirror_tree"):
+        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: pulp_sha or mirror_tree differs from {transfer['export_receipt']}")
+    receipt_files = {row["pulp_path"]: row["blob"] for row in receipt.get("files", [])}
+    records = transfer.get("records", [])
+    if {r.get("pulp_path"): r.get("pulp_git_blob_sha") for r in records} != receipt_files:
+        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: records differ from the export receipt's file list")
+    checks["framework_transfer_records"] = len(records)
+    if pulp_root is None:
+        # Fail closed, as the mirror's origin proof does: only a lane that is
+        # not the required provenance lane may defer the proof to it.
+        checks["framework_transfer_proved"] = "deferred: no Pulp checkout"
+        if not defer_identity:
+            errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: no Pulp checkout proved the transfer; pass --pulp-root")
+        return errors, checks
+    raw, source_errors = identity.raw_from_records(pulp_root, records, transfer.get("pulp_sha", ""), pulp_main_ref)
+    proof = source_errors + identity.verify(raw, identity.git_tree(root, tree), transfer.get("rename", {}))
+    checks["framework_transfer_proved"] = not proof
+    errors.extend(f"framework transfer: {e}" for e in proof)
+    return errors, checks
+
+
+def load_rename_identity_verifier():
+    path = Path(__file__).resolve().parents[1] / "mirror/verify_mirror_rename_identity.py"
+    spec = importlib.util.spec_from_file_location("verify_mirror_rename_identity", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def verify(
     root: Path,
     pulp_root: Path | None = None,
     defer_mirror_identity: bool = False,
     mirror_edge_pulp_root: Path | None = None,
+    pulp_main_ref: str = "origin/main",
 ) -> dict[str, object]:
     provenance = root / "provenance"
     errors: list[str] = []
@@ -891,6 +1056,14 @@ def verify(
     }
     if boundary.get("mirror") != expected_mirror:
         errors.append("mirror scope differs from the Decision 0010 boundary")
+    expected_framework = {
+        "root": FRAMEWORK_ROOT,
+        "transfer_record": FRAMEWORK_TRANSFER_RECORD,
+        "name_debt": FRAMEWORK_NAME_DEBT,
+        "decision": MIRROR_DECISION,
+    }
+    if boundary.get("framework") != expected_framework:
+        errors.append("framework scope differs from the Decision 0010 option (a) boundary")
     if boundary.get("rules") != EXPECTED_RULES:
         errors.append("declared boundary rules differ from the enforced rules")
     if not (root / MIRROR_DECISION).is_file():
@@ -977,7 +1150,11 @@ def verify(
     export_table_path = pulp_root / PULP_MIRROR_EDGE_TABLE if pulp_root is not None else None
     if export_table_path is not None and export_table_path.is_file() \
             and export_table_path.read_bytes() != MIRROR_EDGE_TABLE.read_bytes():
-        export_findings = mirror_edge_findings(root, json.loads(export_table_path.read_text(encoding="utf-8")))
+        # After the transfer the export's units are framework/; the export
+        # commit's table still applies to them.
+        units_prefix = FRAMEWORK_ROOT if (root / FRAMEWORK_ROOT).is_dir() else MIRROR_ROOT
+        export_findings = mirror_edge_findings(root, json.loads(export_table_path.read_text(encoding="utf-8")),
+                                               prefix=units_prefix)
         checks["mirror_edge_findings_under_export_table"] = export_findings
         if export_findings:
             errors.append(
@@ -988,7 +1165,7 @@ def verify(
     if active_findings:
         errors.append(f"native build/authoring surface has {len(active_findings)} forbidden references")
 
-    symlinks = symlink_findings(root)
+    symlinks = symlink_findings(root, RENAMED_MIRROR_SCAN_ROOTS + (FRAMEWORK_ROOT.rstrip("/"),))
     checks["native_tree_symlinks"] = symlinks
     if symlinks:
         errors.append(f"native trees hold {len(symlinks)} symlinks, which the native scans cannot see through")
@@ -1000,6 +1177,9 @@ def verify(
     checks["normalized_mirror_copies"] = normalized_copies
     if normalized_copies:
         errors.append(f"native trees hold {len(normalized_copies)} copies of mirror files (normalized content)")
+    framework_errors, framework_checks = verify_framework(root, pulp_root, pulp_main_ref, defer_mirror_identity)
+    checks.update(framework_checks)
+    errors.extend(framework_errors)
 
     debt = provenance / "extraction-debt/initial.yaml"
     debt_status = top_level_scalar(debt, "status")
@@ -1050,12 +1230,18 @@ def main() -> int:
         action="store_true",
         help="leave the Pulp identity proof of mirror/ to the required provenance lane",
     )
+    parser.add_argument(
+        "--pulp-main-ref",
+        default="origin/main",
+        help="the ref in --pulp-root that the framework transfer's Pulp commit must descend into",
+    )
     args = parser.parse_args()
     report = verify(
         args.root.resolve(),
         args.pulp_root.resolve() if args.pulp_root else None,
         defer_mirror_identity=args.defer_mirror_identity,
         mirror_edge_pulp_root=args.mirror_edge_pulp_root.resolve() if args.mirror_edge_pulp_root else None,
+        pulp_main_ref=args.pulp_main_ref,
     )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:

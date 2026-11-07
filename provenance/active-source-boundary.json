@@ -29,6 +29,12 @@
     "origin_records": "provenance/mirror/blob-origins.json",
     "decision": "decisions/0010-mirror-extracted-pulp-framework-source.md"
   },
+  "framework": {
+    "root": "framework/",
+    "transfer_record": "provenance/framework/transfer.json",
+    "name_debt": "provenance/framework-name-debt.json",
+    "decision": "decisions/0010-mirror-extracted-pulp-framework-source.md"
+  },
   "historical_evidence": [
     "provenance/cut-manifest.json",
     "provenance/cut-paths.txt",

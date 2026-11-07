@@ -277,7 +277,9 @@ class VerifyMirrorExportTests(unittest.TestCase):
 
     def test_repository_receipts_all_verify(self) -> None:
         receipts = verify_mirror_export.landed_receipts(REPO)
-        has_mirror = verify_mirror_export.git_ok(REPO, "cat-file", "-e", "HEAD:mirror")
+        # After the framework transfer the receipts describe framework/'s origin.
+        has_mirror = (verify_mirror_export.git_ok(REPO, "cat-file", "-e", "HEAD:mirror")
+                      or verify_mirror_export.transferred_receipt(REPO) is not None)
         self.assertEqual(bool(receipts), has_mirror, "mirror/ and the receipt index disagree")
         with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": self.ci_git_base} if self.ci_git_base else {}):
             report = verify_mirror_export.verify(REPO)
