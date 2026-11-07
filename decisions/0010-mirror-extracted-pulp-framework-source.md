@@ -220,8 +220,8 @@ earlier decisions".
   `Vellum::Mirror*` target names. Two gates stay permanent, because the units
   now share the `vellum` namespace with native code: the collision census of
   `framework/` against the native roots runs in `verify_extraction.py` (the
-  required provenance lane), and the defined-symbol intersection under
-  `vellum::runtime` of the installed mirror libraries against the native
+  required provenance lane), and the defined-symbol intersection across the
+  whole `vellum` namespace of the installed mirror libraries against the native
   archives runs in the installed-mirror consumer check
   (`tools/mirror/RunMirrorConsumer.cmake`), with a planted-name control. Each
   fails when it cannot see both sides. The export receipts and blob-origin
