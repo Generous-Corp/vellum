@@ -175,7 +175,10 @@ earlier decisions".
   provenance lane proves that record against a Pulp checkout through the
   tool-free identity verifier: the inverse of the rename reproduces Pulp's
   bytes, and an independent forward pass reproduces the recorded tree. The
-  proof is of the transfer commit's tree, not of `HEAD`'s.
+  proof is of the transfer commit's tree, not of `HEAD`'s. The record is
+  immutable: `verify_extraction.py` pins its SHA-256 and requires it to equal
+  its copy at the merge base, so it cannot be repointed at another receipt,
+  record set or tree.
 - **Three rules, the same in Pulp's freeze contract:**
   1. The renamed units are Vellum-native and editable. Generic work on them
      starts in Vellum.
@@ -188,14 +191,28 @@ earlier decisions".
     MIDI, product, plug-in SDK or audio-framework edges, and no Pulp-kept file;
   - no `pulp::`, `namespace pulp` or `<pulp/` spelling anywhere in it,
     case-sensitive;
-  - the native-tree checks: no symlinks, fail-closed decoding, and no
-    normalized second copy of a `framework/` file in any other native root.
+  - the native-tree checks: no symlinks, fail-closed decoding (a file the
+    ratchet cannot decode is an error, not a skip), and no normalized second
+    copy of a `framework/` file in any other native root;
+  - `framework/external/` holds only the transferred third-party files.
 - **Name debt, ratcheted.** The units keep Pulp's `PULP_*` macros and `pulp-*`
   target names, and their prose names plug-in hosts. The native name rules
   `pulp-package-or-target`, `audio-plugin-sdk` and `pulp-public-namespace`
   therefore hold as a counted debt in `provenance/framework-name-debt.json`, per
-  rule and file. A count may fall but never rise, and the respelling that
-  retires the debt is a later, separate change.
+  rule and file, including the units' Python generators. A count may fall but
+  never rise, the committed baseline may not rise above its value at the merge
+  base, and the respelling that retires the debt is a later, separate change.
+- **What a native edit is still held to.** The build compiles the export's
+  closures, so `framework/` keeps exactly the transferred file set: an edit may
+  change a file's bytes but not add or remove one. An edited file is held to
+  the edge rules, the residual-spelling check and the ratchet; it is not
+  re-proven against its closure, so an include of another framework or native
+  header is policed by the edge table alone. Generated inputs (the JavaScript
+  preludes, embedded data, the build-info template) are still checked against
+  Pulp's closure digests through the rename's inverse, so their sources are not
+  yet natively editable, and that check is no pure-rename proof once a
+  generator is edited. Regenerating those digests from Vellum's own build is
+  part of the closure work that follows.
 - **Unchanged.** The installed SDK keeps its `mirror/` directory and the
   `Vellum::Mirror*` target names. The runtime collision census and the
   symbol-intersection gate stay permanent, because the units now share the
