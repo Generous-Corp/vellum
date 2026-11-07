@@ -976,15 +976,34 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
                                 capture_output=True, check=False)
         if before.returncode == 0 and before.stdout != transfer_bytes:
             errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: changed from the merge base; it is immutable")
-    # framework/external/ is skipped by the ratchet, so it may hold only the
-    # transferred third-party files.
+    # The file set is the transfer record's: a native edit may change a file's
+    # bytes but not add or remove one, because the build compiles the export's
+    # closures (mirror_package.verify_framework_identity holds the same set).
+    # framework/external/, which the ratchet skips, is reported on its own.
     recorded = {r.get("framework_path") for r in transfer.get("records", [])}
-    stray = sorted(p.relative_to(root).as_posix() for p in (framework / "external").rglob("*")
-                   if (p.is_file() or p.is_symlink()) and p.relative_to(root).as_posix() not in recorded) \
-        if (framework / "external").is_dir() else []
-    checks["framework_external_unrecorded"] = stray
-    if stray:
-        errors.append(f"framework/external/ holds {len(stray)} files the transfer record does not list")
+    present = {p.relative_to(root).as_posix() for p in framework.rglob("*") if p.is_file() or p.is_symlink()}
+    unrecorded, missing = sorted(present - recorded), sorted(recorded - present)
+    checks["framework_external_unrecorded"] = [p for p in unrecorded if p.startswith(FRAMEWORK_ROOT + "external/")]
+    checks["framework_unrecorded_files"] = unrecorded
+    checks["framework_missing_files"] = missing
+    if checks["framework_external_unrecorded"]:
+        errors.append(f"framework/external/ holds {len(checks['framework_external_unrecorded'])} files "
+                      "the transfer record does not list")
+    if unrecorded:
+        errors.append(f"framework/ holds {len(unrecorded)} files the transfer record does not list: {unrecorded[:5]}")
+    if missing:
+        errors.append(f"framework/ is missing {len(missing)} files the transfer record lists: {missing[:5]}")
+    # The runtime collision census, permanent: framework/ now shares the
+    # vellum namespace with native code, so a native declaration that collides
+    # with a framework/ name fails here. A census that sees no declarations on
+    # either side is itself an error (collision_errors), its built-in control.
+    rename_tool = load_rename_tool()
+    census = rename_tool.collision_census(
+        rename_tool.load_spelling(MIRROR_EDGE_TABLE, "vellum"), framework, root, {})
+    checks["framework_collision_census"] = {
+        key: (len(value) if isinstance(value, (list, dict)) and key != "declarations" else value)
+        for key, value in census.items() if key != "native_root"}
+    errors.extend(f"framework collision census: {e}" for e in rename_tool.collision_errors(census))
     identity = load_rename_identity_verifier()
     tree = transfer.get("framework_tree", "")
     if not SHA_RE.fullmatch(str(tree)) or subprocess.run(
@@ -1015,6 +1034,15 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
     checks["framework_transfer_proved"] = not proof
     errors.extend(f"framework transfer: {e}" for e in proof)
     return errors, checks
+
+
+def load_rename_tool():
+    path = Path(__file__).resolve().parents[1] / "mirror/rename_mirror_namespace.py"
+    spec = importlib.util.spec_from_file_location("rename_mirror_namespace", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def load_rename_identity_verifier():

@@ -206,7 +206,9 @@ earlier decisions".
   base, and the respelling that retires the debt is a later, separate change.
 - **What a native edit is still held to.** The build compiles the export's
   closures, so `framework/` keeps exactly the transferred file set: an edit may
-  change a file's bytes but not add or remove one. An edited file is held to
+  change a file's bytes but not add or remove one. `verify_extraction.py`
+  checks the set in the required provenance lane, and `mirror_package.py`
+  again when it plans the build. An edited file is held to
   the edge rules, the residual-spelling check and the ratchet; it is not
   re-proven against its closure, so an include of another framework or native
   header is policed by the edge table alone. Generated inputs (the JavaScript
@@ -215,7 +217,12 @@ earlier decisions".
   yet natively editable until 8c regenerates those digests from Vellum's own
   build, and the check is no pure-rename proof once a generator is edited.
 - **Unchanged.** The installed SDK keeps its `mirror/` directory and the
-  `Vellum::Mirror*` target names. The runtime collision census and the
-  symbol-intersection gate stay permanent, because the units now share the
-  `vellum` namespace with native code. The export receipts and blob-origin
+  `Vellum::Mirror*` target names. Two gates stay permanent, because the units
+  now share the `vellum` namespace with native code: the collision census of
+  `framework/` against the native roots runs in `verify_extraction.py` (the
+  required provenance lane), and the defined-symbol intersection under
+  `vellum::runtime` of the installed mirror libraries against the native
+  archives runs in the installed-mirror consumer check
+  (`tools/mirror/RunMirrorConsumer.cmake`), with a planted-name control. Each
+  fails when it cannot see both sides. The export receipts and blob-origin
   records stay as history; no later export applies to these units.

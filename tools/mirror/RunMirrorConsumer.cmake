@@ -75,6 +75,24 @@ _run("gpu-runtime census" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/tools/mirror/gpu_runtime_census.py"
     ${_libraries} ${_installed_libraries})
 
+# framework/'s units share the vellum namespace with native code: no symbol
+# under vellum::runtime may be defined both by a mirror library and by a native
+# archive (a silent ODR violation across images). Both sides must be seen
+# (exit 3 otherwise), and a planted shared name must be caught.
+file(GLOB _native_archives "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-*.a")
+if(NOT _native_archives)
+    message(FATAL_ERROR "the install carries no native libvellum-*.a archive to intersect")
+endif()
+set(_intersection "${Python3_EXECUTABLE}" "${VELLUM_SOURCE_DIR}/tools/mirror/mirror_symbol_intersection.py"
+    --old pulp --new vellum --namespace vellum::runtime
+    --mirror ${_libraries} --native ${_native_archives})
+_run("framework and native symbol intersection" ${_intersection})
+execute_process(COMMAND ${_intersection} --plant RESULT_VARIABLE _planted OUTPUT_QUIET ERROR_QUIET)
+if(NOT _planted EQUAL 1)
+    message(FATAL_ERROR "symbol intersection control: a planted shared name gave ${_planted}, not 1")
+endif()
+message(STATUS "symbol intersection control: ok")
+
 set(_generator)
 find_program(_ninja ninja)
 if(_ninja)

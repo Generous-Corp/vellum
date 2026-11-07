@@ -572,6 +572,54 @@ class VerifyExtractionTests(unittest.TestCase):
                 self.assertTrue(any("differ from the pinned transfer record" in e for e in errors), errors)
                 self.assertTrue(any("changed from the merge base" in e for e in errors), errors)
 
+    def framework_fixture(self, root: Path, files: dict[str, bytes]) -> None:
+        for relative, data in files.items():
+            (root / relative).parent.mkdir(parents=True, exist_ok=True)
+            (root / relative).write_bytes(data)
+        self.write_framework_debt(root, {})
+        record = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps({"schema": verify_extraction.FRAMEWORK_TRANSFER_SCHEMA, "framework_tree": "f" * 40,
+                                      "records": [{"framework_path": p} for p in files if p.startswith("framework/")]}),
+                          encoding="utf-8")
+
+    def test_framework_file_set_is_the_transfer_records(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            _, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual((checks["framework_unrecorded_files"], checks["framework_missing_files"]), ([], []))
+            (root / "framework/core/a/src/new.cpp").write_bytes(b"int n;\n")
+            (root / "framework/core/a/src/a.cpp").unlink()
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual(checks["framework_unrecorded_files"], ["framework/core/a/src/new.cpp"])
+            self.assertEqual(checks["framework_missing_files"], ["framework/core/a/src/a.cpp"])
+            self.assertTrue(any("does not list" in e for e in errors) and any("is missing" in e for e in errors))
+
+    def test_framework_collision_census_refuses_a_native_redeclaration(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.framework_fixture(root, {
+                "framework/core/runtime/include/vellum/runtime/log.hpp":
+                    b"#pragma once\nnamespace vellum::runtime {\nclass Logger;\nvoid log_line(int level);\n}\n",
+                "runtime/include/vellum/runtime/kernel.hpp":
+                    b"#pragma once\nnamespace vellum::runtime {\nclass Kernel;\n}\n",
+            })
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            census = checks["framework_collision_census"]
+            # Control: both sides are seen, and nothing collides yet.
+            self.assertGreater(census["declarations"]["mirror"], 0)
+            self.assertGreater(census["declarations"]["native"], 0)
+            self.assertFalse(any("collision census" in e for e in errors), errors)
+            # A native declaration of a framework/ name is refused.
+            (root / "runtime/include/vellum/runtime/kernel.hpp").write_bytes(
+                b"#pragma once\nnamespace vellum::runtime {\nclass Kernel;\nclass Logger;\n}\n")
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual(checks["framework_collision_census"]["name_collisions"], 1)
+            self.assertTrue(any("framework collision census: 1 name collisions" in e for e in errors), errors)
+
     def test_landed_transfer_record_matches_its_pin(self) -> None:
         record = ROOT / verify_extraction.FRAMEWORK_TRANSFER_RECORD
         if not record.is_file():
