@@ -313,6 +313,7 @@ if(VELLUM_BUILD_TESTS)
                     "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
                     "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
                     "-DVELLUM_INSTALL_CONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/graphics/tests/legacy_install_consumer"
+                    "-DVELLUM_INSTALL_CONSUMER_WORK=legacy-install-consumer-test"
                     "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                     "-DTEST_CONFIG=$<CONFIG>"
                     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
