@@ -29,6 +29,20 @@ add_test(NAME vellum.rmlui.core-flattening COMMAND vellum-rmlui-core-flattening-
 if(VELLUM_RMLUI_NATIVE)
     vellum_rmlui_add_test(vellum-rmlui-native-test native_test.cpp VellumRmlUi::Native)
     add_test(NAME vellum.rmlui.native COMMAND vellum-rmlui-native-test)
+
+    # A click into a text input, with the field's font resolved and without.
+    vellum_rmlui_add_test(vellum-rmlui-native-text-input-test native_text_input_test.cpp
+        VellumRmlUi::Native)
+    if(VELLUM_RMLUI_FONTS AND EXISTS "${_vellum_rmlui_test_font}")
+        target_compile_definitions(vellum-rmlui-native-text-input-test PRIVATE
+            VELLUM_RMLUI_TEST_FONT="${_vellum_rmlui_test_font}"
+            VELLUM_RMLUI_TEST_FONT_FAMILY="Inter")
+    else()
+        target_compile_definitions(vellum-rmlui-native-text-input-test PRIVATE
+            VELLUM_RMLUI_TEST_FONT_FAMILY="")
+    endif()
+    add_test(NAME vellum.rmlui.native-text-input COMMAND vellum-rmlui-native-text-input-test)
+    set_tests_properties(vellum.rmlui.native-text-input PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
 vellum_rmlui_add_test(vellum-rmlui-hot-reload-test hot_reload_test.cpp VellumRmlUi::DevAssets)
