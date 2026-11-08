@@ -145,6 +145,10 @@ func click(_ view: NSView, at point: CGPoint, in window: NSWindow) throws {
 
 @MainActor
 func exerciseNativeHosts(bundle: String) throws -> [String: Any] {
+    if let reason = ProcessInfo.processInfo.environment["VELLUM_SWIFT_PROOF_SKIP_NATIVE"],
+       !reason.isEmpty {
+        return ["native_hosts": "skipped: \(reason)"]
+    }
     guard hasWindowServer() else { return ["native_hosts": "skipped: no window-server session"] }
     _ = NSApplication.shared
     NSApplication.shared.setActivationPolicy(.prohibited)

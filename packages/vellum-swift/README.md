@@ -42,7 +42,9 @@ writes `swift-host-proof-evidence.json` in its work directory.
 The proof renders and captures offscreen. When a window-server session exists it
 also hosts `VellumHostView` in a borderless window and `VellumView` in an
 `NSHostingView`, and drives a click, a backing-scale change, a resize and the
-accessibility children through them.
+accessibility children through them. Outside CI the runner first checks that
+the machine is idle (`HIDIdleTime` of at least 180 s and a 1-minute load under 4)
+and skips only the window-opening part, with a message, when it is in use.
 
 - With `VELLUM_REQUIRE_GPU=ON` a missing prefix fails the test; otherwise it
   skips with a message.

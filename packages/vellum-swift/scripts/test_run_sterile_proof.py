@@ -122,6 +122,14 @@ class RunnerTest(unittest.TestCase):
             (package / ".swiftpm" / "xcode" / "state.json").write_text("{}", encoding="utf-8")
             self.assertEqual(runner.check_package(package), [])
 
+    def test_desk_guard_skips_native_hosts_while_the_machine_is_in_use(self) -> None:
+        self.assertIsNone(runner.native_guard_reason(True, 0.0, 99.0))
+        self.assertIsNone(runner.native_guard_reason(False, 180.0, 3.99))
+        self.assertIn("in use", runner.native_guard_reason(False, 179.0, 0.5))
+        self.assertIn("load", runner.native_guard_reason(False, 600.0, 4.0))
+        self.assertIn("HIDIdleTime", runner.native_guard_reason(False, None, 0.5))
+        self.assertIsNone(runner.desk_guard({"GITHUB_ACTIONS": "true"}))
+
 
 if __name__ == "__main__":
     unittest.main()

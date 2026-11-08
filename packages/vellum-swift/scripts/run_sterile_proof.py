@@ -30,6 +30,9 @@ ISOLATED_VARIABLES = (
 )
 
 
+DESK_IDLE_SECONDS = 180.0
+DESK_MAX_LOAD = 4.0
+NATIVE_SKIP_VARIABLE = "VELLUM_SWIFT_PROOF_SKIP_NATIVE"
 PINNED_XCODE = ("27.2", "27B52")
 PINNED_SWIFT = "6.4.2"
 
@@ -110,6 +113,34 @@ def pinned_toolchain_problems(xcode: str, swift: str) -> list[str]:
     return problems
 
 
+def native_guard_reason(ci: bool, idle_seconds: float | None, load: float) -> str | None:
+    if ci:
+        return None
+    if idle_seconds is None:
+        return "could not read HIDIdleTime, so the machine may be in use"
+    if idle_seconds < DESK_IDLE_SECONDS:
+        return (f"machine in use: HIDIdleTime {idle_seconds:.0f} s is under "
+                f"{DESK_IDLE_SECONDS:.0f} s")
+    if load >= DESK_MAX_LOAD:
+        return f"machine busy: 1-minute load {load:.2f} is not under {DESK_MAX_LOAD:.0f}"
+    return None
+
+
+def hid_idle_seconds() -> float | None:
+    result = subprocess.run(
+        ["ioreg", "-c", "IOHIDSystem"], capture_output=True, text=True, check=False
+    )
+    match = re.search(r'"HIDIdleTime"\s*=\s*(\d+)', result.stdout)
+    return int(match.group(1)) / 1_000_000_000 if match else None
+
+
+def desk_guard(environment: dict[str, str]) -> str | None:
+    ci = bool(environment.get("CI") or environment.get("GITHUB_ACTIONS"))
+    if ci:
+        return None
+    return native_guard_reason(False, hid_idle_seconds(), os.getloadavg()[0])
+
+
 def sterile_environment(sdk: Path) -> dict[str, str]:
     environment = {key: value for key, value in os.environ.items() if key not in ISOLATED_VARIABLES}
     environment["PKG_CONFIG_PATH"] = str(sdk / PKG_CONFIG_FILE.parent)
@@ -187,6 +218,10 @@ def prove(sdk: Path, package: Path, work: Path, bundle: Path,
     if foreign_source_reference(linked, source_root, allowed):
         raise ProofError("the proof binary links from the Vellum source tree")
 
+    native_guard = desk_guard(environment)
+    if native_guard is not None:
+        print(f"vellum.swift-host-proof: skipping the window-opening native hosts: {native_guard}")
+        environment[NATIVE_SKIP_VARIABLE] = native_guard
     staged_bundle = work / bundle.name
     shutil.copy2(bundle, staged_bundle)
     started = time.monotonic()
@@ -202,6 +237,7 @@ def prove(sdk: Path, package: Path, work: Path, bundle: Path,
         "xcode_version": xcode_version,
         "pinned_toolchain": {"xcode": " ".join(PINNED_XCODE), "swift": PINNED_SWIFT},
         "pinned_toolchain_matched": not pin_problems,
+        "native_hosts_guard": native_guard or "clear",
         "extra_build_flags": rpath,
         "pkg_config_path": environment["PKG_CONFIG_PATH"],
         "clean_build_seconds": round(build_seconds, 3),
