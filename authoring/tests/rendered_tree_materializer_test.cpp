@@ -299,6 +299,9 @@ int main() {
     }
 
     using vellum::graphics::LoweringDiagnostic;
+    static_assert(vellum::graphics::kUnknownNodeTypeCode == "VELLUM_UNKNOWN_NODE_TYPE");
+    static_assert(vellum::graphics::kStyleDroppedCode == "VELLUM_STYLE_DROPPED");
+    static_assert(vellum::graphics::kNodeContentDroppedCode == "VELLUM_NODE_CONTENT_DROPPED");
     std::vector<LoweringDiagnostic> failure_diagnostics;
     if (!vellum::authoring::materialize_rendered_tree(
             kRenderedTree, rendered, &error, &failure_diagnostics) ||
@@ -312,21 +315,28 @@ int main() {
     constexpr std::string_view kUnknownType = R"JSON({
       "protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
         "type":"stack","id":"unknown-root","style":{"width":100,"height":100},
-        "children":[{"type":"hologram","id":"future-node",
-          "style":{"width":10,"height":10},"children":[]}]}}
+        "children":[
+          {"type":"view","id":"before","style":{"width":10,"height":10,"opacity":1},
+            "children":[]},
+          {"type":"hologram","id":"future-node",
+            "style":{"width":10,"height":10},"children":[]}]}}
     )JSON";
     if (vellum::authoring::materialize_rendered_tree(
             kUnknownType, rendered, &error, &failure_diagnostics) ||
         error != "authoring node future-node has unsupported type hologram" ||
         rendered.scene.width != known_good_width ||
         !rendered.diagnostics.empty() ||
-        failure_diagnostics.size() != 1U ||
-        failure_diagnostics[0].severity != LoweringDiagnostic::Severity::error ||
-        failure_diagnostics[0].disposition != LoweringDiagnostic::Disposition::unsupported ||
-        failure_diagnostics[0].code != "VELLUM_UNKNOWN_NODE_TYPE" ||
-        failure_diagnostics[0].node_id != "future-node" ||
-        failure_diagnostics[0].property != "type" ||
-        failure_diagnostics[0].message != error ||
+        failure_diagnostics.size() != 2U ||
+        failure_diagnostics[0].severity != LoweringDiagnostic::Severity::warning ||
+        failure_diagnostics[0].code != vellum::graphics::kStyleDroppedCode ||
+        failure_diagnostics[0].node_id != "before" ||
+        failure_diagnostics[0].property != "opacity" ||
+        failure_diagnostics[1].severity != LoweringDiagnostic::Severity::error ||
+        failure_diagnostics[1].disposition != LoweringDiagnostic::Disposition::unsupported ||
+        failure_diagnostics[1].code != vellum::graphics::kUnknownNodeTypeCode ||
+        failure_diagnostics[1].node_id != "future-node" ||
+        failure_diagnostics[1].property != "type" ||
+        failure_diagnostics[1].message != error ||
         vellum::graphics::find_node(rendered.scene, "future-node") != nullptr) {
         std::cerr << "unknown node type did not fail closed with a diagnostic\n";
         return 1;
@@ -364,18 +374,60 @@ int main() {
         caption == nullptr || caption->kind != vellum::graphics::SceneNode::Kind::text ||
         caption->text != "Hi" || !failure_diagnostics.empty() ||
         rendered.diagnostics.size() != 4U ||
-        !expect(0U, "panel", "VELLUM_STYLE_DROPPED", "gap",
+        !expect(0U, "panel", vellum::graphics::kStyleDroppedCode, "gap",
             LoweringDiagnostic::Disposition::unsupported) ||
-        !expect(1U, "panel", "VELLUM_STYLE_DROPPED", "opacity",
+        !expect(1U, "panel", vellum::graphics::kStyleDroppedCode, "opacity",
             LoweringDiagnostic::Disposition::unsupported) ||
-        !expect(2U, "caption", "VELLUM_STYLE_DROPPED", "backgroundColor",
+        !expect(2U, "caption", vellum::graphics::kStyleDroppedCode, "backgroundColor",
             LoweringDiagnostic::Disposition::unsupported) ||
-        !expect(3U, "logo", "VELLUM_NODE_CONTENT_DROPPED", "type",
+        !expect(3U, "logo", vellum::graphics::kNodeContentDroppedCode, "type",
             LoweringDiagnostic::Disposition::lowered) ||
         vellum::graphics::to_string(rendered.diagnostics[2].disposition) != "unsupported" ||
         vellum::graphics::to_string(rendered.diagnostics[3].disposition) != "lowered" ||
         vellum::graphics::to_string(rendered.diagnostics[0].severity) != "warning") {
         std::cerr << "dropped style was not reported as a lowering warning\n";
+        return 1;
+    }
+
+    constexpr std::string_view kInertStyle = R"JSON({
+      "protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
+        "type":"stack","id":"inert-root",
+        "style":{"width":200,"height":120,"x":5,"y":5,"gap":2},
+        "children":[
+          {"type":"view","id":"leaf",
+            "style":{"width":10,"height":10,"direction":"horizontal","padding":3},
+            "children":[]},
+          {"type":"text","id":"plain","text":"A",
+            "style":{"height":20,"borderRadius":4,"padding":2},"children":[]},
+          {"type":"text","id":"shaded","text":"B",
+            "style":{"height":20,"borderRadius":4,"boxShadow":{"color":"#000000"}},
+            "children":[]},
+          {"type":"button","id":"press","style":{"width":40,"height":20},
+            "children":[{"type":"text-run","id":"press/run","text":"Go",
+              "style":{"color":"#FFFFFF","fontSize":18},"children":[]}]},
+          {"type":"canvas","id":"sketch","style":{"width":10,"height":10},"children":[]}
+        ]}}
+    )JSON";
+    if (!vellum::authoring::materialize_rendered_tree(kInertStyle, rendered, &error)) {
+        std::cerr << error << '\n';
+        return 1;
+    }
+    const auto* shaded = vellum::graphics::find_node(rendered.scene, "shaded");
+    const auto* sketch = vellum::graphics::find_node(rendered.scene, "sketch");
+    const auto unsupported = LoweringDiagnostic::Disposition::unsupported;
+    if (shaded == nullptr || shaded->corner_radius != 4.0F || sketch == nullptr ||
+        rendered.diagnostics.size() != 9U ||
+        !expect(0U, "inert-root", vellum::graphics::kStyleDroppedCode, "x", unsupported) ||
+        !expect(1U, "inert-root", vellum::graphics::kStyleDroppedCode, "y", unsupported) ||
+        !expect(2U, "leaf", vellum::graphics::kStyleDroppedCode, "direction", unsupported) ||
+        !expect(3U, "leaf", vellum::graphics::kStyleDroppedCode, "padding", unsupported) ||
+        !expect(4U, "plain", vellum::graphics::kStyleDroppedCode, "borderRadius", unsupported) ||
+        !expect(5U, "plain", vellum::graphics::kStyleDroppedCode, "padding", unsupported) ||
+        !expect(6U, "press/run", vellum::graphics::kStyleDroppedCode, "color", unsupported) ||
+        !expect(7U, "press/run", vellum::graphics::kStyleDroppedCode, "fontSize", unsupported) ||
+        !expect(8U, "sketch", vellum::graphics::kNodeContentDroppedCode, "type",
+            LoweringDiagnostic::Disposition::lowered)) {
+        std::cerr << "inert layout, text and button-run style was not reported\n";
         return 1;
     }
 

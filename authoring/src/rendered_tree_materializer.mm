@@ -31,10 +31,6 @@ constexpr float kTextLineHeightMultiplier = 1.4F;
 constexpr std::array<std::string_view, 9> kIntrinsicTypes{
     "view", "stack", "text", "text-run", "text-input", "button", "image", "canvas", "custom",
 };
-constexpr std::array<std::string_view, 10> kBoxStyleKeys{
-    "backgroundColor", "backgroundLinearGradient", "borderRadius", "boxShadow", "direction",
-    "height", "padding", "width", "x", "y",
-};
 constexpr std::array<std::string_view, 6> kTextStyleKeys{
     "color", "fontFamily", "fontSize", "fontWeight", "letterSpacing", "textDecoration",
 };
@@ -46,14 +42,31 @@ bool contains(const std::array<std::string_view, Size>& values, std::string_view
     return std::find(values.begin(), values.end(), value) != values.end();
 }
 
-bool style_key_consumed(std::string_view type, std::string_view key) {
+struct StyleUse final {
+    bool root = false;
+    bool lays_out_children = false;
+    bool paints_text_background = false;
+};
+
+bool style_key_consumed(std::string_view type, std::string_view key, const StyleUse& use) {
     const bool text = type == "text" || type == "text-run";
-    if (contains(kBoxStyleKeys, key)) return !(text && key == "backgroundColor");
+    if (key == "width" || key == "height") return true;
+    if (key == "x" || key == "y") return !use.root;
+    if (key == "padding" || key == "direction") return use.lays_out_children;
+    if (key == "gap") return type == "stack" && use.lays_out_children;
+    if (key == "backgroundLinearGradient" || key == "boxShadow") return true;
+    if (key == "backgroundColor") return !text;
+    if (key == "borderRadius") return !text || use.paints_text_background;
     if (text) return contains(kTextStyleKeys, key);
-    if (type == "stack") return key == "gap";
     if (type == "button") return key == "color";
     if (type == "text-input") return key == "color" || key == "fontSize";
     return false;
+}
+
+bool skipped_text_run(NSString* parent_type, id child) {
+    return [child isKindOfClass:NSDictionary.class] &&
+        [static_cast<NSDictionary*>(child)[@"type"] isEqual:@"text-run"] &&
+        ([parent_type isEqualToString:@"text"] || [parent_type isEqualToString:@"button"]);
 }
 
 bool text_run_style_key_consumed(std::string_view parent_type, std::string_view key) {
@@ -278,7 +291,7 @@ void report_dropped_style(
         context.diagnostics->push_back({
             .severity = LoweringDiagnostic::Severity::warning,
             .disposition = LoweringDiagnostic::Disposition::unsupported,
-            .code = "VELLUM_STYLE_DROPPED",
+            .code = std::string(vellum::graphics::kStyleDroppedCode),
             .node_id = node_id,
             .property = name,
             .message = "style key " + name + " is not supported on " + std::string(type) +
@@ -377,7 +390,7 @@ bool materialize_node(
         context.diagnostics->push_back({
             .severity = LoweringDiagnostic::Severity::error,
             .disposition = LoweringDiagnostic::Disposition::unsupported,
-            .code = "VELLUM_UNKNOWN_NODE_TYPE",
+            .code = std::string(vellum::graphics::kUnknownNodeTypeCode),
             .node_id = identity,
             .property = "type",
             .message = "authoring node " + identity + " has unsupported type " + type_name,
@@ -386,18 +399,6 @@ bool materialize_node(
         return false;
     }
     NSDictionary* style = dictionary_or_empty(source[@"style"]);
-    report_dropped_style(style, identity, type_name,
-        [&](std::string_view key) { return style_key_consumed(type_name, key); }, context);
-    if (type_name == "image" || type_name == "canvas") {
-        context.diagnostics->push_back({
-            .severity = LoweringDiagnostic::Severity::warning,
-            .disposition = LoweringDiagnostic::Disposition::lowered,
-            .code = "VELLUM_NODE_CONTENT_DROPPED",
-            .node_id = identity,
-            .property = "type",
-            .message = type_name + " content has no scene representation; only its box was kept",
-        });
-    }
     NSDictionary* events = dictionary_or_empty(source[@"events"]);
     const bool is_text_input = [type isEqualToString:@"text-input"];
     NSString* input_value = nil;
@@ -460,6 +461,27 @@ bool materialize_node(
     if (!parse_linear_gradient(style, output.fill_gradients, error) ||
         !parse_box_shadow(style, output.box_shadows, error)) {
         return false;
+    }
+    StyleUse style_use{
+        .root = depth == 0U,
+        .paints_text_background =
+            !output.fill_gradients.empty() || !output.box_shadows.empty(),
+    };
+    for (id child in array_or_empty(source[@"children"])) {
+        if (!skipped_text_run(type, child)) style_use.lays_out_children = true;
+    }
+    report_dropped_style(style, identity, type_name,
+        [&](std::string_view key) { return style_key_consumed(type_name, key, style_use); },
+        context);
+    if (type_name == "image" || type_name == "canvas") {
+        context.diagnostics->push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::lowered,
+            .code = std::string(vellum::graphics::kNodeContentDroppedCode),
+            .node_id = identity,
+            .property = "type",
+            .message = type_name + " content has no scene representation; only its box was kept",
+        });
     }
 
     if ([type isEqualToString:@"custom"]) {
@@ -699,8 +721,7 @@ bool materialize_node(
             return false;
         }
         NSDictionary* child = static_cast<NSDictionary*>(child_value);
-        if ([child[@"type"] isEqual:@"text-run"] &&
-            ([type isEqualToString:@"text"] || [type isEqualToString:@"button"])) {
+        if (skipped_text_run(type, child)) {
             report_dropped_style(dictionary_or_empty(child[@"style"]),
                 [child[@"id"] isKindOfClass:NSString.class] ? cpp_string(child[@"id"]) : identity,
                 "text-run",

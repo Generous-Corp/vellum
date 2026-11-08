@@ -36,8 +36,6 @@ struct PaintCommand final {
     std::vector<TextRun> text_runs;
     /// Mesh geometry, relative to `bounds.x`/`bounds.y`.
     std::shared_ptr<const TriangleMesh> mesh;
-    /// The `Scene::scene_version` this command was produced from.
-    std::uint32_t scene_version = kSceneVersion;
 };
 
 struct ResolvedLinearGradient final {
@@ -58,7 +56,8 @@ struct ResolvedLinearGradient final {
 
 /// Flatten a scene into absolute paint commands. A scene whose version fails
 /// `scene_version_is_supported` yields no commands, and a node of a kind this
-/// build does not know contributes nothing for itself or its subtree.
+/// build does not know contributes nothing for itself or its subtree;
+/// `SkiaDawnSurface::render` refuses such a scene outright.
 [[nodiscard]] std::vector<PaintCommand> make_paint_commands(const Scene& scene);
 
 /// Whether a mesh can be drawn as given: every index names a vertex, the index

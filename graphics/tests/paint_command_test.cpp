@@ -109,8 +109,12 @@ bool scene_versioning() {
         .bounds = {1.0F, 1.0F, 4.0F, 4.0F},
     });
     const auto commands = vellum::graphics::make_paint_commands(scene);
-    if (commands.size() != 1U || commands[0].node_id != "known" ||
-        commands[0].scene_version != vellum::graphics::kSceneVersion) {
+    if (commands.size() != 1U || commands[0].node_id != "known") return false;
+    static_assert(!vellum::graphics::is_known_kind(static_cast<SceneNode::Kind>(42)));
+    static_assert(vellum::graphics::is_known_kind(SceneNode::Kind::mesh));
+    const auto* unknown = vellum::graphics::find_unknown_kind(scene.root);
+    if (unknown == nullptr || unknown->id != "future" ||
+        vellum::graphics::find_unknown_kind(scene.root.children[1]) != nullptr) {
         return false;
     }
 

@@ -441,6 +441,67 @@ bool textured_triangle_mesh() {
     return passed;
 }
 
+bool scene_version_refusal() {
+    std::string error;
+    if (!vellum::app_host::register_native_dawn_bootstrap(&error)) {
+        std::cerr << error << '\n';
+        return false;
+    }
+    Scene scene{
+        .width = 32.0F,
+        .height = 32.0F,
+        .background = Color::hex(0x204060),
+        .root = {
+            .id = "root",
+            .kind = SceneNode::Kind::group,
+            .bounds = {0.0F, 0.0F, 32.0F, 32.0F},
+            .children = {{
+                .id = "swatch",
+                .kind = SceneNode::Kind::rectangle,
+                .bounds = {4.0F, 4.0F, 12.0F, 12.0F},
+                .fill = Color::hex(0xF0A030),
+            }},
+        },
+    };
+    auto surface = SkiaDawnSurface::create({.width = 32, .height = 32}, &error);
+    std::vector<std::uint8_t> first;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    if (!surface || !surface->render(scene, &error) ||
+        !surface->capture_rgba(first, width, height, &error)) {
+        std::cerr << error << '\n';
+        return false;
+    }
+    const auto refused_keeps_frame = [&](const Scene& candidate, const std::string& expected) {
+        std::string why;
+        std::vector<std::uint8_t> after;
+        std::uint32_t after_width = 0;
+        std::uint32_t after_height = 0;
+        if (surface->render(candidate, &why) || why != expected) {
+            std::cerr << "unexpected render result: " << why << '\n';
+            return false;
+        }
+        return surface->capture_rgba(after, after_width, after_height, &why) &&
+               after == first;
+    };
+    Scene future = scene;
+    future.scene_version = kSceneVersion + 1U;
+    Scene unknown_kind = scene;
+    unknown_kind.root.children[0].kind = static_cast<SceneNode::Kind>(42);
+    if (!refused_keeps_frame(future, "scene version 2 is not supported by this renderer") ||
+        !refused_keeps_frame(
+            unknown_kind, "scene contains unsupported node kind 42 at swatch")) {
+        return false;
+    }
+    std::vector<std::uint8_t> again;
+    if (!surface->render(scene, &error) ||
+        !surface->capture_rgba(again, width, height, &error)) {
+        std::cerr << error << '\n';
+        return false;
+    }
+    return again == first;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -461,6 +522,9 @@ int main(int argc, char** argv) {
         }
         if (fixture == "textured_triangle_mesh") {
             return textured_triangle_mesh() ? 0 : 1;
+        }
+        if (fixture == "scene_version_refusal") {
+            return scene_version_refusal() ? 0 : 1;
         }
     } catch (const std::exception& exception) {
         std::cerr << exception.what() << '\n';

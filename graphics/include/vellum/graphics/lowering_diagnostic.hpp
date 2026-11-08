@@ -8,9 +8,11 @@ namespace vellum::graphics {
 /// A renderer-independent report of content that a producer could not carry
 /// into a `Scene` exactly as authored.
 ///
-/// The severity and disposition vocabularies match the DesignIR diagnostics
-/// model so a host can merge import-time and lowering-time reports. An `error`
-/// means the producer refused the input; a `warning` means the scene was still
+/// The severity and disposition vocabularies are the ones the DesignIR
+/// diagnostics model uses. The record itself is not a DesignIR diagnostic: it
+/// identifies content by retained-tree `node_id` rather than a document path,
+/// and its codes follow the authoring host's `VELLUM_` form. An `error` means
+/// the producer refused the input; a `warning` means the scene was still
 /// produced with the described loss.
 struct LoweringDiagnostic final {
     enum class Severity {
@@ -30,7 +32,7 @@ struct LoweringDiagnostic final {
 
     Severity severity = Severity::warning;
     Disposition disposition = Disposition::unsupported;
-    /// A stable `VELLUM_`-prefixed identifier for the rule that fired.
+    /// The rule that fired, one of the `k...Code` constants below.
     std::string code;
     /// The semantic ID of the authored node the report is about.
     std::string node_id;
@@ -38,6 +40,13 @@ struct LoweringDiagnostic final {
     std::string property;
     std::string message;
 };
+
+/// An authored node type outside the intrinsic set; always an error.
+inline constexpr std::string_view kUnknownNodeTypeCode = "VELLUM_UNKNOWN_NODE_TYPE";
+/// An authored style key that the node's type does not consume.
+inline constexpr std::string_view kStyleDroppedCode = "VELLUM_STYLE_DROPPED";
+/// An intrinsic whose content has no scene kind, so only its box was kept.
+inline constexpr std::string_view kNodeContentDroppedCode = "VELLUM_NODE_CONTENT_DROPPED";
 
 [[nodiscard]] constexpr std::string_view to_string(
     LoweringDiagnostic::Severity severity) noexcept {

@@ -699,6 +699,12 @@ public:
                                  " is not supported by this renderer");
             return false;
         }
+        if (const auto* unknown = find_unknown_kind(scene.root); unknown != nullptr) {
+            set_error(error, "scene contains unsupported node kind " +
+                                 std::to_string(static_cast<int>(unknown->kind)) + " at " +
+                                 unknown->id);
+            return false;
+        }
         if (!render_internal(scene, false, nullptr, error)) {
             return false;
         }

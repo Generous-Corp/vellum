@@ -9,16 +9,7 @@ namespace {
 
 void append_node(const SceneNode& node, float parent_x, float parent_y,
                  std::vector<PaintCommand>& output) {
-    switch (node.kind) {
-    case SceneNode::Kind::group:
-    case SceneNode::Kind::rectangle:
-    case SceneNode::Kind::text:
-    case SceneNode::Kind::custom:
-    case SceneNode::Kind::mesh:
-        break;
-    default:
-        return;
-    }
+    if (!is_known_kind(node.kind)) return;
     const Rect absolute{
         parent_x + node.bounds.x,
         parent_y + node.bounds.y,
@@ -149,7 +140,6 @@ std::vector<PaintCommand> make_paint_commands(const Scene& scene) {
     std::vector<PaintCommand> output;
     if (!scene_version_is_supported(scene.scene_version)) return output;
     append_node(scene.root, 0.0F, 0.0F, output);
-    for (auto& command : output) command.scene_version = scene.scene_version;
     return output;
 }
 

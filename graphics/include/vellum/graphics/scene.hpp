@@ -112,9 +112,9 @@ inline constexpr std::uint32_t kSceneVersion = 1U;
 /// is one consumer rather than the owner of application state.
 ///
 /// `Kind` is closed for a given `kSceneVersion`. A consumer that meets a kind
-/// it does not know paints neither the node nor its subtree rather than
-/// treating it as a `group`; producers report authored content they cannot
-/// express as a known kind through `LoweringDiagnostic` instead of emitting it.
+/// it does not know refuses the scene rather than treating the node as a
+/// `group`; producers report authored content they cannot express as a known
+/// kind through `LoweringDiagnostic` instead of emitting it.
 struct SceneNode final {
     enum class Kind {
         group,
@@ -145,6 +145,29 @@ struct SceneNode final {
     /// The geometry of a `mesh` node.
     std::shared_ptr<const TriangleMesh> mesh;
 };
+
+[[nodiscard]] constexpr bool is_known_kind(SceneNode::Kind kind) noexcept {
+    switch (kind) {
+    case SceneNode::Kind::group:
+    case SceneNode::Kind::rectangle:
+    case SceneNode::Kind::text:
+    case SceneNode::Kind::custom:
+    case SceneNode::Kind::mesh:
+        return true;
+    }
+    return false;
+}
+
+/// The first node, in depth-first order, whose kind fails `is_known_kind`.
+[[nodiscard]] inline const SceneNode* find_unknown_kind(const SceneNode& node) noexcept {
+    if (!is_known_kind(node.kind)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_unknown_kind(child); found != nullptr) {
+            return found;
+        }
+    }
+    return nullptr;
+}
 
 struct Scene final {
     float width = 0.0F;
