@@ -283,7 +283,10 @@ void group_diff() {
     auto moved = child(reparented, "g")->children.back();
     child(reparented, "g")->children.pop_back();
     reparented.root.children.push_back(moved);
-    check(covers(diff(before, reparented), {100, 10, 120, 30}), "reparented node is damaged");
+    const auto reparent_damage = diff(before, reparented);
+    check(reparent_damage.rects().size() == 1 &&
+              reparent_damage.rects()[0] == PixelRect{100, 10, 120, 30},
+          "reparented node damages exactly its area");
 }
 
 void text_diff() {
@@ -302,8 +305,25 @@ void text_diff() {
     Scene changed = before;
     child(changed, "t")->text = "World";
     auto damage = diff(before, changed);
-    check(damage.rects().size() == 1 && damage.rects()[0] == PixelRect{0, 40, 120, 80},
-          "text change damages the text bounds and overflow");
+    check(damage.rects().size() == 1 && damage.rects()[0] == PixelRect{0, 40, 200, 80},
+          "text change damages to the frame's right edge with overhang");
+
+    Scene narrow = before;
+    child(narrow, "t")->bounds.width = 20.0F;
+    child(narrow, "t")->text = "A label far wider than its box";
+    Scene narrow_changed = narrow;
+    child(narrow_changed, "t")->text = "Another label far wider than its box";
+    damage = diff(narrow, narrow_changed);
+    check(covers(damage, {30, 50, 200, 70}), "text wider than its box damages the overflow");
+
+    Scene tall = before;
+    tall.height = 200.0F;
+    child(tall, "t")->text = "one\ntwo\nthree";
+    Scene tall_changed = tall;
+    child(tall_changed, "t")->text = "one\ntwo\nfour";
+    damage = diff(tall, tall_changed);
+    check(damage.rects().size() == 1 && damage.rects()[0] == PixelRect{0, 40, 200, 102},
+          "line breaks extend text damage below its box");
 
     Scene runs = before;
     child(runs, "t")->text_runs.push_back(TextRun{.text = "Hi", .style = {}});
@@ -376,6 +396,50 @@ void propagation_hooks() {
           "ancestor clip bounds descendant damage");
 }
 
+void unusual_bounds() {
+    const Scene before = base_scene();
+    Scene broken = before;
+    child(broken, "a")->bounds.x = std::numeric_limits<float>::quiet_NaN();
+    check(diff(before, broken).is_full_frame(), "non-finite bounds repaint the frame");
+    check(diff(broken, broken).empty(), "unchanged non-finite bounds add no damage");
+
+    Scene huge = before;
+    child(huge, "a")->bounds = {-1.0e30F, 10.0F, 2.0e30F, 20.0F};
+    const auto damage = diff(before, huge);
+    check(damage.bounds() == PixelRect{0, 10, 200, 30}, "huge bounds clamp to the frame");
+    check(vellum::graphics::to_pixel_rect({-1.0e30F, 0.0F, 2.0e30F, 1.0F}, 1.0F) ==
+              PixelRect{-(1 << 30), 0, 1 << 30, 1},
+          "pixel edges clamp to 2^30");
+
+    Scene negative = before;
+    negative.root.children.push_back(rectangle("n", {-50.0F, 50.0F, 60.0F, 10.0F}));
+    const auto clipped = diff(before, negative);
+    check(clipped.rects().size() == 1 && clipped.rects()[0] == PixelRect{0, 50, 10, 60},
+          "negative bounds clip to the frame");
+
+    DamageRegion capped({0, 0, 10, 10}, {.max_rects = 1000});
+    check(capped.policy().max_rects == vellum::graphics::kMaxDamageRects, "rect budget is capped");
+}
+
+void duplicate_ids() {
+    Scene before = base_scene();
+    before.root.children.push_back(rectangle("a", {50.0F, 50.0F, 10.0F, 10.0F}));
+    check(diff(before, before).empty(), "unchanged duplicate ids add no damage");
+    Scene recolored = before;
+    recolored.root.children.back().fill = Color::hex(0x0000FF);
+    const auto damage = diff(before, recolored);
+    check(damage.rects().size() == 1 && damage.rects()[0] == PixelRect{50, 50, 60, 60},
+          "a duplicate id is matched by position");
+
+    DamageTracker tracker(exact_policy());
+    tracker.commit(before, 1.0F);
+    (void)tracker.take_damage();
+    tracker.mark_dirty("a");
+    const auto marked = tracker.take_damage();
+    check(marked.area() == 500 && covers(marked, {10, 10, 30, 30}) && covers(marked, {50, 50, 60, 60}),
+          "mark_dirty damages every node with the id");
+}
+
 void tracker() {
     check(vellum::graphics::parse_invalidation_reason("state") == InvalidationReason::state &&
               vellum::graphics::parse_invalidation_reason("timer") == InvalidationReason::timer &&
@@ -387,7 +451,9 @@ void tracker() {
 
     DamageTracker tracker(exact_policy());
     tracker.mark_dirty("a");
-    check(tracker.pending_damage().empty() && !tracker.has_scene(), "no scene means nothing to damage yet");
+    tracker.mark_dirty_all(InvalidationReason::reload);
+    check(tracker.pending_damage().empty() && !tracker.has_scene(),
+          "before the first commit marking does nothing");
 
     const Scene scene = base_scene();
     tracker.commit(scene, 1.0F);
@@ -410,13 +476,15 @@ void tracker() {
     tracker.mark_dirty("missing");
     check(tracker.take_damage().is_full_frame(), "unknown node repaints the frame");
 
-    tracker.mark_dirty_all(InvalidationReason::reload, "a");
+    tracker.mark_dirty_all(InvalidationReason::state);
+    check(tracker.take_damage().is_full_frame(), "mark_dirty_all repaints the frame");
+    tracker.invalidate(InvalidationReason::reload, "a");
     check(tracker.take_damage().is_full_frame(), "reload repaints the frame");
-    tracker.mark_dirty_all(InvalidationReason::timer);
+    tracker.invalidate(InvalidationReason::timer);
     check(tracker.take_damage().is_full_frame(), "invalidation without a node repaints the frame");
     for (const auto reason : {InvalidationReason::state, InvalidationReason::timer,
                               InvalidationReason::promise, InvalidationReason::service}) {
-        tracker.mark_dirty_all(reason, "a");
+        tracker.invalidate(reason, "a");
         damage = tracker.take_damage();
         check(damage.rects().size() == 1 && damage.rects()[0] == PixelRect{10, 10, 30, 30},
               "node invalidation damages only that node");
@@ -447,6 +515,8 @@ int main() {
     text_diff();
     mesh_diff();
     propagation_hooks();
+    unusual_bounds();
+    duplicate_ids();
     tracker();
     if (failures != 0) {
         std::fprintf(stderr, "%d damage check(s) failed\n", failures);

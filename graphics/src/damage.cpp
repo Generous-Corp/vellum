@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -12,9 +13,14 @@ namespace {
 
 constexpr double kPixelLimit = 1 << 30;
 constexpr float kShadowBlurExtent = 1.5F;
+constexpr float kLineHeightFactor = 1.4F;
 
 std::int32_t clamp_pixel(double value) noexcept {
     return static_cast<std::int32_t>(std::clamp(value, -kPixelLimit, kPixelLimit));
+}
+
+bool same_float(float a, float b) noexcept {
+    return a == b || (std::isnan(a) && std::isnan(b));
 }
 
 bool finite_rect(const Rect& rect) noexcept {
@@ -54,7 +60,8 @@ std::optional<Rect> clip_to(const Rect& rect, const Rect& clip) noexcept {
 }
 
 bool same_rect(const Rect& a, const Rect& b) noexcept {
-    return a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height;
+    return same_float(a.x, b.x) && same_float(a.y, b.y) && same_float(a.width, b.width) &&
+           same_float(a.height, b.height);
 }
 
 bool same_optional_rect(const std::optional<Rect>& a, const std::optional<Rect>& b) noexcept {
@@ -63,18 +70,21 @@ bool same_optional_rect(const std::optional<Rect>& a, const std::optional<Rect>&
 }
 
 bool same_color(const Color& a, const Color& b) noexcept {
-    return a.red == b.red && a.green == b.green && a.blue == b.blue && a.alpha == b.alpha;
+    return same_float(a.red, b.red) && same_float(a.green, b.green) && same_float(a.blue, b.blue) &&
+           same_float(a.alpha, b.alpha);
 }
 
 bool same_gradients(const std::vector<LinearGradient>& a, const std::vector<LinearGradient>& b) {
     return std::equal(a.begin(), a.end(), b.begin(), b.end(),
         [](const LinearGradient& left, const LinearGradient& right) {
-            return left.angle_degrees == right.angle_degrees && left.repeating == right.repeating &&
-                   left.repeat_length == right.repeat_length &&
+            return same_float(left.angle_degrees, right.angle_degrees) &&
+                   left.repeating == right.repeating &&
+                   same_float(left.repeat_length, right.repeat_length) &&
                    std::equal(left.stops.begin(), left.stops.end(), right.stops.begin(),
                               right.stops.end(),
                               [](const GradientStop& l, const GradientStop& r) {
-                                  return l.position == r.position && same_color(l.color, r.color);
+                                  return same_float(l.position, r.position) &&
+                                         same_color(l.color, r.color);
                               });
         });
 }
@@ -82,16 +92,17 @@ bool same_gradients(const std::vector<LinearGradient>& a, const std::vector<Line
 bool same_shadows(const std::vector<BoxShadow>& a, const std::vector<BoxShadow>& b) {
     return std::equal(a.begin(), a.end(), b.begin(), b.end(),
         [](const BoxShadow& left, const BoxShadow& right) {
-            return left.offset_x == right.offset_x && left.offset_y == right.offset_y &&
-                   left.blur_radius == right.blur_radius &&
-                   left.spread_radius == right.spread_radius &&
+            return same_float(left.offset_x, right.offset_x) &&
+                   same_float(left.offset_y, right.offset_y) &&
+                   same_float(left.blur_radius, right.blur_radius) &&
+                   same_float(left.spread_radius, right.spread_radius) &&
                    same_color(left.color, right.color);
         });
 }
 
 bool same_style(const TextStyle& a, const TextStyle& b) {
     return a.font_family == b.font_family && a.font_weight == b.font_weight &&
-           a.font_size == b.font_size && a.letter_spacing == b.letter_spacing &&
+           same_float(a.font_size, b.font_size) && same_float(a.letter_spacing, b.letter_spacing) &&
            same_color(a.color, b.color) && a.underline == b.underline &&
            a.strikethrough == b.strikethrough;
 }
@@ -116,16 +127,6 @@ std::optional<Rect> box_paint_bounds(const SceneNode& node, const Rect& absolute
     return painted;
 }
 
-std::optional<Rect> text_paint_bounds(const SceneNode& node, const Rect& absolute) {
-    float largest = std::max(1.0F, node.font_size);
-    for (const auto& run : node.text_runs) {
-        largest = std::max(largest, run.style.font_size);
-    }
-    const Rect normalized{absolute.x, absolute.y, std::max(0.0F, absolute.width),
-                          std::max(0.0F, absolute.height)};
-    return outset(normalized, largest);
-}
-
 std::optional<Rect> mesh_paint_bounds(const TriangleMesh& mesh, const Rect& absolute) {
     std::optional<Rect> painted;
     for (const auto& vertex : mesh.vertices) {
@@ -148,46 +149,74 @@ const DamagePropagation& default_propagation() {
     return instance;
 }
 
+SceneNode paint_fields(const SceneNode& node) {
+    SceneNode copy;
+    copy.id = node.id;
+    copy.kind = node.kind;
+    copy.bounds = node.bounds;
+    copy.fill = node.fill;
+    copy.fill_gradients = node.fill_gradients;
+    copy.box_shadows = node.box_shadows;
+    copy.corner_radius = node.corner_radius;
+    copy.text = node.text;
+    copy.font_size = node.font_size;
+    copy.font_family = node.font_family;
+    copy.font_weight = node.font_weight;
+    copy.letter_spacing = node.letter_spacing;
+    copy.underline = node.underline;
+    copy.strikethrough = node.strikethrough;
+    copy.text_runs = node.text_runs;
+    copy.custom_component = node.custom_component;
+    copy.custom_properties_json = node.custom_properties_json;
+    copy.mesh = node.mesh;
+    return copy;
+}
+
+}  // namespace
+
+namespace damage_detail {
+
 struct NodeRecord final {
-    const SceneNode* node = nullptr;
+    std::string key;
     std::string parent_key;
+    SceneNode paint;
     Rect absolute{};
     std::optional<Rect> damage;
-    std::size_t first = 0;
-    std::size_t last = 0;
+    std::size_t subtree_end = 0;
 };
 
-class SceneIndex final {
-public:
-    SceneIndex(const Scene& scene, const DamagePropagation& propagation)
-        : propagation_(propagation) {
-        walk(scene.root, std::string{}, 0, 0.0F, 0.0F, std::nullopt);
-    }
+}  // namespace damage_detail
 
-    template <typename Visit>
-    void for_each_in_subtree(const NodeRecord& record, Visit&& visit) const {
-        for (std::size_t position = record.first; position < record.last; ++position) {
-            visit(records_.at(order_[position]));
-        }
+using damage_detail::NodeRecord;
+
+class DamageTracker::Snapshot final {
+public:
+    Snapshot(const Scene& scene, float scale, const DamagePropagation& propagation)
+        : width_(scene.width), height_(scene.height), scale_(scale), background_(scene.background),
+          frame_(frame_rect(scene, scale)) {
+        walk(propagation, scene.root, std::string{}, 0, 0.0F, 0.0F, std::nullopt);
     }
 
     [[nodiscard]] const NodeRecord* find(const std::string& key) const {
-        const auto found = records_.find(key);
-        return found == records_.end() ? nullptr : &found->second;
+        const auto found = by_key_.find(key);
+        return found == by_key_.end() ? nullptr : &records_[found->second];
     }
 
-    [[nodiscard]] const NodeRecord* find_by_id(std::string_view id) const {
-        for (const auto& key : order_) {
-            const auto& record = records_.at(key);
-            if (record.node->id == id) return &record;
-        }
-        return nullptr;
+    [[nodiscard]] const std::vector<std::size_t>* find_id(std::string_view id) const {
+        const auto found = by_id_.find(std::string(id));
+        return found == by_id_.end() ? nullptr : &found->second;
     }
 
-    [[nodiscard]] const std::vector<std::string>& order() const noexcept { return order_; }
-    [[nodiscard]] const std::unordered_map<std::string, NodeRecord>& records() const noexcept {
-        return records_;
+    [[nodiscard]] const std::vector<NodeRecord>& records() const noexcept { return records_; }
+    [[nodiscard]] const NodeRecord& at(std::size_t position) const { return records_[position]; }
+    [[nodiscard]] const PixelRect& frame() const noexcept { return frame_; }
+    [[nodiscard]] float scale() const noexcept { return scale_; }
+
+    [[nodiscard]] bool same_canvas(const Snapshot& other) const noexcept {
+        return frame_ == other.frame_ && same_float(scale_, other.scale_) &&
+               same_color(background_, other.background_);
     }
+
     [[nodiscard]] const std::vector<std::string>& children(const std::string& parent) const {
         static const std::vector<std::string> none;
         const auto found = children_.find(parent);
@@ -195,12 +224,12 @@ public:
     }
 
 private:
-    void walk(const SceneNode& node, const std::string& parent_key, std::size_t index,
-                             float parent_x, float parent_y, std::optional<Rect> clip) {
+    void walk(const DamagePropagation& propagation, const SceneNode& node, const std::string& parent_key, std::size_t index,
+              float parent_x, float parent_y, std::optional<Rect> clip) {
         std::string key = make_key(node, parent_key, index);
         const Rect absolute{parent_x + node.bounds.x, parent_y + node.bounds.y, node.bounds.width,
                             node.bounds.height};
-        if (const auto own_clip = propagation_.clip_bounds(node, absolute)) {
+        if (const auto own_clip = propagation.clip_bounds(node, absolute)) {
             if (clip) {
                 const auto narrowed = clip_to(*clip, *own_clip);
                 clip = narrowed.value_or(Rect{own_clip->x, own_clip->y, 0.0F, 0.0F});
@@ -209,20 +238,23 @@ private:
             }
         }
 
-        std::optional<Rect> damage = node_paint_bounds(node, absolute);
+        const Rect logical_frame{0.0F, 0.0F, width_, height_};
+        std::optional<Rect> damage = node_paint_bounds(node, absolute, logical_frame, propagation);
         if (damage) {
-            const float radius = propagation_.effect_radius(node);
+            const float radius = propagation.effect_radius(node);
             if (std::isfinite(radius) && radius > 0.0F) damage = outset(*damage, radius);
             if (clip) damage = clip_to(*damage, *clip);
         }
 
-        const std::size_t first = order_.size();
-        order_.push_back(key);
+        const std::size_t position = records_.size();
+        by_key_.emplace(key, position);
+        by_id_[node.id].push_back(position);
         children_[parent_key].push_back(key);
+        records_.push_back({key, parent_key, paint_fields(node), absolute, damage, 0});
         for (std::size_t child = 0; child < node.children.size(); ++child) {
-            walk(node.children[child], key, child, absolute.x, absolute.y, clip);
+            walk(propagation, node.children[child], key, child, absolute.x, absolute.y, clip);
         }
-        records_.emplace(key, NodeRecord{&node, parent_key, absolute, damage, first, order_.size()});
+        records_[position].subtree_end = records_.size();
     }
 
     std::string make_key(const SceneNode& node, const std::string& parent_key, std::size_t index) {
@@ -232,19 +264,24 @@ private:
         return key;
     }
 
-    const DamagePropagation& propagation_;
-    std::unordered_map<std::string, NodeRecord> records_;
+    float width_;
+    float height_;
+    float scale_;
+    Color background_;
+    PixelRect frame_;
+    std::vector<NodeRecord> records_;
+    std::unordered_map<std::string, std::size_t> by_key_;
+    std::unordered_map<std::string, std::vector<std::size_t>> by_id_;
     std::unordered_map<std::string, std::vector<std::string>> children_;
     std::unordered_set<std::string> used_;
-    std::vector<std::string> order_;
 };
+
+namespace {
+
+using Snapshot = DamageTracker::Snapshot;
 
 void add_logical(DamageRegion& region, const std::optional<Rect>& rect, float scale) {
     if (!rect) return;
-    if (!finite_rect(*rect)) {
-        region.add_full_frame();
-        return;
-    }
     const auto pixels = to_pixel_rect(*rect, scale);
     if (!pixels) {
         region.add_full_frame();
@@ -256,13 +293,18 @@ void add_logical(DamageRegion& region, const std::optional<Rect>& rect, float sc
                 pixels->bottom + margin});
 }
 
-void add_subtree(DamageRegion& region, const SceneIndex& index, const NodeRecord& record, float scale) {
-    index.for_each_in_subtree(record, [&](const NodeRecord& member) {
-        add_logical(region, member.damage, scale);
-    });
+void add_subtree(DamageRegion& region, const Snapshot& snapshot, std::size_t position) {
+    const std::size_t end = snapshot.at(position).subtree_end;
+    for (std::size_t member = position; member < end; ++member) {
+        add_logical(region, snapshot.at(member).damage, snapshot.scale());
+    }
 }
 
-std::vector<std::string> shared_children(const SceneIndex& from, const SceneIndex& other,
+void add_subtree(DamageRegion& region, const Snapshot& snapshot, const NodeRecord& record) {
+    add_subtree(region, snapshot, static_cast<std::size_t>(&record - snapshot.records().data()));
+}
+
+std::vector<std::string> shared_children(const Snapshot& from, const Snapshot& other,
                                          const std::string& parent) {
     std::vector<std::string> shared;
     for (const auto& key : from.children(parent)) {
@@ -270,6 +312,44 @@ std::vector<std::string> shared_children(const SceneIndex& from, const SceneInde
         if (record != nullptr && record->parent_key == parent) shared.push_back(key);
     }
     return shared;
+}
+
+void diff_snapshots(const Snapshot& before, const Snapshot& after, DamageRegion& region) {
+    if (!before.same_canvas(after)) {
+        region.add_full_frame();
+        return;
+    }
+    const float scale = after.scale();
+    for (const auto& now : after.records()) {
+        const NodeRecord* was = before.find(now.key);
+        if (was == nullptr) {
+            add_logical(region, now.damage, scale);
+            continue;
+        }
+        if (was->parent_key != now.parent_key) {
+            add_subtree(region, before, *was);
+            add_subtree(region, after, now);
+            continue;
+        }
+        if (!same_rect(was->absolute, now.absolute) || paint_differs(was->paint, now.paint) ||
+            !same_optional_rect(was->damage, now.damage)) {
+            add_logical(region, was->damage, scale);
+            add_logical(region, now.damage, scale);
+        }
+    }
+    for (const auto& was : before.records()) {
+        if (after.find(was.key) == nullptr) add_logical(region, was.damage, scale);
+    }
+    for (const auto& parent : after.records()) {
+        const auto now_order = shared_children(after, before, parent.key);
+        const auto was_order = shared_children(before, after, parent.key);
+        if (now_order == was_order) continue;
+        for (std::size_t index = 0; index < now_order.size(); ++index) {
+            if (index < was_order.size() && was_order[index] == now_order[index]) continue;
+            add_subtree(region, before, *before.find(now_order[index]));
+            add_subtree(region, after, *after.find(now_order[index]));
+        }
+    }
 }
 
 std::vector<PixelRect> subtract(const PixelRect& from, const PixelRect& cut) {
@@ -281,6 +361,16 @@ std::vector<PixelRect> subtract(const PixelRect& from, const PixelRect& cut) {
     if (inner.left > from.left) pieces.push_back({from.left, inner.top, inner.left, inner.bottom});
     if (inner.right < from.right) pieces.push_back({inner.right, inner.top, from.right, inner.bottom});
     return pieces;
+}
+
+std::size_t line_breaks(const SceneNode& node) {
+    const auto count = [](const std::string& text) {
+        return static_cast<std::size_t>(std::count(text.begin(), text.end(), '\n'));
+    };
+    if (node.text_runs.empty()) return count(node.text);
+    std::size_t breaks = 0;
+    for (const auto& run : node.text_runs) breaks += count(run.text);
+    return breaks;
 }
 
 }  // namespace
@@ -326,7 +416,7 @@ PixelRect frame_rect(const Scene& scene, float scale) noexcept {
 
 DamageRegion::DamageRegion(PixelRect frame, DamagePolicy policy)
     : frame_(frame.empty() ? PixelRect{} : frame), policy_(policy) {
-    policy_.max_rects = std::max<std::size_t>(1, policy_.max_rects);
+    policy_.max_rects = std::clamp<std::size_t>(policy_.max_rects, 1, kMaxDamageRects);
 }
 
 void DamageRegion::add(const PixelRect& rect) {
@@ -501,7 +591,22 @@ std::optional<Rect> DamagePropagation::clip_bounds(const SceneNode&, const Rect&
     return std::nullopt;
 }
 
-std::optional<Rect> node_paint_bounds(const SceneNode& node, const Rect& absolute_bounds) {
+Rect DamagePropagation::text_extent(const SceneNode& node, const Rect& absolute_bounds,
+                                    const Rect& frame) const {
+    float largest = std::max(1.0F, node.font_size);
+    for (const auto& run : node.text_runs) largest = std::max(largest, run.style.font_size);
+    const float lines = static_cast<float>(line_breaks(node) + 1U);
+    const float width = std::max(0.0F, absolute_bounds.width);
+    const float height = std::max({0.0F, absolute_bounds.height, lines * kLineHeightFactor * largest});
+    const float right = std::max(absolute_bounds.x + width + largest, frame.x + frame.width);
+    const float left = absolute_bounds.x - largest;
+    const float top = absolute_bounds.y - largest;
+    const float bottom = absolute_bounds.y + height + largest;
+    return {left, top, right - left, bottom - top};
+}
+
+std::optional<Rect> node_paint_bounds(const SceneNode& node, const Rect& absolute_bounds,
+                                      const Rect& frame, const DamagePropagation& propagation) {
     switch (node.kind) {
     case SceneNode::Kind::group:
         return std::nullopt;
@@ -511,7 +616,7 @@ std::optional<Rect> node_paint_bounds(const SceneNode& node, const Rect& absolut
         return rect_empty(absolute_bounds) ? std::nullopt : std::optional<Rect>(absolute_bounds);
     case SceneNode::Kind::text: {
         if (node.text.empty() && node.text_runs.empty()) return std::nullopt;
-        std::optional<Rect> painted = text_paint_bounds(node, absolute_bounds);
+        std::optional<Rect> painted = propagation.text_extent(node, absolute_bounds, frame);
         if (!node.fill_gradients.empty() || !node.box_shadows.empty()) {
             painted = unite(painted, box_paint_bounds(node, absolute_bounds));
         }
@@ -532,18 +637,19 @@ bool paint_differs(const SceneNode& previous, const SceneNode& next) {
         return !same_color(previous.fill, next.fill) ||
                !same_gradients(previous.fill_gradients, next.fill_gradients) ||
                !same_shadows(previous.box_shadows, next.box_shadows) ||
-               previous.corner_radius != next.corner_radius;
+               !same_float(previous.corner_radius, next.corner_radius);
     case SceneNode::Kind::text:
         return previous.text != next.text || !same_runs(previous.text_runs, next.text_runs) ||
-               !same_color(previous.fill, next.fill) || previous.font_size != next.font_size ||
+               !same_color(previous.fill, next.fill) ||
+               !same_float(previous.font_size, next.font_size) ||
                previous.font_family != next.font_family ||
                previous.font_weight != next.font_weight ||
-               previous.letter_spacing != next.letter_spacing ||
+               !same_float(previous.letter_spacing, next.letter_spacing) ||
                previous.underline != next.underline ||
                previous.strikethrough != next.strikethrough ||
                !same_gradients(previous.fill_gradients, next.fill_gradients) ||
                !same_shadows(previous.box_shadows, next.box_shadows) ||
-               previous.corner_radius != next.corner_radius;
+               !same_float(previous.corner_radius, next.corner_radius);
     case SceneNode::Kind::mesh:
         return previous.mesh != next.mesh;
     case SceneNode::Kind::custom:
@@ -555,48 +661,14 @@ bool paint_differs(const SceneNode& previous, const SceneNode& next) {
 
 DamageRegion compute_scene_damage(const Scene& previous, const Scene& next, float scale,
                                   DamagePolicy policy, const DamagePropagation* propagation) {
-    const PixelRect frame = frame_rect(next, scale);
-    DamageRegion region(frame, policy);
-    if (frame != frame_rect(previous, scale) || !same_color(previous.background, next.background)) {
+    DamageRegion region(frame_rect(next, scale), policy);
+    const DamagePropagation& effects = propagation != nullptr ? *propagation : default_propagation();
+    if (frame_rect(previous, scale) != region.frame() ||
+        !same_color(previous.background, next.background)) {
         region.add_full_frame();
         return region;
     }
-    const DamagePropagation& effects = propagation != nullptr ? *propagation : default_propagation();
-    const SceneIndex before(previous, effects);
-    const SceneIndex after(next, effects);
-
-    for (const auto& key : after.order()) {
-        const NodeRecord& now = after.records().at(key);
-        const NodeRecord* was = before.find(key);
-        if (was == nullptr) {
-            add_logical(region, now.damage, scale);
-            continue;
-        }
-        if (was->parent_key != now.parent_key) {
-            add_subtree(region, before, *was, scale);
-            add_subtree(region, after, now, scale);
-            continue;
-        }
-        if (!same_rect(was->absolute, now.absolute) || paint_differs(*was->node, *now.node) ||
-            !same_optional_rect(was->damage, now.damage)) {
-            add_logical(region, was->damage, scale);
-            add_logical(region, now.damage, scale);
-        }
-    }
-    for (const auto& key : before.order()) {
-        if (after.find(key) == nullptr) add_logical(region, before.records().at(key).damage, scale);
-    }
-
-    for (const auto& parent : after.order()) {
-        const auto now_order = shared_children(after, before, parent);
-        const auto was_order = shared_children(before, after, parent);
-        if (now_order == was_order) continue;
-        for (std::size_t index = 0; index < now_order.size(); ++index) {
-            if (index < was_order.size() && was_order[index] == now_order[index]) continue;
-            add_subtree(region, before, *before.find(now_order[index]), scale);
-            add_subtree(region, after, *after.find(now_order[index]), scale);
-        }
-    }
+    diff_snapshots(Snapshot(previous, scale, effects), Snapshot(next, scale, effects), region);
     return region;
 }
 
@@ -613,49 +685,48 @@ DamageTracker::DamageTracker(DamagePolicy policy, std::shared_ptr<const DamagePr
     : policy_(policy), propagation_(std::move(propagation)), pending_(PixelRect{}, policy) {}
 
 void DamageTracker::commit(const Scene& next, float scale) {
-    const PixelRect frame = frame_rect(next, scale);
-    if (!committed_ || scale != scale_ || frame != pending_.frame()) {
-        pending_ = DamageRegion(frame, policy_);
+    const DamagePropagation& effects = propagation_ ? *propagation_ : default_propagation();
+    auto snapshot = std::make_shared<const Snapshot>(next, scale, effects);
+    if (!committed_ || snapshot->frame() != pending_.frame()) {
+        pending_ = DamageRegion(snapshot->frame(), policy_);
         pending_.add_full_frame();
     } else {
-        pending_.add(compute_scene_damage(*committed_, next, scale, policy_, propagation_.get()));
+        diff_snapshots(*committed_, *snapshot, pending_);
     }
-    committed_ = next;
-    scale_ = scale;
+    committed_ = std::move(snapshot);
     last_stats_ = pending_.stats();
 }
 
 void DamageTracker::mark_dirty(std::string_view node_id) {
     if (!committed_) return;
-    const DamagePropagation& effects = propagation_ ? *propagation_ : default_propagation();
-    const SceneIndex index(*committed_, effects);
-    const NodeRecord* record = index.find_by_id(node_id);
-    if (record == nullptr) {
+    const auto* positions = committed_->find_id(node_id);
+    if (positions == nullptr) {
         pending_.add_full_frame();
     } else {
-        add_subtree(pending_, index, *record, scale_);
+        for (const auto position : *positions) add_subtree(pending_, *committed_, position);
     }
     last_stats_ = pending_.stats();
 }
 
-void DamageTracker::mark_dirty_all(InvalidationReason reason, std::string_view node_id) {
+void DamageTracker::mark_dirty_all(InvalidationReason) {
+    if (!committed_) return;
+    pending_.add_full_frame();
+    last_stats_ = pending_.stats();
+}
+
+void DamageTracker::invalidate(InvalidationReason reason, std::string_view node_id) {
     if (reason == InvalidationReason::reload || node_id.empty()) {
-        pending_.add_full_frame();
-        last_stats_ = pending_.stats();
-        return;
+        mark_dirty_all(reason);
+    } else {
+        mark_dirty(node_id);
     }
-    mark_dirty(node_id);
 }
 
 DamageRegion DamageTracker::take_damage() {
     DamageRegion taken = std::move(pending_);
     last_stats_ = taken.stats();
-    reset_pending();
+    pending_ = DamageRegion(committed_ ? committed_->frame() : PixelRect{}, policy_);
     return taken;
-}
-
-void DamageTracker::reset_pending() {
-    pending_ = DamageRegion(frame_rect(committed_ ? *committed_ : Scene{}, scale_), policy_);
 }
 
 }  // namespace vellum::graphics

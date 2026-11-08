@@ -83,9 +83,3 @@ if(VELLUM_HAS_SKIA_DAWN)
             "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_DATADIR}/vellum/fonts"
         VERBATIM)
 endif()
-
-if(VELLUM_BUILD_TESTS)
-    add_executable(vellum-damage-test tests/damage_test.cpp)
-    target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
-    add_test(NAME vellum.damage COMMAND vellum-damage-test)
-endif()

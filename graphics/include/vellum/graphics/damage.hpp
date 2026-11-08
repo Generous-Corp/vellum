@@ -7,7 +7,6 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <string>
 #include <string_view>
 #include <vector>
 
@@ -41,15 +40,24 @@ struct PixelRect final {
 [[nodiscard]] bool overlaps(const PixelRect& a, const PixelRect& b) noexcept;
 
 /// Converts a logical rectangle to the device pixels it touches at `scale`,
-/// rounding outward. Non-finite input yields `std::nullopt`.
+/// rounding outward and clamping each edge to +/-2^30. Non-finite input
+/// yields `std::nullopt`.
 [[nodiscard]] std::optional<PixelRect> to_pixel_rect(const Rect& logical, float scale) noexcept;
 
-/// The device-pixel frame of a scene at `scale`.
+/// The device-pixel frame of a scene at `scale`, rounding the size up.
+///
+/// A render target may round its size differently (the Skia/Dawn surface
+/// rounds to nearest), so consumers clip damage to their actual target.
 [[nodiscard]] PixelRect frame_rect(const Scene& scene, float scale) noexcept;
+
+/// The largest rectangle budget a region accepts; coalescing costs about the
+/// cube of the budget per insertion.
+inline constexpr std::size_t kMaxDamageRects = 64;
 
 /// Limits that keep damage tracking cheap and bounded.
 struct DamagePolicy final {
-    /// Largest number of rectangles a region holds before it merges them.
+    /// Largest number of rectangles a region holds before it merges them,
+    /// clamped to [1, kMaxDamageRects].
     std::size_t max_rects = 16;
     /// Fraction of the frame area at or above which a region becomes the whole frame.
     double full_repaint_fraction = 0.5;
@@ -125,9 +133,9 @@ struct AbsoluteNode final {
 /// same way paint-command lowering does.
 void visit_absolute_nodes(const Scene& scene, const std::function<void(const AbsoluteNode&)>& visit);
 
-/// Extension point for effects that change where a node's damage lands.
-///
-/// The default expands nothing and clips nothing.
+/// Extension point for effects and measurements that change where a node's
+/// damage lands. The defaults expand nothing, clip nothing and estimate text
+/// conservatively.
 class DamagePropagation {
 public:
     virtual ~DamagePropagation() = default;
@@ -140,18 +148,33 @@ public:
     /// descendants, or `std::nullopt` for none.
     [[nodiscard]] virtual std::optional<Rect> clip_bounds(
         const SceneNode& node, const Rect& absolute_bounds) const;
+
+    /// The absolute logical area the glyphs of a text node can cover. Text is
+    /// laid out without wrapping and painted unclipped at the box origin, so
+    /// the default extends to the right edge of `frame` and adds 1.4 times the
+    /// largest font size per line break, plus one font size of overhang on
+    /// every side. A renderer-backed override can measure exactly, for
+    /// example with `SkiaDawnSurface::measure_text`.
+    [[nodiscard]] virtual Rect text_extent(
+        const SceneNode& node, const Rect& absolute_bounds, const Rect& frame) const;
 };
 
 /// The absolute logical area a node paints by itself, including shadows,
-/// text overflow and mesh geometry, before propagation. Empty for nodes that
-/// paint nothing.
-[[nodiscard]] std::optional<Rect> node_paint_bounds(const SceneNode& node, const Rect& absolute_bounds);
+/// text extent and mesh geometry, before effect radius and clips. Empty for
+/// nodes that paint nothing. `frame` is the scene's logical frame.
+[[nodiscard]] std::optional<Rect> node_paint_bounds(
+    const SceneNode& node, const Rect& absolute_bounds, const Rect& frame,
+    const DamagePropagation& propagation);
 
 /// Whether two nodes with the same identity paint differently in place.
+///
+/// Meshes compare by pointer: a `TriangleMesh` or `MeshTexture` must not be
+/// mutated once a scene references it; replace the pointer to change it.
 [[nodiscard]] bool paint_differs(const SceneNode& previous, const SceneNode& next);
 
-/// Damage between two scenes, keyed by node id. Added, removed, moved,
-/// resized, restyled and reordered nodes damage both their old and new
+/// Damage between two scenes, keyed by node id (nodes with an empty or
+/// repeated id are keyed by position). Added, removed, moved, resized,
+/// restyled, reparented and reordered nodes damage both their old and new
 /// areas. A changed frame size or background damages the whole frame.
 [[nodiscard]] DamageRegion compute_scene_damage(
     const Scene& previous, const Scene& next, float scale,
@@ -168,38 +191,46 @@ enum class InvalidationReason {
 
 [[nodiscard]] std::optional<InvalidationReason> parse_invalidation_reason(std::string_view reason) noexcept;
 
-/// Renderer-owned damage state across frames, keyed by node id.
+/// Renderer-owned damage state across frames.
+///
+/// The tracker keeps per-node records of the last committed scene (key,
+/// parent, absolute bounds, damage area and paint fields), not the scene.
 class DamageTracker final {
 public:
     explicit DamageTracker(DamagePolicy policy = {},
                            std::shared_ptr<const DamagePropagation> propagation = nullptr);
 
     /// Diffs `next` against the last committed scene, accumulates the damage
-    /// and commits `next`. The first scene, or a new scale, damages the whole frame.
+    /// and commits `next`. The first scene, a new scale or a new frame size
+    /// damages the whole frame.
     void commit(const Scene& next, float scale);
 
-    /// Damages a node and its descendants in the committed scene. An unknown
-    /// node, or no committed scene, damages the whole frame.
+    /// Damages every node with `node_id`, and their descendants, in the
+    /// committed scene. An unknown id damages the whole frame. Before the
+    /// first commit it does nothing, because that commit repaints everything.
     void mark_dirty(std::string_view node_id);
 
-    /// Handles a host invalidation. `reload`, or any reason without a node,
-    /// damages the whole frame; otherwise only the named node is damaged.
-    void mark_dirty_all(InvalidationReason reason, std::string_view node_id = {});
+    /// Damages the whole committed frame for any reason. Before the first
+    /// commit it does nothing.
+    void mark_dirty_all(InvalidationReason reason);
+
+    /// Handles a host `invalidate` message. `reload`, or any reason without a
+    /// node id, calls `mark_dirty_all`; otherwise it calls `mark_dirty`.
+    void invalidate(InvalidationReason reason, std::string_view node_id = {});
 
     /// The accumulated damage since the last call; resets the tracker's damage.
     [[nodiscard]] DamageRegion take_damage();
 
     [[nodiscard]] const DamageRegion& pending_damage() const noexcept { return pending_; }
     [[nodiscard]] const DamageStats& last_stats() const noexcept { return last_stats_; }
-    [[nodiscard]] bool has_scene() const noexcept { return committed_.has_value(); }
+    [[nodiscard]] bool has_scene() const noexcept { return committed_ != nullptr; }
+
+    class Snapshot;
 
 private:
-    void reset_pending();
-
     DamagePolicy policy_;
     std::shared_ptr<const DamagePropagation> propagation_;
-    std::optional<Scene> committed_;
-    float scale_ = 1.0F;
+    std::shared_ptr<const Snapshot> committed_;
     DamageRegion pending_;
     DamageStats last_stats_{};
 };
