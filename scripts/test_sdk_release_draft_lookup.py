@@ -38,6 +38,7 @@ if args[:2] == ["release", "create"]:
         "draft": True, "immutable": False, "prerelease": False,
         "published_at": None, "assets": [],
     })
+    state["created"] = state["releases"][-1]["id"]
     json.dump(state, open(state_path, "w"))
     print("https://github.com/o/r/releases/tag/untagged-0000")
     sys.exit(0)
@@ -52,7 +53,14 @@ if args and args[0] == "api":
         print(json.dumps(rows[0]))
         sys.exit(0)
     if "/releases?" in path:
-        print(json.dumps([state["releases"]]))
+        lag = int(os.environ.get("FAKE_GH_LIST_LAG", "0"))
+        rows = state["releases"]
+        if state.get("created") and state.get("list_reads_since_create", 0) < lag:
+            rows = [r for r in rows if r["id"] != state["created"]]
+        if state.get("created"):
+            state["list_reads_since_create"] = state.get("list_reads_since_create", 0) + 1
+            json.dump(state, open(state_path, "w"))
+        print(json.dumps([rows]))
         sys.exit(0)
 print(f"fake gh: unexpected call {args}", file=sys.stderr)
 sys.exit(2)
@@ -72,7 +80,7 @@ def selection_shell(workflow_text: str) -> str:
 
 
 class DraftLookupTest(unittest.TestCase):
-    def run_selection(self, releases: list[dict], workflow_text: str | None = None):
+    def run_selection(self, releases: list[dict], workflow_text: str | None = None, list_lag: int = 0):
         text = workflow_text if workflow_text is not None else WORKFLOW.read_text()
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -91,6 +99,7 @@ class DraftLookupTest(unittest.TestCase):
                 "set -euo pipefail\n"
                 f'notes="{notes}"\n'
                 "verify_release_guard() { :; }\n"
+                "sleep() { :; }\n"
                 "allowed=(\"SHA256SUMS=/dev/null\")\n"
                 + selection_shell(text)
                 + 'echo "@@selected@@"; cat "$RUNNER_TEMP/release.json"\n'
@@ -104,6 +113,7 @@ class DraftLookupTest(unittest.TestCase):
                 GITHUB_REPOSITORY="o/r",
                 RELEASE_TAG=TAG,
                 RELEASE_NAME=NAME,
+                FAKE_GH_LIST_LAG=str(list_lag),
             )
             result = subprocess.run(
                 ["bash", "-c", script], cwd=ROOT, env=env,
@@ -126,6 +136,21 @@ class DraftLookupTest(unittest.TestCase):
         self.assertEqual(log.count("release create"), 1)
         self.assertEqual(len(state["releases"]), 1)
         self.assertTrue(json.loads(result.stdout)["draft"])
+
+    def test_waits_for_a_new_draft_the_list_shows_late(self) -> None:
+        # Run 42121922317: the list read 0.7 s after creation did not show the draft.
+        result, state, log = self.run_selection([], list_lag=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(log.count("release create"), 1)
+        self.assertEqual(len(state["releases"]), 1)
+        self.assertEqual(json.loads(result.stdout)["id"], state["created"])
+        self.assertEqual(log.count("/releases?"), 1 + 4)  # the probe, three misses, then the hit
+
+    def test_a_draft_that_never_appears_still_fails_without_a_second_create(self) -> None:
+        result, state, log = self.run_selection([], list_lag=100)
+        self.assertEqual(result.returncode, 4)
+        self.assertEqual(log.count("release create"), 1)
+        self.assertEqual(log.count("/releases?"), 1 + 12)
 
     def test_resumes_existing_draft_without_creating_another(self) -> None:
         result, state, log = self.run_selection([self.draft_row()])
