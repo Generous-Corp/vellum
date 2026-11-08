@@ -19,6 +19,10 @@ cmake_minimum_required(VERSION 3.24)
 #                              Rml::RenderInterface draws it and the caller uses
 #                              RmlUi's own API (VELLUM_RMLUI_NATIVE=ON). It never
 #                              links Core: a process uses one or the other.
+#   VellumRmlUi::Metal         static library; an Rml::RenderInterface on Metal
+#                              (VELLUM_RMLUI_METAL=ON, Apple only, needs
+#                              Native's packaging of RmlUi). It links only RmlUi
+#                              and Apple frameworks.
 #   VellumRmlUi::VellumRenderer draws the backend's commands as triangle meshes
 #                              through Vellum's SkiaDawnSurface
 #                              (VELLUM_RMLUI_VELLUM_RENDERER=ON). It is the only
@@ -46,6 +50,17 @@ option(VELLUM_RMLUI_VELLUM_RENDERER
     "Build VellumRmlUi::VellumRenderer, which draws through Vellum's GPU renderer (needs Vellum::Gpu)" OFF)
 option(VELLUM_RMLUI_NATIVE
     "Build VellumRmlUi::Native, which links RmlUi publicly and accepts any Rml::RenderInterface" OFF)
+option(VELLUM_RMLUI_METAL
+    "Build VellumRmlUi::Metal, an Rml::RenderInterface on Metal (Apple only; needs VELLUM_RMLUI_NATIVE)" OFF)
+if(VELLUM_RMLUI_METAL)
+    if(NOT APPLE)
+        message(FATAL_ERROR "VELLUM_RMLUI_METAL needs an Apple platform")
+    endif()
+    if(NOT VELLUM_RMLUI_NATIVE)
+        message(FATAL_ERROR "VELLUM_RMLUI_METAL needs VELLUM_RMLUI_NATIVE=ON, which packages RmlUi for it")
+    endif()
+    enable_language(OBJCXX)
+endif()
 option(VELLUM_RMLUI_BUILD_TESTS "Build the RmlUi module tests" ${BUILD_TESTING})
 option(VELLUM_RMLUI_INSTALL "Install the VellumRmlUi CMake package" ON)
 
@@ -150,6 +165,24 @@ if(VELLUM_RMLUI_NATIVE)
     list(APPEND VELLUM_RMLUI_COMPONENTS Native)
 endif()
 
+if(VELLUM_RMLUI_METAL)
+    add_library(vellum-rmlui-metal STATIC
+        src/metal_render_interface.mm)
+    add_library(VellumRmlUi::Metal ALIAS vellum-rmlui-metal)
+    set_target_properties(vellum-rmlui-metal PROPERTIES
+        EXPORT_NAME Metal
+        POSITION_INDEPENDENT_CODE ON)
+    target_compile_features(vellum-rmlui-metal PUBLIC cxx_std_20)
+    target_compile_options(vellum-rmlui-metal PRIVATE -fobjc-arc)
+    target_include_directories(vellum-rmlui-metal PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    target_link_libraries(vellum-rmlui-metal
+        PUBLIC RmlUi::Core "-framework Metal" "-framework QuartzCore" "-framework Foundation"
+        PRIVATE "-framework CoreGraphics" "-framework ImageIO")
+    list(APPEND VELLUM_RMLUI_COMPONENTS Metal)
+endif()
+
 if(VELLUM_RMLUI_VELLUM_RENDERER)
     # Inside a Vellum build the GPU target already exists; on its own the
     # module takes it from an installed Vellum package.
@@ -211,6 +244,16 @@ if(VELLUM_RMLUI_INSTALL)
             NAMESPACE VellumRmlUi::
             DESTINATION ${_vellum_rmlui_cmake_dir}
             COMPONENT VellumRmlUiNative)
+        if(VELLUM_RMLUI_METAL)
+            install(TARGETS vellum-rmlui-metal
+                EXPORT VellumRmlUiMetalTargets
+                COMPONENT VellumRmlUiNative
+                ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+            install(EXPORT VellumRmlUiMetalTargets
+                NAMESPACE VellumRmlUi::
+                DESTINATION ${_vellum_rmlui_cmake_dir}
+                COMPONENT VellumRmlUiNative)
+        endif()
         if(VELLUM_RMLUI_FONTS)
             # RmlUi's static archive links FreeType privately; a consumer's
             # final link needs the pinned archive too.
