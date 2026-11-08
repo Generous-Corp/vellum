@@ -1,0 +1,60 @@
+<rml>
+<head>
+<title>Clip masks and layers</title>
+<style>
+body {
+    display: block;
+    width: 256px;
+    height: 160px;
+    margin: 0;
+    background-color: #1b1e24;
+}
+div { display: block; }
+/* A circle that clips a red child: a clip mask (Set). */
+#round {
+    position: absolute;
+    left: 16px;
+    top: 16px;
+    width: 80px;
+    height: 80px;
+    border-radius: 40px;
+    overflow: hidden;
+    background-color: #3a4150;
+}
+#round div { width: 80px; height: 80px; background-color: #ff0000; }
+/* A rounded box inside a rounded box: the inner clip intersects the outer. */
+#outer {
+    position: absolute;
+    left: 112px;
+    top: 16px;
+    width: 80px;
+    height: 80px;
+    border-radius: 40px;
+    overflow: hidden;
+}
+#inner {
+    margin-left: 40px;
+    width: 80px;
+    height: 80px;
+    border-radius: 20px;
+    overflow: hidden;
+}
+#inner div { width: 80px; height: 80px; background-color: #00ff00; }
+/* A hard shadow: RmlUi renders it in a layer and saves the layer as a texture. */
+#shadowed {
+    position: absolute;
+    left: 24px;
+    top: 112px;
+    width: 32px;
+    height: 24px;
+    background-color: #f2f2f2;
+    box-shadow: 12px 8px 0px #0000ff;
+}
+</style>
+</head>
+<body>
+<div id="round"><div/></div>
+<div id="outer"><div id="inner"><div/></div></div>
+<div id="shadowed"/>
+</body>
+</rml>
