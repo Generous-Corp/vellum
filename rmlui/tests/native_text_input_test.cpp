@@ -7,6 +7,7 @@
 
 #include <RmlUi/Core.h>
 
+#include <cstdio>
 #include <map>
 #include <string>
 #include <string_view>
@@ -103,9 +104,13 @@ int main() {
     if (!NativeContext::fonts_enabled() || std::string_view(VELLUM_RMLUI_TEST_FONT_FAMILY).empty())
         return 77; // needs a font engine and a test font
     // The field's font resolves: the click focuses it.
+    std::printf("case: font resolved\n");
+    std::fflush(stdout);
     VELLUM_RMLUI_CHECK(click_into_field(VELLUM_RMLUI_TEST_FONT_FAMILY));
     // The field's font does not resolve, so it lays out no text lines. The
     // click must still be handled without reading past the empty line list.
+    std::printf("case: font unresolved\n");
+    std::fflush(stdout);
     click_into_field("NoSuchFamily");
     return 0;
 }
