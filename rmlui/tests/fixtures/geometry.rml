@@ -20,7 +20,8 @@ img { position: absolute; }
           transform: scale(1.5) translate(4px, 2px); }
 #clip { left: 16px; top: 110px; width: 120px; height: 60px; overflow: hidden;
         background-color: #3a4150; }
-#clip div { left: -20px; top: -20px; width: 200px; height: 100px; background-color: rgba(154, 164, 184, 180); }
+#clip div { position: static; margin-left: -20px; margin-top: -10px; width: 200px; height: 100px;
+            background-color: rgba(154, 164, 184, 180); }
 </style>
 </head>
 <body>
