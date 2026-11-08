@@ -17,7 +17,7 @@ SKIP = 77
 PREFIX_VARIABLE = "VELLUM_SWIFT_PROOF_SDK_PREFIX"
 PKG_CONFIG_FILE = Path("lib/pkgconfig/vellum-host-c.pc")
 PACKAGE_FILES = re.compile(
-    r"\A(?:Package\.swift|README\.md|Fixtures/[\w.-]+\.js|"
+    r"\A(?:Package\.swift|README\.md|CMakeLists\.txt|Fixtures/[\w.-]+\.js|"
     r"Sources/CVellumHostC/(?:module\.modulemap|shim\.h)|Sources/[\w]+/[\w]+\.swift|"
     r"scripts/[\w]+\.py)\Z"
 )
@@ -127,7 +127,8 @@ def prove(sdk: Path, package: Path, work: Path, bundle: Path) -> dict[str, objec
     staged = work / "package"
     shutil.copytree(
         package, staged,
-        ignore=shutil.ignore_patterns(".build", "__pycache__", "scripts", "Fixtures"),
+        ignore=shutil.ignore_patterns(
+            ".build", "__pycache__", "scripts", "Fixtures", "CMakeLists.txt"),
     )
     scratch = work / "scratch"
     environment = sterile_environment(sdk)

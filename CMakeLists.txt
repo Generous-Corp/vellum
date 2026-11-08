@@ -128,6 +128,9 @@ endif()
 if(APPLE AND TARGET vellum-gpu AND TARGET vellum-authoring)
     add_subdirectory(bindings/c)
 endif()
+if(APPLE AND VELLUM_BUILD_TESTS)
+    add_subdirectory(packages/vellum-swift)
+endif()
 
 # The RmlUi module is a self-contained project; it is also built on its own
 # with `cmake -S rmlui`. It is added after the graphics targets so its optional
@@ -322,22 +325,6 @@ if(VELLUM_BUILD_TESTS)
                     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
         endif()
     endif()
-    if(APPLE)
-        set(VELLUM_SWIFT_PROOF_SDK_PREFIX "" CACHE PATH
-            "Installed Vellum SDK prefix that the Swift host-boundary proof builds against")
-        add_test(NAME vellum.swift-host-proof
-            COMMAND "${Python3_EXECUTABLE}" -I
-                "${CMAKE_CURRENT_SOURCE_DIR}/packages/vellum-swift/scripts/run_sterile_proof.py"
-                --sdk-prefix "${VELLUM_SWIFT_PROOF_SDK_PREFIX}"
-                --package "${CMAKE_CURRENT_SOURCE_DIR}/packages/vellum-swift"
-                --work "${CMAKE_CURRENT_BINARY_DIR}/swift-host-proof")
-        set_tests_properties(vellum.swift-host-proof PROPERTIES
-            SKIP_RETURN_CODE 77
-            ENVIRONMENT "MTL_DEBUG_LAYER=0")
-        add_test(NAME vellum.swift-host-proof-unit
-            COMMAND "${Python3_EXECUTABLE}" -I
-                "${CMAKE_CURRENT_SOURCE_DIR}/packages/vellum-swift/scripts/test_run_sterile_proof.py")
-    endif()
     add_test(NAME vellum.sdk-artifact
         COMMAND "${Python3_EXECUTABLE}"
             -m unittest cli.tests.test_sdk_artifact
@@ -443,9 +430,6 @@ if(TARGET vellum-skia-dawn-provider)
 endif()
 if(TARGET vellum-authoring)
     list(APPEND _vellum_install_targets vellum-authoring)
-endif()
-if(TARGET vellum-host-c)
-    list(APPEND _vellum_install_targets vellum-host-c)
 endif()
 
 install(TARGETS ${_vellum_install_targets}

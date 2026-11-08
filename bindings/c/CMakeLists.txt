@@ -29,6 +29,10 @@ string(REGEX REPLACE "/$" "" _vellum_host_c_pc_prefix "${_vellum_host_c_pc_prefi
 set(VELLUM_HOST_C_PC_PREFIX "\${pcfiledir}/${_vellum_host_c_pc_prefix}")
 configure_file(vellum-host-c.pc.in
     "${CMAKE_CURRENT_BINARY_DIR}/vellum-host-c.pc" @ONLY)
+install(TARGETS vellum-host-c
+    EXPORT VellumTargets
+    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    INCLUDES DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/vellum-host-c.pc"
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig")
 install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
