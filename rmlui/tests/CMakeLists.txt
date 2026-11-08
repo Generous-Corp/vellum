@@ -87,6 +87,18 @@ if(VELLUM_RMLUI_INSTALL AND NOT CMAKE_CROSSCOMPILING)
             "-DVELLUM_RMLUI_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
             "-DTEST_CONFIG=$<CONFIG>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/RunInstallConsumer.cmake")
+    if(APPLE)
+        # Control for the deployment-target check the install tests run: a
+        # planted object built for a newer macOS must fail it. The expected
+        # message is matched, so a broken setup cannot pass as the control.
+        add_test(NAME vellum.rmlui.deployment-target-control
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_RMLUI_CONTROL_DIR=${CMAKE_CURRENT_BINARY_DIR}/deployment-target-control"
+                "-DVELLUM_RMLUI_C_COMPILER=${CMAKE_C_COMPILER}"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/PlantNewerObject.cmake")
+        set_tests_properties(vellum.rmlui.deployment-target-control PROPERTIES
+            PASS_REGULAR_EXPRESSION "built for macOS 26\\.0, newer than the recorded deployment target 13\\.3")
+    endif()
     if(VELLUM_RMLUI_NATIVE)
         add_test(NAME vellum.rmlui.install-consumer-native
             COMMAND "${CMAKE_COMMAND}"
