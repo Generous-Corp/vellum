@@ -320,6 +320,7 @@
     "tools/provenance/test_verify_renderer_dependency.py": "workflow:provenance.yml",
     "tools/provenance/test_verify_renderer_eligibility.py": "workflow:provenance.yml",
     "web/tests/test_browser_process_cleanup.py": "cmake:web/CMakeLists.txt",
+    "web/tests/test_browser_proof_wait.py": "cmake:web/CMakeLists.txt",
     "web/tests/test_layout_contract.py": "cmake:web/CMakeLists.txt"
   }
 }
