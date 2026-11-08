@@ -133,16 +133,31 @@ if(VELLUM_RMLUI_INSTALL AND NOT CMAKE_CROSSCOMPILING)
             "-DTEST_CONFIG=$<CONFIG>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/RunInstallConsumer.cmake")
     if(APPLE)
-        # Control for the deployment-target check the install tests run: a
-        # planted object built for a newer macOS must fail it. The expected
-        # message is matched, so a broken setup cannot pass as the control.
-        add_test(NAME vellum.rmlui.deployment-target-control
-            COMMAND "${CMAKE_COMMAND}"
-                "-DVELLUM_RMLUI_CONTROL_DIR=${CMAKE_CURRENT_BINARY_DIR}/deployment-target-control"
-                "-DVELLUM_RMLUI_C_COMPILER=${CMAKE_C_COMPILER}"
-                -P "${CMAKE_CURRENT_SOURCE_DIR}/PlantNewerObject.cmake")
-        set_tests_properties(vellum.rmlui.deployment-target-control PROPERTIES
-            PASS_REGULAR_EXPRESSION "deployment-target-too-new: macOS 27\\.0 > 13\\.3")
+        # Controls for the deployment-target check the install tests run. An
+        # object newer than the recorded target must fail it in either load
+        # command form; an older object in the legacy form must pass it. Each
+        # matches the check's own output, so a broken setup cannot pass.
+        foreach(_control IN ITEMS "build;27.0;fail" "legacy;27.0;fail" "legacy;10.13;pass")
+            list(GET _control 0 _form)
+            list(GET _control 1 _version)
+            list(GET _control 2 _expect)
+            set(_name "vellum.rmlui.deployment-target-${_form}-${_version}")
+            add_test(NAME "${_name}"
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DVELLUM_RMLUI_CONTROL_DIR=${CMAKE_CURRENT_BINARY_DIR}/deployment-target-${_form}-${_version}"
+                    "-DVELLUM_RMLUI_C_COMPILER=${CMAKE_C_COMPILER}"
+                    "-DVELLUM_RMLUI_CONTROL_FORM=${_form}"
+                    "-DVELLUM_RMLUI_CONTROL_VERSION=${_version}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/PlantNewerObject.cmake")
+            string(REPLACE "." "\\." _version_regex "${_version}")
+            if(_expect STREQUAL "fail")
+                set_tests_properties("${_name}" PROPERTIES
+                    PASS_REGULAR_EXPRESSION "deployment-target-too-new: macOS ${_version_regex} > 13\\.3")
+            else()
+                set_tests_properties("${_name}" PROPERTIES
+                    PASS_REGULAR_EXPRESSION "deployment-target: 1 object build versions checked against macOS 13\\.3")
+            endif()
+        endforeach()
     endif()
     if(VELLUM_RMLUI_NATIVE)
         add_test(NAME vellum.rmlui.install-consumer-native
