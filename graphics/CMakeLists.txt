@@ -1,5 +1,6 @@
 add_library(vellum-graphics
     src/capture_stats.cpp
+    src/damage.cpp
     src/paint_command.cpp)
 add_library(Vellum::Graphics ALIAS vellum-graphics)
 
@@ -81,4 +82,10 @@ if(VELLUM_HAS_SKIA_DAWN)
             "${PROJECT_SOURCE_DIR}/assets/fonts"
             "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_DATADIR}/vellum/fonts"
         VERBATIM)
+endif()
+
+if(VELLUM_BUILD_TESTS)
+    add_executable(vellum-damage-test tests/damage_test.cpp)
+    target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
+    add_test(NAME vellum.damage COMMAND vellum-damage-test)
 endif()
