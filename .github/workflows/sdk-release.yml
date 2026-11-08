@@ -799,7 +799,20 @@ jobs:
             verify_release_guard
             gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
               --verify-tag --draft --title "$RELEASE_NAME" --notes-file "$notes"
-            select_existing_release
+            # The releases list shows a new draft only after a short delay, so
+            # a draft just created can read as missing. Only that answer is
+            # retried, for a bounded time; any other failure stops at once,
+            # and a draft still missing at the end still fails the job.
+            for lookup in $(seq 1 12); do
+              select_status=0
+              select_existing_release || select_status=$?
+              [ "$select_status" -eq 4 ] || break
+              echo "new draft not yet in the releases list (attempt $lookup/12); waiting 5s"
+              sleep 5
+            done
+            if [ "$select_status" -ne 0 ]; then
+              exit "$select_status"
+            fi
           elif [ "$select_status" -ne 0 ]; then
             exit "$select_status"
           fi
