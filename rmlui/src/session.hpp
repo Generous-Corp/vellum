@@ -1,6 +1,6 @@
 #pragma once
 
-#include <vellum/rmlui/backend.hpp>
+#include <vellum/rmlui/assets.hpp>
 
 #include <cstddef>
 #include <string>
@@ -53,6 +53,10 @@ class AssetScope {
     std::string_view previous_prefix_;
     LogTarget* previous_log_;
 };
+
+// Adds one logged message to the diagnostics of a document being parsed.
+void count_load_message(LoadDiagnostics& diagnostics, LogLevel level,
+                        std::string_view text) noexcept;
 
 std::string_view strip_scope_prefix(std::string_view path, std::string_view prefix) noexcept;
 
