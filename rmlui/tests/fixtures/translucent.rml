@@ -1,0 +1,28 @@
+<rml>
+<head>
+<title>Translucent fills and text</title>
+<style>
+body {
+    display: block;
+    width: 256px;
+    height: 160px;
+    margin: 0;
+    background-color: #2a2d34;
+    font-family: LatoLatin;
+    font-size: 16px;
+    color: rgba(255, 255, 255, 160);
+}
+div { display: block; position: absolute; }
+#a { left: 16px; top: 16px; width: 120px; height: 80px; background-color: rgba(255, 255, 255, 51); }
+#b { left: 72px; top: 48px; width: 120px; height: 80px; background-color: rgba(255, 59, 48, 128); }
+#c { left: 140px; top: 24px; width: 96px; height: 96px; background-color: rgba(59, 130, 246, 96); border-radius: 12px; }
+#t { left: 20px; top: 128px; }
+</style>
+</head>
+<body>
+<div id="a"/>
+<div id="b"/>
+<div id="c"/>
+<div id="t">Translucent text 0123</div>
+</body>
+</rml>

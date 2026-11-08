@@ -13,6 +13,8 @@ import signal
 import subprocess
 import tempfile
 import threading
+import time
+from typing import Callable
 
 
 def stop_browser(
@@ -46,6 +48,85 @@ def stop_browser(
         pass
     if process.poll() is None:
         process.wait(timeout)
+
+
+class ProofTimeout(Exception):
+    """The browser did not deliver its proof; names the phase that stalled."""
+
+    def __init__(self, phase: str, detail: str) -> None:
+        super().__init__(f"browser proof timed out in phase {phase}: {detail}")
+        self.phase = phase
+
+
+class ProofProgress:
+    """What the browser has done so far, fed by the HTTP handler's threads."""
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._lock = threading.Lock()
+        self.started = clock()
+        self.requests = 0
+        self.last_path = ""
+        self.last_activity = self.started
+        self.received = False
+
+    def request(self, path: str) -> None:
+        with self._lock:
+            self.requests += 1
+            self.last_path = path
+            self.last_activity = self._clock()
+
+    def deliver(self) -> None:
+        with self._lock:
+            self.received = True
+            self.last_activity = self._clock()
+
+    def snapshot(self) -> tuple[int, str, float, bool]:
+        with self._lock:
+            return self.requests, self.last_path, self.last_activity, self.received
+
+
+def wait_for_proof(
+    progress: ProofProgress, process: subprocess.Popen[bytes], *,
+    start_timeout: float = 60.0, idle_timeout: float = 30.0,
+    total_timeout: float = 240.0, poll: float = 0.1,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Wait for the browser's proof on progress, not on one fixed deadline.
+
+    A loaded host can take a long time to start Chrome and fetch the page, so
+    one short deadline fails runs that were still advancing. The wait is in
+    phases: browser-start (no request served yet; also fails at once if Chrome
+    exits), then page-load (requests served, no proof yet; fails after
+    idle_timeout without a new request). total_timeout bounds the whole wait.
+    A timeout names its phase and what was last served.
+    """
+    while True:
+        requests, last_path, last_activity, received = progress.snapshot()
+        if received:
+            return
+        now = clock()
+        elapsed = now - progress.started
+        phase = "browser-start" if requests == 0 else "page-load"
+        exited = process.poll()
+        if exited is not None:
+            raise ProofTimeout(
+                "browser-exited", f"Chrome exited with {exited} after {elapsed:.1f}s, "
+                f"{requests} requests served")
+        if elapsed >= total_timeout:
+            raise ProofTimeout(
+                phase, f"no proof after {elapsed:.1f}s (total limit {total_timeout:.0f}s), "
+                f"{requests} requests served, last {last_path!r}")
+        if requests == 0 and elapsed >= start_timeout:
+            raise ProofTimeout(
+                phase, f"Chrome requested nothing in {elapsed:.1f}s "
+                f"(limit {start_timeout:.0f}s)")
+        if requests and now - last_activity >= idle_timeout:
+            raise ProofTimeout(
+                phase, f"no request or proof for {now - last_activity:.1f}s after "
+                f"{last_path!r} (limit {idle_timeout:.0f}s), {requests} requests served")
+        sleep(poll)
 
 
 def main() -> int:
@@ -125,7 +206,6 @@ def main() -> int:
                 f"{built.stdout}{built.stderr}"
             )
 
-        received = threading.Event()
         evidence: dict[str, object] = {}
 
         class Handler(SimpleHTTPRequestHandler):
@@ -134,6 +214,10 @@ def main() -> int:
 
             def log_message(self, format: str, *values: object) -> None:
                 pass
+
+            def do_GET(self) -> None:  # noqa: N802
+                progress.request(self.path)
+                super().do_GET()
 
             def do_POST(self) -> None:  # noqa: N802
                 if self.path != "/__vellum_proof":
@@ -145,13 +229,14 @@ def main() -> int:
                     evidence.update(value)
                 self.send_response(204)
                 self.end_headers()
-                received.set()
+                progress.deliver()
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
             with tempfile.TemporaryDirectory(prefix="vellum-text-chrome-") as profile:
+                progress = ProofProgress()
                 process = subprocess.Popen([
                     chrome, "--headless=new", "--disable-gpu-sandbox", "--no-first-run",
                     "--disable-background-networking", f"--user-data-dir={profile}",
@@ -160,8 +245,9 @@ def main() -> int:
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                     start_new_session=os.name == "posix")
                 try:
-                    if not received.wait(20):
-                        raise SystemExit("browser text proof timed out")
+                    wait_for_proof(progress, process)
+                except ProofTimeout as timeout:
+                    raise SystemExit(f"browser text proof: {timeout}") from None
                 finally:
                     stop_browser(
                         process,

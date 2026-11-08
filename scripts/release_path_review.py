@@ -22,9 +22,19 @@ default branch's checkout this script runs from, never from the pull request.
 Every pull request, comment and review is read from the API.
 
 For a merge-queue build (reached through the trigger workflow's
-`workflow_run`), the status goes on the queue's commit: every first-parent
-commit between it and the default branch must be a two-parent queue merge,
-and each second parent is a queued pull request's head, judged at that head.
+`workflow_run`), the status goes on the queue's commit, and the range is read
+from the local checkout with git, never from the compare API (which truncates
+at 300 files and refuses long ranges). Every first-parent commit between the
+queue commit and its merge base with the default branch must be a two-parent
+queue merge; each second parent is a queued pull request's head. Each entry
+is judged by its own net diff (`git diff <first parent>...<entry>`, the same
+change its pull request shows): an entry that changes a release-path file
+needs the two APPROVEs at its head; one that changes none passes without
+another read. The range's net diff must hold no release-path file that no
+entry changed, and a merge base, commit or diff git cannot produce is an
+`error`. Nothing is judged per commit: a path changed and changed back inside
+one pull request is not in its net diff, exactly as on the pull request
+itself, because what lands is the pull request's net tree.
 
 The script only decides. It writes `sha`, `state` and `description` to
 `$GITHUB_OUTPUT`, and a later step posts them with the Actions token. Once a
@@ -46,6 +56,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import time
 import tomllib
@@ -78,8 +89,9 @@ STAMP_VARIANT = re.compile(r"<!--\s*session\s*:", re.IGNORECASE)
 SIGNER_LINE = re.compile(r"^[ \t]*reviewer:[ \t]*([A-Za-z0-9._-]+)[ \t]*$", re.MULTILINE)
 UNATTRIBUTED = "unattributed"
 PROTECTED_PREFIXES = (".github/workflows/", ".github/actions/")
-# A queue range longer than this is refused rather than read in part.
-QUEUE_COMMIT_LIMIT = 1000
+# A queue holding more entries than this is refused rather than judged in
+# part. GitHub builds at most 100 entries in one group.
+QUEUE_ENTRY_LIMIT = 100
 # A merge-queue branch is `gh-readonly-queue/<base branch>/pr-<n>-<sha>`.
 QUEUE_BRANCH = "gh-readonly-queue/{branch}/"
 
@@ -337,62 +349,109 @@ def judge_head(api: Api, repo: str, head: str, numbers: Iterable[int], policy: P
     return True, verdicts[0][2] + (f" (PRs {', '.join(f'#{n}' for n in judged)})" if len(judged) > 1 else "")
 
 
-def queue_entries(base: str, head: str, commits: list[dict[str, Any]]) -> list[str]:
-    """The pull request heads a merge-queue commit adds, oldest first.
+class Git:
+    """Read-only git over the local checkout; any failure is a GateError."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+
+    def run(self, *args: str) -> str:
+        try:
+            done = subprocess.run(["git", "-C", str(self.root), *args], capture_output=True, text=True,
+                                  timeout=120, check=False)
+        except (OSError, subprocess.SubprocessError) as error:
+            raise GateError(f"git {args[0]}: {error}") from error
+        if done.returncode:
+            raise GateError(f"git {' '.join(args[:2])} failed: {one_line(done.stderr)[:200]}")
+        return done.stdout
+
+    def commit(self, ref: str) -> str:
+        sha = self.run("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise GateError(f"{ref} is not a commit in the checkout")
+        return sha
+
+    def merge_base(self, first: str, second: str) -> str:
+        return self.commit(self.run("merge-base", first, second).strip())
+
+    def changed(self, base: str, head: str) -> list[str]:
+        """Every path `head` changes against its merge base with `base`.
+
+        Renames are split into a delete and an add, so both names count."""
+        out = self.run("diff", "--name-only", "--no-renames", "-z", f"{base}...{head}")
+        return sorted({name for name in out.split("\0") if name})
+
+    def first_parent_chain(self, base: str, head: str) -> list[tuple[str, list[str]]]:
+        """`(commit, parents)` from `head` down the first-parent chain to `base`."""
+        rows = self.run("rev-list", "--first-parent", "--parents", f"{base}..{head}").split("\n")
+        chain = []
+        for row in rows:
+            fields = row.split()
+            if fields:
+                chain.append((fields[0], fields[1:]))
+        return chain
+
+
+def queue_entries(base: str, head: str, chain: list[tuple[str, list[str]]]) -> list[tuple[str, str]]:
+    """`(first parent, entry head)` for each pull request a queue commit adds, oldest first.
 
     Every commit on the first-parent chain from `head` back to `base` must be a
     two-parent queue merge; its second parent is the entry's head."""
-    parents = {c.get("sha"): [p.get("sha") for p in c.get("parents") or []] for c in commits}
+    parents = dict(chain)
     entries, at = [], head
     while at != base:
         if at not in parents:
             raise GateError(f"queue commit {at[:12]} is not between {base[:12]} and {head[:12]}")
         if len(parents[at]) != 2:
             raise GateError(f"queue commit {at[:12]} is not a two-parent merge")
-        entries.append(parents[at][1])
+        entries.append((parents[at][0], parents[at][1]))
+        if len(entries) > QUEUE_ENTRY_LIMIT:
+            raise GateError(f"the queue commit adds more than {QUEUE_ENTRY_LIMIT} entries")
         at = parents[at][0]
     if not entries:
         raise GateError("the queue commit adds no pull request")
     return list(reversed(entries))
 
 
-def queue_range(api: Api, repo: str, branch: str, head: str) -> tuple[str, list[dict[str, Any]]]:
-    """`(base, commits)`: where the queue commit leaves `branch`, and every commit after it."""
-    path = f"repos/{repo}/compare/{branch}...{head}"
-    commits: list[dict[str, Any]] = []
-    base, total, page = None, None, 1
-    while True:
-        compare = api.get(f"{path}?per_page={PAGE}&page={page}")
-        if not isinstance(compare, dict) or not isinstance(compare.get("commits"), list):
-            raise GateError(f"the queue range {branch}...{head[:12]} is unreadable")
-        base = base or (compare.get("merge_base_commit") or {}).get("sha")
-        total = compare.get("total_commits") if total is None else total
-        if not isinstance(total, int) or not isinstance(base, str):
-            raise GateError(f"the queue range {branch}...{head[:12]} names no merge base or commit count")
-        if total > QUEUE_COMMIT_LIMIT:
-            raise GateError(f"the queue range holds {total} commits, more than {QUEUE_COMMIT_LIMIT}; "
-                            "it is refused rather than read in part")
-        commits.extend(compare["commits"])
-        if len(commits) >= total or not compare["commits"]:
+def protected_hits(paths: Iterable[str], protected: frozenset[str]) -> list[str]:
+    return touched(({"filename": path} for path in paths), protected)
+
+
+def judge_queue(api: Api, repo: str, branch: str, head: str, policy: Policy, git: Git) -> tuple[bool, str]:
+    head = git.commit(head)
+    tip = None
+    for ref in (f"refs/remotes/origin/{branch}", f"refs/heads/{branch}"):
+        try:
+            tip = git.commit(ref)
             break
-        page += 1
-    if len(commits) != total:
-        raise GateError(f"the queue range lists {len(commits)} of its {total} commits")
-    return base, commits
-
-
-def judge_queue(api: Api, repo: str, branch: str, head: str, policy: Policy) -> tuple[bool, str]:
-    base, commits = queue_range(api, repo, branch, head)
+        except GateError:
+            continue
+    if tip is None:
+        raise GateError(f"the checkout has no {branch} to find the queue's merge base")
+    base = git.merge_base(tip, head)
+    entries = queue_entries(base, head, git.first_parent_chain(base, head))
+    claimed: set[str] = set()
     passed = []
-    for entry in queue_entries(base, head, commits):
+    for previous, entry in entries:
+        hits = protected_hits(git.changed(previous, entry), policy.protected)
+        if not hits:
+            continue
+        claimed.update(hits)
         numbers = open_pulls_on(api, repo, entry)
         if len(numbers) != 1:
             raise GateError(f"queue entry {entry[:12]} is the head of {len(numbers)} open pull requests, not one")
-        allowed, why = judge_pull(api, repo, numbers[0], entry, policy)
+        comments = api.pages(f"repos/{repo}/issues/{numbers[0]}/comments", limit=10**6)
+        reviews = api.pages(f"repos/{repo}/pulls/{numbers[0]}/reviews", limit=10**6)
+        allowed, why = judge(entry, [{"filename": path} for path in hits], comments, reviews, policy)
         if not allowed:
             return False, f"PR #{numbers[0]}: {why}"
         passed.append(f"#{numbers[0]}")
-    return True, f"every queued pull request passes ({', '.join(passed)})"
+    unclaimed = sorted(set(protected_hits(git.changed(base, head), policy.protected)) - claimed)
+    if unclaimed:
+        raise GateError(f"the queue range changes {unclaimed[0]}, which no queued pull request changes")
+    if not passed:
+        return True, f"no release-path file changed in {len(entries)} queued pull request(s)"
+    return True, f"every queued release-path pull request is approved ({', '.join(passed)})"
 
 
 def describe(text: str) -> str:
@@ -447,7 +506,7 @@ def one_line(text: str) -> str:
 
 
 def decide(event_name: str, event: dict[str, Any], repo: str, api: Api, root: Path,
-           log: Callable[[str], None] = print) -> tuple[str, str, str] | None:
+           log: Callable[[str], None] = print, git: Git | None = None) -> tuple[str, str, str] | None:
     """`(sha, state, description)` to post, or None when there is nothing to judge.
 
     Never raises for a judgement it cannot make: once a head is known, a
@@ -475,7 +534,7 @@ def decide(event_name: str, event: dict[str, Any], repo: str, api: Api, root: Pa
             branch = str((event.get("repository") or {}).get("default_branch") or "")
             if not branch:
                 raise GateError("the event names no default branch")
-            allowed, why = judge_queue(api, repo, branch, head, policy)
+            allowed, why = judge_queue(api, repo, branch, head, policy, git or Git(root))
         else:
             result = judge_head(api, repo, head, numbers, policy)
             if result is None:

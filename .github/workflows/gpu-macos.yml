@@ -196,8 +196,11 @@ jobs:
           [[ "$url" =~ ^https://github\.com/danielraffel/skia-builder/releases/download/chrome/m[0-9]+/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
           [[ "$sha256" =~ ^[0-9a-f]{64}$ && "$asset" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
           archive="$RUNNER_TEMP/$asset"
+          # Resumable, with curl's own exponential backoff (a fixed retry
+          # delay would turn it off) inside the same three-minute budget as
+          # tools/mirror/retrying_download.py: release-CDN 504s last minutes.
           curl --fail --location --silent --show-error \
-            --retry 5 --retry-delay 2 --retry-all-errors \
+            --retry 12 --retry-max-time 180 --retry-all-errors \
             --continue-at - \
             "$url" \
             --output "$archive"
