@@ -49,4 +49,14 @@ unset(_vellum_rmlui_supported_components)
 
 set(VellumRmlUi_FONTS_ENABLED @VELLUM_RMLUI_FONTS@)
 
+# The macOS deployment target the libraries were built with (empty elsewhere).
+# A consumer targeting older macOS would link objects that need newer macOS.
+set(VellumRmlUi_OSX_DEPLOYMENT_TARGET "@CMAKE_OSX_DEPLOYMENT_TARGET@")
+if(APPLE AND VellumRmlUi_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET AND
+   CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS VellumRmlUi_OSX_DEPLOYMENT_TARGET)
+    message(WARNING
+        "VellumRmlUi was built for macOS ${VellumRmlUi_OSX_DEPLOYMENT_TARGET}, newer than this "
+        "project's deployment target ${CMAKE_OSX_DEPLOYMENT_TARGET}")
+endif()
+
 check_required_components(VellumRmlUi)

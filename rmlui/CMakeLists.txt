@@ -28,6 +28,15 @@ cmake_minimum_required(VERSION 3.24)
 #                              (VELLUM_RMLUI_VELLUM_RENDERER=ON). It is the only
 #                              target that links Vellum; Core and SoftRenderer
 #                              never do.
+# On its own the module pins the macOS deployment target Vellum uses, so the
+# archives Native installs (RmlUi, FreeType) can link into a plug-in that runs
+# on older macOS than the build host. Inside a Vellum build the parent decides.
+# The package records the target it was built with.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "13.3" CACHE STRING
+        "Minimum macOS version for the VellumRmlUi libraries")
+endif()
+
 project(VellumRmlUi
     VERSION 0.1.0
     DESCRIPTION "Optional RmlUi module for Vellum"

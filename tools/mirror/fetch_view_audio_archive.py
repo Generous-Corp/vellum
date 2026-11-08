@@ -44,9 +44,27 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import importlib.util
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
+
+
+def _load_sibling(name: str):
+    # Loaded by path so the import holds under `python3 -I` and when this file is
+    # itself loaded by path (as its tests do), neither of which puts its
+    # directory on sys.path.
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent / f"{name}.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_retrying = _load_sibling("retrying_download")
+download_with_retry = _retrying.download_with_retry
+DownloadError = _retrying.DownloadError
 
 DESCRIPTOR_PATH = "provenance/mirror/pulp-view-audio-archive.json"
 INDEX_PATH = "provenance/mirror/receipts/index.json"
@@ -148,9 +166,12 @@ def sha256_file(path: Path) -> str:
 
 
 def download(url: str, destination: Path) -> None:
-    request = urllib.request.Request(url, headers={"User-Agent": "vellum-mirror"})
-    with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as out:
-        shutil.copyfileobj(response, out)
+    # Release downloads can 5xx for a minute or two; ride that out rather than
+    # failing the run before any check.
+    try:
+        download_with_retry(url, destination)
+    except DownloadError as error:
+        raise urllib.error.URLError(str(error)) from error
 
 
 def check_checksums(paths: dict[str, Path]) -> None:

@@ -87,6 +87,13 @@ if(_native)
     endforeach()
 endif()
 set(_package_dir "${_prefix}/${VELLUM_RMLUI_INSTALL_LIBDIR}/cmake/VellumRmlUi")
+# On macOS every installed library object must be built for at most the
+# deployment target the package records.
+if(CMAKE_HOST_APPLE)
+    set(VELLUM_RMLUI_CHECK_PREFIX "${_prefix}")
+    set(VELLUM_RMLUI_CHECK_PACKAGE_DIR "${_package_dir}")
+    include("${CMAKE_CURRENT_LIST_DIR}/CheckDeploymentTarget.cmake")
+endif()
 file(GLOB _package_files "${_package_dir}/*.cmake")
 foreach(_package_file IN LISTS _package_files)
     file(READ "${_package_file}" _contents)

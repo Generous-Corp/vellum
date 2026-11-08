@@ -918,7 +918,11 @@ class RunnerPolicyTests(unittest.TestCase):
 
     def test_locked_gpu_archive_download_is_resumable_and_hash_gated(self) -> None:
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
-        self.assertIn("--retry 5 --retry-delay 2 --retry-all-errors", gpu)
+        self.assertIn("--retry 12 --retry-max-time 180 --retry-all-errors", gpu)
+        # A fixed --retry-delay turns off curl's exponential backoff, which is
+        # what lets the retries outlast a minutes-long release-CDN outage.
+        step = gpu.split("- name: Download and verify the locked Skia and Dawn archive", 1)[1]
+        self.assertNotIn("--retry-delay", step.split("\n      - name:", 1)[0])
         self.assertIn("--continue-at -", gpu)
         self.assertIn('printf \'%s  %s\\n\' "$sha256" "$archive" | shasum -a 256 -c -', gpu)
         # The workflow reads the pin from gpu-runtime's lock; running its own
