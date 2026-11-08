@@ -655,7 +655,8 @@ jobs:
             if [[ "$url" == api:* ]]; then
               gh api "${url#api:}" > "$lock_root/renderer-$flag"
             else
-              curl -fsSL "$url" -o "$lock_root/renderer-$flag"
+              # Rides out a minute or two of release-CDN 5xx; fails at once on 4xx.
+              python3 -I tools/mirror/retrying_download.py "$url" "$lock_root/renderer-$flag"
             fi
             proof+=("--$flag" "$lock_root/renderer-$flag")
           done < "$lock_root/renderer-assets.tsv"
