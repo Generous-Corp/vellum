@@ -38,8 +38,10 @@ endif()
 if(VELLUM_RMLUI_METAL AND VELLUM_RMLUI_FONTS)
     FetchContent_GetProperties(vellum_rmlui_rmlui SOURCE_DIR _vellum_rmlui_rmlui_src)
     set(_metal_refs "${CMAKE_CURRENT_BINARY_DIR}/metal-references")
-    vellum_rmlui_add_test(vellum-rmlui-metal-reference metal/soft_reference.cpp
-        VellumRmlUi::SoftRenderer)
+    vellum_rmlui_add_test(vellum-rmlui-metal-reference metal/soft_reference.mm
+        VellumRmlUi::SoftRenderer "-framework Foundation" "-framework CoreGraphics"
+        "-framework ImageIO")
+    target_compile_options(vellum-rmlui-metal-reference PRIVATE -fobjc-arc)
     add_test(NAME vellum.rmlui.metal-reference
         COMMAND vellum-rmlui-metal-reference "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}"
             "${_metal_refs}")

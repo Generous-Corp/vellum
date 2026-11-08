@@ -6,11 +6,48 @@
 
 #include "visual_common.hpp"
 
+#import <CoreGraphics/CoreGraphics.h>
+#import <Foundation/Foundation.h>
+#import <ImageIO/ImageIO.h>
+
 #include <cstdio>
 #include <filesystem>
 
 using namespace vellum::rmlui;
 using namespace vellum::rmlui::metal_test;
+
+namespace {
+
+// The same decode the Metal renderer performs: ImageIO into a premultiplied
+// RGBA8 bitmap in the device RGB space, so both sides sample identical texels.
+bool decode(const std::string& encoded, std::uint32_t& width, std::uint32_t& height,
+            std::vector<std::uint8_t>& out) {
+    NSData* data = [NSData dataWithBytes:encoded.data() length:encoded.size()];
+    CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, nullptr);
+    if (!source)
+        return false;
+    CGImageRef image = CGImageSourceCreateImageAtIndex(source, 0, nullptr);
+    CFRelease(source);
+    if (!image)
+        return false;
+    width = static_cast<std::uint32_t>(CGImageGetWidth(image));
+    height = static_cast<std::uint32_t>(CGImageGetHeight(image));
+    out.assign(static_cast<std::size_t>(width) * height * 4u, 0);
+    CGColorSpaceRef colour_space = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(
+        out.data(), width, height, 8, static_cast<std::size_t>(width) * 4u, colour_space,
+        static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedLast) | kCGBitmapByteOrderDefault);
+    CGColorSpaceRelease(colour_space);
+    const bool ok = context != nullptr;
+    if (ok) {
+        CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
+        CGContextRelease(context);
+    }
+    CGImageRelease(image);
+    return ok;
+}
+
+} // namespace
 
 int main(int argc, char** argv) {
     if (argc != 4) {
@@ -26,6 +63,7 @@ int main(int argc, char** argv) {
     std::filesystem::create_directories(out_dir);
     for (const char* document : kDocuments) {
         SoftRenderer renderer(0x00000000u);
+        renderer.set_image_decoder(decode);
         HeadlessRecorder lua;
         Backend backend(assets, renderer, lua);
         if (backend.open(kWidth, kHeight) != Status::ok)
@@ -45,6 +83,11 @@ int main(int argc, char** argv) {
         }
         backend.render();
         backend.render(); // a second pass, after layout settles
+        if (renderer.skipped_draws() != 0) {
+            std::fprintf(stderr, "%s: the soft renderer skipped %zu draws\n", document,
+                         static_cast<std::size_t>(renderer.skipped_draws()));
+            return 1;
+        }
         if (!write_rgba(out_dir / reference_name(document), renderer.pixels()))
             return 1;
         backend.close();

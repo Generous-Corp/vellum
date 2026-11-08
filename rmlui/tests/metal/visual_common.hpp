@@ -37,8 +37,8 @@ inline constexpr Font kFonts[] = {
 
 // Documents this renderer version draws completely: RmlUi visual tests that
 // use no clip mask, layer, filter or shader (the Metal test fails if one
-// does), plus this module's translucent fixture, which the blend control
-// needs.
+// does), plus this module's fixtures: translucent fills and text, which the
+// blend control needs, and a loaded image, transforms and a scissored child.
 inline constexpr const char* kDocuments[] = {
     "rmlui/Tests/Data/VisualTests/border_radius.rml",
     "rmlui/Tests/Data/VisualTests/box_sizing.rml",
@@ -53,6 +53,7 @@ inline constexpr const char* kDocuments[] = {
     "rmlui/Tests/Data/VisualTests/position_06_absolute_positioning.rml",
     "rmlui/Tests/Data/VisualTests/gap-001.rml",
     "fixtures/translucent.rml",
+    "fixtures/geometry.rml",
 };
 
 // The documents whose output depends on translucent blending.

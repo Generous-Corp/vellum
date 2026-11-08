@@ -151,6 +151,15 @@ int main(int argc, char** argv) {
                 ++failures;
                 continue;
             }
+            // A blank frame would match a blank reference: require ink.
+            bool drew = false;
+            for (std::size_t i = 3; i < metal.size() && !drew; i += 4)
+                drew = metal[i] != 0;
+            if (!drew) {
+                std::fprintf(stderr, "%s: the Metal frame is empty\n", document);
+                ++failures;
+                continue;
+            }
             std::vector<std::uint8_t> soft;
             if (!read_rgba(references / reference_name(document), soft)) {
                 std::fprintf(stderr, "missing reference for %s\n", document);
