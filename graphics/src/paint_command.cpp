@@ -9,6 +9,7 @@ namespace {
 
 void append_node(const SceneNode& node, float parent_x, float parent_y,
                  std::vector<PaintCommand>& output) {
+    if (!is_known_kind(node.kind)) return;
     const Rect absolute{
         parent_x + node.bounds.x,
         parent_y + node.bounds.y,
@@ -137,6 +138,7 @@ bool mesh_is_valid(const TriangleMesh& mesh, std::string* reason) {
 
 std::vector<PaintCommand> make_paint_commands(const Scene& scene) {
     std::vector<PaintCommand> output;
+    if (!scene_version_is_supported(scene.scene_version)) return output;
     append_node(scene.root, 0.0F, 0.0F, output);
     return output;
 }

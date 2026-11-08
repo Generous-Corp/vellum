@@ -262,7 +262,8 @@ if(VELLUM_BUILD_TESTS)
                 repeating_linear_gradient_non_square
                 outset_shadow_spread_diagonal
                 attributed_text_runs_materialization
-                textured_triangle_mesh)
+                textured_triangle_mesh
+                scene_version_refusal)
             add_test(NAME "vellum.gpu.${_vellum_fixture}"
                 COMMAND vellum-gpu-style-test "${_vellum_fixture}")
         endforeach()
