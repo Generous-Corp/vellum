@@ -259,7 +259,8 @@ jobs:
             if [[ "$url" == api:* ]]; then
               gh api "${url#api:}" > "$records/$flag"
             else
-              curl -fsSL --retry 3 "$url" -o "$records/$flag"
+              # Rides out a minute or two of release-CDN 5xx; fails at once on 4xx.
+              python3 -I tools/mirror/retrying_download.py "$url" "$records/$flag"
             fi
             proof+=("--$flag" "$records/$flag")
           done < "$records/assets.tsv"
