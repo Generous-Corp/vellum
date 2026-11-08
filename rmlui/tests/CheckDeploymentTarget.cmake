@@ -30,9 +30,9 @@ foreach(_library IN LISTS _libraries)
     foreach(_minimum IN LISTS _minimums)
         string(REPLACE "minos " "" _version "${_minimum}")
         if(_version VERSION_GREATER _recorded)
+            # The fixed prefix comes first so the line cannot wrap inside it.
             message(FATAL_ERROR
-                "${_library} has an object built for macOS ${_version}, newer than the "
-                "recorded deployment target ${_recorded}")
+                "deployment-target-too-new: macOS ${_version} > ${_recorded} in ${_library}")
         endif()
     endforeach()
 endforeach()
