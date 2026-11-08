@@ -15,6 +15,7 @@
 #include <RmlUi/Core.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -160,6 +161,10 @@ int main(int argc, char** argv) {
                 ++failures;
                 continue;
             }
+            // VELLUM_RMLUI_METAL_DUMP=<dir> writes the Metal frames beside the
+            // references, for inspecting a difference.
+            if (const char* dump = std::getenv("VELLUM_RMLUI_METAL_DUMP"))
+                write_rgba(std::filesystem::path(dump) / reference_name(document), metal);
             std::vector<std::uint8_t> soft;
             if (!read_rgba(references / reference_name(document), soft)) {
                 std::fprintf(stderr, "missing reference for %s\n", document);

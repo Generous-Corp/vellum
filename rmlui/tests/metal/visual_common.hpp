@@ -36,7 +36,9 @@ inline constexpr Font kFonts[] = {
 };
 
 // Documents this renderer version draws completely: RmlUi visual tests that
-// use no clip mask, layer, filter or shader (the Metal test fails if one
+// link the test stylesheet relatively (some name it from RmlUi's own test
+// shell root, which an asset provider cannot resolve) and use no clip mask,
+// layer, filter or shader (the Metal test fails if one
 // does), plus this module's fixtures: translucent fills and text, which the
 // blend control needs, and a loaded image, transforms and a scissored child.
 inline constexpr const char* kDocuments[] = {
@@ -44,14 +46,15 @@ inline constexpr const char* kDocuments[] = {
     "rmlui/Tests/Data/VisualTests/box_sizing.rml",
     "rmlui/Tests/Data/VisualTests/css1_clear.rml",
     "rmlui/Tests/Data/VisualTests/flex_01.rml",
-    "rmlui/Tests/Data/VisualTests/flex_direction.rml",
+    "rmlui/Tests/Data/VisualTests/flex_02.rml",
     "rmlui/Tests/Data/VisualTests/float_basic.rml",
     "rmlui/Tests/Data/VisualTests/inline_block.rml",
     "rmlui/Tests/Data/VisualTests/inline_formatting_01.rml",
     "rmlui/Tests/Data/VisualTests/letter_spacing.rml",
     "rmlui/Tests/Data/VisualTests/position_01_normal_flow.rml",
     "rmlui/Tests/Data/VisualTests/position_06_absolute_positioning.rml",
-    "rmlui/Tests/Data/VisualTests/gap-001.rml",
+    "rmlui/Tests/Data/VisualTests/position_02_relative_positioning.rml",
+    "rmlui/Tests/Data/VisualTests/inline_formatting_02.rml",
     "fixtures/translucent.rml",
     "fixtures/geometry.rml",
 };
