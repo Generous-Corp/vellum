@@ -31,6 +31,49 @@ if(VELLUM_RMLUI_NATIVE)
     add_test(NAME vellum.rmlui.native COMMAND vellum-rmlui-native-test)
 endif()
 
+# The Metal renderer drawn headless and compared with the soft renderer. The
+# reference and the Metal frames come from separate processes (Core and Native
+# each carry their own RmlUi), joined by a ctest fixture. The blend control is
+# the same test with a straight-alpha blend compiled in; it must detect it.
+if(VELLUM_RMLUI_METAL AND VELLUM_RMLUI_FONTS)
+    FetchContent_GetProperties(vellum_rmlui_rmlui SOURCE_DIR _vellum_rmlui_rmlui_src)
+    set(_metal_refs "${CMAKE_CURRENT_BINARY_DIR}/metal-references")
+    vellum_rmlui_add_test(vellum-rmlui-metal-reference metal/soft_reference.cpp
+        VellumRmlUi::SoftRenderer)
+    add_test(NAME vellum.rmlui.metal-reference
+        COMMAND vellum-rmlui-metal-reference "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}"
+            "${_metal_refs}")
+    set_tests_properties(vellum.rmlui.metal-reference PROPERTIES
+        FIXTURES_SETUP vellum_rmlui_metal_references)
+
+    vellum_rmlui_add_test(vellum-rmlui-metal-visual-test metal/metal_visual_test.mm
+        VellumRmlUi::Native VellumRmlUi::Metal)
+    target_compile_options(vellum-rmlui-metal-visual-test PRIVATE -fobjc-arc)
+    add_test(NAME vellum.rmlui.metal-visual
+        COMMAND vellum-rmlui-metal-visual-test "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}"
+            "${_metal_refs}")
+    set_tests_properties(vellum.rmlui.metal-visual PROPERTIES
+        FIXTURES_REQUIRED vellum_rmlui_metal_references
+        SKIP_RETURN_CODE 77)
+
+    vellum_rmlui_add_test(vellum-rmlui-metal-blend-control metal/metal_visual_test.mm
+        VellumRmlUi::Native)
+    target_sources(vellum-rmlui-metal-blend-control PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/metal_render_interface.mm")
+    target_compile_definitions(vellum-rmlui-metal-blend-control PRIVATE
+        VELLUM_RMLUI_METAL_TEST_STRAIGHT_ALPHA_BLEND)
+    target_compile_options(vellum-rmlui-metal-blend-control PRIVATE -fobjc-arc)
+    target_link_libraries(vellum-rmlui-metal-blend-control PRIVATE
+        "-framework Metal" "-framework QuartzCore" "-framework Foundation"
+        "-framework CoreGraphics" "-framework ImageIO")
+    add_test(NAME vellum.rmlui.metal-blend-control
+        COMMAND vellum-rmlui-metal-blend-control "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}"
+            "${_metal_refs}")
+    set_tests_properties(vellum.rmlui.metal-blend-control PROPERTIES
+        FIXTURES_REQUIRED vellum_rmlui_metal_references
+        SKIP_RETURN_CODE 77)
+endif()
+
 vellum_rmlui_add_test(vellum-rmlui-hot-reload-test hot_reload_test.cpp VellumRmlUi::DevAssets)
 add_test(NAME vellum.rmlui.hot-reload COMMAND vellum-rmlui-hot-reload-test)
 
