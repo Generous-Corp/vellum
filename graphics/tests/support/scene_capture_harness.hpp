@@ -24,7 +24,7 @@
 /// resolve against `default_golden_directory()`, which is
 /// `graphics/tests/fixtures/capture/`. Setting `VELLUM_UPDATE_GOLDENS=1` makes
 /// `compare_to_golden` in `GoldenMode::from_environment` rewrite the golden
-/// from the capture instead of comparing.
+/// from the capture instead of comparing; it is refused when `CI` is set.
 namespace vellum::graphics::capture_harness {
 
 /// The outcome of a harness check, with a diagnostic on failure.
@@ -38,9 +38,6 @@ struct Verdict final {
 /// One offscreen capture and the evidence needed to judge it.
 struct CaptureResult final {
     bool ok = false;
-    /// True when no GPU device or offscreen surface could be created, as
-    /// opposed to a render or readback failure on a working device.
-    bool device_unavailable = false;
     std::string error;
     std::vector<std::uint8_t> rgba;
     std::uint32_t pixel_width = 0;
@@ -103,7 +100,8 @@ struct PixelComparison final {
 [[nodiscard]] Verdict assert_content_floor(const CaptureResult& result);
 
 enum class GoldenMode {
-    /// Update when `VELLUM_UPDATE_GOLDENS=1`, otherwise compare.
+    /// Update when `VELLUM_UPDATE_GOLDENS=1`, otherwise compare. Updating
+    /// fails when the `CI` environment variable is set and not empty.
     from_environment,
     compare,
     update,

@@ -83,6 +83,6 @@ if(VELLUM_HAS_SKIA_DAWN)
         VERBATIM)
 endif()
 
-if(VELLUM_BUILD_TESTS AND TARGET vellum-gpu)
+if(BUILD_TESTING AND VELLUM_BUILD_TESTS AND TARGET vellum-gpu)
     add_subdirectory(tests)
 endif()

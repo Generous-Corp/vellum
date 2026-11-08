@@ -203,10 +203,7 @@ bool prepare_device(std::string* error) {
 CaptureResult render_offscreen(
     const Scene& scene, std::uint32_t width, std::uint32_t height, float scale) {
     CaptureResult result;
-    if (!prepare_device(&result.error)) {
-        result.device_unavailable = true;
-        return result;
-    }
+    if (!prepare_device(&result.error)) return result;
     const auto start = Clock::now();
     auto surface = SkiaDawnSurface::create(
         {.width = width, .height = height, .scale = scale,
@@ -215,7 +212,6 @@ CaptureResult render_offscreen(
     const auto created = Clock::now();
     result.surface_creation = elapsed(start, created);
     if (!surface) {
-        result.device_unavailable = true;
         if (result.error.empty()) result.error = "offscreen surface creation failed";
         return result;
     }
@@ -336,8 +332,15 @@ Verdict compare_to_golden(
     int max_channel_delta, double max_differing_fraction, GoldenMode mode) {
     if (!result.ok) return fail("capture failed: " + result.error);
     const auto path = golden.is_absolute() ? golden : default_golden_directory() / golden;
-    const bool update = mode == GoldenMode::update ||
-                        (mode == GoldenMode::from_environment && update_goldens_requested());
+    const bool environment_update =
+        mode == GoldenMode::from_environment && update_goldens_requested();
+    if (environment_update) {
+        const char* ci = std::getenv("CI");
+        if (ci != nullptr && *ci != '\0') {
+            return fail("VELLUM_UPDATE_GOLDENS=1 is refused when CI is set");
+        }
+    }
+    const bool update = mode == GoldenMode::update || environment_update;
     std::string error;
     if (update) {
         if (!write_raw_rgba(path, result.pixel_width, result.pixel_height, result.rgba,

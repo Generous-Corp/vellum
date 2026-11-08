@@ -3,9 +3,13 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -14,7 +18,6 @@ namespace {
 namespace harness = vellum::graphics::capture_harness;
 namespace fixtures = vellum::graphics::capture_harness::fixtures;
 
-constexpr int skip_exit_code = 77;
 constexpr std::uint32_t width = 400;
 constexpr std::uint32_t height = 300;
 
@@ -25,6 +28,38 @@ void expect(bool condition, const std::string& what, const std::string& detail =
     if (!detail.empty()) std::cout << ": " << detail;
     std::cout << '\n';
     if (!condition) ++failures;
+}
+
+std::string json_string(const std::string& value) {
+    std::ostringstream out;
+    out << '"';
+    for (const char character : value) {
+        const auto byte = static_cast<unsigned char>(character);
+        if (character == '"' || character == '\\') {
+            out << '\\' << character;
+        } else if (byte < 0x20U) {
+            out << "\\u" << std::hex << std::setw(4) << std::setfill('0') << int(byte)
+                << std::dec;
+        } else {
+            out << character;
+        }
+    }
+    out << '"';
+    return out.str();
+}
+
+std::optional<std::string> environment(const char* name) {
+    const char* value = std::getenv(name);
+    if (value == nullptr) return std::nullopt;
+    return std::string(value);
+}
+
+void restore(const char* name, const std::optional<std::string>& value) {
+    if (value) {
+        setenv(name, value->c_str(), 1);
+    } else {
+        unsetenv(name);
+    }
 }
 
 long long median(std::vector<long long> values) {
@@ -111,6 +146,17 @@ void goldens(const harness::CaptureResult& first, const harness::CaptureResult& 
     expect(!harness::compare_to_golden(second, directory / "truncated.rgba", 255, 1.0,
                                         harness::GoldenMode::compare),
            "a truncated golden fails");
+
+    const auto saved_update = environment("VELLUM_UPDATE_GOLDENS");
+    const auto saved_ci = environment("CI");
+    setenv("VELLUM_UPDATE_GOLDENS", "1", 1);
+    setenv("CI", "true", 1);
+    const auto refused_path = directory / "refused.rgba";
+    const auto refused = harness::compare_to_golden(second, refused_path, 0, 0.0);
+    restore("VELLUM_UPDATE_GOLDENS", saved_update);
+    restore("CI", saved_ci);
+    expect(!refused && !std::filesystem::exists(refused_path),
+           "VELLUM_UPDATE_GOLDENS=1 is refused under CI", refused.message);
 }
 
 void timings(const std::filesystem::path& evidence_path, long long cold_creation) {
@@ -149,68 +195,95 @@ void timings(const std::filesystem::path& evidence_path, long long cold_creation
         << "  \"median_surface_creation_us\": " << median(creation) << ",\n"
         << "  \"median_render_us\": " << median(render) << ",\n"
         << "  \"median_capture_rgba_us\": " << median(capture) << ",\n"
-        << "  \"renderer\": \"" << last.evidence.renderer << "\",\n"
-        << "  \"backend\": \"" << last.evidence.backend << "\",\n"
-        << "  \"adapter\": \"" << last.evidence.adapter << "\",\n"
+        << "  \"renderer\": " << json_string(last.evidence.renderer) << ",\n"
+        << "  \"backend\": " << json_string(last.evidence.backend) << ",\n"
+        << "  \"adapter\": " << json_string(last.evidence.adapter) << ",\n"
         << "  \"unique_colors\": " << last.stats.unique_colors << ",\n"
         << "  \"non_background_pixels\": " << last.stats.non_background_pixels << "\n"
         << "}\n";
 }
 
+int run_checks(const std::filesystem::path& helper_goldens,
+               const std::filesystem::path& evidence) {
+    const auto empty = harness::render_offscreen(fixtures::empty(width, height), width, height);
+    expect(empty.ok, "empty scene captures", empty.error);
+    if (!empty.ok) return 1;
+    negative_controls(empty);
+
+    harness::CaptureResult text;
+    harness::CaptureResult mesh;
+    harness::CaptureResult combined_first;
+    harness::CaptureResult combined_second;
+    for (const auto& [name, scene] : fixtures::all(width, height)) {
+        harness::CaptureResult first;
+        harness::CaptureResult second;
+        const auto deterministic =
+            harness::assert_deterministic(scene, width, height, 1.0F, &first, &second);
+        expect(static_cast<bool>(deterministic), name + " is deterministic in one process",
+               deterministic.message);
+        const auto floor = harness::assert_content_floor(first);
+        expect(static_cast<bool>(floor), name + " passes the content floor", floor.message);
+        if (name == "text") text = first;
+        if (name == "mesh") mesh = first;
+        if (name == "combined") {
+            combined_first = std::move(first);
+            combined_second = std::move(second);
+        }
+    }
+    if (text.ok && mesh.ok) determinism(text, mesh);
+    if (combined_first.ok && combined_second.ok) {
+        goldens(combined_first, combined_second, helper_goldens);
+    }
+    timings(evidence, empty.surface_creation.count());
+    return 0;
+}
+
+int run_golden_pass(const std::filesystem::path& directory, harness::GoldenMode mode) {
+    const bool record = mode == harness::GoldenMode::update;
+    if (record) {
+        std::error_code ignored;
+        std::filesystem::remove_all(directory, ignored);
+    }
+    for (const auto& [name, scene] : fixtures::all(width, height)) {
+        const auto result = harness::render_offscreen(scene, width, height);
+        const auto floor = harness::assert_content_floor(result);
+        expect(static_cast<bool>(floor), name + " passes the content floor", floor.message);
+        const auto golden = harness::compare_to_golden(
+            result, directory / (name + ".rgba"), 0, 0.0, mode);
+        expect(static_cast<bool>(golden),
+               name + (record ? " is recorded" : " matches the recording process exactly"),
+               golden.message);
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 3) {
-        std::cerr << "usage: vellum-scene-capture-harness-test <golden-dir> <evidence.json>\n";
+    const std::string usage =
+        "usage: vellum-scene-capture-harness-test checks <helper-golden-dir> <evidence.json>\n"
+        "       vellum-scene-capture-harness-test record|compare <golden-dir>\n";
+    if (argc < 3) {
+        std::cerr << usage;
         return 2;
     }
+    const std::string mode = argv[1];
     try {
-        const auto empty = harness::render_offscreen(
-            fixtures::empty(width, height), width, height);
-        if (empty.device_unavailable) {
-#if VELLUM_SCENE_CAPTURE_REQUIRE_DEVICE
-            std::cerr << "FAIL no GPU device although VELLUM_REQUIRE_GPU is ON: "
-                      << empty.error << '\n';
-            return 1;
-#else
-            std::cout << "SKIP no GPU device for offscreen capture: " << empty.error << '\n';
-            return skip_exit_code;
-#endif
+        if (mode == "checks" && argc == 4) {
+            if (run_checks(argv[2], argv[3]) != 0) ++failures;
+        } else if (mode == "record" && argc == 3) {
+            run_golden_pass(argv[2], harness::GoldenMode::update);
+        } else if (mode == "compare" && argc == 3) {
+            run_golden_pass(argv[2], harness::GoldenMode::compare);
+        } else {
+            std::cerr << usage;
+            return 2;
         }
-        expect(empty.ok, "empty scene captures", empty.error);
-        negative_controls(empty);
-
-        harness::CaptureResult text;
-        harness::CaptureResult mesh;
-        harness::CaptureResult combined_first;
-        harness::CaptureResult combined_second;
-        for (const auto& [name, scene] : fixtures::all(width, height)) {
-            harness::CaptureResult first;
-            harness::CaptureResult second;
-            const auto deterministic =
-                harness::assert_deterministic(scene, width, height, 1.0F, &first, &second);
-            expect(static_cast<bool>(deterministic), name + " is deterministic",
-                   deterministic.message);
-            const auto floor = harness::assert_content_floor(first);
-            expect(static_cast<bool>(floor), name + " passes the content floor",
-                   floor.message);
-            if (name == "text") text = first;
-            if (name == "mesh") mesh = first;
-            if (name == "combined") {
-                combined_first = std::move(first);
-                combined_second = std::move(second);
-            }
-        }
-        if (text.ok && mesh.ok) determinism(text, mesh);
-        if (combined_first.ok && combined_second.ok) {
-            goldens(combined_first, combined_second, argv[1]);
-        }
-        timings(argv[2], empty.surface_creation.count());
     } catch (const std::exception& exception) {
         std::cerr << "FAIL " << exception.what() << '\n';
         return 1;
     }
-    std::cout << (failures == 0 ? "scene capture harness passed" : "scene capture harness failed")
+    std::cout << "scene capture harness " << mode << (failures == 0 ? " passed" : " failed")
               << '\n';
     return failures == 0 ? 0 : 1;
 }
