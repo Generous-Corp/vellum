@@ -1,10 +1,15 @@
 // Provenance: written from RmlUi's public RenderInterface documentation and
 // headers (MIT), Apple's Metal documentation, and RmlUi's MIT GL3 backend as a
 // behavioural reference (premultiplied blending, the orthographic projection,
-// scissor semantics, the stencil clip-mask operations and the layer stack). It
-// contains no code from any GPL-licensed project.
+// scissor semantics, the stencil clip-mask operations, the layer stack, the
+// filter parameters and colour matrices, the separable blur with iterative
+// half-scaling, and the gradient functions). It contains no code from any
+// GPL-licensed project.
 
 #import <vellum/rmlui/metal_render_interface.hpp>
+
+#include "metal_effects.hpp"
+#include "metal_shaders.hpp"
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <Foundation/Foundation.h>
@@ -15,6 +20,7 @@
 #include <RmlUi/Core/Math.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <unordered_map>
@@ -22,68 +28,12 @@
 
 namespace vellum::rmlui {
 
+using namespace metal_detail;
+
 namespace {
 
 // RmlUi's vertex: position, premultiplied RGBA8 colour, texture coordinate.
 static_assert(sizeof(Rml::Vertex) == 20, "unexpected Rml::Vertex layout");
-
-constexpr const char* kShaderSource = R"msl(
-#include <metal_stdlib>
-using namespace metal;
-
-struct VertexIn {
-    float2 position [[attribute(0)]];
-    float4 colour [[attribute(1)]];
-    float2 uv [[attribute(2)]];
-};
-
-struct VertexOut {
-    float4 position [[position]];
-    float4 colour;
-    float2 uv;
-};
-
-struct Uniforms {
-    float4x4 transform;   // projection * RmlUi transform
-    float2 translation;
-};
-
-vertex VertexOut vellum_rmlui_vertex(VertexIn in [[stage_in]],
-                                     constant Uniforms& uniforms [[buffer(1)]]) {
-    VertexOut out;
-    out.position = uniforms.transform * float4(in.position + uniforms.translation, 0.0, 1.0);
-    out.colour = in.colour;
-    out.uv = in.uv;
-    return out;
-}
-
-fragment float4 vellum_rmlui_colour(VertexOut in [[stage_in]]) {
-    return in.colour;
-}
-
-fragment float4 vellum_rmlui_texture(VertexOut in [[stage_in]],
-                                     texture2d<float> texture [[texture(0)]],
-                                     sampler texture_sampler [[sampler(0)]]) {
-    return texture.sample(texture_sampler, in.uv) * in.colour;
-}
-
-// One triangle covering the viewport, generated from the vertex index; uv maps
-// the viewport onto a whole layer texture, top row first.
-vertex VertexOut vellum_rmlui_fullscreen(uint id [[vertex_id]]) {
-    const float2 corner = float2((id << 1) & 2, id & 2);
-    VertexOut out;
-    out.position = float4(corner * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
-    out.colour = float4(1.0);
-    out.uv = corner;
-    return out;
-}
-
-fragment float4 vellum_rmlui_passthrough(VertexOut in [[stage_in]],
-                                         texture2d<float> texture [[texture(0)]]) {
-    constexpr sampler nearest(filter::nearest, address::clamp_to_edge);
-    return texture.sample(nearest, in.uv);
-}
-)msl";
 
 constexpr MTLPixelFormat kStencilFormat = MTLPixelFormatStencil8;
 
@@ -91,6 +41,13 @@ struct Uniforms {
     float transform[16];
     float translation[2];
     float padding[2];
+};
+
+
+// Integer pixel rectangle, [x0, x1) x [y0, y1).
+struct PixelRect {
+    int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    bool empty() const { return x1 <= x0 || y1 <= y0; }
 };
 
 struct Geometry {
@@ -106,6 +63,18 @@ struct Pipelines {
     id<MTLRenderPipelineState> mask_clear = nil;   // viewport into the stencil only
     id<MTLRenderPipelineState> blend = nil;        // layer composite, premultiplied over
     id<MTLRenderPipelineState> replace = nil;      // layer composite, no blending
+    id<MTLRenderPipelineState> gradient = nil;     // gradient shader over geometry
+
+    // Post-processing between the layers' own passes, without a stencil.
+    id<MTLRenderPipelineState> post_copy = nil;        // nearest copy
+    id<MTLRenderPipelineState> post_linear_copy = nil; // bilinear copy, for rescaling
+    id<MTLRenderPipelineState> post_transparent = nil;
+    id<MTLRenderPipelineState> post_scale = nil;       // opacity
+    id<MTLRenderPipelineState> post_colour_matrix = nil;
+    id<MTLRenderPipelineState> post_blur = nil;
+    id<MTLRenderPipelineState> post_drop_shadow = nil;
+    id<MTLRenderPipelineState> post_mask = nil;
+    id<MTLRenderPipelineState> post_over = nil;        // premultiplied over
 };
 
 // Decodes an encoded image to premultiplied RGBA8, top row first.
@@ -153,6 +122,8 @@ struct MetalRenderInterface::State {
     MTLPixelFormat frame_format = MTLPixelFormatInvalid;
     std::unordered_map<std::uintptr_t, Geometry> geometries;
     std::unordered_map<std::uintptr_t, id<MTLTexture>> textures;
+    std::unordered_map<std::uintptr_t, Filter> filters;
+    std::unordered_map<std::uintptr_t, GradientUniforms> shaders;
     std::uintptr_t next_handle = 1;
 
     // Depth-stencil states for the clip mask.
@@ -165,6 +136,10 @@ struct MetalRenderInterface::State {
     // end_frame() copies it to the target. All layers share one stencil.
     std::vector<id<MTLTexture>> layer_pool;
     id<MTLTexture> stencil = nil;
+    // Post-processing targets (primary, secondary, tertiary) and the saved
+    // mask image, sized and formatted like the layers.
+    std::array<id<MTLTexture>, 3> post{};
+    id<MTLTexture> mask_image = nil;
     NSUInteger target_width = 0;
     NSUInteger target_height = 0;
     int layer_count = 0;
@@ -186,13 +161,14 @@ struct MetalRenderInterface::State {
 
     id<MTLRenderPipelineState> build_pipeline(MTLPixelFormat format, NSString* vertex,
                                               NSString* fragment, bool blend, bool write_colour,
-                                              bool with_vertex_layout) {
+                                              bool with_vertex_layout, bool with_stencil = true) {
         MTLRenderPipelineDescriptor* descriptor = [[MTLRenderPipelineDescriptor alloc] init];
         descriptor.vertexFunction = [library newFunctionWithName:vertex];
         descriptor.fragmentFunction = [library newFunctionWithName:fragment];
         if (with_vertex_layout)
             descriptor.vertexDescriptor = vertex_layout;
-        descriptor.stencilAttachmentPixelFormat = kStencilFormat;
+        if (with_stencil)
+            descriptor.stencilAttachmentPixelFormat = kStencilFormat;
         MTLRenderPipelineColorAttachmentDescriptor* colour = descriptor.colorAttachments[0];
         colour.pixelFormat = format;
         colour.writeMask = write_colour ? MTLColorWriteMaskAll : MTLColorWriteMaskNone;
@@ -237,8 +213,24 @@ struct MetalRenderInterface::State {
                                      @"vellum_rmlui_passthrough", true, true, false);
         built.replace = build_pipeline(format, @"vellum_rmlui_fullscreen",
                                        @"vellum_rmlui_passthrough", false, true, false);
+        built.gradient = build_pipeline(format, @"vellum_rmlui_vertex", @"vellum_rmlui_gradient",
+                                        true, true, true);
+        auto post = [&](NSString* fragment, bool blend) {
+            return build_pipeline(format, @"vellum_rmlui_rect", fragment, blend, true, false, false);
+        };
+        built.post_copy = post(@"vellum_rmlui_passthrough", false);
+        built.post_linear_copy = post(@"vellum_rmlui_linear_copy", false);
+        built.post_transparent = post(@"vellum_rmlui_transparent", false);
+        built.post_scale = post(@"vellum_rmlui_scale", false);
+        built.post_colour_matrix = post(@"vellum_rmlui_colour_matrix", false);
+        built.post_blur = post(@"vellum_rmlui_blur", false);
+        built.post_drop_shadow = post(@"vellum_rmlui_drop_shadow", false);
+        built.post_mask = post(@"vellum_rmlui_mask", false);
+        built.post_over = post(@"vellum_rmlui_passthrough", true);
         if (!built.colour || !built.texture || !built.mask || !built.mask_clear || !built.blend ||
-            !built.replace)
+            !built.replace || !built.gradient || !built.post_copy || !built.post_linear_copy ||
+            !built.post_transparent || !built.post_scale || !built.post_colour_matrix ||
+            !built.post_blur || !built.post_drop_shadow || !built.post_mask || !built.post_over)
             return nullptr;
         return &pipelines.emplace(key, built).first->second;
     }
@@ -266,6 +258,8 @@ struct MetalRenderInterface::State {
         if (width != target_width || height != target_height) {
             layer_pool.clear();
             stencil = nil;
+            post = {};
+            mask_image = nil;
             target_width = width;
             target_height = height;
         }
@@ -297,6 +291,20 @@ struct MetalRenderInterface::State {
             layer_pool.push_back(texture);
         }
         return layer_pool[static_cast<std::size_t>(index)];
+    }
+
+    id<MTLTexture> frame_texture(__strong id<MTLTexture>& slot) {
+        if (!slot) {
+            MTLTextureDescriptor* descriptor =
+                [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:frame_format
+                                                                   width:target_width
+                                                                  height:target_height
+                                                               mipmapped:NO];
+            descriptor.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+            descriptor.storageMode = MTLStorageModePrivate;
+            slot = [device newTextureWithDescriptor:descriptor];
+        }
+        return slot;
     }
 
     void end_pass() {
@@ -344,6 +352,14 @@ struct MetalRenderInterface::State {
     }
 
     void apply_scissor() {
+        const MTLScissorRect rect = scissor_rect();
+        if (encoder)
+            [encoder setScissorRect:rect];
+    }
+
+    // The current scissor in target pixels: the scissor region when enabled,
+    // else the viewport, clamped to the target.
+    MTLScissorRect scissor_rect() const {
         const auto width = target_width;
         const auto height = target_height;
         MTLScissorRect rect{0, 0, width, height};
@@ -367,8 +383,210 @@ struct MetalRenderInterface::State {
         } else {
             clamp_rect(vx, vy, vx + vw, vy + vh);
         }
-        if (encoder)
-            [encoder setScissorRect:rect];
+        return rect;
+    }
+
+    PixelRect filter_window() const {
+        const MTLScissorRect r = scissor_rect();
+        return {int(r.x), int(r.y), int(r.x + r.width), int(r.y + r.height)};
+    }
+
+    // A pass into a post-processing target, loading its contents.
+    id<MTLRenderCommandEncoder> post_pass(id<MTLTexture> target) {
+        end_pass();
+        MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        pass.colorAttachments[0].texture = target;
+        pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+        pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        return [frame.command_buffer renderCommandEncoderWithDescriptor:pass];
+    }
+
+    static MTLScissorRect to_scissor(PixelRect r) {
+        return {NSUInteger(r.x0), NSUInteger(r.y0), NSUInteger(std::max(0, r.x1 - r.x0)),
+                NSUInteger(std::max(0, r.y1 - r.y0))};
+    }
+
+    // Draws `source` (uv_min..uv_max of it) into the destination rectangle
+    // `to`, clipped to `clip`.
+    void draw_rect(id<MTLRenderCommandEncoder> pass, id<MTLRenderPipelineState> pipeline,
+                   id<MTLTexture> source, double x, double y, double w, double h, PixelRect clip,
+                   Rml::Vector2f uv_min = {0.0f, 0.0f}, Rml::Vector2f uv_max = {1.0f, 1.0f}) {
+        [pass setRenderPipelineState:pipeline];
+        [pass setViewport:MTLViewport{x, y, w, h, 0.0, 1.0}];
+        [pass setScissorRect:to_scissor(clip)];
+        const RectUniforms rect{{uv_min.x, uv_min.y}, {uv_max.x, uv_max.y}};
+        [pass setVertexBytes:&rect length:sizeof(rect) atIndex:0];
+        if (source)
+            [pass setFragmentTexture:source atIndex:0];
+        [pass drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    }
+
+    void draw_full(id<MTLRenderCommandEncoder> pass, id<MTLRenderPipelineState> pipeline,
+                   id<MTLTexture> source, PixelRect clip) {
+        draw_rect(pass, pipeline, source, 0.0, 0.0, double(target_width), double(target_height),
+                  clip);
+    }
+
+    // Blurs `image` within `window` by sigma (target pixels), using `temp`.
+    // Large sigmas are blurred at a reduced resolution reached by repeated
+    // half-scaling, then scaled back up.
+    void blur(float sigma, id<MTLTexture> image, id<MTLTexture> temp, PixelRect window) {
+        const Pipelines& p = *frame_pipelines;
+        int level = 0;
+        blur_parameters(sigma, level, sigma);
+        const int w = int(target_width);
+        const int h = int(target_height);
+        const Rml::Vector2f uv_scale{(w % 2) ? 1.0f - 1.0f / float(w) : 1.0f,
+                                     (h % 2) ? 1.0f - 1.0f / float(h) : 1.0f};
+        PixelRect region = window;
+        for (int i = 0; i < level; ++i) {
+            region.x0 = (region.x0 + 1) / 2;
+            region.y0 = (region.y0 + 1) / 2;
+            region.x1 = std::max(region.x1 / 2, region.x0);
+            region.y1 = std::max(region.y1 / 2, region.y0);
+            const bool from_image = i % 2 == 0;
+            id<MTLRenderCommandEncoder> pass = post_pass(from_image ? temp : image);
+            draw_rect(pass, p.post_linear_copy, from_image ? image : temp, 0.0, 0.0, double(w / 2),
+                      double(h / 2), region, {0.0f, 0.0f}, uv_scale);
+            [pass endEncoding];
+        }
+        if (region.empty())
+            return;
+        if (level % 2 == 0) {
+            id<MTLRenderCommandEncoder> pass = post_pass(temp);
+            draw_full(pass, p.post_copy, image, region);
+            [pass endEncoding];
+        }
+        BlurUniforms uniforms{};
+        uniforms.uv_min[0] = (float(region.x0) + 0.5f) / float(w);
+        uniforms.uv_min[1] = (float(region.y0) + 0.5f) / float(h);
+        uniforms.uv_max[0] = (float(region.x1) - 0.5f) / float(w);
+        uniforms.uv_max[1] = (float(region.y1) - 0.5f) / float(h);
+        blur_weights(sigma, uniforms.weights);
+
+        // Vertical, temp into image.
+        id<MTLRenderCommandEncoder> pass = post_pass(image);
+        uniforms.texel_offset[0] = 0.0f;
+        uniforms.texel_offset[1] = 1.0f / float(h);
+        [pass setFragmentBytes:&uniforms length:sizeof(uniforms) atIndex:0];
+        draw_full(pass, p.post_blur, temp, region);
+        [pass endEncoding];
+
+        // Horizontal, image into temp, inside a transparent one-pixel border
+        // so the bilinear scale-up below never picks up stale texels.
+        pass = post_pass(temp);
+        const PixelRect border{std::max(region.x0 - 1, 0), std::max(region.y0 - 1, 0),
+                               std::min(region.x1 + 1, w), std::min(region.y1 + 1, h)};
+        draw_full(pass, p.post_transparent, nil, border);
+        uniforms.texel_offset[0] = 1.0f / float(w);
+        uniforms.texel_offset[1] = 0.0f;
+        [pass setFragmentBytes:&uniforms length:sizeof(uniforms) atIndex:0];
+        draw_full(pass, p.post_blur, image, region);
+        [pass endEncoding];
+
+        // Scale back up into the window: first exactly onto it, then onto the
+        // power-of-two multiple of the region, which is steadier under motion.
+        pass = post_pass(image);
+        const Rml::Vector2f uv_min{float(region.x0) / float(w), float(region.y0) / float(h)};
+        const Rml::Vector2f uv_max{float(region.x1) / float(w), float(region.y1) / float(h)};
+        draw_rect(pass, p.post_linear_copy, temp, window.x0, window.y0, window.x1 - window.x0,
+                  window.y1 - window.y0, window, uv_min, uv_max);
+        const int k = 1 << level;
+        if (region.x0 * k != window.x0 || region.y0 * k != window.y0 ||
+            region.x1 * k != window.x1 || region.y1 * k != window.y1)
+            draw_rect(pass, p.post_linear_copy, temp, region.x0 * k, region.y0 * k,
+                      (region.x1 - region.x0) * k, (region.y1 - region.y0) * k, window, uv_min,
+                      uv_max);
+        [pass endEncoding];
+    }
+
+    // Applies filters to post[current], returning the index now holding the
+    // result. False when a target could not be made.
+    bool apply_filters(Rml::Span<const Rml::CompiledFilterHandle> handles, int& current) {
+        const Pipelines& p = *frame_pipelines;
+        const PixelRect window = filter_window();
+        const double scale = frame.scale;
+        for (const auto handle : handles) {
+            const auto found = filters.find(static_cast<std::uintptr_t>(handle));
+            if (found == filters.end()) {
+                ++unsupported;
+                continue;
+            }
+            const Filter& filter = found->second;
+            const int next = current == 0 ? 1 : 0;
+            id<MTLTexture> source = frame_texture(post[std::size_t(current)]);
+            id<MTLTexture> destination = frame_texture(post[std::size_t(next)]);
+            if (!source || !destination)
+                return false;
+            switch (filter.kind) {
+            case FilterKind::Opacity: {
+                id<MTLRenderCommandEncoder> pass = post_pass(destination);
+                [pass setFragmentBytes:&filter.value length:sizeof(float) atIndex:0];
+                draw_full(pass, p.post_scale, source, window);
+                [pass endEncoding];
+                current = next;
+                break;
+            }
+            case FilterKind::ColourMatrix: {
+                id<MTLRenderCommandEncoder> pass = post_pass(destination);
+                [pass setFragmentBytes:filter.matrix length:sizeof(filter.matrix) atIndex:0];
+                draw_full(pass, p.post_colour_matrix, source, window);
+                [pass endEncoding];
+                current = next;
+                break;
+            }
+            case FilterKind::Blur: {
+                blur(float(filter.value * scale), source, destination, window);
+                break;
+            }
+            case FilterKind::DropShadow: {
+                ShadowUniforms uniforms{};
+                uniforms.uv_min[0] = (float(window.x0) + 0.5f) / float(target_width);
+                uniforms.uv_min[1] = (float(window.y0) + 0.5f) / float(target_height);
+                uniforms.uv_max[0] = (float(window.x1) - 0.5f) / float(target_width);
+                uniforms.uv_max[1] = (float(window.y1) - 0.5f) / float(target_height);
+                uniforms.uv_offset[0] = float(filter.offset.x * scale) / float(target_width);
+                uniforms.uv_offset[1] = float(filter.offset.y * scale) / float(target_height);
+                std::memcpy(uniforms.colour, filter.colour, sizeof(uniforms.colour));
+                id<MTLRenderCommandEncoder> pass = post_pass(destination);
+                [pass setFragmentBytes:&uniforms length:sizeof(uniforms) atIndex:0];
+                draw_full(pass, p.post_drop_shadow, source, window);
+                [pass endEncoding];
+                if (filter.value * scale >= 0.5) {
+                    id<MTLTexture> temp = frame_texture(post[2]);
+                    if (!temp)
+                        return false;
+                    blur(float(filter.value * scale), destination, temp, window);
+                }
+                pass = post_pass(destination);
+                draw_full(pass, p.post_over, source, window);
+                [pass endEncoding];
+                current = next;
+                break;
+            }
+            case FilterKind::MaskImage: {
+                if (!mask_image) {
+                    ++unsupported;
+                    break;
+                }
+                id<MTLRenderCommandEncoder> pass = post_pass(destination);
+                [pass setFragmentTexture:mask_image atIndex:1];
+                draw_full(pass, p.post_mask, source, window);
+                [pass endEncoding];
+                current = next;
+                break;
+            }
+            }
+        }
+        return true;
+    }
+
+    // Copies a whole layer-sized texture into another.
+    void copy_texture(id<MTLTexture> from, id<MTLTexture> to) {
+        end_pass();
+        id<MTLBlitCommandEncoder> blit = [frame.command_buffer blitCommandEncoder];
+        [blit copyFromTexture:from toTexture:to];
+        [blit endEncoding];
     }
 
     void draw_geometry(const Geometry& geometry, Rml::Vector2f translation,
@@ -713,14 +931,24 @@ void MetalRenderInterface::CompositeLayers(Rml::LayerHandle source, Rml::LayerHa
         destination_index < 0 || destination_index >= s.layer_count ||
         source_index == destination_index)
         return;
-    if (!filters.empty())
-        ++s.unsupported; // filters are not drawn yet; the layer composites unfiltered
+    id<MTLTexture> image = s.layer_pool[static_cast<std::size_t>(source_index)];
+    if (!filters.empty()) {
+        // Filter a copy, so the source layer is left as it was drawn.
+        id<MTLTexture> primary = s.frame_texture(s.post[0]);
+        if (!primary)
+            return;
+        s.copy_texture(image, primary);
+        int current = 0;
+        if (!s.apply_filters(filters, current))
+            return;
+        image = s.post[static_cast<std::size_t>(current)];
+    }
     if (!s.open_pass(destination_index, false))
         return;
     s.apply_clip_state();
     s.draw_fullscreen(blend_mode == Rml::BlendMode::Replace ? s.frame_pipelines->replace
                                                             : s.frame_pipelines->blend,
-                      s.layer_pool[static_cast<std::size_t>(source_index)]);
+                      image);
     if (destination_index != s.layer_count - 1)
         s.top_pass();
 }
@@ -780,20 +1008,75 @@ Rml::TextureHandle MetalRenderInterface::SaveLayerAsTexture() {
 }
 
 Rml::CompiledFilterHandle MetalRenderInterface::SaveLayerAsMaskImage() {
-    ++state_->unsupported;
-    return 0;
+    auto& s = *state_;
+    if (!s.frame_pipelines || s.layer_count == 0)
+        return 0;
+    id<MTLTexture> mask = s.frame_texture(s.mask_image);
+    if (!mask)
+        return 0;
+    s.copy_texture(s.layer_pool[static_cast<std::size_t>(s.layer_count - 1)], mask);
+    s.top_pass();
+    Filter filter;
+    filter.kind = FilterKind::MaskImage;
+    const auto handle = s.next_handle++;
+    s.filters.emplace(handle, filter);
+    return static_cast<Rml::CompiledFilterHandle>(handle);
 }
 
-Rml::CompiledFilterHandle MetalRenderInterface::CompileFilter(const Rml::String&,
-                                                              const Rml::Dictionary&) {
-    ++state_->unsupported;
-    return 0;
+Rml::CompiledFilterHandle MetalRenderInterface::CompileFilter(const Rml::String& name,
+                                                              const Rml::Dictionary& parameters) {
+    auto& s = *state_;
+    Filter filter;
+    if (!compile_filter(name, parameters, filter)) {
+        Rml::Log::Message(Rml::Log::LT_WARNING, "MetalRenderInterface: unsupported filter '%s'",
+                          name.c_str());
+        ++s.unsupported;
+        return 0;
+    }
+    const auto handle = s.next_handle++;
+    s.filters.emplace(handle, filter);
+    return static_cast<Rml::CompiledFilterHandle>(handle);
 }
 
-Rml::CompiledShaderHandle MetalRenderInterface::CompileShader(const Rml::String&,
-                                                              const Rml::Dictionary&) {
-    ++state_->unsupported;
-    return 0;
+void MetalRenderInterface::ReleaseFilter(Rml::CompiledFilterHandle filter) {
+    state_->filters.erase(static_cast<std::uintptr_t>(filter));
+}
+
+Rml::CompiledShaderHandle MetalRenderInterface::CompileShader(const Rml::String& name,
+                                                              const Rml::Dictionary& parameters) {
+    auto& s = *state_;
+    GradientUniforms g{};
+    if (!compile_gradient(name, parameters, g)) {
+        // Includes the "shader" decorator's application-defined shaders.
+        Rml::Log::Message(Rml::Log::LT_WARNING, "MetalRenderInterface: unsupported shader '%s'",
+                          name.c_str());
+        ++s.unsupported;
+        return 0;
+    }
+    const auto handle = s.next_handle++;
+    s.shaders.emplace(handle, g);
+    return static_cast<Rml::CompiledShaderHandle>(handle);
+}
+
+void MetalRenderInterface::RenderShader(Rml::CompiledShaderHandle shader,
+                                        Rml::CompiledGeometryHandle geometry,
+                                        Rml::Vector2f translation, Rml::TextureHandle) {
+    auto& s = *state_;
+    if (!s.frame_pipelines || !s.top_pass())
+        return;
+    const auto found_shader = s.shaders.find(static_cast<std::uintptr_t>(shader));
+    const auto found_geometry = s.geometries.find(static_cast<std::uintptr_t>(geometry));
+    if (found_shader == s.shaders.end() || found_geometry == s.geometries.end())
+        return;
+    s.apply_clip_state();
+    [s.encoder setFragmentBytes:&found_shader->second
+                         length:sizeof(GradientUniforms)
+                        atIndex:0];
+    s.draw_geometry(found_geometry->second, translation, s.frame_pipelines->gradient, nil);
+}
+
+void MetalRenderInterface::ReleaseShader(Rml::CompiledShaderHandle shader) {
+    state_->shaders.erase(static_cast<std::uintptr_t>(shader));
 }
 
 } // namespace vellum::rmlui
