@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <exception>
 #include <memory>
@@ -44,9 +45,67 @@ constexpr std::uint32_t kDefaultSettleTasks = 4096U;
 
 thread_local std::string last_error;
 
-vellum_host_status fail(vellum_host_status status, std::string message) {
-    last_error = std::move(message);
+vellum_host_status fail(vellum_host_status status, std::string message) noexcept {
+    try {
+        last_error = std::move(message);
+    } catch (...) {
+        last_error.clear();
+    }
     return status;
+}
+
+template <typename Struct>
+struct InputLayout;
+
+template <>
+struct InputLayout<vellum_host_surface_config> {
+    static constexpr std::size_t v1 = offsetof(vellum_host_surface_config, font_directory) +
+                                      sizeof(const char*);
+};
+
+template <>
+struct InputLayout<vellum_host_app_config> {
+    static constexpr std::size_t v1 =
+        offsetof(vellum_host_app_config, bundle_length) + sizeof(std::size_t);
+};
+
+template <>
+struct InputLayout<vellum_host_pointer_event> {
+    static constexpr std::size_t v1 = offsetof(vellum_host_pointer_event, y) + sizeof(float);
+};
+
+template <>
+struct InputLayout<vellum_host_key_event> {
+    static constexpr std::size_t v1 = offsetof(vellum_host_key_event, key) + sizeof(const char*);
+};
+
+static_assert(InputLayout<vellum_host_surface_config>::v1 == 40);
+static_assert(InputLayout<vellum_host_app_config>::v1 == 24);
+static_assert(InputLayout<vellum_host_pointer_event>::v1 == 24);
+static_assert(InputLayout<vellum_host_key_event>::v1 == 16);
+static_assert(InputLayout<vellum_host_surface_config>::v1 == sizeof(vellum_host_surface_config));
+static_assert(InputLayout<vellum_host_app_config>::v1 == sizeof(vellum_host_app_config));
+static_assert(InputLayout<vellum_host_pointer_event>::v1 == sizeof(vellum_host_pointer_event));
+static_assert(InputLayout<vellum_host_key_event>::v1 == sizeof(vellum_host_key_event));
+
+template <typename Struct>
+vellum_host_status require_input(const Struct* value, const char* name) {
+    if (value == nullptr) {
+        return fail(VELLUM_HOST_ERROR_INVALID_ARGUMENT, std::string(name) + " is null");
+    }
+    constexpr std::size_t v1 = InputLayout<Struct>::v1;
+    if (value->struct_size < v1) {
+        return fail(VELLUM_HOST_ERROR_VERSION,
+            std::string(name) + " struct_size is smaller than ABI v1 requires");
+    }
+    const auto* bytes = reinterpret_cast<const unsigned char*>(value);
+    for (std::size_t offset = v1; offset < value->struct_size; ++offset) {
+        if (bytes[offset] != 0) {
+            return fail(VELLUM_HOST_ERROR_VERSION,
+                std::string(name) + " sets fields newer than ABI v1");
+        }
+    }
+    return VELLUM_HOST_OK;
 }
 
 template <typename Body>
@@ -319,7 +378,7 @@ vellum_host_status vellum_host_surface_create(
             return fail(VELLUM_HOST_ERROR_INVALID_ARGUMENT, "surface output is null");
         }
         *surface = nullptr;
-        if (const auto status = require_sized(config, "config")) return status;
+        if (const auto status = require_input(config, "config")) return status;
         if (config->width == 0 || config->height == 0 || !valid_scale(config->scale)) {
             return fail(VELLUM_HOST_ERROR_INVALID_ARGUMENT,
                 "surface width, height and scale must be positive");
@@ -356,8 +415,13 @@ vellum_host_status vellum_host_surface_create(
     });
 }
 
-void vellum_host_surface_destroy(vellum_host_surface* surface) {
-    delete surface;
+vellum_host_status vellum_host_surface_destroy(vellum_host_surface* surface) {
+    return guarded([&] {
+        if (surface == nullptr) return VELLUM_HOST_OK;
+        if (const auto status = require_owner(surface, "surface")) return status;
+        delete surface;
+        return VELLUM_HOST_OK;
+    });
 }
 
 vellum_host_status vellum_host_surface_info_get(
@@ -437,7 +501,7 @@ vellum_host_status vellum_host_app_create(
             return fail(VELLUM_HOST_ERROR_INVALID_ARGUMENT, "app output is null");
         }
         *app = nullptr;
-        if (const auto status = require_sized(config, "config")) return status;
+        if (const auto status = require_input(config, "config")) return status;
         if (config->bundle == nullptr || config->bundle_length == 0) {
             return fail(VELLUM_HOST_ERROR_INVALID_ARGUMENT, "bundle is empty");
         }
@@ -463,8 +527,13 @@ vellum_host_status vellum_host_app_create(
     });
 }
 
-void vellum_host_app_destroy(vellum_host_app* app) {
-    delete app;
+vellum_host_status vellum_host_app_destroy(vellum_host_app* app) {
+    return guarded([&] {
+        if (app == nullptr) return VELLUM_HOST_OK;
+        if (const auto status = require_owner(app, "app")) return status;
+        delete app;
+        return VELLUM_HOST_OK;
+    });
 }
 
 vellum_host_status vellum_host_app_viewport(
@@ -522,12 +591,15 @@ vellum_host_status vellum_host_app_pointer(
     vellum_host_app* app, const vellum_host_pointer_event* event, uint32_t* outcome) {
     return guarded([&] {
         if (const auto status = require_owner(app, "app")) return status;
-        if (const auto status = require_sized(event, "event")) return status;
+        if (const auto status = require_input(event, "event")) return status;
         if (outcome != nullptr) *outcome = VELLUM_HOST_EVENT_IGNORED;
         if (!std::isfinite(event->x) || !std::isfinite(event->y)) {
             return fail(VELLUM_HOST_ERROR_INVALID_ARGUMENT, "pointer position is not finite");
         }
-        if (event->phase != VELLUM_HOST_POINTER_DOWN) return VELLUM_HOST_OK;
+        if (event->phase != VELLUM_HOST_POINTER_DOWN ||
+            event->button != VELLUM_HOST_POINTER_BUTTON_PRIMARY) {
+            return VELLUM_HOST_OK;
+        }
         const auto& inputs = app->rendered.text_inputs;
         const auto input = std::find_if(inputs.rbegin(), inputs.rend(),
             [event](const TextInputControl& item) {
@@ -579,7 +651,7 @@ vellum_host_status vellum_host_app_key(
     vellum_host_app* app, const vellum_host_key_event* event, uint32_t* outcome) {
     return guarded([&] {
         if (const auto status = require_owner(app, "app")) return status;
-        if (const auto status = require_sized(event, "event")) return status;
+        if (const auto status = require_input(event, "event")) return status;
         if (outcome != nullptr) *outcome = VELLUM_HOST_EVENT_IGNORED;
         if (event->key == nullptr) {
             return fail(VELLUM_HOST_ERROR_INVALID_ARGUMENT, "key is null");

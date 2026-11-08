@@ -153,7 +153,7 @@ public final class VellumApplication {
     }
 
     isolated deinit {
-        vellum_host_app_destroy(handle)
+        _ = vellum_host_app_destroy(handle)
     }
 
     public var viewport: CGSize {
@@ -297,7 +297,7 @@ public final class VellumSurface {
     }
 
     isolated deinit {
-        vellum_host_surface_destroy(handle)
+        _ = vellum_host_surface_destroy(handle)
     }
 
     public var info: SurfaceInfo {

@@ -17,7 +17,8 @@ SKIP = 77
 PREFIX_VARIABLE = "VELLUM_SWIFT_PROOF_SDK_PREFIX"
 PKG_CONFIG_FILE = Path("lib/pkgconfig/vellum-host-c.pc")
 PACKAGE_FILES = re.compile(
-    r"\A(?:Package\.swift|README\.md|CMakeLists\.txt|Fixtures/[\w.-]+\.js|"
+    r"\A(?:Package\.swift|README\.md|CMakeLists\.txt|InstallSdkPrefix\.cmake|"
+    r"Fixtures/[\w.-]+\.js|"
     r"Sources/CVellumHostC/(?:module\.modulemap|shim\.h)|Sources/[\w]+/[\w]+\.swift|"
     r"scripts/[\w]+\.py)\Z"
 )
@@ -41,28 +42,50 @@ class Skip(Exception):
     pass
 
 
-def locate_sdk(prefix_text: str) -> Path:
+def locate_sdk(prefix_text: str, required: bool = False) -> Path:
+    unavailable = ProofError if required else Skip
     if not prefix_text:
-        raise Skip(
+        raise unavailable(
             f"no installed Vellum SDK prefix; set -D{PREFIX_VARIABLE}=<prefix> or "
             f"{PREFIX_VARIABLE} to a prefix made by scripts/build_sdk_artifact.py and "
             "scripts/install.sh"
         )
     prefix = Path(prefix_text).expanduser()
     if not prefix.is_dir():
-        raise Skip(f"installed Vellum SDK prefix is not available: {prefix}")
+        raise unavailable(f"installed Vellum SDK prefix is not available: {prefix}")
     for candidate in (prefix, prefix / "sdk", prefix / "lib" / "vellum" / "sdk"):
         if (candidate / PKG_CONFIG_FILE).is_file():
             return candidate.resolve()
     raise ProofError(f"installed SDK at {prefix} does not ship {PKG_CONFIG_FILE}")
 
 
-def check_package(package: Path) -> list[str]:
-    problems: list[str] = []
+def package_files(package: Path) -> list[str]:
+    listed = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "."],
+        cwd=package, capture_output=True, text=True, check=False,
+    )
+    if listed.returncode == 0:
+        tracked = sorted(
+            name for name in listed.stdout.split("\0")
+            if name and Path(name).name != ".DS_Store"
+        )
+        if tracked:
+            return tracked
+    names: list[str] = []
     for path in sorted(package.rglob("*")):
         relative = path.relative_to(package).as_posix()
-        if not path.is_file() or relative.startswith(".build/") or "/__pycache__/" in f"/{relative}":
+        parts = relative.split("/")
+        if not path.is_file() or parts[0] in {".build", ".swiftpm"} or "__pycache__" in parts:
             continue
+        if path.name == ".DS_Store":
+            continue
+        names.append(relative)
+    return names
+
+
+def check_package(package: Path) -> list[str]:
+    problems: list[str] = []
+    for relative in package_files(package):
         if not PACKAGE_FILES.match(relative):
             problems.append(f"unexpected file in the Swift package: {relative}")
     shim = package / "Sources/CVellumHostC/shim.h"
@@ -111,13 +134,17 @@ def run(command: list[str], environment: dict[str, str], cwd: Path | None = None
     return result.stdout + result.stderr
 
 
-def prove(sdk: Path, package: Path, work: Path, bundle: Path) -> dict[str, object]:
+def prove(sdk: Path, package: Path, work: Path, bundle: Path,
+          require_pin: bool = False) -> dict[str, object]:
     swift = shutil.which("swift")
     if swift is None:
         raise Skip("the swift toolchain is not on PATH")
     swift_version = tool_version([swift, "--version"])
     xcode_version = tool_version(["xcodebuild", "-version"])
-    problems = pinned_toolchain_problems(xcode_version, swift_version) + check_package(package)
+    pin_problems = pinned_toolchain_problems(xcode_version, swift_version)
+    if pin_problems and not require_pin:
+        raise Skip("; ".join(pin_problems) + " (pass --require-pinned-toolchain to fail instead)")
+    problems = pin_problems + check_package(package)
     if problems:
         raise ProofError("\n".join(problems))
     source_root = package.resolve().parents[1]
@@ -128,7 +155,8 @@ def prove(sdk: Path, package: Path, work: Path, bundle: Path) -> dict[str, objec
     shutil.copytree(
         package, staged,
         ignore=shutil.ignore_patterns(
-            ".build", "__pycache__", "scripts", "Fixtures", "CMakeLists.txt"),
+            ".build", ".swiftpm", ".DS_Store", "__pycache__", "scripts", "Fixtures",
+            "CMakeLists.txt", "InstallSdkPrefix.cmake"),
     )
     scratch = work / "scratch"
     environment = sterile_environment(sdk)
@@ -173,6 +201,7 @@ def prove(sdk: Path, package: Path, work: Path, bundle: Path) -> dict[str, objec
         "swift_version": swift_version,
         "xcode_version": xcode_version,
         "pinned_toolchain": {"xcode": " ".join(PINNED_XCODE), "swift": PINNED_SWIFT},
+        "pinned_toolchain_matched": not pin_problems,
         "extra_build_flags": rpath,
         "pkg_config_path": environment["PKG_CONFIG_PATH"],
         "clean_build_seconds": round(build_seconds, 3),
@@ -190,12 +219,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--work", type=Path, required=True)
     parser.add_argument("--bundle", type=Path)
+    parser.add_argument("--require-prefix", action="store_true")
+    parser.add_argument("--require-pinned-toolchain", action="store_true")
     args = parser.parse_args(argv)
     package = args.package.resolve()
     bundle = (args.bundle or package / "Fixtures" / "host-proof-app.js").resolve()
     try:
-        sdk = locate_sdk(args.sdk_prefix or os.environ.get(PREFIX_VARIABLE, ""))
-        evidence = prove(sdk, package, args.work.resolve(), bundle)
+        sdk = locate_sdk(args.sdk_prefix or os.environ.get(PREFIX_VARIABLE, ""),
+                         required=args.require_prefix)
+        evidence = prove(sdk, package, args.work.resolve(), bundle,
+                         require_pin=args.require_pinned_toolchain)
     except Skip as reason:
         print(f"SKIP vellum.swift-host-proof: {reason}")
         return SKIP

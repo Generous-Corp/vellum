@@ -10,6 +10,7 @@ public final class VellumHostView: NSView {
     public private(set) var lastError: VellumHostError?
     private let metalLayer = CAMetalLayer()
     private var pumpTimer: Timer?
+    private var accessibilityElements: [String: NSAccessibilityElement] = [:]
 
     public init(application: VellumApplication) {
         self.application = application
@@ -61,12 +62,26 @@ public final class VellumHostView: NSView {
 
     public override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        guard let surface, newSize.width >= 1, newSize.height >= 1 else { return }
-        let scale = Float(window?.backingScaleFactor ?? 1)
-        metalLayer.drawableSize = CGSize(width: newSize.width * CGFloat(scale),
-                                         height: newSize.height * CGFloat(scale))
+        resizeSurface(to: newSize)
+    }
+
+    public override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        metalLayer.contentsScale = window?.backingScaleFactor ?? metalLayer.contentsScale
+        resizeSurface(to: bounds.size)
+    }
+
+    public var backingScale: Float {
+        Float(window?.backingScaleFactor ?? metalLayer.contentsScale)
+    }
+
+    private func resizeSurface(to size: NSSize) {
+        guard let surface, size.width >= 1, size.height >= 1 else { return }
+        let scale = backingScale
+        metalLayer.drawableSize = CGSize(width: size.width * CGFloat(scale),
+                                         height: size.height * CGFloat(scale))
         perform {
-            try surface.resize(width: UInt32(newSize.width), height: UInt32(newSize.height),
+            try surface.resize(width: UInt32(size.width), height: UInt32(size.height),
                                scale: scale)
             try surface.render(application)
         }
@@ -110,8 +125,11 @@ public final class VellumHostView: NSView {
 
     public override func accessibilityChildren() -> [Any]? {
         guard let nodes = try? application.accessibilityNodes() else { return [] }
+        let live = Set(nodes.map(\.nodeID))
+        accessibilityElements = accessibilityElements.filter { live.contains($0.key) }
         return nodes.map { node in
-            let element = NSAccessibilityElement()
+            let element = accessibilityElements[node.nodeID] ?? NSAccessibilityElement()
+            accessibilityElements[node.nodeID] = element
             element.setAccessibilityParent(self)
             element.setAccessibilityRole(role(for: node.role))
             element.setAccessibilityLabel(node.label)

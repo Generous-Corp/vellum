@@ -53,6 +53,14 @@ if(VELLUM_BUILD_TESTS)
             "${PROJECT_SOURCE_DIR}/packages/vellum-swift/Fixtures/host-proof-app.js")
     set_tests_properties(vellum.host-c PROPERTIES ENVIRONMENT "MTL_DEBUG_LAYER=0")
 
+    add_test(NAME vellum.host-c-dawn-topology
+        COMMAND "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/graphics/tests/test_dawn_provider_topology.py"
+            "$<TARGET_FILE:vellum-host-c-test>"
+            "$<TARGET_FILE:vellum-gpu>"
+            "$<TARGET_FILE:vellum-skia-dawn-provider>"
+            "$<TARGET_FILE:vellum-host-c>")
+
     add_test(NAME vellum.host-c-exports
         COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_exports.py"

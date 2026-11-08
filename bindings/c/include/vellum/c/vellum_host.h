@@ -42,9 +42,9 @@ typedef struct vellum_host_surface_config {
     uint32_t width;
     uint32_t height;
     float scale;
+    uint32_t vsync;
     void* metal_layer;
     const char* font_directory;
-    uint32_t vsync;
 } vellum_host_surface_config;
 
 typedef struct vellum_host_surface_info {
@@ -79,9 +79,9 @@ typedef struct vellum_host_content_stats {
 
 typedef struct vellum_host_app_config {
     uint32_t struct_size;
+    uint32_t settle_max_tasks;
     const char* bundle;
     size_t bundle_length;
-    uint32_t settle_max_tasks;
 } vellum_host_app_config;
 
 typedef struct vellum_host_pump_result {
@@ -95,6 +95,8 @@ typedef struct vellum_host_pump_result {
 #define VELLUM_HOST_POINTER_UP 2u
 #define VELLUM_HOST_POINTER_MOVE 3u
 #define VELLUM_HOST_POINTER_CANCEL 4u
+
+#define VELLUM_HOST_POINTER_BUTTON_PRIMARY 0u
 
 #define VELLUM_HOST_POINTER_MOUSE 1u
 #define VELLUM_HOST_POINTER_TOUCH 2u
@@ -111,8 +113,8 @@ typedef struct vellum_host_pointer_event {
 
 typedef struct vellum_host_key_event {
     uint32_t struct_size;
-    const char* key;
     uint32_t repeat;
+    const char* key;
 } vellum_host_key_event;
 
 #define VELLUM_HOST_EVENT_IGNORED 0u
@@ -159,7 +161,7 @@ VELLUM_HOST_API vellum_host_status vellum_host_content_floor(
 
 VELLUM_HOST_API vellum_host_status vellum_host_surface_create(
     const vellum_host_surface_config* config, vellum_host_surface** surface);
-VELLUM_HOST_API void vellum_host_surface_destroy(vellum_host_surface* surface);
+VELLUM_HOST_API vellum_host_status vellum_host_surface_destroy(vellum_host_surface* surface);
 VELLUM_HOST_API vellum_host_status vellum_host_surface_info_get(
     const vellum_host_surface* surface, vellum_host_surface_info* info);
 VELLUM_HOST_API vellum_host_status vellum_host_surface_resize(
@@ -171,7 +173,7 @@ VELLUM_HOST_API vellum_host_status vellum_host_surface_capture_rgba(
 
 VELLUM_HOST_API vellum_host_status vellum_host_app_create(
     const vellum_host_app_config* config, vellum_host_app** app);
-VELLUM_HOST_API void vellum_host_app_destroy(vellum_host_app* app);
+VELLUM_HOST_API vellum_host_status vellum_host_app_destroy(vellum_host_app* app);
 VELLUM_HOST_API vellum_host_status vellum_host_app_viewport(
     const vellum_host_app* app, float* width, float* height);
 VELLUM_HOST_API vellum_host_status vellum_host_app_pump(

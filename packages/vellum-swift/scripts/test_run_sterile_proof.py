@@ -87,6 +87,41 @@ class RunnerTest(unittest.TestCase):
             xcode, "Apple Swift version 6.4.1 (swiftlang-6.4.1)")), 1)
         self.assertEqual(len(runner.pinned_toolchain_problems("", "")), 2)
 
+    def test_missing_prefix_fails_when_required(self) -> None:
+        code, _, err = self.run_main("--sdk-prefix", "", "--require-prefix")
+        self.assertEqual(code, 1)
+        self.assertIn("no installed Vellum SDK prefix", err)
+        code, _, err = self.run_main(
+            "--sdk-prefix", "/nonexistent/vellum-sdk-prefix", "--require-prefix")
+        self.assertEqual(code, 1)
+
+    def test_toolchain_mismatch_skips_unless_the_pin_is_required(self) -> None:
+        with tempfile.TemporaryDirectory() as text:
+            sdk = Path(text)
+            (sdk / "lib" / "pkgconfig").mkdir(parents=True)
+            (sdk / runner.PKG_CONFIG_FILE).write_text("", encoding="utf-8")
+            saved = runner.PINNED_SWIFT
+            runner.PINNED_SWIFT = "0.0.0"
+            try:
+                code, out, _ = self.run_main("--sdk-prefix", str(sdk))
+                self.assertEqual(code, runner.SKIP)
+                self.assertIn("Swift is not the pinned 0.0.0", out)
+                code, _, err = self.run_main(
+                    "--sdk-prefix", str(sdk), "--require-pinned-toolchain")
+                self.assertEqual(code, 1)
+                self.assertIn("Swift is not the pinned 0.0.0", err)
+            finally:
+                runner.PINNED_SWIFT = saved
+
+    def test_finder_and_swiftpm_metadata_are_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as text:
+            package = Path(text) / "package"
+            runner.shutil.copytree(PACKAGE, package, ignore=runner.shutil.ignore_patterns(".build"))
+            (package / ".DS_Store").write_bytes(b"\0")
+            (package / ".swiftpm" / "xcode").mkdir(parents=True)
+            (package / ".swiftpm" / "xcode" / "state.json").write_text("{}", encoding="utf-8")
+            self.assertEqual(runner.check_package(package), [])
+
 
 if __name__ == "__main__":
     unittest.main()

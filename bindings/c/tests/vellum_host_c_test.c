@@ -111,15 +111,74 @@ static int captures_repeat(vellum_host_surface* surface, const vellum_host_app* 
 
 struct thread_probe {
     vellum_host_app* app;
-    vellum_host_status status;
+    vellum_host_surface* surface;
+    vellum_host_status viewport;
+    vellum_host_status app_destroy;
+    vellum_host_status surface_destroy;
 };
 
 static void* probe_from_other_thread(void* context) {
     struct thread_probe* probe = context;
     float width = 0.0F;
     float height = 0.0F;
-    probe->status = vellum_host_app_viewport(probe->app, &width, &height);
+    probe->viewport = vellum_host_app_viewport(probe->app, &width, &height);
+    probe->app_destroy = vellum_host_app_destroy(probe->app);
+    probe->surface_destroy = vellum_host_surface_destroy(probe->surface);
     return NULL;
+}
+
+struct future_pointer_event {
+    vellum_host_pointer_event v1;
+    uint32_t newer_field;
+};
+
+struct future_app_config {
+    vellum_host_app_config v1;
+    uint64_t newer_field;
+};
+
+static void check_forward_compatibility(vellum_host_app* app,
+                                        const vellum_host_accessibility_node* button) {
+    struct future_pointer_event future;
+    memset(&future, 0, sizeof future);
+    future.v1.struct_size = sizeof future;
+    future.v1.phase = VELLUM_HOST_POINTER_MOVE;
+    future.v1.device = VELLUM_HOST_POINTER_MOUSE;
+    future.v1.x = button->bounds.x + 1.0F;
+    future.v1.y = button->bounds.y + 1.0F;
+    uint32_t outcome = 99U;
+    CHECK(vellum_host_app_pointer(app, &future.v1, &outcome) == VELLUM_HOST_OK);
+    CHECK(outcome == VELLUM_HOST_EVENT_IGNORED);
+    future.newer_field = 1U;
+    CHECK(vellum_host_app_pointer(app, &future.v1, &outcome) == VELLUM_HOST_ERROR_VERSION);
+    CHECK(strlen(vellum_host_last_error()) > 0);
+
+    struct future_app_config config;
+    memset(&config, 0, sizeof config);
+    config.v1.struct_size = sizeof config;
+    config.v1.bundle = "x";
+    config.v1.bundle_length = 1;
+    config.newer_field = 7U;
+    vellum_host_app* created = (vellum_host_app*)1;
+    CHECK(vellum_host_app_create(&config.v1, &created) == VELLUM_HOST_ERROR_VERSION);
+    CHECK(created == NULL);
+
+    vellum_host_key_event key;
+    memset(&key, 0, sizeof key);
+    key.struct_size = sizeof key - 1U;
+    key.key = "Enter";
+    CHECK(vellum_host_app_key(app, &key, &outcome) == VELLUM_HOST_ERROR_VERSION);
+
+    vellum_host_pointer_event secondary;
+    memset(&secondary, 0, sizeof secondary);
+    secondary.struct_size = sizeof secondary;
+    secondary.phase = VELLUM_HOST_POINTER_DOWN;
+    secondary.device = VELLUM_HOST_POINTER_MOUSE;
+    secondary.button = 1U;
+    secondary.x = button->bounds.x + button->bounds.width * 0.5F;
+    secondary.y = button->bounds.y + button->bounds.height * 0.5F;
+    CHECK(vellum_host_app_pointer(app, &secondary, &outcome) == VELLUM_HOST_OK);
+    CHECK(outcome == VELLUM_HOST_EVENT_IGNORED);
 }
 
 static void check_contract_errors(void) {
@@ -163,8 +222,8 @@ static void check_contract_errors(void) {
     CHECK(vellum_host_content_floor(blank, sizeof blank - 1, 16, 16, &stats) ==
           VELLUM_HOST_ERROR_INVALID_ARGUMENT);
 
-    vellum_host_app_destroy(NULL);
-    vellum_host_surface_destroy(NULL);
+    CHECK(vellum_host_app_destroy(NULL) == VELLUM_HOST_OK);
+    CHECK(vellum_host_surface_destroy(NULL) == VELLUM_HOST_OK);
 }
 
 int main(int argc, char** argv) {
@@ -188,12 +247,6 @@ int main(int argc, char** argv) {
     float height = 0.0F;
     REQUIRE(vellum_host_app_viewport(app, &width, &height) == VELLUM_HOST_OK);
     CHECK(width == 360.0F && height == 240.0F);
-
-    struct thread_probe probe = {app, VELLUM_HOST_OK};
-    pthread_t thread;
-    REQUIRE(pthread_create(&thread, NULL, probe_from_other_thread, &probe) == 0);
-    pthread_join(thread, NULL);
-    CHECK(probe.status == VELLUM_HOST_ERROR_WRONG_THREAD);
 
     vellum_host_accessibility_node button;
     REQUIRE(find_node(app, "proof-increment", &button));
@@ -225,6 +278,16 @@ int main(int argc, char** argv) {
     memset(&info, 0, sizeof info);
     info.struct_size = sizeof info;
     REQUIRE(vellum_host_surface_info_get(surface, &info) == VELLUM_HOST_OK);
+
+    struct thread_probe probe = {app, surface, VELLUM_HOST_OK, VELLUM_HOST_OK, VELLUM_HOST_OK};
+    pthread_t thread;
+    REQUIRE(pthread_create(&thread, NULL, probe_from_other_thread, &probe) == 0);
+    pthread_join(thread, NULL);
+    CHECK(probe.viewport == VELLUM_HOST_ERROR_WRONG_THREAD);
+    CHECK(probe.app_destroy == VELLUM_HOST_ERROR_WRONG_THREAD);
+    CHECK(probe.surface_destroy == VELLUM_HOST_ERROR_WRONG_THREAD);
+    CHECK(vellum_host_app_viewport(app, &width, &height) == VELLUM_HOST_OK);
+    CHECK(vellum_host_surface_info_get(surface, &info) == VELLUM_HOST_OK);
     CHECK(info.available == 1U && info.native_surface == 0U && info.fallback == 0U);
     CHECK(strcmp(info.renderer, "Skia Graphite") == 0);
     CHECK(strcmp(info.backend, "Metal") == 0);
@@ -232,6 +295,8 @@ int main(int argc, char** argv) {
     REQUIRE(vellum_host_surface_render(surface, app) == VELLUM_HOST_OK);
     CHECK(capture_passes(surface, 360U, 240U));
     CHECK(captures_repeat(surface, app));
+
+    check_forward_compatibility(app, &button);
 
     vellum_host_pointer_event press;
     memset(&press, 0, sizeof press);
@@ -302,8 +367,8 @@ int main(int argc, char** argv) {
     CHECK(vellum_host_surface_resize(surface, 0U, 240U, 1.0F) ==
           VELLUM_HOST_ERROR_INVALID_ARGUMENT);
 
-    vellum_host_surface_destroy(surface);
-    vellum_host_app_destroy(app);
+    CHECK(vellum_host_surface_destroy(surface) == VELLUM_HOST_OK);
+    CHECK(vellum_host_app_destroy(app) == VELLUM_HOST_OK);
 
     if (failures != 0) {
         fprintf(stderr, "vellum-host-c-test: %d failure(s)\n", failures);

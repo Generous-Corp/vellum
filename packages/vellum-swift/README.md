@@ -29,11 +29,26 @@ PKG_CONFIG_PATH="$sdk/lib/pkgconfig" swift build -c release \
 
 ## Test
 
-`vellum.swift-host-proof` runs `scripts/run_sterile_proof.py`. It requires the
-pinned toolchain, Xcode 27.2 (27B52) with Swift 6.4.2, and fails on any other. It stages a
-copy of the package in its work directory, builds it against the SDK named by
-`VELLUM_SWIFT_PROOF_SDK_PREFIX` (a CMake cache variable or an environment
-variable), checks that the build and the binary reference only the installed
-prefix, runs the proof and writes `swift-host-proof-evidence.json` in its work
-directory. Without a prefix the test is skipped with a message.
-`vellum.swift-host-proof-unit` covers the runner's skip and sterility rules.
+`vellum.swift-host-proof` runs `scripts/run_sterile_proof.py`. By default a
+`vellum.swift-host-proof-install` fixture first installs the build tree into
+`<build>/swift-host-proof/prefix` with `cmake --install`, the way the CMake
+install consumers do. `VELLUM_SWIFT_PROOF_SDK_PREFIX` (a CMake cache variable or
+an environment variable) points the proof at another installed SDK instead, such
+as one made by `scripts/build_sdk_artifact.py` and `scripts/install.sh`. The
+runner stages a copy of the package, builds it against that prefix, checks that
+the build and the binary reference only the installed prefix, runs the proof and
+writes `swift-host-proof-evidence.json` in its work directory.
+
+The proof renders and captures offscreen. When a window-server session exists it
+also hosts `VellumHostView` in a borderless window and `VellumView` in an
+`NSHostingView`, and drives a click, a backing-scale change, a resize and the
+accessibility children through them.
+
+- With `VELLUM_REQUIRE_GPU=ON` a missing prefix fails the test; otherwise it
+  skips with a message.
+- The toolchain is pinned to Xcode 27.2 (27B52) with Swift 6.4.2. Another
+  toolchain skips the test, recording the versions it found, unless
+  `VELLUM_SWIFT_PROOF_REQUIRE_PINNED_TOOLCHAIN=ON` makes it fail.
+
+`vellum.swift-host-proof-unit` covers the runner's skip, failure and sterility
+rules.
