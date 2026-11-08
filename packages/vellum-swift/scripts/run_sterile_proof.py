@@ -29,6 +29,10 @@ ISOLATED_VARIABLES = (
 )
 
 
+PINNED_XCODE = ("27.2", "27B52")
+PINNED_SWIFT = "6.4.2"
+
+
 class ProofError(Exception):
     pass
 
@@ -72,6 +76,17 @@ def tool_version(command: list[str]) -> str:
     return " ".join((result.stdout or result.stderr).split())
 
 
+def pinned_toolchain_problems(xcode: str, swift: str) -> list[str]:
+    problems: list[str] = []
+    match = re.search(r"Xcode (\S+) Build version (\S+)", xcode)
+    if match is None or (match.group(1), match.group(2)) != PINNED_XCODE:
+        problems.append(f"Xcode is not the pinned {PINNED_XCODE[0]} ({PINNED_XCODE[1]}): {xcode}")
+    match = re.search(r"Apple Swift version (\S+)", swift)
+    if match is None or match.group(1) != PINNED_SWIFT:
+        problems.append(f"Swift is not the pinned {PINNED_SWIFT}: {swift}")
+    return problems
+
+
 def sterile_environment(sdk: Path) -> dict[str, str]:
     environment = {key: value for key, value in os.environ.items() if key not in ISOLATED_VARIABLES}
     environment["PKG_CONFIG_PATH"] = str(sdk / PKG_CONFIG_FILE.parent)
@@ -100,7 +115,9 @@ def prove(sdk: Path, package: Path, work: Path, bundle: Path) -> dict[str, objec
     swift = shutil.which("swift")
     if swift is None:
         raise Skip("the swift toolchain is not on PATH")
-    problems = check_package(package)
+    swift_version = tool_version([swift, "--version"])
+    xcode_version = tool_version(["xcodebuild", "-version"])
+    problems = pinned_toolchain_problems(xcode_version, swift_version) + check_package(package)
     if problems:
         raise ProofError("\n".join(problems))
     source_root = package.resolve().parents[1]
@@ -152,8 +169,9 @@ def prove(sdk: Path, package: Path, work: Path, bundle: Path) -> dict[str, objec
     return {
         "schema": "vellum.swift-host-proof.v1",
         "sdk_root": str(sdk),
-        "swift_version": tool_version([swift, "--version"]),
-        "xcode_version": tool_version(["xcodebuild", "-version"]),
+        "swift_version": swift_version,
+        "xcode_version": xcode_version,
+        "pinned_toolchain": {"xcode": " ".join(PINNED_XCODE), "swift": PINNED_SWIFT},
         "extra_build_flags": rpath,
         "pkg_config_path": environment["PKG_CONFIG_PATH"],
         "clean_build_seconds": round(build_seconds, 3),

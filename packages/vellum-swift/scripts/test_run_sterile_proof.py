@@ -77,6 +77,16 @@ class RunnerTest(unittest.TestCase):
         self.assertTrue(runner.foreign_source_reference(
             "-I/repo/bindings/c/include", source, allowed))
 
+    def test_toolchain_pin_accepts_only_the_pinned_versions(self) -> None:
+        xcode = "Xcode 27.2 Build version 27B52"
+        swift = "swift-driver version: 1.168.6 Apple Swift version 6.4.2 (swiftlang-6.4.2.1.9)"
+        self.assertEqual(runner.pinned_toolchain_problems(xcode, swift), [])
+        self.assertEqual(len(runner.pinned_toolchain_problems(
+            "Xcode 27.2 Build version 27B50", swift)), 1)
+        self.assertEqual(len(runner.pinned_toolchain_problems(
+            xcode, "Apple Swift version 6.4.1 (swiftlang-6.4.1)")), 1)
+        self.assertEqual(len(runner.pinned_toolchain_problems("", "")), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -29,7 +29,8 @@ PKG_CONFIG_PATH="$sdk/lib/pkgconfig" swift build -c release \
 
 ## Test
 
-`vellum.swift-host-proof` runs `scripts/run_sterile_proof.py`. It stages a
+`vellum.swift-host-proof` runs `scripts/run_sterile_proof.py`. It requires the
+pinned toolchain, Xcode 27.2 (27B52) with Swift 6.4.2, and fails on any other. It stages a
 copy of the package in its work directory, builds it against the SDK named by
 `VELLUM_SWIFT_PROOF_SDK_PREFIX` (a CMake cache variable or an environment
 variable), checks that the build and the binary reference only the installed
