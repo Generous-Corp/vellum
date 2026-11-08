@@ -46,7 +46,7 @@ inline constexpr const char* kDocuments[] = {
     "rmlui/Tests/Data/VisualTests/box_sizing.rml",
     "rmlui/Tests/Data/VisualTests/css1_clear.rml",
     "rmlui/Tests/Data/VisualTests/flex_01.rml",
-    "rmlui/Tests/Data/VisualTests/flex_02.rml",
+    "rmlui/Tests/Data/VisualTests/float_placement.rml",
     "rmlui/Tests/Data/VisualTests/float_basic.rml",
     "rmlui/Tests/Data/VisualTests/inline_block.rml",
     "rmlui/Tests/Data/VisualTests/inline_formatting_01.rml",

@@ -11,7 +11,9 @@ body {
 }
 div { display: block; position: absolute; }
 img { position: absolute; }
-#image { left: 16px; top: 16px; width: 64px; height: 64px; }
+#image { left: 16px; top: 16px; width: 16px; height: 16px; }
+/* Drawn at its natural size: the soft renderer samples nearest texels and the
+   Metal renderer filters linearly, which agree only at 1:1. */
 #rotated { left: 120px; top: 24px; width: 48px; height: 48px; background-color: #f2f2f2;
            transform: rotate(30deg); }
 #scaled { left: 190px; top: 30px; width: 32px; height: 32px; background-color: rgba(255, 59, 48, 200);
