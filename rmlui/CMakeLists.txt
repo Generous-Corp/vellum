@@ -167,13 +167,14 @@ endif()
 
 if(VELLUM_RMLUI_METAL)
     add_library(vellum-rmlui-metal STATIC
-        src/metal_render_interface.mm)
+        src/metal_render_interface.mm
+        src/metal_effects.cpp)
     add_library(VellumRmlUi::Metal ALIAS vellum-rmlui-metal)
     set_target_properties(vellum-rmlui-metal PROPERTIES
         EXPORT_NAME Metal
         POSITION_INDEPENDENT_CODE ON)
     target_compile_features(vellum-rmlui-metal PUBLIC cxx_std_20)
-    target_compile_options(vellum-rmlui-metal PRIVATE -fobjc-arc)
+    target_compile_options(vellum-rmlui-metal PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
     target_include_directories(vellum-rmlui-metal PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)

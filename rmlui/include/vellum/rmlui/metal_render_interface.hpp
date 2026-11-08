@@ -9,8 +9,10 @@
 // Provenance: written from RmlUi's public RenderInterface documentation and
 // headers (MIT), Apple's Metal documentation, and RmlUi's MIT GL3 backend as a
 // behavioural reference (premultiplied blending, the orthographic projection,
-// scissor semantics, the stencil clip-mask operations and the layer stack). It
-// contains no code from any GPL-licensed project.
+// scissor semantics, the stencil clip-mask operations, the layer stack, the
+// filter parameters and colour matrices, the separable blur with iterative
+// half-scaling, and the gradient functions). It contains no code from any
+// GPL-licensed project.
 //
 // This header is Objective-C++: include it from a .mm file.
 //
@@ -32,11 +34,17 @@
 //
 // Drawn: compiled geometry, generated and loaded textures, scissor,
 // transforms, clip masks (a stencil the renderer owns, sized to the target),
-// and layers (PushLayer, CompositeLayers with the blend and replace modes,
-// PopLayer, SaveLayerAsTexture). Rendering goes to an offscreen base layer
-// that end_frame() copies to the target. Filters, shaders and mask images are
-// not yet drawn: calls to them are counted in unsupported_calls(), and a layer
-// composited with filters is composited unfiltered.
+// layers (PushLayer, CompositeLayers with the blend and replace modes,
+// PopLayer, SaveLayerAsTexture), filters (opacity, blur, drop-shadow,
+// brightness, contrast, invert, grayscale, sepia, hue-rotate, saturate),
+// mask images (SaveLayerAsMaskImage), and gradient shaders (linear, radial,
+// conic and their repeating forms). Rendering goes to an offscreen base layer
+// that end_frame() copies to the target; filters run on target-sized
+// offscreen textures within the current scissor. Not drawn: the "shader"
+// decorator's application-defined shaders and unknown filter names, which are
+// counted in unsupported_calls(). Gradients follow RmlUi's GL3 backend in
+// easing between colour stops (smoothstep), so they match RmlUi's reference
+// rendering rather than CSS's linear interpolation.
 
 #if !defined(__OBJC__)
 #error "vellum/rmlui/metal_render_interface.hpp is Objective-C++; include it from a .mm file"
@@ -84,8 +92,9 @@ class MetalRenderInterface final : public Rml::RenderInterface {
     void begin_frame(const MetalFrameTarget& frame);
     void end_frame();
 
-    // RmlUi render calls this version does not draw yet (filters, shaders,
-    // mask images), counted since construction.
+    // RmlUi render calls this renderer does not draw (application-defined
+    // shaders, unknown filters, filters or shaders with missing parameters),
+    // counted since construction.
     [[nodiscard]] std::size_t unsupported_calls() const noexcept;
 
     Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices,
@@ -116,8 +125,12 @@ class MetalRenderInterface final : public Rml::RenderInterface {
     Rml::CompiledFilterHandle SaveLayerAsMaskImage() override;
     Rml::CompiledFilterHandle CompileFilter(const Rml::String& name,
                                             const Rml::Dictionary& parameters) override;
+    void ReleaseFilter(Rml::CompiledFilterHandle filter) override;
     Rml::CompiledShaderHandle CompileShader(const Rml::String& name,
                                             const Rml::Dictionary& parameters) override;
+    void RenderShader(Rml::CompiledShaderHandle shader, Rml::CompiledGeometryHandle geometry,
+                      Rml::Vector2f translation, Rml::TextureHandle texture) override;
+    void ReleaseShader(Rml::CompiledShaderHandle shader) override;
 
   private:
     struct State;
