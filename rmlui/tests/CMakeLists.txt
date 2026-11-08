@@ -97,7 +97,7 @@ if(VELLUM_RMLUI_INSTALL AND NOT CMAKE_CROSSCOMPILING)
                 "-DVELLUM_RMLUI_C_COMPILER=${CMAKE_C_COMPILER}"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/PlantNewerObject.cmake")
         set_tests_properties(vellum.rmlui.deployment-target-control PROPERTIES
-            PASS_REGULAR_EXPRESSION "built for macOS 26\\.0, newer than the recorded deployment target 13\\.3")
+            PASS_REGULAR_EXPRESSION "built for macOS 27\\.0, newer than the recorded deployment target 13\\.3")
     endif()
     if(VELLUM_RMLUI_NATIVE)
         add_test(NAME vellum.rmlui.install-consumer-native
