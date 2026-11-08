@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import threading
 
-from run_text_semantics_browser import stop_browser
+from run_text_semantics_browser import ProofProgress, ProofTimeout, stop_browser, wait_for_proof
 
 
 def main() -> int:
@@ -26,12 +26,15 @@ def main() -> int:
         chrome = str(application) if application.is_file() else None
     if chrome is None or not Path(chrome).is_file():
         raise SystemExit("Google Chrome is required for the browser proof")
-    received = threading.Event()
     result: dict[str, object] = {}
 
     class ProofHandler(SimpleHTTPRequestHandler):
         def __init__(self, *handler_args: object, **handler_kwargs: object) -> None:
             super().__init__(*handler_args, directory=str(args.root), **handler_kwargs)
+
+        def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
+            progress.request(self.path)
+            super().do_GET()
 
         def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
             if self.path != "/__vellum_proof":
@@ -45,7 +48,7 @@ def main() -> int:
                 result.update(payload)
                 self.send_response(204)
                 self.end_headers()
-                received.set()
+                progress.deliver()
             except (ValueError, json.JSONDecodeError) as error:
                 self.send_error(400, str(error))
 
@@ -54,6 +57,7 @@ def main() -> int:
     thread.start()
     try:
         with tempfile.TemporaryDirectory(prefix="vellum-chrome-") as profile:
+            progress = ProofProgress()
             process = subprocess.Popen(
                 [chrome, "--headless=new", "--disable-gpu-sandbox", "--no-first-run",
                  "--disable-background-networking", f"--user-data-dir={profile}",
@@ -61,8 +65,9 @@ def main() -> int:
                 text=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=os.name == "posix")
             try:
-                if not received.wait(timeout=20):
-                    raise SystemExit("browser proof handshake timed out")
+                wait_for_proof(progress, process)
+            except ProofTimeout as timeout:
+                raise SystemExit(f"browser proof handshake: {timeout}") from None
             finally:
                 stop_browser(
                     process,

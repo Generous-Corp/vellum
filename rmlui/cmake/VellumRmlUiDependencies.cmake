@@ -76,11 +76,12 @@ function(vellum_rmlui_fetch_dependencies)
     # VellumRmlUi::Lua drives its own per-instance sandboxed state instead.
     set(RMLUI_LUA_BINDINGS OFF CACHE BOOL "" FORCE)
     set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${_vellum_rmlui_rmlui_component})
-    # One local fix, recorded in DEPENDENCIES.md and offered upstream: a text
-    # input whose font does not resolve keeps one empty line, so a click into
-    # it does not read before the start of its line list.
+    # One upstream fix backported to the pin (RmlUi 3707ab53, upstream issue
+    # #958): a text input starts with one empty line, so a click into a field
+    # whose font does not resolve cannot read before its line list. Retire it
+    # when the pin moves past 3707ab53.
     set(_vellum_rmlui_patches
-        "${CMAKE_CURRENT_LIST_DIR}/patches/rmlui-text-input-keep-one-line.patch")
+        "${CMAKE_CURRENT_LIST_DIR}/patches/rmlui-3707ab53-text-input-initial-line.patch")
     FetchContent_Declare(vellum_rmlui_rmlui
         GIT_REPOSITORY https://github.com/mikke89/RmlUi.git
         GIT_TAG "${VELLUM_RMLUI_RMLUI_COMMIT}"
