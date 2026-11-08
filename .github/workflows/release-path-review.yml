@@ -47,7 +47,25 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.event.repository.default_branch }}
+          # A merge-queue range is judged with git, from the default branch's
+          # full history and the queue commit fetched below.
+          fetch-depth: 0
           persist-credentials: false
+
+      # Only the commit objects are fetched; nothing from the queue is checked
+      # out or run. A failed fetch leaves the commit missing, which the rule
+      # reports as `error`.
+      - name: Fetch the merge-queue commit
+        if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'merge_group'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUEUE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          [[ "$QUEUE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 0
+          auth="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            fetch --no-tags --quiet origin "$QUEUE_SHA" || echo "release-path-review: could not fetch $QUEUE_SHA"
 
       - name: Decide release-path-review
         id: decide

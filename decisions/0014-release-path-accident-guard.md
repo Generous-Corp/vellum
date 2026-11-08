@@ -77,11 +77,26 @@ this lands:
   permission-less `release-path-review-trigger.yml`, and its completion runs
   the gate. If a queued copy drops the trigger, nothing is posted and the
   queue ejects the entry.
-- **The merge queue.** The status goes on the queue's commit. Every
-  first-parent commit from it back to where it leaves `main` must be a
-  two-parent queue merge. Each second parent is a queued pull request's head
-  and is judged at that head. Any other shape, or a range over 1,000 commits,
-  is an `error`, never a pass.
+- **The merge queue.** The status goes on the queue's commit. The range is
+  read with git from the workflow's checkout, which is the default branch's
+  full history plus the fetched queue commit. It is never read from the
+  compare API, which truncates at 300 files, and which an earlier version
+  refused past 1,000 commits. That refusal ejected a reviewed 2,732-commit
+  history import. Every first-parent commit from the queue commit back to its
+  merge base with `main` must be a two-parent queue merge. Each second parent
+  is a queued pull request's head.
+  - Each entry is judged by its own net diff
+    (`git diff --no-renames <first parent>...<head>`), the change its pull
+    request shows. An entry that changes a release-path file needs the two
+    APPROVEs at its head. An entry that changes none passes. The range's net
+    diff must hold no release-path file that no entry changed.
+  - A missing merge base, a commit git cannot read, or any other shape is an
+    `error`, never a pass.
+  - Nothing is judged commit by commit. A path a pull request changes and
+    changes back is not in its net diff, on the pull request or in the queue,
+    because what lands is the pull request's net tree. A path one entry
+    changes and a later entry changes back still needs reviews on the first
+    entry: that change lands on `main` as its own queue merge commit.
 - **One head, several pull requests.** A status belongs to a commit, so it is
   `success` only when every open pull request with that head passes.
 - **The base copy of release-policy runs from the pull request's workflow.**

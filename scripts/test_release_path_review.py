@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import importlib.util
 import re
+import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -456,87 +458,205 @@ class LogTests(GateCase):
         self.assertEqual(lines[-1], f"::{token}::")
 
 
-class QueueTests(GateCase):
-    first, second, merge1, merge2 = "1" * 40, "2" * 40, "d" * 40, "e" * 40
+class QueueRepo:
+    """A real repository shaped like a merge-queue build: `main`, pull request
+    branches, and a first-parent chain of two-parent queue merges."""
 
-    def queue(self, entries: dict[int, tuple[str, list[dict[str, Any]], list[dict[str, Any]]]],
-              commits: list[dict[str, Any]], head: str, branch: str = "gh-readonly-queue/main/pr-8-x",
-              total: int | None = None, pages: list[list[dict[str, Any]]] | None = None) -> tuple[str, str]:
-        compare = f"repos/{REPO}/compare/main...{head}"
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.git("init", "-q", "-b", "main")
+        for path in (PROTECTED, UNPROTECTED):
+            (root / path).parent.mkdir(parents=True, exist_ok=True)
+            (root / path).write_text("original\n")
+        self.git("add", ".")
+        self.commit_all("base")
+        self.base = self.rev("HEAD")
+
+    def git(self, *args: str, stdin: str | None = None) -> str:
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+               "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull}
+        return subprocess.run(["git", "-C", str(self.root), *args], input=stdin, env=env, check=True,
+                              capture_output=True, text=True).stdout
+
+    def rev(self, ref: str) -> str:
+        return self.git("rev-parse", ref).strip()
+
+    def commit_all(self, message: str) -> None:
+        self.git("add", "-A")
+        self.git("commit", "-q", "--allow-empty", "-m", message)
+
+    def branch(self, name: str, changes: list[tuple[str, str | None]], start: str | None = None) -> str:
+        """A pull request branch from `start` (main's base), one commit per change; None deletes."""
+        self.git("checkout", "-q", "-b", name, start or self.base)
+        for path, text in changes:
+            target = self.root / path
+            if text is None:
+                target.unlink()
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text)
+            self.commit_all(f"{name}: {path}")
+        self.git("checkout", "-q", "main")
+        return self.rev(name)
+
+    def long_branch(self, name: str, count: int) -> str:
+        """`count` commits that each change an unprotected file, written with fast-import."""
+        lines = []
+        for index in range(count):
+            data = f"line {index}\n"
+            lines += [f"commit refs/heads/{name}", f"mark :{index + 1}",
+                      "committer t <t@t> 1700000000 +0000", "data 1", "x"]
+            lines += [f"from {self.base}"] if index == 0 else []
+            lines += [f"M 100644 inline docs/history.txt", f"data {len(data.encode())}", data.rstrip("\n")]
+        self.git("fast-import", "--quiet", stdin="\n".join(lines) + "\n")
+        return self.rev(name)
+
+    def queue(self, heads: list[str]) -> str:
+        """Queue merges of `heads` on top of main, as GitHub builds them; returns the queue commit."""
+        self.git("checkout", "-q", "--detach", "main")
+        for head in heads:
+            self.git("merge", "-q", "--no-ff", "--no-edit", head)
+        queue = self.rev("HEAD")
+        self.git("checkout", "-q", "main")
+        return queue
+
+
+class QueueTests(GateCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.repo = QueueRepo(self.root)
+
+    def run_queue(self, queue: str, entries: dict[int, tuple[str, list[dict[str, Any]]]],
+                  branch: str = "gh-readonly-queue/main/pr-8-x") -> tuple[str, str]:
         routes: dict[str, Any] = {}
-        for index, page in enumerate(pages or [commits], start=1):
-            routes[f"{compare}?per_page=100&page={index}"] = {
-                "total_commits": len(commits) if total is None else total,
-                "merge_base_commit": {"sha": BASE}, "commits": page}
-        for number, (pr_head, changed, comments) in entries.items():
-            routes.update(pull_routes(number, pr_head, changed, comments))
-        api = FakeApi(routes)
-        event = {"workflow_run": {"event": "merge_group", "head_sha": head, "head_branch": branch,
+        for number, (pr_head, comments) in entries.items():
+            routes[f"repos/{REPO}/commits/{pr_head}/pulls"] = [
+                {"number": number, "state": "open", "head": {"sha": pr_head}}]
+            routes[f"repos/{REPO}/issues/{number}/comments"] = comments
+            routes[f"repos/{REPO}/pulls/{number}/reviews"] = []
+        event = {"workflow_run": {"event": "merge_group", "head_sha": queue, "head_branch": branch,
                                   "pull_requests": []},
                  "repository": {"default_branch": "main"}}
-        decision = gate.decide("workflow_run", event, REPO, api, self.root, log=lambda _: None)
+        decision = gate.decide("workflow_run", event, REPO, FakeApi(routes), self.root, log=lambda _: None)
         self.assertIsNotNone(decision)
-        self.assertEqual(decision[0], head)
+        self.assertEqual(decision[0], queue)
         return decision[1], decision[2]
-
-    def batch(self) -> list[dict[str, Any]]:
-        return [{"sha": self.merge1, "parents": [{"sha": BASE}, {"sha": self.first}]},
-                {"sha": self.merge2, "parents": [{"sha": self.merge1}, {"sha": self.second}]}]
 
     def approvals(self, head: str) -> list[dict[str, Any]]:
         return [verdict("pulp-review", "fleet-pass-reviewer-m3-1", head=head, number=1),
                 verdict("infra-review2", "fleet-pass-reviewer-m3-2", head=head, number=2)]
 
-    def test_a_batch_judges_every_entry_at_its_head(self) -> None:
-        state, description = self.queue(
-            {7: (self.first, files(PROTECTED), []), 8: (self.second, files(UNPROTECTED), self.approvals(self.second))},
-            self.batch(), self.merge2)
+    def test_a_batch_judges_every_release_path_entry_at_its_head(self) -> None:
+        first = self.repo.branch("pr-7", [(PROTECTED, "changed\n")])
+        second = self.repo.branch("pr-8", [(UNPROTECTED, "docs\n")])
+        queue = self.repo.queue([first, second])
+        state, description = self.run_queue(queue, {7: (first, []), 8: (second, [])})
         self.assertEqual(state, "failure")
         self.assertIn("PR #7", description)
-        state, _ = self.queue(
-            {7: (self.first, files(PROTECTED), self.approvals(self.first)), 8: (self.second, files(UNPROTECTED), [])},
-            self.batch(), self.merge2)
-        self.assertEqual(state, "success")
+        self.assertEqual(self.run_queue(queue, {7: (first, self.approvals(first)), 8: (second, [])})[0], "success")
 
-    def test_a_paginated_range_is_read_whole(self) -> None:
-        commits = self.batch()
-        state, _ = self.queue(
-            {7: (self.first, files(UNPROTECTED), []), 8: (self.second, files(UNPROTECTED), [])},
-            commits, self.merge2, pages=[commits[:1], commits[1:]])
-        self.assertEqual(state, "success")
+    def test_a_range_of_more_than_a_thousand_commits_with_no_release_path_file_passes(self) -> None:
+        long = self.repo.long_branch("pr-229", 1200)
+        queue = self.repo.queue([long])
+        self.assertGreater(int(self.repo.git("rev-list", "--count", f"main..{queue}")), 1000)
+        state, description = self.run_queue(queue, {})  # no API read is needed
+        self.assertEqual(state, "success", description)
 
-    def test_a_range_missing_commits_or_too_long_fails_closed(self) -> None:
-        for total in (3, gate.QUEUE_COMMIT_LIMIT + 1):
-            with self.subTest(total=total):
-                self.assertEqual(self.queue({}, self.batch(), self.merge2, total=total)[0], "error")
+    def test_the_same_long_range_with_one_release_path_file_still_needs_two_reviews(self) -> None:
+        self.repo.long_branch("pr-229", 1200)
+        head = self.repo.branch("pr-229-protected", [(PROTECTED, "changed\n")], start="pr-229")
+        queue = self.repo.queue([head])
+        state, description = self.run_queue(queue, {229: (head, [self.approvals(head)[0]])})
+        self.assertEqual(state, "failure")
+        self.assertIn("needs 2 counted APPROVEs", description)
+        self.assertEqual(self.run_queue(queue, {229: (head, self.approvals(head))})[0], "success")
+
+    def test_a_change_reverted_inside_one_pull_request_is_judged_by_its_net_tree(self) -> None:
+        original = (self.root / PROTECTED).read_text()
+        head = self.repo.branch("pr-9", [(PROTECTED, "changed\n"), (PROTECTED, original)])
+        state, description = self.run_queue(self.repo.queue([head]), {})
+        self.assertEqual(state, "success", description)
+
+    def test_a_change_one_entry_makes_and_a_later_entry_reverts_still_needs_reviews(self) -> None:
+        original = (self.root / PROTECTED).read_text()
+        first = self.repo.branch("pr-7", [(PROTECTED, "changed\n")])
+        second = self.repo.branch("pr-8", [(PROTECTED, original)], start="pr-7")  # stacked on pr-7
+        queue = self.repo.queue([first, second])
+        self.assertEqual(self.repo.git("diff", "--name-only", f"main...{queue}").split(), [])  # net: nothing
+        state, description = self.run_queue(queue, {7: (first, []), 8: (second, self.approvals(second))})
+        self.assertEqual(state, "failure")
+        self.assertIn("PR #7", description)
+
+    def test_a_rename_out_of_a_release_path_file_counts(self) -> None:
+        # A true rename (same content), which git would report as one renamed path.
+        head = self.repo.branch("pr-9", [(PROTECTED, None), ("scripts/elsewhere.py", "original\n")])
+        state, _ = self.run_queue(self.repo.queue([head]), {9: (head, [])})
+        self.assertEqual(state, "failure")
+
+    def test_a_release_path_change_no_entry_makes_fails_closed(self) -> None:
+        head = self.repo.branch("pr-9", [(UNPROTECTED, "docs\n")])
+        self.repo.git("checkout", "-q", "--detach", "main")
+        self.repo.git("merge", "-q", "--no-ff", "--no-commit", head)
+        (self.root / PROTECTED).write_text("slipped in by the merge\n")
+        self.repo.commit_all("queue merge with an extra change")
+        queue = self.repo.rev("HEAD")
+        self.repo.git("checkout", "-q", "main")
+        state, description = self.run_queue(queue, {9: (head, self.approvals(head))})
+        self.assertEqual(state, "error")
+        self.assertIn("no queued pull request changes", description)
+
+    def test_a_missing_merge_base_or_commit_fails_closed(self) -> None:
+        head = self.repo.branch("pr-9", [(UNPROTECTED, "docs\n")])
+        queue = self.repo.queue([head])
+        self.assertEqual(self.run_queue(queue, {})[0], "success")  # control
+        self.assertEqual(self.run_queue("f" * 40, {})[0], "error")  # not fetched
+        unrelated = self.repo.git("commit-tree", self.repo.rev("HEAD^{tree}"), "-m", "orphan",
+                                  stdin=None).strip()
+        self.assertEqual(self.run_queue(unrelated, {})[0], "error")  # no merge base with main
+        self.repo.git("update-ref", "-d", "refs/heads/main")
+        state, description = self.run_queue(queue, {})  # no default branch to find it
+        self.assertEqual(state, "error")
+        self.assertIn("has no main", description)
 
     def test_a_queue_commit_that_is_not_a_merge_fails_closed(self) -> None:
-        single = "f" * 40
-        self.assertEqual(self.queue({}, [{"sha": single, "parents": [{"sha": BASE}]}], single)[0], "error")
+        head = self.repo.branch("pr-9", [(UNPROTECTED, "docs\n")])
+        self.assertEqual(self.run_queue(head, {})[0], "error")
+        # A plain commit anywhere on the chain, here below two real queue merges.
+        self.repo.git("checkout", "-q", "--detach", "main")
+        (self.root / "docs/other.md").write_text("not from any pull request\n")
+        self.repo.commit_all("not a queue merge")
+        self.repo.git("merge", "-q", "--no-ff", "--no-edit", head)
+        queue = self.repo.rev("HEAD")
+        self.repo.git("checkout", "-q", "main")
+        self.assertEqual(self.run_queue(queue, {9: (head, [])})[0], "error")
 
-    def test_an_entry_that_heads_zero_or_two_open_pull_requests_fails_closed(self) -> None:
-        commits = self.batch()[:1]
+    def test_a_protected_entry_that_heads_zero_or_two_open_pull_requests_fails_closed(self) -> None:
+        head = self.repo.branch("pr-7", [(PROTECTED, "changed\n")])
+        queue = self.repo.queue([head])
         for owners in ([], [7, 9]):
             with self.subTest(owners=owners):
-                routes_entries = {7: (self.first, files(UNPROTECTED), [])}
-                compare = f"repos/{REPO}/compare/main...{self.merge1}?per_page=100&page=1"
-                routes = {compare: {"total_commits": 1, "merge_base_commit": {"sha": BASE}, "commits": commits}}
-                for number, (pr_head, changed, comments) in routes_entries.items():
-                    routes.update(pull_routes(number, pr_head, changed, comments))
-                routes[f"repos/{REPO}/commits/{self.first}/pulls"] = [
-                    {"number": n, "state": "open", "head": {"sha": self.first}} for n in owners]
-                event = {"workflow_run": {"event": "merge_group", "head_sha": self.merge1,
+                routes = {f"repos/{REPO}/commits/{head}/pulls": [
+                    {"number": n, "state": "open", "head": {"sha": head}} for n in owners],
+                    f"repos/{REPO}/issues/7/comments": self.approvals(head), f"repos/{REPO}/pulls/7/reviews": []}
+                event = {"workflow_run": {"event": "merge_group", "head_sha": queue,
                                           "head_branch": "gh-readonly-queue/main/pr-7-x"},
                          "repository": {"default_branch": "main"}}
                 decision = gate.decide("workflow_run", event, REPO, FakeApi(routes), self.root, log=lambda _: None)
                 self.assertEqual(decision[1], "error")
 
     def test_a_merge_group_run_off_a_queue_branch_fails_closed(self) -> None:
-        entries = {7: (self.first, files(UNPROTECTED), []), 8: (self.second, files(UNPROTECTED), [])}
-        self.assertEqual(self.queue(entries, self.batch(), self.merge2)[0], "success")
+        head = self.repo.branch("pr-8", [(UNPROTECTED, "docs\n")])
+        queue = self.repo.queue([head])
+        self.assertEqual(self.run_queue(queue, {})[0], "success")
         for branch in ("feature/x", "gh-readonly-queue/other/pr-8-x"):
             with self.subTest(branch=branch):
-                self.assertEqual(self.queue(entries, self.batch(), self.merge2, branch=branch)[0], "error")
+                self.assertEqual(self.run_queue(queue, {}, branch=branch)[0], "error")
+
+    def test_the_workflow_fetches_full_history_and_the_queue_commit(self) -> None:
+        text = (ROOT / WORKFLOW).read_text(encoding="utf-8")
+        self.assertIn("fetch-depth: 0", text)
+        self.assertIn('fetch --no-tags --quiet origin "$QUEUE_SHA"', text)
+        self.assertNotIn("compare/", (ROOT / "scripts" / "release_path_review.py").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
