@@ -303,6 +303,7 @@
     "authoring/tests/test_phase3_contracts.py": "cmake:CMakeLists.txt",
     "graphics/tests/test_dawn_bootstrap_source.py": "cmake:CMakeLists.txt",
     "graphics/tests/test_dawn_provider_topology.py": "cmake:CMakeLists.txt",
+    "packages/vellum-swift/scripts/test_run_sterile_proof.py": "cmake:packages/vellum-swift/CMakeLists.txt",
     "tools/provenance/test_collect_release_evidence.py": "workflow:provenance.yml",
     "tools/provenance/test_finalize_authority_reconciliation.py": "workflow:provenance.yml",
     "tools/provenance/test_observatory.py": "workflow:provenance.yml",
