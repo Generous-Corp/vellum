@@ -95,7 +95,7 @@ class RunnerTest(unittest.TestCase):
             "--sdk-prefix", "/nonexistent/vellum-sdk-prefix", "--require-prefix")
         self.assertEqual(code, 1)
 
-    def test_toolchain_mismatch_skips_unless_the_pin_is_required(self) -> None:
+    def test_toolchain_mismatch_fails_only_when_the_pin_is_required(self) -> None:
         with tempfile.TemporaryDirectory() as text:
             sdk = Path(text)
             (sdk / "lib" / "pkgconfig").mkdir(parents=True)
@@ -103,15 +103,74 @@ class RunnerTest(unittest.TestCase):
             saved = runner.PINNED_SWIFT
             runner.PINNED_SWIFT = "0.0.0"
             try:
-                code, out, _ = self.run_main("--sdk-prefix", str(sdk))
-                self.assertEqual(code, runner.SKIP)
-                self.assertIn("Swift is not the pinned 0.0.0", out)
+                with tempfile.TemporaryDirectory() as work:
+                    calls = []
+                    original = runner.check_package
+                    runner.check_package = lambda package: calls.append(package) or ["stop here"]
+                    try:
+                        out, err = io.StringIO(), io.StringIO()
+                        with redirect_stdout(out), redirect_stderr(err):
+                            code = runner.main(["--package", str(PACKAGE), "--work", work,
+                                                "--sdk-prefix", str(sdk)])
+                    finally:
+                        runner.check_package = original
+                self.assertEqual(code, 1)
+                self.assertTrue(calls, "an unpinned toolchain must still run the proof")
+                self.assertIn("running on an unpinned toolchain", out.getvalue())
+                self.assertNotIn("Swift is not the pinned", err.getvalue())
                 code, _, err = self.run_main(
                     "--sdk-prefix", str(sdk), "--require-pinned-toolchain")
                 self.assertEqual(code, 1)
                 self.assertIn("Swift is not the pinned 0.0.0", err)
             finally:
                 runner.PINNED_SWIFT = saved
+
+    def test_missing_swift_fails_when_the_prefix_is_required(self) -> None:
+        saved = runner.shutil.which
+        runner.shutil.which = lambda name: None
+        try:
+            with tempfile.TemporaryDirectory() as text:
+                sdk = Path(text)
+                (sdk / "lib" / "pkgconfig").mkdir(parents=True)
+                (sdk / runner.PKG_CONFIG_FILE).write_text("", encoding="utf-8")
+                code, out, _ = self.run_main("--sdk-prefix", str(sdk))
+                self.assertEqual(code, runner.SKIP)
+                code, _, err = self.run_main("--sdk-prefix", str(sdk), "--require-prefix")
+                self.assertEqual(code, 1)
+                self.assertIn("swift toolchain is not on PATH", err)
+        finally:
+            runner.shutil.which = saved
+
+    def test_native_hosts_must_pass_when_required(self) -> None:
+        guard = "machine in use: HIDIdleTime 5 s is under 180 s"
+        passed = {"native_hosts": "passed"}
+        silent = {"native_hosts": "skipped: no window-server session"}
+        inherited = {"native_hosts": "skipped: inherited"}
+        self.assertIsNone(runner.native_problem(passed, True, None))
+        self.assertIsNone(runner.native_problem(silent, False, None))
+        self.assertIsNotNone(runner.native_problem(silent, True, None))
+        self.assertIsNotNone(runner.native_problem(inherited, True, guard))
+        self.assertIsNone(runner.native_problem({"native_hosts": f"skipped: {guard}"}, True, guard))
+
+    def test_runner_owns_the_native_skip_variable(self) -> None:
+        saved = runner.os.environ.get(runner.NATIVE_SKIP_VARIABLE)
+        runner.os.environ[runner.NATIVE_SKIP_VARIABLE] = "inherited"
+        try:
+            environment = runner.sterile_environment(Path("/opt/sdk"))
+        finally:
+            if saved is None:
+                runner.os.environ.pop(runner.NATIVE_SKIP_VARIABLE, None)
+            else:
+                runner.os.environ[runner.NATIVE_SKIP_VARIABLE] = saved
+        self.assertNotIn(runner.NATIVE_SKIP_VARIABLE, environment)
+
+    def test_ci_flags_parse_only_true_or_one(self) -> None:
+        self.assertTrue(runner.running_in_ci({"CI": "true"}))
+        self.assertTrue(runner.running_in_ci({"CI": "1"}))
+        self.assertTrue(runner.running_in_ci({"GITHUB_ACTIONS": "TRUE"}))
+        self.assertFalse(runner.running_in_ci({"CI": "false"}))
+        self.assertFalse(runner.running_in_ci({"CI": "0"}))
+        self.assertFalse(runner.running_in_ci({}))
 
     def test_finder_and_swiftpm_metadata_are_ignored(self) -> None:
         with tempfile.TemporaryDirectory() as text:
@@ -129,6 +188,7 @@ class RunnerTest(unittest.TestCase):
         self.assertIn("load", runner.native_guard_reason(False, 600.0, 4.0))
         self.assertIn("HIDIdleTime", runner.native_guard_reason(False, None, 0.5))
         self.assertIsNone(runner.desk_guard({"GITHUB_ACTIONS": "true"}))
+        self.assertIsNotNone(runner.native_guard_reason(False, 10.0, 0.5))
 
 
 if __name__ == "__main__":

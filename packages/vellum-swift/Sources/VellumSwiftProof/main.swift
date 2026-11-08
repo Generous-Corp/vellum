@@ -178,11 +178,25 @@ func exerciseNativeHosts(bundle: String) throws -> [String: Any] {
     try require(zip(elements, again).allSatisfy { ($0 as AnyObject) === ($1 as AnyObject) },
                 "accessibility elements lost their identity across a refresh")
 
-    view.layer?.contentsScale = 2
+    let startScale = CGFloat(view.backingScale)
+    let changedScale: CGFloat = startScale == 2 ? 1 : 2
+    try require(view.drawableSize == CGSize(width: frame.width * startScale,
+                                            height: frame.height * startScale),
+                "initial drawable \(view.drawableSize) does not match scale \(startScale)")
+    view.backingScaleSource = { changedScale }
     view.viewDidChangeBackingProperties()
-    try require(view.lastError == nil, "backing-scale change failed")
-    view.setFrameSize(NSSize(width: 300, height: 200))
+    try require(view.lastError == nil, "backing-scale change failed: \(String(describing: view.lastError))")
+    try require(view.layerContentsScale == changedScale,
+                "contentsScale \(view.layerContentsScale) did not follow the scale change")
+    try require(view.drawableSize == CGSize(width: frame.width * changedScale,
+                                            height: frame.height * changedScale),
+                "drawable \(view.drawableSize) did not follow the scale change to \(changedScale)")
+    let resized = NSSize(width: 300, height: 200)
+    view.setFrameSize(resized)
     try require(view.lastError == nil, "native resize failed")
+    try require(view.drawableSize == CGSize(width: resized.width * changedScale,
+                                            height: resized.height * changedScale),
+                "drawable \(view.drawableSize) did not follow the resize")
 
     let hosting = NSHostingView(rootView: VellumView(bundle: bundle).frame(width: 360, height: 240))
     hosting.frame = frame
@@ -209,6 +223,7 @@ func exerciseNativeHosts(bundle: String) throws -> [String: Any] {
         "native_renderer": info.renderer,
         "native_backend": info.backend,
         "native_accessibility_children": elements.count,
+        "native_scale_change": "\(startScale)x to \(changedScale)x",
     ]
 }
 

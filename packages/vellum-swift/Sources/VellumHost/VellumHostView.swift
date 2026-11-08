@@ -12,6 +12,10 @@ public final class VellumHostView: NSView {
     private var pumpTimer: Timer?
     private var accessibilityElements: [String: NSAccessibilityElement] = [:]
 
+    public var backingScaleSource: (@MainActor () -> CGFloat)?
+    public var drawableSize: CGSize { metalLayer.drawableSize }
+    public var layerContentsScale: CGFloat { metalLayer.contentsScale }
+
     public init(application: VellumApplication) {
         self.application = application
         super.init(frame: NSRect(origin: .zero, size: application.viewport))
@@ -41,7 +45,7 @@ public final class VellumHostView: NSView {
             return
         }
         if surface == nil {
-            let scale = Float(window.backingScaleFactor)
+            let scale = backingScale
             metalLayer.contentsScale = CGFloat(scale)
             metalLayer.drawableSize = CGSize(width: bounds.width * CGFloat(scale),
                                              height: bounds.height * CGFloat(scale))
@@ -67,12 +71,12 @@ public final class VellumHostView: NSView {
 
     public override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        metalLayer.contentsScale = window?.backingScaleFactor ?? metalLayer.contentsScale
+        metalLayer.contentsScale = CGFloat(backingScale)
         resizeSurface(to: bounds.size)
     }
 
     public var backingScale: Float {
-        Float(window?.backingScaleFactor ?? metalLayer.contentsScale)
+        Float(backingScaleSource?() ?? window?.backingScaleFactor ?? metalLayer.contentsScale)
     }
 
     private func resizeSurface(to size: NSSize) {

@@ -22,8 +22,12 @@ relocatable `lib/pkgconfig/vellum-host-c.pc`, so CMake, SwiftPM and plain
   field, with no tail padding. A smaller size is refused with
   `VELLUM_HOST_ERROR_VERSION`. A larger size from a newer header is accepted
   only when every byte past v1 is zero; a newer field set to anything else is
-  refused with `VELLUM_HOST_ERROR_VERSION` rather than ignored. Output structs
-  accept any size of at least v1, and only their v1 fields are written.
+  refused with `VELLUM_HOST_ERROR_VERSION` rather than ignored. An input
+  `struct_size` above 4096 is refused with `VELLUM_HOST_ERROR_INVALID_ARGUMENT`.
+  Output structs (surface info, image, content stats, pump result,
+  accessibility node, text input) also have frozen v1 sizes ending at their
+  last field. They accept any size of at least v1, and only their v1 fields are
+  written.
 - **Errors.** Every fallible call returns a `vellum_host_status`.
   `vellum_host_last_error()` returns the message of the last failed call on the
   calling thread. Every status-returning call clears it on entry;

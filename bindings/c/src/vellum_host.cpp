@@ -42,6 +42,7 @@ using vellum::authoring::TextInputControl;
 constexpr std::size_t kMaximumKeyBytes = 64U;
 constexpr std::size_t kMaximumTextBytes = 64U * 1024U;
 constexpr std::uint32_t kDefaultSettleTasks = 4096U;
+constexpr std::uint32_t kMaximumStructSize = 4096U;
 
 thread_local std::string last_error;
 
@@ -94,6 +95,10 @@ vellum_host_status require_input(const Struct* value, const char* name) {
         return fail(VELLUM_HOST_ERROR_INVALID_ARGUMENT, std::string(name) + " is null");
     }
     constexpr std::size_t v1 = InputLayout<Struct>::v1;
+    if (value->struct_size > kMaximumStructSize) {
+        return fail(VELLUM_HOST_ERROR_INVALID_ARGUMENT,
+            std::string(name) + " struct_size exceeds 4096 bytes");
+    }
     if (value->struct_size < v1) {
         return fail(VELLUM_HOST_ERROR_VERSION,
             std::string(name) + " struct_size is smaller than ABI v1 requires");
@@ -123,8 +128,29 @@ vellum_host_status guarded(Body&& body) noexcept {
 }
 
 template <typename Struct>
+struct OutputLayout;
+
+#define VELLUM_HOST_OUTPUT_LAYOUT(type, last, size)                               \
+    template <>                                                                \
+    struct OutputLayout<type> {                                                \
+        static constexpr std::size_t v1 =                                      \
+            offsetof(type, last) + sizeof(static_cast<type*>(nullptr)->last);  \
+    };                                                                         \
+    static_assert(OutputLayout<type>::v1 == (size));                           \
+    static_assert(OutputLayout<type>::v1 == sizeof(type))
+
+VELLUM_HOST_OUTPUT_LAYOUT(vellum_host_surface_info, texture_format, 48);
+VELLUM_HOST_OUTPUT_LAYOUT(vellum_host_image, byte_count, 32);
+VELLUM_HOST_OUTPUT_LAYOUT(vellum_host_content_stats, luminance_standard_deviation, 48);
+VELLUM_HOST_OUTPUT_LAYOUT(vellum_host_pump_result, tasks_executed, 24);
+VELLUM_HOST_OUTPUT_LAYOUT(vellum_host_accessibility_node, bounds, 64);
+VELLUM_HOST_OUTPUT_LAYOUT(vellum_host_text_input, bounds, 64);
+
+#undef VELLUM_HOST_OUTPUT_LAYOUT
+
+template <typename Struct>
 bool sized(const Struct* value) {
-    return value != nullptr && value->struct_size >= sizeof(Struct);
+    return value != nullptr && value->struct_size >= OutputLayout<Struct>::v1;
 }
 
 template <typename Struct>

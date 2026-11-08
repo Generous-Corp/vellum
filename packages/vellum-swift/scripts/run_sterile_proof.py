@@ -33,6 +33,7 @@ ISOLATED_VARIABLES = (
 DESK_IDLE_SECONDS = 180.0
 DESK_MAX_LOAD = 4.0
 NATIVE_SKIP_VARIABLE = "VELLUM_SWIFT_PROOF_SKIP_NATIVE"
+REQUIRE_PIN_VARIABLE = "VELLUM_SWIFT_PROOF_REQUIRE_PINNED_TOOLCHAIN"
 PINNED_XCODE = ("27.2", "27B52")
 PINNED_SWIFT = "6.4.2"
 
@@ -134,15 +135,34 @@ def hid_idle_seconds() -> float | None:
     return int(match.group(1)) / 1_000_000_000 if match else None
 
 
+def truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"true", "1"}
+
+
+def running_in_ci(environment: dict[str, str]) -> bool:
+    return truthy(environment.get("CI")) or truthy(environment.get("GITHUB_ACTIONS"))
+
+
 def desk_guard(environment: dict[str, str]) -> str | None:
-    ci = bool(environment.get("CI") or environment.get("GITHUB_ACTIONS"))
-    if ci:
+    if running_in_ci(environment):
         return None
     return native_guard_reason(False, hid_idle_seconds(), os.getloadavg()[0])
 
 
+def native_problem(report: dict[str, object], required: bool, guard: str | None) -> str | None:
+    state = report.get("native_hosts")
+    if state == "passed" or not required:
+        return None
+    if guard is not None and state == f"skipped: {guard}":
+        return None
+    return f"the native AppKit and SwiftUI hosts did not pass: {state}"
+
+
 def sterile_environment(sdk: Path) -> dict[str, str]:
-    environment = {key: value for key, value in os.environ.items() if key not in ISOLATED_VARIABLES}
+    environment = {
+        key: value for key, value in os.environ.items()
+        if key not in ISOLATED_VARIABLES and key != NATIVE_SKIP_VARIABLE
+    }
     environment["PKG_CONFIG_PATH"] = str(sdk / PKG_CONFIG_FILE.parent)
     environment["MTL_DEBUG_LAYER"] = "0"
     return environment
@@ -166,16 +186,19 @@ def run(command: list[str], environment: dict[str, str], cwd: Path | None = None
 
 
 def prove(sdk: Path, package: Path, work: Path, bundle: Path,
-          require_pin: bool = False) -> dict[str, object]:
+          require_pin: bool = False, require_prefix: bool = False) -> dict[str, object]:
     swift = shutil.which("swift")
     if swift is None:
+        if require_prefix:
+            raise ProofError("the swift toolchain is not on PATH")
         raise Skip("the swift toolchain is not on PATH")
     swift_version = tool_version([swift, "--version"])
     xcode_version = tool_version(["xcodebuild", "-version"])
     pin_problems = pinned_toolchain_problems(xcode_version, swift_version)
     if pin_problems and not require_pin:
-        raise Skip("; ".join(pin_problems) + " (pass --require-pinned-toolchain to fail instead)")
-    problems = pin_problems + check_package(package)
+        print("vellum.swift-host-proof: running on an unpinned toolchain: " +
+              "; ".join(pin_problems))
+    problems = (pin_problems if require_pin else []) + check_package(package)
     if problems:
         raise ProofError("\n".join(problems))
     source_root = package.resolve().parents[1]
@@ -230,6 +253,9 @@ def prove(sdk: Path, package: Path, work: Path, bundle: Path,
     report = json.loads(output.strip().splitlines()[-1])
     if report.get("ok") is not True:
         raise ProofError(f"the proof did not report success: {report}")
+    problem = native_problem(report, running_in_ci(environment) or require_prefix, native_guard)
+    if problem is not None:
+        raise ProofError(problem)
     return {
         "schema": "vellum.swift-host-proof.v1",
         "sdk_root": str(sdk),
@@ -237,6 +263,8 @@ def prove(sdk: Path, package: Path, work: Path, bundle: Path,
         "xcode_version": xcode_version,
         "pinned_toolchain": {"xcode": " ".join(PINNED_XCODE), "swift": PINNED_SWIFT},
         "pinned_toolchain_matched": not pin_problems,
+        "pinned_toolchain_problems": pin_problems,
+        "ci": running_in_ci(environment),
         "native_hosts_guard": native_guard or "clear",
         "extra_build_flags": rpath,
         "pkg_config_path": environment["PKG_CONFIG_PATH"],
@@ -264,7 +292,9 @@ def main(argv: list[str] | None = None) -> int:
         sdk = locate_sdk(args.sdk_prefix or os.environ.get(PREFIX_VARIABLE, ""),
                          required=args.require_prefix)
         evidence = prove(sdk, package, args.work.resolve(), bundle,
-                         require_pin=args.require_pinned_toolchain)
+                         require_pin=args.require_pinned_toolchain or
+                         truthy(os.environ.get(REQUIRE_PIN_VARIABLE)),
+                         require_prefix=args.require_prefix)
     except Skip as reason:
         print(f"SKIP vellum.swift-host-proof: {reason}")
         return SKIP

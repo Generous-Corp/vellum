@@ -163,6 +163,26 @@ static void check_forward_compatibility(vellum_host_app* app,
     CHECK(vellum_host_app_create(&config.v1, &created) == VELLUM_HOST_ERROR_VERSION);
     CHECK(created == NULL);
 
+    future.newer_field = 0U;
+    future.v1.struct_size = 4097U;
+    CHECK(vellum_host_app_pointer(app, &future.v1, &outcome) ==
+          VELLUM_HOST_ERROR_INVALID_ARGUMENT);
+
+    struct {
+        vellum_host_text_input v1;
+        uint64_t newer_field;
+    } large_input;
+    memset(&large_input, 0, sizeof large_input);
+    large_input.v1.struct_size = sizeof large_input;
+    large_input.newer_field = 0xA5A5A5A5A5A5A5A5ULL;
+    CHECK(vellum_host_app_text_input(app, 0, &large_input.v1) == VELLUM_HOST_OK);
+    CHECK(large_input.newer_field == 0xA5A5A5A5A5A5A5A5ULL);
+    CHECK(strcmp(large_input.v1.node_id, "proof-title") == 0);
+    vellum_host_text_input short_input;
+    memset(&short_input, 0, sizeof short_input);
+    short_input.struct_size = sizeof short_input - 8U;
+    CHECK(vellum_host_app_text_input(app, 0, &short_input) == VELLUM_HOST_ERROR_VERSION);
+
     vellum_host_key_event key;
     memset(&key, 0, sizeof key);
     key.struct_size = sizeof key - 1U;

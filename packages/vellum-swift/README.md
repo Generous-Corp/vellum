@@ -46,11 +46,17 @@ accessibility children through them. Outside CI the runner first checks that
 the machine is idle (`HIDIdleTime` of at least 180 s and a 1-minute load under 4)
 and skips only the window-opening part, with a message, when it is in use.
 
-- With `VELLUM_REQUIRE_GPU=ON` a missing prefix fails the test; otherwise it
-  skips with a message.
-- The toolchain is pinned to Xcode 27.2 (27B52) with Swift 6.4.2. Another
-  toolchain skips the test, recording the versions it found, unless
-  `VELLUM_SWIFT_PROOF_REQUIRE_PINNED_TOOLCHAIN=ON` makes it fail.
+- With `VELLUM_REQUIRE_GPU=ON` (`--require-prefix`), a missing prefix or a missing
+  `swift` fails the test; otherwise each skips with a message.
+- The toolchain is pinned to Xcode 27.2 (27B52) with Swift 6.4.2. The proof
+  builds and runs on any toolchain and records `pinned_toolchain_matched`; a
+  mismatch fails only with `VELLUM_SWIFT_PROOF_REQUIRE_PINNED_TOOLCHAIN` (a CMake
+  option or an environment variable set to `1` or `true`).
+- In CI (`CI` or `GITHUB_ACTIONS` set to `true` or `1`) or with
+  `--require-prefix`, the native hosts must pass. The only accepted skip is the
+  runner's own desk-machine guard outside CI. The runner clears any inherited
+  `VELLUM_SWIFT_PROOF_SKIP_NATIVE` and sets it only from that guard. The windows
+  are borderless and never ordered front.
 
 `vellum.swift-host-proof-unit` covers the runner's skip, failure and sterility
 rules.
