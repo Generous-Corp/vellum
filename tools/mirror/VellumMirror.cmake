@@ -180,6 +180,10 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             ${VELLUM_MIRROR_TARGET_${_tkey}_INCLUDE_DIRS})
         target_compile_definitions("${_vellum_mirror_target}" PRIVATE
             ${VELLUM_MIRROR_TARGET_${_tkey}_DEFINITIONS})
+        # The mirror's own build is the one place the GPU-surface guard of the
+        # installed choke headers is lifted (gpu_surface_guard.py). PRIVATE,
+        # so it never reaches an installed consumer.
+        target_compile_definitions("${_vellum_mirror_target}" PRIVATE VELLUM_MIRROR_BUILD=1)
         # Per-source options Pulp's own CMake sets on these sources (the plan
         # reads them from the mirrored CMake; source_compile_options.py).
         if(VELLUM_MIRROR_TARGET_${_tkey}_OPTION_SOURCE_COUNT GREATER 0)
@@ -404,11 +408,41 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     endforeach()
 endforeach()
 list(REMOVE_DUPLICATES _vellum_mirror_public_includes)
+# The GPU device types are not part of the installed surface. Each choke
+# header (gpu_surface_guard.py) is installed as its guarded copy instead of
+# the mirrored file; every other header installs byte for byte.
+math(EXPR _vellum_gpu_guard_last "${VELLUM_MIRROR_GPU_GUARD_COUNT} - 1")
 foreach(_include IN LISTS _vellum_mirror_public_includes)
+    set(_vellum_gpu_guard_excludes)
+    if(VELLUM_MIRROR_GPU_GUARD_COUNT GREATER 0)
+        foreach(_index RANGE ${_vellum_gpu_guard_last})
+            if(VELLUM_MIRROR_GPU_GUARD_${_index}_INCLUDE_DIR STREQUAL _include)
+                list(APPEND _vellum_gpu_guard_excludes
+                    REGEX "${VELLUM_MIRROR_GPU_GUARD_${_index}_EXCLUDE}" EXCLUDE)
+            endif()
+        endforeach()
+    endif()
     install(DIRECTORY "${_include}/"
         DESTINATION "${VELLUM_MIRROR_INSTALL_DIR}/include"
-        PATTERN "*.in" EXCLUDE)
+        PATTERN "*.in" EXCLUDE
+        ${_vellum_gpu_guard_excludes})
 endforeach()
+if(VELLUM_MIRROR_GPU_GUARD_COUNT GREATER 0)
+    foreach(_index RANGE ${_vellum_gpu_guard_last})
+        if(NOT VELLUM_MIRROR_GPU_GUARD_${_index}_INCLUDE_DIR IN_LIST _vellum_mirror_public_includes)
+            message(FATAL_ERROR "GPU guard names ${VELLUM_MIRROR_GPU_GUARD_${_index}_INCLUDE_DIR}, "
+                "which the mirror does not install")
+        endif()
+        get_filename_component(_vellum_gpu_guard_dir
+            "${VELLUM_MIRROR_GPU_GUARD_${_index}_RELATIVE}" DIRECTORY)
+        install(FILES "${VELLUM_MIRROR_GPU_GUARD_${_index}_COPY}"
+            DESTINATION "${VELLUM_MIRROR_INSTALL_DIR}/include/${_vellum_gpu_guard_dir}")
+    endforeach()
+    install(DIRECTORY "${VELLUM_MIRROR_GPU_GUARD_CONFIG_DIR}/"
+        DESTINATION "${VELLUM_MIRROR_INSTALL_DIR}/include")
+endif()
+install(FILES "${VELLUM_MIRROR_GPU_GUARD_MANIFEST}"
+    DESTINATION "${VELLUM_MIRROR_INSTALL_DIR}/share/provenance")
 install(DIRECTORY "${VELLUM_MIRROR_BUILD_INFO_DIR}/"
     DESTINATION "${VELLUM_MIRROR_INSTALL_DIR}/include")
 foreach(_header IN LISTS VELLUM_MIRROR_CHOC_HEADERS)

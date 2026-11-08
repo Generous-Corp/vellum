@@ -327,3 +327,49 @@ These are release gates, not claims that `v0.1.10` exists before the tag workflo
 has completed. The local artifact flow exercises the same archive verification
 and transactional installation logic but cannot claim hosted release
 immutability or GitHub asset digests.
+
+## Unsupported surface
+
+The installed mirror (`sdk/mirror/`) does not support Pulp's GPU device types.
+Installed consumers may not use `pulp::render::GpuSurface`,
+`pulp::render::GpuCompute`, or any mirrored header that exposes them. The reason:
+after Pulp's GPU device layer forwards to Vellum's gpu-runtime, these are
+`gpu_runtime` types whose symbols the package does not export.
+
+This fails at compile time. A *choke header* declares the `gpu_runtime` types or
+includes `<gpu_runtime/...>`. The installed copy of each one includes
+`vellum/mirror/gpu_surface_unsupported.hpp`, which is an `#error`:
+
+> pulp::render::GpuSurface / GpuCompute and the mirrored headers that expose them
+> (for example <pulp/view/window_host.hpp>) are not part of the installed
+> mirror's supported surface.
+
+The guard is lifted only by `VELLUM_MIRROR_BUILD`, a private definition on the
+mirror's own targets. A consumer that defines it itself is outside the supported
+surface.
+
+**Which headers are guarded.** `tools/mirror/gpu_surface_guard.py` computes the
+guarded set from the landed mirror; nobody lists it by hand. The package records
+it in `mirror/share/provenance/gpu-guarded-headers.txt`. Every header that
+reaches a choke header through its includes is unsupported too.
+
+At export `20261107-f0ac0a4ff392`, 6 choke headers are guarded:
+- `pulp/platform/gpu_fwd.hpp`;
+- `pulp/render/gpu_surface.hpp`, `gpu_diagnostics.hpp`, `gpu_render_time.hpp`,
+  `gpu_startup_report.hpp` and `bench/perf_counters.hpp`.
+
+9 more headers reach them:
+- `pulp/view/window_host.hpp`, `window_classes.hpp`, `window_manager.hpp`,
+  `widget_bridge.hpp`, `scripted_ui.hpp`, `scripted_editor_session.hpp` and
+  `plugin_view_host.hpp`;
+- `pulp/render/headless_surface.hpp` and `skia_surface.hpp`.
+
+**What stays byte for byte.** Apart from the one guard line in each choke header,
+every installed mirror header equals its `mirror/` source. The
+`vellum.mirror-install-consumer` test checks this, and checks that a consumer
+including `<pulp/view/window_host.hpp>` or `<pulp/render/gpu_surface.hpp>` fails
+with the guard's message.
+
+**Not yet supported.** Exposing the GPU API to installed consumers through the
+Skia/Dawn provider is a named, unscheduled follow-up: "installed GPU API through
+the provider".

@@ -272,7 +272,18 @@ if(PULP_HAS_SKIA)
     # whole import library creates LNK2038/LNK1319 conflicts.  The SDK instead
     # carries a thunk-only archive made from its ARM64EC members with those
     # directives removed.
-    if(WIN32 AND CMAKE_CXX_COMPILER_ARCHITECTURE_ID STREQUAL "ARM64EC")
+    # CMake may report ARM64 for an ARM64EC compiler because the target is
+    # selected by the explicit /arm64EC flag rather than the generator
+    # platform. Use Pulp's shared detector so that the EC runtime closure is
+    # present in both forms; checking the raw compiler architecture alone
+    # silently drops this archive and leaves the final plugin with unresolved
+    # STL thunk symbols.
+    if(WIN32)
+        pulp_windows_target_is_arm64ec(_pulp_canvas_arm64ec)
+    else()
+        set(_pulp_canvas_arm64ec FALSE)
+    endif()
+    if(_pulp_canvas_arm64ec)
         set(PULP_ARM64EC_STL_THUNKS "" CACHE FILEPATH
             "Sanitized ARM64EC STL thunk archive for static-runtime consumers")
         if(NOT EXISTS "${PULP_ARM64EC_STL_THUNKS}")
@@ -288,6 +299,7 @@ if(PULP_HAS_SKIA)
         endif()
         target_link_libraries(pulp-canvas PUBLIC pulp-arm64ec-stl-thunks)
     endif()
+    unset(_pulp_canvas_arm64ec)
     target_compile_definitions(pulp-canvas PUBLIC PULP_HAS_SKIA=1)
     target_include_directories(pulp-canvas PRIVATE ${SKIA_INCLUDE_DIRS})
 
@@ -356,13 +368,13 @@ if(PULP_HAS_SKIA)
         endif()
     endif()
 
-    # font_registry_stubs.cpp compiles direct icu::Locale / BreakIterator calls
-    # when PULP_HAS_SKIA and ICU public headers are on the include path (true on
-    # Linux with libicu-dev). The bundled Skia statically links SkUnicode but does
-    # NOT export ICU's own symbols, so link system ICU here or the Linux link
-    # fails with undefined `icu_NN::Locale::...`. macOS links libicucore
-    # implicitly; Linux must be explicit. (Surfaced by the local Linux VM CI lane.)
-    if(UNIX AND NOT APPLE AND NOT ANDROID)
+    # font_registry_stubs.cpp can use direct icu::Locale / BreakIterator calls
+    # when a source build explicitly opts into PULP_SYSTEM_ICU. The bundled
+    # Skia statically links SkUnicode but does NOT export ICU's own symbols, so
+    # that opt-in must link system ICU. Release SDKs keep this OFF: the host ICU
+    # major version would otherwise become an ABI dependency of static archives.
+    if(PULP_SYSTEM_ICU AND UNIX AND NOT APPLE AND NOT ANDROID)
+        target_compile_definitions(pulp-canvas PRIVATE PULP_SYSTEM_ICU=1)
         find_package(ICU COMPONENTS uc i18n data QUIET)
         if(ICU_FOUND)
             target_link_libraries(pulp-canvas PRIVATE ICU::uc ICU::i18n ICU::data)

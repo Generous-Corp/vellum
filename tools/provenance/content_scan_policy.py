@@ -140,7 +140,7 @@ FORBIDDEN_NATIVE_CONTENT_PATTERNS: dict[str, tuple[str, int]] = {
     # defines a name the mirror defines. Anything else is the accepted blind
     # spot (DECISIONS 2026-11-05, both gates).
     "renamed-mirror-namespace": (
-        r"(?:\bvellum\s*::\s*(?:android|canvas|design|events|platform|render|simd|state|view)\b|\bnamespace\s+vellum\s*\{[\s\S]*?\bnamespace\s+(?:android|canvas|design|events|platform|render|simd|state|view)\b|\bnamespace\s+vellum\b[\s\S]*?(?<![\w:])(?:android|canvas|design|events|platform|render|simd|state|view)\s*::|#\s*(?:include|import)\s*[<\"][^>\"\n]*\bvellum/(?:android|canvas|design|events|platform|render|simd|state|view)/|__has_include(?:_next)?\s*\(\s*[<\"][^>\"\n]*\bvellum/(?:android|canvas|design|events|platform|render|simd|state|view)/|\busing\s+namespace\s+vellum\s*;[\s\S]*?(?<![\w:])(?:android|canvas|design|events|platform|render|simd|state|view)\s*::)",
+        r"(?:\bvellum\s*::\s*(?:android|canvas|dataplane|design|events|platform|render|simd|state|view)\b|\bnamespace\s+vellum\s*\{[\s\S]*?\bnamespace\s+(?:android|canvas|dataplane|design|events|platform|render|simd|state|view)\b|\bnamespace\s+vellum\b[\s\S]*?(?<![\w:])(?:android|canvas|dataplane|design|events|platform|render|simd|state|view)\s*::|#\s*(?:include|import)\s*[<\"][^>\"\n]*\bvellum/(?:android|canvas|dataplane|design|events|platform|render|simd|state|view)/|__has_include(?:_next)?\s*\(\s*[<\"][^>\"\n]*\bvellum/(?:android|canvas|dataplane|design|events|platform|render|simd|state|view)/|\busing\s+namespace\s+vellum\s*;[\s\S]*?(?<![\w:])(?:android|canvas|dataplane|design|events|platform|render|simd|state|view)\s*::)",
         0,
     ),
 }

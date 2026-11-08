@@ -36,6 +36,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import source_compile_options  # noqa: E402
+import gpu_surface_guard  # noqa: E402
 
 
 RECEIPT_SCHEMA = "pulp.vellum.export-receipt.v2"
@@ -182,6 +183,7 @@ BUILD_INFO_INPUTS = {
     "20261014-34d16417a460": {"version": "0.964.1"},
     "20261025-46cee5e4e6e2": {"version": "1.11.0"},
     "20261102-0f616a440cec": {"version": "1.46.1"},
+    "20261107-f0ac0a4ff392": {"version": "1.88.0"},
 }
 
 # Pulp's CHOC standards patch, re-expressed: the JSON number parser accepts a
@@ -867,6 +869,14 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     deps = external_dependencies(units)
     roots = prepare_dependencies(deps, deps_dir, skia_dir, skia_asset_sha256, repo)
     generated = prepare_generated(repo, receipt, units, generated_dir)
+    # GPU device types are not part of the installed surface: the installed
+    # copy of each choke header carries an #error guard (gpu_surface_guard.py).
+    try:
+        gpu_guard = gpu_surface_guard.write_guard(repo, generated_dir / "gpu-surface-guard")
+    except gpu_surface_guard.GuardError as error:
+        raise PlanError(str(error)) from error
+    if "vellum-gpu-runtime" in deps and not gpu_guard["headers"]:
+        raise PlanError("the closures pin vellum-gpu-runtime, but no mirrored header was found to guard")
     binary_dir_token = "@VELLUM_MIRROR_BINARY_DATA_DIR@"
 
     provided = {target: name for name, recipe in DEPENDENCIES.items() for target in recipe.get("provides", [])}
@@ -1024,11 +1034,17 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         "binary_data": generated["binary_data"],
         "source_compile_options": source_options,
         "units": unit_rows,
+        "gpu_guard": gpu_guard,
     }
 
 
 def cmake_quote(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$") + '"'
+
+
+def cmake_path_suffix_regex(relative: str) -> str:
+    """A CMake regular expression matching a path that ends in `/<relative>`."""
+    return "/" + re.sub(r"([][.+*?^$()|\\])", r"\\\1", relative) + "$"
 
 
 def cmake_list(name: str, values: list[str]) -> list[str]:
@@ -1064,6 +1080,16 @@ def write_cmake(build_plan: dict[str, Any], output: Path) -> None:
         lines.append(f"set(VELLUM_MIRROR_BINARY_{key}_HEADER_SHA256 {cmake_quote(spec['header_sha256'])})")
         for var, digest in sorted(spec["sources_sha256"].items()):
             lines.append(f"set(VELLUM_MIRROR_BINARY_{key}_{var}_SHA256 {cmake_quote(digest)})")
+    guard = build_plan["gpu_guard"]
+    lines.append(f"set(VELLUM_MIRROR_GPU_GUARD_CONFIG_DIR {cmake_quote(guard['config_dir'])})")
+    lines.append(f"set(VELLUM_MIRROR_GPU_GUARD_MANIFEST {cmake_quote(guard['manifest'])})")
+    lines.append(f"set(VELLUM_MIRROR_GPU_GUARD_COUNT {len(guard['headers'])})")
+    for index, header in enumerate(guard["headers"]):
+        lines.append(f"set(VELLUM_MIRROR_GPU_GUARD_{index}_INCLUDE_DIR {cmake_quote(header['include_dir'])})")
+        lines.append(f"set(VELLUM_MIRROR_GPU_GUARD_{index}_RELATIVE {cmake_quote(header['relative'])})")
+        lines.append(f"set(VELLUM_MIRROR_GPU_GUARD_{index}_COPY {cmake_quote(header['copy'])})")
+        lines.append(f"set(VELLUM_MIRROR_GPU_GUARD_{index}_EXCLUDE "
+                     f"{cmake_quote(cmake_path_suffix_regex(header['relative']))})")
     lines += cmake_list("VELLUM_MIRROR_UNITS", [unit["name"] for unit in build_plan["units"]])
     for unit in build_plan["units"]:
         ukey = re.sub(r"[^A-Za-z0-9]", "_", unit["name"]).upper()
