@@ -25,6 +25,10 @@
 // Threading: like every RmlUi call, frames are rendered from one thread at a
 // time in the process.
 //
+// Pixel format: fixed per renderer at the first begin_frame(); a later frame
+// with another format draws nothing and is logged as a caller error. The
+// viewport is the region to draw into, normally the whole target.
+//
 // Supported in this version: compiled geometry, generated and loaded textures,
 // scissor and transforms. Clip masks, layers, filters and shaders are not yet
 // drawn; calls to them are counted in unsupported_calls().

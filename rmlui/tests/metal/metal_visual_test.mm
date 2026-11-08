@@ -14,6 +14,7 @@
 
 #include <RmlUi/Core.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -103,7 +104,14 @@ int main(int argc, char** argv) {
             return kSkip;
         }
         id<MTLCommandQueue> queue = [device newCommandQueue];
+        // Cold-open cost: the shader library compiles at construction and the
+        // pipelines at the first frame. Reported, not gated.
+        const auto compile_start = std::chrono::steady_clock::now();
         MetalRenderInterface renderer(device);
+        const double library_ms = std::chrono::duration<double, std::milli>(
+                                      std::chrono::steady_clock::now() - compile_start)
+                                      .count();
+        double first_frame_ms = -1.0;
         if (!renderer.valid()) {
             std::fprintf(stderr, "the Metal renderer could not build its pipelines\n");
             return 1;
@@ -139,7 +147,13 @@ int main(int argc, char** argv) {
             }
             const auto unsupported_before = renderer.unsupported_calls();
             std::vector<std::uint8_t> metal;
-            if (!render(device, queue, renderer, native, metal)) {
+            const auto frame_start = std::chrono::steady_clock::now();
+            const bool rendered = render(device, queue, renderer, native, metal);
+            if (first_frame_ms < 0.0)
+                first_frame_ms = std::chrono::duration<double, std::milli>(
+                                     std::chrono::steady_clock::now() - frame_start)
+                                     .count();
+            if (!rendered) {
                 std::fprintf(stderr, "Metal render failed: %s\n", document);
                 return 1;
             }
@@ -182,6 +196,8 @@ int main(int argc, char** argv) {
             }
         }
         keepalive.close();
+        std::printf("cold open: shader library %.2f ms; first document (pipelines + 2 frames) %.2f ms\n",
+                    library_ms, first_frame_ms);
         if (kControl) {
             if (!control_tripped) {
                 std::fprintf(stderr, "control: a straight-alpha blend stayed within tolerance on "

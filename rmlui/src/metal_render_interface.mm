@@ -126,6 +126,7 @@ struct MetalRenderInterface::State {
     id<MTLSamplerState> sampler = nil;
     MTLVertexDescriptor* vertex_layout = nil;
     std::unordered_map<NSUInteger, Pipelines> pipelines; // by MTLPixelFormat
+    MTLPixelFormat frame_format = MTLPixelFormatInvalid;
     std::unordered_map<std::uintptr_t, Geometry> geometries;
     std::unordered_map<std::uintptr_t, id<MTLTexture>> textures;
     std::uintptr_t next_handle = 1;
@@ -257,6 +258,14 @@ void MetalRenderInterface::begin_frame(const MetalFrameTarget& frame) {
     s.frame_pipelines = nullptr;
     if (!valid() || !frame.command_buffer || !frame.target || frame.scale <= 0.0f)
         return;
+    if (s.frame_format == MTLPixelFormatInvalid) {
+        s.frame_format = frame.target.pixelFormat;
+    } else if (frame.target.pixelFormat != s.frame_format) {
+        Rml::Log::Message(Rml::Log::LT_ERROR,
+                          "MetalRenderInterface: the target's pixel format changed; a renderer "
+                          "draws to one format for its lifetime");
+        return;
+    }
     s.frame_pipelines = s.pipelines_for(frame.target.pixelFormat);
     if (!s.frame_pipelines)
         return;
