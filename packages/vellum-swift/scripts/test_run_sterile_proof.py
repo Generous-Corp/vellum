@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""Unit coverage for the Swift host proof runner's skip and sterility rules."""
+
+from __future__ import annotations
+
+import importlib.util
+import io
+import tempfile
+import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+SPEC = importlib.util.spec_from_file_location("run_sterile_proof", HERE / "run_sterile_proof.py")
+runner = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(runner)
+PACKAGE = HERE.parent
+
+
+class RunnerTest(unittest.TestCase):
+    def run_main(self, *arguments: str) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with tempfile.TemporaryDirectory() as work, redirect_stdout(out), redirect_stderr(err):
+            code = runner.main(["--package", str(PACKAGE), "--work", work, *arguments])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_missing_prefix_skips_with_a_clear_message(self) -> None:
+        saved = runner.os.environ.pop(runner.PREFIX_VARIABLE, None)
+        try:
+            code, out, _ = self.run_main("--sdk-prefix", "")
+        finally:
+            if saved is not None:
+                runner.os.environ[runner.PREFIX_VARIABLE] = saved
+        self.assertEqual(code, runner.SKIP)
+        self.assertIn("SKIP vellum.swift-host-proof: no installed Vellum SDK prefix", out)
+
+    def test_absent_prefix_directory_skips(self) -> None:
+        code, out, _ = self.run_main("--sdk-prefix", "/nonexistent/vellum-sdk-prefix")
+        self.assertEqual(code, runner.SKIP)
+        self.assertIn("not available", out)
+
+    def test_prefix_without_the_c_abi_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as prefix:
+            code, _, err = self.run_main("--sdk-prefix", prefix)
+        self.assertEqual(code, 1)
+        self.assertIn("does not ship lib/pkgconfig/vellum-host-c.pc", err)
+
+    def test_installed_layouts_are_located(self) -> None:
+        with tempfile.TemporaryDirectory() as text:
+            prefix = Path(text)
+            sdk = prefix / "lib" / "vellum" / "sdk"
+            (sdk / "lib" / "pkgconfig").mkdir(parents=True)
+            (sdk / runner.PKG_CONFIG_FILE).write_text("", encoding="utf-8")
+            self.assertEqual(runner.locate_sdk(str(prefix)), sdk.resolve())
+            self.assertEqual(runner.locate_sdk(str(sdk)), sdk.resolve())
+
+    def test_repository_package_is_sterile(self) -> None:
+        self.assertEqual(runner.check_package(PACKAGE), [])
+
+    def test_source_headers_in_the_package_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as text:
+            package = Path(text) / "package"
+            runner.shutil.copytree(PACKAGE, package, ignore=runner.shutil.ignore_patterns(".build"))
+            stray = package / "Sources" / "CVellumHostC" / "skia_dawn_surface.hpp"
+            stray.write_text("#pragma once\n", encoding="utf-8")
+            (package / "Sources" / "CVellumHostC" / "shim.h").write_text(
+                "#include <vellum/graphics/scene.hpp>\n", encoding="utf-8")
+            problems = runner.check_package(package)
+        self.assertTrue(any("skia_dawn_surface.hpp" in item for item in problems))
+        self.assertTrue(any("shim" in item for item in problems))
+
+    def test_source_references_outside_allowed_roots_are_detected(self) -> None:
+        source = Path("/repo")
+        allowed = [Path("/repo/build/swift-host-proof"), Path("/opt/sdk")]
+        self.assertFalse(runner.foreign_source_reference(
+            "-I/opt/sdk/include /repo/build/swift-host-proof/package", source, allowed))
+        self.assertTrue(runner.foreign_source_reference(
+            "-I/repo/bindings/c/include", source, allowed))
+
+
+if __name__ == "__main__":
+    unittest.main()
