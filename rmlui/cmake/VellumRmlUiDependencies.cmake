@@ -76,9 +76,16 @@ function(vellum_rmlui_fetch_dependencies)
     # VellumRmlUi::Lua drives its own per-instance sandboxed state instead.
     set(RMLUI_LUA_BINDINGS OFF CACHE BOOL "" FORCE)
     set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${_vellum_rmlui_rmlui_component})
+    # One local fix, recorded in DEPENDENCIES.md and offered upstream: a text
+    # input whose font does not resolve keeps one empty line, so a click into
+    # it does not read before the start of its line list.
+    set(_vellum_rmlui_patches
+        "${CMAKE_CURRENT_LIST_DIR}/patches/rmlui-text-input-keep-one-line.patch")
     FetchContent_Declare(vellum_rmlui_rmlui
         GIT_REPOSITORY https://github.com/mikke89/RmlUi.git
-        GIT_TAG "${VELLUM_RMLUI_RMLUI_COMMIT}")
+        GIT_TAG "${VELLUM_RMLUI_RMLUI_COMMIT}"
+        PATCH_COMMAND "${CMAKE_COMMAND}" "-DVELLUM_RMLUI_PATCHES=${_vellum_rmlui_patches}"
+            -P "${CMAKE_CURRENT_LIST_DIR}/ApplyRmlUiPatches.cmake")
     FetchContent_MakeAvailable(vellum_rmlui_rmlui)
     if(NOT TARGET RmlUi::Core)
         message(FATAL_ERROR "the pinned RmlUi source did not define RmlUi::Core")

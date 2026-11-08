@@ -1,0 +1,29 @@
+RmlUi: keep one line in a text input whose font does not resolve
+
+WidgetTextInput::FormatText() returns early when the field has no font face,
+leaving its line list empty. A click into the field then reaches
+CalculateCharacterIndex(), whose line index clamps to -1, and reads before the
+start of the list. Keeping one empty line, as the zero-width path already
+does, gives every cursor and hit-testing path a line to work with.
+
+Applies to RmlUi 58c751531f4c1a1eb2dc56f409b8e8a323a0c9ad; the same early
+return is still present on upstream master. Offered upstream. MIT, as RmlUi.
+
+diff --git a/Source/Core/Elements/WidgetTextInput.cpp b/Source/Core/Elements/WidgetTextInput.cpp
+index be2d1c52..237e001b 100644
+--- a/Source/Core/Elements/WidgetTextInput.cpp
++++ b/Source/Core/Elements/WidgetTextInput.cpp
+@@ -1232,7 +1232,13 @@ Vector2f WidgetTextInput::FormatText(float height_constraint)
+ 
+ 	const FontFaceHandle font_handle = parent->GetFontFaceHandle();
+ 	if (!font_handle)
++	{
++		// Without a font there is no text to lay out, but the cursor and hit-testing code indexes the line list, so keep
++		// the invariant that it holds at least one (empty) line.
++		lines.clear();
++		lines.push_back(Line{});
+ 		return content_area;
++	}
+ 
+ 	const FontMetrics& font_metrics = GetFontEngineInterface()->GetFontMetrics(font_handle);
+ 
