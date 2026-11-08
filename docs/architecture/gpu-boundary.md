@@ -22,6 +22,17 @@ The public slice consists of:
   application builds, plus a headers-only `Vellum::DawnHeaders` target for an
   embedding host's authenticated bootstrap and compute code.
 
+The scene carries a single integer schema version, `kSceneVersion`, starting
+at 1. Fields whose defaults leave existing scenes unchanged are added without a
+bump; a new node kind or a change in meaning bumps it. Consumers fail closed on
+a version they do not know: paint-command flattening yields nothing and the
+surface's `render` returns an error. Node kinds are closed per version, so a
+kind a consumer does not know is skipped with its subtree instead of being
+drawn as a group. The authoring materializer rejects an unknown node type with
+an error diagnostic and reports authored style or content it drops as warnings
+on `RenderedApplication::diagnostics`, using the DesignIR severity and
+disposition vocabulary.
+
 Native self-test is deliberately fail-closed. A requested native surface is
 not allowed to fall back to CoreGraphics or an offscreen surface. The test also
 contains a blank-frame negative control so a broken capture detector cannot

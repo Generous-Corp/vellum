@@ -3,11 +3,13 @@
 #import <Foundation/Foundation.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <optional>
 #include <set>
+#include <string_view>
 #include <utility>
 
 namespace vellum::authoring {
@@ -26,6 +28,37 @@ constexpr float kDefaultButtonHeight = 44.0F;
 constexpr float kDefaultTextInputHeight = 44.0F;
 constexpr float kDefaultGenericHeight = 0.0F;
 constexpr float kTextLineHeightMultiplier = 1.4F;
+constexpr std::array<std::string_view, 9> kIntrinsicTypes{
+    "view", "stack", "text", "text-run", "text-input", "button", "image", "canvas", "custom",
+};
+constexpr std::array<std::string_view, 10> kBoxStyleKeys{
+    "backgroundColor", "backgroundLinearGradient", "borderRadius", "boxShadow", "direction",
+    "height", "padding", "width", "x", "y",
+};
+constexpr std::array<std::string_view, 6> kTextStyleKeys{
+    "color", "fontFamily", "fontSize", "fontWeight", "letterSpacing", "textDecoration",
+};
+
+using vellum::graphics::LoweringDiagnostic;
+
+template <std::size_t Size>
+bool contains(const std::array<std::string_view, Size>& values, std::string_view value) {
+    return std::find(values.begin(), values.end(), value) != values.end();
+}
+
+bool style_key_consumed(std::string_view type, std::string_view key) {
+    const bool text = type == "text" || type == "text-run";
+    if (contains(kBoxStyleKeys, key)) return !(text && key == "backgroundColor");
+    if (text) return contains(kTextStyleKeys, key);
+    if (type == "stack") return key == "gap";
+    if (type == "button") return key == "color";
+    if (type == "text-input") return key == "color" || key == "fontSize";
+    return false;
+}
+
+bool text_run_style_key_consumed(std::string_view parent_type, std::string_view key) {
+    return parent_type == "text" && contains(kTextStyleKeys, key);
+}
 
 void set_error(std::string* destination, std::string value) {
     if (destination != nullptr) *destination = std::move(value);
@@ -230,7 +263,29 @@ struct MaterializeContext final {
     std::vector<Interaction>* interactions = nullptr;
     std::vector<TextInputControl>* text_inputs = nullptr;
     std::vector<AccessibilityNode>* accessibility_nodes = nullptr;
+    std::vector<LoweringDiagnostic>* diagnostics = nullptr;
 };
+
+template <typename Consumed>
+void report_dropped_style(
+    NSDictionary* style, const std::string& node_id, std::string_view type,
+    Consumed consumed, MaterializeContext& context) {
+    NSArray* keys = [style.allKeys sortedArrayUsingSelector:@selector(compare:)];
+    for (id key in keys) {
+        if (![key isKindOfClass:NSString.class]) continue;
+        const std::string name = cpp_string(key);
+        if (consumed(name)) continue;
+        context.diagnostics->push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = "VELLUM_STYLE_DROPPED",
+            .node_id = node_id,
+            .property = name,
+            .message = "style key " + name + " is not supported on " + std::string(type) +
+                " nodes and was ignored",
+        });
+    }
+}
 
 std::string inferred_accessibility_role(NSString* type, NSDictionary* source) {
     if ([source[@"accessibilityRole"] isKindOfClass:NSString.class]) {
@@ -317,7 +372,32 @@ bool materialize_node(
         set_error(error, "authoring tree contains an empty or duplicate node id: " + identity);
         return false;
     }
+    const std::string type_name = cpp_string(type);
+    if (!contains(kIntrinsicTypes, type_name)) {
+        context.diagnostics->push_back({
+            .severity = LoweringDiagnostic::Severity::error,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = "VELLUM_UNKNOWN_NODE_TYPE",
+            .node_id = identity,
+            .property = "type",
+            .message = "authoring node " + identity + " has unsupported type " + type_name,
+        });
+        set_error(error, context.diagnostics->back().message);
+        return false;
+    }
     NSDictionary* style = dictionary_or_empty(source[@"style"]);
+    report_dropped_style(style, identity, type_name,
+        [&](std::string_view key) { return style_key_consumed(type_name, key); }, context);
+    if (type_name == "image" || type_name == "canvas") {
+        context.diagnostics->push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::lowered,
+            .code = "VELLUM_NODE_CONTENT_DROPPED",
+            .node_id = identity,
+            .property = "type",
+            .message = type_name + " content has no scene representation; only its box was kept",
+        });
+    }
     NSDictionary* events = dictionary_or_empty(source[@"events"]);
     const bool is_text_input = [type isEqualToString:@"text-input"];
     NSString* input_value = nil;
@@ -621,6 +701,11 @@ bool materialize_node(
         NSDictionary* child = static_cast<NSDictionary*>(child_value);
         if ([child[@"type"] isEqual:@"text-run"] &&
             ([type isEqualToString:@"text"] || [type isEqualToString:@"button"])) {
+            report_dropped_style(dictionary_or_empty(child[@"style"]),
+                [child[@"id"] isKindOfClass:NSString.class] ? cpp_string(child[@"id"]) : identity,
+                "text-run",
+                [&](std::string_view key) { return text_run_style_key_consumed(type_name, key); },
+                context);
             continue;
         }
         NSDictionary* child_style = dictionary_or_empty(child[@"style"]);
@@ -653,7 +738,9 @@ bool materialize_node(
 bool materialize_rendered_tree(
     std::string_view rendered_json,
     RenderedApplication& output,
-    std::string* error) {
+    std::string* error,
+    std::vector<LoweringDiagnostic>* failure_diagnostics) {
+    if (failure_diagnostics != nullptr) failure_diagnostics->clear();
     if (rendered_json.size() > kMaximumJsonBytes) {
         set_error(error, "JavaScript authoring bridge JSON is invalid or too large");
         return false;
@@ -694,10 +781,14 @@ bool materialize_rendered_tree(
         .interactions = &candidate.interactions,
         .text_inputs = &candidate.text_inputs,
         .accessibility_nodes = &candidate.accessibility_nodes,
+        .diagnostics = &candidate.diagnostics,
     };
     if (!materialize_node(
             tree, {0.0F, 0.0F, width, height}, 0.0F, 0.0F, 0U,
             context, candidate.scene.root, error)) {
+        if (failure_diagnostics != nullptr) {
+            *failure_diagnostics = std::move(candidate.diagnostics);
+        }
         return false;
     }
     output = std::move(candidate);

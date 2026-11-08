@@ -84,6 +84,40 @@ bool mesh_commands() {
 
 }  // namespace
 
+bool scene_versioning() {
+    using vellum::graphics::SceneNode;
+    static_assert(vellum::graphics::kSceneVersion == 1U);
+    static_assert(vellum::graphics::scene_version_is_supported(vellum::graphics::kSceneVersion));
+    static_assert(!vellum::graphics::scene_version_is_supported(0U));
+    static_assert(!vellum::graphics::scene_version_is_supported(2U));
+
+    vellum::graphics::Scene scene;
+    if (scene.scene_version != vellum::graphics::kSceneVersion) return false;
+    scene.root.children.push_back({
+        .id = "future",
+        .kind = static_cast<SceneNode::Kind>(42),
+        .bounds = {5.0F, 5.0F, 10.0F, 10.0F},
+        .children = {{
+            .id = "future/child",
+            .kind = SceneNode::Kind::rectangle,
+            .bounds = {0.0F, 0.0F, 4.0F, 4.0F},
+        }},
+    });
+    scene.root.children.push_back({
+        .id = "known",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {1.0F, 1.0F, 4.0F, 4.0F},
+    });
+    const auto commands = vellum::graphics::make_paint_commands(scene);
+    if (commands.size() != 1U || commands[0].node_id != "known" ||
+        commands[0].scene_version != vellum::graphics::kSceneVersion) {
+        return false;
+    }
+
+    scene.scene_version = vellum::graphics::kSceneVersion + 1U;
+    return vellum::graphics::make_paint_commands(scene).empty();
+}
+
 int main() {
     vellum::graphics::Scene scene;
     scene.root.id = "root";
@@ -156,5 +190,5 @@ int main() {
         !near(diagonal.end_y, 125.0F)) {
         return 1;
     }
-    return mesh_commands() ? 0 : 1;
+    return mesh_commands() && scene_versioning() ? 0 : 1;
 }

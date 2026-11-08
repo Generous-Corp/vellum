@@ -694,6 +694,11 @@ public:
     }
 
     bool render(const Scene& scene, std::string* error) {
+        if (!scene_version_is_supported(scene.scene_version)) {
+            set_error(error, "scene version " + std::to_string(scene.scene_version) +
+                                 " is not supported by this renderer");
+            return false;
+        }
         if (!render_internal(scene, false, nullptr, error)) {
             return false;
         }

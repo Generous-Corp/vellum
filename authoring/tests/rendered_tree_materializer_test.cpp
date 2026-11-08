@@ -2,6 +2,8 @@
 
 #include <iostream>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace {
 
@@ -293,6 +295,87 @@ int main() {
         error != "backgroundLinearGradient exceeds the 64-stop limit" ||
         rendered.scene.width != styled_width) {
         std::cerr << "excessive gradient stops did not fail atomically\n";
+        return 1;
+    }
+
+    using vellum::graphics::LoweringDiagnostic;
+    std::vector<LoweringDiagnostic> failure_diagnostics;
+    if (!vellum::authoring::materialize_rendered_tree(
+            kRenderedTree, rendered, &error, &failure_diagnostics) ||
+        !rendered.diagnostics.empty() || !failure_diagnostics.empty() ||
+        rendered.scene.scene_version != vellum::graphics::kSceneVersion) {
+        std::cerr << "known-good tree reported lowering diagnostics\n";
+        return 1;
+    }
+
+    const auto known_good_width = rendered.scene.width;
+    constexpr std::string_view kUnknownType = R"JSON({
+      "protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
+        "type":"stack","id":"unknown-root","style":{"width":100,"height":100},
+        "children":[{"type":"hologram","id":"future-node",
+          "style":{"width":10,"height":10},"children":[]}]}}
+    )JSON";
+    if (vellum::authoring::materialize_rendered_tree(
+            kUnknownType, rendered, &error, &failure_diagnostics) ||
+        error != "authoring node future-node has unsupported type hologram" ||
+        rendered.scene.width != known_good_width ||
+        !rendered.diagnostics.empty() ||
+        failure_diagnostics.size() != 1U ||
+        failure_diagnostics[0].severity != LoweringDiagnostic::Severity::error ||
+        failure_diagnostics[0].disposition != LoweringDiagnostic::Disposition::unsupported ||
+        failure_diagnostics[0].code != "VELLUM_UNKNOWN_NODE_TYPE" ||
+        failure_diagnostics[0].node_id != "future-node" ||
+        failure_diagnostics[0].property != "type" ||
+        failure_diagnostics[0].message != error ||
+        vellum::graphics::find_node(rendered.scene, "future-node") != nullptr) {
+        std::cerr << "unknown node type did not fail closed with a diagnostic\n";
+        return 1;
+    }
+
+    constexpr std::string_view kDroppedStyle = R"JSON({
+      "protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
+        "type":"stack","id":"dropped-root","style":{"width":200,"height":100},
+        "children":[
+          {"type":"view","id":"panel","style":{"width":50,"height":20,
+            "backgroundColor":"#112233","opacity":0.5,"gap":4},"children":[]},
+          {"type":"text","id":"caption","text":"Hi",
+            "style":{"height":20,"backgroundColor":"#FF0000","color":"#000000"},
+            "children":[]},
+          {"type":"image","id":"logo","style":{"width":10,"height":10},"children":[]}
+        ]}}
+    )JSON";
+    if (!vellum::authoring::materialize_rendered_tree(
+            kDroppedStyle, rendered, &error, &failure_diagnostics)) {
+        std::cerr << error << '\n';
+        return 1;
+    }
+    const auto* panel = vellum::graphics::find_node(rendered.scene, "panel");
+    const auto* caption = vellum::graphics::find_node(rendered.scene, "caption");
+    const auto expect = [&](std::size_t index, std::string_view node_id,
+                            std::string_view code, std::string_view property,
+                            LoweringDiagnostic::Disposition disposition) {
+        const auto& diagnostic = rendered.diagnostics[index];
+        return diagnostic.severity == LoweringDiagnostic::Severity::warning &&
+               diagnostic.disposition == disposition && diagnostic.code == code &&
+               diagnostic.node_id == node_id && diagnostic.property == property &&
+               !diagnostic.message.empty();
+    };
+    if (panel == nullptr || panel->kind != vellum::graphics::SceneNode::Kind::rectangle ||
+        caption == nullptr || caption->kind != vellum::graphics::SceneNode::Kind::text ||
+        caption->text != "Hi" || !failure_diagnostics.empty() ||
+        rendered.diagnostics.size() != 4U ||
+        !expect(0U, "panel", "VELLUM_STYLE_DROPPED", "gap",
+            LoweringDiagnostic::Disposition::unsupported) ||
+        !expect(1U, "panel", "VELLUM_STYLE_DROPPED", "opacity",
+            LoweringDiagnostic::Disposition::unsupported) ||
+        !expect(2U, "caption", "VELLUM_STYLE_DROPPED", "backgroundColor",
+            LoweringDiagnostic::Disposition::unsupported) ||
+        !expect(3U, "logo", "VELLUM_NODE_CONTENT_DROPPED", "type",
+            LoweringDiagnostic::Disposition::lowered) ||
+        vellum::graphics::to_string(rendered.diagnostics[2].disposition) != "unsupported" ||
+        vellum::graphics::to_string(rendered.diagnostics[3].disposition) != "lowered" ||
+        vellum::graphics::to_string(rendered.diagnostics[0].severity) != "warning") {
+        std::cerr << "dropped style was not reported as a lowering warning\n";
         return 1;
     }
 
