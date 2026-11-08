@@ -89,6 +89,26 @@ static int capture_passes(vellum_host_surface* surface, uint32_t width, uint32_t
            stats.passes_content_floor == 1U;
 }
 
+static int captures_repeat(vellum_host_surface* surface, const vellum_host_app* app) {
+    vellum_host_image image;
+    memset(&image, 0, sizeof image);
+    image.struct_size = sizeof image;
+    if (vellum_host_surface_render(surface, app) != VELLUM_HOST_OK ||
+        vellum_host_surface_capture_rgba(surface, &image) != VELLUM_HOST_OK) {
+        return 0;
+    }
+    uint8_t* first = malloc(image.byte_count);
+    if (first == NULL) return 0;
+    memcpy(first, image.pixels, image.byte_count);
+    const size_t first_count = image.byte_count;
+    const int repeated = vellum_host_surface_render(surface, app) == VELLUM_HOST_OK &&
+                         vellum_host_surface_capture_rgba(surface, &image) == VELLUM_HOST_OK &&
+                         image.byte_count == first_count &&
+                         memcmp(first, image.pixels, first_count) == 0;
+    free(first);
+    return repeated;
+}
+
 struct thread_probe {
     vellum_host_app* app;
     vellum_host_status status;
@@ -211,6 +231,7 @@ int main(int argc, char** argv) {
 
     REQUIRE(vellum_host_surface_render(surface, app) == VELLUM_HOST_OK);
     CHECK(capture_passes(surface, 360U, 240U));
+    CHECK(captures_repeat(surface, app));
 
     vellum_host_pointer_event press;
     memset(&press, 0, sizeof press);

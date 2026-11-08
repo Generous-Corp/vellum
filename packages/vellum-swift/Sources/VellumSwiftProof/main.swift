@@ -66,6 +66,10 @@ func exercise(app: VellumApplication, target: VellumSurface, viewport: CGSize,
         width: first.width, height: first.height)
     try require(!blank.passesContentFloor, "blank negative control passed the content floor")
 
+    try target.render(app)
+    let repeated = try target.captureRGBA()
+    try require(repeated.pixels == first.pixels, "rendering the same state twice changed the frame")
+
     let nodes = try app.accessibilityNodes()
     guard let button = nodes.first(where: { $0.role == "button" }) else {
         throw ProofFailure(description: "no button in the accessibility projection")
@@ -103,6 +107,7 @@ func exercise(app: VellumApplication, target: VellumSurface, viewport: CGSize,
         "non_background_pixels": stats.nonBackgroundPixels,
         "luminance_standard_deviation": stats.luminanceStandardDeviation,
         "accessibility_nodes": nodes.count,
+        "deterministic_repeat_capture": true,
         "text_inputs": try app.textInputs().count,
         "launch_to_first_frame_ms": launchToFirstFrame,
         "entry_to_first_frame_ms": entryToFirstFrame,
