@@ -149,7 +149,7 @@ func exerciseNativeHosts(bundle: String) throws -> [String: Any] {
        !reason.isEmpty {
         return ["native_hosts": "skipped: \(reason)"]
     }
-    guard hasWindowServer() else { return ["native_hosts": "skipped: no window-server session"] }
+    guard hasWindowServer() else { return ["native_hosts": "skipped-no-window-server"] }
     _ = NSApplication.shared
     NSApplication.shared.setActivationPolicy(.prohibited)
     let frame = NSRect(x: 0, y: 0, width: 360, height: 240)

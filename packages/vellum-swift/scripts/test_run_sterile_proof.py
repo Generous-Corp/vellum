@@ -190,6 +190,47 @@ class RunnerTest(unittest.TestCase):
         self.assertIsNone(runner.desk_guard({"GITHUB_ACTIONS": "true"}))
         self.assertIsNotNone(runner.native_guard_reason(False, 10.0, 0.5))
 
+    def test_no_window_server_is_a_visible_skip_only_in_ci(self) -> None:
+        report = {"native_hosts": runner.NO_WINDOW_SERVER}
+        self.assertIsNone(runner.native_problem(report, True, None, ci=True))
+        self.assertIsNotNone(runner.native_problem(report, True, None, ci=False))
+        self.assertIsNotNone(runner.native_problem(
+            {"native_hosts": "skipped: inherited"}, True, None, ci=True))
+        probe = {"launchctl_command": "launchctl print gui/501",
+                 "launchctl_gui": {"ok": False, "exit": 113, "detail": "Bad request."},
+                 "cg_session": False}
+        summary = runner.native_summary(report, probe)
+        self.assertTrue(summary.startswith("SKIP native AppKit and SwiftUI hosts"))
+        self.assertIn("failed (exit 113)", summary)
+        self.assertIn("CGSessionCopyCurrentDictionary NULL", summary)
+        self.assertNotIn("passed", summary)
+
+    def test_window_server_probe_reports_both_signals(self) -> None:
+        probe = runner.window_server_probe()
+        self.assertIn(probe["cg_session"], (True, False, None))
+        self.assertIn("ok", probe["launchctl_gui"])
+        self.assertTrue(probe["launchctl_command"].startswith("launchctl print gui/"))
+
+    def test_native_check_reports_pass_skip_and_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as text:
+            evidence = Path(text) / "evidence.json"
+            out = io.StringIO()
+            with redirect_stdout(out):
+                self.assertEqual(runner.check_native(evidence), runner.SKIP)
+            for state, expected in (("passed", 0), (runner.NO_WINDOW_SERVER, runner.SKIP),
+                                    ("broken", 1)):
+                evidence.write_text(runner.json.dumps({"proof": {"native_hosts": state}}),
+                                    encoding="utf-8")
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    self.assertEqual(runner.check_native(evidence), expected, state)
+
+    def test_step_summary_is_appended_in_ci(self) -> None:
+        with tempfile.TemporaryDirectory() as text:
+            summary = Path(text) / "summary.md"
+            runner.publish_summary({"GITHUB_STEP_SUMMARY": str(summary)}, ["SKIP native"])
+            self.assertIn("- SKIP native", summary.read_text(encoding="utf-8"))
+            runner.publish_summary({}, ["ignored"])
+
 
 if __name__ == "__main__":
     unittest.main()

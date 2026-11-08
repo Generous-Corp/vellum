@@ -37,10 +37,22 @@ add_test(NAME vellum.swift-host-proof
 set_tests_properties(vellum.swift-host-proof PROPERTIES
     SKIP_RETURN_CODE 77
     ENVIRONMENT "MTL_DEBUG_LAYER=0")
+set_tests_properties(vellum.swift-host-proof PROPERTIES
+    FIXTURES_SETUP vellum-swift-host-evidence)
 if(TEST vellum.swift-host-proof-install)
     set_tests_properties(vellum.swift-host-proof PROPERTIES
         FIXTURES_REQUIRED vellum-swift-host-sdk)
 endif()
+
+add_test(NAME vellum.swift-host-proof-native
+    COMMAND "${Python3_EXECUTABLE}" -I
+        "${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_sterile_proof.py"
+        --package "${CMAKE_CURRENT_SOURCE_DIR}"
+        --work "${_vellum_swift_proof_work}/run"
+        --check-native "${_vellum_swift_proof_work}/run/swift-host-proof-evidence.json")
+set_tests_properties(vellum.swift-host-proof-native PROPERTIES
+    SKIP_RETURN_CODE 77
+    FIXTURES_REQUIRED vellum-swift-host-evidence)
 
 add_test(NAME vellum.swift-host-proof-unit
     COMMAND "${Python3_EXECUTABLE}" -I

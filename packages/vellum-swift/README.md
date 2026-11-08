@@ -52,11 +52,20 @@ and skips only the window-opening part, with a message, when it is in use.
   builds and runs on any toolchain and records `pinned_toolchain_matched`; a
   mismatch fails only with `VELLUM_SWIFT_PROOF_REQUIRE_PINNED_TOOLCHAIN` (a CMake
   option or an environment variable set to `1` or `true`).
-- In CI (`CI` or `GITHUB_ACTIONS` set to `true` or `1`) or with
-  `--require-prefix`, the native hosts must pass. The only accepted skip is the
-  runner's own desk-machine guard outside CI. The runner clears any inherited
-  `VELLUM_SWIFT_PROOF_SKIP_NATIVE` and sets it only from that guard. The windows
-  are borderless and never ordered front.
+- With `--require-prefix` the native hosts must pass locally; the only accepted
+  local skip is the runner's own desk-machine guard. The runner clears any
+  inherited `VELLUM_SWIFT_PROOF_SKIP_NATIVE` and sets it only from that guard.
+  The windows are borderless and never ordered front.
+- Before the native part, the runner probes the window server. It records
+  whether `launchctl print gui/<uid>` succeeds and whether
+  `CGSessionCopyCurrentDictionary` returns a session, both in the log and as
+  `window_server_probe` in the evidence. In CI (`CI` or `GITHUB_ACTIONS` set to
+  `true` or `1`), a missing window-server session does not fail the proof. It
+  is recorded as `skipped-no-window-server`, never as `passed`, with a loud
+  `SKIP` line and a `$GITHUB_STEP_SUMMARY` entry.
+- `vellum.swift-host-proof-native` reads the evidence and reports Skipped in
+  ctest's summary whenever the native part did not run, so a skip stays visible
+  even though passing tests print nothing.
 
 `vellum.swift-host-proof-unit` covers the runner's skip, failure and sterility
 rules.

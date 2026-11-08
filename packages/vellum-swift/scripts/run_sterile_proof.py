@@ -34,6 +34,7 @@ DESK_IDLE_SECONDS = 180.0
 DESK_MAX_LOAD = 4.0
 NATIVE_SKIP_VARIABLE = "VELLUM_SWIFT_PROOF_SKIP_NATIVE"
 REQUIRE_PIN_VARIABLE = "VELLUM_SWIFT_PROOF_REQUIRE_PINNED_TOOLCHAIN"
+NO_WINDOW_SERVER = "skipped-no-window-server"
 PINNED_XCODE = ("27.2", "27B52")
 PINNED_SWIFT = "6.4.2"
 
@@ -149,13 +150,90 @@ def desk_guard(environment: dict[str, str]) -> str | None:
     return native_guard_reason(False, hid_idle_seconds(), os.getloadavg()[0])
 
 
-def native_problem(report: dict[str, object], required: bool, guard: str | None) -> str | None:
+def native_problem(report: dict[str, object], required: bool, guard: str | None,
+                   ci: bool = False) -> str | None:
     state = report.get("native_hosts")
     if state == "passed" or not required:
         return None
     if guard is not None and state == f"skipped: {guard}":
         return None
+    if ci and state == NO_WINDOW_SERVER:
+        return None
     return f"the native AppKit and SwiftUI hosts did not pass: {state}"
+
+
+def cg_session_present() -> bool | None:
+    try:
+        import ctypes
+        graphics = ctypes.CDLL("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+        foundation = ctypes.CDLL(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+    except (OSError, ImportError):
+        return None
+    graphics.CGSessionCopyCurrentDictionary.restype = ctypes.c_void_p
+    session = graphics.CGSessionCopyCurrentDictionary()
+    if not session:
+        return False
+    foundation.CFRelease(ctypes.c_void_p(session))
+    return True
+
+
+def window_server_probe() -> dict[str, object]:
+    command = ["launchctl", "print", f"gui/{os.getuid()}"]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=20)
+        lines = (result.stdout or result.stderr).strip().splitlines()
+        launchctl = {"ok": result.returncode == 0, "exit": result.returncode,
+                     "detail": lines[0][:200] if lines else ""}
+    except (OSError, subprocess.TimeoutExpired) as error:
+        launchctl = {"ok": False, "exit": None, "detail": str(error)[:200]}
+    return {"launchctl_command": " ".join(command), "launchctl_gui": launchctl,
+            "cg_session": cg_session_present()}
+
+
+def describe_probe(probe: dict[str, object]) -> str:
+    launchctl = probe["launchctl_gui"]
+    cg = {True: "non-NULL", False: "NULL", None: "unavailable"}[probe["cg_session"]]
+    status = "ok" if launchctl["ok"] else f"failed (exit {launchctl['exit']})"
+    return (f"{probe['launchctl_command']} {status}: {launchctl['detail']}; "
+            f"CGSessionCopyCurrentDictionary {cg}")
+
+
+def native_summary(report: dict[str, object], probe: dict[str, object]) -> str:
+    state = report.get("native_hosts")
+    if state == "passed":
+        return "native AppKit and SwiftUI hosts: passed"
+    return f"SKIP native AppKit and SwiftUI hosts: {state} [{describe_probe(probe)}]"
+
+
+def publish_summary(environment: dict[str, str], lines: list[str]) -> None:
+    target = environment.get("GITHUB_STEP_SUMMARY")
+    if not target:
+        return
+    try:
+        with open(target, "a", encoding="utf-8") as handle:
+            handle.write("### Swift host proof\n\n" + "".join(f"- {line}\n" for line in lines) + "\n")
+    except OSError:
+        pass
+
+
+def check_native(evidence_path: Path) -> int:
+    try:
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        print(f"SKIP vellum.swift-host-proof-native: no proof evidence at {evidence_path}")
+        return SKIP
+    state = evidence.get("proof", {}).get("native_hosts")
+    probe = evidence.get("window_server_probe")
+    detail = f" [{describe_probe(probe)}]" if probe else ""
+    if state == "passed":
+        print("vellum.swift-host-proof-native: native AppKit and SwiftUI hosts passed" + detail)
+        return 0
+    if isinstance(state, str) and state.startswith("skipped"):
+        print(f"SKIP vellum.swift-host-proof-native: {state}{detail}")
+        return SKIP
+    print(f"vellum.swift-host-proof-native: unexpected native state {state!r}", file=sys.stderr)
+    return 1
 
 
 def sterile_environment(sdk: Path) -> dict[str, str]:
@@ -241,6 +319,8 @@ def prove(sdk: Path, package: Path, work: Path, bundle: Path,
     if foreign_source_reference(linked, source_root, allowed):
         raise ProofError("the proof binary links from the Vellum source tree")
 
+    probe = window_server_probe()
+    print(f"vellum.swift-host-proof: window-server probe: {describe_probe(probe)}")
     native_guard = desk_guard(environment)
     if native_guard is not None:
         print(f"vellum.swift-host-proof: skipping the window-opening native hosts: {native_guard}")
@@ -253,7 +333,11 @@ def prove(sdk: Path, package: Path, work: Path, bundle: Path,
     report = json.loads(output.strip().splitlines()[-1])
     if report.get("ok") is not True:
         raise ProofError(f"the proof did not report success: {report}")
-    problem = native_problem(report, running_in_ci(environment) or require_prefix, native_guard)
+    ci = running_in_ci(environment)
+    problem = native_problem(report, ci or require_prefix, native_guard, ci)
+    summary = native_summary(report, probe)
+    print(f"vellum.swift-host-proof: {summary}")
+    publish_summary(environment, [f"window-server probe: {describe_probe(probe)}", summary])
     if problem is not None:
         raise ProofError(problem)
     return {
@@ -266,6 +350,8 @@ def prove(sdk: Path, package: Path, work: Path, bundle: Path,
         "pinned_toolchain_problems": pin_problems,
         "ci": running_in_ci(environment),
         "native_hosts_guard": native_guard or "clear",
+        "native_hosts_summary": summary,
+        "window_server_probe": probe,
         "extra_build_flags": rpath,
         "pkg_config_path": environment["PKG_CONFIG_PATH"],
         "clean_build_seconds": round(build_seconds, 3),
@@ -285,7 +371,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bundle", type=Path)
     parser.add_argument("--require-prefix", action="store_true")
     parser.add_argument("--require-pinned-toolchain", action="store_true")
+    parser.add_argument("--check-native", type=Path)
     args = parser.parse_args(argv)
+    if args.check_native is not None:
+        return check_native(args.check_native)
     package = args.package.resolve()
     bundle = (args.bundle or package / "Fixtures" / "host-proof-app.js").resolve()
     try:
