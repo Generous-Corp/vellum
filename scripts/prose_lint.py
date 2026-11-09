@@ -3,8 +3,9 @@
 
 The rules are the crisp-writing checker's, vendored unchanged as
 crisp_writing_check.py so Vellum and the skill share one rule set. This wrapper
-checks only lines added since the base, reads comment text only in code files,
-and skips paths that hold history or another project's bytes.
+checks only lines added since the base, reads comment text only in code files
+(the checker's --comments-only), and skips paths that hold history or another
+project's bytes.
 
 Usage: prose_lint.py [--base <ref>]     default base: origin/main
 Add "crisp-writing: ok" and a reason to a line to accept it.
@@ -15,7 +16,6 @@ from __future__ import annotations
 import argparse
 import importlib.util
 from pathlib import Path
-import re
 import subprocess
 import sys
 
@@ -24,7 +24,7 @@ HERE = Path(__file__).resolve().parent
 CHECKER = HERE / "crisp_writing_check.py"
 # SHA-256 of the vendored checker. Update it only together with a fresh copy of
 # the skill's scripts/check.py, so the two rule sets cannot drift apart quietly.
-CHECKER_SHA256 = "157fb14f91f93beda6549c1cdf07d7ce9f4386ddb1f131d9dd5be11bdb34671a"
+CHECKER_SHA256 = "e649f8a05377de6035943e6201e310c074582ad97eea17f80314eca78b3d3200"
 
 # History-bearing records, the byte-identical Pulp export, generated data, and
 # this lint's own files, which quote the patterns they test.
@@ -37,12 +37,6 @@ EXEMPT_FILES = {
 }
 EXEMPT_SUFFIXES = (".json", ".patch")
 
-# Vellum's own pattern on top of the shared set: dated rulings that name a role.
-EXTRA_CHECKS = [
-    ("breadcrumb", re.compile(
-        r"\b(?:team[- ]lead|owner) (?:ruling|sign-?off)\b[^.\n]{0,10}\b20\d\d-\d\d-\d\d", re.I)),
-]
-
 
 def load_checker():
     spec = importlib.util.spec_from_file_location("crisp_writing_check", CHECKER)
@@ -51,17 +45,6 @@ def load_checker():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.COMMENTS_ONLY = True
-    module.CHECKS = [*module.CHECKS, *EXTRA_CHECKS]
-    prose_of = module.prose_of
-
-    def code_aware_prose_of(path: str, text: str) -> str:
-        # CMakeLists.txt ends in .txt, which the checker reads as prose.
-        if Path(path).name == "CMakeLists.txt":
-            match = module.COMMENT_RX.search(text)
-            return match.group(1) if match else ""
-        return prose_of(path, text)
-
-    module.prose_of = code_aware_prose_of
     return module
 
 

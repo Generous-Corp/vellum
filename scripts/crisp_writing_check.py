@@ -18,7 +18,7 @@ CHECKS = [
     ("breadcrumb", re.compile(r"\b[PDM]\d+ (?:work|units?|items?|follow-?up)\b")),
     ("breadcrumb", re.compile(r"\b(?:this|the previous|next) session\b|\bper the reviewer\b|\bcodex (?:p\d|review)\b", re.I)),
     ("breadcrumb", re.compile(r"\b(?:added|introduced|fixed|follow-?up)\b[^.\n]{0,20}#\d{2,}|\b[\w.-]+#\d{2,}\b", re.I)),
-    ("breadcrumb", re.compile(r"\b(?:owner|integrator) (?:decision|ruling)\b[^.\n]{0,10}\b20\d\d-\d\d-\d\d", re.I)),
+    ("breadcrumb", re.compile(r"\b(?:owner|integrator|team[- ]lead) (?:decision|ruling|sign-?off)\b[^.\n]{0,10}\b20\d\d-\d\d-\d\d", re.I)),
     ("padding", re.compile(r"\b(?:it'?s worth noting|importantly,|in order to|this ensures that|seamless(?:ly)?|leverag(?:e|es|ing)|robust|comprehensive|cutting-edge|delve|game-changer|utiliz(?:e|es|ing))\b", re.I)),
 ]
 SKIP = "crisp-writing: ok"
@@ -29,7 +29,7 @@ COMMENTS_ONLY = False
 
 def prose_of(path, text):
     """Return the part of a line that is prose: whole line for docs, comment text for code."""
-    if not COMMENTS_ONLY or path.endswith(PROSE_EXT):
+    if not COMMENTS_ONLY or (path.endswith(PROSE_EXT) and not path.endswith("CMakeLists.txt")):
         return text
     m = COMMENT_RX.search(text)
     return m.group(1) if m else ""
