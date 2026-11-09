@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -147,6 +148,20 @@ class FrameworkTrustedVerifyTests(unittest.TestCase):
             code, verdict = self.repo.judge()
         self.assertEqual(verdict["mode"], "no-op")
 
+    def test_the_no_op_path_is_fast_and_reads_nothing_more(self):
+        self.repo.write("docs/readme.md", b"Vellum, edited\n")
+        verifier_module = trusted.load_verifier()
+        def refuse(*args, **kwargs):
+            raise AssertionError("an unrelated change must not run the rename or the regime")
+        verifier_module.derive_framework_transfer = refuse
+        verifier_module.verify_framework = refuse
+        verifier_module.load_rename_tool = refuse
+        started = time.monotonic()
+        with mock.patch.object(trusted, "load_verifier", lambda: verifier_module):
+            code, verdict = self.repo.judge()
+        self.assertEqual((code, verdict["mode"], verdict["errors"]), (0, "no-op", []))
+        self.assertLess(time.monotonic() - started, 10)
+
     def test_the_pull_request_tree_is_written_from_blobs_only(self):
         # A filter or hook the pull request declares never runs: the tree is
         # read from git objects, not checked out.
@@ -191,6 +206,21 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
                          ["  contents: read\n", "      contents: read\n"])
         self.assertNotIn("secrets.", self.text)
         self.assertNotIn(": write", self.text)
+
+    def test_the_check_reports_on_every_pull_request_and_queue_entry(self):
+        # A required check that never reports blocks a pull request forever,
+        # so nothing may narrow when it runs or skip it.
+        trigger = self.text.split("\non:\n", 1)[1].split("\n\n", 1)[0]
+        blocks = dict(re.findall(r"^  (\w+):\n((?:    .*\n?)*)", trigger, re.MULTILINE))
+        self.assertEqual(set(blocks), {"pull_request_target", "merge_group"})
+        self.assertEqual(re.findall(r"^    ([\w-]+):", blocks["pull_request_target"], re.MULTILINE), ["types"])
+        self.assertEqual(blocks["merge_group"].strip(), "branches: [main]")
+        for block in blocks.values():
+            for narrowing in ("paths", "paths-ignore", "branches-ignore", "tags"):
+                self.assertNotIn(f"{narrowing}:", block)
+        jobs = self.text.split("\njobs:\n", 1)[1]
+        self.assertIsNone(re.search(r"^\s*(?:-\s+)?if:", jobs, re.MULTILINE))
+        self.assertNotIn("continue-on-error", jobs)
 
     def test_the_check_has_a_stable_name(self):
         self.assertEqual(re.findall(r"^jobs:\n  ([\w-]+):\n    name: ([\w-]+)$", self.text, re.MULTILINE),
