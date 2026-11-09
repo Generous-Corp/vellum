@@ -1,10 +1,9 @@
 #pragma once
 // MIDI Learn for RmlUi editors: the RmlUi-free half of the feature that Pulp's
-// view layer draws as a right-click menu and an overlay (pulp::view
-// MidiLearnTarget). An RmlUi editor raises MIDI Learn actions from its document
-// and shows each parameter's state with element classes; this header turns the
-// one into calls on the editor's MIDI Learn engine and the other into class
-// changes.
+// view layer draws as a right-click menu and an overlay (its MidiLearnTarget).
+// An RmlUi editor raises MIDI Learn actions from its document and shows each
+// parameter's state with element classes; this header turns the one into
+// calls on the editor's MIDI Learn engine and the other into class changes.
 //
 // The editor supplies a MidiLearnHost (the same five calls as Pulp's
 // MidiLearnTarget, keyed by the string parameter ids RmlUi documents carry),
