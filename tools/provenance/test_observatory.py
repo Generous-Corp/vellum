@@ -1962,5 +1962,135 @@ class ObservatoryTests(unittest.TestCase):
                 observatory.load_events(root)
 
 
+
+class OwnCommitEventTests(unittest.TestCase):
+    """A change adds Vellum observations only for its own commits."""
+
+    REPOSITORY = "Generous-Corp/vellum"
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        run(self.root, "git", "init", "-b", "main")
+        run(self.root, "git", "config", "user.email", "observatory@example.invalid")
+        run(self.root, "git", "config", "user.name", "Observatory Test")
+        write(self.root / "graphics/render.cpp", "int a;\n")
+        run(self.root, "git", "add", ".")
+        run(self.root, "git", "commit", "-m", "root")
+        self.root_commit = run(self.root, "git", "rev-parse", "HEAD")
+        self.write_cursor(self.root_commit)
+        run(self.root, "git", "add", ".")
+        run(self.root, "git", "commit", "-m", "cursor at root")
+        self.cursor_commit = run(self.root, "git", "rev-parse", "HEAD")
+        write(self.root / "graphics/render.cpp", "int b;\n")
+        run(self.root, "git", "commit", "-am", "a main change after the cursor")
+        self.main_change = run(self.root, "git", "rev-parse", "HEAD")
+        self.base = self.main_change
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def write_cursor(self, vellum_commit: str) -> None:
+        write_json(self.root / observatory.CURSOR_PATH, {
+            "pulp": {"last_scanned_commit": "a" * 40, "repository": "Generous-Corp/pulp"},
+            "vellum": {"last_scanned_commit": vellum_commit, "repository": self.REPOSITORY},
+        })
+
+    def add_event(self, source_commit: str) -> None:
+        event_id = f"vellum-{source_commit}"
+        write_json(self.root / observatory.EVENTS_PATH / f"{event_id}.yaml", {
+            "event_id": event_id, "kind": "observation",
+            "source_repository": self.REPOSITORY, "source_commit": source_commit,
+        })
+
+    def check(self) -> None:
+        events = [
+            (path, json.loads(path.read_text()))
+            for path in sorted((self.root / observatory.EVENTS_PATH).glob("*.yaml"))
+        ]
+        cursor = json.loads((self.root / observatory.CURSOR_PATH).read_text())
+        observatory.verify_new_event_sources(self.root, self.base, events, cursor,
+                                             vellum_repo=self.root)
+
+    def branch_commit(self) -> str:
+        run(self.root, "git", "checkout", "-q", "-b", "branch", self.base)
+        write(self.root / "graphics/render.cpp", "int c;\n")
+        run(self.root, "git", "commit", "-am", "a branch change")
+        return run(self.root, "git", "rev-parse", "HEAD")
+
+    def commit_all(self, message: str) -> None:
+        run(self.root, "git", "add", "-A")
+        run(self.root, "git", "commit", "-m", message)
+
+    def test_branch_events_for_its_own_commits_pass(self) -> None:
+        own = self.branch_commit()
+        self.add_event(own)
+        self.commit_all("record the branch's own observation")
+        self.check()
+
+    def test_branch_event_for_a_main_commit_is_refused(self) -> None:
+        own = self.branch_commit()
+        self.add_event(own)
+        self.add_event(self.main_change)
+        self.commit_all("record main's commit as well")
+        with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
+            self.check()
+
+    def test_branch_event_for_a_commit_outside_both_is_refused(self) -> None:
+        run(self.root, "git", "checkout", "-q", "-b", "elsewhere", self.base)
+        write(self.root / "graphics/render.cpp", "int z;\n")
+        run(self.root, "git", "commit", "-am", "a change on another branch")
+        elsewhere = run(self.root, "git", "rev-parse", "HEAD")
+        run(self.root, "git", "checkout", "-q", "main")
+        self.branch_commit()
+        self.add_event(elsewhere)
+        self.commit_all("record another branch's commit")
+        with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
+            self.check()
+
+    def coalesce(self, *, advance: bool, with_code: bool) -> None:
+        # The receiver's shape: one evidence-only commit on main's tip that
+        # moves the Vellum cursor over main's commits and records them.
+        run(self.root, "git", "checkout", "-q", "-b", "automation/pulp-observatory-coalesced", self.base)
+        if advance:
+            self.write_cursor(self.base)
+        self.add_event(self.main_change)
+        if with_code:
+            write(self.root / "graphics/render.cpp", "int d;\n")
+        self.commit_all("chore(provenance): coalesce Pulp observatory evidence")
+
+    def test_evidence_only_cursor_advance_records_mains_commits(self) -> None:
+        self.coalesce(advance=True, with_code=False)
+        self.check()
+
+    def test_cursor_advance_with_a_code_change_is_refused(self) -> None:
+        self.coalesce(advance=True, with_code=True)
+        with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
+            self.check()
+
+    def test_evidence_only_change_without_a_cursor_advance_is_refused(self) -> None:
+        self.coalesce(advance=False, with_code=False)
+        with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
+            self.check()
+
+    def test_cursor_advance_covers_only_the_commits_it_passes(self) -> None:
+        # Advancing the cursor to the root commit's successor does not cover
+        # main's later change.
+        run(self.root, "git", "checkout", "-q", "-b", "automation/pulp-observatory-coalesced", self.base)
+        self.write_cursor(self.cursor_commit)
+        self.add_event(self.main_change)
+        self.commit_all("advance the cursor short of main's change")
+        with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
+            self.check()
+
+    def test_branch_name_alone_earns_no_exemption(self) -> None:
+        # The coalescing branch name with an events-only reconcile (no cursor
+        # move) is refused like any other branch.
+        self.coalesce(advance=False, with_code=False)
+        self.assertEqual(run(self.root, "git", "rev-parse", "--abbrev-ref", "HEAD"),
+                         "automation/pulp-observatory-coalesced")
+        with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
+            self.check()
+
 if __name__ == "__main__":
     unittest.main()

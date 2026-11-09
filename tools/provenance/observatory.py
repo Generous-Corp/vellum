@@ -1003,6 +1003,7 @@ def verify(
     verify_new_event_times(
         root, git_base, events, pulp_repo=pulp_repo, vellum_repo=vellum_repo, now=check_now,
     )
+    verify_new_event_sources(root, git_base, events, cursor, vellum_repo=vellum_repo)
     gaps = coverage_gaps(
         root=root, mapping=mapping, cursor=cursor, events=events,
         pulp_repo=pulp_repo, vellum_repo=vellum_repo,
@@ -1153,6 +1154,84 @@ def verify_new_event_times(
                 f"{event['event_id']}: discovered_at {event['discovered_at']} precedes its "
                 f"commit ({committed.isoformat()})"
             )
+
+
+# The paths an evidence-only reconciliation may change: the shape the
+# observatory receiver's coalescing pull request is held to.
+EVIDENCE_ONLY_PATHS = (
+    CURSOR_PATH.as_posix(),
+    REPORT_JSON_PATH.as_posix(),
+    REPORT_MD_PATH.as_posix(),
+)
+
+
+def is_evidence_path(path: str) -> bool:
+    return path in EVIDENCE_ONLY_PATHS or (
+        path.startswith(EVENTS_PATH.as_posix() + "/") and path.endswith(".yaml")
+        and "/" not in path[len(EVENTS_PATH.as_posix()) + 1:]
+    )
+
+
+def verify_new_event_sources(
+    root: Path, git_base: str | None, events: list[tuple[Path, dict[str, object]]],
+    cursor: dict[str, object], *, vellum_repo: Path | None = None,
+) -> None:
+    """A change records Vellum observations only for its own commits.
+
+    An observation the change adds must name a commit in git_base..HEAD.
+    Commits already on the base (main) are observed by main's own
+    reconciliation; a branch that records them as well collides with it on
+    the next merge of main. The one exception is that reconciliation
+    itself, recognised by its content rather than its branch or actor: a
+    change whose diff touches only observatory evidence and whose committed
+    Vellum cursor advances over the observed commit. An events-only branch
+    reconcile does not move the cursor, and any code change breaks the
+    evidence-only shape. The event's content is checked against Git by the
+    coverage verification as before.
+
+    The rule judges a change to the Vellum repository itself, so it applies
+    only when the observed Vellum history is this checkout's.
+    """
+    if git_base is None:
+        return
+    if vellum_repo is not None and vellum_repo.resolve() != root.resolve():
+        return
+    new_ids = new_event_ids(root, git_base, events)
+    repository = str(cursor["vellum"]["repository"])
+    added = [
+        event for _, event in events
+        if event["kind"] == "observation"
+        and str(event["source_repository"]) == repository
+        and str(event["event_id"]) in new_ids
+    ]
+    if not added:
+        return
+    head = git(root, "rev-parse", "HEAD")
+    own = set(commits_between(root, git_base, head))
+    foreign = [event for event in added if str(event["source_commit"]) not in own]
+    if not foreign:
+        return
+    changed = [path for path in git(root, "diff", "--name-only", "--no-renames", git_base, head).splitlines() if path]
+    advanced: set[str] = set()
+    if all(is_evidence_path(path) for path in changed):
+        try:
+            before = json.loads(git(root, "show", f"{git_base}:{CURSOR_PATH.as_posix()}"))
+            start = str(before["vellum"]["last_scanned_commit"])
+        except (ObservatoryError, KeyError, TypeError, ValueError):
+            start = None
+        end = str(cursor["vellum"]["last_scanned_commit"])
+        if start is not None and start != end and is_ancestor(root, start, end):
+            advanced = set(commits_between(root, start, end))
+    refused = sorted(
+        f"{event['event_id']} ({event['source_commit']})"
+        for event in foreign if str(event["source_commit"]) not in advanced
+    )
+    if refused:
+        raise ObservatoryError(
+            "a change may add Vellum observations only for its own commits; "
+            "these name commits outside git_base..HEAD that this change's "
+            "evidence-only cursor advance does not cover: " + ", ".join(refused)
+        )
 
 
 def late_new_events(
