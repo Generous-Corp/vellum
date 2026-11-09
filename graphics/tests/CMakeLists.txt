@@ -5,7 +5,8 @@ target_include_directories(vellum-scene-capture-harness PUBLIC
 target_link_libraries(vellum-scene-capture-harness PUBLIC
     Vellum::Gpu Vellum::DawnHeaders)
 target_compile_definitions(vellum-scene-capture-harness PRIVATE
-    VELLUM_CAPTURE_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/capture")
+    VELLUM_CAPTURE_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/capture"
+    VELLUM_CAPTURE_BUILD_GOLDEN_ROOT="${CMAKE_CURRENT_BINARY_DIR}")
 set_target_properties(vellum-scene-capture-harness PROPERTIES
     OSX_ARCHITECTURES arm64
     MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET})
