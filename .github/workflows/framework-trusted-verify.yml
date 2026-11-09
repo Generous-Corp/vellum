@@ -24,8 +24,13 @@
 # statuses: write, and a ruleset bound to GitHub Actions cannot tell those
 # apart. The admission steward verifies that the status resolves to a
 # pull_request_target or merge_group run of this exact file on the pull
-# request's head (Shipyard#1178). The token lives only in an unexported shell
-# variable the status posts read; nothing else in the step sees it.
+# request's head (Shipyard#1178). pull_request_target runs the definition on
+# the pull request's base branch, so a pull request aimed at another branch,
+# whose copy of this file was changed, gets a run of this same path that may
+# judge nothing: the status is trusted only once the steward (or a future
+# judge App) confirms the run used main's definition, not merely this path.
+# The token lives only in an unexported shell variable the status posts read;
+# nothing else in the step sees it.
 name: Framework trusted verify
 
 on:
