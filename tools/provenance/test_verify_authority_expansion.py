@@ -1632,6 +1632,97 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         )
         self.assertTrue(any("live overlap danielraffel/vellum#44 is absent" in error for error in errors))
 
+    def release_bump_case(self):
+        """A real-shaped version bump to 0.1.11 overlapping one exact Vellum route."""
+        acknowledgement = self.exact_boundary_acknowledgement()
+        acceptance = self.pulp_exact_boundary_acceptance(acknowledgement)
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        routes = {row["path"] for row in verifier.exact_route_rows(matrix, amendment)
+                  if row["repository"] == "Generous-Corp/vellum"}
+        route = "cli/tests/test_import_backend.py"
+        self.assertIn(route, routes)
+        self.assertIn(route, verifier.RELEASE_BUMP_FILES)
+        base, head = "d" * 40, "e6" * 20
+        files = [
+            {"filename": "CMakeLists.txt", "status": "modified",
+             "patch": "@@ -2,3 +2,3 @@\n project(vellum\n-    VERSION 0.1.10\n+    VERSION 0.1.11\n     LANGUAGES CXX)"},
+            {"filename": route, "status": "modified",
+             "patch": '@@ -9 +9 @@ x\n-            archive = root / "vellum-sdk-0.1.10-test-host.tar.gz"\n'
+                      '+            archive = root / "vellum-sdk-0.1.11-test-host.tar.gz"'},
+            {"filename": "scripts/INSTALLER_SHA256SUMS", "status": "modified",
+             "patch": "@@ -2 +2 @@\n-" + "5" * 64 + "  install.sh\n+" + "b" * 64 + "  install.sh"},
+        ]
+        evidence = {"number": 188, "base_commit": base, "head_commit": head,
+                    "head_parents": [base], "head_author": dict(verifier.RELEASE_BUMP_BOT),
+                    "head_committer": dict(verifier.RELEASE_BUMP_BOT),
+                    "head_message": "chore(release): bump version to 0.1.11", "files": files}
+        pull = {"repository": "Generous-Corp/vellum", "number": 188, "base_commit": base,
+                "merge_base_commit": base, "head_commit": head,
+                "paths": sorted(row["filename"] for row in files)}
+
+        def check(evidence_row=evidence, release_tag="v0.1.11", pull=pull):
+            bundle = {"schema": "vellum.release-bump-evidence.v1",
+                      "repository": "Generous-Corp/vellum", "pulls": [evidence_row]}
+            return verifier.validate_open_pr_snapshot(
+                self.open_pr_snapshot(pull), acceptance, matrix, amendment,
+                release_tag=release_tag, release_bump_evidence=bundle)
+        return evidence, pull, check
+
+    def test_a_release_bump_is_accepted_only_by_its_exact_content(self) -> None:
+        evidence, pull, check = self.release_bump_case()
+        self.assertEqual(check(), [])
+        # Control: the same overlap is refused outside release readiness for v0.1.11.
+        self.assertTrue(any("is absent from acceptance" in e for e in check(release_tag=None)))
+        files = evidence["files"]
+
+        def with_file(index, **change):
+            rows = [dict(row) for row in files]
+            rows[index].update(change)
+            return evidence | {"files": rows}
+
+        violations = {
+            "a second commit": evidence | {"head_parents": ["c" * 40]},
+            "a merge commit": evidence | {"head_parents": [evidence["base_commit"], "c" * 40]},
+            "another author": evidence | {"head_author": {"name": "someone", "email": "a@b.c"}},
+            "another committer": evidence | {"head_committer": {"name": "someone", "email": "a@b.c"}},
+            "another file": evidence | {"files": files + [
+                {"filename": "scripts/release_request.py", "status": "modified",
+                 "patch": "@@ -1 +1 @@\n-A = '0.1.10'\n+A = '0.1.11'"}]},
+            "a non-version line": with_file(0, patch="@@ -2 +2 @@\n-    VERSION 0.1.10\n+    VERSION 0.1.11 # x"),
+            "an added line": with_file(0, patch="@@ -2 +2,2 @@\n-    VERSION 0.1.10\n+    VERSION 0.1.11\n+evil()"),
+            "a removed line": with_file(0, patch="@@ -2,2 +2 @@\n-    VERSION 0.1.10\n-guard()\n+    VERSION 0.1.11"),
+            "another digest line": with_file(2, patch="@@ -1 +1 @@\n-" + "5" * 64 + "  install_core.py\n+" + "b" * 64 + "  install_core.py"),
+            "a version that is not vX": with_file(0, patch="@@ -2 +2 @@\n-    VERSION 0.1.10\n+    VERSION 0.1.12"),
+            "a downgrade": with_file(0, patch="@@ -2 +2 @@\n-    VERSION 0.1.12\n+    VERSION 0.1.11"),
+            "two earlier versions": with_file(1, patch='@@ -9 +9 @@\n-a = "vellum-sdk-0.1.9-x"\n+a = "vellum-sdk-0.1.11-x"'),
+            "a missing patch": with_file(0, patch=None),
+            "an added file": with_file(0, status="added"),
+            "another head": evidence | {"head_commit": "9" * 40},
+        }
+        for label, broken in violations.items():
+            with self.subTest(violation=label):
+                broken_pull = pull | {"paths": sorted(row["filename"] for row in broken["files"])}
+                errors = check(broken, pull=broken_pull)
+                self.assertTrue(any("is not v0.1.11's own version bump" in e for e in errors), errors)
+        with self.subTest(violation="judged against another release"):
+            self.assertTrue(any("is not v0.1.12's own version bump" in e for e in check(release_tag="v0.1.12")))
+        with self.subTest(violation="no evidence"):
+            self.assertTrue(any("no content evidence" in e for e in check(evidence | {"number": 189})))
+        with self.subTest(violation="evidence hides a changed file"):
+            hidden = pull | {"paths": sorted(pull["paths"] + ["scripts/release_request.py"])}
+            self.assertTrue(any("is not v0.1.11's own version bump" in e for e in check(pull=hidden)))
+
+    def test_release_bump_files_follow_version_at_land(self) -> None:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import version_at_land
+        self.assertEqual(
+            verifier.RELEASE_BUMP_FILES,
+            frozenset(version_at_land.VERSION_SURFACES) | {version_at_land.INSTALLER_SUMS},
+        )
+        self.assertEqual(verifier.RELEASE_BUMP_SUMS, version_at_land.INSTALLER_SUMS)
+        self.assertEqual(verifier.RELEASE_BUMP_BOT["name"], "vellum-version-at-land")
+
     def retired_fixture(self) -> tuple[Path, str]:
         """A Git checkout whose history carries the retirement record's commits."""
         temporary, root, _ = self.copy()

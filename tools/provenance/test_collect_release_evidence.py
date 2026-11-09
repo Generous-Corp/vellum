@@ -330,6 +330,42 @@ class OpenPullRequestTests(unittest.TestCase):
         run_cli("live-cursor", "--cursor-root", str(live_root), "--output", str(live))
         self.assertEqual(live.read_bytes(), (self.root / "cursor.json").read_bytes())
 
+    def test_release_bump_evidence_records_each_vellum_head_and_patch(self) -> None:
+        listed = pull(188, sha("a"), sha("b"))
+        unchanged = tree([blob("a.txt", sha("1"))])
+        self.fixture.add_pages("Generous-Corp/vellum", [[listed]])
+        self.fixture.add_pull("Generous-Corp/vellum", listed, unchanged, unchanged)
+        trees = self.fixture.repository_root("Generous-Corp/vellum") / "trees"
+        bot = {"name": "vellum-version-at-land", "email": "vellum-version-at-land@users.noreply.github.com"}
+        write(trees / "188-head-commit.json", {
+            "sha": sha("b"), "tree": {"sha": sha("2")}, "parents": [{"sha": sha("a")}],
+            "author": bot | {"date": "2026-11-08T00:00:00Z"},
+            "committer": bot | {"date": "2026-11-08T00:00:00Z"}, "message": "chore(release): bump",
+        })
+        write(trees / "188-compare.json", {
+            "merge_base_commit": {"sha": sha("c")},
+            "files": [{"filename": "CMakeLists.txt", "status": "modified", "additions": 1,
+                       "patch": "@@ -1 +1 @@\n-VERSION 0.1.10\n+VERSION 0.1.11"}],
+        })
+        output = self.root / "bump.json"
+        run_cli("release-bump-evidence", "--snapshot-root", str(self.fixture.root),
+                "--output", str(output))
+        evidence = json.loads(output.read_text())
+        self.assertEqual(evidence["schema"], "vellum.release-bump-evidence.v1")
+        self.assertEqual(evidence["repository"], "Generous-Corp/vellum")
+        self.assertEqual(evidence["pulls"], [{
+            "number": 188, "base_commit": sha("a"), "head_commit": sha("b"),
+            "head_parents": [sha("a")], "head_author": bot, "head_committer": bot,
+            "head_message": "chore(release): bump",
+            "files": [{"filename": "CMakeLists.txt", "status": "modified",
+                       "patch": "@@ -1 +1 @@\n-VERSION 0.1.10\n+VERSION 0.1.11"}],
+        }])
+        # A head commit that is not the detail's head is refused, not recorded.
+        write(trees / "188-head-commit.json", {"sha": sha("9"), "parents": []})
+        with self.assertRaises(SystemExit):
+            run_cli("release-bump-evidence", "--snapshot-root", str(self.fixture.root),
+                    "--output", str(output))
+
     def test_empty_snapshot_lists_every_repository(self) -> None:
         snapshot, cursor = self.snapshot()
         self.assertEqual(

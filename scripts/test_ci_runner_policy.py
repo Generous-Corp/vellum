@@ -232,12 +232,12 @@ PULP_API_READER_GIT_CALLS = {
 # backslash continuation inside a word, a glued `os.system` argument, a
 # value written to a file for a later step), so any change to the reader is
 # a reviewed change to this digest. The checks below only explain a failure.
-PULP_API_READER_SHA256 = "2cf6dd5116ee7e696f487852bc8d6d4aa056d0e457cda62a815732ef0ce46bf4"
+PULP_API_READER_SHA256 = "f18636adfbe9a999aa0a2b006fcce61effa48865f253dd9d3fabc551c6370b20"
 # The reader reshapes the GitHub responses it fetched through this script, so
 # the script is part of the reader: it is pinned byte for byte like the step
 # and must carry no transport of its own (every read stays a gh call above).
 PULP_API_READER_COLLECTOR = ROOT / "tools" / "provenance" / "collect_release_evidence.py"
-PULP_API_READER_COLLECTOR_SHA256 = "5f91b99e0ef420761716675fd801b6d0ef7b1c009dfc9540add403afd542d592"
+PULP_API_READER_COLLECTOR_SHA256 = "2c99c0e64fa65299b7aae85a6ed805a9d234eebc07fa3521488f5416a02e3677"
 # Every reader line that names Pulp, stripped, verbatim. A new line naming
 # Pulp (an anchor, an env export, a command through a variable) fails.
 PULP_API_READER_PULP_LINES = {

@@ -147,6 +147,42 @@ LIVE_OPEN_PR_REPOSITORIES = frozenset(
     {"Generous-Corp/pulp", "Generous-Corp/vellum", "danielraffel/vellum"}
 )
 RETIRED_OPEN_PR_REPOSITORIES = frozenset({"Generous-Corp/pulp", "Generous-Corp/vellum"})
+# The release readiness check for vX accepts one kind of open overlap the
+# Pulp acceptance cannot list: vX's own version-bump pull request, which is
+# open while vX's dry run is judged. It is recognised by content, never by a
+# number or head pin (Decision recorded 2026-11-08): one commit by the
+# version-at-land bot on the pull request's base, changing only the files
+# below, each changed line a version-string change to exactly vX (or the
+# install.sh digest line of the installer sums). Anything else is judged as
+# an unaccepted overlap. scripts/version_at_land.py owns this file list; a
+# test fails if the two drift.
+RELEASE_BUMP_REPOSITORY = "Generous-Corp/vellum"
+RELEASE_BUMP_BOT = {
+    "name": "vellum-version-at-land",
+    "email": "vellum-version-at-land@users.noreply.github.com",
+}
+RELEASE_BUMP_SUMS = "scripts/INSTALLER_SHA256SUMS"
+RELEASE_BUMP_FILES = frozenset({
+    "CMakeLists.txt",
+    "README.md",
+    "cli/tests/test_agent_instructions_artifact.py",
+    "cli/tests/test_cli.py",
+    "cli/tests/test_contamination_scanner.py",
+    "cli/tests/test_dev.py",
+    "cli/tests/test_import_backend.py",
+    "cli/tests/test_installer.py",
+    "cli/tests/test_sdk_artifact.py",
+    "cli/vellum_cli.py",
+    "docs/cli/contract.md",
+    "docs/cli/install-artifact.md",
+    "scripts/build_sdk_artifact.py",
+    "scripts/install.ps1",
+    "scripts/install.sh",
+    "scripts/verify_sdk_artifact.py",
+    RELEASE_BUMP_SUMS,
+})
+RELEASE_BUMP_SUMS_LINE = re.compile(r"[0-9a-f]{64}  install\.sh")
+RELEASE_VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 EXPECTED_PROPOSED_AT = "2026-08-10T21:55:54Z"
 EXPECTED_ADDENDUM_PROPOSED_AT = "2026-08-11T02:52:16Z"
 EXPECTED_ACKNOWLEDGED_AT = "2026-08-11T20:54:33Z"
@@ -1487,12 +1523,143 @@ def validate_pulp_router_check_evidence(
     return errors
 
 
+def version_occurrence(version: str) -> re.Pattern[str]:
+    """`version` as a whole version string, not part of a longer number."""
+    return re.compile(r"(?<![0-9.])" + re.escape(version) + r"(?![0-9]|\.[0-9])")
+
+
+def patch_line_pairs(patch: str) -> list[tuple[str, str]] | None:
+    """The (removed, added) line pairs of a unified-diff patch body.
+
+    Each hunk must remove and add the same number of lines, so they pair in
+    order; anything else (a pure addition or deletion, a missing-newline
+    marker, an unparseable line) returns None.
+    """
+    pairs: list[tuple[str, str]] = []
+    removed: list[str] = []
+    added: list[str] = []
+
+    def flush() -> bool:
+        if len(removed) != len(added):
+            return False
+        pairs.extend(zip(removed, added))
+        removed.clear()
+        added.clear()
+        return True
+
+    for line in patch.split("\n"):
+        if line.startswith("@@"):
+            if not flush():
+                return None
+        elif line.startswith("-"):
+            if added:
+                if not flush():
+                    return None
+            removed.append(line[1:])
+        elif line.startswith("+"):
+            added.append(line[1:])
+        elif line.startswith(" ") or line == "":
+            if not flush():
+                return None
+        else:
+            return None
+    return pairs if flush() else None
+
+
+def release_bump_problems(
+    evidence: Any, *, base_commit: str, head_commit: str, paths: list[str], release_tag: str
+) -> list[str]:
+    """Why an open Vellum pull request is not exactly release_tag's own version bump.
+
+    An empty list means it is: one commit by the version-at-land bot whose
+    parent is the pull request's base, changing only RELEASE_BUMP_FILES, every
+    changed line a change from one earlier version to exactly release_tag's.
+    """
+    problems: list[str] = []
+    match = re.fullmatch(r"v(" + RELEASE_VERSION.pattern + r")", release_tag or "")
+    if match is None:
+        return ["no release version to judge a version bump against"]
+    new = match.group(1)
+    if not isinstance(evidence, dict):
+        return ["no content evidence for this pull request"]
+    if evidence.get("head_commit") != head_commit or evidence.get("base_commit") != base_commit:
+        return ["content evidence names another head or base"]
+    if evidence.get("head_parents") != [base_commit]:
+        problems.append("head is not exactly one commit on the pull request's base")
+    if evidence.get("head_author") != RELEASE_BUMP_BOT:
+        problems.append("head commit is not authored by the version-at-land bot")
+    if evidence.get("head_committer") != RELEASE_BUMP_BOT:
+        problems.append("head commit is not committed by the version-at-land bot")
+    files = evidence.get("files")
+    if not isinstance(files, list) or not all(isinstance(row, dict) for row in files):
+        return problems + ["changed files are unreadable"]
+    names = [row.get("filename") for row in files]
+    if sorted(names) != sorted(set(paths)) or len(names) != len(set(names)):
+        problems.append("changed files differ from the snapshot's tree diff")
+    old_versions: set[str] = set()
+    for row in files:
+        name = row.get("filename")
+        if name not in RELEASE_BUMP_FILES:
+            problems.append(f"changes {name}, which is not a version file")
+            continue
+        if row.get("status") != "modified":
+            problems.append(f"{name} is {row.get('status')}, not modified")
+            continue
+        patch = row.get("patch")
+        pairs = patch_line_pairs(patch) if isinstance(patch, str) else None
+        if not pairs:
+            problems.append(f"{name}: patch is missing or not line-for-line")
+            continue
+        for before, after in pairs:
+            if name == RELEASE_BUMP_SUMS:
+                if not (RELEASE_BUMP_SUMS_LINE.fullmatch(before)
+                        and RELEASE_BUMP_SUMS_LINE.fullmatch(after)):
+                    problems.append(f"{name}: changes a line that is not the install.sh digest")
+                    break
+                continue
+            candidates = {found.group(0) for found in RELEASE_VERSION.finditer(before)}
+            found = {
+                text for text in candidates
+                if text != new and version_occurrence(text).search(before)
+                and version_occurrence(text).sub(new, before) == after
+            }
+            if len(found) != 1:
+                problems.append(f"{name}: changes a line other than a version string to {new}")
+                break
+            old_versions |= found
+    if len(old_versions) > 1:
+        problems.append(f"changes more than one earlier version: {sorted(old_versions)}")
+    for old in old_versions:
+        if tuple(map(int, old.split("."))) >= tuple(map(int, new.split("."))):
+            problems.append(f"moves the version from {old}, which is not earlier than {new}")
+    if not old_versions and not problems:
+        problems.append("changes no version string")
+    return problems
+
+
 def validate_open_pr_snapshot(
     snapshot: Any, acceptance: Any, matrix: Any, amendment: Any,
-    *, delivery_retired: bool = False,
+    *, delivery_retired: bool = False, release_tag: str | None = None,
+    release_bump_evidence: Any = None,
 ) -> list[str]:
-    """Compare the accepted overlap audit with a fresh GitHub API snapshot."""
+    """Compare the accepted overlap audit with a fresh GitHub API snapshot.
+
+    With a release tag, an overlap the Pulp acceptance lacks is still accepted
+    when it is exactly that release's own version bump (release_bump_problems),
+    judged from release_bump_evidence.
+    """
     errors: list[str] = []
+    bump_evidence: dict[int, Any] = {}
+    if (
+        isinstance(release_bump_evidence, dict)
+        and release_bump_evidence.get("schema") == "vellum.release-bump-evidence.v1"
+        and release_bump_evidence.get("repository") == RELEASE_BUMP_REPOSITORY
+        and isinstance(release_bump_evidence.get("pulls"), list)
+    ):
+        for row in release_bump_evidence["pulls"]:
+            if isinstance(row, dict) and isinstance(row.get("number"), int):
+                bump_evidence.setdefault(row["number"], row)
+    snapshot_rows: dict[tuple[str, int], tuple[str, list[str]]] = {}
     if not isinstance(snapshot, dict) or set(snapshot) != {
         "schema_version", "kind", "repositories"
     }:
@@ -1601,6 +1768,7 @@ def validate_open_pr_snapshot(
                 invalid_path = invalid_path or len(errors) != before
             if invalid_path:
                 continue
+            snapshot_rows[(repository, number)] = (base_commit, paths)
             overlap_paths = sorted(set(paths) & routed_paths[repository])
             if overlap_paths:
                 live_overlaps[(repository, number)] = (
@@ -1630,6 +1798,19 @@ def validate_open_pr_snapshot(
         row = accepted_by_key.get(key)
         label = f"{key[0]}#{key[1]}"
         if row is None:
+            if release_tag is not None and key[0] == RELEASE_BUMP_REPOSITORY:
+                base_commit, all_paths = snapshot_rows[key]
+                bump_problems = release_bump_problems(
+                    bump_evidence.get(key[1]), base_commit=base_commit,
+                    head_commit=head_commit, paths=all_paths, release_tag=release_tag,
+                )
+                if not bump_problems:
+                    continue
+                errors.append(
+                    f"open PR snapshot: live overlap {label} is absent from acceptance and is "
+                    f"not {release_tag}'s own version bump: {'; '.join(bump_problems)}"
+                )
+                continue
             errors.append(f"open PR snapshot: live overlap {label} is absent from acceptance")
             continue
         if row.get("merge_base_commit") != merge_base_commit:
@@ -1649,7 +1830,8 @@ def validate_exact_boundary_repository_evidence(
     root: Path, pulp_root: Path | None, data: Any, amendment: Any,
     check_runs: Any = None, open_pr_snapshot: Any = None,
     defer_live_open_pr_audit: bool = False, delivery_retired: bool = False,
-    pulp_main_ref: str | None = None,
+    pulp_main_ref: str | None = None, release_tag: str | None = None,
+    release_bump_evidence: Any = None,
 ) -> list[str]:
     """Check the acknowledgement's Pulp and Vellum evidence.
 
@@ -1754,7 +1936,8 @@ def validate_exact_boundary_repository_evidence(
         errors.extend(
             validate_open_pr_snapshot(
                 open_pr_snapshot, acceptance, load_json(root / MATRIX_PATH), amendment,
-                delivery_retired=delivery_retired,
+                delivery_retired=delivery_retired, release_tag=release_tag,
+                release_bump_evidence=release_bump_evidence,
             )
         )
     if check_runs is not None:
@@ -3225,6 +3408,7 @@ def verify(
     defer_live_open_pr_audit: bool = False,
     release_tag: str | None = None,
     pulp_main_ref: str | None = None,
+    release_bump_evidence: Any = None,
 ) -> dict[str, Any]:
     closure_errors = []
     try:
@@ -3315,6 +3499,9 @@ def verify(
                 defer_live_open_pr_audit,
                 delivery_retired,
                 pulp_main_ref,
+                # Only release readiness judges an overlap as the release's own bump.
+                release_tag if release_readiness else None,
+                release_bump_evidence,
             )
         parity_completion_path = root / PARITY_COMPLETION_PATH
         if parity_completion_path.is_file():
@@ -3421,6 +3608,10 @@ def main() -> int:
     parser.add_argument("--release-tag", default=default_release_tag(os.environ))
     parser.add_argument("--check-runs-json", type=Path)
     parser.add_argument("--open-pr-snapshot-json", type=Path)
+    parser.add_argument(
+        "--release-bump-evidence-json", type=Path,
+        help="collect_release_evidence.py release-bump-evidence output",
+    )
     parser.add_argument("--defer-live-open-pr-audit", action="store_true")
     parser.add_argument(
         "--pulp-main-ref",
@@ -3449,6 +3640,10 @@ def main() -> int:
         defer_live_open_pr_audit=args.defer_live_open_pr_audit,
         release_tag=args.release_tag,
         pulp_main_ref=args.pulp_main_ref,
+        release_bump_evidence=(
+            load_json(args.release_bump_evidence_json.resolve())
+            if args.release_bump_evidence_json else None
+        ),
     )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:
