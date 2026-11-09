@@ -1,0 +1,67 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-09T01:01:44Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-818595443e097dc41ef02bec4b0c396228ce5590",
+  "include_dependency_deltas": [
+    "authoring/include/vellum/authoring/js_application.hpp",
+    "authoring/src/rendered_tree_materializer.hpp",
+    "graphics/include/vellum/graphics/lowering_diagnostic.hpp",
+    "graphics/include/vellum/graphics/paint_command.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/include/vellum/authoring/js_application.hpp",
+    "authoring/src/rendered_tree_materializer.hpp",
+    "authoring/src/rendered_tree_materializer.mm",
+    "authoring/tests/rendered_tree_materializer_test.cpp",
+    "authoring/tests/test_phase3_contracts.py",
+    "graphics/include/vellum/graphics/lowering_diagnostic.hpp",
+    "graphics/include/vellum/graphics/paint_command.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/src/paint_command.cpp",
+    "graphics/src/skia_dawn_surface.mm",
+    "graphics/tests/gpu_style_test.cpp",
+    "graphics/tests/paint_command_test.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "ce30e1302a309ce1d741e6083b35d67c07887d2d",
+    "to_commit": "1163e9629557d96a61800c8ddc5601757d37b0b6"
+  },
+  "schema_api_deltas": [
+    "authoring/tests/test_phase3_contracts.py"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "818595443e097dc41ef02bec4b0c396228ce5590",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
