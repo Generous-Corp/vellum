@@ -49,6 +49,9 @@ target_compile_definitions(vellum-rmlui-midi-learn-test PRIVATE
     VELLUM_RMLUI_MIDI_LEARN_RCSS="${CMAKE_CURRENT_SOURCE_DIR}/../assets/midi-learn.rcss")
 add_test(NAME vellum.rmlui.midi-learn COMMAND vellum-rmlui-midi-learn-test)
 
+vellum_rmlui_add_test(vellum-rmlui-settings-test settings_test.cpp VellumRmlUi::Core)
+add_test(NAME vellum.rmlui.settings COMMAND vellum-rmlui-settings-test)
+
 vellum_rmlui_add_test(vellum-rmlui-two-instances-test two_instances_test.cpp VellumRmlUi::Core)
 add_test(NAME vellum.rmlui.two-instances COMMAND vellum-rmlui-two-instances-test)
 
