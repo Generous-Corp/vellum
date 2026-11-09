@@ -382,6 +382,11 @@ def coverage_gaps(
                 continue
             event = observations.get((repository, commit))
             if event is None:
+                if source == "vellum" and integration_merge_covered(repo, commit, mappings, rules):
+                    # An integration merge that adds nothing beyond its two
+                    # sides is covered by their own events; reconcile records
+                    # none for it (see reconcile).
+                    continue
                 gaps.append({"source": source, "commit": commit, "reason": "mapped-commit-has-no-event"})
             else:
                 verify_event_against_git(event, source, repo, mappings, rules)
@@ -1006,6 +1011,7 @@ def verify(
             "verify needs --git-base to tell the observations a change adds from those "
             "already on its base; pass --no-git-base only for a local check"
         )
+    git_base = current_main_git_base(root, git_base)
     lock, mapping, cursor, budgets = validate_lock_map_cursor(root)
     verify_active_cursor_ancestry(lock, cursor, pulp_repo, vellum_repo)
     events = load_events(root)
@@ -1266,6 +1272,33 @@ def verify_new_event_sources(
         )
 
 
+def current_main_git_base(root: Path, git_base: str | None) -> str | None:
+    """`git_base`, moved forward to the merge base of HEAD with origin/main.
+
+    On a pull request CI passes the event's base.sha, but it checks out the
+    pull request merged into the current base, and base.sha can predate it.
+    Everything main gained in between would then count as this change's:
+    new events, their times, their sources. The merge base of HEAD with the
+    current origin/main is where this change really leaves main. The base
+    only moves forward along HEAD's history. It is left alone without
+    origin/main, outside a Git checkout, or when the change is already on
+    main (a push to main).
+    """
+    if git_base is None:
+        return None
+    try:
+        main = git(root, "rev-parse", "--verify", "--quiet", f"{VELLUM_MAIN_REF}^{{commit}}")
+        head = git(root, "rev-parse", "HEAD")
+        if main == head or is_ancestor(root, head, main):
+            return git_base
+        base = git(root, "merge-base", head, main)
+        if base and base != git_base and is_ancestor(root, git_base, base):
+            return base
+    except ObservatoryError:
+        pass
+    return git_base
+
+
 def late_new_events(
     root: Path, git_base: str | None, events: list[tuple[Path, dict[str, object]]],
     budgets: dict[str, int], now: datetime | None,
@@ -1393,6 +1426,16 @@ def reconcile(
             discovered_at=now_text, mappings=mappings, transitive_rules=rules,
         ):
             key = (repository, str(event["source_commit"]))
+            if (
+                source == "vellum" and key not in observations
+                and integration_merge_covered(repo, str(event["source_commit"]), mappings, rules)
+            ):
+                # A Vellum integration merge that adds nothing beyond its two
+                # sides needs no event of its own: coverage_gaps accepts it on
+                # the sides' events, in the reconciled range and in the tail.
+                # Recording one only adds a pending observation someone must
+                # classify as superseded.
+                continue
             if (
                 events_only and source == "vellum" and vellum_main is not None
                 and key not in observations

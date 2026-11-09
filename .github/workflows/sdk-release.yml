@@ -840,6 +840,15 @@ jobs:
             exit 1
           fi
           if [ "$draft" = true ]; then
+            # A draft left by an interrupted run can already hold the asset
+            # verification record this run writes below, from that run's
+            # assets. It is not one of the allowed assets, so the first check
+            # below would refuse it; it is removed and written again.
+            stale_id="$(python3 -c 'import json,sys; rows=[str(x["id"]) for x in json.load(open(sys.argv[1]))["assets"] if x["name"]=="release-assets-verification.json"]; assert len(rows)<=1; print(rows[0] if rows else "")' "$RUNNER_TEMP/release.json")"
+            if [ -n "$stale_id" ]; then
+              verify_release_guard
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$stale_id"
+            fi
             for asset in "${allowed[@]}"; do replace_asset "${asset%%=*}" "${asset#*=}"; done
             gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > "$RUNNER_TEMP/release.json"
             args=(); for asset in "${allowed[@]}"; do args+=(--asset "$asset"); done
