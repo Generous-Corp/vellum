@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string_view>
@@ -410,6 +411,30 @@ std::optional<std::size_t> keyword(id value, const std::array<std::string_view, 
     return static_cast<std::size_t>(found - names.begin());
 }
 
+constexpr std::array<std::string_view, 19> kPathAttributes{
+    "type", "id", "children", "style", "events", "accessibilityLabel", "accessibilityValue",
+    "accessibilityRole", "accessibilityState", "d", "fillRule", "fill", "stroke", "strokeWidth",
+    "strokeLineJoin", "strokeLineCap", "strokeMiterLimit", "strokeDasharray", "strokeDashoffset",
+};
+
+void report_dropped_path_attributes(
+    NSDictionary* source, const std::string& node_id, MaterializeContext& context) {
+    NSArray* keys = [source.allKeys sortedArrayUsingSelector:@selector(compare:)];
+    for (id key in keys) {
+        if (![key isKindOfClass:NSString.class]) continue;
+        const std::string name = cpp_string(key);
+        if (contains(kPathAttributes, name)) continue;
+        context.diagnostics->push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(vellum::graphics::kStyleDroppedCode),
+            .node_id = node_id,
+            .property = name,
+            .message = "attribute " + name + " is not supported on path nodes and was ignored",
+        });
+    }
+}
+
 // Path paint follows SVG: the fill defaults to black, the stroke to none, and
 // the stroke width to 1.
 bool materialize_path(
@@ -506,11 +531,17 @@ bool materialize_path(
             stroke.dash_array.push_back(length);
         }
     }
+    vellum::graphics::PathGeometry unstroked = path;
+    unstroked.stroke = {};
+    if (!vellum::graphics::path_is_valid(unstroked, &reason)) {
+        return reject("d", "cannot be drawn: " + reason);
+    }
     if (!vellum::graphics::path_is_valid(path, &reason)) {
         return reject("strokeDasharray", "cannot be drawn: " + reason);
     }
+    report_dropped_path_attributes(source, identity, context);
     output.kind = vellum::graphics::SceneNode::Kind::path;
-    output.path = std::move(path);
+    output.path = std::make_shared<const vellum::graphics::PathGeometry>(std::move(path));
     return true;
 }
 

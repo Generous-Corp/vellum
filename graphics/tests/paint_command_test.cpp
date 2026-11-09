@@ -285,6 +285,26 @@ bool path_validity() {
     PathGeometry dashes = good;
     dashes.stroke.dash_array.assign(vellum::graphics::kMaxPathDashes, 1.0F);
     ok &= expect(vellum::graphics::path_is_valid(dashes), "a dash array at the limit is valid");
+
+    const auto dashed_line = [](float length, std::vector<float> pattern) {
+        PathGeometry line{.verbs = {PathVerb::move, PathVerb::line},
+                          .values = {0.0F, 0.0F, length, 0.0F}};
+        line.stroke.dash_array = std::move(pattern);
+        return line;
+    };
+    std::string reason;
+    ok &= expect(vellum::graphics::path_is_valid(dashed_line(200.0F, {0.001F, 0.001F})),
+                 "a dash pattern drawing 100000 dashes is valid");
+    ok &= expect(!vellum::graphics::path_is_valid(dashed_line(201.0F, {0.001F, 0.001F}), &reason) &&
+                     reason == "the stroke dash pattern would draw more than 100000 dashes",
+                 "a dash pattern drawing more than 100000 dashes is invalid: " + reason);
+    ok &= expect(vellum::graphics::path_is_valid(dashed_line(200.0F, {0.001F})) &&
+                     !vellum::graphics::path_is_valid(dashed_line(201.0F, {0.001F})),
+                 "an odd dash array counts one dash per entry over twice its sum");
+    ok &= expect(!vellum::graphics::path_is_valid(dashed_line(100.0F, {1e-30F, 1e-30F})),
+                 "a vanishing dash pattern is invalid");
+    ok &= expect(vellum::graphics::path_is_valid(dashed_line(1.0e6F, {10.0F, 10.0F})),
+                 "a long path with a reasonable dash pattern is valid");
     return ok;
 }
 
@@ -320,6 +340,39 @@ bool path_bounds_and_outset() {
                  "a zero-radius arc is a line");
     ok &= expect(is(bounds_of("M10 10 L20 10 Z L10 30"), 10, 10, 10, 20),
                  "a command after close starts at the subpath start");
+
+    const auto length_of = [](std::string_view data) {
+        PathGeometry path;
+        (void)vellum::graphics::parse_svg_path_data(data, path);
+        return vellum::graphics::path_length_bound(path);
+    };
+    ok &= expect(length_of("") == 0.0, "an empty path has no length");
+    ok &= expect(std::abs(length_of("M0 0 L3 4 L3 0 Z") - 12.0) < 1e-9,
+                 "polyline length includes the closing segment");
+    ok &= expect(std::abs(length_of("M0 0 C0 10 10 10 10 0") - 30.0) < 1e-9,
+                 "a cubic is bounded by its control polygon");
+    ok &= expect(std::abs(length_of("M0 0 A10 10 0 0 1 20 0") - 20.0 * 3.14159265358979) < 1e-4,
+                 "an arc is bounded by its ellipse perimeter");
+    ok &= expect(std::abs(length_of("M0 0 A0 10 0 0 1 20 0") - 20.0) < 1e-9,
+                 "a zero-radius arc is bounded by its chord");
+    ok &= expect(std::abs(length_of("M0 0 L10 0 M100 100 L100 110") - 20.0) < 1e-9,
+                 "a move adds no length");
+
+    using vellum::graphics::PaintCommand;
+    PathGeometry triangle;
+    (void)vellum::graphics::parse_svg_path_data("M2 3 L12 3 L7 11 Z", triangle);
+    PaintCommand command{.kind = PaintCommand::Kind::path, .bounds = {5.0F, 6.0F, 30.0F, 40.0F},
+                         .path = std::make_shared<const PathGeometry>(triangle)};
+    ok &= expect(is(vellum::graphics::path_gradient_box(command), 5, 6, 30, 40),
+                 "a gradient resolves against a layout box with area");
+    command.bounds = {5.0F, 6.0F, 30.0F, 0.0F};
+    ok &= expect(is(vellum::graphics::path_gradient_box(command), 7, 9, 10, 8),
+                 "a gradient on an empty layout box resolves against the control box");
+    PathGeometry flat;
+    (void)vellum::graphics::parse_svg_path_data("M0 0 L10 0", flat);
+    command.path = std::make_shared<const PathGeometry>(flat);
+    ok &= expect(!vellum::graphics::path_gradient_box(command),
+                 "a gradient has no box when neither box has area");
 
     using vellum::graphics::PathStroke;
     const auto black = vellum::graphics::Color::hex(0x000000);
@@ -360,7 +413,7 @@ bool path_commands() {
         .fill_gradients = {{.angle_degrees = 45.0F}},
         .box_shadows = {{.spread_radius = 3.0F}},
         .corner_radius = 4.0F,
-        .path = star,
+        .path = std::make_shared<const PathGeometry>(star),
     });
     scene.root.children.push_back({.id = "empty-path", .kind = SceneNode::Kind::path});
     const auto commands = vellum::graphics::make_paint_commands(scene);
@@ -375,12 +428,12 @@ bool path_commands() {
                      near(command.fill_gradients[0].angle_degrees, 45.0F) &&
                      command.box_shadows.empty() && near(command.corner_radius, 0.0F),
                  "the path command carries the fill paint and no box styling");
-    ok &= expect(command.path.verbs == star.verbs &&
-                     same_values(command.path.values, star.values) &&
-                     command.path.fill_rule == FillRule::evenodd &&
-                     command.path.stroke.cap == StrokeCap::round &&
-                     same_values(command.path.stroke.dash_array, {3.0F, 1.0F}) &&
-                     near(command.path.stroke.dash_offset, 0.5F) && command.path.antialias,
+    ok &= expect(command.path->verbs == star.verbs &&
+                     same_values(command.path->values, star.values) &&
+                     command.path->fill_rule == FillRule::evenodd &&
+                     command.path->stroke.cap == StrokeCap::round &&
+                     same_values(command.path->stroke.dash_array, {3.0F, 1.0F}) &&
+                     near(command.path->stroke.dash_offset, 0.5F) && command.path->antialias,
                  "the path command carries the geometry and stroke");
 
     static_assert(vellum::graphics::is_known_kind(SceneNode::Kind::path));

@@ -193,7 +193,8 @@ public:
 ///
 /// Meshes compare by pointer: a `TriangleMesh` or `MeshTexture` must not be
 /// mutated once a scene references it; replace the pointer to change it.
-/// Paths compare their fill paint and every geometry and stroke field.
+/// Paths compare their fill paint and every geometry and stroke field, so two
+/// distinct `PathGeometry` objects with the same content do not differ.
 [[nodiscard]] bool paint_differs(const SceneNode& previous, const SceneNode& next);
 
 /// Damage between two scenes, keyed by node id (nodes with an empty or

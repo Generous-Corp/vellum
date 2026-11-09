@@ -155,13 +155,13 @@ std::optional<Rect> mesh_paint_bounds(const TriangleMesh& mesh, const Rect& abso
 
 std::optional<Rect> path_paint_bounds(const SceneNode& node, const Rect& absolute,
                                       const Rect& frame) {
-    if (node.path.verbs.empty()) return std::nullopt;
-    if (!path_is_valid(node.path)) return frame;
-    const auto control = path_control_bounds(node.path);
+    if (!node.path || node.path->verbs.empty()) return std::nullopt;
+    if (!path_is_valid(*node.path)) return frame;
+    const auto control = path_control_bounds(*node.path);
     if (!control) return std::nullopt;
     const Rect moved{absolute.x + control->x, absolute.y + control->y, control->width,
                      control->height};
-    return outset(moved, path_stroke_outset(node.path.stroke));
+    return outset(moved, path_stroke_outset(node.path->stroke));
 }
 
 bool same_floats(const std::vector<float>& a, const std::vector<float>& b) {
@@ -169,7 +169,12 @@ bool same_floats(const std::vector<float>& a, const std::vector<float>& b) {
                       [](float left, float right) { return same_float(left, right); });
 }
 
-bool same_path(const PathGeometry& a, const PathGeometry& b) {
+bool same_path(const std::shared_ptr<const PathGeometry>& left,
+               const std::shared_ptr<const PathGeometry>& right) {
+    if (left == right) return true;
+    if (!left || !right) return false;
+    const PathGeometry& a = *left;
+    const PathGeometry& b = *right;
     return a.verbs == b.verbs && same_floats(a.values, b.values) && a.fill_rule == b.fill_rule &&
            a.antialias == b.antialias && same_color(a.stroke.color, b.stroke.color) &&
            same_float(a.stroke.width, b.stroke.width) && a.stroke.join == b.stroke.join &&

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -83,16 +84,26 @@ struct Box final {
     }
 };
 
-// The bounds of the whole ellipse an SVG arc lies on, following the
-// endpoint-to-centre conversion of SVG 2 appendix B.2.4.
-void add_arc_ellipse(Box& box, float from_x, float from_y, const float* arc) {
+struct ArcEllipse final {
+    double cx = 0.0;
+    double cy = 0.0;
+    double rx = 0.0;
+    double ry = 0.0;
+    double cos_phi = 1.0;
+    double sin_phi = 0.0;
+};
+
+// The ellipse an SVG arc lies on, with radii scaled up to span the endpoints,
+// following the endpoint-to-centre conversion of SVG 2 appendix B.2.4. Empty
+// when the arc is drawn as a line or not at all.
+std::optional<ArcEllipse> arc_ellipse(float from_x, float from_y, const float* arc) {
     const double x1 = from_x;
     const double y1 = from_y;
     const double x2 = arc[5];
     const double y2 = arc[6];
     double rx = std::abs(static_cast<double>(arc[0]));
     double ry = std::abs(static_cast<double>(arc[1]));
-    if (rx == 0.0 || ry == 0.0 || (x1 == x2 && y1 == y2)) return;
+    if (rx == 0.0 || ry == 0.0 || (x1 == x2 && y1 == y2)) return std::nullopt;
     const double phi = static_cast<double>(arc[2]) * kPi / 180.0;
     const double cos_phi = std::cos(phi);
     const double sin_phi = std::sin(phi);
@@ -113,20 +124,60 @@ void add_arc_ellipse(Box& box, float from_x, float from_y, const float* arc) {
     if ((arc[3] != 0.0F) == (arc[4] != 0.0F)) coefficient = -coefficient;
     const double cxp = coefficient * rx * y1p / ry;
     const double cyp = -coefficient * ry * x1p / rx;
-    const double cx = cos_phi * cxp - sin_phi * cyp + (x1 + x2) * 0.5;
-    const double cy = sin_phi * cxp + cos_phi * cyp + (y1 + y2) * 0.5;
-    const double half_x =
-        std::sqrt(rx * rx * cos_phi * cos_phi + ry * ry * sin_phi * sin_phi);
-    const double half_y =
-        std::sqrt(rx * rx * sin_phi * sin_phi + ry * ry * cos_phi * cos_phi);
-    if (!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(half_x) ||
-        !std::isfinite(half_y)) {
-        return;
+    const ArcEllipse ellipse{
+        .cx = cos_phi * cxp - sin_phi * cyp + (x1 + x2) * 0.5,
+        .cy = sin_phi * cxp + cos_phi * cyp + (y1 + y2) * 0.5,
+        .rx = rx,
+        .ry = ry,
+        .cos_phi = cos_phi,
+        .sin_phi = sin_phi,
+    };
+    if (!std::isfinite(ellipse.cx) || !std::isfinite(ellipse.cy) || !std::isfinite(rx) ||
+        !std::isfinite(ry)) {
+        return std::nullopt;
     }
-    box.add(static_cast<float>(cx - half_x) - kArcBoundsSlack,
-            static_cast<float>(cy - half_y) - kArcBoundsSlack);
-    box.add(static_cast<float>(cx + half_x) + kArcBoundsSlack,
-            static_cast<float>(cy + half_y) + kArcBoundsSlack);
+    return ellipse;
+}
+
+void add_arc_ellipse(Box& box, float from_x, float from_y, const float* arc) {
+    const auto ellipse = arc_ellipse(from_x, from_y, arc);
+    if (!ellipse) return;
+    const double c2 = ellipse->cos_phi * ellipse->cos_phi;
+    const double s2 = ellipse->sin_phi * ellipse->sin_phi;
+    const double half_x = std::sqrt(ellipse->rx * ellipse->rx * c2 + ellipse->ry * ellipse->ry * s2);
+    const double half_y = std::sqrt(ellipse->rx * ellipse->rx * s2 + ellipse->ry * ellipse->ry * c2);
+    box.add(static_cast<float>(ellipse->cx - half_x) - kArcBoundsSlack,
+            static_cast<float>(ellipse->cy - half_y) - kArcBoundsSlack);
+    box.add(static_cast<float>(ellipse->cx + half_x) + kArcBoundsSlack,
+            static_cast<float>(ellipse->cy + half_y) + kArcBoundsSlack);
+}
+
+// Visits each drawing command with the point it starts from.
+template <typename Visit>
+void walk_commands(const PathGeometry& path, Visit visit) {
+    float current_x = 0.0F;
+    float current_y = 0.0F;
+    float start_x = 0.0F;
+    float start_y = 0.0F;
+    std::size_t offset = 0;
+    for (const auto verb : path.verbs) {
+        const std::size_t arity = path_verb_arity(verb);
+        if (!known_verb(verb) || path.values.size() - offset < arity) return;
+        const float* v = path.values.data() + offset;
+        offset += arity;
+        visit(verb, current_x, current_y, start_x, start_y, v);
+        if (verb == PathVerb::close) {
+            current_x = start_x;
+            current_y = start_y;
+            continue;
+        }
+        current_x = v[arity - 2U];
+        current_y = v[arity - 1U];
+        if (verb == PathVerb::move) {
+            start_x = current_x;
+            start_y = current_y;
+        }
+    }
 }
 
 class PathDataParser final {
@@ -526,49 +577,76 @@ bool path_is_valid(const PathGeometry& path, std::string* reason) {
     if (!stroke.dash_array.empty() && !(dash_total > 0.0)) {
         return fail("the stroke dash array sums to zero");
     }
+    if (!stroke.dash_array.empty()) {
+        // An odd-length array repeats once, so a period then holds as many dashes
+        // as the array has entries, over twice its sum.
+        const bool odd = stroke.dash_array.size() % 2U != 0U;
+        const double dashes_per_period =
+            static_cast<double>(odd ? stroke.dash_array.size() : stroke.dash_array.size() / 2U);
+        const double period = odd ? 2.0 * dash_total : dash_total;
+        if (path_length_bound(path) * dashes_per_period / period > kMaxPathDashSegments) {
+            return fail("the stroke dash pattern would draw more than " +
+                        std::to_string(static_cast<long>(kMaxPathDashSegments)) + " dashes");
+        }
+    }
     return true;
 }
 
 std::optional<Rect> path_control_bounds(const PathGeometry& path) {
     Box box;
-    float current_x = 0.0F;
-    float current_y = 0.0F;
-    float start_x = 0.0F;
-    float start_y = 0.0F;
-    std::size_t offset = 0;
-    for (const auto verb : path.verbs) {
-        const std::size_t arity = path_verb_arity(verb);
-        if (!known_verb(verb) || path.values.size() - offset < arity) break;
-        const float* v = path.values.data() + offset;
-        offset += arity;
+    walk_commands(path, [&box](PathVerb verb, float from_x, float from_y, float, float,
+                               const float* v) {
         switch (verb) {
-        case PathVerb::close:
-            current_x = start_x;
-            current_y = start_y;
-            continue;
+        case PathVerb::close: return;
         case PathVerb::arc:
-            add_arc_ellipse(box, current_x, current_y, v);
-            break;
+            add_arc_ellipse(box, from_x, from_y, v);
+            box.add(v[5], v[6]);
+            return;
         case PathVerb::move:
         case PathVerb::line:
         case PathVerb::quadratic:
         case PathVerb::cubic:
-            for (std::size_t index = 0; index + 1U < arity; index += 2U) {
+            for (std::size_t index = 0; index + 1U < path_verb_arity(verb); index += 2U) {
                 box.add(v[index], v[index + 1U]);
             }
-            break;
+            return;
         }
-        current_x = v[arity - 2U];
-        current_y = v[arity - 1U];
-        if (verb == PathVerb::move) {
-            start_x = current_x;
-            start_y = current_y;
-        } else if (verb == PathVerb::arc) {
-            box.add(current_x, current_y);
-        }
-    }
+    });
     if (box.empty) return std::nullopt;
     return Rect{box.left, box.top, box.right - box.left, box.bottom - box.top};
+}
+
+double path_length_bound(const PathGeometry& path) {
+    double length = 0.0;
+    walk_commands(path, [&length](PathVerb verb, float from_x, float from_y, float start_x,
+                                  float start_y, const float* v) {
+        double x = from_x;
+        double y = from_y;
+        const auto to = [&](double next_x, double next_y) {
+            length += std::hypot(next_x - x, next_y - y);
+            x = next_x;
+            y = next_y;
+        };
+        switch (verb) {
+        case PathVerb::move: return;
+        case PathVerb::close: to(start_x, start_y); return;
+        case PathVerb::arc:
+            if (const auto ellipse = arc_ellipse(from_x, from_y, v)) {
+                length += 2.0 * kPi * std::max(ellipse->rx, ellipse->ry);
+            } else {
+                to(v[5], v[6]);
+            }
+            return;
+        case PathVerb::line:
+        case PathVerb::quadratic:
+        case PathVerb::cubic:
+            for (std::size_t index = 0; index + 1U < path_verb_arity(verb); index += 2U) {
+                to(v[index], v[index + 1U]);
+            }
+            return;
+        }
+    });
+    return length;
 }
 
 float path_stroke_outset(const PathStroke& stroke) noexcept {

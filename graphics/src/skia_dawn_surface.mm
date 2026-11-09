@@ -522,7 +522,7 @@ bool draw_mesh(SkCanvas& canvas, const PaintCommand& command,
 }
 
 SkPath sk_path(const PaintCommand& command) {
-    const auto& path = command.path;
+    const auto& path = *command.path;
     SkPathBuilder builder(path.fill_rule == FillRule::evenodd ? SkPathFillType::kEvenOdd
                                                               : SkPathFillType::kWinding);
     const float x = command.bounds.x;
@@ -582,7 +582,8 @@ bool path_is_drawable(const PathGeometry& path, const Color& fill, std::string* 
 
 // The first path node, in depth-first order, that cannot be drawn.
 const SceneNode* find_undrawable_path(const SceneNode& node, std::string& reason) {
-    if (node.kind == SceneNode::Kind::path && !path_is_drawable(node.path, node.fill, &reason)) {
+    if (node.kind == SceneNode::Kind::path && node.path &&
+        !path_is_drawable(*node.path, node.fill, &reason)) {
         return &node;
     }
     for (const auto& child : node.children) {
@@ -594,7 +595,8 @@ const SceneNode* find_undrawable_path(const SceneNode& node, std::string& reason
 }
 
 bool draw_path(SkCanvas& canvas, const PaintCommand& command, std::string* error) {
-    const auto& path = command.path;
+    if (!command.path) return true;
+    const auto& path = *command.path;
     const auto& fill = command.fill;
     std::string reason;
     if (!path_is_drawable(path, fill, &reason)) {
@@ -610,10 +612,9 @@ bool draw_path(SkCanvas& canvas, const PaintCommand& command, std::string* error
         paint.setColor4f(sk_color(fill));
         canvas.drawPath(outline, paint);
     }
-    if (command.bounds.width > 0.0F && command.bounds.height > 0.0F) {
+    if (const auto box = path_gradient_box(command)) {
         for (const auto& declared : command.fill_gradients) {
-            auto shader = linear_gradient_shader(
-                resolve_linear_gradient(command.bounds, declared), error);
+            auto shader = linear_gradient_shader(resolve_linear_gradient(*box, declared), error);
             if (!shader) return false;
             SkPaint paint;
             paint.setAntiAlias(path.antialias);

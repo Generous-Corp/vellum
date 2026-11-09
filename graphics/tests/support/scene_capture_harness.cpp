@@ -164,14 +164,16 @@ void append_path_stars(SceneNode& root, Rect area, const std::string& prefix) {
         .kind = SceneNode::Kind::path,
         .bounds = {area.x, area.y, half, area.height},
         .fill = Color::hex(0xFBBF24),
-        .path = pentagram({0.0F, 0.0F, half, area.height}, FillRule::nonzero),
+        .path = std::make_shared<const PathGeometry>(
+            pentagram({0.0F, 0.0F, half, area.height}, FillRule::nonzero)),
     });
     root.children.push_back({
         .id = prefix + "star-evenodd",
         .kind = SceneNode::Kind::path,
         .bounds = {area.x + half, area.y, half, area.height},
         .fill = Color::hex(0x38BDF8),
-        .path = pentagram({0.0F, 0.0F, half, area.height}, FillRule::evenodd),
+        .path = std::make_shared<const PathGeometry>(
+            pentagram({0.0F, 0.0F, half, area.height}, FillRule::evenodd)),
     });
 }
 
@@ -195,7 +197,7 @@ void append_dashed_polyline(SceneNode& root, Rect area, const std::string& prefi
         .id = prefix + "dashed-polyline",
         .kind = SceneNode::Kind::path,
         .bounds = area,
-        .path = std::move(line),
+        .path = std::make_shared<const PathGeometry>(std::move(line)),
     });
 }
 
@@ -220,7 +222,7 @@ void append_cubic_gradient(SceneNode& root, Rect area, const std::string& prefix
                 {.position = 1.0F, .color = Color::hex(0x8B5CF6)},
             },
         }},
-        .path = std::move(blob),
+        .path = std::make_shared<const PathGeometry>(std::move(blob)),
     });
 }
 

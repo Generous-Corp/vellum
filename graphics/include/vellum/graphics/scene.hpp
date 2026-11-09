@@ -154,8 +154,15 @@ struct PathStroke final {
 /// The geometry and stroke of a `path` node. Coordinates are absolute within
 /// the path and relative to the owning node's origin; relative and shorthand
 /// SVG commands are resolved when the path is built, so a scene never stores
-/// path data strings. The fill paint is the node's `fill` and
-/// `fill_gradients`.
+/// path data strings.
+///
+/// The fill paint is the node's `fill` and `fill_gradients`. A gradient
+/// resolves against the node's layout box, or against
+/// `path_control_bounds` when that box has no area, like SVG's
+/// objectBoundingBox. The stroke is a single colour; stroke gradients are not
+/// supported. The SVG paint defaults (a black fill, no stroke, a stroke width
+/// of 1) belong to the authoring layer: a C++ caller building a node gets the
+/// transparent `SceneNode::fill` and the defaults below.
 struct PathGeometry final {
     std::vector<PathVerb> verbs;
     /// The verbs' values, concatenated in order.
@@ -221,8 +228,9 @@ struct SceneNode final {
     std::vector<SceneNode> children;
     /// The geometry of a `mesh` node.
     std::shared_ptr<const TriangleMesh> mesh;
-    /// The geometry of a `path` node.
-    PathGeometry path;
+    /// The geometry of a `path` node. Like a mesh, it must not be mutated once
+    /// a scene references it; replace the pointer to change it.
+    std::shared_ptr<const PathGeometry> path;
 };
 
 [[nodiscard]] constexpr bool is_known_kind(SceneNode::Kind kind) noexcept {

@@ -528,7 +528,7 @@ SceneNode star_path(std::string id, float x, FillRule rule) {
         .kind = SceneNode::Kind::path,
         .bounds = {x, 0.0F, 60.0F, 60.0F},
         .fill = Color::hex(0xFFFFFF),
-        .path = std::move(star),
+        .path = std::make_shared<const PathGeometry>(star),
     };
 }
 
@@ -554,7 +554,7 @@ bool path_fill_rule_and_stroke() {
                     .id = "dashes",
                     .kind = SceneNode::Kind::path,
                     .bounds = {0.0F, 70.0F, 128.0F, 0.0F},
-                    .path = std::move(dashed),
+                    .path = std::make_shared<const PathGeometry>(dashed),
                 },
             },
         },
@@ -608,21 +608,28 @@ bool path_arc_gradient_and_refusal() {
         .values = {0.0F, 0.0F, 20.0F, -10.0F, 40.0F, 10.0F, 60.0F, 0.0F, 60.0F, 40.0F,
                    0.0F, 40.0F},
     };
+    const std::vector<LinearGradient> red_to_blue{{
+        .angle_degrees = 90.0F,
+        .stops = {
+            {.position = 0.0F, .color = Color::hex(0xFF0000)},
+            {.position = 1.0F, .color = Color::hex(0x0000FF)},
+        },
+    }};
     Scene scene{
         .width = 128.0F,
-        .height = 64.0F,
+        .height = 112.0F,
         .background = Color::hex(0x000000),
         .root = {
             .id = "root",
             .kind = SceneNode::Kind::group,
-            .bounds = {0.0F, 0.0F, 128.0F, 64.0F},
+            .bounds = {0.0F, 0.0F, 128.0F, 112.0F},
             .children = {
                 {
                     .id = "circle",
                     .kind = SceneNode::Kind::path,
                     .bounds = {0.0F, 0.0F, 60.0F, 60.0F},
                     .fill = Color::hex(0x00FF00),
-                    .path = std::move(circle),
+                    .path = std::make_shared<const PathGeometry>(circle),
                 },
                 {
                     .id = "blob",
@@ -635,7 +642,14 @@ bool path_arc_gradient_and_refusal() {
                             {.position = 1.0F, .color = Color::hex(0x0000FF)},
                         },
                     }},
-                    .path = std::move(blob),
+                    .path = std::make_shared<const PathGeometry>(blob),
+                },
+                {
+                    .id = "unboxed",
+                    .kind = SceneNode::Kind::path,
+                    .bounds = {0.0F, 64.0F, 0.0F, 0.0F},
+                    .fill_gradients = red_to_blue,
+                    .path = std::make_shared<const PathGeometry>(blob),
                 },
             },
         },
@@ -645,7 +659,7 @@ bool path_arc_gradient_and_refusal() {
         std::cerr << error << '\n';
         return false;
     }
-    auto surface = SkiaDawnSurface::create({.width = 128, .height = 64}, &error);
+    auto surface = SkiaDawnSurface::create({.width = 128, .height = 112}, &error);
     std::vector<std::uint8_t> first;
     std::uint32_t width = 0;
     std::uint32_t height = 0;
@@ -666,11 +680,22 @@ bool path_arc_gradient_and_refusal() {
         std::cerr << "the cubic path's gradient does not run from red to blue\n";
         return false;
     }
+    const auto* unboxed_left = pixel(first, width, 4, 92);
+    const auto* unboxed_right = pixel(first, width, 56, 92);
+    if (!(unboxed_left[0] > 200 && unboxed_left[2] < 60 && unboxed_right[2] > 200 &&
+          unboxed_right[0] < 60)) {
+        std::cerr << "a gradient on a path without a layout box does not use its control box\n";
+        return false;
+    }
 
     Scene invalid = scene;
-    invalid.root.children[1].path.values[3] = std::numeric_limits<float>::quiet_NaN();
+    auto not_finite = std::make_shared<PathGeometry>(*scene.root.children[1].path);
+    not_finite->values[3] = std::numeric_limits<float>::quiet_NaN();
+    invalid.root.children[1].path = not_finite;
     Scene unbalanced = scene;
-    unbalanced.root.children[1].path.values.pop_back();
+    auto short_values = std::make_shared<PathGeometry>(*scene.root.children[1].path);
+    short_values->values.pop_back();
+    unbalanced.root.children[1].path = short_values;
     std::vector<std::uint8_t> after;
     const auto refused = [&](const Scene& candidate, const std::string& expected) {
         std::string why;

@@ -4,6 +4,8 @@
 #include <vellum/graphics/path_geometry.hpp>
 #include <vellum/graphics/scene.hpp>
 
+#include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -43,8 +45,8 @@ struct PaintCommand final {
     std::shared_ptr<const TriangleMesh> mesh;
     /// Path geometry and stroke, relative to `bounds.x`/`bounds.y`. The fill
     /// paint is `fill` and `fill_gradients`, with gradients resolved against
-    /// `bounds`.
-    PathGeometry path;
+    /// `path_gradient_box`.
+    std::shared_ptr<const PathGeometry> path;
 };
 
 [[nodiscard]] constexpr std::string_view to_string(PaintCommand::Kind kind) noexcept {
@@ -63,6 +65,12 @@ struct PaintCommand final {
 [[nodiscard]] std::vector<LoweringDiagnostic> report_undrawn_commands(
     std::span<const PaintCommand> commands, std::span<const PaintCommand::Kind> drawn,
     std::string_view renderer);
+
+/// The absolute box a path command's fill gradients resolve against: the
+/// command's layout `bounds` when it has area, otherwise the path's
+/// `path_control_bounds` moved to the command's origin. Empty when neither
+/// box has area, in which case gradients draw nothing.
+[[nodiscard]] std::optional<Rect> path_gradient_box(const PaintCommand& command);
 
 struct ResolvedLinearGradient final {
     float start_x = 0.0F;

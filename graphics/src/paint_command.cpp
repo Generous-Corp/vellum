@@ -52,7 +52,7 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
             .strikethrough = node.strikethrough,
             .text_runs = node.text_runs,
         });
-    } else if (node.kind == SceneNode::Kind::path && !node.path.verbs.empty()) {
+    } else if (node.kind == SceneNode::Kind::path && node.path && !node.path->verbs.empty()) {
         output.push_back({
             .kind = PaintCommand::Kind::path,
             .node_id = node.id,
@@ -163,6 +163,16 @@ std::vector<LoweringDiagnostic> report_undrawn_commands(
         });
     }
     return report;
+}
+
+std::optional<Rect> path_gradient_box(const PaintCommand& command) {
+    const auto has_area = [](const Rect& box) { return box.width > 0.0F && box.height > 0.0F; };
+    if (has_area(command.bounds)) return command.bounds;
+    if (!command.path) return std::nullopt;
+    const auto control = path_control_bounds(*command.path);
+    if (!control || !has_area(*control)) return std::nullopt;
+    return Rect{command.bounds.x + control->x, command.bounds.y + control->y, control->width,
+                control->height};
 }
 
 std::vector<PaintCommand> make_paint_commands(const Scene& scene) {

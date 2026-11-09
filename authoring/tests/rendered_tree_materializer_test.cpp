@@ -156,6 +156,7 @@ bool path_nodes() {
             "fillRule":"evenodd","stroke":"#112233","strokeWidth":3,
             "strokeLineJoin":"round","strokeLineCap":"square","strokeMiterLimit":2,
             "strokeDasharray":[4,2],"strokeDashoffset":1,
+            "strokeOpacity":0.5,"fillOpacity":1,"text":"ignored",
             "style":{"width":40,"height":40,"backgroundColor":"#FF0000",
               "boxShadow":{"color":"#000000"},"borderRadius":3},
             "children":[]},
@@ -179,30 +180,30 @@ bool path_nodes() {
     const auto* wave = vellum::graphics::find_node(rendered.scene, "wave");
     const auto* outline = vellum::graphics::find_node(rendered.scene, "outline");
     if (star == nullptr || star->kind != SceneNode::Kind::path ||
-        star->path.verbs != std::vector<PathVerb>{
+        star->path->verbs != std::vector<PathVerb>{
             PathVerb::move, PathVerb::line, PathVerb::line, PathVerb::close} ||
-        star->path.values != std::vector<float>{10, 0, 20, 30, 0, 30} ||
-        star->path.fill_rule != vellum::graphics::FillRule::evenodd ||
+        star->path->values != std::vector<float>{10, 0, 20, 30, 0, 30} ||
+        star->path->fill_rule != vellum::graphics::FillRule::evenodd ||
         star->fill.red != 0.0F || star->fill.alpha != 1.0F ||
         !star->fill_gradients.empty() || !star->box_shadows.empty() ||
         star->corner_radius != 0.0F ||
-        star->path.stroke.color.blue != static_cast<float>(0x33) / 255.0F ||
-        star->path.stroke.width != 3.0F ||
-        star->path.stroke.join != vellum::graphics::StrokeJoin::round ||
-        star->path.stroke.cap != vellum::graphics::StrokeCap::square ||
-        star->path.stroke.miter_limit != 2.0F ||
-        star->path.stroke.dash_array != std::vector<float>{4, 2} ||
-        star->path.stroke.dash_offset != 1.0F ||
+        star->path->stroke.color.blue != static_cast<float>(0x33) / 255.0F ||
+        star->path->stroke.width != 3.0F ||
+        star->path->stroke.join != vellum::graphics::StrokeJoin::round ||
+        star->path->stroke.cap != vellum::graphics::StrokeCap::square ||
+        star->path->stroke.miter_limit != 2.0F ||
+        star->path->stroke.dash_array != std::vector<float>{4, 2} ||
+        star->path->stroke.dash_offset != 1.0F ||
         star->bounds.width != 40.0F || star->bounds.height != 40.0F) {
         std::cerr << "a good path was not materialized\n";
         return false;
     }
     if (wave == nullptr || wave->kind != SceneNode::Kind::path ||
-        wave->path.verbs.size() != 3U || wave->fill.alpha != 0.0F ||
+        wave->path->verbs.size() != 3U || wave->fill.alpha != 0.0F ||
         wave->fill_gradients.size() != 1U || wave->fill_gradients[0].angle_degrees != 90.0F ||
-        wave->path.stroke.color.alpha != 0.0F || wave->path.stroke.width != 1.0F ||
+        wave->path->stroke.color.alpha != 0.0F || wave->path->stroke.width != 1.0F ||
         outline == nullptr || outline->fill.alpha != 0.0F ||
-        outline->path.fill_rule != vellum::graphics::FillRule::nonzero) {
+        outline->path->fill_rule != vellum::graphics::FillRule::nonzero) {
         std::cerr << "path paint defaults or gradient fill were not materialized\n";
         return false;
     }
@@ -212,8 +213,11 @@ bool path_nodes() {
                diagnostic.severity == LoweringDiagnostic::Severity::warning &&
                diagnostic.node_id == "star" && diagnostic.property == property;
     };
-    if (rendered.diagnostics.size() != 3U || !dropped(0U, "backgroundColor") ||
+    if (rendered.diagnostics.size() != 6U || !dropped(0U, "backgroundColor") ||
         !dropped(1U, "borderRadius") || !dropped(2U, "boxShadow") ||
+        !dropped(3U, "fillOpacity") || !dropped(4U, "strokeOpacity") || !dropped(5U, "text") ||
+        rendered.diagnostics[4].message !=
+            "attribute strokeOpacity is not supported on path nodes and was ignored" ||
         !failure_diagnostics.empty()) {
         std::cerr << "path style keys were not reported as dropped\n";
         return false;
@@ -280,6 +284,11 @@ bool path_nodes() {
            rejected(R"({"type":"path","id":"bad","d":"M0 0","strokeDasharray":[0,0]})",
                     "path bad cannot be drawn: the stroke dash array sums to zero",
                     "strokeDasharray") &&
+           rejected(
+               R"({"type":"path","id":"bad","d":"M0 0 L100 0","strokeDasharray":[0.0001,0.0001]})",
+               "path bad cannot be drawn: the stroke dash pattern would draw more than 100000 "
+               "dashes",
+               "strokeDasharray") &&
            rejected(R"({"type":"path","id":"bad","d":"M0 0","children":[
                       {"type":"view","id":"inner","children":[]}]})",
                     "path bad does not accept children", "children");

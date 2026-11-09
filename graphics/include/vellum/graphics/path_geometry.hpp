@@ -17,6 +17,10 @@ inline constexpr std::size_t kMaxPathValues = 16384U;
 inline constexpr std::size_t kMaxPathDataBytes = 64U * 1024U;
 /// The most entries a stroke dash array may hold.
 inline constexpr std::size_t kMaxPathDashes = 64U;
+/// The most dashes a stroke may draw, estimated as `path_length_bound` times
+/// the number of dash ("on") intervals per period divided by the period. Skia
+/// silently draws nothing past one million, so the cap sits well below it.
+inline constexpr double kMaxPathDashSegments = 100000.0;
 
 /// Whether a path can be drawn as given: it fits the command and value
 /// budgets, every verb is known and has exactly its arity of values, the
@@ -24,7 +28,8 @@ inline constexpr std::size_t kMaxPathDashes = 64U;
 /// arc flags are 0 or 1, the fill rule, join and cap are known, and the stroke
 /// has a finite colour, a finite non-negative width, a finite miter limit of
 /// at least 1, a finite dash offset, and at most `kMaxPathDashes` finite
-/// non-negative dashes whose sum is positive. On failure `reason`, when
+/// non-negative dashes whose sum is positive and that draw at most
+/// `kMaxPathDashSegments` dashes along the path. On failure `reason`, when
 /// non-null, says which rule failed.
 [[nodiscard]] bool path_is_valid(const PathGeometry& path, std::string* reason = nullptr);
 
@@ -32,6 +37,11 @@ inline constexpr std::size_t kMaxPathDashes = 64U;
 /// each arc's whole ellipse, so it contains the filled area. It ignores the
 /// stroke. Empty when the path has no commands.
 [[nodiscard]] std::optional<Rect> path_control_bounds(const PathGeometry& path);
+
+/// An upper bound on the path's outline length: the length of its control
+/// polygon, which bounds every Bézier segment, plus each arc's whole
+/// ellipse perimeter. Zero for an empty path.
+[[nodiscard]] double path_length_bound(const PathGeometry& path);
 
 /// How far a visible stroke can reach beyond `path_control_bounds`: half the
 /// width times the miter limit for miter joins, or times sqrt(2) for round

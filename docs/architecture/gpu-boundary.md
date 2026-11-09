@@ -38,11 +38,15 @@ A `path` node carries a `PathGeometry`: a flat list of move, line,
 quadratic, cubic, SVG elliptical arc and close commands with their values,
 a nonzero or evenodd fill rule, a stroke (colour, width, miter, round or bevel
 joins, butt, round or square caps, miter limit, dash array and dash offset)
-and an anti-aliasing flag; the fill paint is the node's colour and linear
-gradients. The authoring host parses an SVG `d` string once, into absolute
+and an anti-aliasing flag, shared and immutable like a mesh. The fill paint is
+the node's colour and linear gradients, which resolve against the layout box,
+or against the path's control box when the layout box has no area; the stroke
+is a single colour. The SVG paint defaults (black fill, no stroke, width 1)
+are applied by the authoring host, not by the scene. The authoring host parses an SVG `d` string once, into absolute
 commands, so a scene never stores path strings. A path is drawable only within
 its budget of 4096 commands and 16384 values (64 KiB of `float` data), with at
-most 64 dashes, finite coordinates and the exact arity per command;
+most 64 dash entries drawing at most 100000 dashes along a bound on the path's
+length, finite coordinates and the exact arity per command;
 `path_is_valid` states the rules, the parser refuses path data longer than
 64 KiB, and the surface refuses a scene with an undrawable path before drawing,
 keeping its previous frame. Damage treats a path as its control-point box,
