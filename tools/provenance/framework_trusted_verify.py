@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-FRAMEWORK_DATA_PREFIXES = ("framework/", "provenance/framework/", "provenance/framework-name-debt.json")
+FRAMEWORK_DATA_PREFIXES = ("framework/", "mirror/", "provenance/framework/", "provenance/framework-name-debt.json")
 # Git, with nothing a repository's config or content can redirect.
 SAFE_GIT = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
             "-c", "filter.lfs.smudge=", "-c", "filter.lfs.process=", "-c", "filter.lfs.required=false"]
@@ -112,27 +112,23 @@ def judge(root: Path, base: str) -> dict:
     """The trusted verdict on `base..HEAD` of `root`."""
     verifier = load_verifier()
     os.environ["VELLUM_GIT_BASE"] = base
-    changed = git(root, "diff", "--name-only", "-z", base, "HEAD").decode("utf-8", errors="surrogateescape")
+    # --no-renames: a file moved out of (or into) a judged path counts on both sides.
+    changed = git(root, "diff", "--no-renames", "--name-only", "-z", base, "HEAD").decode("utf-8", errors="surrogateescape")
     names = [name for name in changed.split("\0") if name]
     data = sorted(n for n in names if n.startswith(FRAMEWORK_DATA_PREFIXES))
     rules = sorted(n for n in names if n.startswith(verifier.FRAMEWORK_RULE_PATHS))
-    record = verifier.FRAMEWORK_TRANSFER_RECORD
-    at_base = subprocess.run([*SAFE_GIT, "-C", str(root), "cat-file", "-e", f"{base}:{record}"],
-                             capture_output=True, check=False).returncode == 0
-    at_head = (root / record).is_file()
     if not data and not rules:
         return {"status": "pass", "mode": "no-op", "errors": []}
-    if at_head and not at_base:
-        # verify_framework judges an introduction with framework_introduction_errors.
-        errors, checks = verifier.verify_framework(root, None, "origin/main", defer_identity=True)
-        if checks.get("framework_transfer_introduced") is not True:
-            errors = errors + ["the transfer record is new but was not judged as an introduction"]
-        return {"status": "fail" if errors else "pass", "mode": "introduction", "errors": errors,
-                "rule_files": rules}
-    if data:
-        errors, _ = verifier.verify_framework(root, None, "origin/main", defer_identity=True)
-        return {"status": "fail" if errors else "pass", "mode": "framework-change", "errors": errors}
-    return {"status": "pass", "mode": "rules-only", "errors": [], "rule_files": rules}
+    if not data:
+        return {"status": "pass", "mode": "rules-only", "errors": [], "rule_files": rules}
+    # The one transfer-state reading decides introduction against change.
+    errors, checks = verifier.verify_framework(root, None, "origin/main", defer_identity=True)
+    state = checks.get("framework_transfer_state") or {}
+    mode = "introduction" if state.get("introduction") else (
+        "framework-change" if state.get("head_framework") else "no-framework")
+    if state.get("introduction") and checks.get("framework_transfer_introduced") is not True:
+        errors = errors + ["framework/ is new but was not judged as an introduction"]
+    return {"status": "fail" if errors else "pass", "mode": mode, "errors": errors, "rule_files": rules}
 
 
 def main(argv: list[str] | None = None) -> int:

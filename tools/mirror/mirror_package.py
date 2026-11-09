@@ -55,7 +55,19 @@ FRAMEWORK_TRANSFER = "provenance/framework/transfer.json"
 
 
 def transferred(repo: Path) -> bool:
-    return (repo / FRAMEWORK_DIR).is_dir() and (repo / FRAMEWORK_TRANSFER).is_file()
+    """Whether the units were transferred to framework/; a half-transferred checkout is refused.
+
+    framework/ and its transfer record exist together or not at all, and
+    mirror/ is gone once they exist (verify_extraction.framework_transfer_state
+    holds the same rule in the provenance lanes).
+    """
+    has_framework = (repo / FRAMEWORK_DIR).is_dir()
+    has_record = (repo / FRAMEWORK_TRANSFER).is_file()
+    if has_framework != has_record:
+        raise PlanError(f"{FRAMEWORK_DIR}/ and {FRAMEWORK_TRANSFER} must exist together")
+    if has_framework and (repo / MIRROR_DIR).exists():
+        raise PlanError(f"{MIRROR_DIR}/ and {FRAMEWORK_DIR}/ both exist")
+    return has_framework
 
 
 def renamed_path(relative: str) -> str:

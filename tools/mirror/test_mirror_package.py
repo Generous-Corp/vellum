@@ -1068,8 +1068,9 @@ class FrameworkTransferTest(unittest.TestCase):
             self.assertEqual(mp.mirrored(root, "core/a/include/pulp/a/a.hpp"),
                              root / "mirror/core/a/include/pulp/a/a.hpp")
             (root / mp.FRAMEWORK_DIR).mkdir()
-            # A framework/ with no transfer record is not a transfer.
-            self.assertFalse(mp.transferred(root))
+            # A framework/ with no transfer record is a half transfer: refused.
+            with self.assertRaisesRegex(mp.PlanError, "must exist together"):
+                mp.transferred(root)
             self.transferred_repo_record_only(root)
             self.assertEqual(mp.mirrored(root, "core/a/include/pulp/a/a.hpp"),
                              root / "framework/core/a/include/vellum/a/a.hpp")

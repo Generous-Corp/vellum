@@ -73,17 +73,13 @@ FRAMEWORK_VELLUM_DECLARATION = re.compile(r"namespace\s+vellum(?![A-Za-z0-9_])|(
 # transfer record may touch none of them, so the rename tool and checks that
 # judge it are the ones already landed.
 FRAMEWORK_RULE_PATHS = (
+    # Whole directories: a file added beside a rule (a tools/provenance/
+    # module that shadows a standard one, a new workflow) changes the rules.
     "tools/mirror/",
-    "tools/provenance/verify_extraction.py",
-    "tools/provenance/framework_trusted_verify.py",
-    "tools/provenance/verify_mirror_export.py",
-    "tools/provenance/content_scan_policy.py",
-    "tools/provenance/mirror_edge_patterns.json",
-    "tools/provenance/mirror_edge_patterns.pin.json",
+    "tools/provenance/",
+    ".github/workflows/",
     "provenance/active-source-boundary.json",
     "scripts/install_core.py",
-    ".github/workflows/framework-trusted-verify.yml",
-    ".github/workflows/provenance.yml",
 )
 FRAMEWORK_TRANSFER_DECISION = "Decision 0010, option (a): the renamed units move from mirror/ to framework/ (M2 8b)"
 FRAMEWORK_TRANSFER_SCHEMA = "vellum.framework-transfer.v1"
@@ -695,6 +691,8 @@ def current_mirror_receipts(
         head_tree = git(root, "rev-parse", "HEAD:mirror")
     except subprocess.CalledProcessError:
         head_tree = None
+    if head_tree is None and not (root / FRAMEWORK_ROOT.rstrip("/")).is_dir():
+        return [], [], ["HEAD has neither mirror/ nor framework/ to name the current export receipt"]
     if head_tree is None:
         # After the 8b transfer the receipt Vellum builds from is the one the
         # transfer record names, and its mirror_tree is the record's.
@@ -1098,6 +1096,59 @@ def derive_framework_transfer(root: Path, base: str, scratch: Path) -> dict:
     return {"files": files, "record": record, "framework": framework}
 
 
+# The files that only exist together with framework/.
+FRAMEWORK_DATA_FILES = (FRAMEWORK_TRANSFER_RECORD, FRAMEWORK_NAME_DEBT, FRAMEWORK_EXTERNAL_UPDATES)
+
+
+def framework_transfer_state(root: Path) -> tuple[dict[str, object], list[str]]:
+    """The one reading of where the framework transfer stands, and what is inconsistent about it.
+
+    The transfer is introduced by the change whose HEAD has framework/ while
+    its history base does not, whatever else the base holds; that change is
+    judged by framework_introduction_errors. A transfer record, debt baseline
+    or update list without framework/, framework/ without its record,
+    framework/ removed after it landed, and mirror/ beside framework/ are all
+    refused. verify_framework, the trusted judge, mirror_package and the
+    current-receipt selection read the transfer through this.
+    """
+    def at_base(base: str, path: str) -> bool:
+        return subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{base}:{path}"],
+                              capture_output=True, check=False).returncode == 0
+
+    state: dict[str, object] = {
+        "head_framework": (root / FRAMEWORK_ROOT.rstrip("/")).is_dir(),
+        "head_record": (root / FRAMEWORK_TRANSFER_RECORD).is_file(),
+        "head_mirror": (root / MIRROR_ROOT.rstrip("/")).exists(),
+        "head_data_without_framework": [],
+        "base": None, "base_framework": None, "base_record": None, "introduction": False,
+    }
+    errors: list[str] = []
+    present = [path for path in FRAMEWORK_DATA_FILES if (root / path).exists()]
+    if present and not state["head_framework"]:
+        state["head_data_without_framework"] = present
+        errors.append(f"{', '.join(present)} exist without framework/: the transfer's data lands only with "
+                      "the transferred tree")
+    if state["head_framework"] and not state["head_record"]:
+        errors.append(f"framework/ exists without {FRAMEWORK_TRANSFER_RECORD}")
+    if state["head_framework"] and state["head_mirror"]:
+        errors.append("mirror/ and framework/ both exist: the transfer moves the renamed units out of mirror/")
+    base, base_error = load_mirror_export_verifier().history_base(root)
+    if base_error:
+        errors.append(f"framework transfer: {base_error}")
+        return state, errors
+    if base is None:
+        if state["head_framework"]:
+            errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: no history base to judge the transfer against "
+                          "(set VELLUM_GIT_BASE, or have main or origin/main)")
+        return state, errors
+    state.update(base=base, base_framework=at_base(base, FRAMEWORK_ROOT.rstrip("/")),
+                 base_record=at_base(base, FRAMEWORK_TRANSFER_RECORD))
+    if state["base_framework"] and not state["head_framework"]:
+        errors.append("framework/ was transferred at the base and is gone at HEAD; it cannot be removed")
+    state["introduction"] = bool(state["head_framework"] and not state["base_framework"])
+    return state, errors
+
+
 def framework_introduction_errors(root: Path, base: str, transfer: dict) -> list[str]:
     """Judge the change that introduces the framework transfer, without trusting its data.
 
@@ -1114,7 +1165,8 @@ def framework_introduction_errors(root: Path, base: str, transfer: dict) -> list
     def git(*args: str) -> subprocess.CompletedProcess:
         return subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False)
 
-    changed = git("diff", "--name-only", base, "HEAD")
+    # --no-renames: a rule file moved out of the rule paths is a deletion here.
+    changed = git("diff", "--no-renames", "--name-only", base, "HEAD")
     if changed.returncode != 0:
         return [f"cannot list the change against {base}"]
     touched = sorted(name for name in changed.stdout.decode("utf-8", errors="replace").splitlines()
@@ -1164,11 +1216,13 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
     errors: list[str] = []
     checks: dict[str, object] = {}
     framework = root / FRAMEWORK_ROOT.rstrip("/")
-    if not framework.is_dir():
-        checks["framework"] = "absent"
+    state, state_errors = framework_transfer_state(root)
+    checks["framework_transfer_state"] = state
+    errors.extend(state_errors)
+    if not state["head_framework"]:
+        if not errors:
+            checks["framework"] = "absent"
         return errors, checks
-    if (root / MIRROR_ROOT.rstrip("/")).exists():
-        errors.append("mirror/ and framework/ both exist: the transfer moves the renamed units out of mirror/")
     # 1. Edges: the mirror-edge table's rules, exactly as mirror/ had them.
     edges = mirror_edge_findings(root, prefix=FRAMEWORK_ROOT)
     checks["framework_edge_findings"] = edges
@@ -1197,27 +1251,22 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
         errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: schema must be {FRAMEWORK_TRANSFER_SCHEMA}")
         return errors, checks
     transfer_bytes = (root / FRAMEWORK_TRANSFER_RECORD).read_bytes()
-    base, base_error = load_mirror_export_verifier().history_base(root)
-    if base_error:
-        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: {base_error}")
-    elif base is None:
-        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: no history base to judge the transfer against "
-                      "(set VELLUM_GIT_BASE, or have main or origin/main)")
-    else:
-        before = subprocess.run(["git", "-C", str(root), "show", f"{base}:{FRAMEWORK_TRANSFER_RECORD}"],
-                                capture_output=True, check=False)
-        if before.returncode == 0:
-            # Landed: the record is immutable.
-            if before.stdout != transfer_bytes:
-                errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: changed from the merge base; it is immutable")
-            checks["framework_transfer_introduced"] = False
-        else:
-            # This change introduces the transfer: judge it independently,
-            # with the rules already landed.
+    base = state["base"]
+    if base is not None:
+        checks["framework_transfer_introduced"] = state["introduction"]
+        if state["introduction"]:
+            # This change introduces framework/: judge it independently, with
+            # the rules already landed, whatever the base's record says.
             introduction = framework_introduction_errors(root, base, transfer)
-            checks["framework_transfer_introduced"] = True
             checks["framework_introduction_errors"] = introduction
             errors.extend(f"framework transfer introduction: {e}" for e in introduction)
+        else:
+            before = subprocess.run(["git", "-C", str(root), "show", f"{base}:{FRAMEWORK_TRANSFER_RECORD}"],
+                                    capture_output=True, check=False)
+            if before.returncode != 0:
+                errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: framework/ landed without its record")
+            elif before.stdout != transfer_bytes:
+                errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: changed from the merge base; it is immutable")
     # The file set is the transfer record's: a native edit may change a file's
     # bytes but not add or remove one, because the build compiles the export's
     # closures (mirror_package.verify_framework_identity holds the same set).

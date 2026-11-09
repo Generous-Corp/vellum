@@ -994,13 +994,15 @@ class VerifyExtractionTests(unittest.TestCase):
 
     def test_no_framework_is_a_clean_no_op(self) -> None:
         # Today's main: mirror/ and no framework/ or transfer record.
+        self.hide_ci_git_base()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "mirror/core/a/src").mkdir(parents=True)
             (root / "mirror/core/a/src/a.cpp").write_bytes(b"namespace pulp::a { int x; }\n")
             with mock.patch.object(verify_extraction, "load_rename_tool", side_effect=AssertionError("not read")):
                 errors, checks = verify_extraction.verify_framework(root, None, "origin/main")
-            self.assertEqual((errors, checks), ([], {"framework": "absent"}))
+            self.assertEqual((errors, checks["framework"]), ([], "absent"))
+            self.assertFalse(checks["framework_transfer_state"]["head_framework"])
 
     def test_symlinks_in_native_trees_are_refused(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1814,6 +1816,9 @@ class RendererPinTests(unittest.TestCase):
         newest = self.landed("newest", self.pulp_commit(self.matching_pin), new_tree)
         git = ["git", "-C", str(self.root), "-c", "user.name=t", "-c", "user.email=t@t"]
         subprocess.run(git + ["rm", "-q", "-r", "mirror"], check=True)
+        (self.root / "framework").mkdir()
+        (self.root / "framework/a.cpp").write_bytes(b"new\n")
+        subprocess.run(git + ["add", "framework"], check=True)
         subprocess.run(git + ["commit", "-q", "-m", "transfer"], check=True)
         # No transfer record: nothing names the current receipt.
         errors, _ = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])

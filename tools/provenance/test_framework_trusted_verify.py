@@ -62,6 +62,7 @@ class Repository:
         self.write("provenance/mirror/receipts/index.json",
                    json.dumps({"receipts": ["provenance/mirror/receipts/r.json"]}).encode())
         self.write("docs/readme.md", b"Vellum\n")
+        self.write("tools/mirror/rename_literal_exclusions.json", b"[]\n")
         # Native Vellum, so the collision census has a native side to read.
         self.write("runtime/include/vellum/runtime/kernel.hpp",
                    b"#pragma once\nnamespace vellum::runtime {\nclass Kernel;\n}\n")
@@ -137,6 +138,86 @@ class FrameworkTrustedVerifyTests(unittest.TestCase):
         target.write_bytes(target.read_bytes() + b"// smuggled\n")
         code, verdict = self.repo.judge()
         self.assertEqual(code, 1)
+        self.assertTrue(any("is not the landed rename tool's output" in e for e in verdict["errors"]), verdict)
+
+    def fresh(self) -> Repository:
+        return Repository(Path(tempfile.mkdtemp(dir=self.temporary.name)))
+
+    def test_moving_a_rule_file_in_or_out_is_refused(self):
+        for case, move in {"out": ("tools/mirror/rename_literal_exclusions.json", "docs/exclusions.json"),
+                           "in": ("docs/readme.md", "tools/mirror/readme.md")}.items():
+            with self.subTest(case=case):
+                repo = self.fresh()
+                repo.introduce_transfer()
+                git(repo.root, "mv", *move)
+                code, verdict = repo.judge()
+                self.assertEqual(code, 1)
+                self.assertTrue(any("edits the rules that judge it" in e for e in verdict["errors"]), verdict)
+
+    def test_adding_beside_the_rules_is_refused(self):
+        for added in ("tools/provenance/argparse.py", ".github/workflows/new.yml"):
+            with self.subTest(added=added):
+                repo = self.fresh()
+                repo.introduce_transfer()
+                repo.write(added, b"x = 1\n")
+                code, verdict = repo.judge()
+                self.assertEqual(code, 1)
+                self.assertTrue(any("edits the rules that judge it" in e for e in verdict["errors"]), verdict)
+
+    def test_transfer_data_without_framework_is_refused(self):
+        for path in (verifier.FRAMEWORK_TRANSFER_RECORD, verifier.FRAMEWORK_NAME_DEBT,
+                     verifier.FRAMEWORK_EXTERNAL_UPDATES):
+            with self.subTest(path=path):
+                repo = self.fresh()
+                repo.write(path, b"{}\n")
+                code, verdict = repo.judge()
+                self.assertEqual(code, 1)
+                self.assertTrue(any("exist without framework/" in e for e in verdict["errors"]), verdict)
+
+    def test_framework_without_its_record_is_refused(self):
+        self.repo.introduce_transfer()
+        (self.repo.root / verifier.FRAMEWORK_TRANSFER_RECORD).unlink()
+        code, verdict = self.repo.judge()
+        self.assertEqual(code, 1)
+        self.assertTrue(any("framework/ exists without" in e for e in verdict["errors"]), verdict)
+
+    def test_mirror_beside_framework_is_refused(self):
+        self.repo.introduce_transfer()
+        git(self.repo.root, "checkout", self.repo.base, "--", "mirror")
+        code, verdict = self.repo.judge()
+        self.assertEqual(code, 1)
+        self.assertTrue(any("mirror/ and framework/ both exist" in e for e in verdict["errors"]), verdict)
+
+    def test_removing_a_landed_framework_is_refused(self):
+        self.repo.introduce_transfer()
+        landed = commit_all(self.repo.root, "land the transfer")
+        self.repo.base = landed
+        git(self.repo.root, "rm", "-q", "-r", "framework", *verifier.FRAMEWORK_DATA_FILES[:2])
+        code, verdict = self.repo.judge()
+        self.assertEqual(code, 1)
+        self.assertTrue(any("cannot be removed" in e for e in verdict["errors"]), verdict)
+
+    def test_the_two_step_attack_is_refused_at_each_step(self):
+        # Step 1: a record (naming a receipt that does not exist yet) and an
+        # inflated baseline, without framework/.
+        record = {"schema": verifier.FRAMEWORK_TRANSFER_SCHEMA,
+                  "export_receipt": "provenance/mirror/receipts/future.json", "records": []}
+        self.repo.write(verifier.FRAMEWORK_TRANSFER_RECORD, json.dumps(record).encode())
+        self.repo.write(verifier.FRAMEWORK_NAME_DEBT,
+                        json.dumps({"schema": "x", "rules": {"pulp-package-or-target": {"framework/a.cpp": 999}}}).encode())
+        code, verdict = self.repo.judge()
+        self.assertEqual(code, 1)
+        self.assertTrue(any("exist without framework/" in e for e in verdict["errors"]), verdict)
+        # Forced through anyway: step 2 adds framework/ with an edit. framework/
+        # is new against that base, so it is an introduction and judged in full.
+        self.repo.base = git(self.repo.root, "rev-parse", "HEAD")
+        (self.repo.root / verifier.FRAMEWORK_TRANSFER_RECORD).unlink()
+        (self.repo.root / verifier.FRAMEWORK_NAME_DEBT).unlink()
+        self.repo.introduce_transfer()
+        target = self.repo.root / "framework/core/a/src/a.cpp"
+        target.write_bytes(target.read_bytes() + b"// arbitrary\n")
+        code, verdict = self.repo.judge()
+        self.assertEqual((code, verdict["mode"]), (1, "introduction"))
         self.assertTrue(any("is not the landed rename tool's output" in e for e in verdict["errors"]), verdict)
 
     def test_an_unrelated_change_is_a_no_op(self):
@@ -259,9 +340,9 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
 
     def test_the_rule_list_covers_this_workflow_and_its_judge(self):
         for path in (".github/workflows/framework-trusted-verify.yml", ".github/workflows/provenance.yml",
-                     "tools/provenance/framework_trusted_verify.py", "tools/provenance/verify_extraction.py",
-                     "tools/mirror/"):
-            self.assertIn(path, verifier.FRAMEWORK_RULE_PATHS)
+                     ".github/workflows/new.yml", "tools/provenance/framework_trusted_verify.py",
+                     "tools/provenance/verify_extraction.py", "tools/provenance/argparse.py", "tools/mirror/x.py"):
+            self.assertTrue(path.startswith(verifier.FRAMEWORK_RULE_PATHS), path)
 
 
 if __name__ == "__main__":
