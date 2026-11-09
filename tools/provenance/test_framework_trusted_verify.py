@@ -422,6 +422,19 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
         self.assertGreater(index["finished"], max(i for i, line in enumerate(lines) if "post_status" in line
                                                   and "local" not in line and "()" not in line))
 
+    def test_the_status_token_never_reaches_git_or_the_judge(self):
+        run = self.runs[0]
+        lines = [line.strip() for line in run.splitlines()]
+        moved = lines.index('status_token="$GITHUB_TOKEN"')
+        self.assertEqual(lines[moved + 1], "unset GITHUB_TOKEN GH_TOKEN")
+        # Nothing runs before the token leaves the environment.
+        self.assertEqual([line for line in lines[:moved] if line and not line.startswith("#")], ["set -euo pipefail"])
+        uses = [i for i, line in enumerate(lines) if "GITHUB_TOKEN" in line or "status_token" in line]
+        self.assertEqual([lines[i] for i in uses if i not in (moved, moved + 1)],
+                         ['--header "Authorization: Bearer ${status_token}" \\',
+                          "env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \\"])
+        self.assertIsNone(re.search(r"(?<![\w-])(export|declare -x)\s", run))
+
     def test_no_expression_reaches_a_shell(self):
         self.assertEqual(len(self.runs), 1)  # control: the run block was read
         for body in self.runs:
@@ -437,6 +450,9 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
             self.assertNotIn(forbidden, runs, forbidden)
         interpreters = re.findall(r"python3?\b[^\n]*", runs)
         self.assertEqual(interpreters, ["python3 -I tools/provenance/framework_trusted_verify.py \\"])
+        # The judge runs with no token in its environment.
+        self.assertIn("env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \\\n"
+                      "            python3 -I tools/provenance/framework_trusted_verify.py", runs)
         self.assertIn('--dest-parent "$RUNNER_TEMP"', runs)
         git_lines = [line.strip() for line in runs.splitlines() if '"${safe_git[@]}"' in line]
         self.assertEqual(len(git_lines), 5)
@@ -451,6 +467,19 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
                      ".github/workflows/new.yml", "tools/provenance/framework_trusted_verify.py",
                      "tools/provenance/verify_extraction.py", "tools/provenance/argparse.py", "tools/mirror/x.py"):
             self.assertTrue(path.startswith(verifier.FRAMEWORK_RULE_PATHS), path)
+
+
+class NoLinksOnTheDefaultBranchTests(unittest.TestCase):
+    def test_the_tree_holds_no_symlink_or_gitlink(self):
+        # framework_trusted_verify.materialize() refuses any symlink (120000)
+        # or gitlink (160000) anywhere in a pull request's tree, so one
+        # landed here would fail every later pull request's required status.
+        # Adding one is a deliberate decision: change the materializer first.
+        listing = subprocess.run(["git", "-C", str(ROOT), "ls-tree", "-r", "HEAD"], check=True,
+                                 capture_output=True, text=True).stdout.splitlines()
+        self.assertGreater(len(listing), 100)  # control: the tree was read
+        links = [line for line in listing if line.split(" ", 1)[0] in ("120000", "160000")]
+        self.assertEqual(links, [], "a symlink or gitlink would be refused by framework_trusted_verify.materialize()")
 
 
 class WorkflowFleetLintTests(unittest.TestCase):

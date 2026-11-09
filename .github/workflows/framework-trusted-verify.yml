@@ -18,6 +18,14 @@
 # framework-trusted-verify is not the verdict. The status starts pending and a
 # trap posts failure on any error, timeout or cancellation, so a run never
 # leaves it pending or missing.
+#
+# This is an accident guard plus the judge, not a security boundary on its own:
+# the framework-trusted-verify context can be posted by any token with
+# statuses: write, and a ruleset bound to GitHub Actions cannot tell those
+# apart. The admission steward verifies that the status resolves to a
+# pull_request_target or merge_group run of this exact file on the pull
+# request's head (Shipyard#1178). The token lives only in an unexported shell
+# variable the status posts read; nothing else in the step sees it.
 name: Framework trusted verify
 
 on:
@@ -53,13 +61,17 @@ jobs:
           GIT_LFS_SKIP_SMUDGE: '1'
         run: |
           set -euo pipefail
+          # The status token stays in this shell: unexported, read only by
+          # post_status, never in the environment of git or the judge.
+          status_token="$GITHUB_TOKEN"
+          unset GITHUB_TOKEN GH_TOKEN
           run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           post_status() {
             local state="$1" description="$2" payload
             payload="$(printf '{"state":"%s","context":"framework-trusted-verify","description":"%s","target_url":"%s"}' \
               "$state" "$description" "$run_url")"
             curl --fail --silent --show-error --retry 3 --request POST \
-              --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+              --header "Authorization: Bearer ${status_token}" \
               --header "Accept: application/vnd.github+json" \
               --data "$payload" \
               "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" > /dev/null
@@ -88,7 +100,8 @@ jobs:
 
           cd trusted
           set +e
-          python3 -I tools/provenance/framework_trusted_verify.py \
+          env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            python3 -I tools/provenance/framework_trusted_verify.py \
             --repo . \
             --head "$HEAD_SHA" \
             --base "$BASE_SHA" \
