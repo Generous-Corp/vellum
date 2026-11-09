@@ -777,6 +777,20 @@ class ObservatoryTests(unittest.TestCase):
                 else:
                     self.assertIn(f"vellum-{main_later}", result["new_events"])
 
+    def test_verify_without_a_git_base_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main, feature = self._coverage_state(Path(temporary))
+            with self.assertRaisesRegex(observatory.ObservatoryError, "needs --git-base"):
+                observatory.verify(root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                                   pulp_target=pulp_head, vellum_target=main)
+            observatory.verify(root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                               allow_no_git_base=True, pulp_target=pulp_head, vellum_target=main)
+            cli = ["--root", str(root), "verify", "--pulp-repo", str(pulp), "--vellum-repo", str(vellum),
+                   "--pulp-target", pulp_head, "--vellum-target", main, "--now", "2026-10-11T00:05:00Z"]
+            self.assertEqual(observatory.main(cli), 1)
+            self.assertEqual(observatory.main(cli + ["--no-git-base"]), 0)
+            self.assertEqual(observatory.main(cli + ["--no-git-base", "--git-base", main]), 1)
+
     def test_vellum_main_requires_events_only(self) -> None:
         self.assertEqual(observatory.main([
             "reconcile", "--pulp-repo", ".", "--vellum-repo", ".", "--pulp-target", "x",

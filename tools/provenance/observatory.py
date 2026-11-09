@@ -999,6 +999,13 @@ def verify(
     whose events fell overdue after the last reconcile fails here rather than
     passing on the clock of its last reconcile.
     """
+    if git_base is None and not allow_no_git_base:
+        # Without a base, append-only, the new-event time checks and the
+        # own-commit rule cannot tell this change's events from its base's.
+        raise ObservatoryError(
+            "verify needs --git-base to tell the observations a change adds from those "
+            "already on its base; pass --no-git-base only for a local check"
+        )
     lock, mapping, cursor, budgets = validate_lock_map_cursor(root)
     verify_active_cursor_ancestry(lock, cursor, pulp_repo, vellum_repo)
     events = load_events(root)

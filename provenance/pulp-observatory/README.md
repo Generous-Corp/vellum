@@ -68,7 +68,7 @@ observed commit.
 **Operating rule: every main landing carries its own events.** A pull request
 can no longer heal main's coverage by recording observations for commits
 already on main. Each pull request records its own mapped commits before it
-lands, and main's merge commits are covered by those events. `verify` also
+lands, and main's merge commits are covered by those events. A main landing without its events leaves every pull request failing coverage until the receiver coalesces. `verify` also
 needs `--git-base` to tell a change's own events apart; `--no-git-base` is for
 local checks only, and CI always passes a base.
 
