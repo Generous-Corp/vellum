@@ -66,6 +66,7 @@ FRAMEWORK_TRANSFER_RECORD = "provenance/framework/transfer.json"
 # append-only list, which is how a third-party update lands.
 FRAMEWORK_EXTERNAL_UPDATES = "provenance/framework/external-updates.json"
 FRAMEWORK_EXTERNAL_UPDATE_KEYS = {"path", "from_blob", "to_blob", "reason", "dependency", "version"}
+FRAMEWORK_VELLUM_DECLARATION = re.compile(r"namespace\s+vellum(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])vellum\s*::")
 # The transfer record is immutable once it lands: its bytes are pinned here,
 # so repointing it (at another receipt, records or tree) is an edit to this
 # verifier, not to data, and it must also equal its copy at the merge base.
@@ -984,6 +985,26 @@ def framework_external_errors(root: Path, recorded: dict[str, str]) -> tuple[lis
             if isinstance(landed, list) and entries[:len(landed)] != landed:
                 errors.append(f"{FRAMEWORK_EXTERNAL_UPDATES}: entries present at the merge base were removed or "
                               "edited; the list is append-only")
+    # Any file whose bytes are no longer the transfer record's has lost the
+    # third-party exemption: it may not declare the vellum namespace or carry
+    # a Pulp, plug-in or audio-SDK name, which a third-party update has no
+    # reason to hold, and the collision census reads it as native.
+    recorded_external = {path: blob for path, blob in recorded.items() if path.startswith(external)}
+    updated: list[str] = []
+    for relative, blob in sorted(recorded_external.items()):
+        file = root / relative
+        if not file.is_file() or file.is_symlink():
+            continue
+        data = file.read_bytes()
+        if git_blob_sha(data) == blob:
+            continue
+        updated.append(relative)
+        text = data.decode("utf-8", errors="replace")
+        if FRAMEWORK_VELLUM_DECLARATION.search(text):
+            errors.append(f"{relative}: an updated third-party file declares or names the vellum namespace")
+        for rule in FRAMEWORK_RATCHETED_RULES:
+            if _ALL_NATIVE_PATTERNS[rule].search(text):
+                errors.append(f"{relative}: an updated third-party file carries {rule} spellings")
     edited = []
     for relative, blob in sorted(expected.items()):
         file = root / relative
@@ -994,7 +1015,8 @@ def framework_external_errors(root: Path, recorded: dict[str, str]) -> tuple[lis
             f"framework/external/ files differ from their pinned blobs: {edited[:5]}. Third-party bytes change "
             f"only through the dependency process: update the file and append an entry to "
             f"{FRAMEWORK_EXTERNAL_UPDATES} in a reviewed pull request")
-    return errors, {"framework_external_edited": edited, "framework_external_updates": len(entries)}
+    return errors, {"framework_external_edited": edited, "framework_external_updates": len(entries),
+                    "framework_external_updated": updated}
 
 
 def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
@@ -1072,7 +1094,7 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
     errors.extend(external_errors)
     checks.update(external_checks)
     rename_tool = load_rename_tool()
-    census = tracked_collision_census(rename_tool, root, framework)
+    census = tracked_collision_census(rename_tool, root, framework, external_checks.get("framework_external_updated", []))
     checks["framework_collision_census"] = {
         key: (len(value) if isinstance(value, (list, dict)) and key != "declarations" else value)
         for key, value in census.items() if key != "native_root"}
@@ -1111,7 +1133,8 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
     return errors, checks
 
 
-def tracked_collision_census(rename_tool, root: Path, framework: Path) -> dict:
+def tracked_collision_census(rename_tool, root: Path, framework: Path,
+                             updated_external: Iterable[str] = ()) -> dict:
     """The collision census of framework/ against native Vellum, over tracked files.
 
     The census reads what the commit holds: `git ls-files`, nothing else. The
@@ -1138,7 +1161,10 @@ def tracked_collision_census(rename_tool, root: Path, framework: Path) -> dict:
         return Path(name).suffix.lower() in collisions.SOURCE_SUFFIXES
 
     units = [name for name in tracked if name.startswith(prefix) and not name.startswith(external)]
-    natives = [name for name in tracked if not name.startswith(prefix)]
+    # An updated third-party file (its blob is no longer the transfer
+    # record's) has lost the external exemption: it is read as native.
+    updated = set(updated_external)
+    natives = [name for name in tracked if not name.startswith(prefix) or name in updated]
     mirror = collisions.census_tree(top / prefix.rstrip("/"), [top / n for n in units if source(n)],
                                     ("pulp", "vellum"), ("pulp", "vellum"))
     native = collisions.census_tree(top, [top / n for n in natives if source(n)], None, None)
@@ -1165,7 +1191,7 @@ def tracked_collision_census(rename_tool, root: Path, framework: Path) -> dict:
                 native_classes.setdefault(cls, name)
     empty = git_blob_sha(b"")
     quarantine, third_party, objc = [], [], []
-    for name in [n for n in tracked if n.startswith(prefix)]:
+    for name in [n for n in tracked if n.startswith(prefix) and n not in updated]:
         path = top / name
         if not path.is_file() or path.is_symlink():
             continue

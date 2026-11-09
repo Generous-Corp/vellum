@@ -200,7 +200,9 @@ earlier decisions".
     to its recorded blob. A third-party update lands in its own reviewed pull
     request that appends an entry to the append-only
     `provenance/framework/external-updates.json`, chaining the file's previous
-    blob to its new one.
+    blob to its new one. An updated file loses the third-party exemption: the
+    collision census reads it as native, and it may not name the `vellum`
+    namespace or carry Pulp, plug-in or audio-SDK names.
 - **Name debt, ratcheted.** The units keep Pulp's `PULP_*` macros and `pulp-*`
   target names, and their prose names plug-in hosts. The native name rules
   `pulp-package-or-target`, `audio-plugin-sdk` and `pulp-public-namespace`

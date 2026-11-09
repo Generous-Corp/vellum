@@ -70,7 +70,10 @@ and appends an entry (`path`, `from_blob`, `to_blob`, `reason`, `dependency`,
 `version`) to
 [`provenance/framework/external-updates.json`](../provenance/framework/external-updates.json)
 in its own reviewed pull request. The list is append-only, and each entry's
-`from_blob` must be the file's current expected blob. Native roots outside `framework/` keep the full rules and may
+`from_blob` must be the file's current expected blob. An updated file is no longer exempt as
+third-party code: the collision census reads it as native, and it may not
+declare or name the `vellum` namespace or carry Pulp, plug-in or audio-SDK
+names. Native roots outside `framework/` keep the full rules and may
 not define or copy the units' namespaces.
 
 ## Active ownership and change routing

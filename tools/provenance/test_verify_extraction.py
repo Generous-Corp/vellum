@@ -743,20 +743,20 @@ class VerifyExtractionTests(unittest.TestCase):
             # An unmodified file passes.
             self.assertEqual(verify_extraction.framework_external_errors(root, recorded)[0], [])
             # An in-place edit with no update entry is refused.
-            smuggled = self.EXTERNAL_BYTES + b"namespace vellum::runtime { class SpscQueue { int x; }; }\n"
+            smuggled = self.EXTERNAL_BYTES + b"int lib_v2(void);\n"  # an edit; clean bytes
             (root / self.EXTERNAL).write_bytes(smuggled)
             errors, checks = verify_extraction.framework_external_errors(root, recorded)
             self.assertEqual(checks["framework_external_edited"], [self.EXTERNAL])
-            self.assertIn("only through the dependency process", errors[0])
+            self.assertTrue(any("only through the dependency process" in e for e in errors), errors)
             # A matching entry makes the same bytes a reviewed update.
             self.write_updates(root, [self.update(self.EXTERNAL, self.EXTERNAL_BYTES, smuggled)])
             self.assertEqual(verify_extraction.framework_external_errors(root, recorded)[0], [])
             # An entry whose to_blob is not the file is refused.
             self.write_updates(root, [self.update(self.EXTERNAL, self.EXTERNAL_BYTES, b"other\n")])
-            self.assertIn("differ from their pinned blobs", verify_extraction.framework_external_errors(root, recorded)[0][0])
+            self.assertTrue(any("differ from their pinned blobs" in e for e in verify_extraction.framework_external_errors(root, recorded)[0]))
             # A broken chain is refused.
             self.write_updates(root, [self.update(self.EXTERNAL, b"not the recorded bytes\n", smuggled)])
-            self.assertIn("breaks the chain", verify_extraction.framework_external_errors(root, recorded)[0][0])
+            self.assertTrue(any("breaks the chain" in e for e in verify_extraction.framework_external_errors(root, recorded)[0]))
             # A chain of two updates resolves to the last to_blob.
             later = smuggled + b"// 1.2.5\n"
             (root / self.EXTERNAL).write_bytes(later)
@@ -765,8 +765,8 @@ class VerifyExtractionTests(unittest.TestCase):
             self.assertEqual(verify_extraction.framework_external_errors(root, recorded)[0], [])
             # An entry for a path the transfer record does not list is refused.
             self.write_updates(root, [self.update("framework/external/lib/new.h", b"a", b"b")])
-            self.assertIn("is not a framework/external/ file the transfer record lists",
-                          verify_extraction.framework_external_errors(root, recorded)[0][0])
+            self.assertTrue(any("is not a framework/external/ file the transfer record lists" in e
+                                for e in verify_extraction.framework_external_errors(root, recorded)[0]))
             # Malformed lists and entries fail closed.
             for bad in ("{", json.dumps({"path": self.EXTERNAL}), json.dumps([{"path": self.EXTERNAL}])):
                 (root / verify_extraction.FRAMEWORK_EXTERNAL_UPDATES).write_text(bad, encoding="utf-8")
@@ -822,6 +822,65 @@ class VerifyExtractionTests(unittest.TestCase):
             (root / "framework/external/lib/extra.h").write_bytes(b"int extra;\n")
             _, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
             self.assertEqual(checks["framework_external_unrecorded"], ["framework/external/lib/extra.h"])
+
+    HTTPLIB = "framework/external/cpp-httplib/httplib.h"
+    HTTPLIB_BYTES = b"// cpp-httplib\nnamespace httplib {\nclass Client;\n}\n"
+    SPSC = "framework/core/runtime/include/vellum/runtime/spsc_queue.hpp"
+    SPSC_BYTES = b"#pragma once\nnamespace vellum::runtime {\nclass SpscQueue;\n}\n"
+
+    def updated_external_fixture(self, root: Path, updated: bytes) -> list[str]:
+        """framework/ with a runtime header and a third-party file updated through a well-formed entry."""
+        self.framework_fixture(root, {self.SPSC: self.SPSC_BYTES, self.HTTPLIB: self.HTTPLIB_BYTES,
+                                      "runtime/include/vellum/runtime/kernel.hpp":
+                                          b"#pragma once\nnamespace vellum::runtime {\nclass Kernel;\n}\n"})
+        record = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+        value = json.loads(record.read_text(encoding="utf-8"))
+        for row in value["records"]:
+            row["framework_git_blob_sha"] = verify_extraction.git_blob_sha((root / row["framework_path"]).read_bytes())
+        record.write_text(json.dumps(value), encoding="utf-8")
+        (root / self.HTTPLIB).write_bytes(updated)
+        self.write_updates(root, [self.update(self.HTTPLIB, self.HTTPLIB_BYTES, updated)])
+        self.track(root)
+        errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+        return errors, checks
+
+    def test_the_laundering_plant_through_an_update_entry_is_refused(self) -> None:
+        self.hide_ci_git_base()
+        plant = (self.HTTPLIB_BYTES + b"namespace vellum::runtime { class SpscQueue { int x; }; }\n"
+                 b"#define PULP_SMUGGLED 1\n")
+        with tempfile.TemporaryDirectory() as temporary:
+            errors, checks = self.updated_external_fixture(Path(temporary), plant)
+            self.assertEqual(checks["framework_external_updated"], [self.HTTPLIB])
+            self.assertEqual(checks["framework_external_edited"], [])  # the entry itself is well formed
+            self.assertTrue(any("declares or names the vellum namespace" in e for e in errors), errors)
+            self.assertTrue(any("carries pulp-package-or-target spellings" in e for e in errors), errors)
+            # The updated file is native to the census: its SpscQueue collides.
+            self.assertEqual(checks["framework_collision_census"]["name_collisions"], 1)
+
+    def test_an_updated_external_file_is_a_native_byte_copy_too(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            # An "update" that replaces the file with a framework/ file's bytes.
+            errors, checks = self.updated_external_fixture(Path(temporary), self.SPSC_BYTES)
+            self.assertEqual(checks["framework_collision_census"]["blob_quarantine"], 1)
+
+    def test_an_updated_external_file_carrying_a_plugin_sdk_name_is_refused(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            errors, _ = self.updated_external_fixture(
+                Path(temporary), self.HTTPLIB_BYTES + b"// works as a VST3 host helper\n")
+            self.assertTrue(any("carries audio-plugin-sdk spellings" in e for e in errors), errors)
+
+    def test_a_clean_third_party_update_passes(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            errors, checks = self.updated_external_fixture(
+                Path(temporary), self.HTTPLIB_BYTES + b"namespace httplib {\nclass Server;\n}\n")
+            self.assertEqual(checks["framework_external_updated"], [self.HTTPLIB])
+            self.assertEqual([e for e in errors if "external" in e or "census" in e], [], errors)
+            census = checks["framework_collision_census"]
+            self.assertEqual((census["name_collisions"], census["macro_collisions"], census["blob_quarantine"]),
+                             (0, 0, 0))
 
     def test_landed_transfer_record_matches_its_pin(self) -> None:
         record = ROOT / verify_extraction.FRAMEWORK_TRANSFER_RECORD
