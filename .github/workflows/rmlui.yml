@@ -14,7 +14,13 @@ name: RmlUi module
 # - Skips: a Metal test skips on a host without a Metal device; here that is
 #   a failure, since a lane that drew nothing proves nothing.
 # - Linked libraries: the Metal renderer's test binaries may load only Apple's
-#   system frameworks and libraries (otool -L), and must load Metal.
+#   system frameworks and libraries (otool -L), and must load Metal. In the
+#   other direction, the module's configure fails if any of its libraries
+#   other than VellumRenderer links Vellum (rmlui/cmake/
+#   VellumRmlUiLinkBoundary.cmake), which every configure here runs.
+# - Vellum's default build: configured with the recorder, it must request no
+#   RmlUi, FreeType or Lua, since the module is opt-in; the same configure with
+#   VELLUM_ENABLE_RMLUI=ON must request RmlUi.
 #
 # Advisory: not a required check. It runs on pull requests and pushes that
 # touch the module or these tools, never on merge groups.
@@ -22,12 +28,16 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
       - 'rmlui/**'
       - 'tools/ci/**'
       - '.github/workflows/rmlui.yml'
   push:
     branches: [main]
     paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
       - 'rmlui/**'
       - 'tools/ci/**'
       - '.github/workflows/rmlui.yml'
@@ -103,6 +113,41 @@ jobs:
             --log build-rmlui-control/dependency-requests.jsonl \
             --require 'vellum'
 
+      - name: Configure Vellum's default build, recording dependency requests
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Vellum's default build requests no dependency at all, so the
+          # sentinel's entry is what shows the recorder ran.
+          cmake -S . -B build-vellum-default \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVELLUM_BUILD_TESTS=OFF \
+            -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES="$PWD/tools/ci/dependency_request_recorder.cmake;$PWD/tools/ci/dependency_request_sentinel.cmake" \
+            -DDEPENDENCY_REQUEST_LOG="$PWD/build-vellum-default/dependency-requests.jsonl"
+
+      - name: Check Vellum's default build requested no RmlUi
+        shell: bash
+        run: |
+          python3 -I tools/ci/dependency_request_check.py \
+            --log build-vellum-default/dependency-requests.jsonl \
+            --forbid 'vellum_rmlui_*' --forbid 'rmlui*' --forbid 'freetype*' --forbid 'lua*' \
+            --require 'recorder-loaded'
+
+      - name: Control - Vellum with the RmlUi module must request RmlUi
+        shell: bash
+        run: |
+          set -uo pipefail
+          cmake -S . -B build-vellum-rmlui-control \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVELLUM_BUILD_TESTS=OFF \
+            -DVELLUM_ENABLE_RMLUI=ON \
+            -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES="$PWD/tools/ci/dependency_request_recorder.cmake" \
+            -DDEPENDENCY_REQUEST_LOG="$PWD/build-vellum-rmlui-control/dependency-requests.jsonl" \
+            > "$RUNNER_TEMP/vellum-rmlui-control-configure.log" 2>&1 || true
+          python3 -I tools/ci/dependency_request_check.py \
+            --log build-vellum-rmlui-control/dependency-requests.jsonl \
+            --require 'vellum_rmlui_rmlui'
+
       - name: Build
         shell: bash
         run: cmake --build build-rmlui --parallel "$VELLUM_BUILD_JOBS"
@@ -152,6 +197,9 @@ jobs:
           path: |
             build-rmlui/dependency-requests.jsonl
             build-rmlui-control/dependency-requests.jsonl
+            build-vellum-default/dependency-requests.jsonl
+            build-vellum-rmlui-control/dependency-requests.jsonl
+            ${{ runner.temp }}/vellum-rmlui-control-configure.log
             ${{ runner.temp }}/rmlui-control-configure.log
             ${{ runner.temp }}/rmlui-ctest.log
             ${{ runner.temp }}/rmlui-ctest.xml
