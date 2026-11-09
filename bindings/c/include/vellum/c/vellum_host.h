@@ -152,6 +152,11 @@ typedef struct vellum_host_text_input {
     vellum_host_rect bounds;
 } vellum_host_text_input;
 
+/*
+ * Borrowed strings: vellum_host_last_error() and every const char* this API
+ * returns, directly or inside an output struct, stay valid only until the next
+ * vellum_host_* call on the same thread. Callers copy anything they retain.
+ */
 VELLUM_HOST_API uint32_t vellum_host_abi_version(void);
 VELLUM_HOST_API const char* vellum_host_last_error(void);
 
@@ -168,6 +173,11 @@ VELLUM_HOST_API vellum_host_status vellum_host_surface_resize(
     vellum_host_surface* surface, uint32_t width, uint32_t height, float scale);
 VELLUM_HOST_API vellum_host_status vellum_host_surface_render(
     vellum_host_surface* surface, const vellum_host_app* app);
+/*
+ * Fills image with a borrowed pixel buffer owned by the surface. The buffer is
+ * invalidated by the next resize, render, capture or destroy on that surface.
+ * The output fields are zeroed on entry and stay zero on any failure.
+ */
 VELLUM_HOST_API vellum_host_status vellum_host_surface_capture_rgba(
     vellum_host_surface* surface, vellum_host_image* image);
 

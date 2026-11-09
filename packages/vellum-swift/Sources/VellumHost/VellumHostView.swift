@@ -37,22 +37,52 @@ public final class VellumHostView: NSView {
         return metalLayer
     }
 
+    public struct SurfaceSize: Equatable, Sendable {
+        public let width: UInt32
+        public let height: UInt32
+        public let scale: Float
+        public let drawable: CGSize
+
+        public init(width: UInt32, height: UInt32, scale: Float, drawable: CGSize) {
+            self.width = width
+            self.height = height
+            self.scale = scale
+            self.drawable = drawable
+        }
+    }
+
+    public static let maximumPixelExtent: CGFloat = 16384
+
+    public static func validatedSurfaceSize(_ size: CGSize, scale: CGFloat) -> SurfaceSize? {
+        guard size.width.isFinite, size.height.isFinite, scale.isFinite,
+              size.width >= 1, size.height >= 1, scale > 0 else { return nil }
+        let width = size.width.rounded(.down)
+        let height = size.height.rounded(.down)
+        let pixelWidth = (width * scale).rounded(.up)
+        let pixelHeight = (height * scale).rounded(.up)
+        guard pixelWidth >= 1, pixelHeight >= 1,
+              pixelWidth <= maximumPixelExtent, pixelHeight <= maximumPixelExtent,
+              let pointWidth = UInt32(exactly: width),
+              let pointHeight = UInt32(exactly: height) else { return nil }
+        let narrowed = Float(scale)
+        guard narrowed.isFinite, narrowed > 0 else { return nil }
+        return SurfaceSize(width: pointWidth, height: pointHeight, scale: narrowed,
+                           drawable: CGSize(width: pixelWidth, height: pixelHeight))
+    }
+
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard let window else {
+        guard window != nil else {
             pumpTimer?.invalidate()
             pumpTimer = nil
             return
         }
-        if surface == nil {
-            let scale = backingScale
-            metalLayer.contentsScale = CGFloat(scale)
-            metalLayer.drawableSize = CGSize(width: bounds.width * CGFloat(scale),
-                                             height: bounds.height * CGFloat(scale))
+        if surface == nil, let size = validatedSize(bounds.size) {
+            metalLayer.contentsScale = CGFloat(size.scale)
+            metalLayer.drawableSize = size.drawable
             perform {
-                surface = try VellumSurface(
-                    width: UInt32(max(1, bounds.width)), height: UInt32(max(1, bounds.height)),
-                    scale: scale, metalLayer: metalLayer)
+                surface = try VellumSurface(width: size.width, height: size.height,
+                                            scale: size.scale, metalLayer: metalLayer)
                 try surface?.render(application)
             }
         }
@@ -71,22 +101,35 @@ public final class VellumHostView: NSView {
 
     public override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        metalLayer.contentsScale = CGFloat(backingScale)
         resizeSurface(to: bounds.size)
     }
 
     public var backingScale: Float {
-        Float(backingScaleSource?() ?? window?.backingScaleFactor ?? metalLayer.contentsScale)
+        Float(rawBackingScale)
+    }
+
+    private var rawBackingScale: CGFloat {
+        backingScaleSource?() ?? window?.backingScaleFactor ?? metalLayer.contentsScale
+    }
+
+    private func validatedSize(_ size: CGSize) -> SurfaceSize? {
+        let scale = rawBackingScale
+        guard let validated = Self.validatedSurfaceSize(size, scale: scale) else {
+            lastError = VellumHostError(
+                status: VELLUM_HOST_ERROR_INVALID_ARGUMENT,
+                message: "invalid surface size \(size.width)x\(size.height) at scale \(scale)")
+            return nil
+        }
+        return validated
     }
 
     private func resizeSurface(to size: NSSize) {
-        guard let surface, size.width >= 1, size.height >= 1 else { return }
-        let scale = backingScale
-        metalLayer.drawableSize = CGSize(width: size.width * CGFloat(scale),
-                                         height: size.height * CGFloat(scale))
+        guard let surface, let validated = validatedSize(size) else { return }
+        metalLayer.contentsScale = CGFloat(validated.scale)
+        metalLayer.drawableSize = validated.drawable
         perform {
-            try surface.resize(width: UInt32(size.width), height: UInt32(size.height),
-                               scale: scale)
+            try surface.resize(width: validated.width, height: validated.height,
+                               scale: validated.scale)
             try surface.render(application)
         }
     }

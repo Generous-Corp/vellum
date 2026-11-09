@@ -33,6 +33,7 @@ add_test(NAME vellum.swift-host-proof
         --sdk-prefix "${_vellum_swift_proof_prefix}"
         --package "${CMAKE_CURRENT_SOURCE_DIR}"
         --work "${_vellum_swift_proof_work}/run"
+        --build-dir "${CMAKE_BINARY_DIR}"
         ${_vellum_swift_proof_args})
 set_tests_properties(vellum.swift-host-proof PROPERTIES
     SKIP_RETURN_CODE 77

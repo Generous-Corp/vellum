@@ -252,6 +252,23 @@ def foreign_source_reference(text: str, source_root: Path, allowed: list[Path]) 
     return str(source_root) in text
 
 
+def unsafe_work_reason(work: Path, build_dir: Path, package: Path) -> str | None:
+    work = work.resolve()
+    build_dir = build_dir.resolve()
+    package = package.resolve()
+    source_root = package.parents[1]
+    if build_dir == source_root or build_dir in source_root.parents:
+        return f"the build directory {build_dir} is or contains the source tree"
+    if work == build_dir or build_dir not in work.parents:
+        return f"the work directory {work} is not a dedicated child of the build directory {build_dir}"
+    for protected in (package, source_root):
+        if work == protected or work in protected.parents:
+            return f"the work directory {work} is or contains {protected}"
+    if package in work.parents:
+        return f"the work directory {work} lies inside the package {package}"
+    return None
+
+
 def run(command: list[str], environment: dict[str, str], cwd: Path | None = None) -> str:
     result = subprocess.run(
         command, env=environment, cwd=cwd, capture_output=True, text=True, check=False
@@ -263,8 +280,11 @@ def run(command: list[str], environment: dict[str, str], cwd: Path | None = None
     return result.stdout + result.stderr
 
 
-def prove(sdk: Path, package: Path, work: Path, bundle: Path,
+def prove(sdk: Path, package: Path, work: Path, bundle: Path, build_dir: Path,
           require_pin: bool = False, require_prefix: bool = False) -> dict[str, object]:
+    unsafe = unsafe_work_reason(work, build_dir, package)
+    if unsafe is not None:
+        raise ProofError(f"refusing to remove the work directory: {unsafe}")
     swift = shutil.which("swift")
     if swift is None:
         if require_prefix:
@@ -372,6 +392,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-prefix", action="store_true")
     parser.add_argument("--require-pinned-toolchain", action="store_true")
     parser.add_argument("--check-native", type=Path)
+    parser.add_argument("--build-dir", type=Path)
     args = parser.parse_args(argv)
     if args.check_native is not None:
         return check_native(args.check_native)
@@ -380,7 +401,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         sdk = locate_sdk(args.sdk_prefix or os.environ.get(PREFIX_VARIABLE, ""),
                          required=args.require_prefix)
-        evidence = prove(sdk, package, args.work.resolve(), bundle,
+        if args.build_dir is None:
+            raise ProofError("--build-dir is required so the work directory can be checked")
+        evidence = prove(sdk, package, args.work.resolve(), bundle, args.build_dir,
                          require_pin=args.require_pinned_toolchain or
                          truthy(os.environ.get(REQUIRE_PIN_VARIABLE)),
                          require_prefix=args.require_prefix)
