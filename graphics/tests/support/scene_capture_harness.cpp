@@ -327,6 +327,23 @@ std::filesystem::path default_golden_directory() {
     return VELLUM_CAPTURE_GOLDEN_DIR;
 }
 
+std::vector<std::filesystem::path> golden_roots() {
+    return {default_golden_directory(), VELLUM_CAPTURE_BUILD_GOLDEN_ROOT};
+}
+
+bool is_within_golden_roots(const std::filesystem::path& path) {
+    std::error_code error;
+    const auto resolved = std::filesystem::weakly_canonical(path, error);
+    if (error) return false;
+    for (const auto& root : golden_roots()) {
+        const auto resolved_root = std::filesystem::weakly_canonical(root, error);
+        if (error) continue;
+        const auto relative = resolved.lexically_relative(resolved_root);
+        if (!relative.empty() && relative != "." && *relative.begin() != "..") return true;
+    }
+    return false;
+}
+
 Verdict compare_to_golden(
     const CaptureResult& result, const std::filesystem::path& golden,
     int max_channel_delta, double max_differing_fraction, GoldenMode mode) {
@@ -343,6 +360,14 @@ Verdict compare_to_golden(
     const bool update = mode == GoldenMode::update || environment_update;
     std::string error;
     if (update) {
+        if (!is_within_golden_roots(path)) {
+            std::string roots;
+            for (const auto& root : golden_roots()) {
+                roots += (roots.empty() ? "" : ", ") + root.string();
+            }
+            return fail("refusing to write golden " + path.string() +
+                        " outside the golden roots: " + roots);
+        }
         if (!write_raw_rgba(path, result.pixel_width, result.pixel_height, result.rgba,
                             &error)) {
             return fail(error);

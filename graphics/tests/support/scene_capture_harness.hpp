@@ -25,6 +25,7 @@
 /// `graphics/tests/fixtures/capture/`. Setting `VELLUM_UPDATE_GOLDENS=1` makes
 /// `compare_to_golden` in `GoldenMode::from_environment` rewrite the golden
 /// from the capture instead of comparing; it is refused when `CI` is set.
+/// Any update writes only under `golden_roots()`.
 namespace vellum::graphics::capture_harness {
 
 /// The outcome of a harness check, with a diagnostic on failure.
@@ -113,10 +114,19 @@ enum class GoldenMode {
 /// The directory relative golden paths resolve against.
 [[nodiscard]] std::filesystem::path default_golden_directory();
 
+/// The directories goldens may be written under: `default_golden_directory()`
+/// and this test directory's build tree.
+[[nodiscard]] std::vector<std::filesystem::path> golden_roots();
+
+/// True when `path`, with symlinks and `..` resolved, lies strictly inside one
+/// of `golden_roots()`.
+[[nodiscard]] bool is_within_golden_roots(const std::filesystem::path& path);
+
 /// Compares a capture to a raw RGBA golden. The capture passes when the
 /// sizes match and at most `max_differing_fraction` of the pixels have a
 /// channel that differs by more than `max_channel_delta`. In update mode the
-/// golden is rewritten from the capture and the verdict passes.
+/// golden is rewritten from the capture and the verdict passes, unless the
+/// path lies outside `golden_roots()`, which fails without writing.
 [[nodiscard]] Verdict compare_to_golden(
     const CaptureResult& result, const std::filesystem::path& golden,
     int max_channel_delta, double max_differing_fraction,
