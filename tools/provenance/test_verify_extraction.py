@@ -668,6 +668,54 @@ class VerifyExtractionTests(unittest.TestCase):
             self.assertEqual(checks["framework_collision_census"]["name_collisions"], 1)
             self.assertTrue(any("framework collision census: 1 name collisions" in e for e in errors), errors)
 
+    def test_framework_census_reads_every_tracked_native_file(self) -> None:
+        # The census must see a tracked second copy wherever it sits: under
+        # each directory name the pinned helper's own walk skips, and under a
+        # build* component (here also git-ignored, so it is force-added).
+        self.hide_ci_git_base()
+        helper = verify_extraction.load_rename_tool().collisions
+        unit = (b"#pragma once\nnamespace vellum::runtime {\nclass Logger;\nvoid log_line(int level);\n}\n")
+        names = sorted(helper.SKIP_DIRS - {".git"}) + ["build-plant", "builders"]
+        self.assertGreater(len(names), 2)  # control: the helper's list was read
+        for name in names:
+            with self.subTest(directory=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.framework_fixture(root, {"framework/core/runtime/include/vellum/runtime/log.hpp": unit})
+                (root / ".gitignore").write_text("build*/\n", encoding="utf-8")
+                copy = root / "runtime" / name / "zz_dup.hpp"
+                copy.parent.mkdir(parents=True)
+                copy.write_bytes(b"#pragma once\nnamespace vellum::runtime {\nclass Logger;\n}\n")
+                subprocess.run(["git", "-C", str(root), "add", "-f", "-A"], check=True)
+                errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+                self.assertEqual(checks["framework_collision_census"]["name_collisions"], 1)
+                self.assertTrue(any("framework collision census: 1 name collisions" in e for e in errors), errors)
+        # .git cannot hold a tracked file: git declines to add a path under it,
+        # so there is no tracked copy there for the census to miss.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / "runtime/.git").mkdir(parents=True)
+            (root / "runtime/.git/zz.hpp").write_text("int x;\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "-f", "runtime/.git/zz.hpp"],
+                           capture_output=True, check=False)
+            listed = subprocess.run(["git", "-C", str(root), "ls-files"], capture_output=True, text=True, check=True)
+            self.assertEqual(listed.stdout, "")
+
+    def test_framework_census_quarantines_a_byte_copy_under_build(self) -> None:
+        self.hide_ci_git_base()
+        unit = b"#pragma once\nnamespace vellum::runtime {\nclass SpscQueue;\n}\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.framework_fixture(root, {"framework/core/runtime/include/vellum/runtime/spsc_queue.hpp": unit})
+            (root / ".gitignore").write_text("build*/\n", encoding="utf-8")
+            (root / "build-plant/runtime").mkdir(parents=True)
+            (root / "build-plant/runtime/spsc_queue.hpp").write_bytes(unit)
+            subprocess.run(["git", "-C", str(root), "add", "-f", "-A"], check=True)
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            census = checks["framework_collision_census"]
+            self.assertEqual(census["blob_quarantine"], 1)
+            self.assertTrue(any("blob quarantine" in e for e in errors), errors)
+
     def test_landed_transfer_record_matches_its_pin(self) -> None:
         record = ROOT / verify_extraction.FRAMEWORK_TRANSFER_RECORD
         if not record.is_file():

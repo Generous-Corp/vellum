@@ -1040,40 +1040,79 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
 
 
 def tracked_collision_census(rename_tool, root: Path, framework: Path) -> dict:
-    """The rename tool's collision census, over the files this repository tracks.
+    """The collision census of framework/ against native Vellum, over tracked files.
 
-    The census walks its trees from the filesystem. A checkout can hold
-    untracked trees the commit does not: the required provenance lane checks
-    Pulp out at .mirror-pulp inside the Vellum checkout, and every Pulp file
-    there would read as a native second copy. Only tracked files are Vellum
-    source, so both walks are confined to them. The tool itself is pinned by
-    the transfer record, so it is wrapped here rather than changed.
+    The census reads what the commit holds: `git ls-files`, nothing else. The
+    tool's own walks read the filesystem and drop any path with a `build*`
+    component or a SKIP_DIRS name, which suits a scratch tree before a rename
+    but would hide a tracked native second copy (a force-added file under an
+    ignored `build*/`, or under `third_party/`) and would read an untracked
+    checkout inside this one (CI's .mirror-pulp) as native. So the census is
+    assembled here from the pinned helper's scanner (census_tree, compare)
+    over the tracked set. The one skipped place is framework/external/: the
+    transferred third-party files, which the transfer record binds file for
+    file. The tool and helper blobs stay as the transfer record pins them.
     """
     listed = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, check=False)
     if listed.returncode != 0:
         return {"status": "error", "reason": "cannot list tracked files"}
-    top = root.resolve()
-    tracked = {name for name in listed.stdout.decode("utf-8", errors="surrogateescape").split("\0") if name}
-
-    def keep(paths):
-        kept = []
-        for path in paths:
-            try:
-                relative = path.resolve().relative_to(top).as_posix()
-            except ValueError:
-                continue
-            if relative in tracked:
-                kept.append(path)
-        return kept
-
     collisions = rename_tool.collisions
-    walk, iter_sources = rename_tool.walk, collisions.iter_sources
-    rename_tool.walk = lambda tree: keep(walk(tree))
-    collisions.iter_sources = lambda tree, skip_top=(): keep(iter_sources(tree, skip_top))
-    try:
-        return rename_tool.collision_census(rename_tool.load_spelling(MIRROR_EDGE_TABLE, "vellum"), framework, root, {})
-    finally:
-        rename_tool.walk, collisions.iter_sources = walk, iter_sources
+    top = root.resolve()
+    tracked = sorted(name for name in listed.stdout.decode("utf-8", errors="surrogateescape").split("\0") if name)
+    prefix = framework.resolve().relative_to(top).as_posix() + "/"
+    external = prefix + "external/"
+
+    def source(name: str) -> bool:
+        return Path(name).suffix.lower() in collisions.SOURCE_SUFFIXES
+
+    units = [name for name in tracked if name.startswith(prefix) and not name.startswith(external)]
+    natives = [name for name in tracked if not name.startswith(prefix)]
+    mirror = collisions.census_tree(top / prefix.rstrip("/"), [top / n for n in units if source(n)],
+                                    ("pulp", "vellum"), ("pulp", "vellum"))
+    native = collisions.census_tree(top, [top / n for n in natives if source(n)], None, None)
+    result = collisions.compare(mirror, native, "vellum")
+
+    # Byte copies: a native file holding a framework/ file's exact blob. The
+    # files that must spell the units' names to refuse them are exempt, as in
+    # the second-copy guard; framework/external/ blobs shared natively are
+    # third-party, listed rather than refused.
+    native_blobs: dict[str, str] = {}
+    native_classes: dict[str, str] = {}
+    declaration = re.compile(r"@(?:interface|implementation)\s+([A-Za-z_]\w*)")
+    objc_suffixes = rename_tool.OBJC_SOURCE_SUFFIXES
+    for name in natives:
+        if name in RENAMED_MIRROR_EXEMPT_PATHS or name.startswith(RENAMED_MIRROR_EXEMPT_PREFIXES or ("\0",)):
+            continue
+        path = top / name
+        if not path.is_file() or path.is_symlink():
+            continue
+        data = path.read_bytes()
+        native_blobs.setdefault(git_blob_sha(data), name)
+        if Path(name).suffix.lower() in objc_suffixes and b"\0" not in data:
+            for cls in declaration.findall(data.decode("utf-8", errors="replace")):
+                native_classes.setdefault(cls, name)
+    empty = git_blob_sha(b"")
+    quarantine, third_party, objc = [], [], []
+    for name in [n for n in tracked if n.startswith(prefix)]:
+        path = top / name
+        if not path.is_file() or path.is_symlink():
+            continue
+        data = path.read_bytes()
+        blob = git_blob_sha(data)
+        if name.startswith(external):
+            if blob in native_blobs:
+                third_party.append({"mirror": name, "native": native_blobs[blob]})
+            continue
+        if blob != empty and blob in native_blobs:
+            quarantine.append({"mirror": name, "native": native_blobs[blob], "blob": blob})
+        if Path(name).suffix.lower() in objc_suffixes and b"\0" not in data:
+            for cls in declaration.findall(data.decode("utf-8", errors="replace")):
+                if cls in native_classes:
+                    objc.append({"class": cls, "mirror": name, "native": native_classes[cls]})
+    result.update({"refused_units": [], "native_refusals": [], "blob_quarantine": quarantine,
+                   "third_party_shared_blobs": third_party, "objc_class_collisions": objc,
+                   "status": "checked"})
+    return result
 
 
 def load_rename_tool():
