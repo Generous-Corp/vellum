@@ -48,6 +48,8 @@ enum class FullRepaintReason {
     /// The scene's frame does not cover the whole surface, so damage clipped
     /// to it could leave stale pixels.
     frame_mismatch,
+    /// The scene's version is newer than `kDamageModelSceneVersion`.
+    damage_model_version,
 };
 
 [[nodiscard]] std::string_view to_string(FullRepaintReason reason) noexcept;
@@ -140,14 +142,16 @@ public:
     /// cleared and only paint commands whose paint extent meets it are drawn,
     /// leaving the rest of the retained image untouched. The first frame, a
     /// resize, a failed previous frame, a scene version, size or background
-    /// change, a `reload` and whole-frame damage repaint everything. The
-    /// output is byte-identical to `render(scene)`.
+    /// change, a `reload`, whole-frame damage and a scene version newer than
+    /// `kDamageModelSceneVersion` repaint everything. The output is
+    /// byte-identical to `render(scene)`.
     [[nodiscard]] bool render_incremental(const Scene& scene, std::string* error = nullptr);
 
-    /// Draws `scene`, repainting only `damage` (device pixels, clipped to the
-    /// surface) under the same full-repaint rules as `render_incremental`. An
-    /// empty region presents the retained image unchanged. The caller is
-    /// responsible for `damage` covering every pixel that changed.
+    /// Draws `scene`, repainting `damage` (device pixels, clipped to the
+    /// surface) plus any host invalidations pending since the last frame,
+    /// under the same full-repaint rules as `render_incremental`. An empty
+    /// region with nothing pending presents the retained image unchanged. The
+    /// caller is responsible for `damage` covering every scene change.
     [[nodiscard]] bool render(const Scene& scene, const DamageRegion& damage,
                               std::string* error = nullptr);
 

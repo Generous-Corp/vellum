@@ -334,6 +334,93 @@ void recreation_and_failure() {
     compare("the frame after a refusal", *full, *partial);
 }
 
+void capture_after_failure() {
+    constexpr std::uint32_t width = 400;
+    constexpr std::uint32_t height = 300;
+    auto full = make_surface(width, height, 2.0F);
+    auto partial = make_surface(width, height, 2.0F);
+    if (!full || !partial) return;
+    const Scene a = base_scene(width, height);
+    if (!render_both(*full, *partial, a)) return;
+
+    Scene c = a;
+    node(c, "mover").bounds.x += 60.0F;
+    node(c, "swatch").fill = Color::hex(0xF97316);
+    Scene b = c;
+    auto mesh = std::make_shared<TriangleMesh>();
+    mesh->vertices = {{.x = 0.0F, .y = 0.0F}, {.x = 10.0F, .y = 0.0F}, {.x = 0.0F, .y = 10.0F}};
+    mesh->indices = {0, 1, 9};
+    b.root.children.push_back({
+        .id = "broken-mesh",
+        .kind = SceneNode::Kind::mesh,
+        .bounds = {300.0F, 40.0F, 10.0F, 10.0F},
+        .mesh = mesh,
+    });
+    std::string error;
+    expect(!partial->render_incremental(b, &error), "scene B with an invalid mesh fails");
+    const auto redrawn = capture(*partial);
+    expect(redrawn.ok, "a capture after the failure redraws the last good scene", redrawn.error);
+    if (!render_both(*full, *partial, c)) return;
+    expect(!partial->frame_stats().full_repaint,
+           "the frame after that capture is partial", describe(partial->frame_stats()));
+    compare("render A, fail B, capture, render C", *full, *partial);
+}
+
+void command_extents() {
+    constexpr std::uint32_t width = 400;
+    constexpr std::uint32_t height = 300;
+    auto full = make_surface(width, height, 2.0F);
+    auto partial = make_surface(width, height, 2.0F);
+    if (!full || !partial) return;
+    Scene scene = base_scene(width, height);
+    auto& mover = node(scene, "mover");
+    scene.root.children.insert(scene.root.children.begin(), {
+        .id = "inverted",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {mover.bounds.x + 70.0F, mover.bounds.y - 10.0F, -50.0F, 40.0F},
+        .fill = Color::hex(0x0EA5E9),
+    });
+    if (!render_both(*full, *partial, scene)) return;
+    for (int step = 0; step < 4; ++step) {
+        node(scene, "mover").bounds.x += 9.0F;
+        if (!render_both(*full, *partial, scene)) return;
+        expect(!partial->frame_stats().full_repaint,
+               "a move across a command with an unbounded extent is partial",
+               describe(partial->frame_stats()));
+        compare("a command with an unbounded extent is always redrawn, step " +
+                    std::to_string(step), *full, *partial);
+    }
+}
+
+void damage_model_version_gate() {
+    expect(partial_redraw_supported(kSceneVersion) &&
+               partial_redraw_supported(kDamageModelSceneVersion) &&
+               !partial_redraw_supported(kDamageModelSceneVersion + 1U) &&
+               !partial_redraw_supported(3U),
+           "partial redraw is enabled only for scene versions the damage model understands");
+    expect(to_string(FullRepaintReason::damage_model_version) == "damage_model_version",
+           "the damage-model version fallback has a telemetry name");
+    auto partial = make_surface(400, 300, 1.0F);
+    if (!partial) return;
+    Scene scene = base_scene(400, 300);
+    std::string error;
+    expect(partial->render_incremental(scene, &error), "a supported scene renders", error);
+    Scene newer = scene;
+    newer.scene_version = 3U;
+    if (scene_version_is_supported(newer.scene_version)) {
+        expect(partial->render_incremental(newer, &error) &&
+                   partial->frame_stats().full_repaint_reason ==
+                       FullRepaintReason::damage_model_version,
+               "a version-3 scene repaints fully", describe(partial->frame_stats()));
+    } else {
+        const auto before = partial->frame_stats().frame;
+        expect(!partial->render_incremental(newer, &error) &&
+                   partial->frame_stats().frame == before,
+               "a version-3 scene this build cannot draw is refused before any redraw",
+               describe(partial->frame_stats()));
+    }
+}
+
 void explicit_damage() {
     constexpr std::uint32_t width = 400;
     constexpr std::uint32_t height = 300;
@@ -364,6 +451,15 @@ void explicit_damage() {
            "an empty damage region records no paint commands", describe(partial->frame_stats()));
     compare("an empty damage region", *full, *partial);
 
+    node(scene, "swatch").fill = Color::hex(0x14B8A6);
+    partial->invalidate(InvalidationReason::state, "swatch");
+    expect(full->render(scene, &error) && partial->render(scene, nothing, &error),
+           "a caller region with a pending host invalidation renders", error);
+    expect(!partial->frame_stats().full_repaint && partial->frame_stats().damage_area_pixels > 0,
+           "a pending host invalidation joins the caller's region",
+           describe(partial->frame_stats()));
+    compare("a caller region that misses an invalidated node", *full, *partial);
+
     node(scene, "swatch").fill = Color::hex(0xEF4444);
     expect(full->render(scene, &error) && partial->render(scene, nothing, &error),
            "a stale damage region renders", error);
@@ -389,6 +485,9 @@ int main() {
         host_invalidation();
         recreation_and_failure();
         explicit_damage();
+        capture_after_failure();
+        command_extents();
+        damage_model_version_gate();
     } catch (const std::exception& exception) {
         std::cerr << "FAIL " << exception.what() << '\n';
         return 1;

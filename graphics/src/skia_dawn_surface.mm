@@ -556,41 +556,40 @@ bool sane_box(const Rect& rect) {
         rect.width >= 0.0F && rect.height >= 0.0F;
 }
 
-void append_extents(const SceneNode& node, float parent_x, float parent_y,
-                    const Rect& frame, float scale, const DamagePropagation& propagation,
-                    std::vector<Extent>& output) {
-    if (!is_known_kind(node.kind)) return;
-    const Rect absolute{parent_x + node.bounds.x, parent_y + node.bounds.y,
-                        node.bounds.width, node.bounds.height};
-    const auto extent = [&]() -> Extent {
-        if (!sane_box(absolute)) return std::nullopt;
-        return pixel_extent(node_paint_bounds(node, absolute, frame, propagation), scale);
-    };
-    if (node.kind == SceneNode::Kind::rectangle) {
-        output.push_back(extent());
-    } else if (node.kind == SceneNode::Kind::text &&
-               (!node.text.empty() || !node.text_runs.empty())) {
-        const auto text = extent();
-        if (!node.fill_gradients.empty() || !node.box_shadows.empty()) {
-            output.push_back(text);
-        }
-        output.push_back(text);
-    } else if (node.kind == SceneNode::Kind::mesh && node.mesh) {
-        output.push_back(extent());
+Extent command_extent(const PaintCommand& command, const Rect& frame, float scale) {
+    static const DamagePropagation propagation;
+    if (!sane_box(command.bounds)) return std::nullopt;
+    SceneNode painted;
+    painted.bounds = command.bounds;
+    switch (command.kind) {
+        case PaintCommand::Kind::rectangle:
+            painted.kind = SceneNode::Kind::rectangle;
+            painted.box_shadows = command.box_shadows;
+            break;
+        case PaintCommand::Kind::text:
+            painted.kind = SceneNode::Kind::text;
+            painted.text = command.text;
+            painted.text_runs = command.text_runs;
+            painted.font_size = command.font_size;
+            break;
+        case PaintCommand::Kind::mesh:
+            painted.kind = SceneNode::Kind::mesh;
+            painted.mesh = command.mesh;
+            break;
+        default:
+            return std::nullopt;
     }
-    for (const auto& child : node.children) {
-        append_extents(child, absolute.x, absolute.y, frame, scale, propagation, output);
-    }
+    return pixel_extent(node_paint_bounds(painted, command.bounds, frame, propagation), scale);
 }
 
-std::vector<Extent> paint_command_extents(const Scene& scene, float scale,
-                                          std::size_t command_count) {
-    static const DamagePropagation propagation;
-    std::vector<Extent> extents;
-    extents.reserve(command_count);
+std::vector<Extent> paint_command_extents(
+    const Scene& scene, const std::vector<PaintCommand>& commands, float scale) {
     const Rect frame{0.0F, 0.0F, scene.width, scene.height};
-    append_extents(scene.root, 0.0F, 0.0F, frame, scale, propagation, extents);
-    if (extents.size() != command_count) extents.assign(command_count, std::nullopt);
+    std::vector<Extent> extents;
+    extents.reserve(commands.size());
+    for (const auto& command : commands) {
+        extents.push_back(command_extent(command, frame, scale));
+    }
     return extents;
 }
 
@@ -634,6 +633,7 @@ std::string_view to_string(FullRepaintReason reason) noexcept {
         case FullRepaintReason::full_damage: return "full_damage";
         case FullRepaintReason::damage_threshold: return "damage_threshold";
         case FullRepaintReason::frame_mismatch: return "frame_mismatch";
+        case FullRepaintReason::damage_model_version: return "damage_model_version";
     }
     return "unknown";
 }
@@ -828,8 +828,11 @@ public:
 
     bool render(const Scene& scene, const DamageRegion& damage, std::string* error) {
         if (!accepts(scene, error)) return false;
+        const auto invalidated = tracker_.take_damage();
         discard_tracked_damage(scene);
-        return draw_frame(scene, FullRepaintReason::none, &damage, error);
+        DamageRegion merged = damage;
+        merged.add(invalidated);
+        return draw_frame(scene, FullRepaintReason::none, &merged, error);
     }
 
     void invalidate(InvalidationReason reason, std::string_view node_id) {
@@ -923,6 +926,7 @@ public:
             stats_ = saved;
             reload_pending_ = reload;
             if (!redrawn) return false;
+            tracker_.commit(scene, config_.scale);
         }
         if (!read_frame(rgba, error)) {
             return false;
@@ -1021,6 +1025,9 @@ private:
         std::vector<PixelRect>& rects) const {
         if (!retained_valid_) return retained_reason_;
         if (!last_scene_) return FullRepaintReason::first_frame;
+        if (!partial_redraw_supported(scene.scene_version)) {
+            return FullRepaintReason::damage_model_version;
+        }
         if (last_scene_->scene_version != scene.scene_version) {
             return FullRepaintReason::scene_version;
         }
@@ -1123,7 +1130,7 @@ private:
             stats.paint_commands_recorded = commands.size();
             stats.paint_command_draws = commands.size();
         } else if (!rects.empty()) {
-            const auto extents = paint_command_extents(scene, config_.scale, commands.size());
+            const auto extents = paint_command_extents(scene, commands, config_.scale);
             std::vector<bool> drawn(commands.size(), false);
             std::vector<ParagraphSlot> paragraphs(commands.size());
             for (const auto& rect : rects) {
