@@ -10,6 +10,7 @@
 #include <iostream>
 #include <limits>
 #include <locale>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -186,19 +187,96 @@ void keys_are_stored_once() {
                 break;
             }
         }
-        cache.insert(CountedKey{7}, 70, 1, 3);
-        expect(CountedKey::live == 40 && *cache.find(CountedKey{7}, 3) == 70,
+        cache.insert(CountedKey{7}, 70, 1, 2);
+        expect(CountedKey::live == 40 && *cache.find(CountedKey{7}, 2) == 70,
                "re-inserting a key keeps one copy");
         cache.set_budget({.max_entries = 10, .max_bytes = 1U << 20U});
-        expect(CountedKey::live == 10 && cache.stats().entries == 10,
+        expect(CountedKey::live == 10 && cache.stats().entries == 10 &&
+                   cache.contains(CountedKey{35}),
                "evicting entries frees their keys",
                "live keys " + std::to_string(CountedKey::live));
+        // Only a hit stamps key 35 with frame 3; nothing is re-inserted.
+        expect(cache.find(CountedKey{35}, 3) != nullptr, "a hit at frame 3");
         cache.trim_unused_since(3);
-        expect(CountedKey::live == 1 && cache.contains(CountedKey{7}),
-               "trimming frees the trimmed keys",
+        expect(CountedKey::live == 1 && cache.contains(CountedKey{35}) &&
+                   cache.stats().entries == 1,
+               "a trim keeps only the entry a hit refreshed, and frees the other keys",
                "live keys " + std::to_string(CountedKey::live));
     }
     expect(CountedKey::live == 0, "destroying the cache frees every key");
+}
+
+// A value whose copy and move throw on demand, and a hash that throws on a
+// chosen call, to drive insert's two allocation points.
+struct FragileValue final {
+    static inline bool fail = false;
+    int value = 0;
+    explicit FragileValue(int v) : value(v) {}
+    FragileValue(const FragileValue& other) : value(other.value) {
+        if (fail) throw std::runtime_error("copy");
+    }
+    FragileValue(FragileValue&& other) : value(other.value) {
+        if (fail) throw std::runtime_error("move");
+    }
+    FragileValue& operator=(const FragileValue&) = default;
+    FragileValue& operator=(FragileValue&&) = default;
+};
+struct FragileHash final {
+    static inline int calls = 0;
+    static inline int throw_on_call = -1;
+    std::size_t operator()(int key) const {
+        if (++calls == throw_on_call) throw std::runtime_error("hash");
+        return std::hash<int>{}(key);
+    }
+};
+
+// An insert that throws leaves the cache as it was: no index entry without a
+// list entry, no bytes charged, and every later lookup safe.
+void insert_is_exception_safe() {
+    using Fragile = detail::LruCache<int, FragileValue, FragileHash>;
+    const auto consistent = [](Fragile& cache, int key, const char* what) {
+        if (cache.contains(key)) {
+            // A stale index entry: a find would splice an invalid iterator.
+            expect(false, what, "the index kept the key after a throw");
+            return;
+        }
+        const auto stats = cache.stats();
+        expect(stats.entries == 1 && stats.bytes == 10 && cache.find(key, 2) == nullptr &&
+                   cache.find(1, 2) != nullptr && cache.find(1, 2)->value == 1,
+               what, describe(stats));
+        expect(cache.insert(key, FragileValue{key}, 10, 3) && cache.find(key, 3) != nullptr &&
+                   cache.stats().entries == 2,
+               std::string(what) + ": a later insert of the key works");
+    };
+    {
+        Fragile cache({.max_entries = 8, .max_bytes = 1000});
+        cache.insert(1, FragileValue{1}, 10, 1);
+        bool threw = false;
+        FragileValue::fail = true;
+        try {
+            cache.insert(2, FragileValue{2}, 10, 1);
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        FragileValue::fail = false;
+        expect(threw, "a throwing value move escapes insert");
+        consistent(cache, 2, "a throwing value move leaves the cache consistent");
+    }
+    {
+        Fragile cache({.max_entries = 8, .max_bytes = 1000});
+        cache.insert(1, FragileValue{1}, 10, 1);
+        // insert hashes once to look for an existing entry, then to index.
+        FragileHash::throw_on_call = FragileHash::calls + 2;
+        bool threw = false;
+        try {
+            cache.insert(2, FragileValue{2}, 10, 1);
+        } catch (const std::runtime_error&) {
+            threw = true;
+        }
+        FragileHash::throw_on_call = -1;
+        expect(threw, "a throwing index insertion escapes insert");
+        consistent(cache, 2, "a throwing index insertion leaves the cache consistent");
+    }
 }
 
 // A budget is in bytes of memory the cache owns, so the key's own strings and
@@ -523,6 +601,7 @@ int main() {
     trims();
     frame_counters();
     keys_are_stored_once();
+    insert_is_exception_safe();
     budgets_count_owned_key_memory();
     paragraph_keys();
     gradient_keys();

@@ -84,9 +84,17 @@ public:
         }
         // The key lives only in the index; its list entry points at it. An
         // unordered_map node never moves, so the pointer survives rehashing.
-        const auto slot = index_.emplace(std::move(key), Iterator{}).first;
-        order_.push_front(Entry{&slot->first, std::move(value), bytes, frame});
-        slot->second = order_.begin();
+        // The list entry goes in first: if it throws, the index is untouched,
+        // and if indexing then throws, the entry is unlinked again, so the
+        // index never holds an iterator that is not in the list.
+        order_.push_front(Entry{nullptr, std::move(value), bytes, frame});
+        try {
+            const auto slot = index_.emplace(std::move(key), order_.begin()).first;
+            order_.front().key = &slot->first;
+        } catch (...) {
+            order_.pop_front();
+            throw;
+        }
         bytes_ += bytes;
         while (over_budget()) {
             erase(std::prev(order_.end()));
