@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-11-09T09:20:01Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-129571dd6dc9d9b5d253f52a4d87921640758556",
+  "kind": "resolution",
+  "linked_commits": [
+    "129571dd6dc9d9b5d253f52a4d87921640758556"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Integration merge (Merge remote-tracking branch 'origin/main' into feat/release-dry-run). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
+  "resolves": "vellum-129571dd6dc9d9b5d253f52a4d87921640758556",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

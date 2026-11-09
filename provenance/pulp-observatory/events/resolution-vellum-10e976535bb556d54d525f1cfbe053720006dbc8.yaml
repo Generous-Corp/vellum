@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:20:18Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-10e976535bb556d54d525f1cfbe053720006dbc8",
+  "kind": "resolution",
+  "linked_commits": [
+    "10e976535bb556d54d525f1cfbe053720006dbc8"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/261"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Confines golden updates in Vellum's scene capture harness to the configured golden roots. Vellum test infrastructure only; no Pulp counterpart and nothing to port.",
+  "resolves": "vellum-10e976535bb556d54d525f1cfbe053720006dbc8",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

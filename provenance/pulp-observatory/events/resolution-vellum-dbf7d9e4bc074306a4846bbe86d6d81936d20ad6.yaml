@@ -1,0 +1,24 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:20:14Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-dbf7d9e4bc074306a4846bbe86d6d81936d20ad6",
+  "kind": "resolution",
+  "linked_commits": [
+    "dbf7d9e4bc074306a4846bbe86d6d81936d20ad6"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/252"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Adds kSceneVersion to Vellum's Scene and PaintCommand, makes consumers fail closed on an unknown version or node kind, and reports dropped style and content from the authoring materializer. These are Vellum-authoritative contracts (canvas-kernel, render-skia-dawn, retained-ui-kernel are vellum-authoritative-transferred); Pulp main has no consumer of vellum::graphics::Scene or the rendered-tree materializer, so nothing is owed to Pulp. Pulp picks the behavior up only by consuming a newer Vellum.",
+  "resolves": "vellum-dbf7d9e4bc074306a4846bbe86d6d81936d20ad6",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
