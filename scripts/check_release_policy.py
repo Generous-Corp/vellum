@@ -73,8 +73,10 @@ OWNER = "@danielraffel"
 # runner that decides which release-path tests CI runs (the lane manifest is not
 # owned; lane_problems holds the release-policy lane's contents instead), the
 # workflow that holds an App token to propose each version (version-at-land.yml),
-# and the release-path review: its rule, its two workflows and the Shipyard
-# config naming the reviewer signers and sessions it counts.
+# the release-path review: its rule, its two workflows and the Shipyard
+# config naming the reviewer signers and sessions it counts, and the framework
+# transfer's judges and the records they hold the transfer to (owned before
+# the records exist, so the change that adds them is a release-path change).
 POLICY_FILES = (
     "/.github/CODEOWNERS",
     "/.github/workflows/release-path-review-trigger.yml",
@@ -84,6 +86,10 @@ POLICY_FILES = (
     "/.github/workflows/version-at-land.yml",
     "/.shipyard/config.toml",
     "/provenance/authority-signers.allowed_signers",
+    "/provenance/framework-name-debt.json",
+    "/provenance/framework/external-updates.json",
+    "/provenance/framework/transfer.json",
+    "/provenance/mirror/link-policy.json",
     "/provenance/release-signers.allowed_signers",
     "/provenance/retired-release-tags.json",
     "/scripts/check_release_policy.py",
@@ -97,7 +103,13 @@ POLICY_FILES = (
     "/scripts/verify_immutable_release_preflight.py",
     "/scripts/verify_release_tag.py",
     "/scripts/version_at_land.py",
+    "/tools/provenance/content_scan_policy.py",
+    "/tools/provenance/framework_trusted_verify.py",
+    "/tools/provenance/mirror_edge_patterns.json",
+    "/tools/provenance/mirror_edge_patterns.pin.json",
     "/tools/provenance/verify_authority_expansion.py",
+    "/tools/provenance/verify_extraction.py",
+    "/tools/provenance/verify_mirror_export.py",
     "/tools/provenance/verify_renderer_dependency.py",
 )
 # GitHub Actions accepts quoted YAML keys and optional whitespace before the
@@ -125,6 +137,15 @@ SECRET = re.compile(r"\$\{\{[^}]*(?:\bsecrets\b|\boutputs\s*(?:\.\s*token\b|\[\s
 # and the working directory would be first on sys.path without -I.
 PYTHON_DIRS = (".", "scripts", "tools/provenance")
 LOCAL_IMPORT = re.compile(r"^[ \t]*(?:from|import)[ \t]+(?P<module>[A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)
+# A policy script that loads a module by path (importlib's spec_from_file_location,
+# runpy) runs it as surely as an import does. Every `.py` path such a script
+# builds (`Path.with_name("x.py")` or `<path> / "x.py"`) is resolved against the
+# script's directory and each directory above it.
+DYNAMIC_LOAD = re.compile(r"\b(?:spec_from_file_location|run_path|SourceFileLoader)\b")
+PY_PATH_LITERAL = re.compile(r"(?:\bwith_name\(\s*|/\s*)[\"']((?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_-]+\.py)[\"']")
+# Prefixes scripts/release_path_review.py protects as wholes (PROTECTED_PREFIXES
+# there): a module under one already needs both reviews, so a policy script may load it.
+REVIEWED_PREFIXES = ("/.github/workflows/", "/.github/actions/", "/tools/mirror/")
 # One signer file per tag namespace; verify_release_tag.py enforces which.
 SIGNER_FILES = {
     "release-signers.allowed_signers": ALLOWED_SIGNERS,
@@ -451,6 +472,30 @@ def import_problems(root: Path, also_policy: frozenset[str] = frozenset()) -> li
                 if (root / target.lstrip("/")).is_file() and target not in POLICY_FILES \
                         and target not in also_policy:
                     found.append(f"{path.lstrip('/')} imports {target.lstrip('/')}, which is not a policy file")
+        found += dynamic_load_problems(root, path, source, also_policy)
+    return found
+
+
+def dynamic_load_problems(root: Path, path: str, source: Path, also_policy: frozenset[str]) -> list[str]:
+    """Modules policy script `path` loads by file path must be policy files too,
+    or sit under a prefix the release-path review protects."""
+    text = source.read_text(encoding="utf-8")
+    if not DYNAMIC_LOAD.search(text):
+        return []
+    found = []
+    resolved_root = root.resolve()
+    for literal in sorted(set(PY_PATH_LITERAL.findall(text))):
+        directory = source.parent.resolve()
+        while True:
+            candidate = directory / literal
+            if candidate.is_file():
+                target = "/" + candidate.resolve().relative_to(resolved_root).as_posix()
+                if target not in POLICY_FILES and target not in also_policy \
+                        and not target.startswith(REVIEWED_PREFIXES):
+                    found.append(f"{path.lstrip('/')} loads {target.lstrip('/')}, which is not a policy file")
+            if directory == resolved_root or resolved_root not in directory.parents:
+                break
+            directory = directory.parent
     return found
 
 
