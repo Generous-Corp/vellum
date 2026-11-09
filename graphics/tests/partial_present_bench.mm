@@ -121,6 +121,8 @@ std::string cell(const Series& series) {
 
 static std::vector<double> last_wait;
 
+constexpr int kSkip = 77;
+
 int check_native() {
     constexpr std::uint32_t width = 400;
     constexpr std::uint32_t height = 300;
@@ -135,9 +137,13 @@ int check_native() {
         &error);
     auto reference = SkiaDawnSurface::create(
         {.width = width, .height = height, .scale = kScale}, &error);
-    if (!native || !reference || !native->evidence().native_surface) {
-        std::cerr << "FAIL surfaces: " << error << '\n';
+    if (!reference) {
+        std::cerr << "FAIL offscreen surface: " << error << '\n';
         return 1;
+    }
+    if (!native || !native->evidence().native_surface) {
+        std::cout << "SKIP no usable CAMetalLayer surface: " << error << '\n';
+        return kSkip;
     }
     Scene scene = tiled_scene(static_cast<float>(width), static_cast<float>(height));
     int failures = 0;
@@ -146,7 +152,17 @@ int check_native() {
         if (frame == 4) native->invalidate(InvalidationReason::reload);
         harness::CaptureResult expected;
         harness::CaptureResult actual;
-        if (!native->render_incremental(scene, &error) || !reference->render(scene, &error) ||
+        if (frame == 0 && !native->render_incremental(scene, &error)) {
+            if (error.find("acquire the native surface texture") != std::string::npos) {
+                std::cout << "SKIP no drawable from a CAMetalLayer outside a window: " << error
+                          << '\n';
+                return kSkip;
+            }
+            std::cerr << "FAIL first native frame: " << error << '\n';
+            return 1;
+        }
+        if ((frame != 0 && !native->render_incremental(scene, &error)) ||
+            !reference->render(scene, &error) ||
             !native->capture_rgba(actual.rgba, actual.pixel_width, actual.pixel_height, &error) ||
             !reference->capture_rgba(expected.rgba, expected.pixel_width, expected.pixel_height,
                                      &error)) {

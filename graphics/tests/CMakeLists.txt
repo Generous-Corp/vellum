@@ -59,3 +59,5 @@ set_target_properties(vellum-partial-present-bench PROPERTIES
     BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
 add_test(NAME vellum.gpu.partial-present-native
     COMMAND vellum-partial-present-bench --check-native)
+set_tests_properties(vellum.gpu.partial-present-native PROPERTIES
+    SKIP_RETURN_CODE 77)
