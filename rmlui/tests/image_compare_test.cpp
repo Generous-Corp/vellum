@@ -44,5 +44,21 @@ int main() {
     VELLUM_RMLUI_CHECK(!within_renderer_tolerance(compare_rgba({}, {})));
     VELLUM_RMLUI_CHECK(!within_renderer_tolerance(
         compare_rgba(std::vector<std::uint8_t>(6, 0u), std::vector<std::uint8_t>(6, 0u))));
+    // Strided rows: padding past width * 4 bytes is ignored, however it
+    // differs, and only the pixels themselves count.
+    constexpr std::uint32_t w = 3, h = 2;
+    std::vector<std::uint8_t> padded(static_cast<std::size_t>(w * 4 + 8) * h, 0xeeu);
+    std::vector<std::uint8_t> tight(static_cast<std::size_t>(w * 4) * h, 50u);
+    for (std::uint32_t y = 0; y < h; ++y)
+        for (std::uint32_t i = 0; i < w * 4; ++i)
+            padded[y * (w * 4 + 8) + i] = 50u;
+    d = compare_rgba(padded.data(), w * 4 + 8, tight.data(), w * 4, w, h);
+    VELLUM_RMLUI_CHECK(d.mean == 0.0 && d.within == 1.0);
+    padded[(w * 4 + 8) + 1] = 50u + kPerChannelBound + 1; // second row, first pixel
+    d = compare_rgba(padded.data(), w * 4 + 8, tight.data(), w * 4, w, h);
+    VELLUM_RMLUI_CHECK(d.within == 5.0 / 6.0);
+    VELLUM_RMLUI_CHECK(!within_renderer_tolerance(
+        compare_rgba(padded.data(), w * 4 - 1, tight.data(), w * 4, w, h)));
+    VELLUM_RMLUI_CHECK(!within_renderer_tolerance(compare_rgba(nullptr, 0, nullptr, 0, w, h)));
     return 0;
 }
