@@ -777,6 +777,88 @@ class ObservatoryTests(unittest.TestCase):
                 else:
                     self.assertIn(f"vellum-{main_later}", result["new_events"])
 
+    def _main_with_merges(self, top: Path):
+        """A reconciled state, then main lands a pull request through a covered
+        integration merge, then a second through a merge that adds a mapped
+        change of its own."""
+        pulp = top / "pulp"
+        vellum = top / "vellum-source"
+        root = top / "state"
+        pulp_base, pulp_head = init_repo(pulp, "unmapped/pulp.cpp")
+        vellum_base, vellum_head = init_repo(vellum, "graphics/render.cpp")
+        make_state(root, pulp_base, vellum_base)
+        observatory.reconcile(root=root, pulp_repo=pulp, vellum_repo=vellum, pulp_target=pulp_head,
+                              vellum_target=vellum_head, now_text="2026-10-11T00:00:00Z", write=True)
+        run(vellum, "git", "checkout", "-q", "-b", "feature")
+        write(vellum / "graphics/feature.cpp", "int feature = 1;\n")
+        feature = commit_all(vellum, "feature mapped change")
+        run(vellum, "git", "checkout", "-q", "main")
+        # Main moves on meanwhile, so the merge's tree matches neither parent
+        # and the merge maps like any real integration merge.
+        write(vellum / "unmapped/notes.md", "main moved\n")
+        commit_all(vellum, "main moves on")
+        run(vellum, "git", "merge", "-q", "--no-ff", "--no-edit", "feature")
+        covered = run(vellum, "git", "rev-parse", "HEAD")
+        run(vellum, "git", "checkout", "-q", "-b", "second")
+        write(vellum / "graphics/second.cpp", "int second = 1;\n")
+        second = commit_all(vellum, "second mapped change")
+        run(vellum, "git", "checkout", "-q", "main")
+        write(vellum / "unmapped/notes.md", "main moved again\n")
+        commit_all(vellum, "main moves on again")
+        run(vellum, "git", "merge", "-q", "--no-ff", "--no-commit", "second")
+        write(vellum / "graphics/render.cpp", "int value = 9;\n")  # the merge's own change
+        evil = commit_all(vellum, "merge second with a change of its own")
+        return pulp, vellum, root, pulp_head, feature, covered, second, evil
+
+    def test_the_receiver_records_no_event_for_a_covered_integration_merge(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, feature, covered, second, evil = self._main_with_merges(Path(temporary))
+            mapping = observatory.load_json(root / observatory.MAP_PATH)
+            self.assertTrue(observatory.integration_merge_covered(
+                vellum, covered, mapping["mappings"], mapping.get("transitive_path_rules", [])))
+            self.assertFalse(observatory.integration_merge_covered(
+                vellum, evil, mapping["mappings"], mapping.get("transitive_path_rules", [])))
+            result = observatory.reconcile(root=root, pulp_repo=pulp, vellum_repo=vellum, pulp_target=pulp_head,
+                                           vellum_target=evil, now_text="2026-10-11T00:05:00Z", write=True)
+            self.assertIn(f"vellum-{feature}", result["new_events"])
+            self.assertIn(f"vellum-{second}", result["new_events"])
+            self.assertIn(f"vellum-{evil}", result["new_events"])  # its own change still needs an event
+            self.assertNotIn(f"vellum-{covered}", result["new_events"])
+            self.assertFalse((root / observatory.EVENTS_PATH / f"vellum-{covered}.yaml").exists())
+            # The reconciled range verifies without an event for the covered merge.
+            report = observatory.verify(root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                                        allow_no_git_base=True, pulp_target=pulp_head, vellum_target=evil)
+            self.assertEqual(report["coverage_gaps"], [])
+
+    def test_a_merge_with_its_own_mapped_change_still_needs_its_event(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, feature, covered, second, evil = self._main_with_merges(Path(temporary))
+            observatory.reconcile(root=root, pulp_repo=pulp, vellum_repo=vellum, pulp_target=pulp_head,
+                                  vellum_target=evil, now_text="2026-10-11T00:05:00Z", write=True)
+            lock, mapping, cursor, budgets = observatory.validate_lock_map_cursor(root)
+            events = [(path, event) for path, event in observatory.load_events(root)
+                      if event["event_id"] != f"vellum-{evil}"]
+            gaps = observatory.coverage_gaps(root=root, mapping=mapping, cursor=cursor, events=events,
+                                             pulp_repo=pulp, vellum_repo=vellum)
+            self.assertEqual(gaps, [{"source": "vellum", "commit": evil, "reason": "mapped-commit-has-no-event"}])
+
+    def test_an_existing_event_for_a_covered_merge_still_verifies(self) -> None:
+        # Ledgers written before the receiver skipped covered merges carry such
+        # events; they stay valid and keep being checked against Git.
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, feature, covered, second, evil = self._main_with_merges(Path(temporary))
+            observatory.reconcile(root=root, pulp_repo=pulp, vellum_repo=vellum, pulp_target=pulp_head,
+                                  vellum_target=evil, now_text="2026-10-11T00:05:00Z", write=True)
+            lock, mapping, cursor, budgets = observatory.validate_lock_map_cursor(root)
+            event = observatory.observation_for_commit(
+                source="vellum", repository="Generous-Corp/vellum", repo=vellum, commit=covered,
+                cursor_from=str(cursor["vellum"]["scan_base_commit"]), cursor_to=evil,
+                discovered_at="2026-10-11T00:05:00Z", mappings=mapping["mappings"],
+                transitive_rules=mapping.get("transitive_path_rules", []))
+            self.assertIsNotNone(event)
+            observatory.verify_event_against_git(event, "vellum", vellum, mapping["mappings"],
+                                                 mapping.get("transitive_path_rules", []))
+
     def test_verify_without_a_git_base_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             pulp, vellum, root, pulp_head, main, feature = self._coverage_state(Path(temporary))
