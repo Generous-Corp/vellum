@@ -2,7 +2,7 @@
 
 - State: `active`
 - Health: `pass`
-- Pending events: 0
+- Pending events: 3
 - Overdue events: 0
 - Release blockers: 0
 - Observatory effort: 0.0% of framework effort
@@ -672,6 +672,12 @@
 | `vellum-dbf7d9e4bc074306a4846bbe86d6d81936d20ad6` | framework-to-Pulp | rendering | framework-only | 2026-11-11T21:43:25Z |
 | `vellum-818595443e097dc41ef02bec4b0c396228ce5590` | framework-to-Pulp | rendering | superseded | 2026-11-12T00:45:29Z |
 | `vellum-ed19b60f3911baf1e2f58a8610db7ba71dc57e77` | framework-to-Pulp | rendering | superseded | 2026-11-12T00:45:29Z |
+| `vellum-ffd77ff351580976537d9e2baf457ec9950b5163` | framework-to-Pulp | rendering | framework-only | 2026-11-12T01:21:10Z |
+| `vellum-10e976535bb556d54d525f1cfbe053720006dbc8` | framework-to-Pulp | rendering | framework-only | 2026-11-12T01:29:24Z |
+| `vellum-728e2ff713c07353c0d8c8895e7917ab1d0d68f7` | framework-to-Pulp | rendering | framework-only | 2026-11-12T02:22:40Z |
+| `vellum-09a2d63a6fd930af8df5cd73dd185d27fdccda7b` | framework-to-Pulp | rendering | pending | 2026-11-12T10:26:05Z |
+| `vellum-94d1465ab78bb5f24b6188a787f0aaaed5b5a743` | framework-to-Pulp | rendering | pending | 2026-11-12T10:26:05Z |
+| `vellum-baa592f564323b417c9a852fdba51d61647d4810` | framework-to-Pulp | rendering | pending | 2026-11-12T10:26:05Z |
 
 ## Release blockers
 

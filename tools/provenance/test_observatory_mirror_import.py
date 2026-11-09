@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 HERE = Path(__file__).parent
-sys.path.insert(0, str(HERE))
+sys.path.append(str(HERE))
 
 from git_test_environment import disable_auto_maintenance  # noqa: E402
 from test_verify_mirror_export import Fixture, dump, run, write  # noqa: E402

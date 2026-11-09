@@ -16,6 +16,8 @@ checked independently in two scopes (Decision 0010):
 from __future__ import annotations
 
 import argparse
+import tempfile
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -54,6 +56,37 @@ EXPECTED_ACTIVE_ROOTS = (
     "templates",
 )
 MIRROR_ROOT = "mirror/"
+# Decision 0010 option (a), M2 8b: the renamed, formerly mirrored units live in
+# this native root. Its content is proved once, at the transfer commit, by the
+# transfer record; from then on it is ordinary editable Vellum source under its
+# own content regime (verify_framework below).
+FRAMEWORK_ROOT = "framework/"
+FRAMEWORK_TRANSFER_RECORD = "provenance/framework/transfer.json"
+# framework/external/ is third-party source: the census and the name-debt
+# ratchet skip it, so its bytes are pinned instead. A file there must hold its
+# transfer-record blob, or the to_blob of the last entry for it in this
+# append-only list, which is how a third-party update lands.
+FRAMEWORK_EXTERNAL_UPDATES = "provenance/framework/external-updates.json"
+FRAMEWORK_EXTERNAL_UPDATE_KEYS = {"path", "from_blob", "to_blob", "reason", "dependency", "version"}
+FRAMEWORK_VELLUM_DECLARATION = re.compile(r"namespace\s+vellum(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])vellum\s*::")
+# The rules the framework transfer is judged by. A change that introduces the
+# transfer record may touch none of them, so the rename tool and checks that
+# judge it are the ones already landed.
+FRAMEWORK_RULE_PATHS = (
+    # Whole directories: a file added beside a rule (a tools/provenance/
+    # module that shadows a standard one, a new workflow) changes the rules.
+    "tools/mirror/",
+    "tools/provenance/",
+    ".github/workflows/",
+    "provenance/active-source-boundary.json",
+    "scripts/install_core.py",
+)
+FRAMEWORK_TRANSFER_DECISION = "Decision 0010, option (a): the renamed units move from mirror/ to framework/ (M2 8b)"
+FRAMEWORK_TRANSFER_SCHEMA = "vellum.framework-transfer.v1"
+FRAMEWORK_NAME_DEBT = "provenance/framework-name-debt.json"
+# The native name rules framework/ carries as a counted debt until 8c respells
+# its kept PULP_* macros, pulp-* targets and plug-in-host prose.
+FRAMEWORK_RATCHETED_RULES = ("pulp-package-or-target", "audio-plugin-sdk", "pulp-public-namespace")
 MIRROR_ORIGIN_RECORDS = "provenance/mirror/blob-origins.json"
 MIRROR_ORIGIN_SCHEMA = "vellum.mirror-blob-origins.v1"
 MIRROR_DECISION = "decisions/0010-mirror-extracted-pulp-framework-source.md"
@@ -107,6 +140,10 @@ RENAMED_MIRROR_EXEMPT_PATHS = {
     "tools/mirror/consumer/direct_main.cpp",
     "tools/mirror/consumer/main.cpp",
     "tools/mirror/consumer/runtime_image_census_main.cpp",
+    # The mirror package's own build glue: the provider anchor compiled into
+    # the canvas unit, and the GPU guard whose #error names the guarded header.
+    "tools/mirror/canvas_provider_anchor.cpp",
+    "tools/mirror/gpu_surface_guard.py",
     # The rule itself, its installer copy and its tests.
     "scripts/install_core.py",
     "tools/provenance/content_scan_policy.py",
@@ -117,6 +154,8 @@ RENAMED_MIRROR_EXEMPT_PATHS = {
     "tools/provenance/mirror_edge_patterns.json",
     "tools/mirror/verify_mirror_inertness.py",
     "tools/mirror/test_verify_mirror_inertness.py",
+    # The 8b rename tool's tests plant the renamed spellings they check for.
+    "tools/mirror/test_rename_mirror_namespace.py",
 }
 
 
@@ -326,12 +365,25 @@ def normalized_fingerprint(data: bytes) -> str | None:
     return hashlib.sha256(text).hexdigest()
 
 
+def framework_or_mirror_files(root: Path) -> tuple[str, list[Path]]:
+    """The renamed units' files: framework/ once transferred, mirror/ before."""
+    if (root / FRAMEWORK_ROOT.rstrip("/")).is_dir():
+        return FRAMEWORK_ROOT, list(active_files(root, (FRAMEWORK_ROOT.rstrip("/"),)))
+    return MIRROR_ROOT, list(mirror_files(root))
+
+
 def normalized_copy_findings(root: Path, roots: Iterable[str] = RENAMED_MIRROR_SCAN_ROOTS) -> list[dict[str, str]]:
-    """Native files whose normalized content equals a Pulp-authored mirror file's."""
+    """Native files whose normalized content equals a renamed unit's (a second copy).
+
+    The units are framework/ after the 8b transfer and mirror/ before it.
+    Normalizing respells pulp -> vellum, so a copy of Pulp's frozen source is
+    the same fingerprint as a copy of the renamed unit.
+    """
     mirror: dict[str, str] = {}
-    for path in mirror_files(root):
+    prefix, units = framework_or_mirror_files(root)
+    for path in units:
         relative = path.relative_to(root).as_posix()
-        if relative.startswith(MIRROR_ROOT + "external/") or path.suffix.lower() not in NORMALIZED_SUFFIXES:
+        if relative.startswith(prefix + "external/") or path.suffix.lower() not in NORMALIZED_SUFFIXES:
             continue
         fingerprint = normalized_fingerprint(path.read_bytes())
         if fingerprint:
@@ -339,7 +391,7 @@ def normalized_copy_findings(root: Path, roots: Iterable[str] = RENAMED_MIRROR_S
     findings: list[dict[str, str]] = []
     for path in active_files(root, roots):
         relative = path.relative_to(root).as_posix()
-        if relative.startswith(MIRROR_ROOT) or path.suffix.lower() not in NORMALIZED_SUFFIXES:
+        if relative.startswith((MIRROR_ROOT, FRAMEWORK_ROOT)) or path.suffix.lower() not in NORMALIZED_SUFFIXES:
             continue
         fingerprint = normalized_fingerprint(path.read_bytes())
         if fingerprint and fingerprint in mirror:
@@ -577,8 +629,12 @@ def compile_mirror_edge_table(table: dict) -> dict[str, object]:
     }
 
 
-def mirror_edge_findings(root: Path, table: dict | None = None) -> list[dict[str, object]]:
-    """Mirror edges under the vendored table, or under another table's rules."""
+def mirror_edge_findings(root: Path, table: dict | None = None, prefix: str = MIRROR_ROOT) -> list[dict[str, object]]:
+    """Mirror edges under the vendored table, or under another table's rules.
+
+    `prefix` is the root scanned: mirror/, or framework/ after the transfer,
+    whose paths keep the export's layout below it.
+    """
     if table is not None:
         rules = compile_mirror_edge_table(table)
         content_rules, path_rules = rules["content"], rules["path"]
@@ -587,9 +643,9 @@ def mirror_edge_findings(root: Path, table: dict | None = None) -> list[dict[str
         content_rules, path_rules = FORBIDDEN_MIRROR_EDGE_PATTERNS, MIRROR_EDGE_PATH_PATTERNS
         suffixes, binary, exceptions = MIRROR_EDGE_SUFFIXES, MIRROR_EDGE_BINARY_SUFFIXES, MIRROR_EDGE_EXCEPTIONS
     findings: list[dict[str, object]] = []
-    for path in mirror_files(root):
+    for path in active_files(root, (prefix.rstrip("/"),)):
         relative = path.relative_to(root).as_posix()
-        in_mirror = relative.removeprefix(MIRROR_ROOT)
+        in_mirror = relative.removeprefix(prefix)
         for name, pattern in path_rules.items():
             if pattern.search(in_mirror):
                 findings.append({"rule": name, "path": relative, "line": 0, "match": relative})
@@ -634,7 +690,20 @@ def current_mirror_receipts(
     try:
         head_tree = git(root, "rev-parse", "HEAD:mirror")
     except subprocess.CalledProcessError:
-        return [], [], ["HEAD has no mirror/ tree to name the current export receipt"]
+        head_tree = None
+    if head_tree is None and not (root / FRAMEWORK_ROOT.rstrip("/")).is_dir():
+        return [], [], ["HEAD has neither mirror/ nor framework/ to name the current export receipt"]
+    if head_tree is None:
+        # After the 8b transfer the receipt Vellum builds from is the one the
+        # transfer record names, and its mirror_tree is the record's.
+        try:
+            transfer = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return [], [], ["HEAD has no mirror/ tree to name the current export receipt"]
+        named = transfer.get("export_receipt") if isinstance(transfer, dict) else None
+        if named not in receipts:
+            return [], receipts, [f"{FRAMEWORK_TRANSFER_RECORD} names {named!r}, which is not a landed receipt"]
+        head_tree = transfer.get("mirror_tree")
     current: list[str] = []
     older: list[str] = []
     for receipt_path in receipts:
@@ -802,11 +871,585 @@ def verify_authority_phase(
     return not errors, errors
 
 
+def framework_counts_content(relative: str) -> bool:
+    """Whether the ratchet reads a framework/ path: the native scan's text, plus the units' Python generators."""
+    return scans_active_content(relative) or Path(relative).suffix.lower() == ".py"
+
+
+def framework_name_debt(root: Path) -> tuple[dict[str, dict[str, int]], list[str]]:
+    """Hits of the ratcheted native name rules in framework/, per rule and file (external/ excluded).
+
+    Returns (counts, undecodable): a file the ratchet should read but cannot
+    decode is reported rather than skipped, so it cannot leave the count.
+    """
+    counts: dict[str, dict[str, int]] = {name: {} for name in FRAMEWORK_RATCHETED_RULES}
+    undecodable: list[str] = []
+    for path in active_files(root, (FRAMEWORK_ROOT.rstrip("/"),)):
+        relative = path.relative_to(root).as_posix()
+        if relative.startswith(FRAMEWORK_ROOT + "external/") or not framework_counts_content(relative):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            undecodable.append(relative)
+            continue
+        for name in FRAMEWORK_RATCHETED_RULES:
+            hits = len(_ALL_NATIVE_PATTERNS[name].findall(text))
+            if hits:
+                counts[name][relative] = hits
+    return counts, undecodable
+
+
+def framework_debt_baseline_at_base(root: Path) -> tuple[dict | None, list[str]]:
+    """The committed name-debt baseline at the history base, or None where there is none to compare."""
+    base, error = load_mirror_export_verifier().history_base(root)
+    if error:
+        return None, [f"{FRAMEWORK_NAME_DEBT}: {error}"]
+    if base is None:
+        return None, []
+    shown = subprocess.run(["git", "-C", str(root), "show", f"{base}:{FRAMEWORK_NAME_DEBT}"],
+                           capture_output=True, check=False)
+    if shown.returncode != 0:
+        return None, []  # the change that introduces the baseline
+    try:
+        return json.loads(shown.stdout)["rules"], []
+    except (ValueError, KeyError) as exc:
+        return None, [f"{FRAMEWORK_NAME_DEBT}: unreadable at {base}: {exc}"]
+
+
+def framework_debt_errors(root: Path) -> tuple[list[str], dict[str, int]]:
+    """The ratchet: no (rule, file) count may rise above the committed baseline,
+    and the committed baseline may not rise above its value at the history base."""
+    current, undecodable = framework_name_debt(root)
+    totals = {rule: sum(files.values()) for rule, files in current.items()}
+    errors = [f"framework name debt: {path} is not UTF-8, so the ratchet cannot count it" for path in undecodable]
+    try:
+        baseline = json.loads((root / FRAMEWORK_NAME_DEBT).read_text(encoding="utf-8"))["rules"]
+    except (OSError, ValueError, KeyError) as exc:
+        return errors + [f"{FRAMEWORK_NAME_DEBT}: unreadable: {exc}"], totals
+    for rule, files in current.items():
+        known = baseline.get(rule, {})
+        for path, n in sorted(files.items()):
+            if n > known.get(path, 0):
+                errors.append(f"framework name debt rose: {rule} in {path} is {n}, baseline {known.get(path, 0)}")
+    base_rules, base_errors = framework_debt_baseline_at_base(root)
+    errors.extend(base_errors)
+    if base_rules is not None:
+        for rule, files in sorted(baseline.items()):
+            before = base_rules.get(rule, {})
+            for path, n in sorted(files.items()):
+                if not isinstance(n, int) or n > before.get(path, 0):
+                    errors.append(f"{FRAMEWORK_NAME_DEBT} raised {rule} in {path} to {n}, "
+                                  f"above {before.get(path, 0)} at the merge base; the baseline may only fall")
+    return errors, totals
+
+
+# Spellings that must be gone from framework/ entirely: the rename made them
+# vellum. Case-sensitive and boundary-free over all bytes.
+FRAMEWORK_RESIDUAL_PULP = re.compile(rb"pulp::|namespace\s+pulp(?![A-Za-z0-9_])|[<\"]pulp/|include/pulp/")
+
+
+def framework_external_errors(root: Path, recorded: dict[str, str]) -> tuple[list[str], dict[str, object]]:
+    """Pin framework/external/ to its recorded blobs, updated only through FRAMEWORK_EXTERNAL_UPDATES."""
+    errors: list[str] = []
+    external = FRAMEWORK_ROOT + "external/"
+    expected = {path: blob for path, blob in recorded.items() if path.startswith(external)}
+    path = root / FRAMEWORK_EXTERNAL_UPDATES
+    entries: list = []
+    if path.exists():
+        try:
+            entries = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return [f"{FRAMEWORK_EXTERNAL_UPDATES}: unreadable: {exc}"], {}
+        if not isinstance(entries, list):
+            return [f"{FRAMEWORK_EXTERNAL_UPDATES}: must be a JSON list of update entries"], {}
+    for index, entry in enumerate(entries):
+        where = f"{FRAMEWORK_EXTERNAL_UPDATES}[{index}]"
+        if not isinstance(entry, dict) or set(entry) != FRAMEWORK_EXTERNAL_UPDATE_KEYS:
+            errors.append(f"{where}: must have exactly {sorted(FRAMEWORK_EXTERNAL_UPDATE_KEYS)}")
+            continue
+        if not all(isinstance(entry[key], str) and entry[key] for key in FRAMEWORK_EXTERNAL_UPDATE_KEYS):
+            errors.append(f"{where}: every field must be a non-empty string")
+            continue
+        if not SHA_RE.fullmatch(entry["from_blob"]) or not SHA_RE.fullmatch(entry["to_blob"]):
+            errors.append(f"{where}: from_blob and to_blob must be git blob ids")
+            continue
+        if entry["path"] not in expected:
+            errors.append(f"{where}: {entry['path']} is not a framework/external/ file the transfer record lists")
+            continue
+        if entry["from_blob"] != expected[entry["path"]]:
+            errors.append(f"{where}: from_blob {entry['from_blob'][:12]} breaks the chain for {entry['path']}, "
+                          f"whose expected blob is {expected[entry['path']][:12]}")
+            continue
+        expected[entry["path"]] = entry["to_blob"]
+    # Append-only: the list at the history base must be a prefix of this one.
+    base, base_error = load_mirror_export_verifier().history_base(root)
+    if base_error:
+        errors.append(f"{FRAMEWORK_EXTERNAL_UPDATES}: {base_error}")
+    elif base is not None:
+        shown = subprocess.run(["git", "-C", str(root), "show", f"{base}:{FRAMEWORK_EXTERNAL_UPDATES}"],
+                               capture_output=True, check=False)
+        if shown.returncode == 0:
+            try:
+                landed = json.loads(shown.stdout)
+            except ValueError as exc:
+                landed = None
+                errors.append(f"{FRAMEWORK_EXTERNAL_UPDATES}: unreadable at {base}: {exc}")
+            if isinstance(landed, list) and entries[:len(landed)] != landed:
+                errors.append(f"{FRAMEWORK_EXTERNAL_UPDATES}: entries present at the merge base were removed or "
+                              "edited; the list is append-only")
+    # Any file whose bytes are no longer the transfer record's has lost the
+    # third-party exemption: it may not declare the vellum namespace or carry
+    # a Pulp, plug-in or audio-SDK name, which a third-party update has no
+    # reason to hold, and the collision census reads it as native.
+    recorded_external = {path: blob for path, blob in recorded.items() if path.startswith(external)}
+    updated: list[str] = []
+    for relative, blob in sorted(recorded_external.items()):
+        file = root / relative
+        if not file.is_file() or file.is_symlink():
+            continue
+        data = file.read_bytes()
+        if git_blob_sha(data) == blob:
+            continue
+        updated.append(relative)
+        text = data.decode("utf-8", errors="replace")
+        if FRAMEWORK_VELLUM_DECLARATION.search(text):
+            errors.append(f"{relative}: an updated third-party file declares or names the vellum namespace")
+        for rule in FRAMEWORK_RATCHETED_RULES:
+            if _ALL_NATIVE_PATTERNS[rule].search(text):
+                errors.append(f"{relative}: an updated third-party file carries {rule} spellings")
+    edited = []
+    for relative, blob in sorted(expected.items()):
+        file = root / relative
+        if file.is_file() and not file.is_symlink() and git_blob_sha(file.read_bytes()) != blob:
+            edited.append(relative)
+    if edited:
+        errors.append(
+            f"framework/external/ files differ from their pinned blobs: {edited[:5]}. Third-party bytes change "
+            f"only through the dependency process: update the file and append an entry to "
+            f"{FRAMEWORK_EXTERNAL_UPDATES} in a reviewed pull request")
+    return errors, {"framework_external_edited": edited, "framework_external_updates": len(entries),
+                    "framework_external_updated": updated}
+
+
+def derive_framework_transfer(root: Path, base: str, scratch: Path) -> dict:
+    """What the landed rename tool makes of the base's mirror/: the framework tree and its record.
+
+    Runs rename_mirror_namespace.py with the landed edge table over a copy of
+    `<base>:mirror` in `scratch`, and derives the transfer record from the
+    base's newest export receipt. Returns {"files": {path: (mode, blob)},
+    "record": dict, "framework": Path}; raises ValueError when the base cannot
+    be renamed. The record's framework_tree is left to the caller, which knows
+    the tree it lands.
+    """
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False)
+
+    rename_tool = load_rename_tool()
+    sp = rename_tool.load_spelling(MIRROR_EDGE_TABLE, "vellum")
+    archive = git("archive", "--format=tar", base, MIRROR_ROOT.rstrip("/"))
+    if archive.returncode != 0:
+        raise ValueError(f"the base {base[:12]} has no mirror/ to rename")
+    subprocess.run(["tar", "-x", "-C", str(scratch)], input=archive.stdout, check=True)
+    report_path = scratch / "rename-report.json"
+    with open(os.devnull, "w") as sink, contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+        code = rename_tool.main([str(scratch / "mirror"), "--to", "vellum", "--edge-table", str(MIRROR_EDGE_TABLE),
+                                 "--no-collision-census", "--apply", "--move-to", "framework",
+                                 "--output", str(report_path)])
+    if code != 0:
+        raise ValueError(f"the landed rename tool refuses the base's mirror/ (exit {code})")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    framework = scratch / "framework"
+    files: dict[str, tuple[str, str]] = {}
+    for path in sorted(framework.rglob("*")):
+        if path.is_file() and not path.is_symlink():
+            mode = "100755" if os.access(path, os.X_OK) else "100644"
+            files[f"framework/{path.relative_to(framework).as_posix()}"] = (mode, git_blob_sha(path.read_bytes()))
+    try:
+        newest = json.loads(git("show", f"{base}:provenance/mirror/receipts/index.json").stdout)["receipts"][-1]
+        receipt = json.loads(git("show", f"{base}:{newest}").stdout)
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise ValueError(f"the base's newest export receipt is unreadable: {exc}") from exc
+    records = []
+    for row in receipt.get("files", []):
+        framework_path = f"framework/{rename_tool.renamed_path(sp, Path(row['pulp_path'])).as_posix()}"
+        mode, blob = files.get(framework_path, ("", ""))
+        records.append({"framework_git_blob_sha": blob, "framework_path": framework_path, "mode": mode,
+                        "pulp_commit": receipt.get("pulp_sha"), "pulp_git_blob_sha": row.get("blob"),
+                        "pulp_path": row["pulp_path"]})
+    tool_dir = Path(rename_tool.__file__).parent
+    rename = dict(report.get("receipt") or {})
+    rename["tool_git_blob"] = git_blob_sha(Path(rename_tool.__file__).read_bytes())
+    rename["helper_git_blobs"] = {name: git_blob_sha((tool_dir / name).read_bytes())
+                                  for name in ("mirror_collision_census.py", "verify_mirror_rename_identity.py")}
+    record = {
+        "schema": FRAMEWORK_TRANSFER_SCHEMA,
+        "decision": FRAMEWORK_TRANSFER_DECISION,
+        "export_receipt": newest,
+        "pulp_repository": receipt.get("pulp_repository"),
+        "pulp_sha": receipt.get("pulp_sha"),
+        "mirror_tree": git("rev-parse", f"{base}:mirror").stdout.decode().strip(),
+        "framework_tree": None,
+        "records": sorted(records, key=lambda r: r["framework_path"]),
+        "rename": rename,
+    }
+    return {"files": files, "record": record, "framework": framework}
+
+
+# The files that only exist together with framework/.
+FRAMEWORK_DATA_FILES = (FRAMEWORK_TRANSFER_RECORD, FRAMEWORK_NAME_DEBT, FRAMEWORK_EXTERNAL_UPDATES)
+
+
+def framework_transfer_state(root: Path) -> tuple[dict[str, object], list[str]]:
+    """The one reading of where the framework transfer stands, and what is inconsistent about it.
+
+    The transfer is introduced by the change whose HEAD has framework/ while
+    its history base does not, whatever else the base holds; that change is
+    judged by framework_introduction_errors. A transfer record, debt baseline
+    or update list without framework/, framework/ without its record,
+    framework/ removed after it landed, and mirror/ beside framework/ are all
+    refused. verify_framework, the trusted judge, mirror_package and the
+    current-receipt selection read the transfer through this.
+    """
+    def at_base(base: str, path: str) -> bool:
+        return subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{base}:{path}"],
+                              capture_output=True, check=False).returncode == 0
+
+    state: dict[str, object] = {
+        "head_framework": (root / FRAMEWORK_ROOT.rstrip("/")).is_dir(),
+        "head_record": (root / FRAMEWORK_TRANSFER_RECORD).is_file(),
+        "head_mirror": (root / MIRROR_ROOT.rstrip("/")).exists(),
+        "head_data_without_framework": [],
+        "base": None, "base_framework": None, "base_record": None, "introduction": False,
+    }
+    errors: list[str] = []
+    present = [path for path in FRAMEWORK_DATA_FILES if (root / path).exists()]
+    if present and not state["head_framework"]:
+        state["head_data_without_framework"] = present
+        errors.append(f"{', '.join(present)} exist without framework/: the transfer's data lands only with "
+                      "the transferred tree")
+    if state["head_framework"] and not state["head_record"]:
+        errors.append(f"framework/ exists without {FRAMEWORK_TRANSFER_RECORD}")
+    if state["head_framework"] and state["head_mirror"]:
+        errors.append("mirror/ and framework/ both exist: the transfer moves the renamed units out of mirror/")
+    base, base_error = load_mirror_export_verifier().history_base(root)
+    if base_error:
+        errors.append(f"framework transfer: {base_error}")
+        return state, errors
+    if base is None:
+        if state["head_framework"]:
+            errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: no history base to judge the transfer against "
+                          "(set VELLUM_GIT_BASE, or have main or origin/main)")
+        return state, errors
+    state.update(base=base, base_framework=at_base(base, FRAMEWORK_ROOT.rstrip("/")),
+                 base_record=at_base(base, FRAMEWORK_TRANSFER_RECORD))
+    if state["base_framework"] and not state["head_framework"]:
+        errors.append("framework/ was transferred at the base and is gone at HEAD; it cannot be removed")
+    state["introduction"] = bool(state["head_framework"] and not state["base_framework"])
+    return state, errors
+
+
+def framework_introduction_errors(root: Path, base: str, transfer: dict) -> list[str]:
+    """Judge the change that introduces the framework transfer, without trusting its data.
+
+    1. It changes none of FRAMEWORK_RULE_PATHS, so what follows runs the
+       landed rename tool and checks.
+    2. The landed rename tool, run over the base's mirror/ with the landed edge
+       table, produces HEAD's framework/ file for file (path, mode and blob).
+    3. The transfer record is the one that run derives (all but the
+       interpreter version the tool notes), naming HEAD's framework tree.
+    4. The name-debt baseline equals the counts on the transferred tree.
+    """
+    errors: list[str] = []
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False)
+
+    # --no-renames: a rule file moved out of the rule paths is a deletion here.
+    changed = git("diff", "--no-renames", "--name-only", base, "HEAD")
+    if changed.returncode != 0:
+        return [f"cannot list the change against {base}"]
+    touched = sorted(name for name in changed.stdout.decode("utf-8", errors="replace").splitlines()
+                     if name.startswith(FRAMEWORK_RULE_PATHS))
+    if touched:
+        errors.append(f"the change also edits the rules that judge it: {touched[:5]}; land rule changes first")
+    with tempfile.TemporaryDirectory() as scratch_dir:
+        try:
+            derived = derive_framework_transfer(root, base, Path(scratch_dir))
+        except ValueError as exc:
+            return errors + [str(exc)]
+    listing = git("ls-tree", "-r", "-z", "HEAD", "--", FRAMEWORK_ROOT.rstrip("/"))
+    head: dict[str, tuple[str, str]] = {}
+    for entry in listing.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
+        if entry:
+            meta, name = entry.split("\t", 1)
+            mode, _, blob = meta.split()
+            head[name] = (mode, blob)
+    if head != derived["files"]:
+        files = derived["files"]
+        differ = sorted(set(head) ^ set(files)) + sorted(n for n in set(head) & set(files) if head[n] != files[n])
+        errors.append(f"framework/ is not the landed rename tool's output for the base's mirror/: "
+                      f"{len(differ)} paths differ, e.g. {differ[:5]}")
+    expected = dict(derived["record"], framework_tree=git("rev-parse", "HEAD:framework").stdout.decode().strip())
+    recorded = dict(transfer)
+    for record in (expected, recorded):
+        record["rename"] = {k: v for k, v in dict(record.get("rename") or {}).items() if k != "python"}
+    recorded["records"] = sorted(recorded.get("records", []), key=lambda r: r.get("framework_path", ""))
+    for key in sorted(set(expected) | set(recorded)):
+        if expected.get(key) != recorded.get(key):
+            errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: {key} is not the one the landed rename derives")
+    counts, _ = framework_name_debt(root)
+    try:
+        baseline = json.loads((root / FRAMEWORK_NAME_DEBT).read_text(encoding="utf-8"))["rules"]
+    except (OSError, ValueError, KeyError) as exc:
+        return errors + [f"{FRAMEWORK_NAME_DEBT}: unreadable: {exc}"]
+    if {rule: files for rule, files in baseline.items() if files} != \
+            {rule: files for rule, files in counts.items() if files}:
+        errors.append(f"{FRAMEWORK_NAME_DEBT} is not the transferred tree's counts; an introduced baseline "
+                      "must equal them exactly")
+    return errors
+
+
+def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
+                     defer_identity: bool = False) -> tuple[list[str], dict[str, object]]:
+    """framework/'s content regime and its transfer proof (Decision 0010 option a)."""
+    errors: list[str] = []
+    checks: dict[str, object] = {}
+    framework = root / FRAMEWORK_ROOT.rstrip("/")
+    state, state_errors = framework_transfer_state(root)
+    checks["framework_transfer_state"] = state
+    errors.extend(state_errors)
+    if not state["head_framework"]:
+        if not errors:
+            checks["framework"] = "absent"
+        return errors, checks
+    # 1. Edges: the mirror-edge table's rules, exactly as mirror/ had them.
+    edges = mirror_edge_findings(root, prefix=FRAMEWORK_ROOT)
+    checks["framework_edge_findings"] = edges
+    if edges:
+        errors.append(f"framework/ has {len(edges)} audio, plug-in, host, or product edges")
+    # 2. No old spelling left anywhere in it.
+    residual = []
+    for path in active_files(root, (FRAMEWORK_ROOT.rstrip("/"),)):
+        if FRAMEWORK_RESIDUAL_PULP.search(path.read_bytes()):
+            residual.append(path.relative_to(root).as_posix())
+    checks["framework_residual_pulp_spellings"] = residual
+    if residual:
+        errors.append(f"framework/ still spells pulp::, namespace pulp or <pulp/ in {len(residual)} files")
+    # 3. The ratchet on the native name rules.
+    debt_errors, totals = framework_debt_errors(root)
+    checks["framework_name_debt"] = totals
+    errors.extend(debt_errors)
+    # 4. The transfer proof: the recorded framework tree is a pure rename of
+    # authoritative Pulp at the export receipt's commit.
+    try:
+        transfer = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: unreadable: {exc}")
+        return errors, checks
+    if transfer.get("schema") != FRAMEWORK_TRANSFER_SCHEMA:
+        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: schema must be {FRAMEWORK_TRANSFER_SCHEMA}")
+        return errors, checks
+    transfer_bytes = (root / FRAMEWORK_TRANSFER_RECORD).read_bytes()
+    base = state["base"]
+    if base is not None:
+        checks["framework_transfer_introduced"] = state["introduction"]
+        if state["introduction"]:
+            # This change introduces framework/: judge it independently, with
+            # the rules already landed, whatever the base's record says.
+            introduction = framework_introduction_errors(root, base, transfer)
+            checks["framework_introduction_errors"] = introduction
+            errors.extend(f"framework transfer introduction: {e}" for e in introduction)
+        else:
+            before = subprocess.run(["git", "-C", str(root), "show", f"{base}:{FRAMEWORK_TRANSFER_RECORD}"],
+                                    capture_output=True, check=False)
+            if before.returncode != 0:
+                errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: framework/ landed without its record")
+            elif before.stdout != transfer_bytes:
+                errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: changed from the merge base; it is immutable")
+    # The file set is the transfer record's: a native edit may change a file's
+    # bytes but not add or remove one, because the build compiles the export's
+    # closures (mirror_package.verify_framework_identity holds the same set).
+    # framework/external/, which the ratchet skips, is reported on its own.
+    recorded = {r.get("framework_path") for r in transfer.get("records", [])}
+    # What git tracks (every entry, gitlinks included) and what the checkout
+    # holds: a submodule or other non-file entry under framework/ is an extra.
+    staged = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z", "--", FRAMEWORK_ROOT.rstrip("/")],
+                            capture_output=True, check=False)
+    present = {entry.split("\t", 1)[1] for entry in staged.stdout.decode("utf-8", errors="surrogateescape").split("\0")
+               if entry.startswith("160000 ")}
+    present |= {p.relative_to(root).as_posix() for p in framework.rglob("*") if p.is_file() or p.is_symlink()}
+    unrecorded, missing = sorted(present - recorded), sorted(recorded - present)
+    checks["framework_external_unrecorded"] = [p for p in unrecorded if p.startswith(FRAMEWORK_ROOT + "external/")]
+    checks["framework_unrecorded_files"] = unrecorded
+    checks["framework_missing_files"] = missing
+    if checks["framework_external_unrecorded"]:
+        errors.append(f"framework/external/ holds {len(checks['framework_external_unrecorded'])} files "
+                      "the transfer record does not list")
+    if unrecorded:
+        errors.append(f"framework/ holds {len(unrecorded)} files the transfer record does not list: {unrecorded[:5]}")
+    if missing:
+        errors.append(f"framework/ is missing {len(missing)} files the transfer record lists: {missing[:5]}")
+    # The runtime collision census, permanent: framework/ now shares the
+    # vellum namespace with native code, so a native declaration that collides
+    # with a framework/ name fails here. A census that sees no declarations on
+    # either side is itself an error (collision_errors), its built-in control.
+    external_errors, external_checks = framework_external_errors(
+        root, {r.get("framework_path"): r.get("framework_git_blob_sha") for r in transfer.get("records", [])})
+    errors.extend(external_errors)
+    checks.update(external_checks)
+    rename_tool = load_rename_tool()
+    census = tracked_collision_census(rename_tool, root, framework, external_checks.get("framework_external_updated", []))
+    checks["framework_collision_census"] = {
+        key: (len(value) if isinstance(value, (list, dict)) and key != "declarations" else value)
+        for key, value in census.items() if key != "native_root"}
+    if census.get("status") == "error":
+        errors.append(f"framework collision census: {census['reason']}")
+    errors.extend(f"framework collision census: {e}" for e in rename_tool.collision_errors(census))
+    identity = load_rename_identity_verifier()
+    tree = transfer.get("framework_tree", "")
+    if not SHA_RE.fullmatch(str(tree)) or subprocess.run(
+            ["git", "-C", str(root), "cat-file", "-e", f"{tree}^{{tree}}"], capture_output=True).returncode:
+        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: framework_tree {tree!r} is not a tree in this repository")
+        return errors, checks
+    try:
+        receipt = json.loads((root / transfer["export_receipt"]).read_text(encoding="utf-8"))
+    except (OSError, ValueError, KeyError) as exc:
+        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: export receipt unreadable: {exc}")
+        return errors, checks
+    if receipt.get("pulp_sha") != transfer.get("pulp_sha") or receipt.get("mirror_tree") != transfer.get("mirror_tree"):
+        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: pulp_sha or mirror_tree differs from {transfer['export_receipt']}")
+    receipt_files = {row["pulp_path"]: row["blob"] for row in receipt.get("files", [])}
+    records = transfer.get("records", [])
+    if {r.get("pulp_path"): r.get("pulp_git_blob_sha") for r in records} != receipt_files:
+        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: records differ from the export receipt's file list")
+    checks["framework_transfer_records"] = len(records)
+    if pulp_root is None:
+        # Fail closed, as the mirror's origin proof does: only a lane that is
+        # not the required provenance lane may defer the proof to it.
+        checks["framework_transfer_proved"] = "deferred: no Pulp checkout"
+        if not defer_identity:
+            errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: no Pulp checkout proved the transfer; pass --pulp-root")
+        return errors, checks
+    raw, source_errors = identity.raw_from_records(pulp_root, records, transfer.get("pulp_sha", ""), pulp_main_ref)
+    proof = source_errors + identity.verify(raw, identity.git_tree(root, tree), transfer.get("rename", {}))
+    checks["framework_transfer_proved"] = not proof
+    errors.extend(f"framework transfer: {e}" for e in proof)
+    return errors, checks
+
+
+def tracked_collision_census(rename_tool, root: Path, framework: Path,
+                             updated_external: Iterable[str] = ()) -> dict:
+    """The collision census of framework/ against native Vellum, over tracked files.
+
+    The census reads what the commit holds: `git ls-files`, nothing else. The
+    tool's own walks read the filesystem and drop any path with a `build*`
+    component or a SKIP_DIRS name, which suits a scratch tree before a rename
+    but would hide a tracked native second copy (a force-added file under an
+    ignored `build*/`, or under `third_party/`) and would read an untracked
+    checkout inside this one (CI's .mirror-pulp) as native. So the census is
+    assembled here from the pinned helper's scanner (census_tree, compare)
+    over the tracked set. The one skipped place is framework/external/: the
+    transferred third-party files, which the transfer record binds file for
+    file. The tool and helper blobs stay as the transfer record pins them.
+    """
+    listed = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, check=False)
+    if listed.returncode != 0:
+        return {"status": "error", "reason": "cannot list tracked files"}
+    collisions = rename_tool.collisions
+    top = root.resolve()
+    tracked = sorted(name for name in listed.stdout.decode("utf-8", errors="surrogateescape").split("\0") if name)
+    prefix = framework.resolve().relative_to(top).as_posix() + "/"
+    external = prefix + "external/"
+
+    def source(name: str) -> bool:
+        return Path(name).suffix.lower() in collisions.SOURCE_SUFFIXES
+
+    units = [name for name in tracked if name.startswith(prefix) and not name.startswith(external)]
+    # An updated third-party file (its blob is no longer the transfer
+    # record's) has lost the external exemption: it is read as native.
+    updated = set(updated_external)
+    natives = [name for name in tracked if not name.startswith(prefix) or name in updated]
+    mirror = collisions.census_tree(top / prefix.rstrip("/"), [top / n for n in units if source(n)],
+                                    ("pulp", "vellum"), ("pulp", "vellum"))
+    native = collisions.census_tree(top, [top / n for n in natives if source(n)], None, None)
+    result = collisions.compare(mirror, native, "vellum")
+
+    # Byte copies: a native file holding a framework/ file's exact blob. The
+    # files that must spell the units' names to refuse them are exempt, as in
+    # the second-copy guard; framework/external/ blobs shared natively are
+    # third-party, listed rather than refused.
+    native_blobs: dict[str, str] = {}
+    native_classes: dict[str, str] = {}
+    declaration = re.compile(r"@(?:interface|implementation)\s+([A-Za-z_]\w*)")
+    objc_suffixes = rename_tool.OBJC_SOURCE_SUFFIXES
+    for name in natives:
+        if name in RENAMED_MIRROR_EXEMPT_PATHS or name.startswith(RENAMED_MIRROR_EXEMPT_PREFIXES or ("\0",)):
+            continue
+        path = top / name
+        if not path.is_file() or path.is_symlink():
+            continue
+        data = path.read_bytes()
+        native_blobs.setdefault(git_blob_sha(data), name)
+        if Path(name).suffix.lower() in objc_suffixes and b"\0" not in data:
+            for cls in declaration.findall(data.decode("utf-8", errors="replace")):
+                native_classes.setdefault(cls, name)
+    empty = git_blob_sha(b"")
+    quarantine, third_party, objc = [], [], []
+    for name in [n for n in tracked if n.startswith(prefix) and n not in updated]:
+        path = top / name
+        if not path.is_file() or path.is_symlink():
+            continue
+        data = path.read_bytes()
+        blob = git_blob_sha(data)
+        if name.startswith(external):
+            if blob in native_blobs:
+                third_party.append({"mirror": name, "native": native_blobs[blob]})
+            continue
+        if blob != empty and blob in native_blobs:
+            quarantine.append({"mirror": name, "native": native_blobs[blob], "blob": blob})
+        if Path(name).suffix.lower() in objc_suffixes and b"\0" not in data:
+            for cls in declaration.findall(data.decode("utf-8", errors="replace")):
+                if cls in native_classes:
+                    objc.append({"class": cls, "mirror": name, "native": native_classes[cls]})
+    result.update({"refused_units": [], "native_refusals": [], "blob_quarantine": quarantine,
+                   "third_party_shared_blobs": third_party, "objc_class_collisions": objc,
+                   "status": "checked"})
+    return result
+
+
+def load_rename_tool():
+    path = Path(__file__).resolve().parents[1] / "mirror/rename_mirror_namespace.py"
+    if "rename_mirror_namespace" in sys.modules:
+        return sys.modules["rename_mirror_namespace"]
+    spec = importlib.util.spec_from_file_location("rename_mirror_namespace", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    # Its dataclasses resolve their annotations through sys.modules.
+    sys.modules["rename_mirror_namespace"] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        del sys.modules["rename_mirror_namespace"]
+        raise
+    return module
+
+
+def load_rename_identity_verifier():
+    path = Path(__file__).resolve().parents[1] / "mirror/verify_mirror_rename_identity.py"
+    spec = importlib.util.spec_from_file_location("verify_mirror_rename_identity", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def verify(
     root: Path,
     pulp_root: Path | None = None,
     defer_mirror_identity: bool = False,
     mirror_edge_pulp_root: Path | None = None,
+    pulp_main_ref: str = "origin/main",
 ) -> dict[str, object]:
     provenance = root / "provenance"
     errors: list[str] = []
@@ -893,6 +1536,14 @@ def verify(
     }
     if boundary.get("mirror") != expected_mirror:
         errors.append("mirror scope differs from the Decision 0010 boundary")
+    expected_framework = {
+        "root": FRAMEWORK_ROOT,
+        "transfer_record": FRAMEWORK_TRANSFER_RECORD,
+        "name_debt": FRAMEWORK_NAME_DEBT,
+        "decision": MIRROR_DECISION,
+    }
+    if boundary.get("framework") != expected_framework:
+        errors.append("framework scope differs from the Decision 0010 option (a) boundary")
     if boundary.get("rules") != EXPECTED_RULES:
         errors.append("declared boundary rules differ from the enforced rules")
     if not (root / MIRROR_DECISION).is_file():
@@ -979,7 +1630,11 @@ def verify(
     export_table_path = pulp_root / PULP_MIRROR_EDGE_TABLE if pulp_root is not None else None
     if export_table_path is not None and export_table_path.is_file() \
             and export_table_path.read_bytes() != MIRROR_EDGE_TABLE.read_bytes():
-        export_findings = mirror_edge_findings(root, json.loads(export_table_path.read_text(encoding="utf-8")))
+        # After the transfer the export's units are framework/; the export
+        # commit's table still applies to them.
+        units_prefix = FRAMEWORK_ROOT if (root / FRAMEWORK_ROOT).is_dir() else MIRROR_ROOT
+        export_findings = mirror_edge_findings(root, json.loads(export_table_path.read_text(encoding="utf-8")),
+                                               prefix=units_prefix)
         checks["mirror_edge_findings_under_export_table"] = export_findings
         if export_findings:
             errors.append(
@@ -990,7 +1645,7 @@ def verify(
     if active_findings:
         errors.append(f"native build/authoring surface has {len(active_findings)} forbidden references")
 
-    symlinks = symlink_findings(root)
+    symlinks = symlink_findings(root, RENAMED_MIRROR_SCAN_ROOTS + (FRAMEWORK_ROOT.rstrip("/"),))
     checks["native_tree_symlinks"] = symlinks
     if symlinks:
         errors.append(f"native trees hold {len(symlinks)} symlinks, which the native scans cannot see through")
@@ -1002,6 +1657,9 @@ def verify(
     checks["normalized_mirror_copies"] = normalized_copies
     if normalized_copies:
         errors.append(f"native trees hold {len(normalized_copies)} copies of mirror files (normalized content)")
+    framework_errors, framework_checks = verify_framework(root, pulp_root, pulp_main_ref, defer_mirror_identity)
+    checks.update(framework_checks)
+    errors.extend(framework_errors)
 
     debt = provenance / "extraction-debt/initial.yaml"
     debt_status = top_level_scalar(debt, "status")
@@ -1052,12 +1710,18 @@ def main() -> int:
         action="store_true",
         help="leave the Pulp identity proof of mirror/ to the required provenance lane",
     )
+    parser.add_argument(
+        "--pulp-main-ref",
+        default="origin/main",
+        help="the ref in --pulp-root that the framework transfer's Pulp commit must descend into",
+    )
     args = parser.parse_args()
     report = verify(
         args.root.resolve(),
         args.pulp_root.resolve() if args.pulp_root else None,
         defer_mirror_identity=args.defer_mirror_identity,
         mirror_edge_pulp_root=args.mirror_edge_pulp_root.resolve() if args.mirror_edge_pulp_root else None,
+        pulp_main_ref=args.pulp_main_ref,
     )
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:
