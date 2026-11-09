@@ -11,7 +11,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.append(str(Path(__file__).resolve().parent))
 import gpu_surface_guard as guard  # noqa: E402
 
 FWD = "#pragma once\n#if defined(PULP_GPU_RUNTIME)\nnamespace gpu_runtime {\nclass GpuSurface;\n}\n#endif\n"
@@ -172,7 +172,7 @@ class InstallExcludeTest(unittest.TestCase):
     """VellumMirror.cmake's install(DIRECTORY ... REGEX ... EXCLUDE) with the plan's regex."""
 
     def test_only_the_named_header_is_excluded(self) -> None:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        sys.path.append(str(Path(__file__).resolve().parent))
         import mirror_package  # noqa: E402
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

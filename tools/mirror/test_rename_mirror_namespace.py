@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.append(str(Path(__file__).resolve().parent))
 import rename_mirror_namespace as rename  # noqa: E402
 from verify_mirror_rename_identity import verify as identity_verify  # noqa: E402
 

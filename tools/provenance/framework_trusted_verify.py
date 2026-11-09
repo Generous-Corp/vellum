@@ -27,9 +27,9 @@ import argparse
 import importlib.util
 import json
 import os
-import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -60,52 +60,77 @@ def git(repo: Path, *args: str, data: bytes | None = None) -> bytes:
     return result.stdout
 
 
-def materialize(source: Path, head: str, dest: Path) -> None:
-    """Write `head`'s tree into `dest`, a repository that borrows `source`'s objects.
+def materialize(source: Path, head: str, dest_parent: Path) -> Path:
+    """Write `head`'s tree into a fresh 0700 directory under `dest_parent`; return it.
 
-    dest's HEAD is `head` (detached) and its index is `head`'s tree, so git
-    reads of dest see the pull request's commit; the files are written from
-    blobs, byte for byte, with the tree's modes.
+    The directory is a repository that borrows `source`'s objects: its HEAD is
+    `head` (detached) and its index is `head`'s tree, so git reads of it see
+    the pull request's commit. Files are written from blobs, byte for byte,
+    each created new (O_EXCL) without following a link (O_NOFOLLOW) in a
+    directory made here, never through one. The tree may hold only regular
+    files: a symlink, a gitlink, a duplicate path or an unsafe name is
+    refused before anything is written. The directory is never inside the
+    trusted checkout, nor the checkout inside it.
     """
-    dest.mkdir(parents=True)
-    git(dest, "init", "-q")
-    alternates = dest / ".git/objects/info/alternates"
-    objects = Path(git(source, "rev-parse", "--path-format=absolute", "--git-common-dir").decode().strip()) / "objects"
-    alternates.write_text(str(objects.resolve()) + "\n", encoding="utf-8")
-    git(dest, "update-ref", "--no-deref", "HEAD", head)
-    git(dest, "read-tree", head)
-    listing = git(dest, "ls-tree", "-r", "-z", "--full-tree", head)
+    top = Path(git(source, "rev-parse", "--show-toplevel").decode().strip()).resolve()
+    common = Path(git(source, "rev-parse", "--path-format=absolute", "--git-common-dir").decode().strip()).resolve()
+    dest = Path(tempfile.mkdtemp(prefix="pr-", dir=dest_parent)).resolve()
+    os.chmod(dest, 0o700)
+    for trusted_path in (top, common):
+        if dest.is_relative_to(trusted_path) or trusted_path.is_relative_to(dest):
+            raise InputError(f"the change would be materialized inside, or around, the trusted checkout {trusted_path}")
+    listing = git(source, "ls-tree", "-r", "-z", "--full-tree", head)
     entries = []
+    seen: set[str] = set()
     for item in listing.split(b"\0"):
         if not item:
             continue
         meta, raw_path = item.split(b"\t", 1)
         mode, kind, sha = meta.decode().split()
         path = raw_path.decode("utf-8", errors="surrogateescape")
-        parts = Path(path).parts
-        if Path(path).is_absolute() or ".." in parts or ".git" in parts:
+        parts = path.split("/")
+        if path.startswith("/") or any(part in ("", ".", "..", ".git") for part in parts):
             raise InputError(f"the tree holds an unsafe path {path!r}")
-        entries.append((mode, kind, sha, path))
-    blobs = [e for e in entries if e[1] == "blob"]
-    batch = git(dest, "cat-file", "--batch", data="".join(f"{sha}\n" for _, _, sha, _ in blobs).encode())
+        if path in seen:
+            raise InputError(f"the tree lists {path!r} twice")
+        seen.add(path)
+        if kind != "blob" or mode not in ("100644", "100755"):
+            raise InputError(f"the tree holds {path!r} as {mode} {kind}; only regular files are judged")
+        entries.append((mode, sha, parts))
+    # A path cannot be both a file and a directory of another path.
+    directories = {"/".join(parts[:i]) for _, _, parts in entries for i in range(1, len(parts))}
+    clash = sorted(directories & seen)
+    if clash:
+        raise InputError(f"the tree lists {clash[0]!r} as both a file and a directory")
+    git(dest, "init", "-q")
+    alternates = dest / ".git/objects/info/alternates"
+    alternates.write_text(str(common / "objects") + "\n", encoding="utf-8")
+    git(dest, "update-ref", "--no-deref", "HEAD", head)
+    git(dest, "read-tree", head)
+    batch = git(source, "cat-file", "--batch", data="".join(f"{sha}\n" for _, sha, _ in entries).encode())
     offset = 0
-    top = dest.resolve()
-    for mode, _, sha, path in blobs:
+    for mode, sha, parts in entries:
         header_end = batch.index(b"\n", offset)
         _, kind, size = batch[offset:header_end].decode().split()
         start = header_end + 1
         content = batch[start:start + int(size)]
         offset = start + int(size) + 1
-        target = dest / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if not target.parent.resolve().is_relative_to(top):
-            raise InputError(f"{path} would be written outside the tree")
-        if mode == "120000":
-            os.symlink(content, target)
-        else:
-            target.write_bytes(content)
-            if mode == "100755":
-                target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        directory = dest
+        for part in parts[:-1]:
+            directory = directory / part
+            if os.path.lexists(directory):
+                if directory.is_symlink() or not directory.is_dir():
+                    raise InputError(f"{'/'.join(parts)}: {directory} is not a directory made here")
+            else:
+                os.mkdir(directory, 0o700)
+        target = directory / parts[-1]
+        if os.path.lexists(target):
+            raise InputError(f"{'/'.join(parts)} already exists")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+        fd = os.open(target, flags, 0o755 if mode == "100755" else 0o644)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+    return dest
 
 
 def judge(root: Path, base: str) -> dict:
@@ -136,7 +161,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", type=Path, required=True, help="the trusted checkout holding the PR's objects")
     parser.add_argument("--head", required=True, help="the pull request's head commit (40 hex)")
     parser.add_argument("--base", required=True, help="the base commit (40 hex)")
-    parser.add_argument("--dest", type=Path, required=True, help="an absent directory to materialize the PR into")
+    parser.add_argument("--dest-parent", type=Path, required=True,
+                        help="where to create the fresh 0700 directory the change is materialized into")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     for name, value in (("--head", args.head), ("--base", args.base)):
@@ -144,8 +170,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"framework-trusted-verify: {name} must be a 40-hex commit", file=sys.stderr)
             return 2
     try:
-        materialize(args.repo, args.head, args.dest)
-        result = judge(args.dest, args.base)
+        dest = materialize(args.repo, args.head, args.dest_parent)
+        result = judge(dest, args.base)
     except (InputError, ValueError, OSError) as exc:
         print(f"framework-trusted-verify: {exc}", file=sys.stderr)
         return 2

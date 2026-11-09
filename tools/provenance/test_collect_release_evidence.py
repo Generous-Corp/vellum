@@ -15,7 +15,7 @@ from typing import Any
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
+    sys.path.append(str(HERE))
 
 SCRIPT = HERE / "collect_release_evidence.py"
 SPEC = importlib.util.spec_from_file_location("collect_release_evidence", SCRIPT)

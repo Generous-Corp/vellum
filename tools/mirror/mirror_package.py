@@ -35,7 +35,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.append(str(Path(__file__).resolve().parent))
 import source_compile_options  # noqa: E402
 import gpu_surface_guard  # noqa: E402
 

@@ -17,6 +17,8 @@ from unittest import mock
 try:
     from .git_test_environment import disable_auto_maintenance
 except ImportError:  # Direct script execution.
+    import sys
+    sys.path.append(str(Path(__file__).resolve().parent))  # -I drops the script dir; append keeps the standard library first
     from git_test_environment import disable_auto_maintenance
 
 disable_auto_maintenance()
@@ -636,6 +638,16 @@ class VerifyExtractionTests(unittest.TestCase):
             self.assertEqual(checks["framework_unrecorded_files"], ["framework/core/a/src/new.cpp"])
             self.assertEqual(checks["framework_missing_files"], ["framework/core/a/src/a.cpp"])
             self.assertTrue(any("does not list" in e for e in errors) and any("is missing" in e for e in errors))
+
+    def test_a_gitlink_under_framework_is_an_unrecorded_entry(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            subprocess.run(["git", "-C", str(root), "update-index", "--add", "--cacheinfo",
+                            f"160000,{'1' * 40},framework/zz_sub"], check=True)
+            _, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual(checks["framework_unrecorded_files"], ["framework/zz_sub"])
 
     def test_framework_collision_census_refuses_a_native_redeclaration(self) -> None:
         self.hide_ci_git_base()

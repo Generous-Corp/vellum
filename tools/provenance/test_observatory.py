@@ -18,6 +18,8 @@ from unittest import mock
 try:
     from .git_test_environment import disable_auto_maintenance
 except ImportError:  # Direct script execution.
+    import sys
+    sys.path.append(str(Path(__file__).resolve().parent))  # -I drops the script dir; append keeps the standard library first
     from git_test_environment import disable_auto_maintenance
 
 disable_auto_maintenance()
@@ -1743,7 +1745,7 @@ class ObservatoryTests(unittest.TestCase):
             with self.assertRaisesRegex(observatory.ObservatoryError, "unknown time-budget mode"):
                 observatory.verify(**arguments, check_now=later, time_budgets="ignore")
             # The watchdog's tracking issue lists exactly these overdue events.
-            sys.path.insert(0, str(Path(observatory.__file__).parent))
+            sys.path.append(str(Path(observatory.__file__).parent))
             import overdue_events  # noqa: PLC0415
             self.assertEqual(overdue_events.overdue(root, discovered)["overdue"], [])
             summary = overdue_events.overdue(root, later)

@@ -1,13 +1,23 @@
-# Judges a pull request's framework/ change with the default branch's rules.
+# Judges a pull request's framework/ change with the default branch's rules,
+# and reports the verdict as the `framework-trusted-verify` commit status on the
+# change's head commit.
 #
 # provenance.yml runs a pull request's own scripts, so a change that edits the
 # verifier would be judged by its edit. This workflow runs on
-# pull_request_target, so the definition and every script come from the base:
-# the base is checked out into trusted/, and the pull request's commit is
-# fetched as objects only and materialized from blobs by the trusted
-# tools/provenance/framework_trusted_verify.py. Nothing from the pull request
-# is checked out, built, installed, sourced or executed, and only the PR number
-# and the two commit ids reach a shell, through env.
+# pull_request_target and merge_group: its definition comes from the base, and
+# so does every script it runs. The base is cloned into trusted/; the change's
+# commit is fetched as objects only (with fsck) and materialized from blobs, in
+# a fresh directory outside trusted/, by the trusted
+# tools/provenance/framework_trusted_verify.py. Nothing from the change is
+# checked out, built, installed, sourced or executed, and only the PR number
+# and commit ids reach the shell, through env.
+#
+# A pull_request_target job's check run attaches to the base commit, never to
+# the pull request's head, so the verdict is a commit status on the head. The
+# job is deliberately not named after that context: a check run named
+# framework-trusted-verify is not the verdict. The status starts pending and a
+# trap posts failure on any error, timeout or cancellation, so a run never
+# leaves it pending or missing.
 name: Framework trusted verify
 
 on:
@@ -18,53 +28,78 @@ on:
 
 permissions:
   contents: read
+  statuses: write
 
 concurrency:
   group: framework-trusted-verify-${{ github.event.pull_request.number || github.event.merge_group.head_sha }}
   cancel-in-progress: true
 
 jobs:
-  framework-trusted-verify:
-    name: framework-trusted-verify
+  framework-trusted-judge:
+    name: framework-trusted-judge
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
+      statuses: write
     steps:
-      - name: Check out the base rules
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-          path: trusted
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Fetch the change's commit as objects
+      - name: Judge the change with the base rules and report the status
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
-        run: |
-          set -euo pipefail
-          safe_git=(git -c core.hooksPath=/dev/null -c core.fsmonitor=false -C trusted)
-          if [ "$EVENT_NAME" = pull_request_target ]; then
-            "${safe_git[@]}" fetch --no-tags --quiet origin "+refs/pull/${PR_NUMBER}/head:refs/framework-verify/head"
-          else
-            "${safe_git[@]}" fetch --no-tags --quiet origin "+${HEAD_SHA}:refs/framework-verify/head"
-          fi
-          test "$("${safe_git[@]}" rev-parse refs/framework-verify/head)" = "$HEAD_SHA"
-
-      - name: Judge the change with the base rules
-        working-directory: trusted
-        env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           GIT_LFS_SKIP_SMUDGE: '1'
         run: |
           set -euo pipefail
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          post_status() {
+            local state="$1" description="$2" payload
+            payload="$(printf '{"state":"%s","context":"framework-trusted-verify","description":"%s","target_url":"%s"}' \
+              "$state" "$description" "$run_url")"
+            curl --fail --silent --show-error --retry 3 --request POST \
+              --header "Authorization: Bearer ${GITHUB_TOKEN}" \
+              --header "Accept: application/vnd.github+json" \
+              --data "$payload" \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" > /dev/null
+          }
+          finished=0
+          # shellcheck disable=SC2329  # invoked by the EXIT trap
+          on_exit() {
+            if [ "$finished" != 1 ]; then
+              post_status failure "The trusted judge did not finish" || true
+            fi
+          }
+          trap on_exit EXIT
+          trap 'exit 130' INT TERM
+          post_status pending "Judging with the base rules"
+
+          safe_git=(git -c core.hooksPath=/dev/null -c core.fsmonitor=false
+                    -c fetch.fsckObjects=true -c transfer.fsckObjects=true)
+          "${safe_git[@]}" clone --quiet --no-checkout "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" trusted
+          "${safe_git[@]}" -C trusted checkout --quiet --detach "$BASE_SHA"
+          if [ "$EVENT_NAME" = pull_request_target ]; then
+            "${safe_git[@]}" -C trusted fetch --no-tags --quiet origin "+refs/pull/${PR_NUMBER}/head:refs/framework-verify/head"
+          else
+            "${safe_git[@]}" -C trusted fetch --no-tags --quiet origin "+${HEAD_SHA}:refs/framework-verify/head"
+          fi
+          test "$("${safe_git[@]}" -C trusted rev-parse refs/framework-verify/head)" = "$HEAD_SHA"
+
+          cd trusted
+          set +e
           python3 -I tools/provenance/framework_trusted_verify.py \
             --repo . \
             --head "$HEAD_SHA" \
             --base "$BASE_SHA" \
-            --dest "$RUNNER_TEMP/pr" \
+            --dest-parent "$RUNNER_TEMP" \
             --output "$RUNNER_TEMP/framework-trusted-verify.json"
+          verdict=$?
+          set -e
+          case "$verdict" in
+            0) post_status success "Passed the base rules" ;;
+            1) post_status failure "Refused by the base rules" ;;
+            *) post_status failure "The change could not be read" ;;
+          esac
+          finished=1
+          exit "$verdict"

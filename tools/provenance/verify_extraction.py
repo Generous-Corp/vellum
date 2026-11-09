@@ -1272,7 +1272,13 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
     # closures (mirror_package.verify_framework_identity holds the same set).
     # framework/external/, which the ratchet skips, is reported on its own.
     recorded = {r.get("framework_path") for r in transfer.get("records", [])}
-    present = {p.relative_to(root).as_posix() for p in framework.rglob("*") if p.is_file() or p.is_symlink()}
+    # What git tracks (every entry, gitlinks included) and what the checkout
+    # holds: a submodule or other non-file entry under framework/ is an extra.
+    staged = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z", "--", FRAMEWORK_ROOT.rstrip("/")],
+                            capture_output=True, check=False)
+    present = {entry.split("\t", 1)[1] for entry in staged.stdout.decode("utf-8", errors="surrogateescape").split("\0")
+               if entry.startswith("160000 ")}
+    present |= {p.relative_to(root).as_posix() for p in framework.rglob("*") if p.is_file() or p.is_symlink()}
     unrecorded, missing = sorted(present - recorded), sorted(recorded - present)
     checks["framework_external_unrecorded"] = [p for p in unrecorded if p.startswith(FRAMEWORK_ROOT + "external/")]
     checks["framework_unrecorded_files"] = unrecorded

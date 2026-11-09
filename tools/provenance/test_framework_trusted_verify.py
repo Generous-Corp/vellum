@@ -93,7 +93,7 @@ class Repository:
             output = Path(out) / "verdict.json"
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 code = trusted.main(["--repo", str(self.root), "--head", head, "--base", self.base,
-                                     "--dest", str(Path(out) / "pr"), "--output", str(output)])
+                                     "--dest-parent", out, "--output", str(output)])
             return code, json.loads(output.read_text()) if output.exists() else {}
 
 
@@ -244,53 +244,140 @@ class FrameworkTrustedVerifyTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 10)
 
     def test_the_pull_request_tree_is_written_from_blobs_only(self):
-        # A filter or hook the pull request declares never runs: the tree is
-        # read from git objects, not checked out.
+        # A filter, attribute or hook the pull request declares never runs:
+        # the tree is read from git objects, not checked out.
+        marker = Path(self.temporary.name) / "smudge-ran"
         self.repo.write(".gitattributes", b"* filter=evil\n*.md export-ignore\n")
         self.repo.write("docs/readme.md", b"Vellum, edited\n")
-        os.symlink("readme.md", self.repo.root / "docs/link.md")
         head = commit_all(self.repo.root, "attributes")
-        git(self.repo.root, "config", "filter.evil.smudge", "touch /tmp/framework-trusted-verify-smudge-ran && cat")
+        git(self.repo.root, "config", "filter.evil.smudge", f"touch {marker} && cat")
         with tempfile.TemporaryDirectory() as out:
-            dest = Path(out) / "pr"
-            trusted.materialize(self.repo.root, head, dest)
+            dest = trusted.materialize(self.repo.root, head, Path(out))
             self.assertEqual((dest / "docs/readme.md").read_bytes(), b"Vellum, edited\n")
-            self.assertTrue((dest / "docs/link.md").is_symlink())
+            self.assertEqual(oct(dest.stat().st_mode & 0o777), "0o700")
             self.assertEqual(git(dest, "rev-parse", "HEAD"), head)
             self.assertIn("docs/readme.md", git(dest, "ls-files").splitlines())
-        self.assertFalse(Path("/tmp/framework-trusted-verify-smudge-ran").exists())
+        self.assertFalse(marker.exists())
+
+    def crafted_commit(self, entries: list[tuple[str, str, str]]) -> str:
+        """A commit whose root tree lists exactly `entries` (mode, name, object), duplicates included."""
+        raw = b"".join(f"{mode} {name}".encode() + b"\0" + bytes.fromhex(sha) for mode, name, sha in entries)
+        tree = subprocess.run(["git", "-C", str(self.repo.root), "hash-object", "-t", "tree", "-w", "--literally",
+                               "--stdin"], input=raw, check=True, capture_output=True).stdout.decode().strip()
+        return git(self.repo.root, "commit-tree", tree, "-m", "crafted")
+
+    def blob(self, data: bytes) -> str:
+        return subprocess.run(["git", "-C", str(self.repo.root), "hash-object", "-w", "--stdin"], input=data,
+                              check=True, capture_output=True).stdout.decode().strip()
+
+    def assert_refused_and_untouched(self, head: str, outside: Path, before: bytes) -> None:
+        with tempfile.TemporaryDirectory() as out:
+            with self.assertRaises(trusted.InputError):
+                trusted.materialize(self.repo.root, head, Path(out))
+        self.assertEqual(outside.read_bytes(), before)
+
+    def test_a_duplicate_entry_cannot_write_through_a_symlink(self):
+        outside = Path(self.temporary.name) / "outside.txt"
+        outside.write_bytes(b"untouched\n")
+        head = self.crafted_commit([("120000", "a", self.blob(str(outside).encode())),
+                                    ("100644", "a", self.blob(b"overwritten\n"))])
+        self.assert_refused_and_untouched(head, outside, b"untouched\n")
+
+    def test_a_symlinked_parent_directory_is_refused(self):
+        outside_dir = Path(self.temporary.name) / "outside-dir"
+        outside_dir.mkdir()
+        (outside_dir / "x").write_bytes(b"untouched\n")
+        sub = subprocess.run(["git", "-C", str(self.repo.root), "mktree"], input=f"100644 blob {self.blob(b'evil')}\tx\n",
+                             check=True, capture_output=True, text=True).stdout.strip()
+        head = self.crafted_commit([("120000", "d", self.blob(str(outside_dir).encode())), ("40000", "d", sub)])
+        self.assert_refused_and_untouched(head, outside_dir / "x", b"untouched\n")
+
+    def test_a_symlink_into_the_trusted_checkout_is_refused(self):
+        judge = Path(trusted.__file__)
+        before = judge.read_bytes()
+        head = self.crafted_commit([("120000", "link", self.blob(str(judge).encode())),
+                                    ("100644", "link", self.blob(b"print('owned')\n"))])
+        self.assert_refused_and_untouched(head, judge, before)
+        lone = self.crafted_commit([("120000", "link", self.blob(str(judge).encode()))])
+        self.assert_refused_and_untouched(lone, judge, before)
+
+    def test_a_gitlink_is_refused(self):
+        head = self.crafted_commit([("100644", "a.txt", self.blob(b"a\n")), ("160000", "sub", "1" * 40)])
+        with tempfile.TemporaryDirectory() as out:
+            with self.assertRaisesRegex(trusted.InputError, "only regular files are judged"):
+                trusted.materialize(self.repo.root, head, Path(out))
+
+    def test_the_change_is_never_materialized_inside_the_trusted_checkout(self):
+        with self.assertRaisesRegex(trusted.InputError, "inside, or around, the trusted checkout"):
+            trusted.materialize(self.repo.root, self.repo.base, self.repo.root)
 
     def test_malformed_commit_ids_are_refused_before_anything_runs(self):
         with contextlib.redirect_stderr(io.StringIO()):
             code = trusted.main(["--repo", str(self.repo.root), "--head", "main; rm -rf /", "--base", self.repo.base,
-                                 "--dest", str(Path(self.temporary.name) / "pr")])
+                                 "--dest-parent", self.temporary.name])
         self.assertEqual(code, 2)
 
 
+WORKFLOWS = ROOT / ".github/workflows"
+# Each still runs a verifier without -I and is listed so the exception is
+# visible and cannot grow: sdk-release.yml is a release-path file, and
+# gpu-macos.yml's fetch step must stay identical to it but for --root
+# (scripts/test_ci_runner_policy.py). Both go isolated together, in a
+# release-path change.
+UNISOLATED_EXCEPTIONS = {("sdk-release.yml", "python3 tools/mirror/fetch_view_audio_archive.py"),
+                         ("gpu-macos.yml", "python3 tools/mirror/fetch_view_audio_archive.py")}
+UNISOLATED = re.compile(r"\bpython3?\s+(?!-I\b)(?:-[A-Za-z]+\s+)*(tools/[\w./-]+\.py)")
+
+
+def run_blocks(text: str) -> list[str]:
+    return [body for _, body in re.findall(r"^( +)(?:- )?run: \|\n((?:\1  .*\n|\n)+)", text, re.MULTILINE)] + \
+        re.findall(r"^ +(?:- )?run: ([^|\n][^\n]*)$", text, re.MULTILINE)
+
+
+def unisolated_invocations(directory: Path) -> set[tuple[str, str]]:
+    found = set()
+    for path in sorted(directory.glob("*.yml")):
+        for body in run_blocks(path.read_text(encoding="utf-8")):
+            for match in UNISOLATED.finditer(body):
+                found.add((path.name, match.group(0).split("\n")[0].strip()))
+    return found
+
+
+def pull_request_workflows_granting_statuses(directory: Path) -> list[str]:
+    found = []
+    for path in sorted(directory.glob("*.yml")):
+        text = "\n" + path.read_text(encoding="utf-8")
+        trigger = text.split("\non:", 1)[1].split("\n\n", 1)[0] if "\non:" in text else ""
+        if re.search(r"^\s*(?:-\s*)?pull_request\s*:?\s*$|\[[^\]]*\bpull_request\b(?!_)", trigger, re.MULTILINE) \
+                and re.search(r"^\s*statuses:\s*write\b", text, re.MULTILINE):
+            found.append(path.name)
+    return found
+
+
 class WorkflowIsTrustedOnlyTests(unittest.TestCase):
-    """The pull_request_target workflow runs nothing from the pull request."""
+    """The pull_request_target workflow runs nothing from the pull request and always reports."""
 
     FORBIDDEN_CONTEXT = re.compile(
         r"github\.event\.pull_request\.(title|body|head\.ref|head\.label|labels|user|head\.repo)"
-        r"|github\.head_ref|github\.event\.merge_group\.head_ref")
+        r"|github\.head_ref|github\.event\.merge_group\.head_ref|github\.sha\b")
 
     def setUp(self) -> None:
         # Read as text, so the check needs nothing beyond the standard library.
         self.text = WORKFLOW.read_text(encoding="utf-8")
-        self.runs = re.findall(r"^( +)run: \|\n((?:\1  .*\n|\n)+)", self.text, re.MULTILINE)
-        self.runs = [body for _, body in self.runs]
+        self.runs = run_blocks(self.text)
 
-    def test_it_runs_on_the_base_definition_with_read_only_contents(self):
+    def test_it_runs_on_the_base_definition_with_exactly_contents_read_and_statuses_write(self):
         trigger = self.text.split("\non:\n", 1)[1].split("\n\n", 1)[0]
         self.assertEqual(re.findall(r"^  (\w+):", trigger, re.MULTILINE), ["pull_request_target", "merge_group"])
         self.assertEqual(re.findall(r"^ *permissions:\n((?: +\w[\w-]*: \w+\n)+)", self.text, re.MULTILINE),
-                         ["  contents: read\n", "      contents: read\n"])
+                         ["  contents: read\n  statuses: write\n", "      contents: read\n      statuses: write\n"])
         self.assertNotIn("secrets.", self.text)
-        self.assertNotIn(": write", self.text)
+        self.assertEqual(re.findall(r"\$\{\{ *github\.token *\}\}", self.text), ["${{ github.token }}"])
+        self.assertIn("GITHUB_TOKEN: ${{ github.token }}", self.text)
 
     def test_the_check_reports_on_every_pull_request_and_queue_entry(self):
-        # A required check that never reports blocks a pull request forever,
-        # so nothing may narrow when it runs or skip it.
+        # A required status that is never posted blocks a pull request
+        # forever, so nothing may narrow when the job runs or skip it.
         trigger = self.text.split("\non:\n", 1)[1].split("\n\n", 1)[0]
         blocks = dict(re.findall(r"^  (\w+):\n((?:    .*\n?)*)", trigger, re.MULTILINE))
         self.assertEqual(set(blocks), {"pull_request_target", "merge_group"})
@@ -302,22 +389,41 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
         jobs = self.text.split("\njobs:\n", 1)[1]
         self.assertIsNone(re.search(r"^\s*(?:-\s+)?if:", jobs, re.MULTILINE))
         self.assertNotIn("continue-on-error", jobs)
+        self.assertEqual(len(re.findall(r"^      - name:", jobs, re.MULTILINE)), 1)  # one step: nothing runs before the trap
 
-    def test_the_check_has_a_stable_name(self):
+    def test_the_job_is_not_named_after_the_status(self):
         self.assertEqual(re.findall(r"^jobs:\n  ([\w-]+):\n    name: ([\w-]+)$", self.text, re.MULTILINE),
-                         [("framework-trusted-verify", "framework-trusted-verify")])
+                         [("framework-trusted-judge", "framework-trusted-judge")])
+        self.assertNotRegex(self.text, r"name: framework-trusted-verify\b")
 
-    def test_only_the_base_is_checked_out(self):
-        self.assertEqual(self.text.count("uses: actions/checkout@"), 1)
-        self.assertEqual(self.text.count("uses: "), 1)
-        checkout = self.text.split("uses: actions/checkout@", 1)[1].split("\n\n", 1)[0]
-        self.assertIn("persist-credentials: false", checkout)
-        self.assertIn("path: trusted", checkout)
-        self.assertIn("ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}", checkout)
-        self.assertNotIn("head", checkout)
+    def test_the_verdict_is_a_status_on_the_change_s_head(self):
+        self.assertIn("HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}",
+                      self.text)
+        run = self.runs[0]
+        self.assertIn('"${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}"', run)
+        self.assertIn('"context":"framework-trusted-verify"', run)
+        self.assertIn('"target_url":"%s"', run)
+        self.assertIn('run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"', run)
+        self.assertEqual(run.count("/statuses/"), 1)
+
+    def test_the_status_is_never_left_pending_or_missing(self):
+        run = self.runs[0]
+        self.assertIn("trap on_exit EXIT", run)
+        self.assertIn("trap 'exit 130' INT TERM", run)
+        self.assertRegex(run, r'on_exit\(\) \{\n\s+if \[ "\$finished" != 1 \]; then\n\s+post_status failure ')
+        lines = run.splitlines()
+        index = {name: next(i for i, line in enumerate(lines) if needle in line)
+                 for name, needle in (("trap", "trap on_exit EXIT"), ("pending", "post_status pending"),
+                                      ("clone", " clone "), ("finished", "finished=1"))}
+        self.assertLess(index["trap"], index["pending"])
+        self.assertLess(index["pending"], index["clone"])
+        self.assertRegex(run, r"0\) post_status success ")
+        self.assertEqual(len(re.findall(r"post_status success", run)), 1)
+        self.assertGreater(index["finished"], max(i for i, line in enumerate(lines) if "post_status" in line
+                                                  and "local" not in line and "()" not in line))
 
     def test_no_expression_reaches_a_shell(self):
-        self.assertEqual(len(self.runs), 2)  # control: both run blocks were read
+        self.assertEqual(len(self.runs), 1)  # control: the run block was read
         for body in self.runs:
             self.assertNotIn("${{", body)
 
@@ -325,24 +431,101 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
         self.assertIsNone(self.FORBIDDEN_CONTEXT.search(self.text), self.FORBIDDEN_CONTEXT.search(self.text))
 
     def test_every_command_is_trusted_code(self):
+        self.assertIsNone(re.search(r"^\s*(?:-\s+)?uses:", self.text, re.MULTILINE))  # the base is cloned in the step
         runs = "\n".join(self.runs)
-        for forbidden in ("pip ", "npm ", "make ", "cmake ", "source ", "bash ", " sh ", "./", "pr/"):
+        for forbidden in ("pip ", "npm ", "make ", "cmake ", "source ", "bash ", " sh ", "./", "pr/", "lfs"):
             self.assertNotIn(forbidden, runs, forbidden)
         interpreters = re.findall(r"python3?\b[^\n]*", runs)
-        self.assertTrue(interpreters)  # control: the judge runs
-        for line in interpreters:
-            self.assertTrue(line.startswith("python3 -I tools/provenance/framework_trusted_verify.py"), line)
-        # The pull request's tree is only ever a destination.
-        self.assertEqual(re.findall(r"\$RUNNER_TEMP/pr\b[^\n]*", runs), ['$RUNNER_TEMP/pr" \\'])
-        self.assertIn('--dest "$RUNNER_TEMP/pr"', runs)
-        judge = self.text.split("- name: Judge the change with the base rules", 1)[1].split("run: |", 1)[0]
-        self.assertIn("working-directory: trusted", judge)
+        self.assertEqual(interpreters, ["python3 -I tools/provenance/framework_trusted_verify.py \\"])
+        self.assertIn('--dest-parent "$RUNNER_TEMP"', runs)
+        git_lines = [line.strip() for line in runs.splitlines() if '"${safe_git[@]}"' in line]
+        self.assertEqual(len(git_lines), 5)
+        self.assertIn("-c fetch.fsckObjects=true -c transfer.fsckObjects=true)", runs)
+        self.assertIn("-c core.hooksPath=/dev/null", runs)
+        self.assertIn('checkout --quiet --detach "$BASE_SHA"', runs)
+        self.assertEqual(runs.count(" checkout "), 1)
+        self.assertIn("clone --quiet --no-checkout", runs)
 
     def test_the_rule_list_covers_this_workflow_and_its_judge(self):
         for path in (".github/workflows/framework-trusted-verify.yml", ".github/workflows/provenance.yml",
                      ".github/workflows/new.yml", "tools/provenance/framework_trusted_verify.py",
                      "tools/provenance/verify_extraction.py", "tools/provenance/argparse.py", "tools/mirror/x.py"):
             self.assertTrue(path.startswith(verifier.FRAMEWORK_RULE_PATHS), path)
+
+
+class WorkflowFleetLintTests(unittest.TestCase):
+    """Rules over every workflow: isolated verifier runs, and no status-writing PR lane."""
+
+    def test_every_tools_verifier_runs_isolated(self):
+        found = unisolated_invocations(WORKFLOWS)
+        self.assertEqual(found, UNISOLATED_EXCEPTIONS)
+
+    def test_the_isolation_lint_catches_each_spelling(self):
+        for line in ("python3 tools/provenance/verify_extraction.py --x", "python tools/mirror/a.py",
+                     "python3 -u tools/provenance/observatory.py verify", "python3 tools/agent_instructions/verify.py"):
+            with self.subTest(line=line), tempfile.TemporaryDirectory() as temporary:
+                Path(temporary, "w.yml").write_text(f"on:\n  push:\n\njobs:\n  a:\n    steps:\n"
+                                                    f"      - run: |\n          {line}\n", encoding="utf-8")
+                self.assertEqual(len(unisolated_invocations(Path(temporary))), 1)
+        with tempfile.TemporaryDirectory() as temporary:
+            Path(temporary, "w.yml").write_text("on:\n  push:\n\njobs:\n  a:\n    steps:\n"
+                                                "      - run: python3 -I tools/provenance/a.py\n", encoding="utf-8")
+            self.assertEqual(unisolated_invocations(Path(temporary)), set())
+
+    def test_a_planted_standard_module_is_not_imported_under_the_ci_invocation(self):
+        # -I drops the script's directory from sys.path, and scripts that need
+        # their siblings append it after the standard library, so a planted
+        # argparse.py or json.py beside them is never what they import.
+        with tempfile.TemporaryDirectory() as temporary:
+            tools = Path(temporary) / "tools"
+            shutil.copytree(ROOT / "tools/provenance", tools / "provenance",
+                            ignore=shutil.ignore_patterns("__pycache__"))
+            shutil.copytree(ROOT / "tools/mirror", tools / "mirror", ignore=shutil.ignore_patterns("__pycache__"))
+            for name in ("argparse", "json"):
+                (tools / "provenance" / f"{name}.py").write_text("raise SystemExit('SHADOWED')\n", encoding="utf-8")
+            scripts = ("verify_extraction.py", "framework_trusted_verify.py", "observatory.py",
+                       "collect_release_evidence.py", "receiver.py")
+            for script in scripts:
+                with self.subTest(script=script):
+                    isolated = subprocess.run(["python3", "-I", str(tools / "provenance" / script), "--help"],
+                                              capture_output=True, text=True, cwd=temporary)
+                    self.assertNotIn("SHADOWED", isolated.stdout + isolated.stderr)
+                    self.assertEqual(isolated.returncode, 0, isolated.stderr[-400:])
+                    # The directory a script adds comes after the standard library,
+                    # so a module it imports later cannot be shadowed either.
+                    probe = ("import runpy, sys, sysconfig\n"
+                             f"script = {str(tools / 'provenance' / script)!r}\n"
+                             "sys.argv = [script, '--help']\n"
+                             "try:\n    runpy.run_path(script, run_name='__main__')\nexcept SystemExit:\n    pass\n"
+                             "import pathlib\nhere = str(pathlib.Path(script).resolve().parent)\n"
+                             "import os\nreal = [os.path.realpath(p) for p in sys.path]\n"
+                             "std = real.index(os.path.realpath(sysconfig.get_paths()['stdlib']))\n"
+                             "mine = [i for i, p in enumerate(real) if p == os.path.realpath(here)]\n"
+                             "print('ORDER-OK' if all(i > std for i in mine) else 'ORDER-BAD')\n")
+                    order = subprocess.run(["python3", "-I", "-c", probe], capture_output=True, text=True, cwd=temporary)
+                    self.assertIn("ORDER-OK", order.stdout, order.stdout[-300:] + order.stderr[-300:])
+            # Control: without -I the plant is what the script imports.
+            plain = subprocess.run(["python3", str(tools / "provenance" / "verify_extraction.py"), "--help"],
+                                   capture_output=True, text=True, cwd=temporary)
+            self.assertIn("SHADOWED", plain.stdout + plain.stderr)
+
+    def test_no_pull_request_workflow_may_write_statuses(self):
+        self.assertEqual(pull_request_workflows_granting_statuses(WORKFLOWS), [])
+        self.assertTrue(any("statuses: write" in p.read_text() for p in WORKFLOWS.glob("*.yml")))  # control
+
+    def test_the_status_lint_catches_top_level_and_job_grants(self):
+        for name, text in {
+            "top": "on:\n  pull_request:\n\npermissions:\n  statuses: write\n",
+            "job": "on:\n  pull_request:\n    types: [opened]\n\njobs:\n  a:\n    permissions:\n      statuses: write\n",
+            "list": "on: [push, pull_request]\n\njobs:\n  a:\n    permissions:\n      statuses: write\n",
+        }.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as temporary:
+                Path(temporary, "w.yml").write_text(text, encoding="utf-8")
+                self.assertEqual(pull_request_workflows_granting_statuses(Path(temporary)), ["w.yml"])
+        with tempfile.TemporaryDirectory() as temporary:
+            Path(temporary, "w.yml").write_text("on:\n  pull_request_target:\n\npermissions:\n  statuses: write\n",
+                                                encoding="utf-8")
+            self.assertEqual(pull_request_workflows_granting_statuses(Path(temporary)), [])
 
 
 if __name__ == "__main__":

@@ -195,7 +195,7 @@ PACKAGE_SYMBOL = re.compile(rf"{_NS}::")
 # from `nm -g -m` there and from the W/V letters on ELF (nm_symbols.strength).
 # A strong definition is every defined type except a weak-only one, so GNU
 # unique (u) and indirect (i) definitions stay in the floor.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.append(str(Path(__file__).resolve().parent))
 import nm_symbols  # noqa: E402
 import rtti_ownership  # noqa: E402
 
