@@ -169,6 +169,9 @@ struct NamedScene final {
 [[nodiscard]] Scene path_dashed_stroke(float width, float height);
 /// A closed cubic curve with a linear gradient fill and a thin stroke.
 [[nodiscard]] Scene path_cubic_gradient(float width, float height);
+/// Rotated, scaled, faded and per-corner rounded rectangles: node transforms,
+/// a group opacity layer, a folded opacity, and `corner_radii`.
+[[nodiscard]] Scene compositing(float width, float height);
 /// Every node kind above in one scene.
 [[nodiscard]] Scene combined(float width, float height);
 /// Each content fixture, named, excluding `empty`.

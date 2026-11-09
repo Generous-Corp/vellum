@@ -10,6 +10,7 @@ import sys
 import unittest
 from pathlib import Path
 
+sys.path.append(str(Path(__file__).resolve().parent))  # -I drops the script dir; append keeps the standard library first
 from verify_renderer_dependency import VerificationError, validate_renderer_attestation
 
 

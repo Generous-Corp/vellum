@@ -22,9 +22,11 @@ The public slice consists of:
   application builds, plus a headers-only `Vellum::DawnHeaders` target for an
   embedding host's authenticated bootstrap and compute code.
 
-The scene carries a single integer schema version, `kSceneVersion`, starting
-at 1. Fields whose defaults leave existing scenes unchanged are added without a
-bump; a new node kind or a change in meaning bumps it. Node kinds are closed
+The scene carries a single integer schema version, `kSceneVersion`, now 3.
+A change that can alter rendered output bumps it: a new node kind, a new field
+that changes how a scene is drawn, or a change in meaning. A change that only
+adds metadata keeps it. Consumers accept versions from
+`kMinSupportedSceneVersion` (1) to `kSceneVersion`. Node kinds are closed
 per version. The surface's `render` refuses a scene with an unknown version or
 node kind before drawing anything and keeps its previous frame, and
 paint-command flattening skips both rather than drawing an unknown kind as a
@@ -34,6 +36,35 @@ diagnostic and reports authored style or content it drops as warnings on
 severity and disposition words but identify content by node ID, not by
 DesignIR document path.
 
+Nodes carry an optional affine transform about their origin, a group opacity,
+and per-corner radii beside the uniform `corner_radius` shorthand. All three
+change rendered output, so they arrived with version 2. A version 1 scene that
+sets any of them is refused by `render` and yields no paint commands. Paint
+commands keep untransformed scene-absolute `bounds` and add the composed
+transform, so a consumer that ignores it still sees the old geometry. A faded
+subtree that draws more than one command is bracketed by `begin_layer` and
+`end_layer` commands whose bounds are the union of the members' transformed
+paint extents (box, shadow offset and spread, and 1.5 blur radii); text can
+overflow its box, so a layer holding text is unbounded. A lone faded command
+carries the opacity itself, and the Skia surface still gives it a bounded
+layer when its own paint overlaps (several shadows, a gradient over a fill,
+decorated text, a mesh). Plain text folds the opacity into its glyph paint, so
+glyphs that overlap one another, under negative letter spacing or in joined
+scripts, blend twice where they meet. The canvas-backed web shell flattens
+layers to per-command alpha and counts layers, meshes, transforms, and
+per-corner radii it cannot draw (`vellum_web_lowering_loss_count`); it does not
+count the gradients and shadows it also skips. The CoreGraphics smoke canvas
+takes no scene and does not lower these properties. A scene with a non-finite
+transform, opacity, or radius is refused like an unknown kind.
+
+The authoring `transform` key takes CSS transform functions, matched without
+regard to case, with lengths in px or percent of the box. A list that does not
+parse is dropped with a `VELLUM_STYLE_DROPPED` warning and the node is drawn
+untransformed; only a list that composes to a non-finite matrix fails the
+tree. Interaction and accessibility boxes are the axis-aligned box of each
+node as drawn, so a rotated control hit-tests on that box, and a node whose
+transform has a zero determinant gets no interaction or text-input box.
+
 A `path` node carries a `PathGeometry`: a flat list of move, line,
 quadratic, cubic, SVG elliptical arc and close commands with their values,
 a nonzero or evenodd fill rule, a stroke (colour, width, miter, round or bevel
@@ -42,8 +73,14 @@ and an anti-aliasing flag, shared and immutable like a mesh. The fill paint is
 the node's colour and linear gradients, which resolve against the layout box,
 or against the path's control box when the layout box has no area; the stroke
 is a single colour. The SVG paint defaults (black fill, no stroke, width 1)
-are applied by the authoring host, not by the scene. The authoring host parses an SVG `d` string once, into absolute
-commands, so a scene never stores path strings. A path is drawable only within
+are applied by the authoring host, not by the scene. The authoring host parses
+an SVG `d` string once, into absolute commands, so a scene never stores path
+strings. The path kind arrived with version 3, so a version 1 or 2 scene with a
+path node is refused by `render` and yields no paint commands. A path command
+carries the composed transform and opacity like any other; a lone faded path
+folds the opacity into its paint unless it draws more than one operation (a
+fill with a gradient, or a fill and a stroke), and then gets a bounded layer
+over its paint extent, the control box outset by the stroke reach. A path is drawable only within
 its budget of 4096 commands and 16384 values (64 KiB of `float` data), with at
 most 64 dash entries drawing at most 100000 dashes along a bound on the path's
 length, finite coordinates and the exact arity per command;
@@ -52,9 +89,8 @@ length, finite coordinates and the exact arity per command;
 keeping its previous frame. Damage treats a path as its control-point box,
 with arcs as their whole ellipse, outset by half the stroke width times the
 larger of the miter limit for miter joins and sqrt(2) for round or square
-caps. Renderers that cannot draw paths,
-such as the web shell, report each dropped command as a
-`VELLUM_NODE_CONTENT_DROPPED` warning.
+caps. The web shell does not draw paths and counts each one in
+`vellum_web_lowering_loss_count`.
 
 Native self-test is deliberately fail-closed. A requested native surface is
 not allowed to fall back to CoreGraphics or an offscreen surface. The test also

@@ -15,6 +15,7 @@
 #include "include/core/SkData.h"
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkMaskFilter.h"
+#include "include/core/SkMatrix.h"
 #include "include/core/SkTypeface.h"
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkImage.h"
@@ -99,6 +100,33 @@ SkColor4f sk_color(Color color) {
     return {color.red, color.green, color.blue, color.alpha};
 }
 
+SkColor4f sk_color(Color color, float opacity) {
+    return {color.red, color.green, color.blue, color.alpha * opacity};
+}
+
+SkMatrix sk_matrix(const Affine2D& transform) {
+    return SkMatrix::MakeAll(
+        transform.a, transform.c, transform.tx,
+        transform.b, transform.d, transform.ty,
+        0.0F, 0.0F, 1.0F);
+}
+
+SkRRect rounded_rect(const SkRect& rect, const CornerRadii& radii, float outset = 0.0F) {
+    const auto grown = [outset](float radius) {
+        const float value = std::max(0.0F, radius + outset);
+        return SkVector{value, value};
+    };
+    const SkVector corners[4]{
+        grown(radii.top_left),
+        grown(radii.top_right),
+        grown(radii.bottom_right),
+        grown(radii.bottom_left),
+    };
+    SkRRect result;
+    result.setRectRadii(rect, corners);
+    return result;
+}
+
 std::filesystem::path font_directory(std::string_view requested) {
     if (!requested.empty()) return std::filesystem::path(requested);
     Dl_info info{};
@@ -155,7 +183,7 @@ std::string replace_unsupported_text(
 }
 
 sk_sp<SkShader> linear_gradient_shader(
-    const ResolvedLinearGradient& gradient, std::string* error) {
+    const ResolvedLinearGradient& gradient, float opacity, std::string* error) {
     if (gradient.stops.size() < 2U) {
         set_error(error, "Vellum linear gradient needs at least two stops");
         return nullptr;
@@ -181,7 +209,7 @@ sk_sp<SkShader> linear_gradient_shader(
     colors.reserve(gradient.stops.size());
     positions.reserve(gradient.stops.size());
     for (const auto& stop : gradient.stops) {
-        colors.push_back(sk_color(stop.color));
+        colors.push_back(sk_color(stop.color, opacity));
         positions.push_back(stop.position);
     }
     const SkGradient shader_gradient{
@@ -199,19 +227,17 @@ sk_sp<SkShader> linear_gradient_shader(
 
 bool draw_linear_gradient(
     SkCanvas& canvas, const PaintCommand& command,
-    const ResolvedLinearGradient& gradient, std::string* error) {
+    const ResolvedLinearGradient& gradient, float opacity, std::string* error) {
     if (command.bounds.width <= 0.0F || command.bounds.height <= 0.0F) return true;
-    auto shader = linear_gradient_shader(gradient, error);
+    auto shader = linear_gradient_shader(gradient, opacity, error);
     if (!shader) return false;
 
     canvas.save();
     const auto rect = SkRect::MakeXYWH(
         command.bounds.x, command.bounds.y,
         command.bounds.width, command.bounds.height);
-    if (command.corner_radius > 0.0F) {
-        canvas.clipRRect(
-            SkRRect::MakeRectXY(rect, command.corner_radius, command.corner_radius),
-            true);
+    if (is_rounded(command.corner_radii)) {
+        canvas.clipRRect(rounded_rect(rect, command.corner_radii), true);
     } else {
         canvas.clipRect(rect, true);
     }
@@ -329,14 +355,15 @@ bool build_text_paragraph(
     return true;
 }
 
-bool draw_rectangle(SkCanvas& canvas, const PaintCommand& command, std::string* error) {
+bool draw_rectangle(SkCanvas& canvas, const PaintCommand& command, float opacity,
+                    std::string* error) {
     const auto rect = SkRect::MakeXYWH(
         command.bounds.x, command.bounds.y,
         command.bounds.width, command.bounds.height);
     for (const auto& shadow : command.box_shadows) {
         SkPaint shadow_paint;
         shadow_paint.setAntiAlias(true);
-        shadow_paint.setColor4f(sk_color(shadow.color));
+        shadow_paint.setColor4f(sk_color(shadow.color, opacity));
         if (shadow.blur_radius > 0.0F) {
             shadow_paint.setMaskFilter(SkMaskFilter::MakeBlur(
                 kNormal_SkBlurStyle, shadow.blur_radius * 0.5F, true));
@@ -346,37 +373,40 @@ bool draw_rectangle(SkCanvas& canvas, const PaintCommand& command, std::string* 
             command.bounds.y + shadow.offset_y - shadow.spread_radius,
             command.bounds.width + shadow.spread_radius * 2.0F,
             command.bounds.height + shadow.spread_radius * 2.0F);
-        const float radius = std::max(0.0F, command.corner_radius + shadow.spread_radius);
         canvas.save();
-        if (command.corner_radius > 0.0F) {
+        if (is_rounded(command.corner_radii)) {
             canvas.clipRRect(
-                SkRRect::MakeRectXY(
-                    rect, command.corner_radius, command.corner_radius),
-                SkClipOp::kDifference, true);
+                rounded_rect(rect, command.corner_radii), SkClipOp::kDifference, true);
         } else {
             canvas.clipRect(rect, SkClipOp::kDifference, true);
         }
-        canvas.drawRoundRect(shadow_rect, radius, radius, shadow_paint);
+        canvas.drawRRect(
+            rounded_rect(shadow_rect, command.corner_radii, shadow.spread_radius),
+            shadow_paint);
         canvas.restore();
     }
 
     SkPaint paint;
     paint.setAntiAlias(true);
-    paint.setColor4f(sk_color(command.fill));
-    if (command.corner_radius > 0.0F) {
-        canvas.drawRoundRect(rect, command.corner_radius, command.corner_radius, paint);
+    paint.setColor4f(sk_color(command.fill, opacity));
+    if (is_rounded(command.corner_radii)) {
+        canvas.drawRRect(rounded_rect(rect, command.corner_radii), paint);
     } else {
         canvas.drawRect(rect, paint);
     }
     for (const auto& declared : command.fill_gradients) {
         const auto gradient = resolve_linear_gradient(command.bounds, declared);
-        if (!draw_linear_gradient(canvas, command, gradient, error)) return false;
+        if (!draw_linear_gradient(canvas, command, gradient, opacity, error)) return false;
     }
     return true;
 }
 
-bool draw_text(SkCanvas& canvas, const PaintCommand& command,
-               std::string_view directory, std::string* error) {
+SkRect layer_rect(const Rect& rect) {
+    return SkRect::MakeXYWH(rect.x, rect.y, rect.width, rect.height).makeOutset(1.0F, 1.0F);
+}
+
+bool draw_text(SkCanvas& canvas, const PaintCommand& command, float opacity,
+               float layer_opacity, std::string_view directory, std::string* error) {
     std::vector<TextRun> runs = command.text_runs;
     if (runs.empty() && !command.text.empty()) {
         runs.push_back({
@@ -392,12 +422,23 @@ bool draw_text(SkCanvas& canvas, const PaintCommand& command,
             },
         });
     }
+    for (auto& run : runs) run.style.color.alpha *= opacity;
     std::unique_ptr<skia::textlayout::Paragraph> paragraph;
     TextMetrics metrics;
     if (!build_text_paragraph(runs, directory, paragraph, metrics, error)) {
         return false;
     }
+    if (layer_opacity < 1.0F) {
+        const float overhang = command.font_size;
+        const auto extent = SkRect::MakeXYWH(
+            command.bounds.x - overhang, command.bounds.y - overhang,
+            std::max(command.bounds.width, metrics.width) + overhang * 2.0F,
+            std::max(command.bounds.height, metrics.ascent + metrics.descent) +
+                overhang * 2.0F);
+        canvas.saveLayerAlphaf(&extent, layer_opacity);
+    }
     paragraph->paint(&canvas, command.bounds.x, command.bounds.y);
+    if (layer_opacity < 1.0F) canvas.restore();
     return true;
 }
 
@@ -594,7 +635,8 @@ const SceneNode* find_undrawable_path(const SceneNode& node, std::string& reason
     return nullptr;
 }
 
-bool draw_path(SkCanvas& canvas, const PaintCommand& command, std::string* error) {
+bool draw_path(SkCanvas& canvas, const PaintCommand& command, float opacity,
+               std::string* error) {
     if (!command.path) return true;
     const auto& path = *command.path;
     const auto& fill = command.fill;
@@ -609,12 +651,13 @@ bool draw_path(SkCanvas& canvas, const PaintCommand& command, std::string* error
     if (fill.alpha > 0.0F) {
         SkPaint paint;
         paint.setAntiAlias(path.antialias);
-        paint.setColor4f(sk_color(fill));
+        paint.setColor4f(sk_color(fill, opacity));
         canvas.drawPath(outline, paint);
     }
     if (const auto box = path_gradient_box(command)) {
         for (const auto& declared : command.fill_gradients) {
-            auto shader = linear_gradient_shader(resolve_linear_gradient(*box, declared), error);
+            auto shader =
+                linear_gradient_shader(resolve_linear_gradient(*box, declared), opacity, error);
             if (!shader) return false;
             SkPaint paint;
             paint.setAntiAlias(path.antialias);
@@ -627,7 +670,7 @@ bool draw_path(SkCanvas& canvas, const PaintCommand& command, std::string* error
     if (stroke.width > 0.0F && stroke.color.alpha > 0.0F) {
         SkPaint paint;
         paint.setAntiAlias(path.antialias);
-        paint.setColor4f(sk_color(stroke.color));
+        paint.setColor4f(sk_color(stroke.color, opacity));
         paint.setStyle(SkPaint::kStroke_Style);
         paint.setStrokeWidth(stroke.width);
         paint.setStrokeJoin(sk_join(stroke.join));
@@ -653,23 +696,76 @@ bool draw_path(SkCanvas& canvas, const PaintCommand& command, std::string* error
     return true;
 }
 
+// Folding is exact when the command's paint operations do not overlap; text
+// accepts the double blend of glyphs that overlap one another.
+bool opacity_folds_into_paint(const PaintCommand& command) {
+    if (command.kind == PaintCommand::Kind::rectangle) {
+        const std::size_t fills =
+            (command.fill.alpha > 0.0F ? 1U : 0U) + command.fill_gradients.size();
+        return command.box_shadows.size() <= 1U && fills <= 1U;
+    }
+    if (command.kind == PaintCommand::Kind::path) {
+        if (!command.path) return true;
+        const auto& stroke = command.path->stroke;
+        const bool stroked = stroke.width > 0.0F && stroke.color.alpha > 0.0F;
+        const std::size_t operations = (command.fill.alpha > 0.0F ? 1U : 0U) +
+                                       command.fill_gradients.size() + (stroked ? 1U : 0U);
+        return operations <= 1U;
+    }
+    if (command.kind == PaintCommand::Kind::text) {
+        if (command.text_runs.empty()) return !command.underline && !command.strikethrough;
+        return std::none_of(command.text_runs.begin(), command.text_runs.end(),
+            [](const TextRun& run) { return run.style.underline || run.style.strikethrough; });
+    }
+    return false;
+}
+
 bool paint_command(SkCanvas& canvas, const PaintCommand& command,
                    std::string_view directory, MeshTextureCache& meshes,
                    std::string* error) {
-    if (command.kind == PaintCommand::Kind::mesh) {
-        return draw_mesh(canvas, command, meshes, error);
+    if (command.kind == PaintCommand::Kind::begin_layer) {
+        const float alpha = std::clamp(command.opacity, 0.0F, 1.0F);
+        if (command.layer_unbounded) {
+            canvas.saveLayerAlphaf(nullptr, alpha);
+        } else {
+            const auto bounds = layer_rect(command.bounds);
+            canvas.saveLayerAlphaf(&bounds, alpha);
+        }
+        return true;
     }
-    if (command.kind == PaintCommand::Kind::path) {
-        return draw_path(canvas, command, error);
-    }
-    if (command.kind == PaintCommand::Kind::rectangle) {
-        return draw_rectangle(canvas, command, error);
+    if (command.kind == PaintCommand::Kind::end_layer) {
+        canvas.restore();
+        return true;
     }
     if (command.kind == PaintCommand::Kind::text &&
-        (!command.text.empty() || !command.text_runs.empty())) {
-        return draw_text(canvas, command, directory, error);
+        command.text.empty() && command.text_runs.empty()) {
+        return true;
     }
-    return true;
+    if (!draws_content(command.kind)) return true;
+    const float opacity = std::clamp(command.opacity, 0.0F, 1.0F);
+    if (opacity <= 0.0F) return true;
+
+    const int saved = canvas.save();
+    if (!is_identity(command.transform)) canvas.concat(sk_matrix(command.transform));
+    const bool layered = opacity < 1.0F && !opacity_folds_into_paint(command);
+    const float paint_opacity = layered ? 1.0F : opacity;
+    if (layered && command.kind != PaintCommand::Kind::text) {
+        const auto bounds = layer_rect(paint_extent(command).rect);
+        canvas.saveLayerAlphaf(&bounds, opacity);
+    }
+    bool drawn = true;
+    if (command.kind == PaintCommand::Kind::mesh) {
+        drawn = draw_mesh(canvas, command, meshes, error);
+    } else if (command.kind == PaintCommand::Kind::rectangle) {
+        drawn = draw_rectangle(canvas, command, paint_opacity, error);
+    } else if (command.kind == PaintCommand::Kind::path) {
+        drawn = draw_path(canvas, command, paint_opacity, error);
+    } else {
+        drawn = draw_text(canvas, command, paint_opacity, layered ? opacity : 1.0F,
+                          directory, error);
+    }
+    canvas.restoreToCount(saved);
+    return drawn;
 }
 
 }  // namespace
@@ -850,6 +946,26 @@ public:
                                  unknown->id);
             return false;
         }
+        if (!scene_fields_match_version(scene)) {
+            const auto* compositing =
+                scene.scene_version < 2U ? find_version_2_fields(scene.root) : nullptr;
+            if (compositing != nullptr) {
+                set_error(error, "scene version " + std::to_string(scene.scene_version) +
+                                     " cannot carry the transform, opacity, or corner radii at " +
+                                     compositing->id);
+            } else {
+                set_error(error, "scene version " + std::to_string(scene.scene_version) +
+                                     " cannot carry the path node " +
+                                     find_version_3_kinds(scene.root)->id);
+            }
+            return false;
+        }
+        if (const auto* invalid = find_non_finite_compositing(scene.root);
+            invalid != nullptr) {
+            set_error(error, "scene node " + invalid->id +
+                                 " has a non-finite transform, opacity, or corner radius");
+            return false;
+        }
         std::string reason;
         if (const auto* path = find_undrawable_path(scene.root, reason); path != nullptr) {
             set_error(error, "path " + path->id + " cannot be drawn: " + reason);
@@ -1012,7 +1128,7 @@ private:
         }
 
         auto* canvas = target->getCanvas();
-        canvas->save();
+        const int saved = canvas->save();
         canvas->resetMatrix();
         canvas->clear(sk_color(scene.background));
         canvas->scale(config_.scale, config_.scale);
@@ -1020,12 +1136,12 @@ private:
         for (const auto& command : make_paint_commands(scene)) {
             if (!paint_command(*canvas, command, config_.font_directory,
                                mesh_textures, error)) {
-                canvas->restore();
+                canvas->restoreToCount(saved);
                 current_texture_ = nullptr;
                 return false;
             }
         }
-        canvas->restore();
+        canvas->restoreToCount(saved);
 
         auto recording = recorder_->snap();
         if (!recording) {

@@ -104,6 +104,14 @@ export interface Style {
     padding?: number;
     gap?: number;
     borderRadius?: number;
+    borderTopLeftRadius?: number;
+    borderTopRightRadius?: number;
+    borderBottomRightRadius?: number;
+    borderBottomLeftRadius?: number;
+    /** Group opacity in [0, 1]; values outside are clamped. */
+    opacity?: number;
+    /** CSS transform functions, pivoting about the box centre. */
+    transform?: string;
     backgroundColor?: string;
     color?: string;
     direction?: 'horizontal' | 'vertical';

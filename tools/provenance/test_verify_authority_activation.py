@@ -14,6 +14,8 @@ from unittest import mock
 try:
     from .git_test_environment import disable_auto_maintenance
 except ImportError:  # Direct script execution.
+    import sys
+    sys.path.append(str(Path(__file__).resolve().parent))  # -I drops the script dir; append keeps the standard library first
     from git_test_environment import disable_auto_maintenance
 
 disable_auto_maintenance()
@@ -343,7 +345,7 @@ class AuthorityActivationTests(unittest.TestCase):
         self.assertIn("permission-contents: read", active)
         self.assertIn("ref: main", active)
         self.assertIn(
-            "python3 tools/provenance/verify_authority_activation.py",
+            "python3 -I tools/provenance/verify_authority_activation.py",
             active,
         )
         self.assertNotIn(

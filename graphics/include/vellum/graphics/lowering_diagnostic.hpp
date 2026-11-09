@@ -45,8 +45,7 @@ struct LoweringDiagnostic final {
 inline constexpr std::string_view kUnknownNodeTypeCode = "VELLUM_UNKNOWN_NODE_TYPE";
 /// An authored style key that the node's type does not consume.
 inline constexpr std::string_view kStyleDroppedCode = "VELLUM_STYLE_DROPPED";
-/// An intrinsic whose content has no scene kind, so only its box was kept,
-/// or a paint command that a renderer does not draw.
+/// An intrinsic whose content has no scene kind, so only its box was kept.
 inline constexpr std::string_view kNodeContentDroppedCode = "VELLUM_NODE_CONTENT_DROPPED";
 /// An attributed text-run with a missing or duplicate id, non-string text,
 /// children, or a non-object style; always an error.

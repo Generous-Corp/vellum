@@ -1,10 +1,12 @@
+#include "canvas_shell_lowering.hpp"
+
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/runtime/kernel.hpp>
 
 #include <emscripten.h>
 
-#include <array>
 #include <bit>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -14,7 +16,7 @@ namespace {
 
 vellum::graphics::Scene scene;
 std::vector<vellum::graphics::PaintCommand> commands;
-std::vector<vellum::graphics::LoweringDiagnostic> dropped;
+int lowering_losses = 0;
 std::unique_ptr<vellum::runtime::Kernel> kernel;
 
 EM_JS(void, canvas_begin,
@@ -91,7 +93,6 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_begin_frame(
     scene.root.kind = vellum::graphics::SceneNode::Kind::group;
     scene.root.bounds = {0.0F, 0.0F, width, height};
     commands.clear();
-    dropped.clear();
     return 1;
 }
 
@@ -132,14 +133,16 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_add_text(
 EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     if (!kernel || scene.width <= 0.0F || scene.height <= 0.0F) return 0;
     using Kind = vellum::graphics::PaintCommand::Kind;
-    constexpr std::array drawn{Kind::rectangle, Kind::text};
     commands = vellum::graphics::make_paint_commands(scene);
-    dropped = vellum::graphics::report_undrawn_commands(commands, drawn, "the web shell");
+    lowering_losses = vellum::web::canvas_shell_loss_count(commands);
+    const auto opacities = vellum::graphics::effective_opacities(commands);
     const auto background = scene.background;
     canvas_begin(scene.width, scene.height, background.red, background.green,
                  background.blue, background.alpha);
-    for (const auto& command : commands) {
-        const auto color = command.fill;
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        const auto& command = commands[index];
+        auto color = command.fill;
+        color.alpha *= opacities[index];
         switch (command.kind) {
         case Kind::rectangle:
             canvas_rectangle(
@@ -153,6 +156,8 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
                 command.bounds.y + command.font_size, command.font_size,
                 color.red, color.green, color.blue, color.alpha);
             break;
+        case Kind::begin_layer:
+        case Kind::end_layer:
         case Kind::mesh:
         case Kind::path:
             break;
@@ -162,8 +167,10 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     return 1;
 }
 
-EMSCRIPTEN_KEEPALIVE int vellum_web_dropped_command_count() {
-    return static_cast<int>(dropped.size());
+/// The number of commands the last render drew with a loss; see
+/// `vellum::web::canvas_shell_loses`.
+EMSCRIPTEN_KEEPALIVE int vellum_web_lowering_loss_count() {
+    return lowering_losses;
 }
 
 EMSCRIPTEN_KEEPALIVE int vellum_web_command_count() {

@@ -184,8 +184,8 @@ int main(int argc, char** argv) {
                 std::fprintf(stderr, "missing reference for %s\n", document);
                 return 1;
             }
-            const auto d = compare(metal, soft, kPerChannelBound);
-            const bool ok = within_tolerance(d);
+            const auto d = compare_rgba(metal, soft);
+            const bool ok = within_renderer_tolerance(d);
             std::printf("%-60s mean=%.3f within=%.4f %s\n", document, d.mean, d.within,
                         ok ? "ok" : "OUTSIDE TOLERANCE");
             if (kControl) {

@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -18,6 +19,8 @@ from unittest import mock
 try:
     from .git_test_environment import disable_auto_maintenance
 except ImportError:  # Direct script execution.
+    import sys
+    sys.path.append(str(Path(__file__).resolve().parent))  # -I drops the script dir; append keeps the standard library first
     from git_test_environment import disable_auto_maintenance
 
 disable_auto_maintenance()
@@ -776,6 +779,195 @@ class ObservatoryTests(unittest.TestCase):
                     self.assertFalse((root / observatory.EVENTS_PATH / f"vellum-{main_later}.yaml").exists())
                 else:
                     self.assertIn(f"vellum-{main_later}", result["new_events"])
+
+    def _main_with_merges(self, top: Path):
+        """A reconciled state, then main lands a pull request through a covered
+        integration merge, then a second through a merge that adds a mapped
+        change of its own."""
+        pulp = top / "pulp"
+        vellum = top / "vellum-source"
+        root = top / "state"
+        pulp_base, pulp_head = init_repo(pulp, "unmapped/pulp.cpp")
+        vellum_base, vellum_head = init_repo(vellum, "graphics/render.cpp")
+        make_state(root, pulp_base, vellum_base)
+        observatory.reconcile(root=root, pulp_repo=pulp, vellum_repo=vellum, pulp_target=pulp_head,
+                              vellum_target=vellum_head, now_text="2026-10-11T00:00:00Z", write=True)
+        run(vellum, "git", "checkout", "-q", "-b", "feature")
+        write(vellum / "graphics/feature.cpp", "int feature = 1;\n")
+        feature = commit_all(vellum, "feature mapped change")
+        run(vellum, "git", "checkout", "-q", "main")
+        # Main moves on meanwhile, so the merge's tree matches neither parent
+        # and the merge maps like any real integration merge.
+        write(vellum / "unmapped/notes.md", "main moved\n")
+        commit_all(vellum, "main moves on")
+        run(vellum, "git", "merge", "-q", "--no-ff", "--no-edit", "feature")
+        covered = run(vellum, "git", "rev-parse", "HEAD")
+        run(vellum, "git", "checkout", "-q", "-b", "second")
+        write(vellum / "graphics/second.cpp", "int second = 1;\n")
+        second = commit_all(vellum, "second mapped change")
+        run(vellum, "git", "checkout", "-q", "main")
+        write(vellum / "unmapped/notes.md", "main moved again\n")
+        commit_all(vellum, "main moves on again")
+        run(vellum, "git", "merge", "-q", "--no-ff", "--no-commit", "second")
+        write(vellum / "graphics/render.cpp", "int value = 9;\n")  # the merge's own change
+        evil = commit_all(vellum, "merge second with a change of its own")
+        return pulp, vellum, root, pulp_head, feature, covered, second, evil
+
+    def test_the_receiver_records_no_event_for_a_covered_integration_merge(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, feature, covered, second, evil = self._main_with_merges(Path(temporary))
+            mapping = observatory.load_json(root / observatory.MAP_PATH)
+            self.assertTrue(observatory.integration_merge_covered(
+                vellum, covered, mapping["mappings"], mapping.get("transitive_path_rules", [])))
+            self.assertFalse(observatory.integration_merge_covered(
+                vellum, evil, mapping["mappings"], mapping.get("transitive_path_rules", [])))
+            result = observatory.reconcile(root=root, pulp_repo=pulp, vellum_repo=vellum, pulp_target=pulp_head,
+                                           vellum_target=evil, now_text="2026-10-11T00:05:00Z", write=True)
+            self.assertIn(f"vellum-{feature}", result["new_events"])
+            self.assertIn(f"vellum-{second}", result["new_events"])
+            self.assertIn(f"vellum-{evil}", result["new_events"])  # its own change still needs an event
+            self.assertNotIn(f"vellum-{covered}", result["new_events"])
+            self.assertFalse((root / observatory.EVENTS_PATH / f"vellum-{covered}.yaml").exists())
+            # The reconciled range verifies without an event for the covered merge.
+            report = observatory.verify(root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                                        allow_no_git_base=True, pulp_target=pulp_head, vellum_target=evil)
+            self.assertEqual(report["coverage_gaps"], [])
+
+    def test_a_merge_with_its_own_mapped_change_still_needs_its_event(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, feature, covered, second, evil = self._main_with_merges(Path(temporary))
+            observatory.reconcile(root=root, pulp_repo=pulp, vellum_repo=vellum, pulp_target=pulp_head,
+                                  vellum_target=evil, now_text="2026-10-11T00:05:00Z", write=True)
+            lock, mapping, cursor, budgets = observatory.validate_lock_map_cursor(root)
+            events = [(path, event) for path, event in observatory.load_events(root)
+                      if event["event_id"] != f"vellum-{evil}"]
+            gaps = observatory.coverage_gaps(root=root, mapping=mapping, cursor=cursor, events=events,
+                                             pulp_repo=pulp, vellum_repo=vellum)
+            self.assertEqual(gaps, [{"source": "vellum", "commit": evil, "reason": "mapped-commit-has-no-event"}])
+
+    def test_an_existing_event_for_a_covered_merge_still_verifies(self) -> None:
+        # Ledgers written before the receiver skipped covered merges carry such
+        # events; they stay valid and keep being checked against Git.
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, feature, covered, second, evil = self._main_with_merges(Path(temporary))
+            observatory.reconcile(root=root, pulp_repo=pulp, vellum_repo=vellum, pulp_target=pulp_head,
+                                  vellum_target=evil, now_text="2026-10-11T00:05:00Z", write=True)
+            lock, mapping, cursor, budgets = observatory.validate_lock_map_cursor(root)
+            event = observatory.observation_for_commit(
+                source="vellum", repository="Generous-Corp/vellum", repo=vellum, commit=covered,
+                cursor_from=str(cursor["vellum"]["scan_base_commit"]), cursor_to=evil,
+                discovered_at="2026-10-11T00:05:00Z", mappings=mapping["mappings"],
+                transitive_rules=mapping.get("transitive_path_rules", []))
+            self.assertIsNotNone(event)
+            observatory.verify_event_against_git(event, "vellum", vellum, mapping["mappings"],
+                                                 mapping.get("transitive_path_rules", []))
+
+    def _branch_with_main_merged(self, top: Path):
+        """`_coverage_state` plus a later mapped commit on main that the branch merged."""
+        pulp, vellum, root, pulp_head, main, feature = self._coverage_state(top)
+        run(vellum, "git", "checkout", "-q", "main")
+        write(vellum / "graphics/shared.cpp", "int shared = 2;\n")
+        main_later = commit_all(vellum, "main lands a mapped change after the cursor")
+        run(vellum, "git", "checkout", "-q", "feature")
+        run(vellum, "git", "merge", "--no-edit", "main")
+        head = run(vellum, "git", "rev-parse", "HEAD")
+        return pulp, vellum, root, pulp_head, main_later, feature, head
+
+    def _cli_reconcile(self, root: Path, pulp: Path, vellum: Path, pulp_target: str, vellum_target: str,
+                       *extra: str) -> tuple[int, str]:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            code = observatory.main([
+                "--root", str(root), "reconcile", "--pulp-repo", str(pulp), "--vellum-repo", str(vellum),
+                "--pulp-target", pulp_target, "--vellum-target", vellum_target,
+                "--now", "2026-10-11T00:05:00Z", "--write", *extra,
+            ])
+        return code, err.getvalue()
+
+    def _event_files(self, root: Path) -> set[str]:
+        return {path.name for path in (root / observatory.EVENTS_PATH).glob("*.yaml")}
+
+    def test_events_only_on_the_command_line_records_only_the_branchs_commits_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main_later, feature, head = self._branch_with_main_merged(
+                Path(temporary))
+            run(vellum, "git", "update-ref", observatory.VELLUM_MAIN_REF, main_later)
+            before = self._event_files(root)
+            code, err = self._cli_reconcile(root, pulp, vellum, pulp_head, head, "--events-only")
+            self.assertEqual(code, 0, err)
+            added = self._event_files(root) - before
+            self.assertIn(f"vellum-{feature}.yaml", added)
+            self.assertNotIn(f"vellum-{main_later}.yaml", added)
+
+    def test_events_only_records_mains_commits_only_when_asked(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main_later, feature, head = self._branch_with_main_merged(
+                Path(temporary))
+            run(vellum, "git", "update-ref", observatory.VELLUM_MAIN_REF, main_later)
+            code, err = self._cli_reconcile(root, pulp, vellum, pulp_head, head, "--events-only",
+                                            "--include-main-commits")
+            self.assertEqual(code, 0, err)
+            self.assertIn(f"vellum-{main_later}.yaml", self._event_files(root))
+            self.assertIn(f"vellum-{feature}.yaml", self._event_files(root))
+
+    def test_events_only_without_origin_main_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main_later, feature, head = self._branch_with_main_merged(
+                Path(temporary))
+            before = self._event_files(root)
+            code, err = self._cli_reconcile(root, pulp, vellum, pulp_head, head, "--events-only")
+            self.assertEqual(code, 1)
+            self.assertIn("cannot resolve origin/main", err)
+            self.assertEqual(self._event_files(root), before)  # nothing written
+            # An explicit main still works without the remote ref.
+            code, err = self._cli_reconcile(root, pulp, vellum, pulp_head, head, "--events-only",
+                                            "--vellum-main", main_later)
+            self.assertEqual(code, 0, err)
+            self.assertNotIn(f"vellum-{main_later}.yaml", self._event_files(root))
+
+    def test_a_full_reconcile_needs_the_receivers_flag_and_is_otherwise_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main_later, feature, head = self._branch_with_main_merged(
+                Path(temporary))
+            run(vellum, "git", "checkout", "-q", "main")
+            cursor_before = (root / observatory.CURSOR_PATH).read_bytes()
+            before = self._event_files(root)
+            code, err = self._cli_reconcile(root, pulp, vellum, pulp_head, main_later)
+            self.assertEqual(code, 1)
+            self.assertIn("--include-main-commits", err)
+            self.assertEqual((root / observatory.CURSOR_PATH).read_bytes(), cursor_before)
+            self.assertEqual(self._event_files(root), before)
+            # With the flag, the receiver's reconcile writes exactly what the
+            # function always did, and needs no origin/main.
+            twin = Path(temporary) / "twin"
+            shutil.copytree(root, twin)
+            code, err = self._cli_reconcile(root, pulp, vellum, pulp_head, main_later, "--include-main-commits")
+            self.assertEqual(code, 0, err)
+            observatory.reconcile(root=twin, pulp_repo=pulp, vellum_repo=vellum, pulp_target=pulp_head,
+                                  vellum_target=main_later, now_text="2026-10-11T00:05:00Z", write=True)
+            for relative in (observatory.CURSOR_PATH, observatory.REPORT_JSON_PATH):
+                self.assertEqual((root / relative).read_bytes(), (twin / relative).read_bytes())
+            self.assertEqual(self._event_files(root), self._event_files(twin))
+            self.assertIn(f"vellum-{main_later}.yaml", self._event_files(root))
+
+    def test_the_receiver_passes_the_include_main_commits_flag(self) -> None:
+        workflow = (Path(__file__).resolve().parents[2]
+                    / ".github/workflows/pulp-observatory-receiver.yml").read_text(encoding="utf-8")
+        reconcile = workflow[workflow.index("observatory.py reconcile"):]
+        reconcile = reconcile[:reconcile.index("--output")]
+        self.assertIn("--include-main-commits", reconcile)
+        self.assertNotIn("--events-only", reconcile)
+
+    def test_vellum_main_and_include_main_commits_are_exclusive(self) -> None:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = observatory.main([
+                "reconcile", "--pulp-repo", ".", "--vellum-repo", ".", "--pulp-target", "x",
+                "--vellum-target", "y", "--now", "2026-10-11T00:00:00Z", "--write", "--events-only",
+                "--vellum-main", "z", "--include-main-commits",
+            ])
+        self.assertEqual(code, 1)
+        self.assertIn("are exclusive", err.getvalue())
 
     def test_verify_without_a_git_base_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1743,7 +1935,7 @@ class ObservatoryTests(unittest.TestCase):
             with self.assertRaisesRegex(observatory.ObservatoryError, "unknown time-budget mode"):
                 observatory.verify(**arguments, check_now=later, time_budgets="ignore")
             # The watchdog's tracking issue lists exactly these overdue events.
-            sys.path.insert(0, str(Path(observatory.__file__).parent))
+            sys.path.append(str(Path(observatory.__file__).parent))
             import overdue_events  # noqa: PLC0415
             self.assertEqual(overdue_events.overdue(root, discovered)["overdue"], [])
             summary = overdue_events.overdue(root, later)

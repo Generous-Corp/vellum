@@ -7,9 +7,11 @@ import copy
 import json
 import tempfile
 import unittest
+import sys
 from pathlib import Path
 
-import verify_downstream_consumers as verifier
+sys.path.append(str(Path(__file__).resolve().parent))  # -I drops the script dir; append keeps the standard library first
+import verify_downstream_consumers as verifier  # noqa: E402
 
 
 class DownstreamConsumerRegistryTests(unittest.TestCase):
