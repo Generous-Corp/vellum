@@ -382,6 +382,11 @@ def coverage_gaps(
                 continue
             event = observations.get((repository, commit))
             if event is None:
+                if source == "vellum" and integration_merge_covered(repo, commit, mappings, rules):
+                    # An integration merge that adds nothing beyond its two
+                    # sides is covered by their own events; reconcile records
+                    # none for it (see reconcile).
+                    continue
                 gaps.append({"source": source, "commit": commit, "reason": "mapped-commit-has-no-event"})
             else:
                 verify_event_against_git(event, source, repo, mappings, rules)
@@ -1393,6 +1398,16 @@ def reconcile(
             discovered_at=now_text, mappings=mappings, transitive_rules=rules,
         ):
             key = (repository, str(event["source_commit"]))
+            if (
+                source == "vellum" and key not in observations
+                and integration_merge_covered(repo, str(event["source_commit"]), mappings, rules)
+            ):
+                # A Vellum integration merge that adds nothing beyond its two
+                # sides needs no event of its own: coverage_gaps accepts it on
+                # the sides' events, in the reconciled range and in the tail.
+                # Recording one only adds a pending observation someone must
+                # classify as superseded.
+                continue
             if (
                 events_only and source == "vellum" and vellum_main is not None
                 and key not in observations
