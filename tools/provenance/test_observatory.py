@@ -687,7 +687,7 @@ class ObservatoryTests(unittest.TestCase):
                 observatory.ObservatoryError, "health budgets failed"
             ) as raised:
                 observatory.verify(
-                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                     pulp_target=pulp_head, vellum_target=feature,
                     vellum_tail_policy="coverage",
                 )
@@ -698,7 +698,7 @@ class ObservatoryTests(unittest.TestCase):
             # are only reported, as they are on pull requests.
             with self.assertRaisesRegex(observatory.ObservatoryError, "cursor-event-coverage-gap"):
                 observatory.verify(
-                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                     pulp_target=pulp_head, vellum_target=feature,
                     vellum_tail_policy="coverage", time_budgets="report",
                 )
@@ -713,7 +713,7 @@ class ObservatoryTests(unittest.TestCase):
             # the tail is not evidence-only.
             with self.assertRaisesRegex(observatory.ObservatoryError, "evidence tail"):
                 observatory.verify(
-                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                     pulp_target=pulp_head, vellum_target=feature,
                 )
 
@@ -729,7 +729,7 @@ class ObservatoryTests(unittest.TestCase):
             self.assertEqual((root / observatory.REPORT_JSON_PATH).read_bytes(), report_before)
 
             report = observatory.verify(
-                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                 pulp_target=pulp_head, vellum_target=feature,
                 vellum_tail_policy="coverage",
             )
@@ -738,7 +738,7 @@ class ObservatoryTests(unittest.TestCase):
             # The #56 main-head hint is ancestry-only under Option A; a
             # lagging main tail is not required to be evidence-only.
             report = observatory.verify(
-                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                 pulp_target=pulp_head, vellum_target=feature,
                 vellum_tail_policy="coverage", vellum_pr_main=main,
             )
@@ -746,7 +746,7 @@ class ObservatoryTests(unittest.TestCase):
             # Still not acceptable to the reconciled policy: nothing relaxed there.
             with self.assertRaisesRegex(observatory.ObservatoryError, "evidence tail"):
                 observatory.verify(
-                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                     pulp_target=pulp_head, vellum_target=feature,
                 )
 
@@ -814,7 +814,7 @@ class ObservatoryTests(unittest.TestCase):
                 resolution,
             )
             report = observatory.verify(
-                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                 pulp_target=pulp_head, vellum_target=feature,
                 vellum_tail_policy="coverage",
             )
@@ -847,7 +847,7 @@ class ObservatoryTests(unittest.TestCase):
             queued = run(vellum, "git", "rev-parse", "HEAD")
             self.assertTrue(observatory.integration_merge_covered(vellum, queued))
             report = observatory.verify(
-                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                 pulp_target=pulp_head, vellum_target=queued,
                 vellum_tail_policy="coverage",
             )
@@ -870,7 +870,7 @@ class ObservatoryTests(unittest.TestCase):
             self.assertFalse(observatory.integration_merge_covered(vellum, resolved))
             with self.assertRaisesRegex(observatory.ObservatoryError, "health budgets failed"):
                 observatory.verify(
-                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                     pulp_target=pulp_head, vellum_target=resolved,
                     vellum_tail_policy="coverage",
                 )
@@ -881,7 +881,7 @@ class ObservatoryTests(unittest.TestCase):
                 now_text="2026-10-11T00:07:00Z", write=True, events_only=True,
             )
             report = observatory.verify(
-                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                 pulp_target=pulp_head, vellum_target=resolved,
                 vellum_tail_policy="coverage",
             )
@@ -908,7 +908,7 @@ class ObservatoryTests(unittest.TestCase):
             self.assertFalse(observatory.integration_merge_covered(vellum, smuggled))
             with self.assertRaisesRegex(observatory.ObservatoryError, "health budgets failed"):
                 observatory.verify(
-                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                     pulp_target=pulp_head, vellum_target=smuggled,
                     vellum_tail_policy="coverage",
                 )
@@ -960,7 +960,7 @@ class ObservatoryTests(unittest.TestCase):
             run(vellum, "git", "merge", "-q", "--no-ff", "second", "-m", "land second")
             moved = run(vellum, "git", "rev-parse", "HEAD")
             report = observatory.verify(
-                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                 pulp_target=pulp_head, vellum_target=moved,
                 vellum_tail_policy="coverage",
             )
@@ -1014,7 +1014,7 @@ class ObservatoryTests(unittest.TestCase):
             # gap names it and the author must make the revert an explicit commit.
             with self.assertRaisesRegex(observatory.ObservatoryError, "health budgets failed") as raised:
                 observatory.verify(
-                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                     pulp_target=pulp_head, vellum_target=reverting,
                     vellum_tail_policy="coverage",
                 )
@@ -1051,7 +1051,7 @@ class ObservatoryTests(unittest.TestCase):
             self.assertFalse(observatory.integration_merge_covered(vellum, queue_shaped))
             with self.assertRaisesRegex(observatory.ObservatoryError, "health budgets failed"):
                 observatory.verify(
-                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                     pulp_target=pulp_head, vellum_target=queue_shaped,
                     vellum_tail_policy="coverage",
                 )
@@ -1062,7 +1062,7 @@ class ObservatoryTests(unittest.TestCase):
             )
             self.assertTrue((root / observatory.EVENTS_PATH / f"vellum-{queue_shaped}.yaml").is_file())
             report = observatory.verify(
-                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                 pulp_target=pulp_head, vellum_target=queue_shaped,
                 vellum_tail_policy="coverage",
             )
@@ -1120,7 +1120,7 @@ class ObservatoryTests(unittest.TestCase):
                     self.assertFalse(observatory.integration_merge_covered(vellum, merge))
                     with self.assertRaisesRegex(observatory.ObservatoryError, "health budgets failed"):
                         observatory.verify(
-                            root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                            root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                             pulp_target=pulp_head, vellum_target=merge,
                             vellum_tail_policy="coverage",
                         )
@@ -1157,7 +1157,7 @@ class ObservatoryTests(unittest.TestCase):
             queue = run(vellum, "git", "rev-parse", "HEAD")
             self.assertTrue(observatory.integration_merge_covered(vellum, queue))
             report = observatory.verify(
-                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                 pulp_target=pulp_head, vellum_target=queue, vellum_tail_policy="coverage",
             )
             self.assertEqual(report["coverage_gaps"], [])
@@ -1243,7 +1243,7 @@ class ObservatoryTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(observatory.ObservatoryError, "health budgets failed"):
                 observatory.verify(
-                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                     pulp_target=pulp_head, vellum_target=reverting,
                     vellum_tail_policy="coverage",
                 )
@@ -1255,7 +1255,7 @@ class ObservatoryTests(unittest.TestCase):
                 observatory.integration_merge_covered(vellum, clean, mapping["mappings"], rules)
             )
             report = observatory.verify(
-                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                 pulp_target=pulp_head, vellum_target=clean, vellum_tail_policy="coverage",
             )
             self.assertEqual(report["coverage_gaps"], [])
@@ -1279,7 +1279,7 @@ class ObservatoryTests(unittest.TestCase):
             queued = run(vellum, "git", "rev-parse", "HEAD")
             self.assertTrue(observatory.integration_merge_covered(vellum, queued))
             report = observatory.verify(
-                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                 pulp_target=pulp_head, vellum_target=queued,
                 vellum_tail_policy="coverage",
             )
@@ -1324,7 +1324,7 @@ class ObservatoryTests(unittest.TestCase):
             self.assertTrue(observatory.integration_merge_covered(vellum, q1, mapping["mappings"], rules))
             self.assertTrue(observatory.integration_merge_covered(vellum, q2, mapping["mappings"], rules))
             report = observatory.verify(
-                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                 pulp_target=pulp_head, vellum_target=q2,
                 vellum_tail_policy="coverage",
             )
@@ -1356,14 +1356,14 @@ class ObservatoryTests(unittest.TestCase):
             run(vellum, "git", "merge", "-q", "--no-ff", "b", "-m", "refs/pull/B/merge")
             merge_ref = run(vellum, "git", "rev-parse", "HEAD")
             report = observatory.verify(
-                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                 pulp_target=pulp_head, vellum_target=merge_ref,
                 vellum_tail_policy="coverage",
             )
             self.assertEqual(report["coverage_gaps"], [])
             with self.assertRaisesRegex(observatory.ObservatoryError, "stale|outside"):
                 observatory.verify(
-                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                     pulp_target=pulp_head, vellum_target=b_head,
                     vellum_tail_policy="coverage",
                 )
@@ -1390,7 +1390,7 @@ class ObservatoryTests(unittest.TestCase):
             self.assertFalse(observatory.integration_merge_covered(vellum, edited))
             with self.assertRaisesRegex(observatory.ObservatoryError, "health budgets failed"):
                 observatory.verify(
-                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
                     pulp_target=pulp_head, vellum_target=edited,
                     vellum_tail_policy="coverage",
                 )
@@ -1419,7 +1419,7 @@ class ObservatoryTests(unittest.TestCase):
             common = [
                 "--root", str(root), "verify", "--pulp-repo", str(pulp),
                 "--vellum-repo", str(vellum), "--pulp-target", pulp_head,
-                "--vellum-target", feature, "--now", "2026-10-11T00:05:00Z",
+                "--vellum-target", feature, "--now", "2026-10-11T00:05:00Z", "--no-git-base",
             ]
             self.assertEqual(observatory.main(common), 1)
             self.assertEqual(observatory.main(common + ["--vellum-tail-policy", "coverage"]), 0)
@@ -1607,7 +1607,7 @@ class ObservatoryTests(unittest.TestCase):
                 root=root,
                 pulp_repo=pulp,
                 vellum_repo=vellum,
-                git_base=None,
+                git_base=None, allow_no_git_base=True,
             )
             self.assertEqual(report["health"], "pass")
             self.assertEqual(report["pending"], 2)
@@ -1627,7 +1627,7 @@ class ObservatoryTests(unittest.TestCase):
                 pulp_target=pulp_head, vellum_target=vellum_head,
                 now_text="2026-07-22T20:00:00Z", write=True,
             )
-            arguments = dict(root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None)
+            arguments = dict(root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True)
             at_reconcile = observatory.parse_utc("2026-07-22T20:00:00Z", "now")
             self.assertEqual(observatory.verify(**arguments, check_now=at_reconcile)["health"], "pass")
             # Without check_now the budgets are judged at reconciled_at, as before.
@@ -1636,7 +1636,7 @@ class ObservatoryTests(unittest.TestCase):
             later = observatory.parse_utc("2027-07-22T20:00:00Z", "now")
             with self.assertRaisesRegex(observatory.ObservatoryError, "overdue-event-count-exceeded"):
                 observatory.verify(**arguments, check_now=later)
-            cli = ["--root", str(root), "verify", "--pulp-repo", str(pulp), "--vellum-repo", str(vellum)]
+            cli = ["--root", str(root), "verify", "--pulp-repo", str(pulp), "--vellum-repo", str(vellum), "--no-git-base"]
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(observatory.main([*cli, "--now", "2026-07-22T20:00:00Z"]), 0)
                 self.assertNotEqual(observatory.main([*cli, "--now", "2027-07-22T20:00:00Z"]), 0)
@@ -1687,7 +1687,7 @@ class ObservatoryTests(unittest.TestCase):
                                    check_now=later, time_budgets="report")
             # Without a base to tell them apart, nothing is relaxed.
             with self.assertRaisesRegex(observatory.ObservatoryError, "overdue-event-count-exceeded"):
-                observatory.verify(**{**arguments, "git_base": None},
+                observatory.verify(**{**arguments, "git_base": None, "allow_no_git_base": True},
                                    check_now=later, time_budgets="report")
             # Budgets that are not about time stay fatal under report.
             real_build_report = observatory.build_report
@@ -1775,7 +1775,7 @@ class ObservatoryTests(unittest.TestCase):
                 root=root,
                 pulp_repo=pulp,
                 vellum_repo=vellum,
-                git_base=None,
+                git_base=None, allow_no_git_base=True,
             )
             self.assertEqual(report["health"], "pass")
             self.assertEqual(report["coverage_gaps"], [])
@@ -2179,7 +2179,7 @@ class OwnCommitEventTests(unittest.TestCase):
         patterns = sorted(p.strip().rstrip("|").strip() for p in block.split("in", 1)[1].split("|\\\n") if p.strip())
         patterns = sorted(item.strip() for chunk in patterns for item in chunk.split("|") if item.strip())
         self.assertEqual(patterns, sorted([
-            *observatory.EVIDENCE_ONLY_PATHS,
+            *observatory.EVIDENCE_MODIFIED_PATHS,
             observatory.EVENTS_PATH.as_posix() + "/*.yaml",
         ]))
         for path in patterns:
@@ -2187,6 +2187,68 @@ class OwnCommitEventTests(unittest.TestCase):
             self.assertTrue(observatory.is_evidence_path(probe), probe)
         self.assertFalse(observatory.is_evidence_path("provenance/pulp-observatory/events/x/y.yaml"))
         self.assertFalse(observatory.is_evidence_path("provenance/pulp-observatory/receiver-policy.json"))
+
+    def test_cursor_moved_onto_an_off_main_commit_it_records_is_refused(self) -> None:
+        # The boundary-review repro: evidence-only, the cursor moved from
+        # main onto a branch commit, and an event for that branch commit.
+        # Leaving the cursor alone is refused too (the control).
+        run(self.root, "git", "checkout", "-q", "-b", "feature", self.base)
+        write(self.root / "graphics/render.cpp", "int f;\n")
+        run(self.root, "git", "commit", "-am", "an off-main branch commit")
+        off_main = run(self.root, "git", "rev-parse", "HEAD")
+        for move in (True, False):
+            with self.subTest(move_cursor=move):
+                run(self.root, "git", "checkout", "-q", "-f", "-B", "evidence", self.base)
+                if move:
+                    self.write_cursor(off_main)
+                self.add_event(off_main)
+                self.commit_all("evidence-only: record an off-main commit")
+                with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
+                    self.check()
+
+    def test_cursor_on_a_merged_branch_commit_is_refused(self) -> None:
+        # An ancestor of main that main never held as its tip: a commit of a
+        # merged branch. The receiver only moves the cursor along main's
+        # first-parent line.
+        run(self.root, "git", "checkout", "-q", "-b", "merged", self.base)
+        write(self.root / "graphics/merged.cpp", "int m;\n")
+        run(self.root, "git", "add", ".")
+        run(self.root, "git", "commit", "-m", "a branch commit main merges")
+        merged = run(self.root, "git", "rev-parse", "HEAD")
+        run(self.root, "git", "checkout", "-q", "main")
+        run(self.root, "git", "merge", "--no-ff", "--no-edit", "merged")
+        self.base = run(self.root, "git", "rev-parse", "HEAD")
+        run(self.root, "git", "checkout", "-q", "-b", "automation/pulp-observatory-coalesced", self.base)
+        self.write_cursor(merged)
+        self.add_event(self.main_change)
+        self.commit_all("move the cursor to a merged branch commit")
+        with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
+            self.check()
+        # Control: the same events with the cursor at main's tip pass.
+        self.write_cursor(self.base)
+        self.commit_all("move the cursor to main's tip")
+        self.check()
+
+    def test_missing_git_base_fails_closed(self) -> None:
+        own = self.branch_commit()
+        self.add_event(own)
+        self.commit_all("record the branch's own observation")
+        events = [(path, json.loads(path.read_text()))
+                  for path in sorted((self.root / observatory.EVENTS_PATH).glob("*.yaml"))]
+        cursor = json.loads((self.root / observatory.CURSOR_PATH).read_text())
+        with self.assertRaisesRegex(observatory.ObservatoryError, "needs --git-base"):
+            observatory.verify_new_event_sources(self.root, None, events, cursor, vellum_repo=self.root)
+        observatory.verify_new_event_sources(self.root, None, events, cursor, vellum_repo=self.root,
+                                             allow_no_git_base=True)
+
+    def test_receivers_own_verify_before_committing_passes(self) -> None:
+        # pulp-observatory-receiver.yml reconciles main, then verifies with
+        # --git-base HEAD before it commits: the advanced cursor and the new
+        # events are still in the working tree.
+        run(self.root, "git", "checkout", "-q", self.base)
+        self.write_cursor(self.base)
+        self.add_event(self.main_change)
+        self.check()
 
     def test_branch_name_alone_earns_no_exemption(self) -> None:
         # The coalescing branch name with an events-only reconcile (no cursor

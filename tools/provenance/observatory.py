@@ -588,17 +588,29 @@ def _is_exact_authority_reconciliation(
     )
 
 
+# The observatory evidence an evidence-only change may touch: these three
+# files, modified, plus event files added directly under EVENTS_PATH. It is
+# the one definition for the evidence-tail check and the own-commit event
+# check, and the observatory receiver's "Prepare the evidence-only
+# coalescing PR" step holds the same list (test_observatory pins the two).
+EVIDENCE_MODIFIED_PATHS = frozenset({
+    CURSOR_PATH.as_posix(),
+    REPORT_JSON_PATH.as_posix(),
+    REPORT_MD_PATH.as_posix(),
+})
+
+
+def is_event_file(path: str) -> bool:
+    prefix = EVENTS_PATH.as_posix() + "/"
+    relative = path[len(prefix):] if path.startswith(prefix) else ""
+    return bool(relative) and "/" not in relative and relative.endswith(".yaml")
+
+
 def verify_vellum_observatory_tail(repo: Path, cursor: str, target: str) -> None:
     """Prove that commits after the reconciled source cursor contain evidence only."""
     require_commit(repo, cursor, "cursor.vellum.last_scanned_commit")
     require_commit(repo, target, "requested vellum target")
     require_ancestor(repo, cursor, target, "requested vellum target")
-    allowed_modified = {
-        CURSOR_PATH.as_posix(),
-        REPORT_JSON_PATH.as_posix(),
-        REPORT_MD_PATH.as_posix(),
-    }
-    events_prefix = EVENTS_PATH.as_posix() + "/"
     previous = cursor
     for commit in commits_between(repo, cursor, target):
         parents = git(repo, "rev-list", "--parents", "-n", "1", commit).split()
@@ -630,15 +642,9 @@ def verify_vellum_observatory_tail(repo: Path, cursor: str, target: str) -> None
                     f"Vellum observatory evidence tail forbids rename/copy at {commit}: "
                     f"{entry['old_path']} -> {path}"
                 )
-            if path in allowed_modified and status == "M":
+            if path in EVIDENCE_MODIFIED_PATHS and status == "M":
                 continue
-            relative_event = path[len(events_prefix):] if path.startswith(events_prefix) else ""
-            if (
-                status == "A"
-                and relative_event
-                and "/" not in relative_event
-                and relative_event.endswith(".yaml")
-            ):
+            if status == "A" and is_event_file(path):
                 continue
             raise ObservatoryError(
                 f"Vellum observatory evidence tail contains non-evidence change at "
@@ -983,6 +989,7 @@ def verify(
     vellum_pr_main: str | None = None,
     check_now: datetime | None = None,
     time_budgets: str = "enforce",
+    allow_no_git_base: bool = False,
 ) -> dict[str, object]:
     """Verify the ledger; with `check_now`, judge the health budgets at that time.
 
@@ -1004,7 +1011,8 @@ def verify(
     verify_new_event_times(
         root, git_base, events, pulp_repo=pulp_repo, vellum_repo=vellum_repo, now=check_now,
     )
-    verify_new_event_sources(root, git_base, events, cursor, vellum_repo=vellum_repo)
+    verify_new_event_sources(root, git_base, events, cursor, vellum_repo=vellum_repo,
+                             allow_no_git_base=allow_no_git_base)
     gaps = coverage_gaps(
         root=root, mapping=mapping, cursor=cursor, events=events,
         pulp_repo=pulp_repo, vellum_repo=vellum_repo,
@@ -1157,20 +1165,8 @@ def verify_new_event_times(
             )
 
 
-# The paths an evidence-only reconciliation may change: the shape the
-# observatory receiver's coalescing pull request is held to.
-EVIDENCE_ONLY_PATHS = (
-    CURSOR_PATH.as_posix(),
-    REPORT_JSON_PATH.as_posix(),
-    REPORT_MD_PATH.as_posix(),
-)
-
-
 def is_evidence_path(path: str) -> bool:
-    return path in EVIDENCE_ONLY_PATHS or (
-        path.startswith(EVENTS_PATH.as_posix() + "/") and path.endswith(".yaml")
-        and "/" not in path[len(EVENTS_PATH.as_posix()) + 1:]
-    )
+    return path in EVIDENCE_MODIFIED_PATHS or is_event_file(path)
 
 
 def commit_exists(root: Path, commit: str) -> bool:
@@ -1182,6 +1178,7 @@ def commit_exists(root: Path, commit: str) -> bool:
 def verify_new_event_sources(
     root: Path, git_base: str | None, events: list[tuple[Path, dict[str, object]]],
     cursor: dict[str, object], *, vellum_repo: Path | None = None,
+    allow_no_git_base: bool = False,
 ) -> None:
     """A change records Vellum observations only for its own commits.
 
@@ -1200,7 +1197,12 @@ def verify_new_event_sources(
     only when the observed Vellum history is this checkout's.
     """
     if git_base is None:
-        return
+        if allow_no_git_base:
+            return
+        raise ObservatoryError(
+            "verify needs --git-base to tell the observations a change adds from those "
+            "already on its base; pass --no-git-base only for a local check"
+        )
     if vellum_repo is not None and vellum_repo.resolve() != root.resolve():
         return
     new_ids = new_event_ids(root, git_base, events)
@@ -1238,7 +1240,13 @@ def verify_new_event_sources(
             and is_ancestor(root, start, end)
             and is_ancestor(root, end, git_base)
         ):
-            advanced = set(commits_between(root, start, end))
+            # Both ends must be positions main itself held: the receiver only
+            # ever moves the cursor to a main tip, which lies on main's
+            # first-parent line. A merged branch commit is an ancestor of main
+            # but was never main's tip.
+            mainline = set(git(root, "rev-list", "--first-parent", git_base).splitlines())
+            if start in mainline and end in mainline:
+                advanced = set(commits_between(root, start, end))
     refused = sorted(
         f"{event['event_id']} ({event['source_commit']})"
         for event in foreign if str(event["source_commit"]) not in advanced
@@ -1450,6 +1458,10 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     verify_parser.add_argument("--output", type=Path)
+    verify_parser.add_argument(
+        "--no-git-base", action="store_true",
+        help="local check only: verify without a git base, so the own-commit event rule cannot run",
+    )
     reconcile_parser = subparsers.add_parser("reconcile")
     reconcile_parser.add_argument("--pulp-repo", type=Path, required=True)
     reconcile_parser.add_argument("--vellum-repo", type=Path, required=True)
@@ -1472,6 +1484,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         root = args.root.resolve()
         if args.command == "verify":
+            if args.no_git_base and args.git_base:
+                raise ObservatoryError("--no-git-base and --git-base are exclusive")
             result = verify(
                 root=root,
                 pulp_repo=args.pulp_repo.resolve() if args.pulp_repo else None,
@@ -1487,6 +1501,7 @@ def main(argv: list[str] | None = None) -> int:
                     else datetime.now(timezone.utc).replace(microsecond=0)
                 ),
                 time_budgets=args.time_budgets,
+                allow_no_git_base=args.no_git_base,
             )
         else:
             if args.events_only and not args.write:
