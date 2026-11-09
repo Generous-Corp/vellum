@@ -332,6 +332,8 @@ class OpenPullRequestTests(unittest.TestCase):
 
     def test_release_bump_evidence_records_each_vellum_head_and_patch(self) -> None:
         listed = pull(188, sha("a"), sha("b"))
+        listed["head"] |= {"ref": "automation/version-bump", "repo": {"full_name": "Generous-Corp/vellum"}}
+        listed["base"] |= {"ref": "main"}
         unchanged = tree([blob("a.txt", sha("1"))])
         self.fixture.add_pages("Generous-Corp/vellum", [[listed]])
         self.fixture.add_pull("Generous-Corp/vellum", listed, unchanged, unchanged)
@@ -354,7 +356,8 @@ class OpenPullRequestTests(unittest.TestCase):
         self.assertEqual(evidence["schema"], "vellum.release-bump-evidence.v1")
         self.assertEqual(evidence["repository"], "Generous-Corp/vellum")
         self.assertEqual(evidence["pulls"], [{
-            "number": 188, "base_commit": sha("a"), "head_commit": sha("b"),
+            "number": 188, "base_commit": sha("a"), "base_ref": "main", "head_commit": sha("b"),
+            "head_ref": "automation/version-bump", "head_repository": "Generous-Corp/vellum",
             "head_parents": [sha("a")], "head_author": bot, "head_committer": bot,
             "head_message": "chore(release): bump",
             "files": [{"filename": "CMakeLists.txt", "status": "modified",

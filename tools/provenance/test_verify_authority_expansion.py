@@ -1653,7 +1653,8 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             {"filename": "scripts/INSTALLER_SHA256SUMS", "status": "modified",
              "patch": "@@ -2 +2 @@\n-" + "5" * 64 + "  install.sh\n+" + "b" * 64 + "  install.sh"},
         ]
-        evidence = {"number": 188, "base_commit": base, "head_commit": head,
+        evidence = {"number": 188, "base_commit": base, "base_ref": "main", "head_commit": head,
+                    "head_ref": "automation/version-bump", "head_repository": "Generous-Corp/vellum",
                     "head_parents": [base], "head_author": dict(verifier.RELEASE_BUMP_BOT),
                     "head_committer": dict(verifier.RELEASE_BUMP_BOT),
                     "head_message": "chore(release): bump version to 0.1.11", "files": files}
@@ -1685,6 +1686,9 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             "a second commit": evidence | {"head_parents": ["c" * 40]},
             "a merge commit": evidence | {"head_parents": [evidence["base_commit"], "c" * 40]},
             "another author": evidence | {"head_author": {"name": "someone", "email": "a@b.c"}},
+            "a fork head": evidence | {"head_repository": "someone/vellum"},
+            "another branch name": evidence | {"head_ref": "automation/version-bump-2"},
+            "another base branch": evidence | {"base_ref": "release"},
             "another committer": evidence | {"head_committer": {"name": "someone", "email": "a@b.c"}},
             "another file": evidence | {"files": files + [
                 {"filename": "scripts/release_request.py", "status": "modified",
@@ -1700,6 +1704,8 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             "an added file": with_file(0, status="added"),
             "another head": evidence | {"head_commit": "9" * 40},
         }
+        violations["a forged bot commit that changes code"] = with_file(
+            1, patch="@@ -9 +9 @@\n-            check_signature()\n+            pass")
         for label, broken in violations.items():
             with self.subTest(violation=label):
                 broken_pull = pull | {"paths": sorted(row["filename"] for row in broken["files"])}

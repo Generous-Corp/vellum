@@ -157,6 +157,9 @@ RETIRED_OPEN_PR_REPOSITORIES = frozenset({"Generous-Corp/pulp", "Generous-Corp/v
 # an unaccepted overlap. scripts/version_at_land.py owns this file list; a
 # test fails if the two drift.
 RELEASE_BUMP_REPOSITORY = "Generous-Corp/vellum"
+# version-at-land.yml's BUMP_BRANCH, pushed to this repository, targeting main.
+RELEASE_BUMP_BRANCH = "automation/version-bump"
+RELEASE_BUMP_BASE = "main"
 RELEASE_BUMP_BOT = {
     "name": "vellum-version-at-land",
     "email": "vellum-version-at-land@users.noreply.github.com",
@@ -1584,6 +1587,14 @@ def release_bump_problems(
         return ["no content evidence for this pull request"]
     if evidence.get("head_commit") != head_commit or evidence.get("base_commit") != base_commit:
         return ["content evidence names another head or base"]
+    # Identity first: which branch, from which repository, into which base.
+    # It is checked, but proves nothing alone; the content checks below do.
+    if evidence.get("head_repository") != RELEASE_BUMP_REPOSITORY:
+        problems.append("head is not a branch of this repository (a fork)")
+    if evidence.get("head_ref") != RELEASE_BUMP_BRANCH:
+        problems.append(f"head branch is not {RELEASE_BUMP_BRANCH}")
+    if evidence.get("base_ref") != RELEASE_BUMP_BASE:
+        problems.append(f"base branch is not {RELEASE_BUMP_BASE}")
     if evidence.get("head_parents") != [base_commit]:
         problems.append("head is not exactly one commit on the pull request's base")
     if evidence.get("head_author") != RELEASE_BUMP_BOT:

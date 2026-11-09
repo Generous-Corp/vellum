@@ -195,7 +195,10 @@ def release_bump_evidence(snapshot_root: Path) -> dict[str, Any]:
         rows.append({
             "number": number,
             "base_commit": detail["base"]["sha"],
+            "base_ref": detail["base"].get("ref"),
             "head_commit": detail["head"]["sha"],
+            "head_ref": detail["head"].get("ref"),
+            "head_repository": (detail["head"].get("repo") or {}).get("full_name"),
             "head_parents": [parent.get("sha") for parent in head.get("parents", [])],
             "head_author": {key: head.get("author", {}).get(key) for key in ("name", "email")},
             "head_committer": {key: head.get("committer", {}).get(key) for key in ("name", "email")},

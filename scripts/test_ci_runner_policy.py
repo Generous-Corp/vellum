@@ -237,7 +237,7 @@ PULP_API_READER_SHA256 = "f18636adfbe9a999aa0a2b006fcce61effa48865f253dd9d3fabc5
 # the script is part of the reader: it is pinned byte for byte like the step
 # and must carry no transport of its own (every read stays a gh call above).
 PULP_API_READER_COLLECTOR = ROOT / "tools" / "provenance" / "collect_release_evidence.py"
-PULP_API_READER_COLLECTOR_SHA256 = "2c99c0e64fa65299b7aae85a6ed805a9d234eebc07fa3521488f5416a02e3677"
+PULP_API_READER_COLLECTOR_SHA256 = "f94e893d9fd41fa42c6dfd17594a18eee9398f0d8172461944c5ee30f6de3d98"
 # Every reader line that names Pulp, stripped, verbatim. A new line naming
 # Pulp (an anchor, an env export, a command through a variable) fails.
 PULP_API_READER_PULP_LINES = {
