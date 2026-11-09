@@ -17,7 +17,7 @@ import subprocess
 import sys
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    sys.path.append(str(Path(__file__).resolve().parent))
 
 if __package__:
     from .observatory_common import (
@@ -1312,7 +1312,9 @@ def describe_coverage_gaps(gaps: list[dict[str, str]], cursor: dict[str, object]
             " --pulp-repo <pulp-checkout> --vellum-repo ."
             f" --pulp-target {(cursor.get('pulp') or {}).get('last_scanned_commit', '<committed-pulp-cursor-sha>')}"
             " --vellum-target <exact-pr-head-sha> --now <utc-timestamp>"
-            " --write --events-only --vellum-main <current-vellum-main-sha>"
+            " --write --events-only"
+            "\n(after `git fetch origin main`: commits already on origin/main are left to"
+            " main's receiver)"
         )
     if ("pulp", "mapped-commit-after-reconciled-cursor") in reasons:
         lines.append(
@@ -1328,6 +1330,26 @@ def describe_coverage_gaps(gaps: list[dict[str, str]], cursor: dict[str, object]
             " not show; make that change an explicit commit on the branch."
         )
     return "".join(lines)
+
+
+VELLUM_MAIN_REF = "refs/remotes/origin/main"
+
+
+def resolve_vellum_main(repo: Path) -> str:
+    """The commit `origin/main` names in `repo`, for an events-only reconcile.
+
+    A branch records observations for its own commits only, so the commits
+    already on main must be known. Without origin/main they are not, and
+    recording every commit in range is exactly the mistake this prevents."""
+    try:
+        return git(repo, "rev-parse", "--verify", "--quiet", f"{VELLUM_MAIN_REF}^{{commit}}")
+    except ObservatoryError:
+        raise ObservatoryError(
+            f"cannot resolve origin/main in {repo}: an events-only reconcile records only the"
+            " branch's own commits and needs main to tell them apart. Run `git fetch origin main`,"
+            " or pass --vellum-main <sha>; the receiver, which records main's commits, passes"
+            " --include-main-commits"
+        ) from None
 
 
 def reconcile(
@@ -1483,8 +1505,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     reconcile_parser.add_argument(
         "--vellum-main",
-        help="with --events-only, the current Vellum main commit: observations of commits "
-        "already on it are left to main's own receiver",
+        help="with --events-only, the current Vellum main commit (default: origin/main in "
+        "--vellum-repo): observations of commits already on it are left to main's own receiver",
+    )
+    reconcile_parser.add_argument(
+        "--include-main-commits",
+        action="store_true",
+        help="record observations of commits already on Vellum main too. The receiver passes "
+        "it; a full reconcile (without --events-only) requires it",
     )
     reconcile_parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
@@ -1515,6 +1543,17 @@ def main(argv: list[str] | None = None) -> int:
                 raise ObservatoryError("--events-only requires --write")
             if args.vellum_main and not args.events_only:
                 raise ObservatoryError("--vellum-main applies only with --events-only")
+            if args.vellum_main and args.include_main_commits:
+                raise ObservatoryError("--vellum-main and --include-main-commits are exclusive")
+            if not args.events_only and not args.include_main_commits:
+                raise ObservatoryError(
+                    "a full reconcile records Vellum main's own commits and advances the cursor;"
+                    " only the receiver runs it, with --include-main-commits. A branch records"
+                    " its own commits with --write --events-only"
+                )
+            vellum_main = args.vellum_main
+            if args.events_only and not args.include_main_commits and vellum_main is None:
+                vellum_main = resolve_vellum_main(args.vellum_repo.resolve())
             result = reconcile(
                 root=root,
                 pulp_repo=args.pulp_repo.resolve(),
@@ -1524,7 +1563,7 @@ def main(argv: list[str] | None = None) -> int:
                 now_text=args.now,
                 write=args.write,
                 events_only=args.events_only,
-                vellum_main=args.vellum_main,
+                vellum_main=vellum_main,
             )
         output = json.dumps(result, indent=2, sort_keys=True) + "\n"
         if args.output:

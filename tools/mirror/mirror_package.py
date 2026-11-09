@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -34,7 +35,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.append(str(Path(__file__).resolve().parent))
 import source_compile_options  # noqa: E402
 import gpu_surface_guard  # noqa: E402
 
@@ -45,6 +46,65 @@ INDEX_SCHEMA = "vellum.mirror-receipt-index.v1"
 PLAN_SCHEMA = "vellum.mirror-build-plan.v1"
 INDEX_PATH = "provenance/mirror/receipts/index.json"
 MIRROR_DIR = "mirror"
+# Decision 0010 option (a), M2 8b: the renamed units live in framework/, with
+# the export's layout below it and every include/pulp/ renamed include/vellum/.
+# The transfer record lists them; closures and receipts keep Pulp's paths, so
+# each path is mapped through the rename when it is read.
+FRAMEWORK_DIR = "framework"
+FRAMEWORK_TRANSFER = "provenance/framework/transfer.json"
+
+
+def transferred(repo: Path) -> bool:
+    """Whether the units were transferred to framework/; a half-transferred checkout is refused.
+
+    framework/ and its transfer record exist together or not at all, and
+    mirror/ is gone once they exist (verify_extraction.framework_transfer_state
+    holds the same rule in the provenance lanes).
+    """
+    has_framework = (repo / FRAMEWORK_DIR).is_dir()
+    has_record = (repo / FRAMEWORK_TRANSFER).is_file()
+    if has_framework != has_record:
+        raise PlanError(f"{FRAMEWORK_DIR}/ and {FRAMEWORK_TRANSFER} must exist together")
+    if has_framework and (repo / MIRROR_DIR).exists():
+        raise PlanError(f"{MIRROR_DIR}/ and {FRAMEWORK_DIR}/ both exist")
+    return has_framework
+
+
+def renamed_path(relative: str) -> str:
+    parts = relative.split("/")
+    for i in range(len(parts) - 1):
+        if parts[i] == "include" and parts[i + 1] == "pulp":
+            parts[i + 1] = "vellum"
+    return "/".join(parts)
+
+
+def mirrored(repo: Path, relative: str) -> Path:
+    """Where a Pulp-relative exported path lives in this checkout."""
+    if transferred(repo):
+        return repo / FRAMEWORK_DIR / renamed_path(relative)
+    return repo / MIRROR_DIR / relative
+
+
+def inverse_renamed(data: bytes) -> bytes:
+    """The rename's tool-free inverse (tools/mirror/verify_mirror_rename_identity.py).
+
+    A generated input produced from the renamed sources is checked against the
+    closure's digest of Pulp's bytes through it.
+    """
+    if not hasattr(inverse_renamed, "_impl"):
+        spec = importlib.util.spec_from_file_location(
+            "verify_mirror_rename_identity", Path(__file__).with_name("verify_mirror_rename_identity.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        inverse_renamed._impl = module.inverse_bytes
+    return inverse_renamed._impl(data, "pulp", "vellum", "VellumMirror")
+
+
+def generated_matches(repo: Path, data: bytes, digest: str) -> bool:
+    """A generated input equals the closure's recorded digest, through the rename once transferred."""
+    if transferred(repo):
+        data = inverse_renamed(data)
+    return sha256_bytes(data) == digest
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".m", ".mm"}
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -251,6 +311,39 @@ def newest_receipt(repo: Path) -> tuple[str, dict[str, Any]]:
     return relative, receipt
 
 
+def verify_framework_identity(repo: Path, receipt_path: str, receipt: dict[str, Any]) -> int:
+    """Hold framework/ to the transfer record's file set.
+
+    The record itself is proved against authoritative Pulp by
+    verify_extraction's framework check. framework/ is Vellum-native after the
+    transfer (Decision 0010), so a file's bytes may change by a reviewed Vellum
+    edit; its file set may not, because the build still compiles the receipt's
+    closures, which name exactly the transferred files.
+    """
+    record = load_json(repo / FRAMEWORK_TRANSFER)
+    if record.get("export_receipt") != receipt_path or record.get("mirror_tree") != receipt.get("mirror_tree"):
+        raise PlanError(f"{FRAMEWORK_TRANSFER} does not name the newest receipt {receipt_path}")
+    expected = {row["framework_path"]: row["framework_git_blob_sha"] for row in record.get("records", [])}
+    root = repo / FRAMEWORK_DIR
+    actual = {path.relative_to(repo).as_posix() for path in root.rglob("*") if path.is_file() or path.is_symlink()}
+    extra, missing = sorted(actual - set(expected)), sorted(set(expected) - actual)
+    if extra:
+        raise PlanError(f"framework/ holds files the transfer record does not list: {extra[:5]}")
+    if missing:
+        raise PlanError(f"framework/ is missing files the transfer record lists: {missing[:5]}")
+    symlinks = sorted(path for path in expected if (repo / path).is_symlink())
+    if symlinks:
+        raise PlanError(f"framework/ holds symlinks: {symlinks[:5]}")
+    return len(expected)
+
+
+def framework_native_edits(repo: Path) -> list[str]:
+    """framework/ files whose bytes differ from the transfer record: Vellum edits since the transfer."""
+    record = load_json(repo / FRAMEWORK_TRANSFER)
+    return sorted(row["framework_path"] for row in record.get("records", [])
+                  if git_blob_sha((repo / row["framework_path"]).read_bytes()) != row["framework_git_blob_sha"])
+
+
 def verify_mirror_identity(repo: Path, receipt: dict[str, Any]) -> int:
     """Prove the working tree's mirror/ is byte-identical to the receipt."""
     expected: dict[str, str] = {}
@@ -301,7 +394,7 @@ def load_closures(repo: Path, receipt: dict[str, Any]) -> list[tuple[str, dict[s
 
 def mirror_cmake_files(repo: Path) -> dict[str, str]:
     """The landed mirror's CMake files, keyed by Pulp-relative path."""
-    root = repo / MIRROR_DIR
+    root = repo / (FRAMEWORK_DIR if transferred(repo) else MIRROR_DIR)
     return {
         path.relative_to(root).as_posix(): path.read_text(encoding="utf-8", errors="replace")
         for path in sorted(root.rglob("*"))
@@ -627,7 +720,7 @@ def render_build_info(template: str, receipt: dict[str, Any], version: str, conf
 
 def binary_data_targets(repo: Path) -> dict[str, dict[str, Any]]:
     """Read the mirrored canvas CMake for each binary-data target's inputs."""
-    text = (repo / MIRROR_DIR / "core/canvas/CMakeLists.txt").read_text(encoding="utf-8")
+    text = mirrored(repo, "core/canvas/CMakeLists.txt").read_text(encoding="utf-8")
     targets: dict[str, dict[str, Any]] = {}
     for match in re.finditer(r"pulp_add_binary_data\(\s*([A-Za-z0-9-]+)\s+SOURCES\s+(.*?)\s+NAMESPACE\s+([A-Za-z0-9_]+)\s*\)", text, re.S):
         sources = [
@@ -714,21 +807,21 @@ def prepare_generated(repo: Path, receipt: dict[str, Any], units: list[tuple[str
                 inputs = BUILD_INFO_INPUTS.get(receipt["export_id"])
                 if not inputs:
                     raise PlanError(f"no build-info inputs are recorded for export {receipt['export_id']}")
-                template = (repo / MIRROR_DIR / "core/runtime/include/pulp/runtime/build_info.hpp.in").read_text(encoding="utf-8")
+                template = mirrored(repo, "core/runtime/include/pulp/runtime/build_info.hpp.in").read_text(encoding="utf-8")
                 normalized = render_build_info(template, receipt, inputs["version"], config, BUILD_TIMESTAMP_PLACEHOLDER)
                 if (row.get("normalization") or {}).get("build_timestamp") != BUILD_TIMESTAMP_PLACEHOLDER:
                     raise PlanError(f"{path} is not timestamp-normalized")
-                if sha256_bytes(normalized.encode("utf-8")) != digest:
+                if not generated_matches(repo, normalized.encode("utf-8"), digest):
                     raise PlanError(f"{path} rendered from the mirrored template does not match the closure digest")
                 # The export time stands in for the configure time, so two
                 # builds of one receipt carry the same bytes.
                 rendered = render_build_info(template, receipt, inputs["version"], config, receipt["created_at"])
-                target = build_info_dir / "pulp/runtime/build_info.hpp"
+                target = build_info_dir / ("vellum" if transferred(repo) else "pulp") / "runtime/build_info.hpp"
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if not target.is_file() or target.read_text(encoding="utf-8") != rendered:
                     target.write_text(rendered, encoding="utf-8")
             elif prelude:
-                cmake = (repo / MIRROR_DIR / "core/view/cmake/PulpViewJsPreludes.cmake").read_text(encoding="utf-8")
+                cmake = mirrored(repo, "core/view/cmake/PulpViewJsPreludes.cmake").read_text(encoding="utf-8")
                 js_paths = re.findall(r"\$\{CMAKE_CURRENT_SOURCE_DIR\}/(js/[^\s)]+)", cmake)
                 js_paths = [js for js in js_paths if js != "js/embed_js.py"]
                 prelude_dir.mkdir(parents=True, exist_ok=True)
@@ -736,10 +829,10 @@ def prepare_generated(repo: Path, receipt: dict[str, Any], units: list[tuple[str
                 if prelude.group("suffix") == "hpp":
                     out.write_text(render_prelude_header(cmake, js_paths), encoding="utf-8")
                 else:
-                    completed = subprocess.run([sys.executable, str(repo / MIRROR_DIR / "core/view/js/embed_js.py"), str(out), *(str(repo / MIRROR_DIR / "core/view" / js) for js in js_paths)], capture_output=True, text=True, check=False)
+                    completed = subprocess.run([sys.executable, str(mirrored(repo, "core/view/js/embed_js.py")), str(out), *(str(mirrored(repo, "core/view/" + js)) for js in js_paths)], capture_output=True, text=True, check=False)
                     if completed.returncode:
                         raise PlanError(f"{unit}: prelude generator failed: {completed.stderr.strip()}")
-                if sha256_file(out) != digest:
+                if not generated_matches(repo, out.read_bytes(), digest):
                     raise PlanError(f"{path} generated by the mirrored producer does not match the closure digest")
             elif data:
                 name = data.group("target")
@@ -752,16 +845,16 @@ def prepare_generated(repo: Path, receipt: dict[str, Any], units: list[tuple[str
                     font = next((s for s in spec["sources"] if c_identifier(Path(s).name) == data.group("var")), None)
                     if font is None:
                         raise PlanError(f"{path} has no matching binary-data source")
-                    encoder = repo / MIRROR_DIR / "tools/cmake/scripts/encode_binary_data.py"
+                    encoder = mirrored(repo, "tools/cmake/scripts/encode_binary_data.py")
                     with tempfile.TemporaryDirectory(prefix="vellum-binary-data-") as temporary:
                         out = Path(temporary) / "out.cpp"
                         completed = subprocess.run([
-                            sys.executable, str(encoder), "--src", str(repo / MIRROR_DIR / font),
+                            sys.executable, str(encoder), "--src", str(mirrored(repo, font)),
                             "--out", str(out), "--namespace", spec["namespace"], "--var", data.group("var"),
                         ], capture_output=True, text=True, check=False)
                         if completed.returncode:
                             raise PlanError(f"mirrored encoder failed for {font}: {completed.stderr.strip()}")
-                        if sha256_file(out) != digest:
+                        if not generated_matches(repo, out.read_bytes(), digest):
                             raise PlanError(f"{path} encoded by the mirrored producer does not match the closure digest")
                     spec["sources_sha256"][data.group("var")] = digest
             else:
@@ -836,7 +929,7 @@ def map_include(path: str, repo: Path, roots: dict[str, Path], generated: dict[s
         return str(root / confined_relative(path, match.group("rel") or ""))
     if path.startswith("@") or path.startswith("/") or ".." in Path(path).parts:
         raise PlanError(f"include directory is not a mirror-relative path: {path}")
-    candidate = repo / MIRROR_DIR / path
+    candidate = mirrored(repo, path)
     if not candidate.is_dir():
         raise PlanError(f"include directory {path} is not in the landed mirror")
     return str(candidate)
@@ -862,7 +955,8 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
          in_tree_definitions: dict[str, list[str]] | None = None) -> dict[str, Any]:
     repo = repo.resolve()
     receipt_path, receipt = newest_receipt(repo)
-    file_count = verify_mirror_identity(repo, receipt)
+    file_count = (verify_framework_identity(repo, receipt_path, receipt) if transferred(repo)
+                  else verify_mirror_identity(repo, receipt))
     units = load_closures(repo, receipt)
     source_options = source_compile_options_for(repo, receipt, units)
     attached: set[str] = set()
@@ -896,7 +990,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                 raise PlanError(f"{unit}/{name}: only static mirrored targets are packaged")
             sources = []
             for source in target.get("sources", []):
-                candidate = repo / MIRROR_DIR / source
+                candidate = mirrored(repo, source)
                 generated_source = None
                 if source == "@build/core/view/web_compat_preludes_gen.cpp":
                     generated_source = generated["prelude_dir"] / "web_compat_preludes_gen.cpp"
@@ -959,7 +1053,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
             option_sources = []
             for source in target.get("sources", []):
                 if source in source_options:
-                    option_sources.append({"source": str(repo / MIRROR_DIR / source),
+                    option_sources.append({"source": str(mirrored(repo, source)),
                                            "options": source_options[source]})
                     attached.add(source)
             targets.append({
@@ -1022,6 +1116,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         "mirror_sha": receipt["mirror_sha"],
         "mirror_tree": receipt["mirror_tree"],
         "mirror_files_verified": file_count,
+        "framework_native_edits": framework_native_edits(repo) if transferred(repo) else [],
         "closures": [unit["closure_manifest"] for unit in receipt["units"]],
         "dependencies": {name: {"pin": entry["pin"], "source": entry["source"],
                                  "files_verified": len(entry["files"])}
@@ -1030,6 +1125,8 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         "licenses": licenses,
         "choc_root": str(roots["choc"]) if "choc" in roots else None,
         "choc_headers": choc_headers,
+        "source_dir": str(repo / (FRAMEWORK_DIR if transferred(repo) else MIRROR_DIR)),
+        "root_namespace": "vellum" if transferred(repo) else "pulp",
         "build_info_dir": str(generated["build_info_dir"]),
         "binary_data": generated["binary_data"],
         "source_compile_options": source_options,
@@ -1058,6 +1155,9 @@ def write_cmake(build_plan: dict[str, Any], output: Path) -> None:
     lines.append(f"set(VELLUM_MIRROR_SHA {cmake_quote(build_plan['mirror_sha'])})")
     lines.append(f"set(VELLUM_MIRROR_RECEIPT {cmake_quote(build_plan['receipt'])})")
     lines += cmake_list("VELLUM_MIRROR_CLOSURES", build_plan["closures"])
+    # The packaged units' source root: framework/ after the 8b transfer.
+    lines.append(f"set(VELLUM_MIRROR_SOURCE_DIR {cmake_quote(build_plan['source_dir'])})")
+    lines.append(f"set(VELLUM_MIRROR_ROOT_NAMESPACE {cmake_quote(build_plan['root_namespace'])})")
     lines.append(f"set(VELLUM_MIRROR_BUILD_INFO_DIR {cmake_quote(build_plan['build_info_dir'])})")
     lines.append(f"set(VELLUM_MIRROR_CHOC_ROOT {cmake_quote(build_plan['choc_root'] or '')})")
     lines += cmake_list("VELLUM_MIRROR_CHOC_HEADERS", build_plan["choc_headers"])

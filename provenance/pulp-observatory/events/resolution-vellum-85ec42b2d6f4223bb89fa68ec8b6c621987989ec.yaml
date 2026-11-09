@@ -1,0 +1,24 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:20:13Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-85ec42b2d6f4223bb89fa68ec8b6c621987989ec",
+  "kind": "resolution",
+  "linked_commits": [
+    "85ec42b2d6f4223bb89fa68ec8b6c621987989ec"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/252"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Hardens the same Vellum-native scene contract: the Skia surface refuses an unknown scene version or node kind and keeps its previous frame, and the materializer uses public lowering-code constants checked against the runtime's intrinsic list. Vellum-authoritative code with no Pulp consumer on Pulp main; nothing to port.",
+  "resolves": "vellum-85ec42b2d6f4223bb89fa68ec8b6c621987989ec",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

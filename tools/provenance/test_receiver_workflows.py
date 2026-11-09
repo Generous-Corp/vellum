@@ -12,7 +12,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github/workflows"
-sys.path.insert(0, str(ROOT / "tools/provenance"))
+sys.path.append(str(ROOT / "tools/provenance"))
 from live_delivery import enabled as live_enabled, validate_enabled_barrier
 
 
@@ -119,8 +119,8 @@ class ReceiverWorkflowTests(unittest.TestCase):
 
     def test_watchdog_builds_its_state_with_the_tested_module(self) -> None:
         text = (ROOT / ".github/workflows/pulp-observatory-watchdog.yml").read_text()
-        self.assertIn("python3 tools/provenance/test_receiver_watchdog_state.py", text)
-        self.assertIn("python3 tools/provenance/receiver_watchdog_state.py", text)
+        self.assertIn("python3 -I tools/provenance/test_receiver_watchdog_state.py", text)
+        self.assertIn("python3 -I tools/provenance/receiver_watchdog_state.py", text)
         self.assertNotIn("import receiver", text)
 
     def test_receiver_and_watchdog_use_only_credentials_that_exist(self) -> None:

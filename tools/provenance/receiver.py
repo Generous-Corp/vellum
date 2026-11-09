@@ -270,7 +270,7 @@ def vellum_needs_reconcile(root: Path, vellum_repo: Path, vellum_main: str) -> b
         return False
     if not is_ancestor(vellum_repo, cursor, main):
         raise ReceiverError("fresh Vellum main is not a descendant of the committed Vellum cursor")
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    sys.path.append(str(Path(__file__).resolve().parent))
     import observatory  # noqa: E402  (same directory; the tail rule lives there)
 
     try:
@@ -295,7 +295,7 @@ def vellum_lag_started_at(vellum_repo: Path, cursor: str, vellum_main: str) -> s
     """
     if cursor == vellum_main:
         return None
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    sys.path.append(str(Path(__file__).resolve().parent))
     import observatory  # noqa: E402  (same directory; the tail rule lives there)
 
     previous = cursor

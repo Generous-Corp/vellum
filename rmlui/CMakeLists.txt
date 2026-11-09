@@ -225,6 +225,9 @@ if(VELLUM_RMLUI_INSTALL)
     install(DIRECTORY include/vellum
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         COMPONENT VellumRmlUi)
+    install(FILES assets/midi-learn.rcss
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/VellumRmlUi
+        COMPONENT VellumRmlUi)
     install(EXPORT VellumRmlUiTargets
         NAMESPACE VellumRmlUi::
         DESTINATION ${_vellum_rmlui_cmake_dir}

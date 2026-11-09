@@ -22,6 +22,7 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 EXPECTED_RUNNERS = {
     "authority-activation.yml": ("__hosted__", "ubuntu-latest"),
     "authority-release.yml": ("__hosted__", "ubuntu-latest"),
+    "framework-trusted-verify.yml": ("__hosted__", "ubuntu-24.04"),
     "gpu-macos.yml": (
         "VELLUM_LOCAL_MACOS_RUNS_ON_JSON",
         '["macos-15"]',
@@ -41,6 +42,10 @@ EXPECTED_RUNNERS = {
     ),
     "pulp-observatory-watchdog.yml": ("__hosted__", "ubuntu-latest"),
     "review-verdict.yml": ("__hosted__", "ubuntu-24.04"),
+    "rmlui.yml": (
+        "VELLUM_RMLUI_MACOS_RUNS_ON_JSON",
+        '["macos-15"]',
+    ),
     "review-verdict-trigger.yml": ("__hosted__", "ubuntu-24.04"),
     "release-cadence-check.yml": ("__hosted__", "ubuntu-latest"),
     "release-path-review.yml": ("__hosted__", "ubuntu-24.04"),
@@ -232,12 +237,12 @@ PULP_API_READER_GIT_CALLS = {
 # backslash continuation inside a word, a glued `os.system` argument, a
 # value written to a file for a later step), so any change to the reader is
 # a reviewed change to this digest. The checks below only explain a failure.
-PULP_API_READER_SHA256 = "f18636adfbe9a999aa0a2b006fcce61effa48865f253dd9d3fabc551c6370b20"
+PULP_API_READER_SHA256 = "a81217e0ab7b09b490c06856ceb659c2e2b6079b1c98d7a544434c796edebce1"
 # The reader reshapes the GitHub responses it fetched through this script, so
 # the script is part of the reader: it is pinned byte for byte like the step
 # and must carry no transport of its own (every read stays a gh call above).
 PULP_API_READER_COLLECTOR = ROOT / "tools" / "provenance" / "collect_release_evidence.py"
-PULP_API_READER_COLLECTOR_SHA256 = "f94e893d9fd41fa42c6dfd17594a18eee9398f0d8172461944c5ee30f6de3d98"
+PULP_API_READER_COLLECTOR_SHA256 = "60d5b35495d89d2fcd8e5ec34aa33932cce57dbf1001b4932056aaa52b7136a0"
 # Every reader line that names Pulp, stripped, verbatim. A new line naming
 # Pulp (an anchor, an env export, a command through a variable) fails.
 PULP_API_READER_PULP_LINES = {
@@ -1124,7 +1129,9 @@ class RunnerPolicyTests(unittest.TestCase):
         # A required context posted from the default branch's copy is started
         # on the queue by a permission-less trigger workflow; neither runs on
         # pull_request, which would run the pull request's own copy.
-        required_from_base = {"release-path-review-trigger.yml"}
+        # framework-trusted-verify.yml posts its context as a commit status
+        # from the base's copy, on pull_request_target and merge_group.
+        required_from_base = {"release-path-review-trigger.yml", "framework-trusted-verify.yml"}
         for path in sorted(WORKFLOWS.glob("*.yml")):
             text = path.read_text(encoding="utf-8")
             _, marker, triggers = text.partition("\non:\n")
@@ -1396,7 +1403,7 @@ class RunnerPolicyTests(unittest.TestCase):
 
         workflow = (WORKFLOWS / "provenance.yml").read_text(encoding="utf-8")
         self.assertIn(
-            "python3 tools/provenance/collect_release_evidence.py open-pr-snapshot", workflow
+            "python3 -I tools/provenance/collect_release_evidence.py open-pr-snapshot", workflow
         )
         self.assertEqual(pulp_reach_problems("provenance.yml", workflow)[0], [])
         reviewed = PULP_API_READER_COLLECTOR.read_text(encoding="utf-8")
