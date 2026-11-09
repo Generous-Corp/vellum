@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -776,6 +777,113 @@ class ObservatoryTests(unittest.TestCase):
                     self.assertFalse((root / observatory.EVENTS_PATH / f"vellum-{main_later}.yaml").exists())
                 else:
                     self.assertIn(f"vellum-{main_later}", result["new_events"])
+
+    def _branch_with_main_merged(self, top: Path):
+        """`_coverage_state` plus a later mapped commit on main that the branch merged."""
+        pulp, vellum, root, pulp_head, main, feature = self._coverage_state(top)
+        run(vellum, "git", "checkout", "-q", "main")
+        write(vellum / "graphics/shared.cpp", "int shared = 2;\n")
+        main_later = commit_all(vellum, "main lands a mapped change after the cursor")
+        run(vellum, "git", "checkout", "-q", "feature")
+        run(vellum, "git", "merge", "--no-edit", "main")
+        head = run(vellum, "git", "rev-parse", "HEAD")
+        return pulp, vellum, root, pulp_head, main_later, feature, head
+
+    def _cli_reconcile(self, root: Path, pulp: Path, vellum: Path, pulp_target: str, vellum_target: str,
+                       *extra: str) -> tuple[int, str]:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            code = observatory.main([
+                "--root", str(root), "reconcile", "--pulp-repo", str(pulp), "--vellum-repo", str(vellum),
+                "--pulp-target", pulp_target, "--vellum-target", vellum_target,
+                "--now", "2026-10-11T00:05:00Z", "--write", *extra,
+            ])
+        return code, err.getvalue()
+
+    def _event_files(self, root: Path) -> set[str]:
+        return {path.name for path in (root / observatory.EVENTS_PATH).glob("*.yaml")}
+
+    def test_events_only_on_the_command_line_records_only_the_branchs_commits_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main_later, feature, head = self._branch_with_main_merged(
+                Path(temporary))
+            run(vellum, "git", "update-ref", observatory.VELLUM_MAIN_REF, main_later)
+            before = self._event_files(root)
+            code, err = self._cli_reconcile(root, pulp, vellum, pulp_head, head, "--events-only")
+            self.assertEqual(code, 0, err)
+            added = self._event_files(root) - before
+            self.assertIn(f"vellum-{feature}.yaml", added)
+            self.assertNotIn(f"vellum-{main_later}.yaml", added)
+
+    def test_events_only_records_mains_commits_only_when_asked(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main_later, feature, head = self._branch_with_main_merged(
+                Path(temporary))
+            run(vellum, "git", "update-ref", observatory.VELLUM_MAIN_REF, main_later)
+            code, err = self._cli_reconcile(root, pulp, vellum, pulp_head, head, "--events-only",
+                                            "--include-main-commits")
+            self.assertEqual(code, 0, err)
+            self.assertIn(f"vellum-{main_later}.yaml", self._event_files(root))
+            self.assertIn(f"vellum-{feature}.yaml", self._event_files(root))
+
+    def test_events_only_without_origin_main_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main_later, feature, head = self._branch_with_main_merged(
+                Path(temporary))
+            before = self._event_files(root)
+            code, err = self._cli_reconcile(root, pulp, vellum, pulp_head, head, "--events-only")
+            self.assertEqual(code, 1)
+            self.assertIn("cannot resolve origin/main", err)
+            self.assertEqual(self._event_files(root), before)  # nothing written
+            # An explicit main still works without the remote ref.
+            code, err = self._cli_reconcile(root, pulp, vellum, pulp_head, head, "--events-only",
+                                            "--vellum-main", main_later)
+            self.assertEqual(code, 0, err)
+            self.assertNotIn(f"vellum-{main_later}.yaml", self._event_files(root))
+
+    def test_a_full_reconcile_needs_the_receivers_flag_and_is_otherwise_unchanged(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main_later, feature, head = self._branch_with_main_merged(
+                Path(temporary))
+            run(vellum, "git", "checkout", "-q", "main")
+            cursor_before = (root / observatory.CURSOR_PATH).read_bytes()
+            before = self._event_files(root)
+            code, err = self._cli_reconcile(root, pulp, vellum, pulp_head, main_later)
+            self.assertEqual(code, 1)
+            self.assertIn("--include-main-commits", err)
+            self.assertEqual((root / observatory.CURSOR_PATH).read_bytes(), cursor_before)
+            self.assertEqual(self._event_files(root), before)
+            # With the flag, the receiver's reconcile writes exactly what the
+            # function always did, and needs no origin/main.
+            twin = Path(temporary) / "twin"
+            shutil.copytree(root, twin)
+            code, err = self._cli_reconcile(root, pulp, vellum, pulp_head, main_later, "--include-main-commits")
+            self.assertEqual(code, 0, err)
+            observatory.reconcile(root=twin, pulp_repo=pulp, vellum_repo=vellum, pulp_target=pulp_head,
+                                  vellum_target=main_later, now_text="2026-10-11T00:05:00Z", write=True)
+            for relative in (observatory.CURSOR_PATH, observatory.REPORT_JSON_PATH):
+                self.assertEqual((root / relative).read_bytes(), (twin / relative).read_bytes())
+            self.assertEqual(self._event_files(root), self._event_files(twin))
+            self.assertIn(f"vellum-{main_later}.yaml", self._event_files(root))
+
+    def test_the_receiver_passes_the_include_main_commits_flag(self) -> None:
+        workflow = (Path(__file__).resolve().parents[2]
+                    / ".github/workflows/pulp-observatory-receiver.yml").read_text(encoding="utf-8")
+        reconcile = workflow[workflow.index("observatory.py reconcile"):]
+        reconcile = reconcile[:reconcile.index("--output")]
+        self.assertIn("--include-main-commits", reconcile)
+        self.assertNotIn("--events-only", reconcile)
+
+    def test_vellum_main_and_include_main_commits_are_exclusive(self) -> None:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code = observatory.main([
+                "reconcile", "--pulp-repo", ".", "--vellum-repo", ".", "--pulp-target", "x",
+                "--vellum-target", "y", "--now", "2026-10-11T00:00:00Z", "--write", "--events-only",
+                "--vellum-main", "z", "--include-main-commits",
+            ])
+        self.assertEqual(code, 1)
+        self.assertIn("are exclusive", err.getvalue())
 
     def test_verify_without_a_git_base_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -20,8 +20,13 @@ python3 tools/provenance/observatory.py reconcile \
   --pulp-target <exact-pulp-main-sha> \
   --vellum-target <exact-vellum-main-sha> \
   --now <utc-timestamp> \
-  --write
+  --write --include-main-commits
 ```
+
+This is the receiver's command. A full reconcile records main's own commits
+and advances the cursor, so it refuses to run without
+`--include-main-commits`. A branch never runs it; it uses `--events-only`,
+described below.
 
 The command writes new observation events first, then advances the cursor and
 regenerates `reports/current.{json,md}`. An interrupted run is idempotent: an
@@ -52,12 +57,15 @@ python3 tools/provenance/observatory.py reconcile \
   --pulp-target <committed-pulp-cursor-sha> \
   --vellum-target <exact-pr-head-sha> \
   --now <utc-timestamp> \
-  --write --events-only \
-  --vellum-main <current-vellum-main-sha>
+  --write --events-only
 ```
 
-`--vellum-main` leaves commits already on main to main's own receiver, so a
-branch that has merged main records only its own commits. `verify` enforces
+Run `git fetch origin main` first. By default the command leaves every commit
+already on `origin/main` to main's own receiver, so a branch that has merged
+main records only its own commits. If `origin/main` cannot be resolved, it
+fails rather than record every commit in range. `--vellum-main <sha>` names
+main explicitly. `--include-main-commits` records main's commits as well; only
+the receiver has a reason to pass it. `verify` enforces
 this: a change may add Vellum observations only for commits in
 `git_base..HEAD`. The one exception is the receiver's own reconciliation,
 recognised by its content: the change touches only observatory evidence (the
