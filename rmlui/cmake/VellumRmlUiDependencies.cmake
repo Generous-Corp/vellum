@@ -93,6 +93,19 @@ function(vellum_rmlui_fetch_dependencies)
         PATCH_COMMAND "${CMAKE_COMMAND}" "-DVELLUM_RMLUI_PATCHES=${_vellum_rmlui_patches}"
             -P "${CMAKE_CURRENT_LIST_DIR}/ApplyRmlUiPatches.cmake")
     FetchContent_MakeAvailable(vellum_rmlui_rmlui)
+    # FetchContent runs PATCH_COMMAND only when it populates the source, so a
+    # build directory populated before a patch joined the list would keep
+    # building the unpatched source. Apply the list again on every configure;
+    # a patch already in place is skipped, and one that applies neither way
+    # fails the configure.
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" "-DVELLUM_RMLUI_PATCHES=${_vellum_rmlui_patches}"
+            -P "${CMAKE_CURRENT_LIST_DIR}/ApplyRmlUiPatches.cmake"
+        WORKING_DIRECTORY "${vellum_rmlui_rmlui_SOURCE_DIR}"
+        RESULT_VARIABLE _vellum_rmlui_patch_result)
+    if(NOT _vellum_rmlui_patch_result EQUAL 0)
+        message(FATAL_ERROR "the RmlUi patches do not apply to ${vellum_rmlui_rmlui_SOURCE_DIR}")
+    endif()
     if(NOT TARGET RmlUi::Core)
         message(FATAL_ERROR "the pinned RmlUi source did not define RmlUi::Core")
     endif()
