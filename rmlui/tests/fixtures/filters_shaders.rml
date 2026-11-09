@@ -1,0 +1,58 @@
+<rml>
+<head>
+<title>Filters, mask images and gradient shaders</title>
+<style>
+body {
+    display: block;
+    width: 256px;
+    height: 256px;
+    margin: 0;
+    background-color: #1b1e24;
+}
+div { display: block; position: absolute; }
+/* Gradient shaders. */
+#linear { left: 8px; top: 8px; width: 96px; height: 24px;
+    decorator: linear-gradient(to right, #ff0000, #0000ff); }
+#radial { left: 112px; top: 8px; width: 48px; height: 48px;
+    decorator: radial-gradient(circle, #00ff00, #000000); }
+#conic { left: 168px; top: 8px; width: 48px; height: 48px;
+    decorator: conic-gradient(#ff0000, #0000ff); }
+/* Opacity and colour-matrix filters. */
+#opacity { left: 8px; top: 64px; width: 24px; height: 24px; background-color: #ffffff;
+    filter: opacity(0.5); }
+#grayscale { left: 40px; top: 64px; width: 24px; height: 24px; background-color: #ff0000;
+    filter: grayscale(1); }
+#invert { left: 72px; top: 64px; width: 24px; height: 24px; background-color: #ff0000;
+    filter: invert(1); }
+#hue { left: 104px; top: 64px; width: 24px; height: 24px; background-color: #ff0000;
+    filter: hue-rotate(180deg); }
+#brightness { left: 136px; top: 64px; width: 24px; height: 24px; background-color: #ffffff;
+    filter: brightness(0.5); }
+#contrast { left: 168px; top: 64px; width: 24px; height: 24px; background-color: #ffffff;
+    filter: contrast(0.5); }
+#sepia { left: 200px; top: 64px; width: 24px; height: 24px; background-color: #ffffff;
+    filter: sepia(1); }
+/* Blur, drop shadow, and a blurred box shadow. */
+#blur { left: 8px; top: 128px; width: 32px; height: 32px; background-color: #ffffff;
+    filter: blur(4px); }
+#drop { left: 72px; top: 128px; width: 24px; height: 24px; background-color: #ffffff;
+    filter: drop-shadow(#0000ff 12px 12px 0px); }
+#soft { left: 128px; top: 128px; width: 24px; height: 24px; background-color: #ffffff;
+    box-shadow: #0000ff 20px 0px 6px; }
+/* A mask image from a gradient: opaque on the left, transparent on the right. */
+#mask { left: 192px; top: 128px; width: 48px; height: 32px; background-color: #ffffff;
+    mask-image: linear-gradient(to right, #000000ff, #00000000); }
+/* A backdrop filter over the plain body. */
+#backdrop { left: 8px; top: 192px; width: 48px; height: 48px;
+    backdrop-filter: invert(1); }
+</style>
+</head>
+<body>
+<div id="linear"/><div id="radial"/><div id="conic"/>
+<div id="opacity"/><div id="grayscale"/><div id="invert"/><div id="hue"/>
+<div id="brightness"/><div id="contrast"/><div id="sepia"/>
+<div id="blur"/><div id="drop"/><div id="soft"/>
+<div id="mask"/>
+<div id="backdrop"/>
+</body>
+</rml>

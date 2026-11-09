@@ -1,0 +1,5 @@
+module CVellumHostC [system] {
+    header "shim.h"
+    link "vellum-host-c"
+    export *
+}

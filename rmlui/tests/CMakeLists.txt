@@ -22,6 +22,94 @@ add_test(NAME vellum.rmlui.two-instances COMMAND vellum-rmlui-two-instances-test
 vellum_rmlui_add_test(vellum-rmlui-log-sink-test log_sink_test.cpp VellumRmlUi::Core)
 add_test(NAME vellum.rmlui.log-sink COMMAND vellum-rmlui-log-sink-test)
 
+# Control for the open target: Core flattens layers and filters away.
+vellum_rmlui_add_test(vellum-rmlui-core-flattening-test core_flattening_test.cpp VellumRmlUi::Core)
+add_test(NAME vellum.rmlui.core-flattening COMMAND vellum-rmlui-core-flattening-test)
+
+if(VELLUM_RMLUI_NATIVE)
+    vellum_rmlui_add_test(vellum-rmlui-native-test native_test.cpp VellumRmlUi::Native)
+    add_test(NAME vellum.rmlui.native COMMAND vellum-rmlui-native-test)
+
+    # A click into a text input, with the field's font resolved and without.
+    vellum_rmlui_add_test(vellum-rmlui-native-text-input-test native_text_input_test.cpp
+        VellumRmlUi::Native)
+    if(VELLUM_RMLUI_FONTS AND EXISTS "${_vellum_rmlui_test_font}")
+        target_compile_definitions(vellum-rmlui-native-text-input-test PRIVATE
+            VELLUM_RMLUI_TEST_FONT="${_vellum_rmlui_test_font}"
+            VELLUM_RMLUI_TEST_FONT_FAMILY="Inter")
+    else()
+        target_compile_definitions(vellum-rmlui-native-text-input-test PRIVATE
+            VELLUM_RMLUI_TEST_FONT_FAMILY="")
+    endif()
+    add_test(NAME vellum.rmlui.native-text-input COMMAND vellum-rmlui-native-text-input-test)
+    set_tests_properties(vellum.rmlui.native-text-input PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+# The Metal renderer drawn headless and compared with the soft renderer. The
+# reference and the Metal frames come from separate processes (Core and Native
+# each carry their own RmlUi), joined by a ctest fixture. The blend control is
+# the same test with a straight-alpha blend compiled in; it must detect it.
+if(VELLUM_RMLUI_METAL AND VELLUM_RMLUI_FONTS)
+    FetchContent_GetProperties(vellum_rmlui_rmlui SOURCE_DIR _vellum_rmlui_rmlui_src)
+    set(_metal_refs "${CMAKE_CURRENT_BINARY_DIR}/metal-references")
+    vellum_rmlui_add_test(vellum-rmlui-metal-reference metal/soft_reference.mm
+        VellumRmlUi::SoftRenderer "-framework Foundation" "-framework CoreGraphics"
+        "-framework ImageIO")
+    target_compile_options(vellum-rmlui-metal-reference PRIVATE -fobjc-arc)
+    add_test(NAME vellum.rmlui.metal-reference
+        COMMAND vellum-rmlui-metal-reference "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}"
+            "${_metal_refs}")
+    set_tests_properties(vellum.rmlui.metal-reference PROPERTIES
+        FIXTURES_SETUP vellum_rmlui_metal_references)
+
+    vellum_rmlui_add_test(vellum-rmlui-metal-visual-test metal/metal_visual_test.mm
+        VellumRmlUi::Native VellumRmlUi::Metal)
+    target_compile_options(vellum-rmlui-metal-visual-test PRIVATE -fobjc-arc)
+    add_test(NAME vellum.rmlui.metal-visual
+        COMMAND vellum-rmlui-metal-visual-test "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}"
+            "${_metal_refs}")
+    set_tests_properties(vellum.rmlui.metal-visual PROPERTIES
+        FIXTURES_REQUIRED vellum_rmlui_metal_references
+        SKIP_RETURN_CODE 77)
+
+    vellum_rmlui_add_test(vellum-rmlui-metal-blend-control metal/metal_visual_test.mm
+        VellumRmlUi::Native)
+    target_sources(vellum-rmlui-metal-blend-control PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/metal_render_interface.mm"
+        "${PROJECT_SOURCE_DIR}/src/metal_effects.cpp")
+    target_compile_definitions(vellum-rmlui-metal-blend-control PRIVATE
+        VELLUM_RMLUI_METAL_TEST_STRAIGHT_ALPHA_BLEND)
+    target_compile_options(vellum-rmlui-metal-blend-control PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+    target_link_libraries(vellum-rmlui-metal-blend-control PRIVATE
+        "-framework Metal" "-framework QuartzCore" "-framework Foundation"
+        "-framework CoreGraphics" "-framework ImageIO")
+    vellum_rmlui_add_test(vellum-rmlui-metal-layers-test metal/metal_layers_test.mm
+        VellumRmlUi::Native VellumRmlUi::Metal)
+    target_compile_options(vellum-rmlui-metal-layers-test PRIVATE -fobjc-arc)
+    add_test(NAME vellum.rmlui.metal-layers
+        COMMAND vellum-rmlui-metal-layers-test "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}")
+    set_tests_properties(vellum.rmlui.metal-layers PROPERTIES SKIP_RETURN_CODE 77)
+
+    vellum_rmlui_add_test(vellum-rmlui-metal-filters-test metal/metal_filters_test.mm
+        VellumRmlUi::Native VellumRmlUi::Metal)
+    target_compile_options(vellum-rmlui-metal-filters-test PRIVATE -fobjc-arc)
+    add_test(NAME vellum.rmlui.metal-filters
+        COMMAND vellum-rmlui-metal-filters-test "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}")
+    set_tests_properties(vellum.rmlui.metal-filters PROPERTIES SKIP_RETURN_CODE 77)
+
+    vellum_rmlui_add_test(vellum-rmlui-metal-effects-test metal/metal_effects_test.cpp
+        VellumRmlUi::Metal)
+    target_include_directories(vellum-rmlui-metal-effects-test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME vellum.rmlui.metal-effects COMMAND vellum-rmlui-metal-effects-test)
+
+    add_test(NAME vellum.rmlui.metal-blend-control
+        COMMAND vellum-rmlui-metal-blend-control "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}"
+            "${_metal_refs}")
+    set_tests_properties(vellum.rmlui.metal-blend-control PROPERTIES
+        FIXTURES_REQUIRED vellum_rmlui_metal_references
+        SKIP_RETURN_CODE 77)
+endif()
+
 vellum_rmlui_add_test(vellum-rmlui-hot-reload-test hot_reload_test.cpp VellumRmlUi::DevAssets)
 add_test(NAME vellum.rmlui.hot-reload COMMAND vellum-rmlui-hot-reload-test)
 
@@ -64,4 +152,42 @@ if(VELLUM_RMLUI_INSTALL AND NOT CMAKE_CROSSCOMPILING)
             "-DVELLUM_RMLUI_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
             "-DTEST_CONFIG=$<CONFIG>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/RunInstallConsumer.cmake")
+    if(APPLE)
+        # Controls for the deployment-target check the install tests run. An
+        # object newer than the recorded target must fail it in either load
+        # command form; an older object in the legacy form must pass it. Each
+        # matches the check's own output, so a broken setup cannot pass.
+        foreach(_control IN ITEMS "build;27.0;fail" "legacy;27.0;fail" "legacy;10.13;pass")
+            list(GET _control 0 _form)
+            list(GET _control 1 _version)
+            list(GET _control 2 _expect)
+            set(_name "vellum.rmlui.deployment-target-${_form}-${_version}")
+            add_test(NAME "${_name}"
+                COMMAND "${CMAKE_COMMAND}"
+                    "-DVELLUM_RMLUI_CONTROL_DIR=${CMAKE_CURRENT_BINARY_DIR}/deployment-target-${_form}-${_version}"
+                    "-DVELLUM_RMLUI_C_COMPILER=${CMAKE_C_COMPILER}"
+                    "-DVELLUM_RMLUI_CONTROL_FORM=${_form}"
+                    "-DVELLUM_RMLUI_CONTROL_VERSION=${_version}"
+                    -P "${CMAKE_CURRENT_SOURCE_DIR}/PlantNewerObject.cmake")
+            string(REPLACE "." "\\." _version_regex "${_version}")
+            if(_expect STREQUAL "fail")
+                set_tests_properties("${_name}" PROPERTIES
+                    PASS_REGULAR_EXPRESSION "deployment-target-too-new: macOS ${_version_regex} > 13\\.3")
+            else()
+                set_tests_properties("${_name}" PROPERTIES
+                    PASS_REGULAR_EXPRESSION "deployment-target: 1 object build versions checked against macOS 13\\.3")
+            endif()
+        endforeach()
+    endif()
+    if(VELLUM_RMLUI_NATIVE)
+        add_test(NAME vellum.rmlui.install-consumer-native
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_RMLUI_BUILD_DIR=${PROJECT_BINARY_DIR}"
+                "-DVELLUM_RMLUI_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+                "-DVELLUM_RMLUI_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+                "-DVELLUM_RMLUI_CONSUMER=native"
+                "-DVELLUM_RMLUI_FONTS=${VELLUM_RMLUI_FONTS}"
+                "-DTEST_CONFIG=$<CONFIG>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/RunInstallConsumer.cmake")
+    endif()
 endif()

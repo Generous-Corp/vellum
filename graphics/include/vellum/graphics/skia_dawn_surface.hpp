@@ -60,6 +60,10 @@ public:
     SkiaDawnSurface(const SkiaDawnSurface&) = delete;
     SkiaDawnSurface& operator=(const SkiaDawnSurface&) = delete;
 
+    /// Draws `scene`. A scene whose version fails `scene_version_is_supported`
+    /// or that contains a node kind outside `is_known_kind` is refused before
+    /// any drawing; the surface stays usable and a capture still returns the
+    /// last frame that rendered successfully.
     [[nodiscard]] bool render(const Scene& scene, std::string* error = nullptr);
     [[nodiscard]] bool resize(
         std::uint32_t width, std::uint32_t height, float scale,

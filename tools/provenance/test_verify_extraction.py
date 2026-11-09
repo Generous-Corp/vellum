@@ -153,6 +153,38 @@ class VerifyExtractionTests(unittest.TestCase):
                 },
             )
 
+    def test_default_inventory_scans_c_abi_and_swift_package(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "bindings/include").mkdir(parents=True)
+            (root / "bindings/include/vellum.h").write_text(
+                "auto* x = pulp::audio::engine();\n", encoding="utf-8"
+            )
+            (root / "packages/vellum-swift/Sources").mkdir(parents=True)
+            (root / "packages/vellum-swift/Sources/Bridge.swift").write_text(
+                "let x = pulp::audio::engine()\n", encoding="utf-8"
+            )
+
+            findings = verify_extraction.scan_active_surface(root)
+
+            self.assertEqual(
+                {finding["path"] for finding in findings},
+                {
+                    "bindings/include/vellum.h",
+                    "packages/vellum-swift/Sources/Bridge.swift",
+                },
+            )
+
+    def test_c_abi_and_swift_package_are_active_source_roots(self) -> None:
+        new_roots = ("bindings", "packages/vellum-swift")
+        boundary = verify_extraction.configured_boundary(ROOT)
+        for entry in new_roots:
+            self.assertIn(entry, verify_extraction.EXPECTED_ACTIVE_ROOTS)
+            self.assertIn(entry, boundary["active_source_roots"])
+        self.assertEqual(
+            tuple(boundary["active_source_roots"]), verify_extraction.EXPECTED_ACTIVE_ROOTS
+        )
+
     def test_active_scan_ignores_historical_evidence_outside_inventory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
