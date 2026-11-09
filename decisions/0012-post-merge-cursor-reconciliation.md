@@ -84,6 +84,9 @@ queue's merge commit contains the other entries.
   receiver runs. Coverage at merge time is enforced by `provenance-verify` on
   `merge_group` and `push`; the receiver is a discovery backstop, not a second
   gate.
+  The observatory itself runs in its own `observatory-verify` job; the
+  required `provenance-verify` job needs it and fails unless it passed, so
+  `provenance-verify` remains the required context that carries it.
 - **Pull requests that change the mapping or add resolution events** still
   regenerate the report, and still conflict with each other exactly as before;
   only observation events for the pull request's own commits are excluded from
