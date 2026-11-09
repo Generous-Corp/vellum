@@ -3,6 +3,7 @@
 #include <vellum/graphics/damage.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <iostream>
@@ -445,9 +446,10 @@ void command_extents() {
 
 void damage_model_version_gate() {
     expect(partial_redraw_supported(kDamageModelSceneVersion) &&
+               partial_redraw_supported(kSceneVersion) &&
                !partial_redraw_supported(kDamageModelSceneVersion + 1U) &&
                !partial_redraw_supported(3U),
-           "partial redraw is enabled only for scene versions the damage model understands");
+           "partial redraw covers every scene version this build draws and no newer one");
     expect(to_string(FullRepaintReason::damage_model_version) == "damage_model_version",
            "the damage-model version fallback has a telemetry name");
     constexpr std::uint32_t width = 400;
@@ -456,22 +458,17 @@ void damage_model_version_gate() {
     auto partial = make_surface(width, height, 2.0F);
     if (!full || !partial) return;
     Scene scene = base_scene(width, height);
-    if (!render_both(*full, *partial, scene)) return;
     scene.scene_version = Scene{}.scene_version;
-    expect(!partial_redraw_supported(scene.scene_version),
-           "a default scene is newer than the damage model",
-           "default version " + std::to_string(scene.scene_version));
+    if (!render_both(*full, *partial, scene)) return;
     for (int step = 0; step < 2; ++step) {
         node(scene, "mover").bounds.x += 6.0F;
         if (!render_both(*full, *partial, scene)) return;
         const auto stats = partial->frame_stats();
-        expect(stats.full_repaint &&
-                   stats.full_repaint_reason == FullRepaintReason::damage_model_version &&
-                   stats.paint_commands_recorded == stats.paint_commands_total,
-               "a default-version scene takes the full-repaint path, step " +
-                   std::to_string(step),
+        expect(!stats.full_repaint && stats.full_repaint_reason == FullRepaintReason::none &&
+                   stats.paint_commands_recorded < stats.paint_commands_total,
+               "a default version 2 scene takes the partial path, step " + std::to_string(step),
                describe(stats));
-        compare("a default-version scene, step " + std::to_string(step), *full, *partial);
+        compare("a default version 2 scene, step " + std::to_string(step), *full, *partial);
     }
     Scene newer = scene;
     newer.scene_version = kSceneVersion + 1U;
@@ -481,6 +478,107 @@ void damage_model_version_gate() {
                partial->frame_stats().frame == before,
            "a scene version this build cannot draw is refused before any redraw",
            describe(partial->frame_stats()));
+}
+
+Affine2D rotation_degrees(float degrees, float scale = 1.0F) {
+    const float radians = degrees * 3.14159265358979323846F / 180.0F;
+    const float cosine = std::cos(radians) * scale;
+    const float sine = std::sin(radians) * scale;
+    return {.a = cosine, .b = sine, .c = -sine, .d = cosine};
+}
+
+Scene compositing_scene(float width, float height) {
+    Scene scene = base_scene(width, height);
+    SceneNode card;
+    card.id = "card";
+    card.bounds = {width * 0.55F, height * 0.18F, 90.0F, 60.0F};
+    card.children.push_back({
+        .id = "card-back",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {0.0F, 0.0F, 70.0F, 44.0F},
+        .fill = Color::hex(0x6366F1),
+        .box_shadows = {{.offset_x = 3.0F, .offset_y = 4.0F, .blur_radius = 6.0F,
+                         .spread_radius = 1.0F, .color = Color::rgba(0.0F, 0.0F, 0.0F, 0.5F)}},
+        .corner_radius = 6.0F,
+    });
+    card.children.push_back({
+        .id = "card-front",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {24.0F, 18.0F, 60.0F, 36.0F},
+        .fill = Color::hex(0xF59E0B),
+    });
+    scene.root.children.push_back(card);
+    return scene;
+}
+
+std::vector<Step> compositing_steps() {
+    return {
+        {"rotate a rectangle", [](Scene& scene) {
+             node(scene, "mover").transform = rotation_degrees(30.0F);
+         }},
+        {"rotate and scale it", [](Scene& scene) {
+             node(scene, "mover").transform = rotation_degrees(-20.0F, 1.4F);
+         }},
+        {"move the rotated rectangle", [](Scene& scene) {
+             node(scene, "mover").bounds.x += 23.5F;
+         }},
+        {"scale a group", [](Scene& scene) {
+             node(scene, "card").transform = Affine2D{.a = 1.25F, .d = 0.8F};
+         }},
+        {"fade a group", [](Scene& scene) { node(scene, "card").opacity = 0.55F; }},
+        {"re-round a corner set", [](Scene& scene) {
+             node(scene, "swatch").corner_radii = CornerRadii{10.0F, 0.0F, 6.0F, 3.0F};
+         }},
+        {"re-round one corner", [](Scene& scene) {
+             node(scene, "swatch").corner_radii->top_right = 8.0F;
+         }},
+        {"fade the group out", [](Scene& scene) { node(scene, "card").opacity = 0.0F; }},
+        {"move inside the hidden group", [](Scene& scene) {
+             node(scene, "card-front").bounds.x -= 12.0F;
+         }},
+        {"fade the group back and unscale it", [](Scene& scene) {
+             auto& card = node(scene, "card");
+             card.opacity = 1.0F;
+             card.transform.reset();
+         }},
+        {"rotate the label", [](Scene& scene) {
+             node(scene, "label").transform = rotation_degrees(4.0F);
+         }, false},
+        {"change nothing", [](Scene&) {}},
+    };
+}
+
+void compositing_sequence(std::uint32_t width, std::uint32_t height, float scale) {
+    const std::string size = std::to_string(width) + "x" + std::to_string(height) + "@" +
+        std::to_string(static_cast<int>(scale)) + " ";
+    auto full = make_surface(width, height, scale);
+    auto partial = make_surface(width, height, scale);
+    if (!full || !partial) return;
+    Scene scene = compositing_scene(static_cast<float>(width), static_cast<float>(height));
+    if (!render_both(*full, *partial, scene)) return;
+    compare(size + "the first compositing frame", *full, *partial);
+    for (const auto& step : compositing_steps()) {
+        step.edit(scene);
+        if (!render_both(*full, *partial, scene)) return;
+        const auto stats = partial->frame_stats();
+        if (step.expect_partial) {
+            expect(!stats.full_repaint && stats.full_repaint_reason == FullRepaintReason::none,
+                   size + step.name + " repaints only its damage", describe(stats));
+            if (step.name != "change nothing" && step.name != "move inside the hidden group") {
+                expect(stats.damage_area_pixels > 0 &&
+                           stats.paint_commands_recorded < stats.paint_commands_total,
+                       size + step.name + " re-records a subset of the paint commands",
+                       describe(stats));
+            } else {
+                expect(stats.damage_area_pixels == 0 && stats.paint_commands_recorded == 0,
+                       size + step.name + " records no paint commands", describe(stats));
+            }
+        } else {
+            expect(stats.damage_fraction == 1.0,
+                   size + step.name + " damages the whole frame", describe(stats));
+        }
+        compare(size + step.name, *full, *partial);
+    }
 }
 
 void explicit_damage() {
@@ -552,6 +650,8 @@ int main() {
         device_loss();
         command_extents();
         damage_model_version_gate();
+        compositing_sequence(400, 300, 1.0F);
+        compositing_sequence(400, 300, 2.0F);
     } catch (const std::exception& exception) {
         std::cerr << "FAIL " << exception.what() << '\n';
         return 1;

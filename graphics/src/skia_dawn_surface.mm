@@ -669,7 +669,12 @@ Extent command_extent(const PaintCommand& command, const Rect& frame, float scal
         case PaintCommand::Kind::end_layer:
             return std::nullopt;
     }
-    return pixel_extent(node_paint_bounds(painted, command.bounds, frame, propagation), scale);
+    if (command.kind == PaintCommand::Kind::text && !is_identity(command.transform)) {
+        return std::nullopt;
+    }
+    const auto local = node_paint_bounds(painted, command.bounds, frame, propagation);
+    if (!local) return pixel_extent(local, scale);
+    return pixel_extent(transformed_bounds(command.transform, *local), scale);
 }
 
 std::vector<Extent> paint_command_extents(

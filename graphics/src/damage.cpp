@@ -1,5 +1,7 @@
 #include <vellum/graphics/damage.hpp>
 
+#include <vellum/graphics/paint_command.hpp>
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -115,6 +117,28 @@ bool same_style(const TextStyle& a, const TextStyle& b) {
            a.strikethrough == b.strikethrough;
 }
 
+Affine2D effective_transform(const std::optional<Affine2D>& transform) noexcept {
+    return transform && !is_identity(*transform) ? *transform : Affine2D{};
+}
+
+bool same_transform(const std::optional<Affine2D>& a, const std::optional<Affine2D>& b) noexcept {
+    const Affine2D left = effective_transform(a);
+    const Affine2D right = effective_transform(b);
+    return same_float(left.a, right.a) && same_float(left.b, right.b) &&
+           same_float(left.c, right.c) && same_float(left.d, right.d) &&
+           same_float(left.tx, right.tx) && same_float(left.ty, right.ty);
+}
+
+bool same_radii(const CornerRadii& a, const CornerRadii& b) noexcept {
+    return same_float(a.top_left, b.top_left) && same_float(a.top_right, b.top_right) &&
+           same_float(a.bottom_right, b.bottom_right) && same_float(a.bottom_left, b.bottom_left);
+}
+
+bool compositing_differs(const SceneNode& previous, const SceneNode& next) noexcept {
+    return !same_transform(previous.transform, next.transform) ||
+           !same_float(previous.opacity, next.opacity);
+}
+
 bool same_runs(const std::vector<TextRun>& a, const std::vector<TextRun>& b) {
     return std::equal(a.begin(), a.end(), b.begin(), b.end(),
         [](const TextRun& left, const TextRun& right) {
@@ -177,6 +201,9 @@ SceneNode paint_fields(const SceneNode& node) {
     copy.custom_component = node.custom_component;
     copy.custom_properties_json = node.custom_properties_json;
     copy.mesh = node.mesh;
+    copy.transform = node.transform;
+    copy.opacity = node.opacity;
+    copy.corner_radii = node.corner_radii;
     return copy;
 }
 
@@ -202,7 +229,7 @@ public:
     Snapshot(const Scene& scene, float scale, const DamagePropagation& propagation)
         : width_(scene.width), height_(scene.height), scale_(scale), background_(scene.background),
           version_(scene.scene_version), frame_(frame_rect(scene, scale)) {
-        walk(propagation, scene.root, std::string{}, 0, 0.0F, 0.0F, std::nullopt);
+        walk(propagation, scene.root, std::string{}, 0, 0.0F, 0.0F, Affine2D{}, std::nullopt, false);
     }
 
     [[nodiscard]] const NodeRecord* find(const std::string& key) const {
@@ -232,12 +259,22 @@ public:
     }
 
 private:
-    void walk(const DamagePropagation& propagation, const SceneNode& node, const std::string& parent_key, std::size_t index,
-              float parent_x, float parent_y, std::optional<Rect> clip) {
+    void walk(const DamagePropagation& propagation, const SceneNode& node,
+              const std::string& parent_key, std::size_t index, float parent_x, float parent_y,
+              const Affine2D& parent_transform, std::optional<Rect> clip, bool hidden) {
         std::string key = make_key(node, parent_key, index);
         const Rect absolute{parent_x + node.bounds.x, parent_y + node.bounds.y, node.bounds.width,
                             node.bounds.height};
-        if (const auto own_clip = propagation.clip_bounds(node, absolute)) {
+        const bool finite = compositing_is_finite(node);
+        hidden = hidden || !is_known_kind(node.kind) ||
+                 (finite && std::clamp(node.opacity, 0.0F, 1.0F) <= 0.0F);
+        Affine2D transform = parent_transform;
+        if (node.transform && !is_identity(*node.transform)) {
+            transform = concat(parent_transform, concat(
+                translation(absolute.x, absolute.y),
+                concat(*node.transform, translation(-absolute.x, -absolute.y))));
+        }
+        if (const auto own_clip = propagation.clip_bounds(node, transformed_bounds(transform, absolute))) {
             if (clip) {
                 const auto narrowed = clip_to(*clip, *own_clip);
                 clip = narrowed.value_or(Rect{own_clip->x, own_clip->y, 0.0F, 0.0F});
@@ -247,11 +284,22 @@ private:
         }
 
         const Rect logical_frame{0.0F, 0.0F, width_, height_};
-        std::optional<Rect> damage = node_paint_bounds(node, absolute, logical_frame, propagation);
-        if (damage) {
-            const float radius = propagation.effect_radius(node);
-            if (std::isfinite(radius) && radius > 0.0F) damage = outset(*damage, radius);
-            if (clip) damage = clip_to(*damage, *clip);
+        std::optional<Rect> damage;
+        if (!finite) {
+            constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+            damage = Rect{nan, nan, nan, nan};
+        } else if (!hidden) {
+            damage = node_paint_bounds(node, absolute, logical_frame, propagation);
+            if (damage) {
+                const float radius = propagation.effect_radius(node);
+                if (std::isfinite(radius) && radius > 0.0F) damage = outset(*damage, radius);
+                if (node.kind == SceneNode::Kind::text && !is_identity(transform)) {
+                    damage = logical_frame;
+                } else {
+                    damage = transformed_bounds(transform, *damage);
+                }
+                if (clip) damage = clip_to(*damage, *clip);
+            }
         }
 
         const std::size_t position = records_.size();
@@ -260,7 +308,8 @@ private:
         children_[parent_key].push_back(key);
         records_.push_back({key, parent_key, paint_fields(node), absolute, damage, 0});
         for (std::size_t child = 0; child < node.children.size(); ++child) {
-            walk(propagation, node.children[child], key, child, absolute.x, absolute.y, clip);
+            walk(propagation, node.children[child], key, child, absolute.x, absolute.y, transform,
+                 clip, hidden);
         }
         records_[position].subtree_end = records_.size();
     }
@@ -335,7 +384,7 @@ void diff_snapshots(const Snapshot& before, const Snapshot& after, DamageRegion&
             add_logical(region, now.damage, scale);
             continue;
         }
-        if (was->parent_key != now.parent_key) {
+        if (was->parent_key != now.parent_key || compositing_differs(was->paint, now.paint)) {
             add_subtree(region, before, *was);
             add_subtree(region, after, now);
             continue;
@@ -650,7 +699,11 @@ std::optional<Rect> node_paint_bounds(const SceneNode& node, const Rect& absolut
 }
 
 bool paint_differs(const SceneNode& previous, const SceneNode& next) {
-    if (previous.kind != next.kind) return true;
+    if (previous.kind != next.kind || compositing_differs(previous, next)) return true;
+    if (previous.corner_radii.has_value() != next.corner_radii.has_value() ||
+        !same_radii(resolved_corner_radii(previous), resolved_corner_radii(next))) {
+        return true;
+    }
     switch (next.kind) {
     case SceneNode::Kind::group:
         return false;

@@ -501,6 +501,102 @@ void review_hardening() {
     check(!forced.stats().explicit_full_frame, "clear resets the explicit flag");
 }
 
+Scene grouped_scene() {
+    Scene scene;
+    scene.width = 200.0F;
+    scene.height = 100.0F;
+    SceneNode group;
+    group.id = "g";
+    group.bounds = {0.0F, 0.0F, 200.0F, 100.0F};
+    group.children.push_back(rectangle("a", {10.0F, 10.0F, 20.0F, 20.0F}));
+    group.children.push_back(rectangle("b", {100.0F, 10.0F, 20.0F, 20.0F}));
+    scene.root.children.push_back(group);
+    return scene;
+}
+
+void compositing_damage() {
+    using vellum::graphics::Affine2D;
+    using vellum::graphics::CornerRadii;
+    const Affine2D quarter_turn{.a = 0.0F, .b = 1.0F, .c = -1.0F, .d = 0.0F};
+    const Affine2D doubled{.a = 2.0F, .d = 2.0F};
+
+    const Scene before = base_scene();
+    Scene rotated = before;
+    child(rotated, "a")->transform = quarter_turn;
+    auto damage = diff(before, rotated);
+    check(covers(damage, {10, 10, 30, 30}) && covers(damage, {0, 10, 10, 30}) && damage.area() == 600,
+          "a rotation damages the old box and the rotated box about the node origin");
+    check(!damage.intersects({100, 10, 120, 30}), "a rotation leaves other nodes alone");
+
+    Scene identity = before;
+    child(identity, "a")->transform = Affine2D{};
+    check(diff(before, identity).empty(), "an identity transform equals no transform");
+
+    const Scene group = grouped_scene();
+    Scene scaled = group;
+    child(scaled, "g")->transform = doubled;
+    damage = diff(group, scaled);
+    check(covers(damage, {10, 10, 30, 30}) && covers(damage, {20, 20, 60, 60}) &&
+              covers(damage, {100, 10, 120, 30}),
+          "a group transform damages its descendants' old and transformed areas");
+    check(damage.area() == 1900 + 400,
+          "group transform damage is exactly the mapped areas, clipped to the frame");
+
+    Scene faded = group;
+    child(faded, "g")->opacity = 0.5F;
+    damage = diff(group, faded);
+    check(damage.area() == 800 && covers(damage, {10, 10, 30, 30}) && covers(damage, {100, 10, 120, 30}),
+          "an opacity change damages the whole subtree");
+
+    Scene hidden = group;
+    child(hidden, "g")->opacity = 0.0F;
+    check(diff(group, hidden).area() == 800, "fading to zero damages what the subtree painted");
+    check(diff(hidden, group).area() == 800, "fading back in damages what the subtree paints");
+    Scene hidden_moved = hidden;
+    child(hidden_moved, "a")->bounds.x = 60.0F;
+    check(diff(hidden, hidden_moved).empty(), "a change inside a zero-opacity subtree is not damage");
+
+    Scene rounded = before;
+    child(rounded, "a")->corner_radii = CornerRadii{8.0F, 0.0F, 4.0F, 2.0F};
+    damage = diff(before, rounded);
+    check(damage.rects().size() == 1 && damage.rects()[0] == PixelRect{10, 10, 30, 30},
+          "setting per-corner radii damages the node");
+    Scene rerounded = rounded;
+    child(rerounded, "a")->corner_radii->bottom_left = 6.0F;
+    check(diff(rounded, rerounded).area() == 400, "changing one corner radius damages the node");
+
+    Scene broken = before;
+    child(broken, "a")->transform = Affine2D{.a = std::numeric_limits<float>::quiet_NaN()};
+    check(diff(before, broken).is_full_frame(), "a non-finite transform repaints the frame");
+    Scene broken_opacity = before;
+    child(broken_opacity, "a")->opacity = std::numeric_limits<float>::infinity();
+    check(diff(before, broken_opacity).is_full_frame(), "a non-finite opacity repaints the frame");
+
+    Scene labelled = before;
+    SceneNode label;
+    label.id = "t";
+    label.kind = SceneNode::Kind::text;
+    label.bounds = {10.0F, 50.0F, 40.0F, 20.0F};
+    label.text = "Hello";
+    label.font_size = 10.0F;
+    labelled.root.children.push_back(label);
+    Scene turned = labelled;
+    child(turned, "t")->transform = quarter_turn;
+    check(diff(labelled, turned).is_full_frame(), "text under a non-identity transform repaints the frame");
+    check(diff(turned, turned).empty(), "unchanged transformed text adds no damage");
+
+    class Blur final : public DamagePropagation {
+    public:
+        float effect_radius(const SceneNode& node) const override { return node.id == "a" ? 5.0F : 0.0F; }
+    };
+    const Blur blur;
+    Scene recoloured = scaled;
+    child(recoloured, "a")->fill = Color::hex(0x00FF00);
+    damage = diff(scaled, recoloured, 1.0F, exact_policy(), &blur);
+    check(damage.rects().size() == 1 && damage.rects()[0] == PixelRect{10, 10, 70, 70},
+          "an effect radius scales with the transform");
+}
+
 void tracker() {
     check(vellum::graphics::parse_invalidation_reason("state") == InvalidationReason::state &&
               vellum::graphics::parse_invalidation_reason("timer") == InvalidationReason::timer &&
@@ -580,6 +676,7 @@ int main() {
     unusual_bounds();
     duplicate_ids();
     review_hardening();
+    compositing_damage();
     tracker();
     if (failures != 0) {
         std::fprintf(stderr, "%d damage check(s) failed\n", failures);
