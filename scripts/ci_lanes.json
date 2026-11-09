@@ -218,6 +218,14 @@
         "script": "scripts/readme_lint.py"
       },
       {
+        "script": "scripts/test_prose_lint.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/prose_lint.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_docs_sync.py"
       },
       {

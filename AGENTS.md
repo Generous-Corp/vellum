@@ -11,4 +11,5 @@ Guidance for coding agents working in this repository. The overview is in [READM
 - **macOS first.** A Windows- or Linux-only failure gets a `PARKED/<platform>` issue with evidence and never blocks a macOS landing.
 - **Labels the pipeline skips:** `superseded`, `owner-decision`, `PARKED/<platform>`.
 - Launch agents with `sr claude` / `sr codex` and use the smallest model that fits (Haiku or Codex Luna for mechanical work, Sonnet or Codex Terra/Sol for fixes, Opus/Fable/Codex Astra for security, signing and release diffs).
+- Prose in docs, comments and PR bodies carries no em dashes, no workflow breadcrumbs (phases, PR numbers as explanation, dated rulings) and no padding. `python3 -I scripts/prose_lint.py` checks the lines a branch adds; the `product-quality` check runs it.
 - Steward log on m3: `~/Library/Logs/shipyard-steward-tick/summary.log`.
