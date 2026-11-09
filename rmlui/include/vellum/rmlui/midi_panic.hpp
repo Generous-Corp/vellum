@@ -159,10 +159,13 @@ class PanicBridge final {
 inline std::string_view midi_panic_stylesheet() {
     return R"rcss(/* MIDI panic button states, set by vellum::rmlui::PanicBridge. A host that
    services no panic requests hides the button, so an editor can always
-   include it and never shows a control that does nothing. To keep it visible
-   but inert instead, override .midi-panic-unavailable after this sheet. */
+   include it and never shows a control that does nothing. Visibility, not
+   display: editors set display on their controls (often by id, which would
+   outrank this class), and a hidden button keeps its place in the layout.
+   To keep it visible but inert instead, override .midi-panic-unavailable
+   after this sheet. */
 .midi-panic-unavailable {
-    display: none;
+    visibility: hidden;
 }
 )rcss";
 }
