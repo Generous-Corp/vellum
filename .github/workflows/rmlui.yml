@@ -117,10 +117,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Vellum's default build requests no dependency at all, so the
+          # sentinel's entry is what shows the recorder ran.
           cmake -S . -B build-vellum-default \
             -DCMAKE_BUILD_TYPE=Release \
             -DVELLUM_BUILD_TESTS=OFF \
-            -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES="$PWD/tools/ci/dependency_request_recorder.cmake" \
+            -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES="$PWD/tools/ci/dependency_request_recorder.cmake;$PWD/tools/ci/dependency_request_sentinel.cmake" \
             -DDEPENDENCY_REQUEST_LOG="$PWD/build-vellum-default/dependency-requests.jsonl"
 
       - name: Check Vellum's default build requested no RmlUi
@@ -128,7 +130,8 @@ jobs:
         run: |
           python3 -I tools/ci/dependency_request_check.py \
             --log build-vellum-default/dependency-requests.jsonl \
-            --forbid 'vellum_rmlui_*' --forbid 'rmlui*' --forbid 'freetype*' --forbid 'lua*'
+            --forbid 'vellum_rmlui_*' --forbid 'rmlui*' --forbid 'freetype*' --forbid 'lua*' \
+            --require 'recorder-loaded'
 
       - name: Control - Vellum with the RmlUi module must request RmlUi
         shell: bash
