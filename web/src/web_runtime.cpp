@@ -1,3 +1,5 @@
+#include "canvas_shell_lowering.hpp"
+
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/runtime/kernel.hpp>
 
@@ -14,7 +16,6 @@ namespace {
 
 vellum::graphics::Scene scene;
 std::vector<vellum::graphics::PaintCommand> commands;
-// Commands the canvas shell drew with a declared loss in the last render.
 int lowering_losses = 0;
 std::unique_ptr<vellum::runtime::Kernel> kernel;
 
@@ -132,32 +133,16 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_add_text(
 EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     if (!kernel || scene.width <= 0.0F || scene.height <= 0.0F) return 0;
     commands = vellum::graphics::make_paint_commands(scene);
-    lowering_losses = 0;
+    lowering_losses = vellum::web::canvas_shell_loss_count(commands);
     const auto opacities = vellum::graphics::effective_opacities(commands);
     const auto background = scene.background;
     canvas_begin(scene.width, scene.height, background.red, background.green,
                  background.blue, background.alpha);
     for (std::size_t index = 0; index < commands.size(); ++index) {
         const auto& command = commands[index];
-        if (!vellum::graphics::draws_content(command.kind)) {
-            // The shell has no group compositing. Each command is faded by its
-            // effective opacity instead, so overlapping members of a faded
-            // group show through one another.
-            if (command.kind == vellum::graphics::PaintCommand::Kind::begin_layer) {
-                ++lowering_losses;
-            }
+        if (!vellum::graphics::draws_content(command.kind) ||
+            command.kind == vellum::graphics::PaintCommand::Kind::mesh) {
             continue;
-        }
-        if (command.kind == vellum::graphics::PaintCommand::Kind::mesh) {
-            ++lowering_losses;
-            continue;
-        }
-        // The shell draws axis-aligned boxes with one radius. A transformed
-        // command keeps its untransformed box, and per-corner radii draw with
-        // the uniform shorthand.
-        if (!vellum::graphics::is_identity(command.transform) ||
-            !vellum::graphics::is_uniform(command.corner_radii)) {
-            ++lowering_losses;
         }
         auto color = command.fill;
         color.alpha *= opacities[index];
@@ -177,9 +162,8 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     return 1;
 }
 
-/// The number of commands the last render drew with a declared loss: a faded
-/// group flattened to per-command alpha, a mesh skipped, or a transform or
-/// per-corner radius the canvas shell cannot express.
+/// The number of commands the last render drew with a loss; see
+/// `vellum::web::canvas_shell_loses`.
 EMSCRIPTEN_KEEPALIVE int vellum_web_lowering_loss_count() {
     return lowering_losses;
 }

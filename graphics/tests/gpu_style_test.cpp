@@ -501,20 +501,24 @@ bool scene_version_refusal() {
         return false;
     }
     if (again != first) return false;
-    // The oldest supported version still renders, drawing the compositing
-    // fields it predates at their defaults, even a non-finite one.
     Scene legacy = scene;
     legacy.scene_version = kMinSupportedSceneVersion;
-    legacy.root.children[0].opacity = std::nanf("");
-    legacy.root.children[0].transform = Affine2D{.a = 3.0F, .d = 3.0F};
-    legacy.root.children[0].corner_radii = CornerRadii{6.0F, 6.0F, 6.0F, 6.0F};
     std::vector<std::uint8_t> old_version;
     if (!surface->render(legacy, &error) ||
-        !surface->capture_rgba(old_version, width, height, &error)) {
-        std::cerr << "version 1 scene was refused: " << error << '\n';
+        !surface->capture_rgba(old_version, width, height, &error) || old_version != first) {
+        std::cerr << "version 1 scene did not render as before: " << error << '\n';
         return false;
     }
-    return old_version == first;
+    const std::string carries =
+        "scene version 1 cannot carry the transform, opacity, or corner radii at swatch";
+    Scene turned = legacy;
+    turned.root.children[0].transform = Affine2D{.a = 3.0F, .d = 3.0F};
+    Scene faded = legacy;
+    faded.root.children[0].opacity = 0.5F;
+    Scene cornered = legacy;
+    cornered.root.children[0].corner_radii = CornerRadii{6.0F, 6.0F, 6.0F, 6.0F};
+    return refused_keeps_frame(turned, carries) && refused_keeps_frame(faded, carries) &&
+           refused_keeps_frame(cornered, carries);
 }
 
 struct Probe final {
@@ -525,8 +529,7 @@ struct Probe final {
 };
 
 // Captures `scene` twice on fresh surfaces, requires identical bytes, and
-// checks each probe within two levels per channel. Fixtures in this shape move
-// into the shared capture harness's fixture list when it is available.
+// checks each probe within two levels per channel.
 bool capture_and_probe(const char* fixture, const Scene& scene,
                        const std::vector<Probe>& probes) {
     std::vector<std::uint8_t> rgba;
@@ -561,12 +564,10 @@ bool capture_and_probe(const char* fixture, const Scene& scene,
 }
 
 // A bar turned a quarter about its centre, a square scaled about its origin
-// inside a translated parent, and a refused non-finite transform.
+// inside a translated parent, a flattened square, and a refused NaN transform.
 bool node_transform_rotation_scale() {
     Scene scene{.width = 64.0F, .height = 64.0F, .background = Color::hex(0x000000)};
     scene.root.id = "root";
-    // A 32 by 8 bar at (16, 28) turned about its centre (16, 4) in its own
-    // frame becomes the 8 by 32 bar at (28, 16).
     scene.root.children.push_back({
         .id = "bar",
         .kind = SceneNode::Kind::rectangle,
@@ -576,7 +577,6 @@ bool node_transform_rotation_scale() {
             concat(Affine2D{.a = 0.0F, .b = 1.0F, .c = -1.0F, .d = 0.0F},
                    translation(-16.0F, -4.0F))),
     });
-    // The parent's origin is (4, 4); its child doubles about that origin.
     scene.root.children.push_back({
         .id = "frame",
         .kind = SceneNode::Kind::group,
@@ -589,7 +589,15 @@ bool node_transform_rotation_scale() {
             .transform = Affine2D{.a = 2.0F, .d = 2.0F},
         }},
     });
+    scene.root.children.push_back({
+        .id = "flattened",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {48.0F, 48.0F, 12.0F, 12.0F},
+        .fill = Color::hex(0x0000FF),
+        .transform = Affine2D{.a = 0.0F, .d = 0.0F},
+    });
     if (!capture_and_probe("node_transform_rotation_scale", scene, {
+            {"a zero-determinant transform paints nothing", 54, 54, {0, 0, 0, 255}},
             {"turned bar covers its new top", 32, 20, {255, 0, 0, 255}},
             {"turned bar covers its new bottom", 32, 44, {255, 0, 0, 255}},
             {"turned bar left its old left end", 20, 32, {0, 0, 0, 255}},
@@ -640,7 +648,6 @@ bool group_opacity_layers() {
                      white("nested/full", {80.0F, 0.0F, 16.0F, 32.0F})},
         .opacity = 0.5F,
     });
-    // Without the layer the overlap would be 191: 128 plus half of the rest.
     return capture_and_probe("group_opacity_layers", scene, {
         {"faded group outside the overlap", 4, 16, {128, 128, 128, 255}},
         {"faded group inside the overlap", 16, 16, {128, 128, 128, 255}},
@@ -649,6 +656,178 @@ bool group_opacity_layers() {
         {"half inside a half group", 72, 16, {64, 64, 64, 255}},
         {"opaque inside a half group", 88, 16, {128, 128, 128, 255}},
     });
+}
+
+// Radii whose sum exceeds a side scale down together, as CSS radii do.
+bool radii_overflow_scaling() {
+    Scene scene{.width = 40.0F, .height = 40.0F, .background = Color::hex(0x000000)};
+    scene.root.id = "root";
+    scene.root.children.push_back({
+        .id = "overflow",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {0.0F, 0.0F, 40.0F, 40.0F},
+        .fill = Color::hex(0xFFFFFF),
+        .corner_radii = CornerRadii{40.0F, 40.0F, 0.0F, 0.0F},
+    });
+    return capture_and_probe("radii_overflow_scaling", scene, {
+        {"outside the scaled top-left arc", 4, 4, {0, 0, 0, 255}},
+        {"outside the scaled top-right arc", 35, 4, {0, 0, 0, 255}},
+        {"inside the scaled arcs at the top centre", 20, 2, {255, 255, 255, 255}},
+        {"inside the scaled arc below its centre", 2, 24, {255, 255, 255, 255}},
+        {"square bottom corners", 1, 38, {255, 255, 255, 255}},
+    });
+}
+
+// A faded command whose own paint overlaps itself draws through a layer, and
+// a faded group's layer bounds reach a blurred shadow.
+bool faded_command_layers() {
+    Scene scene{.width = 112.0F, .height = 64.0F, .background = Color::hex(0x000000)};
+    scene.root.id = "root";
+    const auto red = Color::hex(0xFF0000);
+    scene.root.children.push_back({
+        .id = "gradient",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {0.0F, 0.0F, 16.0F, 16.0F},
+        .fill = Color::hex(0xFFFFFF),
+        .fill_gradients = {{.stops = {{.position = 0.0F, .color = red},
+                                      {.position = 1.0F, .color = red}}}},
+        .opacity = 0.5F,
+    });
+    scene.root.children.push_back({
+        .id = "shadows",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {24.0F, 0.0F, 8.0F, 16.0F},
+        .fill = Color::hex(0xFFFFFF),
+        .box_shadows = {{.offset_x = 10.0F, .color = Color::hex(0xFFFFFF)},
+                        {.offset_x = 10.0F, .color = Color::hex(0xFFFFFF)}},
+        .opacity = 0.5F,
+    });
+    auto quad = std::make_shared<TriangleMesh>();
+    quad->vertices = {
+        {.x = 0.0F, .y = 0.0F}, {.x = 16.0F, .y = 0.0F},
+        {.x = 16.0F, .y = 16.0F}, {.x = 0.0F, .y = 16.0F},
+    };
+    quad->indices = {0, 1, 2, 0, 2, 3};
+    scene.root.children.push_back({
+        .id = "mesh",
+        .kind = SceneNode::Kind::mesh,
+        .bounds = {48.0F, 0.0F, 16.0F, 16.0F},
+        .mesh = quad,
+        .opacity = 0.5F,
+    });
+    scene.root.children.push_back({
+        .id = "decorated",
+        .kind = SceneNode::Kind::text,
+        .bounds = {0.0F, 24.0F, 64.0F, 36.0F},
+        .fill = Color::hex(0xFFFFFF),
+        .text = "gjpqy",
+        .font_size = 28.0F,
+        .underline = true,
+        .opacity = 0.5F,
+    });
+    SceneNode blurred{
+        .id = "blurred",
+        .kind = SceneNode::Kind::group,
+        .opacity = 0.5F,
+    };
+    blurred.children.push_back({
+        .id = "blurred/box",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {76.0F, 24.0F, 12.0F, 12.0F},
+        .fill = Color::hex(0xFFFFFF),
+        .box_shadows = {{.blur_radius = 8.0F, .color = Color::hex(0xFFFFFF)}},
+    });
+    blurred.children.push_back({
+        .id = "blurred/dot",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {100.0F, 56.0F, 4.0F, 4.0F},
+        .fill = Color::hex(0xFFFFFF),
+    });
+    scene.root.children.push_back(std::move(blurred));
+
+    std::vector<std::uint8_t> rgba;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    if (!capture_and_probe("faded_command_layers", scene, {
+            {"faded gradient covers its fill before fading", 8, 8, {128, 0, 0, 255}},
+            {"faded overlapping shadows", 38, 8, {128, 128, 128, 255}},
+            {"faded box under its shadows", 28, 8, {128, 128, 128, 255}},
+            {"faded mesh", 56, 8, {128, 128, 128, 255}},
+            {"faded group box", 82, 30, {128, 128, 128, 255}},
+        }) ||
+        !capture(scene, rgba, width, height)) {
+        return false;
+    }
+    int brightest = 0;
+    int lit = 0;
+    for (std::uint32_t y = 24; y < 64; ++y) {
+        for (std::uint32_t x = 0; x < 64; ++x) {
+            const int value = pixel(rgba, width, x, y)[0];
+            brightest = std::max(brightest, value);
+            if (value > 100) ++lit;
+        }
+    }
+    const int halo = pixel(rgba, width, 92, 30)[0];
+    if (brightest > 132 || lit < 50 || halo < 8) {
+        std::cerr << "faded_command_layers: decorated text brightest=" << brightest
+                  << " lit=" << lit << ", blurred shadow beyond the box=" << halo << '\n';
+        return false;
+    }
+    return true;
+}
+
+// A transform carries a shadow's offset and turns text with its node.
+bool transformed_shadow_and_text() {
+    Scene scene{.width = 128.0F, .height = 128.0F, .background = Color::hex(0x000000)};
+    scene.root.id = "root";
+    scene.root.children.push_back({
+        .id = "shaded",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {4.0F, 4.0F, 8.0F, 8.0F},
+        .fill = Color::hex(0xFF0000),
+        .box_shadows = {{.offset_x = 8.0F, .color = Color::hex(0x00FF00)}},
+        .transform = Affine2D{.a = 2.0F, .d = 2.0F},
+    });
+    scene.root.children.push_back({
+        .id = "turned",
+        .kind = SceneNode::Kind::text,
+        .bounds = {88.0F, 8.0F, 96.0F, 24.0F},
+        .fill = Color::hex(0xFFFFFF),
+        .text = "WWWWW",
+        .font_size = 18.0F,
+        .transform = Affine2D{.a = 0.0F, .b = 1.0F, .c = -1.0F, .d = 0.0F},
+    });
+    std::vector<std::uint8_t> rgba;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    if (!capture_and_probe("transformed_shadow_and_text", scene, {
+            {"scaled box", 16, 10, {255, 0, 0, 255}},
+            {"shadow offset doubles with the scale", 28, 10, {0, 255, 0, 255}},
+            {"shadow ends at the scaled offset", 40, 10, {0, 0, 0, 255}},
+        }) ||
+        !capture(scene, rgba, width, height)) {
+        return false;
+    }
+    std::uint32_t left = width;
+    std::uint32_t right = 0;
+    std::uint32_t top = height;
+    std::uint32_t bottom = 0;
+    for (std::uint32_t y = 0; y < height; ++y) {
+        for (std::uint32_t x = 48; x < width; ++x) {
+            if (pixel(rgba, width, x, y)[1] < 128) continue;
+            left = std::min(left, x);
+            right = std::max(right, x);
+            top = std::min(top, y);
+            bottom = std::max(bottom, y);
+        }
+    }
+    if (right < left || bottom - top < 2U * (right - left) || bottom - top < 40U ||
+        right > 90U) {
+        std::cerr << "transformed_shadow_and_text: text ink spans x " << left << ".." << right
+                  << " y " << top << ".." << bottom << '\n';
+        return false;
+    }
+    return true;
 }
 
 // Each corner keeps its own radius, and the
@@ -715,6 +894,15 @@ int main(int argc, char** argv) {
         }
         if (fixture == "per_corner_radii") {
             return per_corner_radii() ? 0 : 1;
+        }
+        if (fixture == "radii_overflow_scaling") {
+            return radii_overflow_scaling() ? 0 : 1;
+        }
+        if (fixture == "faded_command_layers") {
+            return faded_command_layers() ? 0 : 1;
+        }
+        if (fixture == "transformed_shadow_and_text") {
+            return transformed_shadow_and_text() ? 0 : 1;
         }
     } catch (const std::exception& exception) {
         std::cerr << exception.what() << '\n';

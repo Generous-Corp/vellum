@@ -183,9 +183,8 @@ struct CornerRadii final {
 /// silently missing.
 ///
 /// Version 2 adds `SceneNode::transform`, `opacity`, and `corner_radii`. A
-/// version 1 scene is still accepted and is drawn with the identity
-/// transform, full opacity, and the uniform `corner_radius`, whatever those
-/// fields hold.
+/// version 1 scene is still accepted when none of its nodes sets them; one
+/// that does fails `scene_fields_match_version` and is refused.
 inline constexpr std::uint32_t kSceneVersion = 2U;
 
 /// The oldest scene schema version this build still consumes.
@@ -195,11 +194,6 @@ inline constexpr std::uint32_t kMinSupportedSceneVersion = 1U;
     return version >= kMinSupportedSceneVersion && version <= kSceneVersion;
 }
 
-/// Whether a scene of `version` draws node transforms, opacity, and per-corner
-/// radii; a version 1 scene predates them.
-[[nodiscard]] constexpr bool scene_version_has_compositing(std::uint32_t version) noexcept {
-    return version >= 2U;
-}
 
 /// A deliberately small retained scene used by the first extraction proof.
 ///
@@ -267,6 +261,22 @@ struct SceneNode final {
     };
 }
 
+/// Whether a node sets a field version 2 introduced: a non-identity
+/// transform, an opacity below one, or per-corner radii.
+[[nodiscard]] constexpr bool uses_version_2_fields(const SceneNode& node) noexcept {
+    return (node.transform && !is_identity(*node.transform)) || !(node.opacity >= 1.0F) ||
+           node.corner_radii.has_value();
+}
+
+/// The first node, in depth-first order, that `uses_version_2_fields`.
+[[nodiscard]] inline const SceneNode* find_version_2_fields(const SceneNode& node) noexcept {
+    if (uses_version_2_fields(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_2_fields(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
 /// Whether a node's transform, opacity, and corner radii are all finite.
 [[nodiscard]] inline bool compositing_is_finite(const SceneNode& node) noexcept {
     return std::isfinite(node.opacity) &&
@@ -317,6 +327,12 @@ struct Scene final {
     SceneNode root;
     std::uint32_t scene_version = kSceneVersion;
 };
+
+/// Whether every field the scene sets exists at its version: a version 1
+/// scene sets no field that `uses_version_2_fields` reports.
+[[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
+    return scene.scene_version >= 2U || find_version_2_fields(scene.root) == nullptr;
+}
 
 [[nodiscard]] inline const SceneNode* find_node(
     const SceneNode& node, std::string_view id) noexcept {

@@ -93,7 +93,6 @@ bool near_rect(const vellum::graphics::Rect& rect, float x, float y, float width
 }
 
 vellum::graphics::Affine2D quarter_turn() {
-    // (x, y) -> (-y, x): a clockwise quarter turn in a y-down frame.
     return {.a = 0.0F, .b = 1.0F, .c = -1.0F, .d = 0.0F};
 }
 
@@ -142,7 +141,6 @@ bool transform_geometry() {
     }
     const auto& bar = commands[0];
     const auto& nudged = commands[1];
-    // The bar spans (15, 25) to (25, 29) before the turn about (10, 20).
     if (!near_rect(bar.bounds, 15.0F, 25.0F, 10.0F, 4.0F) ||
         !near_point(vellum::graphics::apply(bar.transform, {15.0F, 25.0F}), 5.0F, 25.0F) ||
         !near_point(vellum::graphics::apply(bar.transform, {25.0F, 29.0F}), 1.0F, 35.0F) ||
@@ -150,8 +148,6 @@ bool transform_geometry() {
                    1.0F, 25.0F, 4.0F, 10.0F)) {
         return false;
     }
-    // The child moves 3 px in the parent's scaled frame: its origin (15, 25)
-    // goes to (10, 20) + 2 * (5 + 3, 5).
     if (!near_point(vellum::graphics::apply(nudged.transform, {15.0F, 25.0F}), 26.0F, 30.0F) ||
         !near_rect(vellum::graphics::transformed_bounds(nudged.transform, nudged.bounds),
                    26.0F, 30.0F, 4.0F, 4.0F) ||
@@ -161,12 +157,10 @@ bool transform_geometry() {
                    1.0F, 1.0F, 2.0F, 2.0F)) {
         return false;
     }
-    // concat applies its right operand first.
     const auto composed = vellum::graphics::concat(
         vellum::graphics::translation(1.0F, 0.0F), Affine2D{.a = 2.0F, .d = 2.0F});
     if (!near_point(vellum::graphics::apply(composed, {1.0F, 1.0F}), 3.0F, 2.0F)) return false;
 
-    // A non-finite transform drops its subtree from the stream and is found.
     auto broken = scene;
     broken.root.children[1].transform->c = std::numeric_limits<float>::infinity();
     const auto kept = vellum::graphics::make_paint_commands(broken);
@@ -251,16 +245,14 @@ bool opacity_nesting() {
             return false;
         }
     }
-    // The layer carries its owner's absolute box and transform.
-    if (!near_rect(commands[0].bounds, 2.0F, 3.0F, 10.0F, 10.0F) ||
-        !near_point(vellum::graphics::apply(commands[0].transform, {2.0F, 3.0F}), 2.0F, 3.0F) ||
-        !near_point(vellum::graphics::apply(commands[0].transform, {3.0F, 3.0F}), 2.0F, 4.0F) ||
+    if (!near_rect(commands[0].bounds, -2.0F, 3.0F, 4.0F, 4.0F) ||
+        commands[0].layer_unbounded || !vellum::graphics::is_identity(commands[0].transform) ||
+        !commands[6].layer_unbounded ||
         vellum::graphics::draws_content(PaintCommand::Kind::begin_layer) ||
         vellum::graphics::draws_content(PaintCommand::Kind::end_layer) ||
         !vellum::graphics::draws_content(PaintCommand::Kind::mesh)) {
         return false;
     }
-    // Nested layers multiply; an unmatched end leaves the opacity unchanged.
     const std::vector<PaintCommand> nested{
         {.kind = PaintCommand::Kind::begin_layer, .opacity = 0.5F},
         {.kind = PaintCommand::Kind::begin_layer, .opacity = 0.5F},
@@ -324,43 +316,67 @@ bool corner_radii() {
     return found != nullptr && found->id == "corners";
 }
 
-// A version 1 scene draws with the default transform, opacity, and uniform
-// radii even when those fields are set, at every depth.
-bool legacy_scene_defaults() {
+// A version 1 scene that sets a version 2 field yields no commands at all.
+bool legacy_scene_fields() {
     using vellum::graphics::SceneNode;
     vellum::graphics::Scene scene;
     scene.scene_version = 1U;
     scene.root.children.push_back({
-        .id = "group",
-        .kind = SceneNode::Kind::group,
-        .bounds = {10.0F, 10.0F, 20.0F, 20.0F},
-        .children = {
-            {.id = "a", .kind = SceneNode::Kind::rectangle,
-             .bounds = {1.0F, 1.0F, 4.0F, 4.0F}, .corner_radius = 2.0F,
-             .transform = quarter_turn(), .opacity = 0.0F,
-             .corner_radii = vellum::graphics::CornerRadii{1.0F, 2.0F, 3.0F, 4.0F}},
-            {.id = "b", .kind = SceneNode::Kind::rectangle,
-             .bounds = {2.0F, 2.0F, 4.0F, 4.0F},
-             .opacity = std::numeric_limits<float>::quiet_NaN()},
-        },
-        .transform = vellum::graphics::Affine2D{.a = 2.0F, .d = 2.0F},
-        .opacity = 0.5F,
+        .id = "plain",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {1.0F, 1.0F, 4.0F, 4.0F},
+        .corner_radius = 2.0F,
+        .transform = vellum::graphics::Affine2D{},
     });
-    auto commands = vellum::graphics::make_paint_commands(scene);
-    const auto plain = [](const vellum::graphics::PaintCommand& command) {
-        return vellum::graphics::is_identity(command.transform) && command.opacity == 1.0F;
-    };
-    if (commands.size() != 2U || commands[0].node_id != "a" || commands[1].node_id != "b" ||
-        !plain(commands[0]) || !plain(commands[1]) ||
-        !vellum::graphics::is_uniform(commands[0].corner_radii) ||
-        commands[0].corner_radii.top_left != 2.0F ||
-        !near_rect(commands[0].bounds, 11.0F, 11.0F, 4.0F, 4.0F)) {
+    if (!vellum::graphics::scene_fields_match_version(scene) ||
+        vellum::graphics::make_paint_commands(scene).size() != 1U) {
         return false;
     }
-    // The same scene at version 2 honours the fields.
-    scene.scene_version = 2U;
-    commands = vellum::graphics::make_paint_commands(scene);
-    return commands.empty();
+    const auto refused = [&](auto change) {
+        auto candidate = scene;
+        change(candidate.root.children[0]);
+        const auto* found = vellum::graphics::find_version_2_fields(candidate.root);
+        auto upgraded = candidate;
+        upgraded.scene_version = 2U;
+        return !vellum::graphics::scene_fields_match_version(candidate) &&
+               vellum::graphics::make_paint_commands(candidate).empty() &&
+               found != nullptr && found->id == "plain" &&
+               vellum::graphics::scene_fields_match_version(upgraded);
+    };
+    return refused([](SceneNode& node) { node.transform = quarter_turn(); }) &&
+           refused([](SceneNode& node) { node.opacity = 0.5F; }) &&
+           refused([](SceneNode& node) {
+               node.opacity = std::numeric_limits<float>::quiet_NaN();
+           }) &&
+           refused([](SceneNode& node) {
+               node.corner_radii = vellum::graphics::CornerRadii{2.0F, 2.0F, 2.0F, 2.0F};
+           });
+}
+
+// Shadows grow the paint extent by offset, spread, and 1.5 blur radii, and a
+// mesh's extent is its clipped vertex box.
+bool paint_extents() {
+    using vellum::graphics::PaintCommand;
+    const PaintCommand shaded{
+        .kind = PaintCommand::Kind::rectangle,
+        .bounds = {10.0F, 10.0F, 20.0F, 10.0F},
+        .box_shadows = {{.offset_x = 4.0F, .blur_radius = 2.0F, .spread_radius = 1.0F},
+                        {.offset_y = -6.0F}},
+    };
+    const auto extent = vellum::graphics::paint_extent(shaded);
+    auto mesh = std::make_shared<vellum::graphics::TriangleMesh>();
+    mesh->vertices = {{.x = 1.0F, .y = 2.0F}, {.x = 9.0F, .y = 2.0F}, {.x = 1.0F, .y = 8.0F}};
+    mesh->indices = {0, 1, 2};
+    mesh->clip_enabled = true;
+    mesh->clip = {0.0F, 0.0F, 5.0F, 50.0F};
+    const auto mesh_extent = vellum::graphics::paint_extent(
+        {.kind = PaintCommand::Kind::mesh, .bounds = {100.0F, 100.0F, 0.0F, 0.0F},
+         .mesh = mesh});
+    const auto text_extent = vellum::graphics::paint_extent(
+        {.kind = PaintCommand::Kind::text, .bounds = {1.0F, 2.0F, 3.0F, 4.0F}});
+    return extent.bounded && near_rect(extent.rect, 10.0F, 4.0F, 28.0F, 20.0F) &&
+           mesh_extent.bounded && near_rect(mesh_extent.rect, 101.0F, 102.0F, 4.0F, 6.0F) &&
+           !text_extent.bounded && near_rect(text_extent.rect, 1.0F, 2.0F, 3.0F, 4.0F);
 }
 
 }  // namespace
@@ -373,11 +389,11 @@ bool scene_versioning() {
     static_assert(vellum::graphics::scene_version_is_supported(1U));
     static_assert(!vellum::graphics::scene_version_is_supported(0U));
     static_assert(!vellum::graphics::scene_version_is_supported(3U));
-    static_assert(!vellum::graphics::scene_version_has_compositing(1U));
-    static_assert(vellum::graphics::scene_version_has_compositing(2U));
 
     vellum::graphics::Scene scene;
-    if (scene.scene_version != vellum::graphics::kSceneVersion) return false;
+    if (scene.scene_version != vellum::graphics::kSceneVersion || scene.scene_version != 2U) {
+        return false;
+    }
     scene.root.children.push_back({
         .id = "future",
         .kind = static_cast<SceneNode::Kind>(42),
@@ -405,7 +421,7 @@ bool scene_versioning() {
 
     scene.scene_version = vellum::graphics::kSceneVersion + 1U;
     if (!vellum::graphics::make_paint_commands(scene).empty()) return false;
-    return legacy_scene_defaults();
+    return legacy_scene_fields() && paint_extents();
 }
 
 int main() {

@@ -6,9 +6,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <initializer_list>
 #include <limits>
 #include <optional>
 #include <set>
@@ -37,7 +39,6 @@ constexpr std::array<std::string_view, 9> kIntrinsicTypes{
 constexpr std::array<std::string_view, 6> kTextStyleKeys{
     "color", "fontFamily", "fontSize", "fontWeight", "letterSpacing", "textDecoration",
 };
-// Clockwise from the top-left corner, the order of `CornerRadii`.
 constexpr std::array<std::string_view, 4> kCornerRadiusKeys{
     "borderTopLeftRadius", "borderTopRightRadius",
     "borderBottomRightRadius", "borderBottomLeftRadius",
@@ -283,7 +284,6 @@ bool parse_opacity(NSDictionary* style, float& output, std::string* error) {
     return true;
 }
 
-// Reads per-corner radii, starting each corner from the uniform radius.
 bool parse_corner_radii(
     NSDictionary* style, float uniform,
     std::optional<vellum::graphics::CornerRadii>& output, std::string* error) {
@@ -317,22 +317,28 @@ std::string_view trimmed(std::string_view value) {
 
 enum class TransformUnit { number, length, angle };
 
-// One argument of a CSS transform function. Lengths are unitless or px, and
-// angles are deg, rad, grad, or turn; a bare zero is accepted as either. An
-// angle is returned in radians.
-std::optional<float> transform_argument(std::string_view text, TransformUnit unit) {
+// Lengths are unitless, px, or a percentage of `reference`; angles are deg,
+// rad, grad, or turn, or a bare zero. Angles are returned in radians.
+std::optional<float> transform_argument(
+    std::string_view text, TransformUnit unit, float reference) {
     text = trimmed(text);
     if (text.empty()) return std::nullopt;
     const std::string copy(text);
     char* end = nullptr;
     const double number = std::strtod(copy.c_str(), &end);
     if (end == copy.c_str() || !std::isfinite(number)) return std::nullopt;
-    const std::string_view suffix(end);
+    std::string suffix(end);
+    std::transform(suffix.begin(), suffix.end(), suffix.begin(),
+        [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
     double value = number;
     if (unit == TransformUnit::number) {
         if (!suffix.empty()) return std::nullopt;
     } else if (unit == TransformUnit::length) {
-        if (!suffix.empty() && suffix != "px") return std::nullopt;
+        if (suffix == "%") {
+            value = number / 100.0 * reference;
+        } else if (!suffix.empty() && suffix != "px") {
+            return std::nullopt;
+        }
     } else {
         constexpr double kPi = 3.14159265358979323846;
         if (suffix == "deg") {
@@ -352,124 +358,139 @@ std::optional<float> transform_argument(std::string_view text, TransformUnit uni
 }
 
 std::optional<vellum::graphics::Affine2D> transform_function(
-    std::string_view name, const std::vector<std::string_view>& arguments) {
+    std::string_view name, const std::vector<std::string_view>& arguments,
+    float width, float height) {
     using vellum::graphics::Affine2D;
     const auto count = arguments.size();
     std::vector<float> values;
-    const auto read = [&](TransformUnit unit) {
+    const auto read = [&](TransformUnit unit, std::initializer_list<float> references) {
         values.clear();
+        auto reference = references.begin();
         for (const auto argument : arguments) {
-            const auto value = transform_argument(argument, unit);
+            const float basis = reference != references.end() ? *reference++ : 0.0F;
+            const auto value = transform_argument(argument, unit, basis);
             if (!value) return false;
             values.push_back(*value);
         }
         return true;
     };
+    const auto one_or_two = count == 1U || count == 2U;
     if (name == "matrix") {
-        if (count != 6U || !read(TransformUnit::number)) return std::nullopt;
+        if (count != 6U || !read(TransformUnit::number, {})) return std::nullopt;
         return Affine2D{values[0], values[1], values[2], values[3], values[4], values[5]};
     }
-    if (name == "translate" || name == "translateX" || name == "translateY") {
-        const bool pair = name == "translate";
-        if ((pair ? count < 1U || count > 2U : count != 1U) ||
-            !read(TransformUnit::length)) {
-            return std::nullopt;
-        }
-        if (name == "translateY") return vellum::graphics::translation(0.0F, values[0]);
+    if (name == "translate") {
+        if (!one_or_two || !read(TransformUnit::length, {width, height})) return std::nullopt;
         return vellum::graphics::translation(values[0], count == 2U ? values[1] : 0.0F);
     }
-    if (name == "scale" || name == "scaleX" || name == "scaleY") {
-        const bool pair = name == "scale";
-        if ((pair ? count < 1U || count > 2U : count != 1U) ||
-            !read(TransformUnit::number)) {
+    if (name == "translatex" || name == "translatey") {
+        const bool x = name == "translatex";
+        if (count != 1U || !read(TransformUnit::length, {x ? width : height})) {
             return std::nullopt;
         }
-        if (name == "scaleX") return Affine2D{.a = values[0]};
-        if (name == "scaleY") return Affine2D{.d = values[0]};
+        return x ? vellum::graphics::translation(values[0], 0.0F)
+                 : vellum::graphics::translation(0.0F, values[0]);
+    }
+    if (name == "scale") {
+        if (!one_or_two || !read(TransformUnit::number, {})) return std::nullopt;
         return Affine2D{.a = values[0], .d = count == 2U ? values[1] : values[0]};
     }
+    if (name == "scalex" || name == "scaley") {
+        if (count != 1U || !read(TransformUnit::number, {})) return std::nullopt;
+        return name == "scalex" ? Affine2D{.a = values[0]} : Affine2D{.d = values[0]};
+    }
     if (name == "rotate") {
-        if (count != 1U || !read(TransformUnit::angle)) return std::nullopt;
+        if (count != 1U || !read(TransformUnit::angle, {})) return std::nullopt;
         const float cosine = std::cos(values[0]);
         const float sine = std::sin(values[0]);
         return Affine2D{.a = cosine, .b = sine, .c = -sine, .d = cosine};
     }
-    if (name == "skew" || name == "skewX" || name == "skewY") {
-        const bool pair = name == "skew";
-        if ((pair ? count < 1U || count > 2U : count != 1U) ||
-            !read(TransformUnit::angle)) {
-            return std::nullopt;
-        }
-        if (name == "skewY") return Affine2D{.b = std::tan(values[0])};
+    if (name == "skew") {
+        if (!one_or_two || !read(TransformUnit::angle, {})) return std::nullopt;
         return Affine2D{
             .b = count == 2U ? std::tan(values[1]) : 0.0F,
             .c = std::tan(values[0]),
         };
     }
+    if (name == "skewx" || name == "skewy") {
+        if (count != 1U || !read(TransformUnit::angle, {})) return std::nullopt;
+        return name == "skewx" ? Affine2D{.c = std::tan(values[0])}
+                               : Affine2D{.b = std::tan(values[0])};
+    }
     return std::nullopt;
 }
 
-// Reads a CSS transform list such as "translate(4px, 0) rotate(45deg)". The
-// functions compose left to right as CSS does, and the result pivots about
-// the centre of a `width` by `height` box, the CSS default transform origin.
-// A list that composes to the identity leaves `output` empty.
-bool parse_transform(
+enum class TransformStatus { parsed, dropped, failed };
+
+// Parses a CSS transform list, composed left to right and pivoting about the
+// box centre. An identity result leaves `output` empty. Text that does not
+// parse is `dropped` with `reason`; only a non-finite composition `failed`.
+TransformStatus parse_transform(
     NSDictionary* style, float width, float height,
-    std::optional<vellum::graphics::Affine2D>& output, std::string* error) {
+    std::optional<vellum::graphics::Affine2D>& output, std::string& reason) {
     id raw = style[@"transform"];
-    if (raw == nil) return true;
+    if (raw == nil) return TransformStatus::parsed;
     if (![raw isKindOfClass:NSString.class]) {
-        set_error(error, "transform must be a string of CSS transform functions");
-        return false;
+        reason = "transform is not a string of CSS transform functions";
+        return TransformStatus::dropped;
     }
     const std::string source = cpp_string(raw);
     if (source.size() > kMaximumTransformBytes) {
-        set_error(error, "transform exceeds the 1024-byte limit");
-        return false;
+        reason = "transform exceeds the 1024-byte limit";
+        return TransformStatus::dropped;
     }
     vellum::graphics::Affine2D composed{};
     std::string_view rest = trimmed(source);
     std::size_t functions = 0;
-    if (rest == "none") rest = {};
+    std::string lowered(rest);
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+        [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    if (lowered == "none") rest = {};
     while (!rest.empty()) {
         const auto open = rest.find('(');
         const auto close = rest.find(')');
         if (open == std::string_view::npos || close == std::string_view::npos ||
-            close < open || ++functions > kMaximumTransformFunctions) {
-            set_error(error, "transform must be a list of at most 32 CSS transform functions");
-            return false;
+            close < open) {
+            reason = "transform has text that is not a function call: " + std::string(rest);
+            return TransformStatus::dropped;
         }
-        const auto name = trimmed(rest.substr(0, open));
+        if (++functions > kMaximumTransformFunctions) {
+            reason = "transform has more than 32 functions";
+            return TransformStatus::dropped;
+        }
+        std::string name(trimmed(rest.substr(0, open)));
+        std::transform(name.begin(), name.end(), name.begin(),
+            [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
         std::vector<std::string_view> arguments;
-        auto inside = rest.substr(open + 1U, close - open - 1U);
+        const auto body = rest.substr(open + 1U, close - open - 1U);
+        auto inside = body;
         while (true) {
             const auto comma = inside.find(',');
             arguments.push_back(inside.substr(0, comma));
             if (comma == std::string_view::npos) break;
             inside.remove_prefix(comma + 1U);
         }
-        const auto function = transform_function(name, arguments);
+        const auto function = transform_function(name, arguments, width, height);
         if (!function) {
-            set_error(error, "transform function " + std::string(name) +
-                "(" + std::string(rest.substr(open + 1U, close - open - 1U)) +
-                ") is not supported");
-            return false;
+            reason = "transform function " + std::string(trimmed(rest.substr(0, open))) + "(" +
+                std::string(body) + ") is not supported";
+            return TransformStatus::dropped;
         }
         composed = vellum::graphics::concat(composed, *function);
         rest = trimmed(rest.substr(close + 1U));
     }
     if (!vellum::graphics::is_finite(composed)) {
-        set_error(error, "transform does not compose to a finite matrix");
-        return false;
+        reason = "transform does not compose to a finite matrix";
+        return TransformStatus::failed;
     }
-    if (vellum::graphics::is_identity(composed)) return true;
+    if (vellum::graphics::is_identity(composed)) return TransformStatus::parsed;
     const float center_x = width * 0.5F;
     const float center_y = height * 0.5F;
     output = vellum::graphics::concat(
         vellum::graphics::translation(center_x, center_y),
         vellum::graphics::concat(composed,
             vellum::graphics::translation(-center_x, -center_y)));
-    return true;
+    return TransformStatus::parsed;
 }
 
 NSDictionary* dictionary_or_empty(id value) {
@@ -676,12 +697,26 @@ bool materialize_node(
     if (!parse_linear_gradient(style, output.fill_gradients, error) ||
         !parse_box_shadow(style, output.box_shadows, error) ||
         !parse_corner_radii(style, output.corner_radius, output.corner_radii, error) ||
-        !parse_opacity(style, output.opacity, error) ||
-        !parse_transform(style, proposed.width, proposed.height, output.transform, error)) {
+        !parse_opacity(style, output.opacity, error)) {
         return false;
     }
-    // Interaction and accessibility boxes are in the frame, so they enclose
-    // the node as drawn, matching `make_paint_commands`.
+    std::string transform_reason;
+    const auto transform_status = parse_transform(
+        style, proposed.width, proposed.height, output.transform, transform_reason);
+    if (transform_status == TransformStatus::failed) {
+        set_error(error, transform_reason);
+        return false;
+    }
+    if (transform_status == TransformStatus::dropped) {
+        context.diagnostics->push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(vellum::graphics::kStyleDroppedCode),
+            .node_id = identity,
+            .property = "transform",
+            .message = transform_reason + "; the node was drawn untransformed",
+        });
+    }
     const vellum::graphics::Rect absolute_box{
         absolute_x + proposed.x, absolute_y + proposed.y, proposed.width, proposed.height};
     vellum::graphics::Affine2D node_transform = parent_transform;
@@ -692,6 +727,8 @@ bool materialize_node(
                 vellum::graphics::translation(-absolute_box.x, -absolute_box.y))));
     }
     const auto frame_box = vellum::graphics::transformed_bounds(node_transform, absolute_box);
+    const bool hit_testable =
+        node_transform.a * node_transform.d - node_transform.b * node_transform.c != 0.0F;
     StyleUse style_use{
         .root = depth == 0U,
         .paints_text_background =
@@ -782,6 +819,7 @@ bool materialize_node(
             set_error(error, "authoring node events must map strings to action strings");
             return false;
         }
+        if (!hit_testable) continue;
         context.interactions->push_back({
             .node_id = identity,
             .event = cpp_string(event),
@@ -790,7 +828,7 @@ bool materialize_node(
         });
     }
 
-    if (is_text_input) {
+    if (is_text_input && hit_testable) {
         const auto action = [&](NSString* name) -> std::string {
             return [events[name] isKindOfClass:NSString.class]
                 ? cpp_string(events[name]) : std::string{};

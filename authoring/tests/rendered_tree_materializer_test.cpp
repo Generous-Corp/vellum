@@ -1,5 +1,6 @@
 #include "rendered_tree_materializer.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <string>
@@ -18,8 +19,8 @@ std::string wrap_tree(std::string_view children) {
       "children":[)JSON") + std::string(children) + "]}}";
 }
 
-// Transform, opacity, and per-corner radius keys reach the scene, and invalid
-// values fail materialization with a message naming the key.
+// Transform, opacity, and per-corner radius keys reach the scene; an
+// unparseable transform is dropped with a warning and a non-finite one fails.
 bool compositing_keys() {
     vellum::authoring::RenderedApplication rendered;
     std::string error;
@@ -39,7 +40,17 @@ bool compositing_keys() {
         "transform":"none","opacity":0.25,"borderTopLeftRadius":4},"children":[]},
       {"type":"button","id":"spun","events":{"press":"spun:press"},
         "style":{"x":100,"y":100,"width":40,"height":20,"transform":"rotate(90deg)"},
-        "children":[]}
+        "children":[]},
+      {"type":"view","id":"percent","style":{"width":10,"height":20,
+        "transform":"TRANSLATE(50%, -10%) Rotate(0DEG) translateY(25%)"},"children":[]},
+      {"type":"button","id":"flat","events":{"press":"flat:press"},
+        "style":{"width":40,"height":20,"transform":"scale(0)"},"children":[]},
+      {"type":"text-input","id":"flat-input","primitiveVersion":1,"value":"x",
+        "events":{"change":"flat:change"},
+        "style":{"width":40,"height":20,"transform":"scaleX(0)"},"children":[]},
+      {"type":"text","id":"runs","children":[
+        {"type":"text-run","id":"runs/faded","text":"A","style":{"opacity":0.5},
+          "children":[]}]}
     )JSON");
     if (!vellum::authoring::materialize_rendered_tree(tree, rendered, &error)) {
         std::cerr << "compositing keys: " << error << '\n';
@@ -55,12 +66,8 @@ bool compositing_keys() {
         std::cerr << "compositing keys: transforms were not lowered as expected\n";
         return false;
     }
-    // rotate(90deg) about the centre (20, 10) of a 40 by 20 box: the origin
-    // goes to (30, -10) and the far corner (40, 20) to (10, 30).
     const auto origin = vellum::graphics::apply(*turned->transform, {0.0F, 0.0F});
     const auto corner = vellum::graphics::apply(*turned->transform, {40.0F, 20.0F});
-    // translate then scale 2, about the centre (5, 5): the origin goes to
-    // (5 - 10 + 4, 5 - 10 - 2).
     const auto moved_origin = vellum::graphics::apply(*moved->transform, {0.0F, 0.0F});
     if (!near(origin.x, 30.0F) || !near(origin.y, -10.0F) ||
         !near(corner.x, 10.0F) || !near(corner.y, 30.0F) ||
@@ -77,27 +84,45 @@ bool compositing_keys() {
         std::cerr << "compositing keys: opacity or corner radii are wrong\n";
         return false;
     }
-    // Hit-testing and accessibility boxes enclose the node as drawn: the
-    // 40 by 20 button at (100, 100) turned about its centre (120, 110).
     const auto frame_box = [](const vellum::graphics::Rect& box) {
         return near(box.x, 110.0F) && near(box.y, 90.0F) && near(box.width, 20.0F) &&
                near(box.height, 40.0F);
     };
+    const auto* percent = vellum::graphics::find_node(rendered.scene, "percent");
+    if (percent == nullptr || !percent->transform || !near(percent->transform->tx, 5.0F) ||
+        !near(percent->transform->ty, 3.0F) || !near(percent->transform->a, 1.0F)) {
+        std::cerr << "compositing keys: percentage or mixed-case transforms are wrong\n";
+        return false;
+    }
+    const auto has_accessibility = [&](std::string_view id) {
+        for (const auto& node : rendered.accessibility_nodes) {
+            if (node.node_id == id) return true;
+        }
+        return false;
+    };
+    if (!has_accessibility("flat") || !has_accessibility("flat-input") ||
+        !rendered.text_inputs.empty()) {
+        std::cerr << "compositing keys: a non-invertible control kept a hit box\n";
+        return false;
+    }
     if (rendered.interactions.size() != 1U || rendered.interactions[0].node_id != "spun" ||
         !frame_box(rendered.interactions[0].bounds) ||
-        rendered.accessibility_nodes.empty() ||
-        rendered.accessibility_nodes.back().node_id != "spun" ||
-        !frame_box(rendered.accessibility_nodes.back().bounds)) {
+        std::none_of(rendered.accessibility_nodes.begin(), rendered.accessibility_nodes.end(),
+            [&](const auto& node) { return node.node_id == "spun" && frame_box(node.bounds); })) {
         std::cerr << "compositing keys: interaction bounds ignore the transform\n";
         return false;
     }
-    // The corner key is dropped on a text node without a painted background,
-    // exactly as borderRadius is; transform and opacity are consumed.
-    if (rendered.diagnostics.size() != 1U ||
+    if (rendered.diagnostics.size() != 2U ||
         rendered.diagnostics[0].node_id != "label" ||
         rendered.diagnostics[0].property != "borderTopLeftRadius" ||
-        rendered.diagnostics[0].code != vellum::graphics::kStyleDroppedCode) {
+        rendered.diagnostics[0].code != vellum::graphics::kStyleDroppedCode ||
+        rendered.diagnostics[1].node_id != "runs/faded" ||
+        rendered.diagnostics[1].property != "opacity" ||
+        rendered.diagnostics[1].code != vellum::graphics::kStyleDroppedCode) {
         std::cerr << "compositing keys: unexpected diagnostics\n";
+        for (const auto& diagnostic : rendered.diagnostics) {
+            std::cerr << "  " << diagnostic.node_id << ' ' << diagnostic.property << '\n';
+        }
         return false;
     }
 
@@ -114,12 +139,36 @@ bool compositing_keys() {
         }
         return true;
     };
-    return refuses(R"S("transform":"rotate(45)")S", "rotate(45) is not supported") &&
-           refuses(R"S("transform":"spin(1turn)")S", "spin(1turn) is not supported") &&
-           refuses(R"S("transform":"translate(1em)")S", "is not supported") &&
-           refuses(R"S("transform":"scale(1, 2, 3)")S", "is not supported") &&
-           refuses(R"S("transform":"rotate(45deg")S", "at most 32 CSS transform functions") &&
-           refuses(R"S("transform":4)S", "transform must be a string") &&
+    const auto drops = [&](std::string_view style, std::string_view expected) {
+        vellum::authoring::RenderedApplication candidate;
+        std::string why;
+        const auto source = wrap_tree(
+            std::string(R"JSON({"type":"view","id":"bad","style":{"width":10,"height":10,)JSON") +
+            std::string(style) + "},\"children\":[]}");
+        if (!vellum::authoring::materialize_rendered_tree(source, candidate, &why)) {
+            std::cerr << "compositing keys: " << style << " failed: " << why << '\n';
+            return false;
+        }
+        const auto* bad = vellum::graphics::find_node(candidate.scene, "bad");
+        if (bad == nullptr || bad->transform || candidate.diagnostics.size() != 1U ||
+            candidate.diagnostics[0].property != "transform" ||
+            candidate.diagnostics[0].code != vellum::graphics::kStyleDroppedCode ||
+            candidate.diagnostics[0].message.find(expected) == std::string::npos) {
+            std::cerr << "compositing keys: " << style << " was not dropped with '"
+                      << expected << "'\n";
+            return false;
+        }
+        return true;
+    };
+    return drops(R"S("transform":"rotate(45)")S", "rotate(45) is not supported") &&
+           drops(R"S("transform":"spin(1turn)")S", "spin(1turn) is not supported") &&
+           drops(R"S("transform":"translate(1em)")S", "is not supported") &&
+           drops(R"S("transform":"scale(1, 2, 3)")S", "is not supported") &&
+           drops(R"S("transform":"rotate(45deg")S", "not a function call: rotate(45deg") &&
+           drops(R"S("transform":"rotate(0) garbage")S", "not a function call: garbage") &&
+           drops(R"S("transform":"rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)rotate(0)")S",
+               "more than 32 functions") &&
+           drops(R"S("transform":4)S", "not a string") &&
            refuses(R"S("transform":"scale(1e30) scale(1e30)")S", "finite matrix") &&
            refuses(R"S("opacity":"half")S", "opacity must be a finite number") &&
            refuses(R"S("borderBottomRightRadius":true)S",

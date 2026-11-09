@@ -107,8 +107,6 @@ SkMatrix sk_matrix(const Affine2D& transform) {
         0.0F, 0.0F, 1.0F);
 }
 
-// Each radius grows by `outset` and stays non-negative. SkRRect scales radii
-// that overflow a side down proportionally.
 SkRRect rounded_rect(const SkRect& rect, const CornerRadii& radii, float outset = 0.0F) {
     const auto grown = [outset](float radius) {
         const float value = std::max(0.0F, radius + outset);
@@ -393,8 +391,12 @@ bool draw_rectangle(SkCanvas& canvas, const PaintCommand& command, float opacity
     return true;
 }
 
+SkRect layer_rect(const Rect& rect) {
+    return SkRect::MakeXYWH(rect.x, rect.y, rect.width, rect.height).makeOutset(1.0F, 1.0F);
+}
+
 bool draw_text(SkCanvas& canvas, const PaintCommand& command, float opacity,
-               std::string_view directory, std::string* error) {
+               float layer_opacity, std::string_view directory, std::string* error) {
     std::vector<TextRun> runs = command.text_runs;
     if (runs.empty() && !command.text.empty()) {
         runs.push_back({
@@ -416,7 +418,17 @@ bool draw_text(SkCanvas& canvas, const PaintCommand& command, float opacity,
     if (!build_text_paragraph(runs, directory, paragraph, metrics, error)) {
         return false;
     }
+    if (layer_opacity < 1.0F) {
+        const float overhang = command.font_size;
+        const auto extent = SkRect::MakeXYWH(
+            command.bounds.x - overhang, command.bounds.y - overhang,
+            std::max(command.bounds.width, metrics.width) + overhang * 2.0F,
+            std::max(command.bounds.height, metrics.ascent + metrics.descent) +
+                overhang * 2.0F);
+        canvas.saveLayerAlphaf(&extent, layer_opacity);
+    }
     paragraph->paint(&canvas, command.bounds.x, command.bounds.y);
+    if (layer_opacity < 1.0F) canvas.restore();
     return true;
 }
 
@@ -540,12 +552,8 @@ bool draw_mesh(SkCanvas& canvas, const PaintCommand& command,
     return true;
 }
 
-// Whether fading each paint operation of `command` separately looks the same
-// as fading the command as a whole. That holds when its operations do not
-// overlap: a shadow is clipped out of the box it surrounds, but several
-// shadows overlap one another, a gradient covers the fill beneath it, and a
-// text decoration crosses glyphs. A mesh's paint alpha does not reach its
-// vertex colours, so a faded mesh always draws through a layer.
+// Folding is exact when the command's paint operations do not overlap; text
+// accepts the double blend of glyphs that overlap one another.
 bool opacity_folds_into_paint(const PaintCommand& command) {
     if (command.kind == PaintCommand::Kind::rectangle) {
         const std::size_t fills =
@@ -564,7 +572,13 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
                    std::string_view directory, MeshTextureCache& meshes,
                    std::string* error) {
     if (command.kind == PaintCommand::Kind::begin_layer) {
-        canvas.saveLayerAlphaf(nullptr, std::clamp(command.opacity, 0.0F, 1.0F));
+        const float alpha = std::clamp(command.opacity, 0.0F, 1.0F);
+        if (command.layer_unbounded) {
+            canvas.saveLayerAlphaf(nullptr, alpha);
+        } else {
+            const auto bounds = layer_rect(command.bounds);
+            canvas.saveLayerAlphaf(&bounds, alpha);
+        }
         return true;
     }
     if (command.kind == PaintCommand::Kind::end_layer) {
@@ -581,10 +595,11 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
 
     const int saved = canvas.save();
     if (!is_identity(command.transform)) canvas.concat(sk_matrix(command.transform));
-    float paint_opacity = opacity;
-    if (opacity < 1.0F && !opacity_folds_into_paint(command)) {
-        canvas.saveLayerAlphaf(nullptr, opacity);
-        paint_opacity = 1.0F;
+    const bool layered = opacity < 1.0F && !opacity_folds_into_paint(command);
+    const float paint_opacity = layered ? 1.0F : opacity;
+    if (layered && command.kind != PaintCommand::Kind::text) {
+        const auto bounds = layer_rect(paint_extent(command).rect);
+        canvas.saveLayerAlphaf(&bounds, opacity);
     }
     bool drawn = true;
     if (command.kind == PaintCommand::Kind::mesh) {
@@ -592,7 +607,8 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
     } else if (command.kind == PaintCommand::Kind::rectangle) {
         drawn = draw_rectangle(canvas, command, paint_opacity, error);
     } else {
-        drawn = draw_text(canvas, command, paint_opacity, directory, error);
+        drawn = draw_text(canvas, command, paint_opacity, layered ? opacity : 1.0F,
+                          directory, error);
     }
     canvas.restoreToCount(saved);
     return drawn;
@@ -776,8 +792,13 @@ public:
                                  unknown->id);
             return false;
         }
-        if (const auto* invalid = scene_version_has_compositing(scene.scene_version)
-                ? find_non_finite_compositing(scene.root) : nullptr;
+        if (!scene_fields_match_version(scene)) {
+            set_error(error, "scene version " + std::to_string(scene.scene_version) +
+                                 " cannot carry the transform, opacity, or corner radii at " +
+                                 find_version_2_fields(scene.root)->id);
+            return false;
+        }
+        if (const auto* invalid = find_non_finite_compositing(scene.root);
             invalid != nullptr) {
             set_error(error, "scene node " + invalid->id +
                                  " has a non-finite transform, opacity, or corner radius");

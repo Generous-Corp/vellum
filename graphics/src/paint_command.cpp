@@ -8,14 +8,17 @@
 namespace vellum::graphics {
 namespace {
 
+Rect union_of(const Rect& left, const Rect& right) {
+    const float x = std::min(left.x, right.x);
+    const float y = std::min(left.y, right.y);
+    return {x, y, std::max(left.x + left.width, right.x + right.width) - x,
+            std::max(left.y + left.height, right.y + right.height) - y};
+}
+
 void append_node(const SceneNode& node, float parent_x, float parent_y,
-                 const Affine2D& parent_transform, bool compositing,
-                 std::vector<PaintCommand>& output) {
-    if (!is_known_kind(node.kind)) return;
-    // A version 1 scene predates transform, opacity, and corner_radii, so they
-    // keep their defaults there whatever they hold.
-    if (compositing && !compositing_is_finite(node)) return;
-    const float opacity = compositing ? std::clamp(node.opacity, 0.0F, 1.0F) : 1.0F;
+                 const Affine2D& parent_transform, std::vector<PaintCommand>& output) {
+    if (!is_known_kind(node.kind) || !compositing_is_finite(node)) return;
+    const float opacity = std::clamp(node.opacity, 0.0F, 1.0F);
     if (opacity <= 0.0F) return;
     const Rect absolute{
         parent_x + node.bounds.x,
@@ -24,14 +27,16 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
         node.bounds.height,
     };
     Affine2D transform = parent_transform;
-    if (compositing && node.transform && !is_identity(*node.transform)) {
+    if (node.transform && !is_identity(*node.transform)) {
         transform = concat(parent_transform, concat(
             translation(absolute.x, absolute.y),
             concat(*node.transform, translation(-absolute.x, -absolute.y))));
     }
-    const auto radii = compositing ? resolved_corner_radii(node)
-                                   : resolved_corner_radii(SceneNode{
-                                         .corner_radius = node.corner_radius});
+    const auto radii = resolved_corner_radii(node);
+    const auto slot = output.size();
+    if (opacity < 1.0F) {
+        output.push_back({.kind = PaintCommand::Kind::begin_layer, .node_id = node.id});
+    }
     const auto first = output.size();
     if (node.kind == SceneNode::Kind::rectangle) {
         output.push_back({
@@ -84,7 +89,7 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
         });
     }
     for (const auto& child : node.children) {
-        append_node(child, absolute.x, absolute.y, transform, compositing, output);
+        append_node(child, absolute.x, absolute.y, transform, output);
     }
     if (opacity >= 1.0F) return;
 
@@ -96,26 +101,33 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
             last_drawn = index;
         }
     }
-    if (drawn == 0U) return;
-    if (drawn == 1U) {
-        // A single command cannot overlap itself, so fading its paint is the
-        // same as fading the group. A layer needs two commands, so none is open.
-        output[last_drawn].opacity *= opacity;
+    if (drawn <= 1U) {
+        if (drawn == 1U) output[last_drawn].opacity *= opacity;
+        output.erase(output.begin() + static_cast<std::ptrdiff_t>(slot));
         return;
     }
-    output.insert(output.begin() + static_cast<std::ptrdiff_t>(first), PaintCommand{
-        .kind = PaintCommand::Kind::begin_layer,
-        .node_id = node.id,
-        .bounds = absolute,
-        .transform = transform,
-        .opacity = opacity,
-    });
-    output.push_back({
-        .kind = PaintCommand::Kind::end_layer,
-        .node_id = node.id,
-        .bounds = absolute,
-        .transform = transform,
-    });
+    auto& layer = output[slot];
+    layer.opacity = opacity;
+    bool bounded = true;
+    bool any = false;
+    for (auto index = first; index < output.size(); ++index) {
+        const auto& member = output[index];
+        Rect extent;
+        if (member.kind == PaintCommand::Kind::begin_layer) {
+            bounded = bounded && !member.layer_unbounded;
+            extent = member.bounds;
+        } else if (draws_content(member.kind)) {
+            const auto local = paint_extent(member);
+            bounded = bounded && local.bounded;
+            extent = transformed_bounds(member.transform, local.rect);
+        } else {
+            continue;
+        }
+        layer.bounds = any ? union_of(layer.bounds, extent) : extent;
+        any = true;
+    }
+    layer.layer_unbounded = !bounded;
+    output.push_back({.kind = PaintCommand::Kind::end_layer, .node_id = node.id});
 }
 
 }  // namespace
@@ -192,9 +204,48 @@ bool mesh_is_valid(const TriangleMesh& mesh, std::string* reason) {
 std::vector<PaintCommand> make_paint_commands(const Scene& scene) {
     std::vector<PaintCommand> output;
     if (!scene_version_is_supported(scene.scene_version)) return output;
-    append_node(scene.root, 0.0F, 0.0F, Affine2D{},
-                scene_version_has_compositing(scene.scene_version), output);
+    if (!scene_fields_match_version(scene)) return output;
+    append_node(scene.root, 0.0F, 0.0F, Affine2D{}, output);
     return output;
+}
+
+PaintExtent paint_extent(const PaintCommand& command) {
+    const auto& box = command.bounds;
+    if (command.kind == PaintCommand::Kind::text) return {box, false};
+    if (command.kind == PaintCommand::Kind::mesh) {
+        if (!command.mesh || command.mesh->vertices.empty()) return {{box.x, box.y, 0.0F, 0.0F}};
+        const auto& vertices = command.mesh->vertices;
+        float left = vertices.front().x;
+        float right = left;
+        float top = vertices.front().y;
+        float bottom = top;
+        for (const auto& vertex : vertices) {
+            left = std::min(left, vertex.x);
+            right = std::max(right, vertex.x);
+            top = std::min(top, vertex.y);
+            bottom = std::max(bottom, vertex.y);
+        }
+        if (command.mesh->clip_enabled) {
+            const auto& clip = command.mesh->clip;
+            left = std::max(left, clip.x);
+            top = std::max(top, clip.y);
+            right = std::min(right, clip.x + std::max(0.0F, clip.width));
+            bottom = std::min(bottom, clip.y + std::max(0.0F, clip.height));
+        }
+        return {{box.x + left, box.y + top, std::max(0.0F, right - left),
+                 std::max(0.0F, bottom - top)}};
+    }
+    if (!draws_content(command.kind)) return {box};
+    Rect extent = box;
+    for (const auto& shadow : command.box_shadows) {
+        const float outset = std::max(0.0F, shadow.spread_radius) +
+                             1.5F * std::max(0.0F, shadow.blur_radius);
+        extent = union_of(extent, {box.x + shadow.offset_x - outset,
+                                   box.y + shadow.offset_y - outset,
+                                   box.width + outset * 2.0F,
+                                   box.height + outset * 2.0F});
+    }
+    return {extent};
 }
 
 Rect transformed_bounds(const Affine2D& transform, const Rect& rect) noexcept {
@@ -225,7 +276,6 @@ std::vector<float> effective_opacities(const std::vector<PaintCommand>& commands
     float enclosing = 1.0F;
     for (const auto& command : commands) {
         if (command.kind == PaintCommand::Kind::end_layer) {
-            // An unmatched end leaves the enclosing opacity unchanged.
             if (!layers.empty()) {
                 enclosing = layers.back();
                 layers.pop_back();

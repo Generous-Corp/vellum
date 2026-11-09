@@ -460,13 +460,11 @@ Scene compositing(float width, float height) {
             .fill = Color::hex(color),
         };
     };
-    // A quarter turn about the bar's centre.
     auto turned = rectangle("turned", {cell, cell, cell * 2.0F, cell * 0.5F}, 0xF97316);
     turned.transform = concat(translation(cell, cell * 0.25F),
         concat(Affine2D{.a = 0.0F, .b = 1.0F, .c = -1.0F, .d = 0.0F},
                translation(-cell, -cell * 0.25F)));
     scene.root.children.push_back(std::move(turned));
-    // Two overlapping members of a half-opacity group, composited first.
     SceneNode faded{
         .id = "faded",
         .kind = SceneNode::Kind::group,
@@ -477,7 +475,6 @@ Scene compositing(float width, float height) {
     faded.children.push_back(
         rectangle("faded/b", {cell * 0.6F, cell * 0.5F, cell * 1.4F, cell}, 0xA3E635));
     scene.root.children.push_back(std::move(faded));
-    // Per-corner radii, scaled about the node's origin, at a folded opacity.
     auto corners = rectangle(
         "corners", {cell * 0.5F, height - cell * 1.5F, cell * 2.0F, cell}, 0xE879F9);
     corners.corner_radii = CornerRadii{0.0F, cell * 0.5F, cell * 0.1F, cell * 0.4F};

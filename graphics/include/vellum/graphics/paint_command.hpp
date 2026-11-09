@@ -22,8 +22,9 @@ struct PaintCommand final {
         rectangle,
         text,
         mesh,
-        /// Starts an offscreen group. `node_id`, `bounds`, and `transform`
-        /// describe the node that owns it; the group is not clipped to them.
+        /// Starts an offscreen group for the node `node_id`. `bounds` is the
+        /// frame-space union of its members' transformed paint extents, and
+        /// the group may be clipped to it unless `layer_unbounded` is set.
         begin_layer,
         /// Composites the innermost open group with its `begin_layer`'s opacity.
         end_layer,
@@ -55,7 +56,21 @@ struct PaintCommand final {
     float opacity = 1.0F;
     /// The resolved per-corner radii; see `resolved_corner_radii`.
     CornerRadii corner_radii{};
+    /// On a `begin_layer`, set when a member can paint outside `bounds`,
+    /// which text can, so the group needs the whole frame.
+    bool layer_unbounded = false;
 };
+
+/// The area a command can paint, in its `bounds` coordinates before
+/// `transform`: the box grown by each shadow's offset, spread, and 1.5 times
+/// its blur radius, or a mesh's clipped vertex extent. Text may overflow its
+/// box, so its extent is the box with `bounded` false.
+struct PaintExtent final {
+    Rect rect{};
+    bool bounded = true;
+};
+
+[[nodiscard]] PaintExtent paint_extent(const PaintCommand& command);
 
 /// Whether the command draws content, as opposed to opening or closing a layer.
 [[nodiscard]] constexpr bool draws_content(PaintCommand::Kind kind) noexcept {
@@ -92,8 +107,8 @@ struct ResolvedLinearGradient final {
 /// `scene_version_is_supported` yields no commands, and a node of a kind this
 /// build does not know, or whose compositing fails `compositing_is_finite`,
 /// contributes nothing for itself or its subtree; `SkiaDawnSurface::render`
-/// refuses such a scene outright. In a version 1 scene the transform,
-/// opacity, and per-corner radii keep their defaults whatever they hold.
+/// refuses such a scene outright. A scene that fails
+/// `scene_fields_match_version` yields no commands.
 ///
 /// A node whose opacity is below one and whose subtree draws more than one
 /// command is wrapped in a `begin_layer`/`end_layer` pair; when it draws
