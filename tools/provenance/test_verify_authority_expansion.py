@@ -8,6 +8,7 @@ import importlib.util
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1721,6 +1722,23 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             hidden = pull | {"paths": sorted(pull["paths"] + ["scripts/release_request.py"])}
             self.assertTrue(any("is not v0.1.11's own version bump" in e for e in check(pull=hidden)))
 
+    def test_tag_scoped_audit_accepts_the_bump_and_refuses_other_overlaps(self) -> None:
+        # A release or dry-run tag enforces the live audit (the scope test
+        # below), and there #287's content rule decides the open bump: a
+        # #188-shaped bump passes, a non-bump overlap of the same route fails.
+        scope = ProvenanceWorkflowScopeTests()
+        for ref in ("refs/tags/v0.1.11", "refs/tags/dry-run/v0.1.11/1-1"):
+            with self.subTest(ref=ref):
+                self.assertEqual(scope.scope(ref), ("true", False))
+        evidence, pull, check = self.release_bump_case()
+        self.assertEqual(check(), [])
+        other = pull | {"number": 277}
+        errors = check(pull=other)
+        self.assertTrue(any("Generous-Corp/vellum#277" in error for error in errors), errors)
+        self.assertNotEqual(check(evidence | {"files": evidence["files"] + [
+            {"filename": "graphics/src/surface.cpp", "status": "modified", "patch": "@@ -1 +1 @@\n-a\n+b"}]},
+            pull=pull | {"paths": sorted(pull["paths"] + ["graphics/src/surface.cpp"])}), [])
+
     def test_release_bump_files_follow_version_at_land(self) -> None:
         sys.path.insert(0, str(ROOT / "scripts"))
         import version_at_land
@@ -2155,10 +2173,11 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             'if [[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == merge_group ]]; then',
             workflow,
         )
-        # The live open-PR snapshot and its cursor re-check never run in the queue.
+        # The live open-PR snapshot and its cursor re-check run only where the
+        # audit is enforced: release and dry-run tags (never a pull request,
+        # the queue or a main push; ProvenanceWorkflowScopeTests).
         snapshot_gate = (
-            'if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request '
-            '&& "$GITHUB_EVENT_NAME" != merge_group ]]; then'
+            'if [[ -n "$PULP_ACCEPTANCE_SHA" && "$live_open_pr_audit" == true ]]; then'
         )
         # One gate holds the whole live read: the snapshot, the binding of the
         # exact-boundary checkout to live Pulp main, the judgment and both
@@ -2745,6 +2764,78 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         self.assertEqual(report["status"], "fail")
         self.assertTrue(report["errors"])
 
+
+
+class ProvenanceWorkflowScopeTests(unittest.TestCase):
+    """The live open-PR audit is tag-scoped; the observatory is its own job."""
+
+    WORKFLOW = ROOT / ".github/workflows/provenance.yml"
+
+    def fragment(self) -> str:
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        start = text.index("# live-open-pr-audit-scope: begin")
+        end = text.index("# live-open-pr-audit-scope: end")
+        return "\n".join(line.strip() for line in text[start:end].splitlines())
+
+    def scope(self, ref: str, event: str = "push") -> tuple[str, bool]:
+        script = (
+            "set -euo pipefail\nrepository_evidence=(--repository x)\n"
+            + self.fragment()
+            + '\nprintf "%s %s\\n" "$live_open_pr_audit" "${repository_evidence[*]}"\n'
+        )
+        completed = subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True, check=True,
+            env={**os.environ, "GITHUB_REF": ref, "GITHUB_EVENT_NAME": event},
+        )
+        audit, _, evidence = completed.stdout.strip().partition(" ")
+        return audit, "--defer-live-open-pr-audit" in evidence.split()
+
+    def test_live_open_pr_audit_runs_only_on_release_and_dry_run_tags(self) -> None:
+        for ref, event, enforced in (
+            ("refs/heads/main", "push", False),
+            ("refs/pull/7/merge", "pull_request", False),
+            ("refs/heads/gh-readonly-queue/main/pr-7-abc", "merge_group", False),
+            ("refs/tags/authority/x", "push", False),
+            ("refs/tags/publish-rehearsal/1-1", "push", False),
+            ("refs/tags/v0.1.11", "push", True),
+            ("refs/tags/dry-run/v0.1.11/1-1", "push", True),
+        ):
+            with self.subTest(ref=ref):
+                audit, deferred = self.scope(ref, event)
+                self.assertEqual(audit, "true" if enforced else "false")
+                self.assertEqual(deferred, not enforced)
+
+    def test_the_snapshot_collection_is_gated_on_the_same_scope(self) -> None:
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        gate = 'if [[ -n "$PULP_ACCEPTANCE_SHA" && "$live_open_pr_audit" == true ]]; then'
+        self.assertIn(gate, text)
+        live = text[text.index(gate):]
+        live = live[:live.index("\n          else\n            judge_authority_expansion\n          fi\n")]
+        # Tag runs collect the release-bump evidence and hand it to the
+        # verifier, so the bump rule is actually consulted.
+        self.assertIn("collect_release_evidence.py release-bump-evidence", live)
+        self.assertIn('--release-bump-evidence-json "$RUNNER_TEMP/release-bump-evidence.json"', live)
+        self.assertNotIn('"$GITHUB_EVENT_NAME" != pull_request && "$GITHUB_EVENT_NAME" != merge_group ]]; then\n'
+                         '            open_pr_repositories_text', text)
+
+    def job_block(self, text: str, job: str) -> str:
+        match = re.search(rf"^  {re.escape(job)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", text, re.M | re.S)
+        self.assertIsNotNone(match, job)
+        return match.group(1)
+
+    def test_observatory_runs_as_its_own_job_without_needs(self) -> None:
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        observatory = self.job_block(text, "observatory-verify")
+        authority = self.job_block(text, "provenance-verify")
+        # No dependency on another job and no job-level condition: it reports
+        # its own status whatever the authority job does.
+        self.assertIsNone(re.search(r"^    (?:needs|if):", observatory, re.M))
+        for name in ("Resolve the committed Pulp observatory cursor",
+                     "Check out exact observed Pulp cursor",
+                     "Verify two-way observatory health and negative controls"):
+            self.assertIn(f"- name: {name}\n", observatory)
+            self.assertNotIn(f"- name: {name}\n", authority)
+        self.assertNotIn("steps.authority-record", observatory)
 
 if __name__ == "__main__":
     unittest.main()

@@ -453,9 +453,20 @@ jobs:
           python3 scripts/test_verify_exact_provenance_artifact.py
           release_readiness=()
           repository_evidence=(--repository "$GITHUB_REPOSITORY")
-          if [[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == merge_group ]]; then
+          # live-open-pr-audit-scope: begin
+          # The live open-PR overlap audit asks whether a release is cut while
+          # unaccepted work overlapping the expansion is open. It is judged on
+          # release and release dry-run tags only. Every other run (a pull
+          # request, the merge queue, a main push, an authority tag) defers
+          # it: there it would only mirror which pull request is open.
+          live_open_pr_audit=false
+          if [[ "$GITHUB_REF" == refs/tags/v[0-9]* || "$GITHUB_REF" == refs/tags/dry-run/* ]]; then
+            live_open_pr_audit=true
+          fi
+          if [[ "$live_open_pr_audit" != true ]]; then
             repository_evidence+=(--defer-live-open-pr-audit)
           fi
+          # live-open-pr-audit-scope: end
           if [[ -n "$PULP_ACCEPTANCE_SHA" ]]; then
             repository_evidence+=(--pulp-root .exact-boundary-pulp)
           fi
@@ -523,7 +534,7 @@ jobs:
               "${repository_evidence[@]}" \
               --output "$RUNNER_TEMP/authority-expansion-report.json"
           }
-          if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request && "$GITHUB_EVENT_NAME" != merge_group ]]; then
+          if [[ -n "$PULP_ACCEPTANCE_SHA" && "$live_open_pr_audit" == true ]]; then
             open_pr_repositories_text="$(python3 -I tools/provenance/collect_release_evidence.py repositories)"
             mapfile -t open_pr_repositories <<<"$open_pr_repositories_text"
             test "${#open_pr_repositories[@]}" -gt 0
@@ -838,6 +849,74 @@ jobs:
             --expected-authority-ref "$GITHUB_REF" \
             --output "$RUNNER_TEMP/authority-pending-report.json"
 
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: provenance-report
+          path: |
+            ${{ runner.temp }}/provenance-report.json
+            ${{ runner.temp }}/renderer-provenance-report.json
+            ${{ runner.temp }}/renderer-eligibility-report.json
+            ${{ runner.temp }}/pulp-tooling-disposition-report.json
+            ${{ runner.temp }}/agent-instructions-report.json
+            ${{ runner.temp }}/authority-ready-report.json
+            ${{ runner.temp }}/authority-pending-report.json
+            ${{ runner.temp }}/authority-expansion-report.json
+            ${{ runner.temp }}/open-pr-snapshot.json
+            ${{ runner.temp }}/release-bump-evidence.json
+            ${{ runner.temp }}/open-pr-cursor.json
+            ${{ runner.temp }}/open-pr-cursor-before.json
+            ${{ runner.temp }}/open-pr-cursor-after.json
+            ${{ runner.temp }}/promotion-release-tag-trust.json
+            ${{ runner.temp }}/authority-tag-trust.json
+          if-no-files-found: error
+          retention-days: 90
+
+  observatory-verify:
+    # The two-way observatory runs as its own job, with no `needs:` on the
+    # authority job, so an unrelated authority or provenance failure cannot
+    # skip it and each reports its own status.
+    name: observatory-verify
+    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
+    env:
+      VELLUM_TARGET_SHA: ${{ github.sha }}
+      VELLUM_GIT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+    steps:
+      - name: Check out full preserved history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the authority-start commit for an authority tag
+        # An authority tag is judged at its pending record's authority-start
+        # commit, read here from the same single record the authority job
+        # resolves, rather than through a job dependency.
+        if: startsWith(github.ref, 'refs/tags/authority/')
+        id: observatory-authority-start
+        env:
+          EXPECTED_AUTHORITY_REF: ${{ github.ref }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          records = sorted(Path("provenance/authority/records").glob("*.json"))
+          if len(records) != 1:
+              raise SystemExit("authority ref must contain exactly one direct pending record")
+          record = json.loads(records[0].read_text(encoding="utf-8"))
+          if record.get("authority_record_ref") != os.environ["EXPECTED_AUTHORITY_REF"]:
+              raise SystemExit("pending record does not name the checked-out authority ref")
+          authority_start = record.get("authority_start_commit")
+          if not isinstance(authority_start, str) or re.fullmatch(r"[0-9a-f]{40}", authority_start) is None:
+              raise SystemExit("pending record authority-start commit is not a full SHA")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"authority-start={authority_start}\n")
+          PY
+
       - name: Resolve the committed Pulp observatory cursor
         id: observatory-cursor
         shell: bash
@@ -872,7 +951,7 @@ jobs:
 
       - name: Verify two-way observatory health and negative controls
         env:
-          AUTHORITY_START_SHA: ${{ steps.authority-record.outputs.authority-start }}
+          AUTHORITY_START_SHA: ${{ steps.observatory-authority-start.outputs.authority-start }}
         run: |
           set -euo pipefail
           observatory_vellum_target="$VELLUM_TARGET_SHA"
@@ -952,27 +1031,12 @@ jobs:
           python3 -I tools/provenance/verify_pulp_observation_scope.py \
             --output "$RUNNER_TEMP/pulp-observation-scope-report.json"
 
-      - name: Upload verification evidence
+      - name: Upload observatory evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: provenance-report
+          name: observatory-report
           path: |
-            ${{ runner.temp }}/provenance-report.json
-            ${{ runner.temp }}/renderer-provenance-report.json
-            ${{ runner.temp }}/renderer-eligibility-report.json
-            ${{ runner.temp }}/pulp-tooling-disposition-report.json
-            ${{ runner.temp }}/agent-instructions-report.json
-            ${{ runner.temp }}/authority-ready-report.json
-            ${{ runner.temp }}/authority-pending-report.json
-            ${{ runner.temp }}/authority-expansion-report.json
-            ${{ runner.temp }}/open-pr-snapshot.json
-            ${{ runner.temp }}/release-bump-evidence.json
-            ${{ runner.temp }}/open-pr-cursor.json
-            ${{ runner.temp }}/open-pr-cursor-before.json
-            ${{ runner.temp }}/open-pr-cursor-after.json
-            ${{ runner.temp }}/promotion-release-tag-trust.json
-            ${{ runner.temp }}/authority-tag-trust.json
             ${{ runner.temp }}/observatory-health-report.json
             ${{ runner.temp }}/pulp-observation-scope-report.json
           if-no-files-found: error
