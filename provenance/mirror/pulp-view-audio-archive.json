@@ -1,23 +1,23 @@
 {
   "schema": "vellum.pulp-view-audio-archive.v1",
   "pulp_repository": "Generous-Corp/pulp",
-  "source_sha": "0f616a440cecdbdaff6234be48f682eec1184587",
-  "export_receipt": "provenance/mirror/receipts/20261102-0f616a440cec.json",
-  "release_tag": "artifact/pulp-view-audio/0f616a440cecdbdaff6234be48f682eec1184587",
-  "workflow_run_id": 41531609477,
-  "workflow_sha": "0f616a440cecdbdaff6234be48f682eec1184587",
+  "source_sha": "f0ac0a4ff3927c50edf0e4e8a1c6ed1e8dd8e1e2",
+  "export_receipt": "provenance/mirror/receipts/20261107-f0ac0a4ff392.json",
+  "release_tag": "artifact/pulp-view-audio/f0ac0a4ff3927c50edf0e4e8a1c6ed1e8dd8e1e2",
+  "workflow_run_id": 42398882150,
+  "workflow_sha": "f0ac0a4ff3927c50edf0e4e8a1c6ed1e8dd8e1e2",
   "archive": {
     "name": "libpulp-view-audio.a",
-    "sha256": "74536743a34daed6a65aadf57fd719132dde033c9b68fb4f5aa3816faa1213e5",
-    "size": 1747552
+    "sha256": "101cd665761c9c6e7081c24dd13688a40ab4ce23be104961282286b9198882d3",
+    "size": 1729672
   },
   "manifest": {
     "name": "pulp-view-audio-archive.manifest.json",
-    "sha256": "7295f1f9d6a68ecfc0f59268a873c1c984bf477f28c6c6d0dc595828573a0626"
+    "sha256": "0ac8cf733192fc5ade80c6e4a54280e1c5a203fd316eda963f358bfd889e9979"
   },
   "symbol_floor": {
     "name": "pulp-view-audio-symbol-floor.txt",
-    "sha256": "7f472909820fd45b1a3bbd7ea691c5ea457f487505b8ac0500e4b713fbdf8844"
+    "sha256": "f70b7cc1799639e1dd28c9b4af32b3e54f6385e5f4a4178c2b573e6b511bca66"
   },
   "symbol_floor_gate": {
     "name": "pulp-view-audio-symbol-floor-gate.txt",
@@ -25,10 +25,10 @@
   },
   "checksums": {
     "name": "SHA256SUMS",
-    "sha256": "84af79bfabcec1a28029185ba4dda25949d43d6f2e82db2ef122ab73f5233895"
+    "sha256": "ccf214b3b956cb78badda05b90a56dbef4a2a7f3e13bc8e1eb2e6cb78a168e59"
   },
   "attestation_bundle": {
     "name": "pulp-view-audio-archive.sigstore.json",
-    "sha256": "6e1858229e8503c1987fab1d06f9d52b6929b6558e42a47720a0d2398cfcfd75"
+    "sha256": "dd817a6223a0fdc51cfdabb21e11f6d7145e1b668e694cacd6404784676b9e69"
   }
 }

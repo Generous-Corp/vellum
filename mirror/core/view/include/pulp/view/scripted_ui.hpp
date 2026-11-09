@@ -17,13 +17,10 @@
 #include <string_view>
 #include <unordered_map>
 
-namespace pulp::render {
-class GpuSurface;
-}
+#include <pulp/platform/gpu_fwd.hpp>
 
 namespace pulp::view {
 
-class ValueChannelSet;
 
 struct ScriptedUiOptions {
     std::filesystem::path script_path;

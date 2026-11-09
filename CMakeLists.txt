@@ -125,6 +125,13 @@ if(APPLE AND TARGET vellum-gpu)
     add_subdirectory(apps/gpu-native)
 endif()
 
+if(APPLE AND TARGET vellum-gpu AND TARGET vellum-authoring)
+    add_subdirectory(bindings/c)
+endif()
+if(APPLE AND VELLUM_BUILD_TESTS)
+    add_subdirectory(packages/vellum-swift)
+endif()
+
 # The RmlUi module is a self-contained project; it is also built on its own
 # with `cmake -S rmlui`. It is added after the graphics targets so its optional
 # VellumRenderer can link Vellum::Gpu; nothing else in it uses Vellum.

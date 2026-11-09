@@ -80,6 +80,56 @@ find_program(_ninja ninja)
 if(_ninja)
     set(_generator -G Ninja)
 endif()
+
+# GPU device types are not part of the installed surface (gpu_surface_guard.py).
+# Installed headers equal their mirror sources byte for byte, except that each
+# choke header carries one guard line; a consumer that includes one fails with
+# the guard's message, and the consumers above and below still build.
+set(_gpu_guard_manifest "${_prefix}/mirror/share/provenance/gpu-guarded-headers.txt")
+if(NOT EXISTS "${_gpu_guard_manifest}")
+    message(FATAL_ERROR "the install carries no GPU guard manifest")
+endif()
+file(STRINGS "${_gpu_guard_manifest}" _gpu_guarded)
+set(_gpu_guard_args)
+if(_gpu_guarded)
+    set(_gpu_guard_args --require-guard)
+endif()
+_run("installed headers match the mirror" "${Python3_EXECUTABLE}"
+    "${VELLUM_SOURCE_DIR}/tools/mirror/gpu_surface_guard.py" check
+    --include-dir "${_prefix}/mirror/include" --repo "${VELLUM_SOURCE_DIR}" ${_gpu_guard_args})
+if(_gpu_guarded)
+    foreach(_case "pulp/view/window_host.hpp" "pulp/render/gpu_surface.hpp")
+        string(MAKE_C_IDENTIFIER "${_case}" _case_key)
+        set(_case_dir "${_work}/gpu-guard-${_case_key}")
+        file(MAKE_DIRECTORY "${_case_dir}")
+        file(WRITE "${_case_dir}/consumer.cpp" "#include <${_case}>\nint main() { return 0; }\n")
+        file(WRITE "${_case_dir}/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.24)
+project(VellumMirrorGpuGuardConsumer LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(Vellum CONFIG REQUIRED)
+add_library(gpu-guard-consumer OBJECT consumer.cpp)
+target_link_libraries(gpu-guard-consumer PRIVATE Vellum::MirrorCanvas)
+]=])
+        _run("GPU guard consumer configure (${_case})" "${CMAKE_COMMAND}"
+            -S "${_case_dir}" -B "${_case_dir}/build" ${_generator} -DCMAKE_BUILD_TYPE=Release
+            "-DCMAKE_PREFIX_PATH=${_prefix}"
+            -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+            -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
+        execute_process(COMMAND "${CMAKE_COMMAND}" --build "${_case_dir}/build"
+            RESULT_VARIABLE _guard_result OUTPUT_VARIABLE _guard_out ERROR_VARIABLE _guard_err)
+        if(_guard_result EQUAL 0)
+            message(FATAL_ERROR "an installed consumer including <${_case}> compiled; the GPU guard is not in force")
+        endif()
+        string(FIND "${_guard_out}${_guard_err}" "not part of the installed mirror's supported surface" _guard_hit)
+        if(_guard_hit EQUAL -1)
+            message(FATAL_ERROR "an installed consumer including <${_case}> failed, "
+                "but not with the GPU guard's message:\n${_guard_out}\n${_guard_err}")
+        endif()
+        message(STATUS "GPU guard refuses <${_case}>: ok")
+    endforeach()
+endif()
 _run("debt probe" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/tools/mirror/verify_mirror_inertness.py"
     --prefix "${_prefix}" --install-libdir "${VELLUM_INSTALL_LIBDIR}"

@@ -1,0 +1,9 @@
+prefix=@VELLUM_HOST_C_PC_PREFIX@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: vellum-host-c
+Description: Vellum host boundary C ABI
+Version: @PROJECT_VERSION@
+Cflags: -I${includedir}
+Libs: -L${libdir} -lvellum-host-c

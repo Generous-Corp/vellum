@@ -82,3 +82,7 @@ if(VELLUM_HAS_SKIA_DAWN)
             "${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_DATADIR}/vellum/fonts"
         VERBATIM)
 endif()
+
+if(BUILD_TESTING AND VELLUM_BUILD_TESTS AND TARGET vellum-gpu)
+    add_subdirectory(tests)
+endif()
