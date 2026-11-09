@@ -54,6 +54,7 @@ SceneNode& node(Scene& scene, const std::string& id) {
 
 Scene base_scene(float width, float height) {
     Scene scene = harness::fixtures::combined(width, height);
+    scene.scene_version = kDamageModelSceneVersion;
     scene.root.children.push_back({
         .id = "mover",
         .kind = SceneNode::Kind::rectangle,
@@ -443,32 +444,43 @@ void command_extents() {
 }
 
 void damage_model_version_gate() {
-    expect(partial_redraw_supported(kSceneVersion) &&
-               partial_redraw_supported(kDamageModelSceneVersion) &&
+    expect(partial_redraw_supported(kDamageModelSceneVersion) &&
                !partial_redraw_supported(kDamageModelSceneVersion + 1U) &&
                !partial_redraw_supported(3U),
            "partial redraw is enabled only for scene versions the damage model understands");
     expect(to_string(FullRepaintReason::damage_model_version) == "damage_model_version",
            "the damage-model version fallback has a telemetry name");
-    auto partial = make_surface(400, 300, 1.0F);
-    if (!partial) return;
-    Scene scene = base_scene(400, 300);
-    std::string error;
-    expect(partial->render_incremental(scene, &error), "a supported scene renders", error);
-    Scene newer = scene;
-    newer.scene_version = 3U;
-    if (scene_version_is_supported(newer.scene_version)) {
-        expect(partial->render_incremental(newer, &error) &&
-                   partial->frame_stats().full_repaint_reason ==
-                       FullRepaintReason::damage_model_version,
-               "a version-3 scene repaints fully", describe(partial->frame_stats()));
-    } else {
-        const auto before = partial->frame_stats().frame;
-        expect(!partial->render_incremental(newer, &error) &&
-                   partial->frame_stats().frame == before,
-               "a version-3 scene this build cannot draw is refused before any redraw",
-               describe(partial->frame_stats()));
+    constexpr std::uint32_t width = 400;
+    constexpr std::uint32_t height = 300;
+    auto full = make_surface(width, height, 2.0F);
+    auto partial = make_surface(width, height, 2.0F);
+    if (!full || !partial) return;
+    Scene scene = base_scene(width, height);
+    if (!render_both(*full, *partial, scene)) return;
+    scene.scene_version = Scene{}.scene_version;
+    expect(!partial_redraw_supported(scene.scene_version),
+           "a default scene is newer than the damage model",
+           "default version " + std::to_string(scene.scene_version));
+    for (int step = 0; step < 2; ++step) {
+        node(scene, "mover").bounds.x += 6.0F;
+        if (!render_both(*full, *partial, scene)) return;
+        const auto stats = partial->frame_stats();
+        expect(stats.full_repaint &&
+                   stats.full_repaint_reason == FullRepaintReason::damage_model_version &&
+                   stats.paint_commands_recorded == stats.paint_commands_total,
+               "a default-version scene takes the full-repaint path, step " +
+                   std::to_string(step),
+               describe(stats));
+        compare("a default-version scene, step " + std::to_string(step), *full, *partial);
     }
+    Scene newer = scene;
+    newer.scene_version = kSceneVersion + 1U;
+    std::string error;
+    const auto before = partial->frame_stats().frame;
+    expect(!partial->render_incremental(newer, &error) &&
+               partial->frame_stats().frame == before,
+           "a scene version this build cannot draw is refused before any redraw",
+           describe(partial->frame_stats()));
 }
 
 void explicit_damage() {

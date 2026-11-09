@@ -12,11 +12,22 @@ namespace vellum::graphics {
 /// Scene traversal belongs to the shared C++ graphics core. Platform backends
 /// consume this stable command stream instead of independently walking the
 /// retained tree and reimplementing parent-coordinate accumulation.
+///
+/// `bounds` stays in scene-absolute coordinates with no transform applied, and
+/// `transform` maps those coordinates into the frame. A `begin_layer` and its
+/// matching `end_layer` bracket the commands of a subtree that is composited
+/// as one group and then drawn with the layer's `opacity`; layers nest.
 struct PaintCommand final {
     enum class Kind {
         rectangle,
         text,
         mesh,
+        /// Starts an offscreen group for the node `node_id`. `bounds` is the
+        /// frame-space union of its members' transformed paint extents, and
+        /// the group may be clipped to it unless `layer_unbounded` is set.
+        begin_layer,
+        /// Composites the innermost open group with its `begin_layer`'s opacity.
+        end_layer,
     };
 
     Kind kind = Kind::rectangle;
@@ -36,7 +47,45 @@ struct PaintCommand final {
     std::vector<TextRun> text_runs;
     /// Mesh geometry, relative to `bounds.x`/`bounds.y`.
     std::shared_ptr<const TriangleMesh> mesh;
+    /// Maps `bounds` coordinates into the frame: every ancestor's transform
+    /// and the node's own, each applied about its node's origin.
+    Affine2D transform{};
+    /// The alpha multiplier for this command's own paint. On a `begin_layer`
+    /// it is the group's opacity. Opacity an enclosing layer applies is not
+    /// included; `effective_opacities` gives the product.
+    float opacity = 1.0F;
+    /// The resolved per-corner radii; see `resolved_corner_radii`.
+    CornerRadii corner_radii{};
+    /// On a `begin_layer`, set when a member can paint outside `bounds`,
+    /// which text can, so the group needs the whole frame.
+    bool layer_unbounded = false;
 };
+
+/// The area a command can paint, in its `bounds` coordinates before
+/// `transform`: the box grown by each shadow's offset, spread, and 1.5 times
+/// its blur radius, or a mesh's clipped vertex extent. Text may overflow its
+/// box, so its extent is the box with `bounded` false.
+struct PaintExtent final {
+    Rect rect{};
+    bool bounded = true;
+};
+
+[[nodiscard]] PaintExtent paint_extent(const PaintCommand& command);
+
+/// Whether the command draws content, as opposed to opening or closing a layer.
+[[nodiscard]] constexpr bool draws_content(PaintCommand::Kind kind) noexcept {
+    return kind == PaintCommand::Kind::rectangle || kind == PaintCommand::Kind::text ||
+           kind == PaintCommand::Kind::mesh;
+}
+
+/// The axis-aligned box that contains `rect` once mapped by `transform`.
+[[nodiscard]] Rect transformed_bounds(const Affine2D& transform, const Rect& rect) noexcept;
+
+/// For each command, its opacity multiplied by the opacity of every layer that
+/// encloses it: the opacity the command would have if layers were flattened.
+/// A backend that cannot composite groups multiplies this into its paint.
+[[nodiscard]] std::vector<float> effective_opacities(
+    const std::vector<PaintCommand>& commands);
 
 struct ResolvedLinearGradient final {
     float start_x = 0.0F;
@@ -56,8 +105,15 @@ struct ResolvedLinearGradient final {
 
 /// Flatten a scene into absolute paint commands. A scene whose version fails
 /// `scene_version_is_supported` yields no commands, and a node of a kind this
-/// build does not know contributes nothing for itself or its subtree;
-/// `SkiaDawnSurface::render` refuses such a scene outright.
+/// build does not know, or whose compositing fails `compositing_is_finite`,
+/// contributes nothing for itself or its subtree; `SkiaDawnSurface::render`
+/// refuses such a scene outright. A scene that fails
+/// `scene_fields_match_version` yields no commands.
+///
+/// A node whose opacity is below one and whose subtree draws more than one
+/// command is wrapped in a `begin_layer`/`end_layer` pair; when it draws
+/// exactly one, its opacity is folded into that command's. A node whose
+/// opacity is zero or less contributes nothing.
 [[nodiscard]] std::vector<PaintCommand> make_paint_commands(const Scene& scene);
 
 /// Whether a mesh can be drawn as given: every index names a vertex, the index

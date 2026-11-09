@@ -16,6 +16,7 @@
 #include "include/core/SkData.h"
 #include "include/core/SkFontMgr.h"
 #include "include/core/SkMaskFilter.h"
+#include "include/core/SkMatrix.h"
 #include "include/core/SkTypeface.h"
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkImage.h"
@@ -98,6 +99,33 @@ SkColor4f sk_color(Color color) {
     return {color.red, color.green, color.blue, color.alpha};
 }
 
+SkColor4f sk_color(Color color, float opacity) {
+    return {color.red, color.green, color.blue, color.alpha * opacity};
+}
+
+SkMatrix sk_matrix(const Affine2D& transform) {
+    return SkMatrix::MakeAll(
+        transform.a, transform.c, transform.tx,
+        transform.b, transform.d, transform.ty,
+        0.0F, 0.0F, 1.0F);
+}
+
+SkRRect rounded_rect(const SkRect& rect, const CornerRadii& radii, float outset = 0.0F) {
+    const auto grown = [outset](float radius) {
+        const float value = std::max(0.0F, radius + outset);
+        return SkVector{value, value};
+    };
+    const SkVector corners[4]{
+        grown(radii.top_left),
+        grown(radii.top_right),
+        grown(radii.bottom_right),
+        grown(radii.bottom_left),
+    };
+    SkRRect result;
+    result.setRectRadii(rect, corners);
+    return result;
+}
+
 std::filesystem::path font_directory(std::string_view requested) {
     if (!requested.empty()) return std::filesystem::path(requested);
     Dl_info info{};
@@ -155,7 +183,7 @@ std::string replace_unsupported_text(
 
 bool draw_linear_gradient(
     SkCanvas& canvas, const PaintCommand& command,
-    const ResolvedLinearGradient& gradient, std::string* error) {
+    const ResolvedLinearGradient& gradient, float opacity, std::string* error) {
     if (command.bounds.width <= 0.0F || command.bounds.height <= 0.0F) return true;
     if (gradient.stops.size() < 2U) {
         set_error(error, "Vellum linear gradient needs at least two stops");
@@ -182,7 +210,7 @@ bool draw_linear_gradient(
     colors.reserve(gradient.stops.size());
     positions.reserve(gradient.stops.size());
     for (const auto& stop : gradient.stops) {
-        colors.push_back(sk_color(stop.color));
+        colors.push_back(sk_color(stop.color, opacity));
         positions.push_back(stop.position);
     }
     const SkGradient shader_gradient{
@@ -201,10 +229,8 @@ bool draw_linear_gradient(
     const auto rect = SkRect::MakeXYWH(
         command.bounds.x, command.bounds.y,
         command.bounds.width, command.bounds.height);
-    if (command.corner_radius > 0.0F) {
-        canvas.clipRRect(
-            SkRRect::MakeRectXY(rect, command.corner_radius, command.corner_radius),
-            true);
+    if (is_rounded(command.corner_radii)) {
+        canvas.clipRRect(rounded_rect(rect, command.corner_radii), true);
     } else {
         canvas.clipRect(rect, true);
     }
@@ -322,14 +348,15 @@ bool build_text_paragraph(
     return true;
 }
 
-bool draw_rectangle(SkCanvas& canvas, const PaintCommand& command, std::string* error) {
+bool draw_rectangle(SkCanvas& canvas, const PaintCommand& command, float opacity,
+                    std::string* error) {
     const auto rect = SkRect::MakeXYWH(
         command.bounds.x, command.bounds.y,
         command.bounds.width, command.bounds.height);
     for (const auto& shadow : command.box_shadows) {
         SkPaint shadow_paint;
         shadow_paint.setAntiAlias(true);
-        shadow_paint.setColor4f(sk_color(shadow.color));
+        shadow_paint.setColor4f(sk_color(shadow.color, opacity));
         if (shadow.blur_radius > 0.0F) {
             shadow_paint.setMaskFilter(SkMaskFilter::MakeBlur(
                 kNormal_SkBlurStyle, shadow.blur_radius * 0.5F, true));
@@ -339,43 +366,46 @@ bool draw_rectangle(SkCanvas& canvas, const PaintCommand& command, std::string* 
             command.bounds.y + shadow.offset_y - shadow.spread_radius,
             command.bounds.width + shadow.spread_radius * 2.0F,
             command.bounds.height + shadow.spread_radius * 2.0F);
-        const float radius = std::max(0.0F, command.corner_radius + shadow.spread_radius);
         canvas.save();
-        if (command.corner_radius > 0.0F) {
+        if (is_rounded(command.corner_radii)) {
             canvas.clipRRect(
-                SkRRect::MakeRectXY(
-                    rect, command.corner_radius, command.corner_radius),
-                SkClipOp::kDifference, true);
+                rounded_rect(rect, command.corner_radii), SkClipOp::kDifference, true);
         } else {
             canvas.clipRect(rect, SkClipOp::kDifference, true);
         }
-        canvas.drawRoundRect(shadow_rect, radius, radius, shadow_paint);
+        canvas.drawRRect(
+            rounded_rect(shadow_rect, command.corner_radii, shadow.spread_radius),
+            shadow_paint);
         canvas.restore();
     }
 
     SkPaint paint;
     paint.setAntiAlias(true);
-    paint.setColor4f(sk_color(command.fill));
-    if (command.corner_radius > 0.0F) {
-        canvas.drawRoundRect(rect, command.corner_radius, command.corner_radius, paint);
+    paint.setColor4f(sk_color(command.fill, opacity));
+    if (is_rounded(command.corner_radii)) {
+        canvas.drawRRect(rounded_rect(rect, command.corner_radii), paint);
     } else {
         canvas.drawRect(rect, paint);
     }
     for (const auto& declared : command.fill_gradients) {
         const auto gradient = resolve_linear_gradient(command.bounds, declared);
-        if (!draw_linear_gradient(canvas, command, gradient, error)) return false;
+        if (!draw_linear_gradient(canvas, command, gradient, opacity, error)) return false;
     }
     return true;
 }
 
-using ParagraphSlot = std::unique_ptr<skia::textlayout::Paragraph>;
+SkRect layer_rect(const Rect& rect) {
+    return SkRect::MakeXYWH(rect.x, rect.y, rect.width, rect.height).makeOutset(1.0F, 1.0F);
+}
 
-bool draw_text(SkCanvas& canvas, const PaintCommand& command,
-               std::string_view directory, ParagraphSlot* slot, std::string* error) {
-    if (slot != nullptr && *slot) {
-        (*slot)->paint(&canvas, command.bounds.x, command.bounds.y);
-        return true;
-    }
+struct ParagraphSlot final {
+    std::unique_ptr<skia::textlayout::Paragraph> paragraph;
+    TextMetrics metrics;
+};
+
+bool draw_text(SkCanvas& canvas, const PaintCommand& command, float opacity,
+               float layer_opacity, std::string_view directory, ParagraphSlot* slot,
+               std::string* error) {
     std::vector<TextRun> runs = command.text_runs;
     if (runs.empty() && !command.text.empty()) {
         runs.push_back({
@@ -391,13 +421,26 @@ bool draw_text(SkCanvas& canvas, const PaintCommand& command,
             },
         });
     }
-    std::unique_ptr<skia::textlayout::Paragraph> paragraph;
-    TextMetrics metrics;
-    if (!build_text_paragraph(runs, directory, paragraph, metrics, error)) {
+    for (auto& run : runs) run.style.color.alpha *= opacity;
+    ParagraphSlot built;
+    ParagraphSlot& cached = slot != nullptr ? *slot : built;
+    if (!cached.paragraph &&
+        !build_text_paragraph(runs, directory, cached.paragraph, cached.metrics, error)) {
         return false;
     }
+    auto& paragraph = cached.paragraph;
+    const auto& metrics = cached.metrics;
+    if (layer_opacity < 1.0F) {
+        const float overhang = command.font_size;
+        const auto extent = SkRect::MakeXYWH(
+            command.bounds.x - overhang, command.bounds.y - overhang,
+            std::max(command.bounds.width, metrics.width) + overhang * 2.0F,
+            std::max(command.bounds.height, metrics.ascent + metrics.descent) +
+                overhang * 2.0F);
+        canvas.saveLayerAlphaf(&extent, layer_opacity);
+    }
     paragraph->paint(&canvas, command.bounds.x, command.bounds.y);
-    if (slot != nullptr) *slot = std::move(paragraph);
+    if (layer_opacity < 1.0F) canvas.restore();
     return true;
 }
 
@@ -521,20 +564,66 @@ bool draw_mesh(SkCanvas& canvas, const PaintCommand& command,
     return true;
 }
 
+// Folding is exact when the command's paint operations do not overlap; text
+// accepts the double blend of glyphs that overlap one another.
+bool opacity_folds_into_paint(const PaintCommand& command) {
+    if (command.kind == PaintCommand::Kind::rectangle) {
+        const std::size_t fills =
+            (command.fill.alpha > 0.0F ? 1U : 0U) + command.fill_gradients.size();
+        return command.box_shadows.size() <= 1U && fills <= 1U;
+    }
+    if (command.kind == PaintCommand::Kind::text) {
+        if (command.text_runs.empty()) return !command.underline && !command.strikethrough;
+        return std::none_of(command.text_runs.begin(), command.text_runs.end(),
+            [](const TextRun& run) { return run.style.underline || run.style.strikethrough; });
+    }
+    return false;
+}
+
 bool paint_command(SkCanvas& canvas, const PaintCommand& command,
                    std::string_view directory, MeshTextureCache& meshes,
                    std::string* error, ParagraphSlot* paragraph = nullptr) {
-    if (command.kind == PaintCommand::Kind::mesh) {
-        return draw_mesh(canvas, command, meshes, error);
+    if (command.kind == PaintCommand::Kind::begin_layer) {
+        const float alpha = std::clamp(command.opacity, 0.0F, 1.0F);
+        if (command.layer_unbounded) {
+            canvas.saveLayerAlphaf(nullptr, alpha);
+        } else {
+            const auto bounds = layer_rect(command.bounds);
+            canvas.saveLayerAlphaf(&bounds, alpha);
+        }
+        return true;
     }
-    if (command.kind == PaintCommand::Kind::rectangle) {
-        return draw_rectangle(canvas, command, error);
+    if (command.kind == PaintCommand::Kind::end_layer) {
+        canvas.restore();
+        return true;
     }
     if (command.kind == PaintCommand::Kind::text &&
-        (!command.text.empty() || !command.text_runs.empty())) {
-        return draw_text(canvas, command, directory, paragraph, error);
+        command.text.empty() && command.text_runs.empty()) {
+        return true;
     }
-    return true;
+    if (!draws_content(command.kind)) return true;
+    const float opacity = std::clamp(command.opacity, 0.0F, 1.0F);
+    if (opacity <= 0.0F) return true;
+
+    const int saved = canvas.save();
+    if (!is_identity(command.transform)) canvas.concat(sk_matrix(command.transform));
+    const bool layered = opacity < 1.0F && !opacity_folds_into_paint(command);
+    const float paint_opacity = layered ? 1.0F : opacity;
+    if (layered && command.kind != PaintCommand::Kind::text) {
+        const auto bounds = layer_rect(paint_extent(command).rect);
+        canvas.saveLayerAlphaf(&bounds, opacity);
+    }
+    bool drawn = true;
+    if (command.kind == PaintCommand::Kind::mesh) {
+        drawn = draw_mesh(canvas, command, meshes, error);
+    } else if (command.kind == PaintCommand::Kind::rectangle) {
+        drawn = draw_rectangle(canvas, command, paint_opacity, error);
+    } else {
+        drawn = draw_text(canvas, command, paint_opacity, layered ? opacity : 1.0F,
+                          directory, paragraph, error);
+    }
+    canvas.restoreToCount(saved);
+    return drawn;
 }
 
 using Extent = std::optional<PixelRect>;
@@ -576,7 +665,8 @@ Extent command_extent(const PaintCommand& command, const Rect& frame, float scal
             painted.kind = SceneNode::Kind::mesh;
             painted.mesh = command.mesh;
             break;
-        default:
+        case PaintCommand::Kind::begin_layer:
+        case PaintCommand::Kind::end_layer:
             return std::nullopt;
     }
     return pixel_extent(node_paint_bounds(painted, command.bounds, frame, propagation), scale);
@@ -896,6 +986,18 @@ public:
                                  unknown->id);
             return false;
         }
+        if (!scene_fields_match_version(scene)) {
+            set_error(error, "scene version " + std::to_string(scene.scene_version) +
+                                 " cannot carry the transform, opacity, or corner radii at " +
+                                 find_version_2_fields(scene.root)->id);
+            return false;
+        }
+        if (const auto* invalid = find_non_finite_compositing(scene.root);
+            invalid != nullptr) {
+            set_error(error, "scene node " + invalid->id +
+                                 " has a non-finite transform, opacity, or corner radius");
+            return false;
+        }
         return true;
     }
 
@@ -1146,18 +1248,18 @@ private:
         auto* canvas = retained_surface_->getCanvas();
         MeshTextureCache mesh_textures{.recorder = recorder_.get()};
         if (full) {
-            canvas->save();
+            const int saved = canvas->save();
             canvas->resetMatrix();
             canvas->clear(sk_color(scene.background));
             canvas->scale(config_.scale, config_.scale);
             for (const auto& command : commands) {
                 if (!paint_command(*canvas, command, config_.font_directory,
                                    mesh_textures, error)) {
-                    canvas->restore();
+                    canvas->restoreToCount(saved);
                     return false;
                 }
             }
-            canvas->restore();
+            canvas->restoreToCount(saved);
             stats.paint_commands_recorded = commands.size();
             stats.paint_command_draws = commands.size();
         } else if (!rects.empty()) {
@@ -1165,7 +1267,7 @@ private:
             std::vector<bool> drawn(commands.size(), false);
             std::vector<ParagraphSlot> paragraphs(commands.size());
             for (const auto& rect : rects) {
-                canvas->save();
+                const int saved = canvas->save();
                 canvas->resetMatrix();
                 canvas->clipRect(
                     SkRect::Make(SkIRect::MakeLTRB(rect.left, rect.top, rect.right, rect.bottom)),
@@ -1176,13 +1278,13 @@ private:
                     if (extents[index] && !overlaps(*extents[index], rect)) continue;
                     if (!paint_command(*canvas, commands[index], config_.font_directory,
                                        mesh_textures, error, &paragraphs[index])) {
-                        canvas->restore();
+                        canvas->restoreToCount(saved);
                         return false;
                     }
                     drawn[index] = true;
                     ++stats.paint_command_draws;
                 }
-                canvas->restore();
+                canvas->restoreToCount(saved);
             }
             stats.paint_commands_recorded =
                 static_cast<std::size_t>(std::count(drawn.begin(), drawn.end(), true));

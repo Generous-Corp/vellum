@@ -31,6 +31,7 @@ constexpr float kTileHeight = 300.0F;
 
 Scene tiled_scene(float width, float height) {
     Scene scene;
+    scene.scene_version = kDamageModelSceneVersion;
     scene.width = width;
     scene.height = height;
     scene.background = harness::fixtures::combined(kTileWidth, kTileHeight).background;
