@@ -16,6 +16,9 @@ if(VELLUM_RMLUI_FONTS AND EXISTS "${_vellum_rmlui_test_font}")
 endif()
 add_test(NAME vellum.rmlui.backend COMMAND vellum-rmlui-backend-test)
 
+vellum_rmlui_add_test(vellum-rmlui-image-compare-test image_compare_test.cpp VellumRmlUi::Core)
+add_test(NAME vellum.rmlui.image-compare COMMAND vellum-rmlui-image-compare-test)
+
 vellum_rmlui_add_test(vellum-rmlui-two-instances-test two_instances_test.cpp VellumRmlUi::Core)
 add_test(NAME vellum.rmlui.two-instances COMMAND vellum-rmlui-two-instances-test)
 
