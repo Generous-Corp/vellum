@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -409,8 +410,13 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
     def test_the_status_is_never_left_pending_or_missing(self):
         run = self.runs[0]
         self.assertIn("trap on_exit EXIT", run)
-        self.assertIn("trap 'exit 130' INT TERM", run)
-        self.assertRegex(run, r'on_exit\(\) \{\n\s+if \[ "\$finished" != 1 \]; then\n\s+post_status failure ')
+        # A signal is a cancellation: the newer run owns the status, so it posts nothing more.
+        self.assertIn("trap 'cancelled=1; exit 130' INT TERM", run)
+        self.assertRegex(run, r'on_exit\(\) \{\n\s+if \[ "\$finished" != 1 \] && \[ "\$cancelled" != 1 \]; then\n'
+                              r'\s+post_status failure ')
+        # Genuine timeouts are this step's own deadlines, exit statuses posted as failure.
+        self.assertEqual(len(re.findall(r"\btimeout \d+m ", run)), 4)
+        self.assertRegex(run, r"124\) post_status failure ")
         lines = run.splitlines()
         index = {name: next(i for i, line in enumerate(lines) if needle in line)
                  for name, needle in (("trap", "trap on_exit EXIT"), ("pending", "post_status pending"),
@@ -432,7 +438,7 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
         uses = [i for i, line in enumerate(lines) if "GITHUB_TOKEN" in line or "status_token" in line]
         self.assertEqual([lines[i] for i in uses if i not in (moved, moved + 1)],
                          ["printf 'Authorization: Bearer %s\\n' \"$status_token\" |",
-                          "env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \\"])
+                          "timeout 8m env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \\"])
         self.assertIsNone(re.search(r"(?<![\w-])(export|declare -x)\s", run))
         # The token reaches curl on stdin, never in its argv.
         self.assertIn("--header @- \\", run)
@@ -443,8 +449,25 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
         for body in self.runs:
             self.assertNotIn("${{", body)
 
+    TRUSTED_SHA = ("TRUSTED_SHA: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha"
+                   " || github.sha }}")
+    BASE_SHA = "BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
+
     def test_no_pull_request_controlled_text_is_used_anywhere(self):
-        self.assertIsNone(self.FORBIDDEN_CONTEXT.search(self.text), self.FORBIDDEN_CONTEXT.search(self.text))
+        # github.sha is the base tip on pull_request_target, and is read only
+        # in TRUSTED_SHA, where merge_group uses merge_group.base_sha instead.
+        text = self.text.replace(self.TRUSTED_SHA, "")
+        self.assertIsNone(self.FORBIDDEN_CONTEXT.search(text), self.FORBIDDEN_CONTEXT.search(text))
+
+    def test_the_rules_come_from_the_definition_s_commit_never_the_pull_request_s_base(self):
+        self.assertEqual(self.text.count(self.TRUSTED_SHA), 1)
+        self.assertEqual(len(re.findall(r"github\.sha\b", self.text)), 1)
+        self.assertEqual(self.text.count("github.event.pull_request.base.sha"), 1)
+        self.assertIn(self.BASE_SHA, self.text)  # the change is judged against its own base
+        run = self.runs[0]
+        self.assertIn('checkout --quiet --detach "$TRUSTED_SHA"', run)
+        self.assertNotIn('checkout --quiet --detach "$BASE_SHA"', run)
+        self.assertIn('--base "$BASE_SHA"', run)
 
     def test_every_command_is_trusted_code(self):
         self.assertIsNone(re.search(r"^\s*(?:-\s+)?uses:", self.text, re.MULTILINE))  # the base is cloned in the step
@@ -454,14 +477,14 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
         interpreters = re.findall(r"python3?\b[^\n]*", runs)
         self.assertEqual(interpreters, ["python3 -I tools/provenance/framework_trusted_verify.py \\"])
         # The judge runs with no token in its environment.
-        self.assertIn("env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \\\n"
+        self.assertIn("timeout 8m env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \\\n"
                       "            python3 -I tools/provenance/framework_trusted_verify.py", runs)
         self.assertIn('--dest-parent "$RUNNER_TEMP"', runs)
         git_lines = [line.strip() for line in runs.splitlines() if '"${safe_git[@]}"' in line]
         self.assertEqual(len(git_lines), 5)
         self.assertIn("-c fetch.fsckObjects=true -c transfer.fsckObjects=true)", runs)
         self.assertIn("-c core.hooksPath=/dev/null", runs)
-        self.assertIn('checkout --quiet --detach "$BASE_SHA"', runs)
+        self.assertIn('checkout --quiet --detach "$TRUSTED_SHA"', runs)
         self.assertEqual(runs.count(" checkout "), 1)
         self.assertIn("clone --quiet --no-checkout", runs)
 
@@ -470,6 +493,93 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
                      ".github/workflows/new.yml", "tools/provenance/framework_trusted_verify.py",
                      "tools/provenance/verify_extraction.py", "tools/provenance/argparse.py", "tools/mirror/x.py"):
             self.assertTrue(path.startswith(verifier.FRAMEWORK_RULE_PATHS), path)
+
+
+class WorkflowStepBehaviourTests(unittest.TestCase):
+    """The workflow's one step, run for real against a local server with a curl shim."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.top = Path(self.temporary.name)
+        self.bin = self.top / "bin"
+        self.bin.mkdir()
+        self.posts = self.top / "posts.log"
+        (self.bin / "curl").write_text(
+            "#!/bin/bash\nfor a in \"$@\"; do case \"$prev\" in --data) printf '%s\\n' \"$a\" >> "
+            f"{self.posts}; esac; prev=\"$a\"; done\ncat > /dev/null\n", encoding="utf-8")
+        if not shutil.which("timeout"):
+            (self.bin / "timeout").write_text("#!/bin/bash\nshift\nexec \"$@\"\n", encoding="utf-8")
+        for shim in self.bin.iterdir():
+            shim.chmod(0o755)
+        body = re.search(r"run: \|\n((?:          .*\n|\n)+)", WORKFLOW.read_text(encoding="utf-8")).group(1)
+        self.step = self.top / "step.sh"
+        self.step.write_text("\n".join(line[10:] for line in body.splitlines()) + "\n", encoding="utf-8")
+        # The server: an old main (before the judge existed), a new main tip
+        # carrying the judge, and an unrelated pull request based on the old main.
+        work = self.top / "work-repo"
+        git(work.parent, "init", "-q", "-b", "main", str(work))
+        (work / "README.md").write_text("old main\n", encoding="utf-8")
+        self.old_main = commit_all(work, "old main, before the judge")
+        for tree in ("tools/provenance", "tools/mirror"):
+            shutil.copytree(ROOT / tree, work / tree, ignore=shutil.ignore_patterns("__pycache__"))
+        self.new_main = commit_all(work, "new main, with the judge")
+        git(work, "checkout", "-q", "-b", "change", self.old_main)
+        (work / "docs").mkdir()
+        (work / "docs/note.md").write_text("an unrelated change\n", encoding="utf-8")
+        self.head = commit_all(work, "an unrelated pull request")
+        self.server = self.top / "server"
+        (self.server / "Generous-Corp").mkdir(parents=True)
+        bare = self.server / "Generous-Corp/vellum.git"
+        git(self.top, "init", "-q", "--bare", str(bare))
+        git(work, "push", "-q", str(bare), f"{self.new_main}:refs/heads/main", f"{self.head}:refs/pull/7/head")
+
+    def environment(self, trusted: str) -> dict[str, str]:
+        runner_temp = Path(tempfile.mkdtemp(dir=self.top))
+        return dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", GITHUB_TOKEN="token", GH_TOKEN="token",
+                    EVENT_NAME="pull_request_target", PR_NUMBER="7", HEAD_SHA=self.head, BASE_SHA=self.old_main,
+                    TRUSTED_SHA=trusted, GITHUB_SERVER_URL=f"file://{self.server}",
+                    GITHUB_REPOSITORY="Generous-Corp/vellum", GITHUB_RUN_ID="1", GITHUB_API_URL="https://api.invalid",
+                    RUNNER_TEMP=str(runner_temp))
+
+    def states(self) -> list[tuple[str, str]]:
+        if not self.posts.exists():
+            return []
+        rows = [json.loads(line) for line in self.posts.read_text(encoding="utf-8").splitlines()]
+        return [(row["state"], row["description"]) for row in rows]
+
+    def test_an_unrelated_change_on_an_old_base_is_judged_by_the_new_rules(self):
+        work = Path(tempfile.mkdtemp(dir=self.top))
+        done = subprocess.run(["bash", str(self.step)], cwd=work, env=self.environment(self.new_main),
+                              capture_output=True, text=True, timeout=300)
+        self.assertEqual(done.returncode, 0, done.stdout[-500:] + done.stderr[-500:])
+        self.assertEqual(self.states(), [("pending", "Judging with the base rules"),
+                                         ("success", "Passed the base rules")])
+
+    def test_rules_from_the_old_base_cannot_be_read(self):
+        # The defect this guards against: the old base predates the judge.
+        work = Path(tempfile.mkdtemp(dir=self.top))
+        done = subprocess.run(["bash", str(self.step)], cwd=work, env=self.environment(self.old_main),
+                              capture_output=True, text=True, timeout=300)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(self.states()[-1], ("failure", "The change could not be read"))
+
+    def test_a_cancelled_run_posts_nothing_more(self):
+        started = self.top / "judge-started"
+        (self.bin / "python3").write_text(f"#!/bin/bash\ntouch {started}\nsleep 15\n", encoding="utf-8")
+        (self.bin / "python3").chmod(0o755)
+        work = Path(tempfile.mkdtemp(dir=self.top))
+        process = subprocess.Popen(["bash", str(self.step)], cwd=work, env=self.environment(self.new_main),
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        # Cancel mid-judgement, as a newer run's arrival would.
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline and not started.exists():
+            time.sleep(0.1)
+        self.assertTrue(started.exists())
+        self.assertEqual(self.states(), [("pending", "Judging with the base rules")])
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=60)
+        self.assertEqual(self.states(), [("pending", "Judging with the base rules")])
 
 
 class NoLinksOnTheDefaultBranchTests(unittest.TestCase):
