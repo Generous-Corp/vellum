@@ -190,11 +190,12 @@ class FakeGitHub:
 class PublishStep(unittest.TestCase):
     """sdk-release's publish step, run for real against a stand-in GitHub."""
 
-    def run_publish(self, dry_run: str | None, tag: str = DRY_TAG, script: str | None = None):
-        github = FakeGitHub(self, {tag: TAG_OBJECT})
+    def run_publish(self, dry_run: str | None, tag: str = DRY_TAG, script: str | None = None,
+                    github: "FakeGitHub | None" = None):
+        github = github or FakeGitHub(self, {tag: TAG_OBJECT})
         temp = github.root / "runner-temp"
         for directory in ("gpu", "trusted"):
-            (temp / directory).mkdir(parents=True)
+            (temp / directory).mkdir(parents=True, exist_ok=True)
         archive = "vellum-sdk-0.1.10-darwin-arm64.tar.gz"
         files = {f"gpu/{archive}": b"archive", "trusted/install.sh": b"#!/bin/sh\n",
                  "trusted/install_core.py": b"print(1)\n", "trusted/SHA256SUMS": b"sums\n",
@@ -236,6 +237,20 @@ class PublishStep(unittest.TestCase):
         self.assertFalse(any(call[:2] == ["release", "verify"] for call in calls))
         self.assertFalse(any("draft=false" in call for call in calls))
         self.assertTrue(github.current()["releases"][0]["draft"])
+
+    def test_a_second_run_resumes_a_draft_that_holds_the_verification_record(self) -> None:
+        # Publish rehearsal run 42572076591: a run resuming a complete draft
+        # found the earlier run's release-assets-verification.json and stopped.
+        first, github = self.run_publish("true")
+        self.assertEqual(first.returncode, 0, first.stderr[-1500:])
+        names = [asset["name"] for asset in github.current()["releases"][0]["assets"]]
+        self.assertIn("release-assets-verification.json", names)
+        second, github = self.run_publish("true", github=github)
+        self.assertEqual(second.returncode, 0, second.stderr[-1500:])
+        self.assertEqual(len(github.current()["releases"]), 1)
+        self.assertEqual(sorted(asset["name"] for asset in github.current()["releases"][0]["assets"]),
+                         sorted(names))
+        self.assertEqual(github.current()["published"], [])
 
     def test_a_failing_report_only_ruleset_read_does_not_stop_the_dry_run(self) -> None:
         # The newest-freeze lookup is report-only: when it fails (here a
