@@ -9,7 +9,10 @@
 // Provenance: written from RmlUi's public RenderInterface documentation and
 // headers (MIT), Apple's Metal documentation, and RmlUi's MIT GL3 backend as a
 // behavioural reference (premultiplied blending, the orthographic projection,
-// scissor semantics). It contains no code from any GPL-licensed project.
+// scissor semantics, the stencil clip-mask operations, the layer stack, the
+// filter parameters and colour matrices, the separable blur with iterative
+// half-scaling, and the gradient functions). It contains no code from any
+// GPL-licensed project.
 //
 // This header is Objective-C++: include it from a .mm file.
 //
@@ -29,9 +32,19 @@
 // with another format draws nothing and is logged as a caller error. The
 // viewport is the region to draw into, normally the whole target.
 //
-// Supported in this version: compiled geometry, generated and loaded textures,
-// scissor and transforms. Clip masks, layers, filters and shaders are not yet
-// drawn; calls to them are counted in unsupported_calls().
+// Drawn: compiled geometry, generated and loaded textures, scissor,
+// transforms, clip masks (a stencil the renderer owns, sized to the target),
+// layers (PushLayer, CompositeLayers with the blend and replace modes,
+// PopLayer, SaveLayerAsTexture), filters (opacity, blur, drop-shadow,
+// brightness, contrast, invert, grayscale, sepia, hue-rotate, saturate),
+// mask images (SaveLayerAsMaskImage), and gradient shaders (linear, radial,
+// conic and their repeating forms). Rendering goes to an offscreen base layer
+// that end_frame() copies to the target; filters run on target-sized
+// offscreen textures within the current scissor. Not drawn: the "shader"
+// decorator's application-defined shaders and unknown filter names, which are
+// counted in unsupported_calls(). Gradients follow RmlUi's GL3 backend in
+// easing between colour stops (smoothstep), so they match RmlUi's reference
+// rendering rather than CSS's linear interpolation.
 
 #if !defined(__OBJC__)
 #error "vellum/rmlui/metal_render_interface.hpp is Objective-C++; include it from a .mm file"
@@ -52,12 +65,14 @@ struct MetalFrameTarget {
     id<MTLCommandBuffer> command_buffer = nil;
     // The colour attachment: BGRA8Unorm, RGBA8Unorm or their sRGB variants.
     id<MTLTexture> target = nil;
-    // The region to draw into, in target pixels.
+    // The region to draw into, in target pixels: the whole target. (Layers are
+    // target-sized and composited over the viewport.)
     MTLViewport viewport{};
     // RmlUi context units to target pixels. Set the context's dimensions to
     // the viewport size divided by this.
     float scale = 1.0f;
-    // Clear the target to transparent before drawing.
+    // Start from transparent. With false, the frame starts from the target's
+    // current contents, which needs a target that is not framebuffer-only.
     bool clear = true;
 };
 
@@ -77,8 +92,9 @@ class MetalRenderInterface final : public Rml::RenderInterface {
     void begin_frame(const MetalFrameTarget& frame);
     void end_frame();
 
-    // RmlUi render calls this version does not draw yet (clip masks, layers,
-    // filters, shaders), counted since construction.
+    // RmlUi render calls this renderer does not draw (application-defined
+    // shaders, unknown filters, filters or shaders with missing parameters),
+    // counted since construction.
     [[nodiscard]] std::size_t unsupported_calls() const noexcept;
 
     Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices,
@@ -105,10 +121,16 @@ class MetalRenderInterface final : public Rml::RenderInterface {
                          Rml::BlendMode blend_mode,
                          Rml::Span<const Rml::CompiledFilterHandle> filters) override;
     void PopLayer() override;
+    Rml::TextureHandle SaveLayerAsTexture() override;
+    Rml::CompiledFilterHandle SaveLayerAsMaskImage() override;
     Rml::CompiledFilterHandle CompileFilter(const Rml::String& name,
                                             const Rml::Dictionary& parameters) override;
+    void ReleaseFilter(Rml::CompiledFilterHandle filter) override;
     Rml::CompiledShaderHandle CompileShader(const Rml::String& name,
                                             const Rml::Dictionary& parameters) override;
+    void RenderShader(Rml::CompiledShaderHandle shader, Rml::CompiledGeometryHandle geometry,
+                      Rml::Vector2f translation, Rml::TextureHandle texture) override;
+    void ReleaseShader(Rml::CompiledShaderHandle shader) override;
 
   private:
     struct State;

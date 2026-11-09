@@ -3,11 +3,13 @@
 #import <Foundation/Foundation.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <optional>
 #include <set>
+#include <string_view>
 #include <utility>
 
 namespace vellum::authoring {
@@ -26,6 +28,50 @@ constexpr float kDefaultButtonHeight = 44.0F;
 constexpr float kDefaultTextInputHeight = 44.0F;
 constexpr float kDefaultGenericHeight = 0.0F;
 constexpr float kTextLineHeightMultiplier = 1.4F;
+constexpr std::array<std::string_view, 9> kIntrinsicTypes{
+    "view", "stack", "text", "text-run", "text-input", "button", "image", "canvas", "custom",
+};
+constexpr std::array<std::string_view, 6> kTextStyleKeys{
+    "color", "fontFamily", "fontSize", "fontWeight", "letterSpacing", "textDecoration",
+};
+
+using vellum::graphics::LoweringDiagnostic;
+
+template <std::size_t Size>
+bool contains(const std::array<std::string_view, Size>& values, std::string_view value) {
+    return std::find(values.begin(), values.end(), value) != values.end();
+}
+
+struct StyleUse final {
+    bool root = false;
+    bool lays_out_children = false;
+    bool paints_text_background = false;
+};
+
+bool style_key_consumed(std::string_view type, std::string_view key, const StyleUse& use) {
+    const bool text = type == "text" || type == "text-run";
+    if (key == "width" || key == "height") return true;
+    if (key == "x" || key == "y") return !use.root;
+    if (key == "padding" || key == "direction") return use.lays_out_children;
+    if (key == "gap") return type == "stack" && use.lays_out_children;
+    if (key == "backgroundLinearGradient" || key == "boxShadow") return true;
+    if (key == "backgroundColor") return !text;
+    if (key == "borderRadius") return !text || use.paints_text_background;
+    if (text) return contains(kTextStyleKeys, key);
+    if (type == "button") return key == "color";
+    if (type == "text-input") return key == "color" || key == "fontSize";
+    return false;
+}
+
+bool skipped_text_run(NSString* parent_type, id child) {
+    return [child isKindOfClass:NSDictionary.class] &&
+        [static_cast<NSDictionary*>(child)[@"type"] isEqual:@"text-run"] &&
+        ([parent_type isEqualToString:@"text"] || [parent_type isEqualToString:@"button"]);
+}
+
+bool text_run_style_key_consumed(std::string_view parent_type, std::string_view key) {
+    return parent_type == "text" && contains(kTextStyleKeys, key);
+}
 
 void set_error(std::string* destination, std::string value) {
     if (destination != nullptr) *destination = std::move(value);
@@ -230,7 +276,29 @@ struct MaterializeContext final {
     std::vector<Interaction>* interactions = nullptr;
     std::vector<TextInputControl>* text_inputs = nullptr;
     std::vector<AccessibilityNode>* accessibility_nodes = nullptr;
+    std::vector<LoweringDiagnostic>* diagnostics = nullptr;
 };
+
+template <typename Consumed>
+void report_dropped_style(
+    NSDictionary* style, const std::string& node_id, std::string_view type,
+    Consumed consumed, MaterializeContext& context) {
+    NSArray* keys = [style.allKeys sortedArrayUsingSelector:@selector(compare:)];
+    for (id key in keys) {
+        if (![key isKindOfClass:NSString.class]) continue;
+        const std::string name = cpp_string(key);
+        if (consumed(name)) continue;
+        context.diagnostics->push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(vellum::graphics::kStyleDroppedCode),
+            .node_id = node_id,
+            .property = name,
+            .message = "style key " + name + " is not supported on " + std::string(type) +
+                " nodes and was ignored",
+        });
+    }
+}
 
 std::string inferred_accessibility_role(NSString* type, NSDictionary* source) {
     if ([source[@"accessibilityRole"] isKindOfClass:NSString.class]) {
@@ -317,6 +385,19 @@ bool materialize_node(
         set_error(error, "authoring tree contains an empty or duplicate node id: " + identity);
         return false;
     }
+    const std::string type_name = cpp_string(type);
+    if (!contains(kIntrinsicTypes, type_name)) {
+        context.diagnostics->push_back({
+            .severity = LoweringDiagnostic::Severity::error,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(vellum::graphics::kUnknownNodeTypeCode),
+            .node_id = identity,
+            .property = "type",
+            .message = "authoring node " + identity + " has unsupported type " + type_name,
+        });
+        set_error(error, context.diagnostics->back().message);
+        return false;
+    }
     NSDictionary* style = dictionary_or_empty(source[@"style"]);
     NSDictionary* events = dictionary_or_empty(source[@"events"]);
     const bool is_text_input = [type isEqualToString:@"text-input"];
@@ -380,6 +461,27 @@ bool materialize_node(
     if (!parse_linear_gradient(style, output.fill_gradients, error) ||
         !parse_box_shadow(style, output.box_shadows, error)) {
         return false;
+    }
+    StyleUse style_use{
+        .root = depth == 0U,
+        .paints_text_background =
+            !output.fill_gradients.empty() || !output.box_shadows.empty(),
+    };
+    for (id child in array_or_empty(source[@"children"])) {
+        if (!skipped_text_run(type, child)) style_use.lays_out_children = true;
+    }
+    report_dropped_style(style, identity, type_name,
+        [&](std::string_view key) { return style_key_consumed(type_name, key, style_use); },
+        context);
+    if (type_name == "image" || type_name == "canvas") {
+        context.diagnostics->push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::lowered,
+            .code = std::string(vellum::graphics::kNodeContentDroppedCode),
+            .node_id = identity,
+            .property = "type",
+            .message = type_name + " content has no scene representation; only its box was kept",
+        });
     }
 
     if ([type isEqualToString:@"custom"]) {
@@ -619,8 +721,12 @@ bool materialize_node(
             return false;
         }
         NSDictionary* child = static_cast<NSDictionary*>(child_value);
-        if ([child[@"type"] isEqual:@"text-run"] &&
-            ([type isEqualToString:@"text"] || [type isEqualToString:@"button"])) {
+        if (skipped_text_run(type, child)) {
+            report_dropped_style(dictionary_or_empty(child[@"style"]),
+                [child[@"id"] isKindOfClass:NSString.class] ? cpp_string(child[@"id"]) : identity,
+                "text-run",
+                [&](std::string_view key) { return text_run_style_key_consumed(type_name, key); },
+                context);
             continue;
         }
         NSDictionary* child_style = dictionary_or_empty(child[@"style"]);
@@ -653,7 +759,9 @@ bool materialize_node(
 bool materialize_rendered_tree(
     std::string_view rendered_json,
     RenderedApplication& output,
-    std::string* error) {
+    std::string* error,
+    std::vector<LoweringDiagnostic>* failure_diagnostics) {
+    if (failure_diagnostics != nullptr) failure_diagnostics->clear();
     if (rendered_json.size() > kMaximumJsonBytes) {
         set_error(error, "JavaScript authoring bridge JSON is invalid or too large");
         return false;
@@ -694,10 +802,14 @@ bool materialize_rendered_tree(
         .interactions = &candidate.interactions,
         .text_inputs = &candidate.text_inputs,
         .accessibility_nodes = &candidate.accessibility_nodes,
+        .diagnostics = &candidate.diagnostics,
     };
     if (!materialize_node(
             tree, {0.0F, 0.0F, width, height}, 0.0F, 0.0F, 0U,
             context, candidate.scene.root, error)) {
+        if (failure_diagnostics != nullptr) {
+            *failure_diagnostics = std::move(candidate.diagnostics);
+        }
         return false;
     }
     output = std::move(candidate);

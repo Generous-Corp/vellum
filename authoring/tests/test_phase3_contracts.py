@@ -251,6 +251,23 @@ class Phase3ContractsTest(unittest.TestCase):
         self.assertNotIn("window.", source)
         self.assertNotIn("document.", source)
 
+    def test_native_materializer_intrinsics_match_the_runtime(self) -> None:
+        native = (ROOT / "authoring" / "src" / "rendered_tree_materializer.mm").read_text(
+            encoding="utf-8"
+        )
+        runtime = (ROOT / "packages" / "vellum-ui" / "src" / "runtime.js").read_text(
+            encoding="utf-8"
+        )
+        native_list = re.search(r"kIntrinsicTypes\{([^}]*)\}", native)
+        runtime_list = re.search(r"INTRINSIC_TYPES = new Set\(\[([^\]]*)\]\)", runtime)
+        self.assertIsNotNone(native_list)
+        self.assertIsNotNone(runtime_list)
+        native_types = re.findall(r'"([a-z-]+)"', native_list.group(1))
+        runtime_types = re.findall(r"'([a-z-]+)'", runtime_list.group(1))
+        self.assertTrue(runtime_types)
+        self.assertEqual(sorted(native_types), sorted(runtime_types))
+        self.assertEqual(len(native_types), len(set(native_types)))
+
 
 if __name__ == "__main__":
     unittest.main()

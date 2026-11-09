@@ -1,5 +1,6 @@
 #pragma once
 
+#include <vellum/graphics/lowering_diagnostic.hpp>
 #include <vellum/graphics/scene.hpp>
 
 #include <memory>
@@ -76,6 +77,10 @@ struct RenderedApplication final {
     std::vector<Interaction> interactions;
     std::vector<TextInputControl> text_inputs;
     std::vector<AccessibilityNode> accessibility_nodes;
+    /// Authored content the materializer could not carry into `scene`
+    /// exactly, in document order. Only warnings and infos appear here, since
+    /// an error fails materialization and leaves the previous output intact.
+    std::vector<vellum::graphics::LoweringDiagnostic> diagnostics;
 };
 
 /// Executes a bundled Vellum JavaScript/TypeScript application through the

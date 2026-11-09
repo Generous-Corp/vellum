@@ -75,13 +75,33 @@ if(VELLUM_RMLUI_METAL AND VELLUM_RMLUI_FONTS)
     vellum_rmlui_add_test(vellum-rmlui-metal-blend-control metal/metal_visual_test.mm
         VellumRmlUi::Native)
     target_sources(vellum-rmlui-metal-blend-control PRIVATE
-        "${PROJECT_SOURCE_DIR}/src/metal_render_interface.mm")
+        "${PROJECT_SOURCE_DIR}/src/metal_render_interface.mm"
+        "${PROJECT_SOURCE_DIR}/src/metal_effects.cpp")
     target_compile_definitions(vellum-rmlui-metal-blend-control PRIVATE
         VELLUM_RMLUI_METAL_TEST_STRAIGHT_ALPHA_BLEND)
-    target_compile_options(vellum-rmlui-metal-blend-control PRIVATE -fobjc-arc)
+    target_compile_options(vellum-rmlui-metal-blend-control PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
     target_link_libraries(vellum-rmlui-metal-blend-control PRIVATE
         "-framework Metal" "-framework QuartzCore" "-framework Foundation"
         "-framework CoreGraphics" "-framework ImageIO")
+    vellum_rmlui_add_test(vellum-rmlui-metal-layers-test metal/metal_layers_test.mm
+        VellumRmlUi::Native VellumRmlUi::Metal)
+    target_compile_options(vellum-rmlui-metal-layers-test PRIVATE -fobjc-arc)
+    add_test(NAME vellum.rmlui.metal-layers
+        COMMAND vellum-rmlui-metal-layers-test "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}")
+    set_tests_properties(vellum.rmlui.metal-layers PROPERTIES SKIP_RETURN_CODE 77)
+
+    vellum_rmlui_add_test(vellum-rmlui-metal-filters-test metal/metal_filters_test.mm
+        VellumRmlUi::Native VellumRmlUi::Metal)
+    target_compile_options(vellum-rmlui-metal-filters-test PRIVATE -fobjc-arc)
+    add_test(NAME vellum.rmlui.metal-filters
+        COMMAND vellum-rmlui-metal-filters-test "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}")
+    set_tests_properties(vellum.rmlui.metal-filters PROPERTIES SKIP_RETURN_CODE 77)
+
+    vellum_rmlui_add_test(vellum-rmlui-metal-effects-test metal/metal_effects_test.cpp
+        VellumRmlUi::Metal)
+    target_include_directories(vellum-rmlui-metal-effects-test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    add_test(NAME vellum.rmlui.metal-effects COMMAND vellum-rmlui-metal-effects-test)
+
     add_test(NAME vellum.rmlui.metal-blend-control
         COMMAND vellum-rmlui-metal-blend-control "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}"
             "${_metal_refs}")

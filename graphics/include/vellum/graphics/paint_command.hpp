@@ -54,6 +54,10 @@ struct ResolvedLinearGradient final {
 [[nodiscard]] ResolvedLinearGradient resolve_linear_gradient(
     const Rect& bounds, const LinearGradient& gradient);
 
+/// Flatten a scene into absolute paint commands. A scene whose version fails
+/// `scene_version_is_supported` yields no commands, and a node of a kind this
+/// build does not know contributes nothing for itself or its subtree;
+/// `SkiaDawnSurface::render` refuses such a scene outright.
 [[nodiscard]] std::vector<PaintCommand> make_paint_commands(const Scene& scene);
 
 /// Whether a mesh can be drawn as given: every index names a vertex, the index

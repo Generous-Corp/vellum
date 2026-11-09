@@ -89,11 +89,32 @@ struct TriangleMesh final {
     Rect clip{};
 };
 
+/// The scene schema version this build produces and consumes.
+///
+/// The version is a single integer. Adding a field whose default leaves every
+/// existing scene rendering exactly as before does not change it. Any other
+/// change bumps it: a new `SceneNode::Kind`, a new meaning for an existing
+/// field, or a default that alters existing output. A consumer accepts only
+/// the versions it knows and fails closed on any other, so a scene built for
+/// a newer schema is never drawn with parts silently missing. When a bump
+/// lands, producers that still emit the previous version migrate by
+/// constructing the new version's equivalent before handing the scene on.
+inline constexpr std::uint32_t kSceneVersion = 1U;
+
+[[nodiscard]] constexpr bool scene_version_is_supported(std::uint32_t version) noexcept {
+    return version == kSceneVersion;
+}
+
 /// A deliberately small retained scene used by the first extraction proof.
 ///
 /// Nodes carry stable semantic identities so import, interaction, and capture
 /// can address the same object. The scene is renderer-independent; Skia/Dawn
 /// is one consumer rather than the owner of application state.
+///
+/// `Kind` is closed for a given `kSceneVersion`. A consumer that meets a kind
+/// it does not know refuses the scene rather than treating the node as a
+/// `group`; producers report authored content they cannot express as a known
+/// kind through `LoweringDiagnostic` instead of emitting it.
 struct SceneNode final {
     enum class Kind {
         group,
@@ -125,11 +146,35 @@ struct SceneNode final {
     std::shared_ptr<const TriangleMesh> mesh;
 };
 
+[[nodiscard]] constexpr bool is_known_kind(SceneNode::Kind kind) noexcept {
+    switch (kind) {
+    case SceneNode::Kind::group:
+    case SceneNode::Kind::rectangle:
+    case SceneNode::Kind::text:
+    case SceneNode::Kind::custom:
+    case SceneNode::Kind::mesh:
+        return true;
+    }
+    return false;
+}
+
+/// The first node, in depth-first order, whose kind fails `is_known_kind`.
+[[nodiscard]] inline const SceneNode* find_unknown_kind(const SceneNode& node) noexcept {
+    if (!is_known_kind(node.kind)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_unknown_kind(child); found != nullptr) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
 struct Scene final {
     float width = 0.0F;
     float height = 0.0F;
     Color background = Color::hex(0x111827);
     SceneNode root;
+    std::uint32_t scene_version = kSceneVersion;
 };
 
 [[nodiscard]] inline const SceneNode* find_node(

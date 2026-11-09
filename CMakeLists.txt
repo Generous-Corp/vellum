@@ -267,7 +267,8 @@ if(VELLUM_BUILD_TESTS)
                 repeating_linear_gradient_non_square
                 outset_shadow_spread_diagonal
                 attributed_text_runs_materialization
-                textured_triangle_mesh)
+                textured_triangle_mesh
+                scene_version_refusal)
             add_test(NAME "vellum.gpu.${_vellum_fixture}"
                 COMMAND vellum-gpu-style-test "${_vellum_fixture}")
         endforeach()
@@ -318,6 +319,7 @@ if(VELLUM_BUILD_TESTS)
                     "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
                     "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
                     "-DVELLUM_INSTALL_CONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/graphics/tests/legacy_install_consumer"
+                    "-DVELLUM_INSTALL_CONSUMER_WORK=legacy-install-consumer-test"
                     "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                     "-DTEST_CONFIG=$<CONFIG>"
                     -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
