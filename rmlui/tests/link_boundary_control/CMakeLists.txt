@@ -1,7 +1,8 @@
 # Controls for the module's link boundary check: a stand-in VellumRenderer
 # links a stand-in Vellum::Gpu, and with PLANT set another library links it
 # too, privately (PLANT=private) or publicly through a generator expression
-# (PLANT=genex). Each case is matched on the check's own output.
+# (PLANT=genex), or through an alias spelled like a module target
+# (PLANT=alias). Each case is matched on the check's own output.
 cmake_minimum_required(VERSION 3.24)
 project(vellum_rmlui_link_boundary_control C)
 
@@ -20,6 +21,9 @@ if(PLANT STREQUAL "private")
     target_link_libraries(vellum-rmlui-native PRIVATE Vellum::Gpu)
 elseif(PLANT STREQUAL "genex")
     target_link_libraries(vellum-rmlui-core PUBLIC "$<$<PLATFORM_ID:${CMAKE_SYSTEM_NAME}>:Vellum::Gpu>")
+elseif(PLANT STREQUAL "alias")
+    add_library(VellumRmlUi::Gpu ALIAS Vellum::Gpu)
+    target_link_libraries(vellum-rmlui-native PRIVATE VellumRmlUi::Gpu)
 endif()
 
 vellum_rmlui_check_link_boundary(ALLOW vellum-rmlui-vellum-renderer
