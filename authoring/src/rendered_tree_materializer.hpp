@@ -11,6 +11,11 @@ namespace vellum::authoring {
 /// Validates a versioned authoring-host render envelope and lowers its retained
 /// tree into the renderer-independent scene and semantic host projections.
 ///
+/// Interaction, text-input, and accessibility boxes are the axis-aligned box
+/// of each node as drawn, so a rotated control hit-tests on that box. A node
+/// whose composed transform has a zero determinant paints nothing and gets no
+/// interaction or text-input box; its accessibility node remains.
+///
 /// An authored node type outside the intrinsic set, or a malformed attributed
 /// text-run, fails materialization. `error`, when non-null, is cleared on
 /// entry and set only on failure. When `failure_diagnostics` is non-null it
