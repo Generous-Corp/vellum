@@ -71,9 +71,10 @@ double coretext_width(CTFontRef font, const std::string& text) {
 
 int main() {
     @autoreleasepool {
+        // RmlUi keeps font families lowercase, as its style parser produces them.
         const std::map<std::string, std::string> fonts = {
-            {"Arial", "/System/Library/Fonts/Supplemental/Arial.ttf"},
-            {"Verdana", "/System/Library/Fonts/Supplemental/Verdana.ttf"},
+            {"arial", "/System/Library/Fonts/Supplemental/Arial.ttf"},
+            {"verdana", "/System/Library/Fonts/Supplemental/Verdana.ttf"},
         };
         for (const auto& [family, path] : fonts) {
             if (!std::filesystem::exists(path)) {
