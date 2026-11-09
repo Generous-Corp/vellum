@@ -569,7 +569,7 @@ jobs:
                 --cursor-output "$RUNNER_TEMP/open-pr-cursor.json"
               # The same reads, as content: release readiness for vX accepts
               # an open Vellum overlap only when it is exactly vX's own bump.
-              python3 tools/provenance/collect_release_evidence.py release-bump-evidence \
+              python3 -I tools/provenance/collect_release_evidence.py release-bump-evidence \
                 --snapshot-root "$snapshot_root" \
                 --output "$RUNNER_TEMP/release-bump-evidence.json"
             }
