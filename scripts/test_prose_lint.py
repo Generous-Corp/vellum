@@ -84,6 +84,10 @@ class ProseLintTest(unittest.TestCase):
     def test_identifier_in_code_is_not_prose(self) -> None:
         self.assertClean({"tools/run.py": 'FIXTURE = "fixtures/authoring-phase3"\n'})
 
+    def test_cmake_lists_is_code(self) -> None:
+        self.assertClean({"CMakeLists.txt": "add_test(NAME vellum.authoring-phase3-fixture)\n"})
+        self.assertFlags({"apps/CMakeLists.txt": "# Phase 3 bundle\n"}, "apps/CMakeLists.txt:1: breadcrumb")
+
     def test_only_added_lines_are_checked(self) -> None:
         self.assertClean({"docs/old.md": f"Already here {EM_DASH} not this change's problem.\nNew line.\n"})
 

@@ -52,6 +52,16 @@ def load_checker():
     spec.loader.exec_module(module)
     module.COMMENTS_ONLY = True
     module.CHECKS = [*module.CHECKS, *EXTRA_CHECKS]
+    prose_of = module.prose_of
+
+    def code_aware_prose_of(path: str, text: str) -> str:
+        # CMakeLists.txt ends in .txt, which the checker reads as prose.
+        if Path(path).name == "CMakeLists.txt":
+            match = module.COMMENT_RX.search(text)
+            return match.group(1) if match else ""
+        return prose_of(path, text)
+
+    module.prose_of = code_aware_prose_of
     return module
 
 
