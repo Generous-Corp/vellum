@@ -80,8 +80,8 @@ path node is refused by `render` and yields no paint commands. A path command
 carries the composed transform and opacity like any other; a lone faded path
 folds the opacity into its paint unless it draws more than one operation (a
 fill with a gradient, or a fill and a stroke), and then gets a bounded layer
-over its paint extent, the control box outset by the stroke reach. A path is drawable only within
-its budget of 4096 commands and 16384 values (64 KiB of `float` data), with at
+over its paint extent, the control box outset by the stroke reach. A path is
+drawable only within its budget of 4096 commands and 16384 values (64 KiB of `float` data), with at
 most 64 dash entries drawing at most 100000 dashes along a bound on the path's
 length, finite coordinates and the exact arity per command;
 `path_is_valid` states the rules, the parser refuses path data longer than
@@ -91,6 +91,26 @@ with arcs as their whole ellipse, outset by half the stroke width times the
 larger of the miter limit for miter joins and sqrt(2) for round or square
 caps. The web shell does not draw paths and counts each one in
 `vellum_web_lowering_loss_count`.
+
+The surface draws every frame into a retained offscreen Graphite surface the
+size of its target in device pixels, and presents by drawing that image into
+the swapchain texture; captures read the retained surface back, through the
+swapchain when there is one. `render(scene)` repaints the whole frame and stays
+the deterministic capture path. `render_incremental` commits each scene to a
+renderer-owned `DamageTracker`, clears only the damage rectangles, and redraws
+only the paint commands whose paint extent (shadows and text overhang
+included) meets them; the rest of the retained image is left as it was, and
+the output is byte-identical to a full redraw. The first frame, a resize or
+surface recreation, a failed or lost-device frame, a scene version, size or
+background change, a host `reload`, and damage past the policy threshold fall
+back to a full repaint. Hosts pass `invalidate` reasons and node ids through
+`SkiaDawnSurface::invalidate`, and `frame_stats` reports the damage area, the
+rectangle counts, the commands re-recorded and why a frame repainted fully.
+What is cached and when it is discarded is renderer policy: the scene schema
+carries no cache hints. Partial redraw is enabled only for scene versions the
+damage model understands, up to `kDamageModelSceneVersion` (1); a version 2
+or 3 scene, which can carry transforms, group opacity, per-corner radii and
+paths, repaints fully until the damage model learns those fields.
 
 Native self-test is deliberately fail-closed. A requested native surface is
 not allowed to fall back to CoreGraphics or an offscreen surface. The test also

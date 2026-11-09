@@ -309,6 +309,7 @@ CaptureResult render_offscreen(
     if (!surface->render(scene, &result.error)) return result;
     const auto rendered = Clock::now();
     result.render = elapsed(created, rendered);
+    result.frame_stats = surface->frame_stats();
     if (!surface->capture_rgba(
             result.rgba, result.pixel_width, result.pixel_height, &result.error)) {
         return result;
@@ -619,8 +620,6 @@ Scene combined(float width, float height) {
     append_rectangles(scene.root, {0.0F, 0.0F, half_width, half_height}, "rect-");
     append_mesh(scene.root, {half_width, 0.0F, half_width, half_height}, "mesh-");
     append_text(scene.root, {0.0F, half_height, width, half_height}, "text-");
-    append_path_stars(scene.root, {width * 0.7F, height * 0.7F, width * 0.3F, height * 0.3F},
-                      "path-");
     return scene;
 }
 

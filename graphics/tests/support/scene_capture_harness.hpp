@@ -44,6 +44,7 @@ struct CaptureResult final {
     std::uint32_t pixel_width = 0;
     std::uint32_t pixel_height = 0;
     GpuEvidence evidence;
+    FrameStats frame_stats;
     CaptureStats stats;
     std::chrono::microseconds surface_creation{0};
     std::chrono::microseconds render{0};
@@ -172,7 +173,9 @@ struct NamedScene final {
 /// Rotated, scaled, faded and per-corner rounded rectangles: node transforms,
 /// a group opacity layer, a folded opacity, and `corner_radii`.
 [[nodiscard]] Scene compositing(float width, float height);
-/// Every node kind above in one scene.
+/// The version 1 node kinds above in one scene, so it can also be drawn at
+/// `kDamageModelSceneVersion`. The compositing and path fixtures need versions
+/// 2 and 3 and stay separate.
 [[nodiscard]] Scene combined(float width, float height);
 /// Each content fixture, named, excluding `empty`.
 [[nodiscard]] std::vector<NamedScene> all(float width, float height);
