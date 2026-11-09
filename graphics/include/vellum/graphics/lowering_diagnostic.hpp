@@ -47,6 +47,9 @@ inline constexpr std::string_view kUnknownNodeTypeCode = "VELLUM_UNKNOWN_NODE_TY
 inline constexpr std::string_view kStyleDroppedCode = "VELLUM_STYLE_DROPPED";
 /// An intrinsic whose content has no scene kind, so only its box was kept.
 inline constexpr std::string_view kNodeContentDroppedCode = "VELLUM_NODE_CONTENT_DROPPED";
+/// An attributed text-run with a missing or duplicate id, non-string text,
+/// children, or a non-object style; always an error.
+inline constexpr std::string_view kInvalidTextRunCode = "VELLUM_INVALID_TEXT_RUN";
 
 [[nodiscard]] constexpr std::string_view to_string(
     LoweringDiagnostic::Severity severity) noexcept {
