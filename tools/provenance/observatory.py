@@ -1215,7 +1215,7 @@ def verify_new_event_sources(
     new_ids = new_event_ids(root, git_base, events)
     repository = str(cursor["vellum"]["repository"])
     added = [
-        event for _, event in events
+        (path, event) for path, event in events
         if event["kind"] == "observation"
         and str(event["source_repository"]) == repository
         and str(event["event_id"]) in new_ids
@@ -1224,7 +1224,8 @@ def verify_new_event_sources(
         return
     head = git(root, "rev-parse", "HEAD")
     own = set(commits_between(root, git_base, head))
-    foreign = [event for event in added if str(event["source_commit"]) not in own]
+    foreign = [event for path, event in added
+               if str(event["source_commit"]) not in own and not on_current_main(root, path, head)]
     if not foreign:
         return
     changed = [path for path in git(root, "diff", "--name-only", "--no-renames", git_base, head).splitlines() if path]
@@ -1264,6 +1265,30 @@ def verify_new_event_sources(
             "these name commits outside git_base..HEAD that this change's "
             "evidence-only cursor advance does not cover: " + ", ".join(refused)
         )
+
+
+def on_current_main(root: Path, path: Path, head: str) -> bool:
+    """True when `path` is byte-identical to the same file on origin/main.
+
+    A pull request's checkout merges it into the current base, but the event's
+    base.sha (CI's git_base) can predate that base. Events main gained in
+    between then look as if the change added them. A file main already holds,
+    unchanged, is main's own and not this change's. A modified copy, or an
+    event main lacks, still counts. A change already on main gets no
+    exemption, and without origin/main nothing does.
+    """
+    try:
+        main = git(root, "rev-parse", "--verify", "--quiet", f"{VELLUM_MAIN_REF}^{{commit}}")
+    except ObservatoryError:
+        return False
+    if main == head or is_ancestor(root, head, main):
+        return False
+    relative = path.resolve().relative_to(root.resolve()).as_posix()
+    try:
+        on_main = git(root, "rev-parse", "--verify", "--quiet", f"{main}:{relative}")
+    except ObservatoryError:
+        return False
+    return git(root, "hash-object", "--", relative) == on_main
 
 
 def late_new_events(

@@ -2206,6 +2206,61 @@ class OwnCommitEventTests(unittest.TestCase):
         with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
             self.check()
 
+    def stale_base_pull_request(self, *, set_origin_main: bool = True) -> str:
+        """vellum#277's shape: CI checks out the pull request merged into the
+        current main, but its git_base (the event's base.sha) predates an
+        evidence commit main gained since. Returns current main's tip."""
+        own = self.branch_commit()
+        self.add_event(own)
+        self.commit_all("record the branch's own observation")
+        run(self.root, "git", "checkout", "-q", "main")
+        self.add_event(self.main_change)
+        self.commit_all("chore(provenance): coalesce Pulp observatory evidence")
+        main_tip = run(self.root, "git", "rev-parse", "HEAD")
+        if set_origin_main:
+            run(self.root, "git", "update-ref", observatory.VELLUM_MAIN_REF, main_tip)
+        run(self.root, "git", "checkout", "-q", "--detach", main_tip)
+        run(self.root, "git", "merge", "-q", "--no-ff", "--no-edit", "branch")
+        return main_tip
+
+    def test_an_event_main_gained_after_a_stale_git_base_is_not_the_branchs(self) -> None:
+        self.stale_base_pull_request()
+        self.check()  # self.base is the stale base.sha
+
+    def test_without_origin_main_the_stale_base_still_refuses(self) -> None:
+        self.stale_base_pull_request(set_origin_main=False)
+        with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
+            self.check()
+
+    def test_a_modified_copy_of_a_main_event_is_refused(self) -> None:
+        self.stale_base_pull_request()
+        path = self.root / observatory.EVENTS_PATH / f"vellum-{self.main_change}.yaml"
+        value = json.loads(path.read_text())
+        value["rationale"] = "edited on the branch"
+        write_json(path, value)
+        self.commit_all("edit main's event")
+        with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
+            self.check()
+
+    def test_a_main_event_main_does_not_hold_is_refused_with_origin_main_set(self) -> None:
+        own = self.branch_commit()
+        self.add_event(own)
+        self.add_event(self.main_change)
+        self.commit_all("record main's commit as well")
+        run(self.root, "git", "update-ref", observatory.VELLUM_MAIN_REF, self.base)
+        with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
+            self.check()
+
+    def test_a_change_already_on_main_gets_no_exemption(self) -> None:
+        # A push to main: origin/main is HEAD itself, so every event matches it.
+        own = self.branch_commit()
+        self.add_event(own)
+        self.add_event(self.main_change)
+        self.commit_all("record main's commit as well")
+        run(self.root, "git", "update-ref", observatory.VELLUM_MAIN_REF, "HEAD")
+        with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
+            self.check()
+
     def coalesce(self, *, advance: bool, with_code: bool) -> None:
         # The receiver's shape: one evidence-only commit on main's tip that
         # moves the Vellum cursor over main's commits and records them.
