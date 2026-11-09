@@ -125,6 +125,24 @@ public:
 
     [[nodiscard]] bool contains(const Key& key) const { return index_.count(key) != 0U; }
 
+    /// Drops `key` if it is cached; it counts as trimmed. Returns whether it was.
+    bool erase(const Key& key) {
+        const auto found = index_.find(key);
+        if (found == index_.end()) return false;
+        erase(found->second);
+        ++stats_.trimmed;
+        return true;
+    }
+
+    /// The frame counters, for restoring after a draw that is not a frame.
+    [[nodiscard]] std::pair<std::uint64_t, std::uint64_t> frame_counters() const noexcept {
+        return {stats_.frame_hits, stats_.frame_misses};
+    }
+    void restore_frame_counters(std::pair<std::uint64_t, std::uint64_t> counters) noexcept {
+        stats_.frame_hits = counters.first;
+        stats_.frame_misses = counters.second;
+    }
+
 private:
     struct Entry final {
         Key key;
@@ -184,10 +202,25 @@ private:
 };
 
 // A new TextStyle or TextRun field changes what a paragraph draws: compare and
-// hash it below before changing these sizes.
-static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 80,
+// hash it below, then add it to these mirrors. The mirrors share the standard
+// library's layout, so the check holds on every toolchain.
+struct TextStyleFields final {
+    std::string font_family;
+    int font_weight;
+    float font_size;
+    float letter_spacing;
+    Color color;
+    bool underline;
+    bool strikethrough;
+};
+struct TextRunFields final {
+    std::string text;
+    TextStyleFields style;
+};
+static_assert(sizeof(TextStyle) == sizeof(TextStyleFields) &&
+                  sizeof(TextRun) == sizeof(TextRunFields),
               "TextStyle changed: update same_style and ParagraphKeyHash");
-static_assert(sizeof(Color) == 16, "Color changed: update same_bits");
+static_assert(sizeof(Color) == 4 * sizeof(float), "Color changed: update same_bits");
 
 inline bool same_style(const TextStyle& a, const TextStyle& b) noexcept {
     return a.font_family == b.font_family && a.font_weight == b.font_weight &&
@@ -300,9 +333,10 @@ struct TextureKey final {
 
 struct TextureKeyHash final {
     std::size_t operator()(const TextureKey& key) const noexcept {
-        std::size_t value = 0;
+        std::uint64_t value = 0;
         std::memcpy(&value, key.digest.data(), sizeof(value));
-        return value ^ (static_cast<std::size_t>(key.width) << 32U) ^ key.height;
+        value ^= (static_cast<std::uint64_t>(key.width) << 32U) ^ key.height;
+        return static_cast<std::size_t>(value ^ (value >> 32U));
     }
 };
 

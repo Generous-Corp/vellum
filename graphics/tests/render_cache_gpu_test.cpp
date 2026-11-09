@@ -260,6 +260,11 @@ void keys_see_every_input() {
                          "a moved paragraph is drawn from the cache at its new place");
         expect(paragraphs.frame_hits == 1 && paragraphs.frame_misses == 0,
                "a moved paragraph is a cache hit", describe(paragraphs));
+        auto subpixel = moved;
+        subpixel.root.children[0].bounds.x += 0.5F;
+        subpixel.root.children[0].bounds.y += 0.25F;
+        expect_second_frame_exact("a paragraph moved by a fraction of a pixel is exact", moved,
+                                  subpixel);
     }
     {
         auto first = empty_scene();
@@ -313,16 +318,19 @@ void partial_redraw_with_and_without_caches() {
     scene.root.children.push_back(gradient_node("ramp", {150.0F, 10.0F, 140.0F, 50.0F}));
     scene.root.children.push_back(textured_quad("quad", texture, 40.0F, 90.0F));
     scene.root.children.push_back({.id = "mover", .kind = SceneNode::Kind::rectangle,
-                                   .bounds = {150.0F, 100.0F, 30.0F, 30.0F},
+                                   .bounds = {250.0F, 150.0F, 30.0F, 30.0F},
                                    .fill = Color::hex(0xF472B6)});
+    // The mover's damage crosses the gradient at step 1 and the textured quad
+    // at step 2, so those partial frames redraw them from the caches.
+    const Rect path[] = {{250.0F, 150.0F, 30.0F, 30.0F},
+                         {200.0F, 30.0F, 30.0F, 30.0F},
+                         {50.0F, 100.0F, 30.0F, 30.0F},
+                         {120.0F, 160.0F, 30.0F, 30.0F}};
     auto cached = make_surface(true);
     auto uncached = make_surface(false);
     std::string error;
     for (int step = 0; step < 4; ++step) {
-        if (step > 0) {
-            scene.root.children[3].bounds.x -= 37.0F;
-            scene.root.children[3].bounds.y -= 21.0F;
-        }
+        scene.root.children[3].bounds = path[step];
         if (step == 3) scene.root.children[0].text_runs[0].text = "Partial, again";
         const bool drawn = cached->render_incremental(scene, &error) &&
                            uncached->render_incremental(scene, &error);
@@ -344,6 +352,14 @@ void partial_redraw_with_and_without_caches() {
                    telemetry.paint_commands_total == stats.paint_commands_total &&
                    telemetry.paint_commands_recorded == stats.paint_commands_recorded,
                "step " + std::to_string(step) + " telemetry carries the frame's damage");
+        if (step == 1) {
+            expect(telemetry.gradients.frame_hits == 1 && telemetry.gradients.frame_misses == 0,
+                   "step 1 redraws the gradient from the cache", describe(telemetry.gradients));
+        }
+        if (step == 2) {
+            expect(telemetry.textures.frame_hits == 1 && telemetry.textures.frame_misses == 0,
+                   "step 2 redraws the texture from the cache", describe(telemetry.textures));
+        }
         const auto expected = reference(scene);
         expect_identical(expected, capture(*uncached),
                          "step " + std::to_string(step) + " uncached partial redraw is exact");
@@ -411,6 +427,76 @@ void budgets_are_enforced() {
     }
 }
 
+// A trim on a settling partial frame keeps what any frame since the resize
+// used, and a capture's internal redraw does not count toward settling.
+void settle_counts_presented_frames() {
+    auto texture = checker_texture(30);
+    auto scene = empty_scene(kDamageModelSceneVersion);
+    scene.root.children.push_back(text_node("title", "Settle", 10.0F, 10.0F));
+    scene.root.children.push_back(gradient_node("ramp", {150.0F, 10.0F, 140.0F, 50.0F}));
+    scene.root.children.push_back({.id = "mover", .kind = SceneNode::Kind::rectangle,
+                                   .bounds = {20.0F, 150.0F, 20.0F, 20.0F},
+                                   .fill = Color::hex(0xF472B6)});
+    auto surface = make_surface(true);
+    std::string error;
+    expect(surface->render_incremental(scene, &error), "settle scene renders", error);
+    expect(surface->resize(kWidth, kHeight, 1.0F, &error), "settle resize", error);
+    expect(surface->render_incremental(scene, &error), "the resize frame repaints", error);
+    for (int step = 0; step < 2; ++step) {
+        scene.root.children[2].bounds.x += 25.0F;
+        expect(surface->render_incremental(scene, &error), "a partial settling frame", error);
+    }
+    auto t = surface->telemetry();
+    expect(t.resize_settled && t.last_trim == CacheTrimReason::resize_settled && !t.full_repaint &&
+               t.paragraphs.entries == 1 && t.gradients.entries == 1,
+           "a partial settling frame keeps what the resize frame drew", to_json(t));
+
+    auto bad = scene;
+    bad.root.children.push_back({.id = "broken", .kind = SceneNode::Kind::rectangle,
+                                 .bounds = {200.0F, 120.0F, 40.0F, 40.0F},
+                                 .fill_gradients = {{.stops = {{0.0F, Color::hex(0xFFFFFF)}}}}});
+    expect(surface->resize(kWidth, kHeight, 1.0F, &error), "second resize", error);
+    expect(surface->render_incremental(scene, &error), "the second resize frame", error);
+    expect(!surface->render_incremental(bad, &error), "a one-stop gradient fails the frame");
+    const auto before = surface->telemetry();
+    (void)capture(*surface);
+    const auto after = surface->telemetry();
+    expect(after.paragraphs.frame_hits == before.paragraphs.frame_hits &&
+               after.paragraphs.frame_misses == before.paragraphs.frame_misses &&
+               after.gradients.frame_hits == before.gradients.frame_hits &&
+               after.gradients.frame_misses == before.gradients.frame_misses &&
+               after.layer_count == before.layer_count && after.frame == before.frame,
+           "a capture's internal redraw leaves the frame telemetry alone", to_json(after));
+    expect(surface->render_incremental(scene, &error), "the frame after the capture", error);
+    t = surface->telemetry();
+    expect(!t.resize_settled && t.trims == 1,
+           "a capture's internal redraw does not advance the settle count", to_json(t));
+}
+
+// A frame that fails after uploading a texture never submits the upload, so
+// the texture must not stay cached.
+void failed_frame_drops_its_uploads() {
+    auto texture = checker_texture(140);
+    auto good = empty_scene();
+    good.root.children.push_back(textured_quad("quad", texture, 60.0F, 60.0F));
+    auto bad = good;
+    bad.root.children.push_back({.id = "broken", .kind = SceneNode::Kind::rectangle,
+                                 .bounds = {200.0F, 60.0F, 40.0F, 40.0F},
+                                 .fill_gradients = {{.stops = {{0.0F, Color::hex(0xFFFFFF)}}}}});
+    auto surface = make_surface(true);
+    std::string error;
+    expect(!surface->render(bad, &error), "a frame with a one-stop gradient fails");
+    auto t = surface->telemetry();
+    expect(t.textures.entries == 0 && t.atlas_bytes == 0,
+           "a failed frame keeps none of its uploads", describe(t.textures));
+    render(*surface, good);
+    t = surface->telemetry();
+    expect(t.textures.frame_misses == 1 && t.textures.entries == 1,
+           "the next frame uploads the texture again", describe(t.textures));
+    expect_identical(reference(good), capture(*surface),
+                     "the frame after a failed one draws the texture exactly");
+}
+
 void scripted_telemetry() {
     auto texture = checker_texture(60);
     const auto full = telemetry_scene(texture);
@@ -455,11 +541,11 @@ void scripted_telemetry() {
            "telemetry carries Graphite's GPU time", to_json(t));
 
     expect(surface->resize(kWidth + 10U, kHeight + 10U, 1.0F, &error), "resize", error);
-    render(*surface, full);
+    render(*surface, reduced);
     t = surface->telemetry();
     expect(!t.resize_settled && t.trims == 0, "the frame after a resize has not settled",
            to_json(t));
-    render(*surface, full);
+    render(*surface, reduced);
     t = surface->telemetry();
     expect(!t.resize_settled && t.trims == 0, "one stable frame has not settled", to_json(t));
     render(*surface, reduced);
@@ -469,7 +555,7 @@ void scripted_telemetry() {
     expect(t.paragraphs.entries == 2 && t.paragraphs.trimmed == 1 && t.gradients.entries == 0 &&
                t.gradients.trimmed == 1 && t.textures.entries == 1 &&
                t.atlas_bytes == texture_bytes,
-           "the settle trim drops what the settling frame did not draw", to_json(t));
+           "the settle trim drops what no frame drew since the resize", to_json(t));
     render(*surface, full);
     t = surface->telemetry();
     expect(t.trims == 1 && t.paragraphs.frame_misses == 1 && t.gradients.frame_misses == 1,
@@ -508,6 +594,8 @@ int main() {
         partial_redraw_with_and_without_caches();
         budgets_are_enforced();
         scripted_telemetry();
+        settle_counts_presented_frames();
+        failed_frame_drops_its_uploads();
     } catch (const std::exception& exception) {
         std::cout << "FAIL " << exception.what() << '\n';
         return 1;

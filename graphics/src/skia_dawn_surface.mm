@@ -198,6 +198,9 @@ struct FrameResources final {
     MeshTextureCache meshes;
     detail::SkiaResourceCaches* caches = nullptr;
     std::size_t layers = 0;
+    /// Textures this frame cached. Their uploads exist only in this frame's
+    /// recording, so a frame that fails before it is submitted drops them.
+    std::vector<detail::TextureKey> uploaded;
 };
 
 bool draw_linear_gradient(
@@ -514,6 +517,7 @@ sk_sp<SkImage> mesh_texture_image(
     // producer may reuse an allocation for different texels.
     auto* caches = resources.caches;
     detail::TextureKey key{.width = texture.width, .height = texture.height};
+    if (caches != nullptr && !caches->textures.enabled()) caches = nullptr;
     if (caches != nullptr) {
         key.digest = detail::sha256(texture.premultiplied_rgba);
         if (const auto* cached = caches->textures.find(key, caches->frame)) {
@@ -540,8 +544,10 @@ sk_sp<SkImage> mesh_texture_image(
         set_error(error, "Skia Graphite could not upload a mesh texture");
         return nullptr;
     }
-    if (caches != nullptr) {
-        caches->textures.insert(key, uploaded, texture.premultiplied_rgba.size(), caches->frame);
+    if (caches != nullptr &&
+        caches->textures.insert(key, uploaded, texture.premultiplied_rgba.size(),
+                                caches->frame)) {
+        resources.uploaded.push_back(key);
     }
     cache.images.emplace(&texture, uploaded);
     return uploaded;
@@ -983,6 +989,7 @@ public:
         if (!create_retained(error)) return false;
         note_configured();
         trim_when_settled_ = true;
+        trim_since_frame_ = caches_.frame + 1U;
         return true;
     }
 
@@ -1151,10 +1158,14 @@ public:
             const Scene scene = *last_scene_;
             const auto saved = stats_;
             const auto saved_layers = layer_count_;
+            const auto saved_caches = caches_.frame_state();
             const bool reload = reload_pending_;
+            internal_redraw_ = true;
             const bool redrawn = draw_frame(scene, FullRepaintReason::full_render, nullptr, error);
+            internal_redraw_ = false;
             stats_ = saved;
             layer_count_ = saved_layers;
+            caches_.restore(saved_caches);
             reload_pending_ = reload;
             if (!redrawn) return false;
             tracker_.commit(scene, config_.scale);
@@ -1262,14 +1273,16 @@ private:
     }
 
     // Called after each frame is submitted. Once a resize has settled, entries
-    // the settling frame did not use, such as gradients sized for the sizes
-    // a live resize passed through, are dropped.
+    // no frame has used since the resize, such as gradients sized for the
+    // sizes a live resize passed through, are dropped. A capture's internal
+    // redraw is not a presented frame and does not count.
     void note_frame_presented() {
+        if (internal_redraw_) return;
         resize_state_.note_frame(frame_configured_);
         frame_configured_ = false;
         if (trim_when_settled_ && resize_state_.settled()) {
             trim_when_settled_ = false;
-            caches_.trim_unused_by_current_frame();
+            caches_.trim_unused_since(trim_since_frame_);
             note_trim(CacheTrimReason::resize_settled);
         }
     }
@@ -1388,6 +1401,17 @@ private:
         auto* canvas = retained_surface_->getCanvas();
         caches_.begin_frame();
         FrameResources resources{.meshes = {.recorder = recorder_.get()}, .caches = &caches_};
+        // A texture cached by a frame that is never submitted was never
+        // written on the GPU; drop it so a later frame uploads it again.
+        struct UploadGuard final {
+            detail::SkiaResourceCaches& caches;
+            const FrameResources& resources;
+            bool submitted = false;
+            ~UploadGuard() {
+                if (submitted) return;
+                for (const auto& key : resources.uploaded) caches.textures.erase(key);
+            }
+        } upload_guard{caches_, resources};
         if (full) {
             const int saved = canvas->save();
             canvas->resetMatrix();
@@ -1432,6 +1456,7 @@ private:
         }
 
         if (!submit_frame(&stats, nullptr, error)) return false;
+        upload_guard.submitted = true;
         layer_count_ = resources.layers;
         note_frame_presented();
         retained_valid_ = true;
@@ -1643,6 +1668,8 @@ private:
     gpu_runtime::SwapchainResizeState resize_state_;
     bool frame_configured_ = false;
     bool trim_when_settled_ = false;
+    std::uint64_t trim_since_frame_ = 0;
+    bool internal_redraw_ = false;
     bool device_loss_trimmed_ = false;
     std::uint64_t trims_ = 0;
     CacheTrimReason last_trim_ = CacheTrimReason::none;

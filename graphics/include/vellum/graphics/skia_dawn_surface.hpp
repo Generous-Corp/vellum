@@ -110,8 +110,8 @@ struct TextMetrics final {
 /// Shaped text paragraphs, gradient shaders and uploaded mesh textures are
 /// cached across frames under `RenderCacheBudgets`. Each cache is keyed on
 /// every input that affects its pixels, so output never depends on what is
-/// cached. A resize that has settled drops the entries the settling frame did
-/// not use, and a device loss drops everything.
+/// cached. A resize that has settled drops the entries no frame has used
+/// since the resize, and a device loss drops everything.
 class SkiaDawnSurface final {
 public:
     struct Config final {

@@ -58,8 +58,8 @@ struct CacheStats final {
 /// Why the renderer last trimmed its caches.
 enum class CacheTrimReason {
     none,
-    /// A resize settled: the size held for `kSettleFrames` frames. Entries
-    /// the settling frame did not use are dropped.
+    /// A resize settled: the size held for `kSettleFrames` frames. Entries no
+    /// frame has used since the resize are dropped.
     resize_settled,
     /// The Dawn device was lost. Every entry is dropped.
     device_lost,

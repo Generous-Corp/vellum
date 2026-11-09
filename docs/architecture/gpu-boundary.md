@@ -99,8 +99,10 @@ entry and a byte budget and evicts its least recently used entry first; an
 entry larger than the byte budget is refused, and a zero budget turns the
 cache off. Paragraph bytes are an estimate, since Skia does not report them.
 Once a resize settles, meaning the size has held for
-`gpu_runtime::SwapchainResizeState::kSettleFrames` frames, the entries the
-settling frame did not use are dropped; a device loss drops every entry.
+`gpu_runtime::SwapchainResizeState::kSettleFrames` presented frames, the
+entries no frame has used since the resize are dropped; a device loss drops
+every entry, and a frame that fails before it is submitted drops the textures
+it uploaded.
 `SkiaDawnSurface::telemetry` reports the frame's damage, the offscreen layers
 it opened, each cache's hits, misses, evictions, trims and bytes, the texture
 (atlas) bytes and Graphite's GPU time, and the capture harness writes it into

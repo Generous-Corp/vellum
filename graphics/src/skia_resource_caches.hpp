@@ -76,10 +76,28 @@ struct SkiaResourceCaches final {
         return {paragraphs.budget(), gradients.budget(), textures.budget()};
     }
 
-    /// Drops every entry the current frame did not use. Returns how many.
-    std::size_t trim_unused_by_current_frame() {
-        return paragraphs.trim_unused_since(frame) + gradients.trim_unused_since(frame) +
-               textures.trim_unused_since(frame);
+    /// Drops every entry last used before `first_frame`. Returns how many.
+    std::size_t trim_unused_since(std::uint64_t first_frame) {
+        return paragraphs.trim_unused_since(first_frame) +
+               gradients.trim_unused_since(first_frame) +
+               textures.trim_unused_since(first_frame);
+    }
+
+    /// The per-frame counters of every cache.
+    struct FrameState final {
+        std::pair<std::uint64_t, std::uint64_t> paragraphs;
+        std::pair<std::uint64_t, std::uint64_t> gradients;
+        std::pair<std::uint64_t, std::uint64_t> textures;
+    };
+    [[nodiscard]] FrameState frame_state() const {
+        return {paragraphs.frame_counters(), gradients.frame_counters(),
+                textures.frame_counters()};
+    }
+    /// Restores the per-frame counters; the frame number stays monotonic.
+    void restore(const FrameState& state) {
+        paragraphs.restore_frame_counters(state.paragraphs);
+        gradients.restore_frame_counters(state.gradients);
+        textures.restore_frame_counters(state.textures);
     }
 
     std::size_t clear() { return paragraphs.clear() + gradients.clear() + textures.clear(); }
