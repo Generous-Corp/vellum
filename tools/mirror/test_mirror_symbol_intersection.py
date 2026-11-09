@@ -54,7 +54,7 @@ class SymbolIntersectionTest(unittest.TestCase):
         # Names outside the namespace do not count, so each of these sees nothing on one side.
         self.assertEqual(self.run_gate({"mirror.dylib": {"vellum::runtime::log(int)"}, "native.a": set()}), 3)
         self.assertEqual(self.run_gate({"mirror.dylib": set(), "native.a": {"vellum::runtime::Kernel::run()"}}), 3)
-        self.assertEqual(self.run_gate({"mirror.dylib": {"vellum::view::View::paint()"},
+        self.assertEqual(self.run_gate({"mirror.dylib": {"vellum::graphics::Surface::paint()"},
                                         "native.a": {"vellum::runtime::Kernel::run()"}}), 3)
         # A blind side stays a failure even with the plant, which has nothing to plant from.
         self.assertEqual(self.run_gate({"mirror.dylib": set(), "native.a": {"vellum::runtime::Kernel::run()"}},
