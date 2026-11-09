@@ -474,5 +474,90 @@ class GpuReleaseStepGateTest(unittest.TestCase):
                 self.assertNotEqual(self.problems(broken), [])
 
 
+
+import sys as _sys
+
+_sys.path.insert(0, str(ROOT / "scripts"))
+import verify_release_attestation as vra  # noqa: E402
+
+
+def attestation(tag: str, uri_tag: str, sha: str, repository: str = "Generous-Corp/vellum") -> dict:
+    """The shape `gh release verify --format json` returns, as read on runs."""
+    return {"attestation": {}, "verificationResult": {"statement": {
+        "predicate": {"repository": repository, "tag": tag},
+        "subject": [
+            {"uri": f"pkg:github/{repository}@{uri_tag}", "digest": {"sha1": sha}},
+            {"name": "SHA256SUMS", "digest": {"sha256": "0" * 64}},
+        ],
+    }}}
+
+
+class ReleaseAttestationTest(unittest.TestCase):
+    # Publish rehearsal run 42636906801: GitHub recorded the slashed tag
+    # percent-encoded in the package URL, with the tag object as its digest.
+    REHEARSAL_TAG = "publish-rehearsal/42636906801-1"
+    REHEARSAL_SHA = "23a4d30025496795390cb11e4069eb3633fab73f"
+
+    def problems(self, value, tag, sha):
+        return vra.attestation_problems(value, repository="Generous-Corp/vellum", tag=tag, tag_object_sha=sha)
+
+    def test_a_slashed_tag_matches_its_percent_encoded_package_url(self) -> None:
+        value = attestation(self.REHEARSAL_TAG, "publish-rehearsal%2F42636906801-1", self.REHEARSAL_SHA)
+        self.assertEqual(self.problems(value, self.REHEARSAL_TAG, self.REHEARSAL_SHA), [])
+        self.assertEqual(vra.tag_purl("Generous-Corp/vellum", self.REHEARSAL_TAG),
+                         "pkg:github/Generous-Corp/vellum@publish-rehearsal%2F42636906801-1")
+
+    def test_a_release_tag_matches_its_plain_package_url(self) -> None:
+        # v0.1.10's attestation named pkg:github/Generous-Corp/vellum@v0.1.10.
+        sha = "1769dedfd5655adf7093d1445bccb3ec6d17455b"
+        self.assertEqual(self.problems(attestation("v0.1.10", "v0.1.10", sha), "v0.1.10", sha), [])
+        self.assertEqual(vra.tag_purl("Generous-Corp/vellum", "v0.1.10"), "pkg:github/Generous-Corp/vellum@v0.1.10")
+
+    def test_a_wrong_tag_object_or_coordinates_is_refused(self) -> None:
+        value = attestation(self.REHEARSAL_TAG, "publish-rehearsal%2F42636906801-1", self.REHEARSAL_SHA)
+        self.assertEqual(self.problems(value, self.REHEARSAL_TAG, "f" * 40),
+                         ["immutable release attestation tag object differs"])
+        release = attestation("v0.1.10", "v0.1.10", "a" * 40)
+        self.assertEqual(self.problems(release, "v0.1.10", "b" * 40),
+                         ["immutable release attestation tag object differs"])
+        # The raw, unencoded URL is not what GitHub writes; it never matches a slashed tag.
+        raw = attestation(self.REHEARSAL_TAG, self.REHEARSAL_TAG, self.REHEARSAL_SHA)
+        self.assertNotEqual(self.problems(raw, self.REHEARSAL_TAG, self.REHEARSAL_SHA), [])
+        self.assertEqual(self.problems(release, "v0.1.11", "a" * 40),
+                         ["immutable release attestation coordinates differ"])
+        other_repo = attestation("v0.1.10", "v0.1.10", "a" * 40, repository="someone/vellum")
+        self.assertEqual(self.problems(other_repo, "v0.1.10", "a" * 40),
+                         ["immutable release attestation coordinates differ"])
+        twice = attestation("v0.1.10", "v0.1.10", "a" * 40)
+        twice["verificationResult"]["statement"]["subject"].append(
+            {"uri": "pkg:github/Generous-Corp/vellum@v0.1.10", "digest": {"sha1": "a" * 40}})
+        self.assertNotEqual(self.problems(twice, "v0.1.10", "a" * 40), [])
+        for broken in (None, [], {"verificationResult": {}}, {"verificationResult": {"statement": {}}}):
+            with self.subTest(value=broken):
+                self.assertNotEqual(self.problems(broken, "v0.1.10", "a" * 40), [])
+        self.assertNotEqual(self.problems(release, "v0.1.10", "short"), [])
+
+    def test_the_finalizer_runs_this_check_on_its_attestation(self) -> None:
+        script = ews.step_script(WORKFLOW.read_text(), "finalize-sdk-release", PUBLISH_STEP)
+        call = script[script.index("python3 -I scripts/verify_release_attestation.py"):]
+        call = call[:call.index("\n", call.index("--tag-object-sha"))]
+        self.assertIn('--input "$RUNNER_TEMP/immutable-release-attestation.json"', call)
+        self.assertIn('--repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG"', call)
+        self.assertIn('--tag-object-sha "$TAG_OBJECT_SHA"', call)
+        self.assertLess(script.index('--format json > "$RUNNER_TEMP/immutable-release-attestation.json"'),
+                        script.index("python3 -I scripts/verify_release_attestation.py"))
+        self.assertLess(script.index("python3 -I scripts/verify_release_attestation.py"),
+                        script.index("--require-published --require-immutable"))
+
+    def test_the_command_line_exits_by_the_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "a.json"
+            path.write_text(json.dumps(attestation(self.REHEARSAL_TAG, "publish-rehearsal%2F42636906801-1",
+                                                   self.REHEARSAL_SHA)))
+            base = ["--input", str(path), "--repository", "Generous-Corp/vellum", "--tag", self.REHEARSAL_TAG]
+            self.assertEqual(vra.main(base + ["--tag-object-sha", self.REHEARSAL_SHA]), 0)
+            self.assertEqual(vra.main(base + ["--tag-object-sha", "f" * 40]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
