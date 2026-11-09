@@ -24,7 +24,8 @@ using Clock = std::chrono::steady_clock;
 
 constexpr float kScale = 2.0F;
 constexpr int kWarmup = 10;
-constexpr int kFrames = 60;
+constexpr int kFrames = 40;
+constexpr int kRounds = 3;
 constexpr float kTileWidth = 400.0F;
 constexpr float kTileHeight = 300.0F;
 
@@ -60,13 +61,17 @@ void move(Scene& scene, int frame) {
     mover.bounds.x = 24.0F + static_cast<float>(frame % 60) * 4.0F;
 }
 
-double median(std::vector<double> values) {
+double percentile(std::vector<double> values, double fraction) {
     if (values.empty()) return 0.0;
     std::sort(values.begin(), values.end());
-    const auto middle = values.size() / 2U;
-    return values.size() % 2U == 0U ? (values[middle - 1U] + values[middle]) / 2.0
-                                    : values[middle];
+    const double position = fraction * static_cast<double>(values.size() - 1U);
+    const auto lower = static_cast<std::size_t>(position);
+    const auto upper = std::min(lower + 1U, values.size() - 1U);
+    const double weight = position - static_cast<double>(lower);
+    return values[lower] * (1.0 - weight) + values[upper] * weight;
 }
+
+double median(const std::vector<double>& values) { return percentile(values, 0.5); }
 
 struct Series final {
     std::vector<double> wall;
@@ -83,12 +88,12 @@ bool run(SkiaDawnSurface& surface, Scene scene, Mode mode, Series& series, std::
         if (mode != Mode::blit) move(scene, frame);
         const auto start = Clock::now();
         bool ok = false;
-        if (mode == Mode::full) {
+        if (mode == Mode::full || (mode == Mode::blit && frame == 0)) {
             ok = surface.render(scene, error);
         } else if (mode == Mode::partial) {
             ok = surface.render_incremental(scene, error);
         } else {
-            ok = surface.render(scene, DamageRegion(frame_rect(scene, kScale)), error);
+            ok = surface.render(scene, DamageRegion{}, error);
         }
         if (!ok || !surface.finish(error)) return false;
         const auto stop = Clock::now();
@@ -107,7 +112,8 @@ bool run(SkiaDawnSurface& surface, Scene scene, Mode mode, Series& series, std::
 
 std::string cell(const Series& series) {
     std::ostringstream out;
-    out << std::fixed << std::setprecision(3) << median(series.wall) << " / "
+    out << std::fixed << std::setprecision(3) << median(series.wall) << " ("
+        << percentile(series.wall, 0.1) << "-" << percentile(series.wall, 0.9) << ") / "
         << median(series.cpu) << " / ";
     if (series.gpu.empty()) {
         out << "n/a";
@@ -115,6 +121,30 @@ std::string cell(const Series& series) {
         out << median(series.gpu);
     }
     return out.str();
+}
+
+void append(Series& into, const Series& from) {
+    into.wall.insert(into.wall.end(), from.wall.begin(), from.wall.end());
+    into.cpu.insert(into.cpu.end(), from.cpu.begin(), from.cpu.end());
+    into.gpu.insert(into.gpu.end(), from.gpu.begin(), from.gpu.end());
+    into.wait.insert(into.wait.end(), from.wait.begin(), from.wait.end());
+    into.last = from.last;
+}
+
+std::unique_ptr<SkiaDawnSurface> fresh_surface(std::uint32_t width, std::uint32_t height,
+                                               bool offscreen, std::string* error) {
+    CAMetalLayer* layer = nil;
+    if (!offscreen) {
+        layer = [CAMetalLayer layer];
+        layer.contentsScale = kScale;
+        layer.drawableSize = CGSizeMake(width * kScale, height * kScale);
+        layer.frame = CGRectMake(0, 0, width, height);
+    }
+    return SkiaDawnSurface::create(
+        {.width = width, .height = height, .scale = kScale,
+         .native_surface_handle = offscreen ? nullptr : (__bridge void*)layer,
+         .vsync = false},
+        error);
 }
 
 }  // namespace
@@ -147,6 +177,7 @@ int check_native() {
     }
     Scene scene = tiled_scene(static_cast<float>(width), static_cast<float>(height));
     int failures = 0;
+    harness::CaptureResult first;
     for (int frame = 0; frame < 8; ++frame) {
         move(scene, frame * 7 + 1);
         if (frame == 4) native->invalidate(InvalidationReason::reload);
@@ -173,11 +204,14 @@ int check_native() {
         const auto stats = native->frame_stats();
         const bool expected_full = frame == 0 || frame == 4;
         const auto verdict = harness::assert_identical(expected, actual);
-        const bool ok = static_cast<bool>(verdict) && stats.presented &&
+        if (frame == 0) first = actual;
+        const bool advanced = frame == 0 || !harness::assert_identical(first, actual);
+        const bool ok = static_cast<bool>(verdict) && advanced && stats.presented &&
             stats.full_repaint == expected_full;
         std::cout << (ok ? "PASS" : "FAIL") << " native frame " << frame
                   << " full=" << stats.full_repaint << " reason="
                   << to_string(stats.full_repaint_reason) << " presented=" << stats.presented
+                  << " differs_from_frame_0=" << (frame == 0 ? "n/a" : advanced ? "yes" : "no")
                   << ' ' << verdict.message << '\n';
         if (!ok) ++failures;
     }
@@ -199,56 +233,56 @@ int main(int argc, char** argv) {
     std::cout << "| logical size | device pixels | target | full redraw | partial + blit | "
                  "blit alone | partial damage | commands re-recorded |\n"
                  "|---|---|---|---|---|---|---|---|\n";
+    bool native = false;
     for (const auto& [width, height] : sizes) {
-        @autoreleasepool {
-            CAMetalLayer* layer = nil;
-            if (!offscreen) {
-                layer = [CAMetalLayer layer];
-                layer.contentsScale = kScale;
-                layer.drawableSize = CGSizeMake(width * kScale, height * kScale);
-                layer.frame = CGRectMake(0, 0, width, height);
-            }
-            auto surface = SkiaDawnSurface::create(
-                {.width = width, .height = height, .scale = kScale,
-                 .native_surface_handle = offscreen ? nullptr : (__bridge void*)layer,
-                 .vsync = false},
-                &error);
-            if (!surface) {
-                std::cerr << "surface creation failed: " << error << '\n';
-                return 1;
-            }
-            const auto scene = tiled_scene(static_cast<float>(width), static_cast<float>(height));
-            Series full;
-            Series partial;
-            Series blit;
-            if (!run(*surface, scene, Mode::full, full, &error) ||
-                !run(*surface, scene, Mode::partial, partial, &error) ||
-                !run(*surface, scene, Mode::blit, blit, &error)) {
-                std::cerr << "frame failed: " << error << '\n';
-                return 1;
-            }
-            std::cout << "| " << width << "x" << height << " | "
-                      << width * static_cast<std::uint32_t>(kScale) << "x"
-                      << height * static_cast<std::uint32_t>(kScale) << " | "
-                      << (surface->evidence().native_surface ? "CAMetalLayer" : "offscreen")
-                      << " | " << cell(full) << " | " << cell(partial) << " | " << cell(blit)
-                      << " | " << std::setprecision(4) << partial.last.damage_fraction * 100.0
-                      << "% in " << partial.last.damage_rects_after_coalescing << " rects | "
-                      << partial.last.paint_commands_recorded << " of "
-                      << partial.last.paint_commands_total << " |\n";
-            last_wait = partial.wait;
-            if (partial.last.full_repaint) {
-                std::cerr << "partial frames repainted fully: "
-                          << to_string(partial.last.full_repaint_reason) << '\n';
-                return 1;
+        const auto scene = tiled_scene(static_cast<float>(width), static_cast<float>(height));
+        Series series[3];
+        const Mode modes[3] = {Mode::full, Mode::partial, Mode::blit};
+        for (int round = 0; round < kRounds; ++round) {
+            for (int slot = 0; slot < 3; ++slot) {
+                const int index = (slot + round) % 3;
+                @autoreleasepool {
+                    auto surface = fresh_surface(width, height, offscreen, &error);
+                    if (!surface) {
+                        std::cerr << "surface creation failed: " << error << '\n';
+                        return 1;
+                    }
+                    native = surface->evidence().native_surface;
+                    Series one;
+                    if (!run(*surface, scene, modes[index], one, &error)) {
+                        std::cerr << "frame failed: " << error << '\n';
+                        return 1;
+                    }
+                    append(series[index], one);
+                }
             }
         }
+        const auto& full = series[0];
+        const auto& partial = series[1];
+        const auto& blit = series[2];
+        std::cout << "| " << width << "x" << height << " | "
+                  << width * static_cast<std::uint32_t>(kScale) << "x"
+                  << height * static_cast<std::uint32_t>(kScale) << " | "
+                  << (native ? "CAMetalLayer" : "offscreen") << " | " << cell(full) << " | "
+                  << cell(partial) << " | " << cell(blit) << " | " << std::setprecision(4)
+                  << partial.last.damage_fraction * 100.0 << "% in "
+                  << partial.last.damage_rects_after_coalescing << " rects | "
+                  << partial.last.paint_commands_recorded << " of "
+                  << partial.last.paint_commands_total << " |\n";
+        last_wait = partial.wait;
+        if (partial.last.full_repaint || blit.last.paint_commands_recorded != 0) {
+            std::cerr << "benchmark modes did not run as intended: partial "
+                      << to_string(partial.last.full_repaint_reason) << ", blit recorded "
+                      << blit.last.paint_commands_recorded << '\n';
+            return 1;
+        }
     }
-    std::cout << "\nCells are median wall / CPU record / GPU milliseconds over " << kFrames
-              << " frames after " << kWarmup
-              << " warm-up frames. Wall time runs from the render call until the GPU has\n"
-                 "finished; wall and CPU exclude the wait for a swapchain texture, which is\n"
-                 "paced by the display (median " << std::fixed << std::setprecision(3)
-              << median(last_wait) << " ms).\n";
+    std::cout << "\nCells are median wall (p10-p90) / CPU record / GPU milliseconds over "
+              << kRounds << " rounds of " << kFrames << " frames after " << kWarmup
+              << " warm-up frames, each round on a freshly created surface with the mode\n"
+                 "order rotated. Wall time runs from the render call until finish() returns,\n"
+                 "so it includes GPU completion; wall and CPU exclude the wait for a swapchain\n"
+                 "texture, which is paced by the display (median " << std::fixed
+              << std::setprecision(3) << median(last_wait) << " ms).\n";
     return 0;
 }
