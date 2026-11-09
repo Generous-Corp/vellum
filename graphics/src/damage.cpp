@@ -1,6 +1,7 @@
 #include <vellum/graphics/damage.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -11,7 +12,7 @@
 namespace vellum::graphics {
 namespace {
 
-constexpr double kPixelLimit = 1 << 30;
+constexpr double kPixelLimit = kMaxPixelCoordinate;
 constexpr float kShadowBlurExtent = 1.5F;
 constexpr float kLineHeightFactor = 1.4F;
 
@@ -20,7 +21,14 @@ std::int32_t clamp_pixel(double value) noexcept {
 }
 
 bool same_float(float a, float b) noexcept {
-    return a == b || (std::isnan(a) && std::isnan(b));
+    return std::bit_cast<std::uint32_t>(a) == std::bit_cast<std::uint32_t>(b);
+}
+
+PixelRect clamp_rect(const PixelRect& rect) noexcept {
+    const auto limit = [](std::int32_t value) {
+        return std::clamp(value, -kMaxPixelCoordinate, kMaxPixelCoordinate);
+    };
+    return {limit(rect.left), limit(rect.top), limit(rect.right), limit(rect.bottom)};
 }
 
 bool finite_rect(const Rect& rect) noexcept {
@@ -193,7 +201,7 @@ class DamageTracker::Snapshot final {
 public:
     Snapshot(const Scene& scene, float scale, const DamagePropagation& propagation)
         : width_(scene.width), height_(scene.height), scale_(scale), background_(scene.background),
-          frame_(frame_rect(scene, scale)) {
+          version_(scene.scene_version), frame_(frame_rect(scene, scale)) {
         walk(propagation, scene.root, std::string{}, 0, 0.0F, 0.0F, std::nullopt);
     }
 
@@ -214,7 +222,7 @@ public:
 
     [[nodiscard]] bool same_canvas(const Snapshot& other) const noexcept {
         return frame_ == other.frame_ && same_float(scale_, other.scale_) &&
-               same_color(background_, other.background_);
+               same_color(background_, other.background_) && version_ == other.version_;
     }
 
     [[nodiscard]] const std::vector<std::string>& children(const std::string& parent) const {
@@ -268,6 +276,7 @@ private:
     float height_;
     float scale_;
     Color background_;
+    std::uint32_t version_;
     PixelRect frame_;
     std::vector<NodeRecord> records_;
     std::unordered_map<std::string, std::size_t> by_key_;
@@ -415,12 +424,12 @@ PixelRect frame_rect(const Scene& scene, float scale) noexcept {
 }
 
 DamageRegion::DamageRegion(PixelRect frame, DamagePolicy policy)
-    : frame_(frame.empty() ? PixelRect{} : frame), policy_(policy) {
+    : frame_(clamp_rect(frame).empty() ? PixelRect{} : clamp_rect(frame)), policy_(policy) {
     policy_.max_rects = std::clamp<std::size_t>(policy_.max_rects, 1, kMaxDamageRects);
 }
 
 void DamageRegion::add(const PixelRect& rect) {
-    const PixelRect clipped = intersection(rect, frame_);
+    const PixelRect clipped = intersection(clamp_rect(rect), frame_);
     if (clipped.empty()) return;
     ++input_rects_;
     if (is_full_frame()) return;
@@ -433,19 +442,21 @@ void DamageRegion::add(const PixelRect& rect) {
 void DamageRegion::add(const DamageRegion& other) {
     for (const auto& rect : other.rects_) add(rect);
     collapsed_ = collapsed_ || (other.collapsed_ && is_full_frame());
+    explicit_full_ = explicit_full_ || (other.explicit_full_ && is_full_frame());
 }
 
 void DamageRegion::add_full_frame() {
     if (frame_.empty()) return;
     ++input_rects_;
     rects_.assign(1, frame_);
+    explicit_full_ = true;
     peak_before_coalescing_ = std::max<std::size_t>(peak_before_coalescing_, 1);
 }
 
 void DamageRegion::intersect(const PixelRect& rect) {
     std::vector<PixelRect> kept;
     for (const auto& existing : rects_) {
-        const PixelRect overlap = intersection(existing, rect);
+        const PixelRect overlap = intersection(existing, clamp_rect(rect));
         if (!overlap.empty()) kept.push_back(overlap);
     }
     rects_ = std::move(kept);
@@ -470,6 +481,7 @@ void DamageRegion::clear() {
     peak_before_coalescing_ = 0;
     coalescing_passes_ = 0;
     collapsed_ = false;
+    explicit_full_ = false;
 }
 
 bool DamageRegion::is_full_frame() const noexcept {
@@ -505,6 +517,7 @@ DamageStats DamageRegion::stats() const noexcept {
     stats.rects_after_coalescing = rects_.size();
     stats.coalescing_passes = coalescing_passes_;
     stats.collapsed_to_full_frame = collapsed_;
+    stats.explicit_full_frame = explicit_full_;
     return stats;
 }
 
@@ -664,7 +677,8 @@ DamageRegion compute_scene_damage(const Scene& previous, const Scene& next, floa
     DamageRegion region(frame_rect(next, scale), policy);
     const DamagePropagation& effects = propagation != nullptr ? *propagation : default_propagation();
     if (frame_rect(previous, scale) != region.frame() ||
-        !same_color(previous.background, next.background)) {
+        !same_color(previous.background, next.background) ||
+        previous.scene_version != next.scene_version) {
         region.add_full_frame();
         return region;
     }

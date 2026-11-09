@@ -1,5 +1,6 @@
 #include <vellum/graphics/damage.hpp>
 
+#include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -440,6 +441,53 @@ void duplicate_ids() {
           "mark_dirty damages every node with the id");
 }
 
+void review_hardening() {
+    const Scene before = base_scene();
+    Scene bumped = before;
+    bumped.scene_version = before.scene_version + 1U;
+    check(diff(before, bumped).is_full_frame(), "a scene_version change repaints the frame");
+    DamageTracker versions(exact_policy());
+    versions.commit(before, 1.0F);
+    (void)versions.take_damage();
+    versions.commit(bumped, 1.0F);
+    check(versions.take_damage().is_full_frame(), "the tracker repaints on a scene_version change");
+
+    Scene quiet = before;
+    child(quiet, "a")->fill.red = std::bit_cast<float>(0x7FC00000U);
+    Scene other_nan = quiet;
+    child(other_nan, "a")->fill.red = std::bit_cast<float>(0x7FC00001U);
+    check(diff(quiet, quiet).empty(), "an identical NaN is unchanged");
+    const auto nan_damage = diff(quiet, other_nan);
+    check(nan_damage.rects().size() == 1 && nan_damage.rects()[0] == PixelRect{10, 10, 30, 30},
+          "a NaN changing to a different NaN is damage");
+
+    constexpr std::int32_t low = std::numeric_limits<std::int32_t>::min();
+    constexpr std::int32_t high = std::numeric_limits<std::int32_t>::max();
+    check(PixelRect{low, low, high, high}.area() == std::numeric_limits<std::int64_t>::max(),
+          "extreme rect area saturates");
+    constexpr std::int32_t limit = vellum::graphics::kMaxPixelCoordinate;
+    DamageRegion extreme({low, low, high, high}, exact_policy());
+    check(extreme.frame() == PixelRect{-limit, -limit, limit, limit}, "an extreme frame is clamped");
+    extreme.add({low, 0, high, 1});
+    check(extreme.area() == 2LL * limit, "an extreme rect is clamped on entry");
+    extreme.add({low, low, high, high});
+    const auto extreme_stats = extreme.stats();
+    check(extreme.is_full_frame() && extreme_stats.area_pixels == extreme_stats.frame_area_pixels &&
+              extreme_stats.frame_fraction == 1.0,
+          "extreme rects keep area arithmetic exact");
+
+    DamageRegion forced({0, 0, 10, 10});
+    forced.add_full_frame();
+    check(forced.stats().explicit_full_frame && !forced.stats().collapsed_to_full_frame,
+          "an explicit full repaint is reported apart from the threshold");
+    DamageRegion threshold({0, 0, 10, 10}, {.full_repaint_fraction = 0.5, .antialias_margin = 0});
+    threshold.add({0, 0, 10, 6});
+    check(threshold.stats().collapsed_to_full_frame && !threshold.stats().explicit_full_frame,
+          "a threshold collapse is not reported as explicit");
+    forced.clear();
+    check(!forced.stats().explicit_full_frame, "clear resets the explicit flag");
+}
+
 void tracker() {
     check(vellum::graphics::parse_invalidation_reason("state") == InvalidationReason::state &&
               vellum::graphics::parse_invalidation_reason("timer") == InvalidationReason::timer &&
@@ -459,7 +507,8 @@ void tracker() {
     tracker.commit(scene, 1.0F);
     auto damage = tracker.take_damage();
     check(damage.is_full_frame() && damage.frame() == PixelRect{0, 0, 200, 100}, "first scene repaints the frame");
-    check(tracker.last_stats().area_pixels == 20000, "take_damage reports telemetry");
+    check(tracker.last_stats().area_pixels == 20000 && tracker.last_stats().explicit_full_frame,
+          "take_damage reports telemetry");
 
     tracker.commit(scene, 1.0F);
     check(tracker.take_damage().empty(), "unchanged commit has no damage");
@@ -517,6 +566,7 @@ int main() {
     propagation_hooks();
     unusual_bounds();
     duplicate_ids();
+    review_hardening();
     tracker();
     if (failures != 0) {
         std::fprintf(stderr, "%d damage check(s) failed\n", failures);

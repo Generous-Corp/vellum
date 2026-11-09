@@ -25,7 +25,14 @@ struct PixelRect final {
     [[nodiscard]] constexpr std::int64_t height() const noexcept {
         return bottom > top ? static_cast<std::int64_t>(bottom) - top : 0;
     }
-    [[nodiscard]] constexpr std::int64_t area() const noexcept { return width() * height(); }
+    /// Saturates at the largest `int64_t` instead of overflowing.
+    [[nodiscard]] constexpr std::int64_t area() const noexcept {
+        const std::int64_t w = width();
+        const std::int64_t h = height();
+        if (w == 0 || h == 0) return 0;
+        constexpr std::int64_t largest = 9223372036854775807;
+        return h > largest / w ? largest : w * h;
+    }
     [[nodiscard]] constexpr bool empty() const noexcept { return right <= left || bottom <= top; }
 
     friend constexpr bool operator==(const PixelRect&, const PixelRect&) = default;
@@ -39,9 +46,13 @@ struct PixelRect final {
 
 [[nodiscard]] bool overlaps(const PixelRect& a, const PixelRect& b) noexcept;
 
+/// The coordinate range a damage region works in; rectangles entering a
+/// region are clamped to [-kMaxPixelCoordinate, kMaxPixelCoordinate].
+inline constexpr std::int32_t kMaxPixelCoordinate = 1 << 30;
+
 /// Converts a logical rectangle to the device pixels it touches at `scale`,
-/// rounding outward and clamping each edge to +/-2^30. Non-finite input
-/// yields `std::nullopt`.
+/// rounding outward and clamping each edge to +/-kMaxPixelCoordinate.
+/// Non-finite input yields `std::nullopt`.
 [[nodiscard]] std::optional<PixelRect> to_pixel_rect(const Rect& logical, float scale) noexcept;
 
 /// The device-pixel frame of a scene at `scale`, rounding the size up.
@@ -77,7 +88,11 @@ struct DamageStats final {
     std::size_t rects_before_coalescing = 0;
     std::size_t rects_after_coalescing = 0;
     std::size_t coalescing_passes = 0;
+    /// The threshold turned accumulated damage into the whole frame.
     bool collapsed_to_full_frame = false;
+    /// `add_full_frame` requested the whole frame (a first commit, a canvas
+    /// change, a reload or an unknown node), independent of the threshold.
+    bool explicit_full_frame = false;
 };
 
 /// A set of non-overlapping device-pixel rectangles clipped to a frame.
@@ -119,6 +134,7 @@ private:
     std::size_t peak_before_coalescing_ = 0;
     std::size_t coalescing_passes_ = 0;
     bool collapsed_ = false;
+    bool explicit_full_ = false;
 };
 
 /// A scene node visited with its absolute logical bounds.
@@ -167,6 +183,7 @@ public:
     const DamagePropagation& propagation);
 
 /// Whether two nodes with the same identity paint differently in place.
+/// Floats compare bitwise, so a NaN changing to a different NaN is a change.
 ///
 /// Meshes compare by pointer: a `TriangleMesh` or `MeshTexture` must not be
 /// mutated once a scene references it; replace the pointer to change it.
@@ -175,7 +192,8 @@ public:
 /// Damage between two scenes, keyed by node id (nodes with an empty or
 /// repeated id are keyed by position). Added, removed, moved, resized,
 /// restyled, reparented and reordered nodes damage both their old and new
-/// areas. A changed frame size or background damages the whole frame.
+/// areas. A changed frame size, background or `scene_version` damages the
+/// whole frame.
 [[nodiscard]] DamageRegion compute_scene_damage(
     const Scene& previous, const Scene& next, float scale,
     DamagePolicy policy = {}, const DamagePropagation* propagation = nullptr);
@@ -201,8 +219,8 @@ public:
                            std::shared_ptr<const DamagePropagation> propagation = nullptr);
 
     /// Diffs `next` against the last committed scene, accumulates the damage
-    /// and commits `next`. The first scene, a new scale or a new frame size
-    /// damages the whole frame.
+    /// and commits `next`. The first scene, a new scale, frame size,
+    /// background or `scene_version` damages the whole frame.
     void commit(const Scene& next, float scale);
 
     /// Damages every node with `node_id`, and their descendants, in the
