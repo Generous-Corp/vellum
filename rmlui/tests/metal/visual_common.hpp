@@ -6,6 +6,7 @@
 // VellumRmlUi::Native, and each carries its own copy of RmlUi.
 
 #include <vellum/rmlui/assets.hpp>
+#include <vellum/rmlui/image_compare.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -120,43 +121,6 @@ inline bool read_rgba(const std::filesystem::path& file, std::vector<std::uint8_
         return false;
     pixels.assign(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
     return pixels.size() == static_cast<std::size_t>(kWidth) * kHeight * 4u;
-}
-
-struct Difference {
-    double mean = 0.0;          // mean absolute channel difference, 0..255
-    double within = 1.0;        // fraction of pixels with every channel within the bound
-};
-
-inline Difference compare(const std::vector<std::uint8_t>& a, const std::vector<std::uint8_t>& b,
-                          int per_channel_bound) {
-    Difference d;
-    if (a.size() != b.size() || a.empty())
-        return {255.0, 0.0};
-    std::uint64_t sum = 0;
-    std::size_t close = 0;
-    const std::size_t pixels = a.size() / 4u;
-    for (std::size_t p = 0; p < pixels; ++p) {
-        bool ok = true;
-        for (std::size_t c = 0; c < 4; ++c) {
-            const int delta = std::abs(int(a[p * 4 + c]) - int(b[p * 4 + c]));
-            sum += static_cast<std::uint64_t>(delta);
-            ok = ok && delta <= per_channel_bound;
-        }
-        close += ok ? 1u : 0u;
-    }
-    d.mean = static_cast<double>(sum) / static_cast<double>(a.size());
-    d.within = static_cast<double>(close) / static_cast<double>(pixels);
-    return d;
-}
-
-// The tolerance the two rasterisers are held to: they differ only in edge
-// coverage and texture filtering.
-inline constexpr double kMaxMean = 2.0;
-inline constexpr double kMinWithin = 0.995;
-inline constexpr int kPerChannelBound = 8;
-
-inline bool within_tolerance(const Difference& d) {
-    return d.mean <= kMaxMean && d.within >= kMinWithin;
 }
 
 } // namespace vellum::rmlui::metal_test

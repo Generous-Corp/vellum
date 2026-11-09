@@ -168,7 +168,7 @@ jobs:
           if test -n "$PAYLOAD_PATH"; then
             payload_args=(--payload "$PAYLOAD_PATH")
           fi
-          python3 tools/provenance/receiver.py \
+          python3 -I tools/provenance/receiver.py \
             --root . \
             --pulp-repo .receiver-pulp \
             --pulp-main "$PULP_MAIN" \
@@ -187,15 +187,15 @@ jobs:
         run: |
           set -euo pipefail
           now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          python3 tools/provenance/observatory.py reconcile \
+          python3 -I tools/provenance/observatory.py reconcile \
             --pulp-repo .receiver-pulp \
             --vellum-repo . \
             --pulp-target "$RECONCILE_TARGET" \
             --vellum-target "$(git rev-parse HEAD)" \
             --now "$now" \
-            --write \
+            --write --include-main-commits \
             --output "$RUNNER_TEMP/receiver-reconcile.json"
-          python3 tools/provenance/observatory.py verify \
+          python3 -I tools/provenance/observatory.py verify \
             --pulp-repo .receiver-pulp \
             --vellum-repo . \
             --git-base "$(git rev-parse HEAD)" \

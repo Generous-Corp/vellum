@@ -11,12 +11,12 @@
     "repository": "Generous-Corp/pulp",
     "scan_base_commit": "2ccff748f0d59da34b01ce1fbceabcf19f452731"
   },
-  "reconciled_at": "2026-11-09T00:45:29Z",
+  "reconciled_at": "2026-11-09T17:44:31Z",
   "schema_version": 2,
   "state": "active",
   "vellum": {
     "last_dispatch_event": null,
-    "last_scanned_commit": "c5c7b24f724aede55f763197b2385b48ad54a5ff",
+    "last_scanned_commit": "fb04a64166c7fdee073bf149d1170d12a4492daa",
     "repository": "Generous-Corp/vellum",
     "scan_base_commit": "5e413a793879478173318918514d7252a4670266"
   }

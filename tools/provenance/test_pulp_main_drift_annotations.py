@@ -11,7 +11,7 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.append(str(Path(__file__).resolve().parent))
 import pulp_main_drift_annotations as annotate  # noqa: E402
 
 LIVE = "a" * 40

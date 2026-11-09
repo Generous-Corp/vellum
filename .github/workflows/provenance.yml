@@ -88,9 +88,9 @@ jobs:
           MIRROR_PULP_ROOT: ${{ steps.mirror-receipts.outputs.present == 'true' && '.mirror-pulp' || '' }}
           VELLUM_REQUIRE_PULP_IDENTITY: '1'
         run: |
-          python3 tools/provenance/test_verify_extraction.py
-          python3 tools/provenance/test_verify_mirror_export.py
-          python3 tools/provenance/verify_extraction.py \
+          python3 -I tools/provenance/test_verify_extraction.py
+          python3 -I tools/provenance/test_verify_mirror_export.py
+          python3 -I tools/provenance/verify_extraction.py \
             ${MIRROR_PULP_ROOT:+--pulp-root "$MIRROR_PULP_ROOT"} \
             --output "$RUNNER_TEMP/forbidden-deps-report.json"
 
@@ -105,6 +105,13 @@ jobs:
 
   provenance-verify:
     name: provenance-verify
+    # `provenance-verify` is the required context that carries the
+    # observatory gate (decisions 0012 and 0013, trust-policy). The
+    # observatory runs as its own job so an authority failure cannot skip it;
+    # this job waits for it, runs whatever its result (a skipped required
+    # check would count as passing), and fails if it did not pass.
+    needs: observatory-verify
+    if: ${{ !cancelled() }}
     runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     env:
       VELLUM_TARGET_SHA: ${{ github.sha }}
@@ -193,9 +200,9 @@ jobs:
           MIRROR_PULP_ROOT: ${{ steps.mirror-receipts.outputs.present == 'true' && '.mirror-pulp' || '' }}
           VELLUM_REQUIRE_PULP_IDENTITY: '1'
         run: |
-          python3 tools/provenance/test_verify_extraction.py
-          python3 tools/provenance/test_verify_mirror_export.py
-          python3 tools/provenance/verify_extraction.py \
+          python3 -I tools/provenance/test_verify_extraction.py
+          python3 -I tools/provenance/test_verify_mirror_export.py
+          python3 -I tools/provenance/verify_extraction.py \
             ${MIRROR_PULP_ROOT:+--pulp-root "$MIRROR_PULP_ROOT"} \
             --mirror-edge-pulp-root "$RUNNER_TEMP/mirror-edge-pulp.git" \
             --output "$RUNNER_TEMP/provenance-report.json"
@@ -214,8 +221,8 @@ jobs:
           # Fail rather than skip the real Sigstore verification tests here.
           VELLUM_REQUIRE_REAL_SIGSTORE: "1"
         run: |
-          python3 tools/provenance/test_verify_renderer_dependency.py
-          python3 tools/provenance/test_verify_renderer_eligibility.py
+          python3 -I tools/provenance/test_verify_renderer_dependency.py
+          python3 -I tools/provenance/test_verify_renderer_eligibility.py
           python3 -I tools/provenance/verify_renderer_dependency.py --json \
             > "$RUNNER_TEMP/renderer-provenance-report.json"
 
@@ -270,14 +277,14 @@ jobs:
 
       - name: Verify pinned Pulp tooling disposition
         run: |
-          python3 tools/provenance/test_verify_pulp_tooling_disposition.py
-          python3 tools/provenance/verify_pulp_tooling_disposition.py \
+          python3 -I tools/provenance/test_verify_pulp_tooling_disposition.py
+          python3 -I tools/provenance/verify_pulp_tooling_disposition.py \
             --output "$RUNNER_TEMP/pulp-tooling-disposition-report.json"
 
       - name: Verify versioned agent-authoring instructions
         run: |
-          python3 tools/agent_instructions/test_verify.py
-          python3 tools/agent_instructions/verify.py --json \
+          python3 -I tools/agent_instructions/test_verify.py
+          python3 -I tools/agent_instructions/verify.py --json \
             > "$RUNNER_TEMP/agent-instructions-report.json"
 
       - name: Resolve exact-boundary and signed-tag promotion evidence
@@ -444,18 +451,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          python3 tools/provenance/test_verify_authority_activation.py
-          python3 tools/provenance/test_finalize_authority_reconciliation.py
-          python3 tools/provenance/test_verify_current_state_docs.py
-          python3 tools/provenance/test_verify_authority_expansion.py
-          python3 tools/provenance/test_collect_release_evidence.py
+          python3 -I tools/provenance/test_verify_authority_activation.py
+          python3 -I tools/provenance/test_finalize_authority_reconciliation.py
+          python3 -I tools/provenance/test_verify_current_state_docs.py
+          python3 -I tools/provenance/test_verify_authority_expansion.py
+          python3 -I tools/provenance/test_collect_release_evidence.py
           python3 scripts/test_select_exact_provenance_run.py
           python3 scripts/test_verify_exact_provenance_artifact.py
           release_readiness=()
           repository_evidence=(--repository "$GITHUB_REPOSITORY")
-          if [[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == merge_group ]]; then
+          # live-open-pr-audit-scope: begin
+          # The live open-PR overlap audit asks whether a release is cut while
+          # unaccepted work overlapping the expansion is open. It is judged on
+          # release and release dry-run tags only. Every other run (a pull
+          # request, the merge queue, a main push, an authority tag) defers
+          # it: there it would only mirror which pull request is open.
+          live_open_pr_audit=false
+          if [[ "$GITHUB_REF" == refs/tags/v[0-9]* || "$GITHUB_REF" == refs/tags/dry-run/* ]]; then
+            live_open_pr_audit=true
+          fi
+          if [[ "$live_open_pr_audit" != true ]]; then
             repository_evidence+=(--defer-live-open-pr-audit)
           fi
+          # live-open-pr-audit-scope: end
           if [[ -n "$PULP_ACCEPTANCE_SHA" ]]; then
             repository_evidence+=(--pulp-root .exact-boundary-pulp)
           fi
@@ -479,11 +497,11 @@ jobs:
               "repos/Generous-Corp/pulp/commits/$PULP_ACCEPTANCE_SHA/check-runs?per_page=100" \
               -f filter=all -F per_page=100 \
               > "$RUNNER_TEMP/pulp-router-check-run-pages.json"
-            python3 tools/provenance/collect_release_evidence.py merge-check-runs \
+            python3 -I tools/provenance/collect_release_evidence.py merge-check-runs \
               --pages "$RUNNER_TEMP/parity-check-run-pages.json" \
               --pages "$RUNNER_TEMP/pulp-router-check-run-pages.json" \
               --output "$RUNNER_TEMP/parity-check-runs-raw.json"
-            python3 tools/provenance/collect_release_evidence.py parity-run-ids \
+            python3 -I tools/provenance/collect_release_evidence.py parity-run-ids \
               --check-runs "$RUNNER_TEMP/parity-check-runs-raw.json" \
               > "$RUNNER_TEMP/parity-run-ids.txt"
             mkdir "$RUNNER_TEMP/parity-workflow-runs"
@@ -506,7 +524,7 @@ jobs:
                   --dir "$destination" 2>/dev/null || true
               fi
             done < "$RUNNER_TEMP/parity-run-ids.txt"
-            python3 tools/provenance/collect_release_evidence.py check-runs \
+            python3 -I tools/provenance/collect_release_evidence.py check-runs \
               --check-runs "$RUNNER_TEMP/parity-check-runs-raw.json" \
               --workflow-runs "$RUNNER_TEMP/parity-workflow-runs" \
               --execution-attestations "$RUNNER_TEMP/execution-attestations" \
@@ -518,13 +536,13 @@ jobs:
             )
           fi
           judge_authority_expansion() {
-            python3 tools/provenance/verify_authority_expansion.py \
+            python3 -I tools/provenance/verify_authority_expansion.py \
               "${release_readiness[@]}" \
               "${repository_evidence[@]}" \
               --output "$RUNNER_TEMP/authority-expansion-report.json"
           }
-          if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request && "$GITHUB_EVENT_NAME" != merge_group ]]; then
-            open_pr_repositories_text="$(python3 tools/provenance/collect_release_evidence.py repositories)"
+          if [[ -n "$PULP_ACCEPTANCE_SHA" && "$live_open_pr_audit" == true ]]; then
+            open_pr_repositories_text="$(python3 -I tools/provenance/collect_release_evidence.py repositories)"
             mapfile -t open_pr_repositories <<<"$open_pr_repositories_text"
             test "${#open_pr_repositories[@]}" -gt 0
             collect_open_pr_snapshot() {
@@ -537,36 +555,41 @@ jobs:
                 gh api --method GET --paginate --slurp \
                   "repos/$repository/pulls?state=open&per_page=100" \
                   > "$repository_root/pulls.json"
-                python3 tools/provenance/collect_release_evidence.py open-pr-numbers \
+                python3 -I tools/provenance/collect_release_evidence.py open-pr-numbers \
                   --pulls "$repository_root/pulls.json" \
                   > "$repository_root/numbers.txt"
                 while read -r pull_number; do
                   gh api "repos/$repository/pulls/$pull_number" \
                     > "$repository_root/details/$pull_number.json"
-                  python3 tools/provenance/collect_release_evidence.py pull-coordinates \
+                  python3 -I tools/provenance/collect_release_evidence.py pull-coordinates \
                     --detail "$repository_root/details/$pull_number.json" \
                     > "$repository_root/trees/$pull_number-coordinates.txt"
                   read -r base_commit head_commit \
                     < "$repository_root/trees/$pull_number-coordinates.txt"
                   gh api "repos/$repository/compare/$base_commit...$head_commit" \
                     > "$repository_root/trees/$pull_number-compare.json"
-                  merge_base_commit="$(python3 tools/provenance/collect_release_evidence.py merge-base-commit --compare "$repository_root/trees/$pull_number-compare.json")"
+                  merge_base_commit="$(python3 -I tools/provenance/collect_release_evidence.py merge-base-commit --compare "$repository_root/trees/$pull_number-compare.json")"
                   gh api "repos/$repository/git/commits/$merge_base_commit" \
                     > "$repository_root/trees/$pull_number-merge-base-commit.json"
                   gh api "repos/$repository/git/commits/$head_commit" \
                     > "$repository_root/trees/$pull_number-head-commit.json"
-                  merge_base_tree="$(python3 tools/provenance/collect_release_evidence.py commit-tree --commit "$repository_root/trees/$pull_number-merge-base-commit.json")"
-                  head_tree="$(python3 tools/provenance/collect_release_evidence.py commit-tree --commit "$repository_root/trees/$pull_number-head-commit.json")"
+                  merge_base_tree="$(python3 -I tools/provenance/collect_release_evidence.py commit-tree --commit "$repository_root/trees/$pull_number-merge-base-commit.json")"
+                  head_tree="$(python3 -I tools/provenance/collect_release_evidence.py commit-tree --commit "$repository_root/trees/$pull_number-head-commit.json")"
                   gh api "repos/$repository/git/trees/$merge_base_tree?recursive=1" \
                     > "$repository_root/trees/$pull_number-merge-base-tree.json"
                   gh api "repos/$repository/git/trees/$head_tree?recursive=1" \
                     > "$repository_root/trees/$pull_number-head-tree.json"
                 done < "$repository_root/numbers.txt"
               done
-              python3 tools/provenance/collect_release_evidence.py open-pr-snapshot \
+              python3 -I tools/provenance/collect_release_evidence.py open-pr-snapshot \
                 --snapshot-root "$snapshot_root" \
                 --output "$RUNNER_TEMP/open-pr-snapshot.json" \
                 --cursor-output "$RUNNER_TEMP/open-pr-cursor.json"
+              # The same reads, as content: release readiness for vX accepts
+              # an open Vellum overlap only when it is exactly vX's own bump.
+              python3 -I tools/provenance/collect_release_evidence.py release-bump-evidence \
+                --snapshot-root "$snapshot_root" \
+                --output "$RUNNER_TEMP/release-bump-evidence.json"
             }
             write_live_open_pr_cursor() {
               local destination="$1"
@@ -578,7 +601,7 @@ jobs:
                   "repos/$repository/pulls?state=open&per_page=100" \
                   > "$cursor_root/$slug.json"
               done
-              python3 tools/provenance/collect_release_evidence.py live-cursor \
+              python3 -I tools/provenance/collect_release_evidence.py live-cursor \
                 --cursor-root "$cursor_root" \
                 --output "$destination"
             }
@@ -610,6 +633,7 @@ jobs:
             }
             repository_evidence+=(
               --open-pr-snapshot-json "$RUNNER_TEMP/open-pr-snapshot.json"
+              --release-bump-evidence-json "$RUNNER_TEMP/release-bump-evidence.json"
             )
             live_attempts=3
             for live_attempt in $(seq 1 "$live_attempts"); do
@@ -716,22 +740,22 @@ jobs:
             exit 0
           fi
           report="$RUNNER_TEMP/authority-expansion-live-main.json"
-          python3 tools/provenance/verify_authority_expansion.py \
+          python3 -I tools/provenance/verify_authority_expansion.py \
             --repository "$GITHUB_REPOSITORY" \
             --pulp-root .exact-boundary-pulp \
             --pulp-main-ref "$live_main" \
             --defer-live-open-pr-audit \
             --output "$report" > /dev/null || true
-          python3 tools/provenance/pulp_main_drift_annotations.py "$report" "$live_main"
+          python3 -I tools/provenance/pulp_main_drift_annotations.py "$report" "$live_main"
 
       - name: Verify active repository documentation
         if: steps.authority-phase.outputs.phase == 'active'
-        run: python3 tools/provenance/verify_current_state_docs.py
+        run: python3 -I tools/provenance/verify_current_state_docs.py
 
       - name: Verify authority-start control plane
         if: steps.authority-phase.outputs.phase == 'ready'
         run: |
-          python3 tools/provenance/verify_authority_activation.py verify-ready \
+          python3 -I tools/provenance/verify_authority_activation.py verify-ready \
             > "$RUNNER_TEMP/authority-ready-report.json"
 
       - name: Resolve the pending authority record
@@ -822,7 +846,7 @@ jobs:
       - name: Verify the committed pending authority record
         if: steps.authority-phase.outputs.phase == 'tagged-pending'
         run: |
-          python3 tools/provenance/verify_authority_activation.py \
+          python3 -I tools/provenance/verify_authority_activation.py \
             verify-pending \
             --pulp-repo .authority-pulp \
             --pulp-ownership-commit \
@@ -831,6 +855,83 @@ jobs:
             --authority-record-commit "$GITHUB_SHA" \
             --expected-authority-ref "$GITHUB_REF" \
             --output "$RUNNER_TEMP/authority-pending-report.json"
+
+      - name: Require the observatory job to have passed
+        env:
+          OBSERVATORY_RESULT: ${{ needs.observatory-verify.result }}
+        run: |
+          if [[ "$OBSERVATORY_RESULT" != success ]]; then
+            echo "::error::observatory-verify concluded '$OBSERVATORY_RESULT'; provenance-verify is the required observatory gate"
+            exit 1
+          fi
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: provenance-report
+          path: |
+            ${{ runner.temp }}/provenance-report.json
+            ${{ runner.temp }}/renderer-provenance-report.json
+            ${{ runner.temp }}/renderer-eligibility-report.json
+            ${{ runner.temp }}/pulp-tooling-disposition-report.json
+            ${{ runner.temp }}/agent-instructions-report.json
+            ${{ runner.temp }}/authority-ready-report.json
+            ${{ runner.temp }}/authority-pending-report.json
+            ${{ runner.temp }}/authority-expansion-report.json
+            ${{ runner.temp }}/open-pr-snapshot.json
+            ${{ runner.temp }}/release-bump-evidence.json
+            ${{ runner.temp }}/open-pr-cursor.json
+            ${{ runner.temp }}/open-pr-cursor-before.json
+            ${{ runner.temp }}/open-pr-cursor-after.json
+            ${{ runner.temp }}/promotion-release-tag-trust.json
+            ${{ runner.temp }}/authority-tag-trust.json
+          if-no-files-found: error
+          retention-days: 90
+
+  observatory-verify:
+    # The two-way observatory runs as its own job, with no `needs:` on the
+    # authority job, so an unrelated authority or provenance failure cannot
+    # skip it and each reports its own status.
+    name: observatory-verify
+    runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
+    env:
+      VELLUM_TARGET_SHA: ${{ github.sha }}
+      VELLUM_GIT_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+    steps:
+      - name: Check out full preserved history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the authority-start commit for an authority tag
+        # An authority tag is judged at its pending record's authority-start
+        # commit, read here from the same single record the authority job
+        # resolves, rather than through a job dependency.
+        if: startsWith(github.ref, 'refs/tags/authority/')
+        id: observatory-authority-start
+        env:
+          EXPECTED_AUTHORITY_REF: ${{ github.ref }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          records = sorted(Path("provenance/authority/records").glob("*.json"))
+          if len(records) != 1:
+              raise SystemExit("authority ref must contain exactly one direct pending record")
+          record = json.loads(records[0].read_text(encoding="utf-8"))
+          if record.get("authority_record_ref") != os.environ["EXPECTED_AUTHORITY_REF"]:
+              raise SystemExit("pending record does not name the checked-out authority ref")
+          authority_start = record.get("authority_start_commit")
+          if not isinstance(authority_start, str) or re.fullmatch(r"[0-9a-f]{40}", authority_start) is None:
+              raise SystemExit("pending record authority-start commit is not a full SHA")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"authority-start={authority_start}\n")
+          PY
 
       - name: Resolve the committed Pulp observatory cursor
         id: observatory-cursor
@@ -866,7 +967,7 @@ jobs:
 
       - name: Verify two-way observatory health and negative controls
         env:
-          AUTHORITY_START_SHA: ${{ steps.authority-record.outputs.authority-start }}
+          AUTHORITY_START_SHA: ${{ steps.observatory-authority-start.outputs.authority-start }}
         run: |
           set -euo pipefail
           observatory_vellum_target="$VELLUM_TARGET_SHA"
@@ -913,11 +1014,11 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == merge_group ]]; then
             observatory_time_budgets=report
           fi
-          python3 tools/provenance/test_observatory.py
-          python3 tools/provenance/test_observatory_mirror_import.py
-          python3 tools/provenance/test_receiver.py
-          python3 tools/provenance/test_receiver_watchdog.py
-          python3 tools/provenance/test_receiver_workflows.py
+          python3 -I tools/provenance/test_observatory.py
+          python3 -I tools/provenance/test_observatory_mirror_import.py
+          python3 -I tools/provenance/test_receiver.py
+          python3 -I tools/provenance/test_receiver_watchdog.py
+          python3 -I tools/provenance/test_receiver_workflows.py
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -929,7 +1030,7 @@ jobs:
           cursor = json.loads(Path("provenance/pulp-observatory/cursor.json").read_text())
           validate_enabled_barrier(switch, scope, cursor)
           PY
-          python3 tools/provenance/observatory.py verify \
+          python3 -I tools/provenance/observatory.py verify \
             --pulp-repo .observatory-pulp \
             --vellum-repo . \
             --git-base "$observatory_git_base" \
@@ -942,30 +1043,16 @@ jobs:
           jq -r '(.reported_time_budget_violations // [])[] |
             "::warning::observatory \(.) (reported, not enforced, on this \(env.GITHUB_EVENT_NAME) run; classify the events, see the open observatory-overdue issue)"' \
             "$RUNNER_TEMP/observatory-health-report.json"
-          python3 tools/provenance/test_verify_pulp_observation_scope.py
-          python3 tools/provenance/verify_pulp_observation_scope.py \
+          python3 -I tools/provenance/test_verify_pulp_observation_scope.py
+          python3 -I tools/provenance/verify_pulp_observation_scope.py \
             --output "$RUNNER_TEMP/pulp-observation-scope-report.json"
 
-      - name: Upload verification evidence
+      - name: Upload observatory evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: provenance-report
+          name: observatory-report
           path: |
-            ${{ runner.temp }}/provenance-report.json
-            ${{ runner.temp }}/renderer-provenance-report.json
-            ${{ runner.temp }}/renderer-eligibility-report.json
-            ${{ runner.temp }}/pulp-tooling-disposition-report.json
-            ${{ runner.temp }}/agent-instructions-report.json
-            ${{ runner.temp }}/authority-ready-report.json
-            ${{ runner.temp }}/authority-pending-report.json
-            ${{ runner.temp }}/authority-expansion-report.json
-            ${{ runner.temp }}/open-pr-snapshot.json
-            ${{ runner.temp }}/open-pr-cursor.json
-            ${{ runner.temp }}/open-pr-cursor-before.json
-            ${{ runner.temp }}/open-pr-cursor-after.json
-            ${{ runner.temp }}/promotion-release-tag-trust.json
-            ${{ runner.temp }}/authority-tag-trust.json
             ${{ runner.temp }}/observatory-health-report.json
             ${{ runner.temp }}/pulp-observation-scope-report.json
           if-no-files-found: error

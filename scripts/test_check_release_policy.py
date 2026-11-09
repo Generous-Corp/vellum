@@ -216,6 +216,7 @@ class Policy(unittest.TestCase):
                      "/.github/workflows/version-at-land.yml",
                      "/scripts/version_at_land.py",
                      "/provenance/authority-signers.allowed_signers",
+                     "/provenance/mirror/link-policy.json",
                      "/tools/provenance/verify_renderer_dependency.py"):
             with self.subTest(path=path):
                 shutil.copy(ROOT / policy.CODEOWNERS, self.tmp / policy.CODEOWNERS)
@@ -231,6 +232,7 @@ class Policy(unittest.TestCase):
                      "/.github/workflows/version-at-land.yml",
                      "/scripts/version_at_land.py",
                      "/provenance/authority-signers.allowed_signers",
+                     "/provenance/mirror/link-policy.json",
                      "/tools/provenance/verify_renderer_dependency.py"):
             with self.subTest(path=path):
                 self.assertIn(path, policy.POLICY_FILES)
@@ -258,6 +260,43 @@ class Policy(unittest.TestCase):
                           "which is not a policy file", policy.problems(self.tmp))
         finally:
             policy.POLICY_FILES = original
+
+    def test_a_policy_script_loading_an_unowned_module_by_path_fails(self) -> None:
+        # verify_extraction.py runs content_scan_policy.py through importlib, not
+        # an import statement; a module it loads by path decides its verdict too.
+        judge = self.tmp / "tools/provenance/verify_extraction.py"
+        judge.parent.mkdir(parents=True)
+        (self.tmp / "tools/mirror").mkdir()
+        (self.tmp / "tools/mirror/rename_mirror_namespace.py").write_text("")
+        (self.tmp / "tools/provenance/content_scan_policy.py").write_text("")
+        (self.tmp / "tools/provenance/helper.py").write_text("")
+        (self.tmp / "scripts").mkdir()
+        (self.tmp / "scripts/install_core.py").write_text("")
+        judge.write_text(
+            "import importlib.util\nfrom pathlib import Path\n"
+            "SCANNED = (\"scripts/install_core.py\",)  # a path it reads as data, not code\n"
+            "POLICY = Path(__file__).with_name(\"content_scan_policy.py\")\n"
+            "RENAME = Path(__file__).resolve().parents[1] / \"mirror/rename_mirror_namespace.py\"\n"
+            "spec = importlib.util.spec_from_file_location(\"p\", POLICY)\n")
+        self.assertEqual(policy.problems(self.tmp), [])
+        judge.write_text(judge.read_text() + "OTHER = Path(__file__).parent / \"helper.py\"\n")
+        self.assertIn("tools/provenance/verify_extraction.py loads tools/provenance/helper.py, "
+                      "which is not a policy file", policy.problems(self.tmp))
+        judge.write_text(judge.read_text().replace("helper.py", "content_scan_policy.py"))
+        kept = tuple(p for p in policy.POLICY_FILES if p != "/tools/provenance/content_scan_policy.py")
+        original, policy.POLICY_FILES = policy.POLICY_FILES, kept
+        try:
+            self.owners(drop="/tools/provenance/content_scan_policy.py")
+            self.assertEqual(policy.problems(self.tmp),
+                             ["tools/provenance/verify_extraction.py loads tools/provenance/content_scan_policy.py, "
+                              "which is not a policy file"])
+        finally:
+            policy.POLICY_FILES = original
+
+    def test_the_reviewed_prefixes_match_the_release_path_review(self) -> None:
+        import release_path_review
+        self.assertEqual(policy.REVIEWED_PREFIXES,
+                         tuple("/" + prefix for prefix in release_path_review.PROTECTED_PREFIXES))
 
     def lanes(self, scripts: list[str]) -> None:
         (self.tmp / "scripts").mkdir(exist_ok=True)
@@ -543,6 +582,7 @@ class Repository(unittest.TestCase):
                      "/.github/workflows/version-at-land.yml",
                      "/scripts/version_at_land.py",
                      "/provenance/authority-signers.allowed_signers",
+                     "/provenance/mirror/link-policy.json",
                      "/tools/provenance/verify_renderer_dependency.py"):
             with self.subTest(path=path):
                 self.assertIn(path, policy.POLICY_FILES)

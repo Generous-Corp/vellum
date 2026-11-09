@@ -3,9 +3,10 @@
 
 A pull request that changes a file `.github/CODEOWNERS` names (the release-signing
 policy, the code that enforces it, and the Shipyard review policy, see
-check_release_policy.py), or any workflow or local action, needs two counted
-reviewer APPROVEs naming its exact head, from two different signers in two
-different reviewer sessions, and no HOLD naming that head. A pull request that
+check_release_policy.py), or any workflow, local action or file under
+tools/mirror/, needs two counted reviewer APPROVEs naming its exact head, from
+two different signers in two different reviewer sessions, and no HOLD naming
+that head. A pull request that
 changes none of those files passes.
 
 A verdict counts on the same terms as the `review-verdict` status: a comment by
@@ -88,7 +89,10 @@ SESSION_STAMP = re.compile(r"<!-- session: ([!-.0-~]+)/([!-~]+?)(?: agent: ([!-~
 STAMP_VARIANT = re.compile(r"<!--\s*session\s*:", re.IGNORECASE)
 SIGNER_LINE = re.compile(r"^[ \t]*reviewer:[ \t]*([A-Za-z0-9._-]+)[ \t]*$", re.MULTILINE)
 UNATTRIBUTED = "unattributed"
-PROTECTED_PREFIXES = (".github/workflows/", ".github/actions/")
+# Every workflow and local action, and the mirror tooling the framework
+# transfer is derived and censused with (rename_mirror_namespace.py and the
+# collision and symbol censuses that verify_extraction.py runs).
+PROTECTED_PREFIXES = (".github/workflows/", ".github/actions/", "tools/mirror/")
 # A queue holding more entries than this is refused rather than judged in
 # part. GitHub builds at most 100 entries in one group.
 QUEUE_ENTRY_LIMIT = 100
@@ -220,7 +224,9 @@ def touched(files: Iterable[dict[str, Any]], protected: frozenset[str]) -> list[
 
     Every workflow and local action is protected as well as the CODEOWNERS
     files: a workflow runs with the repository's token and secrets, so one a
-    pull request adds could otherwise post a required status itself."""
+    pull request adds could otherwise post a required status itself. So is
+    everything under tools/mirror/, which the framework transfer's judges
+    load and run."""
     hits = set()
     for entry in files:
         for key in ("filename", "previous_filename"):

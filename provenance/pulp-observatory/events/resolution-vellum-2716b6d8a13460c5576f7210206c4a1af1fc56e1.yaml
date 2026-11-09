@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:20:02Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-2716b6d8a13460c5576f7210206c4a1af1fc56e1",
+  "kind": "resolution",
+  "linked_commits": [
+    "2716b6d8a13460c5576f7210206c4a1af1fc56e1"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Integration merge (Merge remote-tracking branch 'origin/main' into feat/release-dry-run). It brings main's commits into a branch; their own observations are classified separately in this ledger. Its conflict resolution touches only .github/workflows/gpu-macos.yml, scripts/test_release_dry_run.py, which map to no contract, so it has no independent contract.",
+  "resolves": "vellum-2716b6d8a13460c5576f7210206c4a1af1fc56e1",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

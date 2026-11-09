@@ -286,7 +286,11 @@ class NameDebtTest(unittest.TestCase):
                 self.assertEqual(set(entry), {"rules", "pattern", "file", "owner"})
                 self.assertEqual(entry["owner"], "Phase 6")
                 self.assertTrue(set(entry["rules"]) <= {"no-audio-symbols", "name-only-forward-declarations"})
-                self.assertTrue((repo / "mirror" / entry["file"]).is_file(), entry["file"])
+                # The debts name Pulp's paths; after the transfer the file is
+                # in framework/, under the renamed include root.
+                landed = (repo / "framework" / entry["file"].replace("/include/pulp/", "/include/vellum/")
+                          if (repo / "framework").is_dir() else repo / "mirror" / entry["file"])
+                self.assertTrue(landed.is_file(), entry["file"])
 
 
 class VendoredRttiOwnershipTest(unittest.TestCase):

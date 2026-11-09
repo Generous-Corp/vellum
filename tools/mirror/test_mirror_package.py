@@ -734,11 +734,14 @@ class PreludeHeaderTest(unittest.TestCase):
         }
         if not digests:
             self.skipTest("the newest export generates no prelude header")
-        cmake = (repo / mp.MIRROR_DIR / "core/view/cmake/PulpViewJsPreludes.cmake").read_text(encoding="utf-8")
+        cmake = mp.mirrored(repo, "core/view/cmake/PulpViewJsPreludes.cmake").read_text(encoding="utf-8")
         js_paths = [js for js in re.findall(r"\$\{CMAKE_CURRENT_SOURCE_DIR\}/(js/[^\s)]+)", cmake)
                     if js != "js/embed_js.py"]
         header = mp.render_prelude_header(cmake, js_paths)
-        self.assertEqual(digests, {sha(header.encode("utf-8"))})
+        # Once transferred, the renamed producer renders the renamed header,
+        # which matches the closure's digest of Pulp's through the inverse.
+        self.assertEqual(len(digests), 1)
+        self.assertTrue(mp.generated_matches(repo, header.encode("utf-8"), next(iter(digests))))
 
     def test_quoted_quote_and_backslash_are_unescaped(self) -> None:
         self.assertEqual(mp.cmake_unquote(r'a\"b\\c\nd'), 'a"b\\c\nd')
@@ -1033,6 +1036,93 @@ class CachedCheckoutTest(unittest.TestCase):
             (root / "planted.o").unlink()
             (root / "a.h").write_text("tampered\n")
             self.assertFalse(mp.reusable_checkout(root, pin, {"patched.h"}))
+
+
+
+class FrameworkTransferTest(unittest.TestCase):
+    """The packaged units read from framework/ once the 8b transfer is recorded."""
+
+    REPO = HERE.parents[1]
+
+    def transferred_repo(self, root: Path) -> Path:
+        (root / mp.FRAMEWORK_DIR).mkdir()
+        (root / mp.FRAMEWORK_TRANSFER).parent.mkdir(parents=True)
+        (root / mp.FRAMEWORK_TRANSFER).write_text("{}", encoding="utf-8")
+        return root
+
+    def test_renamed_path_agrees_with_every_transfer_record(self) -> None:
+        record_path = self.REPO / mp.FRAMEWORK_TRANSFER
+        if not record_path.is_file():
+            self.skipTest("this checkout records no framework transfer")
+        records = json.loads(record_path.read_text(encoding="utf-8"))["records"]
+        self.assertGreater(len(records), 0)  # control: the record is read
+        for row in records:
+            self.assertEqual(f"{mp.FRAMEWORK_DIR}/{mp.renamed_path(row['pulp_path'])}", row["framework_path"])
+        self.assertEqual(mp.renamed_path("core/view/include/pulp/view/view.hpp"),
+                         "core/view/include/vellum/view/view.hpp")
+        self.assertEqual(mp.renamed_path("core/view/src/pulp/a.cpp"), "core/view/src/pulp/a.cpp")
+
+    def test_sources_resolve_under_framework_only_when_transferred(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertEqual(mp.mirrored(root, "core/a/include/pulp/a/a.hpp"),
+                             root / "mirror/core/a/include/pulp/a/a.hpp")
+            (root / mp.FRAMEWORK_DIR).mkdir()
+            # A framework/ with no transfer record is a half transfer: refused.
+            with self.assertRaisesRegex(mp.PlanError, "must exist together"):
+                mp.transferred(root)
+            self.transferred_repo_record_only(root)
+            self.assertEqual(mp.mirrored(root, "core/a/include/pulp/a/a.hpp"),
+                             root / "framework/core/a/include/vellum/a/a.hpp")
+
+    def transferred_repo_record_only(self, root: Path) -> None:
+        (root / mp.FRAMEWORK_TRANSFER).parent.mkdir(parents=True)
+        (root / mp.FRAMEWORK_TRANSFER).write_text("{}", encoding="utf-8")
+
+    def test_generated_header_is_checked_through_the_inverse(self) -> None:
+        pulp = b"#pragma once\nnamespace pulp::runtime { inline constexpr bool kGitDirty = false; }\n"
+        renamed = b"#pragma once\nnamespace vellum::runtime { inline constexpr bool kGitDirty = false; }\n"
+        digest = hashlib.sha256(pulp).hexdigest()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.transferred_repo(Path(temporary))
+            self.assertTrue(mp.generated_matches(root, renamed, digest))
+            # A tampered generated header fails, renamed or not.
+            self.assertFalse(mp.generated_matches(root, renamed.replace(b"false", b"true "), digest))
+            self.assertFalse(mp.generated_matches(root, renamed + b"// extra\n", digest))
+        with tempfile.TemporaryDirectory() as temporary:
+            # Before the transfer the bytes are compared as they are.
+            self.assertTrue(mp.generated_matches(Path(temporary), pulp, digest))
+            self.assertFalse(mp.generated_matches(Path(temporary), renamed, digest))
+
+    def test_framework_file_set_is_held_and_native_edits_are_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            files = {"framework/core/a/src/a.cpp": b"int a();\n", "framework/core/a/src/b.cpp": b"int b();\n"}
+            for relative, data in files.items():
+                (root / relative).parent.mkdir(parents=True, exist_ok=True)
+                (root / relative).write_bytes(data)
+            receipt = {"mirror_tree": "0" * 40}
+            record = {"export_receipt": "provenance/mirror/receipts/r.json", "mirror_tree": "0" * 40,
+                      "records": [{"framework_path": p, "framework_git_blob_sha": mp.git_blob_sha(d)}
+                                  for p, d in files.items()]}
+            (root / mp.FRAMEWORK_TRANSFER).parent.mkdir(parents=True)
+            (root / mp.FRAMEWORK_TRANSFER).write_text(json.dumps(record), encoding="utf-8")
+            self.assertEqual(mp.verify_framework_identity(root, "provenance/mirror/receipts/r.json", receipt), 2)
+            with self.assertRaisesRegex(mp.PlanError, "newest receipt"):
+                mp.verify_framework_identity(root, "provenance/mirror/receipts/other.json", receipt)
+            self.assertEqual(mp.framework_native_edits(root), [])
+            # framework/ is Vellum-native: an edited file plans, and is reported.
+            (root / "framework/core/a/src/a.cpp").write_bytes(b"int a(int);\n")
+            self.assertEqual(mp.verify_framework_identity(root, "provenance/mirror/receipts/r.json", receipt), 2)
+            self.assertEqual(mp.framework_native_edits(root), ["framework/core/a/src/a.cpp"])
+            (root / "framework/core/a/src/a.cpp").write_bytes(files["framework/core/a/src/a.cpp"])
+            (root / "framework/core/a/src/c.cpp").write_bytes(b"int c();\n")
+            with self.assertRaisesRegex(mp.PlanError, "does not list"):
+                mp.verify_framework_identity(root, "provenance/mirror/receipts/r.json", receipt)
+            (root / "framework/core/a/src/c.cpp").unlink()
+            (root / "framework/core/a/src/b.cpp").unlink()
+            with self.assertRaisesRegex(mp.PlanError, "is missing files"):
+                mp.verify_framework_identity(root, "provenance/mirror/receipts/r.json", receipt)
 
 
 if __name__ == "__main__":

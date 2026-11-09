@@ -44,6 +44,7 @@ struct CaptureResult final {
     std::uint32_t pixel_width = 0;
     std::uint32_t pixel_height = 0;
     GpuEvidence evidence;
+    FrameStats frame_stats;
     CaptureStats stats;
     std::chrono::microseconds surface_creation{0};
     std::chrono::microseconds render{0};
@@ -162,6 +163,9 @@ struct NamedScene final {
 [[nodiscard]] Scene text(float width, float height);
 /// A vertex-coloured triangle mesh and a textured, clipped quad.
 [[nodiscard]] Scene mesh(float width, float height);
+/// Rotated, scaled, faded and per-corner rounded rectangles: node transforms,
+/// a group opacity layer, a folded opacity, and `corner_radii`.
+[[nodiscard]] Scene compositing(float width, float height);
 /// Every node kind above in one scene.
 [[nodiscard]] Scene combined(float width, float height);
 /// Each content fixture, named, excluding `empty`.
