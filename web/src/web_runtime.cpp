@@ -1,9 +1,12 @@
+#include "canvas_shell_lowering.hpp"
+
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/runtime/kernel.hpp>
 
 #include <emscripten.h>
 
 #include <bit>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -13,6 +16,7 @@ namespace {
 
 vellum::graphics::Scene scene;
 std::vector<vellum::graphics::PaintCommand> commands;
+int lowering_losses = 0;
 std::unique_ptr<vellum::runtime::Kernel> kernel;
 
 EM_JS(void, canvas_begin,
@@ -129,11 +133,19 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_add_text(
 EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     if (!kernel || scene.width <= 0.0F || scene.height <= 0.0F) return 0;
     commands = vellum::graphics::make_paint_commands(scene);
+    lowering_losses = vellum::web::canvas_shell_loss_count(commands);
+    const auto opacities = vellum::graphics::effective_opacities(commands);
     const auto background = scene.background;
     canvas_begin(scene.width, scene.height, background.red, background.green,
                  background.blue, background.alpha);
-    for (const auto& command : commands) {
-        const auto color = command.fill;
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        const auto& command = commands[index];
+        if (!vellum::graphics::draws_content(command.kind) ||
+            command.kind == vellum::graphics::PaintCommand::Kind::mesh) {
+            continue;
+        }
+        auto color = command.fill;
+        color.alpha *= opacities[index];
         if (command.kind == vellum::graphics::PaintCommand::Kind::rectangle) {
             canvas_rectangle(
                 command.bounds.x, command.bounds.y, command.bounds.width,
@@ -148,6 +160,12 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     }
     canvas_finish();
     return 1;
+}
+
+/// The number of commands the last render drew with a loss; see
+/// `vellum::web::canvas_shell_loses`.
+EMSCRIPTEN_KEEPALIVE int vellum_web_lowering_loss_count() {
+    return lowering_losses;
 }
 
 EMSCRIPTEN_KEEPALIVE int vellum_web_command_count() {
