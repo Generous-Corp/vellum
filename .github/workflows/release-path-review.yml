@@ -1,7 +1,7 @@
 # Posts the `release-path-review` commit status. A pull request that changes a
-# file .github/CODEOWNERS names, or any workflow or local action, needs two
-# counted reviewer APPROVEs of its exact head, from different signers and
-# sessions (Decision 0014). The rule is scripts/release_path_review.py, checked
+# file .github/CODEOWNERS names, or any workflow, local action or file under
+# tools/mirror/, needs two counted reviewer APPROVEs of its exact head, from
+# different signers and sessions (Decision 0014). The rule is scripts/release_path_review.py, checked
 # out from the default branch, never from the pull request. Every trigger runs
 # the default branch's definition of this file: a review or a merge-queue
 # build reaches it through the permission-less "Release path review trigger"
