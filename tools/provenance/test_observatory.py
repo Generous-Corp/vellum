@@ -361,6 +361,20 @@ class ObservatoryTests(unittest.TestCase):
                 with self.assertRaisesRegex(observatory.ObservatoryError, "append-only"):
                     observatory.verify_append_only(root, base)
 
+    def test_non_merge_adoption_of_mains_copy_is_rejected(self) -> None:
+        # Writing main's verified bytes over the branch's event in an ordinary
+        # commit, with no merge, is still a modification.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            main_tip, merge = self.merge_fixture(root, result="main")
+            run(root, "git", "checkout", "-q", "-b", "plain", f"{merge}^1")
+            write(root / observatory.EVENTS_PATH / "e.yaml", '{"event_id":"e","discovered_at":"main"}\n')
+            run(root, "git", "add", "-A")
+            run(root, "git", "commit", "-m", "copy main's event without merging")
+            run(root, "git", "merge", "--no-edit", "-s", "ours", main_tip)
+            with self.assertRaisesRegex(observatory.ObservatoryError, "append-only"):
+                observatory.verify_append_only(root, main_tip)
+
     def test_merge_of_two_verified_parents_still_needs_an_equal_blob(self) -> None:
         # Both parents of a merge can lie on the git base. A merge of them that
         # writes a third version of "e" adopts neither parent's verified copy,
