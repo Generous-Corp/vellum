@@ -262,9 +262,9 @@ struct SceneNode final {
 }
 
 /// Whether a node sets a field version 2 introduced: a non-identity
-/// transform, an opacity below one, or per-corner radii.
+/// transform, an opacity other than one, or per-corner radii.
 [[nodiscard]] constexpr bool uses_version_2_fields(const SceneNode& node) noexcept {
-    return (node.transform && !is_identity(*node.transform)) || !(node.opacity >= 1.0F) ||
+    return (node.transform && !is_identity(*node.transform)) || node.opacity != 1.0F ||
            node.corner_radii.has_value();
 }
 

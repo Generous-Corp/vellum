@@ -776,6 +776,66 @@ bool faded_command_layers() {
     return true;
 }
 
+// A blurred, spread shadow keeps its halo inside a faded, scaled group nested
+// in another faded group, so each bounded layer reaches the shadow's extent.
+bool nested_faded_shadow_layers() {
+    Scene scene{.width = 96.0F, .height = 64.0F, .background = Color::hex(0x000000)};
+    scene.root.id = "root";
+    const auto white = Color::hex(0xFFFFFF);
+    SceneNode inner{
+        .id = "inner",
+        .kind = SceneNode::Kind::group,
+        .bounds = {20.0F, 20.0F, 0.0F, 0.0F},
+        .transform = Affine2D{.a = 2.0F, .d = 2.0F},
+        .opacity = 0.5F,
+    };
+    inner.children.push_back({
+        .id = "inner/box",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {0.0F, 0.0F, 8.0F, 8.0F},
+        .fill = white,
+        .box_shadows = {{.blur_radius = 4.0F, .spread_radius = 2.0F, .color = white}},
+    });
+    inner.children.push_back({
+        .id = "inner/dot",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {0.0F, 18.0F, 2.0F, 2.0F},
+        .fill = white,
+    });
+    SceneNode outer{
+        .id = "outer",
+        .kind = SceneNode::Kind::group,
+        .opacity = 0.5F,
+    };
+    outer.children.push_back(std::move(inner));
+    outer.children.push_back({
+        .id = "outer/dot",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {4.0F, 56.0F, 4.0F, 4.0F},
+        .fill = white,
+    });
+    scene.root.children.push_back(std::move(outer));
+    std::vector<std::uint8_t> rgba;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    // The box is drawn at (20, 20) to (36, 36); its spread reaches 40 and the
+    // blur continues past it.
+    if (!capture_and_probe("nested_faded_shadow_layers", scene, {
+            {"box at a quarter", 28, 28, {64, 64, 64, 255}},
+            {"outer member at a half", 6, 58, {128, 128, 128, 255}},
+        }) ||
+        !capture(scene, rgba, width, height)) {
+        return false;
+    }
+    const int spread = pixel(rgba, width, 38, 28)[0];
+    const int halo = pixel(rgba, width, 43, 28)[0];
+    if (spread < 20 || halo < 4 || halo >= spread) {
+        std::cerr << "nested_faded_shadow_layers: spread=" << spread << " halo=" << halo << '\n';
+        return false;
+    }
+    return true;
+}
+
 // A transform carries a shadow's offset and turns text with its node.
 bool transformed_shadow_and_text() {
     Scene scene{.width = 128.0F, .height = 128.0F, .background = Color::hex(0x000000)};
@@ -900,6 +960,9 @@ int main(int argc, char** argv) {
         }
         if (fixture == "faded_command_layers") {
             return faded_command_layers() ? 0 : 1;
+        }
+        if (fixture == "nested_faded_shadow_layers") {
+            return nested_faded_shadow_layers() ? 0 : 1;
         }
         if (fixture == "transformed_shadow_and_text") {
             return transformed_shadow_and_text() ? 0 : 1;

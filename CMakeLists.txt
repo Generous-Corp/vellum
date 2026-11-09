@@ -284,6 +284,7 @@ if(VELLUM_BUILD_TESTS)
                 per_corner_radii
                 radii_overflow_scaling
                 faded_command_layers
+                nested_faded_shadow_layers
                 transformed_shadow_and_text)
             add_test(NAME "vellum.gpu.${_vellum_fixture}"
                 COMMAND vellum-gpu-style-test "${_vellum_fixture}")

@@ -1,6 +1,9 @@
 #include "rendered_tree_materializer.hpp"
 
+#include <vellum/graphics/paint_command.hpp>
+
 #include <algorithm>
+#include <clocale>
 #include <cmath>
 #include <iostream>
 #include <string>
@@ -17,6 +20,67 @@ std::string wrap_tree(std::string_view children) {
     return std::string(R"JSON({"protocol":"vellum.authoring-host.v2","kind":"render-result",
       "tree":{"type":"stack","id":"compositing-root","style":{"width":200,"height":200},
       "children":[)JSON") + std::string(children) + "]}}";
+}
+
+// rotate(90deg) on a 40 by 20 box at (10, 20) inside a parent at (30, 40):
+// the absolute box (40, 60, 40, 20) turns about its own centre (60, 70) once,
+// to (50, 50, 20, 40). A second pivot would move it.
+bool transform_pivots_once() {
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    const auto tree = wrap_tree(R"JSON(
+      {"type":"view","id":"frame","style":{"x":30,"y":40,"width":100,"height":100},
+        "children":[
+          {"type":"view","id":"spinner","events":{"press":"spinner:press"},
+            "style":{"x":10,"y":20,"width":40,"height":20,
+              "backgroundColor":"#FF0000","transform":"rotate(90deg)"},
+            "children":[]}]}
+    )JSON");
+    if (!vellum::authoring::materialize_rendered_tree(tree, rendered, &error)) {
+        std::cerr << "pivot: " << error << '\n';
+        return false;
+    }
+    const auto commands = vellum::graphics::make_paint_commands(rendered.scene);
+    const auto expected = [](const vellum::graphics::Rect& box) {
+        return near(box.x, 50.0F) && near(box.y, 50.0F) && near(box.width, 20.0F) &&
+               near(box.height, 40.0F);
+    };
+    const auto spinner = std::find_if(commands.begin(), commands.end(),
+        [](const auto& command) { return command.node_id == "spinner"; });
+    if (spinner == commands.end() ||
+        !near(spinner->bounds.x, 40.0F) || !near(spinner->bounds.y, 60.0F) ||
+        !expected(vellum::graphics::transformed_bounds(spinner->transform, spinner->bounds)) ||
+        rendered.interactions.size() != 1U || !expected(rendered.interactions[0].bounds)) {
+        std::cerr << "pivot: the rotated box is not where one pivot puts it\n";
+        return false;
+    }
+    return true;
+}
+
+// Transform arguments parse the same under a comma-decimal locale.
+bool transform_ignores_locale() {
+    const std::string previous = std::setlocale(LC_NUMERIC, nullptr);
+    const char* comma = std::setlocale(LC_NUMERIC, "de_DE.UTF-8");
+    if (comma == nullptr) comma = std::setlocale(LC_NUMERIC, "fr_FR.UTF-8");
+    if (comma == nullptr || std::localeconv()->decimal_point[0] != ',') {
+        std::setlocale(LC_NUMERIC, previous.c_str());
+        std::cerr << "locale: no comma-decimal locale is installed\n";
+        return false;
+    }
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    const bool materialized = vellum::authoring::materialize_rendered_tree(
+        wrap_tree(R"JSON({"type":"view","id":"scaled","style":{"width":10,"height":10,
+          "transform":"scale(1.5) translate(+2.5px, 0)"},"children":[]})JSON"),
+        rendered, &error);
+    std::setlocale(LC_NUMERIC, previous.c_str());
+    const auto* scaled = vellum::graphics::find_node(rendered.scene, "scaled");
+    if (!materialized || scaled == nullptr || !scaled->transform ||
+        !near(scaled->transform->a, 1.5F) || !rendered.diagnostics.empty()) {
+        std::cerr << "locale: transform parsing changed under a comma locale: " << error << '\n';
+        return false;
+    }
+    return true;
 }
 
 // Transform, opacity, and per-corner radius keys reach the scene; an
@@ -599,5 +663,5 @@ int main() {
         return 1;
     }
 
-    return compositing_keys() ? 0 : 1;
+    return compositing_keys() && transform_pivots_once() && transform_ignores_locale() ? 0 : 1;
 }

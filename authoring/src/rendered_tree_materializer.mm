@@ -1,6 +1,7 @@
 #include "rendered_tree_materializer.hpp"
 
 #import <Foundation/Foundation.h>
+#include <xlocale.h>
 
 #include <vellum/graphics/paint_command.hpp>
 
@@ -323,10 +324,15 @@ std::optional<float> transform_argument(
     std::string_view text, TransformUnit unit, float reference) {
     text = trimmed(text);
     if (text.empty()) return std::nullopt;
+    // strtod reads the process locale's decimal point; a fixed C locale keeps
+    // "1.5" meaning one and a half under a comma-decimal locale.
+    static const locale_t c_locale = newlocale(LC_ALL_MASK, "C", nullptr);
     const std::string copy(text);
     char* end = nullptr;
-    const double number = std::strtod(copy.c_str(), &end);
-    if (end == copy.c_str() || !std::isfinite(number)) return std::nullopt;
+    const double number = strtod_l(copy.c_str(), &end, c_locale);
+    if (c_locale == nullptr || end == copy.c_str() || !std::isfinite(number)) {
+        return std::nullopt;
+    }
     std::string suffix(end);
     std::transform(suffix.begin(), suffix.end(), suffix.begin(),
         [](unsigned char character) { return static_cast<char>(std::tolower(character)); });

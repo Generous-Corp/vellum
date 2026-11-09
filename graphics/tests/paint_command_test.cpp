@@ -345,6 +345,7 @@ bool legacy_scene_fields() {
     };
     return refused([](SceneNode& node) { node.transform = quarter_turn(); }) &&
            refused([](SceneNode& node) { node.opacity = 0.5F; }) &&
+           refused([](SceneNode& node) { node.opacity = 2.0F; }) &&
            refused([](SceneNode& node) {
                node.opacity = std::numeric_limits<float>::quiet_NaN();
            }) &&
