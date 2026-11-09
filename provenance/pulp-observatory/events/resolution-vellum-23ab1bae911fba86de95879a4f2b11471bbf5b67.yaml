@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:50:11Z",
+  "disposition": "framework-only",
+  "effort_minutes": 10,
+  "event_id": "resolution-vellum-23ab1bae911fba86de95879a4f2b11471bbf5b67",
+  "kind": "resolution",
+  "linked_commits": [
+    "23ab1bae911fba86de95879a4f2b11471bbf5b67"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Test-only: Vellum's offscreen scene-capture harness compares captures across processes and fails without a GPU. It tests Vellum's scene renderer, which has no Pulp counterpart, and changes no shipped behaviour.",
+  "resolves": "vellum-23ab1bae911fba86de95879a4f2b11471bbf5b67",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

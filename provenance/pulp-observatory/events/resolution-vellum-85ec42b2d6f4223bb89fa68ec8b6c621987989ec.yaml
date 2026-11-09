@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:50:13Z",
+  "disposition": "framework-only",
+  "effort_minutes": 10,
+  "event_id": "resolution-vellum-85ec42b2d6f4223bb89fa68ec8b6c621987989ec",
+  "kind": "resolution",
+  "linked_commits": [
+    "85ec42b2d6f4223bb89fa68ec8b6c621987989ec"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Hardens Vellum's scene lowering: unknown scene kinds are refused and lowering diagnostic codes are pinned (lowering_diagnostic.hpp, paint_command, rendered_tree_materializer). The scene schema, lowering diagnostics and the authoring materializer exist only in Vellum; Pulp's main has no counterpart, so no port is owed.",
+  "resolves": "vellum-85ec42b2d6f4223bb89fa68ec8b6c621987989ec",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

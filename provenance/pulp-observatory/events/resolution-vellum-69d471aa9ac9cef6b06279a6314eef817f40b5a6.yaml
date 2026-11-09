@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:50:12Z",
+  "disposition": "framework-only",
+  "effort_minutes": 10,
+  "event_id": "resolution-vellum-69d471aa9ac9cef6b06279a6314eef817f40b5a6",
+  "kind": "resolution",
+  "linked_commits": [
+    "69d471aa9ac9cef6b06279a6314eef817f40b5a6"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Test-only: adds Vellum's deterministic offscreen scene-capture harness for vellum::graphics scenes. Pulp has no scene type or capture harness to port it to.",
+  "resolves": "vellum-69d471aa9ac9cef6b06279a6314eef817f40b5a6",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

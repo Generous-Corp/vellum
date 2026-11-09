@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:50:18Z",
+  "disposition": "framework-only",
+  "effort_minutes": 10,
+  "event_id": "resolution-vellum-10e976535bb556d54d525f1cfbe053720006dbc8",
+  "kind": "resolution",
+  "linked_commits": [
+    "10e976535bb556d54d525f1cfbe053720006dbc8"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Test-only: confines Vellum's scene-capture golden updates to the configured golden roots. A guard on Vellum's own test harness, with no Pulp counterpart.",
+  "resolves": "vellum-10e976535bb556d54d525f1cfbe053720006dbc8",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

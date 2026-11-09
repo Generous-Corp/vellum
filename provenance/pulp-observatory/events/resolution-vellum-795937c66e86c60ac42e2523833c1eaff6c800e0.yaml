@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:50:10Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-795937c66e86c60ac42e2523833c1eaff6c800e0",
+  "kind": "resolution",
+  "linked_commits": [
+    "795937c66e86c60ac42e2523833c1eaff6c800e0"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Integration merge (Merge remote-tracking branch 'origin/main' into perf/classify-gpu-proof). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
+  "resolves": "vellum-795937c66e86c60ac42e2523833c1eaff6c800e0",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:50:00Z",
+  "disposition": "framework-only",
+  "effort_minutes": 10,
+  "event_id": "resolution-vellum-fb92eca58873c134899504d7498ef8f068939fc5",
+  "kind": "resolution",
+  "linked_commits": [
+    "fb92eca58873c134899504d7498ef8f068939fc5"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/pulp/pull/11596"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Moves Vellum's GPU device and Dawn bootstrap into the gpu-runtime package (Bootstrap, Device, SkiaLogBridge). Pulp does not carry a port of it: since pulp#11596 Pulp's macOS GPU device layer forwards to this gpu-runtime package (PULP_USE_GPU_RUNTIME, default ON), so the code exists once, in Vellum. The other Pulp platforms keep their own device layer, tracked as parked work in pulp#11621, pulp#11622 and pulp#11623, which are gpu-runtime platform gaps rather than a port of this commit.",
+  "resolves": "vellum-fb92eca58873c134899504d7498ef8f068939fc5",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

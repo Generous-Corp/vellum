@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:50:14Z",
+  "disposition": "framework-only",
+  "effort_minutes": 10,
+  "event_id": "resolution-vellum-dbf7d9e4bc074306a4846bbe86d6d81936d20ad6",
+  "kind": "resolution",
+  "linked_commits": [
+    "dbf7d9e4bc074306a4846bbe86d6d81936d20ad6"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Adds a version to Vellum's scene schema and reports lowering losses through new lowering diagnostics. Both are Vellum-only surfaces (vellum::graphics scene and the authoring materializer); Pulp has no scene schema to version.",
+  "resolves": "vellum-dbf7d9e4bc074306a4846bbe86d6d81936d20ad6",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:50:19Z",
+  "disposition": "framework-only",
+  "effort_minutes": 10,
+  "event_id": "resolution-vellum-728e2ff713c07353c0d8c8895e7917ab1d0d68f7",
+  "kind": "resolution",
+  "linked_commits": [
+    "728e2ff713c07353c0d8c8895e7917ab1d0d68f7"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Adds a renderer-independent damage model for Vellum scenes (vellum::graphics damage.hpp). New Vellum capability built on Vellum's scene graph, not a fix to shared behaviour; Pulp's view invalidation is separate and owes no port.",
+  "resolves": "vellum-728e2ff713c07353c0d8c8895e7917ab1d0d68f7",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:50:09Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-ef5b1f907f4bccaf7c8bcce00b3e11429020f4ca",
+  "kind": "resolution",
+  "linked_commits": [
+    "ef5b1f907f4bccaf7c8bcce00b3e11429020f4ca"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Integration merge (Merge remote-tracking branch 'origin/main' into fix/html-import-cdp-timeout). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
+  "resolves": "vellum-ef5b1f907f4bccaf7c8bcce00b3e11429020f4ca",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

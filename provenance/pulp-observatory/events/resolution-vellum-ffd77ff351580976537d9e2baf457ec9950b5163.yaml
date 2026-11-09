@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:50:17Z",
+  "disposition": "framework-only",
+  "effort_minutes": 10,
+  "event_id": "resolution-vellum-ffd77ff351580976537d9e2baf457ec9950b5163",
+  "kind": "resolution",
+  "linked_commits": [
+    "ffd77ff351580976537d9e2baf457ec9950b5163"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Fixes Vellum's authoring materializer: attributed text-run children are validated and stale lowering errors are cleared. The materializer and its lowering diagnostics are Vellum-only; Pulp's attributed text has no rendered-tree materializer carrying this defect, so no port is owed.",
+  "resolves": "vellum-ffd77ff351580976537d9e2baf457ec9950b5163",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
