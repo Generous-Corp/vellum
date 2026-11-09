@@ -16,6 +16,9 @@ if(VELLUM_RMLUI_FONTS AND EXISTS "${_vellum_rmlui_test_font}")
 endif()
 add_test(NAME vellum.rmlui.backend COMMAND vellum-rmlui-backend-test)
 
+vellum_rmlui_add_test(vellum-rmlui-image-compare-test image_compare_test.cpp VellumRmlUi::Core)
+add_test(NAME vellum.rmlui.image-compare COMMAND vellum-rmlui-image-compare-test)
+
 vellum_rmlui_add_test(vellum-rmlui-midi-learn-test midi_learn_test.cpp VellumRmlUi::Core)
 target_compile_definitions(vellum-rmlui-midi-learn-test PRIVATE
     VELLUM_RMLUI_MIDI_LEARN_RCSS="${CMAKE_CURRENT_SOURCE_DIR}/../assets/midi-learn.rcss")
