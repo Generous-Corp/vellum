@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -307,6 +309,20 @@ class VerifyExtractionTests(unittest.TestCase):
                 sum(finding["path"].endswith("meter.cpp") for finding in findings), 3
             )
 
+    def test_framework_rejects_renamed_product_edges(self) -> None:
+        # framework/ keeps the mirror-edge rules, in the renamed spelling.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_mirror(root, "framework/core/view/src/meter.cpp",
+                              b"#include <vellum/audio/buffer.hpp>\nauto x = vellum::signal::gain(1.0f);\n")
+            self.write_mirror(root, "framework/core/view/src/host.mm", b"#import <AudioToolbox/AudioToolbox.h>\n")
+            self.write_mirror(root, "framework/core/view/src/clean.cpp", b"#include <vellum/view/view.hpp>\n")
+            findings = verify_extraction.mirror_edge_findings(root, prefix=verify_extraction.FRAMEWORK_ROOT)
+            self.assertEqual({f["path"] for f in findings},
+                             {"framework/core/view/src/meter.cpp", "framework/core/view/src/host.mm"})
+            # The mirror-root scan does not read framework/.
+            self.assertEqual(verify_extraction.mirror_edge_findings(root), [])
+
     def test_pulp_namespace_is_scoped_to_the_mirror_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -371,13 +387,14 @@ class VerifyExtractionTests(unittest.TestCase):
         rule = content_scan_policy.FORBIDDEN_NATIVE_CONTENT_PATTERNS["renamed-mirror-namespace"][0]
         refused = set(re.search(r"vellum\\s\*::\\s\*\(\?:([^)]*)\)", rule).group(1).split("|"))
         census: set[str] = set()
-        for path in (ROOT / "mirror").rglob("*"):
-            if path.is_file() and not path.relative_to(ROOT).as_posix().startswith("mirror/external/"):
+        units = ROOT / ("framework" if (ROOT / "framework").is_dir() else "mirror")
+        for path in units.rglob("*"):
+            if path.is_file() and not path.relative_to(units).as_posix().startswith("external/"):
                 text = path.read_bytes().decode("utf-8", errors="replace")
                 for spelling in ("pulp", "vellum"):
                     census.update(re.findall(rf"namespace\s+{spelling}\s*::\s*(\w+)", text))
                     census.update(re.findall(rf"namespace\s+{spelling}\s*\{{\s*namespace\s+(\w+)", text))
-        census |= {p.name for p in (ROOT / "mirror").glob("core/*/include/*/*")
+        census |= {p.name for p in units.glob("core/*/include/*/*")
                    if p.is_dir() and p.parent.name in {"pulp", "vellum"}}
         native = {p.name for top in ("foundation", "runtime", "graphics", "authoring")
                   for p in (ROOT / top / "include/vellum").glob("*") if p.is_dir()}
@@ -393,6 +410,8 @@ class VerifyExtractionTests(unittest.TestCase):
             "tools/mirror/consumer/direct_main.cpp",
             "tools/mirror/consumer/main.cpp",
             "tools/mirror/consumer/runtime_image_census_main.cpp",
+            "tools/mirror/canvas_provider_anchor.cpp",
+            "tools/mirror/gpu_surface_guard.py",
             "scripts/install_core.py",
             "tools/provenance/content_scan_policy.py",
             "tools/provenance/test_verify_extraction.py",
@@ -400,9 +419,588 @@ class VerifyExtractionTests(unittest.TestCase):
             "tools/provenance/mirror_edge_patterns.json",
             "tools/mirror/verify_mirror_inertness.py",
             "tools/mirror/test_verify_mirror_inertness.py",
+            "tools/mirror/test_rename_mirror_namespace.py",
         })
         self.assertEqual(verify_extraction.RENAMED_MIRROR_SCAN_ROOTS,
                          verify_extraction.EXPECTED_ACTIVE_ROOTS + ("components", "product", "tools", "web"))
+
+    def hide_ci_git_base(self) -> None:
+        # Fixture repositories do not contain the CI's VELLUM_GIT_BASE commit.
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("VELLUM_GIT_BASE", None)
+
+    def git_commit_all(self, root: Path, message: str) -> str:
+        git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t"]
+        if not (root / ".git").exists():
+            subprocess.run(git + ["init", "-q", "-b", "main"], check=True)
+        subprocess.run(git + ["add", "-A"], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", message], check=True)
+        return subprocess.run(git + ["rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+
+    def test_framework_debt_baseline_may_not_rise_from_the_merge_base(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "framework/core/a/src/a.cpp"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"#if PULP_HAS_SKIA\n#endif\n")
+            self.write_framework_debt(root, {"pulp-package-or-target": {"framework/core/a/src/a.cpp": 1}})
+            base = self.git_commit_all(root, "base")
+            subprocess.run(["git", "-C", str(root), "checkout", "-q", "-b", "change"], check=True)
+            os.environ["VELLUM_GIT_BASE"] = base
+            # Control: the base itself passes.
+            self.assertEqual(verify_extraction.framework_debt_errors(root)[0], [])
+            # Adding a macro and raising the baseline with it is refused.
+            source.write_bytes(b"#if PULP_HAS_SKIA && PULP_HAS_DAWN\n#endif\n")
+            self.write_framework_debt(root, {"pulp-package-or-target": {"framework/core/a/src/a.cpp": 2}})
+            self.git_commit_all(root, "raise")
+            errors = verify_extraction.framework_debt_errors(root)[0]
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("the baseline may only fall", errors[0])
+            # So is a new baseline entry for a file the base did not owe.
+            source.write_bytes(b"#if PULP_HAS_SKIA\n#endif\n")
+            (root / "framework/core/a/src/b.cpp").write_bytes(b"// VST3\n")
+            self.write_framework_debt(root, {"pulp-package-or-target": {"framework/core/a/src/a.cpp": 1},
+                                             "audio-plugin-sdk": {"framework/core/a/src/b.cpp": 1}})
+            self.git_commit_all(root, "new entry")
+            self.assertIn("audio-plugin-sdk in framework/core/a/src/b.cpp",
+                          " ".join(verify_extraction.framework_debt_errors(root)[0]))
+            # Lowering it, or dropping the entry, passes.
+            (root / "framework/core/a/src/b.cpp").unlink()
+            source.write_bytes(b"int a;\n")
+            self.write_framework_debt(root, {})
+            self.git_commit_all(root, "retire")
+            self.assertEqual(verify_extraction.framework_debt_errors(root)[0], [])
+
+    def test_framework_debt_counts_generators_and_refuses_undecodable_text(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "framework/tools").mkdir(parents=True)
+            (root / "framework/tools/gen.py").write_bytes(b"NAME = 'PULP_EMBED'\n")
+            self.write_framework_debt(root, {})
+            errors = verify_extraction.framework_debt_errors(root)[0]
+            self.assertEqual([e.split(" in ")[1].split(" is ")[0] for e in errors], ["framework/tools/gen.py"])
+            (root / "framework/tools/gen.py").unlink()
+            (root / "framework/core/a/src").mkdir(parents=True)
+            (root / "framework/core/a/src/bad.cpp").write_bytes(b"int a; // \xff PULP_X\n")
+            errors = verify_extraction.framework_debt_errors(root)[0]
+            self.assertEqual(errors, ["framework name debt: framework/core/a/src/bad.cpp is not UTF-8, "
+                                      "so the ratchet cannot count it"])
+
+    def write_framework_debt(self, root: Path, rules: dict[str, dict[str, int]]) -> None:
+        path = root / verify_extraction.FRAMEWORK_NAME_DEBT
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"schema": "vellum.framework-name-debt.v1", "rules": rules}), encoding="utf-8")
+
+    def test_framework_name_debt_may_only_fall(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "framework/core/a/src/a.cpp"
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b"#if PULP_HAS_SKIA\nint a();\n#endif\n")
+            (root / "framework/external/x").mkdir(parents=True)
+            (root / "framework/external/x/x.c").write_bytes(b"#define PULP_THIRD_PARTY 1\n")
+            self.write_framework_debt(root, {"pulp-package-or-target": {"framework/core/a/src/a.cpp": 1}})
+            errors, totals = verify_extraction.framework_debt_errors(root)
+            self.assertEqual(errors, [])
+            # Control: the baseline's hit is counted, and external/ is not.
+            self.assertEqual(totals["pulp-package-or-target"], 1)
+            # An added PULP_ macro raises the file's count past its baseline.
+            source.write_bytes(b"#if PULP_HAS_SKIA && PULP_HAS_DAWN\nint a();\n#endif\n")
+            errors, _ = verify_extraction.framework_debt_errors(root)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("pulp-package-or-target in framework/core/a/src/a.cpp is 2, baseline 1", errors[0])
+            # So does a new file, and a newly ratcheted rule in an old one.
+            source.write_bytes(b"#if PULP_HAS_SKIA\nint a();\n#endif\n")
+            (root / "framework/core/a/src/b.cpp").write_bytes(b"// VST3 host\n")
+            errors, _ = verify_extraction.framework_debt_errors(root)
+            self.assertEqual([e.split(" in ")[0] for e in errors], ["framework name debt rose: audio-plugin-sdk"])
+            # Falling below the baseline passes.
+            (root / "framework/core/a/src/b.cpp").unlink()
+            source.write_bytes(b"int a();\n")
+            self.assertEqual(verify_extraction.framework_debt_errors(root)[0], [])
+            (root / verify_extraction.FRAMEWORK_NAME_DEBT).write_text("{", encoding="utf-8")
+            self.assertIn("unreadable", verify_extraction.framework_debt_errors(root)[0][0])
+
+    def test_recorded_framework_name_debt_holds_on_this_tree(self) -> None:
+        if not (ROOT / "framework").is_dir():
+            self.skipTest("this checkout has no framework/")
+        errors, totals = verify_extraction.framework_debt_errors(ROOT)
+        self.assertEqual(errors, [])
+        self.assertGreater(totals["pulp-package-or-target"], 0)  # control: the scan reads framework/
+
+    def test_framework_refuses_residual_pulp_spellings_and_unknown_trees(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / "framework/core/a/src").mkdir(parents=True)
+            (root / "framework/core/a/src/a.cpp").write_bytes(b"namespace vellum::a { int x; }\n")
+            (root / "framework/core/a/src/b.cpp").write_bytes(b"#include <pulp/a/a.hpp>\n")
+            self.write_framework_debt(root, {})
+            record = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+            record.parent.mkdir(parents=True)
+            record.write_text(json.dumps({"schema": verify_extraction.FRAMEWORK_TRANSFER_SCHEMA,
+                                          "framework_tree": "f" * 40}), encoding="utf-8")
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main")
+            self.assertEqual(checks["framework_residual_pulp_spellings"], ["framework/core/a/src/b.cpp"])
+            self.assertTrue(any("still spells pulp::" in e for e in errors), errors)
+            self.assertTrue(any("is not a tree in this repository" in e for e in errors), errors)
+            # A real tree with no Pulp checkout fails unless the proof is deferred.
+            subprocess.run(["git", "-C", str(root), "add", "framework"], check=True)
+            tree = subprocess.run(["git", "-C", str(root), "write-tree", "--prefix=framework/"], check=True,
+                                  capture_output=True, text=True).stdout.strip()
+            receipt = root / "provenance/mirror/receipts/r.json"
+            receipt.parent.mkdir(parents=True)
+            receipt.write_text(json.dumps({"pulp_sha": "a" * 40, "mirror_tree": "b" * 40, "files": []}), encoding="utf-8")
+            record.write_text(json.dumps({"schema": verify_extraction.FRAMEWORK_TRANSFER_SCHEMA, "framework_tree": tree,
+                                          "export_receipt": "provenance/mirror/receipts/r.json",
+                                          "pulp_sha": "a" * 40, "mirror_tree": "b" * 40, "records": []}),
+                              encoding="utf-8")
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main")
+            self.assertTrue(any("no Pulp checkout proved the transfer" in e for e in errors), errors)
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertFalse(any("no Pulp checkout" in e for e in errors), errors)
+            self.assertEqual(checks["framework_transfer_proved"], "deferred: no Pulp checkout")
+            # With no history base nothing can say whether the record is landed
+            # or introduced, so the transfer is not judged as either: it fails.
+            self.assertTrue(any("no history base to judge the transfer against" in e for e in errors), errors)
+            (root / "mirror").mkdir()
+            errors, _ = verify_extraction.verify_framework(root, None, "origin/main")
+            self.assertTrue(any("mirror/ and framework/ both exist" in e for e in errors), errors)
+
+    def test_framework_transfer_record_is_immutable_and_confines_external(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "framework/external/x").mkdir(parents=True)
+            (root / "framework/external/x/x.c").write_bytes(b"int x;\n")
+            self.write_framework_debt(root, {})
+            record = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+            record.parent.mkdir(parents=True)
+            body = {"schema": verify_extraction.FRAMEWORK_TRANSFER_SCHEMA, "framework_tree": "f" * 40,
+                    "records": [{"framework_path": "framework/external/x/x.c",
+                                 "framework_git_blob_sha": verify_extraction.git_blob_sha(b"int x;\n")}]}
+            record.write_text(json.dumps(body), encoding="utf-8")
+            base = self.git_commit_all(root, "transfer")
+            subprocess.run(["git", "-C", str(root), "checkout", "-q", "-b", "change"], check=True)
+            os.environ["VELLUM_GIT_BASE"] = base
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            # Control: landed at the base and unchanged, so not an introduction,
+            # and external/ holds only recorded files.
+            self.assertIs(checks["framework_transfer_introduced"], False)
+            self.assertFalse(any("immutable" in e or "external" in e for e in errors), errors)
+            self.assertEqual(checks["framework_external_unrecorded"], [])
+            (root / "framework/external/x/first_party.cpp").write_bytes(b"int y;\n")
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual(checks["framework_external_unrecorded"], ["framework/external/x/first_party.cpp"])
+            (root / "framework/external/x/first_party.cpp").unlink()
+            # Repointing the landed record is refused against the merge base.
+            record.write_text(json.dumps(dict(body, export_receipt="provenance/mirror/receipts/older.json")),
+                              encoding="utf-8")
+            errors, _ = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertTrue(any("changed from the merge base" in e for e in errors), errors)
+
+    def framework_fixture(self, root: Path, files: dict[str, bytes]) -> None:
+        for relative, data in files.items():
+            (root / relative).parent.mkdir(parents=True, exist_ok=True)
+            (root / relative).write_bytes(data)
+        self.write_framework_debt(root, {})
+        record = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps({"schema": verify_extraction.FRAMEWORK_TRANSFER_SCHEMA, "framework_tree": "f" * 40,
+                                      "records": [{"framework_path": p} for p in files if p.startswith("framework/")]}),
+                          encoding="utf-8")
+        self.track(root)
+
+    def track(self, root: Path) -> None:
+        # The census reads tracked files only; the fixture's files are staged.
+        if not (root / ".git").exists():
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+
+    def test_framework_file_set_is_the_transfer_records(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            _, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual((checks["framework_unrecorded_files"], checks["framework_missing_files"]), ([], []))
+            (root / "framework/core/a/src/new.cpp").write_bytes(b"int n;\n")
+            (root / "framework/core/a/src/a.cpp").unlink()
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual(checks["framework_unrecorded_files"], ["framework/core/a/src/new.cpp"])
+            self.assertEqual(checks["framework_missing_files"], ["framework/core/a/src/a.cpp"])
+            self.assertTrue(any("does not list" in e for e in errors) and any("is missing" in e for e in errors))
+
+    def test_framework_collision_census_refuses_a_native_redeclaration(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.framework_fixture(root, {
+                "framework/core/runtime/include/vellum/runtime/log.hpp":
+                    b"#pragma once\nnamespace vellum::runtime {\nclass Logger;\nvoid log_line(int level);\n}\n",
+                "runtime/include/vellum/runtime/kernel.hpp":
+                    b"#pragma once\nnamespace vellum::runtime {\nclass Kernel;\n}\n",
+            })
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            census = checks["framework_collision_census"]
+            # Control: both sides are seen, and nothing collides yet.
+            self.assertGreater(census["declarations"]["mirror"], 0)
+            self.assertGreater(census["declarations"]["native"], 0)
+            self.assertFalse(any("collision census" in e for e in errors), errors)
+            # A native declaration of a framework/ name is refused.
+            # An untracked tree (CI checks Pulp out at .mirror-pulp inside the
+            # checkout) is not Vellum source: its copy collides with nothing.
+            stray = root / ".mirror-pulp/core/runtime/include/pulp/runtime/log.hpp"
+            stray.parent.mkdir(parents=True)
+            stray.write_bytes(b"#pragma once\nnamespace vellum::runtime {\nclass Logger;\n}\n")
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual(checks["framework_collision_census"]["name_collisions"], 0)
+            self.assertFalse(any("collision census" in e for e in errors), errors)
+            # The same declaration in a tracked native file is refused.
+            (root / "runtime/include/vellum/runtime/kernel.hpp").write_bytes(
+                b"#pragma once\nnamespace vellum::runtime {\nclass Kernel;\nclass Logger;\n}\n")
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual(checks["framework_collision_census"]["name_collisions"], 1)
+            self.assertTrue(any("framework collision census: 1 name collisions" in e for e in errors), errors)
+
+    def test_framework_census_reads_every_tracked_native_file(self) -> None:
+        # The census must see a tracked second copy wherever it sits: under
+        # each directory name the pinned helper's own walk skips, and under a
+        # build* component (here also git-ignored, so it is force-added).
+        self.hide_ci_git_base()
+        helper = verify_extraction.load_rename_tool().collisions
+        unit = (b"#pragma once\nnamespace vellum::runtime {\nclass Logger;\nvoid log_line(int level);\n}\n")
+        names = sorted(helper.SKIP_DIRS - {".git"}) + ["build-plant", "builders"]
+        self.assertGreater(len(names), 2)  # control: the helper's list was read
+        for name in names:
+            with self.subTest(directory=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.framework_fixture(root, {"framework/core/runtime/include/vellum/runtime/log.hpp": unit})
+                (root / ".gitignore").write_text("build*/\n", encoding="utf-8")
+                copy = root / "runtime" / name / "zz_dup.hpp"
+                copy.parent.mkdir(parents=True)
+                copy.write_bytes(b"#pragma once\nnamespace vellum::runtime {\nclass Logger;\n}\n")
+                subprocess.run(["git", "-C", str(root), "add", "-f", "-A"], check=True)
+                errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+                self.assertEqual(checks["framework_collision_census"]["name_collisions"], 1)
+                self.assertTrue(any("framework collision census: 1 name collisions" in e for e in errors), errors)
+        # .git cannot hold a tracked file: git declines to add a path under it,
+        # so there is no tracked copy there for the census to miss.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / "runtime/.git").mkdir(parents=True)
+            (root / "runtime/.git/zz.hpp").write_text("int x;\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(root), "add", "-f", "runtime/.git/zz.hpp"],
+                           capture_output=True, check=False)
+            listed = subprocess.run(["git", "-C", str(root), "ls-files"], capture_output=True, text=True, check=True)
+            self.assertEqual(listed.stdout, "")
+
+    def test_framework_census_quarantines_a_byte_copy_under_build(self) -> None:
+        self.hide_ci_git_base()
+        unit = b"#pragma once\nnamespace vellum::runtime {\nclass SpscQueue;\n}\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.framework_fixture(root, {"framework/core/runtime/include/vellum/runtime/spsc_queue.hpp": unit})
+            (root / ".gitignore").write_text("build*/\n", encoding="utf-8")
+            (root / "build-plant/runtime").mkdir(parents=True)
+            (root / "build-plant/runtime/spsc_queue.hpp").write_bytes(unit)
+            subprocess.run(["git", "-C", str(root), "add", "-f", "-A"], check=True)
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            census = checks["framework_collision_census"]
+            self.assertEqual(census["blob_quarantine"], 1)
+            self.assertTrue(any("blob quarantine" in e for e in errors), errors)
+
+    EXTERNAL = "framework/external/lib/lib.h"
+    EXTERNAL_BYTES = b"/* third-party */\nint lib(void);\n"
+
+    def external_fixture(self, root: Path) -> dict[str, str]:
+        (root / self.EXTERNAL).parent.mkdir(parents=True)
+        (root / self.EXTERNAL).write_bytes(self.EXTERNAL_BYTES)
+        return {self.EXTERNAL: verify_extraction.git_blob_sha(self.EXTERNAL_BYTES)}
+
+    def write_updates(self, root: Path, entries) -> None:
+        target = root / verify_extraction.FRAMEWORK_EXTERNAL_UPDATES
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(entries), encoding="utf-8")
+
+    def update(self, path: str, before: bytes, after: bytes) -> dict[str, str]:
+        return {"path": path, "from_blob": verify_extraction.git_blob_sha(before),
+                "to_blob": verify_extraction.git_blob_sha(after), "reason": "security fix",
+                "dependency": "lib", "version": "1.2.4"}
+
+    def test_framework_external_files_are_pinned_to_their_blobs(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            recorded = self.external_fixture(root)
+            # An unmodified file passes.
+            self.assertEqual(verify_extraction.framework_external_errors(root, recorded)[0], [])
+            # An in-place edit with no update entry is refused.
+            smuggled = self.EXTERNAL_BYTES + b"int lib_v2(void);\n"  # an edit; clean bytes
+            (root / self.EXTERNAL).write_bytes(smuggled)
+            errors, checks = verify_extraction.framework_external_errors(root, recorded)
+            self.assertEqual(checks["framework_external_edited"], [self.EXTERNAL])
+            self.assertTrue(any("only through the dependency process" in e for e in errors), errors)
+            # A matching entry makes the same bytes a reviewed update.
+            self.write_updates(root, [self.update(self.EXTERNAL, self.EXTERNAL_BYTES, smuggled)])
+            self.assertEqual(verify_extraction.framework_external_errors(root, recorded)[0], [])
+            # An entry whose to_blob is not the file is refused.
+            self.write_updates(root, [self.update(self.EXTERNAL, self.EXTERNAL_BYTES, b"other\n")])
+            self.assertTrue(any("differ from their pinned blobs" in e for e in verify_extraction.framework_external_errors(root, recorded)[0]))
+            # A broken chain is refused.
+            self.write_updates(root, [self.update(self.EXTERNAL, b"not the recorded bytes\n", smuggled)])
+            self.assertTrue(any("breaks the chain" in e for e in verify_extraction.framework_external_errors(root, recorded)[0]))
+            # A chain of two updates resolves to the last to_blob.
+            later = smuggled + b"// 1.2.5\n"
+            (root / self.EXTERNAL).write_bytes(later)
+            self.write_updates(root, [self.update(self.EXTERNAL, self.EXTERNAL_BYTES, smuggled),
+                                      self.update(self.EXTERNAL, smuggled, later)])
+            self.assertEqual(verify_extraction.framework_external_errors(root, recorded)[0], [])
+            # An entry for a path the transfer record does not list is refused.
+            self.write_updates(root, [self.update("framework/external/lib/new.h", b"a", b"b")])
+            self.assertTrue(any("is not a framework/external/ file the transfer record lists" in e
+                                for e in verify_extraction.framework_external_errors(root, recorded)[0]))
+            # Malformed lists and entries fail closed.
+            for bad in ("{", json.dumps({"path": self.EXTERNAL}), json.dumps([{"path": self.EXTERNAL}])):
+                (root / verify_extraction.FRAMEWORK_EXTERNAL_UPDATES).write_text(bad, encoding="utf-8")
+                self.assertTrue(verify_extraction.framework_external_errors(root, recorded)[0], bad)
+
+    def test_framework_external_updates_are_append_only(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            recorded = self.external_fixture(root)
+            first = self.EXTERNAL_BYTES + b"// 1.2.4\n"
+            (root / self.EXTERNAL).write_bytes(first)
+            entry = self.update(self.EXTERNAL, self.EXTERNAL_BYTES, first)
+            self.write_updates(root, [entry])
+            base = self.git_commit_all(root, "land an update")
+            subprocess.run(["git", "-C", str(root), "checkout", "-q", "-b", "change"], check=True)
+            os.environ["VELLUM_GIT_BASE"] = base
+            self.assertEqual(verify_extraction.framework_external_errors(root, recorded)[0], [])  # control
+            # Appending passes.
+            second = first + b"// 1.2.5\n"
+            (root / self.EXTERNAL).write_bytes(second)
+            self.write_updates(root, [entry, self.update(self.EXTERNAL, first, second)])
+            self.git_commit_all(root, "append")
+            self.assertEqual(verify_extraction.framework_external_errors(root, recorded)[0], [])
+            # Editing the landed entry, or removing it, is refused.
+            (root / self.EXTERNAL).write_bytes(first)
+            self.write_updates(root, [dict(entry, reason="rewritten")])
+            self.git_commit_all(root, "edit")
+            self.assertTrue(any("append-only" in e for e in verify_extraction.framework_external_errors(root, recorded)[0]))
+            (root / self.EXTERNAL).write_bytes(self.EXTERNAL_BYTES)
+            self.write_updates(root, [])
+            self.git_commit_all(root, "remove")
+            self.assertTrue(any("append-only" in e for e in verify_extraction.framework_external_errors(root, recorded)[0]))
+
+    def test_verify_framework_refuses_an_in_place_external_edit(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n",
+                                          self.EXTERNAL: self.EXTERNAL_BYTES})
+            record = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+            value = json.loads(record.read_text(encoding="utf-8"))
+            for row in value["records"]:
+                row["framework_git_blob_sha"] = verify_extraction.git_blob_sha((root / row["framework_path"]).read_bytes())
+            record.write_text(json.dumps(value), encoding="utf-8")
+            _, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual(checks["framework_external_edited"], [])
+            (root / self.EXTERNAL).write_bytes(self.EXTERNAL_BYTES + b"#define PULP_SMUGGLED 1\n")
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual(checks["framework_external_edited"], [self.EXTERNAL])
+            self.assertTrue(any("only through the dependency process" in e for e in errors), errors)
+            # An unrecorded external file is still refused, as before.
+            (root / "framework/external/lib/extra.h").write_bytes(b"int extra;\n")
+            _, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual(checks["framework_external_unrecorded"], ["framework/external/lib/extra.h"])
+
+    HTTPLIB = "framework/external/cpp-httplib/httplib.h"
+    HTTPLIB_BYTES = b"// cpp-httplib\nnamespace httplib {\nclass Client;\n}\n"
+    SPSC = "framework/core/runtime/include/vellum/runtime/spsc_queue.hpp"
+    SPSC_BYTES = b"#pragma once\nnamespace vellum::runtime {\nclass SpscQueue;\n}\n"
+
+    def updated_external_fixture(self, root: Path, updated: bytes) -> list[str]:
+        """framework/ with a runtime header and a third-party file updated through a well-formed entry."""
+        self.framework_fixture(root, {self.SPSC: self.SPSC_BYTES, self.HTTPLIB: self.HTTPLIB_BYTES,
+                                      "runtime/include/vellum/runtime/kernel.hpp":
+                                          b"#pragma once\nnamespace vellum::runtime {\nclass Kernel;\n}\n"})
+        record = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+        value = json.loads(record.read_text(encoding="utf-8"))
+        for row in value["records"]:
+            row["framework_git_blob_sha"] = verify_extraction.git_blob_sha((root / row["framework_path"]).read_bytes())
+        record.write_text(json.dumps(value), encoding="utf-8")
+        (root / self.HTTPLIB).write_bytes(updated)
+        self.write_updates(root, [self.update(self.HTTPLIB, self.HTTPLIB_BYTES, updated)])
+        self.track(root)
+        errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+        return errors, checks
+
+    def test_the_laundering_plant_through_an_update_entry_is_refused(self) -> None:
+        self.hide_ci_git_base()
+        plant = (self.HTTPLIB_BYTES + b"namespace vellum::runtime { class SpscQueue { int x; }; }\n"
+                 b"#define PULP_SMUGGLED 1\n")
+        with tempfile.TemporaryDirectory() as temporary:
+            errors, checks = self.updated_external_fixture(Path(temporary), plant)
+            self.assertEqual(checks["framework_external_updated"], [self.HTTPLIB])
+            self.assertEqual(checks["framework_external_edited"], [])  # the entry itself is well formed
+            self.assertTrue(any("declares or names the vellum namespace" in e for e in errors), errors)
+            self.assertTrue(any("carries pulp-package-or-target spellings" in e for e in errors), errors)
+            # The updated file is native to the census: its SpscQueue collides.
+            self.assertEqual(checks["framework_collision_census"]["name_collisions"], 1)
+
+    def test_an_updated_external_file_is_a_native_byte_copy_too(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            # An "update" that replaces the file with a framework/ file's bytes.
+            errors, checks = self.updated_external_fixture(Path(temporary), self.SPSC_BYTES)
+            self.assertEqual(checks["framework_collision_census"]["blob_quarantine"], 1)
+
+    def test_an_updated_external_file_carrying_a_plugin_sdk_name_is_refused(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            errors, _ = self.updated_external_fixture(
+                Path(temporary), self.HTTPLIB_BYTES + b"// works as a VST3 host helper\n")
+            self.assertTrue(any("carries audio-plugin-sdk spellings" in e for e in errors), errors)
+
+    def test_a_clean_third_party_update_passes(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            errors, checks = self.updated_external_fixture(
+                Path(temporary), self.HTTPLIB_BYTES + b"namespace httplib {\nclass Server;\n}\n")
+            self.assertEqual(checks["framework_external_updated"], [self.HTTPLIB])
+            self.assertEqual([e for e in errors if "external" in e or "census" in e], [], errors)
+            census = checks["framework_collision_census"]
+            self.assertEqual((census["name_collisions"], census["macro_collisions"], census["blob_quarantine"]),
+                             (0, 0, 0))
+
+    def introduce_transfer(self, root: Path) -> tuple[str, dict]:
+        """A base with a mirror export, and a change that introduces its rename as the landed tool makes it."""
+        files = {
+            "mirror/core/a/include/pulp/a/a.hpp": b"#pragma once\nnamespace pulp::a {\nint f();\n}\n",
+            "mirror/core/a/src/a.cpp": b"#include <pulp/a/a.hpp>\n#if PULP_HAS_A\n#endif\n"
+                                       b"namespace pulp::a {\nint f() { return 1; }\n}\n",
+        }
+        for relative, data in files.items():
+            (root / relative).parent.mkdir(parents=True, exist_ok=True)
+            (root / relative).write_bytes(data)
+        receipt = {"pulp_repository": "Generous-Corp/pulp", "pulp_sha": "a" * 40,
+                   "files": [{"pulp_path": p.removeprefix("mirror/"), "blob": verify_extraction.git_blob_sha(d)}
+                             for p, d in files.items()]}
+        (root / "provenance/mirror/receipts").mkdir(parents=True)
+        (root / "provenance/mirror/receipts/r.json").write_text(json.dumps(receipt), encoding="utf-8")
+        (root / "provenance/mirror/receipts/index.json").write_text(
+            json.dumps({"receipts": ["provenance/mirror/receipts/r.json"]}), encoding="utf-8")
+        base = self.git_commit_all(root, "base: the mirror export")
+        subprocess.run(["git", "-C", str(root), "checkout", "-q", "-b", "transfer"], check=True)
+        with tempfile.TemporaryDirectory() as scratch:
+            derived = verify_extraction.derive_framework_transfer(root, base, Path(scratch))
+            shutil.copytree(derived["framework"], root / "framework")
+        subprocess.run(["git", "-C", str(root), "rm", "-q", "-r", "mirror"], check=True)
+        subprocess.run(["git", "-C", str(root), "add", "framework"], check=True)
+        tree = subprocess.run(["git", "-C", str(root), "write-tree", "--prefix=framework/"], check=True,
+                              capture_output=True, text=True).stdout.strip()
+        record = dict(derived["record"], framework_tree=tree)
+        target = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        counts, _ = verify_extraction.framework_name_debt(root)
+        self.write_framework_debt(root, {rule: files for rule, files in counts.items() if files})
+        self.git_commit_all(root, "introduce the transfer")
+        return base, record
+
+    def test_introducing_the_transfer_is_judged_by_the_landed_rules(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base, record = self.introduce_transfer(root)
+            # Control: the honest introduction passes, and the derivation saw
+            # the rename (a renamed include path) and a debt hit.
+            self.assertEqual(verify_extraction.framework_introduction_errors(root, base, record), [])
+            self.assertIn("framework/core/a/include/vellum/a/a.hpp", {r["framework_path"] for r in record["records"]})
+            self.assertTrue(json.loads((root / verify_extraction.FRAMEWORK_NAME_DEBT).read_text())["rules"])
+            os.environ["VELLUM_GIT_BASE"] = base
+            _, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertIs(checks["framework_transfer_introduced"], True)
+            self.assertEqual(checks["framework_introduction_errors"], [])
+
+    def test_an_introduction_that_edits_a_rule_file_is_refused(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base, record = self.introduce_transfer(root)
+            (root / "tools/mirror").mkdir(parents=True)
+            (root / "tools/mirror/rename_mirror_namespace.py").write_text("# looser\n", encoding="utf-8")
+            self.git_commit_all(root, "edit a rule")
+            errors = verify_extraction.framework_introduction_errors(root, base, record)
+            self.assertTrue(any("edits the rules that judge it" in e for e in errors), errors)
+
+    def test_an_introduced_tree_that_is_not_the_tool_output_is_refused(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base, record = self.introduce_transfer(root)
+            target = root / "framework/core/a/src/a.cpp"
+            target.write_bytes(target.read_bytes() + b"// smuggled\n")
+            self.git_commit_all(root, "edit the transferred tree")
+            errors = verify_extraction.framework_introduction_errors(root, base, record)
+            self.assertTrue(any("is not the landed rename tool's output" in e for e in errors), errors)
+
+    def test_an_introduced_record_that_is_not_derived_is_refused(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base, record = self.introduce_transfer(root)
+            for key, value in (("pulp_sha", "b" * 40), ("export_receipt", "provenance/mirror/receipts/x.json"),
+                               ("framework_tree", "f" * 40)):
+                with self.subTest(key=key):
+                    errors = verify_extraction.framework_introduction_errors(root, base, dict(record, **{key: value}))
+                    self.assertTrue(any(f"{key} is not the one the landed rename derives" in e for e in errors), errors)
+            edited = json.loads(json.dumps(record))
+            edited["records"][0]["pulp_git_blob_sha"] = "0" * 40
+            errors = verify_extraction.framework_introduction_errors(root, base, edited)
+            self.assertTrue(any("records is not the one" in e for e in errors), errors)
+            edited = json.loads(json.dumps(record))
+            edited["rename"]["tool_git_blob"] = "0" * 40
+            errors = verify_extraction.framework_introduction_errors(root, base, edited)
+            self.assertTrue(any("rename is not the one" in e for e in errors), errors)
+            # The interpreter version is a note, not part of the rename.
+            edited = json.loads(json.dumps(record))
+            edited["rename"]["python"] = "2.7"
+            self.assertEqual(verify_extraction.framework_introduction_errors(root, base, edited), [])
+
+    def test_an_introduced_baseline_must_equal_the_counts(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base, record = self.introduce_transfer(root)
+            path = root / verify_extraction.FRAMEWORK_NAME_DEBT
+            value = json.loads(path.read_text(encoding="utf-8"))
+            rule, files = next(iter(value["rules"].items()))
+            name = next(iter(files))
+            files[name] += 1  # a looser baseline than the tree needs
+            path.write_text(json.dumps(value), encoding="utf-8")
+            self.git_commit_all(root, "loosen the baseline")
+            errors = verify_extraction.framework_introduction_errors(root, base, record)
+            self.assertTrue(any("is not the transferred tree's counts" in e for e in errors), errors)
+
+    def test_no_framework_is_a_clean_no_op(self) -> None:
+        # Today's main: mirror/ and no framework/ or transfer record.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "mirror/core/a/src").mkdir(parents=True)
+            (root / "mirror/core/a/src/a.cpp").write_bytes(b"namespace pulp::a { int x; }\n")
+            with mock.patch.object(verify_extraction, "load_rename_tool", side_effect=AssertionError("not read")):
+                errors, checks = verify_extraction.verify_framework(root, None, "origin/main")
+            self.assertEqual((errors, checks), ([], {"framework": "absent"}))
 
     def test_symlinks_in_native_trees_are_refused(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -706,7 +1304,9 @@ class VerifyExtractionTests(unittest.TestCase):
                 (clone / "provenance/mirror/receipts/index.json").read_text(encoding="utf-8")
             )["receipts"]
             forged_export_error = (
-                f"mirror export: {landed[-1]}: HEAD:mirror is not the newest receipt's mirror tree"
+                f"mirror export: {landed[-1]}: mirror/ still exists at HEAD after the framework transfer"
+                if (clone / verify_extraction.FRAMEWORK_TRANSFER_RECORD).is_file()
+                else f"mirror export: {landed[-1]}: HEAD:mirror is not the newest receipt's mirror tree"
                 if landed
                 else "mirror export: mirror/ exists at HEAD without an export receipt"
             )
@@ -976,7 +1576,9 @@ class VerifyExtractionTests(unittest.TestCase):
             # refuses something in today's mirror the vendored table admits.
             pulp = root / "pulp"
             export_table = json.loads(json.dumps(table))
-            export_table["content_patterns"]["mirror-pulp-kept-include"] = r"#\s*include\s*<pulp/"
+            # Today's units spell vellum once transferred to framework/.
+            spelling = "vellum" if (MODULE_PATH.parents[2] / "framework").is_dir() else "pulp"
+            export_table["content_patterns"]["mirror-pulp-kept-include"] = rf"#\s*include\s*<{spelling}/"
             (pulp / verify_extraction.PULP_MIRROR_EDGE_TABLE).parent.mkdir(parents=True)
             (pulp / verify_extraction.PULP_MIRROR_EDGE_TABLE).write_text(json.dumps(export_table), encoding="utf-8")
             with mock.patch.object(verify_extraction, "mirror_edge_table_drift", return_value=[]), \
@@ -1204,6 +1806,29 @@ class RendererPinTests(unittest.TestCase):
         errors, rows = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [stale])
         self.assertEqual(len(errors), 1)
         self.assertIn("0 landed receipts name HEAD:mirror", errors[0])
+
+    def test_transferred_receipt_is_current_after_mirror_is_gone(self) -> None:
+        old_tree = self.commit_mirror(b"old\n")
+        older = self.landed("older", self.pulp_commit(self.other_milestone()), old_tree)
+        new_tree = self.commit_mirror(b"new\n")
+        newest = self.landed("newest", self.pulp_commit(self.matching_pin), new_tree)
+        git = ["git", "-C", str(self.root), "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run(git + ["rm", "-q", "-r", "mirror"], check=True)
+        subprocess.run(git + ["commit", "-q", "-m", "transfer"], check=True)
+        # No transfer record: nothing names the current receipt.
+        errors, _ = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
+        self.assertIn("HEAD has no mirror/ tree", errors[0])
+        record = self.root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps({"export_receipt": newest, "mirror_tree": new_tree}), encoding="utf-8")
+        errors, rows = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
+        self.assertEqual(errors, [])
+        self.assertEqual({row["receipt"]: row["matches_lock"] for row in rows}, {newest: True, older: None})
+        # The record must name a landed receipt.
+        record.write_text(json.dumps({"export_receipt": "provenance/mirror/receipts/x.json",
+                                      "mirror_tree": new_tree}), encoding="utf-8")
+        errors, _ = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
+        self.assertIn("which is not a landed receipt", errors[0])
 
 
 if __name__ == "__main__":
