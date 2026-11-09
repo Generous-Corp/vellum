@@ -2,15 +2,15 @@
 #include <cstring>
 #include <mach-o/dyld.h>
 
-#include <vellum/canvas/canvas.hpp>
+#include <pulp/canvas/canvas.hpp>
 
 int main() {
     void* const frontend = dlopen("@rpath/libvellum-mirror-canvas.dylib", RTLD_NOW | RTLD_GLOBAL);
     if (frontend == nullptr)
         return 2;
 
-    using FromHsv = vellum::canvas::Color (*)(vellum::canvas::Color::HSV, float);
-    constexpr char symbol[] = "_ZN6vellum6canvas5Color8from_hsvENS1_3HSVEf";
+    using FromHsv = pulp::canvas::Color (*)(pulp::canvas::Color::HSV, float);
+    constexpr char symbol[] = "_ZN4pulp6canvas5Color8from_hsvENS1_3HSVEf";
     const char* provider_path = nullptr;
     for (uint32_t i = 0; i < _dyld_image_count(); ++i) {
         const char* const image = _dyld_get_image_name(i);

@@ -166,11 +166,8 @@ def compare(pulp_build: Path, vellum_build: Path, vellum_root: Path) -> dict[str
 
     pulp_paths, vellum_paths = paths(pulp_build), paths(vellum_build)
     pulp, pulp_targets = reduced(pulp_build, Normalizer(pulp_paths["source"], pulp_paths["build"]), targets)
-    # The packaged units' root: framework/ after the 8b transfer, whose
-    # compiled sources keep the export's paths (only include/pulp/ renames).
-    units = "framework/" if (vellum_root / "provenance/framework/transfer.json").is_file() else "mirror/"
     vellum, vellum_targets = reduced(
-        vellum_build, Normalizer(vellum_paths["source"], vellum_paths["build"], units), targets)
+        vellum_build, Normalizer(vellum_paths["source"], vellum_paths["build"], "mirror/"), targets)
     if pulp_targets != targets or vellum_targets != targets:
         raise Unusable(f"targets missing from a codemodel: Pulp {sorted(targets - pulp_targets)}, "
                        f"Vellum {sorted(targets - vellum_targets)}")

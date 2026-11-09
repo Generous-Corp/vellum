@@ -217,10 +217,9 @@ def check_no_other_copies(root: Path, lock: dict, problems: list[str]) -> None:
     for relative in tracked_files(root):
         if relative in allowed or any(fnmatch.fnmatch(relative, pattern) for pattern in EVIDENCE):
             continue
-        if relative.startswith(("mirror/", "framework/")):
-            # The mirror, and framework/ that it became, are Pulp's source,
-            # verified byte for byte by the export receipts and the transfer
-            # record; they pin no renderer digest of their own.
+        if relative.startswith("mirror/"):
+            # The mirror is Pulp's source, verified byte for byte by its own
+            # export receipts; it pins no renderer digest of its own.
             continue
         try:
             text = (root / relative).read_text(encoding="utf-8")
