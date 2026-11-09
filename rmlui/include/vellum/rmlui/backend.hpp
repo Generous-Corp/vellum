@@ -212,6 +212,11 @@ class VELLUM_RMLUI_API Backend {
     Status process_key_down(int key_identifier, int key_modifier_state = 0);
     Status process_key_up(int key_identifier, int key_modifier_state = 0);
     Status process_text_input(std::string_view text);
+    // Sets or clears a class on the loaded document's element with this id,
+    // so the change restyles at the next render. not_open before a document
+    // loads; rejected for an unknown id, or an empty or whitespace-containing
+    // class name.
+    Status set_element_class(std::string_view element_id, std::string_view class_name, bool on);
     [[nodiscard]] bool mouse_interacting() const noexcept;
     // Installs, or with an empty function removes, this Backend's log sink. It
     // stays in effect across close() and open(). Installing a sink never hides

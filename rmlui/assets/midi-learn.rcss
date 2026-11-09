@@ -1,0 +1,16 @@
+/* MIDI Learn states for parameter controls, set by vellum::rmlui::MidiLearnBridge.
+   Give each learnable control the class midi-learn-control: it reserves a
+   transparent 2px border, and the states only colour it, so a state change
+   never moves anything. Override these by declaring rules after this sheet. */
+.midi-learn-control {
+    border: 2px transparent;
+}
+.midi-learn-mapped {
+    border-color: #4a90e2;
+}
+.midi-learn-listening {
+    border-color: #f5a623;
+}
+.midi-learn-bound {
+    border-color: #7ed321;
+}

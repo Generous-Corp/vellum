@@ -193,7 +193,7 @@ jobs:
             --pulp-target "$RECONCILE_TARGET" \
             --vellum-target "$(git rev-parse HEAD)" \
             --now "$now" \
-            --write \
+            --write --include-main-commits \
             --output "$RUNNER_TEMP/receiver-reconcile.json"
           python3 tools/provenance/observatory.py verify \
             --pulp-repo .receiver-pulp \

@@ -2,6 +2,7 @@
 // Rml::RenderInterface: compiled geometry, clip masks, transforms, layers,
 // filters and shaders all arrive, where the sealed Core path flattens them to
 // geometry draws (see core_flattening_test.cpp for that control).
+#include <vellum/rmlui/midi_learn_native.hpp>
 #include <vellum/rmlui/native.hpp>
 
 #include "test_support.hpp"
@@ -268,11 +269,33 @@ void test_debugger_attaches_and_detaches_with_its_context() {
 
 } // namespace
 
+void test_midi_learn_native_class_sink() {
+    MapAssets assets;
+    assets.add("plain.rml", kPlainDocument);
+    CountingRenderer renderer;
+    NativeContext native(assets, renderer);
+    NativeClassSink sink(native);
+    VELLUM_RMLUI_CHECK(sink.set_class("box", "midi-learn-mapped", true) == Status::not_open);
+    VELLUM_RMLUI_CHECK(native.open(32, 32) == Status::ok);
+    VELLUM_RMLUI_CHECK(native.load_document("plain.rml") == Status::ok);
+    Rml::Element* box = native.document()->GetElementById("box");
+    VELLUM_RMLUI_CHECK(box != nullptr);
+    VELLUM_RMLUI_CHECK(sink.set_class("box", "midi-learn-mapped", true) == Status::ok);
+    VELLUM_RMLUI_CHECK(box->IsClassSet("midi-learn-mapped"));
+    VELLUM_RMLUI_CHECK(sink.set_class("box", "midi-learn-mapped", false) == Status::ok);
+    VELLUM_RMLUI_CHECK(!box->IsClassSet("midi-learn-mapped"));
+    VELLUM_RMLUI_CHECK(sink.set_class("missing", "midi-learn-mapped", true) == Status::rejected);
+    VELLUM_RMLUI_CHECK(sink.set_class("box", "", true) == Status::rejected);
+    VELLUM_RMLUI_CHECK(sink.set_class("box", "a b", true) == Status::rejected);
+    native.close();
+}
+
 int main() {
     test_every_render_call_reaches_the_callers_renderer();
     test_plain_document_uses_no_layer_features();
     test_linked_assets_resolve_per_instance();
     test_scope_routes_direct_rmlui_calls();
     test_debugger_attaches_and_detaches_with_its_context();
+    test_midi_learn_native_class_sink();
     return 0;
 }
