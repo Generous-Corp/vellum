@@ -1,5 +1,6 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
 #include <vellum/graphics/capture_stats.hpp>
+#include <vellum/graphics/damage.hpp>
 #include <vellum/graphics/dawn_bootstrap.hpp>
 #include <vellum/graphics/paint_command.hpp>
 
@@ -20,6 +21,7 @@
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkPaint.h"
+#include "include/core/SkSamplingOptions.h"
 #include "include/core/SkPixmap.h"
 #include "include/core/SkRRect.h"
 #include "include/core/SkStream.h"
@@ -62,6 +64,7 @@
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace vellum::graphics {
 namespace {
@@ -395,8 +398,14 @@ SkRect layer_rect(const Rect& rect) {
     return SkRect::MakeXYWH(rect.x, rect.y, rect.width, rect.height).makeOutset(1.0F, 1.0F);
 }
 
+struct ParagraphSlot final {
+    std::unique_ptr<skia::textlayout::Paragraph> paragraph;
+    TextMetrics metrics;
+};
+
 bool draw_text(SkCanvas& canvas, const PaintCommand& command, float opacity,
-               float layer_opacity, std::string_view directory, std::string* error) {
+               float layer_opacity, std::string_view directory, ParagraphSlot* slot,
+               std::string* error) {
     std::vector<TextRun> runs = command.text_runs;
     if (runs.empty() && !command.text.empty()) {
         runs.push_back({
@@ -413,11 +422,14 @@ bool draw_text(SkCanvas& canvas, const PaintCommand& command, float opacity,
         });
     }
     for (auto& run : runs) run.style.color.alpha *= opacity;
-    std::unique_ptr<skia::textlayout::Paragraph> paragraph;
-    TextMetrics metrics;
-    if (!build_text_paragraph(runs, directory, paragraph, metrics, error)) {
+    ParagraphSlot built;
+    ParagraphSlot& cached = slot != nullptr ? *slot : built;
+    if (!cached.paragraph &&
+        !build_text_paragraph(runs, directory, cached.paragraph, cached.metrics, error)) {
         return false;
     }
+    auto& paragraph = cached.paragraph;
+    const auto& metrics = cached.metrics;
     if (layer_opacity < 1.0F) {
         const float overhang = command.font_size;
         const auto extent = SkRect::MakeXYWH(
@@ -570,7 +582,7 @@ bool opacity_folds_into_paint(const PaintCommand& command) {
 
 bool paint_command(SkCanvas& canvas, const PaintCommand& command,
                    std::string_view directory, MeshTextureCache& meshes,
-                   std::string* error) {
+                   std::string* error, ParagraphSlot* paragraph = nullptr) {
     if (command.kind == PaintCommand::Kind::begin_layer) {
         const float alpha = std::clamp(command.opacity, 0.0F, 1.0F);
         if (command.layer_unbounded) {
@@ -608,19 +620,121 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
         drawn = draw_rectangle(canvas, command, paint_opacity, error);
     } else {
         drawn = draw_text(canvas, command, paint_opacity, layered ? opacity : 1.0F,
-                          directory, error);
+                          directory, paragraph, error);
     }
     canvas.restoreToCount(saved);
     return drawn;
 }
 
+using Extent = std::optional<PixelRect>;
+
+constexpr std::int32_t kExtentMargin = 2;
+
+Extent pixel_extent(const std::optional<Rect>& painted, float scale) {
+    if (!painted) return PixelRect{};
+    const auto pixels = to_pixel_rect(*painted, scale);
+    if (!pixels) return std::nullopt;
+    if (pixels->empty()) return PixelRect{};
+    return PixelRect{pixels->left - kExtentMargin, pixels->top - kExtentMargin,
+                     pixels->right + kExtentMargin, pixels->bottom + kExtentMargin};
+}
+
+bool sane_box(const Rect& rect) {
+    return std::isfinite(rect.x) && std::isfinite(rect.y) &&
+        std::isfinite(rect.width) && std::isfinite(rect.height) &&
+        rect.width >= 0.0F && rect.height >= 0.0F;
+}
+
+Extent command_extent(const PaintCommand& command, const Rect& frame, float scale) {
+    static const DamagePropagation propagation;
+    if (!sane_box(command.bounds)) return std::nullopt;
+    SceneNode painted;
+    painted.bounds = command.bounds;
+    switch (command.kind) {
+        case PaintCommand::Kind::rectangle:
+            painted.kind = SceneNode::Kind::rectangle;
+            painted.box_shadows = command.box_shadows;
+            break;
+        case PaintCommand::Kind::text:
+            painted.kind = SceneNode::Kind::text;
+            painted.text = command.text;
+            painted.text_runs = command.text_runs;
+            painted.font_size = command.font_size;
+            break;
+        case PaintCommand::Kind::mesh:
+            painted.kind = SceneNode::Kind::mesh;
+            painted.mesh = command.mesh;
+            break;
+        case PaintCommand::Kind::begin_layer:
+        case PaintCommand::Kind::end_layer:
+            return std::nullopt;
+    }
+    return pixel_extent(node_paint_bounds(painted, command.bounds, frame, propagation), scale);
+}
+
+std::vector<Extent> paint_command_extents(
+    const Scene& scene, const std::vector<PaintCommand>& commands, float scale) {
+    const Rect frame{0.0F, 0.0F, scene.width, scene.height};
+    std::vector<Extent> extents;
+    extents.reserve(commands.size());
+    for (const auto& command : commands) {
+        extents.push_back(command_extent(command, frame, scale));
+    }
+    return extents;
+}
+
+bool same_color(const Color& a, const Color& b) {
+    return std::memcmp(&a, &b, sizeof(Color)) == 0;
+}
+
+struct GpuTimer final {
+    std::uint64_t frame = 0;
+    bool available = false;
+    std::uint64_t nanoseconds = 0;
+};
+
+struct GpuTimerContext final {
+    std::shared_ptr<GpuTimer> timer;
+    std::uint64_t frame = 0;
+};
+
+void record_gpu_time(skgpu::graphite::GpuFinishedContext context,
+                     skgpu::CallbackResult result, const skgpu::GpuStats& stats) {
+    std::unique_ptr<GpuTimerContext> owner(static_cast<GpuTimerContext*>(context));
+    if (!owner || !owner->timer || result != skgpu::CallbackResult::kSuccess) return;
+    if (owner->frame < owner->timer->frame) return;
+    owner->timer->frame = owner->frame;
+    owner->timer->available = stats.elapsedTime > 0;
+    owner->timer->nanoseconds = stats.elapsedTime;
+}
+
 }  // namespace
+
+std::string_view to_string(FullRepaintReason reason) noexcept {
+    switch (reason) {
+        case FullRepaintReason::none: return "none";
+        case FullRepaintReason::full_render: return "full_render";
+        case FullRepaintReason::first_frame: return "first_frame";
+        case FullRepaintReason::surface_recreated: return "surface_recreated";
+        case FullRepaintReason::previous_frame_failed: return "previous_frame_failed";
+        case FullRepaintReason::scene_version: return "scene_version";
+        case FullRepaintReason::frame_changed: return "frame_changed";
+        case FullRepaintReason::reload: return "reload";
+        case FullRepaintReason::full_damage: return "full_damage";
+        case FullRepaintReason::damage_threshold: return "damage_threshold";
+        case FullRepaintReason::frame_mismatch: return "frame_mismatch";
+        case FullRepaintReason::damage_model_version: return "damage_model_version";
+        case FullRepaintReason::damage_frame_mismatch: return "damage_frame_mismatch";
+    }
+    return "unknown";
+}
 
 class SkiaDawnSurface::Impl final {
 public:
     ~Impl() {
         frame_surface_.reset();
-        offscreen_surface_.reset();
+        retained_image_.reset();
+        retained_surface_.reset();
         recorder_.reset();
         if (context_) {
             context_->submit(skgpu::graphite::SyncToCpu::kYes);
@@ -701,6 +815,19 @@ public:
 
         wgpu::DeviceDescriptor device_descriptor{};
         device_descriptor.label = "Vellum Skia/Dawn Device";
+        const wgpu::FeatureName timestamp_feature[] = {wgpu::FeatureName::TimestampQuery};
+        if (adapter_.HasFeature(wgpu::FeatureName::TimestampQuery)) {
+            device_descriptor.requiredFeatureCount = 1;
+            device_descriptor.requiredFeatures = timestamp_feature;
+        }
+        device_descriptor.SetDeviceLostCallback(
+            wgpu::CallbackMode::AllowSpontaneous,
+            [lost = device_lost_](const wgpu::Device&, wgpu::DeviceLostReason reason,
+                                  wgpu::StringView) {
+                if (reason != wgpu::DeviceLostReason::Destroyed) {
+                    lost->store(true, std::memory_order_release);
+                }
+            });
         wgpu::RequestDeviceStatus device_status = wgpu::RequestDeviceStatus::Error;
         std::string device_message;
         adapter_.RequestDevice(
@@ -741,9 +868,12 @@ public:
         if (surface_ && !configure_surface(error)) {
             return false;
         }
-        if (!surface_ && !create_offscreen(error)) {
+        if (!create_retained(error)) {
             return false;
         }
+        retained_reason_ = FullRepaintReason::first_frame;
+        gpu_stats_supported_ = static_cast<bool>(
+            context_->supportedGpuStats() & skgpu::GpuStatsFlags::kElapsedTime);
 
         wgpu::AdapterInfo adapter_info{};
         adapter_.GetInfo(&adapter_info);
@@ -774,13 +904,77 @@ public:
         config_.height = height;
         config_.scale = scale;
         frame_surface_.reset();
-        if (surface_) {
-            return configure_surface(error);
+        retained_valid_ = false;
+        retained_reason_ = FullRepaintReason::surface_recreated;
+        if (surface_ && !configure_surface(error)) {
+            return false;
         }
-        return create_offscreen(error);
+        return create_retained(error);
     }
 
     bool render(const Scene& scene, std::string* error) {
+        if (!accepts(scene, error)) return false;
+        discard_tracked_damage(scene);
+        return draw_frame(scene, FullRepaintReason::full_render, nullptr, error);
+    }
+
+    bool render_incremental(const Scene& scene, std::string* error) {
+        if (!accepts(scene, error)) return false;
+        tracker_.commit(scene, config_.scale);
+        const auto damage = tracker_.take_damage();
+        return draw_frame(scene, FullRepaintReason::none, &damage, error);
+    }
+
+    bool render(const Scene& scene, const DamageRegion& damage, std::string* error) {
+        if (!accepts(scene, error)) return false;
+        const auto invalidated = tracker_.take_damage();
+        discard_tracked_damage(scene);
+        const auto frame = frame_rect(scene, config_.scale);
+        const bool unframed_nothing = damage.frame().empty() && damage.empty();
+        if (!unframed_nothing && damage.frame() != frame) {
+            return draw_frame(scene, FullRepaintReason::damage_frame_mismatch, nullptr, error);
+        }
+        DamageRegion merged(frame, damage.frame().empty() ? DamagePolicy{} : damage.policy());
+        merged.add(damage);
+        merged.add(invalidated);
+        return draw_frame(scene, FullRepaintReason::none, &merged, error);
+    }
+
+    void simulate_device_loss() {
+        if (!device_) return;
+        device_.ForceLoss(wgpu::DeviceLostReason::Unknown, "Vellum simulated device loss");
+        instance_.ProcessEvents();
+    }
+
+    void invalidate(InvalidationReason reason, std::string_view node_id) {
+        if (reason == InvalidationReason::reload) reload_pending_ = true;
+        tracker_.invalidate(reason, node_id);
+    }
+
+    FrameStats frame_stats() const {
+        FrameStats stats = stats_;
+        if (gpu_timer_ && gpu_timer_->frame == stats.frame && gpu_timer_->available) {
+            stats.gpu_time_available = true;
+            stats.gpu_milliseconds = static_cast<double>(gpu_timer_->nanoseconds) / 1.0e6;
+        }
+        return stats;
+    }
+
+    bool finish(std::string* error) {
+        if (!context_) {
+            set_error(error, "Skia/Dawn surface is not initialized");
+            return false;
+        }
+        context_->submit(skgpu::graphite::SyncToCpu::kYes);
+        context_->checkAsyncWorkCompletion();
+        instance_.ProcessEvents();
+        if (device_lost()) {
+            return fail_device_lost(error, "the Dawn device was lost");
+        }
+        return true;
+    }
+
+    bool accepts(const Scene& scene, std::string* error) {
         if (!scene_version_is_supported(scene.scene_version)) {
             set_error(error, "scene version " + std::to_string(scene.scene_version) +
                                  " is not supported by this renderer");
@@ -804,10 +998,6 @@ public:
                                  " has a non-finite transform, opacity, or corner radius");
             return false;
         }
-        if (!render_internal(scene, false, nullptr, error)) {
-            return false;
-        }
-        last_scene_ = scene;
         return true;
     }
 
@@ -848,7 +1038,21 @@ public:
             set_error(error, "capture requires one successfully submitted scene");
             return false;
         }
-        if (!render_internal(*last_scene_, true, &rgba, error)) {
+        if (device_lost()) {
+            return fail_device_lost(
+                error, "the Dawn device was lost; the last good frame can no longer be read back");
+        }
+        if (!retained_valid_) {
+            const Scene scene = *last_scene_;
+            const auto saved = stats_;
+            const bool reload = reload_pending_;
+            const bool redrawn = draw_frame(scene, FullRepaintReason::full_render, nullptr, error);
+            stats_ = saved;
+            reload_pending_ = reload;
+            if (!redrawn) return false;
+            tracker_.commit(scene, config_.scale);
+        }
+        if (!read_frame(rgba, error)) {
             return false;
         }
         pixel_width = static_cast<std::uint32_t>(physical_width());
@@ -907,89 +1111,267 @@ private:
         return true;
     }
 
-    bool create_offscreen(std::string* error) {
-        const auto image_info = SkImageInfo::MakeN32Premul(
-            physical_width(), physical_height());
-        offscreen_surface_ = SkSurfaces::RenderTarget(recorder_.get(), image_info);
-        if (!offscreen_surface_) {
-            set_error(error, "Skia Graphite could not allocate an offscreen GPU surface");
+    bool create_retained(std::string* error) {
+        retained_image_.reset();
+        retained_surface_.reset();
+        retained_valid_ = false;
+        const auto image_info = surface_
+            ? SkImageInfo::Make(physical_width(), physical_height(), kBGRA_8888_SkColorType,
+                                kPremul_SkAlphaType, SkColorSpace::MakeSRGB())
+            : SkImageInfo::MakeN32Premul(physical_width(), physical_height());
+        retained_surface_ = SkSurfaces::RenderTarget(recorder_.get(), image_info);
+        if (!retained_surface_) {
+            set_error(error, "Skia Graphite could not allocate the retained GPU surface");
+            return false;
+        }
+        if (surface_) {
+            retained_image_ = SkSurfaces::AsImage(retained_surface_);
+            if (!retained_image_) {
+                retained_surface_.reset();
+                set_error(error, "Skia Graphite could not sample the retained GPU surface");
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool device_lost() const {
+        return device_lost_->load(std::memory_order_acquire) ||
+            (context_ && context_->isDeviceLost());
+    }
+
+    bool fail_device_lost(std::string* error, std::string message) {
+        retained_valid_ = false;
+        retained_reason_ = FullRepaintReason::previous_frame_failed;
+        set_error(error, std::move(message));
+        return false;
+    }
+
+    PixelRect target_rect() const {
+        return {0, 0, physical_width(), physical_height()};
+    }
+
+    void discard_tracked_damage(const Scene& scene) {
+        tracker_.commit(scene, config_.scale);
+        (void)tracker_.take_damage();
+    }
+
+    FullRepaintReason full_repaint_reason(
+        const Scene& scene, const DamageRegion& damage,
+        std::vector<PixelRect>& rects) const {
+        if (!retained_valid_) return retained_reason_;
+        if (!last_scene_) return FullRepaintReason::first_frame;
+        if (!partial_redraw_supported(scene.scene_version)) {
+            return FullRepaintReason::damage_model_version;
+        }
+        if (last_scene_->scene_version != scene.scene_version) {
+            return FullRepaintReason::scene_version;
+        }
+        if (std::memcmp(&last_scene_->width, &scene.width, sizeof(float)) != 0 ||
+            std::memcmp(&last_scene_->height, &scene.height, sizeof(float)) != 0 ||
+            !same_color(last_scene_->background, scene.background)) {
+            return FullRepaintReason::frame_changed;
+        }
+        if (reload_pending_) return FullRepaintReason::reload;
+        const auto target = target_rect();
+        const auto frame = frame_rect(scene, config_.scale);
+        if (frame.left > target.left || frame.top > target.top ||
+            frame.right < target.right || frame.bottom < target.bottom) {
+            return FullRepaintReason::frame_mismatch;
+        }
+        const auto stats = damage.stats();
+        if (damage.is_full_frame()) {
+            return stats.collapsed_to_full_frame && !stats.explicit_full_frame
+                ? FullRepaintReason::damage_threshold
+                : FullRepaintReason::full_damage;
+        }
+        std::int64_t area = 0;
+        for (const auto& rect : damage.rects()) {
+            const auto clipped = intersection(rect, target);
+            if (clipped.empty()) continue;
+            rects.push_back(clipped);
+            area += clipped.area();
+        }
+        if (area >= target.area()) return FullRepaintReason::full_damage;
+        return FullRepaintReason::none;
+    }
+
+    bool draw_frame(const Scene& scene, FullRepaintReason forced,
+                    const DamageRegion* damage, std::string* error) {
+        const auto started = std::chrono::steady_clock::now();
+        if (!context_ || !recorder_ || !evidence_.available || !retained_surface_) {
+            set_error(error, "Skia/Dawn surface is not initialized");
+            return false;
+        }
+        if (device_lost()) {
+            return fail_device_lost(error, "the Dawn device was lost");
+        }
+
+        std::vector<PixelRect> rects;
+        FullRepaintReason reason = forced;
+        if (reason == FullRepaintReason::none && damage != nullptr) {
+            reason = full_repaint_reason(scene, *damage, rects);
+        } else if (reason == FullRepaintReason::none) {
+            reason = FullRepaintReason::full_render;
+        }
+        const bool full = reason != FullRepaintReason::none;
+        const auto target = target_rect();
+
+        FrameStats stats;
+        stats.frame = stats_.frame + 1;
+        stats.full_repaint = full;
+        stats.full_repaint_reason = reason;
+        stats.frame_area_pixels = target.area();
+        if (damage != nullptr) {
+            const auto damage_stats = damage->stats();
+            stats.damage_rects_before_coalescing = damage_stats.rects_before_coalescing;
+            stats.damage_rects_after_coalescing = damage_stats.rects_after_coalescing;
+        }
+        if (full) {
+            stats.damage_area_pixels = target.area();
+            stats.damage_rects_after_coalescing = 1;
+            stats.damage_rects_before_coalescing =
+                std::max<std::size_t>(1, stats.damage_rects_before_coalescing);
+        } else {
+            for (const auto& rect : rects) stats.damage_area_pixels += rect.area();
+            stats.damage_rects_after_coalescing = rects.size();
+        }
+        stats.damage_fraction = stats.frame_area_pixels > 0
+            ? static_cast<double>(stats.damage_area_pixels) /
+                  static_cast<double>(stats.frame_area_pixels)
+            : 0.0;
+
+        retained_valid_ = false;
+        retained_reason_ = FullRepaintReason::previous_frame_failed;
+        const auto commands = make_paint_commands(scene);
+        stats.paint_commands_total = commands.size();
+        auto* canvas = retained_surface_->getCanvas();
+        MeshTextureCache mesh_textures{.recorder = recorder_.get()};
+        if (full) {
+            const int saved = canvas->save();
+            canvas->resetMatrix();
+            canvas->clear(sk_color(scene.background));
+            canvas->scale(config_.scale, config_.scale);
+            for (const auto& command : commands) {
+                if (!paint_command(*canvas, command, config_.font_directory,
+                                   mesh_textures, error)) {
+                    canvas->restoreToCount(saved);
+                    return false;
+                }
+            }
+            canvas->restoreToCount(saved);
+            stats.paint_commands_recorded = commands.size();
+            stats.paint_command_draws = commands.size();
+        } else if (!rects.empty()) {
+            const auto extents = paint_command_extents(scene, commands, config_.scale);
+            std::vector<bool> drawn(commands.size(), false);
+            std::vector<ParagraphSlot> paragraphs(commands.size());
+            for (const auto& rect : rects) {
+                const int saved = canvas->save();
+                canvas->resetMatrix();
+                canvas->clipRect(
+                    SkRect::Make(SkIRect::MakeLTRB(rect.left, rect.top, rect.right, rect.bottom)),
+                    SkClipOp::kIntersect, false);
+                canvas->clear(sk_color(scene.background));
+                canvas->scale(config_.scale, config_.scale);
+                for (std::size_t index = 0; index < commands.size(); ++index) {
+                    if (extents[index] && !overlaps(*extents[index], rect)) continue;
+                    if (!paint_command(*canvas, commands[index], config_.font_directory,
+                                       mesh_textures, error, &paragraphs[index])) {
+                        canvas->restoreToCount(saved);
+                        return false;
+                    }
+                    drawn[index] = true;
+                    ++stats.paint_command_draws;
+                }
+                canvas->restoreToCount(saved);
+            }
+            stats.paint_commands_recorded =
+                static_cast<std::size_t>(std::count(drawn.begin(), drawn.end(), true));
+        }
+
+        if (!submit_frame(&stats, nullptr, error)) return false;
+        retained_valid_ = true;
+        retained_reason_ = FullRepaintReason::none;
+        reload_pending_ = false;
+        last_scene_ = scene;
+        stats.cpu_milliseconds = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - started).count();
+        stats_ = stats;
+        return true;
+    }
+
+    bool acquire_frame_surface(std::string* error) {
+        frame_surface_.reset();
+        wgpu::SurfaceTexture texture{};
+        surface_.GetCurrentTexture(&texture);
+        if (texture.status != wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal &&
+            texture.status != wgpu::SurfaceGetCurrentTextureStatus::SuccessSuboptimal) {
+            set_error(error, "Dawn could not acquire the native surface texture");
+            return false;
+        }
+        current_texture_ = std::move(texture.texture);
+        const auto backend_texture =
+            skgpu::graphite::BackendTextures::MakeDawn(current_texture_.Get());
+        if (!backend_texture.isValid()) {
+            set_error(error, "Skia rejected Dawn's native surface texture");
+            current_texture_ = nullptr;
+            return false;
+        }
+        frame_surface_ = SkSurfaces::WrapBackendTexture(
+            recorder_.get(), backend_texture, kBGRA_8888_SkColorType,
+            SkColorSpace::MakeSRGB(), nullptr);
+        if (!frame_surface_) {
+            set_error(error, "Skia could not wrap Dawn's native surface texture");
+            current_texture_ = nullptr;
             return false;
         }
         return true;
     }
 
-    bool render_internal(const Scene& scene, bool readback,
-                         std::vector<std::uint8_t>* rgba, std::string* error) {
-        if (!context_ || !recorder_ || !evidence_.available) {
-            set_error(error, "Skia/Dawn surface is not initialized");
-            return false;
-        }
-
-        frame_surface_.reset();
-        SkSurface* target = nullptr;
+    bool submit_frame(FrameStats* stats, std::vector<std::uint8_t>* rgba,
+                      std::string* error) {
         if (surface_) {
-            wgpu::SurfaceTexture texture{};
-            surface_.GetCurrentTexture(&texture);
-            if (texture.status != wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal &&
-                texture.status != wgpu::SurfaceGetCurrentTextureStatus::SuccessSuboptimal) {
-                set_error(error, "Dawn could not acquire the native surface texture");
-                return false;
+            const auto waiting = std::chrono::steady_clock::now();
+            if (!acquire_frame_surface(error)) return false;
+            if (stats != nullptr) {
+                stats->present_wait_milliseconds = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - waiting).count();
             }
-            current_texture_ = std::move(texture.texture);
-            const auto backend_texture =
-                skgpu::graphite::BackendTextures::MakeDawn(current_texture_.Get());
-            if (!backend_texture.isValid()) {
-                set_error(error, "Skia rejected Dawn's native surface texture");
-                current_texture_ = nullptr;
-                return false;
-            }
-            frame_surface_ = SkSurfaces::WrapBackendTexture(
-                recorder_.get(), backend_texture, kBGRA_8888_SkColorType,
-                SkColorSpace::MakeSRGB(), nullptr);
-            if (!frame_surface_) {
-                set_error(error, "Skia could not wrap Dawn's native surface texture");
-                current_texture_ = nullptr;
-                return false;
-            }
-            target = frame_surface_.get();
-        } else {
-            target = offscreen_surface_.get();
+            SkPaint copy;
+            copy.setBlendMode(SkBlendMode::kSrc);
+            frame_surface_->getCanvas()->drawImage(
+                retained_image_, 0.0F, 0.0F, SkSamplingOptions(), &copy);
         }
-        if (target == nullptr) {
-            set_error(error, "no GPU render target is available");
-            return false;
-        }
-
-        auto* canvas = target->getCanvas();
-        const int saved = canvas->save();
-        canvas->resetMatrix();
-        canvas->clear(sk_color(scene.background));
-        canvas->scale(config_.scale, config_.scale);
-        MeshTextureCache mesh_textures{.recorder = recorder_.get()};
-        for (const auto& command : make_paint_commands(scene)) {
-            if (!paint_command(*canvas, command, config_.font_directory,
-                               mesh_textures, error)) {
-                canvas->restoreToCount(saved);
-                current_texture_ = nullptr;
-                return false;
-            }
-        }
-        canvas->restoreToCount(saved);
 
         auto recording = recorder_->snap();
         if (!recording) {
             set_error(error, "Skia Graphite produced no recording");
             current_texture_ = nullptr;
+            frame_surface_.reset();
             return false;
         }
         skgpu::graphite::InsertRecordingInfo insertion{};
         insertion.fRecording = recording.get();
-        context_->insertRecording(insertion);
+        if (gpu_stats_supported_ && stats != nullptr) {
+            if (!gpu_timer_) gpu_timer_ = std::make_shared<GpuTimer>();
+            insertion.fGpuStatsFlags = skgpu::GpuStatsFlags::kElapsedTime;
+            insertion.fFinishedContext = new GpuTimerContext{gpu_timer_, stats->frame};
+            insertion.fFinishedWithStatsProc = record_gpu_time;
+        }
+        if (!context_->insertRecording(insertion)) {
+            set_error(error, "Skia Graphite could not insert the frame recording");
+            current_texture_ = nullptr;
+            frame_surface_.reset();
+            return false;
+        }
         context_->submit(skgpu::graphite::SyncToCpu::kNo);
 
-        if (readback && rgba != nullptr) {
-            if (!read_target_rgba(*target, *rgba, error)) {
+        if (rgba != nullptr) {
+            SkSurface& source = surface_ ? *frame_surface_ : *retained_surface_;
+            if (!read_target_rgba(source, *rgba, error)) {
                 current_texture_ = nullptr;
+                frame_surface_.reset();
                 return false;
             }
         }
@@ -997,9 +1379,15 @@ private:
         if (surface_) {
             surface_.Present();
             current_texture_ = nullptr;
+            frame_surface_.reset();
+            if (stats != nullptr) stats->presented = true;
         }
         instance_.ProcessEvents();
         return true;
+    }
+
+    bool read_frame(std::vector<std::uint8_t>& rgba, std::string* error) {
+        return submit_frame(nullptr, &rgba, error);
     }
 
     bool read_target_rgba(
@@ -1097,7 +1485,16 @@ private:
     std::unique_ptr<skgpu::graphite::Context> context_;
     std::unique_ptr<skgpu::graphite::Recorder> recorder_;
     sk_sp<SkSurface> frame_surface_;
-    sk_sp<SkSurface> offscreen_surface_;
+    sk_sp<SkSurface> retained_surface_;
+    sk_sp<SkImage> retained_image_;
+    bool retained_valid_ = false;
+    FullRepaintReason retained_reason_ = FullRepaintReason::first_frame;
+    bool reload_pending_ = false;
+    DamageTracker tracker_;
+    FrameStats stats_{};
+    bool gpu_stats_supported_ = false;
+    std::shared_ptr<GpuTimer> gpu_timer_;
+    std::shared_ptr<std::atomic_bool> device_lost_ = std::make_shared<std::atomic_bool>(false);
 };
 
 SkiaDawnSurface::SkiaDawnSurface(std::unique_ptr<Impl> impl) noexcept
@@ -1129,6 +1526,31 @@ bool SkiaDawnSurface::measure_text(
 
 bool SkiaDawnSurface::render(const Scene& scene, std::string* error) {
     return impl_->render(scene, error);
+}
+
+bool SkiaDawnSurface::render_incremental(const Scene& scene, std::string* error) {
+    return impl_->render_incremental(scene, error);
+}
+
+bool SkiaDawnSurface::render(
+    const Scene& scene, const DamageRegion& damage, std::string* error) {
+    return impl_->render(scene, damage, error);
+}
+
+void SkiaDawnSurface::invalidate(InvalidationReason reason, std::string_view node_id) {
+    impl_->invalidate(reason, node_id);
+}
+
+FrameStats SkiaDawnSurface::frame_stats() const {
+    return impl_->frame_stats();
+}
+
+bool SkiaDawnSurface::finish(std::string* error) {
+    return impl_->finish(error);
+}
+
+void SkiaDawnSurface::simulate_device_loss() {
+    impl_->simulate_device_loss();
 }
 
 bool SkiaDawnSurface::resize(

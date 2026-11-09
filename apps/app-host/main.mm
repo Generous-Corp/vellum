@@ -501,7 +501,7 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
 - (BOOL)finishMutation:(std::string*)error {
     if (!_components->expand(_rendered.scene, error)) return NO;
     if (!persist_state(*_application, _persistencePath, error)) return NO;
-    if (_surface && !_surface->render(_rendered.scene, error)) return NO;
+    if (_surface && !_surface->render_incremental(_rendered.scene, error)) return NO;
     _accessibility->sync(_rendered.accessibility_nodes);
     return YES;
 }

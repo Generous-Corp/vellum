@@ -65,6 +65,26 @@ tree. Interaction and accessibility boxes are the axis-aligned box of each
 node as drawn, so a rotated control hit-tests on that box, and a node whose
 transform has a zero determinant gets no interaction or text-input box.
 
+The surface draws every frame into a retained offscreen Graphite surface the
+size of its target in device pixels, and presents by drawing that image into
+the swapchain texture; captures read the retained surface back, through the
+swapchain when there is one. `render(scene)` repaints the whole frame and stays
+the deterministic capture path. `render_incremental` commits each scene to a
+renderer-owned `DamageTracker`, clears only the damage rectangles, and redraws
+only the paint commands whose paint extent (shadows and text overhang
+included) meets them; the rest of the retained image is left as it was, and
+the output is byte-identical to a full redraw. The first frame, a resize or
+surface recreation, a failed or lost-device frame, a scene version, size or
+background change, a host `reload`, and damage past the policy threshold fall
+back to a full repaint. Hosts pass `invalidate` reasons and node ids through
+`SkiaDawnSurface::invalidate`, and `frame_stats` reports the damage area, the
+rectangle counts, the commands re-recorded and why a frame repainted fully.
+What is cached and when it is discarded is renderer policy: the scene schema
+carries no cache hints. Partial redraw is enabled only for scene versions the
+damage model understands, up to `kDamageModelSceneVersion` (1); a version 2
+scene, which can carry transforms, group opacity and per-corner radii, repaints
+fully until the damage model learns those fields.
+
 Native self-test is deliberately fail-closed. A requested native surface is
 not allowed to fall back to CoreGraphics or an offscreen surface. The test also
 contains a blank-frame negative control so a broken capture detector cannot
