@@ -750,6 +750,40 @@ class ObservatoryTests(unittest.TestCase):
                     pulp_target=pulp_head, vellum_target=feature,
                 )
 
+    def test_events_only_reconcile_leaves_mains_commits_to_main(self) -> None:
+        # A pull request that merged main after the receiver's cursor records
+        # only its own commits once it names main; without --vellum-main it
+        # also records main's (the control), which collides with main's own
+        # receiver on the next merge.
+        for name_main in (False, True):
+            with self.subTest(vellum_main=name_main), tempfile.TemporaryDirectory() as temporary:
+                pulp, vellum, root, pulp_head, main, feature = self._coverage_state(Path(temporary))
+                run(vellum, "git", "checkout", "-q", "main")
+                write(vellum / "graphics/shared.cpp", "int shared = 2;\n")
+                main_later = commit_all(vellum, "main lands a mapped change after the cursor")
+                run(vellum, "git", "checkout", "-q", "feature")
+                run(vellum, "git", "merge", "--no-edit", "main")
+                head = run(vellum, "git", "rev-parse", "HEAD")
+                result = observatory.reconcile(
+                    root=root, pulp_repo=pulp, vellum_repo=vellum,
+                    pulp_target=pulp_head, vellum_target=head,
+                    now_text="2026-10-11T00:05:00Z", write=True, events_only=True,
+                    vellum_main=main_later if name_main else None,
+                )
+                self.assertIn(f"vellum-{feature}", result["new_events"])
+                if name_main:
+                    self.assertNotIn(f"vellum-{main_later}", result["new_events"])
+                    self.assertFalse((root / observatory.EVENTS_PATH / f"vellum-{main_later}.yaml").exists())
+                else:
+                    self.assertIn(f"vellum-{main_later}", result["new_events"])
+
+    def test_vellum_main_requires_events_only(self) -> None:
+        self.assertEqual(observatory.main([
+            "reconcile", "--pulp-repo", ".", "--vellum-repo", ".", "--pulp-target", "x",
+            "--vellum-target", "y", "--now", "2026-10-11T00:00:00Z", "--write",
+            "--vellum-main", "z",
+        ]), 1)
+
     def test_coverage_policy_accepts_a_resolution_of_an_unreconciled_observation(
         self,
     ) -> None:
@@ -2082,6 +2116,77 @@ class OwnCommitEventTests(unittest.TestCase):
         self.commit_all("advance the cursor short of main's change")
         with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
             self.check()
+
+    def test_cursor_advanced_beyond_main_is_refused(self) -> None:
+        # Evidence-only, but the cursor moves onto a commit main does not
+        # hold; the observed main commit lies in that advance.
+        run(self.root, "git", "checkout", "-q", "-b", "side", self.base)
+        write(self.root / "graphics/render.cpp", "int s;\n")
+        run(self.root, "git", "commit", "-am", "a commit main does not hold")
+        beyond = run(self.root, "git", "rev-parse", "HEAD")
+        run(self.root, "git", "checkout", "-q", "-b", "automation/pulp-observatory-coalesced", self.base)
+        self.write_cursor(beyond)
+        self.add_event(self.main_change)
+        self.commit_all("advance the cursor past main")
+        with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
+            self.check()
+
+    def cursor_ahead_on_main(self) -> tuple[str, str]:
+        """Main with its cursor at main_change, a merged side commit, and a later change."""
+        run(self.root, "git", "checkout", "-q", "-b", "side", self.root_commit)
+        write(self.root / "graphics/side.cpp", "int s;\n")
+        run(self.root, "git", "add", ".")
+        run(self.root, "git", "commit", "-m", "a side commit")
+        side = run(self.root, "git", "rev-parse", "HEAD")
+        run(self.root, "git", "checkout", "-q", "main")
+        self.write_cursor(self.main_change)
+        self.commit_all("the receiver moved the cursor to main_change")
+        run(self.root, "git", "merge", "--no-edit", "side")
+        write(self.root / "graphics/render.cpp", "int later;\n")
+        run(self.root, "git", "commit", "-am", "a later main change")
+        later = run(self.root, "git", "rev-parse", "HEAD")
+        self.base = later
+        return side, later
+
+    def test_cursor_moved_backward_or_sideways_is_refused(self) -> None:
+        side, later = self.cursor_ahead_on_main()
+        for name, target in (("backward", self.root_commit), ("sideways", side)):
+            with self.subTest(name):
+                run(self.root, "git", "checkout", "-q", "-f", "-B", "automation/pulp-observatory-coalesced", self.base)
+                self.write_cursor(target)
+                self.add_event(later)
+                self.commit_all(f"move the cursor {name}")
+                with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
+                    self.check()
+
+    def test_forward_advance_on_main_records_the_later_change(self) -> None:
+        # Control for the two refusals above: the same base, the cursor
+        # moved forward to main's tip.
+        side, later = self.cursor_ahead_on_main()
+        run(self.root, "git", "checkout", "-q", "-b", "automation/pulp-observatory-coalesced", self.base)
+        self.write_cursor(later)
+        self.add_event(later)
+        self.commit_all("move the cursor forward on main")
+        self.check()
+
+    def test_evidence_allowlist_is_the_receivers(self) -> None:
+        # The receiver's "Prepare the evidence-only coalescing PR" step holds
+        # its own copy of the allowlist in shell; this pins the two equal.
+        workflow = (Path(__file__).resolve().parents[2]
+                    / ".github/workflows/pulp-observatory-receiver.yml").read_text(encoding="utf-8")
+        block = workflow[workflow.index('case "$path" in'):]
+        block = block[:block.index(") ;;")]
+        patterns = sorted(p.strip().rstrip("|").strip() for p in block.split("in", 1)[1].split("|\\\n") if p.strip())
+        patterns = sorted(item.strip() for chunk in patterns for item in chunk.split("|") if item.strip())
+        self.assertEqual(patterns, sorted([
+            *observatory.EVIDENCE_ONLY_PATHS,
+            observatory.EVENTS_PATH.as_posix() + "/*.yaml",
+        ]))
+        for path in patterns:
+            probe = path.replace("*", "x")
+            self.assertTrue(observatory.is_evidence_path(probe), probe)
+        self.assertFalse(observatory.is_evidence_path("provenance/pulp-observatory/events/x/y.yaml"))
+        self.assertFalse(observatory.is_evidence_path("provenance/pulp-observatory/receiver-policy.json"))
 
     def test_branch_name_alone_earns_no_exemption(self) -> None:
         # The coalescing branch name with an events-only reconcile (no cursor

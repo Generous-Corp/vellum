@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 if __package__ in {None, ""}:
@@ -1172,6 +1173,12 @@ def is_evidence_path(path: str) -> bool:
     )
 
 
+def commit_exists(root: Path, commit: str) -> bool:
+    return subprocess.run(
+        ["git", "cat-file", "-e", f"{commit}^{{commit}}"], cwd=root, capture_output=True
+    ).returncode == 0
+
+
 def verify_new_event_sources(
     root: Path, git_base: str | None, events: list[tuple[Path, dict[str, object]]],
     cursor: dict[str, object], *, vellum_repo: Path | None = None,
@@ -1220,7 +1227,17 @@ def verify_new_event_sources(
         except (ObservatoryError, KeyError, TypeError, ValueError):
             start = None
         end = str(cursor["vellum"]["last_scanned_commit"])
-        if start is not None and start != end and is_ancestor(root, start, end):
+        # The advance must move forward (start an ancestor of end, and not
+        # equal) and stay on the base: an evidence-only change cannot move
+        # the cursor onto a branch or foreign commit and record that.
+        if (
+            start is not None
+            and start != end
+            and commit_exists(root, start)
+            and commit_exists(root, end)
+            and is_ancestor(root, start, end)
+            and is_ancestor(root, end, git_base)
+        ):
             advanced = set(commits_between(root, start, end))
     refused = sorted(
         f"{event['event_id']} ({event['source_commit']})"
@@ -1280,7 +1297,7 @@ def describe_coverage_gaps(gaps: list[dict[str, str]], cursor: dict[str, object]
             " --pulp-repo <pulp-checkout> --vellum-repo ."
             f" --pulp-target {(cursor.get('pulp') or {}).get('last_scanned_commit', '<committed-pulp-cursor-sha>')}"
             " --vellum-target <exact-pr-head-sha> --now <utc-timestamp>"
-            " --write --events-only"
+            " --write --events-only --vellum-main <current-vellum-main-sha>"
         )
     if ("pulp", "mapped-commit-after-reconciled-cursor") in reasons:
         lines.append(
@@ -1300,7 +1317,7 @@ def describe_coverage_gaps(gaps: list[dict[str, str]], cursor: dict[str, object]
 
 def reconcile(
     *, root: Path, pulp_repo: Path, vellum_repo: Path, pulp_target: str, vellum_target: str,
-    now_text: str, write: bool, events_only: bool = False
+    now_text: str, write: bool, events_only: bool = False, vellum_main: str | None = None,
 ) -> dict[str, object]:
     now = parse_utc(now_text, "--now")
     lock, mapping, cursor, budgets = validate_lock_map_cursor(root)
@@ -1332,11 +1349,21 @@ def reconcile(
             # when it is behind main the scan starts at the merge base.
             start = coverage_tail_start(repo, start, target)
         repository = str(source_cursor["repository"])
+        if events_only and source == "vellum" and vellum_main is not None:
+            require_commit(repo, vellum_main, "--vellum-main")
         for event in expected_observations(
             source=source, repo=repo, repository=repository, start=start, target=target,
             discovered_at=now_text, mappings=mappings, transitive_rules=rules,
         ):
             key = (repository, str(event["source_commit"]))
+            if (
+                events_only and source == "vellum" and vellum_main is not None
+                and key not in observations
+                and is_ancestor(repo, str(event["source_commit"]), vellum_main)
+            ):
+                # Main's commits are observed by main's own receiver; a pull
+                # request that merged them records only its own commits.
+                continue
             if key in observations:
                 verify_event_against_git(observations[key], source, repo, mappings, rules)
             else:
@@ -1435,6 +1462,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="with --write, record new observation events but leave cursor and report untouched",
     )
+    reconcile_parser.add_argument(
+        "--vellum-main",
+        help="with --events-only, the current Vellum main commit: observations of commits "
+        "already on it are left to main's own receiver",
+    )
     reconcile_parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
@@ -1459,6 +1491,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if args.events_only and not args.write:
                 raise ObservatoryError("--events-only requires --write")
+            if args.vellum_main and not args.events_only:
+                raise ObservatoryError("--vellum-main applies only with --events-only")
             result = reconcile(
                 root=root,
                 pulp_repo=args.pulp_repo.resolve(),
@@ -1468,6 +1502,7 @@ def main(argv: list[str] | None = None) -> int:
                 now_text=args.now,
                 write=args.write,
                 events_only=args.events_only,
+                vellum_main=args.vellum_main,
             )
         output = json.dumps(result, indent=2, sort_keys=True) + "\n"
         if args.output:
