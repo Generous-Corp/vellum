@@ -80,8 +80,13 @@ function(vellum_rmlui_fetch_dependencies)
     # #958): a text input starts with one empty line, so a click into a field
     # whose font does not resolve cannot read before its line list. Retire it
     # when the pin moves past 3707ab53.
+    # One Vellum patch to the default font engine: glyph advances and kerning
+    # accumulate in 26.6 fixed point and only the pen position is rounded, so
+    # text no longer comes out up to 5 % wider at small sizes. Upstream has the
+    # same code; retire it only if upstream takes an equivalent change.
     set(_vellum_rmlui_patches
-        "${CMAKE_CURRENT_LIST_DIR}/patches/rmlui-3707ab53-text-input-initial-line.patch")
+        "${CMAKE_CURRENT_LIST_DIR}/patches/rmlui-3707ab53-text-input-initial-line.patch"
+        "${CMAKE_CURRENT_LIST_DIR}/patches/rmlui-fractional-glyph-advances.patch")
     FetchContent_Declare(vellum_rmlui_rmlui
         GIT_REPOSITORY https://github.com/mikke89/RmlUi.git
         GIT_TAG "${VELLUM_RMLUI_RMLUI_COMMIT}"
