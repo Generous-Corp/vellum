@@ -11,13 +11,13 @@ set(_vellum_swift_proof_prefix "${VELLUM_SWIFT_PROOF_SDK_PREFIX}")
 set(_vellum_swift_proof_args)
 if(_vellum_swift_proof_prefix STREQUAL "" AND TARGET vellum-host-c)
     set(_vellum_swift_proof_prefix "${_vellum_swift_proof_work}/prefix")
-    add_test(NAME vellum.swift-host-proof-install
+    add_test(NAME vellum.swift-host-proof-prefix
         COMMAND "${CMAKE_COMMAND}"
             "-DVELLUM_BUILD_DIR=${CMAKE_BINARY_DIR}"
             "-DVELLUM_SWIFT_PROOF_PREFIX=${_vellum_swift_proof_prefix}"
             "-DTEST_CONFIG=$<CONFIG>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/InstallSdkPrefix.cmake")
-    set_tests_properties(vellum.swift-host-proof-install PROPERTIES
+    set_tests_properties(vellum.swift-host-proof-prefix PROPERTIES
         FIXTURES_SETUP vellum-swift-host-sdk)
 endif()
 if(VELLUM_REQUIRE_GPU)
@@ -40,7 +40,7 @@ set_tests_properties(vellum.swift-host-proof PROPERTIES
     ENVIRONMENT "MTL_DEBUG_LAYER=0")
 set_tests_properties(vellum.swift-host-proof PROPERTIES
     FIXTURES_SETUP vellum-swift-host-evidence)
-if(TEST vellum.swift-host-proof-install)
+if(TEST vellum.swift-host-proof-prefix)
     set_tests_properties(vellum.swift-host-proof PROPERTIES
         FIXTURES_REQUIRED vellum-swift-host-sdk)
 endif()

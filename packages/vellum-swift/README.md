@@ -30,7 +30,7 @@ PKG_CONFIG_PATH="$sdk/lib/pkgconfig" swift build -c release \
 ## Test
 
 `vellum.swift-host-proof` runs `scripts/run_sterile_proof.py`. By default a
-`vellum.swift-host-proof-install` fixture first installs the build tree into
+`vellum.swift-host-proof-prefix` fixture first installs the build tree into
 `<build>/swift-host-proof/prefix` with `cmake --install`, the way the CMake
 install consumers do. `VELLUM_SWIFT_PROOF_SDK_PREFIX` (a CMake cache variable or
 an environment variable) points the proof at another installed SDK instead, such
