@@ -41,6 +41,10 @@ EXPECTED_RUNNERS = {
     ),
     "pulp-observatory-watchdog.yml": ("__hosted__", "ubuntu-latest"),
     "review-verdict.yml": ("__hosted__", "ubuntu-24.04"),
+    "rmlui.yml": (
+        "VELLUM_RMLUI_MACOS_RUNS_ON_JSON",
+        '["macos-15"]',
+    ),
     "review-verdict-trigger.yml": ("__hosted__", "ubuntu-24.04"),
     "release-cadence-check.yml": ("__hosted__", "ubuntu-latest"),
     "release-path-review.yml": ("__hosted__", "ubuntu-24.04"),
