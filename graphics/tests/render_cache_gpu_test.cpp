@@ -497,6 +497,45 @@ void failed_frame_drops_its_uploads() {
                      "the frame after a failed one draws the texture exactly");
 }
 
+// A frame that fails partway leaves the telemetry describing the last frame
+// that was submitted: its frame number, layers and per-frame cache counters.
+// The failed attempt's lookups still count toward the cumulative totals.
+void failed_frame_keeps_the_last_frame_telemetry() {
+    auto texture = checker_texture(200);
+    const auto good = telemetry_scene(texture);
+    auto bad = good;
+    bad.root.children.push_back({.id = "broken", .kind = SceneNode::Kind::rectangle,
+                                 .bounds = {200.0F, 150.0F, 40.0F, 40.0F},
+                                 .fill_gradients = {{.stops = {{0.0F, Color::hex(0xFFFFFF)}}}}});
+    auto surface = make_surface(true);
+    render(*surface, good);
+    const auto before = surface->telemetry();
+    std::string error;
+    expect(!surface->render(bad, &error), "a frame with a one-stop gradient fails");
+    const auto after = surface->telemetry();
+    const auto same_frame = [](const CacheStats& a, const CacheStats& b) {
+        return a.frame_hits == b.frame_hits && a.frame_misses == b.frame_misses;
+    };
+    expect(after.frame == before.frame && after.layer_count == before.layer_count &&
+               after.full_repaint_reason == before.full_repaint_reason &&
+               same_frame(after.paragraphs, before.paragraphs) &&
+               same_frame(after.gradients, before.gradients) &&
+               same_frame(after.textures, before.textures),
+           "a failed frame leaves the last submitted frame's telemetry",
+           to_json(before) + " then " + to_json(after));
+    expect(before.paragraphs.frame_misses == 3 && after.paragraphs.frame_hits == 0,
+           "the snapshot is the cold first frame", to_json(after));
+    expect(after.paragraphs.hits > before.paragraphs.hits &&
+               after.paragraphs.hits + after.paragraphs.misses >
+                   before.paragraphs.hits + before.paragraphs.misses,
+           "the failed attempt's lookups stay in the cumulative totals", to_json(after));
+    render(*surface, good);
+    const auto next = surface->telemetry();
+    expect(next.frame == before.frame + 1U && next.paragraphs.frame_hits == 3 &&
+               next.paragraphs.frame_misses == 0 && next.layer_count == before.layer_count,
+           "the frame after a failed one reports itself", to_json(next));
+}
+
 void scripted_telemetry() {
     auto texture = checker_texture(60);
     const auto full = telemetry_scene(texture);
@@ -596,6 +635,7 @@ int main() {
         scripted_telemetry();
         settle_counts_presented_frames();
         failed_frame_drops_its_uploads();
+        failed_frame_keeps_the_last_frame_telemetry();
     } catch (const std::exception& exception) {
         std::cout << "FAIL " << exception.what() << '\n';
         return 1;

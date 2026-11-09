@@ -1,18 +1,25 @@
 #include <vellum/graphics/render_telemetry.hpp>
 
+#include <charconv>
 #include <cmath>
 #include <cstdio>
+#include <locale>
 #include <sstream>
 #include <string>
+#include <system_error>
 
 namespace vellum::graphics {
 namespace {
 
+// JSON numbers are locale-independent: std::to_chars never reads the C or
+// C++ locale, so a host that set a comma decimal separator still gets JSON.
 std::string json_number(double value) {
     if (!std::isfinite(value)) return "null";
     char buffer[64];
-    std::snprintf(buffer, sizeof(buffer), "%.17g", value);
-    return buffer;
+    const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value,
+                                      std::chars_format::general, 17);
+    if (result.ec != std::errc{}) return "null";
+    return {buffer, result.ptr};
 }
 
 std::string json_string(const std::string& value) {
@@ -72,6 +79,8 @@ const char* to_string(CacheTrimReason reason) noexcept {
 
 std::string to_json(const RenderTelemetry& telemetry) {
     std::ostringstream out;
+    // Integers too: the global locale may group thousands.
+    out.imbue(std::locale::classic());
     out << "{\"frame\":" << telemetry.frame
         << ",\"full_repaint\":" << (telemetry.full_repaint ? "true" : "false")
         << ",\"full_repaint_reason\":" << json_string(telemetry.full_repaint_reason)
