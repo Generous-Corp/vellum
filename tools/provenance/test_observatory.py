@@ -2223,14 +2223,29 @@ class OwnCommitEventTests(unittest.TestCase):
         run(self.root, "git", "merge", "-q", "--no-ff", "--no-edit", "branch")
         return main_tip
 
-    def test_an_event_main_gained_after_a_stale_git_base_is_not_the_branchs(self) -> None:
-        self.stale_base_pull_request()
-        self.check()  # self.base is the stale base.sha
+    def check_from(self, base: str) -> None:
+        """The checks verify runs on the git base it settles on."""
+        events = [
+            (path, json.loads(path.read_text()))
+            for path in sorted((self.root / observatory.EVENTS_PATH).glob("*.yaml"))
+        ]
+        cursor = json.loads((self.root / observatory.CURSOR_PATH).read_text())
+        observatory.verify_append_only(self.root, base)
+        observatory.verify_new_event_sources(self.root, base, events, cursor, vellum_repo=self.root)
 
-    def test_without_origin_main_the_stale_base_still_refuses(self) -> None:
-        self.stale_base_pull_request(set_origin_main=False)
+    def test_the_stale_base_moves_to_the_merge_base_with_current_main(self) -> None:
+        main_tip = self.stale_base_pull_request()
+        base = observatory.current_main_git_base(self.root, self.base)
+        self.assertEqual(base, main_tip)
+        self.check_from(base)  # main's newer event is not this change's
         with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
-            self.check()
+            self.check_from(self.base)  # the stale base alone: #277's false positive
+
+    def test_without_origin_main_the_stale_base_stays(self) -> None:
+        self.stale_base_pull_request(set_origin_main=False)
+        self.assertEqual(observatory.current_main_git_base(self.root, self.base), self.base)
+        with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
+            self.check_from(observatory.current_main_git_base(self.root, self.base))
 
     def test_a_modified_copy_of_a_main_event_is_refused(self) -> None:
         self.stale_base_pull_request()
@@ -2239,27 +2254,43 @@ class OwnCommitEventTests(unittest.TestCase):
         value["rationale"] = "edited on the branch"
         write_json(path, value)
         self.commit_all("edit main's event")
-        with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
-            self.check()
+        with self.assertRaisesRegex(observatory.ObservatoryError, "append-only"):
+            self.check_from(observatory.current_main_git_base(self.root, self.base))
 
-    def test_a_main_event_main_does_not_hold_is_refused_with_origin_main_set(self) -> None:
+    def test_a_branch_event_for_a_main_commit_is_still_refused_with_origin_main_set(self) -> None:
         own = self.branch_commit()
         self.add_event(own)
         self.add_event(self.main_change)
         self.commit_all("record main's commit as well")
         run(self.root, "git", "update-ref", observatory.VELLUM_MAIN_REF, self.base)
+        base = observatory.current_main_git_base(self.root, self.base)
+        self.assertEqual(base, self.base)
         with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
-            self.check()
+            self.check_from(base)
 
-    def test_a_change_already_on_main_gets_no_exemption(self) -> None:
-        # A push to main: origin/main is HEAD itself, so every event matches it.
-        own = self.branch_commit()
-        self.add_event(own)
-        self.add_event(self.main_change)
-        self.commit_all("record main's commit as well")
+    def test_verify_judges_from_the_current_main_base(self) -> None:
+        class Settled(Exception):
+            pass
+
+        def settle(root: Path, git_base: str | None) -> str | None:
+            raise Settled(git_base)
+
+        original = observatory.current_main_git_base
+        observatory.current_main_git_base = settle
+        try:
+            with self.assertRaises(Settled):
+                observatory.verify(root=self.root, pulp_repo=None, vellum_repo=self.root, git_base=self.base)
+        finally:
+            observatory.current_main_git_base = original
+
+    def test_the_base_never_moves_backward_or_on_main(self) -> None:
+        self.branch_commit()
+        # origin/main older than the given base: left alone.
+        run(self.root, "git", "update-ref", observatory.VELLUM_MAIN_REF, self.cursor_commit)
+        self.assertEqual(observatory.current_main_git_base(self.root, self.base), self.base)
+        # A push to main: HEAD is origin/main, so nothing moves.
         run(self.root, "git", "update-ref", observatory.VELLUM_MAIN_REF, "HEAD")
-        with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
-            self.check()
+        self.assertEqual(observatory.current_main_git_base(self.root, self.cursor_commit), self.cursor_commit)
 
     def coalesce(self, *, advance: bool, with_code: bool) -> None:
         # The receiver's shape: one evidence-only commit on main's tip that
