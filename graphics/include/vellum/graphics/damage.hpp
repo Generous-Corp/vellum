@@ -108,6 +108,7 @@ public:
     void add(const PixelRect& rect);
     void add(const DamageRegion& other);
     void add_full_frame();
+    /// Intersections clear both full-frame flags unless the result is still the whole frame.
     void intersect(const PixelRect& rect);
     void intersect(const DamageRegion& other);
     void clear();
@@ -126,6 +127,7 @@ private:
     void append_disjoint(const PixelRect& rect);
     void coalesce();
     void apply_threshold();
+    void clear_full_flags_unless_full() noexcept;
 
     PixelRect frame_{};
     DamagePolicy policy_{};
@@ -184,6 +186,7 @@ public:
 
 /// Whether two nodes with the same identity paint differently in place.
 /// Floats compare bitwise, so a NaN changing to a different NaN is a change.
+/// Likewise +0.0 and -0.0 compare as different.
 ///
 /// Meshes compare by pointer: a `TriangleMesh` or `MeshTexture` must not be
 /// mutated once a scene references it; replace the pointer to change it.

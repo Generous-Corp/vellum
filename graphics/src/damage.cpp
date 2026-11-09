@@ -460,6 +460,7 @@ void DamageRegion::intersect(const PixelRect& rect) {
         if (!overlap.empty()) kept.push_back(overlap);
     }
     rects_ = std::move(kept);
+    clear_full_flags_unless_full();
 }
 
 void DamageRegion::intersect(const DamageRegion& other) {
@@ -473,6 +474,13 @@ void DamageRegion::intersect(const DamageRegion& other) {
     rects_ = std::move(kept);
     peak_before_coalescing_ = std::max(peak_before_coalescing_, rects_.size());
     if (rects_.size() > policy_.max_rects) coalesce();
+    clear_full_flags_unless_full();
+}
+
+void DamageRegion::clear_full_flags_unless_full() noexcept {
+    if (is_full_frame()) return;
+    collapsed_ = false;
+    explicit_full_ = false;
 }
 
 void DamageRegion::clear() {

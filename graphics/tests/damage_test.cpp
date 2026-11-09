@@ -484,6 +484,19 @@ void review_hardening() {
     threshold.add({0, 0, 10, 6});
     check(threshold.stats().collapsed_to_full_frame && !threshold.stats().explicit_full_frame,
           "a threshold collapse is not reported as explicit");
+    DamageRegion forced_whole = forced;
+    forced_whole.intersect(PixelRect{0, 0, 10, 10});
+    check(forced_whole.stats().explicit_full_frame, "intersecting with the whole frame keeps the flag");
+    forced.intersect(PixelRect{0, 0, 5, 5});
+    check(!forced.stats().explicit_full_frame && !forced.stats().collapsed_to_full_frame,
+          "intersecting below the frame clears the explicit flag");
+    DamageRegion window({0, 0, 10, 10}, exact_policy());
+    window.add({2, 2, 4, 4});
+    threshold.intersect(window);
+    check(!threshold.stats().collapsed_to_full_frame && !threshold.stats().explicit_full_frame &&
+              threshold.area() == 4,
+          "intersecting below the frame clears the collapse flag");
+    forced.add_full_frame();
     forced.clear();
     check(!forced.stats().explicit_full_frame, "clear resets the explicit flag");
 }
