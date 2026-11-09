@@ -214,6 +214,12 @@ if(VELLUM_RMLUI_VELLUM_RENDERER)
     list(APPEND VELLUM_RMLUI_COMPONENTS VellumRenderer)
 endif()
 
+# Only VellumRenderer may link Vellum; every other library here stays usable
+# without it.
+include(cmake/VellumRmlUiLinkBoundary.cmake)
+get_property(_vellum_rmlui_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY BUILDSYSTEM_TARGETS)
+vellum_rmlui_check_link_boundary(ALLOW vellum-rmlui-vellum-renderer TARGETS ${_vellum_rmlui_targets})
+
 if(VELLUM_RMLUI_INSTALL)
     set(_vellum_rmlui_cmake_dir "${CMAKE_INSTALL_LIBDIR}/cmake/VellumRmlUi")
     install(TARGETS ${_vellum_rmlui_install_targets}
