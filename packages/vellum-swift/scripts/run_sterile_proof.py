@@ -252,6 +252,95 @@ def foreign_source_reference(text: str, source_root: Path, allowed: list[Path]) 
     return str(source_root) in text
 
 
+WORK_MARKER = ".vellum-swift-proof-work"
+
+
+def identity(path: Path) -> tuple[int, int] | None:
+    try:
+        details = os.stat(path)
+    except OSError:
+        return None
+    return details.st_dev, details.st_ino
+
+
+def canonical(path: Path) -> Path:
+    return Path(os.path.normcase(os.path.realpath(path)))
+
+
+def lineage(path: Path) -> list[Path]:
+    absolute = Path(os.path.abspath(path))
+    return [absolute, *absolute.parents]
+
+
+def same_location(first: Path, second: Path) -> bool:
+    first_id, second_id = identity(first), identity(second)
+    if first_id is not None and second_id is not None:
+        return first_id == second_id
+    return str(canonical(first)).casefold() == str(canonical(second)).casefold()
+
+
+def within(ancestor: Path, path: Path) -> bool:
+    target = identity(ancestor)
+    for candidate in lineage(canonical(path)):
+        if target is not None and identity(candidate) == target:
+            return True
+        if target is None and str(candidate).casefold() == str(canonical(ancestor)).casefold():
+            return True
+    return False
+
+
+def symlink_between(build_dir: Path, work: Path) -> Path | None:
+    stop = os.path.abspath(build_dir)
+    for candidate in lineage(work):
+        if str(candidate) == stop:
+            return None
+        if os.path.islink(candidate):
+            return candidate
+        if same_location(candidate, build_dir):
+            return None
+    return None
+
+
+def unsafe_work_reason(work: Path, build_dir: Path, package: Path) -> str | None:
+    work = Path(os.path.abspath(work))
+    package = Path(os.path.abspath(package))
+    source_root = canonical(package).parents[1]
+    if within(build_dir, source_root):
+        return f"the build directory {build_dir} is or contains the source tree"
+    link = symlink_between(build_dir, work)
+    if link is not None:
+        return f"the work directory path {work} passes through the symlink {link}"
+    if same_location(work, build_dir) or not within(build_dir, work):
+        return f"the work directory {work} is not a dedicated child of the build directory {build_dir}"
+    for protected in (package, source_root):
+        if within(work, protected):
+            return f"the work directory {work} is or contains {protected}"
+    if within(package, work):
+        return f"the work directory {work} lies inside the package {package}"
+    return None
+
+
+def prepare_work(work: Path, build_dir: Path, package: Path) -> None:
+    if os.path.lexists(work):
+        if os.path.islink(work) or not os.path.isdir(work):
+            raise ProofError(f"refusing to remove the work directory: {work} is not a real directory")
+        if not os.path.isfile(work / WORK_MARKER):
+            raise ProofError(
+                f"refusing to remove the work directory: {work} was not created by this runner "
+                f"(no {WORK_MARKER}); remove it by hand")
+        unsafe = unsafe_work_reason(work, build_dir, package)
+        if unsafe is not None:
+            raise ProofError(f"refusing to remove the work directory: {unsafe}")
+        shutil.rmtree(work)
+    work.parent.mkdir(parents=True, exist_ok=True)
+    os.mkdir(work, 0o700)
+    unsafe = unsafe_work_reason(work, build_dir, package)
+    if unsafe is not None or os.path.islink(work):
+        raise ProofError(f"the created work directory failed validation: {unsafe or work}")
+    descriptor = os.open(work / WORK_MARKER, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    os.close(descriptor)
+
+
 def run(command: list[str], environment: dict[str, str], cwd: Path | None = None) -> str:
     result = subprocess.run(
         command, env=environment, cwd=cwd, capture_output=True, text=True, check=False
@@ -263,8 +352,11 @@ def run(command: list[str], environment: dict[str, str], cwd: Path | None = None
     return result.stdout + result.stderr
 
 
-def prove(sdk: Path, package: Path, work: Path, bundle: Path,
+def prove(sdk: Path, package: Path, work: Path, bundle: Path, build_dir: Path,
           require_pin: bool = False, require_prefix: bool = False) -> dict[str, object]:
+    unsafe = unsafe_work_reason(work, build_dir, package)
+    if unsafe is not None:
+        raise ProofError(f"refusing to remove the work directory: {unsafe}")
     swift = shutil.which("swift")
     if swift is None:
         if require_prefix:
@@ -280,9 +372,7 @@ def prove(sdk: Path, package: Path, work: Path, bundle: Path,
     if problems:
         raise ProofError("\n".join(problems))
     source_root = package.resolve().parents[1]
-    if work.exists():
-        shutil.rmtree(work)
-    work.mkdir(parents=True)
+    prepare_work(work, build_dir, package)
     staged = work / "package"
     shutil.copytree(
         package, staged,
@@ -372,6 +462,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-prefix", action="store_true")
     parser.add_argument("--require-pinned-toolchain", action="store_true")
     parser.add_argument("--check-native", type=Path)
+    parser.add_argument("--build-dir", type=Path)
     args = parser.parse_args(argv)
     if args.check_native is not None:
         return check_native(args.check_native)
@@ -380,7 +471,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         sdk = locate_sdk(args.sdk_prefix or os.environ.get(PREFIX_VARIABLE, ""),
                          required=args.require_prefix)
-        evidence = prove(sdk, package, args.work.resolve(), bundle,
+        if args.build_dir is None:
+            raise ProofError("--build-dir is required so the work directory can be checked")
+        evidence = prove(sdk, package, Path(os.path.abspath(args.work)), bundle, args.build_dir,
                          require_pin=args.require_pinned_toolchain or
                          truthy(os.environ.get(REQUIRE_PIN_VARIABLE)),
                          require_prefix=args.require_prefix)
@@ -391,7 +484,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"vellum.swift-host-proof: {error}", file=sys.stderr)
         return 1
     text = json.dumps(evidence, indent=2, sort_keys=True)
-    (args.work.resolve() / "swift-host-proof-evidence.json").write_text(text + "\n", encoding="utf-8")
+    (Path(os.path.abspath(args.work)) / "swift-host-proof-evidence.json").write_text(text + "\n", encoding="utf-8")
     print(text)
     return 0
 

@@ -41,13 +41,28 @@ relocatable `lib/pkgconfig/vellum-host-c.pc`, so CMake, SwiftPM and plain
   `metal_layer` is borrowed: the caller keeps it alive until the surface is
   destroyed. The bundle bytes and every input string are copied before the call
   returns.
-- **Borrowed outputs.** Strings in `vellum_host_surface_info` belong to the
-  surface and stay valid until it is destroyed. Strings in accessibility and
-  text-input records belong to the application and stay valid until its next
-  mutating call (create, pump, dispatch, pointer, key, insert text, focus or
-  accessibility perform). The pixels in `vellum_host_image` belong to the
-  surface and stay valid until its next render, resize, capture or destroy.
-  Copy anything kept longer.
+- **Handle validity.** Live handles are tracked in a process-wide registry
+  under a mutex. Every entry point resolves its handle there and never reads a
+  handle's memory to decide whether it may use it. Destroy removes the handle
+  from the registry before freeing it, so a concurrent or later call on a
+  destroyed handle returns `VELLUM_HOST_ERROR_INVALID_ARGUMENT` (or
+  `VELLUM_HOST_ERROR_WRONG_THREAD` while it is still live) instead of touching
+  freed memory. The registry also records each handle's kind, so an app
+  handle passed to a surface function, or the reverse, returns
+  `VELLUM_HOST_ERROR_INVALID_ARGUMENT`. The lock is held only for the lookup.
+  That is sufficient because destroy is confined to the owner thread and a
+  non-owner call is refused under the lock, so a handle could be freed in use
+  only if its owner were inside two calls at once. A destroyed address that a
+  later create happens to reuse is indistinguishable from the new handle;
+  generation-bearing handles are the planned follow-up.
+- **Borrowed outputs.** The contract is the strictest rule: every borrowed
+  string, `vellum_host_last_error()` included, is valid only until the next
+  `vellum_host_*` call on the same thread. Strings in surface info belong to
+  the surface, and strings in accessibility and text-input records belong to
+  the application. The pixels in `vellum_host_image` belong to the surface and
+  are invalidated by its next render, resize, capture or destroy. Copy anything
+  kept longer. Output structs are zeroed on entry, so a failed call never leaves
+  stale pointers or sizes behind.
 - **Threading.** A handle is confined to the thread that created it. A call
   from any other thread, destroy included, returns
   `VELLUM_HOST_ERROR_WRONG_THREAD` without touching the handle; a destroy
