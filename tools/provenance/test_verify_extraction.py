@@ -614,6 +614,13 @@ class VerifyExtractionTests(unittest.TestCase):
         record.write_text(json.dumps({"schema": verify_extraction.FRAMEWORK_TRANSFER_SCHEMA, "framework_tree": "f" * 40,
                                       "records": [{"framework_path": p} for p in files if p.startswith("framework/")]}),
                           encoding="utf-8")
+        self.track(root)
+
+    def track(self, root: Path) -> None:
+        # The census reads tracked files only; the fixture's files are staged.
+        if not (root / ".git").exists():
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
 
     def test_framework_file_set_is_the_transfer_records(self) -> None:
         self.hide_ci_git_base()
@@ -646,6 +653,15 @@ class VerifyExtractionTests(unittest.TestCase):
             self.assertGreater(census["declarations"]["native"], 0)
             self.assertFalse(any("collision census" in e for e in errors), errors)
             # A native declaration of a framework/ name is refused.
+            # An untracked tree (CI checks Pulp out at .mirror-pulp inside the
+            # checkout) is not Vellum source: its copy collides with nothing.
+            stray = root / ".mirror-pulp/core/runtime/include/pulp/runtime/log.hpp"
+            stray.parent.mkdir(parents=True)
+            stray.write_bytes(b"#pragma once\nnamespace vellum::runtime {\nclass Logger;\n}\n")
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual(checks["framework_collision_census"]["name_collisions"], 0)
+            self.assertFalse(any("collision census" in e for e in errors), errors)
+            # The same declaration in a tracked native file is refused.
             (root / "runtime/include/vellum/runtime/kernel.hpp").write_bytes(
                 b"#pragma once\nnamespace vellum::runtime {\nclass Kernel;\nclass Logger;\n}\n")
             errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
