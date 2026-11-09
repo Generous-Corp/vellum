@@ -33,7 +33,11 @@
 /scripts/verify_immutable_release_preflight.py @danielraffel
 /scripts/verify_release_tag.py @danielraffel
 /scripts/version_at_land.py @danielraffel
+/tools/provenance/content_scan_policy.py @danielraffel
 /tools/provenance/framework_trusted_verify.py @danielraffel
+/tools/provenance/mirror_edge_patterns.json @danielraffel
+/tools/provenance/mirror_edge_patterns.pin.json @danielraffel
 /tools/provenance/verify_authority_expansion.py @danielraffel
 /tools/provenance/verify_extraction.py @danielraffel
+/tools/provenance/verify_mirror_export.py @danielraffel
 /tools/provenance/verify_renderer_dependency.py @danielraffel

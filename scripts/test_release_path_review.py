@@ -315,6 +315,11 @@ class BaseCopyTests(GateCase):
         policy = gate.load_policy(ROOT)
         for path in ("tools/provenance/verify_extraction.py",
                      "tools/provenance/framework_trusted_verify.py",
+                     # What verify_extraction.py loads and reads as its rules.
+                     "tools/provenance/content_scan_policy.py",
+                     "tools/provenance/verify_mirror_export.py",
+                     "tools/provenance/mirror_edge_patterns.json",
+                     "tools/provenance/mirror_edge_patterns.pin.json",
                      ".github/workflows/framework-trusted-verify.yml",
                      "provenance/framework/transfer.json",
                      "provenance/framework/external-updates.json",

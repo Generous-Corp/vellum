@@ -187,12 +187,16 @@ promotion attestation and prove full-matrix parity.
   - the release-path review's rule, its two workflows, and `.shipyard/config.toml`, which names the reviewer signers
     and sessions it counts;
   - the framework transfer's judges, `tools/provenance/verify_extraction.py` and
-    `tools/provenance/framework_trusted_verify.py`, the mirror tooling under `tools/mirror/` they run, and the records
+    `tools/provenance/framework_trusted_verify.py`, the modules and rule tables the judge loads
+    (`content_scan_policy.py`, `verify_mirror_export.py`, `mirror_edge_patterns.json` and its pin, all under
+    `tools/provenance/`), the mirror tooling under `tools/mirror/` they run, and the records
     they hold the transfer to: `provenance/framework/transfer.json`, `provenance/framework/external-updates.json` and
     `provenance/framework-name-debt.json`, owned before they exist so the change that adds them needs both reviews;
   - CODEOWNERS itself.
   `release-policy` keeps that list complete: CODEOWNERS and the check's own list must name the same files, and a
-  policy script may import only modules that are themselves on the list. It then runs the base branch's copy of the
+  policy script may import only modules that are themselves on the list. That includes a module it
+  loads by file path (`importlib`'s `spec_from_file_location`) rather than with an `import` statement; one under
+  `tools/mirror/` or a workflow directory is accepted because the review already protects that whole prefix. It then runs the base branch's copy of the
   check on the pull request's tree (`--from-base`), so a pull request cannot weaken the check that judges it.
 - **Checked-out code never runs next to a secret.** In `release-tag.yml` and `version-at-land.yml`, each secret
   lives in a step that runs no repository Python:
