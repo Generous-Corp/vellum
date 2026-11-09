@@ -1,10 +1,14 @@
 # The release-signing policy and the code that enforces it. This list is the
 # release path: a change to any of these files, or to anything under
-# .github/workflows/ or .github/actions/, needs two counted reviewer APPROVEs
-# of its exact head (the `release-path-review` status, Decision 0014). Owners
+# .github/workflows/, .github/actions/ or tools/mirror/, needs two counted
+# reviewer APPROVEs of its exact head (the `release-path-review` status, Decision 0014). Owners
 # here only receive review requests. That status is an accident guard, not a
 # security boundary. scripts/check_release_policy.py (the required
 # `release-policy` check) keeps this list complete.
+# The Pulp-to-Vellum framework transfer is judged by verify_extraction.py
+# and framework_trusted_verify.py against the transfer record, the name-debt
+# baseline and the external-updates log under provenance/; the record files
+# are owned before they exist so the change that adds them needs both reviews.
 /.github/CODEOWNERS @danielraffel
 /.github/workflows/release-path-review-trigger.yml @danielraffel
 /.github/workflows/release-path-review.yml @danielraffel
@@ -13,6 +17,9 @@
 /.github/workflows/version-at-land.yml @danielraffel
 /.shipyard/config.toml @danielraffel
 /provenance/authority-signers.allowed_signers @danielraffel
+/provenance/framework-name-debt.json @danielraffel
+/provenance/framework/external-updates.json @danielraffel
+/provenance/framework/transfer.json @danielraffel
 /provenance/release-signers.allowed_signers @danielraffel
 /provenance/retired-release-tags.json @danielraffel
 /scripts/check_release_policy.py @danielraffel
@@ -26,5 +33,7 @@
 /scripts/verify_immutable_release_preflight.py @danielraffel
 /scripts/verify_release_tag.py @danielraffel
 /scripts/version_at_land.py @danielraffel
+/tools/provenance/framework_trusted_verify.py @danielraffel
 /tools/provenance/verify_authority_expansion.py @danielraffel
+/tools/provenance/verify_extraction.py @danielraffel
 /tools/provenance/verify_renderer_dependency.py @danielraffel

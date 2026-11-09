@@ -73,8 +73,10 @@ OWNER = "@danielraffel"
 # runner that decides which release-path tests CI runs (the lane manifest is not
 # owned; lane_problems holds the release-policy lane's contents instead), the
 # workflow that holds an App token to propose each version (version-at-land.yml),
-# and the release-path review: its rule, its two workflows and the Shipyard
-# config naming the reviewer signers and sessions it counts.
+# the release-path review: its rule, its two workflows and the Shipyard
+# config naming the reviewer signers and sessions it counts, and the framework
+# transfer's judges and the records they hold the transfer to (owned before
+# the records exist, so the change that adds them is a release-path change).
 POLICY_FILES = (
     "/.github/CODEOWNERS",
     "/.github/workflows/release-path-review-trigger.yml",
@@ -84,6 +86,9 @@ POLICY_FILES = (
     "/.github/workflows/version-at-land.yml",
     "/.shipyard/config.toml",
     "/provenance/authority-signers.allowed_signers",
+    "/provenance/framework-name-debt.json",
+    "/provenance/framework/external-updates.json",
+    "/provenance/framework/transfer.json",
     "/provenance/release-signers.allowed_signers",
     "/provenance/retired-release-tags.json",
     "/scripts/check_release_policy.py",
@@ -97,7 +102,9 @@ POLICY_FILES = (
     "/scripts/verify_immutable_release_preflight.py",
     "/scripts/verify_release_tag.py",
     "/scripts/version_at_land.py",
+    "/tools/provenance/framework_trusted_verify.py",
     "/tools/provenance/verify_authority_expansion.py",
+    "/tools/provenance/verify_extraction.py",
     "/tools/provenance/verify_renderer_dependency.py",
 )
 # GitHub Actions accepts quoted YAML keys and optional whitespace before the

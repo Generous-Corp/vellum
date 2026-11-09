@@ -305,6 +305,34 @@ class BaseCopyTests(GateCase):
                      ".shipyard/config.toml"):
             self.assertIn(path, live)
 
+    def test_the_framework_transfer_judges_and_records_are_release_path(self) -> None:
+        # The judges of the Pulp-to-Vellum framework transfer, the mirror
+        # tooling they run, and the records they hold the transfer to. The
+        # records are protected before they exist, so the change adding them
+        # needs both reviews. Each is read through the live policy and the
+        # gate's own path match, so dropping one from CODEOWNERS (and the
+        # policy list) or the tools/mirror/ prefix fails here.
+        policy = gate.load_policy(ROOT)
+        for path in ("tools/provenance/verify_extraction.py",
+                     "tools/provenance/framework_trusted_verify.py",
+                     ".github/workflows/framework-trusted-verify.yml",
+                     "provenance/framework/transfer.json",
+                     "provenance/framework/external-updates.json",
+                     "provenance/framework-name-debt.json",
+                     "tools/mirror/rename_mirror_namespace.py",
+                     "tools/mirror/mirror_collision_census.py",
+                     "tools/mirror/mirror_symbol_intersection.py",
+                     "tools/mirror/a-file-added-later/x.py"):
+            with self.subTest(path=path):
+                self.assertEqual(gate.touched([{"filename": path}], policy.protected), [path])
+                self.assertEqual(gate.touched([{"filename": "elsewhere.txt", "previous_filename": path}],
+                                              policy.protected), [path])
+        # Control: the match is not vacuous.
+        for path in ("tools/provenance/test_framework_trusted_verify.py", "tools/mirrors/x.py",
+                     "provenance/framework/other.json", "framework/README.md"):
+            with self.subTest(control=path):
+                self.assertEqual(gate.touched([{"filename": path}], policy.protected), [])
+
     def test_a_loose_codeowners_pattern_fails_closed(self) -> None:
         for pattern in ("scripts/*.py", "/scripts/", "docs/x.md", "/a/**"):
             with self.subTest(pattern=pattern):
