@@ -145,6 +145,30 @@ void test_action_rows() {
     VELLUM_RMLUI_CHECK(model.run("midi.panic") == Status::rejected && panics == 1);
 }
 
+void test_rows_state_their_own_availability() {
+    MemorySettingsStore store;
+    FakeEngine engine;
+    SettingsModel model(store, &engine);
+    bool serviced = false;
+    int runs = 0;
+    SettingsPage page{"midi", "MIDI", {}, {}};
+    SettingRow panic;
+    panic.id = "midi.panic";
+    panic.kind = SettingKind::action;
+    panic.run = [&] { ++runs; };
+    panic.state = [&] { return serviced ? RowState{} : RowState{false, "the host services no panic"}; };
+    page.rows.push_back(panic);
+    model.add_page(std::move(page));
+
+    VELLUM_RMLUI_CHECK(model.state("midi.panic").reason == "the host services no panic");
+    VELLUM_RMLUI_CHECK(model.run("midi.panic") == Status::rejected && runs == 0);
+    serviced = true;
+    VELLUM_RMLUI_CHECK(model.run("midi.panic") == Status::ok && runs == 1);
+    // The adapter can still disable a row that is available on its own.
+    engine.states["midi.panic"] = {false, "disabled by the product"};
+    VELLUM_RMLUI_CHECK(model.state("midi.panic").reason == "disabled by the product");
+}
+
 void test_provider_filled_choice() {
     MemorySettingsStore store;
     SettingsModel model(store);
@@ -215,6 +239,7 @@ int main() {
     test_values_by_scope();
     test_disabled_rows_keep_their_value();
     test_action_rows();
+    test_rows_state_their_own_availability();
     test_provider_filled_choice();
     test_window_scale_scope();
     return 0;

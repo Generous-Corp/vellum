@@ -72,6 +72,10 @@ struct SettingRow {
     std::function<std::vector<ChoiceItem>()> choice_source;
     // action rows (for example Panic)
     std::function<void()> run;
+    // The row's own availability, for a row whose command knows it (Panic
+    // knows whether the host services it). Combined with the adapter: either
+    // can disable the row.
+    std::function<RowState()> state;
 };
 
 struct SettingsPage {
@@ -178,10 +182,17 @@ class SettingsModel final {
         return Status::rejected;
     }
 
-    // Enabled, or disabled with a reason. Unknown rows are disabled.
+    // Enabled, or disabled with a reason: the row's own answer first, then
+    // the adapter's. Unknown rows are disabled.
     RowState state(std::string_view row_id) {
-        if (!find(row_id))
+        const SettingRow* row = find(row_id);
+        if (!row)
             return {false, "unknown setting"};
+        if (row->state) {
+            RowState own = row->state();
+            if (!own.enabled)
+                return own;
+        }
         return capabilities_ ? capabilities_->state(row_id) : RowState{};
     }
 
