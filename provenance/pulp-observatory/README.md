@@ -29,7 +29,13 @@ and advances the cursor, so it refuses to run without
 described below.
 
 The command writes new observation events first, then advances the cursor and
-regenerates `reports/current.{json,md}`. An interrupted run is idempotent: an
+regenerates `reports/current.{json,md}`. A Vellum integration merge that adds nothing
+beyond its two sides (`integration_merge_covered`: every observable path
+carries exactly the entry of the side that changed it) gets no event of its
+own. The sides' events cover it, and `verify` accepts it without one, so the
+receiver no longer adds a pending observation that can only ever be
+classified `superseded`. A merge with a mapped change of its own still gets an
+event. Older events for covered merges stay valid. An interrupted run is idempotent: an
 existing event is verified against Git and is never overwritten.
 
 Discovery defaults to `pending`; it is not a port decision. Review the event
