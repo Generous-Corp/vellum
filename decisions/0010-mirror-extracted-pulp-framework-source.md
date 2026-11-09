@@ -196,7 +196,11 @@ earlier decisions".
     copy of a `framework/` file in any other native root;
   - `framework/external/` is third-party source, outside the name-debt
     ratchet's scope; it may hold only the transferred files, so first-party
-    code cannot be placed there to escape the count.
+    code cannot be placed there to escape the count, and each file is pinned
+    to its recorded blob. A third-party update lands in its own reviewed pull
+    request that appends an entry to the append-only
+    `provenance/framework/external-updates.json`, chaining the file's previous
+    blob to its new one.
 - **Name debt, ratcheted.** The units keep Pulp's `PULP_*` macros and `pulp-*`
   target names, and their prose names plug-in hosts. The native name rules
   `pulp-package-or-target`, `audio-plugin-sdk` and `pulp-public-namespace`

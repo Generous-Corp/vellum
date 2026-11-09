@@ -581,7 +581,8 @@ class VerifyExtractionTests(unittest.TestCase):
             record = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
             record.parent.mkdir(parents=True)
             body = {"schema": verify_extraction.FRAMEWORK_TRANSFER_SCHEMA, "framework_tree": "f" * 40,
-                    "records": [{"framework_path": "framework/external/x/x.c"}]}
+                    "records": [{"framework_path": "framework/external/x/x.c",
+                                 "framework_git_blob_sha": verify_extraction.git_blob_sha(b"int x;\n")}]}
             record.write_text(json.dumps(body), encoding="utf-8")
             pinned = hashlib.sha256(record.read_bytes()).hexdigest()
             base = self.git_commit_all(root, "transfer")
@@ -715,6 +716,112 @@ class VerifyExtractionTests(unittest.TestCase):
             census = checks["framework_collision_census"]
             self.assertEqual(census["blob_quarantine"], 1)
             self.assertTrue(any("blob quarantine" in e for e in errors), errors)
+
+    EXTERNAL = "framework/external/lib/lib.h"
+    EXTERNAL_BYTES = b"/* third-party */\nint lib(void);\n"
+
+    def external_fixture(self, root: Path) -> dict[str, str]:
+        (root / self.EXTERNAL).parent.mkdir(parents=True)
+        (root / self.EXTERNAL).write_bytes(self.EXTERNAL_BYTES)
+        return {self.EXTERNAL: verify_extraction.git_blob_sha(self.EXTERNAL_BYTES)}
+
+    def write_updates(self, root: Path, entries) -> None:
+        target = root / verify_extraction.FRAMEWORK_EXTERNAL_UPDATES
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(entries), encoding="utf-8")
+
+    def update(self, path: str, before: bytes, after: bytes) -> dict[str, str]:
+        return {"path": path, "from_blob": verify_extraction.git_blob_sha(before),
+                "to_blob": verify_extraction.git_blob_sha(after), "reason": "security fix",
+                "dependency": "lib", "version": "1.2.4"}
+
+    def test_framework_external_files_are_pinned_to_their_blobs(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            recorded = self.external_fixture(root)
+            # An unmodified file passes.
+            self.assertEqual(verify_extraction.framework_external_errors(root, recorded)[0], [])
+            # An in-place edit with no update entry is refused.
+            smuggled = self.EXTERNAL_BYTES + b"namespace vellum::runtime { class SpscQueue { int x; }; }\n"
+            (root / self.EXTERNAL).write_bytes(smuggled)
+            errors, checks = verify_extraction.framework_external_errors(root, recorded)
+            self.assertEqual(checks["framework_external_edited"], [self.EXTERNAL])
+            self.assertIn("only through the dependency process", errors[0])
+            # A matching entry makes the same bytes a reviewed update.
+            self.write_updates(root, [self.update(self.EXTERNAL, self.EXTERNAL_BYTES, smuggled)])
+            self.assertEqual(verify_extraction.framework_external_errors(root, recorded)[0], [])
+            # An entry whose to_blob is not the file is refused.
+            self.write_updates(root, [self.update(self.EXTERNAL, self.EXTERNAL_BYTES, b"other\n")])
+            self.assertIn("differ from their pinned blobs", verify_extraction.framework_external_errors(root, recorded)[0][0])
+            # A broken chain is refused.
+            self.write_updates(root, [self.update(self.EXTERNAL, b"not the recorded bytes\n", smuggled)])
+            self.assertIn("breaks the chain", verify_extraction.framework_external_errors(root, recorded)[0][0])
+            # A chain of two updates resolves to the last to_blob.
+            later = smuggled + b"// 1.2.5\n"
+            (root / self.EXTERNAL).write_bytes(later)
+            self.write_updates(root, [self.update(self.EXTERNAL, self.EXTERNAL_BYTES, smuggled),
+                                      self.update(self.EXTERNAL, smuggled, later)])
+            self.assertEqual(verify_extraction.framework_external_errors(root, recorded)[0], [])
+            # An entry for a path the transfer record does not list is refused.
+            self.write_updates(root, [self.update("framework/external/lib/new.h", b"a", b"b")])
+            self.assertIn("is not a framework/external/ file the transfer record lists",
+                          verify_extraction.framework_external_errors(root, recorded)[0][0])
+            # Malformed lists and entries fail closed.
+            for bad in ("{", json.dumps({"path": self.EXTERNAL}), json.dumps([{"path": self.EXTERNAL}])):
+                (root / verify_extraction.FRAMEWORK_EXTERNAL_UPDATES).write_text(bad, encoding="utf-8")
+                self.assertTrue(verify_extraction.framework_external_errors(root, recorded)[0], bad)
+
+    def test_framework_external_updates_are_append_only(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            recorded = self.external_fixture(root)
+            first = self.EXTERNAL_BYTES + b"// 1.2.4\n"
+            (root / self.EXTERNAL).write_bytes(first)
+            entry = self.update(self.EXTERNAL, self.EXTERNAL_BYTES, first)
+            self.write_updates(root, [entry])
+            base = self.git_commit_all(root, "land an update")
+            subprocess.run(["git", "-C", str(root), "checkout", "-q", "-b", "change"], check=True)
+            os.environ["VELLUM_GIT_BASE"] = base
+            self.assertEqual(verify_extraction.framework_external_errors(root, recorded)[0], [])  # control
+            # Appending passes.
+            second = first + b"// 1.2.5\n"
+            (root / self.EXTERNAL).write_bytes(second)
+            self.write_updates(root, [entry, self.update(self.EXTERNAL, first, second)])
+            self.git_commit_all(root, "append")
+            self.assertEqual(verify_extraction.framework_external_errors(root, recorded)[0], [])
+            # Editing the landed entry, or removing it, is refused.
+            (root / self.EXTERNAL).write_bytes(first)
+            self.write_updates(root, [dict(entry, reason="rewritten")])
+            self.git_commit_all(root, "edit")
+            self.assertTrue(any("append-only" in e for e in verify_extraction.framework_external_errors(root, recorded)[0]))
+            (root / self.EXTERNAL).write_bytes(self.EXTERNAL_BYTES)
+            self.write_updates(root, [])
+            self.git_commit_all(root, "remove")
+            self.assertTrue(any("append-only" in e for e in verify_extraction.framework_external_errors(root, recorded)[0]))
+
+    def test_verify_framework_refuses_an_in_place_external_edit(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n",
+                                          self.EXTERNAL: self.EXTERNAL_BYTES})
+            record = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+            value = json.loads(record.read_text(encoding="utf-8"))
+            for row in value["records"]:
+                row["framework_git_blob_sha"] = verify_extraction.git_blob_sha((root / row["framework_path"]).read_bytes())
+            record.write_text(json.dumps(value), encoding="utf-8")
+            _, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual(checks["framework_external_edited"], [])
+            (root / self.EXTERNAL).write_bytes(self.EXTERNAL_BYTES + b"#define PULP_SMUGGLED 1\n")
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual(checks["framework_external_edited"], [self.EXTERNAL])
+            self.assertTrue(any("only through the dependency process" in e for e in errors), errors)
+            # An unrecorded external file is still refused, as before.
+            (root / "framework/external/lib/extra.h").write_bytes(b"int extra;\n")
+            _, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual(checks["framework_external_unrecorded"], ["framework/external/lib/extra.h"])
 
     def test_landed_transfer_record_matches_its_pin(self) -> None:
         record = ROOT / verify_extraction.FRAMEWORK_TRANSFER_RECORD

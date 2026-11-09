@@ -60,6 +60,12 @@ MIRROR_ROOT = "mirror/"
 # own content regime (verify_framework below).
 FRAMEWORK_ROOT = "framework/"
 FRAMEWORK_TRANSFER_RECORD = "provenance/framework/transfer.json"
+# framework/external/ is third-party source: the census and the name-debt
+# ratchet skip it, so its bytes are pinned instead. A file there must hold its
+# transfer-record blob, or the to_blob of the last entry for it in this
+# append-only list, which is how a third-party update lands.
+FRAMEWORK_EXTERNAL_UPDATES = "provenance/framework/external-updates.json"
+FRAMEWORK_EXTERNAL_UPDATE_KEYS = {"path", "from_blob", "to_blob", "reason", "dependency", "version"}
 # The transfer record is immutable once it lands: its bytes are pinned here,
 # so repointing it (at another receipt, records or tree) is an edit to this
 # verifier, not to data, and it must also equal its copy at the merge base.
@@ -929,6 +935,68 @@ def framework_debt_errors(root: Path) -> tuple[list[str], dict[str, int]]:
 FRAMEWORK_RESIDUAL_PULP = re.compile(rb"pulp::|namespace\s+pulp(?![A-Za-z0-9_])|[<\"]pulp/|include/pulp/")
 
 
+def framework_external_errors(root: Path, recorded: dict[str, str]) -> tuple[list[str], dict[str, object]]:
+    """Pin framework/external/ to its recorded blobs, updated only through FRAMEWORK_EXTERNAL_UPDATES."""
+    errors: list[str] = []
+    external = FRAMEWORK_ROOT + "external/"
+    expected = {path: blob for path, blob in recorded.items() if path.startswith(external)}
+    path = root / FRAMEWORK_EXTERNAL_UPDATES
+    entries: list = []
+    if path.exists():
+        try:
+            entries = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return [f"{FRAMEWORK_EXTERNAL_UPDATES}: unreadable: {exc}"], {}
+        if not isinstance(entries, list):
+            return [f"{FRAMEWORK_EXTERNAL_UPDATES}: must be a JSON list of update entries"], {}
+    for index, entry in enumerate(entries):
+        where = f"{FRAMEWORK_EXTERNAL_UPDATES}[{index}]"
+        if not isinstance(entry, dict) or set(entry) != FRAMEWORK_EXTERNAL_UPDATE_KEYS:
+            errors.append(f"{where}: must have exactly {sorted(FRAMEWORK_EXTERNAL_UPDATE_KEYS)}")
+            continue
+        if not all(isinstance(entry[key], str) and entry[key] for key in FRAMEWORK_EXTERNAL_UPDATE_KEYS):
+            errors.append(f"{where}: every field must be a non-empty string")
+            continue
+        if not SHA_RE.fullmatch(entry["from_blob"]) or not SHA_RE.fullmatch(entry["to_blob"]):
+            errors.append(f"{where}: from_blob and to_blob must be git blob ids")
+            continue
+        if entry["path"] not in expected:
+            errors.append(f"{where}: {entry['path']} is not a framework/external/ file the transfer record lists")
+            continue
+        if entry["from_blob"] != expected[entry["path"]]:
+            errors.append(f"{where}: from_blob {entry['from_blob'][:12]} breaks the chain for {entry['path']}, "
+                          f"whose expected blob is {expected[entry['path']][:12]}")
+            continue
+        expected[entry["path"]] = entry["to_blob"]
+    # Append-only: the list at the history base must be a prefix of this one.
+    base, base_error = load_mirror_export_verifier().history_base(root)
+    if base_error:
+        errors.append(f"{FRAMEWORK_EXTERNAL_UPDATES}: {base_error}")
+    elif base is not None:
+        shown = subprocess.run(["git", "-C", str(root), "show", f"{base}:{FRAMEWORK_EXTERNAL_UPDATES}"],
+                               capture_output=True, check=False)
+        if shown.returncode == 0:
+            try:
+                landed = json.loads(shown.stdout)
+            except ValueError as exc:
+                landed = None
+                errors.append(f"{FRAMEWORK_EXTERNAL_UPDATES}: unreadable at {base}: {exc}")
+            if isinstance(landed, list) and entries[:len(landed)] != landed:
+                errors.append(f"{FRAMEWORK_EXTERNAL_UPDATES}: entries present at the merge base were removed or "
+                              "edited; the list is append-only")
+    edited = []
+    for relative, blob in sorted(expected.items()):
+        file = root / relative
+        if file.is_file() and not file.is_symlink() and git_blob_sha(file.read_bytes()) != blob:
+            edited.append(relative)
+    if edited:
+        errors.append(
+            f"framework/external/ files differ from their pinned blobs: {edited[:5]}. Third-party bytes change "
+            f"only through the dependency process: update the file and append an entry to "
+            f"{FRAMEWORK_EXTERNAL_UPDATES} in a reviewed pull request")
+    return errors, {"framework_external_edited": edited, "framework_external_updates": len(entries)}
+
+
 def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
                      defer_identity: bool = False) -> tuple[list[str], dict[str, object]]:
     """framework/'s content regime and its transfer proof (Decision 0010 option a)."""
@@ -999,6 +1067,10 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
     # vellum namespace with native code, so a native declaration that collides
     # with a framework/ name fails here. A census that sees no declarations on
     # either side is itself an error (collision_errors), its built-in control.
+    external_errors, external_checks = framework_external_errors(
+        root, {r.get("framework_path"): r.get("framework_git_blob_sha") for r in transfer.get("records", [])})
+    errors.extend(external_errors)
+    checks.update(external_checks)
     rename_tool = load_rename_tool()
     census = tracked_collision_census(rename_tool, root, framework)
     checks["framework_collision_census"] = {

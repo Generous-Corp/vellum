@@ -63,7 +63,14 @@ counted debt in
 [`provenance/framework-name-debt.json`](../provenance/framework-name-debt.json)
 that may only fall. Until 8c regenerates the closures from Vellum, an edit may
 change a file's bytes but not the transferred file set, and the generated-input
-sources (preludes, embedded data, build info) stay as Pulp produced them. Native roots outside `framework/` keep the full rules and may
+sources (preludes, embedded data, build info) stay as Pulp produced them.
+`framework/external/` is third-party source, and its bytes are pinned: each
+file must hold its transfer-record blob. A third-party update changes the file
+and appends an entry (`path`, `from_blob`, `to_blob`, `reason`, `dependency`,
+`version`) to
+[`provenance/framework/external-updates.json`](../provenance/framework/external-updates.json)
+in its own reviewed pull request. The list is append-only, and each entry's
+`from_blob` must be the file's current expected blob. Native roots outside `framework/` keep the full rules and may
 not define or copy the units' namespaces.
 
 ## Active ownership and change routing
