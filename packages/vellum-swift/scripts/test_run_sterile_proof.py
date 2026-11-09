@@ -276,6 +276,64 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("--build-dir is required", err.getvalue())
 
+    def fake_tree(self, base: Path) -> tuple[Path, Path, Path]:
+        source = base / "src"
+        package = source / "packages" / "vellum-swift"
+        package.mkdir(parents=True)
+        build = source / "build"
+        build.mkdir()
+        return source, package, build
+
+    def test_case_variant_paths_cannot_evade_the_protected_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as text:
+            source, package, build = self.fake_tree(Path(text))
+            variant_source = source.parent / "SRC"
+            variant_build = source / "BUILD"
+            if not variant_source.exists():
+                self.skipTest("the temporary volume is case-sensitive")
+            self.assertIsNotNone(runner.unsafe_work_reason(variant_source, build, package))
+            self.assertIsNotNone(runner.unsafe_work_reason(variant_build, build, package))
+            self.assertIsNotNone(runner.unsafe_work_reason(
+                variant_source / "PACKAGES" / "VELLUM-SWIFT" / "run", build, package))
+            self.assertIsNone(runner.unsafe_work_reason(variant_build / "run", build, package))
+
+    def test_symlinked_work_directories_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as text:
+            base = Path(text)
+            source, package, build = self.fake_tree(base)
+            elsewhere = base / "elsewhere"
+            elsewhere.mkdir()
+            (elsewhere / "keep.txt").write_text("keep", encoding="utf-8")
+            (build / "outside").symlink_to(elsewhere, target_is_directory=True)
+            (build / "inward").symlink_to(package, target_is_directory=True)
+            (build / "hop").symlink_to(build, target_is_directory=True)
+            for name in ("outside", "inward", "hop/run"):
+                with self.subTest(name=name):
+                    reason = runner.unsafe_work_reason(build / name, build, package)
+                    self.assertIsNotNone(reason)
+                    with self.assertRaises(runner.ProofError):
+                        runner.prepare_work(build / name, build, package)
+            self.assertTrue((elsewhere / "keep.txt").is_file())
+
+    def test_only_runner_created_work_directories_are_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as text:
+            _, package, build = self.fake_tree(Path(text))
+            work = build / "swift-host-proof" / "run"
+            work.mkdir(parents=True)
+            (work / "keep.txt").write_text("keep", encoding="utf-8")
+            with self.assertRaises(runner.ProofError) as refused:
+                runner.prepare_work(work, build, package)
+            self.assertIn("not created by this runner", str(refused.exception))
+            self.assertTrue((work / "keep.txt").is_file())
+            (work / "keep.txt").unlink()
+            work.rmdir()
+            runner.prepare_work(work, build, package)
+            self.assertTrue((work / runner.WORK_MARKER).is_file())
+            (work / "old.txt").write_text("old", encoding="utf-8")
+            runner.prepare_work(work, build, package)
+            self.assertFalse((work / "old.txt").exists())
+            self.assertTrue((work / runner.WORK_MARKER).is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

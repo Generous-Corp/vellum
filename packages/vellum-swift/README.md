@@ -35,8 +35,12 @@ PKG_CONFIG_PATH="$sdk/lib/pkgconfig" swift build -c release \
 install consumers do. `VELLUM_SWIFT_PROOF_SDK_PREFIX` (a CMake cache variable or
 an environment variable) points the proof at another installed SDK instead, such
 as one made by `scripts/build_sdk_artifact.py` and `scripts/install.sh`. The
-runner refuses a work directory that is not a dedicated child of `--build-dir`
-or that is or contains the package or source tree, and only then clears it. It
+runner refuses a work directory that is not a dedicated child of `--build-dir`,
+that is or contains the package or source tree, or whose path passes through a
+symlink. It compares filesystem identities, so case variants and symlinks
+cannot evade the checks. It removes only a directory it created itself, marked
+with `.vellum-swift-proof-work`, and it re-validates the path before removal and
+after creating it again. It
 stages a copy of the package, builds it against that prefix, checks that
 the build and the binary reference only the installed prefix, runs the proof and
 writes `swift-host-proof-evidence.json` in its work directory.

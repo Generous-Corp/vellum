@@ -346,10 +346,68 @@ static void check_handle_lifetime(void) {
           stale.height == 0U && stale.row_bytes == 0U);
 }
 
+static void check_handle_kinds(void) {
+    vellum_host_app_config config;
+    memset(&config, 0, sizeof config);
+    config.struct_size = sizeof config;
+    config.bundle = kRaceBundle;
+    config.bundle_length = strlen(kRaceBundle);
+    vellum_host_app* app = NULL;
+    vellum_host_surface_config surface_config;
+    memset(&surface_config, 0, sizeof surface_config);
+    surface_config.struct_size = sizeof surface_config;
+    surface_config.width = 16U;
+    surface_config.height = 16U;
+    surface_config.scale = 1.0F;
+    vellum_host_surface* surface = NULL;
+    CHECK(vellum_host_app_create(&config, &app) == VELLUM_HOST_OK);
+    CHECK(vellum_host_surface_create(&surface_config, &surface) == VELLUM_HOST_OK);
+    if (app == NULL || surface == NULL) {
+        vellum_host_app_destroy(app);
+        vellum_host_surface_destroy(surface);
+        return;
+    }
+    vellum_host_surface* app_as_surface = (vellum_host_surface*)(void*)app;
+    vellum_host_app* surface_as_app = (vellum_host_app*)(void*)surface;
+    vellum_host_surface_info info;
+    memset(&info, 0, sizeof info);
+    info.struct_size = sizeof info;
+    vellum_host_image image;
+    memset(&image, 0, sizeof image);
+    image.struct_size = sizeof image;
+    float width = 0.0F;
+    float height = 0.0F;
+    size_t count = 0;
+    CHECK(vellum_host_surface_info_get(app_as_surface, &info) ==
+          VELLUM_HOST_ERROR_INVALID_ARGUMENT);
+    CHECK(strstr(vellum_host_last_error(), "another kind") != NULL);
+    CHECK(vellum_host_surface_resize(app_as_surface, 8U, 8U, 1.0F) ==
+          VELLUM_HOST_ERROR_INVALID_ARGUMENT);
+    CHECK(vellum_host_surface_capture_rgba(app_as_surface, &image) ==
+          VELLUM_HOST_ERROR_INVALID_ARGUMENT);
+    CHECK(vellum_host_surface_render(app_as_surface, app) == VELLUM_HOST_ERROR_INVALID_ARGUMENT);
+    CHECK(vellum_host_surface_render(surface, surface_as_app) ==
+          VELLUM_HOST_ERROR_INVALID_ARGUMENT);
+    CHECK(vellum_host_surface_destroy(app_as_surface) == VELLUM_HOST_ERROR_INVALID_ARGUMENT);
+    CHECK(vellum_host_app_viewport(surface_as_app, &width, &height) ==
+          VELLUM_HOST_ERROR_INVALID_ARGUMENT);
+    CHECK(vellum_host_app_accessibility_count(surface_as_app, &count) ==
+          VELLUM_HOST_ERROR_INVALID_ARGUMENT);
+    CHECK(vellum_host_app_dispatch(surface_as_app, "x", NULL) ==
+          VELLUM_HOST_ERROR_INVALID_ARGUMENT);
+    CHECK(vellum_host_app_destroy(surface_as_app) == VELLUM_HOST_ERROR_INVALID_ARGUMENT);
+    CHECK(vellum_host_app_viewport(app, &width, &height) == VELLUM_HOST_OK);
+    CHECK(vellum_host_surface_info_get(surface, &info) == VELLUM_HOST_OK);
+    CHECK(vellum_host_surface_render(surface, app) == VELLUM_HOST_OK);
+    CHECK(vellum_host_surface_destroy(surface) == VELLUM_HOST_OK);
+    CHECK(vellum_host_app_destroy(app) == VELLUM_HOST_OK);
+}
+
 int main(int argc, char** argv) {
     REQUIRE(argc == 2);
     check_contract_errors();
     check_handle_lifetime();
+    check_handle_kinds();
 
     size_t length = 0;
     char* bundle = read_file(argv[1], &length);

@@ -47,8 +47,14 @@ relocatable `lib/pkgconfig/vellum-host-c.pc`, so CMake, SwiftPM and plain
   from the registry before freeing it, so a concurrent or later call on a
   destroyed handle returns `VELLUM_HOST_ERROR_INVALID_ARGUMENT` (or
   `VELLUM_HOST_ERROR_WRONG_THREAD` while it is still live) instead of touching
-  freed memory. A destroyed address that a later create happens to reuse is
-  indistinguishable from the new handle.
+  freed memory. The registry also records each handle's kind, so an app
+  handle passed to a surface function, or the reverse, returns
+  `VELLUM_HOST_ERROR_INVALID_ARGUMENT`. The lock is held only for the lookup.
+  That is sufficient because destroy is confined to the owner thread and a
+  non-owner call is refused under the lock, so a handle could be freed in use
+  only if its owner were inside two calls at once. A destroyed address that a
+  later create happens to reuse is indistinguishable from the new handle;
+  generation-bearing handles are the planned follow-up.
 - **Borrowed outputs.** The contract is the strictest rule: every borrowed
   string, `vellum_host_last_error()` included, is valid only until the next
   `vellum_host_*` call on the same thread. Strings in surface info belong to

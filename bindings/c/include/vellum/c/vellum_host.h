@@ -157,6 +157,14 @@ typedef struct vellum_host_text_input {
  * returns, directly or inside an output struct, stay valid only until the next
  * vellum_host_* call on the same thread. Callers copy anything they retain.
  */
+/*
+ * Handles: every entry point checks its handle against a registry of live
+ * handles of the expected kind, so a destroyed handle, or an app passed where a
+ * surface is expected (or the reverse), returns VELLUM_HOST_ERROR_INVALID_ARGUMENT.
+ * Only the creating thread may use or destroy a handle. A destroyed address that
+ * a later create reuses is indistinguishable from the new handle;
+ * generation-bearing handles are the planned follow-up.
+ */
 VELLUM_HOST_API uint32_t vellum_host_abi_version(void);
 VELLUM_HOST_API const char* vellum_host_last_error(void);
 
