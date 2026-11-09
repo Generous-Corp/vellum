@@ -2,20 +2,31 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 
 namespace vellum::graphics {
 namespace {
 
 void append_node(const SceneNode& node, float parent_x, float parent_y,
-                 std::vector<PaintCommand>& output) {
-    if (!is_known_kind(node.kind)) return;
+                 const Affine2D& parent_transform, std::vector<PaintCommand>& output) {
+    if (!is_known_kind(node.kind) || !compositing_is_finite(node)) return;
+    const float opacity = std::clamp(node.opacity, 0.0F, 1.0F);
+    if (opacity <= 0.0F) return;
     const Rect absolute{
         parent_x + node.bounds.x,
         parent_y + node.bounds.y,
         node.bounds.width,
         node.bounds.height,
     };
+    Affine2D transform = parent_transform;
+    if (node.transform && !is_identity(*node.transform)) {
+        transform = concat(parent_transform, concat(
+            translation(absolute.x, absolute.y),
+            concat(*node.transform, translation(-absolute.x, -absolute.y))));
+    }
+    const auto radii = resolved_corner_radii(node);
+    const auto first = output.size();
     if (node.kind == SceneNode::Kind::rectangle) {
         output.push_back({
             .kind = PaintCommand::Kind::rectangle,
@@ -25,6 +36,8 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
             .fill_gradients = node.fill_gradients,
             .box_shadows = node.box_shadows,
             .corner_radius = node.corner_radius,
+            .transform = transform,
+            .corner_radii = radii,
         });
     } else if (node.kind == SceneNode::Kind::text &&
                (!node.text.empty() || !node.text_runs.empty())) {
@@ -36,6 +49,8 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
                 .fill_gradients = node.fill_gradients,
                 .box_shadows = node.box_shadows,
                 .corner_radius = node.corner_radius,
+                .transform = transform,
+                .corner_radii = radii,
             });
         }
         output.push_back({
@@ -51,6 +66,7 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
             .underline = node.underline,
             .strikethrough = node.strikethrough,
             .text_runs = node.text_runs,
+            .transform = transform,
         });
     } else if (node.kind == SceneNode::Kind::mesh && node.mesh) {
         output.push_back({
@@ -58,11 +74,42 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
             .node_id = node.id,
             .bounds = absolute,
             .mesh = node.mesh,
+            .transform = transform,
         });
     }
     for (const auto& child : node.children) {
-        append_node(child, absolute.x, absolute.y, output);
+        append_node(child, absolute.x, absolute.y, transform, output);
     }
+    if (opacity >= 1.0F) return;
+
+    std::size_t drawn = 0;
+    std::size_t last_drawn = first;
+    for (auto index = first; index < output.size(); ++index) {
+        if (draws_content(output[index].kind)) {
+            ++drawn;
+            last_drawn = index;
+        }
+    }
+    if (drawn == 0U) return;
+    if (drawn == 1U) {
+        // A single command cannot overlap itself, so fading its paint is the
+        // same as fading the group. A layer needs two commands, so none is open.
+        output[last_drawn].opacity *= opacity;
+        return;
+    }
+    output.insert(output.begin() + static_cast<std::ptrdiff_t>(first), PaintCommand{
+        .kind = PaintCommand::Kind::begin_layer,
+        .node_id = node.id,
+        .bounds = absolute,
+        .transform = transform,
+        .opacity = opacity,
+    });
+    output.push_back({
+        .kind = PaintCommand::Kind::end_layer,
+        .node_id = node.id,
+        .bounds = absolute,
+        .transform = transform,
+    });
 }
 
 }  // namespace
@@ -139,8 +186,53 @@ bool mesh_is_valid(const TriangleMesh& mesh, std::string* reason) {
 std::vector<PaintCommand> make_paint_commands(const Scene& scene) {
     std::vector<PaintCommand> output;
     if (!scene_version_is_supported(scene.scene_version)) return output;
-    append_node(scene.root, 0.0F, 0.0F, output);
+    append_node(scene.root, 0.0F, 0.0F, Affine2D{}, output);
     return output;
+}
+
+Rect transformed_bounds(const Affine2D& transform, const Rect& rect) noexcept {
+    if (is_identity(transform)) return rect;
+    const Point corners[]{
+        apply(transform, {rect.x, rect.y}),
+        apply(transform, {rect.x + rect.width, rect.y}),
+        apply(transform, {rect.x + rect.width, rect.y + rect.height}),
+        apply(transform, {rect.x, rect.y + rect.height}),
+    };
+    float left = corners[0].x;
+    float right = corners[0].x;
+    float top = corners[0].y;
+    float bottom = corners[0].y;
+    for (const auto& corner : corners) {
+        left = std::min(left, corner.x);
+        right = std::max(right, corner.x);
+        top = std::min(top, corner.y);
+        bottom = std::max(bottom, corner.y);
+    }
+    return {left, top, right - left, bottom - top};
+}
+
+std::vector<float> effective_opacities(const std::vector<PaintCommand>& commands) {
+    std::vector<float> result;
+    result.reserve(commands.size());
+    std::vector<float> layers;
+    float enclosing = 1.0F;
+    for (const auto& command : commands) {
+        if (command.kind == PaintCommand::Kind::end_layer) {
+            // An unmatched end leaves the enclosing opacity unchanged.
+            if (!layers.empty()) {
+                enclosing = layers.back();
+                layers.pop_back();
+            }
+            result.push_back(enclosing);
+            continue;
+        }
+        result.push_back(enclosing * command.opacity);
+        if (command.kind == PaintCommand::Kind::begin_layer) {
+            layers.push_back(enclosing);
+            enclosing *= command.opacity;
+        }
+    }
+    return result;
 }
 
 }  // namespace vellum::graphics

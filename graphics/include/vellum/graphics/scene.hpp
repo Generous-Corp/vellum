@@ -2,8 +2,10 @@
 
 #include <vellum/graphics/color.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -89,6 +91,87 @@ struct TriangleMesh final {
     Rect clip{};
 };
 
+/// A point in logical pixels.
+struct Point final {
+    float x = 0.0F;
+    float y = 0.0F;
+};
+
+/// A two-dimensional affine transform. It maps a point (x, y) to
+/// (a * x + c * y + tx, b * x + d * y + ty); the six values are in the order
+/// of CSS `matrix(a, b, c, d, tx, ty)`. The default is the identity.
+struct Affine2D final {
+    float a = 1.0F;
+    float b = 0.0F;
+    float c = 0.0F;
+    float d = 1.0F;
+    float tx = 0.0F;
+    float ty = 0.0F;
+};
+
+[[nodiscard]] constexpr Affine2D translation(float x, float y) noexcept {
+    return {.tx = x, .ty = y};
+}
+
+/// The transform that applies `inner` first and then `outer`.
+[[nodiscard]] constexpr Affine2D concat(const Affine2D& outer, const Affine2D& inner) noexcept {
+    return {
+        .a = outer.a * inner.a + outer.c * inner.b,
+        .b = outer.b * inner.a + outer.d * inner.b,
+        .c = outer.a * inner.c + outer.c * inner.d,
+        .d = outer.b * inner.c + outer.d * inner.d,
+        .tx = outer.a * inner.tx + outer.c * inner.ty + outer.tx,
+        .ty = outer.b * inner.tx + outer.d * inner.ty + outer.ty,
+    };
+}
+
+[[nodiscard]] constexpr Point apply(const Affine2D& transform, Point point) noexcept {
+    return {
+        transform.a * point.x + transform.c * point.y + transform.tx,
+        transform.b * point.x + transform.d * point.y + transform.ty,
+    };
+}
+
+[[nodiscard]] constexpr bool is_identity(const Affine2D& transform) noexcept {
+    return transform.a == 1.0F && transform.b == 0.0F && transform.c == 0.0F &&
+           transform.d == 1.0F && transform.tx == 0.0F && transform.ty == 0.0F;
+}
+
+[[nodiscard]] inline bool is_finite(const Affine2D& transform) noexcept {
+    return std::isfinite(transform.a) && std::isfinite(transform.b) &&
+           std::isfinite(transform.c) && std::isfinite(transform.d) &&
+           std::isfinite(transform.tx) && std::isfinite(transform.ty);
+}
+
+/// Corner radii in logical pixels, clockwise from the top-left corner. Each
+/// corner is circular. Radii that together exceed a side are scaled down
+/// proportionally when drawn, as CSS `border-radius` is.
+struct CornerRadii final {
+    float top_left = 0.0F;
+    float top_right = 0.0F;
+    float bottom_right = 0.0F;
+    float bottom_left = 0.0F;
+};
+
+[[nodiscard]] constexpr CornerRadii uniform_corner_radii(float radius) noexcept {
+    return {radius, radius, radius, radius};
+}
+
+[[nodiscard]] constexpr bool is_uniform(const CornerRadii& radii) noexcept {
+    return radii.top_left == radii.top_right && radii.top_left == radii.bottom_right &&
+           radii.top_left == radii.bottom_left;
+}
+
+[[nodiscard]] constexpr bool is_rounded(const CornerRadii& radii) noexcept {
+    return radii.top_left > 0.0F || radii.top_right > 0.0F ||
+           radii.bottom_right > 0.0F || radii.bottom_left > 0.0F;
+}
+
+[[nodiscard]] inline bool is_finite(const CornerRadii& radii) noexcept {
+    return std::isfinite(radii.top_left) && std::isfinite(radii.top_right) &&
+           std::isfinite(radii.bottom_right) && std::isfinite(radii.bottom_left);
+}
+
 /// The scene schema version this build produces and consumes.
 ///
 /// The version is a single integer. Adding a field whose default leaves every
@@ -144,7 +227,52 @@ struct SceneNode final {
     std::vector<SceneNode> children;
     /// The geometry of a `mesh` node.
     std::shared_ptr<const TriangleMesh> mesh;
+    /// A transform applied about the node's origin, the top-left corner of
+    /// `bounds`, in addition to the `bounds` offset. It applies to the node's
+    /// own paint and to its whole subtree, composing with every ancestor's.
+    /// Absent is the identity.
+    std::optional<Affine2D> transform;
+    /// The opacity of the node and its subtree as one group. Values outside
+    /// [0, 1] are clamped. Overlapping descendants are composited together
+    /// first and then faded, so they do not show through one another.
+    float opacity = 1.0F;
+    /// Per-corner radii. When present they replace `corner_radius`, which
+    /// remains the uniform shorthand.
+    std::optional<CornerRadii> corner_radii;
 };
+
+/// The corner radii a node is drawn with: `corner_radii` when present,
+/// otherwise `corner_radius` on every corner. Negative radii resolve to zero.
+[[nodiscard]] constexpr CornerRadii resolved_corner_radii(const SceneNode& node) noexcept {
+    const auto radii = node.corner_radii.value_or(uniform_corner_radii(node.corner_radius));
+    const auto positive = [](float value) { return value > 0.0F ? value : 0.0F; };
+    return {
+        positive(radii.top_left),
+        positive(radii.top_right),
+        positive(radii.bottom_right),
+        positive(radii.bottom_left),
+    };
+}
+
+/// Whether a node's transform, opacity, and corner radii are all finite.
+[[nodiscard]] inline bool compositing_is_finite(const SceneNode& node) noexcept {
+    return std::isfinite(node.opacity) &&
+           (!node.transform || is_finite(*node.transform)) &&
+           (!node.corner_radii || is_finite(*node.corner_radii));
+}
+
+/// The first node, in depth-first order, whose transform, opacity, or corner
+/// radii are not finite.
+[[nodiscard]] inline const SceneNode* find_non_finite_compositing(
+    const SceneNode& node) noexcept {
+    if (!compositing_is_finite(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_non_finite_compositing(child); found != nullptr) {
+            return found;
+        }
+    }
+    return nullptr;
+}
 
 [[nodiscard]] constexpr bool is_known_kind(SceneNode::Kind kind) noexcept {
     switch (kind) {

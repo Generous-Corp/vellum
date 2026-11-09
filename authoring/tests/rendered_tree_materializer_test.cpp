@@ -1,11 +1,130 @@
 #include "rendered_tree_materializer.hpp"
 
+#include <cmath>
 #include <iostream>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace {
+
+bool near(float left, float right) {
+    return std::abs(left - right) < 0.0001F;
+}
+
+std::string wrap_tree(std::string_view children) {
+    return std::string(R"JSON({"protocol":"vellum.authoring-host.v2","kind":"render-result",
+      "tree":{"type":"stack","id":"compositing-root","style":{"width":200,"height":200},
+      "children":[)JSON") + std::string(children) + "]}}";
+}
+
+// Transform, opacity, and per-corner radius keys reach the scene, and invalid
+// values fail materialization with a message naming the key.
+bool compositing_keys() {
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    const auto tree = wrap_tree(R"JSON(
+      {"type":"view","id":"turned","style":{"width":40,"height":20,
+        "backgroundColor":"#FF0000","transform":"rotate(90deg)","opacity":0.5,
+        "borderRadius":3,"borderTopRightRadius":8,"borderBottomLeftRadius":-2},
+        "children":[]},
+      {"type":"view","id":"moved","style":{"width":10,"height":10,
+        "backgroundColor":"#00FF00",
+        "transform":"translate(4px, -2px) scale(2) skewX(0) matrix(1,0,0,1,0,0)",
+        "opacity":7},"children":[]},
+      {"type":"view","id":"identity","style":{"width":10,"height":10,
+        "backgroundColor":"#0000FF","transform":"rotate(0) translate(0, 0)",
+        "opacity":-1},"children":[]},
+      {"type":"text","id":"label","text":"Hi","style":{"height":20,
+        "transform":"none","opacity":0.25,"borderTopLeftRadius":4},"children":[]},
+      {"type":"button","id":"spun","events":{"press":"spun:press"},
+        "style":{"x":100,"y":100,"width":40,"height":20,"transform":"rotate(90deg)"},
+        "children":[]}
+    )JSON");
+    if (!vellum::authoring::materialize_rendered_tree(tree, rendered, &error)) {
+        std::cerr << "compositing keys: " << error << '\n';
+        return false;
+    }
+    const auto* turned = vellum::graphics::find_node(rendered.scene, "turned");
+    const auto* moved = vellum::graphics::find_node(rendered.scene, "moved");
+    const auto* identity = vellum::graphics::find_node(rendered.scene, "identity");
+    const auto* label = vellum::graphics::find_node(rendered.scene, "label");
+    if (turned == nullptr || moved == nullptr || identity == nullptr || label == nullptr ||
+        !turned->transform || !moved->transform || identity->transform ||
+        label->transform) {
+        std::cerr << "compositing keys: transforms were not lowered as expected\n";
+        return false;
+    }
+    // rotate(90deg) about the centre (20, 10) of a 40 by 20 box: the origin
+    // goes to (30, -10) and the far corner (40, 20) to (10, 30).
+    const auto origin = vellum::graphics::apply(*turned->transform, {0.0F, 0.0F});
+    const auto corner = vellum::graphics::apply(*turned->transform, {40.0F, 20.0F});
+    // translate then scale 2, about the centre (5, 5): the origin goes to
+    // (5 - 10 + 4, 5 - 10 - 2).
+    const auto moved_origin = vellum::graphics::apply(*moved->transform, {0.0F, 0.0F});
+    if (!near(origin.x, 30.0F) || !near(origin.y, -10.0F) ||
+        !near(corner.x, 10.0F) || !near(corner.y, 30.0F) ||
+        !near(moved_origin.x, -1.0F) || !near(moved_origin.y, -7.0F) ||
+        !near(moved->transform->a, 2.0F) || !near(moved->transform->d, 2.0F)) {
+        std::cerr << "compositing keys: transform geometry is wrong\n";
+        return false;
+    }
+    if (turned->opacity != 0.5F || moved->opacity != 1.0F || identity->opacity != 0.0F ||
+        label->opacity != 0.25F || !turned->corner_radii ||
+        turned->corner_radii->top_left != 3.0F || turned->corner_radii->top_right != 8.0F ||
+        turned->corner_radii->bottom_right != 3.0F ||
+        turned->corner_radii->bottom_left != 0.0F || moved->corner_radii) {
+        std::cerr << "compositing keys: opacity or corner radii are wrong\n";
+        return false;
+    }
+    // Hit-testing and accessibility boxes enclose the node as drawn: the
+    // 40 by 20 button at (100, 100) turned about its centre (120, 110).
+    const auto frame_box = [](const vellum::graphics::Rect& box) {
+        return near(box.x, 110.0F) && near(box.y, 90.0F) && near(box.width, 20.0F) &&
+               near(box.height, 40.0F);
+    };
+    if (rendered.interactions.size() != 1U || rendered.interactions[0].node_id != "spun" ||
+        !frame_box(rendered.interactions[0].bounds) ||
+        rendered.accessibility_nodes.empty() ||
+        rendered.accessibility_nodes.back().node_id != "spun" ||
+        !frame_box(rendered.accessibility_nodes.back().bounds)) {
+        std::cerr << "compositing keys: interaction bounds ignore the transform\n";
+        return false;
+    }
+    // The corner key is dropped on a text node without a painted background,
+    // exactly as borderRadius is; transform and opacity are consumed.
+    if (rendered.diagnostics.size() != 1U ||
+        rendered.diagnostics[0].node_id != "label" ||
+        rendered.diagnostics[0].property != "borderTopLeftRadius" ||
+        rendered.diagnostics[0].code != vellum::graphics::kStyleDroppedCode) {
+        std::cerr << "compositing keys: unexpected diagnostics\n";
+        return false;
+    }
+
+    const auto refuses = [&](std::string_view style, std::string_view expected) {
+        vellum::authoring::RenderedApplication candidate;
+        std::string why;
+        const auto source = wrap_tree(
+            std::string(R"JSON({"type":"view","id":"bad","style":{"width":10,"height":10,)JSON") +
+            std::string(style) + "},\"children\":[]}");
+        if (vellum::authoring::materialize_rendered_tree(source, candidate, &why) ||
+            why.find(expected) == std::string::npos) {
+            std::cerr << "compositing keys: " << style << " gave '" << why << "'\n";
+            return false;
+        }
+        return true;
+    };
+    return refuses(R"S("transform":"rotate(45)")S", "rotate(45) is not supported") &&
+           refuses(R"S("transform":"spin(1turn)")S", "spin(1turn) is not supported") &&
+           refuses(R"S("transform":"translate(1em)")S", "is not supported") &&
+           refuses(R"S("transform":"scale(1, 2, 3)")S", "is not supported") &&
+           refuses(R"S("transform":"rotate(45deg")S", "at most 32 CSS transform functions") &&
+           refuses(R"S("transform":4)S", "transform must be a string") &&
+           refuses(R"S("transform":"scale(1e30) scale(1e30)")S", "finite matrix") &&
+           refuses(R"S("opacity":"half")S", "opacity must be a finite number") &&
+           refuses(R"S("borderBottomRightRadius":true)S",
+               "borderBottomRightRadius must be a finite number");
+}
 
 constexpr std::string_view kRenderedTree = R"JSON({
   "protocol": "vellum.authoring-host.v2",
@@ -316,7 +435,7 @@ int main() {
       "protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
         "type":"stack","id":"unknown-root","style":{"width":100,"height":100},
         "children":[
-          {"type":"view","id":"before","style":{"width":10,"height":10,"opacity":1},
+          {"type":"view","id":"before","style":{"width":10,"height":10,"zIndex":1},
             "children":[]},
           {"type":"hologram","id":"future-node",
             "style":{"width":10,"height":10},"children":[]}]}}
@@ -330,7 +449,7 @@ int main() {
         failure_diagnostics[0].severity != LoweringDiagnostic::Severity::warning ||
         failure_diagnostics[0].code != vellum::graphics::kStyleDroppedCode ||
         failure_diagnostics[0].node_id != "before" ||
-        failure_diagnostics[0].property != "opacity" ||
+        failure_diagnostics[0].property != "zIndex" ||
         failure_diagnostics[1].severity != LoweringDiagnostic::Severity::error ||
         failure_diagnostics[1].disposition != LoweringDiagnostic::Disposition::unsupported ||
         failure_diagnostics[1].code != vellum::graphics::kUnknownNodeTypeCode ||
@@ -347,7 +466,7 @@ int main() {
         "type":"stack","id":"dropped-root","style":{"width":200,"height":100},
         "children":[
           {"type":"view","id":"panel","style":{"width":50,"height":20,
-            "backgroundColor":"#112233","opacity":0.5,"gap":4},"children":[]},
+            "backgroundColor":"#112233","zIndex":2,"gap":4},"children":[]},
           {"type":"text","id":"caption","text":"Hi",
             "style":{"height":20,"backgroundColor":"#FF0000","color":"#000000"},
             "children":[]},
@@ -376,7 +495,7 @@ int main() {
         rendered.diagnostics.size() != 4U ||
         !expect(0U, "panel", vellum::graphics::kStyleDroppedCode, "gap",
             LoweringDiagnostic::Disposition::unsupported) ||
-        !expect(1U, "panel", vellum::graphics::kStyleDroppedCode, "opacity",
+        !expect(1U, "panel", vellum::graphics::kStyleDroppedCode, "zIndex",
             LoweringDiagnostic::Disposition::unsupported) ||
         !expect(2U, "caption", vellum::graphics::kStyleDroppedCode, "backgroundColor",
             LoweringDiagnostic::Disposition::unsupported) ||
@@ -431,5 +550,5 @@ int main() {
         return 1;
     }
 
-    return 0;
+    return compositing_keys() ? 0 : 1;
 }

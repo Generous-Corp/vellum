@@ -263,7 +263,10 @@ if(VELLUM_BUILD_TESTS)
                 outset_shadow_spread_diagonal
                 attributed_text_runs_materialization
                 textured_triangle_mesh
-                scene_version_refusal)
+                scene_version_refusal
+                node_transform_rotation_scale
+                group_opacity_layers
+                per_corner_radii)
             add_test(NAME "vellum.gpu.${_vellum_fixture}"
                 COMMAND vellum-gpu-style-test "${_vellum_fixture}")
         endforeach()

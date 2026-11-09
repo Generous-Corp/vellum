@@ -34,6 +34,19 @@ diagnostic and reports authored style or content it drops as warnings on
 severity and disposition words but identify content by node ID, not by
 DesignIR document path.
 
+Nodes carry an optional affine transform about their origin, a group opacity,
+and per-corner radii beside the uniform `corner_radius` shorthand; all three
+default to the previous output, so they did not bump the version. Paint
+commands keep untransformed scene-absolute `bounds` and add the composed
+transform, so a consumer that ignores it still sees the old geometry. A faded
+subtree that draws more than one command is bracketed by `begin_layer` and
+`end_layer` commands, and a lone faded command carries the opacity itself.
+The Skia surface lowers all of it; the canvas-backed web shell flattens layers
+to per-command alpha and counts every command it draws with a loss
+(`vellum_web_lowering_loss_count`); the CoreGraphics smoke canvas takes no
+scene and does not lower these properties. A scene with a non-finite
+transform, opacity, or radius is refused like an unknown kind.
+
 Native self-test is deliberately fail-closed. A requested native surface is
 not allowed to fall back to CoreGraphics or an offscreen surface. The test also
 contains a blank-frame negative control so a broken capture detector cannot

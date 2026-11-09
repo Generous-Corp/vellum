@@ -5,6 +5,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -80,6 +81,247 @@ bool mesh_commands() {
            expect_invalid(bad_clip, "clip rectangle") &&
            vellum::graphics::mesh_is_valid(good_texture) &&
            vellum::graphics::mesh_is_valid(TriangleMesh{});
+}
+
+bool near_point(vellum::graphics::Point point, float x, float y) {
+    return near(point.x, x) && near(point.y, y);
+}
+
+bool near_rect(const vellum::graphics::Rect& rect, float x, float y, float width, float height) {
+    return near(rect.x, x) && near(rect.y, y) && near(rect.width, width) &&
+           near(rect.height, height);
+}
+
+vellum::graphics::Affine2D quarter_turn() {
+    // (x, y) -> (-y, x): a clockwise quarter turn in a y-down frame.
+    return {.a = 0.0F, .b = 1.0F, .c = -1.0F, .d = 0.0F};
+}
+
+// Transforms pivot on each node's origin and compose down the tree, while
+// `bounds` stays untransformed.
+bool transform_geometry() {
+    using vellum::graphics::Affine2D;
+    using vellum::graphics::SceneNode;
+    vellum::graphics::Scene scene;
+    scene.root.id = "root";
+    scene.root.children.push_back({
+        .id = "turned",
+        .kind = SceneNode::Kind::group,
+        .bounds = {10.0F, 20.0F, 40.0F, 40.0F},
+        .children = {{
+            .id = "bar",
+            .kind = SceneNode::Kind::rectangle,
+            .bounds = {5.0F, 5.0F, 10.0F, 4.0F},
+            .fill = vellum::graphics::Color::hex(0xFF0000),
+        }},
+        .transform = quarter_turn(),
+    });
+    scene.root.children.push_back({
+        .id = "scaled",
+        .kind = SceneNode::Kind::group,
+        .bounds = {10.0F, 20.0F, 40.0F, 40.0F},
+        .children = {{
+            .id = "nudged",
+            .kind = SceneNode::Kind::rectangle,
+            .bounds = {5.0F, 5.0F, 2.0F, 2.0F},
+            .fill = vellum::graphics::Color::hex(0x00FF00),
+            .transform = vellum::graphics::translation(3.0F, 0.0F),
+        }},
+        .transform = Affine2D{.a = 2.0F, .d = 2.0F},
+    });
+    scene.root.children.push_back({
+        .id = "plain",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {1.0F, 1.0F, 2.0F, 2.0F},
+        .transform = Affine2D{},
+    });
+    const auto commands = vellum::graphics::make_paint_commands(scene);
+    if (commands.size() != 3U || commands[0].node_id != "bar" ||
+        commands[1].node_id != "nudged" || commands[2].node_id != "plain") {
+        return false;
+    }
+    const auto& bar = commands[0];
+    const auto& nudged = commands[1];
+    // The bar spans (15, 25) to (25, 29) before the turn about (10, 20).
+    if (!near_rect(bar.bounds, 15.0F, 25.0F, 10.0F, 4.0F) ||
+        !near_point(vellum::graphics::apply(bar.transform, {15.0F, 25.0F}), 5.0F, 25.0F) ||
+        !near_point(vellum::graphics::apply(bar.transform, {25.0F, 29.0F}), 1.0F, 35.0F) ||
+        !near_rect(vellum::graphics::transformed_bounds(bar.transform, bar.bounds),
+                   1.0F, 25.0F, 4.0F, 10.0F)) {
+        return false;
+    }
+    // The child moves 3 px in the parent's scaled frame: its origin (15, 25)
+    // goes to (10, 20) + 2 * (5 + 3, 5).
+    if (!near_point(vellum::graphics::apply(nudged.transform, {15.0F, 25.0F}), 26.0F, 30.0F) ||
+        !near_rect(vellum::graphics::transformed_bounds(nudged.transform, nudged.bounds),
+                   26.0F, 30.0F, 4.0F, 4.0F) ||
+        !vellum::graphics::is_identity(commands[2].transform) ||
+        !near_rect(vellum::graphics::transformed_bounds(commands[2].transform,
+                                                         commands[2].bounds),
+                   1.0F, 1.0F, 2.0F, 2.0F)) {
+        return false;
+    }
+    // concat applies its right operand first.
+    const auto composed = vellum::graphics::concat(
+        vellum::graphics::translation(1.0F, 0.0F), Affine2D{.a = 2.0F, .d = 2.0F});
+    if (!near_point(vellum::graphics::apply(composed, {1.0F, 1.0F}), 3.0F, 2.0F)) return false;
+
+    // A non-finite transform drops its subtree from the stream and is found.
+    auto broken = scene;
+    broken.root.children[1].transform->c = std::numeric_limits<float>::infinity();
+    const auto kept = vellum::graphics::make_paint_commands(broken);
+    const auto* found = vellum::graphics::find_non_finite_compositing(broken.root);
+    return kept.size() == 2U && kept[1].node_id == "plain" && found != nullptr &&
+           found->id == "scaled" &&
+           vellum::graphics::find_non_finite_compositing(scene.root) == nullptr;
+}
+
+// Group opacity folds into a lone command and otherwise opens a layer.
+bool opacity_nesting() {
+    using vellum::graphics::PaintCommand;
+    using vellum::graphics::SceneNode;
+    const auto box = [](std::string id, float opacity = 1.0F) {
+        return SceneNode{
+            .id = std::move(id),
+            .kind = SceneNode::Kind::rectangle,
+            .bounds = {0.0F, 0.0F, 4.0F, 4.0F},
+            .fill = vellum::graphics::Color::hex(0xFFFFFF),
+            .opacity = opacity,
+        };
+    };
+    vellum::graphics::Scene scene;
+    scene.root.id = "root";
+    scene.root.children.push_back({
+        .id = "pair",
+        .kind = SceneNode::Kind::group,
+        .bounds = {2.0F, 3.0F, 10.0F, 10.0F},
+        .children = {box("pair/a"), box("pair/b", 0.5F)},
+        .transform = quarter_turn(),
+        .opacity = 0.5F,
+    });
+    scene.root.children.push_back({
+        .id = "single",
+        .kind = SceneNode::Kind::group,
+        .children = {box("single/a", 0.5F)},
+        .opacity = 0.25F,
+    });
+    scene.root.children.push_back(box("clear", 0.0F));
+    scene.root.children.back().children.push_back(box("clear/child"));
+    scene.root.children.push_back(box("clamped", 4.0F));
+    scene.root.children.push_back({
+        .id = "empty",
+        .kind = SceneNode::Kind::group,
+        .opacity = 0.5F,
+    });
+    scene.root.children.push_back({
+        .id = "caption",
+        .kind = SceneNode::Kind::text,
+        .box_shadows = {{.color = vellum::graphics::Color::hex(0x000000)}},
+        .text = "Hi",
+        .opacity = 0.5F,
+    });
+
+    const auto commands = vellum::graphics::make_paint_commands(scene);
+    const std::vector<std::pair<PaintCommand::Kind, std::string>> expected{
+        {PaintCommand::Kind::begin_layer, "pair"},
+        {PaintCommand::Kind::rectangle, "pair/a"},
+        {PaintCommand::Kind::rectangle, "pair/b"},
+        {PaintCommand::Kind::end_layer, "pair"},
+        {PaintCommand::Kind::rectangle, "single/a"},
+        {PaintCommand::Kind::rectangle, "clamped"},
+        {PaintCommand::Kind::begin_layer, "caption"},
+        {PaintCommand::Kind::rectangle, "caption/background"},
+        {PaintCommand::Kind::text, "caption"},
+        {PaintCommand::Kind::end_layer, "caption"},
+    };
+    if (commands.size() != expected.size()) return false;
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+        if (commands[index].kind != expected[index].first ||
+            commands[index].node_id != expected[index].second) {
+            return false;
+        }
+    }
+    const std::vector<float> paint{0.5F, 1.0F, 0.5F, 1.0F, 0.125F, 1.0F, 0.5F, 1.0F, 1.0F, 1.0F};
+    const std::vector<float> effective{
+        0.5F, 0.5F, 0.25F, 1.0F, 0.125F, 1.0F, 0.5F, 0.5F, 0.5F, 1.0F};
+    const auto flattened = vellum::graphics::effective_opacities(commands);
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        if (!near(commands[index].opacity, paint[index]) ||
+            !near(flattened[index], effective[index])) {
+            return false;
+        }
+    }
+    // The layer carries its owner's absolute box and transform.
+    if (!near_rect(commands[0].bounds, 2.0F, 3.0F, 10.0F, 10.0F) ||
+        !near_point(vellum::graphics::apply(commands[0].transform, {2.0F, 3.0F}), 2.0F, 3.0F) ||
+        !near_point(vellum::graphics::apply(commands[0].transform, {3.0F, 3.0F}), 2.0F, 4.0F) ||
+        vellum::graphics::draws_content(PaintCommand::Kind::begin_layer) ||
+        vellum::graphics::draws_content(PaintCommand::Kind::end_layer) ||
+        !vellum::graphics::draws_content(PaintCommand::Kind::mesh)) {
+        return false;
+    }
+    // Nested layers multiply; an unmatched end leaves the opacity unchanged.
+    const std::vector<PaintCommand> nested{
+        {.kind = PaintCommand::Kind::begin_layer, .opacity = 0.5F},
+        {.kind = PaintCommand::Kind::begin_layer, .opacity = 0.5F},
+        {.kind = PaintCommand::Kind::rectangle, .opacity = 0.5F},
+        {.kind = PaintCommand::Kind::end_layer},
+        {.kind = PaintCommand::Kind::rectangle},
+        {.kind = PaintCommand::Kind::end_layer},
+        {.kind = PaintCommand::Kind::end_layer},
+        {.kind = PaintCommand::Kind::rectangle},
+    };
+    const auto deep = vellum::graphics::effective_opacities(nested);
+    const std::vector<float> deep_expected{0.5F, 0.25F, 0.125F, 0.5F, 0.5F, 1.0F, 1.0F, 1.0F};
+    for (std::size_t index = 0; index < deep.size(); ++index) {
+        if (!near(deep[index], deep_expected[index])) return false;
+    }
+    auto broken = scene;
+    broken.root.children[0].opacity = std::numeric_limits<float>::quiet_NaN();
+    const auto kept = vellum::graphics::make_paint_commands(broken);
+    return deep.size() == nested.size() && kept.size() == expected.size() - 4U &&
+           kept[0].node_id == "single/a";
+}
+
+bool corner_radii() {
+    using vellum::graphics::CornerRadii;
+    using vellum::graphics::SceneNode;
+    vellum::graphics::Scene scene;
+    scene.root.children.push_back({
+        .id = "shorthand",
+        .kind = SceneNode::Kind::rectangle,
+        .corner_radius = 5.0F,
+    });
+    scene.root.children.push_back({
+        .id = "corners",
+        .kind = SceneNode::Kind::rectangle,
+        .corner_radius = 5.0F,
+        .corner_radii = CornerRadii{1.0F, 2.0F, -3.0F, 4.0F},
+    });
+    scene.root.children.push_back({
+        .id = "label",
+        .kind = SceneNode::Kind::text,
+        .fill_gradients = {{.stops = {{}, {.position = 1.0F}}}},
+        .text = "x",
+        .corner_radii = CornerRadii{0.0F, 6.0F, 0.0F, 0.0F},
+    });
+    const auto commands = vellum::graphics::make_paint_commands(scene);
+    if (commands.size() != 4U) return false;
+    const auto& shorthand = commands[0].corner_radii;
+    const auto& corners = commands[1].corner_radii;
+    const auto& background = commands[2].corner_radii;
+    if (!vellum::graphics::is_uniform(shorthand) || shorthand.top_left != 5.0F ||
+        commands[0].corner_radius != 5.0F || vellum::graphics::is_uniform(corners) ||
+        corners.top_left != 1.0F || corners.top_right != 2.0F ||
+        corners.bottom_right != 0.0F || corners.bottom_left != 4.0F ||
+        commands[2].node_id != "label/background" || background.top_right != 6.0F ||
+        !vellum::graphics::is_rounded(background) ||
+        vellum::graphics::is_rounded(CornerRadii{})) {
+        return false;
+    }
+    scene.root.children[1].corner_radii->top_left = std::numeric_limits<float>::quiet_NaN();
+    const auto* found = vellum::graphics::find_non_finite_compositing(scene.root);
+    return found != nullptr && found->id == "corners";
 }
 
 }  // namespace
@@ -194,5 +436,8 @@ int main() {
         !near(diagonal.end_y, 125.0F)) {
         return 1;
     }
-    return mesh_commands() && scene_versioning() ? 0 : 1;
+    return mesh_commands() && scene_versioning() && transform_geometry() &&
+                   opacity_nesting() && corner_radii()
+               ? 0
+               : 1;
 }

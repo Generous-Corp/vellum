@@ -10,6 +10,7 @@
 #include <future>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -502,6 +503,172 @@ bool scene_version_refusal() {
     return again == first;
 }
 
+struct Probe final {
+    const char* what;
+    std::uint32_t x;
+    std::uint32_t y;
+    std::array<int, 4> expected;
+};
+
+// Captures `scene` twice on fresh surfaces, requires identical bytes, and
+// checks each probe within two levels per channel. Fixtures in this shape move
+// into the shared capture harness's fixture list when it is available.
+bool capture_and_probe(const char* fixture, const Scene& scene,
+                       const std::vector<Probe>& probes) {
+    std::vector<std::uint8_t> rgba;
+    std::vector<std::uint8_t> again;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint32_t again_width = 0;
+    std::uint32_t again_height = 0;
+    if (!capture(scene, rgba, width, height) ||
+        !capture(scene, again, again_width, again_height)) {
+        return false;
+    }
+    if (width != static_cast<std::uint32_t>(scene.width) ||
+        height != static_cast<std::uint32_t>(scene.height) || rgba != again) {
+        std::cerr << fixture << ": capture is not deterministic or has the wrong size\n";
+        return false;
+    }
+    bool passed = true;
+    for (const auto& probe : probes) {
+        const auto* actual = pixel(rgba, width, probe.x, probe.y);
+        for (int channel = 0; channel < 4; ++channel) {
+            if (std::abs(int(actual[channel]) - probe.expected[channel]) > 2) {
+                std::cerr << fixture << ": " << probe.what << ": got "
+                          << int(actual[0]) << ',' << int(actual[1]) << ','
+                          << int(actual[2]) << ',' << int(actual[3]) << '\n';
+                passed = false;
+                break;
+            }
+        }
+    }
+    return passed;
+}
+
+// A bar turned a quarter about its centre, a square scaled about its origin
+// inside a translated parent, and a refused non-finite transform.
+bool node_transform_rotation_scale() {
+    Scene scene{.width = 64.0F, .height = 64.0F, .background = Color::hex(0x000000)};
+    scene.root.id = "root";
+    // A 32 by 8 bar at (16, 28) turned about its centre (16, 4) in its own
+    // frame becomes the 8 by 32 bar at (28, 16).
+    scene.root.children.push_back({
+        .id = "bar",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {16.0F, 28.0F, 32.0F, 8.0F},
+        .fill = Color::hex(0xFF0000),
+        .transform = concat(translation(16.0F, 4.0F),
+            concat(Affine2D{.a = 0.0F, .b = 1.0F, .c = -1.0F, .d = 0.0F},
+                   translation(-16.0F, -4.0F))),
+    });
+    // The parent's origin is (4, 4); its child doubles about that origin.
+    scene.root.children.push_back({
+        .id = "frame",
+        .kind = SceneNode::Kind::group,
+        .bounds = {4.0F, 4.0F, 0.0F, 0.0F},
+        .children = {{
+            .id = "square",
+            .kind = SceneNode::Kind::rectangle,
+            .bounds = {0.0F, 0.0F, 8.0F, 8.0F},
+            .fill = Color::hex(0x00FF00),
+            .transform = Affine2D{.a = 2.0F, .d = 2.0F},
+        }},
+    });
+    if (!capture_and_probe("node_transform_rotation_scale", scene, {
+            {"turned bar covers its new top", 32, 20, {255, 0, 0, 255}},
+            {"turned bar covers its new bottom", 32, 44, {255, 0, 0, 255}},
+            {"turned bar left its old left end", 20, 32, {0, 0, 0, 255}},
+            {"turned bar left its old right end", 44, 32, {0, 0, 0, 255}},
+            {"scaled square reaches past its own size", 17, 17, {0, 255, 0, 255}},
+            {"scaled square stops at twice its size", 22, 22, {0, 0, 0, 255}},
+        })) {
+        return false;
+    }
+    std::string error;
+    auto surface = SkiaDawnSurface::create({.width = 64, .height = 64}, &error);
+    auto broken = scene;
+    broken.root.children[1].children[0].transform->a = std::nanf("");
+    if (!surface || surface->render(broken, &error) ||
+        error != "scene node square has a non-finite transform, opacity, or corner radius") {
+        std::cerr << "non-finite transform was not refused: " << error << '\n';
+        return false;
+    }
+    return true;
+}
+
+// Overlapping members of a faded group composite before fading, a lone faded
+// rectangle folds its opacity into its paint, and nested opacity multiplies.
+bool group_opacity_layers() {
+    Scene scene{.width = 96.0F, .height = 32.0F, .background = Color::hex(0x000000)};
+    scene.root.id = "root";
+    const auto white = [](std::string id, Rect bounds, float opacity = 1.0F) {
+        return SceneNode{
+            .id = std::move(id),
+            .kind = SceneNode::Kind::rectangle,
+            .bounds = bounds,
+            .fill = Color::hex(0xFFFFFF),
+            .opacity = opacity,
+        };
+    };
+    scene.root.children.push_back({
+        .id = "layered",
+        .kind = SceneNode::Kind::group,
+        .children = {white("layered/a", {0.0F, 0.0F, 24.0F, 32.0F}),
+                     white("layered/b", {8.0F, 0.0F, 24.0F, 32.0F})},
+        .opacity = 0.5F,
+    });
+    scene.root.children.push_back(white("folded", {40.0F, 0.0F, 16.0F, 32.0F}, 0.5F));
+    scene.root.children.push_back({
+        .id = "nested",
+        .kind = SceneNode::Kind::group,
+        .children = {white("nested/half", {64.0F, 0.0F, 16.0F, 32.0F}, 0.5F),
+                     white("nested/full", {80.0F, 0.0F, 16.0F, 32.0F})},
+        .opacity = 0.5F,
+    });
+    // Without the layer the overlap would be 191: 128 plus half of the rest.
+    return capture_and_probe("group_opacity_layers", scene, {
+        {"faded group outside the overlap", 4, 16, {128, 128, 128, 255}},
+        {"faded group inside the overlap", 16, 16, {128, 128, 128, 255}},
+        {"faded group, second member only", 28, 16, {128, 128, 128, 255}},
+        {"lone faded rectangle", 48, 16, {128, 128, 128, 255}},
+        {"half inside a half group", 72, 16, {64, 64, 64, 255}},
+        {"opaque inside a half group", 88, 16, {128, 128, 128, 255}},
+    });
+}
+
+// Each corner keeps its own radius, and the
+// uniform shorthand still rounds every corner.
+bool per_corner_radii() {
+    Scene scene{.width = 128.0F, .height = 64.0F, .background = Color::hex(0x000000)};
+    scene.root.id = "root";
+    scene.root.children.push_back({
+        .id = "corners",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {0.0F, 0.0F, 64.0F, 64.0F},
+        .fill = Color::hex(0xFFFFFF),
+        .corner_radius = 4.0F,
+        .corner_radii = CornerRadii{0.0F, 24.0F, 0.0F, 24.0F},
+    });
+    scene.root.children.push_back({
+        .id = "shorthand",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {72.0F, 8.0F, 48.0F, 48.0F},
+        .fill = Color::hex(0x00FF00),
+        .corner_radius = 16.0F,
+    });
+    return capture_and_probe("per_corner_radii", scene, {
+        {"square top-left corner", 1, 1, {255, 255, 255, 255}},
+        {"rounded top-right corner", 62, 1, {0, 0, 0, 255}},
+        {"square bottom-right corner", 62, 62, {255, 255, 255, 255}},
+        {"rounded bottom-left corner", 1, 62, {0, 0, 0, 255}},
+        {"rounded corner interior", 56, 8, {255, 255, 255, 255}},
+        {"shorthand rounds its top-left", 73, 9, {0, 0, 0, 255}},
+        {"shorthand rounds its bottom-right", 118, 54, {0, 0, 0, 255}},
+        {"shorthand interior", 96, 32, {0, 255, 0, 255}},
+    });
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -525,6 +692,15 @@ int main(int argc, char** argv) {
         }
         if (fixture == "scene_version_refusal") {
             return scene_version_refusal() ? 0 : 1;
+        }
+        if (fixture == "node_transform_rotation_scale") {
+            return node_transform_rotation_scale() ? 0 : 1;
+        }
+        if (fixture == "group_opacity_layers") {
+            return group_opacity_layers() ? 0 : 1;
+        }
+        if (fixture == "per_corner_radii") {
+            return per_corner_radii() ? 0 : 1;
         }
     } catch (const std::exception& exception) {
         std::cerr << exception.what() << '\n';
