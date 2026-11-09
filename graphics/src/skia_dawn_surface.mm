@@ -634,6 +634,7 @@ std::string_view to_string(FullRepaintReason reason) noexcept {
         case FullRepaintReason::damage_threshold: return "damage_threshold";
         case FullRepaintReason::frame_mismatch: return "frame_mismatch";
         case FullRepaintReason::damage_model_version: return "damage_model_version";
+        case FullRepaintReason::damage_frame_mismatch: return "damage_frame_mismatch";
     }
     return "unknown";
 }
@@ -729,6 +730,14 @@ public:
             device_descriptor.requiredFeatureCount = 1;
             device_descriptor.requiredFeatures = timestamp_feature;
         }
+        device_descriptor.SetDeviceLostCallback(
+            wgpu::CallbackMode::AllowSpontaneous,
+            [lost = device_lost_](const wgpu::Device&, wgpu::DeviceLostReason reason,
+                                  wgpu::StringView) {
+                if (reason != wgpu::DeviceLostReason::Destroyed) {
+                    lost->store(true, std::memory_order_release);
+                }
+            });
         wgpu::RequestDeviceStatus device_status = wgpu::RequestDeviceStatus::Error;
         std::string device_message;
         adapter_.RequestDevice(
@@ -830,9 +839,21 @@ public:
         if (!accepts(scene, error)) return false;
         const auto invalidated = tracker_.take_damage();
         discard_tracked_damage(scene);
-        DamageRegion merged = damage;
+        const auto frame = frame_rect(scene, config_.scale);
+        const bool unframed_nothing = damage.frame().empty() && damage.empty();
+        if (!unframed_nothing && damage.frame() != frame) {
+            return draw_frame(scene, FullRepaintReason::damage_frame_mismatch, nullptr, error);
+        }
+        DamageRegion merged(frame, damage.frame().empty() ? DamagePolicy{} : damage.policy());
+        merged.add(damage);
         merged.add(invalidated);
         return draw_frame(scene, FullRepaintReason::none, &merged, error);
+    }
+
+    void simulate_device_loss() {
+        if (!device_) return;
+        device_.ForceLoss(wgpu::DeviceLostReason::Unknown, "Vellum simulated device loss");
+        instance_.ProcessEvents();
     }
 
     void invalidate(InvalidationReason reason, std::string_view node_id) {
@@ -857,11 +878,8 @@ public:
         context_->submit(skgpu::graphite::SyncToCpu::kYes);
         context_->checkAsyncWorkCompletion();
         instance_.ProcessEvents();
-        if (context_->isDeviceLost()) {
-            retained_valid_ = false;
-            retained_reason_ = FullRepaintReason::previous_frame_failed;
-            set_error(error, "the Dawn device was lost");
-            return false;
+        if (device_lost()) {
+            return fail_device_lost(error, "the Dawn device was lost");
         }
         return true;
     }
@@ -917,6 +935,10 @@ public:
         if (!last_scene_.has_value()) {
             set_error(error, "capture requires one successfully submitted scene");
             return false;
+        }
+        if (device_lost()) {
+            return fail_device_lost(
+                error, "the Dawn device was lost; the last good frame can no longer be read back");
         }
         if (!retained_valid_) {
             const Scene scene = *last_scene_;
@@ -1011,6 +1033,18 @@ private:
         return true;
     }
 
+    bool device_lost() const {
+        return device_lost_->load(std::memory_order_acquire) ||
+            (context_ && context_->isDeviceLost());
+    }
+
+    bool fail_device_lost(std::string* error, std::string message) {
+        retained_valid_ = false;
+        retained_reason_ = FullRepaintReason::previous_frame_failed;
+        set_error(error, std::move(message));
+        return false;
+    }
+
     PixelRect target_rect() const {
         return {0, 0, physical_width(), physical_height()};
     }
@@ -1067,11 +1101,8 @@ private:
             set_error(error, "Skia/Dawn surface is not initialized");
             return false;
         }
-        if (context_->isDeviceLost()) {
-            retained_valid_ = false;
-            retained_reason_ = FullRepaintReason::previous_frame_failed;
-            set_error(error, "the Dawn device was lost");
-            return false;
+        if (device_lost()) {
+            return fail_device_lost(error, "the Dawn device was lost");
         }
 
         std::vector<PixelRect> rects;
@@ -1361,6 +1392,7 @@ private:
     FrameStats stats_{};
     bool gpu_stats_supported_ = false;
     std::shared_ptr<GpuTimer> gpu_timer_;
+    std::shared_ptr<std::atomic_bool> device_lost_ = std::make_shared<std::atomic_bool>(false);
 };
 
 SkiaDawnSurface::SkiaDawnSurface(std::unique_ptr<Impl> impl) noexcept
@@ -1413,6 +1445,10 @@ FrameStats SkiaDawnSurface::frame_stats() const {
 
 bool SkiaDawnSurface::finish(std::string* error) {
     return impl_->finish(error);
+}
+
+void SkiaDawnSurface::simulate_device_loss() {
+    impl_->simulate_device_loss();
 }
 
 bool SkiaDawnSurface::resize(

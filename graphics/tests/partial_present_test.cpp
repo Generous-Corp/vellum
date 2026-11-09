@@ -334,6 +334,56 @@ void recreation_and_failure() {
     compare("the frame after a refusal", *full, *partial);
 }
 
+void mismatched_damage_frame() {
+    constexpr std::uint32_t width = 400;
+    constexpr std::uint32_t height = 300;
+    auto full = make_surface(width, height, 2.0F);
+    auto partial = make_surface(width, height, 2.0F);
+    if (!full || !partial) return;
+    Scene scene = base_scene(width, height);
+    if (!render_both(*full, *partial, scene)) return;
+    const Scene previous = scene;
+    node(scene, "mover").bounds.x += 80.0F;
+    node(scene, "mover").bounds.y -= 40.0F;
+    const auto wrong_scale = compute_scene_damage(previous, scene, 1.0F);
+    std::string error;
+    expect(full->render(scene, &error) && partial->render(scene, wrong_scale, &error),
+           "a damage region computed at another scale renders", error);
+    const auto stats = partial->frame_stats();
+    expect(stats.full_repaint &&
+               stats.full_repaint_reason == FullRepaintReason::damage_frame_mismatch,
+           "a damage region for another frame size or scale repaints the whole frame",
+           describe(stats));
+    compare("a damage region computed at another scale", *full, *partial);
+}
+
+void device_loss() {
+    auto surface = make_surface(400, 300, 2.0F);
+    if (!surface) return;
+    const Scene scene = base_scene(400, 300);
+    std::string error;
+    expect(surface->render(scene, &error) && capture(*surface).ok,
+           "a frame renders and captures before the device is lost", error);
+    surface->simulate_device_loss();
+    error.clear();
+    std::vector<std::uint8_t> rgba;
+    std::uint32_t pixel_width = 0;
+    std::uint32_t pixel_height = 0;
+    expect(!surface->capture_rgba(rgba, pixel_width, pixel_height, &error) &&
+               error.find("lost") != std::string::npos && rgba.empty(),
+           "a capture after device loss fails closed without submitting", error);
+    error.clear();
+    expect(!surface->render_incremental(scene, &error) &&
+               error.find("lost") != std::string::npos,
+           "an incremental frame after device loss fails closed", error);
+    error.clear();
+    expect(!surface->render(scene, &error) && error.find("lost") != std::string::npos,
+           "a full frame after device loss fails closed", error);
+    error.clear();
+    expect(!surface->finish(&error) && error.find("lost") != std::string::npos,
+           "finish reports the lost device", error);
+}
+
 void capture_after_failure() {
     constexpr std::uint32_t width = 400;
     constexpr std::uint32_t height = 300;
@@ -444,7 +494,7 @@ void explicit_damage() {
            "a caller-supplied damage region is the frame's damage", describe(stats));
     compare("a caller-supplied damage region", *full, *partial);
 
-    const DamageRegion nothing(frame_rect(scene, scale));
+    const DamageRegion nothing{};
     expect(partial->render(scene, nothing, &error), "an empty damage region renders", error);
     expect(partial->frame_stats().paint_commands_recorded == 0 &&
                !partial->frame_stats().full_repaint,
@@ -486,6 +536,8 @@ int main() {
         recreation_and_failure();
         explicit_damage();
         capture_after_failure();
+        mismatched_damage_frame();
+        device_loss();
         command_extents();
         damage_model_version_gate();
     } catch (const std::exception& exception) {

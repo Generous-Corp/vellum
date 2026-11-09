@@ -50,6 +50,9 @@ enum class FullRepaintReason {
     frame_mismatch,
     /// The scene's version is newer than `kDamageModelSceneVersion`.
     damage_model_version,
+    /// A caller-supplied damage region was computed for a different frame
+    /// size or scale than the surface's.
+    damage_frame_mismatch,
 };
 
 [[nodiscard]] std::string_view to_string(FullRepaintReason reason) noexcept;
@@ -150,8 +153,10 @@ public:
     /// Draws `scene`, repainting `damage` (device pixels, clipped to the
     /// surface) plus any host invalidations pending since the last frame,
     /// under the same full-repaint rules as `render_incremental`. An empty
-    /// region with nothing pending presents the retained image unchanged. The
-    /// caller is responsible for `damage` covering every scene change.
+    /// region (`DamageRegion{}`) with nothing pending presents the retained
+    /// image unchanged. A region whose frame differs from
+    /// `frame_rect(scene, scale)` repaints the whole frame. The caller is
+    /// responsible for `damage` covering every scene change.
     [[nodiscard]] bool render(const Scene& scene, const DamageRegion& damage,
                               std::string* error = nullptr);
 
@@ -166,6 +171,10 @@ public:
 
     /// Waits until every frame submitted so far has finished on the GPU.
     [[nodiscard]] bool finish(std::string* error = nullptr);
+
+    /// Forces the Dawn device lost, for exercising the fail-closed paths in
+    /// tests. Every later render, capture and finish fails.
+    void simulate_device_loss();
     [[nodiscard]] bool resize(
         std::uint32_t width, std::uint32_t height, float scale,
         std::string* error = nullptr);
