@@ -44,6 +44,7 @@ struct CaptureResult final {
     std::uint32_t pixel_width = 0;
     std::uint32_t pixel_height = 0;
     GpuEvidence evidence;
+    FrameStats frame_stats;
     CaptureStats stats;
     std::chrono::microseconds surface_creation{0};
     std::chrono::microseconds render{0};

@@ -36,3 +36,26 @@ set_tests_properties(vellum.scene-capture-harness.record PROPERTIES
     FIXTURES_SETUP vellum_scene_capture_goldens)
 set_tests_properties(vellum.scene-capture-harness.compare PROPERTIES
     FIXTURES_REQUIRED vellum_scene_capture_goldens)
+
+add_executable(vellum-partial-present-test
+    partial_present_test.cpp)
+target_link_libraries(vellum-partial-present-test PRIVATE
+    vellum-scene-capture-harness)
+set_target_properties(vellum-partial-present-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.partial-present
+    COMMAND vellum-partial-present-test)
+
+add_executable(vellum-partial-present-bench
+    partial_present_bench.mm)
+target_link_libraries(vellum-partial-present-bench PRIVATE
+    vellum-scene-capture-harness
+    "-framework QuartzCore")
+set_target_properties(vellum-partial-present-bench PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.partial-present-native
+    COMMAND vellum-partial-present-bench --check-native)
