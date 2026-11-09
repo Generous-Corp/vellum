@@ -2837,5 +2837,23 @@ class ProvenanceWorkflowScopeTests(unittest.TestCase):
             self.assertNotIn(f"- name: {name}\n", authority)
         self.assertNotIn("steps.authority-record", observatory)
 
+    def test_required_provenance_verify_still_gates_on_the_observatory(self) -> None:
+        # `observatory-verify` is not a required context. The required
+        # `provenance-verify` (decisions 0012 and 0013, trust-policy) must
+        # still fail when the observatory fails, so the split does not drop
+        # the observatory from the merge, queue, main-push and release gate.
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        authority = self.job_block(text, "provenance-verify")
+        self.assertIsNotNone(re.search(r"^    needs: \[?observatory-verify\]?\n", authority, re.M))
+        # It must run (and so report) even when the observatory failed;
+        # a skipped required check would count as passing.
+        self.assertIn("    if: ${{ !cancelled() }}\n", authority)
+        gate = "- name: Require the observatory job to have passed\n"
+        self.assertIn(gate, authority)
+        step = authority[authority.index(gate):]
+        step = step[:step.index("\n      - name:")] if "\n      - name:" in step else step
+        self.assertIn("needs.observatory-verify.result", step)
+        self.assertIn("success", step)
+
 if __name__ == "__main__":
     unittest.main()

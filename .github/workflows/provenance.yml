@@ -105,6 +105,13 @@ jobs:
 
   provenance-verify:
     name: provenance-verify
+    # `provenance-verify` is the required context that carries the
+    # observatory gate (decisions 0012 and 0013, trust-policy). The
+    # observatory runs as its own job so an authority failure cannot skip it;
+    # this job waits for it, runs whatever its result (a skipped required
+    # check would count as passing), and fails if it did not pass.
+    needs: observatory-verify
+    if: ${{ !cancelled() }}
     runs-on: ${{ fromJSON(vars.VELLUM_LINUX_RUNS_ON_JSON || '["ubuntu-latest"]') }}
     env:
       VELLUM_TARGET_SHA: ${{ github.sha }}
@@ -848,6 +855,15 @@ jobs:
             --authority-record-commit "$GITHUB_SHA" \
             --expected-authority-ref "$GITHUB_REF" \
             --output "$RUNNER_TEMP/authority-pending-report.json"
+
+      - name: Require the observatory job to have passed
+        env:
+          OBSERVATORY_RESULT: ${{ needs.observatory-verify.result }}
+        run: |
+          if [[ "$OBSERVATORY_RESULT" != success ]]; then
+            echo "::error::observatory-verify concluded '$OBSERVATORY_RESULT'; provenance-verify is the required observatory gate"
+            exit 1
+          fi
 
       - name: Upload verification evidence
         if: always()
