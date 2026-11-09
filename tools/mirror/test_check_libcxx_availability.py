@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.append(str(Path(__file__).resolve().parent))
 import check_libcxx_availability as check  # noqa: E402
 
 DOUBLE = "__ZNSt3__18to_charsEPcS0_d"

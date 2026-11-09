@@ -19,6 +19,8 @@ from unittest import mock
 try:
     from .git_test_environment import disable_auto_maintenance
 except ImportError:  # Direct script execution.
+    import sys
+    sys.path.append(str(Path(__file__).resolve().parent))  # -I drops the script dir; append keeps the standard library first
     from git_test_environment import disable_auto_maintenance
 
 disable_auto_maintenance()
@@ -313,11 +315,11 @@ class Tests(unittest.TestCase):
     def test_workflow_runs_and_retains_expansion_gate(self) -> None:
         workflow = (ROOT / ".github/workflows/provenance.yml").read_text()
         self.assertIn(
-            "python3 tools/provenance/test_verify_authority_expansion.py",
+            "python3 -I tools/provenance/test_verify_authority_expansion.py",
             workflow,
         )
         self.assertIn(
-            "python3 tools/provenance/verify_authority_expansion.py", workflow
+            "python3 -I tools/provenance/verify_authority_expansion.py", workflow
         )
         self.assertIn("refs/tags/v[0-9]*", workflow)
         self.assertIn("--release-readiness", workflow)
@@ -346,8 +348,8 @@ class Tests(unittest.TestCase):
         self.assertNotIn("<<'PY'", step)
         self.assertNotIn("python3 -c", step)
         self.assertNotIn("for repository in Generous-Corp/", step)
-        self.assertIn("python3 tools/provenance/test_collect_release_evidence.py", step)
-        collect = "python3 tools/provenance/collect_release_evidence.py"
+        self.assertIn("python3 -I tools/provenance/test_collect_release_evidence.py", step)
+        collect = "python3 -I tools/provenance/collect_release_evidence.py"
         for invocation in (
             f'open_pr_repositories_text="$({collect} repositories)"',
             f"{collect} merge-check-runs",
@@ -2036,7 +2038,7 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         # list the collector prints, and the collector reads the same list
         # when it builds the snapshot and the cursor.
         self.assertIn(
-            'open_pr_repositories_text="$(python3 tools/provenance/collect_release_evidence.py repositories)"',
+            'open_pr_repositories_text="$(python3 -I tools/provenance/collect_release_evidence.py repositories)"',
             workflow,
         )
         self.assertIn('test "${#open_pr_repositories[@]}" -gt 0', workflow)

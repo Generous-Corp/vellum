@@ -2,15 +2,25 @@
 #include <cstring>
 #include <mach-o/dyld.h>
 
+// The units are spelled vellum after the framework transfer and pulp before
+// it; the consumer builds against whichever the install carries.
+#if __has_include(<vellum/canvas/canvas.hpp>)
+#include <vellum/canvas/canvas.hpp>
+namespace units = vellum;
+#define VELLUM_MIRROR_FROM_HSV_SYMBOL "_ZN6vellum6canvas5Color8from_hsvENS1_3HSVEf"
+#else
 #include <pulp/canvas/canvas.hpp>
+namespace units = pulp;
+#define VELLUM_MIRROR_FROM_HSV_SYMBOL "_ZN4pulp6canvas5Color8from_hsvENS1_3HSVEf"
+#endif
 
 int main() {
     void* const frontend = dlopen("@rpath/libvellum-mirror-canvas.dylib", RTLD_NOW | RTLD_GLOBAL);
     if (frontend == nullptr)
         return 2;
 
-    using FromHsv = pulp::canvas::Color (*)(pulp::canvas::Color::HSV, float);
-    constexpr char symbol[] = "_ZN4pulp6canvas5Color8from_hsvENS1_3HSVEf";
+    using FromHsv = units::canvas::Color (*)(units::canvas::Color::HSV, float);
+    constexpr char symbol[] = VELLUM_MIRROR_FROM_HSV_SYMBOL;
     const char* provider_path = nullptr;
     for (uint32_t i = 0; i < _dyld_image_count(); ++i) {
         const char* const image = _dyld_get_image_name(i);
