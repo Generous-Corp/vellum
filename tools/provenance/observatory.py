@@ -842,6 +842,45 @@ def verify_mirror_join(
         )
 
 
+def adopts_verified_event(
+    root: Path, git_base: str, commit: str, parent: str, parents: list[str], line: str
+) -> bool:
+    """Whether a merge edge's event change adopts an event already verified on the base.
+
+    Two lines of history can append an event with the same id, for example a
+    branch's reconcile and a later coalesce on main that observe the same
+    commit; the copies differ only in when and from where they were seen. A
+    merge then has to keep one of them. It may keep the base side's: on the
+    edge from the other parent, a modified event path is accepted only when
+    the merge result's blob equals the blob of another parent of the same
+    merge, and that parent is the git base or one of its ancestors, so its
+    copy was already verified there. Any other blob (a third version),
+    a deletion, a rename, or a non-merge change is still a mutation.
+    """
+    status, _, path = line.partition("\t")
+    if status != "M" or len(parents) < 2 or not path:
+        return False
+    result = git_try_blob(root, commit, path)
+    if result is None:
+        return False
+    for other in parents:
+        if other == parent:
+            continue
+        if git_try_blob(root, other, path) != result:
+            continue
+        if other == git_base or is_ancestor(root, other, git_base):
+            return True
+    return False
+
+
+def git_try_blob(root: Path, commit: str, path: str) -> str | None:
+    """The blob id of `path` at `commit`, or None when it is absent there."""
+    try:
+        return git(root, "rev-parse", "--verify", "--quiet", f"{commit}:{path}") or None
+    except ObservatoryError:
+        return None
+
+
 def verify_append_only(
     root: Path,
     git_base: str | None,
@@ -908,7 +947,9 @@ def verify_append_only(
             bad = [
                 line
                 for line in output.splitlines()
-                if line and not line.startswith("A\t")
+                if line
+                and not line.startswith("A\t")
+                and not adopts_verified_event(root, git_base, commit, parent, parents, line)
             ]
             if bad:
                 raise ObservatoryError(

@@ -307,6 +307,90 @@ class ObservatoryTests(unittest.TestCase):
                 ):
                     observatory.verify_append_only(root, base)
 
+    def merge_fixture(self, root: Path, *, result: str | None) -> tuple[str, str]:
+        """A branch and main each append event "e"; a merge keeps `result`.
+
+        Returns (git_base, merge). git_base is main's tip, as CI resolves it.
+        `result` is "main", "branch", "third" or None for a deleted event.
+        """
+        run(root, "git", "init", "-b", "main")
+        run(root, "git", "config", "user.email", "observatory@example.invalid")
+        run(root, "git", "config", "user.name", "Observatory Test")
+        event = root / observatory.EVENTS_PATH / "e.yaml"
+        write(root / observatory.EVENTS_PATH / "seed.yaml", '{"event_id":"seed"}\n')
+        run(root, "git", "add", ".")
+        run(root, "git", "commit", "-m", "seed")
+        run(root, "git", "checkout", "-b", "branch")
+        write(event, '{"event_id":"e","discovered_at":"branch"}\n')
+        run(root, "git", "add", ".")
+        run(root, "git", "commit", "-m", "branch reconcile appends e")
+        run(root, "git", "checkout", "main")
+        write(event, '{"event_id":"e","discovered_at":"main"}\n')
+        run(root, "git", "add", ".")
+        run(root, "git", "commit", "-m", "main coalesce appends e")
+        main_tip = run(root, "git", "rev-parse", "HEAD")
+        run(root, "git", "checkout", "branch")
+        subprocess.run(["git", "merge", "--no-edit", "main"], cwd=root, capture_output=True)
+        if result is None:
+            event.unlink()
+        else:
+            write(event, {
+                "main": '{"event_id":"e","discovered_at":"main"}\n',
+                "branch": '{"event_id":"e","discovered_at":"branch"}\n',
+                "third": '{"event_id":"e","discovered_at":"third"}\n',
+            }[result])
+        run(root, "git", "add", "-A")
+        run(root, "git", "commit", "--no-edit", "-m", "merge main")
+        merge = run(root, "git", "rev-parse", "HEAD")
+        self.assertEqual(len(run(root, "git", "rev-list", "--parents", "-n", "1", merge).split()), 3)
+        return main_tip, merge
+
+    def test_merge_adopting_mains_identical_event_is_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base, _ = self.merge_fixture(root, result="main")
+            observatory.verify_append_only(root, base)
+
+    def test_merge_mutations_of_a_shared_event_are_rejected(self) -> None:
+        # Keeping the branch's copy rewrites main's verified event; a third
+        # blob or a deletion matches neither parent.
+        for result in ("branch", "third", None):
+            with self.subTest(result=result), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                base, _ = self.merge_fixture(root, result=result)
+                with self.assertRaisesRegex(observatory.ObservatoryError, "append-only"):
+                    observatory.verify_append_only(root, base)
+
+    def test_merge_of_two_verified_parents_still_needs_an_equal_blob(self) -> None:
+        # Both parents of a merge can lie on the git base. A merge of them that
+        # writes a third version of "e" adopts neither parent's verified copy,
+        # even when a later merge restores main's version at the head.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            main_tip, merge = self.merge_fixture(root, result="main")
+            # The verified base is the merge itself; both of its parents lie on it.
+            base = merge
+            branch_tip = run(root, "git", "rev-parse", f"{merge}^1")
+            write(root / observatory.EVENTS_PATH / "e.yaml", '{"event_id":"e","discovered_at":"third"}\n')
+            run(root, "git", "add", "-A")
+            tree = run(root, "git", "write-tree")
+            rogue = run(root, "git", "commit-tree", tree, "-p", branch_tip, "-p", main_tip, "-m", "third version")
+            run(root, "git", "checkout", "-q", "-f", "-b", "pr", base)
+            subprocess.run(["git", "merge", "--no-commit", "-s", "ours", rogue], cwd=root, check=True, capture_output=True)
+            run(root, "git", "commit", "--no-edit", "-m", "bring the rogue merge in, keep main's copy")
+            with self.assertRaisesRegex(observatory.ObservatoryError, "append-only"):
+                observatory.verify_append_only(root, base)
+
+    def test_merge_adoption_needs_the_other_parent_on_the_git_base(self) -> None:
+        # The same merge judged from a base before main appended "e": main's
+        # copy is not verified there, so adopting it is a mutation.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.merge_fixture(root, result="main")
+            seed = run(root, "git", "rev-list", "--max-parents=0", "HEAD")
+            with self.assertRaisesRegex(observatory.ObservatoryError, "append-only"):
+                observatory.verify_append_only(root, seed)
+
     def test_similar_new_event_is_allowed_against_git_base(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
