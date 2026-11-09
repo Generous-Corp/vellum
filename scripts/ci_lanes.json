@@ -152,6 +152,9 @@
         "script": "tools/provenance/test_verify_extraction.py"
       },
       {
+        "script": "tools/provenance/test_framework_trusted_verify.py"
+      },
+      {
         "script": "tools/provenance/verify_extraction.py",
         "args": [
           "--defer-mirror-identity",

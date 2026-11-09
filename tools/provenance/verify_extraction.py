@@ -75,12 +75,15 @@ FRAMEWORK_VELLUM_DECLARATION = re.compile(r"namespace\s+vellum(?![A-Za-z0-9_])|(
 FRAMEWORK_RULE_PATHS = (
     "tools/mirror/",
     "tools/provenance/verify_extraction.py",
+    "tools/provenance/framework_trusted_verify.py",
     "tools/provenance/verify_mirror_export.py",
     "tools/provenance/content_scan_policy.py",
     "tools/provenance/mirror_edge_patterns.json",
     "tools/provenance/mirror_edge_patterns.pin.json",
     "provenance/active-source-boundary.json",
     "scripts/install_core.py",
+    ".github/workflows/framework-trusted-verify.yml",
+    ".github/workflows/provenance.yml",
 )
 FRAMEWORK_TRANSFER_DECISION = "Decision 0010, option (a): the renamed units move from mirror/ to framework/ (M2 8b)"
 FRAMEWORK_TRANSFER_SCHEMA = "vellum.framework-transfer.v1"

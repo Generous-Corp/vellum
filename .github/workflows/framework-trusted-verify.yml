@@ -1,0 +1,70 @@
+# Judges a pull request's framework/ change with the default branch's rules.
+#
+# provenance.yml runs a pull request's own scripts, so a change that edits the
+# verifier would be judged by its edit. This workflow runs on
+# pull_request_target, so the definition and every script come from the base:
+# the base is checked out into trusted/, and the pull request's commit is
+# fetched as objects only and materialized from blobs by the trusted
+# tools/provenance/framework_trusted_verify.py. Nothing from the pull request
+# is checked out, built, installed, sourced or executed, and only the PR number
+# and the two commit ids reach a shell, through env.
+name: Framework trusted verify
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, edited]
+  merge_group:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: framework-trusted-verify-${{ github.event.pull_request.number || github.event.merge_group.head_sha }}
+  cancel-in-progress: true
+
+jobs:
+  framework-trusted-verify:
+    name: framework-trusted-verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the base rules
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          path: trusted
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch the change's commit as objects
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: |
+          set -euo pipefail
+          safe_git=(git -c core.hooksPath=/dev/null -c core.fsmonitor=false -C trusted)
+          if [ "$EVENT_NAME" = pull_request_target ]; then
+            "${safe_git[@]}" fetch --no-tags --quiet origin "+refs/pull/${PR_NUMBER}/head:refs/framework-verify/head"
+          else
+            "${safe_git[@]}" fetch --no-tags --quiet origin "+${HEAD_SHA}:refs/framework-verify/head"
+          fi
+          test "$("${safe_git[@]}" rev-parse refs/framework-verify/head)" = "$HEAD_SHA"
+
+      - name: Judge the change with the base rules
+        working-directory: trusted
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          GIT_LFS_SKIP_SMUDGE: '1'
+        run: |
+          set -euo pipefail
+          python3 -I tools/provenance/framework_trusted_verify.py \
+            --repo . \
+            --head "$HEAD_SHA" \
+            --base "$BASE_SHA" \
+            --dest "$RUNNER_TEMP/pr" \
+            --output "$RUNNER_TEMP/framework-trusted-verify.json"
