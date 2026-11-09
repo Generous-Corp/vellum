@@ -324,14 +324,57 @@ bool corner_radii() {
     return found != nullptr && found->id == "corners";
 }
 
+// A version 1 scene draws with the default transform, opacity, and uniform
+// radii even when those fields are set, at every depth.
+bool legacy_scene_defaults() {
+    using vellum::graphics::SceneNode;
+    vellum::graphics::Scene scene;
+    scene.scene_version = 1U;
+    scene.root.children.push_back({
+        .id = "group",
+        .kind = SceneNode::Kind::group,
+        .bounds = {10.0F, 10.0F, 20.0F, 20.0F},
+        .children = {
+            {.id = "a", .kind = SceneNode::Kind::rectangle,
+             .bounds = {1.0F, 1.0F, 4.0F, 4.0F}, .corner_radius = 2.0F,
+             .transform = quarter_turn(), .opacity = 0.0F,
+             .corner_radii = vellum::graphics::CornerRadii{1.0F, 2.0F, 3.0F, 4.0F}},
+            {.id = "b", .kind = SceneNode::Kind::rectangle,
+             .bounds = {2.0F, 2.0F, 4.0F, 4.0F},
+             .opacity = std::numeric_limits<float>::quiet_NaN()},
+        },
+        .transform = vellum::graphics::Affine2D{.a = 2.0F, .d = 2.0F},
+        .opacity = 0.5F,
+    });
+    auto commands = vellum::graphics::make_paint_commands(scene);
+    const auto plain = [](const vellum::graphics::PaintCommand& command) {
+        return vellum::graphics::is_identity(command.transform) && command.opacity == 1.0F;
+    };
+    if (commands.size() != 2U || commands[0].node_id != "a" || commands[1].node_id != "b" ||
+        !plain(commands[0]) || !plain(commands[1]) ||
+        !vellum::graphics::is_uniform(commands[0].corner_radii) ||
+        commands[0].corner_radii.top_left != 2.0F ||
+        !near_rect(commands[0].bounds, 11.0F, 11.0F, 4.0F, 4.0F)) {
+        return false;
+    }
+    // The same scene at version 2 honours the fields.
+    scene.scene_version = 2U;
+    commands = vellum::graphics::make_paint_commands(scene);
+    return commands.empty();
+}
+
 }  // namespace
 
 bool scene_versioning() {
     using vellum::graphics::SceneNode;
-    static_assert(vellum::graphics::kSceneVersion == 1U);
+    static_assert(vellum::graphics::kSceneVersion == 2U);
+    static_assert(vellum::graphics::kMinSupportedSceneVersion == 1U);
     static_assert(vellum::graphics::scene_version_is_supported(vellum::graphics::kSceneVersion));
+    static_assert(vellum::graphics::scene_version_is_supported(1U));
     static_assert(!vellum::graphics::scene_version_is_supported(0U));
-    static_assert(!vellum::graphics::scene_version_is_supported(2U));
+    static_assert(!vellum::graphics::scene_version_is_supported(3U));
+    static_assert(!vellum::graphics::scene_version_has_compositing(1U));
+    static_assert(vellum::graphics::scene_version_has_compositing(2U));
 
     vellum::graphics::Scene scene;
     if (scene.scene_version != vellum::graphics::kSceneVersion) return false;
@@ -361,7 +404,8 @@ bool scene_versioning() {
     }
 
     scene.scene_version = vellum::graphics::kSceneVersion + 1U;
-    return vellum::graphics::make_paint_commands(scene).empty();
+    if (!vellum::graphics::make_paint_commands(scene).empty()) return false;
+    return legacy_scene_defaults();
 }
 
 int main() {

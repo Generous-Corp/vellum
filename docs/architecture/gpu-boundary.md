@@ -22,9 +22,11 @@ The public slice consists of:
   application builds, plus a headers-only `Vellum::DawnHeaders` target for an
   embedding host's authenticated bootstrap and compute code.
 
-The scene carries a single integer schema version, `kSceneVersion`, starting
-at 1. Fields whose defaults leave existing scenes unchanged are added without a
-bump; a new node kind or a change in meaning bumps it. Node kinds are closed
+The scene carries a single integer schema version, `kSceneVersion`, now 2.
+A change that can alter rendered output bumps it: a new node kind, a new field
+that changes how a scene is drawn, or a change in meaning. A change that only
+adds metadata keeps it. Consumers accept versions from
+`kMinSupportedSceneVersion` (1) to `kSceneVersion`. Node kinds are closed
 per version. The surface's `render` refuses a scene with an unknown version or
 node kind before drawing anything and keeps its previous frame, and
 paint-command flattening skips both rather than drawing an unknown kind as a
@@ -36,7 +38,8 @@ DesignIR document path.
 
 Nodes carry an optional affine transform about their origin, a group opacity,
 and per-corner radii beside the uniform `corner_radius` shorthand; all three
-default to the previous output, so they did not bump the version. Paint
+change rendered output, so they arrived with version 2; a version 1 scene is
+drawn with the identity transform, full opacity, and the uniform radius. Paint
 commands keep untransformed scene-absolute `bounds` and add the composed
 transform, so a consumer that ignores it still sees the old geometry. A faded
 subtree that draws more than one command is bracketed by `begin_layer` and

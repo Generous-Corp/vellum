@@ -776,7 +776,8 @@ public:
                                  unknown->id);
             return false;
         }
-        if (const auto* invalid = find_non_finite_compositing(scene.root);
+        if (const auto* invalid = scene_version_has_compositing(scene.scene_version)
+                ? find_non_finite_compositing(scene.root) : nullptr;
             invalid != nullptr) {
             set_error(error, "scene node " + invalid->id +
                                  " has a non-finite transform, opacity, or corner radius");

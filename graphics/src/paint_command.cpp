@@ -9,9 +9,13 @@ namespace vellum::graphics {
 namespace {
 
 void append_node(const SceneNode& node, float parent_x, float parent_y,
-                 const Affine2D& parent_transform, std::vector<PaintCommand>& output) {
-    if (!is_known_kind(node.kind) || !compositing_is_finite(node)) return;
-    const float opacity = std::clamp(node.opacity, 0.0F, 1.0F);
+                 const Affine2D& parent_transform, bool compositing,
+                 std::vector<PaintCommand>& output) {
+    if (!is_known_kind(node.kind)) return;
+    // A version 1 scene predates transform, opacity, and corner_radii, so they
+    // keep their defaults there whatever they hold.
+    if (compositing && !compositing_is_finite(node)) return;
+    const float opacity = compositing ? std::clamp(node.opacity, 0.0F, 1.0F) : 1.0F;
     if (opacity <= 0.0F) return;
     const Rect absolute{
         parent_x + node.bounds.x,
@@ -20,12 +24,14 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
         node.bounds.height,
     };
     Affine2D transform = parent_transform;
-    if (node.transform && !is_identity(*node.transform)) {
+    if (compositing && node.transform && !is_identity(*node.transform)) {
         transform = concat(parent_transform, concat(
             translation(absolute.x, absolute.y),
             concat(*node.transform, translation(-absolute.x, -absolute.y))));
     }
-    const auto radii = resolved_corner_radii(node);
+    const auto radii = compositing ? resolved_corner_radii(node)
+                                   : resolved_corner_radii(SceneNode{
+                                         .corner_radius = node.corner_radius});
     const auto first = output.size();
     if (node.kind == SceneNode::Kind::rectangle) {
         output.push_back({
@@ -78,7 +84,7 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
         });
     }
     for (const auto& child : node.children) {
-        append_node(child, absolute.x, absolute.y, transform, output);
+        append_node(child, absolute.x, absolute.y, transform, compositing, output);
     }
     if (opacity >= 1.0F) return;
 
@@ -186,7 +192,8 @@ bool mesh_is_valid(const TriangleMesh& mesh, std::string* reason) {
 std::vector<PaintCommand> make_paint_commands(const Scene& scene) {
     std::vector<PaintCommand> output;
     if (!scene_version_is_supported(scene.scene_version)) return output;
-    append_node(scene.root, 0.0F, 0.0F, Affine2D{}, output);
+    append_node(scene.root, 0.0F, 0.0F, Affine2D{},
+                scene_version_has_compositing(scene.scene_version), output);
     return output;
 }
 

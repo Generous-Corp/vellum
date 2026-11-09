@@ -489,7 +489,7 @@ bool scene_version_refusal() {
     future.scene_version = kSceneVersion + 1U;
     Scene unknown_kind = scene;
     unknown_kind.root.children[0].kind = static_cast<SceneNode::Kind>(42);
-    if (!refused_keeps_frame(future, "scene version 2 is not supported by this renderer") ||
+    if (!refused_keeps_frame(future, "scene version 3 is not supported by this renderer") ||
         !refused_keeps_frame(
             unknown_kind, "scene contains unsupported node kind 42 at swatch")) {
         return false;
@@ -500,7 +500,21 @@ bool scene_version_refusal() {
         std::cerr << error << '\n';
         return false;
     }
-    return again == first;
+    if (again != first) return false;
+    // The oldest supported version still renders, drawing the compositing
+    // fields it predates at their defaults, even a non-finite one.
+    Scene legacy = scene;
+    legacy.scene_version = kMinSupportedSceneVersion;
+    legacy.root.children[0].opacity = std::nanf("");
+    legacy.root.children[0].transform = Affine2D{.a = 3.0F, .d = 3.0F};
+    legacy.root.children[0].corner_radii = CornerRadii{6.0F, 6.0F, 6.0F, 6.0F};
+    std::vector<std::uint8_t> old_version;
+    if (!surface->render(legacy, &error) ||
+        !surface->capture_rgba(old_version, width, height, &error)) {
+        std::cerr << "version 1 scene was refused: " << error << '\n';
+        return false;
+    }
+    return old_version == first;
 }
 
 struct Probe final {

@@ -92,7 +92,8 @@ struct ResolvedLinearGradient final {
 /// `scene_version_is_supported` yields no commands, and a node of a kind this
 /// build does not know, or whose compositing fails `compositing_is_finite`,
 /// contributes nothing for itself or its subtree; `SkiaDawnSurface::render`
-/// refuses such a scene outright.
+/// refuses such a scene outright. In a version 1 scene the transform,
+/// opacity, and per-corner radii keep their defaults whatever they hold.
 ///
 /// A node whose opacity is below one and whose subtree draws more than one
 /// command is wrapped in a `begin_layer`/`end_layer` pair; when it draws
