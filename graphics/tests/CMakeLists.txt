@@ -66,6 +66,9 @@ add_executable(vellum-layer-cache-gpu-test
     layer_cache_gpu_test.cpp)
 target_link_libraries(vellum-layer-cache-gpu-test PRIVATE
     vellum-scene-capture-harness)
+# The test reaches SkiaDawnSurfaceTestAccess, which is not installed.
+target_include_directories(vellum-layer-cache-gpu-test PRIVATE
+    ${PROJECT_SOURCE_DIR}/graphics/src)
 set_target_properties(vellum-layer-cache-gpu-test PROPERTIES
     OSX_ARCHITECTURES arm64
     MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}

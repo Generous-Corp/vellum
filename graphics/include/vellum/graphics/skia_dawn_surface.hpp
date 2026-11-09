@@ -210,6 +210,7 @@ public:
     [[nodiscard]] const GpuEvidence& evidence() const noexcept;
 
 private:
+    friend struct SkiaDawnSurfaceTestAccess;
     class Impl;
     explicit SkiaDawnSurface(std::unique_ptr<Impl> impl) noexcept;
     std::unique_ptr<Impl> impl_;

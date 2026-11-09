@@ -1,5 +1,7 @@
+#include "skia_dawn_surface_test_access.hpp"
 #include "support/scene_capture_harness.hpp"
 
+#include <vellum/graphics/damage.hpp>
 #include <vellum/graphics/layer_cache.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
@@ -542,6 +544,14 @@ void device_loss_rebuild() {
 // A scene partial redraw serves caches only exact images, so partial frames
 // stay byte-identical to full repaints even when the two surfaces' cache
 // histories differ (here a reload on one of them).
+//
+// Partial redraw serves scenes up to `kDamageModelSceneVersion`. While that is
+// version 1, the scene here carries no layer at all: the only image that
+// composites exactly is a faded group's, and opacity is a version-2 field, so
+// `layered_scene` adds its faded group only from version 2. This test then
+// checks that partial frames stay byte-identical with caching on and that no
+// static or expensive subtree is cached; `exact_layer_inside_damage_rect`
+// covers compositing an exact image inside a damage rectangle.
 void partial_presentation_with_layers() {
     constexpr std::uint32_t width = 400;
     constexpr std::uint32_t height = 300;
@@ -550,12 +560,13 @@ void partial_presentation_with_layers() {
     auto partial = make_surface(width, height, 2.0F, inexact());
     if (!full || !partial) return;
     std::size_t partial_frames = 0;
-    std::size_t inexact_layers = 0;
+    std::size_t most_layers = 0;
     const auto frame = [&](const std::string& what) {
         if (!render(*full, scene) || !render(*partial, scene, true)) return;
         const auto stats = partial->frame_stats();
         if (!stats.full_repaint) ++partial_frames;
-        inexact_layers += partial->layer_cache_stats().layers + full->layer_cache_stats().layers;
+        most_layers = std::max({most_layers, partial->layer_cache_stats().layers,
+                                full->layer_cache_stats().layers});
         const auto comparison = difference(*full, *partial, 0);
         expect(comparison.same_size && comparison.differing_pixels == 0U,
                what + " is byte-identical to a full redraw",
@@ -575,9 +586,68 @@ void partial_presentation_with_layers() {
     }
     expect(partial_frames >= 8U, "most frames were partial",
            std::to_string(partial_frames));
-    expect(inexact_layers == 0U,
-           "a scene partial redraw serves caches no static or expensive subtree",
-           std::to_string(inexact_layers));
+    if constexpr (kDamageModelSceneVersion < 2U) {
+        expect(most_layers == 0U,
+               "a scene partial redraw serves carries no layer while it cannot carry opacity",
+               "layers=" + std::to_string(most_layers));
+    } else {
+        expect(most_layers == 1U,
+               "a scene partial redraw serves caches only its faded group",
+               "layers=" + std::to_string(most_layers));
+    }
+}
+
+// An exact image composited inside a damage rectangle is byte-identical to
+// drawing its group directly. A scene partial redraw serves cannot carry
+// opacity yet (see `partial_presentation_with_layers`), so this raises the
+// surface's damage-model version to 2 and supplies the damage itself.
+void exact_layer_inside_damage_rect() {
+    constexpr std::uint32_t width = 320;
+    constexpr std::uint32_t height = 240;
+    constexpr float scale = 2.0F;
+    Scene scene = layered_scene(width, height, 2U);
+    auto plain = make_surface(width, height, scale, uncached());
+    auto partial = make_surface(width, height, scale, {});
+    if (!plain || !partial) return;
+    SkiaDawnSurfaceTestAccess::set_damage_model_version(*partial, 2U);
+    if (!render(*plain, scene) || !render(*partial, scene)) return;
+    expect(partial->layer_cache_stats().layers == 1U,
+           "the faded group is cached from its first frame",
+           describe(partial->layer_cache_stats()));
+
+    // Device pixels at scale 2. The first rectangle covers the faded group and
+    // its shadow, the second cuts through the group, and the third misses it.
+    struct Step final {
+        std::string what;
+        PixelRect rect;
+        float opacity = 0.0F;
+    };
+    const std::vector<Step> steps{
+        {"a damage rectangle covering a re-faded group", {0, 280, 420, 472}, 0.3F},
+        {"a damage rectangle cutting through the faded group", {100, 300, 240, 400}, 0.3F},
+        {"a damage rectangle beside the faded group", {440, 40, 600, 200}, 0.3F},
+        {"a damage rectangle covering a group faded back up", {0, 280, 420, 472}, 0.85F},
+    };
+    std::string error;
+    for (const auto& step : steps) {
+        node(scene, "fade").opacity = step.opacity;
+        DamageRegion damage(frame_rect(scene, scale));
+        damage.add(step.rect);
+        if (!render(*plain, scene)) return;
+        if (!partial->render(scene, damage, &error)) {
+            expect(false, step.what + " renders", error);
+            return;
+        }
+        const auto frame = partial->frame_stats();
+        const auto layers = partial->layer_cache_stats();
+        expect(!frame.full_repaint, step.what + " redraws only the damage",
+               std::string(to_string(frame.full_repaint_reason)));
+        expect(layers.layers == 1U && layers.hits == 1U && layers.builds == 0U,
+               step.what + " reuses the group's image", describe(layers));
+        const auto comparison = difference(*plain, *partial, 0);
+        expect(comparison.same_size && comparison.differing_pixels == 0U,
+               step.what + " is byte-identical to the uncached draw", describe(comparison));
+    }
 }
 
 void budget_on_the_gpu() {
@@ -614,6 +684,7 @@ int main() {
     invalidation_matrix();
     device_loss_rebuild();
     partial_presentation_with_layers();
+    exact_layer_inside_damage_rect();
     budget_on_the_gpu();
     std::cout << (failures == 0 ? "layer cache: all checks passed\n"
                                 : "layer cache: " + std::to_string(failures) + " failed\n");

@@ -5,6 +5,7 @@
 #include <vellum/graphics/layer_cache.hpp>
 #include <vellum/graphics/paint_command.hpp>
 
+#include "skia_dawn_surface_test_access.hpp"
 #include "utf8_text.hpp"
 
 #import <QuartzCore/CAMetalLayer.h>
@@ -1007,6 +1008,10 @@ public:
         return draw_frame(scene, FullRepaintReason::none, &merged, error);
     }
 
+    void set_damage_model_version(std::uint32_t version) noexcept {
+        damage_model_version_ = version;
+    }
+
     void simulate_device_loss() {
         if (!device_) return;
         device_.ForceLoss(wgpu::DeviceLostReason::Unknown, "Vellum simulated device loss");
@@ -1227,6 +1232,10 @@ private:
             (context_ && context_->isDeviceLost());
     }
 
+    bool serves_partial_redraw(std::uint32_t version) const noexcept {
+        return version <= damage_model_version_;
+    }
+
     bool fail_device_lost(std::string* error, std::string message) {
         drop_all_layers(LayerInvalidation::device_lost);
         retained_valid_ = false;
@@ -1249,7 +1258,7 @@ private:
         std::vector<PixelRect>& rects) const {
         if (!retained_valid_) return retained_reason_;
         if (!last_scene_) return FullRepaintReason::first_frame;
-        if (!partial_redraw_supported(scene.scene_version)) {
+        if (!serves_partial_redraw(scene.scene_version)) {
             return FullRepaintReason::damage_model_version;
         }
         if (last_scene_->scene_version != scene.scene_version) {
@@ -1306,7 +1315,7 @@ private:
         // partial frame and a full repaint agree whatever each surface cached.
         const LayerPlanOptions options{
             .count_frame = count_frame,
-            .exact_only = partial_redraw_supported(scene.scene_version),
+            .exact_only = serves_partial_redraw(scene.scene_version),
         };
         if (!prepare_layers(commands, ranges, options, paragraphs, mesh_textures, layers,
                             layer_commands_recorded, error)) {
@@ -1721,6 +1730,8 @@ private:
     bool retained_valid_ = false;
     FullRepaintReason retained_reason_ = FullRepaintReason::first_frame;
     bool reload_pending_ = false;
+    // The newest scene version this surface redraws from damage alone.
+    std::uint32_t damage_model_version_ = kDamageModelSceneVersion;
     DamageTracker tracker_;
     LayerCache layer_cache_;
     std::unordered_map<std::string, LayerImage> layer_images_;
@@ -1784,6 +1795,11 @@ void SkiaDawnSurface::set_layer_cache_policy(const LayerCachePolicy& policy) {
 
 LayerCacheStats SkiaDawnSurface::layer_cache_stats() const {
     return impl_->layer_cache_stats();
+}
+
+void SkiaDawnSurfaceTestAccess::set_damage_model_version(SkiaDawnSurface& surface,
+                                                         std::uint32_t version) noexcept {
+    surface.impl_->set_damage_model_version(version);
 }
 
 bool SkiaDawnSurface::finish(std::string* error) {
