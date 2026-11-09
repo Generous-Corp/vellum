@@ -189,7 +189,7 @@ promotion attestation and prove full-matrix parity.
   - the framework transfer's judges, `tools/provenance/verify_extraction.py` and
     `tools/provenance/framework_trusted_verify.py`, the modules and rule tables the judge loads
     (`content_scan_policy.py`, `verify_mirror_export.py`, `mirror_edge_patterns.json` and its pin, all under
-    `tools/provenance/`), the mirror tooling under `tools/mirror/` they run, and the records
+    `tools/provenance/`, plus `provenance/mirror/link-policy.json`), the mirror tooling under `tools/mirror/` they run, and the records
     they hold the transfer to: `provenance/framework/transfer.json`, `provenance/framework/external-updates.json` and
     `provenance/framework-name-debt.json`, owned before they exist so the change that adds them needs both reviews;
   - CODEOWNERS itself.

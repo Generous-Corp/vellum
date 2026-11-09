@@ -89,6 +89,7 @@ POLICY_FILES = (
     "/provenance/framework-name-debt.json",
     "/provenance/framework/external-updates.json",
     "/provenance/framework/transfer.json",
+    "/provenance/mirror/link-policy.json",
     "/provenance/release-signers.allowed_signers",
     "/provenance/retired-release-tags.json",
     "/scripts/check_release_policy.py",

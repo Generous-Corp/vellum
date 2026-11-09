@@ -216,6 +216,7 @@ class Policy(unittest.TestCase):
                      "/.github/workflows/version-at-land.yml",
                      "/scripts/version_at_land.py",
                      "/provenance/authority-signers.allowed_signers",
+                     "/provenance/mirror/link-policy.json",
                      "/tools/provenance/verify_renderer_dependency.py"):
             with self.subTest(path=path):
                 shutil.copy(ROOT / policy.CODEOWNERS, self.tmp / policy.CODEOWNERS)
@@ -231,6 +232,7 @@ class Policy(unittest.TestCase):
                      "/.github/workflows/version-at-land.yml",
                      "/scripts/version_at_land.py",
                      "/provenance/authority-signers.allowed_signers",
+                     "/provenance/mirror/link-policy.json",
                      "/tools/provenance/verify_renderer_dependency.py"):
             with self.subTest(path=path):
                 self.assertIn(path, policy.POLICY_FILES)
@@ -580,6 +582,7 @@ class Repository(unittest.TestCase):
                      "/.github/workflows/version-at-land.yml",
                      "/scripts/version_at_land.py",
                      "/provenance/authority-signers.allowed_signers",
+                     "/provenance/mirror/link-policy.json",
                      "/tools/provenance/verify_renderer_dependency.py"):
             with self.subTest(path=path):
                 self.assertIn(path, policy.POLICY_FILES)
