@@ -431,9 +431,12 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
         self.assertEqual([line for line in lines[:moved] if line and not line.startswith("#")], ["set -euo pipefail"])
         uses = [i for i, line in enumerate(lines) if "GITHUB_TOKEN" in line or "status_token" in line]
         self.assertEqual([lines[i] for i in uses if i not in (moved, moved + 1)],
-                         ['--header "Authorization: Bearer ${status_token}" \\',
+                         ["printf 'Authorization: Bearer %s\\n' \"$status_token\" |",
                           "env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \\"])
         self.assertIsNone(re.search(r"(?<![\w-])(export|declare -x)\s", run))
+        # The token reaches curl on stdin, never in its argv.
+        self.assertIn("--header @- \\", run)
+        self.assertNotIn("Bearer ${status_token}\"", run)
 
     def test_no_expression_reaches_a_shell(self):
         self.assertEqual(len(self.runs), 1)  # control: the run block was read

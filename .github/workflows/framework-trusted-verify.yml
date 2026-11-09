@@ -19,16 +19,15 @@
 # trap posts failure on any error, timeout or cancellation, so a run never
 # leaves it pending or missing.
 #
-# This is an accident guard plus the judge, not a security boundary on its own:
-# the framework-trusted-verify context can be posted by any token with
+# The framework-trusted-verify context can be posted by any token with
 # statuses: write, and a ruleset bound to GitHub Actions cannot tell those
-# apart. The admission steward verifies that the status resolves to a
-# pull_request_target or merge_group run of this exact file on the pull
-# request's head (Shipyard#1178). pull_request_target runs the definition on
-# the pull request's base branch, so a pull request aimed at another branch,
-# whose copy of this file was changed, gets a run of this same path that may
-# judge nothing: the status is trusted only once the steward (or a future
-# judge App) confirms the run used main's definition, not merely this path.
+# apart. Shipyard#1178 will have the admission steward verify that this status
+# resolves to a pull_request_target or merge_group run of this exact file on
+# the pull request's head, from that head's own branch, with no non-main-base
+# pull request for that head. Even then it is an accident guard, not a
+# security boundary: a pull_request_target run executes the base branch's copy
+# of this file, and merge_group runs use the queued pull request's workflows.
+# A dedicated judge App (vellum#275) is the planned hardening.
 # The token lives only in an unexported shell variable the status posts read;
 # nothing else in the step sees it.
 name: Framework trusted verify
@@ -75,8 +74,11 @@ jobs:
             local state="$1" description="$2" payload
             payload="$(printf '{"state":"%s","context":"framework-trusted-verify","description":"%s","target_url":"%s"}' \
               "$state" "$description" "$run_url")"
-            curl --fail --silent --show-error --retry 3 --request POST \
-              --header "Authorization: Bearer ${status_token}" \
+            # The header arrives on stdin from the printf builtin, so the token
+            # is never in a process's argv.
+            printf 'Authorization: Bearer %s\n' "$status_token" |
+              curl --fail --silent --show-error --retry 3 --request POST \
+              --header @- \
               --header "Accept: application/vnd.github+json" \
               --data "$payload" \
               "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" > /dev/null
