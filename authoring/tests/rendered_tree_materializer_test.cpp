@@ -663,5 +663,87 @@ int main() {
         return 1;
     }
 
+    error = "stale failure";
+    if (!vellum::authoring::materialize_rendered_tree(kRenderedTree, rendered, &error) ||
+        !error.empty()) {
+        std::cerr << "a successful materialization kept a stale error\n";
+        return 1;
+    }
+
+    const auto run_rejected = [&](std::string_view tree, const std::string& expected,
+                                  std::string_view node_id, std::string_view property) {
+        const auto width_before = rendered.scene.width;
+        std::vector<LoweringDiagnostic> diagnostics;
+        if (vellum::authoring::materialize_rendered_tree(tree, rendered, &error, &diagnostics) ||
+            error != expected || rendered.scene.width != width_before ||
+            diagnostics.empty()) {
+            std::cerr << "unexpected text-run result: " << error << '\n';
+            return false;
+        }
+        const auto& last = diagnostics.back();
+        return last.severity == LoweringDiagnostic::Severity::error &&
+               last.disposition == LoweringDiagnostic::Disposition::unsupported &&
+               last.code == vellum::graphics::kInvalidTextRunCode &&
+               last.node_id == node_id && last.property == property && last.message == error;
+    };
+    static_assert(vellum::graphics::kInvalidTextRunCode == "VELLUM_INVALID_TEXT_RUN");
+    constexpr std::string_view kRunWithoutText = R"JSON({
+      "protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
+        "type":"text","id":"label","style":{"width":100,"height":30},
+        "children":[
+          {"type":"text-run","id":"label/first","text":"Ok","children":[]},
+          {"type":"text-run","id":"label/second","text":7,"children":[]}]}}
+    )JSON";
+    constexpr std::string_view kRunWithoutId = R"JSON({
+      "protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
+        "type":"button","id":"go","style":{"width":100,"height":30},
+        "children":[{"type":"text-run","text":"Go","children":[]}]}}
+    )JSON";
+    constexpr std::string_view kRunWithChildren = R"JSON({
+      "protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
+        "type":"text","id":"nested","style":{"width":100,"height":30},
+        "children":[{"type":"text-run","id":"nested/run","text":"A",
+          "children":[{"type":"view","id":"hidden","children":[]}]}]}}
+    )JSON";
+    constexpr std::string_view kRunWithBadStyle = R"JSON({
+      "protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
+        "type":"text","id":"styled","style":{"width":100,"height":30},
+        "children":[{"type":"text-run","id":"styled/run","text":"A","style":"bold",
+          "children":[]}]}}
+    )JSON";
+    constexpr std::string_view kDuplicateRunId = R"JSON({
+      "protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
+        "type":"stack","id":"dup-root","style":{"width":100,"height":60},
+        "children":[
+          {"type":"text","id":"dup-text","style":{"height":20},"children":[
+            {"type":"text-run","id":"dup","text":"A","children":[]},
+            {"type":"text-run","id":"dup","text":"B","children":[]}]}]}}
+    )JSON";
+    constexpr std::string_view kRunIdShadowsNode = R"JSON({
+      "protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
+        "type":"stack","id":"shadow-root","style":{"width":100,"height":60},
+        "children":[
+          {"type":"text","id":"shadow-text","style":{"height":20},"children":[
+            {"type":"text-run","id":"shadow-root","text":"A","children":[]}]}]}}
+    )JSON";
+    if (!run_rejected(kRunWithoutText, "text-run label/second requires string text",
+            "label/second", "text") ||
+        !run_rejected(kRunWithoutId, "text-run under go requires a non-empty string id",
+            "go", "id") ||
+        !run_rejected(kRunWithChildren, "text-run nested/run does not accept children",
+            "nested/run", "children") ||
+        !run_rejected(kRunWithBadStyle, "text-run styled/run style must be an object",
+            "styled/run", "style") ||
+        !run_rejected(kDuplicateRunId,
+            "authoring tree contains an empty or duplicate node id: dup", "dup", "id") ||
+        !run_rejected(kRunIdShadowsNode,
+            "authoring tree contains an empty or duplicate node id: shadow-root",
+            "shadow-root", "id")) {
+        std::cerr << "a malformed attributed text-run did not fail closed\n";
+        return 1;
+    }
+
+
+
     return compositing_keys() && transform_pivots_once() && transform_ignores_locale() ? 0 : 1;
 }

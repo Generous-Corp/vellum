@@ -199,6 +199,11 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-web-canvas-shell-lowering-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.web.canvas-shell-lowering
             COMMAND vellum-web-canvas-shell-lowering-test)
+
+        add_executable(vellum-damage-test
+            graphics/tests/damage_test.cpp)
+        target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.damage COMMAND vellum-damage-test)
     endif()
 
     if(TARGET vellum-authoring)

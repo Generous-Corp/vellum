@@ -20,8 +20,10 @@ PACKAGE = HERE.parent
 class RunnerTest(unittest.TestCase):
     def run_main(self, *arguments: str) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
-        with tempfile.TemporaryDirectory() as work, redirect_stdout(out), redirect_stderr(err):
-            code = runner.main(["--package", str(PACKAGE), "--work", work, *arguments])
+        with tempfile.TemporaryDirectory() as base, redirect_stdout(out), redirect_stderr(err):
+            build = Path(base) / "build"
+            code = runner.main(["--package", str(PACKAGE), "--work", str(build / "work"),
+                                "--build-dir", str(build), *arguments])
         return code, out.getvalue(), err.getvalue()
 
     def test_missing_prefix_skips_with_a_clear_message(self) -> None:
@@ -103,7 +105,9 @@ class RunnerTest(unittest.TestCase):
             saved = runner.PINNED_SWIFT
             runner.PINNED_SWIFT = "0.0.0"
             try:
-                with tempfile.TemporaryDirectory() as work:
+                with tempfile.TemporaryDirectory() as base:
+                    build = Path(base) / "build"
+                    work = str(build / "work")
                     calls = []
                     original = runner.check_package
                     runner.check_package = lambda package: calls.append(package) or ["stop here"]
@@ -111,6 +115,7 @@ class RunnerTest(unittest.TestCase):
                         out, err = io.StringIO(), io.StringIO()
                         with redirect_stdout(out), redirect_stderr(err):
                             code = runner.main(["--package", str(PACKAGE), "--work", work,
+                                                "--build-dir", str(build),
                                                 "--sdk-prefix", str(sdk)])
                     finally:
                         runner.check_package = original
@@ -230,6 +235,104 @@ class RunnerTest(unittest.TestCase):
             runner.publish_summary({"GITHUB_STEP_SUMMARY": str(summary)}, ["SKIP native"])
             self.assertIn("- SKIP native", summary.read_text(encoding="utf-8"))
             runner.publish_summary({}, ["ignored"])
+
+    def test_unsafe_work_directories_are_refused(self) -> None:
+        source = PACKAGE.parents[1]
+        build = source / "build-gpu"
+        self.assertIsNone(runner.unsafe_work_reason(build / "swift-host-proof" / "run", build, PACKAGE))
+        self.assertIsNotNone(runner.unsafe_work_reason(build, build, PACKAGE))
+        self.assertIsNotNone(runner.unsafe_work_reason(source / "elsewhere", build, PACKAGE))
+        self.assertIsNotNone(runner.unsafe_work_reason(PACKAGE / "work", source, PACKAGE))
+        self.assertIsNotNone(runner.unsafe_work_reason(source, source.parent, PACKAGE))
+        self.assertIsNotNone(runner.unsafe_work_reason(PACKAGE / "run", PACKAGE, PACKAGE))
+        self.assertIsNotNone(runner.unsafe_work_reason(Path("/tmp/x"), Path("/"), PACKAGE))
+
+    def test_refused_work_directory_is_left_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as text:
+            build = Path(text) / "build"
+            build.mkdir()
+            keep = build / "keep.txt"
+            keep.write_text("keep", encoding="utf-8")
+            sdk = Path(text) / "sdk"
+            (sdk / "lib" / "pkgconfig").mkdir(parents=True)
+            (sdk / runner.PKG_CONFIG_FILE).write_text("", encoding="utf-8")
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                code = runner.main(["--package", str(PACKAGE), "--work", str(build),
+                                    "--build-dir", str(build), "--sdk-prefix", str(sdk)])
+            self.assertEqual(code, 1)
+            self.assertIn("refusing to remove the work directory", err.getvalue())
+            self.assertTrue(keep.is_file())
+
+    def test_build_directory_is_required(self) -> None:
+        with tempfile.TemporaryDirectory() as text:
+            sdk = Path(text)
+            (sdk / "lib" / "pkgconfig").mkdir(parents=True)
+            (sdk / runner.PKG_CONFIG_FILE).write_text("", encoding="utf-8")
+            out, err = io.StringIO(), io.StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                code = runner.main(["--package", str(PACKAGE), "--work", str(sdk / "w"),
+                                    "--sdk-prefix", str(sdk)])
+        self.assertEqual(code, 1)
+        self.assertIn("--build-dir is required", err.getvalue())
+
+    def fake_tree(self, base: Path) -> tuple[Path, Path, Path]:
+        source = base / "src"
+        package = source / "packages" / "vellum-swift"
+        package.mkdir(parents=True)
+        build = source / "build"
+        build.mkdir()
+        return source, package, build
+
+    def test_case_variant_paths_cannot_evade_the_protected_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as text:
+            source, package, build = self.fake_tree(Path(text))
+            variant_source = source.parent / "SRC"
+            variant_build = source / "BUILD"
+            if not variant_source.exists():
+                self.skipTest("the temporary volume is case-sensitive")
+            self.assertIsNotNone(runner.unsafe_work_reason(variant_source, build, package))
+            self.assertIsNotNone(runner.unsafe_work_reason(variant_build, build, package))
+            self.assertIsNotNone(runner.unsafe_work_reason(
+                variant_source / "PACKAGES" / "VELLUM-SWIFT" / "run", build, package))
+            self.assertIsNone(runner.unsafe_work_reason(variant_build / "run", build, package))
+
+    def test_symlinked_work_directories_are_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as text:
+            base = Path(text)
+            source, package, build = self.fake_tree(base)
+            elsewhere = base / "elsewhere"
+            elsewhere.mkdir()
+            (elsewhere / "keep.txt").write_text("keep", encoding="utf-8")
+            (build / "outside").symlink_to(elsewhere, target_is_directory=True)
+            (build / "inward").symlink_to(package, target_is_directory=True)
+            (build / "hop").symlink_to(build, target_is_directory=True)
+            for name in ("outside", "inward", "hop/run"):
+                with self.subTest(name=name):
+                    reason = runner.unsafe_work_reason(build / name, build, package)
+                    self.assertIsNotNone(reason)
+                    with self.assertRaises(runner.ProofError):
+                        runner.prepare_work(build / name, build, package)
+            self.assertTrue((elsewhere / "keep.txt").is_file())
+
+    def test_only_runner_created_work_directories_are_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as text:
+            _, package, build = self.fake_tree(Path(text))
+            work = build / "swift-host-proof" / "run"
+            work.mkdir(parents=True)
+            (work / "keep.txt").write_text("keep", encoding="utf-8")
+            with self.assertRaises(runner.ProofError) as refused:
+                runner.prepare_work(work, build, package)
+            self.assertIn("not created by this runner", str(refused.exception))
+            self.assertTrue((work / "keep.txt").is_file())
+            (work / "keep.txt").unlink()
+            work.rmdir()
+            runner.prepare_work(work, build, package)
+            self.assertTrue((work / runner.WORK_MARKER).is_file())
+            (work / "old.txt").write_text("old", encoding="utf-8")
+            runner.prepare_work(work, build, package)
+            self.assertFalse((work / "old.txt").exists())
+            self.assertTrue((work / runner.WORK_MARKER).is_file())
 
 
 if __name__ == "__main__":
