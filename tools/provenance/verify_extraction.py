@@ -1000,11 +1000,12 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
     # with a framework/ name fails here. A census that sees no declarations on
     # either side is itself an error (collision_errors), its built-in control.
     rename_tool = load_rename_tool()
-    census = rename_tool.collision_census(
-        rename_tool.load_spelling(MIRROR_EDGE_TABLE, "vellum"), framework, root, {})
+    census = tracked_collision_census(rename_tool, root, framework)
     checks["framework_collision_census"] = {
         key: (len(value) if isinstance(value, (list, dict)) and key != "declarations" else value)
         for key, value in census.items() if key != "native_root"}
+    if census.get("status") == "error":
+        errors.append(f"framework collision census: {census['reason']}")
     errors.extend(f"framework collision census: {e}" for e in rename_tool.collision_errors(census))
     identity = load_rename_identity_verifier()
     tree = transfer.get("framework_tree", "")
@@ -1036,6 +1037,43 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
     checks["framework_transfer_proved"] = not proof
     errors.extend(f"framework transfer: {e}" for e in proof)
     return errors, checks
+
+
+def tracked_collision_census(rename_tool, root: Path, framework: Path) -> dict:
+    """The rename tool's collision census, over the files this repository tracks.
+
+    The census walks its trees from the filesystem. A checkout can hold
+    untracked trees the commit does not: the required provenance lane checks
+    Pulp out at .mirror-pulp inside the Vellum checkout, and every Pulp file
+    there would read as a native second copy. Only tracked files are Vellum
+    source, so both walks are confined to them. The tool itself is pinned by
+    the transfer record, so it is wrapped here rather than changed.
+    """
+    listed = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, check=False)
+    if listed.returncode != 0:
+        return {"status": "error", "reason": "cannot list tracked files"}
+    top = root.resolve()
+    tracked = {name for name in listed.stdout.decode("utf-8", errors="surrogateescape").split("\0") if name}
+
+    def keep(paths):
+        kept = []
+        for path in paths:
+            try:
+                relative = path.resolve().relative_to(top).as_posix()
+            except ValueError:
+                continue
+            if relative in tracked:
+                kept.append(path)
+        return kept
+
+    collisions = rename_tool.collisions
+    walk, iter_sources = rename_tool.walk, collisions.iter_sources
+    rename_tool.walk = lambda tree: keep(walk(tree))
+    collisions.iter_sources = lambda tree, skip_top=(): keep(iter_sources(tree, skip_top))
+    try:
+        return rename_tool.collision_census(rename_tool.load_spelling(MIRROR_EDGE_TABLE, "vellum"), framework, root, {})
+    finally:
+        rename_tool.walk, collisions.iter_sources = walk, iter_sources
 
 
 def load_rename_tool():
