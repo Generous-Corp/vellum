@@ -2,6 +2,7 @@
 
 #include <vellum/graphics/scene.hpp>
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -115,6 +116,26 @@ struct ResolvedLinearGradient final {
 /// exactly one, its opacity is folded into that command's. A node whose
 /// opacity is zero or less contributes nothing.
 [[nodiscard]] std::vector<PaintCommand> make_paint_commands(const Scene& scene);
+
+/// The paint commands one scene node and its subtree contribute: the
+/// half-open index range [`begin`, `end`) of the command stream, which holds
+/// the node's own commands, its descendants' and, when the node is faded as a
+/// group, its `begin_layer`/`end_layer` pair. A subtree's commands are always
+/// contiguous because lowering is depth first.
+struct PaintCommandRange final {
+    const SceneNode* node = nullptr;
+    std::size_t begin = 0;
+    std::size_t end = 0;
+};
+
+/// `make_paint_commands`, also reporting each contributing node's range in
+/// depth-first preorder, so a node's range precedes and contains those of its
+/// descendants. Nodes that contribute nothing for themselves or their subtree
+/// (unknown kind, non-finite compositing, zero opacity) have no range; a
+/// node that draws nothing but is kept, such as an empty group, has an empty
+/// one. `ranges`, when non-null, is cleared first; `node` points into `scene`.
+[[nodiscard]] std::vector<PaintCommand> make_paint_commands(
+    const Scene& scene, std::vector<PaintCommandRange>* ranges);
 
 /// Whether a mesh can be drawn as given: every index names a vertex, the index
 /// count is a multiple of three, every position and texture coordinate is

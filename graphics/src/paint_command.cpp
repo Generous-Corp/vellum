@@ -16,10 +16,16 @@ Rect union_of(const Rect& left, const Rect& right) {
 }
 
 void append_node(const SceneNode& node, float parent_x, float parent_y,
-                 const Affine2D& parent_transform, std::vector<PaintCommand>& output) {
+                 const Affine2D& parent_transform, std::vector<PaintCommand>& output,
+                 std::vector<PaintCommandRange>* ranges) {
     if (!is_known_kind(node.kind) || !compositing_is_finite(node)) return;
     const float opacity = std::clamp(node.opacity, 0.0F, 1.0F);
     if (opacity <= 0.0F) return;
+    // Recorded before the children so the vector is in depth-first preorder.
+    const auto range_index = ranges != nullptr ? ranges->size() : 0U;
+    if (ranges != nullptr) {
+        ranges->push_back({.node = &node, .begin = output.size(), .end = output.size()});
+    }
     const Rect absolute{
         parent_x + node.bounds.x,
         parent_y + node.bounds.y,
@@ -89,9 +95,12 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
         });
     }
     for (const auto& child : node.children) {
-        append_node(child, absolute.x, absolute.y, transform, output);
+        append_node(child, absolute.x, absolute.y, transform, output, ranges);
     }
-    if (opacity >= 1.0F) return;
+    if (opacity >= 1.0F) {
+        if (ranges != nullptr) (*ranges)[range_index].end = output.size();
+        return;
+    }
 
     std::size_t drawn = 0;
     std::size_t last_drawn = first;
@@ -104,6 +113,14 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
     if (drawn <= 1U) {
         if (drawn == 1U) output[last_drawn].opacity *= opacity;
         output.erase(output.begin() + static_cast<std::ptrdiff_t>(slot));
+        if (ranges != nullptr) {
+            // Every descendant's range lies past the erased slot.
+            for (auto index = range_index + 1U; index < ranges->size(); ++index) {
+                --(*ranges)[index].begin;
+                --(*ranges)[index].end;
+            }
+            (*ranges)[range_index].end = output.size();
+        }
         return;
     }
     auto& layer = output[slot];
@@ -128,6 +145,7 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
     }
     layer.layer_unbounded = !bounded;
     output.push_back({.kind = PaintCommand::Kind::end_layer, .node_id = node.id});
+    if (ranges != nullptr) (*ranges)[range_index].end = output.size();
 }
 
 }  // namespace
@@ -202,10 +220,16 @@ bool mesh_is_valid(const TriangleMesh& mesh, std::string* reason) {
 }
 
 std::vector<PaintCommand> make_paint_commands(const Scene& scene) {
+    return make_paint_commands(scene, nullptr);
+}
+
+std::vector<PaintCommand> make_paint_commands(
+    const Scene& scene, std::vector<PaintCommandRange>* ranges) {
     std::vector<PaintCommand> output;
+    if (ranges != nullptr) ranges->clear();
     if (!scene_version_is_supported(scene.scene_version)) return output;
     if (!scene_fields_match_version(scene)) return output;
-    append_node(scene.root, 0.0F, 0.0F, Affine2D{}, output);
+    append_node(scene.root, 0.0F, 0.0F, Affine2D{}, output, ranges);
     return output;
 }
 

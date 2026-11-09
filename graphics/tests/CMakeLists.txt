@@ -61,3 +61,16 @@ add_test(NAME vellum.gpu.partial-present-native
     COMMAND vellum-partial-present-bench --check-native)
 set_tests_properties(vellum.gpu.partial-present-native PROPERTIES
     SKIP_RETURN_CODE 77)
+
+add_executable(vellum-layer-cache-gpu-test
+    layer_cache_gpu_test.cpp)
+target_link_libraries(vellum-layer-cache-gpu-test PRIVATE
+    vellum-scene-capture-harness)
+set_target_properties(vellum-layer-cache-gpu-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.layer-cache
+    COMMAND vellum-layer-cache-gpu-test)
+set_tests_properties(vellum.gpu.layer-cache PROPERTIES
+    SKIP_RETURN_CODE 77)
