@@ -1,15 +1,18 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
+#include <vellum/graphics/damage.hpp>
 #include <vellum/graphics/paint_command.hpp>
 
 #include <vellum/graphics/dawn_native_bootstrap.hpp>
 
 #include <array>
+#include <algorithm>
 #include <memory>
 #include <cmath>
 #include <cstdint>
 #include <future>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -1142,9 +1145,93 @@ bool path_arc_gradient_and_refusal() {
         }
         return surface->capture_rgba(after, width, height, &why) && after == first;
     };
+    Scene infinite = scene;
+    auto infinite_values = std::make_shared<PathGeometry>(*scene.root.children[1].path);
+    infinite_values->values[6] = std::numeric_limits<float>::infinity();
+    infinite.root.children[1].path = infinite_values;
+    Scene ghost = scene;
+    ghost.root.children[1].path = nullptr;
     return refused(invalid, "path blob cannot be drawn: a path coordinate is not finite") &&
+           refused(infinite, "path blob cannot be drawn: a path coordinate is not finite") &&
            refused(unbalanced,
-                   "path blob cannot be drawn: a path command has fewer values than its arity");
+                   "path blob cannot be drawn: a path command has fewer values than its arity") &&
+           refused(ghost, "path blob has no geometry");
+}
+
+// Every pixel a stroked path paints lies inside its damage bounds, for a
+// diagonal square-capped segment and for a sharp miter that reaches far past
+// half the stroke width.
+bool path_damage_bounds_contain_paint() {
+    const auto stroked = [](std::vector<float> values, StrokeJoin join, StrokeCap cap) {
+        auto geometry = std::make_shared<PathGeometry>();
+        geometry->values = std::move(values);
+        geometry->verbs.assign(geometry->values.size() / 2U, PathVerb::line);
+        geometry->verbs.front() = PathVerb::move;
+        geometry->stroke = {.color = Color::hex(0xFFFFFF), .width = 4.0F, .join = join,
+                            .cap = cap, .miter_limit = 10.0F};
+        return geometry;
+    };
+    struct Case final {
+        const char* what;
+        Rect origin;
+        std::shared_ptr<const PathGeometry> path;
+        float painted_right_at_least;
+    };
+    const std::array<Case, 2> cases{{
+        {"diagonal square cap", {10.0F, 10.0F, 0.0F, 0.0F},
+         stroked({0.0F, 0.0F, 30.0F, 40.0F}, StrokeJoin::bevel, StrokeCap::square), 41.0F},
+        {"sharp miter", {8.0F, 16.0F, 0.0F, 0.0F},
+         stroked({0.0F, 0.0F, 40.0F, 0.0F, 0.0F, 10.0F}, StrokeJoin::miter, StrokeCap::butt),
+         62.0F},
+    }};
+    bool passed = true;
+    for (const auto& test : cases) {
+        const SceneNode node{
+            .id = "stroke",
+            .kind = SceneNode::Kind::path,
+            .bounds = test.origin,
+            .path = test.path,
+        };
+        const Scene scene{
+            .width = 96.0F,
+            .height = 64.0F,
+            .background = Color::hex(0x000000),
+            .root = {.id = "root", .kind = SceneNode::Kind::group,
+                     .bounds = {0.0F, 0.0F, 96.0F, 64.0F}, .children = {node}},
+        };
+        const DamagePropagation none;
+        const auto bounds = node_paint_bounds(node, test.origin, {0.0F, 0.0F, 96.0F, 64.0F}, none);
+        const auto pixels = bounds ? to_pixel_rect(*bounds, 1.0F) : std::nullopt;
+        std::vector<std::uint8_t> rgba;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+        if (!pixels || !capture(scene, rgba, width, height)) return false;
+        std::uint32_t painted = 0;
+        std::uint32_t outside = 0;
+        std::int64_t rightmost = -1;
+        for (std::uint32_t y = 0; y < height; ++y) {
+            for (std::uint32_t x = 0; x < width; ++x) {
+                const auto* value = pixel(rgba, width, x, y);
+                if (value[0] == 0 && value[1] == 0 && value[2] == 0) continue;
+                ++painted;
+                rightmost = std::max<std::int64_t>(rightmost, x);
+                const auto px = static_cast<std::int32_t>(x);
+                const auto py = static_cast<std::int32_t>(y);
+                if (px < pixels->left || px >= pixels->right || py < pixels->top ||
+                    py >= pixels->bottom) {
+                    ++outside;
+                }
+            }
+        }
+        if (painted == 0U || outside != 0U ||
+            static_cast<float>(rightmost) < test.painted_right_at_least) {
+            std::cerr << test.what << ": " << outside << " of " << painted
+                      << " painted pixels lie outside the damage bounds; rightmost " << rightmost
+                      << '\n';
+            passed = false;
+        }
+    }
+    return passed;
 }
 
 }  // namespace
@@ -1176,6 +1263,9 @@ int main(int argc, char** argv) {
         }
         if (fixture == "path_arc_gradient_and_refusal") {
             return path_arc_gradient_and_refusal() ? 0 : 1;
+        }
+        if (fixture == "path_damage_bounds_contain_paint") {
+            return path_damage_bounds_contain_paint() ? 0 : 1;
         }
         if (fixture == "node_transform_rotation_scale") {
             return node_transform_rotation_scale() ? 0 : 1;

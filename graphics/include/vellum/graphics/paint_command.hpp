@@ -136,7 +136,10 @@ struct ResolvedLinearGradient final {
 /// build does not know, or whose compositing fails `compositing_is_finite`,
 /// contributes nothing for itself or its subtree; `SkiaDawnSurface::render`
 /// refuses such a scene outright. A scene that fails
-/// `scene_fields_match_version` yields no commands.
+/// `scene_fields_match_version` yields no commands. A path node emits its
+/// command even when it has no geometry or its geometry fails `path_is_valid`,
+/// so the renderer refuses it rather than silently skipping it; a valid path
+/// with no commands emits nothing.
 ///
 /// A node whose opacity is below one and whose subtree draws more than one
 /// command is wrapped in a `begin_layer`/`end_layer` pair; when it draws

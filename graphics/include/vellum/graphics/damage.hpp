@@ -182,7 +182,8 @@ public:
 /// nodes that paint nothing. `frame` is the scene's logical frame.
 ///
 /// A path paints within `path_control_bounds` outset by
-/// `path_stroke_outset`; a path that fails `path_is_valid` reports `frame`.
+/// `path_stroke_outset`; a path without geometry, or whose geometry fails
+/// `path_is_valid`, reports `frame`.
 [[nodiscard]] std::optional<Rect> node_paint_bounds(
     const SceneNode& node, const Rect& absolute_bounds, const Rect& frame,
     const DamagePropagation& propagation);

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <limits>
 #include <memory>
 #include <string>
@@ -440,6 +441,23 @@ void path_diff() {
     check(invalid && invalid->width == 200.0F && invalid->height == 100.0F,
           "an invalid path reports the whole frame");
 
+    SceneNode ghost = node;
+    ghost.path = nullptr;
+    const auto missing = paint_bounds(ghost);
+    check(missing && missing->width == 200.0F && missing->height == 100.0F,
+          "a path without geometry reports the whole frame");
+    for (const float bad : {std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::infinity()}) {
+        SceneNode direct = node;
+        auto geometry = std::make_shared<PathGeometry>();
+        geometry->verbs = {PathVerb::move, PathVerb::line};
+        geometry->values = {0.0F, 0.0F, bad, 10.0F};
+        direct.path = geometry;
+        const auto bounds_of_bad = paint_bounds(direct);
+        check(bounds_of_bad && bounds_of_bad->width == 200.0F && bounds_of_bad->height == 100.0F,
+              "a directly built non-finite path reports the whole frame");
+    }
+
     Scene same = before;
     check(diff(before, same).empty(), "an identical path has no damage");
     Scene copied = before;
@@ -491,6 +509,65 @@ void path_diff() {
     edit_path(*child(invisible_again, "p")).stroke.miter_limit = 9.0F;
     check(diff(invisible, invisible_again).bounds() == PixelRect{20, 20, 80, 50},
           "an invisible stroke change damages only the fill");
+}
+
+bool contains(const std::optional<Rect>& bounds, float x, float y) {
+    return bounds && x >= bounds->x && x <= bounds->x + bounds->width && y >= bounds->y &&
+           y <= bounds->y + bounds->height;
+}
+
+// The geometry of a stroke's outline, worked out by hand, must lie inside the
+// damage bounds for a diagonal square-capped segment and a sharp miter.
+void stroke_reach() {
+    const DamagePropagation none;
+    const Rect frame{0.0F, 0.0F, 200.0F, 100.0F};
+    const Rect origin{10.0F, 10.0F, 0.0F, 0.0F};
+
+    SceneNode diagonal;
+    diagonal.kind = SceneNode::Kind::path;
+    auto segment = std::make_shared<PathGeometry>();
+    segment->verbs = {PathVerb::move, PathVerb::line};
+    segment->values = {0.0F, 0.0F, 30.0F, 40.0F};
+    segment->stroke = {.color = Color::hex(0xFFFFFF), .width = 4.0F, .join = StrokeJoin::bevel,
+                       .cap = StrokeCap::square};
+    diagonal.path = segment;
+    const auto capped = vellum::graphics::node_paint_bounds(diagonal, origin, frame, none);
+    const float along[2]{0.6F, 0.8F};
+    const float across[2]{-0.8F, 0.6F};
+    bool corners_inside = true;
+    for (const auto& end : {std::pair{0.0F, -1.0F}, std::pair{1.0F, 1.0F}}) {
+        for (const float side : {-1.0F, 1.0F}) {
+            const float x =
+                10.0F + 30.0F * end.first + 2.0F * (end.second * along[0] + side * across[0]);
+            const float y =
+                10.0F + 40.0F * end.first + 2.0F * (end.second * along[1] + side * across[1]);
+            corners_inside = corners_inside && contains(capped, x, y);
+        }
+    }
+    check(corners_inside, "a diagonal square cap's corners lie inside the damage bounds");
+
+    SceneNode sharp;
+    sharp.kind = SceneNode::Kind::path;
+    auto turn = std::make_shared<PathGeometry>();
+    turn->verbs = {PathVerb::move, PathVerb::line, PathVerb::line};
+    turn->values = {0.0F, 0.0F, 40.0F, 0.0F, 0.0F, 10.0F};
+    turn->stroke = {.color = Color::hex(0xFFFFFF), .width = 4.0F, .miter_limit = 10.0F};
+    sharp.path = turn;
+    const auto mitered = vellum::graphics::node_paint_bounds(sharp, origin, frame, none);
+    const double in_x = 1.0;
+    const double in_y = 0.0;
+    const double out_length = std::hypot(-40.0, 10.0);
+    const double out_x = -40.0 / out_length;
+    const double out_y = 10.0 / out_length;
+    const double half_angle = 0.5 * std::acos(-(in_x * out_x + in_y * out_y));
+    const double reach = 2.0 / std::sin(half_angle);
+    const double bisector_length = std::hypot(in_x - out_x, in_y - out_y);
+    const double tip_x = 10.0 + 40.0 + reach * (in_x - out_x) / bisector_length;
+    const double tip_y = 10.0 + reach * (in_y - out_y) / bisector_length;
+    check(1.0 / std::sin(half_angle) < 10.0, "the sharp turn is within its miter limit");
+    check(tip_x > 10.0 + 40.0 + 2.0 * 6.0, "the miter tip reaches well past half the width");
+    check(contains(mitered, static_cast<float>(tip_x), static_cast<float>(tip_y)),
+          "a sharp miter's tip lies inside the damage bounds");
 }
 
 class TestPropagation final : public DamagePropagation {
@@ -698,6 +775,7 @@ int main() {
     text_diff();
     mesh_diff();
     path_diff();
+    stroke_reach();
     propagation_hooks();
     unusual_bounds();
     duplicate_ids();

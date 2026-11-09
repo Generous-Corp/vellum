@@ -79,7 +79,7 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
             .text_runs = node.text_runs,
             .transform = transform,
         });
-    } else if (node.kind == SceneNode::Kind::path && node.path && !node.path->verbs.empty()) {
+    } else if (node.kind == SceneNode::Kind::path && (!node.path || !node.path->verbs.empty())) {
         output.push_back({
             .kind = PaintCommand::Kind::path,
             .node_id = node.id,

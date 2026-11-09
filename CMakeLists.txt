@@ -292,7 +292,8 @@ if(VELLUM_BUILD_TESTS)
                 nested_faded_shadow_layers
                 transformed_shadow_and_text
                 path_fill_rule_and_stroke
-                path_arc_gradient_and_refusal)
+                path_arc_gradient_and_refusal
+                path_damage_bounds_contain_paint)
             add_test(NAME "vellum.gpu.${_vellum_fixture}"
                 COMMAND vellum-gpu-style-test "${_vellum_fixture}")
         endforeach()

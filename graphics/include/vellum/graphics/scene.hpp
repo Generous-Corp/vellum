@@ -334,8 +334,9 @@ struct SceneNode final {
     /// Per-corner radii. When present they replace `corner_radius`, which
     /// remains the uniform shorthand.
     std::optional<CornerRadii> corner_radii;
-    /// The geometry of a `path` node. Like a mesh, it must not be mutated once
-    /// a scene references it; replace the pointer to change it.
+    /// The geometry of a `path` node. A path node without it is refused. Like
+    /// a mesh, it must not be mutated once a scene references it; replace the
+    /// pointer to change it.
     std::shared_ptr<const PathGeometry> path;
 };
 

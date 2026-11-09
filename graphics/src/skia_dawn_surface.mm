@@ -623,8 +623,9 @@ bool path_is_drawable(const PathGeometry& path, const Color& fill, std::string* 
 
 // The first path node, in depth-first order, that cannot be drawn.
 const SceneNode* find_undrawable_path(const SceneNode& node, std::string& reason) {
-    if (node.kind == SceneNode::Kind::path && node.path &&
-        !path_is_drawable(*node.path, node.fill, &reason)) {
+    if (node.kind == SceneNode::Kind::path &&
+        (!node.path || !path_is_drawable(*node.path, node.fill, &reason))) {
+        if (!node.path) reason.clear();
         return &node;
     }
     for (const auto& child : node.children) {
@@ -637,7 +638,10 @@ const SceneNode* find_undrawable_path(const SceneNode& node, std::string& reason
 
 bool draw_path(SkCanvas& canvas, const PaintCommand& command, float opacity,
                std::string* error) {
-    if (!command.path) return true;
+    if (!command.path) {
+        set_error(error, "path " + command.node_id + " has no geometry");
+        return false;
+    }
     const auto& path = *command.path;
     const auto& fill = command.fill;
     std::string reason;
@@ -968,7 +972,8 @@ public:
         }
         std::string reason;
         if (const auto* path = find_undrawable_path(scene.root, reason); path != nullptr) {
-            set_error(error, "path " + path->id + " cannot be drawn: " + reason);
+            set_error(error, path->path ? "path " + path->id + " cannot be drawn: " + reason
+                                        : "path " + path->id + " has no geometry");
             return false;
         }
         if (!render_internal(scene, false, nullptr, error)) {

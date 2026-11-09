@@ -394,6 +394,62 @@ bool path_bounds_and_outset() {
     return ok;
 }
 
+// Geometry built directly, not parsed, so non-finite values and a missing
+// pointer reach the paint commands and must fail closed there.
+bool path_fail_closed() {
+    using vellum::graphics::PaintCommand;
+    using vellum::graphics::SceneNode;
+    constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+    constexpr float infinity = std::numeric_limits<float>::infinity();
+    const auto direct = [](std::vector<PathVerb> verbs, std::vector<float> values) {
+        auto geometry = std::make_shared<PathGeometry>();
+        geometry->verbs = std::move(verbs);
+        geometry->values = std::move(values);
+        return geometry;
+    };
+    const auto nan_line = direct({PathVerb::move, PathVerb::line}, {0.0F, 0.0F, nan, 5.0F});
+    const auto inf_line = direct({PathVerb::move, PathVerb::line}, {0.0F, 0.0F, infinity, 5.0F});
+    const auto nan_arc = direct({PathVerb::move, PathVerb::arc},
+                                {0.0F, 0.0F, nan, 5.0F, 0.0F, 0.0F, 1.0F, 10.0F, 0.0F});
+    const auto inf_cubic = direct({PathVerb::move, PathVerb::cubic},
+                                  {0.0F, 0.0F, 1.0F, 1.0F, 2.0F, -infinity, 3.0F, 0.0F});
+    vellum::graphics::Scene scene;
+    for (const auto& [id, geometry] :
+         std::vector<std::pair<std::string, std::shared_ptr<const PathGeometry>>>{
+             {"ghost", nullptr}, {"nan-line", nan_line}, {"inf-line", inf_line},
+             {"nan-arc", nan_arc}, {"inf-cubic", inf_cubic},
+             {"empty", std::make_shared<const PathGeometry>()}}) {
+        scene.root.children.push_back({
+            .id = id, .kind = SceneNode::Kind::path, .bounds = {3.0F, 4.0F, 5.0F, 6.0F},
+            .path = geometry});
+    }
+    const auto commands = vellum::graphics::make_paint_commands(scene);
+    bool ok = expect(commands.size() == 5U, "every path except the empty one emits a command");
+    for (const auto& command : commands) {
+        const auto extent = vellum::graphics::paint_extent(command);
+        ok &= expect(command.kind == PaintCommand::Kind::path && !extent.bounded &&
+                         near(extent.rect.x, 3.0F) && command.node_id != "empty",
+                     command.node_id + " has an unbounded paint extent");
+    }
+    ok &= expect(!commands.empty() && commands[0].node_id == "ghost" && !commands[0].path,
+                 "a path without geometry still emits its command");
+    for (const auto& geometry : {nan_line, inf_line, nan_arc, inf_cubic}) {
+        std::string reason;
+        ok &= expect(!vellum::graphics::path_is_valid(*geometry, &reason) &&
+                         reason == "a path coordinate is not finite",
+                     "a directly built non-finite path is invalid: " + reason);
+    }
+
+    PathGeometry coincident;
+    (void)vellum::graphics::parse_svg_path_data("M5 5 A10 10 0 0 1 5 5", coincident);
+    const auto point = vellum::graphics::path_control_bounds(coincident);
+    ok &= expect(point && near(point->x, 5.0F) && near(point->y, 5.0F) &&
+                     near(point->width, 0.0F) && near(point->height, 0.0F) &&
+                     vellum::graphics::path_length_bound(coincident) == 0.0,
+                 "an arc whose ends coincide is omitted, as in SVG");
+    return ok;
+}
+
 bool path_commands() {
     using vellum::graphics::Color;
     using vellum::graphics::PaintCommand;
@@ -416,7 +472,9 @@ bool path_commands() {
         .corner_radius = 4.0F,
         .path = std::make_shared<const PathGeometry>(star),
     });
-    scene.root.children.push_back({.id = "empty-path", .kind = SceneNode::Kind::path});
+    scene.root.children.push_back({.id = "empty-path",
+                                   .kind = SceneNode::Kind::path,
+                                   .path = std::make_shared<const PathGeometry>()});
     const auto commands = vellum::graphics::make_paint_commands(scene);
     bool ok = expect(commands.size() == 1U, "only the non-empty path emits a command");
     if (!ok) return false;
@@ -928,6 +986,7 @@ int main() {
     paths &= path_validity();
     paths &= path_bounds_and_outset();
     paths &= path_commands();
+    paths &= path_fail_closed();
     return mesh_commands() && scene_versioning() && transform_geometry() &&
                    opacity_nesting() && corner_radii() && paths
                ? 0
