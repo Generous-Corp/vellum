@@ -1,0 +1,24 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:20:17Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-ffd77ff351580976537d9e2baf457ec9950b5163",
+  "kind": "resolution",
+  "linked_commits": [
+    "ffd77ff351580976537d9e2baf457ec9950b5163"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/260"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Validates attributed text-runs in Vellum's rendered-tree materializer (unique non-empty id, string text, no children, object style) and clears a stale error on entry. The materializer exists only in Vellum; Pulp main has no rendered-tree materializer, and its own attributed-text widgets are a separate implementation, so no port is owed.",
+  "resolves": "vellum-ffd77ff351580976537d9e2baf457ec9950b5163",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

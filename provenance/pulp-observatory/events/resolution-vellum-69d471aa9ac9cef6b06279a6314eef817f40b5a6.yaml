@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:20:12Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-69d471aa9ac9cef6b06279a6314eef817f40b5a6",
+  "kind": "resolution",
+  "linked_commits": [
+    "69d471aa9ac9cef6b06279a6314eef817f40b5a6"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/248"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Adds Vellum's own deterministic offscreen scene capture harness under graphics/tests. It is test infrastructure for Vellum's scene renderer only; Pulp keeps its own visual harness and has no counterpart to port.",
+  "resolves": "vellum-69d471aa9ac9cef6b06279a6314eef817f40b5a6",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

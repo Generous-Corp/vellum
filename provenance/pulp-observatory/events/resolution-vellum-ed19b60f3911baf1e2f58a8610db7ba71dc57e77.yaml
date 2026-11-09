@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:20:16Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-ed19b60f3911baf1e2f58a8610db7ba71dc57e77",
+  "kind": "resolution",
+  "linked_commits": [
+    "ed19b60f3911baf1e2f58a8610db7ba71dc57e77"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/248"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Integration merge (Merge pull request #248 from Generous-Corp/feature/scene-capture-harness-20261108). It lands commits whose own observations are classified separately in this ledger, so it has no independent contract.",
+  "resolves": "vellum-ed19b60f3911baf1e2f58a8610db7ba71dc57e77",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
