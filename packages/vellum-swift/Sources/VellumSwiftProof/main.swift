@@ -28,6 +28,33 @@ func milliseconds(since start: Date) -> Double {
 }
 
 @MainActor
+func checkSurfaceValidation() throws -> Int {
+    let invalid: [(CGSize, CGFloat)] = [
+        (CGSize(width: 360, height: 240), .nan),
+        (CGSize(width: 360, height: 240), .infinity),
+        (CGSize(width: 360, height: 240), -1),
+        (CGSize(width: 360, height: 240), 0),
+        (CGSize(width: CGFloat.nan, height: 240), 1),
+        (CGSize(width: 360, height: CGFloat.infinity), 1),
+        (CGSize(width: -360, height: 240), 1),
+        (CGSize(width: 0.5, height: 240), 1),
+        (CGSize(width: 1e9, height: 240), 1),
+        (CGSize(width: 360, height: 240), 1e9),
+        (CGSize(width: 16385, height: 240), 1),
+        (CGSize(width: 10000, height: 240), 2),
+    ]
+    for (size, scale) in invalid {
+        try require(VellumHostView.validatedSurfaceSize(size, scale: scale) == nil,
+                    "accepted invalid surface size \(size) at scale \(scale)")
+    }
+    let valid = VellumHostView.validatedSurfaceSize(CGSize(width: 360.7, height: 240), scale: 2)
+    try require(valid == VellumHostView.SurfaceSize(
+        width: 360, height: 240, scale: 2, drawable: CGSize(width: 720, height: 480)),
+        "valid surface size was not rounded as expected: \(String(describing: valid))")
+    return invalid.count
+}
+
+@MainActor
 func runProof(bundlePath: String, launched: Date, entered: Date) throws -> [String: Any] {
     try require(VellumHost.abiVersion == VellumHost.expectedABIVersion,
                 "C ABI version \(VellumHost.abiVersion) is not \(VellumHost.expectedABIVersion)")
@@ -39,6 +66,7 @@ func runProof(bundlePath: String, launched: Date, entered: Date) throws -> [Stri
         width: UInt32(viewport.width), height: UInt32(viewport.height), scale: 1)
     var report = try exercise(app: application!, target: surface!, viewport: viewport,
                               launched: launched, entered: entered)
+    report["rejected_invalid_surface_sizes"] = try checkSurfaceValidation()
     let teardownStart = Date()
     surface = nil
     application = nil
@@ -191,6 +219,15 @@ func exerciseNativeHosts(bundle: String) throws -> [String: Any] {
     try require(view.drawableSize == CGSize(width: frame.width * changedScale,
                                             height: frame.height * changedScale),
                 "drawable \(view.drawableSize) did not follow the scale change to \(changedScale)")
+    let drawableBefore = view.drawableSize
+    view.backingScaleSource = { .nan }
+    view.viewDidChangeBackingProperties()
+    try require(view.lastError?.status == VellumHostError.invalidArgument,
+                "a NaN backing scale was not refused")
+    try require(view.drawableSize == drawableBefore, "a NaN backing scale changed the drawable")
+    view.backingScaleSource = { changedScale }
+    view.viewDidChangeBackingProperties()
+    try require(view.lastError == nil, "restoring the backing scale failed")
     let resized = NSSize(width: 300, height: 200)
     view.setFrameSize(resized)
     try require(view.lastError == nil, "native resize failed")

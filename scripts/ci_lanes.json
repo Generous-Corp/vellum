@@ -166,6 +166,10 @@
         "pattern": "test_*.py"
       },
       {
+        "discover": "tools/ci",
+        "pattern": "test_*.py"
+      },
+      {
         "module": "tools.agent_instructions.test_verify"
       },
       {

@@ -20,8 +20,13 @@ python3 tools/provenance/observatory.py reconcile \
   --pulp-target <exact-pulp-main-sha> \
   --vellum-target <exact-vellum-main-sha> \
   --now <utc-timestamp> \
-  --write
+  --write --include-main-commits
 ```
+
+This is the receiver's command. A full reconcile records main's own commits
+and advances the cursor, so it refuses to run without
+`--include-main-commits`. A branch never runs it; it uses `--events-only`,
+described below.
 
 The command writes new observation events first, then advances the cursor and
 regenerates `reports/current.{json,md}`. An interrupted run is idempotent: an
@@ -54,6 +59,26 @@ python3 tools/provenance/observatory.py reconcile \
   --now <utc-timestamp> \
   --write --events-only
 ```
+
+Run `git fetch origin main` first. By default the command leaves every commit
+already on `origin/main` to main's own receiver, so a branch that has merged
+main records only its own commits. If `origin/main` cannot be resolved, it
+fails rather than record every commit in range. `--vellum-main <sha>` names
+main explicitly. `--include-main-commits` records main's commits as well; only
+the receiver has a reason to pass it. `verify` enforces
+this: a change may add Vellum observations only for commits in
+`git_base..HEAD`. The one exception is the receiver's own reconciliation,
+recognised by its content: the change touches only observatory evidence (the
+receiver's allowlist) and moves the committed Vellum cursor forward along
+main's first-parent line, from one main tip to a later one, over the
+observed commit.
+
+**Operating rule: every main landing carries its own events.** A pull request
+can no longer heal main's coverage by recording observations for commits
+already on main. Each pull request records its own mapped commits before it
+lands, and main's merge commits are covered by those events. A main landing without its events leaves every pull request failing coverage until the receiver coalesces. `verify` also
+needs `--git-base` to tell a change's own events apart; `--no-git-base` is for
+local checks only, and CI always passes a base.
 
 `provenance-verify` runs `verify --vellum-tail-policy coverage` on pull
 requests, merge-queue builds and `main`: every mapped commit after the cursor

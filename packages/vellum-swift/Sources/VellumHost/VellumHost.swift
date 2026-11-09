@@ -7,6 +7,9 @@ public struct VellumHostError: Error, CustomStringConvertible, Sendable {
     public let message: String
 
     public var description: String { "vellum host status \(status): \(message)" }
+
+    public static let invalidArgument: Int32 = VELLUM_HOST_ERROR_INVALID_ARGUMENT
+    public static let wrongThread: Int32 = VELLUM_HOST_ERROR_WRONG_THREAD
 }
 
 func check(_ status: vellum_host_status) throws {

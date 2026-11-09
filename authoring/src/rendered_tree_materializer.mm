@@ -361,6 +361,54 @@ std::optional<std::string> json_object(id value) {
     return text == nil ? std::nullopt : std::optional<std::string>{cpp_string(text)};
 }
 
+bool reject_text_run(
+    MaterializeContext& context, const std::string& node_id, std::string property,
+    std::string message, std::string* error) {
+    context.diagnostics->push_back({
+        .severity = LoweringDiagnostic::Severity::error,
+        .disposition = LoweringDiagnostic::Disposition::unsupported,
+        .code = std::string(vellum::graphics::kInvalidTextRunCode),
+        .node_id = node_id,
+        .property = std::move(property),
+        .message = message,
+    });
+    set_error(error, std::move(message));
+    return false;
+}
+
+bool validate_attributed_run(
+    NSDictionary* run, const std::string& parent_id, std::size_t depth,
+    MaterializeContext& context, std::string* error) {
+    if (depth + 1U > kMaximumDepth || ++context.nodes > kMaximumNodes) {
+        set_error(error, "authoring tree exceeds the node or depth limit");
+        return false;
+    }
+    const std::string identity =
+        [run[@"id"] isKindOfClass:NSString.class] ? cpp_string(run[@"id"]) : std::string{};
+    if (identity.empty()) {
+        return reject_text_run(context, parent_id, "id",
+            "text-run under " + parent_id + " requires a non-empty string id", error);
+    }
+    if (!context.identities.insert(identity).second) {
+        return reject_text_run(context, identity, "id",
+            "authoring tree contains an empty or duplicate node id: " + identity, error);
+    }
+    if (![run[@"text"] isKindOfClass:NSString.class]) {
+        return reject_text_run(context, identity, "text",
+            "text-run " + identity + " requires string text", error);
+    }
+    if (run[@"children"] != nil && (![run[@"children"] isKindOfClass:NSArray.class] ||
+                                    static_cast<NSArray*>(run[@"children"]).count != 0U)) {
+        return reject_text_run(context, identity, "children",
+            "text-run " + identity + " does not accept children", error);
+    }
+    if (run[@"style"] != nil && ![run[@"style"] isKindOfClass:NSDictionary.class]) {
+        return reject_text_run(context, identity, "style",
+            "text-run " + identity + " style must be an object", error);
+    }
+    return true;
+}
+
 bool materialize_node(
     NSDictionary* source,
     const vellum::graphics::Rect& proposed,
@@ -722,8 +770,8 @@ bool materialize_node(
         }
         NSDictionary* child = static_cast<NSDictionary*>(child_value);
         if (skipped_text_run(type, child)) {
-            report_dropped_style(dictionary_or_empty(child[@"style"]),
-                [child[@"id"] isKindOfClass:NSString.class] ? cpp_string(child[@"id"]) : identity,
+            if (!validate_attributed_run(child, identity, depth, context, error)) return false;
+            report_dropped_style(dictionary_or_empty(child[@"style"]), cpp_string(child[@"id"]),
                 "text-run",
                 [&](std::string_view key) { return text_run_style_key_consumed(type_name, key); },
                 context);
@@ -761,6 +809,7 @@ bool materialize_rendered_tree(
     RenderedApplication& output,
     std::string* error,
     std::vector<LoweringDiagnostic>* failure_diagnostics) {
+    if (error != nullptr) error->clear();
     if (failure_diagnostics != nullptr) failure_diagnostics->clear();
     if (rendered_json.size() > kMaximumJsonBytes) {
         set_error(error, "JavaScript authoring bridge JSON is invalid or too large");

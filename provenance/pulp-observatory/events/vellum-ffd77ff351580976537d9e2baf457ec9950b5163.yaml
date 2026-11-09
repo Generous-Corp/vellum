@@ -1,0 +1,50 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-09T01:21:10Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-ffd77ff351580976537d9e2baf457ec9950b5163",
+  "include_dependency_deltas": [
+    "authoring/src/rendered_tree_materializer.hpp",
+    "graphics/include/vellum/graphics/lowering_diagnostic.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/src/rendered_tree_materializer.hpp",
+    "authoring/src/rendered_tree_materializer.mm",
+    "authoring/tests/rendered_tree_materializer_test.cpp",
+    "graphics/include/vellum/graphics/lowering_diagnostic.hpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "54bfe2875b95a3501d906fed08183014a4de58e6",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "ce30e1302a309ce1d741e6083b35d67c07887d2d",
+    "to_commit": "ffd77ff351580976537d9e2baf457ec9950b5163"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "ffd77ff351580976537d9e2baf457ec9950b5163",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

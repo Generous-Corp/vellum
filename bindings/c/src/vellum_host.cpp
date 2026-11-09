@@ -9,28 +9,29 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstring>
 #include <cstdio>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 struct vellum_host_app final {
     std::unique_ptr<vellum::authoring::JsApplication> application;
     vellum::authoring::RenderedApplication rendered;
     std::string focused;
-    std::thread::id owner;
 };
 
 struct vellum_host_surface final {
     std::unique_ptr<vellum::graphics::SkiaDawnSurface> surface;
     std::vector<std::uint8_t> capture;
-    std::thread::id owner;
 };
 
 namespace {
@@ -165,16 +166,72 @@ vellum_host_status require_sized(const Struct* value, const char* name) {
     return VELLUM_HOST_OK;
 }
 
-template <typename Handle>
-vellum_host_status require_owner(const Handle* handle, const char* name) {
+enum class HandleKind { app, surface };
+
+struct LiveHandle final {
+    HandleKind kind;
+    std::thread::id owner;
+};
+
+// Every entry point resolves its handle here instead of reading handle memory.
+// Holding the lock only for the lookup is enough: destroy is itself confined to
+// the owner thread, and a non-owner call is refused under the lock, so a handle
+// can be freed while in use only if its owner thread were inside two calls at
+// once. Generation-bearing handles are the planned follow-up for address reuse.
+struct LiveHandles final {
+    std::mutex mutex;
+    std::unordered_map<const void*, LiveHandle> handles;
+};
+
+LiveHandles& live_handles() {
+    static auto* handles = new LiveHandles();
+    return *handles;
+}
+
+void register_handle(const void* handle, HandleKind kind) {
+    auto& handles = live_handles();
+    std::lock_guard lock(handles.mutex);
+    handles.handles.insert_or_assign(handle, LiveHandle{kind, std::this_thread::get_id()});
+}
+
+constexpr HandleKind kind_of(const vellum_host_app*) { return HandleKind::app; }
+constexpr HandleKind kind_of(const vellum_host_surface*) { return HandleKind::surface; }
+
+vellum_host_status claim_handle(const void* handle, HandleKind kind, const char* name,
+                                bool release) {
     if (handle == nullptr) {
         return fail(VELLUM_HOST_ERROR_INVALID_ARGUMENT, std::string(name) + " is null");
     }
-    if (handle->owner != std::this_thread::get_id()) {
+    auto& handles = live_handles();
+    std::lock_guard lock(handles.mutex);
+    const auto entry = handles.handles.find(handle);
+    if (entry == handles.handles.end()) {
+        return fail(VELLUM_HOST_ERROR_INVALID_ARGUMENT,
+            std::string(name) + " is not a live handle");
+    }
+    if (entry->second.kind != kind) {
+        return fail(VELLUM_HOST_ERROR_INVALID_ARGUMENT,
+            std::string(name) + " is a live handle of another kind");
+    }
+    if (entry->second.owner != std::this_thread::get_id()) {
         return fail(VELLUM_HOST_ERROR_WRONG_THREAD,
             std::string(name) + " is confined to the thread that created it");
     }
+    if (release) handles.handles.erase(entry);
     return VELLUM_HOST_OK;
+}
+
+template <typename Handle>
+vellum_host_status require_owner(const Handle* handle, const char* name) {
+    return claim_handle(handle, kind_of(handle), name, false);
+}
+
+template <typename Struct>
+void clear_output(Struct* value) {
+    if (value == nullptr || value->struct_size < OutputLayout<Struct>::v1) return;
+    const auto size = value->struct_size;
+    std::memset(static_cast<void*>(value), 0, OutputLayout<Struct>::v1);
+    value->struct_size = size;
 }
 
 vellum_host_status native_failure(vellum_host_status status, const std::string& error,
@@ -379,6 +436,7 @@ vellum_host_status vellum_host_content_floor(
     const uint8_t* rgba, size_t byte_count, uint32_t width, uint32_t height,
     vellum_host_content_stats* stats) {
     return guarded([&] {
+        clear_output(stats);
         if (const auto status = require_sized(stats, "stats")) return status;
         const auto expected = vellum::graphics::checked_image_byte_count(width, height, 4);
         if (rgba == nullptr || !expected || *expected == 0 || *expected != byte_count) {
@@ -435,7 +493,7 @@ vellum_host_status vellum_host_surface_create(
         }
         auto handle = std::make_unique<vellum_host_surface>();
         handle->surface = std::move(created);
-        handle->owner = std::this_thread::get_id();
+        register_handle(handle.get(), HandleKind::surface);
         *surface = handle.release();
         return VELLUM_HOST_OK;
     });
@@ -444,7 +502,9 @@ vellum_host_status vellum_host_surface_create(
 vellum_host_status vellum_host_surface_destroy(vellum_host_surface* surface) {
     return guarded([&] {
         if (surface == nullptr) return VELLUM_HOST_OK;
-        if (const auto status = require_owner(surface, "surface")) return status;
+        if (const auto status = claim_handle(surface, HandleKind::surface, "surface", true)) {
+            return status;
+        }
         delete surface;
         return VELLUM_HOST_OK;
     });
@@ -453,6 +513,7 @@ vellum_host_status vellum_host_surface_destroy(vellum_host_surface* surface) {
 vellum_host_status vellum_host_surface_info_get(
     const vellum_host_surface* surface, vellum_host_surface_info* info) {
     return guarded([&] {
+        clear_output(info);
         if (const auto status = require_owner(surface, "surface")) return status;
         if (const auto status = require_sized(info, "info")) return status;
         const auto& evidence = surface->surface->evidence();
@@ -501,6 +562,7 @@ vellum_host_status vellum_host_surface_render(
 vellum_host_status vellum_host_surface_capture_rgba(
     vellum_host_surface* surface, vellum_host_image* image) {
     return guarded([&] {
+        clear_output(image);
         if (const auto status = require_owner(surface, "surface")) return status;
         if (const auto status = require_sized(image, "image")) return status;
         std::uint32_t width = 0;
@@ -532,7 +594,6 @@ vellum_host_status vellum_host_app_create(
             return fail(VELLUM_HOST_ERROR_INVALID_ARGUMENT, "bundle is empty");
         }
         auto handle = std::make_unique<vellum_host_app>();
-        handle->owner = std::this_thread::get_id();
         std::string error;
         handle->application = vellum::authoring::JsApplication::create(
             std::string_view(config->bundle, config->bundle_length), &error);
@@ -548,6 +609,7 @@ vellum_host_status vellum_host_app_create(
         if (!handle->application->wait_for_idle(tasks, handle->rendered, settled, &error)) {
             return native_failure(VELLUM_HOST_ERROR_FAILED, error, "initial settle failed");
         }
+        register_handle(handle.get(), HandleKind::app);
         *app = handle.release();
         return VELLUM_HOST_OK;
     });
@@ -556,7 +618,9 @@ vellum_host_status vellum_host_app_create(
 vellum_host_status vellum_host_app_destroy(vellum_host_app* app) {
     return guarded([&] {
         if (app == nullptr) return VELLUM_HOST_OK;
-        if (const auto status = require_owner(app, "app")) return status;
+        if (const auto status = claim_handle(app, HandleKind::app, "app", true)) {
+            return status;
+        }
         delete app;
         return VELLUM_HOST_OK;
     });
@@ -579,6 +643,7 @@ vellum_host_status vellum_host_app_pump(
     vellum_host_app* app, uint64_t advance_milliseconds, uint32_t max_tasks,
     vellum_host_pump_result* result) {
     return guarded([&] {
+        clear_output(result);
         if (const auto status = require_owner(app, "app")) return status;
         if (result != nullptr && !sized(result)) {
             return fail(VELLUM_HOST_ERROR_VERSION,
@@ -758,6 +823,7 @@ vellum_host_status vellum_host_app_accessibility_count(
 vellum_host_status vellum_host_app_accessibility_node(
     const vellum_host_app* app, size_t index, vellum_host_accessibility_node* node) {
     return guarded([&] {
+        clear_output(node);
         if (const auto status = require_owner(app, "app")) return status;
         if (const auto status = require_sized(node, "node")) return status;
         if (index >= app->rendered.accessibility_nodes.size()) {
@@ -826,6 +892,7 @@ vellum_host_status vellum_host_app_text_input_count(
 vellum_host_status vellum_host_app_text_input(
     const vellum_host_app* app, size_t index, vellum_host_text_input* input) {
     return guarded([&] {
+        clear_output(input);
         if (const auto status = require_owner(app, "app")) return status;
         if (const auto status = require_sized(input, "input")) return status;
         if (index >= app->rendered.text_inputs.size()) {

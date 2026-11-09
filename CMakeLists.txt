@@ -191,6 +191,11 @@ if(VELLUM_BUILD_TESTS)
             graphics/tests/paint_command_test.cpp)
         target_link_libraries(vellum-paint-command-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.paint-command COMMAND vellum-paint-command-test)
+
+        add_executable(vellum-damage-test
+            graphics/tests/damage_test.cpp)
+        target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.damage COMMAND vellum-damage-test)
     endif()
 
     if(TARGET vellum-authoring)

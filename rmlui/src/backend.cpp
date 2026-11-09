@@ -558,6 +558,21 @@ Status Backend::invoke_action(std::string_view action) {
     return actions_ ? actions_->invoke(action) : Status::rejected;
 }
 
+Status Backend::set_element_class(std::string_view element_id, std::string_view class_name,
+                                  bool on) {
+    if (!open_ || !runtime_ || !runtime_->context || !runtime_->document)
+        return Status::not_open;
+    if (element_id.empty() || class_name.empty() ||
+        class_name.find_first_of(" \t\r\n") != std::string_view::npos)
+        return Status::rejected;
+    detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
+    Rml::Element* element = runtime_->document->GetElementById(Rml::String(element_id));
+    if (!element)
+        return Status::rejected;
+    element->SetClass(Rml::String(class_name), on);
+    return Status::ok;
+}
+
 Status Backend::process_mouse_move(int x, int y, int key_modifier_state) {
     if (!open_ || !runtime_ || !runtime_->context)
         return Status::not_open;

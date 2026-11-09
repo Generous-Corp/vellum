@@ -11,6 +11,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 namespace {
@@ -157,6 +158,35 @@ void goldens(const harness::CaptureResult& first, const harness::CaptureResult& 
     restore("CI", saved_ci);
     expect(!refused && !std::filesystem::exists(refused_path),
            "VELLUM_UPDATE_GOLDENS=1 is refused under CI", refused.message);
+
+    const auto outside = std::filesystem::temp_directory_path() /
+                         ("vellum-golden-escape-" + std::to_string(getpid()));
+    std::filesystem::create_directories(outside, ignored);
+    const auto absolute_escape = outside / "absolute.rgba";
+    const auto absolute = harness::compare_to_golden(
+        second, absolute_escape, 0, 0.0, harness::GoldenMode::update);
+    expect(!absolute && !std::filesystem::exists(absolute_escape) &&
+               absolute.message.find("outside the golden roots") != std::string::npos,
+           "update refuses an absolute path outside the golden roots", absolute.message);
+
+    const auto dotdot_escape = directory / ".." / ".." / "dotdot-escape.rgba";
+    const auto dotdot = harness::compare_to_golden(
+        second, dotdot_escape, 0, 0.0, harness::GoldenMode::update);
+    expect(!dotdot && !std::filesystem::exists(dotdot_escape),
+           "update refuses a path that escapes through ..", dotdot.message);
+
+    const auto link = directory / "escape-link";
+    std::filesystem::create_directory_symlink(outside, link, ignored);
+    const auto linked = harness::compare_to_golden(
+        second, link / "linked.rgba", 0, 0.0, harness::GoldenMode::update);
+    expect(!ignored && !linked && !std::filesystem::exists(outside / "linked.rgba"),
+           "update refuses a path that escapes through a symlink", linked.message);
+    std::filesystem::remove(link, ignored);
+    std::filesystem::remove_all(outside, ignored);
+
+    expect(harness::is_within_golden_roots(harness::default_golden_directory() / "a.rgba") &&
+               !harness::is_within_golden_roots(harness::default_golden_directory()),
+           "the fixture directory accepts files but is not itself a golden");
 }
 
 void timings(const std::filesystem::path& evidence_path, long long cold_creation) {
