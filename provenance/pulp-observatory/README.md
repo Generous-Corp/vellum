@@ -52,8 +52,25 @@ python3 tools/provenance/observatory.py reconcile \
   --pulp-target <committed-pulp-cursor-sha> \
   --vellum-target <exact-pr-head-sha> \
   --now <utc-timestamp> \
-  --write --events-only
+  --write --events-only \
+  --vellum-main <current-vellum-main-sha>
 ```
+
+`--vellum-main` leaves commits already on main to main's own receiver, so a
+branch that has merged main records only its own commits. `verify` enforces
+this: a change may add Vellum observations only for commits in
+`git_base..HEAD`. The one exception is the receiver's own reconciliation,
+recognised by its content: the change touches only observatory evidence (the
+receiver's allowlist) and moves the committed Vellum cursor forward along
+main's first-parent line, from one main tip to a later one, over the
+observed commit.
+
+**Operating rule: every main landing carries its own events.** A pull request
+can no longer heal main's coverage by recording observations for commits
+already on main. Each pull request records its own mapped commits before it
+lands, and main's merge commits are covered by those events. A main landing without its events leaves every pull request failing coverage until the receiver coalesces. `verify` also
+needs `--git-base` to tell a change's own events apart; `--no-git-base` is for
+local checks only, and CI always passes a base.
 
 `provenance-verify` runs `verify --vellum-tail-policy coverage` on pull
 requests, merge-queue builds and `main`: every mapped commit after the cursor
