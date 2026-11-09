@@ -64,8 +64,8 @@ jobs:
           GH_TOKEN: ${{ steps.watchdog-token.outputs.token }}
         run: |
           set -euo pipefail
-          python3 tools/provenance/test_receiver_watchdog_state.py
-          python3 tools/provenance/receiver_watchdog_state.py \
+          python3 -I tools/provenance/test_receiver_watchdog_state.py
+          python3 -I tools/provenance/receiver_watchdog_state.py \
             --root . \
             --pulp-repo .watchdog-pulp \
             --output "$RUNNER_TEMP/watchdog-base.json"
@@ -93,7 +93,7 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          python3 tools/provenance/receiver_watchdog.py \
+          python3 -I tools/provenance/receiver_watchdog.py \
             --policy provenance/pulp-observatory/receiver-policy.json \
             --state "$RUNNER_TEMP/watchdog-state.json" \
             --now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \

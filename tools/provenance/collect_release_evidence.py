@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 from typing import Any, Iterable
 
+sys.path.append(str(Path(__file__).resolve().parent))  # -I drops the script dir; append keeps the standard library first
 from verify_authority_expansion import RETIRED_OPEN_PR_REPOSITORIES
 
 # The verifier accepts exactly these repositories in the open-PR snapshot once

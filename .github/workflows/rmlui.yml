@@ -1,0 +1,159 @@
+name: RmlUi module
+
+# Builds the optional rmlui/ module on its own, with the Metal renderer, and
+# runs its tests, including the Metal renderer drawn headless. Three checks
+# hold the module to what it claims to be: standalone, depending on RmlUi and
+# the operating system only.
+#
+# - Dependency requests: the configure runs with
+#   tools/ci/dependency_request_recorder.cmake injected, and the log of what it
+#   REQUESTED (not what it downloaded, which a warm cache hides) must not name
+#   Vellum, Pulp, Skia, Dawn or WebGPU. The same log must show RmlUi and
+#   FreeType, and a control configure with the Vellum renderer on must show
+#   Vellum, so a recorder that saw nothing cannot pass.
+# - Skips: a Metal test skips on a host without a Metal device; here that is
+#   a failure, since a lane that drew nothing proves nothing.
+# - Linked libraries: the Metal renderer's test binaries may load only Apple's
+#   system frameworks and libraries (otool -L), and must load Metal.
+#
+# Advisory: not a required check. It runs on pull requests and pushes that
+# touch the module or these tools, never on merge groups.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'rmlui/**'
+      - 'tools/ci/**'
+      - '.github/workflows/rmlui.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'rmlui/**'
+      - 'tools/ci/**'
+      - '.github/workflows/rmlui.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('vellum-rmlui-pr-{0}', github.ref) || format('vellum-rmlui-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  rmlui-metal:
+    name: rmlui + Metal (macOS)
+    runs-on: ${{ fromJSON(vars.VELLUM_RMLUI_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    timeout-minutes: 60
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Size builds to this runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          cores="$(sysctl -n hw.ncpu)"
+          memory_bytes="$(sysctl -n hw.memsize)"
+          [[ "$cores" =~ ^[1-9][0-9]*$ && "$memory_bytes" =~ ^[1-9][0-9]*$ ]]
+          by_memory=$(( memory_bytes * 2 / 3 / 1024 / 1024 / 1024 ))
+          jobs=$(( cores < by_memory ? cores : by_memory ))
+          jobs=$(( jobs < 1 ? 1 : jobs > 16 ? 16 : jobs ))
+          echo "VELLUM_BUILD_JOBS=$jobs" >> "$GITHUB_ENV"
+          echo "Building with $jobs jobs ($cores cores, $(( memory_bytes / 1024 / 1024 / 1024 )) GiB)"
+
+      - name: Configure rmlui with Metal, recording dependency requests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S rmlui -B build-rmlui \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVELLUM_RMLUI_BUILD_TESTS=ON \
+            -DVELLUM_RMLUI_NATIVE=ON \
+            -DVELLUM_RMLUI_FONTS=ON \
+            -DVELLUM_RMLUI_METAL=ON \
+            -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES="$PWD/tools/ci/dependency_request_recorder.cmake" \
+            -DDEPENDENCY_REQUEST_LOG="$PWD/build-rmlui/dependency-requests.jsonl"
+
+      - name: Check the module requested no Vellum, Pulp or GPU stack
+        shell: bash
+        run: |
+          python3 -I tools/ci/dependency_request_check.py \
+            --log build-rmlui/dependency-requests.jsonl \
+            --forbid 'vellum' --forbid 'pulp*' --forbid 'skia*' --forbid 'dawn*' \
+            --forbid 'webgpu' --forbid 'wgpu*' \
+            --require 'vellum_rmlui_rmlui' --require 'vellum_rmlui_freetype'
+
+      - name: Control - the Vellum renderer configure must request Vellum
+        shell: bash
+        run: |
+          set -uo pipefail
+          # The configure fails here, with no installed Vellum to find; the
+          # request is recorded before that, which is all the control needs.
+          cmake -S rmlui -B build-rmlui-control \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVELLUM_RMLUI_BUILD_TESTS=OFF \
+            -DVELLUM_RMLUI_VELLUM_RENDERER=ON \
+            -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES="$PWD/tools/ci/dependency_request_recorder.cmake" \
+            -DDEPENDENCY_REQUEST_LOG="$PWD/build-rmlui-control/dependency-requests.jsonl" \
+            > "$RUNNER_TEMP/rmlui-control-configure.log" 2>&1 || true
+          python3 -I tools/ci/dependency_request_check.py \
+            --log build-rmlui-control/dependency-requests.jsonl \
+            --require 'vellum'
+
+      - name: Build
+        shell: bash
+        run: cmake --build build-rmlui --parallel "$VELLUM_BUILD_JOBS"
+
+      - name: Test, with no Metal test skipped
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir build-rmlui --output-on-failure --parallel 2 \
+            --output-junit "$RUNNER_TEMP/rmlui-ctest.xml" | tee "$RUNNER_TEMP/rmlui-ctest.log"
+          # Every Metal test must have run and passed; a skip means no Metal
+          # device, and a missing name means the test was never registered.
+          python3 -I - "$RUNNER_TEMP/rmlui-ctest.xml" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          cases = {c.get("name"): c for c in ET.parse(sys.argv[1]).getroot().iter("testcase")}
+          wanted = ["vellum.rmlui.metal-visual", "vellum.rmlui.metal-layers",
+                    "vellum.rmlui.metal-filters", "vellum.rmlui.metal-effects",
+                    "vellum.rmlui.metal-blend-control"]
+          bad = []
+          for name in wanted:
+              case = cases.get(name)
+              if case is None:
+                  bad.append(f"{name}: not run")
+              elif case.find("skipped") is not None or case.get("status") in ("notrun", "disabled"):
+                  bad.append(f"{name}: skipped")
+          for line in bad:
+              print(f"::error::{line}")
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Check the Metal binaries load only system libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I tools/ci/rmlui_link_check.py \
+            --binary build-rmlui/tests/vellum-rmlui-metal-visual-test \
+            --binary build-rmlui/tests/vellum-rmlui-metal-layers-test \
+            --binary build-rmlui/tests/vellum-rmlui-metal-filters-test \
+            --require Metal.framework
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vellum-rmlui-metal
+          path: |
+            build-rmlui/dependency-requests.jsonl
+            build-rmlui-control/dependency-requests.jsonl
+            ${{ runner.temp }}/rmlui-control-configure.log
+            ${{ runner.temp }}/rmlui-ctest.log
+            ${{ runner.temp }}/rmlui-ctest.xml
+          if-no-files-found: warn
+          retention-days: 30
