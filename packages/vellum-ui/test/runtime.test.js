@@ -5,6 +5,7 @@ import {
     Button,
     CustomComponent,
     Design,
+    Path,
     Stack,
     Text,
     TextRun,
@@ -336,6 +337,69 @@ test('serializes bounded gradient, shadow, and attributed-run styles', () => {
             })),
         } },
     })).renderJSON(), /between 2 and 64 stops/);
+});
+
+test('serializes a path node with SVG paint properties', () => {
+    const tree = JSON.parse(mount(() => jsx(View, {
+        id: 'canvas-root',
+        style: { width: 120, height: 120 },
+        children: jsx(Path, {
+            id: 'star',
+            d: 'M60 10 L90 100 L15 45 H105 L30 100 Z',
+            fillRule: 'evenodd',
+            fill: { angle: 90, stops: [
+                { position: 0, color: '#f59e0b' },
+                { position: 1, color: '#ef4444' },
+            ] },
+            stroke: '#111827',
+            strokeWidth: 3,
+            strokeLineJoin: 'round',
+            strokeLineCap: 'square',
+            strokeMiterLimit: 2,
+            strokeDasharray: [6, 3],
+            strokeDashoffset: 1,
+            style: { width: 120, height: 120 },
+        }),
+    })).renderJSON()).tree;
+    const star = tree.children[0];
+    assert.equal(star.type, 'path');
+    assert.equal(star.d, 'M60 10 L90 100 L15 45 H105 L30 100 Z');
+    assert.equal(star.fillRule, 'evenodd');
+    assert.equal(star.fill.stops.length, 2);
+    assert.equal(star.stroke, '#111827');
+    assert.equal(star.strokeWidth, 3);
+    assert.equal(star.strokeLineJoin, 'round');
+    assert.equal(star.strokeLineCap, 'square');
+    assert.equal(star.strokeMiterLimit, 2);
+    assert.deepEqual(star.strokeDasharray, [6, 3]);
+    assert.equal(star.strokeDashoffset, 1);
+    assert.deepEqual(star.children, []);
+
+    const plain = JSON.parse(mount(() => jsx(Path, {
+        id: 'plain', d: 'M0 0 L10 10', fill: 'none',
+    })).renderJSON()).tree;
+    assert.deepEqual(
+        Object.keys(plain).filter((name) => name !== 'style').sort(),
+        ['children', 'd', 'fill', 'id', 'type'],
+    );
+
+    const rejects = (properties, pattern) => assert.throws(
+        () => mount(() => jsx(Path, { id: 'bad', d: 'M0 0', ...properties })).renderJSON(),
+        pattern);
+    rejects({ d: undefined }, /Path d must be SVG path data/);
+    rejects({ d: 'M'.repeat(65537) }, /at most 65536 characters/);
+    rejects({ fillRule: 'winding' }, /fillRule must be one of nonzero, evenodd/);
+    rejects({ fill: 'red' }, /fill must be a hex color, none, or a linear gradient/);
+    rejects({ fill: { angle: 0, stops: [] } }, /between 2 and 64 stops/);
+    rejects({ stroke: 12 }, /stroke must be a hex color or none/);
+    rejects({ strokeWidth: -1 }, /strokeWidth must be a non-negative finite number/);
+    rejects({ strokeMiterLimit: 0.5 }, /strokeMiterLimit must be at least 1/);
+    rejects({ strokeLineJoin: 'arcs' }, /strokeLineJoin must be one of miter, round, bevel/);
+    rejects({ strokeLineCap: 'flat' }, /strokeLineCap must be one of butt, round, square/);
+    rejects({ strokeDasharray: [1, Number.NaN] }, /strokeDasharray\[1\] must be/);
+    rejects({ strokeDasharray: Array(65).fill(1) }, /at most 64 numbers/);
+    rejects({ strokeDashoffset: Infinity }, /strokeDashoffset must be a finite number/);
+    rejects({ children: jsx(View, {}) }, /Path does not accept children/);
 });
 
 test('retains declared scroll containers for native and browser hosts', () => {

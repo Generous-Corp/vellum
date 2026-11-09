@@ -2,6 +2,7 @@
 
 #include <vellum/graphics/color.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -89,6 +90,81 @@ struct TriangleMesh final {
     Rect clip{};
 };
 
+/// One command of a `PathGeometry`. Each verb consumes a fixed number of
+/// values from `PathGeometry::values`, given by `path_verb_arity`.
+enum class PathVerb : std::uint8_t {
+    /// x, y: starts a new subpath.
+    move,
+    /// x, y.
+    line,
+    /// Control x, y, then end x, y.
+    quadratic,
+    /// First control x, y, second control x, y, then end x, y.
+    cubic,
+    /// An SVG elliptical arc: radius x, radius y, x-axis rotation in degrees,
+    /// large-arc flag, sweep flag (each 0 or 1), then end x, y.
+    arc,
+    /// Closes the current subpath; consumes nothing.
+    close,
+};
+
+[[nodiscard]] constexpr std::size_t path_verb_arity(PathVerb verb) noexcept {
+    switch (verb) {
+    case PathVerb::move:
+    case PathVerb::line: return 2U;
+    case PathVerb::quadratic: return 4U;
+    case PathVerb::cubic: return 6U;
+    case PathVerb::arc: return 7U;
+    case PathVerb::close: return 0U;
+    }
+    return 0U;
+}
+
+enum class FillRule : std::uint8_t {
+    nonzero,
+    evenodd,
+};
+
+enum class StrokeJoin : std::uint8_t {
+    miter,
+    round,
+    bevel,
+};
+
+enum class StrokeCap : std::uint8_t {
+    butt,
+    round,
+    square,
+};
+
+/// How a path's outline is stroked. A zero width or a transparent colour
+/// draws no stroke.
+struct PathStroke final {
+    Color color = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    float width = 0.0F;
+    StrokeJoin join = StrokeJoin::miter;
+    StrokeCap cap = StrokeCap::butt;
+    /// At least 1, as in SVG.
+    float miter_limit = 4.0F;
+    /// Alternating dash and gap lengths; empty draws a solid stroke.
+    std::vector<float> dash_array;
+    float dash_offset = 0.0F;
+};
+
+/// The geometry and stroke of a `path` node. Coordinates are absolute within
+/// the path and relative to the owning node's origin; relative and shorthand
+/// SVG commands are resolved when the path is built, so a scene never stores
+/// path data strings. The fill paint is the node's `fill` and
+/// `fill_gradients`.
+struct PathGeometry final {
+    std::vector<PathVerb> verbs;
+    /// The verbs' values, concatenated in order.
+    std::vector<float> values;
+    FillRule fill_rule = FillRule::nonzero;
+    PathStroke stroke;
+    bool antialias = true;
+};
+
 /// The scene schema version this build produces and consumes.
 ///
 /// The version is a single integer. Adding a field whose default leaves every
@@ -122,6 +198,7 @@ struct SceneNode final {
         text,
         custom,
         mesh,
+        path,
     };
 
     std::string id;
@@ -144,6 +221,8 @@ struct SceneNode final {
     std::vector<SceneNode> children;
     /// The geometry of a `mesh` node.
     std::shared_ptr<const TriangleMesh> mesh;
+    /// The geometry of a `path` node.
+    PathGeometry path;
 };
 
 [[nodiscard]] constexpr bool is_known_kind(SceneNode::Kind kind) noexcept {
@@ -153,6 +232,7 @@ struct SceneNode final {
     case SceneNode::Kind::text:
     case SceneNode::Kind::custom:
     case SceneNode::Kind::mesh:
+    case SceneNode::Kind::path:
         return true;
     }
     return false;

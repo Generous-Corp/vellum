@@ -3,6 +3,7 @@
 
 #include <emscripten.h>
 
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <memory>
@@ -13,6 +14,7 @@ namespace {
 
 vellum::graphics::Scene scene;
 std::vector<vellum::graphics::PaintCommand> commands;
+std::vector<vellum::graphics::LoweringDiagnostic> dropped;
 std::unique_ptr<vellum::runtime::Kernel> kernel;
 
 EM_JS(void, canvas_begin,
@@ -89,6 +91,7 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_begin_frame(
     scene.root.kind = vellum::graphics::SceneNode::Kind::group;
     scene.root.bounds = {0.0F, 0.0F, width, height};
     commands.clear();
+    dropped.clear();
     return 1;
 }
 
@@ -128,26 +131,39 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_add_text(
 
 EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     if (!kernel || scene.width <= 0.0F || scene.height <= 0.0F) return 0;
+    using Kind = vellum::graphics::PaintCommand::Kind;
+    constexpr std::array drawn{Kind::rectangle, Kind::text};
     commands = vellum::graphics::make_paint_commands(scene);
+    dropped = vellum::graphics::report_undrawn_commands(commands, drawn, "the web shell");
     const auto background = scene.background;
     canvas_begin(scene.width, scene.height, background.red, background.green,
                  background.blue, background.alpha);
     for (const auto& command : commands) {
         const auto color = command.fill;
-        if (command.kind == vellum::graphics::PaintCommand::Kind::rectangle) {
+        switch (command.kind) {
+        case Kind::rectangle:
             canvas_rectangle(
                 command.bounds.x, command.bounds.y, command.bounds.width,
                 command.bounds.height, command.corner_radius,
                 color.red, color.green, color.blue, color.alpha);
-        } else {
+            break;
+        case Kind::text:
             canvas_text(
                 command.text.c_str(), command.bounds.x,
                 command.bounds.y + command.font_size, command.font_size,
                 color.red, color.green, color.blue, color.alpha);
+            break;
+        case Kind::mesh:
+        case Kind::path:
+            break;
         }
     }
     canvas_finish();
     return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE int vellum_web_dropped_command_count() {
+    return static_cast<int>(dropped.size());
 }
 
 EMSCRIPTEN_KEEPALIVE int vellum_web_command_count() {

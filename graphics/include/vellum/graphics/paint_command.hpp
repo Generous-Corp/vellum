@@ -1,8 +1,12 @@
 #pragma once
 
+#include <vellum/graphics/lowering_diagnostic.hpp>
+#include <vellum/graphics/path_geometry.hpp>
 #include <vellum/graphics/scene.hpp>
 
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace vellum::graphics {
@@ -17,6 +21,7 @@ struct PaintCommand final {
         rectangle,
         text,
         mesh,
+        path,
     };
 
     Kind kind = Kind::rectangle;
@@ -36,7 +41,28 @@ struct PaintCommand final {
     std::vector<TextRun> text_runs;
     /// Mesh geometry, relative to `bounds.x`/`bounds.y`.
     std::shared_ptr<const TriangleMesh> mesh;
+    /// Path geometry and stroke, relative to `bounds.x`/`bounds.y`. The fill
+    /// paint is `fill` and `fill_gradients`, with gradients resolved against
+    /// `bounds`.
+    PathGeometry path;
 };
+
+[[nodiscard]] constexpr std::string_view to_string(PaintCommand::Kind kind) noexcept {
+    switch (kind) {
+    case PaintCommand::Kind::rectangle: return "rectangle";
+    case PaintCommand::Kind::text: return "text";
+    case PaintCommand::Kind::mesh: return "mesh";
+    case PaintCommand::Kind::path: return "path";
+    }
+    return "unknown";
+}
+
+/// The loss report of a renderer that draws only the `drawn` command kinds:
+/// one `kNodeContentDroppedCode` warning, with disposition `unsupported` and
+/// property `kind`, for each command of any other kind, in command order.
+[[nodiscard]] std::vector<LoweringDiagnostic> report_undrawn_commands(
+    std::span<const PaintCommand> commands, std::span<const PaintCommand::Kind> drawn,
+    std::string_view renderer);
 
 struct ResolvedLinearGradient final {
     float start_x = 0.0F;

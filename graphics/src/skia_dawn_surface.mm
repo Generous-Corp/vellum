@@ -19,12 +19,16 @@
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkPaint.h"
+#include "include/core/SkPath.h"
+#include "include/core/SkPathBuilder.h"
+#include "include/core/SkPathEffect.h"
 #include "include/core/SkPixmap.h"
 #include "include/core/SkRRect.h"
 #include "include/core/SkStream.h"
 #include "include/core/SkSurface.h"
 #include "include/core/SkVertices.h"
 #include "include/encode/SkPngEncoder.h"
+#include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradient.h"
 #include "include/gpu/graphite/BackendTexture.h"
 #include "include/gpu/graphite/Context.h"
@@ -150,20 +154,18 @@ std::string replace_unsupported_text(
     });
 }
 
-bool draw_linear_gradient(
-    SkCanvas& canvas, const PaintCommand& command,
+sk_sp<SkShader> linear_gradient_shader(
     const ResolvedLinearGradient& gradient, std::string* error) {
-    if (command.bounds.width <= 0.0F || command.bounds.height <= 0.0F) return true;
     if (gradient.stops.size() < 2U) {
         set_error(error, "Vellum linear gradient needs at least two stops");
-        return false;
+        return nullptr;
     }
     const float vector_x = gradient.end_x - gradient.start_x;
     const float vector_y = gradient.end_y - gradient.start_y;
     const float length = std::hypot(vector_x, vector_y);
     if (length <= 0.0F) {
         set_error(error, "Vellum linear gradient has a zero-length paint box");
-        return false;
+        return nullptr;
     }
     const float direction_x = vector_x / length;
     const float direction_y = vector_y / length;
@@ -191,8 +193,16 @@ bool draw_linear_gradient(
     auto shader = SkShaders::LinearGradient(points, shader_gradient);
     if (!shader) {
         set_error(error, "Vellum could not create the linear-gradient shader");
-        return false;
     }
+    return shader;
+}
+
+bool draw_linear_gradient(
+    SkCanvas& canvas, const PaintCommand& command,
+    const ResolvedLinearGradient& gradient, std::string* error) {
+    if (command.bounds.width <= 0.0F || command.bounds.height <= 0.0F) return true;
+    auto shader = linear_gradient_shader(gradient, error);
+    if (!shader) return false;
 
     canvas.save();
     const auto rect = SkRect::MakeXYWH(
@@ -511,11 +521,145 @@ bool draw_mesh(SkCanvas& canvas, const PaintCommand& command,
     return true;
 }
 
+SkPath sk_path(const PaintCommand& command) {
+    const auto& path = command.path;
+    SkPathBuilder builder(path.fill_rule == FillRule::evenodd ? SkPathFillType::kEvenOdd
+                                                              : SkPathFillType::kWinding);
+    const float x = command.bounds.x;
+    const float y = command.bounds.y;
+    std::size_t offset = 0;
+    for (const auto verb : path.verbs) {
+        const float* v = path.values.data() + offset;
+        offset += path_verb_arity(verb);
+        switch (verb) {
+        case PathVerb::move: builder.moveTo(x + v[0], y + v[1]); break;
+        case PathVerb::line: builder.lineTo(x + v[0], y + v[1]); break;
+        case PathVerb::quadratic: builder.quadTo(x + v[0], y + v[1], x + v[2], y + v[3]); break;
+        case PathVerb::cubic:
+            builder.cubicTo(x + v[0], y + v[1], x + v[2], y + v[3], x + v[4], y + v[5]);
+            break;
+        case PathVerb::arc:
+            // SVG's sweep flag 1 is clockwise in y-down space, Skia's kCW.
+            builder.arcTo({v[0], v[1]}, v[2],
+                          v[3] != 0.0F ? SkPathBuilder::kLarge_ArcSize
+                                       : SkPathBuilder::kSmall_ArcSize,
+                          v[4] != 0.0F ? SkPathDirection::kCW : SkPathDirection::kCCW,
+                          {x + v[5], y + v[6]});
+            break;
+        case PathVerb::close: builder.close(); break;
+        }
+    }
+    return builder.detach();
+}
+
+SkPaint::Join sk_join(StrokeJoin join) {
+    switch (join) {
+    case StrokeJoin::miter: return SkPaint::kMiter_Join;
+    case StrokeJoin::round: return SkPaint::kRound_Join;
+    case StrokeJoin::bevel: return SkPaint::kBevel_Join;
+    }
+    return SkPaint::kMiter_Join;
+}
+
+SkPaint::Cap sk_cap(StrokeCap cap) {
+    switch (cap) {
+    case StrokeCap::butt: return SkPaint::kButt_Cap;
+    case StrokeCap::round: return SkPaint::kRound_Cap;
+    case StrokeCap::square: return SkPaint::kSquare_Cap;
+    }
+    return SkPaint::kButt_Cap;
+}
+
+bool path_is_drawable(const PathGeometry& path, const Color& fill, std::string* reason) {
+    if (!path_is_valid(path, reason)) return false;
+    if (!std::isfinite(fill.red) || !std::isfinite(fill.green) || !std::isfinite(fill.blue) ||
+        !std::isfinite(fill.alpha)) {
+        set_error(reason, "the fill colour is not finite");
+        return false;
+    }
+    return true;
+}
+
+// The first path node, in depth-first order, that cannot be drawn.
+const SceneNode* find_undrawable_path(const SceneNode& node, std::string& reason) {
+    if (node.kind == SceneNode::Kind::path && !path_is_drawable(node.path, node.fill, &reason)) {
+        return &node;
+    }
+    for (const auto& child : node.children) {
+        if (const auto* found = find_undrawable_path(child, reason); found != nullptr) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+bool draw_path(SkCanvas& canvas, const PaintCommand& command, std::string* error) {
+    const auto& path = command.path;
+    const auto& fill = command.fill;
+    std::string reason;
+    if (!path_is_drawable(path, fill, &reason)) {
+        set_error(error, "path " + command.node_id + " cannot be drawn: " + reason);
+        return false;
+    }
+    if (path.verbs.empty()) return true;
+    const SkPath outline = sk_path(command);
+
+    if (fill.alpha > 0.0F) {
+        SkPaint paint;
+        paint.setAntiAlias(path.antialias);
+        paint.setColor4f(sk_color(fill));
+        canvas.drawPath(outline, paint);
+    }
+    if (command.bounds.width > 0.0F && command.bounds.height > 0.0F) {
+        for (const auto& declared : command.fill_gradients) {
+            auto shader = linear_gradient_shader(
+                resolve_linear_gradient(command.bounds, declared), error);
+            if (!shader) return false;
+            SkPaint paint;
+            paint.setAntiAlias(path.antialias);
+            paint.setShader(std::move(shader));
+            canvas.drawPath(outline, paint);
+        }
+    }
+
+    const auto& stroke = path.stroke;
+    if (stroke.width > 0.0F && stroke.color.alpha > 0.0F) {
+        SkPaint paint;
+        paint.setAntiAlias(path.antialias);
+        paint.setColor4f(sk_color(stroke.color));
+        paint.setStyle(SkPaint::kStroke_Style);
+        paint.setStrokeWidth(stroke.width);
+        paint.setStrokeJoin(sk_join(stroke.join));
+        paint.setStrokeCap(sk_cap(stroke.cap));
+        paint.setStrokeMiter(stroke.miter_limit);
+        if (!stroke.dash_array.empty()) {
+            // An odd-length dash array repeats once, as in SVG.
+            std::vector<SkScalar> intervals(stroke.dash_array.begin(), stroke.dash_array.end());
+            if (intervals.size() % 2U != 0U) {
+                intervals.insert(intervals.end(), stroke.dash_array.begin(),
+                                 stroke.dash_array.end());
+            }
+            auto dashes = SkDashPathEffect::Make(intervals, stroke.dash_offset);
+            if (!dashes) {
+                set_error(error,
+                          "Skia could not build the dash pattern of path " + command.node_id);
+                return false;
+            }
+            paint.setPathEffect(std::move(dashes));
+        }
+        canvas.drawPath(outline, paint);
+    }
+    return true;
+}
+
 bool paint_command(SkCanvas& canvas, const PaintCommand& command,
                    std::string_view directory, MeshTextureCache& meshes,
                    std::string* error) {
     if (command.kind == PaintCommand::Kind::mesh) {
         return draw_mesh(canvas, command, meshes, error);
+    }
+    if (command.kind == PaintCommand::Kind::path) {
+        return draw_path(canvas, command, error);
     }
     if (command.kind == PaintCommand::Kind::rectangle) {
         return draw_rectangle(canvas, command, error);
@@ -703,6 +847,11 @@ public:
             set_error(error, "scene contains unsupported node kind " +
                                  std::to_string(static_cast<int>(unknown->kind)) + " at " +
                                  unknown->id);
+            return false;
+        }
+        std::string reason;
+        if (const auto* path = find_undrawable_path(scene.root, reason); path != nullptr) {
+            set_error(error, "path " + path->id + " cannot be drawn: " + reason);
             return false;
         }
         if (!render_internal(scene, false, nullptr, error)) {

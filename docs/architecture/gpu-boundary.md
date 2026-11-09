@@ -34,6 +34,24 @@ diagnostic and reports authored style or content it drops as warnings on
 severity and disposition words but identify content by node ID, not by
 DesignIR document path.
 
+A `path` node carries a `PathGeometry`: a flat list of move, line,
+quadratic, cubic, SVG elliptical arc and close commands with their values,
+a nonzero or evenodd fill rule, a stroke (colour, width, miter, round or bevel
+joins, butt, round or square caps, miter limit, dash array and dash offset)
+and an anti-aliasing flag; the fill paint is the node's colour and linear
+gradients. The authoring host parses an SVG `d` string once, into absolute
+commands, so a scene never stores path strings. A path is drawable only within
+its budget of 4096 commands and 16384 values (64 KiB of `float` data), with at
+most 64 dashes, finite coordinates and the exact arity per command;
+`path_is_valid` states the rules, the parser refuses path data longer than
+64 KiB, and the surface refuses a scene with an undrawable path before drawing,
+keeping its previous frame. Damage treats a path as its control-point box,
+with arcs as their whole ellipse, outset by half the stroke width times the
+larger of the miter limit for miter joins and sqrt(2) for round or square
+caps. Renderers that cannot draw paths,
+such as the web shell, report each dropped command as a
+`VELLUM_NODE_CONTENT_DROPPED` warning.
+
 Native self-test is deliberately fail-closed. A requested native surface is
 not allowed to fall back to CoreGraphics or an offscreen surface. The test also
 contains a blank-frame negative control so a broken capture detector cannot

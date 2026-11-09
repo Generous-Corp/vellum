@@ -144,6 +144,147 @@ constexpr std::string_view kStyledTree = R"JSON({
 
 }  // namespace
 
+bool path_nodes() {
+    using vellum::graphics::LoweringDiagnostic;
+    using vellum::graphics::PathVerb;
+    using vellum::graphics::SceneNode;
+    constexpr std::string_view kGoodPath = R"JSON({
+      "protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
+        "type":"stack","id":"art","style":{"width":200,"height":120},
+        "children":[
+          {"type":"path","id":"star","d":"M10 0 l10 30 h-20 z",
+            "fillRule":"evenodd","stroke":"#112233","strokeWidth":3,
+            "strokeLineJoin":"round","strokeLineCap":"square","strokeMiterLimit":2,
+            "strokeDasharray":[4,2],"strokeDashoffset":1,
+            "style":{"width":40,"height":40,"backgroundColor":"#FF0000",
+              "boxShadow":{"color":"#000000"},"borderRadius":3},
+            "children":[]},
+          {"type":"path","id":"wave","d":"M0 0 Q5 10 10 0 T20 0",
+            "fill":{"angle":90,"stops":[{"position":0,"color":"#FF0000"},
+              {"position":1,"color":"#0000FF"}]},
+            "style":{"width":20,"height":20}},
+          {"type":"path","id":"outline","d":"M0 0 L5 5","fill":"none",
+            "style":{"height":10}}
+        ]}}
+    )JSON";
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    std::vector<LoweringDiagnostic> failure_diagnostics;
+    if (!vellum::authoring::materialize_rendered_tree(
+            kGoodPath, rendered, &error, &failure_diagnostics)) {
+        std::cerr << error << '\n';
+        return false;
+    }
+    const auto* star = vellum::graphics::find_node(rendered.scene, "star");
+    const auto* wave = vellum::graphics::find_node(rendered.scene, "wave");
+    const auto* outline = vellum::graphics::find_node(rendered.scene, "outline");
+    if (star == nullptr || star->kind != SceneNode::Kind::path ||
+        star->path.verbs != std::vector<PathVerb>{
+            PathVerb::move, PathVerb::line, PathVerb::line, PathVerb::close} ||
+        star->path.values != std::vector<float>{10, 0, 20, 30, 0, 30} ||
+        star->path.fill_rule != vellum::graphics::FillRule::evenodd ||
+        star->fill.red != 0.0F || star->fill.alpha != 1.0F ||
+        !star->fill_gradients.empty() || !star->box_shadows.empty() ||
+        star->corner_radius != 0.0F ||
+        star->path.stroke.color.blue != static_cast<float>(0x33) / 255.0F ||
+        star->path.stroke.width != 3.0F ||
+        star->path.stroke.join != vellum::graphics::StrokeJoin::round ||
+        star->path.stroke.cap != vellum::graphics::StrokeCap::square ||
+        star->path.stroke.miter_limit != 2.0F ||
+        star->path.stroke.dash_array != std::vector<float>{4, 2} ||
+        star->path.stroke.dash_offset != 1.0F ||
+        star->bounds.width != 40.0F || star->bounds.height != 40.0F) {
+        std::cerr << "a good path was not materialized\n";
+        return false;
+    }
+    if (wave == nullptr || wave->kind != SceneNode::Kind::path ||
+        wave->path.verbs.size() != 3U || wave->fill.alpha != 0.0F ||
+        wave->fill_gradients.size() != 1U || wave->fill_gradients[0].angle_degrees != 90.0F ||
+        wave->path.stroke.color.alpha != 0.0F || wave->path.stroke.width != 1.0F ||
+        outline == nullptr || outline->fill.alpha != 0.0F ||
+        outline->path.fill_rule != vellum::graphics::FillRule::nonzero) {
+        std::cerr << "path paint defaults or gradient fill were not materialized\n";
+        return false;
+    }
+    const auto dropped = [&](std::size_t index, std::string_view property) {
+        const auto& diagnostic = rendered.diagnostics[index];
+        return diagnostic.code == vellum::graphics::kStyleDroppedCode &&
+               diagnostic.severity == LoweringDiagnostic::Severity::warning &&
+               diagnostic.node_id == "star" && diagnostic.property == property;
+    };
+    if (rendered.diagnostics.size() != 3U || !dropped(0U, "backgroundColor") ||
+        !dropped(1U, "borderRadius") || !dropped(2U, "boxShadow") ||
+        !failure_diagnostics.empty()) {
+        std::cerr << "path style keys were not reported as dropped\n";
+        return false;
+    }
+
+    const auto rejected = [&](std::string_view node, std::string_view expected_error,
+                              std::string_view property) {
+        const std::string tree =
+            std::string(R"JSON({"protocol":"vellum.authoring-host.v2","kind":"render-result",
+              "tree":{"type":"stack","id":"art","style":{"width":100,"height":100},
+              "children":[)JSON") + std::string(node) + "]}}";
+        vellum::authoring::RenderedApplication kept = rendered;
+        std::string why;
+        std::vector<LoweringDiagnostic> diagnostics;
+        const bool ok = !vellum::authoring::materialize_rendered_tree(
+                            tree, kept, &why, &diagnostics) &&
+                        why == expected_error && kept.scene.width == rendered.scene.width &&
+                        diagnostics.size() == 1U &&
+                        diagnostics[0].severity == LoweringDiagnostic::Severity::error &&
+                        diagnostics[0].disposition ==
+                            LoweringDiagnostic::Disposition::unsupported &&
+                        diagnostics[0].code == vellum::graphics::kInvalidPathCode &&
+                        diagnostics[0].node_id == "bad" && diagnostics[0].property == property &&
+                        diagnostics[0].message == why;
+        if (!ok) std::cerr << "path was not rejected as expected: " << why << '\n';
+        return ok;
+    };
+    static_assert(vellum::graphics::kInvalidPathCode == "VELLUM_INVALID_PATH");
+    return rejected(R"({"type":"path","id":"bad","d":"M0 0 L1"})",
+                    "path bad has invalid path data: path data: expected a number at byte 7",
+                    "d") &&
+           rejected(R"({"type":"path","id":"bad","d":"Q1 1 2 2"})",
+                    "path bad has invalid path data: path data must start with a move command",
+                    "d") &&
+           rejected(R"({"type":"path","id":"bad","d":"M0 0 K1 1"})",
+                    "path bad has invalid path data: path data: unknown command 'K' at byte 5",
+                    "d") &&
+           rejected(R"({"type":"path","id":"bad"})", "path bad requires string path data in d",
+                    "d") &&
+           rejected(R"({"type":"path","id":"bad","d":7})",
+                    "path bad requires string path data in d", "d") &&
+           rejected(R"({"type":"path","id":"bad","d":"M0 0","fillRule":"winding"})",
+                    "path bad fillRule must be nonzero or evenodd", "fillRule") &&
+           rejected(R"({"type":"path","id":"bad","d":"M0 0","fill":"red"})",
+                    "path bad fill must be a colour, none or a linear gradient", "fill") &&
+           rejected(R"({"type":"path","id":"bad","d":"M0 0","fill":{"angle":0,"stops":[]}})",
+                    "path bad fill requires at least two stops", "fill") &&
+           rejected(R"({"type":"path","id":"bad","d":"M0 0","stroke":true})",
+                    "path bad stroke must be a colour or none", "stroke") &&
+           rejected(R"({"type":"path","id":"bad","d":"M0 0","strokeWidth":-1})",
+                    "path bad strokeWidth must be a finite non-negative number", "strokeWidth") &&
+           rejected(R"({"type":"path","id":"bad","d":"M0 0","strokeMiterLimit":0.5})",
+                    "path bad strokeMiterLimit must be a finite number of at least 1",
+                    "strokeMiterLimit") &&
+           rejected(R"({"type":"path","id":"bad","d":"M0 0","strokeDashoffset":"1"})",
+                    "path bad strokeDashoffset must be a finite number", "strokeDashoffset") &&
+           rejected(R"({"type":"path","id":"bad","d":"M0 0","strokeLineJoin":"arcs"})",
+                    "path bad strokeLineJoin must be miter, round or bevel", "strokeLineJoin") &&
+           rejected(R"({"type":"path","id":"bad","d":"M0 0","strokeLineCap":"flat"})",
+                    "path bad strokeLineCap must be butt, round or square", "strokeLineCap") &&
+           rejected(R"({"type":"path","id":"bad","d":"M0 0","strokeDasharray":[1,-2]})",
+                    "path bad strokeDasharray entries must be finite non-negative numbers",
+                    "strokeDasharray") &&
+           rejected(R"({"type":"path","id":"bad","d":"M0 0","strokeDasharray":[0,0]})",
+                    "path bad cannot be drawn: the stroke dash array sums to zero",
+                    "strokeDasharray") &&
+           rejected(R"({"type":"path","id":"bad","d":"M0 0","children":[
+                      {"type":"view","id":"inner","children":[]}]})",
+                    "path bad does not accept children", "children");
+}
+
 int main() {
     vellum::authoring::RenderedApplication rendered;
     std::string error;
@@ -511,5 +652,5 @@ int main() {
         return 1;
     }
 
-    return 0;
+    return path_nodes() ? 0 : 1;
 }

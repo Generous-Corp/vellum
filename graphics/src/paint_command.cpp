@@ -52,6 +52,15 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
             .strikethrough = node.strikethrough,
             .text_runs = node.text_runs,
         });
+    } else if (node.kind == SceneNode::Kind::path && !node.path.verbs.empty()) {
+        output.push_back({
+            .kind = PaintCommand::Kind::path,
+            .node_id = node.id,
+            .bounds = absolute,
+            .fill = node.fill,
+            .fill_gradients = node.fill_gradients,
+            .path = node.path,
+        });
     } else if (node.kind == SceneNode::Kind::mesh && node.mesh) {
         output.push_back({
             .kind = PaintCommand::Kind::mesh,
@@ -134,6 +143,26 @@ bool mesh_is_valid(const TriangleMesh& mesh, std::string* reason) {
         return fail("the clip rectangle is not finite");
     }
     return true;
+}
+
+std::vector<LoweringDiagnostic> report_undrawn_commands(
+    std::span<const PaintCommand> commands, std::span<const PaintCommand::Kind> drawn,
+    std::string_view renderer) {
+    std::vector<LoweringDiagnostic> report;
+    for (const auto& command : commands) {
+        if (std::find(drawn.begin(), drawn.end(), command.kind) != drawn.end()) continue;
+        const std::string kind(to_string(command.kind));
+        report.push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(kNodeContentDroppedCode),
+            .node_id = command.node_id,
+            .property = "kind",
+            .message = std::string(renderer) + " does not draw " + kind + " commands; " + kind +
+                       " " + command.node_id + " was dropped",
+        });
+    }
+    return report;
 }
 
 std::vector<PaintCommand> make_paint_commands(const Scene& scene) {

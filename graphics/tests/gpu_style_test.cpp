@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -502,6 +503,188 @@ bool scene_version_refusal() {
     return again == first;
 }
 
+bool same_pixel(const std::uint8_t* value, std::array<std::uint8_t, 4> expected,
+                int tolerance = 2) {
+    for (std::size_t channel = 0; channel < 4U; ++channel) {
+        if (std::abs(static_cast<int>(value[channel]) - static_cast<int>(expected[channel])) >
+            tolerance) {
+            return false;
+        }
+    }
+    return true;
+}
+
+SceneNode star_path(std::string id, float x, FillRule rule) {
+    PathGeometry star{.fill_rule = rule};
+    for (int index = 0; index < 5; ++index) {
+        const float angle = -1.5707963F + static_cast<float>(index * 2 % 5) * 1.2566371F;
+        star.verbs.push_back(index == 0 ? PathVerb::move : PathVerb::line);
+        star.values.insert(star.values.end(),
+                           {30.0F + 28.0F * std::cos(angle), 30.0F + 28.0F * std::sin(angle)});
+    }
+    star.verbs.push_back(PathVerb::close);
+    return {
+        .id = std::move(id),
+        .kind = SceneNode::Kind::path,
+        .bounds = {x, 0.0F, 60.0F, 60.0F},
+        .fill = Color::hex(0xFFFFFF),
+        .path = std::move(star),
+    };
+}
+
+bool path_fill_rule_and_stroke() {
+    PathGeometry dashed{
+        .verbs = {PathVerb::move, PathVerb::line},
+        .values = {4.0F, 0.0F, 116.0F, 0.0F},
+        .stroke = {.color = Color::hex(0xFF0000), .width = 4.0F, .cap = StrokeCap::round,
+                   .dash_array = {12.0F, 12.0F}},
+    };
+    Scene scene{
+        .width = 128.0F,
+        .height = 80.0F,
+        .background = Color::hex(0x000000),
+        .root = {
+            .id = "root",
+            .kind = SceneNode::Kind::group,
+            .bounds = {0.0F, 0.0F, 128.0F, 80.0F},
+            .children = {
+                star_path("nonzero", 0.0F, FillRule::nonzero),
+                star_path("evenodd", 64.0F, FillRule::evenodd),
+                {
+                    .id = "dashes",
+                    .kind = SceneNode::Kind::path,
+                    .bounds = {0.0F, 70.0F, 128.0F, 0.0F},
+                    .path = std::move(dashed),
+                },
+            },
+        },
+    };
+    std::vector<std::uint8_t> rgba;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    if (!capture(scene, rgba, width, height)) return false;
+    const std::array<std::uint8_t, 4> white{255, 255, 255, 255};
+    const std::array<std::uint8_t, 4> black{0, 0, 0, 255};
+    const std::array<std::uint8_t, 4> red{255, 0, 0, 255};
+    struct Probe {
+        const char* what;
+        std::uint32_t x;
+        std::uint32_t y;
+        std::array<std::uint8_t, 4> expected;
+    };
+    const std::array<Probe, 9> probes{{
+        {"nonzero centre is filled", 30, 30, white},
+        {"evenodd centre is a hole", 94, 30, black},
+        {"nonzero point is filled", 30, 12, white},
+        {"evenodd point is filled", 94, 12, white},
+        {"outside the star is empty", 2, 58, black},
+        {"the first dash is drawn", 10, 70, red},
+        {"the first gap is empty", 22, 70, black},
+        {"the second dash is drawn", 34, 70, red},
+        {"the round cap reaches before the start", 3, 70, red},
+    }};
+    bool passed = true;
+    for (const auto& probe : probes) {
+        const auto* value = pixel(rgba, width, probe.x, probe.y);
+        if (!same_pixel(value, probe.expected)) {
+            std::cerr << probe.what << ": pixel (" << probe.x << ", " << probe.y << ") is "
+                      << int(value[0]) << ',' << int(value[1]) << ',' << int(value[2]) << ','
+                      << int(value[3]) << '\n';
+            passed = false;
+        }
+    }
+    return passed;
+}
+
+bool path_arc_gradient_and_refusal() {
+    std::string reason;
+    PathGeometry circle;
+    if (!parse_svg_path_data("M10 30 A20 20 0 0 1 50 30 A20 20 0 0 1 10 30 Z", circle, &reason)) {
+        std::cerr << reason << '\n';
+        return false;
+    }
+    PathGeometry blob{
+        .verbs = {PathVerb::move, PathVerb::cubic, PathVerb::line, PathVerb::line, PathVerb::close},
+        .values = {0.0F, 0.0F, 20.0F, -10.0F, 40.0F, 10.0F, 60.0F, 0.0F, 60.0F, 40.0F,
+                   0.0F, 40.0F},
+    };
+    Scene scene{
+        .width = 128.0F,
+        .height = 64.0F,
+        .background = Color::hex(0x000000),
+        .root = {
+            .id = "root",
+            .kind = SceneNode::Kind::group,
+            .bounds = {0.0F, 0.0F, 128.0F, 64.0F},
+            .children = {
+                {
+                    .id = "circle",
+                    .kind = SceneNode::Kind::path,
+                    .bounds = {0.0F, 0.0F, 60.0F, 60.0F},
+                    .fill = Color::hex(0x00FF00),
+                    .path = std::move(circle),
+                },
+                {
+                    .id = "blob",
+                    .kind = SceneNode::Kind::path,
+                    .bounds = {64.0F, 12.0F, 60.0F, 40.0F},
+                    .fill_gradients = {{
+                        .angle_degrees = 90.0F,
+                        .stops = {
+                            {.position = 0.0F, .color = Color::hex(0xFF0000)},
+                            {.position = 1.0F, .color = Color::hex(0x0000FF)},
+                        },
+                    }},
+                    .path = std::move(blob),
+                },
+            },
+        },
+    };
+    std::string error;
+    if (!vellum::app_host::register_native_dawn_bootstrap(&error)) {
+        std::cerr << error << '\n';
+        return false;
+    }
+    auto surface = SkiaDawnSurface::create({.width = 128, .height = 64}, &error);
+    std::vector<std::uint8_t> first;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    if (!surface || !surface->render(scene, &error) ||
+        !surface->capture_rgba(first, width, height, &error)) {
+        std::cerr << error << '\n';
+        return false;
+    }
+    const auto* centre = pixel(first, width, 30, 30);
+    const auto* corner = pixel(first, width, 12, 12);
+    const auto* left = pixel(first, width, 68, 40);
+    const auto* right = pixel(first, width, 120, 40);
+    if (!same_pixel(centre, {0, 255, 0, 255}) || !same_pixel(corner, {0, 0, 0, 255})) {
+        std::cerr << "the arc circle is not filled as a circle\n";
+        return false;
+    }
+    if (!(left[0] > 200 && left[2] < 60 && right[2] > 200 && right[0] < 60)) {
+        std::cerr << "the cubic path's gradient does not run from red to blue\n";
+        return false;
+    }
+
+    Scene invalid = scene;
+    invalid.root.children[1].path.values[3] = std::numeric_limits<float>::quiet_NaN();
+    Scene unbalanced = scene;
+    unbalanced.root.children[1].path.values.pop_back();
+    std::vector<std::uint8_t> after;
+    const auto refused = [&](const Scene& candidate, const std::string& expected) {
+        std::string why;
+        if (surface->render(candidate, &why) || why != expected) {
+            std::cerr << "unexpected render result: " << why << '\n';
+            return false;
+        }
+        return surface->capture_rgba(after, width, height, &why) && after == first;
+    };
+    return refused(invalid, "path blob cannot be drawn: a path coordinate is not finite") &&
+           refused(unbalanced,
+                   "path blob cannot be drawn: a path command has fewer values than its arity");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -525,6 +708,12 @@ int main(int argc, char** argv) {
         }
         if (fixture == "scene_version_refusal") {
             return scene_version_refusal() ? 0 : 1;
+        }
+        if (fixture == "path_fill_rule_and_stroke") {
+            return path_fill_rule_and_stroke() ? 0 : 1;
+        }
+        if (fixture == "path_arc_gradient_and_refusal") {
+            return path_arc_gradient_and_refusal() ? 0 : 1;
         }
     } catch (const std::exception& exception) {
         std::cerr << exception.what() << '\n';

@@ -180,6 +180,9 @@ public:
 /// The absolute logical area a node paints by itself, including shadows,
 /// text extent and mesh geometry, before effect radius and clips. Empty for
 /// nodes that paint nothing. `frame` is the scene's logical frame.
+///
+/// A path paints within `path_control_bounds` outset by
+/// `path_stroke_outset`; a path that fails `path_is_valid` reports `frame`.
 [[nodiscard]] std::optional<Rect> node_paint_bounds(
     const SceneNode& node, const Rect& absolute_bounds, const Rect& frame,
     const DamagePropagation& propagation);
@@ -190,6 +193,7 @@ public:
 ///
 /// Meshes compare by pointer: a `TriangleMesh` or `MeshTexture` must not be
 /// mutated once a scene references it; replace the pointer to change it.
+/// Paths compare their fill paint and every geometry and stroke field.
 [[nodiscard]] bool paint_differs(const SceneNode& previous, const SceneNode& next);
 
 /// Damage between two scenes, keyed by node id (nodes with an empty or

@@ -2,6 +2,8 @@
 
 #import <Foundation/Foundation.h>
 
+#include <vellum/graphics/path_geometry.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -28,8 +30,9 @@ constexpr float kDefaultButtonHeight = 44.0F;
 constexpr float kDefaultTextInputHeight = 44.0F;
 constexpr float kDefaultGenericHeight = 0.0F;
 constexpr float kTextLineHeightMultiplier = 1.4F;
-constexpr std::array<std::string_view, 9> kIntrinsicTypes{
+constexpr std::array<std::string_view, 10> kIntrinsicTypes{
     "view", "stack", "text", "text-run", "text-input", "button", "image", "canvas", "custom",
+    "path",
 };
 constexpr std::array<std::string_view, 6> kTextStyleKeys{
     "color", "fontFamily", "fontSize", "fontWeight", "letterSpacing", "textDecoration",
@@ -52,6 +55,7 @@ bool style_key_consumed(std::string_view type, std::string_view key, const Style
     const bool text = type == "text" || type == "text-run";
     if (key == "width" || key == "height") return true;
     if (key == "x" || key == "y") return !use.root;
+    if (type == "path") return false;
     if (key == "padding" || key == "direction") return use.lays_out_children;
     if (key == "gap") return type == "stack" && use.lays_out_children;
     if (key == "backgroundLinearGradient" || key == "boxShadow") return true;
@@ -164,47 +168,47 @@ vellum::graphics::TextStyle text_style(
     return fallback;
 }
 
-bool parse_linear_gradient(
-    NSDictionary* style,
+bool parse_linear_gradient_value(
+    id raw,
+    const std::string& name,
     std::vector<vellum::graphics::LinearGradient>& output,
     std::string* error) {
-    id raw = style[@"backgroundLinearGradient"];
     if (raw == nil) return true;
     if (![raw isKindOfClass:NSDictionary.class]) {
-        set_error(error, "backgroundLinearGradient must be an object");
+        set_error(error, name + " must be an object");
         return false;
     }
     NSDictionary* source = raw;
     vellum::graphics::LinearGradient gradient;
     if (!number_field(source, @"angle", 180.0F, gradient.angle_degrees,
-            "backgroundLinearGradient.angle", error) ||
+            name + ".angle", error) ||
         !number_field(source, @"repeatLength", 0.0F, gradient.repeat_length,
-            "backgroundLinearGradient.repeatLength", error)) {
+            name + ".repeatLength", error)) {
         return false;
     }
     if (gradient.repeat_length < 0.0F) {
-        set_error(error, "backgroundLinearGradient.repeatLength must be non-negative");
+        set_error(error, name + ".repeatLength must be non-negative");
         return false;
     }
     if (source[@"repeating"] != nil &&
         CFGetTypeID((__bridge CFTypeRef)source[@"repeating"]) != CFBooleanGetTypeID()) {
-        set_error(error, "backgroundLinearGradient.repeating must be boolean");
+        set_error(error, name + ".repeating must be boolean");
         return false;
     }
     gradient.repeating = [source[@"repeating"] boolValue];
     NSArray* stops = array_or_empty(source[@"stops"]);
     if (stops.count < 2U) {
-        set_error(error, "backgroundLinearGradient requires at least two stops");
+        set_error(error, name + " requires at least two stops");
         return false;
     }
     if (stops.count > kMaximumGradientStops) {
-        set_error(error, "backgroundLinearGradient exceeds the 64-stop limit");
+        set_error(error, name + " exceeds the 64-stop limit");
         return false;
     }
     float previous = -1.0F;
     for (id value in stops) {
         if (![value isKindOfClass:NSDictionary.class]) {
-            set_error(error, "backgroundLinearGradient stops must be objects");
+            set_error(error, name + " stops must be objects");
             return false;
         }
         NSDictionary* stop = value;
@@ -212,8 +216,7 @@ bool parse_linear_gradient(
         const auto color = parse_color(stop[@"color"]);
         if (!finite_number(stop[@"position"], position) || position < 0.0F ||
             position > 1.0F || position <= previous || !color) {
-            set_error(error,
-                "backgroundLinearGradient stops require increasing positions and colors");
+            set_error(error, name + " stops require increasing positions and colors");
             return false;
         }
         gradient.stops.push_back({.position = position, .color = *color});
@@ -221,6 +224,14 @@ bool parse_linear_gradient(
     }
     output.push_back(std::move(gradient));
     return true;
+}
+
+bool parse_linear_gradient(
+    NSDictionary* style,
+    std::vector<vellum::graphics::LinearGradient>& output,
+    std::string* error) {
+    return parse_linear_gradient_value(
+        style[@"backgroundLinearGradient"], "backgroundLinearGradient", output, error);
 }
 
 bool parse_box_shadow(
@@ -374,6 +385,133 @@ bool reject_text_run(
     });
     set_error(error, std::move(message));
     return false;
+}
+
+bool reject_path(
+    MaterializeContext& context, const std::string& node_id, std::string property,
+    std::string message, std::string* error) {
+    context.diagnostics->push_back({
+        .severity = LoweringDiagnostic::Severity::error,
+        .disposition = LoweringDiagnostic::Disposition::unsupported,
+        .code = std::string(vellum::graphics::kInvalidPathCode),
+        .node_id = node_id,
+        .property = std::move(property),
+        .message = message,
+    });
+    set_error(error, std::move(message));
+    return false;
+}
+
+template <std::size_t Size>
+std::optional<std::size_t> keyword(id value, const std::array<std::string_view, Size>& names) {
+    if (![value isKindOfClass:NSString.class]) return std::nullopt;
+    const auto found = std::find(names.begin(), names.end(), cpp_string(value));
+    if (found == names.end()) return std::nullopt;
+    return static_cast<std::size_t>(found - names.begin());
+}
+
+// Path paint follows SVG: the fill defaults to black, the stroke to none, and
+// the stroke width to 1.
+bool materialize_path(
+    NSDictionary* source, const std::string& identity, MaterializeContext& context,
+    vellum::graphics::SceneNode& output, std::string* error) {
+    using vellum::graphics::Color;
+    const auto reject = [&](std::string property, const std::string& problem) {
+        return reject_path(context, identity, std::move(property),
+            "path " + identity + " " + problem, error);
+    };
+    id children = source[@"children"];
+    if (children != nil && (![children isKindOfClass:NSArray.class] ||
+                            static_cast<NSArray*>(children).count != 0U)) {
+        return reject("children", "does not accept children");
+    }
+    if (![source[@"d"] isKindOfClass:NSString.class]) {
+        return reject("d", "requires string path data in d");
+    }
+    vellum::graphics::PathGeometry path;
+    std::string reason;
+    if (!vellum::graphics::parse_svg_path_data(cpp_string(source[@"d"]), path, &reason)) {
+        return reject("d", "has invalid path data: " + reason);
+    }
+    if (source[@"fillRule"] != nil) {
+        const auto rule = keyword(source[@"fillRule"],
+            std::array<std::string_view, 2>{"nonzero", "evenodd"});
+        if (!rule) return reject("fillRule", "fillRule must be nonzero or evenodd");
+        path.fill_rule = static_cast<vellum::graphics::FillRule>(*rule);
+    }
+    const Color none = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    output.fill = Color::hex(0x000000);
+    output.fill_gradients.clear();
+    output.box_shadows.clear();
+    output.corner_radius = 0.0F;
+    if (id fill = source[@"fill"]; fill != nil) {
+        if ([fill isEqual:@"none"]) {
+            output.fill = none;
+        } else if ([fill isKindOfClass:NSDictionary.class]) {
+            output.fill = none;
+            std::string why;
+            if (!parse_linear_gradient_value(fill, "fill", output.fill_gradients, &why)) {
+                return reject("fill", why);
+            }
+        } else if (const auto color = parse_color(fill)) {
+            output.fill = *color;
+        } else {
+            return reject("fill", "fill must be a colour, none or a linear gradient");
+        }
+    }
+    auto& stroke = path.stroke;
+    if (id paint = source[@"stroke"]; paint != nil && ![paint isEqual:@"none"]) {
+        const auto color = parse_color(paint);
+        if (!color) return reject("stroke", "stroke must be a colour or none");
+        stroke.color = *color;
+    }
+    stroke.width = 1.0F;
+    const auto number = [&](NSString* key, float& value) {
+        id raw = source[key];
+        return raw == nil || finite_number(raw, value);
+    };
+    if (!number(@"strokeWidth", stroke.width) || stroke.width < 0.0F) {
+        return reject("strokeWidth", "strokeWidth must be a finite non-negative number");
+    }
+    if (!number(@"strokeMiterLimit", stroke.miter_limit) || stroke.miter_limit < 1.0F) {
+        return reject("strokeMiterLimit", "strokeMiterLimit must be a finite number of at least 1");
+    }
+    if (!number(@"strokeDashoffset", stroke.dash_offset)) {
+        return reject("strokeDashoffset", "strokeDashoffset must be a finite number");
+    }
+    if (source[@"strokeLineJoin"] != nil) {
+        const auto join = keyword(source[@"strokeLineJoin"],
+            std::array<std::string_view, 3>{"miter", "round", "bevel"});
+        if (!join) return reject("strokeLineJoin", "strokeLineJoin must be miter, round or bevel");
+        stroke.join = static_cast<vellum::graphics::StrokeJoin>(*join);
+    }
+    if (source[@"strokeLineCap"] != nil) {
+        const auto cap = keyword(source[@"strokeLineCap"],
+            std::array<std::string_view, 3>{"butt", "round", "square"});
+        if (!cap) return reject("strokeLineCap", "strokeLineCap must be butt, round or square");
+        stroke.cap = static_cast<vellum::graphics::StrokeCap>(*cap);
+    }
+    if (id dashes = source[@"strokeDasharray"]; dashes != nil) {
+        if (![dashes isKindOfClass:NSArray.class] ||
+            static_cast<NSArray*>(dashes).count > vellum::graphics::kMaxPathDashes) {
+            return reject("strokeDasharray", "strokeDasharray must be an array of at most " +
+                std::to_string(vellum::graphics::kMaxPathDashes) + " numbers");
+        }
+        for (id dash in static_cast<NSArray*>(dashes)) {
+            float length = 0.0F;
+            if (!finite_number(dash, length) || length < 0.0F) {
+                return reject("strokeDasharray",
+                    "strokeDasharray entries must be finite non-negative numbers");
+            }
+            stroke.dash_array.push_back(length);
+        }
+    }
+    if (!vellum::graphics::path_is_valid(path, &reason)) {
+        return reject("strokeDasharray", "cannot be drawn: " + reason);
+    }
+    output.kind = vellum::graphics::SceneNode::Kind::path;
+    output.path = std::move(path);
+    return true;
 }
 
 bool validate_attributed_run(
@@ -532,7 +670,9 @@ bool materialize_node(
         });
     }
 
-    if ([type isEqualToString:@"custom"]) {
+    if (type_name == "path") {
+        if (!materialize_path(source, identity, context, output, error)) return false;
+    } else if ([type isEqualToString:@"custom"]) {
         if (![source[@"component"] isKindOfClass:NSString.class]) {
             set_error(error, "custom authoring node requires a component identifier");
             return false;

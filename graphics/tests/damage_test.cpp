@@ -1,6 +1,7 @@
 #include <vellum/graphics/damage.hpp>
 
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -24,6 +25,10 @@ using vellum::graphics::Scene;
 using vellum::graphics::SceneNode;
 using vellum::graphics::TextRun;
 using vellum::graphics::TriangleMesh;
+using vellum::graphics::PathGeometry;
+using vellum::graphics::PathVerb;
+using vellum::graphics::StrokeCap;
+using vellum::graphics::StrokeJoin;
 
 int failures = 0;
 
@@ -372,6 +377,113 @@ void mesh_diff() {
     check(clip_only.bounds() == PixelRect{20, 60, 25, 65}, "mesh clip change is bounded by the clips");
 }
 
+void path_diff() {
+    Scene before;
+    before.width = 200.0F;
+    before.height = 100.0F;
+    SceneNode node;
+    node.id = "p";
+    node.kind = SceneNode::Kind::path;
+    node.bounds = {20.0F, 20.0F, 0.0F, 0.0F};
+    node.fill = Color::hex(0xFF0000);
+    node.path.verbs = {PathVerb::move, PathVerb::line, PathVerb::quadratic};
+    node.path.values = {0.0F, 0.0F, 40.0F, 0.0F, 60.0F, 30.0F, 40.0F, 20.0F};
+    node.path.stroke = {
+        .color = Color::hex(0x0000FF), .width = 4.0F, .join = StrokeJoin::bevel};
+    before.root.children.push_back(node);
+
+    const DamagePropagation none;
+    const Rect frame{0.0F, 0.0F, 200.0F, 100.0F};
+    const auto paint_bounds = [&](const SceneNode& candidate) {
+        return vellum::graphics::node_paint_bounds(candidate, {20.0F, 20.0F, 0.0F, 0.0F}, frame,
+                                                   none);
+    };
+    const auto bounds = paint_bounds(node);
+    check(bounds && bounds->x == 18.0F && bounds->y == 18.0F && bounds->width == 64.0F &&
+              bounds->height == 34.0F,
+          "path paint bounds are the control box outset by half the stroke width");
+
+    SceneNode mitered = node;
+    mitered.path.stroke.join = StrokeJoin::miter;
+    mitered.path.stroke.miter_limit = 3.0F;
+    const auto miter = paint_bounds(mitered);
+    check(miter && miter->x == 14.0F && miter->width == 72.0F,
+          "a miter join outsets by the miter limit");
+
+    SceneNode capped = node;
+    capped.path.stroke.cap = StrokeCap::round;
+    const auto round = paint_bounds(capped);
+    check(round && std::abs(round->x - (20.0F - 2.0F * std::sqrt(2.0F))) < 0.0001F,
+          "a round cap outsets by sqrt(2) times half the width");
+
+    SceneNode unstroked = node;
+    unstroked.path.stroke.width = 0.0F;
+    const auto fill_only = paint_bounds(unstroked);
+    check(fill_only && fill_only->x == 20.0F && fill_only->width == 60.0F &&
+              fill_only->height == 30.0F,
+          "an unstroked path paints its control box");
+
+    SceneNode empty = node;
+    empty.path = PathGeometry{};
+    check(!paint_bounds(empty),
+          "an empty path paints nothing");
+
+    SceneNode broken = node;
+    broken.path.values.pop_back();
+    const auto invalid = paint_bounds(broken);
+    check(invalid && invalid->width == 200.0F && invalid->height == 100.0F,
+          "an invalid path reports the whole frame");
+
+    Scene same = before;
+    check(diff(before, same).empty(), "an identical path has no damage");
+
+    const PixelRect painted{18, 18, 82, 52};
+    const auto changed = [&](auto mutate, const char* what) {
+        Scene next = before;
+        mutate(*child(next, "p"));
+        const auto damage = diff(before, next);
+        check(!damage.empty() && covers(damage, painted) && disjoint(damage), what);
+        return damage;
+    };
+    changed([](SceneNode& p) { p.fill = Color::hex(0x00FF00); },
+            "fill colour change damages the path");
+    changed([](SceneNode& p) {
+        p.fill_gradients = {{.stops = {{.position = 0.0F}, {.position = 1.0F}}}};
+    }, "fill gradient change damages the path");
+    changed([](SceneNode& p) { p.path.fill_rule = vellum::graphics::FillRule::evenodd; },
+            "fill rule change damages the path");
+    changed([](SceneNode& p) { p.path.stroke.color = Color::hex(0xFFFFFF); },
+            "stroke colour change damages the path");
+    changed([](SceneNode& p) { p.path.stroke.dash_array = {4.0F, 2.0F}; },
+            "dash array change damages the path");
+    changed([](SceneNode& p) { p.path.stroke.dash_offset = 1.0F; },
+            "dash offset change damages the path");
+    changed([](SceneNode& p) { p.path.stroke.join = StrokeJoin::round; },
+            "join change damages the path");
+    changed([](SceneNode& p) { p.path.stroke.cap = StrokeCap::square; },
+            "cap change damages the path");
+    changed([](SceneNode& p) { p.path.antialias = false; },
+            "anti-aliasing change damages the path");
+    changed([](SceneNode& p) { p.path.verbs[1] = PathVerb::move; }, "verb change damages the path");
+
+    const auto moved = changed([](SceneNode& p) { p.path.values[4] = 120.0F; },
+                               "geometry change damages the old path");
+    check(moved.bounds() == PixelRect{18, 18, 142, 52},
+          "geometry change damages the old and new paths");
+
+    Scene stroke_grown = before;
+    child(stroke_grown, "p")->path.stroke.width = 10.0F;
+    check(diff(before, stroke_grown).bounds() == PixelRect{15, 15, 85, 55},
+          "a wider stroke damages its larger reach");
+
+    Scene invisible = before;
+    child(invisible, "p")->path.stroke.width = 0.0F;
+    Scene invisible_again = invisible;
+    child(invisible_again, "p")->path.stroke.miter_limit = 9.0F;
+    check(diff(invisible, invisible_again).bounds() == PixelRect{20, 20, 80, 50},
+          "an invisible stroke change damages only the fill");
+}
+
 class TestPropagation final : public DamagePropagation {
 public:
     float effect_radius(const SceneNode& node) const override {
@@ -576,6 +688,7 @@ int main() {
     group_diff();
     text_diff();
     mesh_diff();
+    path_diff();
     propagation_hooks();
     unusual_bounds();
     duplicate_ids();

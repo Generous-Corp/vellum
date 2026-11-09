@@ -15,7 +15,7 @@ target_link_options(vellum-web-core PRIVATE
     "-sINITIAL_MEMORY=16777216"
     "-sFILESYSTEM=0"
     "-sASSERTIONS=1"
-    "-sEXPORTED_FUNCTIONS=['_vellum_web_start','_vellum_web_stop','_vellum_web_begin_frame','_vellum_web_add_rectangle','_vellum_web_add_text','_vellum_web_render','_vellum_web_command_count','_vellum_web_command_digest','_vellum_web_backend_name']"
+    "-sEXPORTED_FUNCTIONS=['_vellum_web_start','_vellum_web_stop','_vellum_web_begin_frame','_vellum_web_add_rectangle','_vellum_web_add_text','_vellum_web_render','_vellum_web_command_count','_vellum_web_dropped_command_count','_vellum_web_command_digest','_vellum_web_backend_name']"
     "-sEXPORTED_RUNTIME_METHODS=['cwrap']")
 
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/web-dist/vellum-ui")
