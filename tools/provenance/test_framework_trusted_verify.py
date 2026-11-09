@@ -360,7 +360,9 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
 
     FORBIDDEN_CONTEXT = re.compile(
         r"github\.event\.pull_request\.(title|body|head\.ref|head\.label|labels|user|head\.repo)"
-        r"|github\.head_ref|github\.event\.merge_group\.head_ref|github\.sha\b")
+        r"|github\.head_ref|github\.event\.merge_group\.head_ref|github\.sha\b"
+        # The payload's base sha is a stale snapshot once the head merges main.
+        r"|github\.event\.pull_request\.base\b")
 
     def setUp(self) -> None:
         # Read as text, so the check needs nothing beyond the standard library.
@@ -420,13 +422,23 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
         lines = run.splitlines()
         index = {name: next(i for i, line in enumerate(lines) if needle in line)
                  for name, needle in (("trap", "trap on_exit EXIT"), ("pending", "post_status pending"),
-                                      ("clone", " clone "), ("finished", "finished=1"))}
+                                      ("clone", " clone "))}
         self.assertLess(index["trap"], index["pending"])
         self.assertLess(index["pending"], index["clone"])
         self.assertRegex(run, r"0\) post_status success ")
         self.assertEqual(len(re.findall(r"post_status success", run)), 1)
-        self.assertGreater(index["finished"], max(i for i, line in enumerate(lines) if "post_status" in line
-                                                  and "local" not in line and "()" not in line))
+        # Every verdict post outside the trap.
+        posts = [i for i, line in enumerate(lines) if re.search(r"\bpost_status (success|failure) ", line)
+                 and "did not finish" not in line]
+        self.assertEqual(len(posts), 6)  # control: two refusals before the judge, four verdicts after
+        finishes = [i for i, line in enumerate(lines) if line.strip() == "finished=1"]
+        self.assertGreater(max(finishes), max(posts))
+        # Every verdict the step posts itself is marked finished before the
+        # step exits, so the trap cannot post a second one over it.
+        for post in posts:
+            after = [line.strip() for line in lines[post + 1:] if line.strip() and line.strip() not in ("fi", "esac")
+                     and not re.match(r"\S+\) post_status ", line.strip())]
+            self.assertEqual(after[0], "finished=1", lines[post])
 
     def test_the_status_token_never_reaches_git_or_the_judge(self):
         run = self.runs[0]
@@ -451,7 +463,8 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
 
     TRUSTED_SHA = ("TRUSTED_SHA: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha"
                    " || github.sha }}")
-    BASE_SHA = "BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
+    MERGE_BASE = ('merge_bases="$("${safe_git[@]}" -C trusted merge-base --all refs/framework-verify/head'
+                  ' "$TRUSTED_SHA")" || merge_bases=""')
 
     def test_no_pull_request_controlled_text_is_used_anywhere(self):
         # github.sha is the base tip on pull_request_target, and is read only
@@ -462,12 +475,26 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
     def test_the_rules_come_from_the_definition_s_commit_never_the_pull_request_s_base(self):
         self.assertEqual(self.text.count(self.TRUSTED_SHA), 1)
         self.assertEqual(len(re.findall(r"github\.sha\b", self.text)), 1)
-        self.assertEqual(self.text.count("github.event.pull_request.base.sha"), 1)
-        self.assertIn(self.BASE_SHA, self.text)  # the change is judged against its own base
         run = self.runs[0]
         self.assertIn('checkout --quiet --detach "$TRUSTED_SHA"', run)
-        self.assertNotIn('checkout --quiet --detach "$BASE_SHA"', run)
-        self.assertIn('--base "$BASE_SHA"', run)
+        self.assertEqual(run.count(" checkout "), 1)
+
+    def test_the_change_is_judged_from_where_it_meets_the_rules_never_the_payload_base(self):
+        # The payload's base sha is a snapshot from the pull request's last
+        # synchronize; once the head merges main past it, diffing against it
+        # counts main's merged-in changes as the pull request's.
+        self.assertNotIn("pull_request.base", self.text)
+        self.assertNotIn("BASE_SHA", self.text)
+        run = self.runs[0]
+        self.assertEqual(run.count(self.MERGE_BASE), 1)
+        self.assertIn('--base "$merge_base"', run)
+        self.assertEqual(len(re.findall(r"--base ", run)), 1)
+        self.assertIn('merge_base="$merge_bases"', run)
+        # No merge base, or more than one, is refused before the judge runs.
+        self.assertRegex(run, r'if \[ -z "\$merge_bases" \]; then\n\s+post_status failure ')
+        self.assertRegex(run, r'if \[ "\$\(printf \'%s\\n\' "\$merge_bases" \| wc -l\)" -ne 1 \]; then\n'
+                              r'\s+post_status failure ')
+        self.assertLess(run.index(self.MERGE_BASE), run.index("python3 -I"))
 
     def test_every_command_is_trusted_code(self):
         self.assertIsNone(re.search(r"^\s*(?:-\s+)?uses:", self.text, re.MULTILINE))  # the base is cloned in the step
@@ -481,7 +508,7 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
                       "            python3 -I tools/provenance/framework_trusted_verify.py", runs)
         self.assertIn('--dest-parent "$RUNNER_TEMP"', runs)
         git_lines = [line.strip() for line in runs.splitlines() if '"${safe_git[@]}"' in line]
-        self.assertEqual(len(git_lines), 5)
+        self.assertEqual(len(git_lines), 6)
         self.assertIn("-c fetch.fsckObjects=true -c transfer.fsckObjects=true)", runs)
         self.assertIn("-c core.hooksPath=/dev/null", runs)
         self.assertIn('checkout --quiet --detach "$TRUSTED_SHA"', runs)
@@ -580,6 +607,174 @@ class WorkflowStepBehaviourTests(unittest.TestCase):
         os.killpg(process.pid, signal.SIGTERM)
         process.wait(timeout=60)
         self.assertEqual(self.states(), [("pending", "Judging with the base rules")])
+
+
+class CarriedHeadBehaviourTests(unittest.TestCase):
+    """The step's merge base, run for real: a head that merged main, one that did not, and the queue.
+
+    Main B carries the judge. Main M then edits a rule path (a workflow), and
+    adds a later rule to the judge that a change can only meet by merging M.
+    Every run is given a stale payload base (B) in BASE_SHA, which the step
+    must not read."""
+
+    LATER_RULE = '''
+
+_verify_framework_before_later_rule = verify_framework
+
+
+def verify_framework(root, *args, **kwargs):
+    errors, checks = _verify_framework_before_later_rule(root, *args, **kwargs)
+    if not (Path(root) / "docs/later-rule.md").is_file():
+        errors = errors + ["a later rule on main: docs/later-rule.md is missing"]
+    return errors, checks
+'''
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.top = Path(self.temporary.name)
+        self.bin = self.top / "bin"
+        self.bin.mkdir()
+        self.posts = self.top / "posts.log"
+        (self.bin / "curl").write_text(
+            "#!/bin/bash\nfor a in \"$@\"; do case \"$prev\" in --data) printf '%s\\n' \"$a\" >> "
+            f"{self.posts}; esac; prev=\"$a\"; done\ncat > /dev/null\n", encoding="utf-8")
+        if not shutil.which("timeout"):
+            (self.bin / "timeout").write_text("#!/bin/bash\nshift\nexec \"$@\"\n", encoding="utf-8")
+        for shim in self.bin.iterdir():
+            shim.chmod(0o755)
+        body = re.search(r"run: \|\n((?:          .*\n|\n)+)", WORKFLOW.read_text(encoding="utf-8")).group(1)
+        self.step = self.top / "step.sh"
+        self.step.write_text("\n".join(line[10:] for line in body.splitlines()) + "\n", encoding="utf-8")
+
+        work = self.top / "work-repo"
+        work.mkdir()
+        repo = Repository(work)
+        self.repo = repo
+        git(work, "checkout", "-q", "main")
+        for tree in ("tools/provenance", "tools/mirror"):
+            shutil.copytree(ROOT / tree, work / tree, ignore=shutil.ignore_patterns("__pycache__"), dirs_exist_ok=True)
+        repo.write("tools/mirror/rename_literal_exclusions.json", b"[]\n")
+        self.main_b = commit_all(work, "main B, with the judge")
+        repo.write(".github/workflows/pulp-observatory-watchdog.yml", b"name: a later workflow edit on main\n")
+        repo.write("docs/later-rule.md", b"what the later rule asks for\n")
+        verify = work / "tools/provenance/verify_extraction.py"
+        verify.write_text(verify.read_text(encoding="utf-8") + self.LATER_RULE, encoding="utf-8")
+        self.main_m = commit_all(work, "main M: a rule-path edit and a later rule")
+
+        # A framework introduction branched from B, never synchronized with M.
+        git(work, "checkout", "-q", "-b", "not-carried", self.main_b)
+        repo.base = self.main_b
+        repo.introduce_transfer()
+        self.not_carried = commit_all(work, "the introduction, on B")
+        # The same introduction after the steward carry merged M into it.
+        git(work, "checkout", "-q", "-b", "carried", self.not_carried)
+        git(work, "merge", "-q", "--no-ff", "--no-edit", self.main_m)
+        self.carried = git(work, "rev-parse", "HEAD")
+        # The queue's commit for the not-carried change: M, then the change.
+        git(work, "checkout", "-q", "-b", "queue", self.main_m)
+        git(work, "merge", "-q", "--no-ff", "--no-edit", self.not_carried)
+        self.queue = git(work, "rev-parse", "HEAD")
+        # A criss-cross: two merge bases between the head and the rules' commit.
+        git(work, "checkout", "-q", "-b", "x", self.main_b)
+        repo.write("docs/x.md", b"x\n")
+        x = commit_all(work, "x")
+        git(work, "checkout", "-q", "-b", "y", self.main_b)
+        repo.write("docs/y.md", b"y\n")
+        y = commit_all(work, "y")
+        git(work, "merge", "-q", "--no-edit", x)
+        self.criss_rules = git(work, "rev-parse", "HEAD")
+        git(work, "checkout", "-q", "x")
+        git(work, "merge", "-q", "--no-edit", y)
+        self.criss_head = git(work, "rev-parse", "HEAD")
+        # A head with no history in common with the rules.
+        git(work, "checkout", "-q", "--orphan", "orphan")
+        git(work, "rm", "-q", "-r", "-f", ".")
+        repo.write("docs/orphan.md", b"no shared history\n")
+        self.orphan = commit_all(work, "an unrelated root")
+
+        self.server = self.top / "server"
+        (self.server / "Generous-Corp").mkdir(parents=True)
+        bare = self.server / "Generous-Corp/vellum.git"
+        git(self.top, "init", "-q", "--bare", str(bare))
+        git(bare, "config", "uploadpack.allowAnySHA1InWant", "true")
+        git(work, "push", "-q", str(bare), f"{self.main_m}:refs/heads/main", f"{self.criss_rules}:refs/heads/criss",
+            f"{self.carried}:refs/pull/7/head", f"{self.not_carried}:refs/pull/8/head",
+            f"{self.criss_head}:refs/pull/9/head", f"{self.orphan}:refs/pull/10/head",
+            f"{self.queue}:refs/heads/gh-readonly-queue/main/pr-8")
+
+    def run_step(self, *, head: str, trusted: str, pr: str = "", event: str = "pull_request_target",
+                 step: Path | None = None) -> subprocess.CompletedProcess:
+        if self.posts.exists():
+            self.posts.unlink()
+        runner_temp = Path(tempfile.mkdtemp(dir=self.top))
+        work = Path(tempfile.mkdtemp(dir=self.top))
+        env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", GITHUB_TOKEN="token", GH_TOKEN="token",
+                   EVENT_NAME=event, PR_NUMBER=pr, HEAD_SHA=head, TRUSTED_SHA=trusted,
+                   # The stale payload base. The step must not read it.
+                   BASE_SHA=self.main_b,
+                   GITHUB_SERVER_URL=f"file://{self.server}", GITHUB_REPOSITORY="Generous-Corp/vellum",
+                   GITHUB_RUN_ID="1", GITHUB_API_URL="https://api.invalid", RUNNER_TEMP=str(runner_temp))
+        return subprocess.run(["bash", str(step or self.step)], cwd=work, env=env, capture_output=True, text=True,
+                              timeout=600)
+
+    def states(self) -> list[tuple[str, str]]:
+        rows = [json.loads(line) for line in self.posts.read_text(encoding="utf-8").splitlines()] \
+            if self.posts.exists() else []
+        return [(row["state"], row["description"]) for row in rows]
+
+    def judged_against(self, done: subprocess.CompletedProcess) -> str:
+        found = re.search(r"judging [0-9a-f]{40} against merge base ([0-9a-f]{40})", done.stdout)
+        return found.group(1) if found else ""
+
+    def test_a_carried_head_is_judged_from_where_it_meets_main(self):
+        # Control: the stale payload base would count M's rule edits as the
+        # pull request's, which is the defect.
+        stale = self.repo.root
+        git(stale, "checkout", "-q", "carried")
+        with tempfile.TemporaryDirectory() as out, contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            output = Path(out) / "verdict.json"
+            code = trusted.main(["--repo", str(stale), "--head", self.carried, "--base", self.main_b,
+                                 "--dest-parent", out, "--output", str(output)])
+            verdict = json.loads(output.read_text())
+        self.assertEqual(code, 1)
+        self.assertIn(".github/workflows/pulp-observatory-watchdog.yml", verdict["rule_files"])
+        done = self.run_step(head=self.carried, trusted=self.main_m, pr="7")
+        self.assertEqual(done.returncode, 0, done.stdout[-1500:] + done.stderr[-1500:])
+        self.assertEqual(self.judged_against(done), self.main_m)
+        self.assertEqual(self.states(), [("pending", "Judging with the base rules"),
+                                         ("success", "Passed the base rules")])
+
+    def test_a_head_that_never_merged_main_is_judged_from_its_branch_point(self):
+        # Its own rules, the ones it branched from, pass it.
+        done = self.run_step(head=self.not_carried, trusted=self.main_b, pr="8")
+        self.assertEqual(done.returncode, 0, done.stdout[-1500:] + done.stderr[-1500:])
+        self.assertEqual(self.judged_against(done), self.main_b)
+        # Main's later rule refuses it until it merges main.
+        done = self.run_step(head=self.not_carried, trusted=self.main_m, pr="8")
+        self.assertEqual(done.returncode, 1, done.stdout[-1500:] + done.stderr[-1500:])
+        self.assertEqual(self.judged_against(done), self.main_b)
+        self.assertIn("a later rule on main: docs/later-rule.md is missing", done.stderr)
+        self.assertEqual(self.states()[-1], ("failure", "Refused by the base rules"))
+
+    def test_a_queue_entry_is_judged_against_the_queue_s_base(self):
+        done = self.run_step(head=self.queue, trusted=self.main_m, event="merge_group")
+        self.assertEqual(done.returncode, 0, done.stdout[-1500:] + done.stderr[-1500:])
+        self.assertEqual(self.judged_against(done), self.main_m)
+        self.assertEqual(self.states()[-1], ("success", "Passed the base rules"))
+
+    def test_more_than_one_merge_base_is_refused(self):
+        done = self.run_step(head=self.criss_head, trusted=self.criss_rules, pr="9")
+        self.assertEqual(done.returncode, 2, done.stdout[-1500:] + done.stderr[-1500:])
+        self.assertEqual(self.states(), [("pending", "Judging with the base rules"),
+                                         ("failure", "The change has more than one merge base with the base rules")])
+
+    def test_no_shared_history_is_refused(self):
+        done = self.run_step(head=self.orphan, trusted=self.main_m, pr="10")
+        self.assertEqual(done.returncode, 2, done.stdout[-1500:] + done.stderr[-1500:])
+        self.assertEqual(self.states(), [("pending", "Judging with the base rules"),
+                                         ("failure", "The change shares no history with the base rules")])
 
 
 class NoLinksOnTheDefaultBranchTests(unittest.TestCase):

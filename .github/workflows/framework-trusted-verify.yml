@@ -61,13 +61,12 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
-          # The change is judged against the commit it was based on.
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           # The rules come from the commit this workflow definition came from:
           # the base branch's tip (the event's own sha) on pull_request_target,
-          # never the pull request's older base sha, which can predate the
-          # judge; and the queue's base on merge_group, where the event's sha
-          # is the queue commit that holds the pull request's own changes.
+          # never the pull request's base sha in the event payload, which can
+          # predate the judge; and the queue's base on merge_group, where the
+          # event's sha is the queue commit that holds the pull request's own
+          # changes.
           TRUSTED_SHA: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.sha }}
           GIT_LFS_SKIP_SMUDGE: '1'
         run: |
@@ -119,13 +118,34 @@ jobs:
           fi
           test "$("${safe_git[@]}" -C trusted rev-parse refs/framework-verify/head)" = "$HEAD_SHA"
 
+          # The change is what the head adds to where it meets the rules'
+          # commit: the merge base of the head and TRUSTED_SHA. The payload's
+          # base sha is a snapshot from when the pull request was opened or
+          # last synchronized; once the head merges a newer main, diffing
+          # against that snapshot would count main's merged-in changes as the
+          # pull request's. On merge_group this is the queue's base. No merge
+          # base, or more than one, is refused rather than guessed.
+          merge_bases="$("${safe_git[@]}" -C trusted merge-base --all refs/framework-verify/head "$TRUSTED_SHA")" || merge_bases=""
+          if [ -z "$merge_bases" ]; then
+            post_status failure "The change shares no history with the base rules"
+            finished=1
+            exit 2
+          fi
+          if [ "$(printf '%s\n' "$merge_bases" | wc -l)" -ne 1 ]; then
+            post_status failure "The change has more than one merge base with the base rules"
+            finished=1
+            exit 2
+          fi
+          merge_base="$merge_bases"
+          echo "framework-trusted-verify: rules from $TRUSTED_SHA, judging $HEAD_SHA against merge base $merge_base"
+
           cd trusted
           set +e
           timeout 8m env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
             python3 -I tools/provenance/framework_trusted_verify.py \
             --repo . \
             --head "$HEAD_SHA" \
-            --base "$BASE_SHA" \
+            --base "$merge_base" \
             --dest-parent "$RUNNER_TEMP" \
             --output "$RUNNER_TEMP/framework-trusted-verify.json"
           verdict=$?
