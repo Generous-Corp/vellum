@@ -65,6 +65,49 @@ tree. Interaction and accessibility boxes are the axis-aligned box of each
 node as drawn, so a rotated control hit-tests on that box, and a node whose
 transform has a zero determinant gets no interaction or text-input box.
 
+The surface draws every frame into a retained offscreen Graphite surface the
+size of its target in device pixels, and presents by drawing that image into
+the swapchain texture; captures read the retained surface back, through the
+swapchain when there is one. `render(scene)` repaints the whole frame and stays
+the deterministic capture path. `render_incremental` commits each scene to a
+renderer-owned `DamageTracker`, clears only the damage rectangles, and redraws
+only the paint commands whose paint extent (shadows and text overhang
+included) meets them; the rest of the retained image is left as it was, and
+the output is byte-identical to a full redraw. The first frame, a resize or
+surface recreation, a failed or lost-device frame, a scene version, size or
+background change, a host `reload`, and damage past the policy threshold fall
+back to a full repaint. Hosts pass `invalidate` reasons and node ids through
+`SkiaDawnSurface::invalidate`, and `frame_stats` reports the damage area, the
+rectangle counts, the commands re-recorded and why a frame repainted fully.
+What is cached and when it is discarded is renderer policy: the scene schema
+carries no cache hints. Partial redraw is enabled only for scene versions the
+damage model understands, up to `kDamageModelSceneVersion` (1); a version 2
+scene, which can carry transforms, group opacity and per-corner radii, repaints
+fully until the damage model learns those fields.
+
+The surface keeps three cross-frame resource caches under
+`RenderCacheBudgets`: laid-out text paragraphs keyed by every run's text and
+style (the colour with any folded opacity included) and the font directory;
+linear-gradient shaders keyed by their exact end points, colours, positions and
+tile mode; and GPU textures uploaded from mesh textures, keyed by size and the
+SHA-256 of the texels rather than by address, so texels rewritten in place are
+uploaded again. Keys compare floats by their bits. A hit returns the object a
+miss would build from the same inputs, so captures are byte-identical with
+every cache on or off; the render-cache GPU test checks that for each capture
+fixture, on the partial-redraw path, and for each key input. Each cache has an
+entry and a byte budget and evicts its least recently used entry first; an
+entry larger than the byte budget is refused, and a zero budget turns the
+cache off. Paragraph bytes are an estimate, since Skia does not report them.
+Once a resize settles, meaning the size has held for
+`gpu_runtime::SwapchainResizeState::kSettleFrames` presented frames, the
+entries no frame has used since the resize are dropped; a device loss drops
+every entry, and a frame that fails before it is submitted drops the textures
+it uploaded.
+`SkiaDawnSurface::telemetry` reports the frame's damage, the offscreen layers
+it opened, each cache's hits, misses, evictions, trims and bytes, the texture
+(atlas) bytes and Graphite's GPU time, and the capture harness writes it into
+its evidence JSON.
+
 Native self-test is deliberately fail-closed. A requested native surface is
 not allowed to fall back to CoreGraphics or an offscreen surface. The test also
 contains a blank-frame negative control so a broken capture detector cannot

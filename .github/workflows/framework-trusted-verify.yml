@@ -61,7 +61,13 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          # The rules come from the commit this workflow definition came from:
+          # the base branch's tip (the event's own sha) on pull_request_target,
+          # never the pull request's base sha in the event payload, which can
+          # predate the judge; and the queue's base on merge_group, where the
+          # event's sha is the queue commit that holds the pull request's own
+          # changes.
+          TRUSTED_SHA: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.sha }}
           GIT_LFS_SKIP_SMUDGE: '1'
         run: |
           set -euo pipefail
@@ -83,35 +89,63 @@ jobs:
               --data "$payload" \
               "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" > /dev/null
           }
+          # A cancelled run posts nothing more: Actions cancels a step by
+          # signalling it (SIGINT, then SIGTERM), and a newer run of the same
+          # concurrency group owns the status from then on, so a late post
+          # could overwrite its verdict. A job timeout signals the step the
+          # same way, so this step enforces its own, shorter deadlines with
+          # `timeout`: a genuine timeout is an exit status, posted as failure.
           finished=0
+          cancelled=0
           # shellcheck disable=SC2329  # invoked by the EXIT trap
           on_exit() {
-            if [ "$finished" != 1 ]; then
+            if [ "$finished" != 1 ] && [ "$cancelled" != 1 ]; then
               post_status failure "The trusted judge did not finish" || true
             fi
           }
           trap on_exit EXIT
-          trap 'exit 130' INT TERM
+          trap 'cancelled=1; exit 130' INT TERM
           post_status pending "Judging with the base rules"
 
           safe_git=(git -c core.hooksPath=/dev/null -c core.fsmonitor=false
                     -c fetch.fsckObjects=true -c transfer.fsckObjects=true)
-          "${safe_git[@]}" clone --quiet --no-checkout "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" trusted
-          "${safe_git[@]}" -C trusted checkout --quiet --detach "$BASE_SHA"
+          timeout 6m "${safe_git[@]}" clone --quiet --no-checkout "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" trusted
+          "${safe_git[@]}" -C trusted checkout --quiet --detach "$TRUSTED_SHA"
           if [ "$EVENT_NAME" = pull_request_target ]; then
-            "${safe_git[@]}" -C trusted fetch --no-tags --quiet origin "+refs/pull/${PR_NUMBER}/head:refs/framework-verify/head"
+            timeout 3m "${safe_git[@]}" -C trusted fetch --no-tags --quiet origin "+refs/pull/${PR_NUMBER}/head:refs/framework-verify/head"
           else
-            "${safe_git[@]}" -C trusted fetch --no-tags --quiet origin "+${HEAD_SHA}:refs/framework-verify/head"
+            timeout 3m "${safe_git[@]}" -C trusted fetch --no-tags --quiet origin "+${HEAD_SHA}:refs/framework-verify/head"
           fi
           test "$("${safe_git[@]}" -C trusted rev-parse refs/framework-verify/head)" = "$HEAD_SHA"
 
+          # The change is what the head adds to where it meets the rules'
+          # commit: the merge base of the head and TRUSTED_SHA. The payload's
+          # base sha is a snapshot from when the pull request was opened or
+          # last synchronized; once the head merges a newer main, diffing
+          # against that snapshot would count main's merged-in changes as the
+          # pull request's. On merge_group this is the queue's base. No merge
+          # base, or more than one, is refused rather than guessed.
+          merge_bases="$("${safe_git[@]}" -C trusted merge-base --all refs/framework-verify/head "$TRUSTED_SHA")" || merge_bases=""
+          if [ -z "$merge_bases" ]; then
+            post_status failure "The change shares no history with the base rules"
+            finished=1
+            exit 2
+          fi
+          if [ "$(printf '%s\n' "$merge_bases" | wc -l)" -ne 1 ]; then
+            post_status failure "The change has more than one merge base with the base rules"
+            finished=1
+            exit 2
+          fi
+          merge_base="$merge_bases"
+          echo "framework-trusted-verify: rules from $TRUSTED_SHA, judging $HEAD_SHA against merge base $merge_base"
+
           cd trusted
           set +e
-          env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+          timeout 8m env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
             python3 -I tools/provenance/framework_trusted_verify.py \
             --repo . \
             --head "$HEAD_SHA" \
-            --base "$BASE_SHA" \
+            --base "$merge_base" \
             --dest-parent "$RUNNER_TEMP" \
             --output "$RUNNER_TEMP/framework-trusted-verify.json"
           verdict=$?
@@ -119,6 +153,7 @@ jobs:
           case "$verdict" in
             0) post_status success "Passed the base rules" ;;
             1) post_status failure "Refused by the base rules" ;;
+            124) post_status failure "The trusted judge timed out" ;;
             *) post_status failure "The change could not be read" ;;
           esac
           finished=1

@@ -201,6 +201,17 @@ public:
     const Scene& previous, const Scene& next, float scale,
     DamagePolicy policy = {}, const DamagePropagation* propagation = nullptr);
 
+/// The newest scene schema version whose every paint-affecting field the
+/// damage model understands. Partial redraw is enabled only for scene
+/// versions the damage model understands; a newer scene repaints fully until
+/// the damage model learns its fields and this constant is raised.
+inline constexpr std::uint32_t kDamageModelSceneVersion = 1U;
+
+/// Whether a scene of `version` may be redrawn from its damage alone.
+[[nodiscard]] constexpr bool partial_redraw_supported(std::uint32_t version) noexcept {
+    return version <= kDamageModelSceneVersion;
+}
+
 /// Why the authoring host asked for a redraw (`invalidate.reason`).
 enum class InvalidationReason {
     state,
