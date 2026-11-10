@@ -183,9 +183,9 @@ native root `framework/`; `provenance/framework/transfer.json` pairs each
 
 ## Transferred framework inventory
 
-The following rows are the legal inventory for the bytes under `framework/`,
-transferred from the D3 units and the foundation amendment. They are scoped to
-that root and do not make the corresponding historical Pulp paths active
+The following rows are the legal inventory for the bytes under `framework/`:
+the external inputs and vendored files of the units transferred from Pulp.
+They are scoped to that root and do not make the corresponding historical Pulp paths active
 Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 `DEPENDENCIES.md`, `NOTICE.md`, and `tools/deps/manifest.json` at the `46cee5e4e6e2` export.
 
