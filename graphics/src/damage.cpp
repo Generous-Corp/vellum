@@ -1,4 +1,5 @@
 #include <vellum/graphics/damage.hpp>
+#include <vellum/graphics/path_geometry.hpp>
 
 #include <vellum/graphics/paint_command.hpp>
 
@@ -224,6 +225,36 @@ std::optional<Rect> mesh_paint_bounds(const TriangleMesh& mesh, const Rect& abso
     return painted;
 }
 
+std::optional<Rect> path_paint_bounds(const SceneNode& node, const Rect& absolute,
+                                      const Rect& frame) {
+    if (!node.path || !path_is_valid(*node.path)) return frame;
+    if (node.path->verbs.empty()) return std::nullopt;
+    const auto control = path_control_bounds(*node.path);
+    if (!control) return std::nullopt;
+    const Rect moved{absolute.x + control->x, absolute.y + control->y, control->width,
+                     control->height};
+    return outset(moved, path_stroke_outset(node.path->stroke));
+}
+
+bool same_floats(const std::vector<float>& a, const std::vector<float>& b) {
+    return std::equal(a.begin(), a.end(), b.begin(), b.end(),
+                      [](float left, float right) { return same_float(left, right); });
+}
+
+bool same_path(const std::shared_ptr<const PathGeometry>& left,
+               const std::shared_ptr<const PathGeometry>& right) {
+    if (left == right) return true;
+    if (!left || !right) return false;
+    const PathGeometry& a = *left;
+    const PathGeometry& b = *right;
+    return a.verbs == b.verbs && same_floats(a.values, b.values) && a.fill_rule == b.fill_rule &&
+           a.antialias == b.antialias && same_color(a.stroke.color, b.stroke.color) &&
+           same_float(a.stroke.width, b.stroke.width) && a.stroke.join == b.stroke.join &&
+           a.stroke.cap == b.stroke.cap && same_float(a.stroke.miter_limit, b.stroke.miter_limit) &&
+           same_floats(a.stroke.dash_array, b.stroke.dash_array) &&
+           same_float(a.stroke.dash_offset, b.stroke.dash_offset);
+}
+
 const DamagePropagation& default_propagation() {
     static const DamagePropagation instance;
     return instance;
@@ -252,6 +283,7 @@ SceneNode paint_fields(const SceneNode& node) {
     copy.transform = node.transform;
     copy.opacity = node.opacity;
     copy.corner_radii = node.corner_radii;
+    copy.path = node.path;
     return copy;
 }
 
@@ -747,6 +779,8 @@ std::optional<Rect> node_paint_bounds(const SceneNode& node, const Rect& absolut
     }
     case SceneNode::Kind::mesh:
         return node.mesh ? mesh_paint_bounds(*node.mesh, absolute_bounds) : std::nullopt;
+    case SceneNode::Kind::path:
+        return path_paint_bounds(node, absolute_bounds, frame);
     }
     return std::nullopt;
 }
@@ -804,6 +838,10 @@ bool paint_differs(const SceneNode& previous, const SceneNode& next) {
                !same_float(previous.corner_radius, next.corner_radius);
     case SceneNode::Kind::mesh:
         return previous.mesh != next.mesh;
+    case SceneNode::Kind::path:
+        return !same_color(previous.fill, next.fill) ||
+               !same_gradients(previous.fill_gradients, next.fill_gradients) ||
+               !same_path(previous.path, next.path);
     case SceneNode::Kind::custom:
         return previous.custom_component != next.custom_component ||
                previous.custom_properties_json != next.custom_properties_json;

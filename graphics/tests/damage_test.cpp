@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <limits>
 #include <memory>
 #include <string>
@@ -26,6 +27,10 @@ using vellum::graphics::Scene;
 using vellum::graphics::SceneNode;
 using vellum::graphics::TextRun;
 using vellum::graphics::TriangleMesh;
+using vellum::graphics::PathGeometry;
+using vellum::graphics::PathVerb;
+using vellum::graphics::StrokeCap;
+using vellum::graphics::StrokeJoin;
 
 int failures = 0;
 
@@ -372,6 +377,198 @@ void mesh_diff() {
         return next;
     }());
     check(clip_only.bounds() == PixelRect{20, 60, 25, 65}, "mesh clip change is bounded by the clips");
+}
+
+PathGeometry& edit_path(SceneNode& node) {
+    auto copy = std::make_shared<PathGeometry>(node.path ? *node.path : PathGeometry{});
+    node.path = copy;
+    return *copy;
+}
+
+void path_diff() {
+    Scene before;
+    before.width = 200.0F;
+    before.height = 100.0F;
+    SceneNode node;
+    node.id = "p";
+    node.kind = SceneNode::Kind::path;
+    node.bounds = {20.0F, 20.0F, 0.0F, 0.0F};
+    node.fill = Color::hex(0xFF0000);
+    edit_path(node).verbs = {PathVerb::move, PathVerb::line, PathVerb::quadratic};
+    edit_path(node).values = {0.0F, 0.0F, 40.0F, 0.0F, 60.0F, 30.0F, 40.0F, 20.0F};
+    edit_path(node).stroke = {
+        .color = Color::hex(0x0000FF), .width = 4.0F, .join = StrokeJoin::bevel};
+    before.root.children.push_back(node);
+
+    const DamagePropagation none;
+    const Rect frame{0.0F, 0.0F, 200.0F, 100.0F};
+    const auto paint_bounds = [&](const SceneNode& candidate) {
+        return vellum::graphics::node_paint_bounds(candidate, {20.0F, 20.0F, 0.0F, 0.0F}, frame,
+                                                   none);
+    };
+    const auto bounds = paint_bounds(node);
+    check(bounds && bounds->x == 18.0F && bounds->y == 18.0F && bounds->width == 64.0F &&
+              bounds->height == 34.0F,
+          "path paint bounds are the control box outset by half the stroke width");
+
+    SceneNode mitered = node;
+    edit_path(mitered).stroke.join = StrokeJoin::miter;
+    edit_path(mitered).stroke.miter_limit = 3.0F;
+    const auto miter = paint_bounds(mitered);
+    check(miter && miter->x == 14.0F && miter->width == 72.0F,
+          "a miter join outsets by the miter limit");
+
+    SceneNode capped = node;
+    edit_path(capped).stroke.cap = StrokeCap::round;
+    const auto round = paint_bounds(capped);
+    check(round && std::abs(round->x - (20.0F - 2.0F * std::sqrt(2.0F))) < 0.0001F,
+          "a round cap outsets by sqrt(2) times half the width");
+
+    SceneNode unstroked = node;
+    edit_path(unstroked).stroke.width = 0.0F;
+    const auto fill_only = paint_bounds(unstroked);
+    check(fill_only && fill_only->x == 20.0F && fill_only->width == 60.0F &&
+              fill_only->height == 30.0F,
+          "an unstroked path paints its control box");
+
+    SceneNode empty = node;
+    empty.path = std::make_shared<const PathGeometry>();
+    check(!paint_bounds(empty),
+          "an empty path paints nothing");
+
+    SceneNode broken = node;
+    edit_path(broken).values.pop_back();
+    const auto invalid = paint_bounds(broken);
+    check(invalid && invalid->width == 200.0F && invalid->height == 100.0F,
+          "an invalid path reports the whole frame");
+
+    SceneNode ghost = node;
+    ghost.path = nullptr;
+    const auto missing = paint_bounds(ghost);
+    check(missing && missing->width == 200.0F && missing->height == 100.0F,
+          "a path without geometry reports the whole frame");
+    for (const float bad : {std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::infinity()}) {
+        SceneNode direct = node;
+        auto geometry = std::make_shared<PathGeometry>();
+        geometry->verbs = {PathVerb::move, PathVerb::line};
+        geometry->values = {0.0F, 0.0F, bad, 10.0F};
+        direct.path = geometry;
+        const auto bounds_of_bad = paint_bounds(direct);
+        check(bounds_of_bad && bounds_of_bad->width == 200.0F && bounds_of_bad->height == 100.0F,
+              "a directly built non-finite path reports the whole frame");
+    }
+
+    Scene same = before;
+    check(diff(before, same).empty(), "an identical path has no damage");
+    Scene copied = before;
+    child(copied, "p")->path = std::make_shared<const PathGeometry>(*node.path);
+    check(diff(before, copied).empty(), "a distinct path with the same content has no damage");
+
+    const PixelRect painted{18, 18, 82, 52};
+    const auto changed = [&](auto mutate, const char* what) {
+        Scene next = before;
+        mutate(*child(next, "p"));
+        const auto damage = diff(before, next);
+        check(!damage.empty() && covers(damage, painted) && disjoint(damage), what);
+        return damage;
+    };
+    changed([](SceneNode& p) { p.fill = Color::hex(0x00FF00); },
+            "fill colour change damages the path");
+    changed([](SceneNode& p) {
+        p.fill_gradients = {{.stops = {{.position = 0.0F}, {.position = 1.0F}}}};
+    }, "fill gradient change damages the path");
+    changed([](SceneNode& p) { edit_path(p).fill_rule = vellum::graphics::FillRule::evenodd; },
+            "fill rule change damages the path");
+    changed([](SceneNode& p) { edit_path(p).stroke.color = Color::hex(0xFFFFFF); },
+            "stroke colour change damages the path");
+    changed([](SceneNode& p) { edit_path(p).stroke.dash_array = {4.0F, 2.0F}; },
+            "dash array change damages the path");
+    changed([](SceneNode& p) { edit_path(p).stroke.dash_offset = 1.0F; },
+            "dash offset change damages the path");
+    changed([](SceneNode& p) { edit_path(p).stroke.join = StrokeJoin::round; },
+            "join change damages the path");
+    changed([](SceneNode& p) { edit_path(p).stroke.cap = StrokeCap::square; },
+            "cap change damages the path");
+    changed([](SceneNode& p) { edit_path(p).antialias = false; },
+            "anti-aliasing change damages the path");
+    changed([](SceneNode& p) { edit_path(p).verbs[1] = PathVerb::move; }, "verb change damages the path");
+
+    const auto moved = changed([](SceneNode& p) { edit_path(p).values[4] = 120.0F; },
+                               "geometry change damages the old path");
+    check(moved.bounds() == PixelRect{18, 18, 142, 52},
+          "geometry change damages the old and new paths");
+
+    Scene stroke_grown = before;
+    edit_path(*child(stroke_grown, "p")).stroke.width = 10.0F;
+    check(diff(before, stroke_grown).bounds() == PixelRect{15, 15, 85, 55},
+          "a wider stroke damages its larger reach");
+
+    Scene invisible = before;
+    edit_path(*child(invisible, "p")).stroke.width = 0.0F;
+    Scene invisible_again = invisible;
+    edit_path(*child(invisible_again, "p")).stroke.miter_limit = 9.0F;
+    check(diff(invisible, invisible_again).bounds() == PixelRect{20, 20, 80, 50},
+          "an invisible stroke change damages only the fill");
+}
+
+bool contains(const std::optional<Rect>& bounds, float x, float y) {
+    return bounds && x >= bounds->x && x <= bounds->x + bounds->width && y >= bounds->y &&
+           y <= bounds->y + bounds->height;
+}
+
+// The geometry of a stroke's outline, worked out by hand, must lie inside the
+// damage bounds for a diagonal square-capped segment and a sharp miter.
+void stroke_reach() {
+    const DamagePropagation none;
+    const Rect frame{0.0F, 0.0F, 200.0F, 100.0F};
+    const Rect origin{10.0F, 10.0F, 0.0F, 0.0F};
+
+    SceneNode diagonal;
+    diagonal.kind = SceneNode::Kind::path;
+    auto segment = std::make_shared<PathGeometry>();
+    segment->verbs = {PathVerb::move, PathVerb::line};
+    segment->values = {0.0F, 0.0F, 30.0F, 40.0F};
+    segment->stroke = {.color = Color::hex(0xFFFFFF), .width = 4.0F, .join = StrokeJoin::bevel,
+                       .cap = StrokeCap::square};
+    diagonal.path = segment;
+    const auto capped = vellum::graphics::node_paint_bounds(diagonal, origin, frame, none);
+    const float along[2]{0.6F, 0.8F};
+    const float across[2]{-0.8F, 0.6F};
+    bool corners_inside = true;
+    for (const auto& end : {std::pair{0.0F, -1.0F}, std::pair{1.0F, 1.0F}}) {
+        for (const float side : {-1.0F, 1.0F}) {
+            const float x =
+                10.0F + 30.0F * end.first + 2.0F * (end.second * along[0] + side * across[0]);
+            const float y =
+                10.0F + 40.0F * end.first + 2.0F * (end.second * along[1] + side * across[1]);
+            corners_inside = corners_inside && contains(capped, x, y);
+        }
+    }
+    check(corners_inside, "a diagonal square cap's corners lie inside the damage bounds");
+
+    SceneNode sharp;
+    sharp.kind = SceneNode::Kind::path;
+    auto turn = std::make_shared<PathGeometry>();
+    turn->verbs = {PathVerb::move, PathVerb::line, PathVerb::line};
+    turn->values = {0.0F, 0.0F, 40.0F, 0.0F, 0.0F, 10.0F};
+    turn->stroke = {.color = Color::hex(0xFFFFFF), .width = 4.0F, .miter_limit = 10.0F};
+    sharp.path = turn;
+    const auto mitered = vellum::graphics::node_paint_bounds(sharp, origin, frame, none);
+    const double in_x = 1.0;
+    const double in_y = 0.0;
+    const double out_length = std::hypot(-40.0, 10.0);
+    const double out_x = -40.0 / out_length;
+    const double out_y = 10.0 / out_length;
+    const double half_angle = 0.5 * std::acos(-(in_x * out_x + in_y * out_y));
+    const double reach = 2.0 / std::sin(half_angle);
+    const double bisector_length = std::hypot(in_x - out_x, in_y - out_y);
+    const double tip_x = 10.0 + 40.0 + reach * (in_x - out_x) / bisector_length;
+    const double tip_y = 10.0 + reach * (in_y - out_y) / bisector_length;
+    check(1.0 / std::sin(half_angle) < 10.0, "the sharp turn is within its miter limit");
+    check(tip_x > 10.0 + 40.0 + 2.0 * 6.0, "the miter tip reaches well past half the width");
+    check(contains(mitered, static_cast<float>(tip_x), static_cast<float>(tip_y)),
+          "a sharp miter's tip lies inside the damage bounds");
 }
 
 class TestPropagation final : public DamagePropagation {
@@ -824,6 +1021,8 @@ int main() {
     group_diff();
     text_diff();
     mesh_diff();
+    path_diff();
+    stroke_reach();
     propagation_hooks();
     unusual_bounds();
     duplicate_ids();
