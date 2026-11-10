@@ -77,6 +77,8 @@ OWNER = "@danielraffel"
 # config naming the reviewer signers and sessions it counts, and the framework
 # transfer's judges and the records they hold the transfer to (owned before
 # the records exist, so the change that adds them is a release-path change).
+# The list of Vellum-native paths the observatory classifies framework-only
+# on its own is a policy file too: widening it decides observations.
 POLICY_FILES = (
     "/.github/CODEOWNERS",
     "/.github/workflows/release-path-review-trigger.yml",
@@ -89,6 +91,7 @@ POLICY_FILES = (
     "/provenance/framework-name-debt.json",
     "/provenance/framework/external-updates.json",
     "/provenance/framework/transfer.json",
+    "/provenance/pulp-observatory/vellum-native-paths.json",
     "/provenance/mirror/link-policy.json",
     "/provenance/release-signers.allowed_signers",
     "/provenance/retired-release-tags.json",

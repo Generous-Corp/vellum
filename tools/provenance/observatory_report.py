@@ -151,6 +151,7 @@ def build_report(
         "maximum_pending_age_days": round(maximum_age_days, 3),
         "observatory_effort_percent": effort_percent,
         "repeated_generic_fixes": repeated,
+        "auto_classified": sum(1 for event in effective if str(event.get("owner", "")).startswith("auto:")),
         "coverage_gaps": coverage_gaps,
         "budget_violations": violations,
         "release_blockers": sorted(set(release_blockers)),
@@ -180,6 +181,7 @@ def render_markdown(report: dict[str, object]) -> str:
         f"- Pending events: {report['pending']}",
         f"- Overdue events: {report['overdue']}",
         f"- Release blockers: {len(report['release_blockers'])}",
+        f"- Automatically classified: {report.get('auto_classified', 0)}",
         (
             f"- Observatory effort: {report['observatory_effort_percent']}% "
             "of framework effort"

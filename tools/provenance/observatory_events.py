@@ -18,6 +18,7 @@ if __package__:
         load_json,
         parse_utc,
     )
+    from .observatory_native import validate_owner
 else:
     from observatory_common import (
         CLASSES,
@@ -31,6 +32,7 @@ else:
         load_json,
         parse_utc,
     )
+    from observatory_native import validate_owner
 
 
 def validate_string_list(
@@ -76,8 +78,7 @@ def validate_event(event: object, path: Path) -> dict[str, object]:
         raise ObservatoryError(f"resolution cannot remain pending: {event_id}")
     timestamp_field = "discovered_at" if kind == "observation" else "created_at"
     parse_utc(event.get(timestamp_field), f"{event_id}.{timestamp_field}")
-    if not isinstance(event.get("owner"), str) or not event["owner"]:
-        raise ObservatoryError(f"event owner is required: {event_id}")
+    validate_owner(event, event_id)
     if not isinstance(event.get("rationale"), str) or not event["rationale"].strip():
         raise ObservatoryError(f"event rationale is required: {event_id}")
     if not isinstance(event.get("shared_contract_release_blocker"), bool):
