@@ -141,6 +141,7 @@ void equality_covers_every_field() {
         .text = "t",
         .text_runs = {{.text = "r"}},
         .mesh = std::make_shared<TriangleMesh>(),
+        .path = std::make_shared<PathGeometry>(),
     };
     expect(paint_commands_equal(base, base), "a command equals itself");
     const std::vector<Mutation> mutations{
@@ -185,6 +186,12 @@ void equality_covers_every_field() {
          [](PaintCommand& c) { c.text_runs[0].style.strikethrough = true; }},
         {"run count", [](PaintCommand& c) { c.text_runs.push_back({}); }},
         {"mesh", [](PaintCommand& c) { c.mesh = std::make_shared<TriangleMesh>(); }},
+        {"path", [](PaintCommand& c) {
+             auto changed = std::make_shared<PathGeometry>();
+             changed->verbs = {PathVerb::move};
+             changed->values = {1.0F, 2.0F};
+             c.path = std::move(changed);
+         }},
         {"transform a", [](PaintCommand& c) { c.transform.a = 2.0F; }},
         {"transform b", [](PaintCommand& c) { c.transform.b = 2.0F; }},
         {"transform c", [](PaintCommand& c) { c.transform.c = 2.0F; }},
@@ -226,6 +233,8 @@ void change_classification() {
     rekinded[0].kind = PaintCommand::Kind::mesh;
     auto meshed = before;
     meshed[0].mesh = std::make_shared<TriangleMesh>();
+    auto pathed = before;
+    pathed[0].path = std::make_shared<PathGeometry>();
     auto longer = before;
     longer.push_back(rect);
     expect(classify_change(before, moved) == LayerInvalidation::bounds,
@@ -240,6 +249,8 @@ void change_classification() {
            "a new command is a structure change");
     expect(classify_change(before, meshed) == LayerInvalidation::resource,
            "a replaced mesh is a resource change");
+    expect(classify_change(before, pathed) == LayerInvalidation::resource,
+           "a replaced path is a resource change");
 }
 
 struct Frame final {

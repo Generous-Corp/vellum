@@ -15,7 +15,7 @@ namespace {
 // PaintCommand field: a field they skip lets a cached image survive a change
 // to it. This size changes when a field is added; update both functions, and
 // the field-coverage test in layer_cache_test.cpp, then this number.
-static_assert(sizeof(PaintCommand) == 280,
+static_assert(sizeof(PaintCommand) == 296,
               "PaintCommand changed: update paint_commands_equal and hash_command");
 static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 80,
               "TextStyle or TextRun changed: update same_style, same_runs and hash_command");
@@ -117,7 +117,27 @@ bool same_runs(const std::vector<TextRun>& a, const std::vector<TextRun>& b) {
     return true;
 }
 
-// Everything except `bounds`, `transform` and `mesh`.
+bool same_floats(const std::vector<float>& a, const std::vector<float>& b) {
+    return a.size() == b.size() &&
+           std::equal(a.begin(), a.end(), b.begin(),
+                      [](float left, float right) { return same_float(left, right); });
+}
+
+bool same_path(const std::shared_ptr<const PathGeometry>& a,
+               const std::shared_ptr<const PathGeometry>& b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    return a->verbs == b->verbs && same_floats(a->values, b->values) &&
+           a->fill_rule == b->fill_rule && a->antialias == b->antialias &&
+           same_color(a->stroke.color, b->stroke.color) &&
+           same_float(a->stroke.width, b->stroke.width) &&
+           a->stroke.join == b->stroke.join && a->stroke.cap == b->stroke.cap &&
+           same_float(a->stroke.miter_limit, b->stroke.miter_limit) &&
+           same_floats(a->stroke.dash_array, b->stroke.dash_array) &&
+           same_float(a->stroke.dash_offset, b->stroke.dash_offset);
+}
+
+// Everything except `bounds`, `transform`, `mesh` and `path`.
 bool same_paint(const PaintCommand& a, const PaintCommand& b) {
     return a.kind == b.kind && a.node_id == b.node_id && same_color(a.fill, b.fill) &&
            same_gradients(a.fill_gradients, b.fill_gradients) &&
@@ -156,6 +176,25 @@ public:
 private:
     std::uint64_t value_ = 0xCBF29CE484222325ULL;
 };
+
+void path(Hasher& hash, const std::shared_ptr<const PathGeometry>& geometry) {
+    hash.number(geometry ? 1U : 0U);
+    if (!geometry) return;
+    hash.number(geometry->verbs.size());
+    for (const auto verb : geometry->verbs) hash.number(static_cast<std::uint64_t>(verb));
+    hash.number(geometry->values.size());
+    for (const float value : geometry->values) hash.real(value);
+    hash.number(static_cast<std::uint64_t>(geometry->fill_rule));
+    hash.number(geometry->antialias ? 1U : 0U);
+    hash.color(geometry->stroke.color);
+    hash.real(geometry->stroke.width);
+    hash.number(static_cast<std::uint64_t>(geometry->stroke.join));
+    hash.number(static_cast<std::uint64_t>(geometry->stroke.cap));
+    hash.real(geometry->stroke.miter_limit);
+    hash.number(geometry->stroke.dash_array.size());
+    for (const float value : geometry->stroke.dash_array) hash.real(value);
+    hash.real(geometry->stroke.dash_offset);
+}
 
 std::uint64_t hash_command(const PaintCommand& command) {
     Hasher hash;
@@ -206,6 +245,7 @@ std::uint64_t hash_command(const PaintCommand& command) {
     hash.number(reinterpret_cast<std::uintptr_t>(command.mesh.get()));
     hash.number(command.mesh ? reinterpret_cast<std::uintptr_t>(command.mesh->texture.get())
                              : 0U);
+    path(hash, command.path);
     hash.real(command.transform.a);
     hash.real(command.transform.b);
     hash.real(command.transform.c);
@@ -262,7 +302,8 @@ std::string_view to_string(LayerCacheTrigger trigger) noexcept {
 
 bool paint_commands_equal(const PaintCommand& a, const PaintCommand& b) {
     return same_paint(a, b) && same_rect(a.bounds, b.bounds) &&
-           same_transform(a.transform, b.transform) && a.mesh == b.mesh;
+           same_transform(a.transform, b.transform) && a.mesh == b.mesh &&
+           same_path(a.path, b.path);
 }
 
 LayerInvalidation classify_change(
@@ -273,7 +314,9 @@ LayerInvalidation classify_change(
         const auto& before = previous[index];
         const auto& after = next[index];
         if (before.kind != after.kind) return LayerInvalidation::structure;
-        if (before.mesh != after.mesh) return LayerInvalidation::resource;
+        if (before.mesh != after.mesh || !same_path(before.path, after.path)) {
+            return LayerInvalidation::resource;
+        }
     }
     for (std::size_t index = 0; index < previous.size(); ++index) {
         const auto& before = previous[index];
