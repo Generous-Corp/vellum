@@ -2583,7 +2583,8 @@ class VellumNativePathTests(unittest.TestCase):
 
     def test_the_guards_keep_it_pending(self) -> None:
         nat = self.native_module()
-        for overrides in ({"schema_api_deltas": ["graphics/native.cpp"]}, {"class": "security"},
+        for overrides in ({"schema_api_deltas": ["graphics/native.cpp"]},
+                          {"include_dependency_deltas": ["graphics/native/api.hpp"]}, {"class": "security"},
                           {"severity": "P0"}, {"mapped_paths": ["framework/core/native.cpp"]},
                           {"source_repository": "Generous-Corp/pulp"}, {"mapped_paths": []}):
             with self.subTest(overrides=overrides):
@@ -2592,6 +2593,30 @@ class VellumNativePathTests(unittest.TestCase):
         # framework/ never qualifies, even if an entry (bypassing the loader) lists it.
         listed = [{"id": "exported", "paths": ["framework/core/"], "absent_in_pulp": [], "reason": "r"}]
         self.assertIsNone(nat.qualifying_entries(self.observation(mapped_paths=["framework/core/x.cpp"]), listed))
+
+    def test_a_header_change_found_by_the_real_delta_path_never_qualifies(self) -> None:
+        nat = self.native_module()
+        git_module = sys.modules[observatory.load_native_paths.__module__.replace("observatory_native", "observatory_git")]
+        paths = ["graphics/native/api.hpp"]
+        includes, schemas = git_module.delta_paths(paths)
+        self.assertEqual((includes, schemas), (paths, []))  # the header is not a schema/API delta
+        header = self.observation(mapped_paths=paths, include_dependency_deltas=includes, schema_api_deltas=schemas)
+        self.assertIsNone(nat.qualifying_entries(header, self.ENTRIES))
+        includes, schemas = git_module.delta_paths(["graphics/native/impl.cpp"])
+        impl = self.observation(mapped_paths=["graphics/native/impl.cpp"], include_dependency_deltas=includes,
+                                schema_api_deltas=schemas)
+        self.assertEqual(nat.qualifying_entries(impl, self.ENTRIES), ["native-thing"])
+
+    def test_an_entry_with_no_absence_witness_is_rejected(self) -> None:
+        nat = self.native_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_json(root / nat.NATIVE_PATHS_PATH, {"schema_version": 1, "entries": [
+                {**self.ENTRIES[0], "absent_in_pulp": []}]})
+            with self.assertRaisesRegex(observatory.ObservatoryError, "at least one identifier"):
+                nat.load_native_paths(root)
+            write_json(root / nat.NATIVE_PATHS_PATH, {"schema_version": 1, "entries": self.ENTRIES})
+            self.assertEqual(nat.load_native_paths(root), self.ENTRIES)
 
     def test_the_automatic_resolution_names_its_policy_not_a_person(self) -> None:
         nat = self.native_module()
@@ -2624,13 +2649,13 @@ class VellumNativePathTests(unittest.TestCase):
             with self.subTest(paths=paths), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 write_json(root / nat.NATIVE_PATHS_PATH, {"schema_version": 1, "entries": [
-                    {"id": "x-y", "paths": paths, "absent_in_pulp": [], "reason": "r"}]})
+                    {"id": "x-y", "paths": paths, "absent_in_pulp": ["SomeSymbol"], "reason": "r"}]})
                 with self.assertRaises(observatory.ObservatoryError):
                     nat.load_native_paths(root)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.assertEqual(nat.load_native_paths(root), [])
-            twice = [{"id": "x-y", "paths": ["a"], "absent_in_pulp": [], "reason": "r"}] * 2
+            twice = [{"id": "x-y", "paths": ["a"], "absent_in_pulp": ["SomeSymbol"], "reason": "r"}] * 2
             write_json(root / nat.NATIVE_PATHS_PATH, {"schema_version": 1, "entries": twice})
             with self.assertRaisesRegex(observatory.ObservatoryError, "repeated"):
                 nat.load_native_paths(root)

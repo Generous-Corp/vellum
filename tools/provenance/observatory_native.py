@@ -78,8 +78,10 @@ def load_native_paths(root: Path) -> list[dict[str, object]]:
                 raise ObservatoryError(f"{NATIVE_PATHS_PATH} {entry_id}: path {item!r} must be an exact file "
                                        "or a directory ending in /, outside framework/ and mirror/")
         symbols = entry["absent_in_pulp"]
-        if not isinstance(symbols, list) or not all(isinstance(s, str) and SYMBOL_RE.fullmatch(s) for s in symbols):
-            raise ObservatoryError(f"{NATIVE_PATHS_PATH} {entry_id}: absent_in_pulp must list identifiers")
+        if not isinstance(symbols, list) or not symbols \
+                or not all(isinstance(s, str) and SYMBOL_RE.fullmatch(s) for s in symbols):
+            raise ObservatoryError(f"{NATIVE_PATHS_PATH} {entry_id}: absent_in_pulp must list at least one "
+                                   "identifier; an empty list would check nothing")
         if not isinstance(entry["reason"], str) or not entry["reason"].strip():
             raise ObservatoryError(f"{NATIVE_PATHS_PATH} {entry_id}: reason is required")
     return entries
@@ -93,7 +95,10 @@ def qualifying_entries(observation: dict[str, object], entries: list[dict[str, o
     """The sorted entry ids covering the observation, or None when it does not qualify."""
     if not entries or not str(observation.get("source_repository", "")).endswith("/vellum"):
         return None
-    if observation.get("schema_api_deltas") or observation.get("class") == "security" \
+    # include_dependency_deltas carries ordinary C++ headers and include paths, which
+    # delta_paths does not count as schema/API deltas but which can change a public API.
+    if observation.get("schema_api_deltas") or observation.get("include_dependency_deltas") \
+            or observation.get("class") == "security" \
             or observation.get("severity") == "P0":
         return None
     paths = sorted(set(observation.get("mapped_paths") or []) | set(observation.get("transitive_paths") or []))
