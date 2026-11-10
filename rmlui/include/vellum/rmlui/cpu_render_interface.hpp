@@ -15,11 +15,13 @@
 //
 // Drawn: compiled geometry with vertex colours and texture coordinates,
 // generated textures, loaded textures (through a decoder the caller
-// supplies), scissor, transforms, premultiplied blending. Not drawn yet:
-// clip masks, layers, filters, shaders and mask images. Each such call is
-// counted in unsupported_calls() (by kind in unsupported(kind)) and logged
-// once per kind, never dropped silently; a layer composite draws into the
-// base target unfiltered.
+// supplies), scissor, transforms, premultiplied blending, clip masks (a byte
+// per pixel standing in for a stencil) and layers (PushLayer, CompositeLayers
+// with the blend and replace modes, PopLayer, SaveLayerAsTexture). Not drawn:
+// filters, shaders and mask images. Each such call is counted in
+// unsupported_calls() (by kind in unsupported(kind)) and logged once per
+// kind, never dropped silently; a layer composited with filters is composited
+// unfiltered.
 //
 // Threading: one instance per thread, no global state, so several editors and
 // an offline renderer can each own one. (RmlUi itself is process-global; this
@@ -77,7 +79,7 @@ class CpuRenderInterface final : public Rml::RenderInterface {
     [[nodiscard]] std::uint32_t texture_limit() const noexcept;
 
     // Calls this renderer does not draw, since construction: in total, and by
-    // kind ("clip_mask", "layer", "filter", "shader", "mask_image").
+    // kind ("filter", "shader", "mask_image").
     [[nodiscard]] std::size_t unsupported_calls() const noexcept;
     [[nodiscard]] std::size_t unsupported(const std::string& kind) const;
 
