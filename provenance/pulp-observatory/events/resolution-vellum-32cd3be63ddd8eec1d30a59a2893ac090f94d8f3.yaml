@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-10T15:21:01Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-32cd3be63ddd8eec1d30a59a2893ac090f94d8f3",
+  "kind": "resolution",
+  "linked_commits": [
+    "32cd3be63ddd8eec1d30a59a2893ac090f94d8f3"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Integration merge (Merge remote-tracking branch 'origin/main' into feat/damage-transform-opacity-20261109). It brings main's commits into the branch; their own observations are classified separately in this ledger. It resolved no conflict (git show --remerge-diff is empty), so it has no independent contract.",
+  "resolves": "vellum-32cd3be63ddd8eec1d30a59a2893ac090f94d8f3",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
