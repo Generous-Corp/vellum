@@ -65,6 +65,10 @@ RMLUI_UPSTREAM_PATTERNS = (
     "include/freetype2/*", "**/libfreetype*",
     "include/lua*", "**/liblua*", "**/libvellum-rmlui-lua*",
 )
+# The mirror's CMake package, and the targets in it that SDK consumers link:
+# an editor built on the mirror links MirrorView_core.
+MIRROR_CMAKE_PACKAGE = "mirror/lib/cmake/VellumMirror"
+MIRROR_REQUIRED_TARGETS = ("MirrorView_core",)
 # The native host and the libraries it loads at launch. The installer keeps
 # the same list under the payload's "sdk/" prefix.
 NATIVE_HOST_FILES = (
@@ -123,8 +127,9 @@ def verify_cli_identity(repo: Path) -> None:
         )
 
 
-def installed_cmake_target(install_tree: Path, target: str) -> bool:
-    package = install_tree / "lib/cmake/Vellum"
+def installed_cmake_target(install_tree: Path, target: str,
+                           package_dir: str = "lib/cmake/Vellum") -> bool:
+    package = install_tree / package_dir
     marker = f"Vellum::{target}"
     return any(marker in path.read_text(encoding="utf-8") for path in package.glob("*.cmake"))
 
@@ -143,6 +148,13 @@ def native_configure_options(skia_archive: Path) -> list[str]:
         # And the RmlUi editor package, with its renderer on Vellum's GPU path.
         "-DVELLUM_ENABLE_RMLUI=ON",
         "-DVELLUM_RMLUI_VELLUM_RENDERER=ON",
+    ]
+
+
+def missing_mirror_targets(install_tree: Path) -> list[str]:
+    return [
+        f"Vellum::{target}" for target in MIRROR_REQUIRED_TARGETS
+        if not installed_cmake_target(install_tree, target, MIRROR_CMAKE_PACKAGE)
     ]
 
 
@@ -848,6 +860,10 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             )
         if skia_archive and not all((install_tree / path).is_file() for path in MIRROR_PACKAGE_FILES):
             raise ArtifactError("--skia-archive build did not install the landed mirror's units")
+        if skia_archive and (missing := missing_mirror_targets(install_tree)):
+            raise ArtifactError(
+                "--skia-archive build did not export the mirror's " + ", ".join(missing)
+            )
         if skia_archive and (leaks := upstream_rmlui_leaks(install_tree)):
             raise ArtifactError("SDK install tree carries RmlUi's own files: " + ", ".join(leaks))
         if skia_archive and (missing := missing_package_files(install_tree, RMLUI_PACKAGE_FILES)):

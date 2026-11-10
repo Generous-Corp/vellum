@@ -65,6 +65,32 @@ class PackageFiles(unittest.TestCase):
             )
 
 
+class MirrorTargets(unittest.TestCase):
+    def test_a_mirror_package_exporting_mirror_view_core_is_complete(self):
+        with tempfile.TemporaryDirectory() as text:
+            tree = Path(text)
+            targets = tree / builder.MIRROR_CMAKE_PACKAGE / "VellumMirrorTargets.cmake"
+            targets.parent.mkdir(parents=True)
+            targets.write_text("add_library(Vellum::MirrorView_core SHARED IMPORTED)\n", encoding="utf-8")
+            self.assertEqual(builder.missing_mirror_targets(tree), [])
+
+    def test_a_mirror_package_without_mirror_view_core_names_it(self):
+        with tempfile.TemporaryDirectory() as text:
+            tree = Path(text)
+            targets = tree / builder.MIRROR_CMAKE_PACKAGE / "VellumMirrorTargets.cmake"
+            targets.parent.mkdir(parents=True)
+            targets.write_text("add_library(Vellum::MirrorCanvas SHARED IMPORTED)\n", encoding="utf-8")
+            # The target in Vellum's own package does not count: consumers reach
+            # it through the mirror's package.
+            touch(tree, "lib/cmake/Vellum/VellumTargets.cmake").write_text(
+                "add_library(Vellum::MirrorView_core SHARED IMPORTED)\n", encoding="utf-8")
+            self.assertEqual(builder.missing_mirror_targets(tree), ["Vellum::MirrorView_core"])
+
+    def test_build_refuses_an_archive_without_the_mirror_targets(self):
+        self.assertIn("missing_mirror_targets(install_tree)", inspect.getsource(builder.build))
+        self.assertIn("MirrorView_core", builder.MIRROR_REQUIRED_TARGETS)
+
+
 class UpstreamLeaks(unittest.TestCase):
     def test_rmlui_headers_and_archives_are_leaks(self):
         with tempfile.TemporaryDirectory() as text:
