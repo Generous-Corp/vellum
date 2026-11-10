@@ -12,11 +12,15 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
+
+sys.path.append(str(Path(__file__).resolve().parent))
+from git_test_environment import hermetic_git_env, run_git  # noqa: E402
 
 
 HERE = Path(__file__).resolve().parent
@@ -30,14 +34,37 @@ verifier = trusted.load_verifier()
 
 
 def git(root: Path, *args: str) -> str:
-    return subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", *args],
-                          check=True, capture_output=True, text=True).stdout.strip()
+    return run_git(root, *args).strip()
 
 
 def commit_all(root: Path, message: str) -> str:
     git(root, "add", "-A")
     git(root, "commit", "-q", "-m", message)
     return git(root, "rev-parse", "HEAD")
+
+
+class HermeticGitTests(unittest.TestCase):
+    """Fixture repositories must not depend on the machine's Git configuration."""
+
+    def test_a_hostile_global_and_system_config_does_not_reach_fixture_repositories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            hostile = Path(temporary) / "gitconfig"
+            hostile.write_text("[core]\n\thooksPath = /nonexistent\n[broken\n")
+            repo = Path(temporary) / "repo"
+            repo.mkdir()
+            with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(hostile), "GIT_CONFIG_SYSTEM": str(hostile),
+                                              "GIT_DIR": str(Path(temporary) / "elsewhere")}):
+                git(repo, "init", "-q")
+                (repo / "f").write_text("x")
+                self.assertEqual(len(commit_all(repo, "c")), 40)
+                self.assertEqual(git(repo, "symbolic-ref", "--short", "HEAD"), "main")
+
+    def test_a_failing_git_call_reports_its_stderr(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(RuntimeError) as caught:
+                git(Path(temporary), "rev-parse", "--verify", "no-such-ref")
+            self.assertIn("no-such-ref", str(caught.exception))
+            self.assertIn("exit 128", str(caught.exception))
 
 
 class Repository:
@@ -263,13 +290,12 @@ class FrameworkTrustedVerifyTests(unittest.TestCase):
     def crafted_commit(self, entries: list[tuple[str, str, str]]) -> str:
         """A commit whose root tree lists exactly `entries` (mode, name, object), duplicates included."""
         raw = b"".join(f"{mode} {name}".encode() + b"\0" + bytes.fromhex(sha) for mode, name, sha in entries)
-        tree = subprocess.run(["git", "-C", str(self.repo.root), "hash-object", "-t", "tree", "-w", "--literally",
-                               "--stdin"], input=raw, check=True, capture_output=True).stdout.decode().strip()
+        tree = run_git(self.repo.root, "hash-object", "-t", "tree", "-w", "--literally", "--stdin",
+                       input=raw, text=False).decode().strip()
         return git(self.repo.root, "commit-tree", tree, "-m", "crafted")
 
     def blob(self, data: bytes) -> str:
-        return subprocess.run(["git", "-C", str(self.repo.root), "hash-object", "-w", "--stdin"], input=data,
-                              check=True, capture_output=True).stdout.decode().strip()
+        return run_git(self.repo.root, "hash-object", "-w", "--stdin", input=data, text=False).decode().strip()
 
     def assert_refused_and_untouched(self, head: str, outside: Path, before: bytes) -> None:
         with tempfile.TemporaryDirectory() as out:
@@ -288,8 +314,7 @@ class FrameworkTrustedVerifyTests(unittest.TestCase):
         outside_dir = Path(self.temporary.name) / "outside-dir"
         outside_dir.mkdir()
         (outside_dir / "x").write_bytes(b"untouched\n")
-        sub = subprocess.run(["git", "-C", str(self.repo.root), "mktree"], input=f"100644 blob {self.blob(b'evil')}\tx\n",
-                             check=True, capture_output=True, text=True).stdout.strip()
+        sub = run_git(self.repo.root, "mktree", input=f"100644 blob {self.blob(b'evil')}\tx\n").strip()
         head = self.crafted_commit([("120000", "d", self.blob(str(outside_dir).encode())), ("40000", "d", sub)])
         self.assert_refused_and_untouched(head, outside_dir / "x", b"untouched\n")
 
@@ -563,7 +588,7 @@ class WorkflowStepBehaviourTests(unittest.TestCase):
 
     def environment(self, trusted: str) -> dict[str, str]:
         runner_temp = Path(tempfile.mkdtemp(dir=self.top))
-        return dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", GITHUB_TOKEN="token", GH_TOKEN="token",
+        return dict(hermetic_git_env(), PATH=f"{self.bin}:{os.environ['PATH']}", GITHUB_TOKEN="token", GH_TOKEN="token",
                     EVENT_NAME="pull_request_target", PR_NUMBER="7", HEAD_SHA=self.head, BASE_SHA=self.old_main,
                     TRUSTED_SHA=trusted, GITHUB_SERVER_URL=f"file://{self.server}",
                     GITHUB_REPOSITORY="Generous-Corp/vellum", GITHUB_RUN_ID="1", GITHUB_API_URL="https://api.invalid",
@@ -709,7 +734,7 @@ def verify_framework(root, *args, **kwargs):
             self.posts.unlink()
         runner_temp = Path(tempfile.mkdtemp(dir=self.top))
         work = Path(tempfile.mkdtemp(dir=self.top))
-        env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", GITHUB_TOKEN="token", GH_TOKEN="token",
+        env = dict(hermetic_git_env(), PATH=f"{self.bin}:{os.environ['PATH']}", GITHUB_TOKEN="token", GH_TOKEN="token",
                    EVENT_NAME=event, PR_NUMBER=pr, HEAD_SHA=head, TRUSTED_SHA=trusted,
                    # The stale payload base. The step must not read it.
                    BASE_SHA=self.main_b,
@@ -783,8 +808,7 @@ class NoLinksOnTheDefaultBranchTests(unittest.TestCase):
         # or gitlink (160000) anywhere in a pull request's tree, so one
         # landed here would fail every later pull request's required status.
         # Adding one is a deliberate decision: change the materializer first.
-        listing = subprocess.run(["git", "-C", str(ROOT), "ls-tree", "-r", "HEAD"], check=True,
-                                 capture_output=True, text=True).stdout.splitlines()
+        listing = run_git(ROOT, "ls-tree", "-r", "HEAD").splitlines()
         self.assertGreater(len(listing), 100)  # control: the tree was read
         links = [line for line in listing if line.split(" ", 1)[0] in ("120000", "160000")]
         self.assertEqual(links, [], "a symlink or gitlink would be refused by framework_trusted_verify.materialize()")

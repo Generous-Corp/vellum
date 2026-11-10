@@ -4,6 +4,7 @@ export {
     CustomComponent,
     Fragment,
     Image,
+    Path,
     Stack,
     Text,
     TextRun,

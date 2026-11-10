@@ -1,8 +1,12 @@
 #pragma once
 
+#include <vellum/graphics/path_geometry.hpp>
 #include <vellum/graphics/scene.hpp>
 
+#include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace vellum::graphics {
@@ -28,6 +32,7 @@ struct PaintCommand final {
         begin_layer,
         /// Composites the innermost open group with its `begin_layer`'s opacity.
         end_layer,
+        path,
     };
 
     Kind kind = Kind::rectangle;
@@ -47,6 +52,10 @@ struct PaintCommand final {
     std::vector<TextRun> text_runs;
     /// Mesh geometry, relative to `bounds.x`/`bounds.y`.
     std::shared_ptr<const TriangleMesh> mesh;
+    /// Path geometry and stroke, relative to `bounds.x`/`bounds.y`. The fill
+    /// paint is `fill` and `fill_gradients`, with gradients resolved against
+    /// `path_gradient_box`.
+    std::shared_ptr<const PathGeometry> path;
     /// Maps `bounds` coordinates into the frame: every ancestor's transform
     /// and the node's own, each applied about its node's origin.
     Affine2D transform{};
@@ -61,9 +70,28 @@ struct PaintCommand final {
     bool layer_unbounded = false;
 };
 
+[[nodiscard]] constexpr std::string_view to_string(PaintCommand::Kind kind) noexcept {
+    switch (kind) {
+    case PaintCommand::Kind::rectangle: return "rectangle";
+    case PaintCommand::Kind::text: return "text";
+    case PaintCommand::Kind::mesh: return "mesh";
+    case PaintCommand::Kind::path: return "path";
+    case PaintCommand::Kind::begin_layer: return "begin_layer";
+    case PaintCommand::Kind::end_layer: return "end_layer";
+    }
+    return "unknown";
+}
+
+/// The absolute box a path command's fill gradients resolve against: the
+/// command's layout `bounds` when it has area, otherwise the path's
+/// `path_control_bounds` moved to the command's origin. Empty when neither
+/// box has area, in which case gradients draw nothing.
+[[nodiscard]] std::optional<Rect> path_gradient_box(const PaintCommand& command);
+
 /// The area a command can paint, in its `bounds` coordinates before
 /// `transform`: the box grown by each shadow's offset, spread, and 1.5 times
-/// its blur radius, or a mesh's clipped vertex extent. Text may overflow its
+/// its blur radius, a mesh's clipped vertex extent, or a path's
+/// `path_control_bounds` outset by `path_stroke_outset`. Text may overflow its
 /// box, so its extent is the box with `bounded` false.
 struct PaintExtent final {
     Rect rect{};
@@ -75,7 +103,7 @@ struct PaintExtent final {
 /// Whether the command draws content, as opposed to opening or closing a layer.
 [[nodiscard]] constexpr bool draws_content(PaintCommand::Kind kind) noexcept {
     return kind == PaintCommand::Kind::rectangle || kind == PaintCommand::Kind::text ||
-           kind == PaintCommand::Kind::mesh;
+           kind == PaintCommand::Kind::mesh || kind == PaintCommand::Kind::path;
 }
 
 /// The axis-aligned box that contains `rect` once mapped by `transform`.
@@ -108,7 +136,10 @@ struct ResolvedLinearGradient final {
 /// build does not know, or whose compositing fails `compositing_is_finite`,
 /// contributes nothing for itself or its subtree; `SkiaDawnSurface::render`
 /// refuses such a scene outright. A scene that fails
-/// `scene_fields_match_version` yields no commands.
+/// `scene_fields_match_version` yields no commands. A path node emits its
+/// command even when it has no geometry or its geometry fails `path_is_valid`,
+/// so the renderer refuses it rather than silently skipping it; a valid path
+/// with no commands emits nothing.
 ///
 /// A node whose opacity is below one and whose subtree draws more than one
 /// command is wrapped in a `begin_layer`/`end_layer` pair; when it draws

@@ -302,7 +302,7 @@ class BaseCopyTests(GateCase):
     def test_codeowners_is_the_protected_set(self) -> None:
         live = gate.protected_paths((ROOT / ".github" / "CODEOWNERS").read_text(encoding="utf-8"))
         for path in (WORKFLOW, TRIGGER, "scripts/release_path_review.py", ".github/CODEOWNERS",
-                     ".shipyard/config.toml"):
+                     ".shipyard/config.toml", "scripts/verify_release_attestation.py"):
             self.assertIn(path, live)
 
     def test_the_framework_transfer_judges_and_records_are_release_path(self) -> None:
