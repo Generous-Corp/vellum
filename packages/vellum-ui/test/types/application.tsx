@@ -2,6 +2,7 @@ import {
     Button,
     CustomComponent,
     Fragment,
+    Path,
     Stack,
     Text,
     TextRun,
@@ -106,6 +107,28 @@ const styledText = (
     </Text>
 );
 void styledText;
+
+const star = (
+    <Path
+        id="star"
+        d="M50 0 L61 35 L98 35 L68 57 L79 91 L50 70 L21 91 L32 57 L2 35 L39 35 Z"
+        fillRule="evenodd"
+        fill={{ angle: 90, stops: [
+            { position: 0, color: '#f59e0b' },
+            { position: 1, color: '#ef4444' },
+        ] }}
+        stroke="#111827"
+        strokeWidth={2}
+        strokeLineJoin="round"
+        strokeLineCap="round"
+        strokeDasharray={[4, 2]}
+        style={{ width: 100, height: 100 }}
+    />
+);
+void star;
+// @ts-expect-error A path requires its path data.
+const missingData = <Path id="no-data" />;
+void missingData;
 
 const imported = materializeDesign({
     root: {
