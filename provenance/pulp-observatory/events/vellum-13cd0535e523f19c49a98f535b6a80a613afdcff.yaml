@@ -1,0 +1,45 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "render-skia-dawn"
+  ],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-09T07:21:41Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-13cd0535e523f19c49a98f535b6a80a613afdcff",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "render-skia-dawn"
+  ],
+  "mapped_paths": [
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/src/skia_dawn_surface.mm"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "9a201455ed32fc16b031f59ea547d656d4ac4639",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c5c7b24f724aede55f763197b2385b48ad54a5ff",
+    "to_commit": "9c8f1d50bb0cfd115876b83e838c84a7a09ffb7d"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "13cd0535e523f19c49a98f535b6a80a613afdcff",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

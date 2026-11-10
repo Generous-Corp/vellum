@@ -912,6 +912,19 @@ def link_closure_findings(
     return findings
 
 
+FRAMEWORK_TRANSFER_RECORD = "provenance/framework/transfer.json"
+
+
+def transferred_receipt(root: Path) -> str | None:
+    """The export receipt the framework transfer record names, if the units were transferred."""
+    try:
+        record = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    value = record.get("export_receipt") if isinstance(record, dict) else None
+    return value if isinstance(value, str) else None
+
+
 def verify_receipt(
     root: Path, receipt_path: str, receipt: dict[str, Any], policy: dict[str, Any] | None,
     origins: list[dict[str, Any]], *, newest: bool, head: str, pulp_root: Path | None = None,
@@ -933,7 +946,16 @@ def verify_receipt(
         errors.append(f"{label}: mirror_sha root tree must contain only mirror/")
     if git_try(root, "rev-parse", f"{mirror_sha}:{MIRROR_DIR}") != receipt["mirror_tree"]:
         errors.append(f"{label}: mirror_tree differs from {mirror_sha}:mirror")
-    if newest and git_try(root, "rev-parse", f"{head}:{MIRROR_DIR}") != receipt["mirror_tree"]:
+    if newest and transferred_receipt(root) == receipt_path:
+        # Decision 0010 option (a): the 8b transfer moved the renamed units to
+        # framework/, so HEAD holds no mirror/. The export is proved through
+        # the transfer record instead: it names this receipt and its tree, and
+        # verify_extraction's framework check proves the renamed tree.
+        if git_ok(root, "cat-file", "-e", f"{head}:{MIRROR_DIR}"):
+            errors.append(f"{label}: mirror/ still exists at HEAD after the framework transfer")
+        if not git_ok(root, "cat-file", "-e", f"{receipt['mirror_tree']}^{{tree}}"):
+            errors.append(f"{label}: the transferred mirror tree is not in this repository")
+    elif newest and git_try(root, "rev-parse", f"{head}:{MIRROR_DIR}") != receipt["mirror_tree"]:
         errors.append(f"{label}: HEAD:mirror is not the newest receipt's mirror tree")
     entries = tree_entries(root, mirror_sha) or []
     projected = [
@@ -1213,6 +1235,27 @@ def landed_receipts(root: Path) -> list[str]:
     return [r for r in receipts if isinstance(r, str)] if isinstance(receipts, list) else []
 
 
+def history_base(root: Path) -> tuple[str | None, str | None]:
+    """The commit append-only provenance is compared against: (base, error).
+
+    The merge base of HEAD with VELLUM_GIT_BASE, the CI base commit. When that
+    names nothing this repository has (a push's all-zero `before`), HEAD's
+    first parent, the tip the push replaced; a root commit then has no base and
+    fails closed. Without VELLUM_GIT_BASE (a local run) the merge base with
+    main or origin/main, whichever resolves first; with neither, (None, None):
+    there is nothing to compare.
+    """
+    configured = os.environ.get("VELLUM_GIT_BASE")
+    if configured:
+        base = git_try(root, "merge-base", "HEAD", configured) or git_try(
+            root, "rev-parse", "--verify", "--quiet", "HEAD^1")
+        if base is None:
+            return None, f"history base is unavailable: {configured} names no commit and HEAD has no parent"
+        return base, None
+    return next((found for found in (git_try(root, "merge-base", "HEAD", ref)
+                                     for ref in ("main", "origin/main")) if found), None), None
+
+
 def receipt_history_errors(root: Path, receipts: list[str], stored: list[str]) -> list[str]:
     """Reject removal or mutation of receipts present at the merge base.
 
@@ -1223,17 +1266,11 @@ def receipt_history_errors(root: Path, receipts: list[str], stored: list[str]) -
     (a local run) the base is the merge base with main or origin/main,
     whichever resolves first, and with neither there is nothing to compare.
     """
-    configured = os.environ.get("VELLUM_GIT_BASE")
-    if configured:
-        base = git_try(root, "merge-base", "HEAD", configured) or git_try(
-            root, "rev-parse", "--verify", "--quiet", "HEAD^1")
-        if base is None:
-            return [f"receipt history base is unavailable: {configured} names no commit and HEAD has no parent"]
-    else:
-        base = next((found for found in (git_try(root, "merge-base", "HEAD", ref)
-                                         for ref in ("main", "origin/main")) if found), None)
-        if base is None:
-            return []
+    base, error = history_base(root)
+    if error:
+        return [f"receipt {error}"]
+    if base is None:
+        return []
     base_index_text = git_try(root, "show", f"{base}:{INDEX_PATH}")
     if base_index_text is None:
         return [f"receipt history index is unavailable at {base}"]

@@ -1,0 +1,48 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel"
+  ],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-09T07:21:41Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-982c47e72d8e15cf00281f57ac8d822bd800c1ef",
+  "include_dependency_deltas": [
+    "graphics/tests/CMakeLists.txt",
+    "graphics/tests/support/scene_capture_harness.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel"
+  ],
+  "mapped_paths": [
+    "graphics/tests/CMakeLists.txt",
+    "graphics/tests/partial_present_bench.mm",
+    "graphics/tests/partial_present_test.cpp",
+    "graphics/tests/scene_capture_harness_test.cpp",
+    "graphics/tests/support/scene_capture_harness.cpp",
+    "graphics/tests/support/scene_capture_harness.hpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "e15e9612dfdf41bbeea535cdf0a3e266581675bd",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "c5c7b24f724aede55f763197b2385b48ad54a5ff",
+    "to_commit": "9c8f1d50bb0cfd115876b83e838c84a7a09ffb7d"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "982c47e72d8e15cf00281f57ac8d822bd800c1ef",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

@@ -8,6 +8,31 @@ function(vellum_rmlui_add_test name source)
 endfunction()
 
 vellum_rmlui_add_test(vellum-rmlui-backend-test backend_test.cpp VellumRmlUi::Core)
+
+# The link boundary check (cmake/VellumRmlUiLinkBoundary.cmake), on a stand-in
+# project: clean passes, and each planted violation fails it with its own
+# message, so a check that cannot see a link cannot pass.
+foreach(_case IN ITEMS clean private genex alias unlinked_renderer)
+    set(_name "vellum.rmlui.link-boundary-${_case}")
+    add_test(NAME "${_name}"
+        COMMAND "${CMAKE_COMMAND}"
+            -S "${CMAKE_CURRENT_SOURCE_DIR}/link_boundary_control"
+            -B "${CMAKE_CURRENT_BINARY_DIR}/link-boundary-${_case}"
+            "-DVELLUM_RMLUI_MODULE_DIR=${PROJECT_SOURCE_DIR}"
+            "-DPLANT=${_case}")
+    if(_case STREQUAL "clean")
+        set(_expect "rmlui-link-boundary: 3 targets checked; only vellum-rmlui-vellum-renderer links Vellum")
+    elseif(_case STREQUAL "private")
+        set(_expect "rmlui-link-boundary: vellum-rmlui-native links Vellum::Gpu")
+    elseif(_case STREQUAL "genex")
+        set(_expect "rmlui-link-boundary: vellum-rmlui-core links [^\n]*Vellum::Gpu")
+    elseif(_case STREQUAL "alias")
+        set(_expect "rmlui-link-boundary: vellum-rmlui-native links VellumRmlUi::Gpu \\(alias VellumRmlUi::Gpu -> Vellum::Gpu\\)")
+    else()
+        set(_expect "rmlui-link-boundary: vellum-rmlui-vellum-renderer links no Vellum target")
+    endif()
+    set_tests_properties("${_name}" PROPERTIES PASS_REGULAR_EXPRESSION "${_expect}")
+endforeach()
 # Vellum's packaged Inter face, when this module sits inside a Vellum checkout.
 set(_vellum_rmlui_test_font "${CMAKE_CURRENT_SOURCE_DIR}/../../assets/fonts/Inter-Regular.ttf")
 if(VELLUM_RMLUI_FONTS AND EXISTS "${_vellum_rmlui_test_font}")
@@ -15,6 +40,9 @@ if(VELLUM_RMLUI_FONTS AND EXISTS "${_vellum_rmlui_test_font}")
         VELLUM_RMLUI_TEST_FONT="${_vellum_rmlui_test_font}")
 endif()
 add_test(NAME vellum.rmlui.backend COMMAND vellum-rmlui-backend-test)
+
+vellum_rmlui_add_test(vellum-rmlui-image-compare-test image_compare_test.cpp VellumRmlUi::Core)
+add_test(NAME vellum.rmlui.image-compare COMMAND vellum-rmlui-image-compare-test)
 
 vellum_rmlui_add_test(vellum-rmlui-midi-learn-test midi_learn_test.cpp VellumRmlUi::Core)
 target_compile_definitions(vellum-rmlui-midi-learn-test PRIVATE
@@ -39,6 +67,20 @@ add_test(NAME vellum.rmlui.core-flattening COMMAND vellum-rmlui-core-flattening-
 if(VELLUM_RMLUI_NATIVE)
     vellum_rmlui_add_test(vellum-rmlui-native-test native_test.cpp VellumRmlUi::Native)
     add_test(NAME vellum.rmlui.native COMMAND vellum-rmlui-native-test)
+
+    # The font engine's text width against CoreText's fractional layout of
+    # the same font file. Apple only: the reference and the fonts (Arial,
+    # Verdana) are the system's.
+    if(APPLE AND VELLUM_RMLUI_FONTS)
+        enable_language(OBJCXX)
+        vellum_rmlui_add_test(vellum-rmlui-native-text-width-test native_text_width_test.mm
+            VellumRmlUi::Native)
+        target_compile_options(vellum-rmlui-native-text-width-test PRIVATE -fobjc-arc)
+        target_link_libraries(vellum-rmlui-native-text-width-test PRIVATE
+            "-framework CoreText" "-framework CoreGraphics" "-framework Foundation")
+        add_test(NAME vellum.rmlui.native-text-width COMMAND vellum-rmlui-native-text-width-test)
+        set_tests_properties(vellum.rmlui.native-text-width PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
 
     # A click into a text input, with the field's font resolved and without.
     vellum_rmlui_add_test(vellum-rmlui-native-text-input-test native_text_input_test.cpp

@@ -152,6 +152,9 @@
         "script": "tools/provenance/test_verify_extraction.py"
       },
       {
+        "script": "tools/provenance/test_framework_trusted_verify.py"
+      },
+      {
         "script": "tools/provenance/verify_extraction.py",
         "args": [
           "--defer-mirror-identity",
@@ -163,6 +166,10 @@
     "product-quality": [
       {
         "discover": "cli/tests",
+        "pattern": "test_*.py"
+      },
+      {
+        "discover": "tools/ci",
         "pattern": "test_*.py"
       },
       {
@@ -209,6 +216,14 @@
       },
       {
         "script": "scripts/readme_lint.py"
+      },
+      {
+        "script": "scripts/test_prose_lint.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/prose_lint.py",
+        "isolated": true
       },
       {
         "script": "scripts/test_docs_sync.py"

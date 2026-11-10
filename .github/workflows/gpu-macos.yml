@@ -145,7 +145,7 @@ jobs:
       - name: Re-check the external state a reused proof read
         if: steps.reuse.outputs.run_id != ''
         run: |
-          python3 tools/provenance/verify_extraction.py \
+          python3 -I tools/provenance/verify_extraction.py \
             --defer-mirror-identity \
             --output "$RUNNER_TEMP/provenance-report.json"
 

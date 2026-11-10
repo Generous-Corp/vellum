@@ -33,7 +33,7 @@ import unittest
 import unittest.mock
 import zipfile
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.append(str(Path(__file__).resolve().parent))
 import verify_renderer_dependency as verifier  # noqa: E402
 from verify_renderer_dependency import VerificationError  # noqa: E402
 

@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:20:03Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-ee1943ba5d005b4d40869ebb8e7d0cc4322a633a",
+  "kind": "resolution",
+  "linked_commits": [
+    "ee1943ba5d005b4d40869ebb8e7d0cc4322a633a"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Integration merge (Merge remote-tracking branch 'origin/main' into repair/pr172-20261104). It brings main's commits into a branch; their own observations are classified separately in this ledger. Its conflict resolution touches only CMakeLists.txt, which map to no contract, so it has no independent contract.",
+  "resolves": "vellum-ee1943ba5d005b4d40869ebb8e7d0cc4322a633a",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

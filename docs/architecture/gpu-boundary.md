@@ -22,9 +22,11 @@ The public slice consists of:
   application builds, plus a headers-only `Vellum::DawnHeaders` target for an
   embedding host's authenticated bootstrap and compute code.
 
-The scene carries a single integer schema version, `kSceneVersion`, starting
-at 1. Fields whose defaults leave existing scenes unchanged are added without a
-bump; a new node kind or a change in meaning bumps it. Node kinds are closed
+The scene carries a single integer schema version, `kSceneVersion`, now 2.
+A change that can alter rendered output bumps it: a new node kind, a new field
+that changes how a scene is drawn, or a change in meaning. A change that only
+adds metadata keeps it. Consumers accept versions from
+`kMinSupportedSceneVersion` (1) to `kSceneVersion`. Node kinds are closed
 per version. The surface's `render` refuses a scene with an unknown version or
 node kind before drawing anything and keeps its previous frame, and
 paint-command flattening skips both rather than drawing an unknown kind as a
@@ -33,6 +35,78 @@ diagnostic and reports authored style or content it drops as warnings on
 `RenderedApplication::diagnostics`. Those diagnostics share the DesignIR
 severity and disposition words but identify content by node ID, not by
 DesignIR document path.
+
+Nodes carry an optional affine transform about their origin, a group opacity,
+and per-corner radii beside the uniform `corner_radius` shorthand. All three
+change rendered output, so they arrived with version 2. A version 1 scene that
+sets any of them is refused by `render` and yields no paint commands. Paint
+commands keep untransformed scene-absolute `bounds` and add the composed
+transform, so a consumer that ignores it still sees the old geometry. A faded
+subtree that draws more than one command is bracketed by `begin_layer` and
+`end_layer` commands whose bounds are the union of the members' transformed
+paint extents (box, shadow offset and spread, and 1.5 blur radii); text can
+overflow its box, so a layer holding text is unbounded. A lone faded command
+carries the opacity itself, and the Skia surface still gives it a bounded
+layer when its own paint overlaps (several shadows, a gradient over a fill,
+decorated text, a mesh). Plain text folds the opacity into its glyph paint, so
+glyphs that overlap one another, under negative letter spacing or in joined
+scripts, blend twice where they meet. The canvas-backed web shell flattens
+layers to per-command alpha and counts layers, meshes, transforms, and
+per-corner radii it cannot draw (`vellum_web_lowering_loss_count`); it does not
+count the gradients and shadows it also skips. The CoreGraphics smoke canvas
+takes no scene and does not lower these properties. A scene with a non-finite
+transform, opacity, or radius is refused like an unknown kind.
+
+The authoring `transform` key takes CSS transform functions, matched without
+regard to case, with lengths in px or percent of the box. A list that does not
+parse is dropped with a `VELLUM_STYLE_DROPPED` warning and the node is drawn
+untransformed; only a list that composes to a non-finite matrix fails the
+tree. Interaction and accessibility boxes are the axis-aligned box of each
+node as drawn, so a rotated control hit-tests on that box, and a node whose
+transform has a zero determinant gets no interaction or text-input box.
+
+The surface draws every frame into a retained offscreen Graphite surface the
+size of its target in device pixels, and presents by drawing that image into
+the swapchain texture; captures read the retained surface back, through the
+swapchain when there is one. `render(scene)` repaints the whole frame and stays
+the deterministic capture path. `render_incremental` commits each scene to a
+renderer-owned `DamageTracker`, clears only the damage rectangles, and redraws
+only the paint commands whose paint extent (shadows and text overhang
+included) meets them; the rest of the retained image is left as it was, and
+the output is byte-identical to a full redraw. The first frame, a resize or
+surface recreation, a failed or lost-device frame, a scene version, size or
+background change, a host `reload`, and damage past the policy threshold fall
+back to a full repaint. Hosts pass `invalidate` reasons and node ids through
+`SkiaDawnSurface::invalidate`, and `frame_stats` reports the damage area, the
+rectangle counts, the commands re-recorded and why a frame repainted fully.
+What is cached and when it is discarded is renderer policy: the scene schema
+carries no cache hints. Partial redraw is enabled only for scene versions the
+damage model understands, up to `kDamageModelSceneVersion` (1); a version 2
+scene, which can carry transforms, group opacity and per-corner radii, repaints
+fully until the damage model learns those fields.
+
+The surface keeps three cross-frame resource caches under
+`RenderCacheBudgets`: laid-out text paragraphs keyed by every run's text and
+style (the colour with any folded opacity included) and the font directory;
+linear-gradient shaders keyed by their exact end points, colours, positions and
+tile mode; and GPU textures uploaded from mesh textures, keyed by size and the
+SHA-256 of the texels rather than by address, so texels rewritten in place are
+uploaded again. Keys compare floats by their bits. A hit returns the object a
+miss would build from the same inputs, so captures are byte-identical with
+every cache on or off; the render-cache GPU test checks that for each capture
+fixture, on the partial-redraw path, and for each key input. Each cache has an
+entry and a byte budget and evicts its least recently used entry first; an
+entry larger than the byte budget is refused, and a zero budget turns the
+cache off. Paragraph bytes are an estimate, since Skia does not report them.
+Once a resize settles, meaning the size has held for
+`gpu_runtime::SwapchainResizeState::kSettleFrames` presented frames, the
+entries no frame has used since the resize are dropped; a device loss drops
+every entry, and a frame that fails before it is submitted drops the textures
+it uploaded.
+`SkiaDawnSurface::telemetry` reports the frame's damage, the offscreen layers
+it opened, each cache's hits, misses, evictions, trims and bytes, the texture
+(atlas) bytes and Graphite's GPU time, and the capture harness writes it into
+its evidence JSON.
 
 Native self-test is deliberately fail-closed. A requested native surface is
 not allowed to fall back to CoreGraphics or an offscreen surface. The test also

@@ -224,6 +224,8 @@ CaptureResult render_offscreen(
     if (!surface->render(scene, &result.error)) return result;
     const auto rendered = Clock::now();
     result.render = elapsed(created, rendered);
+    result.frame_stats = surface->frame_stats();
+    result.telemetry = surface->telemetry();
     if (!surface->capture_rgba(
             result.rgba, result.pixel_width, result.pixel_height, &result.error)) {
         return result;
@@ -474,6 +476,41 @@ Scene mesh(float width, float height) {
     return scene;
 }
 
+Scene compositing(float width, float height) {
+    auto scene = empty(width, height);
+    const float cell = std::min(width, height) * 0.25F;
+    const auto rectangle = [](std::string id, Rect bounds, std::uint32_t color) {
+        return SceneNode{
+            .id = std::move(id),
+            .kind = SceneNode::Kind::rectangle,
+            .bounds = bounds,
+            .fill = Color::hex(color),
+        };
+    };
+    auto turned = rectangle("turned", {cell, cell, cell * 2.0F, cell * 0.5F}, 0xF97316);
+    turned.transform = concat(translation(cell, cell * 0.25F),
+        concat(Affine2D{.a = 0.0F, .b = 1.0F, .c = -1.0F, .d = 0.0F},
+               translation(-cell, -cell * 0.25F)));
+    scene.root.children.push_back(std::move(turned));
+    SceneNode faded{
+        .id = "faded",
+        .kind = SceneNode::Kind::group,
+        .bounds = {width - cell * 2.5F, cell * 0.5F, cell * 2.0F, cell * 2.0F},
+        .opacity = 0.5F,
+    };
+    faded.children.push_back(rectangle("faded/a", {0.0F, 0.0F, cell * 1.4F, cell}, 0x38BDF8));
+    faded.children.push_back(
+        rectangle("faded/b", {cell * 0.6F, cell * 0.5F, cell * 1.4F, cell}, 0xA3E635));
+    scene.root.children.push_back(std::move(faded));
+    auto corners = rectangle(
+        "corners", {cell * 0.5F, height - cell * 1.5F, cell * 2.0F, cell}, 0xE879F9);
+    corners.corner_radii = CornerRadii{0.0F, cell * 0.5F, cell * 0.1F, cell * 0.4F};
+    corners.transform = Affine2D{.a = 1.25F, .d = 1.0F};
+    corners.opacity = 0.75F;
+    scene.root.children.push_back(std::move(corners));
+    return scene;
+}
+
 Scene combined(float width, float height) {
     auto scene = empty(width, height);
     const float half_width = width * 0.5F;
@@ -489,6 +526,7 @@ std::vector<NamedScene> all(float width, float height) {
         {"gradient_shadow_rectangle", gradient_shadow_rectangle(width, height)},
         {"text", text(width, height)},
         {"mesh", mesh(width, height)},
+        {"compositing", compositing(width, height)},
         {"combined", combined(width, height)},
     };
 }

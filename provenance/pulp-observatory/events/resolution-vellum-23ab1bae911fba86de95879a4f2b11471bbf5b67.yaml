@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-09T09:20:11Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-23ab1bae911fba86de95879a4f2b11471bbf5b67",
+  "kind": "resolution",
+  "linked_commits": [
+    "23ab1bae911fba86de95879a4f2b11471bbf5b67"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/248"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Extends Vellum's scene capture harness to compare captures across processes and fail without a GPU. Vellum test infrastructure only; no Pulp counterpart and nothing to port.",
+  "resolves": "vellum-23ab1bae911fba86de95879a4f2b11471bbf5b67",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

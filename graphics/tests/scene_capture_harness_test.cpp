@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -228,9 +229,40 @@ void timings(const std::filesystem::path& evidence_path, long long cold_creation
         << "  \"renderer\": " << json_string(last.evidence.renderer) << ",\n"
         << "  \"backend\": " << json_string(last.evidence.backend) << ",\n"
         << "  \"adapter\": " << json_string(last.evidence.adapter) << ",\n"
+        << "  \"frame_full_repaint\": " << (last.frame_stats.full_repaint ? "true" : "false")
+        << ",\n"
+        << "  \"frame_full_repaint_reason\": "
+        << json_string(std::string(vellum::graphics::to_string(
+               last.frame_stats.full_repaint_reason)))
+        << ",\n"
+        << "  \"frame_damage_fraction\": " << last.frame_stats.damage_fraction << ",\n"
+        << "  \"frame_paint_commands_recorded\": "
+        << last.frame_stats.paint_commands_recorded << ",\n"
+        << "  \"frame_paint_commands_total\": " << last.frame_stats.paint_commands_total
+        << ",\n"
         << "  \"unique_colors\": " << last.stats.unique_colors << ",\n"
-        << "  \"non_background_pixels\": " << last.stats.non_background_pixels << "\n"
+        << "  \"non_background_pixels\": " << last.stats.non_background_pixels << ",\n"
+        << "  \"telemetry\": " << vellum::graphics::to_json(last.telemetry) << "\n"
         << "}\n";
+    out.close();
+
+    // The evidence carries the renderer's telemetry for the capture: one full
+    // frame of the combined scene, whose first render misses every cache.
+    std::ifstream written(evidence_path);
+    const std::string evidence((std::istreambuf_iterator<char>(written)),
+                               std::istreambuf_iterator<char>());
+    const auto& telemetry = last.telemetry;
+    expect(evidence.find("\"telemetry\": {\"frame\":1,\"full_repaint\":true") !=
+                   std::string::npos &&
+               evidence.find("\"paragraphs\":{") != std::string::npos &&
+               evidence.find("\"atlas_bytes\":") != std::string::npos,
+           "the capture evidence records the render telemetry");
+    expect(telemetry.frame == 1 && telemetry.damage_fraction == 1.0 &&
+               telemetry.paragraphs.frame_misses > 0 && telemetry.paragraphs.frame_hits == 0 &&
+               telemetry.textures.entries > 0 &&
+               telemetry.atlas_bytes == telemetry.textures.bytes,
+           "the combined capture's telemetry shows a cold first frame",
+           vellum::graphics::to_json(telemetry));
 }
 
 int run_checks(const std::filesystem::path& helper_goldens,

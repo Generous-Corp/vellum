@@ -1,0 +1,160 @@
+# Judges a pull request's framework/ change with the default branch's rules,
+# and reports the verdict as the `framework-trusted-verify` commit status on the
+# change's head commit.
+#
+# provenance.yml runs a pull request's own scripts, so a change that edits the
+# verifier would be judged by its edit. This workflow runs on
+# pull_request_target and merge_group: its definition comes from the base, and
+# so does every script it runs. The base is cloned into trusted/; the change's
+# commit is fetched as objects only (with fsck) and materialized from blobs, in
+# a fresh directory outside trusted/, by the trusted
+# tools/provenance/framework_trusted_verify.py. Nothing from the change is
+# checked out, built, installed, sourced or executed, and only the PR number
+# and commit ids reach the shell, through env.
+#
+# A pull_request_target job's check run attaches to the base commit, never to
+# the pull request's head, so the verdict is a commit status on the head. The
+# job is deliberately not named after that context: a check run named
+# framework-trusted-verify is not the verdict. The status starts pending and a
+# trap posts failure on any error, timeout or cancellation, so a run never
+# leaves it pending or missing.
+#
+# The framework-trusted-verify context can be posted by any token with
+# statuses: write, and a ruleset bound to GitHub Actions cannot tell those
+# apart. Shipyard#1178 will have the admission steward verify that this status
+# resolves to a pull_request_target or merge_group run of this exact file on
+# the pull request's head, from that head's own branch, with no non-main-base
+# pull request for that head. Even then it is an accident guard, not a
+# security boundary: a pull_request_target run executes the base branch's copy
+# of this file, and merge_group runs use the queued pull request's workflows.
+# A dedicated judge App (vellum#275) is the planned hardening.
+# The token lives only in an unexported shell variable the status posts read;
+# nothing else in the step sees it.
+name: Framework trusted verify
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, edited]
+  merge_group:
+    branches: [main]
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: framework-trusted-verify-${{ github.event.pull_request.number || github.event.merge_group.head_sha }}
+  cancel-in-progress: true
+
+jobs:
+  framework-trusted-judge:
+    name: framework-trusted-judge
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - name: Judge the change with the base rules and report the status
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+          # The rules come from the commit this workflow definition came from:
+          # the base branch's tip (the event's own sha) on pull_request_target,
+          # never the pull request's base sha in the event payload, which can
+          # predate the judge; and the queue's base on merge_group, where the
+          # event's sha is the queue commit that holds the pull request's own
+          # changes.
+          TRUSTED_SHA: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.sha }}
+          GIT_LFS_SKIP_SMUDGE: '1'
+        run: |
+          set -euo pipefail
+          # The status token stays in this shell: unexported, read only by
+          # post_status, never in the environment of git or the judge.
+          status_token="$GITHUB_TOKEN"
+          unset GITHUB_TOKEN GH_TOKEN
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          post_status() {
+            local state="$1" description="$2" payload
+            payload="$(printf '{"state":"%s","context":"framework-trusted-verify","description":"%s","target_url":"%s"}' \
+              "$state" "$description" "$run_url")"
+            # The header arrives on stdin from the printf builtin, so the token
+            # is never in a process's argv.
+            printf 'Authorization: Bearer %s\n' "$status_token" |
+              curl --fail --silent --show-error --retry 3 --request POST \
+              --header @- \
+              --header "Accept: application/vnd.github+json" \
+              --data "$payload" \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" > /dev/null
+          }
+          # A cancelled run posts nothing more: Actions cancels a step by
+          # signalling it (SIGINT, then SIGTERM), and a newer run of the same
+          # concurrency group owns the status from then on, so a late post
+          # could overwrite its verdict. A job timeout signals the step the
+          # same way, so this step enforces its own, shorter deadlines with
+          # `timeout`: a genuine timeout is an exit status, posted as failure.
+          finished=0
+          cancelled=0
+          # shellcheck disable=SC2329  # invoked by the EXIT trap
+          on_exit() {
+            if [ "$finished" != 1 ] && [ "$cancelled" != 1 ]; then
+              post_status failure "The trusted judge did not finish" || true
+            fi
+          }
+          trap on_exit EXIT
+          trap 'cancelled=1; exit 130' INT TERM
+          post_status pending "Judging with the base rules"
+
+          safe_git=(git -c core.hooksPath=/dev/null -c core.fsmonitor=false
+                    -c fetch.fsckObjects=true -c transfer.fsckObjects=true)
+          timeout 6m "${safe_git[@]}" clone --quiet --no-checkout "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" trusted
+          "${safe_git[@]}" -C trusted checkout --quiet --detach "$TRUSTED_SHA"
+          if [ "$EVENT_NAME" = pull_request_target ]; then
+            timeout 3m "${safe_git[@]}" -C trusted fetch --no-tags --quiet origin "+refs/pull/${PR_NUMBER}/head:refs/framework-verify/head"
+          else
+            timeout 3m "${safe_git[@]}" -C trusted fetch --no-tags --quiet origin "+${HEAD_SHA}:refs/framework-verify/head"
+          fi
+          test "$("${safe_git[@]}" -C trusted rev-parse refs/framework-verify/head)" = "$HEAD_SHA"
+
+          # The change is what the head adds to where it meets the rules'
+          # commit: the merge base of the head and TRUSTED_SHA. The payload's
+          # base sha is a snapshot from when the pull request was opened or
+          # last synchronized; once the head merges a newer main, diffing
+          # against that snapshot would count main's merged-in changes as the
+          # pull request's. On merge_group this is the queue's base. No merge
+          # base, or more than one, is refused rather than guessed.
+          merge_bases="$("${safe_git[@]}" -C trusted merge-base --all refs/framework-verify/head "$TRUSTED_SHA")" || merge_bases=""
+          if [ -z "$merge_bases" ]; then
+            post_status failure "The change shares no history with the base rules"
+            finished=1
+            exit 2
+          fi
+          if [ "$(printf '%s\n' "$merge_bases" | wc -l)" -ne 1 ]; then
+            post_status failure "The change has more than one merge base with the base rules"
+            finished=1
+            exit 2
+          fi
+          merge_base="$merge_bases"
+          echo "framework-trusted-verify: rules from $TRUSTED_SHA, judging $HEAD_SHA against merge base $merge_base"
+
+          cd trusted
+          set +e
+          timeout 8m env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            python3 -I tools/provenance/framework_trusted_verify.py \
+            --repo . \
+            --head "$HEAD_SHA" \
+            --base "$merge_base" \
+            --dest-parent "$RUNNER_TEMP" \
+            --output "$RUNNER_TEMP/framework-trusted-verify.json"
+          verdict=$?
+          set -e
+          case "$verdict" in
+            0) post_status success "Passed the base rules" ;;
+            1) post_status failure "Refused by the base rules" ;;
+            124) post_status failure "The trusted judge timed out" ;;
+            *) post_status failure "The change could not be read" ;;
+          esac
+          finished=1
+          exit "$verdict"

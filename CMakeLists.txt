@@ -196,6 +196,20 @@ if(VELLUM_BUILD_TESTS)
             graphics/tests/damage_test.cpp)
         target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.damage COMMAND vellum-damage-test)
+
+        add_executable(vellum-render-cache-test
+            graphics/tests/render_cache_test.cpp)
+        target_include_directories(vellum-render-cache-test PRIVATE graphics/src)
+        target_link_libraries(vellum-render-cache-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.render-cache COMMAND vellum-render-cache-test)
+
+        add_executable(vellum-web-canvas-shell-lowering-test
+            web/tests/canvas_shell_lowering_test.cpp)
+        target_include_directories(vellum-web-canvas-shell-lowering-test
+            PRIVATE web/src)
+        target_link_libraries(vellum-web-canvas-shell-lowering-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.web.canvas-shell-lowering
+            COMMAND vellum-web-canvas-shell-lowering-test)
     endif()
 
     if(TARGET vellum-authoring)
@@ -275,7 +289,14 @@ if(VELLUM_BUILD_TESTS)
                 outset_shadow_spread_diagonal
                 attributed_text_runs_materialization
                 textured_triangle_mesh
-                scene_version_refusal)
+                scene_version_refusal
+                node_transform_rotation_scale
+                group_opacity_layers
+                per_corner_radii
+                radii_overflow_scaling
+                faded_command_layers
+                nested_faded_shadow_layers
+                transformed_shadow_and_text)
             add_test(NAME "vellum.gpu.${_vellum_fixture}"
                 COMMAND vellum-gpu-style-test "${_vellum_fixture}")
         endforeach()

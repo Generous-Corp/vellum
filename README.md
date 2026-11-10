@@ -400,9 +400,12 @@ unavailable unless a real `cli/vellum_native_backend.py` exists; artifact
 metadata is derived from the payload and cannot claim a missing backend.
 
 The installed `Vellum::Gpu` target exposes the renderer-neutral `Scene`,
-`LinearGradient`, `BoxShadow`, `TextStyle`, and `TextRun` types. The matching
-`@vellum/ui` surface serializes `backgroundLinearGradient`, `boxShadow`, and
-per-run font, color, tracking, underline, and line-through styles. Packaged
+`LinearGradient`, `BoxShadow`, `TextStyle`, `TextRun`, `Affine2D`, and
+`CornerRadii` types; nodes also carry a group `opacity`. The matching
+`@vellum/ui` surface serializes `backgroundLinearGradient`, `boxShadow`,
+`transform` (CSS transform functions about the box centre), `opacity`,
+per-corner `border*Radius` keys, and per-run font, color, tracking, underline,
+and line-through styles. Packaged
 fonts resolve from `share/vellum/fonts` relative to the installed GPU library,
 so moving the install prefix does not reconnect the SDK to its source tree.
 `SkiaDawnSurface::measure_text` provides the same shaping path to installed C++

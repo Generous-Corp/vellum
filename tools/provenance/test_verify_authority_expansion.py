@@ -8,6 +8,7 @@ import importlib.util
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,8 @@ from unittest import mock
 try:
     from .git_test_environment import disable_auto_maintenance
 except ImportError:  # Direct script execution.
+    import sys
+    sys.path.append(str(Path(__file__).resolve().parent))  # -I drops the script dir; append keeps the standard library first
     from git_test_environment import disable_auto_maintenance
 
 disable_auto_maintenance()
@@ -313,11 +316,11 @@ class Tests(unittest.TestCase):
     def test_workflow_runs_and_retains_expansion_gate(self) -> None:
         workflow = (ROOT / ".github/workflows/provenance.yml").read_text()
         self.assertIn(
-            "python3 tools/provenance/test_verify_authority_expansion.py",
+            "python3 -I tools/provenance/test_verify_authority_expansion.py",
             workflow,
         )
         self.assertIn(
-            "python3 tools/provenance/verify_authority_expansion.py", workflow
+            "python3 -I tools/provenance/verify_authority_expansion.py", workflow
         )
         self.assertIn("refs/tags/v[0-9]*", workflow)
         self.assertIn("--release-readiness", workflow)
@@ -346,8 +349,8 @@ class Tests(unittest.TestCase):
         self.assertNotIn("<<'PY'", step)
         self.assertNotIn("python3 -c", step)
         self.assertNotIn("for repository in Generous-Corp/", step)
-        self.assertIn("python3 tools/provenance/test_collect_release_evidence.py", step)
-        collect = "python3 tools/provenance/collect_release_evidence.py"
+        self.assertIn("python3 -I tools/provenance/test_collect_release_evidence.py", step)
+        collect = "python3 -I tools/provenance/collect_release_evidence.py"
         for invocation in (
             f'open_pr_repositories_text="$({collect} repositories)"',
             f"{collect} merge-check-runs",
@@ -1632,6 +1635,120 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         )
         self.assertTrue(any("live overlap danielraffel/vellum#44 is absent" in error for error in errors))
 
+    def release_bump_case(self):
+        """A real-shaped version bump to 0.1.11 overlapping one exact Vellum route."""
+        acknowledgement = self.exact_boundary_acknowledgement()
+        acceptance = self.pulp_exact_boundary_acceptance(acknowledgement)
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        routes = {row["path"] for row in verifier.exact_route_rows(matrix, amendment)
+                  if row["repository"] == "Generous-Corp/vellum"}
+        route = "cli/tests/test_import_backend.py"
+        self.assertIn(route, routes)
+        self.assertIn(route, verifier.RELEASE_BUMP_FILES)
+        base, head = "d" * 40, "e6" * 20
+        files = [
+            {"filename": "CMakeLists.txt", "status": "modified",
+             "patch": "@@ -2,3 +2,3 @@\n project(vellum\n-    VERSION 0.1.10\n+    VERSION 0.1.11\n     LANGUAGES CXX)"},
+            {"filename": route, "status": "modified",
+             "patch": '@@ -9 +9 @@ x\n-            archive = root / "vellum-sdk-0.1.10-test-host.tar.gz"\n'
+                      '+            archive = root / "vellum-sdk-0.1.11-test-host.tar.gz"'},
+            {"filename": "scripts/INSTALLER_SHA256SUMS", "status": "modified",
+             "patch": "@@ -2 +2 @@\n-" + "5" * 64 + "  install.sh\n+" + "b" * 64 + "  install.sh"},
+        ]
+        evidence = {"number": 188, "base_commit": base, "base_ref": "main", "head_commit": head,
+                    "head_ref": "automation/version-bump", "head_repository": "Generous-Corp/vellum",
+                    "head_parents": [base], "head_author": dict(verifier.RELEASE_BUMP_BOT),
+                    "head_committer": dict(verifier.RELEASE_BUMP_BOT),
+                    "head_message": "chore(release): bump version to 0.1.11", "files": files}
+        pull = {"repository": "Generous-Corp/vellum", "number": 188, "base_commit": base,
+                "merge_base_commit": base, "head_commit": head,
+                "paths": sorted(row["filename"] for row in files)}
+
+        def check(evidence_row=evidence, release_tag="v0.1.11", pull=pull):
+            bundle = {"schema": "vellum.release-bump-evidence.v1",
+                      "repository": "Generous-Corp/vellum", "pulls": [evidence_row]}
+            return verifier.validate_open_pr_snapshot(
+                self.open_pr_snapshot(pull), acceptance, matrix, amendment,
+                release_tag=release_tag, release_bump_evidence=bundle)
+        return evidence, pull, check
+
+    def test_a_release_bump_is_accepted_only_by_its_exact_content(self) -> None:
+        evidence, pull, check = self.release_bump_case()
+        self.assertEqual(check(), [])
+        # Control: the same overlap is refused outside release readiness for v0.1.11.
+        self.assertTrue(any("is absent from acceptance" in e for e in check(release_tag=None)))
+        files = evidence["files"]
+
+        def with_file(index, **change):
+            rows = [dict(row) for row in files]
+            rows[index].update(change)
+            return evidence | {"files": rows}
+
+        violations = {
+            "a second commit": evidence | {"head_parents": ["c" * 40]},
+            "a merge commit": evidence | {"head_parents": [evidence["base_commit"], "c" * 40]},
+            "another author": evidence | {"head_author": {"name": "someone", "email": "a@b.c"}},
+            "a fork head": evidence | {"head_repository": "someone/vellum"},
+            "another branch name": evidence | {"head_ref": "automation/version-bump-2"},
+            "another base branch": evidence | {"base_ref": "release"},
+            "another committer": evidence | {"head_committer": {"name": "someone", "email": "a@b.c"}},
+            "another file": evidence | {"files": files + [
+                {"filename": "scripts/release_request.py", "status": "modified",
+                 "patch": "@@ -1 +1 @@\n-A = '0.1.10'\n+A = '0.1.11'"}]},
+            "a non-version line": with_file(0, patch="@@ -2 +2 @@\n-    VERSION 0.1.10\n+    VERSION 0.1.11 # x"),
+            "an added line": with_file(0, patch="@@ -2 +2,2 @@\n-    VERSION 0.1.10\n+    VERSION 0.1.11\n+evil()"),
+            "a removed line": with_file(0, patch="@@ -2,2 +2 @@\n-    VERSION 0.1.10\n-guard()\n+    VERSION 0.1.11"),
+            "another digest line": with_file(2, patch="@@ -1 +1 @@\n-" + "5" * 64 + "  install_core.py\n+" + "b" * 64 + "  install_core.py"),
+            "a version that is not vX": with_file(0, patch="@@ -2 +2 @@\n-    VERSION 0.1.10\n+    VERSION 0.1.12"),
+            "a downgrade": with_file(0, patch="@@ -2 +2 @@\n-    VERSION 0.1.12\n+    VERSION 0.1.11"),
+            "two earlier versions": with_file(1, patch='@@ -9 +9 @@\n-a = "vellum-sdk-0.1.9-x"\n+a = "vellum-sdk-0.1.11-x"'),
+            "a missing patch": with_file(0, patch=None),
+            "an added file": with_file(0, status="added"),
+            "another head": evidence | {"head_commit": "9" * 40},
+        }
+        violations["a forged bot commit that changes code"] = with_file(
+            1, patch="@@ -9 +9 @@\n-            check_signature()\n+            pass")
+        for label, broken in violations.items():
+            with self.subTest(violation=label):
+                broken_pull = pull | {"paths": sorted(row["filename"] for row in broken["files"])}
+                errors = check(broken, pull=broken_pull)
+                self.assertTrue(any("is not v0.1.11's own version bump" in e for e in errors), errors)
+        with self.subTest(violation="judged against another release"):
+            self.assertTrue(any("is not v0.1.12's own version bump" in e for e in check(release_tag="v0.1.12")))
+        with self.subTest(violation="no evidence"):
+            self.assertTrue(any("no content evidence" in e for e in check(evidence | {"number": 189})))
+        with self.subTest(violation="evidence hides a changed file"):
+            hidden = pull | {"paths": sorted(pull["paths"] + ["scripts/release_request.py"])}
+            self.assertTrue(any("is not v0.1.11's own version bump" in e for e in check(pull=hidden)))
+
+    def test_tag_scoped_audit_accepts_the_bump_and_refuses_other_overlaps(self) -> None:
+        # A release or dry-run tag enforces the live audit (the scope test
+        # below), and there #287's content rule decides the open bump: a
+        # #188-shaped bump passes, a non-bump overlap of the same route fails.
+        scope = ProvenanceWorkflowScopeTests()
+        for ref in ("refs/tags/v0.1.11", "refs/tags/dry-run/v0.1.11/1-1"):
+            with self.subTest(ref=ref):
+                self.assertEqual(scope.scope(ref), ("true", False))
+        evidence, pull, check = self.release_bump_case()
+        self.assertEqual(check(), [])
+        other = pull | {"number": 277}
+        errors = check(pull=other)
+        self.assertTrue(any("Generous-Corp/vellum#277" in error for error in errors), errors)
+        self.assertNotEqual(check(evidence | {"files": evidence["files"] + [
+            {"filename": "graphics/src/surface.cpp", "status": "modified", "patch": "@@ -1 +1 @@\n-a\n+b"}]},
+            pull=pull | {"paths": sorted(pull["paths"] + ["graphics/src/surface.cpp"])}), [])
+
+    def test_release_bump_files_follow_version_at_land(self) -> None:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import version_at_land
+        self.assertEqual(
+            verifier.RELEASE_BUMP_FILES,
+            frozenset(version_at_land.VERSION_SURFACES) | {version_at_land.INSTALLER_SUMS},
+        )
+        self.assertEqual(verifier.RELEASE_BUMP_SUMS, version_at_land.INSTALLER_SUMS)
+        self.assertEqual(verifier.RELEASE_BUMP_BOT["name"], "vellum-version-at-land")
+
     def retired_fixture(self) -> tuple[Path, str]:
         """A Git checkout whose history carries the retirement record's commits."""
         temporary, root, _ = self.copy()
@@ -2036,7 +2153,7 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         # list the collector prints, and the collector reads the same list
         # when it builds the snapshot and the cursor.
         self.assertIn(
-            'open_pr_repositories_text="$(python3 tools/provenance/collect_release_evidence.py repositories)"',
+            'open_pr_repositories_text="$(python3 -I tools/provenance/collect_release_evidence.py repositories)"',
             workflow,
         )
         self.assertIn('test "${#open_pr_repositories[@]}" -gt 0', workflow)
@@ -2056,10 +2173,11 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             'if [[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == merge_group ]]; then',
             workflow,
         )
-        # The live open-PR snapshot and its cursor re-check never run in the queue.
+        # The live open-PR snapshot and its cursor re-check run only where the
+        # audit is enforced: release and dry-run tags (never a pull request,
+        # the queue or a main push; ProvenanceWorkflowScopeTests).
         snapshot_gate = (
-            'if [[ -n "$PULP_ACCEPTANCE_SHA" && "$GITHUB_EVENT_NAME" != pull_request '
-            '&& "$GITHUB_EVENT_NAME" != merge_group ]]; then'
+            'if [[ -n "$PULP_ACCEPTANCE_SHA" && "$live_open_pr_audit" == true ]]; then'
         )
         # One gate holds the whole live read: the snapshot, the binding of the
         # exact-boundary checkout to live Pulp main, the judgment and both
@@ -2646,6 +2764,96 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         self.assertEqual(report["status"], "fail")
         self.assertTrue(report["errors"])
 
+
+
+class ProvenanceWorkflowScopeTests(unittest.TestCase):
+    """The live open-PR audit is tag-scoped; the observatory is its own job."""
+
+    WORKFLOW = ROOT / ".github/workflows/provenance.yml"
+
+    def fragment(self) -> str:
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        start = text.index("# live-open-pr-audit-scope: begin")
+        end = text.index("# live-open-pr-audit-scope: end")
+        return "\n".join(line.strip() for line in text[start:end].splitlines())
+
+    def scope(self, ref: str, event: str = "push") -> tuple[str, bool]:
+        script = (
+            "set -euo pipefail\nrepository_evidence=(--repository x)\n"
+            + self.fragment()
+            + '\nprintf "%s %s\\n" "$live_open_pr_audit" "${repository_evidence[*]}"\n'
+        )
+        completed = subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True, check=True,
+            env={**os.environ, "GITHUB_REF": ref, "GITHUB_EVENT_NAME": event},
+        )
+        audit, _, evidence = completed.stdout.strip().partition(" ")
+        return audit, "--defer-live-open-pr-audit" in evidence.split()
+
+    def test_live_open_pr_audit_runs_only_on_release_and_dry_run_tags(self) -> None:
+        for ref, event, enforced in (
+            ("refs/heads/main", "push", False),
+            ("refs/pull/7/merge", "pull_request", False),
+            ("refs/heads/gh-readonly-queue/main/pr-7-abc", "merge_group", False),
+            ("refs/tags/authority/x", "push", False),
+            ("refs/tags/publish-rehearsal/1-1", "push", False),
+            ("refs/tags/v0.1.11", "push", True),
+            ("refs/tags/dry-run/v0.1.11/1-1", "push", True),
+        ):
+            with self.subTest(ref=ref):
+                audit, deferred = self.scope(ref, event)
+                self.assertEqual(audit, "true" if enforced else "false")
+                self.assertEqual(deferred, not enforced)
+
+    def test_the_snapshot_collection_is_gated_on_the_same_scope(self) -> None:
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        gate = 'if [[ -n "$PULP_ACCEPTANCE_SHA" && "$live_open_pr_audit" == true ]]; then'
+        self.assertIn(gate, text)
+        live = text[text.index(gate):]
+        live = live[:live.index("\n          else\n            judge_authority_expansion\n          fi\n")]
+        # Tag runs collect the release-bump evidence and hand it to the
+        # verifier, so the bump rule is actually consulted.
+        self.assertIn("collect_release_evidence.py release-bump-evidence", live)
+        self.assertIn('--release-bump-evidence-json "$RUNNER_TEMP/release-bump-evidence.json"', live)
+        self.assertNotIn('"$GITHUB_EVENT_NAME" != pull_request && "$GITHUB_EVENT_NAME" != merge_group ]]; then\n'
+                         '            open_pr_repositories_text', text)
+
+    def job_block(self, text: str, job: str) -> str:
+        match = re.search(rf"^  {re.escape(job)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", text, re.M | re.S)
+        self.assertIsNotNone(match, job)
+        return match.group(1)
+
+    def test_observatory_runs_as_its_own_job_without_needs(self) -> None:
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        observatory = self.job_block(text, "observatory-verify")
+        authority = self.job_block(text, "provenance-verify")
+        # No dependency on another job and no job-level condition: it reports
+        # its own status whatever the authority job does.
+        self.assertIsNone(re.search(r"^    (?:needs|if):", observatory, re.M))
+        for name in ("Resolve the committed Pulp observatory cursor",
+                     "Check out exact observed Pulp cursor",
+                     "Verify two-way observatory health and negative controls"):
+            self.assertIn(f"- name: {name}\n", observatory)
+            self.assertNotIn(f"- name: {name}\n", authority)
+        self.assertNotIn("steps.authority-record", observatory)
+
+    def test_required_provenance_verify_still_gates_on_the_observatory(self) -> None:
+        # `observatory-verify` is not a required context. The required
+        # `provenance-verify` (decisions 0012 and 0013, trust-policy) must
+        # still fail when the observatory fails, so the split does not drop
+        # the observatory from the merge, queue, main-push and release gate.
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        authority = self.job_block(text, "provenance-verify")
+        self.assertIsNotNone(re.search(r"^    needs: \[?observatory-verify\]?\n", authority, re.M))
+        # It must run (and so report) even when the observatory failed;
+        # a skipped required check would count as passing.
+        self.assertIn("    if: ${{ !cancelled() }}\n", authority)
+        gate = "- name: Require the observatory job to have passed\n"
+        self.assertIn(gate, authority)
+        step = authority[authority.index(gate):]
+        step = step[:step.index("\n      - name:")] if "\n      - name:" in step else step
+        self.assertIn("needs.observatory-verify.result", step)
+        self.assertIn("success", step)
 
 if __name__ == "__main__":
     unittest.main()
