@@ -30,8 +30,8 @@ namespace vellum::web {
 }
 
 /// For each command, whether it lies inside a mask, between a `begin_mask`
-/// and its `end_mask`, where the shell draws nothing. The mask brackets
-/// themselves are not inside.
+/// and its `end_mask`, where the shell draws nothing. The outermost mask
+/// brackets are not inside; a nested mask's are, so each mask counts once.
 [[nodiscard]] inline std::vector<bool> canvas_shell_masked(
     const std::vector<vellum::graphics::PaintCommand>& commands) {
     using Kind = vellum::graphics::PaintCommand::Kind;
@@ -40,7 +40,7 @@ namespace vellum::web {
     std::size_t depth = 0;
     for (const auto& command : commands) {
         if (command.kind == Kind::end_mask && depth > 0U) --depth;
-        masked.push_back(depth > 0U && command.kind != Kind::begin_mask);
+        masked.push_back(depth > 0U);
         if (command.kind == Kind::begin_mask) ++depth;
     }
     return masked;

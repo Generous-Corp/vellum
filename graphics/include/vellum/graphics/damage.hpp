@@ -165,8 +165,10 @@ public:
     /// An absolute logical clip that bounds the damage of `node` and its
     /// descendants, or `std::nullopt` for none. The default is the
     /// `clip_extent` of the node's `clip` when the clip is valid and the node
-    /// has no transform of its own; the damage model does not map clips
-    /// through transforms.
+    /// has no transform of its own. The damage model does not map clips
+    /// through transforms, so it ignores this for a node under a transformed
+    /// ancestor, and a clip that spares the node's own paint bounds only the
+    /// descendants' damage.
     [[nodiscard]] virtual std::optional<Rect> clip_bounds(
         const SceneNode& node, const Rect& absolute_bounds) const;
 
@@ -204,7 +206,8 @@ public:
 /// Whether two nodes with the same identity group their subtree differently:
 /// a different clip (compared like paths in `paint_differs`), mask mode, or
 /// isolation. Such a change damages the node's whole subtree, and a changed
-/// mask mode also damages its parent's subtree.
+/// mask mode also damages its parent's subtree, as does a change to a mask's
+/// opacity or transform.
 [[nodiscard]] bool grouping_differs(const SceneNode& previous, const SceneNode& next);
 
 /// Damage between two scenes, keyed by node id (nodes with an empty or

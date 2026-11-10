@@ -211,6 +211,8 @@ SceneNode paint_fields(const SceneNode& node) {
     copy.mesh = node.mesh;
     copy.path = node.path;
     copy.clip = node.clip;
+    copy.opacity = node.opacity;
+    copy.transform = node.transform;
     copy.mask = node.mask;
     copy.isolate = node.isolate;
     return copy;
@@ -228,7 +230,14 @@ bool same_clip(const std::optional<NodeClip>& a, const std::optional<NodeClip>& 
     return same_float(a->rect.x, b->rect.x) && same_float(a->rect.y, b->rect.y) &&
            same_float(a->rect.width, b->rect.width) &&
            same_float(a->rect.height, b->rect.height) && same_radii(a->radii, b->radii) &&
-           same_path(a->path, b->path);
+           a->clips_own_paint == b->clips_own_paint && same_path(a->path, b->path);
+}
+
+bool same_transform(const std::optional<Affine2D>& a, const std::optional<Affine2D>& b) {
+    const auto x = a.value_or(Affine2D{});
+    const auto y = b.value_or(Affine2D{});
+    return same_float(x.a, y.a) && same_float(x.b, y.b) && same_float(x.c, y.c) &&
+           same_float(x.d, y.d) && same_float(x.tx, y.tx) && same_float(x.ty, y.ty);
 }
 
 }  // namespace
@@ -253,7 +262,7 @@ public:
     Snapshot(const Scene& scene, float scale, const DamagePropagation& propagation)
         : width_(scene.width), height_(scene.height), scale_(scale), background_(scene.background),
           version_(scene.scene_version), frame_(frame_rect(scene, scale)) {
-        walk(propagation, scene.root, std::string{}, 0, 0.0F, 0.0F, std::nullopt);
+        walk(propagation, scene.root, std::string{}, 0, 0.0F, 0.0F, std::nullopt, false);
     }
 
     [[nodiscard]] const NodeRecord* find(const std::string& key) const {
@@ -284,11 +293,17 @@ public:
 
 private:
     void walk(const DamagePropagation& propagation, const SceneNode& node, const std::string& parent_key, std::size_t index,
-              float parent_x, float parent_y, std::optional<Rect> clip) {
+              float parent_x, float parent_y, std::optional<Rect> clip, bool transformed) {
         std::string key = make_key(node, parent_key, index);
         const Rect absolute{parent_x + node.bounds.x, parent_y + node.bounds.y, node.bounds.width,
                             node.bounds.height};
-        if (const auto own_clip = propagation.clip_bounds(node, absolute)) {
+        // The damage model does not map clips through transforms, so a clip
+        // under any transformed ancestor bounds nothing.
+        transformed = transformed || (node.transform && !is_identity(*node.transform));
+        const std::optional<Rect> parent_clip = clip;
+        const auto own_clip =
+            transformed ? std::optional<Rect>{} : propagation.clip_bounds(node, absolute);
+        if (own_clip) {
             if (clip) {
                 const auto narrowed = clip_to(*clip, *own_clip);
                 clip = narrowed.value_or(Rect{own_clip->x, own_clip->y, 0.0F, 0.0F});
@@ -296,13 +311,16 @@ private:
                 clip = own_clip;
             }
         }
+        // A clip that spares the node's own paint bounds only its subtree.
+        const auto& paint_clip =
+            own_clip && node.clip && !node.clip->clips_own_paint ? parent_clip : clip;
 
         const Rect logical_frame{0.0F, 0.0F, width_, height_};
         std::optional<Rect> damage = node_paint_bounds(node, absolute, logical_frame, propagation);
         if (damage) {
             const float radius = propagation.effect_radius(node);
             if (std::isfinite(radius) && radius > 0.0F) damage = outset(*damage, radius);
-            if (clip) damage = clip_to(*damage, *clip);
+            if (paint_clip) damage = clip_to(*damage, *paint_clip);
         }
 
         const std::size_t position = records_.size();
@@ -311,7 +329,8 @@ private:
         children_[parent_key].push_back(key);
         records_.push_back({key, parent_key, paint_fields(node), absolute, damage, 0});
         for (std::size_t child = 0; child < node.children.size(); ++child) {
-            walk(propagation, node.children[child], key, child, absolute.x, absolute.y, clip);
+            walk(propagation, node.children[child], key, child, absolute.x, absolute.y, clip,
+                 transformed);
         }
         records_[position].subtree_end = records_.size();
     }
@@ -413,6 +432,14 @@ void diff_snapshots(const Snapshot& before, const Snapshot& after, DamageRegion&
                 add_parent(region, before, *was);
                 add_parent(region, after, now);
             }
+        }
+        // A mask's opacity or transform changes where it covers, and a mask
+        // that stops drawing hides its siblings everywhere.
+        if ((was->paint.mask || now.paint.mask) &&
+            (!same_float(was->paint.opacity, now.paint.opacity) ||
+             !same_transform(was->paint.transform, now.paint.transform))) {
+            add_mask_parent(region, before, *was);
+            add_mask_parent(region, after, now);
         }
         if (!same_rect(was->absolute, now.absolute) || paint_differs(was->paint, now.paint) ||
             !same_optional_rect(was->damage, now.damage)) {

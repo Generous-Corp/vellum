@@ -101,7 +101,7 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
             concat(*node.transform, translation(-absolute.x, -absolute.y))));
     }
     const auto radii = resolved_corner_radii(node);
-    if (node.clip) {
+    const auto open_clip = [&] {
         output.push_back({
             .kind = PaintCommand::Kind::begin_clip,
             .node_id = node.id,
@@ -113,7 +113,10 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
                           std::max(0.0F, node.clip->rect.width),
                           std::max(0.0F, node.clip->rect.height)},
         });
-    }
+    };
+    const bool own_clip = node.clip && node.clip->clips_own_paint;
+    const bool subtree_clip = node.clip && !node.clip->clips_own_paint;
+    if (own_clip) open_clip();
     const bool layered = opacity < 1.0F || node.isolate;
     const auto slot = output.size();
     if (layered) {
@@ -180,9 +183,11 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
             .transform = transform,
         });
     }
+    if (subtree_clip) open_clip();
     append_children(node, absolute, transform, output);
+    if (subtree_clip) output.push_back({.kind = PaintCommand::Kind::end_clip, .node_id = node.id});
     const auto close_clip = [&] {
-        if (node.clip) output.push_back({.kind = PaintCommand::Kind::end_clip, .node_id = node.id});
+        if (own_clip) output.push_back({.kind = PaintCommand::Kind::end_clip, .node_id = node.id});
     };
     if (!layered) {
         close_clip();

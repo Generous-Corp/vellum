@@ -796,8 +796,9 @@ bool materialize_path(
     return true;
 }
 
-// Clip, mask and isolation follow CSS: `overflow: hidden` clips to the box
-// with its border radii, `clipPath` is SVG path data in the box's
+// Clip, mask and isolation follow CSS: `overflow: hidden` (or `clip`, or
+// `auto` and `scroll` without scrolling) clips the subtree to the border box
+// with its radii, leaving the node's own paint and shadows whole, `clipPath` is SVG path data in the box's
 // coordinates and wins over `overflow`, `maskMode` marks the node as a mask
 // for its siblings, and `isolation: isolate` forces a group.
 bool parse_grouping(
@@ -809,9 +810,21 @@ bool parse_grouping(
     };
     bool clip_box = false;
     if (id overflow = style[@"overflow"]; overflow != nil) {
-        const auto value = keyword(overflow, std::array<std::string_view, 2>{"visible", "hidden"});
-        if (!value) return reject("overflow", "must be visible or hidden");
-        clip_box = *value == 1U;
+        const auto value = keyword(overflow,
+            std::array<std::string_view, 5>{"visible", "hidden", "clip", "auto", "scroll"});
+        if (!value) return reject("overflow", "must be visible, hidden, clip, auto or scroll");
+        clip_box = *value != 0U;
+        if (*value >= 3U) {
+            context.diagnostics->push_back({
+                .severity = LoweringDiagnostic::Severity::warning,
+                .disposition = LoweringDiagnostic::Disposition::lowered,
+                .code = std::string(vellum::graphics::kStyleDroppedCode),
+                .node_id = identity,
+                .property = "overflow",
+                .message = "overflow " + cpp_string(overflow) +
+                    " clips like hidden; the node does not scroll",
+            });
+        }
     }
     if (id clip_path = style[@"clipPath"]; clip_path != nil) {
         if (![clip_path isKindOfClass:NSString.class]) {
@@ -841,6 +854,7 @@ bool parse_grouping(
         output.clip = vellum::graphics::NodeClip{
             .rect = {0.0F, 0.0F, output.bounds.width, output.bounds.height},
             .radii = vellum::graphics::resolved_corner_radii(output),
+            .clips_own_paint = false,
         };
     }
     if (id mode = style[@"maskMode"]; mode != nil && !use.root) {
@@ -1026,7 +1040,8 @@ bool materialize_node(
         .root = depth == 0U,
         .paints_text_background =
             !output.fill_gradients.empty() || !output.box_shadows.empty(),
-        .clips_to_box = [style[@"overflow"] isEqual:@"hidden"] && style[@"clipPath"] == nil,
+        .clips_to_box = [style[@"overflow"] isKindOfClass:NSString.class] &&
+            ![style[@"overflow"] isEqual:@"visible"] && style[@"clipPath"] == nil,
     };
     for (id child in array_or_empty(source[@"children"])) {
         if (!skipped_text_run(type, child)) style_use.lays_out_children = true;

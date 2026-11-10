@@ -177,8 +177,9 @@ struct ResolvedLinearGradient final {
 /// opacity is zero or less contributes nothing.
 ///
 /// An isolated node is always wrapped in a layer, with `layer_isolated` set.
-/// A node with a clip wraps its layer, paint and subtree in a
-/// `begin_clip`/`end_clip` pair. A node with mask children wraps its other
+/// A node whose clip `clips_own_paint` wraps its layer, paint and subtree in
+/// a `begin_clip`/`end_clip` pair; any other clip wraps only its subtree,
+/// after the node's own paint and inside its layer. A node with mask children wraps its other
 /// children in a `layer_isolated` layer named `node_id + "/masked"` and ends
 /// that layer with one `begin_mask`/`end_mask` pair per mask child, in child
 /// order, holding the mask's own commands; a mask child whose subtree draws

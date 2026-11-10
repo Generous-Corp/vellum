@@ -104,14 +104,16 @@ bool nested_rounded_and_path_clips() {
     })};
     inner.children.push_back(rect("inner/fill", {-8.0F, -8.0F, 64.0F, 64.0F}, 0xFF0000));
     outer.children.push_back(std::move(inner));
+    outer.children.push_back(rect("overhang", {40.0F, 40.0F, 40.0F, 40.0F}, 0x00FF00));
     scene.root.children.push_back(std::move(outer));
     return capture_and_probe("nested_rounded_and_path_clips", scene, {
         {"inside both clips", 16, 16, {255, 0, 0, 255}},
         {"inside both clips near the top edge", 30, 12, {255, 0, 0, 255}},
-        {"outside the triangle shows the outer paint", 48, 48, {0, 0, 255, 255}},
-        {"the rounded corner cuts the fill", 10, 10, kBlack},
-        {"the outer clip cuts the overhang on the left", 4, 30, kBlack},
-        {"the outer clip cuts the overhang on the right", 60, 30, kBlack},
+        {"outside the triangle shows the outer paint", 20, 50, {0, 0, 255, 255}},
+        {"only the rounded outer corner cuts the triangle's fill here", 10, 10, kBlack},
+        {"the triangle cuts the overhang on the left", 4, 30, kBlack},
+        {"the outer clip cuts the overhang sibling", 60, 60, kBlack},
+        {"the overhang sibling shows inside the outer clip", 50, 50, {0, 255, 0, 255}},
     });
 }
 
@@ -123,12 +125,21 @@ bool transformed_clip() {
     node.clip = NodeClip{.rect = {0.0F, 0.0F, 16.0F, 32.0F}};
     node.children.push_back(rect("moved/child", {0.0F, 24.0F, 32.0F, 8.0F}, 0xFFFFFF));
     scene.root.children.push_back(std::move(node));
+    // Scaled twice as wide about its origin, so its 4-wide clip covers 8.
+    auto scaled = rect("scaled", {0.0F, 52.0F, 16.0F, 8.0F}, 0xFF00FF);
+    scaled.transform = Affine2D{.a = 2.0F};
+    scaled.clip = NodeClip{.rect = {0.0F, 0.0F, 4.0F, 8.0F}};
+    scene.root.children.push_back(std::move(scaled));
     return capture_and_probe("transformed_clip", scene, {
         {"the clipped left half is drawn where the node moved", 30, 30, {0, 255, 0, 255}},
+        {"the clip moved with the node past its untransformed edge", 36, 30, {0, 255, 0, 255}},
+        {"the child is drawn past the untransformed clip edge", 38, 44, {255, 255, 255, 255}},
         {"the right half is clipped", 44, 30, kBlack},
         {"the untransformed position is empty", 20, 30, kBlack},
         {"the child is clipped by the moved clip", 30, 44, {255, 255, 255, 255}},
         {"the child is cut beyond the moved clip", 44, 44, kBlack},
+        {"the clip scales with its node", 6, 56, {255, 0, 255, 255}},
+        {"the scaled clip still cuts", 12, 56, kBlack},
     });
 }
 
@@ -136,7 +147,7 @@ bool transformed_clip() {
 // over a parent whose own paint stays unmasked; the same mask in alpha mode,
 // which keeps both opaque halves; and a mask that draws nothing.
 bool alpha_and_luminance_masks() {
-    auto scene = frame(128.0F, 32.0F);
+    auto scene = frame(160.0F, 32.0F);
     const auto halves = [](std::string id, MaskMode mode) {
         SceneNode mask{.id = id, .kind = SceneNode::Kind::group,
                        .bounds = {0.0F, 0.0F, 32.0F, 32.0F}, .mask = mode};
@@ -167,8 +178,16 @@ bool alpha_and_luminance_masks() {
     nothing.mask = MaskMode::alpha;
     hidden.children.push_back(std::move(nothing));
 
+    // Luminance times alpha: half-transparent white keeps half the content.
+    SceneNode faint{.id = "faint", .kind = SceneNode::Kind::group, .bounds = {128.0F, 0.0F, 32.0F, 32.0F}};
+    faint.children.push_back(rect("faint/content", {0.0F, 0.0F, 32.0F, 32.0F}, 0xFFFF00));
+    auto faint_mask = rect("faint/mask", {0.0F, 0.0F, 32.0F, 32.0F}, 0xFFFFFF);
+    faint_mask.fill.alpha = 0.5F;
+    faint_mask.mask = MaskMode::luminance;
+    faint.children.push_back(std::move(faint_mask));
+
     scene.root.children = {std::move(alpha), std::move(luminance), std::move(opaque),
-                           std::move(hidden)};
+                           std::move(hidden), std::move(faint)};
     Capture kept;
     const bool probed = capture_and_probe("alpha_and_luminance_masks", scene, {
         {"half alpha keeps half the content", 8, 16, {128, 0, 0, 255}},
@@ -178,13 +197,30 @@ bool alpha_and_luminance_masks() {
         {"alpha mode keeps the white half", 72, 16, {0, 0, 255, 255}},
         {"alpha mode keeps the opaque black half too", 88, 16, {0, 0, 255, 255}},
         {"an empty mask hides its siblings", 112, 16, kBlack},
+        {"translucent white luminance keeps half the content", 144, 16, {128, 128, 0, 255}},
     }, &kept);
-    // Three masked groups and four mask layers.
-    if (kept.layers != 8U) {
-        std::cerr << "alpha_and_luminance_masks: expected 8 layers, got " << kept.layers << '\n';
+    // Five masked groups and five mask layers.
+    if (kept.layers != 10U) {
+        std::cerr << "alpha_and_luminance_masks: expected 10 layers, got " << kept.layers << '\n';
         return false;
     }
     return probed;
+}
+
+// A clip that spares its node's own paint, as `overflow: hidden` does, keeps
+// the node's shadow outside the box while cutting its children.
+bool subtree_clip_keeps_own_shadow() {
+    auto scene = frame(64.0F, 64.0F);
+    auto card = rect("card", {8.0F, 8.0F, 32.0F, 32.0F}, 0x0000FF);
+    card.box_shadows = {{.offset_x = 16.0F, .offset_y = 16.0F, .color = Color::hex(0xFF0000)}};
+    card.clip = NodeClip{.rect = {0.0F, 0.0F, 32.0F, 32.0F}, .clips_own_paint = false};
+    card.children.push_back(rect("card/overhang", {16.0F, -6.0F, 32.0F, 4.0F}, 0x00FF00));
+    scene.root.children.push_back(std::move(card));
+    return capture_and_probe("subtree_clip_keeps_own_shadow", scene, {
+        {"the shadow outside the box is drawn", 52, 52, {255, 0, 0, 255}},
+        {"the card's own fill is drawn", 16, 16, {0, 0, 255, 255}},
+        {"the child is cut above the box", 30, 4, kBlack},
+    });
 }
 
 // Source-over composition is associative, so isolating translucent overlapping
@@ -316,6 +352,7 @@ int main(int argc, char** argv) {
     try {
         if (fixture == "nested_rounded_and_path_clips") return nested_rounded_and_path_clips() ? 0 : 1;
         if (fixture == "transformed_clip") return transformed_clip() ? 0 : 1;
+        if (fixture == "subtree_clip_keeps_own_shadow") return subtree_clip_keeps_own_shadow() ? 0 : 1;
         if (fixture == "alpha_and_luminance_masks") return alpha_and_luminance_masks() ? 0 : 1;
         if (fixture == "isolated_overlap_matches_flat") return isolated_overlap_matches_flat() ? 0 : 1;
         if (fixture == "grouping_version_refusal") return grouping_version_refusal() ? 0 : 1;

@@ -262,9 +262,15 @@ struct CornerRadii final {
 /// width or height clips everything. With `path` the clip is the area the
 /// path fills under its fill rule; its stroke is ignored, and a path with no
 /// commands clips everything. Clip edges are anti-aliased.
+///
+/// With `clips_own_paint`, the default, the clip limits the node's own paint
+/// as well as its subtree, like CSS `clip-path`; without it only the subtree
+/// is clipped and the node's own fill and shadows stay whole, like CSS
+/// `overflow: hidden`.
 struct NodeClip final {
     Rect rect{};
     CornerRadii radii{};
+    bool clips_own_paint = true;
     /// Like a path node's geometry, it must not be mutated once a scene
     /// references it; replace the pointer to change it.
     std::shared_ptr<const PathGeometry> path;
@@ -296,6 +302,9 @@ enum class MaskMode : std::uint8_t {
 /// Version 3 adds the `path` node kind. A version 1 or 2 scene is still
 /// accepted when it has no path node; one that does fails
 /// `scene_fields_match_version` and is refused.
+///
+/// Version 4 is reserved for the image node kind; this build accepts it and
+/// draws it like version 3.
 ///
 /// Version 5 adds `SceneNode::clip`, `mask`, and `isolate`. A scene of an
 /// earlier version is still accepted when none of its nodes sets them; one

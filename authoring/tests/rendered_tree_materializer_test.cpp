@@ -548,7 +548,11 @@ bool grouping_keys() {
       {"type":"view","id":"shaped","style":{"width":20,"height":20,"overflow":"hidden",
         "clipPath":"M0 0 h20 v20 z","isolation":"auto"},"children":[]},
       {"type":"view","id":"visible","style":{"width":20,"height":20,"overflow":"visible",
-        "maskMode":"alpha"},"children":[]}
+        "maskMode":"alpha"},"children":[]},
+      {"type":"view","id":"clipped","style":{"width":20,"height":20,"overflow":"clip"},
+        "children":[]},
+      {"type":"view","id":"scroller","style":{"width":20,"height":20,"overflow":"scroll"},
+        "children":[]}
     )JSON");
     if (!vellum::authoring::materialize_rendered_tree(tree, rendered, &error,
                                                       &failure_diagnostics)) {
@@ -563,7 +567,7 @@ bool grouping_keys() {
     if (window == nullptr || !window->clip || window->clip->path ||
         !near(window->clip->rect.width, 40.0F) || !near(window->clip->rect.height, 30.0F) ||
         !near(window->clip->radii.top_left, 4.0F) || !near(window->clip->radii.top_right, 9.0F) ||
-        !window->isolate || window->mask) {
+        window->clip->clips_own_paint || !window->isolate || window->mask) {
         std::cerr << "grouping keys: overflow hidden or isolation did not reach the window\n";
         return false;
     }
@@ -576,8 +580,15 @@ bool grouping_keys() {
         std::cerr << "grouping keys: a clipped text node lost its border radius\n";
         return false;
     }
+    const auto* clipped = vellum::graphics::find_node(rendered.scene, "clipped");
+    const auto* scroller = vellum::graphics::find_node(rendered.scene, "scroller");
+    if (clipped == nullptr || !clipped->clip || scroller == nullptr || !scroller->clip) {
+        std::cerr << "grouping keys: overflow clip or scroll did not clip\n";
+        return false;
+    }
     if (shaped == nullptr || !shaped->clip || !shaped->clip->path ||
-        shaped->clip->path->verbs.size() != 4U || shaped->isolate) {
+        !shaped->clip->clips_own_paint || shaped->clip->path->verbs.size() != 4U ||
+        shaped->isolate) {
         std::cerr << "grouping keys: clipPath did not reach the scene\n";
         return false;
     }
@@ -588,8 +599,9 @@ bool grouping_keys() {
                        diagnostic.code == vellum::graphics::kStyleDroppedCode;
             });
     };
-    if (rendered.diagnostics.size() != 1U || reported("shaped", "overflow") != 1) {
-        std::cerr << "grouping keys: expected one overflow-ignored warning, got "
+    if (rendered.diagnostics.size() != 2U || reported("shaped", "overflow") != 1 ||
+        reported("scroller", "overflow") != 1) {
+        std::cerr << "grouping keys: expected two overflow warnings, got "
                   << rendered.diagnostics.size() << " diagnostics\n";
         return false;
     }
@@ -642,8 +654,8 @@ bool grouping_keys() {
         }
         return true;
     };
-    return refuses(R"("overflow":"scroll")", "node bad overflow must be visible or hidden",
-                   false) &&
+    return refuses(R"("overflow":"overlay")",
+                   "node bad overflow must be visible, hidden, clip, auto or scroll", false) &&
            refuses(R"("maskMode":"inverted")", "node bad maskMode must be alpha or luminance",
                    false) &&
            refuses(R"("isolation":true)", "node bad isolation must be auto or isolate", false) &&

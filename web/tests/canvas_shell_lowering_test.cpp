@@ -107,6 +107,9 @@ int main() {
     auto mask = box("masked/mask");
     mask.mask = vellum::graphics::MaskMode::luminance;
     mask.children.push_back(box("masked/mask/inner"));
+    auto nested = box("masked/mask/nested");
+    nested.mask = vellum::graphics::MaskMode::alpha;
+    mask.children.push_back(nested);
     masked.children.push_back(mask);
     grouped.root.children.push_back(masked);
     const auto grouped_commands = vellum::graphics::make_paint_commands(grouped);

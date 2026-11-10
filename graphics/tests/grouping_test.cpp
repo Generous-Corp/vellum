@@ -96,6 +96,29 @@ void clip_commands() {
            "the new kinds have names");
 }
 
+// A clip that spares the node's own paint opens after that paint, inside the
+// node's layer, and closes before the layer does.
+void subtree_clip_commands() {
+    auto card = box("card", {10.0F, 10.0F, 20.0F, 20.0F});
+    card.box_shadows = {{.offset_x = 8.0F, .color = Color::hex(0x000000)}};
+    card.opacity = 0.5F;
+    card.clip = NodeClip{.rect = {0.0F, 0.0F, 20.0F, 20.0F}, .clips_own_paint = false};
+    card.children = {box("card/a", {0.0F, 0.0F, 5.0F, 5.0F}), box("card/b", {5.0F, 5.0F, 5.0F, 5.0F})};
+    const auto commands = make_paint_commands(scene_with({card}));
+    const std::vector<std::pair<Kind, std::string>> expected{
+        {Kind::begin_layer, "card"}, {Kind::rectangle, "card"}, {Kind::begin_clip, "card"},
+        {Kind::rectangle, "card/a"}, {Kind::rectangle, "card/b"}, {Kind::end_clip, "card"},
+        {Kind::end_layer, "card"},
+    };
+    expect(shape(commands) == expected, "a subtree clip leaves the node's own paint outside it");
+    auto lone = box("lone", {0.0F, 0.0F, 5.0F, 5.0F});
+    lone.clip = NodeClip{.rect = {0.0F, 0.0F, 1.0F, 1.0F}, .clips_own_paint = false};
+    const std::vector<std::pair<Kind, std::string>> bare{
+        {Kind::rectangle, "lone"}, {Kind::begin_clip, "lone"}, {Kind::end_clip, "lone"}};
+    expect(shape(make_paint_commands(scene_with({lone}))) == bare,
+           "a subtree clip without children still balances");
+}
+
 // Isolation forces a layer even at full opacity and for a single command;
 // clip, layer and paint nest in that order.
 void isolation_commands() {
@@ -316,9 +339,40 @@ void damage() {
     expect(grouping_differs(before.root.children[0], radii.root.children[0]) &&
                !compute_scene_damage(before, radii, 1.0F).empty(),
            "changing only a clip's radii damages the clipped subtree");
-    auto same = before;
-    same.root.children[0].clip->path = nullptr;
-    expect(compute_scene_damage(before, same, 1.0F).empty(), "an unchanged clip damages nothing");
+    auto shaped = before;
+    shaped.root.children[0].clip->path = triangle();
+    auto reshaped = shaped;
+    reshaped.root.children[0].clip->path = triangle();
+    expect(!grouping_differs(shaped.root.children[0], reshaped.root.children[0]) &&
+               compute_scene_damage(shaped, reshaped, 1.0F).empty(),
+           "an equal clip path in a new allocation damages nothing");
+    expect(!compute_scene_damage(before, shaped, 1.0F).empty(),
+           "replacing a clip rectangle with a path damages");
+
+    // A subtree clip bounds the descendants but not the node's own shadow.
+    auto card = box("card", {10.0F, 10.0F, 20.0F, 20.0F});
+    card.box_shadows = {{.offset_x = 40.0F, .color = Color::hex(0x000000)}};
+    card.clip = NodeClip{.rect = {0.0F, 0.0F, 20.0F, 20.0F}, .clips_own_paint = false};
+    card.children.push_back(box("card/slider", {0.0F, 0.0F, 60.0F, 5.0F}));
+    const auto card_before = scene_with({card});
+    auto recoloured = card_before;
+    recoloured.root.children[0].fill = Color::hex(0x00FF00);
+    expect(damage_bounds(card_before, recoloured).right >= 70,
+           "a subtree clip does not bound the node's own shadow damage");
+    auto slid = card_before;
+    slid.root.children[0].children[0].bounds.y = 10.0F;
+    expect(damage_bounds(card_before, slid).right <= 31,
+           "a subtree clip bounds its descendants' damage");
+
+    // Under a transformed ancestor the clip's position is unknown to the model.
+    SceneNode turner{.id = "turner", .kind = SceneNode::Kind::group,
+                     .transform = Affine2D{.b = 0.5F}};
+    turner.children.push_back(before.root.children[0]);
+    const auto under = scene_with({turner});
+    auto under_moved = under;
+    under_moved.root.children[0].children[0].children[0].bounds.y = 10.0F;
+    expect(damage_bounds(under, under_moved).right > 31,
+           "a clip under a transformed ancestor does not bound damage");
 
     auto isolated = before;
     isolated.root.children[0].isolate = true;
@@ -350,6 +404,14 @@ void damage() {
            "adding a mask damages the siblings it hides");
     expect(damage_bounds(added, unmasked).right >= 80,
            "removing a mask damages the siblings it revealed");
+    auto faded_mask = masked;
+    faded_mask.root.children[0].children[1].opacity = 0.0F;
+    expect(damage_bounds(masked, faded_mask).right >= 80,
+           "fading a mask out damages every sibling it now hides");
+    auto moved_mask = masked;
+    moved_mask.root.children[0].children[1].transform = Affine2D{.tx = 2.0F};
+    expect(damage_bounds(masked, moved_mask).right >= 80,
+           "transforming a mask damages the parent's subtree");
     auto plain_added = unmasked;
     plain_added.root.children[0].children.push_back(
         box("parent/new", {0.0F, 0.0F, 5.0F, 5.0F}));
@@ -361,6 +423,7 @@ void damage() {
 
 int main() {
     clip_commands();
+    subtree_clip_commands();
     isolation_commands();
     mask_commands();
     clip_validity();

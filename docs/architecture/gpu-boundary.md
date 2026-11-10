@@ -96,9 +96,12 @@ Version 5 adds three grouping fields to every node, and a scene before
 version 5 that sets any of them is refused by `render` and yields no paint
 commands. A `clip`, in the node's own coordinates so it moves with its
 transform, is a rectangle with per-corner radii or the fill area of a path
-(its stroke ignored); it limits the node's paint and its whole subtree, with
-anti-aliased edges, and lowers to `begin_clip` and `end_clip` commands around
-everything else the node emits. A `mask` marks a child as a mask for its
+(its stroke ignored), with anti-aliased edges. By default it limits the node's
+own paint and its whole subtree, like CSS `clip-path`, and lowers to
+`begin_clip` and `end_clip` commands around everything else the node emits;
+a clip that does not `clips_own_paint` limits only the subtree, like CSS
+`overflow`, and its brackets sit after the node's own paint, so the node's
+fill and shadows stay whole. A `mask` marks a child as a mask for its
 siblings: it is not drawn, its subtree is rendered offscreen, and its alpha, or
 its luminance times its alpha, multiplies the parent's other children, which
 are composited together first in a `begin_layer` named after the parent with
@@ -112,18 +115,25 @@ modes, isolation only changes rounding, which the GPU test bounds at two
 levels. A clip whose rectangle or radii are not finite, or whose path fails
 `path_is_valid`, is refused like a non-finite transform. Damage clips a
 subtree to its clip's extent (the rectangle, or the path's control box) unless
-the node has its own transform, which the damage model does not map; a changed
-clip or isolation damages the node's subtree, and adding, removing or changing
-a mask damages its parent's subtree. The web shell neither clips nor masks: it
+the node or an ancestor has a transform, which the damage model does not map;
+a clip that spares the node's own paint does not bound the node's own damage.
+A changed clip or isolation damages the node's subtree, and adding, removing
+or changing a mask, including its opacity or transform, damages its parent's
+subtree. The web shell neither clips nor masks: it
 counts each clip once, skips each mask's commands so a mask is never drawn as
 paint, counts the mask once, and draws its siblings unmasked. The CoreGraphics
 smoke canvas takes no scene and does not lower clips, masks or isolation. The
-authoring host maps CSS `overflow: hidden` to a clip of the box with its border
-radii, `clipPath` (SVG path data in the box's coordinates, which wins over
-`overflow` with a `VELLUM_STYLE_DROPPED` warning) to a path clip, `maskMode`
-(`alpha` or `luminance`) to a mask, and `isolation: isolate` to isolation; a
-root `maskMode` is dropped with a warning, an invalid value fails the tree, and
-invalid clip path data fails it with `VELLUM_INVALID_PATH`. Hit testing and
+authoring host maps CSS `overflow: hidden` or `clip` to a subtree clip of the
+border box (not the padding box) with its border radii; `auto` and `scroll`
+clip the same way with a `VELLUM_STYLE_DROPPED` warning, since nothing
+scrolls. `clipPath` (SVG path data in the box's coordinates) becomes a clip of
+the node and its subtree; it replaces `overflow` rather than intersecting with
+it, with a `VELLUM_STYLE_DROPPED` warning. `maskMode` (`alpha` or `luminance`)
+makes a mask, and `isolation: isolate` isolation. A mask still takes its place
+in its parent's layout, so a mask meant to cover its siblings needs explicit
+`x` and `y` or a parent that does not stack it after them. A root `maskMode` is
+dropped with a warning, any other invalid value fails the tree, and invalid
+clip path data fails it with `VELLUM_INVALID_PATH`. Hit testing and
 accessibility boxes ignore clips and masks.
 
 The surface draws every frame into a retained offscreen Graphite surface the
