@@ -203,15 +203,18 @@ bool CpuRenderInterface::begin_frame(const CpuFrameTarget& frame) {
         stride < static_cast<std::size_t>(frame.width) * 4u || !(frame.scale > 0.0f) ||
         !std::isfinite(frame.scale))
         return false;
+    const bool dimensions_changed = s.base.width != frame.width || s.base.height != frame.height;
     s.base = {frame.rgba, frame.width, frame.height, stride};
     s.target = s.base;
     s.layer_count = 1;
-    if (s.layer_pool.size() && (s.layer_pool.front().size() != static_cast<std::size_t>(frame.width) * frame.height * 4u)) {
+    if (dimensions_changed ||
+        (s.layer_pool.size() &&
+         s.layer_pool.front().size() != static_cast<std::size_t>(frame.width) * frame.height * 4u)) {
         s.layer_pool.clear();
         s.layer_dirty.clear();
     }
     const std::size_t mask_size = static_cast<std::size_t>(frame.width) * frame.height;
-    if (s.mask.size() != mask_size)
+    if (dimensions_changed || s.mask.size() != mask_size)
         s.mask.assign(mask_size, 0);
     else
         zero(s.mask.data(), frame.width, 1, s.mask_dirty);

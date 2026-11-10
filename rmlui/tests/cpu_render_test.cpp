@@ -362,6 +362,58 @@ void test_layer_reuse_starts_clear() {
     VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 1, 1), 0, 0, 0, 0));
 }
 
+void test_equal_area_resize_clears_reused_buffers() {
+    const auto check_mask = [](std::uint32_t old_width, std::uint32_t old_height, std::uint32_t width,
+                               std::uint32_t height) {
+        CpuRenderInterface r;
+        std::vector<std::uint8_t> old_buffer(static_cast<std::size_t>(old_width) * old_height * 4u);
+        std::vector<std::uint8_t> buffer(static_cast<std::size_t>(width) * height * 4u);
+        const auto old_full = quad(r, 0, 0, static_cast<float>(old_width), static_cast<float>(old_height), kRed);
+        const auto full = quad(r, 0, 0, static_cast<float>(width), static_cast<float>(height), kRed);
+
+        VELLUM_RMLUI_CHECK(r.begin_frame(frame(old_buffer, old_width, old_height)));
+        r.EnableClipMask(true);
+        r.RenderToClipMask(Rml::ClipMaskOperation::Set, old_full, {0, 0});
+        r.end_frame();
+
+        VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer, width, height)));
+        r.EnableClipMask(true);
+        r.RenderGeometry(full, {0, 0}, 0);
+        r.EnableClipMask(false);
+        r.end_frame();
+        for (std::uint32_t y = 0; y < height; ++y)
+            for (std::uint32_t x = 0; x < width; ++x)
+                VELLUM_RMLUI_CHECK(is(px(buffer, static_cast<std::size_t>(width) * 4u, x, y), 255, 0, 0, 255));
+    };
+
+    const auto check_layer = [](std::uint32_t old_width, std::uint32_t old_height, std::uint32_t width,
+                                std::uint32_t height) {
+        CpuRenderInterface r;
+        std::vector<std::uint8_t> old_buffer(static_cast<std::size_t>(old_width) * old_height * 4u);
+        std::vector<std::uint8_t> buffer(static_cast<std::size_t>(width) * height * 4u);
+        const auto old_full = quad(r, 0, 0, static_cast<float>(old_width), static_cast<float>(old_height), kRed);
+
+        VELLUM_RMLUI_CHECK(r.begin_frame(frame(old_buffer, old_width, old_height)));
+        r.PushLayer();
+        r.RenderGeometry(old_full, {0, 0}, 0);
+        r.PopLayer();
+        r.end_frame();
+
+        VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer, width, height)));
+        const auto layer = r.PushLayer();
+        r.CompositeLayers(layer, 0, Rml::BlendMode::Blend, {});
+        r.PopLayer();
+        r.end_frame();
+        for (const auto value : buffer)
+            VELLUM_RMLUI_CHECK(value == 0);
+    };
+
+    check_mask(8, 8, 16, 4);
+    check_mask(16, 4, 8, 8);
+    check_layer(8, 8, 16, 4);
+    check_layer(16, 4, 8, 8);
+}
+
 std::vector<std::uint8_t> tall_texture() {
     std::vector<std::uint8_t> texels(28544u * 4u);
     for (std::size_t y = 0; y < 28544u; ++y) {
@@ -465,6 +517,7 @@ int main() {
     test_layers();
     test_mask_reuse_outside_the_scissor();
     test_layer_reuse_starts_clear();
+    test_equal_area_resize_clears_reused_buffers();
     test_texture_limit();
     test_deterministic_across_threads();
     return 0;
