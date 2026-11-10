@@ -78,6 +78,30 @@ class UpstreamLeaks(unittest.TestCase):
                 ["include/RmlUi/Core.h", "lib/cmake/RmlUi/RmlUiConfig.cmake", "lib/librmlui.a"],
             )
 
+    def test_lua_archives_are_leaks(self):
+        with tempfile.TemporaryDirectory() as text:
+            tree = Path(text)
+            touch(tree, "lib/liblua.a")
+            touch(tree, "lib/libvellum-rmlui-lua.a")
+            touch(tree, "include/lua.h")
+            self.assertEqual(
+                builder.upstream_rmlui_leaks(tree),
+                ["include/lua.h", "lib/liblua.a", "lib/libvellum-rmlui-lua.a"],
+            )
+
+    def test_upstream_paths_are_recognized_and_vellum_paths_are_not(self):
+        for relative in ("include/RmlUi/Core.h", "include/RmlUi/Core/Box.h", "lib/librmlui.a",
+                         "lib/librmlui_debugger.a", "lib/cmake/RmlUi/RmlUiConfig.cmake",
+                         "lib/cmake/RmlUi/Modules/FindLuaJIT.cmake", "include/freetype2/ft2build.h",
+                         "lib/libfreetype.a", "include/luaconf.h", "lib/liblua.a",
+                         "lib/libvellum-rmlui-lua.a"):
+            self.assertTrue(builder.is_upstream_rmlui_path(relative), relative)
+        for relative in ("lib/libvellum-rmlui-core.dylib", "include/vellum/rmlui/backend.hpp",
+                         "lib/cmake/VellumRmlUi/VellumRmlUiConfig.cmake",
+                         "lib/cmake/Vellum/VellumConfig.cmake", "lib/libvellum-gpu.dylib",
+                         "share/doc/VellumRmlUi/RmlUi-LICENSE.txt"):
+            self.assertFalse(builder.is_upstream_rmlui_path(relative), relative)
+
     def test_the_vellum_rmlui_package_is_not_a_leak(self):
         with tempfile.TemporaryDirectory() as text:
             tree = Path(text)
@@ -126,6 +150,22 @@ class RemoveInstallComponent(unittest.TestCase):
                     root / "build", tree, "VellumRmlUiUpstream", root / "scratch")
             self.assertEqual(removed, [])
             self.assertTrue((tree / "lib/libvellum-gpu.dylib").is_file())
+
+    def test_refuses_a_component_that_installs_anything_but_rmlui_files(self):
+        for stray in ("lib/libvellum-rmlui-core.dylib", "include/vellum/rmlui/x.hpp"):
+            with self.subTest(stray=stray), tempfile.TemporaryDirectory() as text:
+                root = Path(text)
+                tree = root / "install"
+                touch(tree, "include/RmlUi/Core.h")
+                touch(tree, stray)
+                files = ["include/RmlUi/Core.h", stray]
+                with mock.patch.object(builder, "run", self.fake_install(files)):
+                    with self.assertRaisesRegex(builder.ArtifactError, stray):
+                        builder.remove_install_component(
+                            root / "build", tree, "VellumRmlUiUpstream", root / "scratch")
+                # Refused before anything is removed.
+                self.assertTrue((tree / stray).is_file())
+                self.assertTrue((tree / "include/RmlUi/Core.h").is_file())
 
     def test_refuses_a_component_that_shares_a_package_file(self):
         with tempfile.TemporaryDirectory() as text:

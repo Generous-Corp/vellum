@@ -11,11 +11,12 @@ CLI backend when every required payload is present.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import gzip
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import platform
 import re
 import shutil
@@ -57,8 +58,13 @@ RMLUI_PACKAGE_FILES = (
 # The install component that carries RmlUi's own headers, archives and CMake
 # package. The SDK links RmlUi only inside VellumRmlUi::Core, so none of it ships.
 RMLUI_UPSTREAM_COMPONENT = "VellumRmlUiUpstream"
-RMLUI_UPSTREAM_PATTERNS = ("include/RmlUi/*", "include/freetype2/*", "**/librmlui*", "**/libfreetype*",
-                           "lib/cmake/RmlUi/*", "include/lua*")
+# What RmlUi, FreeType and Lua install of their own. An SDK install tree may
+# carry none of it, and it is all removing the upstream component may delete.
+RMLUI_UPSTREAM_PATTERNS = (
+    "include/RmlUi/*", "lib/cmake/RmlUi/*", "**/librmlui*",
+    "include/freetype2/*", "**/libfreetype*",
+    "include/lua*", "**/liblua*", "**/libvellum-rmlui-lua*",
+)
 # The native host and the libraries it loads at launch. The installer keeps
 # the same list under the payload's "sdk/" prefix.
 NATIVE_HOST_FILES = (
@@ -144,16 +150,28 @@ def missing_package_files(install_tree: Path, files: Iterable[str]) -> list[str]
     return [path for path in files if not (install_tree / path).is_file()]
 
 
+def is_upstream_rmlui_path(relative: str) -> bool:
+    """Whether an install-tree path is one of RMLUI_UPSTREAM_PATTERNS."""
+
+    path = PurePosixPath(relative)
+    for pattern in RMLUI_UPSTREAM_PATTERNS:
+        if pattern.startswith("**/"):
+            if fnmatch.fnmatchcase(path.name, pattern[3:]):
+                return True
+        elif fnmatch.fnmatchcase(relative, pattern):
+            return True
+    return False
+
+
 def upstream_rmlui_leaks(install_tree: Path) -> list[str]:
     """RmlUi, FreeType or Lua files an SDK install tree must not carry."""
 
-    found = {
-        path.relative_to(install_tree).as_posix()
-        for pattern in RMLUI_UPSTREAM_PATTERNS
-        for path in install_tree.glob(pattern)
-        if path.is_file() or path.is_symlink()
-    }
-    return sorted(found)
+    return sorted(
+        relative
+        for path in install_tree.rglob("*")
+        if (path.is_file() or path.is_symlink())
+        and is_upstream_rmlui_path(relative := path.relative_to(install_tree).as_posix())
+    )
 
 
 def remove_install_component(build_dir: Path, install_tree: Path, component: str,
@@ -162,9 +180,10 @@ def remove_install_component(build_dir: Path, install_tree: Path, component: str
 
     A plain `cmake --install` installs every component. The component is
     installed alone into scratch to learn its files, which are then removed
-    from install_tree with any directory they leave empty. A file the
-    component shares with the RmlUi or Vellum packages is refused rather than
-    removed. Returns the removed paths.
+    from install_tree with any directory they leave empty. Only paths matching
+    RMLUI_UPSTREAM_PATTERNS may be removed: a component that installs anything
+    else is refused, so the removal can never delete a Vellum file. Returns
+    the removed paths.
     """
 
     if scratch.exists():
@@ -173,14 +192,19 @@ def remove_install_component(build_dir: Path, install_tree: Path, component: str
          "--component", component, "--prefix", str(scratch)])
     if not scratch.exists():
         return []
+    files = [
+        path.relative_to(scratch).as_posix()
+        for path in sorted(scratch.rglob("*"), key=lambda item: item.as_posix())
+        if not (path.is_dir() and not path.is_symlink())
+    ]
+    unexpected = [relative for relative in files if not is_upstream_rmlui_path(relative)]
+    if unexpected:
+        raise ArtifactError(
+            f"install component {component} installs files that are not RmlUi's own: "
+            + ", ".join(unexpected)
+        )
     removed: list[str] = []
-    kept = set(RMLUI_PACKAGE_FILES)
-    for path in sorted(scratch.rglob("*"), key=lambda item: item.as_posix()):
-        if path.is_dir() and not path.is_symlink():
-            continue
-        relative = path.relative_to(scratch).as_posix()
-        if relative in kept or relative.startswith("lib/cmake/Vellum/"):
-            raise ArtifactError(f"install component {component} also installs {relative}")
+    for relative in files:
         target = install_tree / relative
         if target.is_symlink() or target.exists():
             target.unlink()
