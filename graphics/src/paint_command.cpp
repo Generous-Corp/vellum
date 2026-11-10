@@ -85,6 +85,16 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
             .text_runs = node.text_runs,
             .transform = transform,
         });
+    } else if (node.kind == SceneNode::Kind::path && (!node.path || !node.path->verbs.empty())) {
+        output.push_back({
+            .kind = PaintCommand::Kind::path,
+            .node_id = node.id,
+            .bounds = absolute,
+            .fill = node.fill,
+            .fill_gradients = node.fill_gradients,
+            .path = node.path,
+            .transform = transform,
+        });
     } else if (node.kind == SceneNode::Kind::mesh && node.mesh) {
         output.push_back({
             .kind = PaintCommand::Kind::mesh,
@@ -219,6 +229,16 @@ bool mesh_is_valid(const TriangleMesh& mesh, std::string* reason) {
     return true;
 }
 
+std::optional<Rect> path_gradient_box(const PaintCommand& command) {
+    const auto has_area = [](const Rect& box) { return box.width > 0.0F && box.height > 0.0F; };
+    if (has_area(command.bounds)) return command.bounds;
+    if (!command.path) return std::nullopt;
+    const auto control = path_control_bounds(*command.path);
+    if (!control || !has_area(*control)) return std::nullopt;
+    return Rect{command.bounds.x + control->x, command.bounds.y + control->y, control->width,
+                control->height};
+}
+
 std::vector<PaintCommand> make_paint_commands(const Scene& scene) {
     return make_paint_commands(scene, nullptr);
 }
@@ -258,6 +278,14 @@ PaintExtent paint_extent(const PaintCommand& command) {
         }
         return {{box.x + left, box.y + top, std::max(0.0F, right - left),
                  std::max(0.0F, bottom - top)}};
+    }
+    if (command.kind == PaintCommand::Kind::path) {
+        if (!command.path || !path_is_valid(*command.path)) return {box, false};
+        const auto control = path_control_bounds(*command.path);
+        if (!control) return {{box.x, box.y, 0.0F, 0.0F}};
+        const float outset = path_stroke_outset(command.path->stroke);
+        return {{box.x + control->x - outset, box.y + control->y - outset,
+                 control->width + 2.0F * outset, control->height + 2.0F * outset}};
     }
     if (!draws_content(command.kind)) return {box};
     Rect extent = box;

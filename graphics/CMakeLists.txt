@@ -3,6 +3,7 @@ add_library(vellum-graphics
     src/damage.cpp
     src/layer_cache.cpp
     src/paint_command.cpp
+    src/path_geometry.cpp
     src/render_telemetry.cpp)
 add_library(Vellum::Graphics ALIAS vellum-graphics)
 

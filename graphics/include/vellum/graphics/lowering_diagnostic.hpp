@@ -50,6 +50,9 @@ inline constexpr std::string_view kNodeContentDroppedCode = "VELLUM_NODE_CONTENT
 /// An attributed text-run with a missing or duplicate id, non-string text,
 /// children, or a non-object style; always an error.
 inline constexpr std::string_view kInvalidTextRunCode = "VELLUM_INVALID_TEXT_RUN";
+/// A path with missing or malformed path data, path data over the path
+/// budgets, or an invalid fill rule, fill or stroke; always an error.
+inline constexpr std::string_view kInvalidPathCode = "VELLUM_INVALID_PATH";
 
 [[nodiscard]] constexpr std::string_view to_string(
     LoweringDiagnostic::Severity severity) noexcept {

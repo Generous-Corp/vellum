@@ -483,6 +483,45 @@ void damage_model_version_gate() {
            describe(partial->frame_stats()));
 }
 
+// Paths arrive with version 3, past the damage model, so a scene with paths
+// always repaints fully and matches a full render, and an older scene that
+// carries one is refused before anything is redrawn.
+void path_scenes() {
+    constexpr std::uint32_t width = 400;
+    constexpr std::uint32_t height = 300;
+    auto full = make_surface(width, height, 2.0F);
+    auto partial = make_surface(width, height, 2.0F);
+    if (!full || !partial) return;
+    Scene scene = base_scene(width, height);
+    scene.scene_version = kSceneVersion;
+    for (auto& path : harness::fixtures::path_fill_rules(200.0F, 150.0F).root.children) {
+        scene.root.children.push_back(std::move(path));
+    }
+    if (!render_both(*full, *partial, scene)) return;
+    for (int step = 0; step < 2; ++step) {
+        auto& star = node(scene, "star-evenodd");
+        auto recoloured = std::make_shared<PathGeometry>(*star.path);
+        recoloured->stroke.color = step == 0 ? Color::hex(0xF43F5E) : Color::hex(0x22C55E);
+        star.path = recoloured;
+        node(scene, "mover").bounds.x += 6.0F;
+        if (!render_both(*full, *partial, scene)) return;
+        const auto stats = partial->frame_stats();
+        expect(stats.full_repaint &&
+                   stats.full_repaint_reason == FullRepaintReason::damage_model_version,
+               "a scene with paths repaints fully, step " + std::to_string(step),
+               describe(stats));
+        compare("a scene with paths, step " + std::to_string(step), *full, *partial);
+    }
+    Scene legacy = scene;
+    legacy.scene_version = kDamageModelSceneVersion;
+    std::string error;
+    const auto before = partial->frame_stats().frame;
+    expect(!partial->render_incremental(legacy, &error) &&
+               error == "scene version 1 cannot carry the path node star-nonzero" &&
+               partial->frame_stats().frame == before,
+           "a version 1 scene with a path is refused before any redraw", error);
+}
+
 void explicit_damage() {
     constexpr std::uint32_t width = 400;
     constexpr std::uint32_t height = 300;
@@ -552,6 +591,7 @@ int main() {
         device_loss();
         command_extents();
         damage_model_version_gate();
+        path_scenes();
     } catch (const std::exception& exception) {
         std::cerr << "FAIL " << exception.what() << '\n';
         return 1;
