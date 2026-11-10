@@ -10,7 +10,8 @@ The machine-readable current boundary is
 source scan policy is
 [`provenance/active-source-boundary.json`](../provenance/active-source-boundary.json).
 Source authority for the selected mapped framework slices is active in
-Vellum's independently implemented boundary. The historical Pulp source was
+Vellum's independently implemented boundary and, for the units transferred from
+Pulp, in `framework/`. The historical Pulp source was
 not restored or copied into the active Vellum tree. Pulp's matching transferred
 paths remain in Pulp under its freeze and change-event contract. Vellum-only
 surfaces with no transferred counterpart, including the CLI, remain explicitly
@@ -32,24 +33,51 @@ verifier checks both facts: historical blobs still match the manifest at the
 seed commit, while no retired path or exact historical source blob is present
 in a Vellum-native root.
 
-## Mirrored Pulp framework source
+## Framework source transferred from Pulp
 
 [Decision 0010](../decisions/0010-mirror-extracted-pulp-framework-source.md)
-admits a second, separately verified scope: the `mirror/` root, which receives
-validated audio-free Pulp framework closures by automation from an exact Pulp
-commit and lands by merge commit. Nothing is mirrored yet. Each mirrored file
-must equal a blob recorded in
-[`provenance/mirror/blob-origins.json`](../provenance/mirror/blob-origins.json)
-with its Pulp commit and path, so the root is read-only in Vellum. The check
-fails closed: the required provenance lane proves each mirrored blob against a
-checkout of Pulp `main`. Every landing carries a
-`pulp.vellum.export-receipt.v2` receipt whose projected tree must equal
-`HEAD:mirror`. Pulp remains
-the editable source owner of a mirrored unit until a separately approved Pulp
-change consumes the exact Vellum package and freezes its copy; there is no
-synchronization in either direction. The `pulp::` namespace is permitted only
-under `mirror/`; audio, plug-in, host, and product edges are forbidden in both
-scopes, and native roots may not contain a copy of any Pulp-origin blob.
+admitted the `mirror/` root, which received validated audio-free Pulp
+framework closures by automation from an exact Pulp commit, each file equal to
+a recorded Pulp-origin blob. Its amendment ends that scope for the exported
+units: one commit renames them from `pulp` to `vellum` and moves them to the
+native root `framework/`, keeping the export's layout.
+
+From that commit on:
+
+- **The units in `framework/` are Vellum-native and editable.** Generic work on
+  them starts in Vellum and is reviewed like any other Vellum source.
+- **Pulp's frozen copies change only by `framework-backport`** from a named,
+  immutable Vellum commit, with destination tests.
+- **Pulp's copies of the UI units are deleted** when Pulp consumes Vellum. Until
+  then they are Pulp's build inputs and keep the `pulp` spelling. The
+  foundation, state-core, dataplane and gpu-device-api units stay in Pulp,
+  which audio-only builds still need; Pulp's copies of those become ordinary
+  Pulp code again, and Vellum's renamed copies evolve independently.
+
+[`provenance/framework/transfer.json`](../provenance/framework/transfer.json)
+records the transfer: each Pulp path and blob at the export receipt's commit,
+paired with its `framework/` path and blob. The required provenance lane proves
+the record against a Pulp checkout, as a pure rename of the transfer commit's
+tree. `framework/` has its own content rules: the mirror-edge rules (no audio,
+plug-in, host, or product edges), no `pulp::`, `namespace pulp` or `<pulp/`
+spelling, no symlinks, and no second copy of its files elsewhere in Vellum. The
+units' kept `PULP_*` macros, `pulp-*` target names and plug-in-host prose are a
+counted debt in
+[`provenance/framework-name-debt.json`](../provenance/framework-name-debt.json)
+that may only fall. Until 8c regenerates the closures from Vellum, an edit may
+change a file's bytes but not the transferred file set, and the generated-input
+sources (preludes, embedded data, build info) stay as Pulp produced them.
+`framework/external/` is third-party source, and its bytes are pinned: each
+file must hold its transfer-record blob. A third-party update changes the file
+and appends an entry (`path`, `from_blob`, `to_blob`, `reason`, `dependency`,
+`version`) to
+[`provenance/framework/external-updates.json`](../provenance/framework/external-updates.json)
+in its own reviewed pull request. The list is append-only, and each entry's
+`from_blob` must be the file's current expected blob. An updated file is no longer exempt as
+third-party code: the collision census reads it as native, and it may not
+declare or name the `vellum` namespace or carry Pulp, plug-in or audio-SDK
+names. Native roots outside `framework/` keep the full rules and may
+not define or copy the units' namespaces.
 
 ## Active ownership and change routing
 
