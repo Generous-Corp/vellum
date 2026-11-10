@@ -6,6 +6,7 @@
 
 #include "test_support.hpp"
 
+#include <RmlUi/Core/Dictionary.h>
 #include <RmlUi/Core/Matrix4.h>
 
 #include <array>
