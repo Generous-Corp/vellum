@@ -445,11 +445,11 @@ void command_extents() {
 }
 
 void damage_model_version_gate() {
-    expect(partial_redraw_supported(kDamageModelSceneVersion) &&
+    expect(kDamageModelSceneVersion == 3U && partial_redraw_supported(3U) &&
+               partial_redraw_supported(kDamageModelSceneVersion) &&
                !partial_redraw_supported(kDamageModelSceneVersion + 1U) &&
-               !partial_redraw_supported(kSceneVersion) &&
-               !partial_redraw_supported(3U),
-           "partial redraw covers the damage-model scene versions and no newer one");
+               !partial_redraw_supported(4U),
+           "partial redraw covers scene versions up to 3 and refuses version 4");
     expect(to_string(FullRepaintReason::damage_model_version) == "damage_model_version",
            "the damage-model version fallback has a telemetry name");
     constexpr std::uint32_t width = 400;
@@ -466,9 +466,26 @@ void damage_model_version_gate() {
         const auto stats = partial->frame_stats();
         expect(!stats.full_repaint && stats.full_repaint_reason == FullRepaintReason::none &&
                    stats.paint_commands_recorded < stats.paint_commands_total,
-               "a default version 2 scene takes the partial path, step " + std::to_string(step),
+               "a default version 3 scene takes the partial path, step " + std::to_string(step),
                describe(stats));
-        compare("a default version 2 scene, step " + std::to_string(step), *full, *partial);
+        compare("a default version 3 scene, step " + std::to_string(step), *full, *partial);
+    }
+    Scene beyond = scene;
+    beyond.scene_version = kDamageModelSceneVersion + 1U;
+    if (scene_version_is_supported(beyond.scene_version)) {
+        node(beyond, "mover").bounds.x += 6.0F;
+        if (!render_both(*full, *partial, beyond)) return;
+        const auto stats = partial->frame_stats();
+        expect(stats.full_repaint &&
+                   stats.full_repaint_reason == FullRepaintReason::damage_model_version,
+               "a version 4 scene is refused partial redraw and repaints fully", describe(stats));
+        compare("a version 4 scene", *full, *partial);
+    } else {
+        std::string refused;
+        const auto before = partial->frame_stats().frame;
+        expect(!partial->render_incremental(beyond, &refused) &&
+                   partial->frame_stats().frame == before,
+               "a version 4 scene is refused before any redraw", refused);
     }
     Scene newer = scene;
     newer.scene_version = kSceneVersion + 1U;
@@ -510,6 +527,34 @@ SceneNode card_label() {
 void remove_child(Scene& scene, const std::string& parent, const std::string& id) {
     std::erase_if(node(scene, parent).children,
                   [&](const SceneNode& child) { return child.id == id; });
+}
+
+std::shared_ptr<const PathGeometry> zigzag(float stroke_width, Color stroke_color) {
+    auto path = std::make_shared<PathGeometry>();
+    path->verbs = {PathVerb::move, PathVerb::line, PathVerb::line, PathVerb::line,
+                   PathVerb::close};
+    path->values = {0.0F, 0.0F, 14.0F, 36.0F, 28.0F, 0.0F, 42.0F, 36.0F};
+    path->stroke = {.color = stroke_color, .width = stroke_width,
+                    .join = StrokeJoin::miter, .cap = StrokeCap::butt, .miter_limit = 4.0F};
+    return path;
+}
+
+SceneNode path_node(std::string id, Rect bounds, Color fill, float stroke_width,
+                    Color stroke_color) {
+    return {
+        .id = std::move(id),
+        .kind = SceneNode::Kind::path,
+        .bounds = bounds,
+        .fill = fill,
+        .path = zigzag(stroke_width, stroke_color),
+    };
+}
+
+PathGeometry& edit_path(Scene& scene, const std::string& id) {
+    auto& target = node(scene, id);
+    auto copy = std::make_shared<PathGeometry>(*target.path);
+    target.path = copy;
+    return *copy;
 }
 
 Scene compositing_scene(float width, float height) {
@@ -554,6 +599,29 @@ Scene compositing_scene(float width, float height) {
         .bounds = {80.0F, 88.0F, 20.0F, 8.0F},
         .fill = Color::hex(0xE11D48),
     });
+    scene.root.children.push_back(path_node("glyph",
+                                            {width * 0.42F, height * 0.77F, 42.0F, 36.0F},
+                                            Color::hex(0x38BDF8), 6.0F, Color::hex(0xFDE68A)));
+    SceneNode veil;
+    veil.id = "veil";
+    veil.bounds = {width * 0.62F, height * 0.52F, 100.0F, 50.0F};
+    veil.opacity = 0.5F;
+    veil.children.push_back({
+        .id = "veil-back",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {0.0F, 0.0F, 20.0F, 20.0F},
+        .fill = Color::hex(0xA3E635),
+    });
+    veil.children.push_back(path_node("veil-path", {50.0F, 6.0F, 42.0F, 36.0F},
+                                      Color::hex(0xFB7185), 5.0F, Color::hex(0x1E293B)));
+    scene.root.children.push_back(veil);
+    SceneNode halo;
+    halo.id = "halo";
+    halo.bounds = {width * 0.85F, height * 0.37F, 50.0F, 40.0F};
+    halo.opacity = 0.6F;
+    halo.children.push_back(path_node("halo-path", {0.0F, 0.0F, 42.0F, 36.0F},
+                                      Color::hex(0xC084FC), 4.0F, Color::hex(0xF8FAFC)));
+    scene.root.children.push_back(halo);
     return scene;
 }
 
@@ -606,6 +674,52 @@ std::vector<Step> compositing_steps() {
              card.opacity = 1.0F;
              card.transform.reset();
          }},
+        {"move a path", [](Scene& scene) {
+             node(scene, "glyph").bounds.x += 13.5F;
+             node(scene, "glyph").bounds.y += 4.25F;
+         }},
+        {"restroke a path", [](Scene& scene) {
+             auto& path = edit_path(scene, "glyph");
+             path.stroke.width = 10.0F;
+             path.stroke.color = Color::hex(0xF97316);
+         }},
+        {"re-dash a path", [](Scene& scene) {
+             edit_path(scene, "glyph").stroke.dash_array = {9.0F, 5.0F};
+         }},
+        {"shift a path's dash phase", [](Scene& scene) {
+             edit_path(scene, "glyph").stroke.dash_offset = 4.0F;
+         }},
+        {"fill a path with a gradient", [](Scene& scene) {
+             node(scene, "glyph").fill_gradients = {{
+                 .angle_degrees = 90.0F,
+                 .stops = {{.position = 0.0F, .color = Color::hex(0xEF4444)},
+                           {.position = 1.0F, .color = Color::hex(0x3B82F6)}},
+             }};
+         }},
+        {"rotate a path", [](Scene& scene) {
+             node(scene, "glyph").transform = rotation_degrees(25.0F);
+         }},
+        {"move the rotated path", [](Scene& scene) { node(scene, "glyph").bounds.x -= 7.0F; }},
+        {"move a path inside a faded group", [](Scene& scene) {
+             node(scene, "veil-path").bounds.x -= 6.0F;
+             node(scene, "veil-path").bounds.y += 3.0F;
+         }},
+        {"restroke a path inside a faded group", [](Scene& scene) {
+             edit_path(scene, "veil-path").stroke.width = 9.0F;
+         }},
+        {"restroke the lone path of a faded group", [](Scene& scene) {
+             auto& path = edit_path(scene, "halo-path");
+             path.stroke.width = 8.0F;
+             path.stroke.color = Color::hex(0x0F172A);
+         }},
+        {"move the lone path of a faded group", [](Scene& scene) {
+             node(scene, "halo-path").bounds.y += 5.0F;
+         }},
+        {"remove the paths and their faded groups", [](Scene& scene) {
+             std::erase_if(scene.root.children, [](const SceneNode& child) {
+                 return child.id == "glyph" || child.id == "veil" || child.id == "halo";
+             });
+         }},
         {"stretch a blurred shadow", [](Scene& scene) {
              node(scene, "stretched").transform = Affine2D{.a = 2.0F, .d = 0.5F};
          }},
@@ -652,9 +766,6 @@ void compositing_sequence(std::uint32_t width, std::uint32_t height, float scale
     }
 }
 
-// Paths arrive with version 3, past the damage model, so a scene with paths
-// always repaints fully and matches a full render, and an older scene that
-// carries one is refused before anything is redrawn.
 void path_scenes() {
     constexpr std::uint32_t width = 400;
     constexpr std::uint32_t height = 300;
@@ -662,7 +773,6 @@ void path_scenes() {
     auto partial = make_surface(width, height, 2.0F);
     if (!full || !partial) return;
     Scene scene = base_scene(width, height);
-    scene.scene_version = kSceneVersion;
     for (auto& path : harness::fixtures::path_fill_rules(200.0F, 150.0F).root.children) {
         scene.root.children.push_back(std::move(path));
     }
@@ -675,21 +785,102 @@ void path_scenes() {
         node(scene, "mover").bounds.x += 6.0F;
         if (!render_both(*full, *partial, scene)) return;
         const auto stats = partial->frame_stats();
-        expect(stats.full_repaint &&
-                   stats.full_repaint_reason == FullRepaintReason::damage_model_version,
-               "a scene with paths repaints fully, step " + std::to_string(step),
+        expect(!stats.full_repaint && stats.full_repaint_reason == FullRepaintReason::none &&
+                   stats.paint_commands_recorded < stats.paint_commands_total,
+               "a version 3 scene with paths repaints only its damage, step " +
+                   std::to_string(step),
                describe(stats));
         compare("a scene with paths, step " + std::to_string(step), *full, *partial);
     }
     Scene legacy = scene;
-    legacy.scene_version = kDamageModelSceneVersion;
+    legacy.scene_version = 2U;
     std::string error;
     const auto before = partial->frame_stats().frame;
     expect(!partial->render_incremental(legacy, &error) &&
-               error == "scene version " + std::to_string(kDamageModelSceneVersion) +
-                       " cannot carry the path node star-nonzero" &&
+               error == "scene version 2 cannot carry the path node star-nonzero" &&
                partial->frame_stats().frame == before,
-           "a damage-model-version scene with a path is refused before any redraw", error);
+           "a version 2 scene with a path is refused before any redraw", error);
+}
+
+void whole_path_enclosure() {
+    constexpr std::uint32_t width = 400;
+    constexpr std::uint32_t height = 300;
+    constexpr float scale = 2.0F;
+    auto full = make_surface(width, height, scale);
+    auto partial = make_surface(width, height, scale);
+    if (!full || !partial) return;
+    Scene scene = compositing_scene(width, height);
+    node(scene, "glyph").transform = rotation_degrees(25.0F);
+    node(scene, "veil-path").transform = rotation_degrees(15.0F);
+    if (!render_both(*full, *partial, scene)) return;
+
+    Scene previous = scene;
+    node(scene, "glyph").bounds.x += 9.0F;
+    if (!render_both(*full, *partial, scene)) return;
+    auto modelled = compute_scene_damage(previous, scene, scale);
+    auto stats = partial->frame_stats();
+    expect(!stats.full_repaint && modelled.area() > 0 &&
+               stats.damage_area_pixels > modelled.area(),
+           "a rotated path outside a layer is redrawn whole",
+           describe(stats) + " modelled_px=" + std::to_string(modelled.area()));
+    compare("a moved rotated path", *full, *partial);
+
+    previous = scene;
+    node(scene, "veil-path").bounds.x -= 4.0F;
+    if (!render_both(*full, *partial, scene)) return;
+    modelled = compute_scene_damage(previous, scene, scale);
+    stats = partial->frame_stats();
+    expect(!stats.full_repaint && modelled.area() > 0 &&
+               stats.damage_area_pixels > modelled.area(),
+           "a rotated path inside a faded group is enclosed with its whole layer",
+           describe(stats) + " modelled_px=" + std::to_string(modelled.area()));
+    compare("a moved rotated path inside a faded group", *full, *partial);
+}
+
+Scene without_stroke_reach(Scene scene, const std::string& id) {
+    edit_path(scene, id).stroke.width = 0.0F;
+    return scene;
+}
+
+void stroke_outset_negative_control() {
+    constexpr std::uint32_t width = 400;
+    constexpr std::uint32_t height = 300;
+    constexpr float scale = 2.0F;
+    auto full = make_surface(width, height, scale);
+    auto partial = make_surface(width, height, scale);
+    if (!full || !partial) return;
+    const std::vector<Step> edits = {
+        {"move a path", [](Scene& scene) { node(scene, "glyph").bounds.x += 13.5F; }},
+        {"restroke a path", [](Scene& scene) {
+             edit_path(scene, "glyph").stroke.width = 12.0F;
+         }},
+    };
+    Scene scene = compositing_scene(width, height);
+    std::string error;
+    for (const auto& edit : edits) {
+        const Scene previous = scene;
+        edit.edit(scene);
+        const auto real = compute_scene_damage(previous, scene, scale);
+        const auto stripped = compute_scene_damage(without_stroke_reach(previous, "glyph"),
+                                                   without_stroke_reach(scene, "glyph"), scale);
+        expect(full->render(previous, &error) && partial->render(previous, &error) &&
+                   full->render(scene, &error) && partial->render(scene, real, &error),
+               "negative control setup renders " + edit.name, error);
+        const bool real_identical = compare("control: " + edit.name + " with the stroke outset",
+                                            *full, *partial);
+        expect(full->render(previous, &error) && partial->render(previous, &error) &&
+                   full->render(scene, &error) && partial->render(scene, stripped, &error),
+               "negative control renders " + edit.name + " without the stroke outset", error);
+        const auto expected = capture(*full);
+        const auto stale = capture(*partial);
+        const auto verdict = harness::assert_identical(expected.result, stale.result);
+        expect(real_identical && expected.ok && stale.ok && !verdict &&
+                   stripped.area() < real.area(),
+               "negative control: " + edit.name +
+                   " without the stroke outset fails the byte-identity check",
+               verdict.message + " damage_px=" + std::to_string(stripped.area()) + "/" +
+                   std::to_string(real.area()));
+    }
 }
 
 void explicit_damage() {
@@ -764,6 +955,8 @@ int main() {
         compositing_sequence(400, 300, 1.0F);
         compositing_sequence(400, 300, 2.0F);
         path_scenes();
+        whole_path_enclosure();
+        stroke_outset_negative_control();
     } catch (const std::exception& exception) {
         std::cerr << "FAIL " << exception.what() << '\n';
         return 1;

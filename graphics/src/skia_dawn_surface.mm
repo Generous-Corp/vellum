@@ -937,9 +937,14 @@ bool close_over_layers(const Scene& scene, const std::vector<PaintCommand>& comm
             command.kind == PaintCommand::Kind::rectangle && !is_identity(command.transform) &&
             std::any_of(command.box_shadows.begin(), command.box_shadows.end(),
                         [](const BoxShadow& shadow) { return shadow.blur_radius > 0.0F; });
-        if (command.kind != PaintCommand::Kind::begin_layer && !transformed_blur) continue;
+        const float opacity = std::clamp(command.opacity, 0.0F, 1.0F);
+        const bool own_layer = draws_content(command.kind) &&
+                               command.kind != PaintCommand::Kind::text && opacity > 0.0F &&
+                               opacity < 1.0F && !opacity_folds_into_paint(command);
+        const bool whole = transformed_blur || own_layer || command.kind == PaintCommand::Kind::path;
+        if (command.kind != PaintCommand::Kind::begin_layer && !whole) continue;
         if (extents.empty()) extents = paint_command_extents(scene, commands, scale);
-        if (transformed_blur) {
+        if (whole) {
             layers.push_back(intersection(extents[begin] ? *extents[begin] : target, target));
             continue;
         }
@@ -1137,6 +1142,7 @@ public:
         backend_context.fDevice = device_;
         backend_context.fQueue = queue_;
         skgpu::graphite::ContextOptions context_options;
+        context_options.fInternalMultisampleCount = skgpu::graphite::SampleCount::k1;
         context_ = skgpu::graphite::ContextFactory::MakeDawn(
             backend_context, context_options);
         if (!context_) {

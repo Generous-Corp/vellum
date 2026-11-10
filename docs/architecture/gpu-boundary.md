@@ -108,9 +108,17 @@ back to a full repaint. Hosts pass `invalidate` reasons and node ids through
 rectangle counts, the commands re-recorded and why a frame repainted fully.
 What is cached and when it is discarded is renderer policy: the scene schema
 carries no cache hints. Partial redraw is enabled only for scene versions the
-damage model understands, up to `kDamageModelSceneVersion` (1); a version 2
-or 3 scene, which can carry transforms, group opacity, per-corner radii and
-paths, repaints fully until the damage model learns those fields.
+damage model understands, up to `kDamageModelSceneVersion` (3), which covers
+transforms, group opacity, per-corner radii and paths. A path damages its
+control box outset by its stroke reach (half the width, scaled by the miter
+limit or the square or round cap reach, dashes ignored), mapped through its
+composed transform; the renderer culls with the same box. Graphite's path
+coverage and a command's own opacity layer change when a damage rectangle cuts
+them, so the surface grows the damage to hold every path and self-layered
+command it meets whole, and it disables Graphite's internal multisampling,
+which would otherwise switch a whole pass, paths or not, to multisampled
+rasterization whenever a path is drawn. A newer scene repaints fully until the
+damage model learns its fields.
 
 The surface keeps three cross-frame resource caches under
 `RenderCacheBudgets`: laid-out text paragraphs keyed by every run's text and

@@ -230,12 +230,9 @@ std::optional<Rect> mesh_paint_bounds(const TriangleMesh& mesh, const Rect& abso
 std::optional<Rect> path_paint_bounds(const SceneNode& node, const Rect& absolute,
                                       const Rect& frame) {
     if (!node.path || !path_is_valid(*node.path)) return frame;
-    if (node.path->verbs.empty()) return std::nullopt;
-    const auto control = path_control_bounds(*node.path);
-    if (!control) return std::nullopt;
-    const Rect moved{absolute.x + control->x, absolute.y + control->y, control->width,
-                     control->height};
-    return outset(moved, path_stroke_outset(node.path->stroke));
+    const auto box = path_paint_box(*node.path);
+    if (!box) return std::nullopt;
+    return Rect{absolute.x + box->x, absolute.y + box->y, box->width, box->height};
 }
 
 bool same_floats(const std::vector<float>& a, const std::vector<float>& b) {

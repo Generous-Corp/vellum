@@ -91,8 +91,8 @@ struct PaintCommand final {
 /// The area a command can paint, in its `bounds` coordinates before
 /// `transform`: the box grown by each shadow's offset, spread, and 1.5 times
 /// its blur radius, a mesh's clipped vertex extent, or a path's
-/// `path_control_bounds` outset by `path_stroke_outset`. Text may overflow its
-/// box, so its extent is the box with `bounded` false.
+/// `path_paint_box`. Text may overflow its box, so its extent is the box
+/// with `bounded` false.
 struct PaintExtent final {
     Rect rect{};
     bool bounded = true;
