@@ -201,6 +201,8 @@ std::size_t own_draws(const SceneNode& node) noexcept {
         return (node.fill_gradients.empty() && node.box_shadows.empty()) ? 1 : 2;
     case SceneNode::Kind::mesh:
         return node.mesh ? 1 : 0;
+    case SceneNode::Kind::path:
+        return (!node.path || !node.path->verbs.empty()) ? 1 : 0;
     case SceneNode::Kind::group:
     case SceneNode::Kind::custom:
         return 0;
@@ -803,6 +805,12 @@ std::optional<Rect> transformed_paint_bounds(const SceneNode& node, const Rect& 
     case SceneNode::Kind::mesh: {
         if (!node.mesh) return std::nullopt;
         const auto local = mesh_paint_bounds(*node.mesh, absolute_bounds);
+        if (!local) return std::nullopt;
+        return transformed_bounds(transform, *local);
+    }
+    case SceneNode::Kind::path: {
+        if (!node.path || !path_is_valid(*node.path)) return frame;
+        const auto local = path_paint_bounds(node, absolute_bounds, frame);
         if (!local) return std::nullopt;
         return transformed_bounds(transform, *local);
     }

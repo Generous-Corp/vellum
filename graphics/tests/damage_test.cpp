@@ -946,6 +946,42 @@ void whole_area_closure() {
           "growth is clipped to the target");
 }
 
+void path_damage() {
+    using vellum::graphics::PathGeometry;
+    using vellum::graphics::PathVerb;
+    auto triangle = std::make_shared<PathGeometry>();
+    triangle->verbs = {PathVerb::move, PathVerb::line, PathVerb::line, PathVerb::close};
+    triangle->values = {0.0F, 0.0F, 30.0F, 0.0F, 0.0F, 20.0F};
+    SceneNode shape;
+    shape.id = "shape";
+    shape.kind = SceneNode::Kind::path;
+    shape.bounds = {60.0F, 30.0F, 0.0F, 0.0F};
+    shape.fill = Color::hex(0x22C55E);
+    shape.path = triangle;
+
+    Scene base;
+    base.width = 200.0F;
+    base.height = 100.0F;
+    Scene rotated = base;
+    shape.transform = rotation(30.0F);
+    rotated.root.children.push_back(shape);
+    check(!lowered_pixels(rotated, "shape").empty() && added_matches_lowering(base, rotated, "shape"),
+          "a path under a rotation damages its lowered, transformed extent");
+
+    Scene faded = base;
+    SceneNode group;
+    group.id = "g";
+    group.opacity = 0.5F;
+    group.children.push_back(rectangle("a", {10.0F, 10.0F, 20.0F, 20.0F}));
+    shape.transform.reset();
+    group.children.push_back(shape);
+    faded.root.children.push_back(group);
+    Scene folded = faded;
+    child(folded, "g")->children.erase(child(folded, "g")->children.begin());
+    check(covers(diff(faded, folded), lowered_pixels(folded, "shape")),
+          "a path left alone in a faded group is damaged when the group's opacity folds into it");
+}
+
 void tracker() {
     check(vellum::graphics::parse_invalidation_reason("state") == InvalidationReason::state &&
               vellum::graphics::parse_invalidation_reason("timer") == InvalidationReason::timer &&
@@ -1031,6 +1067,7 @@ int main() {
     transform_geometry();
     composite_path_changes();
     whole_area_closure();
+    path_damage();
     tracker();
     if (failures != 0) {
         std::fprintf(stderr, "%d damage check(s) failed\n", failures);
