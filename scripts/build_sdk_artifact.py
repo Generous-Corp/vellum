@@ -513,6 +513,11 @@ def normalize_macho_dylibs(install_tree: Path, commit: str, target: str) -> None
     if codesign is None:
         raise ArtifactError("deterministic Darwin artifacts require codesign")
     for path in sorted(install_tree.rglob("*.dylib")):
+        # A versioned library installs with symlinks to it (libx.0.1.dylib ->
+        # libx.0.1.10.dylib). Each real file is normalized once, under its own
+        # name; the payload copy dereferences the links into identical files.
+        if path.is_symlink():
+            continue
         relative = path.relative_to(install_tree).as_posix()
         identity = bytearray(hashlib.sha256(
             f"vellum-dylib\0{relative}\0{commit}\0{target}".encode("utf-8")

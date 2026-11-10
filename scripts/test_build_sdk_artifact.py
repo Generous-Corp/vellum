@@ -140,5 +140,25 @@ class RemoveInstallComponent(unittest.TestCase):
             self.assertTrue((tree / shared).is_file())
 
 
+class NormalizeMachoDylibs(unittest.TestCase):
+    def test_each_real_dylib_is_normalized_once_and_symlinks_are_skipped(self):
+        with tempfile.TemporaryDirectory() as text:
+            tree = Path(text)
+            real = touch(tree, "lib/libvellum-rmlui-core.0.1.10.dylib")
+            (tree / "lib/libvellum-rmlui-core.0.1.dylib").symlink_to(real.name)
+            (tree / "lib/libvellum-rmlui-core.dylib").symlink_to("libvellum-rmlui-core.0.1.dylib")
+            touch(tree, "lib/libvellum-gpu.dylib")
+            normalized, signed = [], []
+            with mock.patch.object(builder.shutil, "which", return_value="/usr/bin/codesign"), \
+                 mock.patch.object(builder, "canonicalize_macho_temp_root",
+                                   side_effect=lambda path: normalized.append(path.name)), \
+                 mock.patch.object(builder, "rewrite_macho_uuid"), \
+                 mock.patch.object(builder, "run",
+                                   side_effect=lambda arguments, **_: signed.append(Path(arguments[-1]).name)):
+                builder.normalize_macho_dylibs(tree, "0" * 40, "darwin-arm64")
+            self.assertEqual(normalized, ["libvellum-gpu.dylib", "libvellum-rmlui-core.0.1.10.dylib"])
+            self.assertEqual(sorted(set(signed)), normalized)
+
+
 if __name__ == "__main__":
     unittest.main()
