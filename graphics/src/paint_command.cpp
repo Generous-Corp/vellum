@@ -248,8 +248,24 @@ namespace {
 
 void report_missing_images(const ImageAssetIndex& images, const SceneNode& node,
                            std::vector<LoweringDiagnostic>& output) {
-    if (node.kind == SceneNode::Kind::image && node.image &&
-        !images.find(node.image->content_hash)) {
+    const auto asset = node.kind == SceneNode::Kind::image && node.image
+        ? images.find(node.image->content_hash)
+        : nullptr;
+    // A unit box always has area, so an empty placement means the source
+    // rectangle selects nothing of the image.
+    if (asset &&
+        !image_placement(*node.image, asset->width, asset->height, {0.0F, 0.0F, 1.0F, 1.0F})) {
+        output.push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::lowered,
+            .code = std::string(kImageAssetMissingCode),
+            .node_id = node.id,
+            .property = "image",
+            .message = "image " + node.id +
+                       " has a source rectangle outside its asset; only its fill was drawn",
+        });
+    }
+    if (node.kind == SceneNode::Kind::image && node.image && !asset) {
         output.push_back({
             .severity = LoweringDiagnostic::Severity::warning,
             .disposition = LoweringDiagnostic::Disposition::lowered,

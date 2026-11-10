@@ -832,8 +832,10 @@ bool draw_path(SkCanvas& canvas, const PaintCommand& command, float opacity,
 // without a reference or with an invalid one.
 const SceneNode* find_undrawable_image(const SceneNode& node, std::string& reason) {
     if (node.kind == SceneNode::Kind::image &&
-        (!node.image || !image_reference_is_valid(*node.image, &reason))) {
+        (!node.image || !node.children.empty() ||
+         !image_reference_is_valid(*node.image, &reason))) {
         if (!node.image) reason = "it has no image reference";
+        else if (!node.children.empty()) reason = "an image node has no children";
         return &node;
     }
     for (const auto& child : node.children) {
@@ -1270,23 +1272,20 @@ public:
     }
 
     bool render(const Scene& scene, std::string* error) {
-        diagnostics_ = scene_loss_diagnostics(scene);
-        if (!accepts(scene, error)) return false;
+        if (!accepts_with_diagnostics(scene, error)) return false;
         discard_tracked_damage(scene);
         return draw_frame(scene, FullRepaintReason::full_render, nullptr, error);
     }
 
     bool render_incremental(const Scene& scene, std::string* error) {
-        diagnostics_ = scene_loss_diagnostics(scene);
-        if (!accepts(scene, error)) return false;
+        if (!accepts_with_diagnostics(scene, error)) return false;
         tracker_.commit(scene, config_.scale);
         const auto damage = tracker_.take_damage();
         return draw_frame(scene, FullRepaintReason::none, &damage, error);
     }
 
     bool render(const Scene& scene, const DamageRegion& damage, std::string* error) {
-        diagnostics_ = scene_loss_diagnostics(scene);
-        if (!accepts(scene, error)) return false;
+        if (!accepts_with_diagnostics(scene, error)) return false;
         const auto invalidated = tracker_.take_damage();
         discard_tracked_damage(scene);
         const auto frame = frame_rect(scene, config_.scale);
@@ -1367,7 +1366,37 @@ public:
         return true;
     }
 
+    // Records what the frame loses. A refused scene reports only its refusal:
+    // the version mismatch, or a `kInvalidImageCode` error for an image or
+    // image table that cannot be drawn.
+    bool accepts_with_diagnostics(const Scene& scene, std::string* error) {
+        std::string why;
+        diagnostics_ = scene_loss_diagnostics(scene);
+        if (accepts(scene, &why)) return true;
+        const bool version = !diagnostics_.empty() &&
+            diagnostics_.front().severity == LoweringDiagnostic::Severity::error;
+        if (version) {
+            diagnostics_.resize(1U);
+        } else {
+            diagnostics_.clear();
+            if (image_refusal_) {
+                diagnostics_.push_back({
+                    .severity = LoweringDiagnostic::Severity::error,
+                    .disposition = LoweringDiagnostic::Disposition::unsupported,
+                    .code = std::string(kInvalidImageCode),
+                    .node_id = image_refusal_node_,
+                    .property = "image",
+                    .message = why,
+                });
+            }
+        }
+        set_error(error, std::move(why));
+        return false;
+    }
+
     bool accepts(const Scene& scene, std::string* error) {
+        image_refusal_ = false;
+        image_refusal_node_.clear();
         if (!scene_version_is_supported(scene.scene_version)) {
             set_error(error, "scene version " + std::to_string(scene.scene_version) +
                                  " is not supported by this renderer");
@@ -1398,10 +1427,13 @@ public:
             return false;
         }
         if (const auto* image = find_undrawable_image(scene.root, reason); image != nullptr) {
+            image_refusal_ = true;
+            image_refusal_node_ = image->id;
             set_error(error, "image " + image->id + " cannot be drawn: " + reason);
             return false;
         }
         if (!scene_images_are_valid(scene, &reason)) {
+            image_refusal_ = true;
             set_error(error, reason);
             return false;
         }
@@ -1967,6 +1999,8 @@ private:
     bool internal_redraw_ = false;
     bool device_loss_trimmed_ = false;
     std::vector<LoweringDiagnostic> diagnostics_;
+    bool image_refusal_ = false;
+    std::string image_refusal_node_;
     std::uint64_t trims_ = 0;
     CacheTrimReason last_trim_ = CacheTrimReason::none;
 };

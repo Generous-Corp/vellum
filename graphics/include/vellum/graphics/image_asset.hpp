@@ -14,9 +14,11 @@
 
 namespace vellum::graphics {
 
-/// The largest width or height of an `ImageAsset`, in pixels.
-inline constexpr std::uint32_t kMaxImageDimension = 16384U;
-/// The largest texel buffer of an `ImageAsset`: 256 MiB, a 8192 by 8192
+/// The largest width or height of an `ImageAsset`, in pixels: the WebGPU
+/// default `maxTextureDimension2D`, which the Dawn device is created with, so
+/// every accepted asset can be uploaded as one texture.
+inline constexpr std::uint32_t kMaxImageDimension = 8192U;
+/// The largest texel buffer of an `ImageAsset`: 256 MiB, an 8192 by 8192
 /// image.
 inline constexpr std::size_t kMaxImageBytes = 256U * 1024U * 1024U;
 

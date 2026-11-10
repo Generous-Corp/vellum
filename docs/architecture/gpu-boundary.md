@@ -98,7 +98,8 @@ An `image` node carries an `ImageReference`: the content hash of an asset
 source rectangle in image pixels, a fit (fill, contain, cover or none, as CSS
 `object-fit`) and nearest or linear sampling. The decoded pixels live beside
 the tree in `Scene::images`, premultiplied RGBA8 `ImageAsset`s that are shared
-and immutable like a mesh texture, at most 16384 pixels on a side and 256 MiB.
+and immutable like a mesh texture, at most 8192 pixels on a side (the WebGPU
+default texture limit) and 256 MiB.
 `make_image_asset` premultiplies straight alpha once, and
 `SkiaDawnSurface::decode_image_asset` decodes a PNG into an asset named by the
 SHA-256 of its bytes, refusing bytes that do not match an expected hash. The
@@ -113,7 +114,12 @@ scene with an image node is refused with a `VELLUM_SCENE_VERSION_MISMATCH`
 diagnostic. Damage treats an image as its box and compares its asset by
 pointer. The surface remembers each asset's texel digest under its content
 hash while the hash still names the same asset object, so an unchanged image
-is not rehashed each frame, and uploads through the texture cache below. The
+is not rehashed each frame, and uploads through the texture cache below; hosts
+should keep an unchanged asset's object rather than rebuild it each frame. An
+image with children is refused, and a source rectangle that selects nothing of
+its asset draws only the fill and is reported with the same warning. The
+damage tracker and the surface hold the previous scene's assets until the next
+frame. The
 web shell draws the placeholder and counts each image in
 `vellum_web_lowering_loss_count`. The authoring materializer lowers an `image`
 whose `source` is a SHA-256 content hash, with `fit`, `sampling` and
@@ -145,9 +151,12 @@ The surface keeps three cross-frame resource caches under
 style (the colour with any folded opacity included) and the font directory;
 linear-gradient shaders keyed by their exact end points, colours, positions and
 tile mode; and GPU textures uploaded from mesh textures and image assets,
-keyed by size and the SHA-256 of the texels rather than by address, so texels rewritten in place are
-uploaded again. Keys compare floats by their bits. A hit returns the object a
-miss would build from the same inputs, so captures are byte-identical with
+keyed by size and the SHA-256 of the texels rather than by address, so mesh
+texels rewritten in place are uploaded again; an image asset's digest is
+remembered per asset object, so image assets must be replaced, never
+rewritten in place. Keys compare floats by their bits. A hit returns the
+object a miss would build from the same inputs, so captures are byte-identical
+with
 every cache on or off; the render-cache GPU test checks that for each capture
 fixture, on the partial-redraw path, and for each key input. Each cache has an
 entry and a byte budget and evicts its least recently used entry first; an

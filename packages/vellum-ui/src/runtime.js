@@ -509,6 +509,11 @@ function materialize(value, runtime, path) {
     if (value.type === 'path' && childValues.length > 0) {
         throw new TypeError(`${path}.Path does not accept children`);
     }
+    if (value.type === 'image' && childValues.length > 0 &&
+        typeof value.props.source === 'string' &&
+        /^(?:sha256:)?[0-9a-f]{64}$/i.test(value.props.source.trim())) {
+        throw new TypeError(`${path}.Image with a content-hash source does not accept children`);
+    }
     const pathProperties = value.type === 'path' ? validatePath(value.props, path) : undefined;
     const imageProperties = value.type === 'image' ? validateImage(value.props, path) : undefined;
     let textRunText;

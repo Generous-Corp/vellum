@@ -112,7 +112,8 @@ struct TextMetrics final {
 /// Shaped text paragraphs, gradient shaders, and the textures uploaded from
 /// mesh textures and image assets are cached across frames under
 /// `RenderCacheBudgets`. Each cache is keyed on every input that affects its
-/// pixels, so output never depends on what is cached. A resize that has settled drops the entries no frame has used
+/// pixels, so output never depends on what is cached, given that mesh
+/// textures and image assets are not mutated once a scene references them. A resize that has settled drops the entries no frame has used
 /// since the resize, and a device loss drops everything.
 class SkiaDawnSurface final {
 public:
@@ -207,9 +208,11 @@ public:
     [[nodiscard]] const GpuEvidence& evidence() const noexcept;
 
     /// What the most recent `render` call lost, from
-    /// `scene_loss_diagnostics`: the version error of a refused scene, or a
-    /// warning for each image node drawn as `kMissingImagePlaceholder`
-    /// because its asset is not in `Scene::images`.
+    /// `scene_loss_diagnostics`: for a drawn scene, a warning for each image
+    /// drawn as `kMissingImagePlaceholder` or with nothing of its source to
+    /// show; for a refused scene, only the refusal: its version error, or a
+    /// `kInvalidImageCode` error for an undrawable image or image table.
+    /// Other refusals leave it empty and report through `error`.
     [[nodiscard]] const std::vector<LoweringDiagnostic>& diagnostics() const noexcept;
 
     /// Replaces the cache budgets, dropping the least recently used entries

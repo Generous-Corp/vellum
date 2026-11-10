@@ -436,6 +436,7 @@ test('serializes an image node with fit, sampling and a source rectangle', () =>
         /sourceRect.width must be a non-negative finite number/);
     rejects({ sourceRect: { x: Number.NaN, y: 0, width: 1, height: 1 } },
         /sourceRect.x must be a finite number/);
+    rejects({ children: jsx(View, {}) }, /content-hash source does not accept children/);
 });
 
 test('retains declared scroll containers for native and browser hosts', () => {

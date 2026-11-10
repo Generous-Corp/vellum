@@ -53,11 +53,13 @@ inline constexpr std::string_view kInvalidTextRunCode = "VELLUM_INVALID_TEXT_RUN
 /// A path with missing or malformed path data, path data over the path
 /// budgets, or an invalid fill rule, fill or stroke; always an error.
 inline constexpr std::string_view kInvalidPathCode = "VELLUM_INVALID_PATH";
-/// An image with a source that is not a SHA-256 content hash, children, or
-/// an invalid fit, sampling or source rectangle; always an error.
+/// An image with children, an invalid fit, sampling or source rectangle, or a
+/// malformed asset table; always an error.
 inline constexpr std::string_view kInvalidImageCode = "VELLUM_INVALID_IMAGE";
 /// An image node whose asset is not in `Scene::images`; a warning. The
-/// renderer draws `kMissingImagePlaceholder` over the node's box instead.
+/// renderer draws `kMissingImagePlaceholder` over the node's box instead. The
+/// same code warns of a source rectangle that leaves nothing of its image to
+/// draw.
 inline constexpr std::string_view kImageAssetMissingCode = "VELLUM_IMAGE_ASSET_MISSING";
 /// A node of a kind this build does not know, or a field or kind newer than
 /// its scene's `scene_version`; always an error. The consumer refuses the

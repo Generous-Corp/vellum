@@ -108,10 +108,18 @@ bool asset_construction() {
                      ImageAlpha::premultiplied, &error) &&
                      error.find("pixels on a side") != std::string::npos,
                  "an image wider than the dimension budget is refused");
-    ok &= expect(!vellum::graphics::make_image_asset(kHashA, 16384, 16384, opaque,
+    static_assert(vellum::graphics::kMaxImageDimension == 8192U);
+    static_assert(static_cast<std::size_t>(vellum::graphics::kMaxImageDimension) *
+                      vellum::graphics::kMaxImageDimension * 4U ==
+                  vellum::graphics::kMaxImageBytes);
+    ok &= expect(!vellum::graphics::make_image_asset(kHashA, 8192, 8193, opaque,
                                                      ImageAlpha::premultiplied, &error) &&
-                     error.find("bytes") != std::string::npos,
-                 "an image over the byte budget is refused before its buffer is read");
+                     error.find("8192 pixels on a side") != std::string::npos,
+                 "an image taller than the texture limit is refused before its buffer is read");
+    ok &= expect(!vellum::graphics::make_image_asset(kHashA, 8192, 8192, opaque,
+                                                     ImageAlpha::premultiplied, &error) &&
+                     error.find("dimensions") != std::string::npos,
+                 "an image at the limit is checked against its buffer");
     const std::vector<std::uint8_t> unpremultiplied{10, 0, 0, 5};
     ok &= expect(!vellum::graphics::make_image_asset(kHashA, 1, 1, unpremultiplied,
                                                      ImageAlpha::premultiplied, &error) &&
@@ -297,11 +305,19 @@ bool commands() {
                          vellum::graphics::to_string(PaintCommand::Kind::image) == "image",
                      "an image command draws content");
     }
-    const auto loss = vellum::graphics::scene_loss_diagnostics(scene);
+    auto loss = vellum::graphics::scene_loss_diagnostics(scene);
     ok &= expect(loss.size() == 1U && loss[0].code == vellum::graphics::kImageAssetMissingCode &&
                      loss[0].node_id == "missing" &&
                      loss[0].severity == vellum::graphics::LoweringDiagnostic::Severity::warning,
                  "a missing asset is a warning against its node");
+    scene.root.children[0].image->source_rect = Rect{9.0F, 0.0F, 4.0F, 4.0F};
+    loss = vellum::graphics::scene_loss_diagnostics(scene);
+    ok &= expect(loss.size() == 2U && loss[0].node_id == "present" &&
+                     loss[0].message.find("outside its asset") != std::string::npos,
+                 "a source rectangle that selects nothing is a warning");
+    scene.root.children[0].image->source_rect = Rect{7.0F, 7.0F, 4.0F, 4.0F};
+    ok &= expect(vellum::graphics::scene_loss_diagnostics(scene).size() == 1U,
+                 "a source rectangle that overlaps the asset is not");
 
     // A lone faded image folds its opacity; two members get a layer.
     Scene faded;

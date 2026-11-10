@@ -184,6 +184,16 @@ void fit_and_sampling() {
     probe(sourced, 4, 4, kGreen, "a source rectangle selects its texels");
     probe(sourced, 28, 28, kHalfWhite, "a source rectangle maps onto the whole box");
 
+    // Linear sampling stays inside the source rectangle: the red quadrant,
+    // magnified, must not pick up the green texels beside it.
+    auto strict = scene_of(64.0F, 64.0F);
+    auto red = image_node("strict", {0, 0, 64, 64}, ImageFit::fill, ImageSampling::linear);
+    red.image->source_rect = Rect{0.0F, 0.0F, 4.0F, 4.0F};
+    strict.root.children.push_back(red);
+    const auto bounded = render(strict);
+    probe(bounded, 63, 32, kRed, "linear sampling does not bleed past the source's right edge");
+    probe(bounded, 32, 63, kRed, "linear sampling does not bleed past the source's bottom edge");
+
     auto rounded = scene_of(32.0F, 32.0F);
     auto corners = image_node("rounded", {0, 0, 32, 32});
     corners.corner_radius = 12.0F;
@@ -199,13 +209,18 @@ void opacity() {
     faded.image->source_rect = Rect{0.0F, 0.0F, 4.0F, 4.0F};
     faded.opacity = 0.5F;
     lone.root.children.push_back(faded);
-    probe(render(lone), 8, 8, {128, 0, 0, 255}, "a faded image folds its opacity");
+    const auto folded = harness::render_offscreen(lone, 16, 16);
+    probe({folded.rgba, folded.pixel_width, folded.pixel_height}, 8, 8, {128, 0, 0, 255},
+          "a faded image draws at half strength");
+    expect(folded.telemetry.layer_count == 0U, "a lone faded image folds its opacity");
 
     // Over a blue fill, folding would leave blue showing through the red.
     auto over_fill = lone;
     over_fill.root.children[0].fill = Color::hex(0x0000FF);
-    probe(render(over_fill), 8, 8, {128, 0, 0, 255},
+    const auto layered = harness::render_offscreen(over_fill, 16, 16);
+    probe({layered.rgba, layered.pixel_width, layered.pixel_height}, 8, 8, {128, 0, 0, 255},
           "a faded image over a fill is composited as a layer");
+    expect(layered.telemetry.layer_count == 1U, "an image over a fill opens one layer");
 }
 
 void placeholder_and_refusals() {
@@ -244,17 +259,29 @@ void placeholder_and_refusals() {
     auto older = scene;
     older.scene_version = 3U;
     refused(older, "scene version 3 cannot carry the image node missing");
-    expect(!surface->diagnostics().empty() &&
+    expect(surface->diagnostics().size() == 1U &&
                surface->diagnostics()[0].code == kSceneVersionMismatchCode,
-           "the version refusal is a loss diagnostic");
+           "the version refusal is the only loss diagnostic");
 
     auto malformed = scene;
     malformed.root.children[0].image->content_hash = "logo.png";
     refused(malformed, "image missing cannot be drawn: the content hash is not sha256: "
                        "followed by 64 lowercase hex digits");
+    expect(surface->diagnostics().size() == 1U &&
+               surface->diagnostics()[0].code == kInvalidImageCode,
+           "a refused image reports no placeholder warning for the frame it never drew");
     auto unreferenced = scene;
     unreferenced.root.children[0].image.reset();
     refused(unreferenced, "image missing cannot be drawn: it has no image reference");
+    expect(surface->diagnostics().size() == 1U &&
+               surface->diagnostics()[0].code == kInvalidImageCode &&
+               surface->diagnostics()[0].node_id == "missing" &&
+               surface->diagnostics()[0].severity == LoweringDiagnostic::Severity::error,
+           "an undrawable image is reported as a refusal, not as a placeholder");
+    auto parent = scene;
+    parent.root.children[0].children.push_back(
+        {.id = "inner", .kind = SceneNode::Kind::rectangle, .bounds = {0, 0, 2, 2}});
+    refused(parent, "image missing cannot be drawn: an image node has no children");
     auto twice = scene;
     twice.images.push_back(harness::fixtures::quadrant_image());
     refused(twice, "the scene lists image asset " + std::string(harness::fixtures::kQuadrantImageHash) +

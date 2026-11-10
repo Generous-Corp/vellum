@@ -195,7 +195,10 @@ enum class ImageSampling : std::uint8_t {
 
 /// Decoded image pixels, named by the content hash of the asset they were
 /// decoded from. Like a mesh texture, an asset must not be mutated once a
-/// scene references it; replace the pointer to change it.
+/// scene references it; replace the pointer to change it. Keep the same
+/// object from frame to frame: a renderer may remember work per object (the
+/// Skia surface hashes an asset's texels once per object), so rebuilding an
+/// unchanged asset every frame costs that work every frame.
 struct ImageAsset final {
     /// `sha256:` followed by 64 lowercase hexadecimal digits, the DesignIR
     /// asset convention (see `is_content_hash`).
@@ -322,7 +325,8 @@ struct CornerRadii final {
 /// earlier version is still accepted when it has no image node; one that does
 /// fails `scene_fields_match_version` and is refused.
 ///
-/// Claimed versions, in order: version 4: image nodes; version 5: clip, mask and isolation on groups (reserved)
+/// Claimed versions, in order:
+/// version 4: image nodes; version 5: clip, mask and isolation on groups (reserved)
 inline constexpr std::uint32_t kSceneVersion = 4U;
 
 /// The oldest scene schema version this build still consumes.
@@ -390,8 +394,9 @@ struct SceneNode final {
     /// a mesh, it must not be mutated once a scene references it; replace the
     /// pointer to change it.
     std::shared_ptr<const PathGeometry> path;
-    /// What an `image` node draws. An image node without it is refused. The
-    /// node's `fill` paints behind the image, and its corner radii clip both.
+    /// What an `image` node draws. An image node without it, or with
+    /// children, is refused. The node's `fill` paints behind the image, and
+    /// its corner radii clip both.
     std::optional<ImageReference> image;
 };
 
