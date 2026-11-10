@@ -67,6 +67,20 @@ if(VELLUM_RMLUI_CPU)
     vellum_rmlui_add_test(vellum-rmlui-cpu-hash-test cpu_hash_test.cpp VellumRmlUi::Cpu)
     add_test(NAME vellum.rmlui.cpu-hash COMMAND vellum-rmlui-cpu-hash-test)
 
+    # The rasteriser's fast paths against the per-pixel rasteriser they
+    # replaced, and its control.
+    vellum_rmlui_add_test(vellum-rmlui-cpu-raster-equivalence-test cpu_raster_equivalence_test.cpp)
+    target_include_directories(vellum-rmlui-cpu-raster-equivalence-test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(vellum-rmlui-cpu-raster-equivalence-test PRIVATE cxx_std_20)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(vellum-rmlui-cpu-raster-equivalence-test PRIVATE -ffp-contract=off)
+    elseif(MSVC)
+        target_compile_options(vellum-rmlui-cpu-raster-equivalence-test PRIVATE /fp:precise)
+    endif()
+    add_test(NAME vellum.rmlui.cpu-raster-equivalence COMMAND vellum-rmlui-cpu-raster-equivalence-test)
+    add_test(NAME vellum.rmlui.cpu-raster-equivalence-control
+        COMMAND vellum-rmlui-cpu-raster-equivalence-test --break-flat)
+
     # Speed, recorded and not gated: outside the required tests (ctest -LE bench).
     vellum_rmlui_add_test(vellum-rmlui-cpu-bench cpu_bench.cpp VellumRmlUi::Cpu)
     add_test(NAME vellum.rmlui.cpu-bench COMMAND vellum-rmlui-cpu-bench 1)
