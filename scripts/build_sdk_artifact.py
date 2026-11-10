@@ -11,11 +11,12 @@ CLI backend when every required payload is present.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import gzip
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import platform
 import re
 import shutil
@@ -45,6 +46,29 @@ MIRROR_PACKAGE_FILES = (
     "mirror/lib/libvellum-mirror-canvas.dylib",
     "mirror/lib/libvellum-mirror-state-core.dylib",
 )
+# The RmlUi editor package a native SDK carries: VellumRmlUi::Core (which links
+# RmlUi privately), SoftRenderer, and VellumRenderer on Vellum's GPU renderer,
+# with RmlUi's licence because Core redistributes it.
+RMLUI_PACKAGE_FILES = (
+    "lib/cmake/VellumRmlUi/VellumRmlUiConfig.cmake",
+    "lib/cmake/VellumRmlUi/VellumRmlUiTargets.cmake",
+    "lib/cmake/VellumRmlUi/VellumRmlUiVellumRendererTargets.cmake",
+    "share/doc/VellumRmlUi/RmlUi-LICENSE.txt",
+)
+# The install component that carries RmlUi's own headers, archives and CMake
+# package. The SDK links RmlUi only inside VellumRmlUi::Core, so none of it ships.
+RMLUI_UPSTREAM_COMPONENT = "VellumRmlUiUpstream"
+# What RmlUi, FreeType and Lua install of their own. An SDK install tree may
+# carry none of it, and it is all removing the upstream component may delete.
+RMLUI_UPSTREAM_PATTERNS = (
+    "include/RmlUi/*", "lib/cmake/RmlUi/*", "**/librmlui*",
+    "include/freetype2/*", "**/libfreetype*",
+    "include/lua*", "**/liblua*", "**/libvellum-rmlui-lua*",
+)
+# The mirror's CMake package, and the targets in it that SDK consumers link:
+# an editor built on the mirror links MirrorView_core.
+MIRROR_CMAKE_PACKAGE = "mirror/lib/cmake/VellumMirror"
+MIRROR_REQUIRED_TARGETS = ("MirrorView_core",)
 # The native host and the libraries it loads at launch. The installer keeps
 # the same list under the payload's "sdk/" prefix.
 NATIVE_HOST_FILES = (
@@ -103,10 +127,106 @@ def verify_cli_identity(repo: Path) -> None:
         )
 
 
-def installed_cmake_target(install_tree: Path, target: str) -> bool:
-    package = install_tree / "lib/cmake/Vellum"
+def installed_cmake_target(install_tree: Path, target: str,
+                           package_dir: str = "lib/cmake/Vellum") -> bool:
+    package = install_tree / package_dir
     marker = f"Vellum::{target}"
     return any(marker in path.read_text(encoding="utf-8") for path in package.glob("*.cmake"))
+
+
+def native_configure_options(skia_archive: Path) -> list[str]:
+    """The CMake options of a native SDK build on the pinned Skia/Dawn archive."""
+
+    return [
+        "-DVELLUM_ENABLE_GPU=ON",
+        "-DVELLUM_REQUIRE_GPU=ON",
+        "-DVELLUM_ENABLE_AUTHORING=ON",
+        f"-DVELLUM_SKIA_ARCHIVE={skia_archive}",
+        # The native package carries the units built from the landed
+        # mirror (Decision 0010).
+        "-DVELLUM_ENABLE_MIRROR=ON",
+        # And the RmlUi editor package, with its renderer on Vellum's GPU path.
+        "-DVELLUM_ENABLE_RMLUI=ON",
+        "-DVELLUM_RMLUI_VELLUM_RENDERER=ON",
+    ]
+
+
+def missing_mirror_targets(install_tree: Path) -> list[str]:
+    return [
+        f"Vellum::{target}" for target in MIRROR_REQUIRED_TARGETS
+        if not installed_cmake_target(install_tree, target, MIRROR_CMAKE_PACKAGE)
+    ]
+
+
+def missing_package_files(install_tree: Path, files: Iterable[str]) -> list[str]:
+    return [path for path in files if not (install_tree / path).is_file()]
+
+
+def is_upstream_rmlui_path(relative: str) -> bool:
+    """Whether an install-tree path is one of RMLUI_UPSTREAM_PATTERNS."""
+
+    path = PurePosixPath(relative)
+    for pattern in RMLUI_UPSTREAM_PATTERNS:
+        if pattern.startswith("**/"):
+            if fnmatch.fnmatchcase(path.name, pattern[3:]):
+                return True
+        elif fnmatch.fnmatchcase(relative, pattern):
+            return True
+    return False
+
+
+def upstream_rmlui_leaks(install_tree: Path) -> list[str]:
+    """RmlUi, FreeType or Lua files an SDK install tree must not carry."""
+
+    return sorted(
+        relative
+        for path in install_tree.rglob("*")
+        if (path.is_file() or path.is_symlink())
+        and is_upstream_rmlui_path(relative := path.relative_to(install_tree).as_posix())
+    )
+
+
+def remove_install_component(build_dir: Path, install_tree: Path, component: str,
+                             scratch: Path) -> list[str]:
+    """Remove from install_tree every file one install component installs.
+
+    A plain `cmake --install` installs every component. The component is
+    installed alone into scratch to learn its files, which are then removed
+    from install_tree with any directory they leave empty. Only paths matching
+    RMLUI_UPSTREAM_PATTERNS may be removed: a component that installs anything
+    else is refused, so the removal can never delete a Vellum file. Returns
+    the removed paths.
+    """
+
+    if scratch.exists():
+        shutil.rmtree(scratch)
+    run(["cmake", "--install", str(build_dir), "--config", "Release",
+         "--component", component, "--prefix", str(scratch)])
+    if not scratch.exists():
+        return []
+    files = [
+        path.relative_to(scratch).as_posix()
+        for path in sorted(scratch.rglob("*"), key=lambda item: item.as_posix())
+        if not (path.is_dir() and not path.is_symlink())
+    ]
+    unexpected = [relative for relative in files if not is_upstream_rmlui_path(relative)]
+    if unexpected:
+        raise ArtifactError(
+            f"install component {component} installs files that are not RmlUi's own: "
+            + ", ".join(unexpected)
+        )
+    removed: list[str] = []
+    for relative in files:
+        target = install_tree / relative
+        if target.is_symlink() or target.exists():
+            target.unlink()
+            removed.append(relative)
+            parent = target.parent
+            while parent != install_tree and parent.is_dir() and not any(parent.iterdir()):
+                parent.rmdir()
+                parent = parent.parent
+    shutil.rmtree(scratch)
+    return removed
 
 
 def prepare_ui_payload(repo: Path, payload: Path) -> None:
@@ -429,6 +549,11 @@ def normalize_macho_dylibs(install_tree: Path, commit: str, target: str) -> None
     if codesign is None:
         raise ArtifactError("deterministic Darwin artifacts require codesign")
     for path in sorted(install_tree.rglob("*.dylib")):
+        # A versioned library installs with symlinks to it (libx.0.1.dylib ->
+        # libx.0.1.10.dylib). Each real file is normalized once, under its own
+        # name; the payload copy dereferences the links into identical files.
+        if path.is_symlink():
+            continue
         relative = path.relative_to(install_tree).as_posix()
         identity = bytearray(hashlib.sha256(
             f"vellum-dylib\0{relative}\0{commit}\0{target}".encode("utf-8")
@@ -698,15 +823,7 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         for language in ("C", "CXX", "OBJC", "OBJCXX"):
             configure.append(f"-DCMAKE_{language}_FLAGS={path_map_flags}")
         if skia_archive:
-            configure.extend([
-                "-DVELLUM_ENABLE_GPU=ON",
-                "-DVELLUM_REQUIRE_GPU=ON",
-                "-DVELLUM_ENABLE_AUTHORING=ON",
-                f"-DVELLUM_SKIA_ARCHIVE={skia_archive}",
-                # The native package carries the units built from the landed
-                # mirror (Decision 0010).
-                "-DVELLUM_ENABLE_MIRROR=ON",
-            ])
+            configure.extend(native_configure_options(skia_archive))
             mirror_deps = os.environ.get("VELLUM_MIRROR_DEPS_DIR")
             if mirror_deps:
                 configure.append(f"-DVELLUM_MIRROR_DEPS_DIR={Path(mirror_deps).resolve()}")
@@ -723,6 +840,10 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "").strip() or "3"
         run(["cmake", "--build", str(build_dir), "--config", "Release", "--parallel", jobs])
         run(["cmake", "--install", str(build_dir), "--config", "Release", "--prefix", str(install_tree)])
+        if skia_archive:
+            remove_install_component(
+                build_dir, install_tree, RMLUI_UPSTREAM_COMPONENT, temporary / "upstream-install"
+            )
         for archive in sorted(install_tree.rglob("*.a")):
             normalize_static_archive(archive)
         if skia_archive and target == "darwin-arm64":
@@ -739,6 +860,16 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             )
         if skia_archive and not all((install_tree / path).is_file() for path in MIRROR_PACKAGE_FILES):
             raise ArtifactError("--skia-archive build did not install the landed mirror's units")
+        if skia_archive and (missing := missing_mirror_targets(install_tree)):
+            raise ArtifactError(
+                "--skia-archive build did not export the mirror's " + ", ".join(missing)
+            )
+        if skia_archive and (leaks := upstream_rmlui_leaks(install_tree)):
+            raise ArtifactError("SDK install tree carries RmlUi's own files: " + ", ".join(leaks))
+        if skia_archive and (missing := missing_package_files(install_tree, RMLUI_PACKAGE_FILES)):
+            raise ArtifactError(
+                "--skia-archive build did not install the VellumRmlUi package: " + ", ".join(missing)
+            )
         if skia_archive and target != "darwin-arm64":
             raise ArtifactError("native application artifacts currently require target darwin-arm64")
         metadata = copy_payload(
