@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-10T10:30:13Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-f91570b1fa3f8a001e88e2040d9fc94f1c346f81",
+  "kind": "resolution",
+  "linked_commits": [
+    "f91570b1fa3f8a001e88e2040d9fc94f1c346f81"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Merge of main into feat/scene-path-node-20261109. Its own conflict resolution touches only Vellum-native files (authoring/src/rendered_tree_materializer.mm, authoring/tests/rendered_tree_materializer_test.cpp, graphics/include/vellum/graphics/lowering_diagnostic.hpp, graphics/include/vellum/graphics/paint_command.hpp, graphics/include/vellum/graphics/scene.hpp, graphics/src/paint_command.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/gpu_style_test.cpp, graphics/tests/paint_command_test.cpp, graphics/tests/support/scene_capture_harness.cpp, graphics/tests/support/scene_capture_harness.hpp, packages/vellum-ui/src/index.d.ts), combining both sides' retained-scene and surface work. Pulp has no counterpart to those files, so nothing is owed to Pulp.",
+  "resolves": "vellum-f91570b1fa3f8a001e88e2040d9fc94f1c346f81",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

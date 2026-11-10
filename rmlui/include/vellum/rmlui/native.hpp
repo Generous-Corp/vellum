@@ -64,6 +64,22 @@ class NativeContext {
     // Context::Update() then Context::Render(), with this instance in scope.
     void update();
     void render();
+    // Prepares the loaded document's first frame without drawing it: one
+    // update() and one render() with the renderer outside a frame, so RmlUi
+    // loads and decodes every texture the document shows, compiles its
+    // geometry and generates its glyph textures, and the draw calls fall
+    // away. Call it after load_document() and before the first real frame,
+    // somewhere that is not latency-critical (before a view is attached, for
+    // example), so the first frame only draws.
+    //
+    // It relies on the renderer drawing nothing between frames, as
+    // VellumRmlUi::Cpu (outside begin_frame/end_frame) and VellumRmlUi::Metal
+    // do. A renderer that draws on every call (RmlUi's GL3 backend, for
+    // example) would draw into whatever it has bound. A texture RmlUi makes by
+    // drawing (a box shadow, saved from a layer) is not made here, since a
+    // renderer outside a frame returns no layer to save; RmlUi makes it on the
+    // first real frame instead.
+    void warm();
     void close();
 
     [[nodiscard]] bool is_open() const noexcept {

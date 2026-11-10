@@ -50,6 +50,57 @@ void column_major(const Rml::Matrix4f& matrix, float out[16]) {
         std::memcpy(out, matrix.data(), sizeof(float) * 16);
 }
 
+// A pixel rectangle [x0, x1) x [y0, y1); empty when x0 >= x1 or y0 >= y1.
+struct Rect {
+    std::int64_t x0 = 0;
+    std::int64_t y0 = 0;
+    std::int64_t x1 = 0;
+    std::int64_t y1 = 0;
+    [[nodiscard]] bool empty() const {
+        return x0 >= x1 || y0 >= y1;
+    }
+    void add(const Rect& other) {
+        if (other.empty())
+            return;
+        if (empty()) {
+            *this = other;
+            return;
+        }
+        x0 = std::min(x0, other.x0);
+        y0 = std::min(y0, other.y0);
+        x1 = std::max(x1, other.x1);
+        y1 = std::max(y1, other.y1);
+    }
+    [[nodiscard]] Rect intersect(const Rect& other) const {
+        Rect out{std::max(x0, other.x0), std::max(y0, other.y0), std::min(x1, other.x1), std::min(y1, other.y1)};
+        return out.empty() ? Rect{} : out;
+    }
+    [[nodiscard]] bool contains(const Rect& other) const {
+        return other.empty() || (x0 <= other.x0 && y0 <= other.y0 && x1 >= other.x1 && y1 >= other.y1);
+    }
+};
+
+Rect rect(const raster::Clip& clip) {
+    const Rect out{clip.x0, clip.y0, clip.x1, clip.y1};
+    return out.empty() ? Rect{} : out;
+}
+
+// The pixels a triangle may write inside `clip`.
+Rect touched(const raster::Fixed& a, const raster::Fixed& b, const raster::Fixed& c, const raster::Clip& clip) {
+    const raster::Clip box = raster::bounds(a, b, c, clip);
+    return rect({box.x0, box.y0, box.x1 + 1, box.y1 + 1});
+}
+
+// Zeroes `area` (clamped to the buffer) in a tightly packed buffer of
+// `bytes_per_pixel` bytes a pixel.
+void zero(std::uint8_t* data, std::size_t width, std::size_t bytes_per_pixel, const Rect& area) {
+    if (area.empty())
+        return;
+    for (auto y = area.y0; y < area.y1; ++y)
+        std::memset(data + (static_cast<std::size_t>(y) * width + static_cast<std::size_t>(area.x0)) * bytes_per_pixel,
+                    0, static_cast<std::size_t>(area.x1 - area.x0) * bytes_per_pixel);
+}
+
 } // namespace
 
 struct CpuRenderInterface::State {
@@ -70,10 +121,15 @@ struct CpuRenderInterface::State {
     raster::Target base{};
     raster::Target target{};
     // Layers above the base, tightly packed, kept for reuse across frames.
+    // Each pooled buffer is zero outside its `layer_dirty` rectangle, so
+    // pushing a layer clears only what was drawn there before, and blending a
+    // layer down visits only what was drawn into it.
     std::vector<std::vector<std::uint8_t>> layer_pool;
+    std::vector<Rect> layer_dirty;
     int layer_count = 0; // including the base
     // The clip mask: one byte per target pixel, standing in for a stencil.
     std::vector<std::uint8_t> mask;
+    Rect mask_dirty; // the mask is zero outside it
     bool clip_enabled = false;
     std::uint8_t reference = 0;
     double scale = 1.0;
@@ -101,6 +157,12 @@ struct CpuRenderInterface::State {
         c.x1 = std::min<std::int64_t>(c.x1, edge(scissor.Right()));
         c.y1 = std::min<std::int64_t>(c.y1, edge(scissor.Bottom()));
         return c;
+    }
+
+    // Records that `area` of layer `index` may have been written.
+    void dirty(int index, const Rect& area) {
+        if (index > 0)
+            layer_dirty[static_cast<std::size_t>(index - 1)].add(area);
     }
 
     raster::Target layer_target(int index) {
@@ -141,12 +203,22 @@ bool CpuRenderInterface::begin_frame(const CpuFrameTarget& frame) {
         stride < static_cast<std::size_t>(frame.width) * 4u || !(frame.scale > 0.0f) ||
         !std::isfinite(frame.scale))
         return false;
+    const bool dimensions_changed = s.base.width != frame.width || s.base.height != frame.height;
     s.base = {frame.rgba, frame.width, frame.height, stride};
     s.target = s.base;
     s.layer_count = 1;
-    if (s.layer_pool.size() && (s.layer_pool.front().size() != static_cast<std::size_t>(frame.width) * frame.height * 4u))
+    if (dimensions_changed ||
+        (s.layer_pool.size() &&
+         s.layer_pool.front().size() != static_cast<std::size_t>(frame.width) * frame.height * 4u)) {
         s.layer_pool.clear();
-    s.mask.assign(static_cast<std::size_t>(frame.width) * frame.height, 0);
+        s.layer_dirty.clear();
+    }
+    const std::size_t mask_size = static_cast<std::size_t>(frame.width) * frame.height;
+    if (dimensions_changed || s.mask.size() != mask_size)
+        s.mask.assign(mask_size, 0);
+    else
+        zero(s.mask.data(), frame.width, 1, s.mask_dirty);
+    s.mask_dirty = {};
     s.clip_enabled = false;
     s.reference = 0;
     s.scale = static_cast<double>(frame.scale);
@@ -243,8 +315,8 @@ void CpuRenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle, Rml:
                                       s.scale, v[k].position);
         }
         raster::MaskTest storage;
-        if (visible)
-            raster::draw_triangle(s.target, clip, v[0], v[1], v[2], sampled, s.mask_test(storage));
+        if (visible && raster::draw_triangle(s.target, clip, v[0], v[1], v[2], sampled, s.mask_test(storage)))
+            s.dirty(s.layer_count - 1, touched(v[0].position, v[1].position, v[2].position, clip));
     }
 }
 
@@ -327,11 +399,12 @@ void CpuRenderInterface::RenderToClipMask(Rml::ClipMaskOperation operation, Rml:
     const std::size_t width = s.base.width;
     using Rml::ClipMaskOperation;
     if (operation == ClipMaskOperation::Set || operation == ClipMaskOperation::SetInverse) {
-        // A fresh mask inside the scissor: 0 everywhere, then 1 under the geometry.
-        for (auto y = clip.y0; y < clip.y1; ++y)
-            std::fill_n(s.mask.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(y) * width +
-                                                                    static_cast<std::size_t>(clip.x0)),
-                        clip.x1 - clip.x0, std::uint8_t{0});
+        // A fresh mask inside the scissor: 0 everywhere, then 1 under the
+        // geometry. Outside `mask_dirty` it is 0 already.
+        const Rect scissor = rect(clip);
+        zero(s.mask.data(), width, 1, scissor.intersect(s.mask_dirty));
+        if (scissor.contains(s.mask_dirty))
+            s.mask_dirty = {};
         s.reference = operation == ClipMaskOperation::Set ? 1 : 0;
     } else {
         // Intersect: raise the value under the geometry; only pixels that were
@@ -353,14 +426,20 @@ void CpuRenderInterface::RenderToClipMask(Rml::ClipMaskOperation operation, Rml:
         if (!visible)
             continue;
         int ordered[3];
-        raster::cover(p[0], p[1], p[2], clip, ordered,
-                      [&](std::int64_t x, std::int64_t y, std::int64_t, std::int64_t, std::int64_t, std::int64_t) {
-                          auto& value = s.mask[static_cast<std::size_t>(y) * width + static_cast<std::size_t>(x)];
-                          if (increment)
-                              value = static_cast<std::uint8_t>(std::min(255, value + 1));
-                          else
-                              value = 1;
-                      });
+        const bool covered = raster::cover_spans(
+            p[0], p[1], p[2], clip, ordered,
+            [&](std::int64_t y, std::int64_t x_begin, std::int64_t x_end, std::int64_t, std::int64_t, std::int64_t,
+                std::int64_t, std::int64_t, std::int64_t, std::int64_t) {
+                auto* row = s.mask.data() + static_cast<std::size_t>(y) * width;
+                if (!increment) {
+                    std::memset(row + x_begin, 1, static_cast<std::size_t>(x_end - x_begin));
+                    return;
+                }
+                for (auto x = x_begin; x < x_end; ++x)
+                    row[x] = static_cast<std::uint8_t>(std::min(255, row[x] + 1));
+            });
+        if (covered)
+            s.mask_dirty.add(touched(p[0], p[1], p[2], clip));
     }
 }
 
@@ -370,10 +449,17 @@ Rml::LayerHandle CpuRenderInterface::PushLayer() {
         return 0;
     const auto index = s.layer_count;
     const std::size_t bytes = static_cast<std::size_t>(s.base.width) * s.base.height * 4u;
-    if (s.layer_pool.size() < static_cast<std::size_t>(index))
+    if (s.layer_pool.size() < static_cast<std::size_t>(index)) {
         s.layer_pool.emplace_back();
+        s.layer_dirty.emplace_back();
+    }
     auto& buffer = s.layer_pool[static_cast<std::size_t>(index - 1)];
-    buffer.assign(bytes, 0);
+    auto& dirty = s.layer_dirty[static_cast<std::size_t>(index - 1)];
+    if (buffer.size() != bytes)
+        buffer.assign(bytes, 0);
+    else
+        zero(buffer.data(), s.base.width, 4, dirty);
+    dirty = {};
     s.layer_count += 1;
     s.target = s.layer_target(index);
     return static_cast<Rml::LayerHandle>(index);
@@ -395,22 +481,32 @@ void CpuRenderInterface::CompositeLayers(Rml::LayerHandle source, Rml::LayerHand
     raster::MaskTest storage;
     const raster::MaskTest* mask = s.mask_test(storage);
     const bool replace = blend_mode == Rml::BlendMode::Replace;
-    for (auto y = clip.y0; y < clip.y1; ++y) {
-        for (auto x = clip.x0; x < clip.x1; ++x) {
-            if (mask && mask->mask[static_cast<std::size_t>(y) * mask->width + static_cast<std::size_t>(x)] !=
-                            mask->reference)
+    // Blending a transparent pixel (all four channels 0) changes nothing, and
+    // a layer is all 0 outside its dirty rectangle, so a blend visits only
+    // that. Replace writes every pixel in the clip.
+    Rect area = rect(clip);
+    if (!replace && from > 0)
+        area = area.intersect(s.layer_dirty[static_cast<std::size_t>(from - 1)]);
+    for (auto y = area.y0; y < area.y1; ++y) {
+        const auto* in_row = src.rgba + static_cast<std::size_t>(y) * src.stride;
+        auto* out_row = dst.rgba + static_cast<std::size_t>(y) * dst.stride;
+        const std::uint8_t* mask_row = mask ? mask->mask + static_cast<std::size_t>(y) * mask->width : nullptr;
+        for (auto x = area.x0; x < area.x1; ++x) {
+            if (mask_row && mask_row[x] != mask->reference)
                 continue;
-            const auto* in = src.rgba + static_cast<std::size_t>(y) * src.stride + static_cast<std::size_t>(x) * 4u;
-            auto* out = dst.rgba + static_cast<std::size_t>(y) * dst.stride + static_cast<std::size_t>(x) * 4u;
+            const auto* in = in_row + static_cast<std::size_t>(x) * 4u;
+            auto* out = out_row + static_cast<std::size_t>(x) * 4u;
             if (replace) {
                 std::memcpy(out, in, 4);
                 continue;
             }
-            const auto inverse = 255u - in[3];
-            for (int k = 0; k < 4; ++k)
-                out[k] = static_cast<std::uint8_t>(std::min(255u, in[k] + raster::mul255(out[k], inverse)));
+            const std::uint32_t pixel[4] = {in[0], in[1], in[2], in[3]};
+            if ((pixel[0] | pixel[1] | pixel[2] | pixel[3]) == 0u)
+                continue;
+            raster::blend_over(out, pixel);
         }
     }
+    s.dirty(to, area);
 }
 
 void CpuRenderInterface::PopLayer() {

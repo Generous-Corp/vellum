@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-10T10:30:15Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-e3768c9551c6bfdc31737bac19fdd2a2a2dadb96",
+  "kind": "resolution",
+  "linked_commits": [
+    "e3768c9551c6bfdc31737bac19fdd2a2a2dadb96"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Makes Vellum's renderer refuse path nodes without geometry, and treats them as unbounded for paint_extent and as whole-frame damage. Tests cover non-finite paths, arc and cap reach, and web-shell loss. Vellum's retained path node only.",
+  "resolves": "vellum-e3768c9551c6bfdc31737bac19fdd2a2a2dadb96",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
