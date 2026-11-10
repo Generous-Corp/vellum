@@ -4,7 +4,8 @@ add_library(vellum-graphics
     src/image_asset.cpp
     src/paint_command.cpp
     src/path_geometry.cpp
-    src/render_telemetry.cpp)
+    src/render_telemetry.cpp
+    src/scene_acceptance.cpp)
 add_library(Vellum::Graphics ALIAS vellum-graphics)
 
 set_target_properties(vellum-graphics PROPERTIES

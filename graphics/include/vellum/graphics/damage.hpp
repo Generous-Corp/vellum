@@ -1,5 +1,6 @@
 #pragma once
 
+#include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/scene.hpp>
 
 #include <cstddef>
@@ -187,6 +188,14 @@ public:
 [[nodiscard]] std::optional<Rect> node_paint_bounds(
     const SceneNode& node, const Rect& absolute_bounds, const Rect& frame,
     const DamagePropagation& propagation);
+
+/// The frame area a drawing paint command can paint: `node_paint_bounds` of
+/// its kind and paint fields over its `bounds`, mapped through its
+/// `transform` the way the renderer draws it. Empty for a command that paints
+/// nothing, and for `begin_layer` and `end_layer`, which paint through their
+/// members.
+[[nodiscard]] std::optional<Rect> command_paint_bounds(
+    const PaintCommand& command, const Rect& frame, const DamagePropagation& propagation);
 
 /// Whether two nodes with the same identity paint differently in place.
 /// Floats compare bitwise, so a NaN changing to a different NaN is a change.

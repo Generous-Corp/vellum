@@ -102,17 +102,24 @@ and immutable like a mesh texture, at most 8192 pixels on a side (the WebGPU
 default texture limit) and 256 MiB.
 `make_image_asset` premultiplies straight alpha once, and
 `SkiaDawnSurface::decode_image_asset` decodes a PNG into an asset named by the
-SHA-256 of its bytes, refusing bytes that do not match an expected hash. The
+SHA-256 of its bytes, refusing bytes that do not match an expected hash. It
+refuses input over 64 MiB (`kMaxEncodedImageBytes`) and a header whose
+dimensions are over the image budgets before it hashes the bytes or builds a
+codec. The
 node's fill paints behind the image and its corner radii clip both;
 `image_placement` is the pure fit and crop the renderer draws with. An image
 whose asset the scene does not hold draws `kMissingImagePlaceholder` over its
 box and is reported as a `VELLUM_IMAGE_ASSET_MISSING` warning by
 `scene_loss_diagnostics` and `SkiaDawnSurface::diagnostics`; an image without
 a reference or with a malformed one, and a scene whose assets are invalid or
-list a hash twice, are refused. The kind arrived with version 4, so an earlier
+list a hash twice, are refused; an asset is invalid when its texel buffer does
+not match its size or a colour channel is above its alpha. Every backend
+decides through `accept_scene`, so the web shell refuses the scenes the
+surface refuses, with the same reason and diagnostics. The kind arrived with version 4, so an earlier
 scene with an image node is refused with a `VELLUM_SCENE_VERSION_MISMATCH`
 diagnostic. Damage treats an image as its box and compares its asset by
-pointer. The surface remembers each asset's texel digest under its content
+pointer; a command's paint extent, `command_paint_bounds`, is that box mapped
+through the command's transform. The surface remembers each asset's texel digest under its content
 hash while the hash still names the same asset object, so an unchanged image
 is not rehashed each frame, and uploads through the texture cache below; hosts
 should keep an unchanged asset's object rather than rebuild it each frame. An
@@ -121,7 +128,9 @@ its asset draws only the fill and is reported with the same warning. The
 damage tracker and the surface hold the previous scene's assets until the next
 frame. The
 web shell draws the placeholder and counts each image in
-`vellum_web_lowering_loss_count`. The authoring materializer lowers an `image`
+`vellum_web_lowering_loss_count`; a refused scene draws nothing, `vellum_web_render`
+returns 0, and `vellum_web_refused`, `vellum_web_refusal_reason` and the
+`vellum_web_diagnostic_*` accessors report the refusal. The authoring materializer lowers an `image`
 whose `source` is a SHA-256 content hash, with `fit`, `sampling` and
 `sourceRect` attributes; any other source keeps only the box and reports
 `VELLUM_NODE_CONTENT_DROPPED`.

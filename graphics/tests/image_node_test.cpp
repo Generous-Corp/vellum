@@ -150,6 +150,13 @@ bool asset_construction() {
     scene.images = {nullptr};
     ok &= expect(!vellum::graphics::scene_images_are_valid(scene, &error),
                  "a null asset is refused");
+    // A table entry built by hand, bypassing make_image_asset, is checked for
+    // premultiplication too.
+    scene.images = {std::make_shared<const ImageAsset>(forged)};
+    ok &= expect(!vellum::graphics::scene_images_are_valid(scene, &error) &&
+                     error == "image asset " + kHashA +
+                                  " is invalid: a texel has a colour channel above its alpha",
+                 "an asset with a colour channel above its alpha is refused: " + error);
     return ok;
 }
 
@@ -336,6 +343,63 @@ bool commands() {
     return ok;
 }
 
+bool png_headers() {
+    using vellum::graphics::image_dimensions_fit;
+    using vellum::graphics::png_header_dimensions;
+    bool ok = true;
+    std::vector<std::uint8_t> header{0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n',
+                                     0, 0, 0, 13, 'I', 'H', 'D', 'R',
+                                     0x00, 0x00, 0x20, 0x01, 0x00, 0x00, 0x00, 0x07};
+    const auto read = png_header_dimensions(header);
+    ok &= expect(read && read->width == 8193U && read->height == 7U,
+                 "the IHDR width and height are read big-endian");
+    ok &= expect(!image_dimensions_fit(8193U, 7U) && image_dimensions_fit(8192U, 8192U) &&
+                     !image_dimensions_fit(0U, 7U),
+                 "dimensions are checked against the texture and byte budgets");
+    auto renamed = header;
+    renamed[12] = 'X';
+    ok &= expect(!png_header_dimensions(renamed), "a first chunk that is not IHDR is refused");
+    header.pop_back();
+    ok &= expect(!png_header_dimensions(header), "a header cut short is refused");
+    ok &= expect(!png_header_dimensions({}), "an empty input has no header");
+    return ok;
+}
+
+bool transformed_extent() {
+    using vellum::graphics::Affine2D;
+    using vellum::graphics::command_paint_bounds;
+    using vellum::graphics::DamagePropagation;
+    bool ok = true;
+    const DamagePropagation propagation;
+    const Rect frame{0, 0, 200, 200};
+    PaintCommand image{.kind = PaintCommand::Kind::image,
+                       .node_id = "logo",
+                       .bounds = {10, 20, 30, 40},
+                       .image = ImageReference{.content_hash = kHashA}};
+    auto plain = command_paint_bounds(image, frame, propagation);
+    ok &= expect(plain && near_rect(*plain, 10, 20, 30, 40),
+                 "an untransformed image paints its box");
+    // A quarter turn about the origin maps (x, y) to (-y, x), then a
+    // translation moves the result back into the frame.
+    image.transform = Affine2D{.a = 0.0F, .b = 1.0F, .c = -1.0F, .d = 0.0F,
+                               .tx = 100.0F, .ty = 0.0F};
+    const auto turned = command_paint_bounds(image, frame, propagation);
+    ok &= expect(turned && near_rect(*turned, 40, 10, 40, 30),
+                 "a transformed image paints its box mapped through the transform");
+    PaintCommand box{.kind = PaintCommand::Kind::rectangle,
+                     .node_id = "box",
+                     .bounds = {10, 20, 30, 40},
+                     .transform = image.transform};
+    const auto rectangle = command_paint_bounds(box, frame, propagation);
+    ok &= expect(rectangle && turned && near_rect(*rectangle, turned->x, turned->y,
+                                                  turned->width, turned->height),
+                 "an image and a rectangle with one box and transform paint the same area");
+    ok &= expect(!command_paint_bounds({.kind = PaintCommand::Kind::begin_layer}, frame,
+                                       propagation),
+                 "a layer bracket paints nothing itself");
+    return ok;
+}
+
 bool damage() {
     using vellum::graphics::compute_scene_damage;
     using vellum::graphics::DamagePropagation;
@@ -398,6 +462,8 @@ int main() {
     ok &= versions();
     ok &= commands();
     ok &= damage();
+    ok &= png_headers();
+    ok &= transformed_extent();
     if (ok) std::cout << "image node tests passed\n";
     return ok ? 0 : 1;
 }

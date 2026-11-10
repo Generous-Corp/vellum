@@ -708,6 +708,42 @@ std::optional<Rect> node_paint_bounds(const SceneNode& node, const Rect& absolut
     return std::nullopt;
 }
 
+std::optional<Rect> command_paint_bounds(const PaintCommand& command, const Rect& frame,
+                                         const DamagePropagation& propagation) {
+    SceneNode painted;
+    painted.bounds = command.bounds;
+    switch (command.kind) {
+    case PaintCommand::Kind::rectangle:
+        painted.kind = SceneNode::Kind::rectangle;
+        painted.box_shadows = command.box_shadows;
+        break;
+    case PaintCommand::Kind::text:
+        painted.kind = SceneNode::Kind::text;
+        painted.text = command.text;
+        painted.text_runs = command.text_runs;
+        painted.font_size = command.font_size;
+        break;
+    case PaintCommand::Kind::mesh:
+        painted.kind = SceneNode::Kind::mesh;
+        painted.mesh = command.mesh;
+        break;
+    case PaintCommand::Kind::path:
+        painted.kind = SceneNode::Kind::path;
+        painted.path = command.path;
+        break;
+    case PaintCommand::Kind::image:
+        painted.kind = SceneNode::Kind::image;
+        painted.image = command.image;
+        break;
+    case PaintCommand::Kind::begin_layer:
+    case PaintCommand::Kind::end_layer:
+        return std::nullopt;
+    }
+    const auto local = node_paint_bounds(painted, command.bounds, frame, propagation);
+    if (!local) return std::nullopt;
+    return transformed_bounds(command.transform, *local);
+}
+
 bool paint_differs(const SceneNode& previous, const SceneNode& next) {
     if (previous.kind != next.kind) return true;
     switch (next.kind) {

@@ -21,6 +21,27 @@ inline constexpr std::uint32_t kMaxImageDimension = 8192U;
 /// The largest texel buffer of an `ImageAsset`: 256 MiB, an 8192 by 8192
 /// image.
 inline constexpr std::size_t kMaxImageBytes = 256U * 1024U * 1024U;
+/// The largest encoded image a decoder accepts: 64 MiB. A decoder refuses
+/// larger input before hashing or parsing it, so the cost of a refusal does
+/// not grow with the input.
+inline constexpr std::size_t kMaxEncodedImageBytes = 64U * 1024U * 1024U;
+
+/// The width and height a PNG declares in its header.
+struct ImageDimensions final {
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
+
+/// The dimensions in the IHDR chunk of `encoded`, which must start with the
+/// PNG signature followed by a 13-byte IHDR chunk, read without decoding or
+/// hashing anything else. Empty when the header is not there. The values are
+/// as declared, so they still have to be checked against the image budgets.
+[[nodiscard]] std::optional<ImageDimensions> png_header_dimensions(
+    std::span<const std::uint8_t> encoded) noexcept;
+
+/// Whether `width` by `height` RGBA8 texels fit `kMaxImageDimension` and
+/// `kMaxImageBytes` and are not empty.
+[[nodiscard]] bool image_dimensions_fit(std::uint32_t width, std::uint32_t height) noexcept;
 
 /// What an image node draws when its asset is not in the scene: an opaque
 /// mid-grey box, so a missing asset is visible rather than silently empty.
@@ -71,11 +92,11 @@ enum class ImageAlpha : std::uint8_t {
 [[nodiscard]] bool image_reference_is_valid(
     const ImageReference& reference, std::string* reason = nullptr);
 
-/// Whether every entry of `scene.images` is non-null, has a canonical hash and
-/// a texel buffer matching its size within the image budgets, and is the only
-/// one with its hash. It reads no texels, so it is cheap enough to run every
-/// frame; the premultiplication rule is `make_image_asset`'s and
-/// `image_asset_is_valid`'s to enforce.
+/// Whether every entry of `scene.images` is non-null, passes
+/// `image_asset_is_valid` (a canonical hash, a texel buffer matching its size
+/// within the image budgets, and no colour channel above its alpha), and is
+/// the only one with its hash. The premultiplication check reads every texel
+/// once, so its cost is linear in the scene's texel bytes.
 [[nodiscard]] bool scene_images_are_valid(const Scene& scene, std::string* reason = nullptr);
 
 /// The asset `scene.images` holds under `content_hash`, or null. With a hash

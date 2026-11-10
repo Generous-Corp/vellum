@@ -11,6 +11,8 @@
 #include <array>
 #include <cstdio>
 #include <limits>
+#include <optional>
+#include <string>
 
 namespace vellum::graphics {
 namespace {
@@ -43,23 +45,40 @@ std::string content_hash_of(std::span<const std::uint8_t> bytes) {
 std::shared_ptr<const ImageAsset> SkiaDawnSurface::decode_image_asset(
     std::span<const std::uint8_t> encoded, std::string_view expected_content_hash,
     std::string* error) {
-    const auto hash = content_hash_of(encoded);
-    if (!expected_content_hash.empty()) {
-        const auto expected = normalize_content_hash(expected_content_hash);
-        if (!expected) {
-            set_error(error, "the expected content hash is not a SHA-256 hash");
-            return nullptr;
-        }
-        if (*expected != hash) {
-            set_error(error, "the image bytes hash to " + hash + ", not " + *expected);
-            return nullptr;
-        }
+    // Everything that bounds the work is checked before the bytes are hashed
+    // or handed to a codec: the encoded size, then the declared dimensions.
+    if (encoded.size() > kMaxEncodedImageBytes) {
+        set_error(error, "the encoded image is larger than " +
+                             std::to_string(kMaxEncodedImageBytes) + " bytes");
+        return nullptr;
     }
-    auto data = SkData::MakeWithoutCopy(encoded.data(), encoded.size());
     if (!SkPngDecoder::IsPng(encoded.data(), encoded.size())) {
         set_error(error, "the image is not a PNG");
         return nullptr;
     }
+    const auto declared = png_header_dimensions(encoded);
+    if (!declared) {
+        set_error(error, "the PNG does not start with an IHDR header");
+        return nullptr;
+    }
+    if (!image_dimensions_fit(declared->width, declared->height)) {
+        set_error(error, "the PNG's size is empty or over the image budget");
+        return nullptr;
+    }
+    std::optional<std::string> expected;
+    if (!expected_content_hash.empty()) {
+        expected = normalize_content_hash(expected_content_hash);
+        if (!expected) {
+            set_error(error, "the expected content hash is not a SHA-256 hash");
+            return nullptr;
+        }
+    }
+    const auto hash = content_hash_of(encoded);
+    if (expected && *expected != hash) {
+        set_error(error, "the image bytes hash to " + hash + ", not " + *expected);
+        return nullptr;
+    }
+    auto data = SkData::MakeWithoutCopy(encoded.data(), encoded.size());
     SkCodec::Result result = SkCodec::kSuccess;
     auto codec = SkPngDecoder::Decode(data, &result);
     if (!codec || result != SkCodec::kSuccess) {
@@ -68,11 +87,9 @@ std::shared_ptr<const ImageAsset> SkiaDawnSurface::decode_image_asset(
     }
     const auto size = codec->dimensions();
     if (size.width() <= 0 || size.height() <= 0 ||
-        static_cast<std::uint32_t>(size.width()) > kMaxImageDimension ||
-        static_cast<std::uint32_t>(size.height()) > kMaxImageDimension ||
-        static_cast<std::uint64_t>(size.width()) * static_cast<std::uint64_t>(size.height()) *
-                4U > kMaxImageBytes) {
-        set_error(error, "the PNG's size is empty or over the image budget");
+        static_cast<std::uint32_t>(size.width()) != declared->width ||
+        static_cast<std::uint32_t>(size.height()) != declared->height) {
+        set_error(error, "the PNG's decoded size does not match its header");
         return nullptr;
     }
     // Texels are taken as stored: no colour management, as for every other

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <set>
 
 namespace vellum::graphics {
@@ -47,6 +48,32 @@ bool premultiplied(std::span<const std::uint8_t> rgba) {
 }
 
 }  // namespace
+
+std::optional<ImageDimensions> png_header_dimensions(
+    std::span<const std::uint8_t> encoded) noexcept {
+    constexpr std::uint8_t signature[]{0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+    constexpr std::uint8_t ihdr[]{0, 0, 0, 13, 'I', 'H', 'D', 'R'};
+    // Signature, IHDR length and type, then the 4-byte width and height.
+    if (encoded.size() < 24U) return std::nullopt;
+    if (!std::equal(std::begin(signature), std::end(signature), encoded.begin()) ||
+        !std::equal(std::begin(ihdr), std::end(ihdr), encoded.begin() + 8)) {
+        return std::nullopt;
+    }
+    const auto big_endian = [&](std::size_t offset) {
+        return (static_cast<std::uint32_t>(encoded[offset]) << 24U) |
+               (static_cast<std::uint32_t>(encoded[offset + 1U]) << 16U) |
+               (static_cast<std::uint32_t>(encoded[offset + 2U]) << 8U) |
+               static_cast<std::uint32_t>(encoded[offset + 3U]);
+    };
+    return ImageDimensions{big_endian(16U), big_endian(20U)};
+}
+
+bool image_dimensions_fit(std::uint32_t width, std::uint32_t height) noexcept {
+    return width > 0U && height > 0U && width <= kMaxImageDimension &&
+           height <= kMaxImageDimension &&
+           static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height) * 4U <=
+               kMaxImageBytes;
+}
 
 std::optional<std::string> normalize_content_hash(std::string_view value) {
     const auto space = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
@@ -133,12 +160,7 @@ bool scene_images_are_valid(const Scene& scene, std::string* reason) {
     for (const auto& asset : scene.images) {
         if (!asset) return fail(reason, "the scene lists a null image asset");
         std::string why;
-        if (!is_content_hash(asset->content_hash)) {
-            why = "the content hash is not sha256: followed by 64 lowercase hex digits";
-        } else {
-            check_size(asset->width, asset->height, asset->premultiplied_rgba.size(), &why);
-        }
-        if (!why.empty()) {
+        if (!image_asset_is_valid(*asset, &why)) {
             return fail(reason, "image asset " + asset->content_hash + " is invalid: " + why);
         }
         if (!hashes.insert(asset->content_hash).second) {

@@ -141,8 +141,10 @@ public:
     /// the DesignIR content-hash convention. When `expected_content_hash` is
     /// not empty it must name the same digest, bare or prefixed, or decoding
     /// fails, so a mislabelled asset never reaches a scene. Texels are taken
-    /// as stored, without colour management, and the size must fit
-    /// `kMaxImageDimension` and `kMaxImageBytes`.
+    /// as stored, without colour management. Input over
+    /// `kMaxEncodedImageBytes`, and a header whose dimensions do not fit
+    /// `kMaxImageDimension` and `kMaxImageBytes`, are refused before the bytes
+    /// are hashed or a codec is built.
     [[nodiscard]] static std::shared_ptr<const ImageAsset> decode_image_asset(
         std::span<const std::uint8_t> encoded, std::string_view expected_content_hash = {},
         std::string* error = nullptr);

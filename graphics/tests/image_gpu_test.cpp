@@ -7,8 +7,10 @@
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/lowering_diagnostic.hpp>
 #include <vellum/graphics/paint_command.hpp>
+#include <vellum/graphics/scene_acceptance.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
@@ -130,6 +132,27 @@ void decoding() {
     expect(!SkiaDawnSurface::decode_image_asset(png, "sha256:" + std::string(64, '0'), &error) &&
                error.find("hash to") != std::string::npos,
            "a mislabelled PNG is refused", error);
+    // The header's dimensions are read before the bytes are hashed: an
+    // oversized header is refused for its size even when its hash is wrong.
+    auto oversized = png;
+    if (oversized.size() >= 24U) {
+        oversized[16] = 0x00; oversized[17] = 0x00; oversized[18] = 0x20; oversized[19] = 0x01;
+    }
+    expect(!SkiaDawnSurface::decode_image_asset(oversized, "sha256:" + std::string(64, '0'),
+                                                &error) &&
+               error == "the PNG's size is empty or over the image budget",
+           "an oversized header is refused before hashing", error);
+    std::vector<std::uint8_t> huge(kMaxEncodedImageBytes + 1U, 0U);
+    std::copy(png.begin(), png.begin() + std::min<std::size_t>(png.size(), 33U), huge.begin());
+    expect(!SkiaDawnSurface::decode_image_asset(huge, "sha256:" + std::string(64, '0'), &error) &&
+               error == "the encoded image is larger than " +
+                            std::to_string(kMaxEncodedImageBytes) + " bytes",
+           "input over the encoded budget is refused before hashing", error);
+    auto headless = png;
+    if (headless.size() >= 16U) headless[12] = 'X';
+    expect(!SkiaDawnSurface::decode_image_asset(headless, {}, &error) &&
+               error == "the PNG does not start with an IHDR header",
+           "a PNG without an IHDR header first is refused", error);
     png.resize(png.size() / 2U);
     expect(!SkiaDawnSurface::decode_image_asset(png, {}, &error),
            "a truncated PNG is refused", error);
@@ -252,6 +275,18 @@ void placeholder_and_refusals() {
         Capture after;
         const bool rendered = surface->render(candidate, &why);
         expect(!rendered && why == expected, "the scene is refused: " + expected, why);
+        // The surface decides through the shared acceptance, so the web shell
+        // refuses the same scene with the same report.
+        const auto shared = accept_scene(candidate);
+        const auto& reported = surface->diagnostics();
+        bool same = !shared.accepted && shared.reason == why &&
+                    shared.diagnostics.size() == reported.size();
+        for (std::size_t index = 0; same && index < reported.size(); ++index) {
+            same = shared.diagnostics[index].code == reported[index].code &&
+                   shared.diagnostics[index].node_id == reported[index].node_id &&
+                   shared.diagnostics[index].message == reported[index].message;
+        }
+        expect(same, "the surface refusal matches accept_scene: " + expected, shared.reason);
         expect(surface->capture_rgba(after.rgba, after.width, after.height, &why) &&
                    after.rgba == placeholder.rgba,
                "a refused scene keeps the previous frame: " + expected);
@@ -292,6 +327,20 @@ void placeholder_and_refusals() {
     forged.images = {bad};
     refused(forged, "image asset " + std::string(harness::fixtures::kQuadrantImageHash) +
                         " is invalid: the image's texel buffer does not match its dimensions");
+    expect(surface->diagnostics().size() == 1U &&
+               surface->diagnostics()[0].code == kInvalidImageCode,
+           "an invalid asset table is reported as a refusal");
+    auto straight = scene;
+    auto unpremultiplied = std::make_shared<ImageAsset>(*straight.images[0]);
+    // The quadrant fixture's last texel is white at half alpha; raise its red
+    // channel above that alpha.
+    unpremultiplied->premultiplied_rgba[unpremultiplied->premultiplied_rgba.size() - 4U] = 255U;
+    straight.images = {unpremultiplied};
+    refused(straight, "image asset " + std::string(harness::fixtures::kQuadrantImageHash) +
+                          " is invalid: a texel has a colour channel above its alpha");
+    expect(surface->diagnostics().size() == 1U &&
+               surface->diagnostics()[0].code == kInvalidImageCode,
+           "an asset that is not premultiplied is reported as a refusal");
 
     auto current = scene;
     current.scene_version = kSceneVersion;

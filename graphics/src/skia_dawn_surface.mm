@@ -5,6 +5,7 @@
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/render_telemetry.hpp>
+#include <vellum/graphics/scene_acceptance.hpp>
 
 #include <gpu_runtime/gpu_surface.hpp>
 
@@ -748,21 +749,6 @@ bool path_is_drawable(const PathGeometry& path, const Color& fill, std::string* 
     return true;
 }
 
-// The first path node, in depth-first order, that cannot be drawn.
-const SceneNode* find_undrawable_path(const SceneNode& node, std::string& reason) {
-    if (node.kind == SceneNode::Kind::path &&
-        (!node.path || !path_is_drawable(*node.path, node.fill, &reason))) {
-        if (!node.path) reason.clear();
-        return &node;
-    }
-    for (const auto& child : node.children) {
-        if (const auto* found = find_undrawable_path(child, reason); found != nullptr) {
-            return found;
-        }
-    }
-    return nullptr;
-}
-
 bool draw_path(SkCanvas& canvas, const PaintCommand& command, float opacity,
                FrameResources& resources, std::string* error) {
     if (!command.path) {
@@ -826,24 +812,6 @@ bool draw_path(SkCanvas& canvas, const PaintCommand& command, float opacity,
         canvas.drawPath(outline, paint);
     }
     return true;
-}
-
-// The first image node, in depth-first order, that cannot be drawn: one
-// without a reference or with an invalid one.
-const SceneNode* find_undrawable_image(const SceneNode& node, std::string& reason) {
-    if (node.kind == SceneNode::Kind::image &&
-        (!node.image || !node.children.empty() ||
-         !image_reference_is_valid(*node.image, &reason))) {
-        if (!node.image) reason = "it has no image reference";
-        else if (!node.children.empty()) reason = "an image node has no children";
-        return &node;
-    }
-    for (const auto& child : node.children) {
-        if (const auto* found = find_undrawable_image(child, reason); found != nullptr) {
-            return found;
-        }
-    }
-    return nullptr;
 }
 
 bool draw_image(SkCanvas& canvas, const PaintCommand& command, float opacity,
@@ -991,39 +959,11 @@ bool sane_box(const Rect& rect) {
         rect.width >= 0.0F && rect.height >= 0.0F;
 }
 
+// A command whose box is not finite has no known extent and is always drawn.
 Extent command_extent(const PaintCommand& command, const Rect& frame, float scale) {
     static const DamagePropagation propagation;
-    if (!sane_box(command.bounds)) return std::nullopt;
-    SceneNode painted;
-    painted.bounds = command.bounds;
-    switch (command.kind) {
-        case PaintCommand::Kind::rectangle:
-            painted.kind = SceneNode::Kind::rectangle;
-            painted.box_shadows = command.box_shadows;
-            break;
-        case PaintCommand::Kind::text:
-            painted.kind = SceneNode::Kind::text;
-            painted.text = command.text;
-            painted.text_runs = command.text_runs;
-            painted.font_size = command.font_size;
-            break;
-        case PaintCommand::Kind::mesh:
-            painted.kind = SceneNode::Kind::mesh;
-            painted.mesh = command.mesh;
-            break;
-        case PaintCommand::Kind::path:
-            painted.kind = SceneNode::Kind::path;
-            painted.path = command.path;
-            break;
-        case PaintCommand::Kind::image:
-            painted.kind = SceneNode::Kind::image;
-            painted.image = command.image;
-            break;
-        case PaintCommand::Kind::begin_layer:
-        case PaintCommand::Kind::end_layer:
-            return std::nullopt;
-    }
-    return pixel_extent(node_paint_bounds(painted, command.bounds, frame, propagation), scale);
+    if (!sane_box(command.bounds) || !draws_content(command.kind)) return std::nullopt;
+    return pixel_extent(command_paint_bounds(command, frame, propagation), scale);
 }
 
 std::vector<Extent> paint_command_extents(
@@ -1366,78 +1306,14 @@ public:
         return true;
     }
 
-    // Records what the frame loses. A refused scene reports only its refusal:
-    // the version mismatch, or a `kInvalidImageCode` error for an image or
-    // image table that cannot be drawn.
+    // Records what the frame loses through `accept_scene`, the decision every
+    // backend shares.
     bool accepts_with_diagnostics(const Scene& scene, std::string* error) {
-        std::string why;
-        diagnostics_ = scene_loss_diagnostics(scene);
-        if (accepts(scene, &why)) return true;
-        const bool version = !diagnostics_.empty() &&
-            diagnostics_.front().severity == LoweringDiagnostic::Severity::error;
-        if (version) {
-            diagnostics_.resize(1U);
-        } else {
-            diagnostics_.clear();
-            if (image_refusal_) {
-                diagnostics_.push_back({
-                    .severity = LoweringDiagnostic::Severity::error,
-                    .disposition = LoweringDiagnostic::Disposition::unsupported,
-                    .code = std::string(kInvalidImageCode),
-                    .node_id = image_refusal_node_,
-                    .property = "image",
-                    .message = why,
-                });
-            }
-        }
-        set_error(error, std::move(why));
+        auto acceptance = accept_scene(scene);
+        diagnostics_ = std::move(acceptance.diagnostics);
+        if (acceptance.accepted) return true;
+        set_error(error, std::move(acceptance.reason));
         return false;
-    }
-
-    bool accepts(const Scene& scene, std::string* error) {
-        image_refusal_ = false;
-        image_refusal_node_.clear();
-        if (!scene_version_is_supported(scene.scene_version)) {
-            set_error(error, "scene version " + std::to_string(scene.scene_version) +
-                                 " is not supported by this renderer");
-            return false;
-        }
-        if (const auto* unknown = find_unknown_kind(scene.root); unknown != nullptr) {
-            set_error(error, "scene contains unsupported node kind " +
-                                 std::to_string(static_cast<int>(unknown->kind)) + " at " +
-                                 unknown->id);
-            return false;
-        }
-        if (!scene_fields_match_version(scene)) {
-            const auto loss = scene_loss_diagnostics(scene);
-            set_error(error, loss.empty() ? "scene fields do not match its version"
-                                          : loss.front().message);
-            return false;
-        }
-        if (const auto* invalid = find_non_finite_compositing(scene.root);
-            invalid != nullptr) {
-            set_error(error, "scene node " + invalid->id +
-                                 " has a non-finite transform, opacity, or corner radius");
-            return false;
-        }
-        std::string reason;
-        if (const auto* path = find_undrawable_path(scene.root, reason); path != nullptr) {
-            set_error(error, path->path ? "path " + path->id + " cannot be drawn: " + reason
-                                        : "path " + path->id + " has no geometry");
-            return false;
-        }
-        if (const auto* image = find_undrawable_image(scene.root, reason); image != nullptr) {
-            image_refusal_ = true;
-            image_refusal_node_ = image->id;
-            set_error(error, "image " + image->id + " cannot be drawn: " + reason);
-            return false;
-        }
-        if (!scene_images_are_valid(scene, &reason)) {
-            image_refusal_ = true;
-            set_error(error, reason);
-            return false;
-        }
-        return true;
     }
 
     bool capture_png(std::vector<std::uint8_t>& png, std::string* error) {
@@ -1999,8 +1875,6 @@ private:
     bool internal_redraw_ = false;
     bool device_loss_trimmed_ = false;
     std::vector<LoweringDiagnostic> diagnostics_;
-    bool image_refusal_ = false;
-    std::string image_refusal_node_;
     std::uint64_t trims_ = 0;
     CacheTrimReason last_trim_ = CacheTrimReason::none;
 };
