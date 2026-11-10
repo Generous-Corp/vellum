@@ -48,6 +48,17 @@ set_target_properties(vellum-partial-present-test PROPERTIES
 add_test(NAME vellum.gpu.partial-present
     COMMAND vellum-partial-present-test)
 
+add_executable(vellum-render-cache-gpu-test
+    render_cache_gpu_test.cpp)
+target_link_libraries(vellum-render-cache-gpu-test PRIVATE
+    vellum-scene-capture-harness)
+set_target_properties(vellum-render-cache-gpu-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.render-cache
+    COMMAND vellum-render-cache-gpu-test)
+
 add_executable(vellum-partial-present-bench
     partial_present_bench.mm)
 target_link_libraries(vellum-partial-present-bench PRIVATE

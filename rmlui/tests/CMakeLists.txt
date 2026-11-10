@@ -63,6 +63,20 @@ if(VELLUM_RMLUI_NATIVE)
     vellum_rmlui_add_test(vellum-rmlui-native-test native_test.cpp VellumRmlUi::Native)
     add_test(NAME vellum.rmlui.native COMMAND vellum-rmlui-native-test)
 
+    # The font engine's text width against CoreText's fractional layout of
+    # the same font file. Apple only: the reference and the fonts (Arial,
+    # Verdana) are the system's.
+    if(APPLE AND VELLUM_RMLUI_FONTS)
+        enable_language(OBJCXX)
+        vellum_rmlui_add_test(vellum-rmlui-native-text-width-test native_text_width_test.mm
+            VellumRmlUi::Native)
+        target_compile_options(vellum-rmlui-native-text-width-test PRIVATE -fobjc-arc)
+        target_link_libraries(vellum-rmlui-native-text-width-test PRIVATE
+            "-framework CoreText" "-framework CoreGraphics" "-framework Foundation")
+        add_test(NAME vellum.rmlui.native-text-width COMMAND vellum-rmlui-native-text-width-test)
+        set_tests_properties(vellum.rmlui.native-text-width PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
+
     # A click into a text input, with the field's font resolved and without.
     vellum_rmlui_add_test(vellum-rmlui-native-text-input-test native_text_input_test.cpp
         VellumRmlUi::Native)

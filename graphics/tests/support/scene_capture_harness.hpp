@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vellum/graphics/capture_stats.hpp>
+#include <vellum/graphics/render_telemetry.hpp>
 #include <vellum/graphics/scene.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
@@ -45,6 +46,8 @@ struct CaptureResult final {
     std::uint32_t pixel_height = 0;
     GpuEvidence evidence;
     FrameStats frame_stats;
+    /// The surface's telemetry right after the render.
+    RenderTelemetry telemetry;
     CaptureStats stats;
     std::chrono::microseconds surface_creation{0};
     std::chrono::microseconds render{0};
