@@ -52,6 +52,11 @@ add_test(NAME vellum.rmlui.midi-learn COMMAND vellum-rmlui-midi-learn-test)
 vellum_rmlui_add_test(vellum-rmlui-settings-test settings_test.cpp VellumRmlUi::Core)
 add_test(NAME vellum.rmlui.settings COMMAND vellum-rmlui-settings-test)
 
+vellum_rmlui_add_test(vellum-rmlui-midi-panic-test midi_panic_test.cpp VellumRmlUi::Core)
+target_compile_definitions(vellum-rmlui-midi-panic-test PRIVATE
+    VELLUM_RMLUI_MIDI_PANIC_RCSS="${CMAKE_CURRENT_SOURCE_DIR}/../assets/midi-panic.rcss")
+add_test(NAME vellum.rmlui.midi-panic COMMAND vellum-rmlui-midi-panic-test)
+
 vellum_rmlui_add_test(vellum-rmlui-two-instances-test two_instances_test.cpp VellumRmlUi::Core)
 add_test(NAME vellum.rmlui.two-instances COMMAND vellum-rmlui-two-instances-test)
 
@@ -62,9 +67,28 @@ add_test(NAME vellum.rmlui.log-sink COMMAND vellum-rmlui-log-sink-test)
 vellum_rmlui_add_test(vellum-rmlui-core-flattening-test core_flattening_test.cpp VellumRmlUi::Core)
 add_test(NAME vellum.rmlui.core-flattening COMMAND vellum-rmlui-core-flattening-test)
 
+if(VELLUM_RMLUI_CPU)
+    vellum_rmlui_add_test(vellum-rmlui-cpu-render-test cpu_render_test.cpp VellumRmlUi::Cpu)
+    add_test(NAME vellum.rmlui.cpu-render COMMAND vellum-rmlui-cpu-render-test)
+endif()
+
 if(VELLUM_RMLUI_NATIVE)
     vellum_rmlui_add_test(vellum-rmlui-native-test native_test.cpp VellumRmlUi::Native)
     add_test(NAME vellum.rmlui.native COMMAND vellum-rmlui-native-test)
+
+    # The font engine's text width against CoreText's fractional layout of
+    # the same font file. Apple only: the reference and the fonts (Arial,
+    # Verdana) are the system's.
+    if(APPLE AND VELLUM_RMLUI_FONTS)
+        enable_language(OBJCXX)
+        vellum_rmlui_add_test(vellum-rmlui-native-text-width-test native_text_width_test.mm
+            VellumRmlUi::Native)
+        target_compile_options(vellum-rmlui-native-text-width-test PRIVATE -fobjc-arc)
+        target_link_libraries(vellum-rmlui-native-text-width-test PRIVATE
+            "-framework CoreText" "-framework CoreGraphics" "-framework Foundation")
+        add_test(NAME vellum.rmlui.native-text-width COMMAND vellum-rmlui-native-text-width-test)
+        set_tests_properties(vellum.rmlui.native-text-width PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
 
     # A click into a text input, with the field's font resolved and without.
     vellum_rmlui_add_test(vellum-rmlui-native-text-input-test native_text_input_test.cpp

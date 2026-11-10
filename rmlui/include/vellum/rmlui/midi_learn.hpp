@@ -23,7 +23,7 @@
 // MIT) and this module's host bridge. It contains no code from any
 // GPL-licensed project.
 
-#include <vellum/rmlui/backend.hpp>
+#include <vellum/rmlui/element_classes.hpp>
 #include <vellum/rmlui/host_bridge.hpp>
 
 #include <array>
@@ -117,13 +117,6 @@ struct MidiLearnHost {
     std::function<void(std::string_view param)> begin;
     std::function<void()> cancel;
     std::function<void(std::string_view param)> clear;
-};
-
-// Applies a class change to an element. Returns ok, or the reason it could not.
-class ClassSink {
-  public:
-    virtual ~ClassSink() = default;
-    virtual Status set_class(std::string_view element_id, std::string_view class_name, bool on) = 0;
 };
 
 class MidiLearnBridge final {
@@ -243,18 +236,6 @@ class MidiLearnBridge final {
 
     MidiLearnHost host_;
     std::vector<Tracked> tracked_;
-};
-
-// A ClassSink over a Core Backend (VellumRmlUi::Core exposes no elements).
-class CoreClassSink final : public ClassSink {
-  public:
-    explicit CoreClassSink(Backend& backend) : backend_(backend) {}
-    Status set_class(std::string_view element_id, std::string_view class_name, bool on) override {
-        return backend_.set_element_class(element_id, class_name, on);
-    }
-
-  private:
-    Backend& backend_;
 };
 
 // The stock stylesheet, identical to the installed

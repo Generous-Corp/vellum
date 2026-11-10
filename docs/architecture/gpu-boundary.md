@@ -22,7 +22,7 @@ The public slice consists of:
   application builds, plus a headers-only `Vellum::DawnHeaders` target for an
   embedding host's authenticated bootstrap and compute code.
 
-The scene carries a single integer schema version, `kSceneVersion`, now 2.
+The scene carries a single integer schema version, `kSceneVersion`, now 3.
 A change that can alter rendered output bumps it: a new node kind, a new field
 that changes how a scene is drawn, or a change in meaning. A change that only
 adds metadata keeps it. Consumers accept versions from
@@ -65,6 +65,33 @@ tree. Interaction and accessibility boxes are the axis-aligned box of each
 node as drawn, so a rotated control hit-tests on that box, and a node whose
 transform has a zero determinant gets no interaction or text-input box.
 
+A `path` node carries a `PathGeometry`: a flat list of move, line,
+quadratic, cubic, SVG elliptical arc and close commands with their values,
+a nonzero or evenodd fill rule, a stroke (colour, width, miter, round or bevel
+joins, butt, round or square caps, miter limit, dash array and dash offset)
+and an anti-aliasing flag, shared and immutable like a mesh. The fill paint is
+the node's colour and linear gradients, which resolve against the layout box,
+or against the path's control box when the layout box has no area; the stroke
+is a single colour. The SVG paint defaults (black fill, no stroke, width 1)
+are applied by the authoring host, not by the scene. The authoring host parses
+an SVG `d` string once, into absolute commands, so a scene never stores path
+strings. The path kind arrived with version 3, so a version 1 or 2 scene with a
+path node is refused by `render` and yields no paint commands. A path command
+carries the composed transform and opacity like any other; a lone faded path
+folds the opacity into its paint unless it draws more than one operation (a
+fill with a gradient, or a fill and a stroke), and then gets a bounded layer
+over its paint extent, the control box outset by the stroke reach. A path is
+drawable only within its budget of 4096 commands and 16384 values (64 KiB of `float` data), with at
+most 64 dash entries drawing at most 100000 dashes along a bound on the path's
+length, finite coordinates and the exact arity per command;
+`path_is_valid` states the rules, the parser refuses path data longer than
+64 KiB, and the surface refuses a scene with an undrawable path before drawing,
+keeping its previous frame. Damage treats a path as its control-point box,
+with arcs as their whole ellipse, outset by half the stroke width times the
+larger of the miter limit for miter joins and sqrt(2) for round or square
+caps. The web shell does not draw paths and counts each one in
+`vellum_web_lowering_loss_count`.
+
 The surface draws every frame into a retained offscreen Graphite surface the
 size of its target in device pixels, and presents by drawing that image into
 the swapchain texture; captures read the retained surface back, through the
@@ -82,8 +109,31 @@ rectangle counts, the commands re-recorded and why a frame repainted fully.
 What is cached and when it is discarded is renderer policy: the scene schema
 carries no cache hints. Partial redraw is enabled only for scene versions the
 damage model understands, up to `kDamageModelSceneVersion` (1); a version 2
-scene, which can carry transforms, group opacity and per-corner radii, repaints
-fully until the damage model learns those fields.
+or 3 scene, which can carry transforms, group opacity, per-corner radii and
+paths, repaints fully until the damage model learns those fields.
+
+The surface keeps three cross-frame resource caches under
+`RenderCacheBudgets`: laid-out text paragraphs keyed by every run's text and
+style (the colour with any folded opacity included) and the font directory;
+linear-gradient shaders keyed by their exact end points, colours, positions and
+tile mode; and GPU textures uploaded from mesh textures, keyed by size and the
+SHA-256 of the texels rather than by address, so texels rewritten in place are
+uploaded again. Keys compare floats by their bits. A hit returns the object a
+miss would build from the same inputs, so captures are byte-identical with
+every cache on or off; the render-cache GPU test checks that for each capture
+fixture, on the partial-redraw path, and for each key input. Each cache has an
+entry and a byte budget and evicts its least recently used entry first; an
+entry larger than the byte budget is refused, and a zero budget turns the
+cache off. Paragraph bytes are an estimate, since Skia does not report them.
+Once a resize settles, meaning the size has held for
+`gpu_runtime::SwapchainResizeState::kSettleFrames` presented frames, the
+entries no frame has used since the resize are dropped; a device loss drops
+every entry, and a frame that fails before it is submitted drops the textures
+it uploaded.
+`SkiaDawnSurface::telemetry` reports the frame's damage, the offscreen layers
+it opened, each cache's hits, misses, evictions, trims and bytes, the texture
+(atlas) bytes and Graphite's GPU time, and the capture harness writes it into
+its evidence JSON.
 
 Native self-test is deliberately fail-closed. A requested native surface is
 not allowed to fall back to CoreGraphics or an offscreen surface. The test also

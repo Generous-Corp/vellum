@@ -1,5 +1,6 @@
 #include "canvas_shell_lowering.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -58,10 +59,38 @@ int main() {
         .kind = SceneNode::Kind::rectangle,
         .box_shadows = {{.blur_radius = 4.0F}},
     });
+    auto outline = std::make_shared<vellum::graphics::PathGeometry>();
+    outline->verbs = {vellum::graphics::PathVerb::move, vellum::graphics::PathVerb::line};
+    outline->values = {0.0F, 0.0F, 4.0F, 4.0F};
+    scene.root.children.push_back({
+        .id = "outline", .kind = SceneNode::Kind::path, .path = outline,
+    });
     const auto losses = vellum::web::canvas_shell_loss_count(
         vellum::graphics::make_paint_commands(scene));
-    if (losses != 4) {
-        std::cerr << "expected 4 losses, got " << losses << '\n';
+    if (losses != 5) {
+        std::cerr << "expected 5 losses, got " << losses << '\n';
+        return 1;
+    }
+
+    scene.root.children.push_back({
+        .id = "faded-path-group",
+        .kind = SceneNode::Kind::group,
+        .children = {box("faded-path-group/box"),
+                     {.id = "faded-path-group/outline", .kind = SceneNode::Kind::path,
+                      .path = outline}},
+        .opacity = 0.5F,
+    });
+    const auto layered = vellum::graphics::make_paint_commands(scene);
+    using Kind = vellum::graphics::PaintCommand::Kind;
+    const auto wrapped_path = std::find_if(layered.begin(), layered.end(), [](const auto& command) {
+        return command.node_id == "faded-path-group/outline";
+    });
+    if (layered.empty() || wrapped_path == layered.end() || wrapped_path->kind != Kind::path ||
+        (wrapped_path - 2)->kind != Kind::begin_layer ||
+        !vellum::web::canvas_shell_loses(*wrapped_path) ||
+        vellum::web::canvas_shell_loss_count(layered) != 7) {
+        std::cerr << "a path inside a faded layer was not counted with its layer: "
+                  << vellum::web::canvas_shell_loss_count(layered) << '\n';
         return 1;
     }
     return 0;

@@ -1,0 +1,62 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "capture-primitives",
+    "macos-shell",
+    "render-skia-dawn"
+  ],
+  "contract_tests": [
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-09T18:28:01Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-ac9c853883d8b7cb4dd2627a16ed9267f22dc322",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/damage.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/tests/CMakeLists.txt",
+    "graphics/tests/support/scene_capture_harness.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "capture-primitives",
+    "macos-shell",
+    "render-skia-dawn"
+  ],
+  "mapped_paths": [
+    "apps/app-host/main.mm",
+    "graphics/include/vellum/graphics/damage.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/src/skia_dawn_surface.mm",
+    "graphics/tests/CMakeLists.txt",
+    "graphics/tests/partial_present_bench.mm",
+    "graphics/tests/partial_present_test.cpp",
+    "graphics/tests/scene_capture_harness_test.cpp",
+    "graphics/tests/support/scene_capture_harness.cpp",
+    "graphics/tests/support/scene_capture_harness.hpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "c86c5a6243cc4acce28b91bf02fbca4e180e8e9b",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "8f9b38d7744b3101e14d28cbacd9b692036aa3f1",
+    "to_commit": "0805a88e1e9607db1372fb2567e039d946cadc94"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "ac9c853883d8b7cb4dd2627a16ed9267f22dc322",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

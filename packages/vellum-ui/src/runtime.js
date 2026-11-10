@@ -14,8 +14,12 @@ const SNAPSHOT_SCHEMA = 'vellum.authoring-state.v1';
 const TEXT_INPUT_PRIMITIVE_VERSION = 1;
 const MAXIMUM_TEXT_INPUT_LENGTH = 65536;
 const MAXIMUM_TEXT_INPUT_PLACEHOLDER_LENGTH = 1024;
+const MAXIMUM_PATH_DATA_LENGTH = 65536;
+const MAXIMUM_PATH_DASHES = 64;
+const HEX_COLOR = /^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/;
 const INTRINSIC_TYPES = new Set([
     'view', 'stack', 'text', 'text-run', 'text-input', 'button', 'image', 'canvas', 'custom',
+    'path',
 ]);
 
 let renderingRuntime = null;
@@ -153,6 +157,7 @@ export const TextRun = primitive('text-run');
 export const Button = primitive('button');
 export const Image = primitive('image');
 export const Canvas = primitive('canvas');
+export const Path = primitive('path');
 export function TextInput(properties = {}) {
     return jsx('text-input', { ...properties, primitiveVersion: TEXT_INPUT_PRIMITIVE_VERSION });
 }
@@ -307,6 +312,70 @@ function validateBoxShadow(value, path) {
     return cloneJson(shadow, path);
 }
 
+function pathKeyword(value, path, names) {
+    if (value !== undefined && !names.includes(value)) {
+        throw new TypeError(`${path} must be one of ${names.join(', ')}`);
+    }
+    return value;
+}
+
+function validatePath(properties, path) {
+    if (typeof properties.d !== 'string' || properties.d.length > MAXIMUM_PATH_DATA_LENGTH) {
+        throw new TypeError(
+            `${path}.Path d must be SVG path data of at most ` +
+            `${MAXIMUM_PATH_DATA_LENGTH} characters`,
+        );
+    }
+    const output = { d: properties.d };
+    const fillRule = pathKeyword(properties.fillRule, `${path}.fillRule`, ['nonzero', 'evenodd']);
+    if (fillRule !== undefined) output.fillRule = fillRule;
+    const { fill, stroke } = properties;
+    if (fill !== undefined) {
+        if (fill !== null && typeof fill === 'object') {
+            output.fill = validateLinearGradient(fill, `${path}.fill`);
+        } else if (fill === 'none' || (typeof fill === 'string' && HEX_COLOR.test(fill))) {
+            output.fill = fill;
+        } else {
+            throw new TypeError(`${path}.fill must be a hex color, none, or a linear gradient`);
+        }
+    }
+    if (stroke !== undefined) {
+        if (stroke !== 'none' && !(typeof stroke === 'string' && HEX_COLOR.test(stroke))) {
+            throw new TypeError(`${path}.stroke must be a hex color or none`);
+        }
+        output.stroke = stroke;
+    }
+    finitePaintNumber(
+        properties.strokeWidth, `${path}.strokeWidth`, { optional: true, nonNegative: true });
+    finitePaintNumber(properties.strokeMiterLimit, `${path}.strokeMiterLimit`, { optional: true });
+    if (properties.strokeMiterLimit !== undefined && properties.strokeMiterLimit < 1) {
+        throw new TypeError(`${path}.strokeMiterLimit must be at least 1`);
+    }
+    finitePaintNumber(properties.strokeDashoffset, `${path}.strokeDashoffset`, { optional: true });
+    for (const name of ['strokeWidth', 'strokeMiterLimit', 'strokeDashoffset']) {
+        if (properties[name] !== undefined) output[name] = properties[name];
+    }
+    const join = pathKeyword(
+        properties.strokeLineJoin, `${path}.strokeLineJoin`, ['miter', 'round', 'bevel']);
+    if (join !== undefined) output.strokeLineJoin = join;
+    const cap = pathKeyword(
+        properties.strokeLineCap, `${path}.strokeLineCap`, ['butt', 'round', 'square']);
+    if (cap !== undefined) output.strokeLineCap = cap;
+    const dashes = properties.strokeDasharray;
+    if (dashes !== undefined) {
+        if (!Array.isArray(dashes) || dashes.length > MAXIMUM_PATH_DASHES) {
+            throw new TypeError(
+                `${path}.strokeDasharray must be an array of at most ` +
+                `${MAXIMUM_PATH_DASHES} numbers`,
+            );
+        }
+        dashes.forEach((dash, index) => finitePaintNumber(
+            dash, `${path}.strokeDasharray[${index}]`, { nonNegative: true }));
+        output.strokeDasharray = [...dashes];
+    }
+    return output;
+}
+
 function validateStyle(style, path) {
     if (style === undefined) return undefined;
     if (style === null || typeof style !== 'object' || Array.isArray(style)) {
@@ -419,6 +488,10 @@ function materialize(value, runtime, path) {
             throw new Error(`${path}.TextInput does not accept children`);
         }
     }
+    if (value.type === 'path' && childValues.length > 0) {
+        throw new TypeError(`${path}.Path does not accept children`);
+    }
+    const pathProperties = value.type === 'path' ? validatePath(value.props, path) : undefined;
     let textRunText;
     if (value.type === 'text-run') {
         const unsupported = Object.keys(value.props).filter(
@@ -483,6 +556,7 @@ function materialize(value, runtime, path) {
     if (value.type === 'text-run') node.text = textRunText;
     else if (typeof value.props.text === 'string') node.text = value.props.text;
     if (typeof value.props.source === 'string') node.source = value.props.source;
+    if (pathProperties !== undefined) Object.assign(node, pathProperties);
     if (value.type === 'custom') {
         if (typeof value.props.component !== 'string' ||
             !/^[a-z][a-z0-9-]{0,63}$/.test(value.props.component)) {

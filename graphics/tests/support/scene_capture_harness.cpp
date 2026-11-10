@@ -141,6 +141,91 @@ void append_text(SceneNode& root, Rect area, const std::string& prefix) {
     });
 }
 
+PathGeometry pentagram(Rect area, FillRule rule) {
+    PathGeometry star{.fill_rule = rule};
+    const float cx = area.width * 0.5F;
+    const float cy = area.height * 0.5F;
+    const float radius = std::min(area.width, area.height) * 0.45F;
+    for (int index = 0; index < 5; ++index) {
+        const float angle = -1.5707963F + static_cast<float>(index * 2 % 5) * 1.2566371F;
+        star.verbs.push_back(index == 0 ? PathVerb::move : PathVerb::line);
+        star.values.insert(star.values.end(),
+                           {cx + radius * std::cos(angle), cy + radius * std::sin(angle)});
+    }
+    star.verbs.push_back(PathVerb::close);
+    star.stroke = {.color = Color::hex(0x0F172A), .width = 2.0F, .join = StrokeJoin::bevel};
+    return star;
+}
+
+void append_path_stars(SceneNode& root, Rect area, const std::string& prefix) {
+    const float half = area.width * 0.5F;
+    root.children.push_back({
+        .id = prefix + "star-nonzero",
+        .kind = SceneNode::Kind::path,
+        .bounds = {area.x, area.y, half, area.height},
+        .fill = Color::hex(0xFBBF24),
+        .path = std::make_shared<const PathGeometry>(
+            pentagram({0.0F, 0.0F, half, area.height}, FillRule::nonzero)),
+    });
+    root.children.push_back({
+        .id = prefix + "star-evenodd",
+        .kind = SceneNode::Kind::path,
+        .bounds = {area.x + half, area.y, half, area.height},
+        .fill = Color::hex(0x38BDF8),
+        .path = std::make_shared<const PathGeometry>(
+            pentagram({0.0F, 0.0F, half, area.height}, FillRule::evenodd)),
+    });
+}
+
+void append_dashed_polyline(SceneNode& root, Rect area, const std::string& prefix) {
+    PathGeometry line{.stroke = {
+        .color = Color::hex(0xF472B6),
+        .width = std::max(4.0F, area.height * 0.08F),
+        .join = StrokeJoin::round,
+        .cap = StrokeCap::round,
+        .dash_array = {area.width * 0.08F, area.width * 0.05F},
+        .dash_offset = area.width * 0.02F,
+    }};
+    constexpr std::array<float, 5> heights{0.8F, 0.2F, 0.7F, 0.3F, 0.75F};
+    for (std::size_t index = 0; index < heights.size(); ++index) {
+        line.verbs.push_back(index == 0U ? PathVerb::move : PathVerb::line);
+        line.values.insert(line.values.end(),
+                           {area.width * (0.1F + 0.2F * static_cast<float>(index)),
+                            area.height * heights[index]});
+    }
+    root.children.push_back({
+        .id = prefix + "dashed-polyline",
+        .kind = SceneNode::Kind::path,
+        .bounds = area,
+        .path = std::make_shared<const PathGeometry>(std::move(line)),
+    });
+}
+
+void append_cubic_gradient(SceneNode& root, Rect area, const std::string& prefix) {
+    const float w = area.width;
+    const float h = area.height;
+    PathGeometry blob{
+        .verbs = {PathVerb::move, PathVerb::cubic, PathVerb::cubic, PathVerb::close},
+        .values = {w * 0.1F, h * 0.5F,
+                   w * 0.2F, h * 0.05F, w * 0.8F, h * 0.05F, w * 0.9F, h * 0.5F,
+                   w * 0.7F, h * 0.95F, w * 0.3F, h * 0.6F, w * 0.1F, h * 0.5F},
+        .stroke = {.color = Color::hex(0xF8FAFC), .width = 1.5F},
+    };
+    root.children.push_back({
+        .id = prefix + "cubic-gradient",
+        .kind = SceneNode::Kind::path,
+        .bounds = area,
+        .fill_gradients = {{
+            .angle_degrees = 90.0F,
+            .stops = {
+                {.position = 0.0F, .color = Color::hex(0x22C55E)},
+                {.position = 1.0F, .color = Color::hex(0x8B5CF6)},
+            },
+        }},
+        .path = std::make_shared<const PathGeometry>(std::move(blob)),
+    });
+}
+
 void append_mesh(SceneNode& root, Rect area, const std::string& prefix) {
     auto fan = std::make_shared<TriangleMesh>();
     const float cx = area.x + area.width * 0.35F;
@@ -225,6 +310,7 @@ CaptureResult render_offscreen(
     const auto rendered = Clock::now();
     result.render = elapsed(created, rendered);
     result.frame_stats = surface->frame_stats();
+    result.telemetry = surface->telemetry();
     if (!surface->capture_rgba(
             result.rgba, result.pixel_width, result.pixel_height, &result.error)) {
         return result;
@@ -475,6 +561,24 @@ Scene mesh(float width, float height) {
     return scene;
 }
 
+Scene path_fill_rules(float width, float height) {
+    auto scene = empty(width, height);
+    append_path_stars(scene.root, {0.0F, 0.0F, width, height}, "");
+    return scene;
+}
+
+Scene path_dashed_stroke(float width, float height) {
+    auto scene = empty(width, height);
+    append_dashed_polyline(scene.root, {0.0F, 0.0F, width, height}, "");
+    return scene;
+}
+
+Scene path_cubic_gradient(float width, float height) {
+    auto scene = empty(width, height);
+    append_cubic_gradient(scene.root, {0.0F, 0.0F, width, height}, "");
+    return scene;
+}
+
 Scene compositing(float width, float height) {
     auto scene = empty(width, height);
     const float cell = std::min(width, height) * 0.25F;
@@ -525,6 +629,9 @@ std::vector<NamedScene> all(float width, float height) {
         {"gradient_shadow_rectangle", gradient_shadow_rectangle(width, height)},
         {"text", text(width, height)},
         {"mesh", mesh(width, height)},
+        {"path_fill_rules", path_fill_rules(width, height)},
+        {"path_dashed_stroke", path_dashed_stroke(width, height)},
+        {"path_cubic_gradient", path_cubic_gradient(width, height)},
         {"compositing", compositing(width, height)},
         {"combined", combined(width, height)},
     };

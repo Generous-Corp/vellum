@@ -202,6 +202,23 @@ export declare const Button: Component;
 export declare const Image: Component;
 export declare const Canvas: Component;
 
+/** A retained vector path. Paint follows SVG: fill defaults to black, stroke to none. */
+export interface PathProps extends Omit<ElementProps, 'children' | 'text' | 'source'> {
+    /** SVG path data, parsed once when the tree is materialized. */
+    d: string;
+    fillRule?: 'nonzero' | 'evenodd';
+    fill?: string | LinearGradientStyle;
+    stroke?: string;
+    strokeWidth?: number;
+    strokeLineJoin?: 'miter' | 'round' | 'bevel';
+    strokeLineCap?: 'butt' | 'round' | 'square';
+    strokeMiterLimit?: number;
+    strokeDasharray?: readonly number[];
+    strokeDashoffset?: number;
+    children?: never;
+}
+export declare const Path: Component<PathProps>;
+
 export interface CustomComponentProps extends ElementProps {
     component: string;
     properties?: Record<string, JsonValue>;

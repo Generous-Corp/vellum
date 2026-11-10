@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vellum/graphics/capture_stats.hpp>
+#include <vellum/graphics/render_telemetry.hpp>
 #include <vellum/graphics/scene.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
@@ -45,6 +46,8 @@ struct CaptureResult final {
     std::uint32_t pixel_height = 0;
     GpuEvidence evidence;
     FrameStats frame_stats;
+    /// The surface's telemetry right after the render.
+    RenderTelemetry telemetry;
     CaptureStats stats;
     std::chrono::microseconds surface_creation{0};
     std::chrono::microseconds render{0};
@@ -163,10 +166,19 @@ struct NamedScene final {
 [[nodiscard]] Scene text(float width, float height);
 /// A vertex-coloured triangle mesh and a textured, clipped quad.
 [[nodiscard]] Scene mesh(float width, float height);
+/// The same pentagram filled with the nonzero and the evenodd rule, side by
+/// side; only the evenodd one leaves its centre unfilled.
+[[nodiscard]] Scene path_fill_rules(float width, float height);
+/// A dashed polyline stroked with round caps and joins.
+[[nodiscard]] Scene path_dashed_stroke(float width, float height);
+/// A closed cubic curve with a linear gradient fill and a thin stroke.
+[[nodiscard]] Scene path_cubic_gradient(float width, float height);
 /// Rotated, scaled, faded and per-corner rounded rectangles: node transforms,
 /// a group opacity layer, a folded opacity, and `corner_radii`.
 [[nodiscard]] Scene compositing(float width, float height);
-/// Every node kind above in one scene.
+/// The version 1 node kinds above in one scene, so it can also be drawn at
+/// `kDamageModelSceneVersion`. The compositing and path fixtures need versions
+/// 2 and 3 and stay separate.
 [[nodiscard]] Scene combined(float width, float height);
 /// Each content fixture, named, excluding `empty`.
 [[nodiscard]] std::vector<NamedScene> all(float width, float height);
