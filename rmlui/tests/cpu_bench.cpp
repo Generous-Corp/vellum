@@ -1,9 +1,13 @@
-// The CPU renderer's speed, recorded and not gated: a 2275 x 1197 frame with
-// 400 textured quads (a 20 x 20 grid of 64 x 64 texel tiles, each about
-// 113 x 59 pixels, half of them translucent) over a full-frame background,
-// rendered through Rml::RenderInterface calls. Prints the median and the
-// fastest of the timed frames. Registered with the `bench` label, outside the
-// required tests.
+// The CPU renderer's speed, recorded and not gated: a 2275 x 1197 context
+// with 400 textured quads (a 20 x 20 grid of 64 x 64 texel tiles, each about
+// 113 x 59 context units, half of them translucent) over a full-frame
+// background, rendered through Rml::RenderInterface calls. The first argument
+// is the target scale (default 1; 2 gives a 4550 x 2394 pixel frame).
+//
+// Prints the median and fastest frame, and the median of three partial
+// frames, to show where the time goes: the clear alone, the clear plus the
+// background, and the full frame. Registered with the `bench` label, outside
+// the required tests.
 #include <vellum/rmlui/cpu_render_interface.hpp>
 
 #include "test_support.hpp"
@@ -15,6 +19,8 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <functional>
 #include <vector>
 
 using namespace vellum::rmlui;
@@ -41,9 +47,25 @@ Rml::CompiledGeometryHandle quad(CpuRenderInterface& r, float x0, float y0, floa
                              Rml::Span<const int>(i.data(), i.size()));
 }
 
+double median_ms(int frames, const std::function<void()>& draw) {
+    std::vector<double> times;
+    for (int i = 0; i < frames + 1; ++i) {
+        const auto start = std::chrono::steady_clock::now();
+        draw();
+        const double ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        if (i > 0) // the first frame warms the caches
+            times.push_back(ms);
+    }
+    std::sort(times.begin(), times.end());
+    return times[times.size() / 2];
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    const float scale = argc > 1 ? std::strtof(argv[1], nullptr) : 1.0f;
+    VELLUM_RMLUI_CHECK(scale >= 1.0f && scale <= 4.0f);
     CpuRenderInterface r;
     std::vector<std::uint8_t> texels(64 * 64 * 4);
     for (std::size_t i = 0; i < 64 * 64; ++i) {
@@ -68,11 +90,23 @@ int main() {
             tiles.push_back(quad(r, x * w + 2.0f, y * h + 2.0f, (x + 1) * w - 2.0f, (y + 1) * h - 2.0f, tint));
         }
 
-    std::vector<std::uint8_t> buffer(static_cast<std::size_t>(kWidth) * kHeight * 4u);
+    const auto pixels_w = static_cast<std::uint32_t>(kWidth * scale);
+    const auto pixels_h = static_cast<std::uint32_t>(kHeight * scale);
+    std::vector<std::uint8_t> buffer(static_cast<std::size_t>(pixels_w) * pixels_h * 4u);
     CpuFrameTarget frame;
     frame.rgba = buffer.data();
-    frame.width = kWidth;
-    frame.height = kHeight;
+    frame.width = pixels_w;
+    frame.height = pixels_h;
+    frame.scale = scale;
+    const double clear_ms = median_ms(kFrames, [&] {
+        VELLUM_RMLUI_CHECK(r.begin_frame(frame));
+        r.end_frame();
+    });
+    const double background_ms = median_ms(kFrames, [&] {
+        VELLUM_RMLUI_CHECK(r.begin_frame(frame));
+        r.RenderGeometry(background, {0.0f, 0.0f}, 0);
+        r.end_frame();
+    });
     std::vector<double> times;
     for (int i = 0; i < kFrames + 1; ++i) {
         const auto start = std::chrono::steady_clock::now();
@@ -83,11 +117,13 @@ int main() {
         r.end_frame();
         const double ms =
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-        if (i > 0) // the first frame warms the caches
+        if (i > 0)
             times.push_back(ms);
     }
     std::sort(times.begin(), times.end());
-    std::printf("cpu bench: %ux%u, %zu textured quads: median %.2f ms, fastest %.2f ms over %d frames\n",
-                kWidth, kHeight, tiles.size(), times[times.size() / 2], times.front(), kFrames);
+    std::printf("cpu bench: %ux%u px (scale %.0f), %zu textured quads: median %.2f ms, fastest %.2f ms "
+                "over %d frames; clear alone %.2f ms, clear + background %.2f ms\n",
+                pixels_w, pixels_h, scale, tiles.size(), times[times.size() / 2], times.front(), kFrames,
+                clear_ms, background_ms);
     return 0;
 }

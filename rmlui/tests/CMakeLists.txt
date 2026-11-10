@@ -69,8 +69,9 @@ if(VELLUM_RMLUI_CPU)
 
     # Speed, recorded and not gated: outside the required tests (ctest -LE bench).
     vellum_rmlui_add_test(vellum-rmlui-cpu-bench cpu_bench.cpp VellumRmlUi::Cpu)
-    add_test(NAME vellum.rmlui.cpu-bench COMMAND vellum-rmlui-cpu-bench)
-    set_tests_properties(vellum.rmlui.cpu-bench PROPERTIES LABELS bench)
+    add_test(NAME vellum.rmlui.cpu-bench COMMAND vellum-rmlui-cpu-bench 1)
+    add_test(NAME vellum.rmlui.cpu-bench-2x COMMAND vellum-rmlui-cpu-bench 2)
+    set_tests_properties(vellum.rmlui.cpu-bench vellum.rmlui.cpu-bench-2x PROPERTIES LABELS bench)
 endif()
 
 if(VELLUM_RMLUI_NATIVE)
