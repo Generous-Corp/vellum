@@ -216,6 +216,11 @@ inline bool draw_triangle(const Target& target, Clip clip, const Vertex& a, cons
                          return;
                      }
                      const auto inverse = 255u - src[3];
+#if defined(VELLUM_RMLUI_CPU_TEST_STRAIGHT_ALPHA_BLEND)
+                     // Test-only control: blend as if colours were straight alpha.
+                     for (int k = 0; k < 3; ++k)
+                         src[k] = mul255(src[k], src[3]);
+#endif
                      for (int k = 0; k < 4; ++k)
                          dst[k] = static_cast<std::uint8_t>(std::min(255u, src[k] + mul255(dst[k], inverse)));
                  });
