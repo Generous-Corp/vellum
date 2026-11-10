@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-10T15:21:02Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-38c0318121bb7d1d7700e4d552498f99756e9483",
+  "kind": "resolution",
+  "linked_commits": [
+    "38c0318121bb7d1d7700e4d552498f99756e9483"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Integration merge (Merge remote-tracking branch 'origin/main' into feat/damage-transform-opacity-20261109). It brings main's commits into the branch; their own observations are classified separately in this ledger. Its conflict resolution touches only graphics/include/vellum/graphics/damage.hpp, graphics/src/damage.cpp and graphics/tests/partial_present_test.cpp, the Vellum-native damage model this PR classifies framework-only, so it has no independent contract.",
+  "resolves": "vellum-38c0318121bb7d1d7700e4d552498f99756e9483",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
