@@ -2,6 +2,7 @@
 
 #include <vellum/graphics/color.hpp>
 
+#include <cstddef>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -89,6 +90,88 @@ struct TriangleMesh final {
     bool clip_enabled = false;
     /// Clip rectangle relative to the owning node's origin.
     Rect clip{};
+};
+
+/// One command of a `PathGeometry`. Each verb consumes a fixed number of
+/// values from `PathGeometry::values`, given by `path_verb_arity`.
+enum class PathVerb : std::uint8_t {
+    /// x, y: starts a new subpath.
+    move,
+    /// x, y.
+    line,
+    /// Control x, y, then end x, y.
+    quadratic,
+    /// First control x, y, second control x, y, then end x, y.
+    cubic,
+    /// An SVG elliptical arc: radius x, radius y, x-axis rotation in degrees,
+    /// large-arc flag, sweep flag (each 0 or 1), then end x, y.
+    arc,
+    /// Closes the current subpath; consumes nothing.
+    close,
+};
+
+[[nodiscard]] constexpr std::size_t path_verb_arity(PathVerb verb) noexcept {
+    switch (verb) {
+    case PathVerb::move:
+    case PathVerb::line: return 2U;
+    case PathVerb::quadratic: return 4U;
+    case PathVerb::cubic: return 6U;
+    case PathVerb::arc: return 7U;
+    case PathVerb::close: return 0U;
+    }
+    return 0U;
+}
+
+enum class FillRule : std::uint8_t {
+    nonzero,
+    evenodd,
+};
+
+enum class StrokeJoin : std::uint8_t {
+    miter,
+    round,
+    bevel,
+};
+
+enum class StrokeCap : std::uint8_t {
+    butt,
+    round,
+    square,
+};
+
+/// How a path's outline is stroked. A zero width or a transparent colour
+/// draws no stroke.
+struct PathStroke final {
+    Color color = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    float width = 0.0F;
+    StrokeJoin join = StrokeJoin::miter;
+    StrokeCap cap = StrokeCap::butt;
+    /// At least 1, as in SVG.
+    float miter_limit = 4.0F;
+    /// Alternating dash and gap lengths; empty draws a solid stroke.
+    std::vector<float> dash_array;
+    float dash_offset = 0.0F;
+};
+
+/// The geometry and stroke of a `path` node. Coordinates are absolute within
+/// the path and relative to the owning node's origin; relative and shorthand
+/// SVG commands are resolved when the path is built, so a scene never stores
+/// path data strings.
+///
+/// The fill paint is the node's `fill` and `fill_gradients`. A gradient
+/// resolves against the node's layout box, or against
+/// `path_control_bounds` when that box has no area, like SVG's
+/// objectBoundingBox. The stroke is a single colour; stroke gradients are not
+/// supported. The SVG paint defaults (a black fill, no stroke, a stroke width
+/// of 1) belong to the authoring layer: a C++ caller building a node gets the
+/// transparent `SceneNode::fill` and the defaults below.
+struct PathGeometry final {
+    std::vector<PathVerb> verbs;
+    /// The verbs' values, concatenated in order.
+    std::vector<float> values;
+    FillRule fill_rule = FillRule::nonzero;
+    PathStroke stroke;
+    bool antialias = true;
 };
 
 /// A point in logical pixels.
@@ -185,7 +268,11 @@ struct CornerRadii final {
 /// Version 2 adds `SceneNode::transform`, `opacity`, and `corner_radii`. A
 /// version 1 scene is still accepted when none of its nodes sets them; one
 /// that does fails `scene_fields_match_version` and is refused.
-inline constexpr std::uint32_t kSceneVersion = 2U;
+///
+/// Version 3 adds the `path` node kind. A version 1 or 2 scene is still
+/// accepted when it has no path node; one that does fails
+/// `scene_fields_match_version` and is refused.
+inline constexpr std::uint32_t kSceneVersion = 3U;
 
 /// The oldest scene schema version this build still consumes.
 inline constexpr std::uint32_t kMinSupportedSceneVersion = 1U;
@@ -212,6 +299,7 @@ struct SceneNode final {
         text,
         custom,
         mesh,
+        path,
     };
 
     std::string id;
@@ -246,6 +334,10 @@ struct SceneNode final {
     /// Per-corner radii. When present they replace `corner_radius`, which
     /// remains the uniform shorthand.
     std::optional<CornerRadii> corner_radii;
+    /// The geometry of a `path` node. A path node without it is refused. Like
+    /// a mesh, it must not be mutated once a scene references it; replace the
+    /// pointer to change it.
+    std::shared_ptr<const PathGeometry> path;
 };
 
 /// The corner radii a node is drawn with: `corner_radii` when present,
@@ -304,6 +396,7 @@ struct SceneNode final {
     case SceneNode::Kind::text:
     case SceneNode::Kind::custom:
     case SceneNode::Kind::mesh:
+    case SceneNode::Kind::path:
         return true;
     }
     return false;
@@ -328,10 +421,22 @@ struct Scene final {
     std::uint32_t scene_version = kSceneVersion;
 };
 
-/// Whether every field the scene sets exists at its version: a version 1
-/// scene sets no field that `uses_version_2_fields` reports.
+/// The first node, in depth-first order, of a kind version 3 introduced: a
+/// `path` node.
+[[nodiscard]] inline const SceneNode* find_version_3_kinds(const SceneNode& node) noexcept {
+    if (node.kind == SceneNode::Kind::path) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_3_kinds(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
+/// Whether every field and kind the scene uses exists at its version: a
+/// version 1 scene sets no field that `uses_version_2_fields` reports, and a
+/// version 1 or 2 scene has no node that `find_version_3_kinds` reports.
 [[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
-    return scene.scene_version >= 2U || find_version_2_fields(scene.root) == nullptr;
+    return (scene.scene_version >= 2U || find_version_2_fields(scene.root) == nullptr) &&
+           (scene.scene_version >= 3U || find_version_3_kinds(scene.root) == nullptr);
 }
 
 [[nodiscard]] inline const SceneNode* find_node(
