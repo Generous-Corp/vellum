@@ -45,6 +45,20 @@ MIRROR_PACKAGE_FILES = (
     "mirror/lib/libvellum-mirror-canvas.dylib",
     "mirror/lib/libvellum-mirror-state-core.dylib",
 )
+# The RmlUi editor package a native SDK carries: VellumRmlUi::Core (which links
+# RmlUi privately), SoftRenderer, and VellumRenderer on Vellum's GPU renderer,
+# with RmlUi's licence because Core redistributes it.
+RMLUI_PACKAGE_FILES = (
+    "lib/cmake/VellumRmlUi/VellumRmlUiConfig.cmake",
+    "lib/cmake/VellumRmlUi/VellumRmlUiTargets.cmake",
+    "lib/cmake/VellumRmlUi/VellumRmlUiVellumRendererTargets.cmake",
+    "share/doc/VellumRmlUi/RmlUi-LICENSE.txt",
+)
+# The install component that carries RmlUi's own headers, archives and CMake
+# package. The SDK links RmlUi only inside VellumRmlUi::Core, so none of it ships.
+RMLUI_UPSTREAM_COMPONENT = "VellumRmlUiUpstream"
+RMLUI_UPSTREAM_PATTERNS = ("include/RmlUi/*", "include/freetype2/*", "**/librmlui*", "**/libfreetype*",
+                           "lib/cmake/RmlUi/*", "include/lua*")
 # The native host and the libraries it loads at launch. The installer keeps
 # the same list under the payload's "sdk/" prefix.
 NATIVE_HOST_FILES = (
@@ -107,6 +121,76 @@ def installed_cmake_target(install_tree: Path, target: str) -> bool:
     package = install_tree / "lib/cmake/Vellum"
     marker = f"Vellum::{target}"
     return any(marker in path.read_text(encoding="utf-8") for path in package.glob("*.cmake"))
+
+
+def native_configure_options(skia_archive: Path) -> list[str]:
+    """The CMake options of a native SDK build on the pinned Skia/Dawn archive."""
+
+    return [
+        "-DVELLUM_ENABLE_GPU=ON",
+        "-DVELLUM_REQUIRE_GPU=ON",
+        "-DVELLUM_ENABLE_AUTHORING=ON",
+        f"-DVELLUM_SKIA_ARCHIVE={skia_archive}",
+        # The native package carries the units built from the landed
+        # mirror (Decision 0010).
+        "-DVELLUM_ENABLE_MIRROR=ON",
+        # And the RmlUi editor package, with its renderer on Vellum's GPU path.
+        "-DVELLUM_ENABLE_RMLUI=ON",
+        "-DVELLUM_RMLUI_VELLUM_RENDERER=ON",
+    ]
+
+
+def missing_package_files(install_tree: Path, files: Iterable[str]) -> list[str]:
+    return [path for path in files if not (install_tree / path).is_file()]
+
+
+def upstream_rmlui_leaks(install_tree: Path) -> list[str]:
+    """RmlUi, FreeType or Lua files an SDK install tree must not carry."""
+
+    found = {
+        path.relative_to(install_tree).as_posix()
+        for pattern in RMLUI_UPSTREAM_PATTERNS
+        for path in install_tree.glob(pattern)
+        if path.is_file() or path.is_symlink()
+    }
+    return sorted(found)
+
+
+def remove_install_component(build_dir: Path, install_tree: Path, component: str,
+                             scratch: Path) -> list[str]:
+    """Remove from install_tree every file one install component installs.
+
+    A plain `cmake --install` installs every component. The component is
+    installed alone into scratch to learn its files, which are then removed
+    from install_tree with any directory they leave empty. A file the
+    component shares with the RmlUi or Vellum packages is refused rather than
+    removed. Returns the removed paths.
+    """
+
+    if scratch.exists():
+        shutil.rmtree(scratch)
+    run(["cmake", "--install", str(build_dir), "--config", "Release",
+         "--component", component, "--prefix", str(scratch)])
+    if not scratch.exists():
+        return []
+    removed: list[str] = []
+    kept = set(RMLUI_PACKAGE_FILES)
+    for path in sorted(scratch.rglob("*"), key=lambda item: item.as_posix()):
+        if path.is_dir() and not path.is_symlink():
+            continue
+        relative = path.relative_to(scratch).as_posix()
+        if relative in kept or relative.startswith("lib/cmake/Vellum/"):
+            raise ArtifactError(f"install component {component} also installs {relative}")
+        target = install_tree / relative
+        if target.is_symlink() or target.exists():
+            target.unlink()
+            removed.append(relative)
+            parent = target.parent
+            while parent != install_tree and parent.is_dir() and not any(parent.iterdir()):
+                parent.rmdir()
+                parent = parent.parent
+    shutil.rmtree(scratch)
+    return removed
 
 
 def prepare_ui_payload(repo: Path, payload: Path) -> None:
@@ -698,15 +782,7 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         for language in ("C", "CXX", "OBJC", "OBJCXX"):
             configure.append(f"-DCMAKE_{language}_FLAGS={path_map_flags}")
         if skia_archive:
-            configure.extend([
-                "-DVELLUM_ENABLE_GPU=ON",
-                "-DVELLUM_REQUIRE_GPU=ON",
-                "-DVELLUM_ENABLE_AUTHORING=ON",
-                f"-DVELLUM_SKIA_ARCHIVE={skia_archive}",
-                # The native package carries the units built from the landed
-                # mirror (Decision 0010).
-                "-DVELLUM_ENABLE_MIRROR=ON",
-            ])
+            configure.extend(native_configure_options(skia_archive))
             mirror_deps = os.environ.get("VELLUM_MIRROR_DEPS_DIR")
             if mirror_deps:
                 configure.append(f"-DVELLUM_MIRROR_DEPS_DIR={Path(mirror_deps).resolve()}")
@@ -723,6 +799,10 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         jobs = os.environ.get("CMAKE_BUILD_PARALLEL_LEVEL", "").strip() or "3"
         run(["cmake", "--build", str(build_dir), "--config", "Release", "--parallel", jobs])
         run(["cmake", "--install", str(build_dir), "--config", "Release", "--prefix", str(install_tree)])
+        if skia_archive:
+            remove_install_component(
+                build_dir, install_tree, RMLUI_UPSTREAM_COMPONENT, temporary / "upstream-install"
+            )
         for archive in sorted(install_tree.rglob("*.a")):
             normalize_static_archive(archive)
         if skia_archive and target == "darwin-arm64":
@@ -739,6 +819,12 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             )
         if skia_archive and not all((install_tree / path).is_file() for path in MIRROR_PACKAGE_FILES):
             raise ArtifactError("--skia-archive build did not install the landed mirror's units")
+        if skia_archive and (leaks := upstream_rmlui_leaks(install_tree)):
+            raise ArtifactError("SDK install tree carries RmlUi's own files: " + ", ".join(leaks))
+        if skia_archive and (missing := missing_package_files(install_tree, RMLUI_PACKAGE_FILES)):
+            raise ArtifactError(
+                "--skia-archive build did not install the VellumRmlUi package: " + ", ".join(missing)
+            )
         if skia_archive and target != "darwin-arm64":
             raise ArtifactError("native application artifacts currently require target darwin-arm64")
         metadata = copy_payload(

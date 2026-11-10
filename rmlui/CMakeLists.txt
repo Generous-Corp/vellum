@@ -260,6 +260,13 @@ if(VELLUM_RMLUI_INSTALL)
     install(FILES assets/midi-learn.rcss assets/midi-panic.rcss
         DESTINATION ${CMAKE_INSTALL_DATADIR}/VellumRmlUi
         COMPONENT VellumRmlUi)
+    # Core links RmlUi privately, so the package that carries Core carries
+    # RmlUi's licence. Native installs the same file for its own component.
+    FetchContent_GetProperties(vellum_rmlui_rmlui SOURCE_DIR _vellum_rmlui_core_rmlui_src)
+    install(FILES "${_vellum_rmlui_core_rmlui_src}/LICENSE.txt"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/VellumRmlUi
+        RENAME RmlUi-LICENSE.txt
+        COMPONENT VellumRmlUi)
     install(EXPORT VellumRmlUiTargets
         NAMESPACE VellumRmlUi::
         DESTINATION ${_vellum_rmlui_cmake_dir}

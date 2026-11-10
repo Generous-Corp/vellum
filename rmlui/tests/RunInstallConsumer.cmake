@@ -43,6 +43,11 @@ file(GLOB_RECURSE _leaked
 if(_leaked)
     message(FATAL_ERROR "the VellumRmlUi package installed RmlUi or FreeType files: ${_leaked}")
 endif()
+# Core redistributes RmlUi inside its shared library, so the Core package
+# carries RmlUi's licence even without Native.
+if(NOT EXISTS "${_prefix}/share/doc/VellumRmlUi/RmlUi-LICENSE.txt")
+    message(FATAL_ERROR "the VellumRmlUi package did not install RmlUi's licence file")
+endif()
 if(_native)
     _run("${CMAKE_COMMAND}" --install "${VELLUM_RMLUI_BUILD_DIR}"
          --prefix "${_prefix}" --component VellumRmlUiNative ${_config_args})
