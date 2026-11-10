@@ -80,7 +80,7 @@ int main() {
                       .path = outline}},
         .opacity = 0.5F,
     });
-    const auto layered = vellum::graphics::make_paint_commands(scene);
+    auto layered = vellum::graphics::make_paint_commands(scene);
     using Kind = vellum::graphics::PaintCommand::Kind;
     const auto wrapped_path = std::find_if(layered.begin(), layered.end(), [](const auto& command) {
         return command.node_id == "faded-path-group/outline";
@@ -90,6 +90,21 @@ int main() {
         !vellum::web::canvas_shell_loses(*wrapped_path) ||
         vellum::web::canvas_shell_loss_count(layered) != 7) {
         std::cerr << "a path inside a faded layer was not counted with its layer: "
+                  << vellum::web::canvas_shell_loss_count(layered) << '\n';
+        return 1;
+    }
+
+    scene.root.children.push_back({
+        .id = "logo",
+        .kind = SceneNode::Kind::image,
+        .bounds = {0.0F, 0.0F, 8.0F, 8.0F},
+        .image = vellum::graphics::ImageReference{.content_hash = "sha256:" + std::string(64, 'a')},
+    });
+    layered = vellum::graphics::make_paint_commands(scene);
+    if (layered.empty() || layered.back().kind != Kind::image ||
+        !vellum::web::canvas_shell_loses(layered.back()) ||
+        vellum::web::canvas_shell_loss_count(layered) != 8) {
+        std::cerr << "an image was not counted as a loss: "
                   << vellum::web::canvas_shell_loss_count(layered) << '\n';
         return 1;
     }

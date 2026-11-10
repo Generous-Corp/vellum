@@ -1,6 +1,7 @@
 add_library(vellum-graphics
     src/capture_stats.cpp
     src/damage.cpp
+    src/image_asset.cpp
     src/paint_command.cpp
     src/path_geometry.cpp
     src/render_telemetry.cpp)
@@ -37,6 +38,7 @@ if(VELLUM_HAS_SKIA_DAWN)
     # definitions avoids a private Skia symbol crossing a dylib boundary.
     target_sources(vellum-skia-dawn-provider PRIVATE
         src/dawn_bootstrap.cpp
+        src/image_decode.mm
         src/skia_dawn_surface.mm)
     target_include_directories(vellum-skia-dawn-provider PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)

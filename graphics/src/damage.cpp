@@ -1,4 +1,5 @@
 #include <vellum/graphics/damage.hpp>
+#include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/path_geometry.hpp>
 
 #include <algorithm>
@@ -183,6 +184,16 @@ bool same_path(const std::shared_ptr<const PathGeometry>& left,
            same_float(a.stroke.dash_offset, b.stroke.dash_offset);
 }
 
+bool same_image(const std::optional<ImageReference>& left,
+                const std::optional<ImageReference>& right) {
+    if (left.has_value() != right.has_value()) return false;
+    if (!left) return true;
+    return left->content_hash == right->content_hash && left->fit == right->fit &&
+           left->sampling == right->sampling &&
+           left->source_rect.has_value() == right->source_rect.has_value() &&
+           (!left->source_rect || same_rect(*left->source_rect, *right->source_rect));
+}
+
 const DamagePropagation& default_propagation() {
     static const DamagePropagation instance;
     return instance;
@@ -209,6 +220,7 @@ SceneNode paint_fields(const SceneNode& node) {
     copy.custom_properties_json = node.custom_properties_json;
     copy.mesh = node.mesh;
     copy.path = node.path;
+    copy.image = node.image;
     return copy;
 }
 
@@ -220,6 +232,8 @@ struct NodeRecord final {
     std::string key;
     std::string parent_key;
     SceneNode paint;
+    /// The asset an image node resolves to in its scene, compared by pointer.
+    std::shared_ptr<const ImageAsset> image_asset;
     Rect absolute{};
     std::optional<Rect> damage;
     std::size_t subtree_end = 0;
@@ -234,7 +248,8 @@ public:
     Snapshot(const Scene& scene, float scale, const DamagePropagation& propagation)
         : width_(scene.width), height_(scene.height), scale_(scale), background_(scene.background),
           version_(scene.scene_version), frame_(frame_rect(scene, scale)) {
-        walk(propagation, scene.root, std::string{}, 0, 0.0F, 0.0F, std::nullopt);
+        walk(ImageAssetIndex(scene), propagation, scene.root, std::string{}, 0, 0.0F, 0.0F,
+             std::nullopt);
     }
 
     [[nodiscard]] const NodeRecord* find(const std::string& key) const {
@@ -264,7 +279,9 @@ public:
     }
 
 private:
-    void walk(const DamagePropagation& propagation, const SceneNode& node, const std::string& parent_key, std::size_t index,
+    void walk(const ImageAssetIndex& images, const DamagePropagation& propagation,
+              const SceneNode& node,
+              const std::string& parent_key, std::size_t index,
               float parent_x, float parent_y, std::optional<Rect> clip) {
         std::string key = make_key(node, parent_key, index);
         const Rect absolute{parent_x + node.bounds.x, parent_y + node.bounds.y, node.bounds.width,
@@ -290,9 +307,14 @@ private:
         by_key_.emplace(key, position);
         by_id_[node.id].push_back(position);
         children_[parent_key].push_back(key);
-        records_.push_back({key, parent_key, paint_fields(node), absolute, damage, 0});
+        records_.push_back({key, parent_key, paint_fields(node),
+                            node.kind == SceneNode::Kind::image && node.image
+                                ? images.find(node.image->content_hash)
+                                : nullptr,
+                            absolute, damage, 0});
         for (std::size_t child = 0; child < node.children.size(); ++child) {
-            walk(propagation, node.children[child], key, child, absolute.x, absolute.y, clip);
+            walk(images, propagation, node.children[child], key, child, absolute.x, absolute.y,
+                 clip);
         }
         records_[position].subtree_end = records_.size();
     }
@@ -373,6 +395,7 @@ void diff_snapshots(const Snapshot& before, const Snapshot& after, DamageRegion&
             continue;
         }
         if (!same_rect(was->absolute, now.absolute) || paint_differs(was->paint, now.paint) ||
+            was->image_asset != now.image_asset ||
             !same_optional_rect(was->damage, now.damage)) {
             add_logical(region, was->damage, scale);
             add_logical(region, now.damage, scale);
@@ -679,6 +702,8 @@ std::optional<Rect> node_paint_bounds(const SceneNode& node, const Rect& absolut
         return node.mesh ? mesh_paint_bounds(*node.mesh, absolute_bounds) : std::nullopt;
     case SceneNode::Kind::path:
         return path_paint_bounds(node, absolute_bounds, frame);
+    case SceneNode::Kind::image:
+        return rect_empty(absolute_bounds) ? std::nullopt : std::optional<Rect>(absolute_bounds);
     }
     return std::nullopt;
 }
@@ -711,6 +736,10 @@ bool paint_differs(const SceneNode& previous, const SceneNode& next) {
         return !same_color(previous.fill, next.fill) ||
                !same_gradients(previous.fill_gradients, next.fill_gradients) ||
                !same_path(previous.path, next.path);
+    case SceneNode::Kind::image:
+        return !same_color(previous.fill, next.fill) ||
+               !same_float(previous.corner_radius, next.corner_radius) ||
+               !same_image(previous.image, next.image);
     case SceneNode::Kind::custom:
         return previous.custom_component != next.custom_component ||
                previous.custom_properties_json != next.custom_properties_json;

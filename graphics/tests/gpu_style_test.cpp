@@ -493,7 +493,8 @@ bool scene_version_refusal() {
     future.scene_version = kSceneVersion + 1U;
     Scene unknown_kind = scene;
     unknown_kind.root.children[0].kind = static_cast<SceneNode::Kind>(42);
-    if (!refused_keeps_frame(future, "scene version 4 is not supported by this renderer") ||
+    if (!refused_keeps_frame(future, "scene version " + std::to_string(kSceneVersion + 1U) +
+                                         " is not supported by this renderer") ||
         !refused_keeps_frame(
             unknown_kind, "scene contains unsupported node kind 42 at swatch")) {
         return false;
@@ -534,12 +535,35 @@ bool scene_version_refusal() {
         });
         return candidate;
     };
+    // An image node needs version 4; at 3 it is refused, at 4 it draws.
+    const auto with_image = [](Scene candidate, std::uint32_t version) {
+        candidate.scene_version = version;
+        candidate.root.children.push_back({
+            .id = "logo",
+            .kind = SceneNode::Kind::image,
+            .bounds = {0.0F, 0.0F, 8.0F, 8.0F},
+            .image = ImageReference{.content_hash = "sha256:" + std::string(64, 'd')},
+        });
+        return candidate;
+    };
+    const auto accepted_at_current = [&](const Scene& candidate) {
+        std::string why;
+        if (!surface->render(candidate, &why)) {
+            std::cerr << "a version 4 image scene was refused: " << why << '\n';
+            return false;
+        }
+        const auto& lost = surface->diagnostics();
+        return lost.size() == 1U && lost[0].code == kImageAssetMissingCode;
+    };
     return refused_keeps_frame(turned, carries) && refused_keeps_frame(faded, carries) &&
            refused_keeps_frame(cornered, carries) &&
            refused_keeps_frame(with_path(scene, 1U),
                                "scene version 1 cannot carry the path node outline") &&
            refused_keeps_frame(with_path(scene, 2U),
-                               "scene version 2 cannot carry the path node outline");
+                               "scene version 2 cannot carry the path node outline") &&
+           refused_keeps_frame(with_image(scene, 3U),
+                               "scene version 3 cannot carry the image node logo") &&
+           accepted_at_current(with_image(scene, 4U));
 }
 
 struct Probe final {

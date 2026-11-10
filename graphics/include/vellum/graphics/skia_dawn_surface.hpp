@@ -1,12 +1,14 @@
 #pragma once
 
 #include <vellum/graphics/damage.hpp>
+#include <vellum/graphics/lowering_diagnostic.hpp>
 #include <vellum/graphics/render_telemetry.hpp>
 #include <vellum/graphics/scene.hpp>
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -107,10 +109,10 @@ struct TextMetrics final {
 /// image into the swapchain texture; captures read the retained surface back,
 /// through the swapchain when there is one.
 ///
-/// Shaped text paragraphs, gradient shaders and uploaded mesh textures are
-/// cached across frames under `RenderCacheBudgets`. Each cache is keyed on
-/// every input that affects its pixels, so output never depends on what is
-/// cached. A resize that has settled drops the entries no frame has used
+/// Shaped text paragraphs, gradient shaders, and the textures uploaded from
+/// mesh textures and image assets are cached across frames under
+/// `RenderCacheBudgets`. Each cache is keyed on every input that affects its
+/// pixels, so output never depends on what is cached. A resize that has settled drops the entries no frame has used
 /// since the resize, and a device loss drops everything.
 class SkiaDawnSurface final {
 public:
@@ -132,6 +134,16 @@ public:
         const std::vector<TextRun>& runs,
         TextMetrics& metrics,
         std::string_view font_directory = {},
+        std::string* error = nullptr);
+
+    /// Decodes a PNG into an `ImageAsset` named by the SHA-256 of `encoded`,
+    /// the DesignIR content-hash convention. When `expected_content_hash` is
+    /// not empty it must name the same digest, bare or prefixed, or decoding
+    /// fails, so a mislabelled asset never reaches a scene. Texels are taken
+    /// as stored, without colour management, and the size must fit
+    /// `kMaxImageDimension` and `kMaxImageBytes`.
+    [[nodiscard]] static std::shared_ptr<const ImageAsset> decode_image_asset(
+        std::span<const std::uint8_t> encoded, std::string_view expected_content_hash = {},
         std::string* error = nullptr);
 
     ~SkiaDawnSurface();
@@ -193,6 +205,12 @@ public:
         std::uint32_t& pixel_height,
         std::string* error = nullptr);
     [[nodiscard]] const GpuEvidence& evidence() const noexcept;
+
+    /// What the most recent `render` call lost, from
+    /// `scene_loss_diagnostics`: the version error of a refused scene, or a
+    /// warning for each image node drawn as `kMissingImagePlaceholder`
+    /// because its asset is not in `Scene::images`.
+    [[nodiscard]] const std::vector<LoweringDiagnostic>& diagnostics() const noexcept;
 
     /// Replaces the cache budgets, dropping the least recently used entries
     /// that no longer fit. A zero budget turns that cache off.

@@ -5,6 +5,7 @@
 
 #include <vellum/graphics/paint_command.hpp>
 
+#include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/path_geometry.hpp>
 
 #include <algorithm>
@@ -62,6 +63,7 @@ struct StyleUse final {
     bool root = false;
     bool lays_out_children = false;
     bool paints_text_background = false;
+    bool draws_image = false;
 };
 
 bool style_key_consumed(std::string_view type, std::string_view key, const StyleUse& use) {
@@ -70,6 +72,10 @@ bool style_key_consumed(std::string_view type, std::string_view key, const Style
     if (key == "x" || key == "y") return !use.root;
     if (key == "opacity" || key == "transform") return true;
     if (type == "path") return false;
+    if (use.draws_image) {
+        return key == "backgroundColor" || key == "borderRadius" ||
+               contains(kCornerRadiusKeys, key);
+    }
     if (key == "padding" || key == "direction") return use.lays_out_children;
     if (key == "gap") return type == "stack" && use.lays_out_children;
     if (key == "backgroundLinearGradient" || key == "boxShadow") return true;
@@ -787,6 +793,70 @@ bool materialize_path(
     return true;
 }
 
+bool reject_image(
+    MaterializeContext& context, const std::string& node_id, std::string property,
+    std::string message, std::string* error) {
+    context.diagnostics->push_back({
+        .severity = LoweringDiagnostic::Severity::error,
+        .disposition = LoweringDiagnostic::Disposition::unsupported,
+        .code = std::string(vellum::graphics::kInvalidImageCode),
+        .node_id = node_id,
+        .property = std::move(property),
+        .message = message,
+    });
+    set_error(error, std::move(message));
+    return false;
+}
+
+// An image whose source is a SHA-256 content hash. The asset itself is
+// supplied by the host in `Scene::images`; the renderer reports a missing one.
+bool materialize_image(
+    NSDictionary* source, const std::string& identity, std::string content_hash,
+    MaterializeContext& context, vellum::graphics::SceneNode& output, std::string* error) {
+    const auto reject = [&](std::string property, const std::string& problem) {
+        return reject_image(context, identity, std::move(property),
+            "image " + identity + " " + problem, error);
+    };
+    id children = source[@"children"];
+    if (children != nil && (![children isKindOfClass:NSArray.class] ||
+                            static_cast<NSArray*>(children).count != 0U)) {
+        return reject("children", "does not accept children");
+    }
+    vellum::graphics::ImageReference reference{.content_hash = std::move(content_hash)};
+    if (source[@"fit"] != nil) {
+        const auto fit = keyword(source[@"fit"],
+            std::array<std::string_view, 4>{"fill", "contain", "cover", "none"});
+        if (!fit) return reject("fit", "fit must be fill, contain, cover or none");
+        reference.fit = static_cast<vellum::graphics::ImageFit>(*fit);
+    }
+    if (source[@"sampling"] != nil) {
+        const auto sampling = keyword(source[@"sampling"],
+            std::array<std::string_view, 2>{"nearest", "linear"});
+        if (!sampling) return reject("sampling", "sampling must be nearest or linear");
+        reference.sampling = static_cast<vellum::graphics::ImageSampling>(*sampling);
+    }
+    if (id raw = source[@"sourceRect"]; raw != nil) {
+        if (![raw isKindOfClass:NSDictionary.class]) {
+            return reject("sourceRect", "sourceRect must be an object");
+        }
+        NSDictionary* rect = raw;
+        vellum::graphics::Rect value;
+        if (!finite_number(rect[@"x"], value.x) || !finite_number(rect[@"y"], value.y) ||
+            !finite_number(rect[@"width"], value.width) ||
+            !finite_number(rect[@"height"], value.height) || value.width < 0.0F ||
+            value.height < 0.0F) {
+            return reject("sourceRect",
+                "sourceRect needs finite x, y and non-negative width and height");
+        }
+        reference.source_rect = value;
+    }
+    output.kind = vellum::graphics::SceneNode::Kind::image;
+    output.fill_gradients.clear();
+    output.box_shadows.clear();
+    output.image = std::move(reference);
+    return true;
+}
+
 bool validate_attributed_run(
     NSDictionary* run, const std::string& parent_id, std::size_t depth,
     MaterializeContext& context, std::string* error) {
@@ -953,10 +1023,15 @@ bool materialize_node(
     const auto frame_box = vellum::graphics::transformed_bounds(node_transform, absolute_box);
     const bool hit_testable =
         node_transform.a * node_transform.d - node_transform.b * node_transform.c != 0.0F;
+    std::optional<std::string> image_hash;
+    if (type_name == "image" && [source[@"source"] isKindOfClass:NSString.class]) {
+        image_hash = vellum::graphics::normalize_content_hash(cpp_string(source[@"source"]));
+    }
     StyleUse style_use{
         .root = depth == 0U,
         .paints_text_background =
             !output.fill_gradients.empty() || !output.box_shadows.empty(),
+        .draws_image = image_hash.has_value(),
     };
     for (id child in array_or_empty(source[@"children"])) {
         if (!skipped_text_run(type, child)) style_use.lays_out_children = true;
@@ -964,7 +1039,17 @@ bool materialize_node(
     report_dropped_style(style, identity, type_name,
         [&](std::string_view key) { return style_key_consumed(type_name, key, style_use); },
         context);
-    if (type_name == "image" || type_name == "canvas") {
+    if (type_name == "image" && !image_hash && source[@"source"] != nil) {
+        context.diagnostics->push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::lowered,
+            .code = std::string(vellum::graphics::kNodeContentDroppedCode),
+            .node_id = identity,
+            .property = "source",
+            .message = "image source is not a SHA-256 content hash, so it names no asset; "
+                       "only its box was kept",
+        });
+    } else if ((type_name == "image" && !image_hash) || type_name == "canvas") {
         context.diagnostics->push_back({
             .severity = LoweringDiagnostic::Severity::warning,
             .disposition = LoweringDiagnostic::Disposition::lowered,
@@ -977,6 +1062,10 @@ bool materialize_node(
 
     if (type_name == "path") {
         if (!materialize_path(source, identity, context, output, error)) return false;
+    } else if (image_hash) {
+        if (!materialize_image(source, identity, *image_hash, context, output, error)) {
+            return false;
+        }
     } else if ([type isEqualToString:@"custom"]) {
         if (![source[@"component"] isKindOfClass:NSString.class]) {
             set_error(error, "custom authoring node requires a component identifier");

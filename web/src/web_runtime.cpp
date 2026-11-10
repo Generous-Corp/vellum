@@ -1,5 +1,6 @@
 #include "canvas_shell_lowering.hpp"
 
+#include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/runtime/kernel.hpp>
 
@@ -156,6 +157,17 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
                 command.bounds.y + command.font_size, command.font_size,
                 color.red, color.green, color.blue, color.alpha);
             break;
+        case Kind::image: {
+            // The shell has no image decoding; it marks the box and counts
+            // the loss.
+            auto placeholder = vellum::graphics::kMissingImagePlaceholder;
+            placeholder.alpha *= opacities[index];
+            canvas_rectangle(
+                command.bounds.x, command.bounds.y, command.bounds.width,
+                command.bounds.height, command.corner_radius,
+                placeholder.red, placeholder.green, placeholder.blue, placeholder.alpha);
+            break;
+        }
         case Kind::begin_layer:
         case Kind::end_layer:
         case Kind::mesh:
