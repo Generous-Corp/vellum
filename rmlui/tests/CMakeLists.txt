@@ -59,6 +59,11 @@ add_test(NAME vellum.rmlui.log-sink COMMAND vellum-rmlui-log-sink-test)
 vellum_rmlui_add_test(vellum-rmlui-core-flattening-test core_flattening_test.cpp VellumRmlUi::Core)
 add_test(NAME vellum.rmlui.core-flattening COMMAND vellum-rmlui-core-flattening-test)
 
+if(VELLUM_RMLUI_CPU)
+    vellum_rmlui_add_test(vellum-rmlui-cpu-render-test cpu_render_test.cpp VellumRmlUi::Cpu)
+    add_test(NAME vellum.rmlui.cpu-render COMMAND vellum-rmlui-cpu-render-test)
+endif()
+
 if(VELLUM_RMLUI_NATIVE)
     vellum_rmlui_add_test(vellum-rmlui-native-test native_test.cpp VellumRmlUi::Native)
     add_test(NAME vellum.rmlui.native COMMAND vellum-rmlui-native-test)

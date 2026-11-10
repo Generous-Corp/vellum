@@ -61,6 +61,11 @@ option(VELLUM_RMLUI_NATIVE
     "Build VellumRmlUi::Native, which links RmlUi publicly and accepts any Rml::RenderInterface" OFF)
 option(VELLUM_RMLUI_METAL
     "Build VellumRmlUi::Metal, an Rml::RenderInterface on Metal (Apple only; needs VELLUM_RMLUI_NATIVE)" OFF)
+option(VELLUM_RMLUI_CPU
+    "Build VellumRmlUi::Cpu, an Rml::RenderInterface on the CPU into an RGBA8 buffer (needs VELLUM_RMLUI_NATIVE)" OFF)
+if(VELLUM_RMLUI_CPU AND NOT VELLUM_RMLUI_NATIVE)
+    message(FATAL_ERROR "VELLUM_RMLUI_CPU needs VELLUM_RMLUI_NATIVE=ON, which packages RmlUi for it")
+endif()
 if(VELLUM_RMLUI_METAL)
     if(NOT APPLE)
         message(FATAL_ERROR "VELLUM_RMLUI_METAL needs an Apple platform")
@@ -193,6 +198,27 @@ if(VELLUM_RMLUI_METAL)
     list(APPEND VELLUM_RMLUI_COMPONENTS Metal)
 endif()
 
+if(VELLUM_RMLUI_CPU)
+    add_library(vellum-rmlui-cpu STATIC
+        src/cpu_render_interface.cpp)
+    add_library(VellumRmlUi::Cpu ALIAS vellum-rmlui-cpu)
+    set_target_properties(vellum-rmlui-cpu PROPERTIES
+        EXPORT_NAME Cpu
+        POSITION_INDEPENDENT_CODE ON)
+    target_compile_features(vellum-rmlui-cpu PUBLIC cxx_std_20)
+    target_include_directories(vellum-rmlui-cpu PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    target_link_libraries(vellum-rmlui-cpu PUBLIC RmlUi::Core)
+    # Same output on every platform: no fused multiply-add in the projection.
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(vellum-rmlui-cpu PRIVATE -ffp-contract=off)
+    elseif(MSVC)
+        target_compile_options(vellum-rmlui-cpu PRIVATE /fp:precise)
+    endif()
+    list(APPEND VELLUM_RMLUI_COMPONENTS Cpu)
+endif()
+
 if(VELLUM_RMLUI_VELLUM_RENDERER)
     # Inside a Vellum build the GPU target already exists; on its own the
     # module takes it from an installed Vellum package.
@@ -269,6 +295,16 @@ if(VELLUM_RMLUI_INSTALL)
                 COMPONENT VellumRmlUiNative
                 ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
             install(EXPORT VellumRmlUiMetalTargets
+                NAMESPACE VellumRmlUi::
+                DESTINATION ${_vellum_rmlui_cmake_dir}
+                COMPONENT VellumRmlUiNative)
+        endif()
+        if(VELLUM_RMLUI_CPU)
+            install(TARGETS vellum-rmlui-cpu
+                EXPORT VellumRmlUiCpuTargets
+                COMPONENT VellumRmlUiNative
+                ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+            install(EXPORT VellumRmlUiCpuTargets
                 NAMESPACE VellumRmlUi::
                 DESTINATION ${_vellum_rmlui_cmake_dir}
                 COMPONENT VellumRmlUiNative)

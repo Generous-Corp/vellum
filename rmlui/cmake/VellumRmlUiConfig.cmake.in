@@ -1,6 +1,6 @@
 @PACKAGE_INIT@
 
-# find_package(VellumRmlUi [COMPONENTS Core SoftRenderer DevAssets VellumRenderer Native Metal])
+# find_package(VellumRmlUi [COMPONENTS Core SoftRenderer DevAssets VellumRenderer Native Metal Cpu])
 #
 # RmlUi and its font engine are linked privately into the VellumRmlUi::Core
 # shared library, so this package needs no further dependency. Core is always
@@ -31,6 +31,14 @@ if("Metal" IN_LIST VellumRmlUi_FIND_COMPONENTS AND
         include("${CMAKE_CURRENT_LIST_DIR}/VellumRmlUiRmlUiTargets.cmake")
     endif()
     include("${CMAKE_CURRENT_LIST_DIR}/VellumRmlUiMetalTargets.cmake")
+endif()
+
+if("Cpu" IN_LIST VellumRmlUi_FIND_COMPONENTS AND
+   EXISTS "${CMAKE_CURRENT_LIST_DIR}/VellumRmlUiCpuTargets.cmake")
+    if(NOT TARGET RmlUi::Core)
+        include("${CMAKE_CURRENT_LIST_DIR}/VellumRmlUiRmlUiTargets.cmake")
+    endif()
+    include("${CMAKE_CURRENT_LIST_DIR}/VellumRmlUiCpuTargets.cmake")
 endif()
 
 if(NOT VellumRmlUi_FIND_COMPONENTS)
