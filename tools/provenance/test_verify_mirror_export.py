@@ -1618,5 +1618,57 @@ class ReceiptHistoryTests(unittest.TestCase):
             self.assertEqual(verify_mirror_export.receipt_history_errors(repo, [], []),
                              [f"receipt history base is unavailable: {'0' * 40} names no commit and HEAD has no parent"])
 
+class HistoryBaseSelectionTests(unittest.TestCase):
+    """Without VELLUM_GIT_BASE the base is origin/main, then local main."""
+
+    INDEX = "provenance/mirror/receipts/index.json"
+    ADDED = "provenance/mirror/receipts/20261110-added.json"
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.ci_git_base = isolate_git_base(self)
+        self.repo = Path(self.temporary.name) / "repo"
+        self.repo.mkdir()
+        run(self.repo, "init", "-q", "-b", "main")
+        write(self.repo, "README.md", "stale\n")
+        run(self.repo, "add", "-A")
+        run(self.repo, "commit", "-q", "-m", "stale main")
+        self.stale = run(self.repo, "rev-parse", "HEAD")
+        write(self.repo, self.INDEX, dump({"schema": "vellum.mirror-receipt-index.v1", "receipts": []}))
+        run(self.repo, "add", "-A")
+        run(self.repo, "commit", "-q", "-m", "current")
+        self.current = run(self.repo, "rev-parse", "HEAD")
+        run(self.repo, "branch", "-q", "feature")
+        run(self.repo, "checkout", "-q", "feature")
+        write(self.repo, self.ADDED, b"{}\n")
+        write(self.repo, self.INDEX, dump({"schema": "vellum.mirror-receipt-index.v1", "receipts": [self.ADDED]}))
+        run(self.repo, "add", "-A")
+        run(self.repo, "commit", "-q", "-m", "append receipt")
+        run(self.repo, "update-ref", "refs/heads/main", self.stale)
+
+    def test_stale_local_main_loses_to_current_origin_main(self) -> None:
+        run(self.repo, "update-ref", "refs/remotes/origin/main", self.current)
+        self.assertEqual(verify_mirror_export.history_base(self.repo), (self.current, None))
+        self.assertEqual(
+            verify_mirror_export.receipt_history_errors(self.repo, [self.ADDED], [self.ADDED]), [])
+
+    def test_local_main_is_used_without_origin_main(self) -> None:
+        self.assertEqual(verify_mirror_export.history_base(self.repo), (self.stale, None))
+        self.assertEqual(
+            verify_mirror_export.receipt_history_errors(self.repo, [self.ADDED], [self.ADDED]),
+            [f"receipt history index is unavailable at {self.stale}"])
+
+    def test_origin_main_wins_even_when_local_main_is_ahead(self) -> None:
+        run(self.repo, "update-ref", "refs/remotes/origin/main", self.stale)
+        run(self.repo, "update-ref", "refs/heads/main", self.current)
+        self.assertEqual(verify_mirror_export.history_base(self.repo), (self.stale, None))
+
+    def test_named_base_wins_over_both_refs(self) -> None:
+        run(self.repo, "update-ref", "refs/remotes/origin/main", self.stale)
+        with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": self.current}):
+            self.assertEqual(verify_mirror_export.history_base(self.repo), (self.current, None))
+
+
 if __name__ == "__main__":
     unittest.main()
