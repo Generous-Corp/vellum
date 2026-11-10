@@ -19,7 +19,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.append(str(Path(__file__).resolve().parent))
 from git_test_environment import hermetic_git_env, run_git  # noqa: E402
 
 

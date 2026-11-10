@@ -36,11 +36,11 @@ HERMETIC_GIT_CONFIG = (
 def hermetic_git_env(base: dict[str, str] | None = None) -> dict[str, str]:
     """An environment in which Git reads no global or system configuration.
 
-    A runner's own ~/.gitconfig, a system gitconfig, or an inherited GIT_* variable
+    A runner's own ~/.gitconfig, a system gitconfig, or any inherited GIT_* variable (all are dropped)
     must not change how a fixture repository behaves.
     """
     env = {key: value for key, value in (os.environ if base is None else base).items()
-           if not key.startswith("GIT_CONFIG_") and key not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}
+           if not key.startswith("GIT_")}
     env.update(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0",
                GIT_CONFIG_COUNT=str(len(HERMETIC_GIT_CONFIG)))
     for index, (key, value) in enumerate(HERMETIC_GIT_CONFIG):
