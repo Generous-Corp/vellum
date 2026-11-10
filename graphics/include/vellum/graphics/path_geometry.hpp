@@ -48,9 +48,11 @@ inline constexpr double kMaxPathDashSegments = 100000.0;
 /// or square caps, whichever is larger. Zero when the stroke draws nothing.
 [[nodiscard]] float path_stroke_outset(const PathStroke& stroke) noexcept;
 
-/// The box a valid path can paint, in its own coordinates:
-/// `path_control_bounds` outset by `path_stroke_outset`, ignoring dashes.
-/// Empty when the path has no commands.
+/// The box a path can paint, in its own coordinates: `path_control_bounds`
+/// outset by `path_stroke_outset`, ignoring dashes. Empty when the path has
+/// no commands. The path must satisfy `path_is_valid`. A valid stroke with a
+/// huge miter limit can make the box non-finite; damage then covers the frame
+/// and the renderer treats the command as unbounded.
 [[nodiscard]] std::optional<Rect> path_paint_box(const PathGeometry& path);
 
 /// Parses SVG path data (the `d` attribute grammar of SVG 2) into absolute

@@ -232,7 +232,8 @@ std::optional<Rect> path_paint_bounds(const SceneNode& node, const Rect& absolut
     if (!node.path || !path_is_valid(*node.path)) return frame;
     const auto box = path_paint_box(*node.path);
     if (!box) return std::nullopt;
-    return Rect{absolute.x + box->x, absolute.y + box->y, box->width, box->height};
+    const Rect moved{absolute.x + box->x, absolute.y + box->y, box->width, box->height};
+    return finite_rect(moved) ? moved : frame;
 }
 
 bool same_floats(const std::vector<float>& a, const std::vector<float>& b) {
@@ -807,9 +808,13 @@ std::optional<Rect> transformed_paint_bounds(const SceneNode& node, const Rect& 
     }
     case SceneNode::Kind::path: {
         if (!node.path || !path_is_valid(*node.path)) return frame;
-        const auto local = path_paint_bounds(node, absolute_bounds, frame);
-        if (!local) return std::nullopt;
-        return transformed_bounds(transform, *local);
+        const auto box = path_paint_box(*node.path);
+        if (!box) return std::nullopt;
+        const Rect local{absolute_bounds.x + box->x, absolute_bounds.y + box->y, box->width,
+                         box->height};
+        if (!finite_rect(local)) return frame;
+        const Rect mapped = transformed_bounds(transform, local);
+        return finite_rect(mapped) ? mapped : frame;
     }
     }
     return std::nullopt;

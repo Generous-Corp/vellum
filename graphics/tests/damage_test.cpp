@@ -1045,7 +1045,6 @@ void tracker() {
     check(damage.is_full_frame() && damage.frame() == PixelRect{0, 0, 400, 200}, "scale change repaints the frame");
 }
 
-}  // namespace
 
 bool same_box(const std::optional<Rect>& a, const std::optional<Rect>& b) {
     if (a.has_value() != b.has_value()) return false;
@@ -1119,6 +1118,40 @@ void path_extent_agreement() {
           "a dashed stroke damages the same box as the solid one");
 }
 
+void non_finite_stroke_reach() {
+    const DamagePropagation none;
+    const Rect frame{0.0F, 0.0F, 200.0F, 100.0F};
+    auto wedge = std::make_shared<PathGeometry>();
+    wedge->verbs = {PathVerb::move, PathVerb::line, PathVerb::line};
+    wedge->values = {0.0F, 0.0F, 40.0F, 0.0F, 0.0F, 10.0F};
+    wedge->stroke = {.color = Color::hex(0xFFFFFF), .width = 10.0F,
+                     .miter_limit = std::numeric_limits<float>::max()};
+    check(vellum::graphics::path_is_valid(*wedge), "a huge finite miter limit is valid");
+    SceneNode node;
+    node.id = "wedge";
+    node.kind = SceneNode::Kind::path;
+    node.bounds = {10.0F, 10.0F, 0.0F, 0.0F};
+    node.path = wedge;
+    check(same_box(vellum::graphics::node_paint_bounds(node, node.bounds, frame, none), frame),
+          "a stroke reach that overflows damages the whole frame");
+    const vellum::graphics::Affine2D turned{.a = 0.8F, .b = 0.6F, .c = -0.6F, .d = 0.8F};
+    check(same_box(vellum::graphics::transformed_paint_bounds(node, node.bounds, turned, frame,
+                                                              none),
+                   frame),
+          "an overflowing stroke reach under a transform damages the whole frame");
+    Scene scene = base_scene();
+    scene.root.children.push_back(node);
+    const auto commands = vellum::graphics::make_paint_commands(scene);
+    check(!vellum::graphics::paint_extent(commands.back()).bounded,
+          "an overflowing stroke reach makes the paint extent unbounded");
+    Scene moved = scene;
+    child(moved, "wedge")->bounds.x += 1.0F;
+    check(diff(scene, moved).is_full_frame(),
+          "moving a path whose reach overflows damages the whole frame");
+}
+
+}  // namespace
+
 int main() {
     geometry();
     union_and_intersection();
@@ -1141,6 +1174,7 @@ int main() {
     whole_area_closure();
     path_damage();
     path_extent_agreement();
+    non_finite_stroke_reach();
     tracker();
     if (failures != 0) {
         std::fprintf(stderr, "%d damage check(s) failed\n", failures);

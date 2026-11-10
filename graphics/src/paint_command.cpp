@@ -259,7 +259,12 @@ PaintExtent paint_extent(const PaintCommand& command) {
         if (!command.path || !path_is_valid(*command.path)) return {box, false};
         const auto painted = path_paint_box(*command.path);
         if (!painted) return {{box.x, box.y, 0.0F, 0.0F}};
-        return {{box.x + painted->x, box.y + painted->y, painted->width, painted->height}};
+        const Rect moved{box.x + painted->x, box.y + painted->y, painted->width,
+                         painted->height};
+        const bool finite = std::isfinite(moved.x) && std::isfinite(moved.y) &&
+                            std::isfinite(moved.width) && std::isfinite(moved.height);
+        if (!finite) return {box, false};
+        return {moved};
     }
     if (!draws_content(command.kind)) return {box};
     Rect extent = box;

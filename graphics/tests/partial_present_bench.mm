@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iomanip>
@@ -148,6 +149,78 @@ std::unique_ptr<SkiaDawnSurface> fresh_surface(std::uint32_t width, std::uint32_
         error);
 }
 
+Scene spinner_scene(bool path, float degrees) {
+    Scene scene;
+    scene.scene_version = kDamageModelSceneVersion;
+    scene.width = kTileWidth;
+    scene.height = kTileHeight;
+    scene.background = Color::hex(0x111827);
+    scene.root = {.id = "root", .kind = SceneNode::Kind::group,
+                  .bounds = {0.0F, 0.0F, kTileWidth, kTileHeight}};
+    const float radians = degrees * 3.14159265F / 180.0F;
+    SceneNode spinner{
+        .id = "spinner",
+        .kind = path ? SceneNode::Kind::path : SceneNode::Kind::rectangle,
+        .bounds = {130.0F, 80.0F, 140.0F, 140.0F},
+        .fill = Color::hex(0x38BDF8),
+        .transform = Affine2D{.a = std::cos(radians), .b = std::sin(radians),
+                              .c = -std::sin(radians), .d = std::cos(radians)},
+    };
+    if (path) {
+        auto star = std::make_shared<PathGeometry>();
+        star->verbs.push_back(PathVerb::move);
+        for (int point = 0; point < 10; ++point) {
+            const float angle = static_cast<float>(point) * 3.14159265F / 5.0F;
+            const float reach = point % 2 == 0 ? 70.0F : 30.0F;
+            star->values.push_back(70.0F + reach * std::sin(angle));
+            star->values.push_back(70.0F - reach * std::cos(angle));
+            if (point > 0) star->verbs.push_back(PathVerb::line);
+        }
+        star->verbs.push_back(PathVerb::close);
+        star->stroke = {.color = Color::hex(0xF8FAFC), .width = 4.0F,
+                        .join = StrokeJoin::round};
+        spinner.path = star;
+    }
+    scene.root.children.push_back(spinner);
+    return scene;
+}
+
+int animated_path() {
+    std::string error;
+    std::cout << "| content | median CPU record ms | median wall ms | damage |\n|---|---|---|---|\n";
+    for (const bool path : {true, false}) {
+        auto surface = fresh_surface(static_cast<std::uint32_t>(kTileWidth),
+                                     static_cast<std::uint32_t>(kTileHeight), true, &error);
+        if (!surface) {
+            std::cerr << "surface creation failed: " << error << '\n';
+            return 1;
+        }
+        Series series;
+        for (int frame = 0; frame < kWarmup + kFrames * kRounds; ++frame) {
+            const Scene scene = spinner_scene(path, static_cast<float>(frame) * 3.0F);
+            const auto start = Clock::now();
+            if (!surface->render_incremental(scene, &error) || !surface->finish(&error)) {
+                std::cerr << "frame failed: " << error << '\n';
+                return 1;
+            }
+            const auto stop = Clock::now();
+            if (frame < kWarmup) continue;
+            const auto stats = surface->frame_stats();
+            series.cpu.push_back(stats.cpu_milliseconds);
+            series.wall.push_back(std::chrono::duration<double, std::milli>(stop - start).count());
+            series.last = stats;
+        }
+        std::cout << "| " << (path ? "rotating star path" : "rotating rectangle") << " | "
+                  << std::fixed << std::setprecision(3) << median(series.cpu) << " | "
+                  << median(series.wall) << " | " << std::setprecision(1)
+                  << series.last.damage_fraction * 100.0 << "% |\n";
+    }
+    std::cout << "\nOne 140x140 logical shape at 400x300 and 2x, rotated 3 degrees per frame and "
+                 "redrawn with render_incremental over " << kFrames * kRounds
+              << " frames after " << kWarmup << " warm-up frames.\n";
+    return 0;
+}
+
 }  // namespace
 
 static std::vector<double> last_wait;
@@ -229,6 +302,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (mode == "--check-native") return check_native();
+    if (mode == "--animated-path") return animated_path();
     const std::vector<std::pair<std::uint32_t, std::uint32_t>> sizes{
         {400, 300}, {1280, 800}, {2560, 1600}};
     std::cout << "| logical size | device pixels | target | full redraw | partial + blit | "
