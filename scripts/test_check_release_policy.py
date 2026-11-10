@@ -212,6 +212,7 @@ class Policy(unittest.TestCase):
         # version-at-land workflow that does more with its App token must not
         # land without the owner's review.
         for path in ("/scripts/verify_immutable_release_preflight.py",
+                     "/scripts/verify_release_attestation.py",
                      "/provenance/retired-release-tags.json",
                      "/.github/workflows/version-at-land.yml",
                      "/scripts/version_at_land.py",
@@ -228,6 +229,7 @@ class Policy(unittest.TestCase):
 
     def test_release_decision_inputs_missing_from_policy_files_fail(self) -> None:
         for path in ("/scripts/verify_immutable_release_preflight.py",
+                     "/scripts/verify_release_attestation.py",
                      "/provenance/retired-release-tags.json",
                      "/.github/workflows/version-at-land.yml",
                      "/scripts/version_at_land.py",

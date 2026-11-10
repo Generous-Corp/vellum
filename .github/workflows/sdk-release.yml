@@ -907,20 +907,10 @@ jobs:
           verify_release_guard
           gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
             --format json > "$RUNNER_TEMP/immutable-release-attestation.json"
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          value = json.loads(Path(os.environ["RUNNER_TEMP"]).joinpath(
-              "immutable-release-attestation.json").read_text())
-          statement = value.get("verificationResult", {}).get("statement", {})
-          predicate = statement.get("predicate", {})
-          if predicate.get("repository") != os.environ["GITHUB_REPOSITORY"] or predicate.get("tag") != os.environ["RELEASE_TAG"]:
-              raise SystemExit("immutable release attestation coordinates differ")
-          expected_uri = f"pkg:github/{os.environ['GITHUB_REPOSITORY']}@{os.environ['RELEASE_TAG']}"
-          matches = [row for row in statement.get("subject", []) if isinstance(row, dict) and row.get("uri") == expected_uri]
-          if len(matches) != 1 or matches[0].get("digest") != {"sha1": os.environ["TAG_OBJECT_SHA"]}:
-              raise SystemExit("immutable release attestation tag object differs")
-          PY
+          python3 -I scripts/verify_release_attestation.py \
+            --input "$RUNNER_TEMP/immutable-release-attestation.json" \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
+            --tag-object-sha "$TAG_OBJECT_SHA"
           args=(); for asset in "${allowed[@]}"; do args+=(--asset "$asset"); done
           python3 scripts/verify_release_assets.py \
             --release-json "$RUNNER_TEMP/release-published.json" --tag "$RELEASE_TAG" \
