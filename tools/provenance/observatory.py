@@ -1090,8 +1090,8 @@ def verify(
         # Only the receiver commits the report. A change judged under the
         # coverage policy leaves it as its base had it, and the comparison
         # leaves out every event added after the commit that last wrote it.
-        refuse_report_edit(root, git_base)
-        since = events_since_report(root, events)
+        receiver = refuse_report_edit(root, git_base)
+        since = events_since_report(root, events, "HEAD" if receiver or git_base is None else git_base)
         if since:
             committed_events = [
                 (path, event) for path, event in committed_events
@@ -1196,23 +1196,31 @@ def is_evidence_path(path: str) -> bool:
 REPORT_PATHS = (REPORT_JSON_PATH.as_posix(), REPORT_MD_PATH.as_posix())
 
 
-def events_since_report(root: Path, events: list[tuple[Path, dict[str, object]]]) -> set[str]:
+def events_since_report(root: Path, events: list[tuple[Path, dict[str, object]]], anchor: str = "HEAD") -> set[str]:
     """IDs of the events added after the commit that last wrote the committed report.
 
     The receiver writes the report; every change after it (a pull request's
     observations and resolutions, or main's landings before the next
     coalesce) adds events without rewriting it, so the report describes the
-    ledger as that commit held it. Outside a Git checkout nothing is left out.
+    ledger as that commit held it. The writer is looked up from `anchor`: the
+    git base for any change that is not the receiver's, since such a change
+    cannot edit the report and so carries its base's copy. Base history is
+    main's own and the change cannot place a commit there. The receiver's
+    reconciliation is anchored on itself. Outside a Git checkout nothing is
+    left out.
     """
     try:
-        commit = git(root, "log", "-1", "--format=%H", "--", REPORT_JSON_PATH.as_posix())
+        commit = git(root, "log", "-1", "--format=%H", anchor, "--", REPORT_JSON_PATH.as_posix())
     except ObservatoryError:
         return set()
     return new_event_ids(root, commit, events) if commit else set()
 
 
-def refuse_report_edit(root: Path, git_base: str | None) -> None:
+def refuse_report_edit(root: Path, git_base: str | None) -> bool:
     """A change may not commit the report unless it is the receiver's reconciliation.
+
+    Returns True for the receiver's reconciliation, False when the change
+    leaves the report alone, and raises otherwise.
 
     The receiver is recognised by its content, as the own-commit rule does:
     every path it changes is observatory evidence, and it moves the cursor.
@@ -1220,12 +1228,12 @@ def refuse_report_edit(root: Path, git_base: str | None) -> None:
     merge of main, although their events never overlap.
     """
     if git_base is None:
-        return
+        return False
     changed = [path for path in git(root, "diff", "--name-only", "--no-renames", git_base, "HEAD").splitlines() if path]
     if not any(path in REPORT_PATHS for path in changed):
-        return
+        return False
     if CURSOR_PATH.as_posix() in changed and all(is_evidence_path(path) for path in changed):
-        return
+        return True
     raise ObservatoryError(
         "a change may not commit provenance/pulp-observatory/reports/current.{json,md}: "
         "the receiver regenerates it after landing, and verify compares it with the events "
