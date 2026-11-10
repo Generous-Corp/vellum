@@ -62,6 +62,8 @@ struct StyleUse final {
     bool root = false;
     bool lays_out_children = false;
     bool paints_text_background = false;
+    /// `overflow: hidden` clips to the box with its border radii.
+    bool clips_to_box = false;
 };
 
 bool style_key_consumed(std::string_view type, std::string_view key, const StyleUse& use) {
@@ -69,6 +71,13 @@ bool style_key_consumed(std::string_view type, std::string_view key, const Style
     if (key == "width" || key == "height") return true;
     if (key == "x" || key == "y") return !use.root;
     if (key == "opacity" || key == "transform") return true;
+    if (key == "overflow" || key == "clipPath" || key == "isolation") return true;
+    // The root has no siblings to mask.
+    if (key == "maskMode") return !use.root;
+    if (use.clips_to_box && type != "path" &&
+        (key == "borderRadius" || contains(kCornerRadiusKeys, key))) {
+        return true;
+    }
     if (type == "path") return false;
     if (key == "padding" || key == "direction") return use.lays_out_children;
     if (key == "gap") return type == "stack" && use.lays_out_children;
@@ -787,6 +796,66 @@ bool materialize_path(
     return true;
 }
 
+// Clip, mask and isolation follow CSS: `overflow: hidden` clips to the box
+// with its border radii, `clipPath` is SVG path data in the box's
+// coordinates and wins over `overflow`, `maskMode` marks the node as a mask
+// for its siblings, and `isolation: isolate` forces a group.
+bool parse_grouping(
+    NSDictionary* style, const std::string& identity, const StyleUse& use,
+    MaterializeContext& context, vellum::graphics::SceneNode& output, std::string* error) {
+    const auto reject = [&](std::string property, const std::string& problem) {
+        set_error(error, "node " + identity + " " + property + " " + problem);
+        return false;
+    };
+    bool clip_box = false;
+    if (id overflow = style[@"overflow"]; overflow != nil) {
+        const auto value = keyword(overflow, std::array<std::string_view, 2>{"visible", "hidden"});
+        if (!value) return reject("overflow", "must be visible or hidden");
+        clip_box = *value == 1U;
+    }
+    if (id clip_path = style[@"clipPath"]; clip_path != nil) {
+        if (![clip_path isKindOfClass:NSString.class]) {
+            return reject_path(context, identity, "clipPath",
+                "node " + identity + " clipPath must be SVG path data", error);
+        }
+        vellum::graphics::PathGeometry path;
+        std::string reason;
+        if (!vellum::graphics::parse_svg_path_data(cpp_string(clip_path), path, &reason) ||
+            !vellum::graphics::path_is_valid(path, &reason)) {
+            return reject_path(context, identity, "clipPath",
+                "node " + identity + " has an invalid clipPath: " + reason, error);
+        }
+        output.clip = vellum::graphics::NodeClip{
+            .path = std::make_shared<const vellum::graphics::PathGeometry>(std::move(path))};
+        if (clip_box) {
+            context.diagnostics->push_back({
+                .severity = LoweringDiagnostic::Severity::warning,
+                .disposition = LoweringDiagnostic::Disposition::lowered,
+                .code = std::string(vellum::graphics::kStyleDroppedCode),
+                .node_id = identity,
+                .property = "overflow",
+                .message = "overflow hidden was ignored because clipPath clips the node",
+            });
+        }
+    } else if (clip_box) {
+        output.clip = vellum::graphics::NodeClip{
+            .rect = {0.0F, 0.0F, output.bounds.width, output.bounds.height},
+            .radii = vellum::graphics::resolved_corner_radii(output),
+        };
+    }
+    if (id mode = style[@"maskMode"]; mode != nil && !use.root) {
+        const auto value = keyword(mode, std::array<std::string_view, 2>{"alpha", "luminance"});
+        if (!value) return reject("maskMode", "must be alpha or luminance");
+        output.mask = static_cast<vellum::graphics::MaskMode>(*value);
+    }
+    if (id isolation = style[@"isolation"]; isolation != nil) {
+        const auto value = keyword(isolation, std::array<std::string_view, 2>{"auto", "isolate"});
+        if (!value) return reject("isolation", "must be auto or isolate");
+        output.isolate = *value == 1U;
+    }
+    return true;
+}
+
 bool validate_attributed_run(
     NSDictionary* run, const std::string& parent_id, std::size_t depth,
     MaterializeContext& context, std::string* error) {
@@ -957,6 +1026,7 @@ bool materialize_node(
         .root = depth == 0U,
         .paints_text_background =
             !output.fill_gradients.empty() || !output.box_shadows.empty(),
+        .clips_to_box = [style[@"overflow"] isEqual:@"hidden"] && style[@"clipPath"] == nil,
     };
     for (id child in array_or_empty(source[@"children"])) {
         if (!skipped_text_run(type, child)) style_use.lays_out_children = true;
@@ -1038,6 +1108,8 @@ bool materialize_node(
     } else {
         output.kind = vellum::graphics::SceneNode::Kind::group;
     }
+
+    if (!parse_grouping(style, identity, style_use, context, output, error)) return false;
 
     for (NSString* event in events) {
         if (![event isKindOfClass:NSString.class] ||

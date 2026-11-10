@@ -112,6 +112,14 @@ export interface Style {
     opacity?: number;
     /** CSS transform functions, pivoting about the box centre. */
     transform?: string;
+    /** `hidden` clips the node and its subtree to its box and border radii. */
+    overflow?: 'visible' | 'hidden';
+    /** SVG path data in the box's coordinates; clips like `overflow` and wins over it. */
+    clipPath?: string;
+    /** Makes the node a mask for its siblings instead of drawing it. */
+    maskMode?: 'alpha' | 'luminance';
+    /** `isolate` composites the node and its subtree as one group. */
+    isolation?: 'auto' | 'isolate';
     backgroundColor?: string;
     color?: string;
     direction?: 'horizontal' | 'vertical';

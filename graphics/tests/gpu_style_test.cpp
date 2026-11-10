@@ -493,7 +493,8 @@ bool scene_version_refusal() {
     future.scene_version = kSceneVersion + 1U;
     Scene unknown_kind = scene;
     unknown_kind.root.children[0].kind = static_cast<SceneNode::Kind>(42);
-    if (!refused_keeps_frame(future, "scene version 4 is not supported by this renderer") ||
+    if (!refused_keeps_frame(future, "scene version " + std::to_string(kSceneVersion + 1U) +
+                                         " is not supported by this renderer") ||
         !refused_keeps_frame(
             unknown_kind, "scene contains unsupported node kind 42 at swatch")) {
         return false;

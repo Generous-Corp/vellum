@@ -22,7 +22,7 @@ The public slice consists of:
   application builds, plus a headers-only `Vellum::DawnHeaders` target for an
   embedding host's authenticated bootstrap and compute code.
 
-The scene carries a single integer schema version, `kSceneVersion`, now 3.
+The scene carries a single integer schema version, `kSceneVersion`, now 5.
 A change that can alter rendered output bumps it: a new node kind, a new field
 that changes how a scene is drawn, or a change in meaning. A change that only
 adds metadata keeps it. Consumers accept versions from
@@ -92,6 +92,40 @@ larger of the miter limit for miter joins and sqrt(2) for round or square
 caps. The web shell does not draw paths and counts each one in
 `vellum_web_lowering_loss_count`.
 
+Version 5 adds three grouping fields to every node, and a scene before
+version 5 that sets any of them is refused by `render` and yields no paint
+commands. A `clip`, in the node's own coordinates so it moves with its
+transform, is a rectangle with per-corner radii or the fill area of a path
+(its stroke ignored); it limits the node's paint and its whole subtree, with
+anti-aliased edges, and lowers to `begin_clip` and `end_clip` commands around
+everything else the node emits. A `mask` marks a child as a mask for its
+siblings: it is not drawn, its subtree is rendered offscreen, and its alpha, or
+its luminance times its alpha, multiplies the parent's other children, which
+are composited together first in a `begin_layer` named after the parent with
+`/masked`. That layer ends with one `begin_mask` and `end_mask` pair per mask
+child, so several masks multiply and a mask that draws nothing hides its
+siblings; the parent's own paint is not masked, and the root cannot be a
+mask. The Skia surface draws a mask into a layer composited with
+destination-in, through a luma colour filter for luminance. `isolate` keeps a
+node's layer even at full opacity and around a single command. Without blend
+modes, isolation only changes rounding, which the GPU test bounds at two
+levels. A clip whose rectangle or radii are not finite, or whose path fails
+`path_is_valid`, is refused like a non-finite transform. Damage clips a
+subtree to its clip's extent (the rectangle, or the path's control box) unless
+the node has its own transform, which the damage model does not map; a changed
+clip or isolation damages the node's subtree, and adding, removing or changing
+a mask damages its parent's subtree. The web shell neither clips nor masks: it
+counts each clip once, skips each mask's commands so a mask is never drawn as
+paint, counts the mask once, and draws its siblings unmasked. The CoreGraphics
+smoke canvas takes no scene and does not lower clips, masks or isolation. The
+authoring host maps CSS `overflow: hidden` to a clip of the box with its border
+radii, `clipPath` (SVG path data in the box's coordinates, which wins over
+`overflow` with a `VELLUM_STYLE_DROPPED` warning) to a path clip, `maskMode`
+(`alpha` or `luminance`) to a mask, and `isolation: isolate` to isolation; a
+root `maskMode` is dropped with a warning, an invalid value fails the tree, and
+invalid clip path data fails it with `VELLUM_INVALID_PATH`. Hit testing and
+accessibility boxes ignore clips and masks.
+
 The surface draws every frame into a retained offscreen Graphite surface the
 size of its target in device pixels, and presents by drawing that image into
 the swapchain texture; captures read the retained surface back, through the
@@ -109,8 +143,9 @@ rectangle counts, the commands re-recorded and why a frame repainted fully.
 What is cached and when it is discarded is renderer policy: the scene schema
 carries no cache hints. Partial redraw is enabled only for scene versions the
 damage model understands, up to `kDamageModelSceneVersion` (1); a version 2
-or 3 scene, which can carry transforms, group opacity, per-corner radii and
-paths, repaints fully until the damage model learns those fields.
+to 5 scene, which can carry transforms, group opacity, per-corner radii,
+paths, clips, masks and isolation, repaints fully until the damage model
+learns those fields.
 
 The surface keeps three cross-frame resource caches under
 `RenderCacheBudgets`: laid-out text paragraphs keyed by every run's text and

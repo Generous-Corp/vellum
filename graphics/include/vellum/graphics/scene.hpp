@@ -255,6 +255,30 @@ struct CornerRadii final {
            std::isfinite(radii.bottom_right) && std::isfinite(radii.bottom_left);
 }
 
+/// A clip shape in the owning node's coordinates, relative to its origin.
+///
+/// Without `path` the clip is `rect` with `radii`, each corner circular and
+/// scaled down like `CornerRadii` when the radii exceed a side; a negative
+/// width or height clips everything. With `path` the clip is the area the
+/// path fills under its fill rule; its stroke is ignored, and a path with no
+/// commands clips everything. Clip edges are anti-aliased.
+struct NodeClip final {
+    Rect rect{};
+    CornerRadii radii{};
+    /// Like a path node's geometry, it must not be mutated once a scene
+    /// references it; replace the pointer to change it.
+    std::shared_ptr<const PathGeometry> path;
+};
+
+/// How a mask node's rendered subtree becomes coverage for its siblings.
+enum class MaskMode : std::uint8_t {
+    /// The mask's alpha.
+    alpha,
+    /// The mask's luminance multiplied by its alpha, as CSS `mask-mode:
+    /// luminance` and SVG `<mask>` define it (Rec. 709 coefficients).
+    luminance,
+};
+
 /// The scene schema version this build produces.
 ///
 /// The version is a single integer. Bump it when a change can alter rendered
@@ -272,7 +296,11 @@ struct CornerRadii final {
 /// Version 3 adds the `path` node kind. A version 1 or 2 scene is still
 /// accepted when it has no path node; one that does fails
 /// `scene_fields_match_version` and is refused.
-inline constexpr std::uint32_t kSceneVersion = 3U;
+///
+/// Version 5 adds `SceneNode::clip`, `mask`, and `isolate`. A scene of an
+/// earlier version is still accepted when none of its nodes sets them; one
+/// that does fails `scene_fields_match_version` and is refused.
+inline constexpr std::uint32_t kSceneVersion = 5U;
 
 /// The oldest scene schema version this build still consumes.
 inline constexpr std::uint32_t kMinSupportedSceneVersion = 1U;
@@ -338,6 +366,18 @@ struct SceneNode final {
     /// a mesh, it must not be mutated once a scene references it; replace the
     /// pointer to change it.
     std::shared_ptr<const PathGeometry> path;
+    /// Clips the node's own paint and its whole subtree. The clip is in the
+    /// node's coordinates, so it moves with `transform`.
+    std::optional<NodeClip> clip;
+    /// Marks the node as a mask for its siblings. The node and its subtree
+    /// are not drawn; they are rendered offscreen and their coverage, by
+    /// `MaskMode`, multiplies the parent's other children, which are
+    /// composited together first. Several mask children multiply. The
+    /// parent's own paint is not masked. The root cannot be a mask.
+    std::optional<MaskMode> mask;
+    /// Composites the node and its subtree offscreen as one group even at
+    /// full opacity, so the group meets what lies beneath it only once.
+    bool isolate = false;
 };
 
 /// The corner radii a node is drawn with: `corner_radii` when present,
@@ -389,6 +429,21 @@ struct SceneNode final {
     return nullptr;
 }
 
+/// Whether a node sets a field version 5 introduced: a clip, a mask mode,
+/// or isolation.
+[[nodiscard]] constexpr bool uses_version_5_fields(const SceneNode& node) noexcept {
+    return node.clip.has_value() || node.mask.has_value() || node.isolate;
+}
+
+/// The first node, in depth-first order, that `uses_version_5_fields`.
+[[nodiscard]] inline const SceneNode* find_version_5_fields(const SceneNode& node) noexcept {
+    if (uses_version_5_fields(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_5_fields(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
 [[nodiscard]] constexpr bool is_known_kind(SceneNode::Kind kind) noexcept {
     switch (kind) {
     case SceneNode::Kind::group:
@@ -433,10 +488,13 @@ struct Scene final {
 
 /// Whether every field and kind the scene uses exists at its version: a
 /// version 1 scene sets no field that `uses_version_2_fields` reports, and a
-/// version 1 or 2 scene has no node that `find_version_3_kinds` reports.
+/// version 1 or 2 scene has no node that `find_version_3_kinds` reports, and
+/// a scene before version 5 sets no field that `uses_version_5_fields`
+/// reports.
 [[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
     return (scene.scene_version >= 2U || find_version_2_fields(scene.root) == nullptr) &&
-           (scene.scene_version >= 3U || find_version_3_kinds(scene.root) == nullptr);
+           (scene.scene_version >= 3U || find_version_3_kinds(scene.root) == nullptr) &&
+           (scene.scene_version >= 5U || find_version_5_fields(scene.root) == nullptr);
 }
 
 [[nodiscard]] inline const SceneNode* find_node(

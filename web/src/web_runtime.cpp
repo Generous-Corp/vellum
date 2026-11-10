@@ -136,11 +136,13 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     commands = vellum::graphics::make_paint_commands(scene);
     lowering_losses = vellum::web::canvas_shell_loss_count(commands);
     const auto opacities = vellum::graphics::effective_opacities(commands);
+    const auto masked = vellum::web::canvas_shell_masked(commands);
     const auto background = scene.background;
     canvas_begin(scene.width, scene.height, background.red, background.green,
                  background.blue, background.alpha);
     for (std::size_t index = 0; index < commands.size(); ++index) {
         const auto& command = commands[index];
+        if (masked[index]) continue;
         auto color = command.fill;
         color.alpha *= opacities[index];
         switch (command.kind) {
@@ -160,6 +162,10 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
         case Kind::end_layer:
         case Kind::mesh:
         case Kind::path:
+        case Kind::begin_clip:
+        case Kind::end_clip:
+        case Kind::begin_mask:
+        case Kind::end_mask:
             break;
         }
     }

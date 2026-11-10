@@ -15,9 +15,77 @@ Rect union_of(const Rect& left, const Rect& right) {
             std::max(left.y + left.height, right.y + right.height) - y};
 }
 
+// The frame-space union of the paint extents of the commands in
+// [first, last), and whether every one of them is bounded. Nested layers
+// contribute their own bounds; clips and masks contribute nothing.
+struct GroupExtent final {
+    Rect bounds{};
+    bool bounded = true;
+};
+
+GroupExtent group_extent(const std::vector<PaintCommand>& output, std::size_t first,
+                         std::size_t last) {
+    GroupExtent group;
+    bool any = false;
+    for (auto index = first; index < last; ++index) {
+        const auto& member = output[index];
+        Rect extent;
+        if (member.kind == PaintCommand::Kind::begin_layer) {
+            group.bounded = group.bounded && !member.layer_unbounded;
+            extent = member.bounds;
+        } else if (draws_content(member.kind)) {
+            const auto local = paint_extent(member);
+            group.bounded = group.bounded && local.bounded;
+            extent = transformed_bounds(member.transform, local.rect);
+        } else {
+            continue;
+        }
+        group.bounds = any ? union_of(group.bounds, extent) : extent;
+        any = true;
+    }
+    return group;
+}
+
+void append_node(const SceneNode& node, float parent_x, float parent_y,
+                 const Affine2D& parent_transform, std::vector<PaintCommand>& output);
+
+void append_children(const SceneNode& node, const Rect& absolute, const Affine2D& transform,
+                     std::vector<PaintCommand>& output) {
+    const bool masked = std::any_of(node.children.begin(), node.children.end(),
+        [](const SceneNode& child) { return child.mask.has_value(); });
+    if (!masked) {
+        for (const auto& child : node.children) {
+            append_node(child, absolute.x, absolute.y, transform, output);
+        }
+        return;
+    }
+    const auto slot = output.size();
+    output.push_back({.kind = PaintCommand::Kind::begin_layer,
+                      .node_id = node.id + "/masked",
+                      .layer_isolated = true});
+    for (const auto& child : node.children) {
+        if (!child.mask) append_node(child, absolute.x, absolute.y, transform, output);
+    }
+    const auto group = group_extent(output, slot + 1U, output.size());
+    output[slot].bounds = group.bounds;
+    output[slot].layer_unbounded = !group.bounded;
+    for (const auto& child : node.children) {
+        if (!child.mask) continue;
+        output.push_back({.kind = PaintCommand::Kind::begin_mask,
+                          .node_id = child.id,
+                          .mask_mode = *child.mask});
+        // The mask node's own flag is consumed here; its subtree renders
+        // as ordinary paint into the mask.
+        append_node(child, absolute.x, absolute.y, transform, output);
+        output.push_back({.kind = PaintCommand::Kind::end_mask, .node_id = child.id});
+    }
+    output.push_back({.kind = PaintCommand::Kind::end_layer, .node_id = node.id + "/masked"});
+}
+
 void append_node(const SceneNode& node, float parent_x, float parent_y,
                  const Affine2D& parent_transform, std::vector<PaintCommand>& output) {
     if (!is_known_kind(node.kind) || !compositing_is_finite(node)) return;
+    if (node.clip && !clip_is_valid(*node.clip)) return;
     const float opacity = std::clamp(node.opacity, 0.0F, 1.0F);
     if (opacity <= 0.0F) return;
     const Rect absolute{
@@ -33,8 +101,22 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
             concat(*node.transform, translation(-absolute.x, -absolute.y))));
     }
     const auto radii = resolved_corner_radii(node);
+    if (node.clip) {
+        output.push_back({
+            .kind = PaintCommand::Kind::begin_clip,
+            .node_id = node.id,
+            .bounds = absolute,
+            .path = node.clip->path,
+            .transform = transform,
+            .corner_radii = node.clip->radii,
+            .clip_rect = {absolute.x + node.clip->rect.x, absolute.y + node.clip->rect.y,
+                          std::max(0.0F, node.clip->rect.width),
+                          std::max(0.0F, node.clip->rect.height)},
+        });
+    }
+    const bool layered = opacity < 1.0F || node.isolate;
     const auto slot = output.size();
-    if (opacity < 1.0F) {
+    if (layered) {
         output.push_back({.kind = PaintCommand::Kind::begin_layer, .node_id = node.id});
     }
     const auto first = output.size();
@@ -98,46 +180,42 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
             .transform = transform,
         });
     }
-    for (const auto& child : node.children) {
-        append_node(child, absolute.x, absolute.y, transform, output);
+    append_children(node, absolute, transform, output);
+    const auto close_clip = [&] {
+        if (node.clip) output.push_back({.kind = PaintCommand::Kind::end_clip, .node_id = node.id});
+    };
+    if (!layered) {
+        close_clip();
+        return;
     }
-    if (opacity >= 1.0F) return;
 
     std::size_t drawn = 0;
     std::size_t last_drawn = first;
+    bool structured = false;
     for (auto index = first; index < output.size(); ++index) {
         if (draws_content(output[index].kind)) {
             ++drawn;
             last_drawn = index;
+        } else if (output[index].kind == PaintCommand::Kind::begin_mask) {
+            structured = true;
         }
     }
-    if (drawn <= 1U) {
+    // A mask's commands draw coverage, so folding opacity into one of them, or
+    // into a sibling it masks, would change what the mask hides.
+    if (!node.isolate && !structured && drawn <= 1U) {
         if (drawn == 1U) output[last_drawn].opacity *= opacity;
         output.erase(output.begin() + static_cast<std::ptrdiff_t>(slot));
+        close_clip();
         return;
     }
     auto& layer = output[slot];
     layer.opacity = opacity;
-    bool bounded = true;
-    bool any = false;
-    for (auto index = first; index < output.size(); ++index) {
-        const auto& member = output[index];
-        Rect extent;
-        if (member.kind == PaintCommand::Kind::begin_layer) {
-            bounded = bounded && !member.layer_unbounded;
-            extent = member.bounds;
-        } else if (draws_content(member.kind)) {
-            const auto local = paint_extent(member);
-            bounded = bounded && local.bounded;
-            extent = transformed_bounds(member.transform, local.rect);
-        } else {
-            continue;
-        }
-        layer.bounds = any ? union_of(layer.bounds, extent) : extent;
-        any = true;
-    }
-    layer.layer_unbounded = !bounded;
+    layer.layer_isolated = node.isolate;
+    const auto group = group_extent(output, first, output.size());
+    layer.bounds = group.bounds;
+    layer.layer_unbounded = !group.bounded;
     output.push_back({.kind = PaintCommand::Kind::end_layer, .node_id = node.id});
+    close_clip();
 }
 
 }  // namespace
@@ -221,10 +299,44 @@ std::optional<Rect> path_gradient_box(const PaintCommand& command) {
                 control->height};
 }
 
+bool clip_is_valid(const NodeClip& clip, std::string* reason) {
+    const auto& rect = clip.rect;
+    if (!std::isfinite(rect.x) || !std::isfinite(rect.y) || !std::isfinite(rect.width) ||
+        !std::isfinite(rect.height)) {
+        if (reason != nullptr) *reason = "the clip rectangle is not finite";
+        return false;
+    }
+    if (!is_finite(clip.radii)) {
+        if (reason != nullptr) *reason = "a clip corner radius is not finite";
+        return false;
+    }
+    return !clip.path || path_is_valid(*clip.path, reason);
+}
+
+const SceneNode* find_invalid_clip(const SceneNode& node, std::string& reason) {
+    if (node.clip && !clip_is_valid(*node.clip, &reason)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_invalid_clip(child, reason); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
+Rect clip_extent(const NodeClip& clip, float absolute_x, float absolute_y) {
+    if (clip.path) {
+        const auto control = path_control_bounds(*clip.path);
+        if (!control) return {absolute_x, absolute_y, 0.0F, 0.0F};
+        return {absolute_x + control->x, absolute_y + control->y, control->width,
+                control->height};
+    }
+    return {absolute_x + clip.rect.x, absolute_y + clip.rect.y, std::max(0.0F, clip.rect.width),
+            std::max(0.0F, clip.rect.height)};
+}
+
 std::vector<PaintCommand> make_paint_commands(const Scene& scene) {
     std::vector<PaintCommand> output;
     if (!scene_version_is_supported(scene.scene_version)) return output;
     if (!scene_fields_match_version(scene)) return output;
+    if (scene.root.mask) return output;
     append_node(scene.root, 0.0F, 0.0F, Affine2D{}, output);
     return output;
 }

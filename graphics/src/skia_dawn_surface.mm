@@ -37,6 +37,8 @@
 #include "include/encode/SkPngEncoder.h"
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradient.h"
+#include "include/core/SkColorFilter.h"
+#include "include/effects/SkLumaColorFilter.h"
 #include "include/gpu/graphite/BackendTexture.h"
 #include "include/gpu/graphite/Context.h"
 #include "include/gpu/graphite/ContextOptions.h"
@@ -827,8 +829,45 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
         ++resources.layers;
         return true;
     }
-    if (command.kind == PaintCommand::Kind::end_layer) {
+    if (command.kind == PaintCommand::Kind::end_layer ||
+        command.kind == PaintCommand::Kind::end_clip ||
+        command.kind == PaintCommand::Kind::end_mask) {
         canvas.restore();
+        return true;
+    }
+    if (command.kind == PaintCommand::Kind::begin_clip) {
+        canvas.save();
+        // The clip is in the node's coordinates; the commands that follow
+        // carry their own transforms, so only the clip takes this one.
+        const SkM44 frame = canvas.getLocalToDevice();
+        if (!is_identity(command.transform)) canvas.concat(sk_matrix(command.transform));
+        if (command.path) {
+            canvas.clipPath(sk_path(command), SkClipOp::kIntersect, true);
+        } else {
+            const auto& box = command.clip_rect;
+            const auto rect = SkRect::MakeXYWH(box.x, box.y, box.width, box.height);
+            if (is_rounded(command.corner_radii)) {
+                canvas.clipRRect(rounded_rect(rect, command.corner_radii), SkClipOp::kIntersect,
+                                 true);
+            } else {
+                canvas.clipRect(rect, SkClipOp::kIntersect, true);
+            }
+        }
+        canvas.setMatrix(frame);
+        return true;
+    }
+    if (command.kind == PaintCommand::Kind::begin_mask) {
+        // The mask renders into its own layer, which then keeps the enclosing
+        // group's pixels in proportion to its coverage (destination-in). The
+        // layer is unbounded so the group is cleared wherever the mask draws
+        // nothing.
+        SkPaint coverage;
+        coverage.setBlendMode(SkBlendMode::kDstIn);
+        if (command.mask_mode == MaskMode::luminance) {
+            coverage.setColorFilter(SkLumaColorFilter::Make());
+        }
+        canvas.saveLayer(nullptr, &coverage);
+        ++resources.layers;
         return true;
     }
     if (command.kind == PaintCommand::Kind::text &&
@@ -908,6 +947,10 @@ Extent command_extent(const PaintCommand& command, const Rect& frame, float scal
             break;
         case PaintCommand::Kind::begin_layer:
         case PaintCommand::Kind::end_layer:
+        case PaintCommand::Kind::begin_clip:
+        case PaintCommand::Kind::end_clip:
+        case PaintCommand::Kind::begin_mask:
+        case PaintCommand::Kind::end_mask:
             return std::nullopt;
     }
     return pixel_extent(node_paint_bounds(painted, command.bounds, frame, propagation), scale);
@@ -1266,10 +1309,18 @@ public:
         if (!scene_fields_match_version(scene)) {
             const auto* compositing =
                 scene.scene_version < 2U ? find_version_2_fields(scene.root) : nullptr;
+            const auto* grouping =
+                scene.scene_version < 5U ? find_version_5_fields(scene.root) : nullptr;
+            const auto* path_node =
+                scene.scene_version < 3U ? find_version_3_kinds(scene.root) : nullptr;
             if (compositing != nullptr) {
                 set_error(error, "scene version " + std::to_string(scene.scene_version) +
                                      " cannot carry the transform, opacity, or corner radii at " +
                                      compositing->id);
+            } else if (path_node == nullptr && grouping != nullptr) {
+                set_error(error, "scene version " + std::to_string(scene.scene_version) +
+                                     " cannot carry the clip, mask, or isolation at " +
+                                     grouping->id);
             } else {
                 set_error(error, "scene version " + std::to_string(scene.scene_version) +
                                      " cannot carry the path node " +
@@ -1283,7 +1334,15 @@ public:
                                  " has a non-finite transform, opacity, or corner radius");
             return false;
         }
+        if (scene.root.mask) {
+            set_error(error, "scene root " + scene.root.id + " cannot be a mask");
+            return false;
+        }
         std::string reason;
+        if (const auto* clipped = find_invalid_clip(scene.root, reason); clipped != nullptr) {
+            set_error(error, "clip of " + clipped->id + " cannot be applied: " + reason);
+            return false;
+        }
         if (const auto* path = find_undrawable_path(scene.root, reason); path != nullptr) {
             set_error(error, path->path ? "path " + path->id + " cannot be drawn: " + reason
                                         : "path " + path->id + " has no geometry");

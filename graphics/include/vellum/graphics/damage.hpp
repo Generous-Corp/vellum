@@ -163,7 +163,10 @@ public:
     [[nodiscard]] virtual float effect_radius(const SceneNode& node) const;
 
     /// An absolute logical clip that bounds the damage of `node` and its
-    /// descendants, or `std::nullopt` for none.
+    /// descendants, or `std::nullopt` for none. The default is the
+    /// `clip_extent` of the node's `clip` when the clip is valid and the node
+    /// has no transform of its own; the damage model does not map clips
+    /// through transforms.
     [[nodiscard]] virtual std::optional<Rect> clip_bounds(
         const SceneNode& node, const Rect& absolute_bounds) const;
 
@@ -197,6 +200,12 @@ public:
 /// Paths compare their fill paint and every geometry and stroke field, so two
 /// distinct `PathGeometry` objects with the same content do not differ.
 [[nodiscard]] bool paint_differs(const SceneNode& previous, const SceneNode& next);
+
+/// Whether two nodes with the same identity group their subtree differently:
+/// a different clip (compared like paths in `paint_differs`), mask mode, or
+/// isolation. Such a change damages the node's whole subtree, and a changed
+/// mask mode also damages its parent's subtree.
+[[nodiscard]] bool grouping_differs(const SceneNode& previous, const SceneNode& next);
 
 /// Damage between two scenes, keyed by node id (nodes with an empty or
 /// repeated id are keyed by position). Added, removed, moved, resized,

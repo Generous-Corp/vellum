@@ -527,6 +527,130 @@ bool path_nodes() {
                     "path bad does not accept children", "children");
 }
 
+// overflow, clipPath, maskMode and isolation reach the scene; bad values fail
+// atomically, and keys that cannot apply are reported.
+bool grouping_keys() {
+    using vellum::graphics::LoweringDiagnostic;
+    using vellum::graphics::MaskMode;
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    std::vector<LoweringDiagnostic> failure_diagnostics;
+    const auto tree = wrap_tree(R"JSON(
+      {"type":"view","id":"window","style":{"width":40,"height":30,"overflow":"hidden",
+        "borderRadius":4,"borderTopRightRadius":9,"isolation":"isolate"},
+        "children":[
+          {"type":"view","id":"window/content","style":{"width":40,"height":30,
+            "backgroundColor":"#FF0000"},"children":[]},
+          {"type":"view","id":"window/mask","style":{"width":20,"height":30,
+            "backgroundColor":"#FFFFFF","maskMode":"luminance"},"children":[]}]},
+      {"type":"text","id":"caption","text":"Hi","style":{"height":20,
+        "overflow":"hidden","borderRadius":5},"children":[]},
+      {"type":"view","id":"shaped","style":{"width":20,"height":20,"overflow":"hidden",
+        "clipPath":"M0 0 h20 v20 z","isolation":"auto"},"children":[]},
+      {"type":"view","id":"visible","style":{"width":20,"height":20,"overflow":"visible",
+        "maskMode":"alpha"},"children":[]}
+    )JSON");
+    if (!vellum::authoring::materialize_rendered_tree(tree, rendered, &error,
+                                                      &failure_diagnostics)) {
+        std::cerr << "grouping keys: " << error << '\n';
+        return false;
+    }
+    const auto* window = vellum::graphics::find_node(rendered.scene, "window");
+    const auto* mask = vellum::graphics::find_node(rendered.scene, "window/mask");
+    const auto* caption = vellum::graphics::find_node(rendered.scene, "caption");
+    const auto* shaped = vellum::graphics::find_node(rendered.scene, "shaped");
+    const auto* visible = vellum::graphics::find_node(rendered.scene, "visible");
+    if (window == nullptr || !window->clip || window->clip->path ||
+        !near(window->clip->rect.width, 40.0F) || !near(window->clip->rect.height, 30.0F) ||
+        !near(window->clip->radii.top_left, 4.0F) || !near(window->clip->radii.top_right, 9.0F) ||
+        !window->isolate || window->mask) {
+        std::cerr << "grouping keys: overflow hidden or isolation did not reach the window\n";
+        return false;
+    }
+    if (mask == nullptr || mask->mask != MaskMode::luminance || mask->clip ||
+        visible == nullptr || visible->mask != MaskMode::alpha || visible->clip) {
+        std::cerr << "grouping keys: maskMode did not reach the scene\n";
+        return false;
+    }
+    if (caption == nullptr || !caption->clip || !near(caption->clip->radii.bottom_left, 5.0F)) {
+        std::cerr << "grouping keys: a clipped text node lost its border radius\n";
+        return false;
+    }
+    if (shaped == nullptr || !shaped->clip || !shaped->clip->path ||
+        shaped->clip->path->verbs.size() != 4U || shaped->isolate) {
+        std::cerr << "grouping keys: clipPath did not reach the scene\n";
+        return false;
+    }
+    const auto reported = [&](std::string_view node, std::string_view property) {
+        return std::count_if(rendered.diagnostics.begin(), rendered.diagnostics.end(),
+            [&](const LoweringDiagnostic& diagnostic) {
+                return diagnostic.node_id == node && diagnostic.property == property &&
+                       diagnostic.code == vellum::graphics::kStyleDroppedCode;
+            });
+    };
+    if (rendered.diagnostics.size() != 1U || reported("shaped", "overflow") != 1) {
+        std::cerr << "grouping keys: expected one overflow-ignored warning, got "
+                  << rendered.diagnostics.size() << " diagnostics\n";
+        return false;
+    }
+    if (rendered.scene.scene_version != vellum::graphics::kSceneVersion ||
+        !vellum::graphics::scene_fields_match_version(rendered.scene)) {
+        std::cerr << "grouping keys: the scene does not carry its own version\n";
+        return false;
+    }
+    const auto commands = vellum::graphics::make_paint_commands(rendered.scene);
+    if (std::none_of(commands.begin(), commands.end(), [](const auto& command) {
+            return command.kind == vellum::graphics::PaintCommand::Kind::begin_mask &&
+                   command.node_id == "window/mask";
+        })) {
+        std::cerr << "grouping keys: the mask did not lower to a mask pair\n";
+        return false;
+    }
+
+    // The root has no siblings to mask, so its maskMode is reported and dropped.
+    constexpr std::string_view kRootMask = R"JSON({
+      "protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
+        "type":"view","id":"lonely","style":{"width":10,"height":10,"maskMode":"alpha"},
+        "children":[]}}
+    )JSON";
+    if (!vellum::authoring::materialize_rendered_tree(kRootMask, rendered, &error) ||
+        rendered.scene.root.mask || reported("lonely", "maskMode") != 1) {
+        std::cerr << "grouping keys: a root maskMode was not dropped with a warning\n";
+        return false;
+    }
+
+    const auto width_before = rendered.scene.width;
+    const auto refuses = [&](std::string_view style, const std::string& expected,
+                             bool path_diagnostic) {
+        std::vector<LoweringDiagnostic> diagnostics;
+        const auto bad = wrap_tree(std::string(R"JSON({"type":"view","id":"bad","style":{)JSON") +
+                                   std::string(style) + R"JSON(},"children":[]})JSON");
+        if (vellum::authoring::materialize_rendered_tree(bad, rendered, &error, &diagnostics) ||
+            error.rfind(expected, 0) != 0 || rendered.scene.width != width_before) {
+            std::cerr << "grouping keys: '" << style << "' gave '" << error << "'\n";
+            return false;
+        }
+        const bool coded = std::any_of(diagnostics.begin(), diagnostics.end(),
+            [](const LoweringDiagnostic& diagnostic) {
+                return diagnostic.code == vellum::graphics::kInvalidPathCode &&
+                       diagnostic.property == "clipPath" &&
+                       diagnostic.severity == LoweringDiagnostic::Severity::error;
+            });
+        if (coded != path_diagnostic) {
+            std::cerr << "grouping keys: '" << style << "' path diagnostic mismatch\n";
+            return false;
+        }
+        return true;
+    };
+    return refuses(R"("overflow":"scroll")", "node bad overflow must be visible or hidden",
+                   false) &&
+           refuses(R"("maskMode":"inverted")", "node bad maskMode must be alpha or luminance",
+                   false) &&
+           refuses(R"("isolation":true)", "node bad isolation must be auto or isolate", false) &&
+           refuses(R"("clipPath":7)", "node bad clipPath must be SVG path data", true) &&
+           refuses(R"("clipPath":"M0 0 L")", "node bad has an invalid clipPath: ", true);
+}
+
 int main() {
     vellum::authoring::RenderedApplication rendered;
     std::string error;
@@ -897,7 +1021,7 @@ int main() {
 
 
     return compositing_keys() && transform_pivots_once() && transform_ignores_locale() &&
-                   path_nodes()
+                   path_nodes() && grouping_keys()
                ? 0
                : 1;
 }
