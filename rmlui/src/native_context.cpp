@@ -144,6 +144,14 @@ void NativeContext::render() {
     context_->Render();
 }
 
+void NativeContext::warm() {
+    if (!context_)
+        return;
+    Scope scope(*this);
+    context_->Update();
+    context_->Render();
+}
+
 Status NativeContext::attach_debugger() {
     if (!context_)
         return Status::not_open;
