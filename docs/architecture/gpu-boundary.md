@@ -112,7 +112,28 @@ Even when allowed, they apply only to scenes that always repaint fully
 (versions past `kDamageModelSceneVersion`); a scene partial redraw serves
 caches only faded groups, so its partial frames stay byte-identical to full
 repaints whatever each surface has cached.
-
+The surface keeps three cross-frame resource caches under
+`RenderCacheBudgets`: laid-out text paragraphs keyed by every run's text and
+style (the colour with any folded opacity included) and the font directory;
+linear-gradient shaders keyed by their exact end points, colours, positions and
+tile mode; and GPU textures uploaded from mesh textures, keyed by size and the
+SHA-256 of the texels rather than by address, so texels rewritten in place are
+uploaded again. Keys compare floats by their bits. A hit returns the object a
+miss would build from the same inputs, so captures are byte-identical with
+every cache on or off; the render-cache GPU test checks that for each capture
+fixture, on the partial-redraw path, and for each key input. Each cache has an
+entry and a byte budget and evicts its least recently used entry first; an
+entry larger than the byte budget is refused, and a zero budget turns the
+cache off. Paragraph bytes are an estimate, since Skia does not report them.
+Once a resize settles, meaning the size has held for
+`gpu_runtime::SwapchainResizeState::kSettleFrames` presented frames, the
+entries no frame has used since the resize are dropped; a device loss drops
+every entry, and a frame that fails before it is submitted drops the textures
+it uploaded.
+`SkiaDawnSurface::telemetry` reports the frame's damage, the offscreen layers
+it opened, each cache's hits, misses, evictions, trims and bytes, the texture
+(atlas) bytes and Graphite's GPU time, and the capture harness writes it into
+its evidence JSON.
 Native self-test is deliberately fail-closed. A requested native surface is
 not allowed to fall back to CoreGraphics or an offscreen surface. The test also
 contains a blank-frame negative control so a broken capture detector cannot

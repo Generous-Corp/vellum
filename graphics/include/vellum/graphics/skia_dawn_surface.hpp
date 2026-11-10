@@ -2,6 +2,7 @@
 
 #include <vellum/graphics/damage.hpp>
 #include <vellum/graphics/layer_cache.hpp>
+#include <vellum/graphics/render_telemetry.hpp>
 #include <vellum/graphics/scene.hpp>
 
 #include <cstddef>
@@ -117,6 +118,11 @@ struct TextMetrics final {
 /// not depend on caching. The opt-in static and expensive triggers can differ
 /// from drawing the commands directly where translucent or antialiased paint
 /// overlaps, and apply only to scenes that always repaint fully.
+/// Shaped text paragraphs, gradient shaders and uploaded mesh textures are
+/// cached across frames under `RenderCacheBudgets`. Each cache is keyed on
+/// every input that affects its pixels, so output never depends on what is
+/// cached. A resize that has settled drops the entries no frame has used
+/// since the resize, and a device loss drops everything.
 class SkiaDawnSurface final {
 public:
     struct Config final {
@@ -208,6 +214,15 @@ public:
         std::uint32_t& pixel_height,
         std::string* error = nullptr);
     [[nodiscard]] const GpuEvidence& evidence() const noexcept;
+
+    /// Replaces the cache budgets, dropping the least recently used entries
+    /// that no longer fit. A zero budget turns that cache off.
+    void set_cache_budgets(const RenderCacheBudgets& budgets);
+    [[nodiscard]] RenderCacheBudgets cache_budgets() const;
+
+    /// Damage, layer, cache and GPU-time telemetry for the most recent frame;
+    /// the GPU time fills in once that frame has finished on the GPU.
+    [[nodiscard]] RenderTelemetry telemetry() const;
 
 private:
     friend struct SkiaDawnSurfaceTestAccess;

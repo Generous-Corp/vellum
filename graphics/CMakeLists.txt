@@ -2,7 +2,8 @@ add_library(vellum-graphics
     src/capture_stats.cpp
     src/damage.cpp
     src/layer_cache.cpp
-    src/paint_command.cpp)
+    src/paint_command.cpp
+    src/render_telemetry.cpp)
 add_library(Vellum::Graphics ALIAS vellum-graphics)
 
 set_target_properties(vellum-graphics PROPERTIES
