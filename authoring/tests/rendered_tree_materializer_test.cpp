@@ -545,6 +545,10 @@ bool grouping_keys() {
             "backgroundColor":"#FFFFFF","maskMode":"luminance"},"children":[]}]},
       {"type":"text","id":"caption","text":"Hi","style":{"height":20,
         "overflow":"hidden","borderRadius":5},"children":[]},
+      {"type":"text","id":"shadowed","text":"Hi","style":{"height":20,"overflow":"hidden",
+        "boxShadow":{"color":"#000000","blurRadius":2}},"children":[]},
+      {"type":"path","id":"clipped-path","d":"M0 0 L50 50","stroke":"#FF0000",
+        "style":{"width":20,"height":20,"overflow":"hidden"}},
       {"type":"view","id":"shaped","style":{"width":20,"height":20,"overflow":"hidden",
         "clipPath":"M0 0 h20 v20 z","isolation":"auto"},"children":[]},
       {"type":"view","id":"visible","style":{"width":20,"height":20,"overflow":"visible",
@@ -576,8 +580,11 @@ bool grouping_keys() {
         std::cerr << "grouping keys: maskMode did not reach the scene\n";
         return false;
     }
-    if (caption == nullptr || !caption->clip || !near(caption->clip->radii.bottom_left, 5.0F)) {
-        std::cerr << "grouping keys: a clipped text node lost its border radius\n";
+    const auto* clipped_path = vellum::graphics::find_node(rendered.scene, "clipped-path");
+    if (caption == nullptr || !caption->clip || !near(caption->clip->radii.bottom_left, 5.0F) ||
+        !caption->clip->clips_own_paint || clipped_path == nullptr || !clipped_path->clip ||
+        !clipped_path->clip->clips_own_paint) {
+        std::cerr << "grouping keys: an overflow clip does not cut text or path content\n";
         return false;
     }
     const auto* clipped = vellum::graphics::find_node(rendered.scene, "clipped");
@@ -599,9 +606,9 @@ bool grouping_keys() {
                        diagnostic.code == vellum::graphics::kStyleDroppedCode;
             });
     };
-    if (rendered.diagnostics.size() != 2U || reported("shaped", "overflow") != 1 ||
-        reported("scroller", "overflow") != 1) {
-        std::cerr << "grouping keys: expected two overflow warnings, got "
+    if (rendered.diagnostics.size() != 3U || reported("shaped", "overflow") != 1 ||
+        reported("scroller", "overflow") != 1 || reported("shadowed", "boxShadow") != 1) {
+        std::cerr << "grouping keys: expected three grouping warnings, got "
                   << rendered.diagnostics.size() << " diagnostics\n";
         return false;
     }

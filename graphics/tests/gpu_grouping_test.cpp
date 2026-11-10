@@ -223,6 +223,40 @@ bool subtree_clip_keeps_own_shadow() {
     });
 }
 
+// Text is its node's own paint, so a clip that covers own paint cuts glyphs
+// that overflow the box; the unclipped control proves they do overflow.
+bool clipped_text_overflow() {
+    auto scene = frame(96.0F, 32.0F);
+    SceneNode label{.id = "label", .kind = SceneNode::Kind::text,
+                    .bounds = {4.0F, 4.0F, 24.0F, 24.0F}, .fill = Color::hex(0xFFFFFF),
+                    .text = "WWWWWWWWWW", .font_size = 16.0F};
+    scene.root.children.push_back(label);
+    const auto lit_past_box = [](const Capture& capture) {
+        std::size_t lit = 0;
+        for (std::uint32_t y = 0; y < capture.height; ++y) {
+            for (std::uint32_t x = 30; x < capture.width; ++x) {
+                const auto* value =
+                    capture.rgba.data() + (static_cast<std::size_t>(y) * capture.width + x) * 4U;
+                if (value[0] > 8 || value[1] > 8 || value[2] > 8) ++lit;
+            }
+        }
+        return lit;
+    };
+    Capture unclipped;
+    if (!capture(scene, unclipped)) return false;
+    scene.root.children[0].clip = NodeClip{.rect = {0.0F, 0.0F, 24.0F, 24.0F}};
+    Capture clipped;
+    if (!capture(scene, clipped)) return false;
+    const auto before = lit_past_box(unclipped);
+    const auto after = lit_past_box(clipped);
+    if (before < 20U || after != 0U) {
+        std::cerr << "clipped_text_overflow: lit pixels past the box went from " << before
+                  << " to " << after << '\n';
+        return false;
+    }
+    return true;
+}
+
 // Source-over composition is associative, so isolating translucent overlapping
 // children changes the layer count but not, beyond rounding, the pixels.
 bool isolated_overlap_matches_flat() {
@@ -352,6 +386,7 @@ int main(int argc, char** argv) {
     try {
         if (fixture == "nested_rounded_and_path_clips") return nested_rounded_and_path_clips() ? 0 : 1;
         if (fixture == "transformed_clip") return transformed_clip() ? 0 : 1;
+        if (fixture == "clipped_text_overflow") return clipped_text_overflow() ? 0 : 1;
         if (fixture == "subtree_clip_keeps_own_shadow") return subtree_clip_keeps_own_shadow() ? 0 : 1;
         if (fixture == "alpha_and_luminance_masks") return alpha_and_luminance_masks() ? 0 : 1;
         if (fixture == "isolated_overlap_matches_flat") return isolated_overlap_matches_flat() ? 0 : 1;

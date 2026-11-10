@@ -316,6 +316,7 @@ if(VELLUM_BUILD_TESTS)
                 nested_rounded_and_path_clips
                 transformed_clip
                 subtree_clip_keeps_own_shadow
+                clipped_text_overflow
                 alpha_and_luminance_masks
                 isolated_overlap_matches_flat
                 grouping_version_refusal)

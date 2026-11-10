@@ -18,9 +18,9 @@ namespace vellum::graphics {
 ///
 /// It draws only what its caller issues and does not consume `Scene` or
 /// `PaintCommand`, so node transforms, group opacity, per-corner radii, clips,
-/// masks, and isolation are not lowered here: a caller that draws a scene through this canvas loses
-/// them and must report the loss with `kNodeContentDroppedCode`. Rounded
-/// rectangles take one uniform radius.
+/// masks, and isolation are not lowered here: a caller that draws a scene
+/// through this canvas loses them and must report the loss with
+/// `kNodeContentDroppedCode`. Rounded rectangles take one uniform radius.
 class CoreGraphicsCanvas final {
 public:
     CoreGraphicsCanvas(CGContextRef context, float width, float height) noexcept;

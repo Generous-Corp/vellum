@@ -798,9 +798,11 @@ bool materialize_path(
 
 // Clip, mask and isolation follow CSS: `overflow: hidden` (or `clip`, or
 // `auto` and `scroll` without scrolling) clips the subtree to the border box
-// with its radii, leaving the node's own paint and shadows whole, `clipPath` is SVG path data in the box's
-// coordinates and wins over `overflow`, `maskMode` marks the node as a mask
-// for its siblings, and `isolation: isolate` forces a group.
+// with its radii, leaving the node's own fill and shadows whole; text and
+// path nodes draw their content as their own paint, so theirs is clipped.
+// `clipPath` is SVG path data in the box's coordinates that clips the node
+// and its subtree and wins over `overflow`, `maskMode` marks the node as a
+// mask for its siblings, and `isolation: isolate` forces a group.
 bool parse_grouping(
     NSDictionary* style, const std::string& identity, const StyleUse& use,
     MaterializeContext& context, vellum::graphics::SceneNode& output, std::string* error) {
@@ -851,11 +853,25 @@ bool parse_grouping(
             });
         }
     } else if (clip_box) {
+        using Kind = vellum::graphics::SceneNode::Kind;
+        const bool content_is_own_paint =
+            output.kind == Kind::text || output.kind == Kind::path;
         output.clip = vellum::graphics::NodeClip{
             .rect = {0.0F, 0.0F, output.bounds.width, output.bounds.height},
             .radii = vellum::graphics::resolved_corner_radii(output),
-            .clips_own_paint = false,
+            .clips_own_paint = content_is_own_paint,
         };
+        if (content_is_own_paint && !output.box_shadows.empty()) {
+            context.diagnostics->push_back({
+                .severity = LoweringDiagnostic::Severity::warning,
+                .disposition = LoweringDiagnostic::Disposition::lowered,
+                .code = std::string(vellum::graphics::kStyleDroppedCode),
+                .node_id = identity,
+                .property = "boxShadow",
+                .message = "the overflow clip of a node whose content is its own paint also "
+                    "clips its box shadow",
+            });
+        }
     }
     if (id mode = style[@"maskMode"]; mode != nil && !use.root) {
         const auto value = keyword(mode, std::array<std::string_view, 2>{"alpha", "luminance"});
