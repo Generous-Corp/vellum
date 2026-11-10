@@ -164,10 +164,10 @@ public:
 
     /// An absolute logical clip that bounds the damage of `node` and its
     /// descendants, or `std::nullopt` for none. The default is the
-    /// `clip_extent` of the node's `clip` when the clip is valid and the node
-    /// has no transform of its own. The damage model does not map clips
-    /// through transforms, so it ignores this for a node under a transformed
-    /// ancestor, and a clip that spares the node's own paint bounds only the
+    /// `clip_extent` of the node's `clip` when the clip is valid. The damage
+    /// model does not map clips through transforms, so it does not ask for
+    /// the clip of a node that has, or sits under, a non-identity transform;
+    /// and a clip that spares the node's own paint bounds only the
     /// descendants' damage.
     [[nodiscard]] virtual std::optional<Rect> clip_bounds(
         const SceneNode& node, const Rect& absolute_bounds) const;

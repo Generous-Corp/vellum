@@ -714,7 +714,6 @@ float DamagePropagation::effect_radius(const SceneNode&) const {
 std::optional<Rect> DamagePropagation::clip_bounds(const SceneNode& node,
                                                    const Rect& absolute_bounds) const {
     if (!node.clip || !clip_is_valid(*node.clip)) return std::nullopt;
-    if (node.transform && !is_identity(*node.transform)) return std::nullopt;
     return clip_extent(*node.clip, absolute_bounds.x, absolute_bounds.y);
 }
 
