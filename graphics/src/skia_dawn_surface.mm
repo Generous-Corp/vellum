@@ -963,7 +963,38 @@ bool sane_box(const Rect& rect) {
 Extent command_extent(const PaintCommand& command, const Rect& frame, float scale) {
     static const DamagePropagation propagation;
     if (!sane_box(command.bounds) || !draws_content(command.kind)) return std::nullopt;
-    return pixel_extent(command_paint_bounds(command, frame, propagation), scale);
+    SceneNode painted;
+    painted.bounds = command.bounds;
+    switch (command.kind) {
+        case PaintCommand::Kind::rectangle:
+            painted.kind = SceneNode::Kind::rectangle;
+            painted.box_shadows = command.box_shadows;
+            break;
+        case PaintCommand::Kind::text:
+            painted.kind = SceneNode::Kind::text;
+            painted.text = command.text;
+            painted.text_runs = command.text_runs;
+            painted.font_size = command.font_size;
+            break;
+        case PaintCommand::Kind::mesh:
+            painted.kind = SceneNode::Kind::mesh;
+            painted.mesh = command.mesh;
+            break;
+        case PaintCommand::Kind::path:
+            painted.kind = SceneNode::Kind::path;
+            painted.path = command.path;
+            break;
+        case PaintCommand::Kind::image:
+            painted.kind = SceneNode::Kind::image;
+            painted.image = command.image;
+            break;
+        case PaintCommand::Kind::begin_layer:
+        case PaintCommand::Kind::end_layer:
+            return std::nullopt;
+    }
+    return pixel_extent(
+        transformed_paint_bounds(painted, command.bounds, command.transform, frame, propagation),
+        scale);
 }
 
 std::vector<Extent> paint_command_extents(
@@ -975,6 +1006,47 @@ std::vector<Extent> paint_command_extents(
         extents.push_back(command_extent(command, frame, scale));
     }
     return extents;
+}
+
+bool close_over_layers(const Scene& scene, const std::vector<PaintCommand>& commands, float scale,
+                       const PixelRect& target, std::vector<PixelRect>& rects) {
+    if (rects.empty()) return true;
+    std::vector<PixelRect> layers;
+    std::vector<Extent> extents;
+    for (std::size_t begin = 0; begin < commands.size(); ++begin) {
+        const auto& command = commands[begin];
+        const bool transformed_blur =
+            command.kind == PaintCommand::Kind::rectangle && !is_identity(command.transform) &&
+            std::any_of(command.box_shadows.begin(), command.box_shadows.end(),
+                        [](const BoxShadow& shadow) { return shadow.blur_radius > 0.0F; });
+        if (command.kind != PaintCommand::Kind::begin_layer && !transformed_blur) continue;
+        if (extents.empty()) extents = paint_command_extents(scene, commands, scale);
+        if (transformed_blur) {
+            layers.push_back(intersection(extents[begin] ? *extents[begin] : target, target));
+            continue;
+        }
+        PixelRect area{};
+        std::size_t depth = 0;
+        for (std::size_t index = begin + 1; index < commands.size(); ++index) {
+            const auto kind = commands[index].kind;
+            if (kind == PaintCommand::Kind::begin_layer) {
+                ++depth;
+                continue;
+            }
+            if (kind == PaintCommand::Kind::end_layer) {
+                if (depth == 0) break;
+                --depth;
+                continue;
+            }
+            area = bounding_union(area, extents[index] ? *extents[index] : target);
+        }
+        layers.push_back(intersection(area, target));
+    }
+    if (layers.empty()) return true;
+    rects = enclose_whole_areas(std::move(rects), layers, target);
+    std::int64_t area = 0;
+    for (const auto& rect : rects) area += rect.area();
+    return area < target.area();
 }
 
 bool same_color(const Color& a, const Color& b) {
@@ -1570,8 +1642,13 @@ private:
         } else if (reason == FullRepaintReason::none) {
             reason = FullRepaintReason::full_render;
         }
-        const bool full = reason != FullRepaintReason::none;
         const auto target = target_rect();
+        const auto commands = make_paint_commands(scene);
+        if (reason == FullRepaintReason::none &&
+            !close_over_layers(scene, commands, config_.scale, target, rects)) {
+            reason = FullRepaintReason::full_damage;
+        }
+        const bool full = reason != FullRepaintReason::none;
 
         FrameStats stats;
         stats.frame = stats_.frame + 1;
@@ -1599,7 +1676,6 @@ private:
 
         retained_valid_ = false;
         retained_reason_ = FullRepaintReason::previous_frame_failed;
-        const auto commands = make_paint_commands(scene);
         stats.paint_commands_total = commands.size();
         auto* canvas = retained_surface_->getCanvas();
         caches_.begin_frame();

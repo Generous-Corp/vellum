@@ -153,6 +153,9 @@ The opt-in `VellumRmlUi::Native` component (`VELLUM_RMLUI_NATIVE=ON`) is the
 exception: it links RmlUi publicly, so its install component redistributes
 RmlUi's headers and archives, and FreeType's archive when fonts are on, with
 `rmlui/NOTICE-Native.md` and their licence files under `share/doc/VellumRmlUi/`.
+The base `VellumRmlUi` package installs RmlUi's licence there too, because
+Core redistributes RmlUi. The native SDK artifact carries the base package
+(Core, SoftRenderer and VellumRenderer) and never the Native component.
 Nothing here enters the default Vellum build or the Vellum SDK artifact.
 
 | Dependency | Pinned identity | License | Used by | Notes |
@@ -175,46 +178,48 @@ The filtered seed once placed 232 projected source and vendored files in the
 working tree. Those paths are deleted from the active tip. Their exact
 historical identities remain in `provenance/cut-manifest.json` and Git history;
 they are not build inputs, installed files, or release payloads. The active
-source boundary is `provenance/active-source-boundary.json`. Mirrored Pulp
-framework source admitted by Decision 0010 is recorded blob by blob in
-`provenance/mirror/blob-origins.json`; none is present yet.
+source boundary is `provenance/active-source-boundary.json`. The Pulp framework
+units admitted by Decision 0010 were mirrored blob by blob (recorded in
+`provenance/mirror/blob-origins.json`) and then transferred, renamed, to the
+native root `framework/`; `provenance/framework/transfer.json` pairs each
+`framework/` file with its Pulp path and blob.
 
-## Planned mirrored framework inventory
+## Transferred framework inventory
 
-The following rows are the legal inventory for bytes that may arrive under
-`mirror/` from the D3 units and the foundation amendment. They are scoped to
-the mirror root and do not make the corresponding historical Pulp paths active
+The following rows are the legal inventory for the bytes under `framework/`:
+the external inputs and vendored files of the units transferred from Pulp.
+They are scoped to that root and do not make the corresponding historical Pulp paths active
 Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 `DEPENDENCIES.md`, `NOTICE.md`, and `tools/deps/manifest.json` at the `46cee5e4e6e2` export.
 
 | Dependency | Version or source identity | License | Mirror scope | Compatibility / handling |
 |---|---|---|---|---|
 | Abseil | `af5aede14a0b4013be6890148d34e0fd7b1fac69` | Apache-2.0 | not mirrored; no landed unit consumes it yet (planned renderer and V8 units) | MIT-compatible; transitive notice |
-| Brotli | `v1.2.1` (`db24a98a`) | MIT | `canvas` unit external input (`mirror/core/canvas/`, WOFF2 decoder); bytes not mirrored | MIT-compatible |
+| Brotli | `v1.2.1` (`db24a98a`) | MIT | `canvas` unit external input (`framework/core/canvas/`, WOFF2 decoder); bytes not mirrored | MIT-compatible |
 | CHOC | `pulp-webview-dnd-poc2` (`b586f33d`) | ISC | `foundation`, `state-core`, `view-core`, `design-import` and `view-script` unit external input, patched (JSON exponent, V8 compatibility); bytes not mirrored | MIT-compatible; retain fork attribution |
-| cpp-httplib | vendored snapshot | MIT | `mirror/external/cpp-httplib/` (`foundation` unit) | MIT-compatible |
+| cpp-httplib | vendored snapshot | MIT | `framework/external/cpp-httplib/` (`foundation` unit) | MIT-compatible |
 | Dawn and Tint | `1716e88cc9e58398fab5d4473f7f2e858667b677` | BSD-3-Clause | `canvas` unit external input: headers inside the Skia build tree; bytes not mirrored | MIT-compatible; renderer notice exists |
 | Expat | `6154446fccefbf3ca644894f598969113b0c7bcd` | MIT | not mirrored; no landed unit consumes it yet (planned renderer units) | MIT-compatible; renderer notice exists |
 | HarfBuzz | `9cb1fee51069b206effb4736e443b038d230789d` | Old MIT | `canvas` unit external input through the Skia build (text shaping); bytes not mirrored | MIT-compatible; notice exists |
-| Highway | `1.4.0` (`2607d3b5`) | Apache-2.0 | `foundation` unit external input (`mirror/core/simd/`); bytes not mirrored | MIT-compatible |
+| Highway | `1.4.0` (`2607d3b5`) | Apache-2.0 | `foundation` unit external input (`framework/core/simd/`); bytes not mirrored | MIT-compatible |
 | ICU | `d578f2e8b7bd5938e21cfb6bf15c079e0aa5b738` | Unicode-3.0 plus bundled notices | `canvas` unit external input through the Skia build (text shaping); bytes not mirrored | Permissive; notice exists |
-| Inter | `4.001; git-9221beed3` | SIL OFL 1.1 | `mirror/external/fonts/` (`canvas` unit) | Allowed font license |
+| Inter | `4.001; git-9221beed3` | SIL OFL 1.1 | `framework/external/fonts/` (`canvas` unit) | Allowed font license |
 | JavaScriptCore | Apple system framework | LGPL-2.1+ components and Apple terms | Never mirrored; system framework only | **Not MIT-compatible**; system-only, never mirrored |
-| JetBrains Mono | `2.304` | SIL OFL 1.1 | `mirror/external/fonts/` (`canvas` unit) | Allowed font license |
-| Jost | `3.710` | SIL OFL 1.1 | `mirror/external/fonts/` (`canvas` unit) | Allowed font license |
-| Mbed TLS | `v3.6.2` | Apache-2.0 | `foundation` unit external input (`mirror/core/runtime/`); bytes not mirrored | MIT-compatible |
-| miniz | `3.0.2` | MIT | `mirror/external/miniz/` (`foundation` unit) | MIT-compatible |
-| pugixml | `1.15` | MIT | `mirror/external/pugixml/` (`foundation` unit) | MIT-compatible |
-| TweetNaCl | `20140427` | Public domain | `mirror/external/tweetnacl/` (`foundation` unit) | Public-domain code |
-| WOFF2 | `fb9c3379f260` | MIT | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | MIT-compatible |
-| NanoSVG | vendored snapshot | zlib | `mirror/external/nanosvg/` (`canvas` unit) | MIT-compatible |
+| JetBrains Mono | `2.304` | SIL OFL 1.1 | `framework/external/fonts/` (`canvas` unit) | Allowed font license |
+| Jost | `3.710` | SIL OFL 1.1 | `framework/external/fonts/` (`canvas` unit) | Allowed font license |
+| Mbed TLS | `v3.6.2` | Apache-2.0 | `foundation` unit external input (`framework/core/runtime/`); bytes not mirrored | MIT-compatible |
+| miniz | `3.0.2` | MIT | `framework/external/miniz/` (`foundation` unit) | MIT-compatible |
+| pugixml | `1.15` | MIT | `framework/external/pugixml/` (`foundation` unit) | MIT-compatible |
+| TweetNaCl | `20140427` | Public domain | `framework/external/tweetnacl/` (`foundation` unit) | Public-domain code |
+| WOFF2 | `fb9c3379f260` | MIT | `canvas` unit external input (`framework/core/canvas/`); bytes not mirrored | MIT-compatible |
+| NanoSVG | vendored snapshot | zlib | `framework/external/nanosvg/` (`canvas` unit) | MIT-compatible |
 | Noto Sans Arabic | variable font | SIL OFL 1.1 | not mirrored; no landed unit consumes it yet | Allowed font license |
 | Noto Sans JP | variable font | SIL OFL 1.1 | not mirrored; no landed unit consumes it yet | Allowed font license |
 | PartitionAlloc | `03cc513177b4340bee3dbfd46f6dd5fdded43b79` | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned GPU and renderer units) | MIT-compatible; transitive notice |
 | QuickJS | `2021-03-27`, bundled in CHOC (`choc_javascript_QuickJS.h`) | MIT | `view-script` unit external input through that CHOC header; bytes not mirrored. Its MIT notice is in the header, and CHOC's license ships under `sdk/mirror/share/licenses/choc/` | MIT-compatible |
 | SDL3 | `release-3.4.18` (`829a65d7`) | zlib | `render-2d` and `view-core` unit external input, built from source as the `SDL3-static` link target the link policy allows; bytes not mirrored; license ships under `sdk/mirror/share/licenses/sdl3/` | MIT-compatible |
-| SheenBidi | `v3.0.0` | Apache-2.0 | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | MIT-compatible |
-| Skia and skcms | `be7d7c3e996e567eda7dc9774274f7a0103cdb8c` | BSD-3-Clause | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | MIT-compatible; renderer notice exists |
+| SheenBidi | `v3.0.0` | Apache-2.0 | `canvas` unit external input (`framework/core/canvas/`); bytes not mirrored | MIT-compatible |
+| Skia and skcms | `be7d7c3e996e567eda7dc9774274f7a0103cdb8c` | BSD-3-Clause | `canvas` unit external input (`framework/core/canvas/`); bytes not mirrored | MIT-compatible; renderer notice exists |
 | V8 | `v8-m153-15.3.76.5-26cef0256b0e` | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned scripted-view unit, when selected) | MIT-compatible; sealed provider |
 | yaml-cpp | `0.9.0` (`56e3bb55`) | MIT | `design-import` unit external input, built from source as the `yaml-cpp` link target the link policy allows; bytes not mirrored; license ships under `sdk/mirror/share/licenses/yaml-cpp/` | MIT-compatible |
 | Yoga | `v3.2.1` (`042f5013`) | MIT | `view-core` unit external input, built from source as the `yogacore` link target the link policy allows; bytes not mirrored; license ships under `sdk/mirror/share/licenses/yoga/` | MIT-compatible |

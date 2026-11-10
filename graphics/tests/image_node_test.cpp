@@ -367,36 +367,33 @@ bool png_headers() {
 
 bool transformed_extent() {
     using vellum::graphics::Affine2D;
-    using vellum::graphics::command_paint_bounds;
     using vellum::graphics::DamagePropagation;
+    using vellum::graphics::SceneNode;
+    using vellum::graphics::transformed_paint_bounds;
     bool ok = true;
     const DamagePropagation propagation;
     const Rect frame{0, 0, 200, 200};
-    PaintCommand image{.kind = PaintCommand::Kind::image,
-                       .node_id = "logo",
-                       .bounds = {10, 20, 30, 40},
-                       .image = ImageReference{.content_hash = kHashA}};
-    auto plain = command_paint_bounds(image, frame, propagation);
+    const Rect box{10, 20, 30, 40};
+    SceneNode image;
+    image.kind = SceneNode::Kind::image;
+    image.bounds = box;
+    image.image = ImageReference{.content_hash = kHashA};
+    const auto plain = transformed_paint_bounds(image, box, Affine2D{}, frame, propagation);
     ok &= expect(plain && near_rect(*plain, 10, 20, 30, 40),
                  "an untransformed image paints its box");
     // A quarter turn about the origin maps (x, y) to (-y, x), then a
     // translation moves the result back into the frame.
-    image.transform = Affine2D{.a = 0.0F, .b = 1.0F, .c = -1.0F, .d = 0.0F,
-                               .tx = 100.0F, .ty = 0.0F};
-    const auto turned = command_paint_bounds(image, frame, propagation);
+    const Affine2D turn{.a = 0.0F, .b = 1.0F, .c = -1.0F, .d = 0.0F, .tx = 100.0F, .ty = 0.0F};
+    const auto turned = transformed_paint_bounds(image, box, turn, frame, propagation);
     ok &= expect(turned && near_rect(*turned, 40, 10, 40, 30),
                  "a transformed image paints its box mapped through the transform");
-    PaintCommand box{.kind = PaintCommand::Kind::rectangle,
-                     .node_id = "box",
-                     .bounds = {10, 20, 30, 40},
-                     .transform = image.transform};
-    const auto rectangle = command_paint_bounds(box, frame, propagation);
-    ok &= expect(rectangle && turned && near_rect(*rectangle, turned->x, turned->y,
-                                                  turned->width, turned->height),
+    SceneNode rectangle;
+    rectangle.kind = SceneNode::Kind::rectangle;
+    rectangle.bounds = box;
+    const auto rect = transformed_paint_bounds(rectangle, box, turn, frame, propagation);
+    ok &= expect(rect && turned && near_rect(*rect, turned->x, turned->y, turned->width,
+                                              turned->height),
                  "an image and a rectangle with one box and transform paint the same area");
-    ok &= expect(!command_paint_bounds({.kind = PaintCommand::Kind::begin_layer}, frame,
-                                       propagation),
-                 "a layer bracket paints nothing itself");
     return ok;
 }
 

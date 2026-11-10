@@ -2,6 +2,8 @@
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/path_geometry.hpp>
 
+#include <vellum/graphics/paint_command.hpp>
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -117,6 +119,28 @@ bool same_style(const TextStyle& a, const TextStyle& b) {
            a.strikethrough == b.strikethrough;
 }
 
+Affine2D effective_transform(const std::optional<Affine2D>& transform) noexcept {
+    return transform && !is_identity(*transform) ? *transform : Affine2D{};
+}
+
+bool same_transform(const std::optional<Affine2D>& a, const std::optional<Affine2D>& b) noexcept {
+    const Affine2D left = effective_transform(a);
+    const Affine2D right = effective_transform(b);
+    return same_float(left.a, right.a) && same_float(left.b, right.b) &&
+           same_float(left.c, right.c) && same_float(left.d, right.d) &&
+           same_float(left.tx, right.tx) && same_float(left.ty, right.ty);
+}
+
+bool same_radii(const CornerRadii& a, const CornerRadii& b) noexcept {
+    return same_float(a.top_left, b.top_left) && same_float(a.top_right, b.top_right) &&
+           same_float(a.bottom_right, b.bottom_right) && same_float(a.bottom_left, b.bottom_left);
+}
+
+bool compositing_differs(const SceneNode& previous, const SceneNode& next) noexcept {
+    return !same_transform(previous.transform, next.transform) ||
+           !same_float(previous.opacity, next.opacity);
+}
+
 bool same_runs(const std::vector<TextRun>& a, const std::vector<TextRun>& b) {
     return std::equal(a.begin(), a.end(), b.begin(), b.end(),
         [](const TextRun& left, const TextRun& right) {
@@ -135,6 +159,58 @@ std::optional<Rect> box_paint_bounds(const SceneNode& node, const Rect& absolute
         if (!rect_empty(spread)) painted = unite(painted, spread);
     }
     return painted;
+}
+
+float largest_scale(const Affine2D& transform) noexcept {
+    const double a = transform.a;
+    const double b = transform.b;
+    const double c = transform.c;
+    const double d = transform.d;
+    const double sum = a * a + b * b + c * c + d * d;
+    const double det = a * d - b * c;
+    const double root = std::sqrt(std::max(0.0, sum * sum - 4.0 * det * det));
+    return static_cast<float>(std::sqrt(std::max(0.0, (sum + root) * 0.5)));
+}
+
+Rect sorted(const Rect& rect) noexcept {
+    return {std::min(rect.x, rect.x + rect.width), std::min(rect.y, rect.y + rect.height),
+            std::abs(rect.width), std::abs(rect.height)};
+}
+
+std::optional<Rect> mapped_box_bounds(const SceneNode& node, const Rect& absolute,
+                                      const Affine2D& transform) {
+    std::optional<Rect> painted;
+    if (!rect_empty(absolute)) painted = transformed_bounds(transform, absolute);
+    const float scale = largest_scale(transform);
+    for (const auto& shadow : node.box_shadows) {
+        const Rect moved{absolute.x + shadow.offset_x, absolute.y + shadow.offset_y,
+                         absolute.width, absolute.height};
+        const Rect spread = sorted(outset(moved, shadow.spread_radius));
+        const float blur = std::max(0.0F, shadow.blur_radius) * kShadowBlurExtent * scale;
+        const Rect blurred = outset(transformed_bounds(transform, spread), blur);
+        if (!rect_empty(blurred)) painted = unite(painted, blurred);
+    }
+    return painted;
+}
+
+std::size_t own_draws(const SceneNode& node) noexcept {
+    switch (node.kind) {
+    case SceneNode::Kind::rectangle:
+        return 1;
+    case SceneNode::Kind::text:
+        if (node.text.empty() && node.text_runs.empty()) return 0;
+        return (node.fill_gradients.empty() && node.box_shadows.empty()) ? 1 : 2;
+    case SceneNode::Kind::mesh:
+        return node.mesh ? 1 : 0;
+    case SceneNode::Kind::image:
+        return node.image ? 1 : 0;
+    case SceneNode::Kind::path:
+        return (!node.path || !node.path->verbs.empty()) ? 1 : 0;
+    case SceneNode::Kind::group:
+    case SceneNode::Kind::custom:
+        return 0;
+    }
+    return 0;
 }
 
 std::optional<Rect> mesh_paint_bounds(const TriangleMesh& mesh, const Rect& absolute) {
@@ -219,6 +295,9 @@ SceneNode paint_fields(const SceneNode& node) {
     copy.custom_component = node.custom_component;
     copy.custom_properties_json = node.custom_properties_json;
     copy.mesh = node.mesh;
+    copy.transform = node.transform;
+    copy.opacity = node.opacity;
+    copy.corner_radii = node.corner_radii;
     copy.path = node.path;
     copy.image = node.image;
     return copy;
@@ -237,6 +316,7 @@ struct NodeRecord final {
     Rect absolute{};
     std::optional<Rect> damage;
     std::size_t subtree_end = 0;
+    std::uint8_t composite = 0;
 };
 
 }  // namespace damage_detail
@@ -249,7 +329,7 @@ public:
         : width_(scene.width), height_(scene.height), scale_(scale), background_(scene.background),
           version_(scene.scene_version), frame_(frame_rect(scene, scale)) {
         walk(ImageAssetIndex(scene), propagation, scene.root, std::string{}, 0, 0.0F, 0.0F,
-             std::nullopt);
+             Affine2D{}, std::nullopt, false);
     }
 
     [[nodiscard]] const NodeRecord* find(const std::string& key) const {
@@ -279,14 +359,23 @@ public:
     }
 
 private:
-    void walk(const ImageAssetIndex& images, const DamagePropagation& propagation,
-              const SceneNode& node,
-              const std::string& parent_key, std::size_t index,
-              float parent_x, float parent_y, std::optional<Rect> clip) {
+    std::size_t walk(const ImageAssetIndex& images, const DamagePropagation& propagation,
+                     const SceneNode& node, const std::string& parent_key, std::size_t index,
+                     float parent_x, float parent_y, const Affine2D& parent_transform,
+                     std::optional<Rect> clip, bool hidden) {
         std::string key = make_key(node, parent_key, index);
         const Rect absolute{parent_x + node.bounds.x, parent_y + node.bounds.y, node.bounds.width,
                             node.bounds.height};
-        if (const auto own_clip = propagation.clip_bounds(node, absolute)) {
+        const bool finite = compositing_is_finite(node);
+        hidden = hidden || !is_known_kind(node.kind) ||
+                 (finite && std::clamp(node.opacity, 0.0F, 1.0F) <= 0.0F);
+        Affine2D transform = parent_transform;
+        if (node.transform && !is_identity(*node.transform)) {
+            transform = concat(parent_transform, concat(
+                translation(absolute.x, absolute.y),
+                concat(*node.transform, translation(-absolute.x, -absolute.y))));
+        }
+        if (const auto own_clip = propagation.clip_bounds(node, transformed_bounds(transform, absolute))) {
             if (clip) {
                 const auto narrowed = clip_to(*clip, *own_clip);
                 clip = narrowed.value_or(Rect{own_clip->x, own_clip->y, 0.0F, 0.0F});
@@ -296,11 +385,19 @@ private:
         }
 
         const Rect logical_frame{0.0F, 0.0F, width_, height_};
-        std::optional<Rect> damage = node_paint_bounds(node, absolute, logical_frame, propagation);
-        if (damage) {
-            const float radius = propagation.effect_radius(node);
-            if (std::isfinite(radius) && radius > 0.0F) damage = outset(*damage, radius);
-            if (clip) damage = clip_to(*damage, *clip);
+        std::optional<Rect> damage;
+        if (!finite) {
+            constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+            damage = Rect{nan, nan, nan, nan};
+        } else if (!hidden) {
+            damage = transformed_paint_bounds(node, absolute, transform, logical_frame, propagation);
+            if (damage) {
+                const float radius = propagation.effect_radius(node);
+                if (std::isfinite(radius) && radius > 0.0F) {
+                    damage = outset(*damage, radius * largest_scale(transform));
+                }
+                if (clip) damage = clip_to(*damage, *clip);
+            }
         }
 
         const std::size_t position = records_.size();
@@ -311,12 +408,18 @@ private:
                             node.kind == SceneNode::Kind::image && node.image
                                 ? images.find(node.image->content_hash)
                                 : nullptr,
-                            absolute, damage, 0});
+                            absolute, damage, 0, 0});
+        const bool drawing = finite && !hidden;
+        std::size_t drawn = drawing ? own_draws(node) : 0;
         for (std::size_t child = 0; child < node.children.size(); ++child) {
-            walk(images, propagation, node.children[child], key, child, absolute.x, absolute.y,
-                 clip);
+            drawn += walk(images, propagation, node.children[child], key, child, absolute.x,
+                          absolute.y, transform, clip, !drawing);
         }
         records_[position].subtree_end = records_.size();
+        if (drawing && std::clamp(node.opacity, 0.0F, 1.0F) < 1.0F) {
+            records_[position].composite = drawn > 1 ? 2 : 1;
+        }
+        return drawing ? drawn : 0;
     }
 
     std::string make_key(const SceneNode& node, const std::string& parent_key, std::size_t index) {
@@ -389,7 +492,8 @@ void diff_snapshots(const Snapshot& before, const Snapshot& after, DamageRegion&
             add_logical(region, now.damage, scale);
             continue;
         }
-        if (was->parent_key != now.parent_key) {
+        if (was->parent_key != now.parent_key || was->composite != now.composite ||
+            compositing_differs(was->paint, now.paint)) {
             add_subtree(region, before, *was);
             add_subtree(region, after, now);
             continue;
@@ -708,44 +812,44 @@ std::optional<Rect> node_paint_bounds(const SceneNode& node, const Rect& absolut
     return std::nullopt;
 }
 
-std::optional<Rect> command_paint_bounds(const PaintCommand& command, const Rect& frame,
-                                         const DamagePropagation& propagation) {
-    SceneNode painted;
-    painted.bounds = command.bounds;
-    switch (command.kind) {
-    case PaintCommand::Kind::rectangle:
-        painted.kind = SceneNode::Kind::rectangle;
-        painted.box_shadows = command.box_shadows;
-        break;
-    case PaintCommand::Kind::text:
-        painted.kind = SceneNode::Kind::text;
-        painted.text = command.text;
-        painted.text_runs = command.text_runs;
-        painted.font_size = command.font_size;
-        break;
-    case PaintCommand::Kind::mesh:
-        painted.kind = SceneNode::Kind::mesh;
-        painted.mesh = command.mesh;
-        break;
-    case PaintCommand::Kind::path:
-        painted.kind = SceneNode::Kind::path;
-        painted.path = command.path;
-        break;
-    case PaintCommand::Kind::image:
-        painted.kind = SceneNode::Kind::image;
-        painted.image = command.image;
-        break;
-    case PaintCommand::Kind::begin_layer:
-    case PaintCommand::Kind::end_layer:
+std::optional<Rect> transformed_paint_bounds(const SceneNode& node, const Rect& absolute_bounds,
+                                             const Affine2D& transform, const Rect& frame,
+                                             const DamagePropagation& propagation) {
+    if (is_identity(transform)) return node_paint_bounds(node, absolute_bounds, frame, propagation);
+    switch (node.kind) {
+    case SceneNode::Kind::group:
         return std::nullopt;
+    case SceneNode::Kind::rectangle:
+        return mapped_box_bounds(node, absolute_bounds, transform);
+    case SceneNode::Kind::custom:
+    case SceneNode::Kind::image:
+        if (rect_empty(absolute_bounds)) return std::nullopt;
+        return transformed_bounds(transform, absolute_bounds);
+    case SceneNode::Kind::text:
+        if (node.text.empty() && node.text_runs.empty()) return std::nullopt;
+        return frame;
+    case SceneNode::Kind::mesh: {
+        if (!node.mesh) return std::nullopt;
+        const auto local = mesh_paint_bounds(*node.mesh, absolute_bounds);
+        if (!local) return std::nullopt;
+        return transformed_bounds(transform, *local);
     }
-    const auto local = node_paint_bounds(painted, command.bounds, frame, propagation);
-    if (!local) return std::nullopt;
-    return transformed_bounds(command.transform, *local);
+    case SceneNode::Kind::path: {
+        if (!node.path || !path_is_valid(*node.path)) return frame;
+        const auto local = path_paint_bounds(node, absolute_bounds, frame);
+        if (!local) return std::nullopt;
+        return transformed_bounds(transform, *local);
+    }
+    }
+    return std::nullopt;
 }
 
 bool paint_differs(const SceneNode& previous, const SceneNode& next) {
-    if (previous.kind != next.kind) return true;
+    if (previous.kind != next.kind || compositing_differs(previous, next)) return true;
+    if (previous.corner_radii.has_value() != next.corner_radii.has_value() ||
+        !same_radii(resolved_corner_radii(previous), resolved_corner_radii(next))) {
+        return true;
+    }
     switch (next.kind) {
     case SceneNode::Kind::group:
         return false;
@@ -795,6 +899,45 @@ DamageRegion compute_scene_damage(const Scene& previous, const Scene& next, floa
     }
     diff_snapshots(Snapshot(previous, scale, effects), Snapshot(next, scale, effects), region);
     return region;
+}
+
+std::vector<PixelRect> enclose_whole_areas(std::vector<PixelRect> rects,
+                                           const std::vector<PixelRect>& areas,
+                                           const PixelRect& target) {
+    const auto contains = [](const PixelRect& outer, const PixelRect& inner) {
+        return outer.left <= inner.left && outer.top <= inner.top &&
+               outer.right >= inner.right && outer.bottom >= inner.bottom;
+    };
+    for (auto& rect : rects) rect = intersection(rect, target);
+    std::erase_if(rects, [](const PixelRect& rect) { return rect.empty(); });
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (const auto& candidate : areas) {
+            const PixelRect area = intersection(candidate, target);
+            if (area.empty()) continue;
+            const bool touched = std::any_of(rects.begin(), rects.end(),
+                [&](const PixelRect& rect) { return overlaps(rect, area); });
+            const bool whole = std::any_of(rects.begin(), rects.end(),
+                [&](const PixelRect& rect) { return contains(rect, area); });
+            if (touched && !whole) {
+                rects.push_back(area);
+                changed = true;
+            }
+        }
+        for (std::size_t first = 0; first < rects.size(); ++first) {
+            for (std::size_t second = first + 1; second < rects.size();) {
+                if (overlaps(rects[first], rects[second])) {
+                    rects[first] = bounding_union(rects[first], rects[second]);
+                    rects.erase(rects.begin() + static_cast<std::ptrdiff_t>(second));
+                    second = first + 1;
+                    changed = true;
+                } else {
+                    ++second;
+                }
+            }
+        }
+    }
+    return rects;
 }
 
 std::optional<InvalidationReason> parse_invalidation_reason(std::string_view reason) noexcept {

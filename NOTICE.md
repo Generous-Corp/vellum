@@ -1356,8 +1356,11 @@ a standalone `cmake -S rmlui` build). They are linked privately into the
 are also linked publicly into the `VellumRmlUi::Native` archive, whose
 installed package carries RmlUi's headers, the RmlUi and FreeType archives,
 `rmlui/NOTICE-Native.md` and each component's licence file under
-`share/doc/VellumRmlUi/`. The default Vellum build and the Vellum SDK artifact contain none of
-them. Exact identities are recorded in `DEPENDENCIES.md` and
+`share/doc/VellumRmlUi/`. The default Vellum build contains none of them. The
+native Vellum SDK artifact carries the `VellumRmlUi` package (Core, which
+embeds RmlUi; SoftRenderer, which embeds stb_image_write; and VellumRenderer) with RmlUi's
+licence at `sdk/share/doc/VellumRmlUi/RmlUi-LICENSE.txt`, and none of RmlUi's
+headers or archives, FreeType or Lua. Exact identities are recorded in `DEPENDENCIES.md` and
 `provenance/third-party-lock.json`.
 
 ### FreeType

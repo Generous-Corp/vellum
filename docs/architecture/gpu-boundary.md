@@ -118,7 +118,7 @@ decides through `accept_scene`, so the web shell refuses the scenes the
 surface refuses, with the same reason and diagnostics. The kind arrived with version 4, so an earlier
 scene with an image node is refused with a `VELLUM_SCENE_VERSION_MISMATCH`
 diagnostic. Damage treats an image as its box and compares its asset by
-pointer; a command's paint extent, `command_paint_bounds`, is that box mapped
+pointer; a command's paint extent, `transformed_paint_bounds`, is that box mapped
 through the command's transform. The surface remembers each asset's texel digest under its content
 hash while the hash still names the same asset object, so an unchanged image
 is not rehashed each frame, and uploads through the texture cache below; hosts
