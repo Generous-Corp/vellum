@@ -190,6 +190,16 @@ public:
     const SceneNode& node, const Rect& absolute_bounds, const Rect& frame,
     const DamagePropagation& propagation);
 
+/// The frame-space logical area a node paints under `transform`. With the
+/// identity it is `node_paint_bounds`. Otherwise the box and each shadow's
+/// spread box are mapped first, and each shadow then grows by 1.5 times its
+/// blur radius times the transform's largest singular value, because the
+/// renderer blurs in frame space. Text under a non-identity transform covers
+/// `frame`.
+[[nodiscard]] std::optional<Rect> transformed_paint_bounds(
+    const SceneNode& node, const Rect& absolute_bounds, const Affine2D& transform,
+    const Rect& frame, const DamagePropagation& propagation);
+
 /// Whether two nodes with the same identity paint differently in place,
 /// including their transform, opacity and resolved corner radii. An absent
 /// transform equals the identity. Floats compare bitwise, so a NaN changing
@@ -204,8 +214,11 @@ public:
 /// restyled, reparented and reordered nodes damage both their old and new
 /// areas. Areas are mapped through each node's composed transform, the way
 /// `make_paint_commands` composes it. A transform or opacity change damages
-/// the node's whole subtree, old and new; a subtree at zero opacity paints
-/// nothing; and a non-finite transform, opacity or radius repaints the frame. A changed frame size, background or `scene_version` damages the
+/// the node's whole subtree, old and new, and so does a faded node switching
+/// between folding its opacity into one command and compositing a layer. A
+/// subtree at zero opacity paints nothing. A non-finite transform, opacity or
+/// radius damages the whole frame; `SkiaDawnSurface::render` refuses such a
+/// scene. A changed frame size, background or `scene_version` damages the
 /// whole frame.
 [[nodiscard]] DamageRegion compute_scene_damage(
     const Scene& previous, const Scene& next, float scale,

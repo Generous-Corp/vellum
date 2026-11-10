@@ -159,6 +159,54 @@ std::optional<Rect> box_paint_bounds(const SceneNode& node, const Rect& absolute
     return painted;
 }
 
+float largest_scale(const Affine2D& transform) noexcept {
+    const double a = transform.a;
+    const double b = transform.b;
+    const double c = transform.c;
+    const double d = transform.d;
+    const double sum = a * a + b * b + c * c + d * d;
+    const double det = a * d - b * c;
+    const double root = std::sqrt(std::max(0.0, sum * sum - 4.0 * det * det));
+    return static_cast<float>(std::sqrt(std::max(0.0, (sum + root) * 0.5)));
+}
+
+Rect sorted(const Rect& rect) noexcept {
+    return {std::min(rect.x, rect.x + rect.width), std::min(rect.y, rect.y + rect.height),
+            std::abs(rect.width), std::abs(rect.height)};
+}
+
+std::optional<Rect> mapped_box_bounds(const SceneNode& node, const Rect& absolute,
+                                      const Affine2D& transform) {
+    std::optional<Rect> painted;
+    if (!rect_empty(absolute)) painted = transformed_bounds(transform, absolute);
+    const float scale = largest_scale(transform);
+    for (const auto& shadow : node.box_shadows) {
+        const Rect moved{absolute.x + shadow.offset_x, absolute.y + shadow.offset_y,
+                         absolute.width, absolute.height};
+        const Rect spread = sorted(outset(moved, shadow.spread_radius));
+        const float blur = std::max(0.0F, shadow.blur_radius) * kShadowBlurExtent * scale;
+        const Rect blurred = outset(transformed_bounds(transform, spread), blur);
+        if (!rect_empty(blurred)) painted = unite(painted, blurred);
+    }
+    return painted;
+}
+
+std::size_t own_draws(const SceneNode& node) noexcept {
+    switch (node.kind) {
+    case SceneNode::Kind::rectangle:
+        return 1;
+    case SceneNode::Kind::text:
+        if (node.text.empty() && node.text_runs.empty()) return 0;
+        return (node.fill_gradients.empty() && node.box_shadows.empty()) ? 1 : 2;
+    case SceneNode::Kind::mesh:
+        return node.mesh ? 1 : 0;
+    case SceneNode::Kind::group:
+    case SceneNode::Kind::custom:
+        return 0;
+    }
+    return 0;
+}
+
 std::optional<Rect> mesh_paint_bounds(const TriangleMesh& mesh, const Rect& absolute) {
     std::optional<Rect> painted;
     for (const auto& vertex : mesh.vertices) {
@@ -218,6 +266,7 @@ struct NodeRecord final {
     Rect absolute{};
     std::optional<Rect> damage;
     std::size_t subtree_end = 0;
+    std::uint8_t composite = 0;
 };
 
 }  // namespace damage_detail
@@ -259,7 +308,7 @@ public:
     }
 
 private:
-    void walk(const DamagePropagation& propagation, const SceneNode& node,
+    std::size_t walk(const DamagePropagation& propagation, const SceneNode& node,
               const std::string& parent_key, std::size_t index, float parent_x, float parent_y,
               const Affine2D& parent_transform, std::optional<Rect> clip, bool hidden) {
         std::string key = make_key(node, parent_key, index);
@@ -289,14 +338,11 @@ private:
             constexpr float nan = std::numeric_limits<float>::quiet_NaN();
             damage = Rect{nan, nan, nan, nan};
         } else if (!hidden) {
-            damage = node_paint_bounds(node, absolute, logical_frame, propagation);
+            damage = transformed_paint_bounds(node, absolute, transform, logical_frame, propagation);
             if (damage) {
                 const float radius = propagation.effect_radius(node);
-                if (std::isfinite(radius) && radius > 0.0F) damage = outset(*damage, radius);
-                if (node.kind == SceneNode::Kind::text && !is_identity(transform)) {
-                    damage = logical_frame;
-                } else {
-                    damage = transformed_bounds(transform, *damage);
+                if (std::isfinite(radius) && radius > 0.0F) {
+                    damage = outset(*damage, radius * largest_scale(transform));
                 }
                 if (clip) damage = clip_to(*damage, *clip);
             }
@@ -306,12 +352,18 @@ private:
         by_key_.emplace(key, position);
         by_id_[node.id].push_back(position);
         children_[parent_key].push_back(key);
-        records_.push_back({key, parent_key, paint_fields(node), absolute, damage, 0});
+        records_.push_back({key, parent_key, paint_fields(node), absolute, damage, 0, 0});
+        const bool drawing = finite && !hidden;
+        std::size_t drawn = drawing ? own_draws(node) : 0;
         for (std::size_t child = 0; child < node.children.size(); ++child) {
-            walk(propagation, node.children[child], key, child, absolute.x, absolute.y, transform,
-                 clip, hidden);
+            drawn += walk(propagation, node.children[child], key, child, absolute.x, absolute.y,
+                          transform, clip, !drawing);
         }
         records_[position].subtree_end = records_.size();
+        if (drawing && std::clamp(node.opacity, 0.0F, 1.0F) < 1.0F) {
+            records_[position].composite = drawn > 1 ? 2 : 1;
+        }
+        return drawing ? drawn : 0;
     }
 
     std::string make_key(const SceneNode& node, const std::string& parent_key, std::size_t index) {
@@ -384,7 +436,8 @@ void diff_snapshots(const Snapshot& before, const Snapshot& after, DamageRegion&
             add_logical(region, now.damage, scale);
             continue;
         }
-        if (was->parent_key != now.parent_key || compositing_differs(was->paint, now.paint)) {
+        if (was->parent_key != now.parent_key || was->composite != now.composite ||
+            compositing_differs(was->paint, now.paint)) {
             add_subtree(region, before, *was);
             add_subtree(region, after, now);
             continue;
@@ -694,6 +747,31 @@ std::optional<Rect> node_paint_bounds(const SceneNode& node, const Rect& absolut
     }
     case SceneNode::Kind::mesh:
         return node.mesh ? mesh_paint_bounds(*node.mesh, absolute_bounds) : std::nullopt;
+    }
+    return std::nullopt;
+}
+
+std::optional<Rect> transformed_paint_bounds(const SceneNode& node, const Rect& absolute_bounds,
+                                             const Affine2D& transform, const Rect& frame,
+                                             const DamagePropagation& propagation) {
+    if (is_identity(transform)) return node_paint_bounds(node, absolute_bounds, frame, propagation);
+    switch (node.kind) {
+    case SceneNode::Kind::group:
+        return std::nullopt;
+    case SceneNode::Kind::rectangle:
+        return mapped_box_bounds(node, absolute_bounds, transform);
+    case SceneNode::Kind::custom:
+        if (rect_empty(absolute_bounds)) return std::nullopt;
+        return transformed_bounds(transform, absolute_bounds);
+    case SceneNode::Kind::text:
+        if (node.text.empty() && node.text_runs.empty()) return std::nullopt;
+        return frame;
+    case SceneNode::Kind::mesh: {
+        if (!node.mesh) return std::nullopt;
+        const auto local = mesh_paint_bounds(*node.mesh, absolute_bounds);
+        if (!local) return std::nullopt;
+        return transformed_bounds(transform, *local);
+    }
     }
     return std::nullopt;
 }

@@ -745,12 +745,9 @@ Extent command_extent(const PaintCommand& command, const Rect& frame, float scal
         case PaintCommand::Kind::end_layer:
             return std::nullopt;
     }
-    if (command.kind == PaintCommand::Kind::text && !is_identity(command.transform)) {
-        return std::nullopt;
-    }
-    const auto local = node_paint_bounds(painted, command.bounds, frame, propagation);
-    if (!local) return pixel_extent(local, scale);
-    return pixel_extent(transformed_bounds(command.transform, *local), scale);
+    return pixel_extent(
+        transformed_paint_bounds(painted, command.bounds, command.transform, frame, propagation),
+        scale);
 }
 
 std::vector<Extent> paint_command_extents(
@@ -762,6 +759,80 @@ std::vector<Extent> paint_command_extents(
         extents.push_back(command_extent(command, frame, scale));
     }
     return extents;
+}
+
+bool close_over_layers(const Scene& scene, const std::vector<PaintCommand>& commands, float scale,
+                       const PixelRect& target, std::vector<PixelRect>& rects) {
+    if (rects.empty()) return true;
+    std::vector<PixelRect> layers;
+    std::vector<Extent> extents;
+    for (std::size_t begin = 0; begin < commands.size(); ++begin) {
+        const auto& command = commands[begin];
+        const bool transformed_blur =
+            command.kind == PaintCommand::Kind::rectangle && !is_identity(command.transform) &&
+            std::any_of(command.box_shadows.begin(), command.box_shadows.end(),
+                        [](const BoxShadow& shadow) { return shadow.blur_radius > 0.0F; });
+        if (command.kind != PaintCommand::Kind::begin_layer && !transformed_blur) continue;
+        if (extents.empty()) extents = paint_command_extents(scene, commands, scale);
+        if (transformed_blur) {
+            layers.push_back(intersection(extents[begin] ? *extents[begin] : target, target));
+            continue;
+        }
+        PixelRect area{};
+        std::size_t depth = 0;
+        for (std::size_t index = begin + 1; index < commands.size(); ++index) {
+            const auto kind = commands[index].kind;
+            if (kind == PaintCommand::Kind::begin_layer) {
+                ++depth;
+                continue;
+            }
+            if (kind == PaintCommand::Kind::end_layer) {
+                if (depth == 0) break;
+                --depth;
+                continue;
+            }
+            area = bounding_union(area, extents[index] ? *extents[index] : target);
+        }
+        layers.push_back(intersection(area, target));
+    }
+    if (layers.empty()) return true;
+    const auto contains = [](const PixelRect& outer, const PixelRect& inner) {
+        return outer.left <= inner.left && outer.top <= inner.top &&
+               outer.right >= inner.right && outer.bottom >= inner.bottom;
+    };
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (const auto& layer : layers) {
+            if (layer.empty()) continue;
+            const bool touched = std::any_of(rects.begin(), rects.end(),
+                [&](const PixelRect& rect) { return overlaps(rect, layer); });
+            const bool whole = std::any_of(rects.begin(), rects.end(),
+                [&](const PixelRect& rect) { return contains(rect, layer); });
+            if (touched && !whole) {
+                rects.push_back(layer);
+                changed = true;
+            }
+        }
+        for (std::size_t a = 0; a < rects.size(); ++a) {
+            for (std::size_t b = a + 1; b < rects.size();) {
+                if (overlaps(rects[a], rects[b])) {
+                    rects[a] = bounding_union(rects[a], rects[b]);
+                    rects.erase(rects.begin() + static_cast<std::ptrdiff_t>(b));
+                    b = a + 1;
+                    changed = true;
+                } else {
+                    ++b;
+                }
+            }
+        }
+    }
+    std::int64_t area = 0;
+    for (auto& rect : rects) {
+        rect = intersection(rect, target);
+        area += rect.area();
+    }
+    std::erase_if(rects, [](const PixelRect& rect) { return rect.empty(); });
+    return area < target.area();
 }
 
 bool same_color(const Color& a, const Color& b) {
@@ -1372,8 +1443,13 @@ private:
         } else if (reason == FullRepaintReason::none) {
             reason = FullRepaintReason::full_render;
         }
-        const bool full = reason != FullRepaintReason::none;
         const auto target = target_rect();
+        const auto commands = make_paint_commands(scene);
+        if (reason == FullRepaintReason::none &&
+            !close_over_layers(scene, commands, config_.scale, target, rects)) {
+            reason = FullRepaintReason::full_damage;
+        }
+        const bool full = reason != FullRepaintReason::none;
 
         FrameStats stats;
         stats.frame = stats_.frame + 1;
@@ -1401,7 +1477,6 @@ private:
 
         retained_valid_ = false;
         retained_reason_ = FullRepaintReason::previous_frame_failed;
-        const auto commands = make_paint_commands(scene);
         stats.paint_commands_total = commands.size();
         auto* canvas = retained_surface_->getCanvas();
         caches_.begin_frame();

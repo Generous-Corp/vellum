@@ -487,6 +487,31 @@ Affine2D rotation_degrees(float degrees, float scale = 1.0F) {
     return {.a = cosine, .b = sine, .c = -sine, .d = cosine};
 }
 
+SceneNode card_front() {
+    return {
+        .id = "card-front",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {24.0F, 18.0F, 60.0F, 36.0F},
+        .fill = Color::hex(0xF59E0B),
+    };
+}
+
+SceneNode card_label() {
+    return {
+        .id = "card-label",
+        .kind = SceneNode::Kind::text,
+        .bounds = {6.0F, 8.0F, 70.0F, 16.0F},
+        .text_runs = {{.text = "Card",
+                       .style = {.font_family = "Inter", .font_size = 13.0F,
+                                 .color = Color::hex(0xF9FAFB)}}},
+    };
+}
+
+void remove_child(Scene& scene, const std::string& parent, const std::string& id) {
+    std::erase_if(node(scene, parent).children,
+                  [&](const SceneNode& child) { return child.id == id; });
+}
+
 Scene compositing_scene(float width, float height) {
     Scene scene = base_scene(width, height);
     SceneNode card;
@@ -501,13 +526,34 @@ Scene compositing_scene(float width, float height) {
                          .spread_radius = 1.0F, .color = Color::rgba(0.0F, 0.0F, 0.0F, 0.5F)}},
         .corner_radius = 6.0F,
     });
-    card.children.push_back({
-        .id = "card-front",
-        .kind = SceneNode::Kind::rectangle,
-        .bounds = {24.0F, 18.0F, 60.0F, 36.0F},
-        .fill = Color::hex(0xF59E0B),
-    });
+    card.children.push_back(card_front());
     scene.root.children.push_back(card);
+    SceneNode panel;
+    panel.id = "panel";
+    panel.bounds = {width * 0.30F, height * 0.40F, 110.0F, 40.0F};
+    panel.opacity = 0.6F;
+    panel.children.push_back({
+        .id = "panel-back",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {0.0F, 0.0F, 100.0F, 34.0F},
+        .fill = Color::hex(0x0EA5E9),
+        .corner_radius = 4.0F,
+    });
+    panel.children.push_back(card_label());
+    scene.root.children.push_back(panel);
+    scene.root.children.push_back({
+        .id = "stretched",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {60.0F, 60.0F, 40.0F, 20.0F},
+        .fill = Color::hex(0x14B8A6),
+        .box_shadows = {{.blur_radius = 20.0F, .color = Color::rgba(0.0F, 0.0F, 0.0F, 1.0F)}},
+    });
+    scene.root.children.push_back({
+        .id = "neighbour",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {80.0F, 88.0F, 20.0F, 8.0F},
+        .fill = Color::hex(0xE11D48),
+    });
     return scene;
 }
 
@@ -526,6 +572,25 @@ std::vector<Step> compositing_steps() {
              node(scene, "card").transform = Affine2D{.a = 1.25F, .d = 0.8F};
          }},
         {"fade a group", [](Scene& scene) { node(scene, "card").opacity = 0.55F; }},
+        {"recolor a child of the scaled faded group", [](Scene& scene) {
+             node(scene, "card-front").fill = Color::hex(0x10B981);
+         }},
+        {"move a child over its siblings in the scaled faded group", [](Scene& scene) {
+             node(scene, "card-front").bounds.x -= 9.0F;
+             node(scene, "card-front").bounds.y -= 6.0F;
+         }},
+        {"remove a child of the faded group, folding its opacity", [](Scene& scene) {
+             remove_child(scene, "card", "card-front");
+         }},
+        {"re-add the child, compositing a layer again", [](Scene& scene) {
+             node(scene, "card").children.push_back(card_front());
+         }},
+        {"remove a faded panel's text child, folding its opacity", [](Scene& scene) {
+             remove_child(scene, "panel", "card-label");
+         }},
+        {"re-add the text child, compositing a layer again", [](Scene& scene) {
+             node(scene, "panel").children.push_back(card_label());
+         }},
         {"re-round a corner set", [](Scene& scene) {
              node(scene, "swatch").corner_radii = CornerRadii{10.0F, 0.0F, 6.0F, 3.0F};
          }},
@@ -540,6 +605,12 @@ std::vector<Step> compositing_steps() {
              auto& card = node(scene, "card");
              card.opacity = 1.0F;
              card.transform.reset();
+         }},
+        {"stretch a blurred shadow", [](Scene& scene) {
+             node(scene, "stretched").transform = Affine2D{.a = 2.0F, .d = 0.5F};
+         }},
+        {"damage beside the stretched shadow", [](Scene& scene) {
+             node(scene, "neighbour").fill = Color::hex(0x7C3AED);
          }},
         {"rotate the label", [](Scene& scene) {
              node(scene, "label").transform = rotation_degrees(4.0F);

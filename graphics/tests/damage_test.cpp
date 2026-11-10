@@ -1,6 +1,8 @@
 #include <vellum/graphics/damage.hpp>
+#include <vellum/graphics/paint_command.hpp>
 
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -597,6 +599,131 @@ void compositing_damage() {
           "an effect radius scales with the transform");
 }
 
+PixelRect lowered_pixels(const Scene& scene, const std::string& id) {
+    for (const auto& command : vellum::graphics::make_paint_commands(scene)) {
+        if (command.node_id != id || !vellum::graphics::draws_content(command.kind)) continue;
+        const auto extent = vellum::graphics::paint_extent(command);
+        const auto mapped = vellum::graphics::transformed_bounds(command.transform, extent.rect);
+        const auto pixels = vellum::graphics::to_pixel_rect(mapped, 1.0F);
+        return pixels ? vellum::graphics::intersection(*pixels, vellum::graphics::frame_rect(scene, 1.0F))
+                      : PixelRect{};
+    }
+    return {};
+}
+
+vellum::graphics::Affine2D rotation(float degrees, float tx = 0.0F, float ty = 0.0F) {
+    const float radians = degrees * 3.14159265358979323846F / 180.0F;
+    return {.a = std::cos(radians), .b = std::sin(radians), .c = -std::sin(radians),
+            .d = std::cos(radians), .tx = tx, .ty = ty};
+}
+
+bool added_matches_lowering(const Scene& base, const Scene& next, const std::string& leaf) {
+    const auto damage = diff(base, next);
+    const auto expected = lowered_pixels(next, leaf);
+    if (expected.empty()) return damage.empty();
+    return damage.rects().size() == 1 && damage.rects()[0] == expected;
+}
+
+void transform_geometry() {
+    using vellum::graphics::Affine2D;
+    Scene base;
+    base.width = 200.0F;
+    base.height = 100.0F;
+
+    const auto with_leaf = [&](Affine2D transform, Rect bounds) {
+        Scene next = base;
+        SceneNode leaf = rectangle("leaf", bounds);
+        leaf.transform = transform;
+        next.root.children.push_back(leaf);
+        return next;
+    };
+    check(added_matches_lowering(base, with_leaf(rotation(30.0F), {60.0F, 30.0F, 30.0F, 20.0F}), "leaf"),
+          "a 30 degree rotation matches the lowered transform");
+    check(added_matches_lowering(base, with_leaf({.a = -1.0F, .tx = 4.0F}, {10.0F, 30.0F, 30.0F, 20.0F}),
+                                 "leaf"),
+          "a horizontal mirror with translation clips at the frame edge like the lowering");
+    check(added_matches_lowering(base, with_leaf({.d = -1.0F, .ty = 3.0F}, {50.0F, 8.0F, 30.0F, 20.0F}),
+                                 "leaf"),
+          "a vertical mirror with translation clips at the frame edge like the lowering");
+    check(added_matches_lowering(
+              base, with_leaf({.a = -1.0F, .d = -1.0F, .tx = 7.0F, .ty = -2.0F}, {190.0F, 90.0F, 30.0F, 20.0F}),
+              "leaf"),
+          "a combined mirror matches the lowering");
+    check(!lowered_pixels(with_leaf({.a = -1.0F, .tx = 4.0F}, {10.0F, 30.0F, 30.0F, 20.0F}), "leaf").empty(),
+          "the mirror oracle is not vacuous");
+
+    const auto with_group = [&](Affine2D group_transform, Affine2D child_transform) {
+        Scene next = base;
+        SceneNode group;
+        group.id = "group";
+        group.bounds = {70.0F, 20.0F, 60.0F, 40.0F};
+        group.transform = group_transform;
+        SceneNode leaf = rectangle("leaf", {15.0F, 10.0F, 24.0F, 12.0F});
+        leaf.transform = child_transform;
+        group.children.push_back(leaf);
+        next.root.children.push_back(group);
+        return next;
+    };
+    check(added_matches_lowering(base, with_group(rotation(20.0F), rotation(35.0F, 2.0F, 1.0F)), "leaf"),
+          "a rotated child of a rotated group composes in the lowering's order");
+    check(added_matches_lowering(base, with_group({.a = -1.0F, .tx = 5.0F}, rotation(-50.0F)), "leaf"),
+          "a rotated child of a mirrored group composes in the lowering's order");
+    check(added_matches_lowering(base, with_group({.d = -1.0F, .ty = 2.0F}, {.a = 1.5F, .d = 0.5F}), "leaf"),
+          "a scaled child of a vertically mirrored group composes in the lowering's order");
+    const auto forward = lowered_pixels(with_group(rotation(20.0F), rotation(35.0F, 2.0F, 1.0F)), "leaf");
+    const auto swapped = lowered_pixels(with_group(rotation(35.0F, 2.0F, 1.0F), rotation(20.0F)), "leaf");
+    check(forward != swapped, "the nested-transform cases do not commute, so they test order");
+
+    Scene wide;
+    wide.width = 400.0F;
+    wide.height = 300.0F;
+    Scene stretched = wide;
+    SceneNode shadowed = rectangle("shadowed", {150.0F, 120.0F, 20.0F, 10.0F});
+    shadowed.box_shadows.push_back({.blur_radius = 20.0F, .color = Color::hex(0x000000)});
+    shadowed.transform = Affine2D{.a = 2.0F, .d = 0.5F};
+    stretched.root.children.push_back(shadowed);
+    const auto blurred = diff(wide, stretched);
+    check(blurred.rects().size() == 1 && blurred.rects()[0] == PixelRect{90, 60, 250, 185},
+          "a shadow blur grows in frame space by the largest scale, not along the squashed axis");
+}
+
+void composite_path_changes() {
+    Scene base = grouped_scene();
+    child(base, "g")->opacity = 0.5F;
+    Scene single = base;
+    child(single, "g")->children.pop_back();
+    auto damage = diff(base, single);
+    check(covers(damage, {10, 10, 30, 30}) && covers(damage, {100, 10, 120, 30}),
+          "removing a sibling under a faded group damages the survivor, whose opacity now folds");
+    damage = diff(single, base);
+    check(covers(damage, {10, 10, 30, 30}) && covers(damage, {100, 10, 120, 30}),
+          "adding a sibling under a faded group damages the survivor, which now composites a layer");
+
+    Scene hidden_sibling = base;
+    child(hidden_sibling, "b")->opacity = 0.0F;
+    check(covers(diff(base, hidden_sibling), {10, 10, 30, 30}),
+          "hiding a sibling under a faded group damages the survivor");
+
+    Scene with_text = base;
+    SceneNode label;
+    label.id = "label";
+    label.kind = SceneNode::Kind::text;
+    label.bounds = {40.0F, 50.0F, 40.0F, 20.0F};
+    label.text = "Hi";
+    child(with_text, "g")->children.pop_back();
+    child(with_text, "g")->children.push_back(label);
+    Scene emptied = with_text;
+    child(emptied, "label")->text.clear();
+    check(covers(diff(with_text, emptied), {10, 10, 30, 30}),
+          "emptying a text sibling under a faded group damages the survivor");
+
+    Scene opaque = grouped_scene();
+    Scene opaque_single = opaque;
+    child(opaque_single, "g")->children.pop_back();
+    check(!diff(opaque, opaque_single).intersects({10, 10, 30, 30}),
+          "removing a sibling under an opaque group leaves the survivor alone");
+}
+
 void tracker() {
     check(vellum::graphics::parse_invalidation_reason("state") == InvalidationReason::state &&
               vellum::graphics::parse_invalidation_reason("timer") == InvalidationReason::timer &&
@@ -677,6 +804,8 @@ int main() {
     duplicate_ids();
     review_hardening();
     compositing_damage();
+    transform_geometry();
+    composite_path_changes();
     tracker();
     if (failures != 0) {
         std::fprintf(stderr, "%d damage check(s) failed\n", failures);
