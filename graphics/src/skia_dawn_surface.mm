@@ -3,7 +3,11 @@
 #include <vellum/graphics/damage.hpp>
 #include <vellum/graphics/dawn_bootstrap.hpp>
 #include <vellum/graphics/paint_command.hpp>
+#include <vellum/graphics/render_telemetry.hpp>
 
+#include <gpu_runtime/gpu_surface.hpp>
+
+#include "skia_resource_caches.hpp"
 #include "utf8_text.hpp"
 
 #import <QuartzCore/CAMetalLayer.h>
@@ -181,9 +185,28 @@ std::string replace_unsupported_text(
     });
 }
 
+// Textures uploaded for one frame, so a texture shared by several meshes (a
+// glyph atlas, say) is hashed and looked up once.
+struct MeshTextureCache final {
+    skgpu::graphite::Recorder* recorder = nullptr;
+    std::unordered_map<const MeshTexture*, sk_sp<SkImage>> images;
+};
+
+// What one frame draws with: the per-frame texture map, the surface's
+// cross-frame caches, and the count of offscreen layers the frame opens.
+struct FrameResources final {
+    MeshTextureCache meshes;
+    detail::SkiaResourceCaches* caches = nullptr;
+    std::size_t layers = 0;
+    /// Textures this frame cached. Their uploads exist only in this frame's
+    /// recording, so a frame that fails before it is submitted drops them.
+    std::vector<detail::TextureKey> uploaded;
+};
+
 bool draw_linear_gradient(
     SkCanvas& canvas, const PaintCommand& command,
-    const ResolvedLinearGradient& gradient, float opacity, std::string* error) {
+    const ResolvedLinearGradient& gradient, float opacity, FrameResources& resources,
+    std::string* error) {
     if (command.bounds.width <= 0.0F || command.bounds.height <= 0.0F) return true;
     if (gradient.stops.size() < 2U) {
         set_error(error, "Vellum linear gradient needs at least two stops");
@@ -205,24 +228,43 @@ bool draw_linear_gradient(
         {gradient.start_x + direction_x * cycle,
          gradient.start_y + direction_y * cycle},
     };
-    std::vector<SkColor4f> colors;
-    std::vector<float> positions;
-    colors.reserve(gradient.stops.size());
-    positions.reserve(gradient.stops.size());
-    for (const auto& stop : gradient.stops) {
-        colors.push_back(sk_color(stop.color, opacity));
-        positions.push_back(stop.position);
-    }
-    const SkGradient shader_gradient{
-        SkGradient::Colors(
-            colors, positions,
-            gradient.repeating ? SkTileMode::kRepeat : SkTileMode::kClamp),
-        {},
+    detail::GradientKey key{
+        .points = {points[0].fX, points[0].fY, points[1].fX, points[1].fY},
+        .repeating = gradient.repeating,
     };
-    auto shader = SkShaders::LinearGradient(points, shader_gradient);
-    if (!shader) {
-        set_error(error, "Vellum could not create the linear-gradient shader");
-        return false;
+    key.colors.reserve(gradient.stops.size());
+    key.positions.reserve(gradient.stops.size());
+    for (const auto& stop : gradient.stops) {
+        const auto color = sk_color(stop.color, opacity);
+        key.colors.push_back({color.fR, color.fG, color.fB, color.fA});
+        key.positions.push_back(stop.position);
+    }
+    sk_sp<SkShader> shader;
+    auto* caches = resources.caches;
+    if (const auto* cached = caches != nullptr ? caches->gradients.find(key, caches->frame)
+                                               : nullptr) {
+        shader = *cached;
+    } else {
+        std::vector<SkColor4f> colors;
+        colors.reserve(key.colors.size());
+        for (const auto& color : key.colors) {
+            colors.push_back({color.red, color.green, color.blue, color.alpha});
+        }
+        const SkGradient shader_gradient{
+            SkGradient::Colors(
+                colors, key.positions,
+                gradient.repeating ? SkTileMode::kRepeat : SkTileMode::kClamp),
+            {},
+        };
+        shader = SkShaders::LinearGradient(points, shader_gradient);
+        if (!shader) {
+            set_error(error, "Vellum could not create the linear-gradient shader");
+            return false;
+        }
+        if (caches != nullptr) {
+            const auto bytes = detail::gradient_bytes(key);
+            caches->gradients.insert(std::move(key), shader, bytes, caches->frame);
+        }
     }
 
     canvas.save();
@@ -349,7 +391,7 @@ bool build_text_paragraph(
 }
 
 bool draw_rectangle(SkCanvas& canvas, const PaintCommand& command, float opacity,
-                    std::string* error) {
+                    FrameResources& resources, std::string* error) {
     const auto rect = SkRect::MakeXYWH(
         command.bounds.x, command.bounds.y,
         command.bounds.width, command.bounds.height);
@@ -389,7 +431,9 @@ bool draw_rectangle(SkCanvas& canvas, const PaintCommand& command, float opacity
     }
     for (const auto& declared : command.fill_gradients) {
         const auto gradient = resolve_linear_gradient(command.bounds, declared);
-        if (!draw_linear_gradient(canvas, command, gradient, opacity, error)) return false;
+        if (!draw_linear_gradient(canvas, command, gradient, opacity, resources, error)) {
+            return false;
+        }
     }
     return true;
 }
@@ -398,14 +442,32 @@ SkRect layer_rect(const Rect& rect) {
     return SkRect::MakeXYWH(rect.x, rect.y, rect.width, rect.height).makeOutset(1.0F, 1.0F);
 }
 
-struct ParagraphSlot final {
-    std::unique_ptr<skia::textlayout::Paragraph> paragraph;
-    TextMetrics metrics;
-};
+using ParagraphSlot = detail::CachedParagraph;
+
+// Finds the laid-out paragraph for `runs`, or builds and caches it.
+bool paragraph_for(std::vector<TextRun> runs, std::string_view directory,
+                   FrameResources& resources, ParagraphSlot& slot, std::string* error) {
+    auto* caches = resources.caches;
+    detail::ParagraphKey key{.font_directory = std::string(directory), .runs = std::move(runs)};
+    if (caches != nullptr) {
+        if (const auto* cached = caches->paragraphs.find(key, caches->frame)) {
+            slot = *cached;
+            return true;
+        }
+    }
+    std::unique_ptr<skia::textlayout::Paragraph> built;
+    if (!build_text_paragraph(key.runs, directory, built, slot.metrics, error)) return false;
+    slot.paragraph = std::move(built);
+    if (caches != nullptr) {
+        const auto bytes = detail::estimated_paragraph_bytes(key);
+        caches->paragraphs.insert(std::move(key), slot, bytes, caches->frame);
+    }
+    return true;
+}
 
 bool draw_text(SkCanvas& canvas, const PaintCommand& command, float opacity,
-               float layer_opacity, std::string_view directory, ParagraphSlot* slot,
-               std::string* error) {
+               float layer_opacity, std::string_view directory, FrameResources& resources,
+               ParagraphSlot* slot, std::string* error) {
     std::vector<TextRun> runs = command.text_runs;
     if (runs.empty() && !command.text.empty()) {
         runs.push_back({
@@ -425,7 +487,7 @@ bool draw_text(SkCanvas& canvas, const PaintCommand& command, float opacity,
     ParagraphSlot built;
     ParagraphSlot& cached = slot != nullptr ? *slot : built;
     if (!cached.paragraph &&
-        !build_text_paragraph(runs, directory, cached.paragraph, cached.metrics, error)) {
+        !paragraph_for(std::move(runs), directory, resources, cached, error)) {
         return false;
     }
     auto& paragraph = cached.paragraph;
@@ -438,23 +500,30 @@ bool draw_text(SkCanvas& canvas, const PaintCommand& command, float opacity,
             std::max(command.bounds.height, metrics.ascent + metrics.descent) +
                 overhang * 2.0F);
         canvas.saveLayerAlphaf(&extent, layer_opacity);
+        ++resources.layers;
     }
     paragraph->paint(&canvas, command.bounds.x, command.bounds.y);
     if (layer_opacity < 1.0F) canvas.restore();
     return true;
 }
 
-// Textures uploaded for one frame, so a texture shared by several meshes (a
-// glyph atlas, say) is uploaded once.
-struct MeshTextureCache final {
-    skgpu::graphite::Recorder* recorder = nullptr;
-    std::unordered_map<const MeshTexture*, sk_sp<SkImage>> images;
-};
-
 sk_sp<SkImage> mesh_texture_image(
-    const MeshTexture& texture, MeshTextureCache& cache, std::string* error) {
+    const MeshTexture& texture, FrameResources& resources, std::string* error) {
+    auto& cache = resources.meshes;
     if (const auto found = cache.images.find(&texture); found != cache.images.end()) {
         return found->second;
+    }
+    // Across frames a texture is found by its content, never its address: a
+    // producer may reuse an allocation for different texels.
+    auto* caches = resources.caches;
+    detail::TextureKey key{.width = texture.width, .height = texture.height};
+    if (caches != nullptr && !caches->textures.enabled()) caches = nullptr;
+    if (caches != nullptr) {
+        key.digest = detail::sha256(texture.premultiplied_rgba);
+        if (const auto* cached = caches->textures.find(key, caches->frame)) {
+            cache.images.emplace(&texture, *cached);
+            return *cached;
+        }
     }
     const auto info = SkImageInfo::Make(
         static_cast<int>(texture.width), static_cast<int>(texture.height),
@@ -475,6 +544,11 @@ sk_sp<SkImage> mesh_texture_image(
         set_error(error, "Skia Graphite could not upload a mesh texture");
         return nullptr;
     }
+    if (caches != nullptr &&
+        caches->textures.insert(key, uploaded, texture.premultiplied_rgba.size(),
+                                caches->frame)) {
+        resources.uploaded.push_back(key);
+    }
     cache.images.emplace(&texture, uploaded);
     return uploaded;
 }
@@ -494,7 +568,7 @@ SkColor straight_vertex_color(std::uint32_t premultiplied_rgba) {
 }
 
 bool draw_mesh(SkCanvas& canvas, const PaintCommand& command,
-               MeshTextureCache& cache, std::string* error) {
+               FrameResources& resources, std::string* error) {
     if (!command.mesh) return true;
     const auto& mesh = *command.mesh;
     std::string reason;
@@ -510,7 +584,7 @@ bool draw_mesh(SkCanvas& canvas, const PaintCommand& command,
 
     sk_sp<SkImage> image;
     if (mesh.texture) {
-        image = mesh_texture_image(*mesh.texture, cache, error);
+        image = mesh_texture_image(*mesh.texture, resources, error);
         if (!image) return false;
     }
     // Expand the indexed list: SkVertices indices are 16-bit, and a mesh may
@@ -581,7 +655,7 @@ bool opacity_folds_into_paint(const PaintCommand& command) {
 }
 
 bool paint_command(SkCanvas& canvas, const PaintCommand& command,
-                   std::string_view directory, MeshTextureCache& meshes,
+                   std::string_view directory, FrameResources& resources,
                    std::string* error, ParagraphSlot* paragraph = nullptr) {
     if (command.kind == PaintCommand::Kind::begin_layer) {
         const float alpha = std::clamp(command.opacity, 0.0F, 1.0F);
@@ -591,6 +665,7 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
             const auto bounds = layer_rect(command.bounds);
             canvas.saveLayerAlphaf(&bounds, alpha);
         }
+        ++resources.layers;
         return true;
     }
     if (command.kind == PaintCommand::Kind::end_layer) {
@@ -612,15 +687,16 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
     if (layered && command.kind != PaintCommand::Kind::text) {
         const auto bounds = layer_rect(paint_extent(command).rect);
         canvas.saveLayerAlphaf(&bounds, opacity);
+        ++resources.layers;
     }
     bool drawn = true;
     if (command.kind == PaintCommand::Kind::mesh) {
-        drawn = draw_mesh(canvas, command, meshes, error);
+        drawn = draw_mesh(canvas, command, resources, error);
     } else if (command.kind == PaintCommand::Kind::rectangle) {
-        drawn = draw_rectangle(canvas, command, paint_opacity, error);
+        drawn = draw_rectangle(canvas, command, paint_opacity, resources, error);
     } else {
         drawn = draw_text(canvas, command, paint_opacity, layered ? opacity : 1.0F,
-                          directory, paragraph, error);
+                          directory, resources, paragraph, error);
     }
     canvas.restoreToCount(saved);
     return drawn;
@@ -876,6 +952,7 @@ public:
         if (!create_retained(error)) {
             return false;
         }
+        note_configured();
         retained_reason_ = FullRepaintReason::first_frame;
         gpu_stats_supported_ = static_cast<bool>(
             context_->supportedGpuStats() & skgpu::GpuStatsFlags::kElapsedTime);
@@ -914,7 +991,11 @@ public:
         if (surface_ && !configure_surface(error)) {
             return false;
         }
-        return create_retained(error);
+        if (!create_retained(error)) return false;
+        note_configured();
+        trim_when_settled_ = true;
+        trim_since_frame_ = caches_.frame + 1U;
+        return true;
     }
 
     bool render(const Scene& scene, std::string* error) {
@@ -963,6 +1044,37 @@ public:
             stats.gpu_milliseconds = static_cast<double>(gpu_timer_->nanoseconds) / 1.0e6;
         }
         return stats;
+    }
+
+    void set_cache_budgets(const RenderCacheBudgets& budgets) {
+        if (caches_.set_budgets(budgets) > 0U) note_trim(CacheTrimReason::budget_changed);
+    }
+
+    RenderCacheBudgets cache_budgets() const { return caches_.budgets(); }
+
+    RenderTelemetry telemetry() const {
+        const auto frame = frame_stats();
+        RenderTelemetry telemetry;
+        telemetry.frame = frame.frame;
+        telemetry.full_repaint = frame.full_repaint;
+        telemetry.full_repaint_reason = std::string(to_string(frame.full_repaint_reason));
+        telemetry.damage_area_pixels = frame.damage_area_pixels;
+        telemetry.frame_area_pixels = frame.frame_area_pixels;
+        telemetry.damage_fraction = frame.damage_fraction;
+        telemetry.paint_commands_total = frame.paint_commands_total;
+        telemetry.paint_commands_recorded = frame.paint_commands_recorded;
+        telemetry.layer_count = layer_count_;
+        telemetry.paragraphs = caches_.paragraphs.stats();
+        telemetry.gradients = caches_.gradients.stats();
+        telemetry.textures = caches_.textures.stats();
+        telemetry.atlas_bytes = telemetry.textures.bytes;
+        telemetry.gpu_time_available = frame.gpu_time_available;
+        telemetry.gpu_milliseconds = frame.gpu_milliseconds;
+        telemetry.cpu_milliseconds = frame.cpu_milliseconds;
+        telemetry.resize_settled = resize_state_.settled();
+        telemetry.trims = trims_;
+        telemetry.last_trim = last_trim_;
+        return telemetry;
     }
 
     bool finish(std::string* error) {
@@ -1050,9 +1162,15 @@ public:
         if (!retained_valid_) {
             const Scene scene = *last_scene_;
             const auto saved = stats_;
+            const auto saved_layers = layer_count_;
+            const auto saved_caches = caches_.frame_state();
             const bool reload = reload_pending_;
+            internal_redraw_ = true;
             const bool redrawn = draw_frame(scene, FullRepaintReason::full_render, nullptr, error);
+            internal_redraw_ = false;
             stats_ = saved;
+            layer_count_ = saved_layers;
+            caches_.restore(saved_caches);
             reload_pending_ = reload;
             if (!redrawn) return false;
             tracker_.commit(scene, config_.scale);
@@ -1145,7 +1263,42 @@ private:
             (context_ && context_->isDeviceLost());
     }
 
+    // Records that the surface now matches its size, so the frame after it
+    // restarts the settle count.
+    void note_configured() {
+        resize_state_.request(static_cast<std::uint32_t>(physical_width()),
+                              static_cast<std::uint32_t>(physical_height()));
+        resize_state_.mark_configured();
+        frame_configured_ = true;
+    }
+
+    void note_trim(CacheTrimReason reason) {
+        ++trims_;
+        last_trim_ = reason;
+    }
+
+    // Called after each frame is submitted. Once a resize has settled, entries
+    // no frame has used since the resize, such as gradients sized for the
+    // sizes a live resize passed through, are dropped. A capture's internal
+    // redraw is not a presented frame and does not count.
+    void note_frame_presented() {
+        if (internal_redraw_) return;
+        resize_state_.note_frame(frame_configured_);
+        frame_configured_ = false;
+        if (trim_when_settled_ && resize_state_.settled()) {
+            trim_when_settled_ = false;
+            caches_.trim_unused_since(trim_since_frame_);
+            note_trim(CacheTrimReason::resize_settled);
+        }
+    }
+
     bool fail_device_lost(std::string* error, std::string message) {
+        // Every cached texture belonged to the lost device.
+        if (!device_loss_trimmed_) {
+            device_loss_trimmed_ = true;
+            caches_.clear();
+            note_trim(CacheTrimReason::device_lost);
+        }
         retained_valid_ = false;
         retained_reason_ = FullRepaintReason::previous_frame_failed;
         set_error(error, std::move(message));
@@ -1251,7 +1404,19 @@ private:
         const auto commands = make_paint_commands(scene);
         stats.paint_commands_total = commands.size();
         auto* canvas = retained_surface_->getCanvas();
-        MeshTextureCache mesh_textures{.recorder = recorder_.get()};
+        caches_.begin_frame();
+        FrameResources resources{.meshes = {.recorder = recorder_.get()}, .caches = &caches_};
+        // A texture cached by a frame that is never submitted was never
+        // written on the GPU; drop it so a later frame uploads it again.
+        struct UploadGuard final {
+            detail::SkiaResourceCaches& caches;
+            const FrameResources& resources;
+            bool submitted = false;
+            ~UploadGuard() {
+                if (submitted) return;
+                for (const auto& key : resources.uploaded) caches.textures.erase(key);
+            }
+        } upload_guard{caches_, resources};
         if (full) {
             const int saved = canvas->save();
             canvas->resetMatrix();
@@ -1259,7 +1424,7 @@ private:
             canvas->scale(config_.scale, config_.scale);
             for (const auto& command : commands) {
                 if (!paint_command(*canvas, command, config_.font_directory,
-                                   mesh_textures, error)) {
+                                   resources, error)) {
                     canvas->restoreToCount(saved);
                     return false;
                 }
@@ -1282,7 +1447,7 @@ private:
                 for (std::size_t index = 0; index < commands.size(); ++index) {
                     if (extents[index] && !overlaps(*extents[index], rect)) continue;
                     if (!paint_command(*canvas, commands[index], config_.font_directory,
-                                       mesh_textures, error, &paragraphs[index])) {
+                                       resources, error, &paragraphs[index])) {
                         canvas->restoreToCount(saved);
                         return false;
                     }
@@ -1296,6 +1461,9 @@ private:
         }
 
         if (!submit_frame(&stats, nullptr, error)) return false;
+        upload_guard.submitted = true;
+        layer_count_ = resources.layers;
+        note_frame_presented();
         retained_valid_ = true;
         retained_reason_ = FullRepaintReason::none;
         reload_pending_ = false;
@@ -1500,6 +1668,16 @@ private:
     bool gpu_stats_supported_ = false;
     std::shared_ptr<GpuTimer> gpu_timer_;
     std::shared_ptr<std::atomic_bool> device_lost_ = std::make_shared<std::atomic_bool>(false);
+    detail::SkiaResourceCaches caches_;
+    std::size_t layer_count_ = 0;
+    gpu_runtime::SwapchainResizeState resize_state_;
+    bool frame_configured_ = false;
+    bool trim_when_settled_ = false;
+    std::uint64_t trim_since_frame_ = 0;
+    bool internal_redraw_ = false;
+    bool device_loss_trimmed_ = false;
+    std::uint64_t trims_ = 0;
+    CacheTrimReason last_trim_ = CacheTrimReason::none;
 };
 
 SkiaDawnSurface::SkiaDawnSurface(std::unique_ptr<Impl> impl) noexcept
@@ -1548,6 +1726,18 @@ void SkiaDawnSurface::invalidate(InvalidationReason reason, std::string_view nod
 
 FrameStats SkiaDawnSurface::frame_stats() const {
     return impl_->frame_stats();
+}
+
+void SkiaDawnSurface::set_cache_budgets(const RenderCacheBudgets& budgets) {
+    impl_->set_cache_budgets(budgets);
+}
+
+RenderCacheBudgets SkiaDawnSurface::cache_budgets() const {
+    return impl_->cache_budgets();
+}
+
+RenderTelemetry SkiaDawnSurface::telemetry() const {
+    return impl_->telemetry();
 }
 
 bool SkiaDawnSurface::finish(std::string* error) {

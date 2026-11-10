@@ -156,7 +156,7 @@ class Reader(unittest.TestCase):
         self.assertIn("open-pr-snapshot", readiness.run)
         self.assertEqual(readiness.env["PROMOTION_ATTESTATION_PATH"],
                          "${{ steps.expansion-evidence.outputs.promotion-path }}")
-        observatory = pc.read_step(provenance, "provenance-verify",
+        observatory = pc.read_step(provenance, "observatory-verify",
                                    "Verify two-way observatory health and negative controls")
         self.assertIn("observatory_tail_policy=reconciled", observatory.run)
         gpu = (pc.ROOT / ".github/workflows/gpu-macos.yml").read_text()
