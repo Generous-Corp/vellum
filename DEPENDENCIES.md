@@ -175,15 +175,17 @@ The filtered seed once placed 232 projected source and vendored files in the
 working tree. Those paths are deleted from the active tip. Their exact
 historical identities remain in `provenance/cut-manifest.json` and Git history;
 they are not build inputs, installed files, or release payloads. The active
-source boundary is `provenance/active-source-boundary.json`. Mirrored Pulp
-framework source admitted by Decision 0010 is recorded blob by blob in
-`provenance/mirror/blob-origins.json`; none is present yet.
+source boundary is `provenance/active-source-boundary.json`. The Pulp framework
+units admitted by Decision 0010 were mirrored blob by blob (recorded in
+`provenance/mirror/blob-origins.json`) and then transferred, renamed, to the
+native root `framework/`; `provenance/framework/transfer.json` pairs each
+`framework/` file with its Pulp path and blob.
 
-## Planned mirrored framework inventory
+## Transferred framework inventory
 
-The following rows are the legal inventory for bytes that may arrive under
-`mirror/` from the D3 units and the foundation amendment. They are scoped to
-the mirror root and do not make the corresponding historical Pulp paths active
+The following rows are the legal inventory for the bytes under `framework/`,
+transferred from the D3 units and the foundation amendment. They are scoped to
+that root and do not make the corresponding historical Pulp paths active
 Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 `DEPENDENCIES.md`, `NOTICE.md`, and `tools/deps/manifest.json` at the `46cee5e4e6e2` export.
 
