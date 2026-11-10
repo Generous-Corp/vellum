@@ -310,6 +310,7 @@ CaptureResult render_offscreen(
     const auto rendered = Clock::now();
     result.render = elapsed(created, rendered);
     result.frame_stats = surface->frame_stats();
+    result.telemetry = surface->telemetry();
     if (!surface->capture_rgba(
             result.rgba, result.pixel_width, result.pixel_height, &result.error)) {
         return result;

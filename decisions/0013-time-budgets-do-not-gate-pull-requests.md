@@ -37,6 +37,8 @@ that; it stopped every landing while the work waited.
 3. Pushes to `main` and release tags keep `--time-budgets enforce`, the default.
    A red `provenance-verify` on `main` holds release-tag readiness, and a tag is
    judged at its commit's time, so nothing is released while events are overdue.
+   (`provenance-verify` fails whenever the separate `observatory-verify` job
+   did not pass, so it stays the required check that carries these budgets.)
 4. The hourly `Observatory overdue issue` workflow keeps one issue,
    "Observatory events overdue for classification", with the current overdue
    list and the oldest pending event's age against its budget. It closes any

@@ -1,0 +1,62 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "render-skia-dawn"
+  ],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-09T20:28:07Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-a38933cd15d775eb34ab8b2fa85b749ae1b9ed87",
+  "include_dependency_deltas": [
+    "graphics/CMakeLists.txt",
+    "graphics/include/vellum/graphics/render_telemetry.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/src/render_cache.hpp",
+    "graphics/src/skia_resource_caches.hpp",
+    "graphics/tests/CMakeLists.txt",
+    "graphics/tests/support/scene_capture_harness.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "render-skia-dawn"
+  ],
+  "mapped_paths": [
+    "graphics/CMakeLists.txt",
+    "graphics/include/vellum/graphics/render_telemetry.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/src/render_cache.hpp",
+    "graphics/src/render_telemetry.cpp",
+    "graphics/src/skia_dawn_surface.mm",
+    "graphics/src/skia_resource_caches.hpp",
+    "graphics/tests/CMakeLists.txt",
+    "graphics/tests/render_cache_gpu_test.cpp",
+    "graphics/tests/render_cache_test.cpp",
+    "graphics/tests/scene_capture_harness_test.cpp",
+    "graphics/tests/support/scene_capture_harness.cpp",
+    "graphics/tests/support/scene_capture_harness.hpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "e08ae8cea835b812260c39bb6b8fd5ca1aaa8781",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "8f9b38d7744b3101e14d28cbacd9b692036aa3f1",
+    "to_commit": "5457a318a2673de7c832ff89d9490dd97d861302"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "a38933cd15d775eb34ab8b2fa85b749ae1b9ed87",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

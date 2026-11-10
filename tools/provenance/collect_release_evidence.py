@@ -172,6 +172,51 @@ def snapshot_pull(
     }
 
 
+RELEASE_BUMP_REPOSITORY = "Generous-Corp/vellum"
+
+
+def release_bump_evidence(snapshot_root: Path) -> dict[str, Any]:
+    """Each open Vellum pull request's head commit and patch, from the snapshot's own reads.
+
+    The authority verifier judges a release's version-bump pull request by its
+    content (verify_authority_expansion.release_bump_problems); this records
+    that content from the same API responses the snapshot was built from.
+    """
+    repository_root = snapshot_root / repository_slug(RELEASE_BUMP_REPOSITORY)
+    pulls = [pull for page in read_json(repository_root / "pulls.json") for pull in page]
+    rows = []
+    for pull in sorted(pulls, key=lambda row: row["number"]):
+        number = pull["number"]
+        detail = read_json(repository_root / "details" / f"{number}.json")
+        trees = repository_root / "trees"
+        head = read_json(trees / f"{number}-head-commit.json")
+        comparison = read_json(trees / f"{number}-compare.json")
+        if head.get("sha") != detail["head"]["sha"]:
+            raise SystemExit(f"{RELEASE_BUMP_REPOSITORY}#{number}: commit lookup differs")
+        rows.append({
+            "number": number,
+            "base_commit": detail["base"]["sha"],
+            "base_ref": detail["base"].get("ref"),
+            "head_commit": detail["head"]["sha"],
+            "head_ref": detail["head"].get("ref"),
+            "head_repository": (detail["head"].get("repo") or {}).get("full_name"),
+            "head_parents": [parent.get("sha") for parent in head.get("parents", [])],
+            "head_author": {key: head.get("author", {}).get(key) for key in ("name", "email")},
+            "head_committer": {key: head.get("committer", {}).get(key) for key in ("name", "email")},
+            "head_message": head.get("message"),
+            "files": [
+                {"filename": row.get("filename"), "status": row.get("status"),
+                 "patch": row.get("patch")}
+                for row in comparison.get("files", [])
+            ],
+        })
+    return {
+        "schema": "vellum.release-bump-evidence.v1",
+        "repository": RELEASE_BUMP_REPOSITORY,
+        "pulls": rows,
+    }
+
+
 def open_pr_snapshot(snapshot_root: Path) -> dict[str, Any]:
     repositories = []
     for repository in OPEN_PR_REPOSITORIES:
@@ -269,6 +314,10 @@ def command_open_pr_snapshot(args: argparse.Namespace) -> None:
     write_json(args.cursor_output, snapshot_cursor(snapshot))
 
 
+def command_release_bump_evidence(args: argparse.Namespace) -> None:
+    write_json(args.output, release_bump_evidence(args.snapshot_root))
+
+
 def command_live_cursor(args: argparse.Namespace) -> None:
     write_json(args.output, live_cursor(args.cursor_root))
 
@@ -338,6 +387,14 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--output", type=Path, required=True)
     command.add_argument("--cursor-output", type=Path, required=True)
     command.set_defaults(handler=command_open_pr_snapshot)
+
+    command = commands.add_parser(
+        "release-bump-evidence",
+        help="write the verifier's --release-bump-evidence-json from a snapshot root",
+    )
+    command.add_argument("--snapshot-root", type=Path, required=True)
+    command.add_argument("--output", type=Path, required=True)
+    command.set_defaults(handler=command_release_bump_evidence)
 
     command = commands.add_parser(
         "live-cursor", help="write the open-PR cursor from freshly slurped pulls pages"

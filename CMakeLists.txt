@@ -197,6 +197,12 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.damage COMMAND vellum-damage-test)
 
+        add_executable(vellum-render-cache-test
+            graphics/tests/render_cache_test.cpp)
+        target_include_directories(vellum-render-cache-test PRIVATE graphics/src)
+        target_link_libraries(vellum-render-cache-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.render-cache COMMAND vellum-render-cache-test)
+
         add_executable(vellum-web-canvas-shell-lowering-test
             web/tests/canvas_shell_lowering_test.cpp)
         target_include_directories(vellum-web-canvas-shell-lowering-test
