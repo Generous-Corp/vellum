@@ -650,8 +650,12 @@ void scripted_telemetry() {
                t.paragraphs.entries == 0 && t.gradients.entries == 0 &&
                t.textures.entries == 0 && t.atlas_bytes == 0 && t.textures.bytes == 0,
            "a device loss drops every cache", to_json(t));
+    // A second loss notification must still invalidate caches. The public
+    // surface remains fail-closed after loss, so this exercises the repeated
+    // failure path that a recovered device would use before its next frame.
+    surface->simulate_device_loss();
     expect(!surface->render(full, &error) && surface->telemetry().trims == 3,
-           "a lost device trims once");
+           "a second device loss remains fail-closed without double-counting");
 }
 
 }  // namespace

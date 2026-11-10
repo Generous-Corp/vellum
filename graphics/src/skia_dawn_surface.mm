@@ -1261,6 +1261,10 @@ private:
     // Records that the surface now matches its size, so the frame after it
     // restarts the settle count.
     void note_configured() {
+        // A successful device/surface configuration starts a new device
+        // lifetime.  The next loss must invalidate that device's resources
+        // even if an earlier loss already accounted for a trim.
+        device_loss_trimmed_ = false;
         resize_state_.request(static_cast<std::uint32_t>(physical_width()),
                               static_cast<std::uint32_t>(physical_height()));
         resize_state_.mark_configured();
@@ -1289,9 +1293,9 @@ private:
 
     bool fail_device_lost(std::string* error, std::string message) {
         // Every cached texture belonged to the lost device.
+        caches_.clear();
         if (!device_loss_trimmed_) {
             device_loss_trimmed_ = true;
-            caches_.clear();
             note_trim(CacheTrimReason::device_lost);
         }
         retained_valid_ = false;
