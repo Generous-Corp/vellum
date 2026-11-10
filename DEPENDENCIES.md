@@ -153,6 +153,9 @@ The opt-in `VellumRmlUi::Native` component (`VELLUM_RMLUI_NATIVE=ON`) is the
 exception: it links RmlUi publicly, so its install component redistributes
 RmlUi's headers and archives, and FreeType's archive when fonts are on, with
 `rmlui/NOTICE-Native.md` and their licence files under `share/doc/VellumRmlUi/`.
+The base `VellumRmlUi` package installs RmlUi's licence there too, because
+Core redistributes RmlUi. The native SDK artifact carries the base package
+(Core, SoftRenderer and VellumRenderer) and never the Native component.
 Nothing here enters the default Vellum build or the Vellum SDK artifact.
 
 | Dependency | Pinned identity | License | Used by | Notes |
