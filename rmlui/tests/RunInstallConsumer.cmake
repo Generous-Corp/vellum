@@ -43,12 +43,27 @@ file(GLOB_RECURSE _leaked
 if(_leaked)
     message(FATAL_ERROR "the VellumRmlUi package installed RmlUi or FreeType files: ${_leaked}")
 endif()
+# Core redistributes RmlUi inside its shared library, so the Core package
+# carries RmlUi's licence even without Native.
+if(NOT EXISTS "${_prefix}/share/doc/VellumRmlUi/RmlUi-LICENSE.txt")
+    message(FATAL_ERROR "the VellumRmlUi package did not install RmlUi's licence file")
+endif()
+# Headers that include RmlUi's belong to Native, which carries RmlUi.
+foreach(_native_header native.hpp element_classes_native.hpp midi_learn_native.hpp
+        cpu_render_interface.hpp metal_render_interface.hpp)
+    if(EXISTS "${_prefix}/include/vellum/rmlui/${_native_header}")
+        message(FATAL_ERROR "the VellumRmlUi package installed the Native-only header ${_native_header}")
+    endif()
+endforeach()
 if(_native)
     _run("${CMAKE_COMMAND}" --install "${VELLUM_RMLUI_BUILD_DIR}"
          --prefix "${_prefix}" --component VellumRmlUiNative ${_config_args})
     # Native carries RmlUi: its headers and archive must now be present.
     if(NOT EXISTS "${_prefix}/include/RmlUi/Core.h")
         message(FATAL_ERROR "the Native component did not install RmlUi's headers")
+    endif()
+    if(NOT EXISTS "${_prefix}/include/vellum/rmlui/native.hpp")
+        message(FATAL_ERROR "the Native component did not install vellum/rmlui/native.hpp")
     endif()
     # What the component redistributes must ship with its notices: RmlUi's
     # MIT notice always, and the FreeType credit, FTL election and FTL text

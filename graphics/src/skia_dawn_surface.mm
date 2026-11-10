@@ -25,6 +25,9 @@
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkPaint.h"
+#include "include/core/SkPath.h"
+#include "include/core/SkPathBuilder.h"
+#include "include/core/SkPathEffect.h"
 #include "include/core/SkSamplingOptions.h"
 #include "include/core/SkPixmap.h"
 #include "include/core/SkRRect.h"
@@ -32,6 +35,7 @@
 #include "include/core/SkSurface.h"
 #include "include/core/SkVertices.h"
 #include "include/encode/SkPngEncoder.h"
+#include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradient.h"
 #include "include/gpu/graphite/BackendTexture.h"
 #include "include/gpu/graphite/Context.h"
@@ -203,21 +207,19 @@ struct FrameResources final {
     std::vector<detail::TextureKey> uploaded;
 };
 
-bool draw_linear_gradient(
-    SkCanvas& canvas, const PaintCommand& command,
+sk_sp<SkShader> linear_gradient_shader(
     const ResolvedLinearGradient& gradient, float opacity, FrameResources& resources,
     std::string* error) {
-    if (command.bounds.width <= 0.0F || command.bounds.height <= 0.0F) return true;
     if (gradient.stops.size() < 2U) {
         set_error(error, "Vellum linear gradient needs at least two stops");
-        return false;
+        return nullptr;
     }
     const float vector_x = gradient.end_x - gradient.start_x;
     const float vector_y = gradient.end_y - gradient.start_y;
     const float length = std::hypot(vector_x, vector_y);
     if (length <= 0.0F) {
         set_error(error, "Vellum linear gradient has a zero-length paint box");
-        return false;
+        return nullptr;
     }
     const float direction_x = vector_x / length;
     const float direction_y = vector_y / length;
@@ -259,13 +261,23 @@ bool draw_linear_gradient(
         shader = SkShaders::LinearGradient(points, shader_gradient);
         if (!shader) {
             set_error(error, "Vellum could not create the linear-gradient shader");
-            return false;
+            return nullptr;
         }
         if (caches != nullptr) {
             const auto bytes = detail::gradient_bytes(key);
             caches->gradients.insert(std::move(key), shader, bytes, caches->frame);
         }
     }
+    return shader;
+}
+
+bool draw_linear_gradient(
+    SkCanvas& canvas, const PaintCommand& command,
+    const ResolvedLinearGradient& gradient, float opacity, FrameResources& resources,
+    std::string* error) {
+    if (command.bounds.width <= 0.0F || command.bounds.height <= 0.0F) return true;
+    auto shader = linear_gradient_shader(gradient, opacity, resources, error);
+    if (!shader) return false;
 
     canvas.save();
     const auto rect = SkRect::MakeXYWH(
@@ -638,6 +650,145 @@ bool draw_mesh(SkCanvas& canvas, const PaintCommand& command,
     return true;
 }
 
+SkPath sk_path(const PaintCommand& command) {
+    const auto& path = *command.path;
+    SkPathBuilder builder(path.fill_rule == FillRule::evenodd ? SkPathFillType::kEvenOdd
+                                                              : SkPathFillType::kWinding);
+    const float x = command.bounds.x;
+    const float y = command.bounds.y;
+    std::size_t offset = 0;
+    for (const auto verb : path.verbs) {
+        const float* v = path.values.data() + offset;
+        offset += path_verb_arity(verb);
+        switch (verb) {
+        case PathVerb::move: builder.moveTo(x + v[0], y + v[1]); break;
+        case PathVerb::line: builder.lineTo(x + v[0], y + v[1]); break;
+        case PathVerb::quadratic: builder.quadTo(x + v[0], y + v[1], x + v[2], y + v[3]); break;
+        case PathVerb::cubic:
+            builder.cubicTo(x + v[0], y + v[1], x + v[2], y + v[3], x + v[4], y + v[5]);
+            break;
+        case PathVerb::arc:
+            // SVG's sweep flag 1 is clockwise in y-down space, Skia's kCW.
+            builder.arcTo({v[0], v[1]}, v[2],
+                          v[3] != 0.0F ? SkPathBuilder::kLarge_ArcSize
+                                       : SkPathBuilder::kSmall_ArcSize,
+                          v[4] != 0.0F ? SkPathDirection::kCW : SkPathDirection::kCCW,
+                          {x + v[5], y + v[6]});
+            break;
+        case PathVerb::close: builder.close(); break;
+        }
+    }
+    return builder.detach();
+}
+
+SkPaint::Join sk_join(StrokeJoin join) {
+    switch (join) {
+    case StrokeJoin::miter: return SkPaint::kMiter_Join;
+    case StrokeJoin::round: return SkPaint::kRound_Join;
+    case StrokeJoin::bevel: return SkPaint::kBevel_Join;
+    }
+    return SkPaint::kMiter_Join;
+}
+
+SkPaint::Cap sk_cap(StrokeCap cap) {
+    switch (cap) {
+    case StrokeCap::butt: return SkPaint::kButt_Cap;
+    case StrokeCap::round: return SkPaint::kRound_Cap;
+    case StrokeCap::square: return SkPaint::kSquare_Cap;
+    }
+    return SkPaint::kButt_Cap;
+}
+
+bool path_is_drawable(const PathGeometry& path, const Color& fill, std::string* reason) {
+    if (!path_is_valid(path, reason)) return false;
+    if (!std::isfinite(fill.red) || !std::isfinite(fill.green) || !std::isfinite(fill.blue) ||
+        !std::isfinite(fill.alpha)) {
+        set_error(reason, "the fill colour is not finite");
+        return false;
+    }
+    return true;
+}
+
+// The first path node, in depth-first order, that cannot be drawn.
+const SceneNode* find_undrawable_path(const SceneNode& node, std::string& reason) {
+    if (node.kind == SceneNode::Kind::path &&
+        (!node.path || !path_is_drawable(*node.path, node.fill, &reason))) {
+        if (!node.path) reason.clear();
+        return &node;
+    }
+    for (const auto& child : node.children) {
+        if (const auto* found = find_undrawable_path(child, reason); found != nullptr) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+bool draw_path(SkCanvas& canvas, const PaintCommand& command, float opacity,
+               FrameResources& resources, std::string* error) {
+    if (!command.path) {
+        set_error(error, "path " + command.node_id + " has no geometry");
+        return false;
+    }
+    const auto& path = *command.path;
+    const auto& fill = command.fill;
+    std::string reason;
+    if (!path_is_drawable(path, fill, &reason)) {
+        set_error(error, "path " + command.node_id + " cannot be drawn: " + reason);
+        return false;
+    }
+    if (path.verbs.empty()) return true;
+    const SkPath outline = sk_path(command);
+
+    if (fill.alpha > 0.0F) {
+        SkPaint paint;
+        paint.setAntiAlias(path.antialias);
+        paint.setColor4f(sk_color(fill, opacity));
+        canvas.drawPath(outline, paint);
+    }
+    if (const auto box = path_gradient_box(command)) {
+        for (const auto& declared : command.fill_gradients) {
+            auto shader =
+                linear_gradient_shader(resolve_linear_gradient(*box, declared), opacity,
+                                       resources, error);
+            if (!shader) return false;
+            SkPaint paint;
+            paint.setAntiAlias(path.antialias);
+            paint.setShader(std::move(shader));
+            canvas.drawPath(outline, paint);
+        }
+    }
+
+    const auto& stroke = path.stroke;
+    if (stroke.width > 0.0F && stroke.color.alpha > 0.0F) {
+        SkPaint paint;
+        paint.setAntiAlias(path.antialias);
+        paint.setColor4f(sk_color(stroke.color, opacity));
+        paint.setStyle(SkPaint::kStroke_Style);
+        paint.setStrokeWidth(stroke.width);
+        paint.setStrokeJoin(sk_join(stroke.join));
+        paint.setStrokeCap(sk_cap(stroke.cap));
+        paint.setStrokeMiter(stroke.miter_limit);
+        if (!stroke.dash_array.empty()) {
+            // An odd-length dash array repeats once, as in SVG.
+            std::vector<SkScalar> intervals(stroke.dash_array.begin(), stroke.dash_array.end());
+            if (intervals.size() % 2U != 0U) {
+                intervals.insert(intervals.end(), stroke.dash_array.begin(),
+                                 stroke.dash_array.end());
+            }
+            auto dashes = SkDashPathEffect::Make(intervals, stroke.dash_offset);
+            if (!dashes) {
+                set_error(error,
+                          "Skia could not build the dash pattern of path " + command.node_id);
+                return false;
+            }
+            paint.setPathEffect(std::move(dashes));
+        }
+        canvas.drawPath(outline, paint);
+    }
+    return true;
+}
+
 // Folding is exact when the command's paint operations do not overlap; text
 // accepts the double blend of glyphs that overlap one another.
 bool opacity_folds_into_paint(const PaintCommand& command) {
@@ -645,6 +796,14 @@ bool opacity_folds_into_paint(const PaintCommand& command) {
         const std::size_t fills =
             (command.fill.alpha > 0.0F ? 1U : 0U) + command.fill_gradients.size();
         return command.box_shadows.size() <= 1U && fills <= 1U;
+    }
+    if (command.kind == PaintCommand::Kind::path) {
+        if (!command.path) return true;
+        const auto& stroke = command.path->stroke;
+        const bool stroked = stroke.width > 0.0F && stroke.color.alpha > 0.0F;
+        const std::size_t operations = (command.fill.alpha > 0.0F ? 1U : 0U) +
+                                       command.fill_gradients.size() + (stroked ? 1U : 0U);
+        return operations <= 1U;
     }
     if (command.kind == PaintCommand::Kind::text) {
         if (command.text_runs.empty()) return !command.underline && !command.strikethrough;
@@ -694,6 +853,8 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
         drawn = draw_mesh(canvas, command, resources, error);
     } else if (command.kind == PaintCommand::Kind::rectangle) {
         drawn = draw_rectangle(canvas, command, paint_opacity, resources, error);
+    } else if (command.kind == PaintCommand::Kind::path) {
+        drawn = draw_path(canvas, command, paint_opacity, resources, error);
     } else {
         drawn = draw_text(canvas, command, paint_opacity, layered ? opacity : 1.0F,
                           directory, resources, paragraph, error);
@@ -741,11 +902,17 @@ Extent command_extent(const PaintCommand& command, const Rect& frame, float scal
             painted.kind = SceneNode::Kind::mesh;
             painted.mesh = command.mesh;
             break;
+        case PaintCommand::Kind::path:
+            painted.kind = SceneNode::Kind::path;
+            painted.path = command.path;
+            break;
         case PaintCommand::Kind::begin_layer:
         case PaintCommand::Kind::end_layer:
             return std::nullopt;
     }
-    return pixel_extent(node_paint_bounds(painted, command.bounds, frame, propagation), scale);
+    return pixel_extent(
+        transformed_paint_bounds(painted, command.bounds, command.transform, frame, propagation),
+        scale);
 }
 
 std::vector<Extent> paint_command_extents(
@@ -757,6 +924,47 @@ std::vector<Extent> paint_command_extents(
         extents.push_back(command_extent(command, frame, scale));
     }
     return extents;
+}
+
+bool close_over_layers(const Scene& scene, const std::vector<PaintCommand>& commands, float scale,
+                       const PixelRect& target, std::vector<PixelRect>& rects) {
+    if (rects.empty()) return true;
+    std::vector<PixelRect> layers;
+    std::vector<Extent> extents;
+    for (std::size_t begin = 0; begin < commands.size(); ++begin) {
+        const auto& command = commands[begin];
+        const bool transformed_blur =
+            command.kind == PaintCommand::Kind::rectangle && !is_identity(command.transform) &&
+            std::any_of(command.box_shadows.begin(), command.box_shadows.end(),
+                        [](const BoxShadow& shadow) { return shadow.blur_radius > 0.0F; });
+        if (command.kind != PaintCommand::Kind::begin_layer && !transformed_blur) continue;
+        if (extents.empty()) extents = paint_command_extents(scene, commands, scale);
+        if (transformed_blur) {
+            layers.push_back(intersection(extents[begin] ? *extents[begin] : target, target));
+            continue;
+        }
+        PixelRect area{};
+        std::size_t depth = 0;
+        for (std::size_t index = begin + 1; index < commands.size(); ++index) {
+            const auto kind = commands[index].kind;
+            if (kind == PaintCommand::Kind::begin_layer) {
+                ++depth;
+                continue;
+            }
+            if (kind == PaintCommand::Kind::end_layer) {
+                if (depth == 0) break;
+                --depth;
+                continue;
+            }
+            area = bounding_union(area, extents[index] ? *extents[index] : target);
+        }
+        layers.push_back(intersection(area, target));
+    }
+    if (layers.empty()) return true;
+    rects = enclose_whole_areas(std::move(rects), layers, target);
+    std::int64_t area = 0;
+    for (const auto& rect : rects) area += rect.area();
+    return area < target.area();
 }
 
 bool same_color(const Color& a, const Color& b) {
@@ -1099,15 +1307,29 @@ public:
             return false;
         }
         if (!scene_fields_match_version(scene)) {
-            set_error(error, "scene version " + std::to_string(scene.scene_version) +
-                                 " cannot carry the transform, opacity, or corner radii at " +
-                                 find_version_2_fields(scene.root)->id);
+            const auto* compositing =
+                scene.scene_version < 2U ? find_version_2_fields(scene.root) : nullptr;
+            if (compositing != nullptr) {
+                set_error(error, "scene version " + std::to_string(scene.scene_version) +
+                                     " cannot carry the transform, opacity, or corner radii at " +
+                                     compositing->id);
+            } else {
+                set_error(error, "scene version " + std::to_string(scene.scene_version) +
+                                     " cannot carry the path node " +
+                                     find_version_3_kinds(scene.root)->id);
+            }
             return false;
         }
         if (const auto* invalid = find_non_finite_compositing(scene.root);
             invalid != nullptr) {
             set_error(error, "scene node " + invalid->id +
                                  " has a non-finite transform, opacity, or corner radius");
+            return false;
+        }
+        std::string reason;
+        if (const auto* path = find_undrawable_path(scene.root, reason); path != nullptr) {
+            set_error(error, path->path ? "path " + path->id + " cannot be drawn: " + reason
+                                        : "path " + path->id + " has no geometry");
             return false;
         }
         return true;
@@ -1371,8 +1593,13 @@ private:
         } else if (reason == FullRepaintReason::none) {
             reason = FullRepaintReason::full_render;
         }
-        const bool full = reason != FullRepaintReason::none;
         const auto target = target_rect();
+        const auto commands = make_paint_commands(scene);
+        if (reason == FullRepaintReason::none &&
+            !close_over_layers(scene, commands, config_.scale, target, rects)) {
+            reason = FullRepaintReason::full_damage;
+        }
+        const bool full = reason != FullRepaintReason::none;
 
         FrameStats stats;
         stats.frame = stats_.frame + 1;
@@ -1400,7 +1627,6 @@ private:
 
         retained_valid_ = false;
         retained_reason_ = FullRepaintReason::previous_frame_failed;
-        const auto commands = make_paint_commands(scene);
         stats.paint_commands_total = commands.size();
         auto* canvas = retained_surface_->getCanvas();
         // stats_ and layer_count_ describe the last submitted frame until

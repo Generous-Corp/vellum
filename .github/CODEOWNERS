@@ -31,6 +31,7 @@
 /scripts/retired_release_tags.py @danielraffel
 /scripts/run_ci_lane.py @danielraffel
 /scripts/verify_immutable_release_preflight.py @danielraffel
+/scripts/verify_release_attestation.py @danielraffel
 /scripts/verify_release_tag.py @danielraffel
 /scripts/version_at_land.py @danielraffel
 /tools/provenance/content_scan_policy.py @danielraffel
