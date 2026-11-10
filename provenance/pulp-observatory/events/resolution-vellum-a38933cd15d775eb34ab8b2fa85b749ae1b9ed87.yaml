@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-10T10:30:18Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-a38933cd15d775eb34ab8b2fa85b749ae1b9ed87",
+  "kind": "resolution",
+  "linked_commits": [
+    "a38933cd15d775eb34ab8b2fa85b749ae1b9ed87"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Adds cross-frame paragraph, linear-gradient and mesh-texture caches to Vellum's SkiaDawnSurface, with budgets, LRU eviction and render telemetry. New Vellum renderer capability. Pulp's own text and paint paths are separate and owe no port.",
+  "resolves": "vellum-a38933cd15d775eb34ab8b2fa85b749ae1b9ed87",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
