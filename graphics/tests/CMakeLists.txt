@@ -88,3 +88,14 @@ add_test(NAME vellum.gpu.layer-cache
     COMMAND vellum-layer-cache-gpu-test)
 set_tests_properties(vellum.gpu.layer-cache PROPERTIES
     SKIP_RETURN_CODE 77)
+
+add_executable(vellum-layer-text-extent-test layer_text_extent_test.cpp)
+target_link_libraries(vellum-layer-text-extent-test PRIVATE Vellum::Gpu)
+target_include_directories(vellum-layer-text-extent-test PRIVATE
+    ${PROJECT_SOURCE_DIR}/graphics/src)
+set_target_properties(vellum-layer-text-extent-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.layer-text-extent
+    COMMAND vellum-layer-text-extent-test "${PROJECT_SOURCE_DIR}/assets/fonts")

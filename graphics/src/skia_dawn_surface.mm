@@ -973,17 +973,13 @@ void record_gpu_time(skgpu::graphite::GpuFinishedContext context,
 std::optional<Rect> measured_text_extent(const PaintCommand& command,
                                          std::string_view directory, ParagraphSlot& slot,
                                          std::string* error) {
-    if (!slot.paragraph &&
-        [&] {
-            std::unique_ptr<skia::textlayout::Paragraph> paragraph;
-            if (!build_text_paragraph(text_draw_runs(command, own_paint_opacity(command)),
-                                      directory, paragraph, slot.metrics, error)) {
-                return false;
-            }
-            slot.paragraph = std::shared_ptr<skia::textlayout::Paragraph>(std::move(paragraph));
-            return true;
-        }()) {
-        return std::nullopt;
+    if (!slot.paragraph) {
+        std::unique_ptr<skia::textlayout::Paragraph> paragraph;
+        if (!build_text_paragraph(text_draw_runs(command, own_paint_opacity(command)),
+                                  directory, paragraph, slot.metrics, error)) {
+            return std::nullopt;
+        }
+        slot.paragraph = std::shared_ptr<skia::textlayout::Paragraph>(std::move(paragraph));
     }
     const auto& metrics = slot.metrics;
     float overhang = command.font_size;
@@ -2103,6 +2099,12 @@ private:
     std::uint64_t trims_ = 0;
     CacheTrimReason last_trim_ = CacheTrimReason::none;
 };
+
+std::optional<Rect> SkiaDawnSurfaceTestAccess::measure_layer_text_extent(
+    const PaintCommand& command, std::string_view directory, std::string* error) {
+    ParagraphSlot slot;
+    return measured_text_extent(command, directory, slot, error);
+}
 
 SkiaDawnSurface::SkiaDawnSurface(std::unique_ptr<Impl> impl) noexcept
     : impl_(std::move(impl)) {}

@@ -313,6 +313,16 @@ void default_policy_is_exact() {
     std::size_t layers = 0;
     for (int frame = 0; frame < 8; ++frame) {
         if (!render(*plain, scene) || !render(*cached, scene)) return;
+        const auto stats = cached->layer_cache_stats();
+        if (frame == 0) {
+            expect(stats.layers == 1U && stats.builds == 1U && stats.hits == 0U,
+                   "the text-containing faded group builds one image on its first frame",
+                   describe(stats));
+        } else if (frame == 1) {
+            expect(stats.layers == 1U && stats.builds == 0U && stats.hits == 1U,
+                   "the text-containing faded group reuses its image on its second frame",
+                   describe(stats));
+        }
         worst = std::max(worst, difference(*plain, *cached, 0).max_channel_delta);
         layers = std::max(layers, cached->layer_cache_stats().layers);
     }
