@@ -724,6 +724,31 @@ void composite_path_changes() {
           "removing a sibling under an opaque group leaves the survivor alone");
 }
 
+void whole_area_closure() {
+    using vellum::graphics::enclose_whole_areas;
+    const PixelRect target{0, 0, 200, 100};
+    const PixelRect layer{20, 0, 60, 40};
+    auto grown = enclose_whole_areas({{25, 5, 35, 15}}, {layer}, target);
+    check(grown.size() == 1 && grown[0] == layer, "a rect inside a layer becomes the layer's bounds");
+    grown = enclose_whole_areas({{10, 10, 30, 30}}, {layer}, target);
+    check(grown.size() == 1 && grown[0] == PixelRect{10, 0, 60, 40},
+          "a rect cutting a layer grows to hold the whole layer");
+    const PixelRect chained{55, 30, 90, 70};
+    grown = enclose_whole_areas({{25, 5, 35, 15}}, {layer, chained}, target);
+    check(grown.size() == 1 && grown[0] == PixelRect{20, 0, 90, 70},
+          "two layers chained by overlap both grow into the rect");
+    grown = enclose_whole_areas({{100, 80, 110, 90}, {150, 10, 160, 20}}, {layer, chained}, target);
+    check(grown.size() == 2 && grown[0] == PixelRect{100, 80, 110, 90} &&
+              grown[1] == PixelRect{150, 10, 160, 20},
+          "rects that miss every layer are unchanged");
+    grown = enclose_whole_areas({{25, 5, 35, 15}, {58, 2, 64, 6}}, {layer}, target);
+    check(grown.size() == 1 && grown[0] == PixelRect{20, 0, 64, 40},
+          "a rect the grown layer reaches is merged, so the result stays disjoint");
+    grown = enclose_whole_areas({{190, 90, 220, 120}}, {{180, 80, 260, 140}}, target);
+    check(grown.size() == 1 && grown[0] == PixelRect{180, 80, 200, 100},
+          "growth is clipped to the target");
+}
+
 void tracker() {
     check(vellum::graphics::parse_invalidation_reason("state") == InvalidationReason::state &&
               vellum::graphics::parse_invalidation_reason("timer") == InvalidationReason::timer &&
@@ -806,6 +831,7 @@ int main() {
     compositing_damage();
     transform_geometry();
     composite_path_changes();
+    whole_area_closure();
     tracker();
     if (failures != 0) {
         std::fprintf(stderr, "%d damage check(s) failed\n", failures);

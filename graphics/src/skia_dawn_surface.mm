@@ -796,42 +796,9 @@ bool close_over_layers(const Scene& scene, const std::vector<PaintCommand>& comm
         layers.push_back(intersection(area, target));
     }
     if (layers.empty()) return true;
-    const auto contains = [](const PixelRect& outer, const PixelRect& inner) {
-        return outer.left <= inner.left && outer.top <= inner.top &&
-               outer.right >= inner.right && outer.bottom >= inner.bottom;
-    };
-    for (bool changed = true; changed;) {
-        changed = false;
-        for (const auto& layer : layers) {
-            if (layer.empty()) continue;
-            const bool touched = std::any_of(rects.begin(), rects.end(),
-                [&](const PixelRect& rect) { return overlaps(rect, layer); });
-            const bool whole = std::any_of(rects.begin(), rects.end(),
-                [&](const PixelRect& rect) { return contains(rect, layer); });
-            if (touched && !whole) {
-                rects.push_back(layer);
-                changed = true;
-            }
-        }
-        for (std::size_t a = 0; a < rects.size(); ++a) {
-            for (std::size_t b = a + 1; b < rects.size();) {
-                if (overlaps(rects[a], rects[b])) {
-                    rects[a] = bounding_union(rects[a], rects[b]);
-                    rects.erase(rects.begin() + static_cast<std::ptrdiff_t>(b));
-                    b = a + 1;
-                    changed = true;
-                } else {
-                    ++b;
-                }
-            }
-        }
-    }
+    rects = enclose_whole_areas(std::move(rects), layers, target);
     std::int64_t area = 0;
-    for (auto& rect : rects) {
-        rect = intersection(rect, target);
-        area += rect.area();
-    }
-    std::erase_if(rects, [](const PixelRect& rect) { return rect.empty(); });
+    for (const auto& rect : rects) area += rect.area();
     return area < target.area();
 }
 

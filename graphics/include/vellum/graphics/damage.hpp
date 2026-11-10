@@ -235,6 +235,14 @@ inline constexpr std::uint32_t kDamageModelSceneVersion = 2U;
     return version <= kDamageModelSceneVersion;
 }
 
+/// Grows `rects` until every one of `areas` that a rect overlaps lies wholly
+/// inside a single rect, merging rects that overlap, to a fixed point. The
+/// result is disjoint and clipped to `target`. A renderer passes the extents
+/// of content that does not reproduce when drawn through a partial clip,
+/// such as a composited layer.
+[[nodiscard]] std::vector<PixelRect> enclose_whole_areas(
+    std::vector<PixelRect> rects, const std::vector<PixelRect>& areas, const PixelRect& target);
+
 /// Why the authoring host asked for a redraw (`invalidate.reason`).
 enum class InvalidationReason {
     state,

@@ -825,6 +825,45 @@ DamageRegion compute_scene_damage(const Scene& previous, const Scene& next, floa
     return region;
 }
 
+std::vector<PixelRect> enclose_whole_areas(std::vector<PixelRect> rects,
+                                           const std::vector<PixelRect>& areas,
+                                           const PixelRect& target) {
+    const auto contains = [](const PixelRect& outer, const PixelRect& inner) {
+        return outer.left <= inner.left && outer.top <= inner.top &&
+               outer.right >= inner.right && outer.bottom >= inner.bottom;
+    };
+    for (auto& rect : rects) rect = intersection(rect, target);
+    std::erase_if(rects, [](const PixelRect& rect) { return rect.empty(); });
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (const auto& candidate : areas) {
+            const PixelRect area = intersection(candidate, target);
+            if (area.empty()) continue;
+            const bool touched = std::any_of(rects.begin(), rects.end(),
+                [&](const PixelRect& rect) { return overlaps(rect, area); });
+            const bool whole = std::any_of(rects.begin(), rects.end(),
+                [&](const PixelRect& rect) { return contains(rect, area); });
+            if (touched && !whole) {
+                rects.push_back(area);
+                changed = true;
+            }
+        }
+        for (std::size_t first = 0; first < rects.size(); ++first) {
+            for (std::size_t second = first + 1; second < rects.size();) {
+                if (overlaps(rects[first], rects[second])) {
+                    rects[first] = bounding_union(rects[first], rects[second]);
+                    rects.erase(rects.begin() + static_cast<std::ptrdiff_t>(second));
+                    second = first + 1;
+                    changed = true;
+                } else {
+                    ++second;
+                }
+            }
+        }
+    }
+    return rects;
+}
+
 std::optional<InvalidationReason> parse_invalidation_reason(std::string_view reason) noexcept {
     if (reason == "state") return InvalidationReason::state;
     if (reason == "timer") return InvalidationReason::timer;
