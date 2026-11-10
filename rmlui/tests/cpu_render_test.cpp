@@ -91,6 +91,13 @@ void test_premultiplied_blend() {
     r.end_frame();
     // out = src + dst * (255 - src.a) / 255, rounded: 128 + 0, 0, 0 + 127, 128 + 127.
     VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 3, 3), 128, 0, 127, 255));
+
+    // Values where rounding shows: 200 * 155 / 255 = 121.57 rounds to 122.
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    r.RenderGeometry(quad(r, 0, 0, 8, 8, {0, 0, 200, 200}), {0, 0}, 0);
+    r.RenderGeometry(quad(r, 0, 0, 8, 8, {100, 0, 0, 100}), {0, 0}, 0);
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 3, 3), 100, 0, 122, 222));
 }
 
 void test_textures_nearest() {
