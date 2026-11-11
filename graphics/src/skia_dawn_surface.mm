@@ -1775,7 +1775,6 @@ private:
             reason = FullRepaintReason::full_render;
         }
         const auto target = target_rect();
-        const auto commands = make_paint_commands(scene);
         if (reason == FullRepaintReason::none &&
             !close_over_layers(scene, commands, config_.scale, target, rects)) {
             reason = FullRepaintReason::full_damage;
