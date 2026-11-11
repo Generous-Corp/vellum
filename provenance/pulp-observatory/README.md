@@ -77,8 +77,9 @@ The observation stays `pending`, for a person to classify, when:
   resolution.
 
 Any later resolution overrides an automatic one, which is how a person
-reverses it. The report counts the effective automatic resolutions as
-`auto_classified`.
+reverses it. Once any exist, the report counts the effective automatic
+resolutions as `auto_classified`. Only the receiver writes the report, so the
+field first appears in its next reconciliation.
 
 The list is a policy file (CODEOWNERS and `POLICY_FILES`). Adding or widening
 an entry therefore needs the two release-path reviews.

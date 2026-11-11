@@ -5,7 +5,6 @@
 - Pending events: 4
 - Overdue events: 0
 - Release blockers: 0
-- Automatically classified: 0
 - Observatory effort: 0.0% of framework effort
 
 ## Events
