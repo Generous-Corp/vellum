@@ -81,6 +81,20 @@ std::unique_ptr<SkiaDawnSurface> make_surface(std::uint32_t width, std::uint32_t
     return surface;
 }
 
+// A surface for scenes its damage model does not serve. The static and
+// expensive triggers cache only such scenes (a scene partial redraw serves
+// caches only exact images), and the layered scene is version 2, which the
+// current damage model serves, so these surfaces stop at version 1.
+constexpr std::uint32_t kUnservedDamageModel = 1U;
+
+std::unique_ptr<SkiaDawnSurface> make_inexact_surface(std::uint32_t width, std::uint32_t height,
+                                                      float scale,
+                                                      const LayerCachePolicy& policy = inexact()) {
+    auto surface = make_surface(width, height, scale, policy);
+    if (surface) SkiaDawnSurfaceTestAccess::set_damage_model_version(*surface, kUnservedDamageModel);
+    return surface;
+}
+
 struct Capture final {
     bool ok = false;
     std::string error;
@@ -270,7 +284,7 @@ void equality_with_and_without_caching() {
 
         const Scene scene = layered_scene(static_cast<float>(width), static_cast<float>(height), 2U);
         auto plain = make_surface(width, height, scale, uncached());
-        auto cached = make_surface(width, height, scale, inexact());
+        auto cached = make_inexact_surface(width, height, scale);
         if (!plain || !cached) return;
         for (int frame = 1; frame <= 5; ++frame) {
             if (!render(*plain, scene) || !render(*cached, scene)) return;
@@ -352,7 +366,7 @@ void inexact_error_grows_with_overlap() {
     }
     scene.root.children.push_back(std::move(stack));
     auto plain = make_surface(width, height, 1.0F, uncached());
-    auto cached = make_surface(width, height, 1.0F, inexact());
+    auto cached = make_inexact_surface(width, height, 1.0F);
     if (!plain || !cached) return;
     for (int frame = 0; frame < 5; ++frame) {
         if (!render(*plain, scene) || !render(*cached, scene)) return;
@@ -369,8 +383,8 @@ void cached_frames_are_deterministic() {
     constexpr std::uint32_t width = 320;
     constexpr std::uint32_t height = 240;
     const Scene scene = layered_scene(width, height, 2U);
-    auto first = make_surface(width, height, 2.0F, inexact());
-    auto second = make_surface(width, height, 2.0F, inexact());
+    auto first = make_inexact_surface(width, height, 2.0F);
+    auto second = make_inexact_surface(width, height, 2.0F);
     if (!first || !second) return;
     for (int frame = 1; frame <= 4; ++frame) {
         if (!render(*first, scene) || !render(*second, scene)) return;
@@ -401,7 +415,7 @@ void invalidation_matrix() {
     float scale = 2.0F;
     Scene scene = layered_scene(width, height, 2U);
     auto plain = make_surface(width, height, scale, uncached());
-    auto cached = make_surface(width, height, scale, inexact());
+    auto cached = make_inexact_surface(width, height, scale);
     if (!plain || !cached) return;
     const auto warm = [&]() {
         for (int frame = 0; frame < 4; ++frame) {
@@ -519,7 +533,7 @@ void device_loss_rebuild() {
     constexpr std::uint32_t width = 320;
     constexpr std::uint32_t height = 240;
     const Scene scene = layered_scene(width, height, 2U);
-    auto lost = make_surface(width, height, 2.0F, inexact());
+    auto lost = make_inexact_surface(width, height, 2.0F);
     if (!lost) return;
     for (int frame = 0; frame < 5; ++frame) {
         if (!render(*lost, scene)) return;
@@ -533,7 +547,7 @@ void device_loss_rebuild() {
     expect(gone.layers == 0U && gone.invalidated(LayerInvalidation::device_lost) == warm.layers,
            "device loss drops every image", describe(gone));
 
-    auto rebuilt = make_surface(width, height, 2.0F, inexact());
+    auto rebuilt = make_inexact_surface(width, height, 2.0F);
     if (!rebuilt) return;
     for (int frame = 0; frame < 5; ++frame) {
         if (!render(*rebuilt, scene)) return;
@@ -555,13 +569,12 @@ void device_loss_rebuild() {
 // stay byte-identical to full repaints even when the two surfaces' cache
 // histories differ (here a reload on one of them).
 //
-// Partial redraw serves scenes up to `kDamageModelSceneVersion`. While that is
-// version 1, the scene here carries no layer at all: the only image that
-// composites exactly is a faded group's, and opacity is a version-2 field, so
-// `layered_scene` adds its faded group only from version 2. This test then
-// checks that partial frames stay byte-identical with caching on and that no
-// static or expensive subtree is cached; `exact_layer_inside_damage_rect`
-// covers compositing an exact image inside a damage rectangle.
+// Partial redraw serves scenes up to `kDamageModelSceneVersion`, which carries
+// opacity, so the layered scene includes its faded group. The test checks that
+// partial frames stay byte-identical with caching on and that only the faded
+// group is cached, never a static or expensive subtree;
+// `exact_layer_inside_damage_rect` covers compositing an exact image inside a
+// damage rectangle.
 void partial_presentation_with_layers() {
     constexpr std::uint32_t width = 400;
     constexpr std::uint32_t height = 300;
@@ -608,9 +621,8 @@ void partial_presentation_with_layers() {
 }
 
 // An exact image composited inside a damage rectangle is byte-identical to
-// drawing its group directly. A scene partial redraw serves cannot carry
-// opacity yet (see `partial_presentation_with_layers`), so this raises the
-// surface's damage-model version to 2 and supplies the damage itself.
+// drawing its group directly. The damage here is supplied rather than
+// computed, so the frame is partial whatever the scene's version.
 void exact_layer_inside_damage_rect() {
     constexpr std::uint32_t width = 320;
     constexpr std::uint32_t height = 240;
@@ -619,7 +631,6 @@ void exact_layer_inside_damage_rect() {
     auto plain = make_surface(width, height, scale, uncached());
     auto partial = make_surface(width, height, scale, {});
     if (!plain || !partial) return;
-    SkiaDawnSurfaceTestAccess::set_damage_model_version(*partial, 2U);
     if (!render(*plain, scene) || !render(*partial, scene)) return;
     expect(partial->layer_cache_stats().layers == 1U,
            "the faded group is cached from its first frame",
@@ -665,7 +676,8 @@ void budget_on_the_gpu() {
     constexpr std::uint32_t height = 240;
     const Scene scene = layered_scene(width, height, 2U);
     auto plain = make_surface(width, height, 2.0F, uncached());
-    auto cached = make_surface(width, height, 2.0F, {.allow_inexact = true, .max_layers = 1});
+    auto cached = make_inexact_surface(width, height, 2.0F,
+                                       {.allow_inexact = true, .max_layers = 1});
     if (!plain || !cached) return;
     std::size_t refused = 0;
     for (int frame = 0; frame < 5; ++frame) {
