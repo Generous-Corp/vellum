@@ -65,12 +65,6 @@ Pulp consumer. The limits:
 - The owner is the agent's own handle or session, never `@danielraffel`.
 - Any later resolution overrides it.
 
-This rule and the reviewed list `vellum-native-paths.json` cover different
-cases. When the list is present, `reconcile` classifies an event automatically
-if every mapped path is on it, and the owner is the policy, not a person. This
-rule is for an author classifying events by hand when the work is Vellum-native
-but its paths are not on the list. If the list covers an event, leave it alone.
-
 ## Pull requests: record events, leave the cursor
 
 A pull request does not advance `cursor.json` or regenerate
