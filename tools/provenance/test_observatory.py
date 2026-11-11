@@ -2768,14 +2768,16 @@ class ReportReceiverOnlyTests(unittest.TestCase):
     def test_an_input_change_does_not_excuse_a_report_that_differs_from_its_writers(self) -> None:
         # Negative control: the inputs changed, but the checked-out report is not
         # the copy its last writer committed (a local edit nobody committed).
+        # A generator change excuses any difference it could explain, so only
+        # the report pin can refuse this.
         run(self.root, "git", "checkout", "-q", "-b", "budgets", self.base)
-        self.lengthen_deadlines()
-        commit_all(self.root, "lengthen the classification deadlines")
+        write(self.root / "tools/provenance/observatory_report.py", "# a new report field\n")
+        commit_all(self.root, "teach the generator a new field")
         self.verify(self.base)  # control
         path = self.root / observatory.REPORT_MD_PATH
         path.write_text(path.read_text() + "\nedited\n")
         self.assertFalse(observatory.same_blob_as(self.root, self.base, observatory.REPORT_PATHS))
-        with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
+        with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.md is stale"):
             self.verify(self.base)
 
     def test_a_stale_report_without_an_input_change_still_fails(self) -> None:
