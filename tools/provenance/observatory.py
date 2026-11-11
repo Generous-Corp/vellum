@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 if __package__ in {None, ""}:
     sys.path.append(str(Path(__file__).resolve().parent))
@@ -1121,8 +1122,10 @@ def verify(
         vellum_tail_policy == "coverage"
         and not receiver
         and report_writer
-        and report_is_writers_copy(root, report_writer)
-        and report_inputs_changed_since(root, report_writer)
+        and report_explained_by_input_change(
+            root, report_writer, cursor=cursor, events=committed_events,
+            coverage_gaps=committed_gaps, now=now,
+        )
     ):
         raise ObservatoryError(stale)
     if check_now is not None:
@@ -1229,37 +1232,81 @@ def last_report_writer(root: Path, anchor: str = "HEAD") -> str | None:
     return commit or None
 
 
-# Everything the report is computed from besides the ledger itself: the
-# generator, the event schema, the budgets (deadlines and thresholds), the
-# path map and the lock. A path missing here only makes verify stricter.
-REPORT_INPUT_PATHS = frozenset({BUDGETS_PATH.as_posix(), MAP_PATH.as_posix(), LOCK_PATH.as_posix()})
-REPORT_INPUT_PREFIXES = ("tools/provenance/observatory", (OBSERVATORY / "schemas").as_posix() + "/")
+# What the report is computed from besides the ledger and the cursor. The
+# writer's own copy of each rebuilt input is read back, so a change to one of
+# them must still reproduce the committed report exactly. The generator, the
+# event schema and the path map cannot be read back that way.
+TRUST_POLICY_PATH = Path("provenance/authority/trust-policy.v1.json")
+REPORT_REBUILT_INPUTS = (BUDGETS_PATH, LOCK_PATH, TRUST_POLICY_PATH)
+REPORT_CODE_INPUT_PATHS = frozenset({MAP_PATH.as_posix()})
+REPORT_CODE_INPUT_PREFIXES = ("tools/provenance/observatory", (OBSERVATORY / "schemas").as_posix() + "/")
 
 
 def report_inputs_changed_since(root: Path, writer: str) -> list[str]:
-    """Report inputs, other than the ledger, that changed after `writer`.
-
-    A change to the generator or the budgets alters what a fresh regenerate
-    of the same ledger produces. The committed report then cannot match it
-    until the receiver regenerates it after landing, and no change but the
-    receiver's may write it.
-    """
+    """Report inputs, other than the ledger and the cursor, that changed after `writer`."""
+    rebuilt = {path.as_posix() for path in REPORT_REBUILT_INPUTS}
     changed = git(root, "diff", "--name-only", "--no-renames", writer, "HEAD").splitlines()
     return sorted(
         path for path in changed
-        if path in REPORT_INPUT_PATHS or path.startswith(REPORT_INPUT_PREFIXES)
+        if path in rebuilt or path in REPORT_CODE_INPUT_PATHS or path.startswith(REPORT_CODE_INPUT_PREFIXES)
     )
 
 
-def report_is_writers_copy(root: Path, writer: str) -> bool:
-    """The checked-out report is byte-identical to the copy `writer` committed."""
-    for path in REPORT_PATHS:
+def same_blob_as(root: Path, writer: str, paths: tuple[str, ...]) -> bool:
+    """Each checked-out path is byte-identical to the copy `writer` committed."""
+    for path in paths:
         try:
             if git(root, "hash-object", "--", path) != git(root, "rev-parse", f"{writer}:{path}"):
                 return False
         except ObservatoryError:
             return False
     return True
+
+
+def report_explained_by_input_change(
+    root: Path, writer: str, *, cursor: dict[str, object],
+    events: list[tuple[Path, dict[str, object]]], coverage_gaps: list[dict[str, str]],
+    now: datetime | None,
+) -> bool:
+    """A stale report is the writer's, and a change to its inputs accounts for the difference.
+
+    Only the receiver writes the report and the cursor, so a change that is
+    not the receiver's must carry both exactly as their last writer committed
+    them. A change to the budgets, the lock or the trust policy alters what
+    a fresh regenerate prints (every deadline, for example); rebuilding with
+    the writer's copies must then reproduce the committed report exactly. A
+    change to the generator, the event schema or the path map cannot be
+    rebuilt that way, so its presence since the writer is accepted, whether
+    or not a rebuilt input changed beside it. Until the receiver regenerates
+    the report, that holds for every later change too.
+    """
+    if not same_blob_as(root, writer, REPORT_PATHS + (CURSOR_PATH.as_posix(),)):
+        return False
+    changed = report_inputs_changed_since(root, writer)
+    if not changed:
+        return False
+    rebuilt = {path.as_posix() for path in REPORT_REBUILT_INPUTS}
+    if any(path not in rebuilt for path in changed):
+        # The generator may read the rebuilt inputs differently now (a new
+        # budget key, say), so the writer's copies may not even load.
+        return True
+    try:
+        with tempfile.TemporaryDirectory() as temporary:
+            snapshot = Path(temporary)
+            for path in REPORT_REBUILT_INPUTS:
+                content = git(root, "show", f"{writer}:{path.as_posix()}")
+                (snapshot / path).parent.mkdir(parents=True, exist_ok=True)
+                (snapshot / path).write_text(content + "\n", encoding="utf-8")
+            expected = build_report(
+                root=snapshot, lock=load_json(snapshot / LOCK_PATH), cursor=cursor, events=events,
+                budgets=load_budgets(snapshot / BUDGETS_PATH), now=now, coverage_gaps=coverage_gaps,
+            )
+    except (ObservatoryError, KeyError, ValueError, TypeError, OSError):
+        return False
+    return (
+        load_json(root / REPORT_JSON_PATH) == expected
+        and (root / REPORT_MD_PATH).read_text(encoding="utf-8") == render_markdown(expected)
+    )
 
 
 def refuse_report_edit(root: Path, git_base: str | None) -> bool:

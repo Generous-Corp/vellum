@@ -2774,7 +2774,7 @@ class ReportReceiverOnlyTests(unittest.TestCase):
         self.verify(self.base)  # control
         path = self.root / observatory.REPORT_MD_PATH
         path.write_text(path.read_text() + "\nedited\n")
-        self.assertFalse(observatory.report_is_writers_copy(self.root, self.base))
+        self.assertFalse(observatory.same_blob_as(self.root, self.base, observatory.REPORT_PATHS))
         with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
             self.verify(self.base)
 
@@ -2791,6 +2791,67 @@ class ReportReceiverOnlyTests(unittest.TestCase):
         self.assertEqual(observatory.report_inputs_changed_since(self.root, bad_base), [])
         with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
             self.verify(bad_base)
+        # A budgets change that does not account for the difference does not excuse it:
+        # rebuilt with the writer's budgets, the report still differs.
+        path = self.root / observatory.BUDGETS_PATH
+        path.write_text(path.read_text() + "# reviewed\n")
+        commit_all(self.root, "touch the budgets")
+        self.assertEqual(observatory.report_inputs_changed_since(self.root, bad_base),
+                         [observatory.BUDGETS_PATH.as_posix()])
+        with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
+            self.verify(bad_base)
+
+    def test_an_input_change_does_not_excuse_a_cursor_edit(self) -> None:
+        # Only the receiver moves the cursor. A generator change, which excuses
+        # a difference it cannot be rebuilt to explain, must not let a cursor
+        # edit through beside it.
+        run(self.root, "git", "checkout", "-q", "-b", "cursor", self.base)
+        write(self.root / "tools/provenance/observatory_report.py", "# a new report field\n")
+        commit_all(self.root, "teach the generator a new field")
+        self.verify(self.base)  # control
+        path = self.root / observatory.CURSOR_PATH
+        write_json(path, {**json.loads(path.read_text()), "reconciled_at": "2026-10-01T00:00:00Z"})
+        commit_all(self.root, "move the cursor's clock")
+        with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
+            self.verify(self.base)
+
+    def test_a_generator_change_with_a_new_budget_key_is_accepted(self) -> None:
+        # The common pairing: the generator learns a budget key and budgets.yaml
+        # gains it. The writer's budgets no longer load, so no rebuild is tried.
+        run(self.root, "git", "checkout", "-q", "-b", "new-budget", self.base)
+        required = observatory.load_budgets.__globals__["REQUIRED_BUDGETS"] | {"new_budget"}
+        with mock.patch.dict(observatory.load_budgets.__globals__, {"REQUIRED_BUDGETS": required}):
+            self.lengthen_deadlines()
+            path = self.root / observatory.BUDGETS_PATH
+            path.write_text(path.read_text().replace("observatory:\n", "observatory:\n  new_budget: 1\n"))
+            commit_all(self.root, "a new budget")
+            with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
+                self.verify(self.base)  # control: budgets alone are rebuilt, and the writer's no longer load
+            write(self.root / "tools/provenance/observatory_common.py", "# reads new_budget\n")
+            commit_all(self.root, "the generator reads it")
+            self.verify(self.base)
+
+    def test_a_generator_change_leaves_the_report_to_the_receiver(self) -> None:
+        # A generator change cannot be rebuilt from the writer's tree, so its
+        # presence since the writer is what excuses the difference.
+        original = observatory.build_report
+
+        def new_generator(**kwargs):
+            return {**original(**kwargs), "native_policy": "framework-only"}
+
+        run(self.root, "git", "checkout", "-q", "-b", "generator", self.base)
+        self.resolve(self.pending[0], "2026-10-11T00:10:00Z")
+        commit_all(self.root, "classify one observation")
+        with mock.patch.object(observatory, "build_report", new_generator):
+            with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
+                self.verify(self.base)  # control: the generator's file is unchanged
+            write(self.root / "tools/provenance/observatory_report.py", "# a new report field\n")
+            commit_all(self.root, "teach the generator a new field")
+            self.assertEqual(observatory.report_inputs_changed_since(self.root, self.base),
+                             ["tools/provenance/observatory_report.py"])
+            self.verify(self.base)
+            with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
+                self.verify(self.base, policy="reconciled")
 
 if __name__ == "__main__":
     unittest.main()
