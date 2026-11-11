@@ -50,6 +50,27 @@ so the latest resolution wins independently of filename order. Add a later
 resolution to expand or close an obligation—never edit or delete an earlier
 observation or resolution.
 
+### Classifying your own events `framework-only`
+
+Owner decision, 2026-11-10: an agent may classify the observation events of its
+own pull request `framework-only` when the work is Vellum-native and has no
+Pulp consumer. The limits:
+
+- Only events for commits of the agent's own pull request.
+- Only `framework-only`.
+- Never for paths under `framework/` or `mirror/`, for a schema or API change,
+  or for security or P0 work.
+- The rationale shows a search of Pulp for the touched identifiers that returns
+  0, and a control search on the same instrument that returns more than 0.
+- The owner is the agent's own handle or session, never `@danielraffel`.
+- Any later resolution overrides it.
+
+This rule and the reviewed list `vellum-native-paths.json` cover different
+cases. When the list is present, `reconcile` classifies an event automatically
+if every mapped path is on it, and the owner is the policy, not a person. This
+rule is for an author classifying events by hand when the work is Vellum-native
+but its paths are not on the list. If the list covers an event, leave it alone.
+
 ## Pull requests: record events, leave the cursor
 
 A pull request does not advance `cursor.json` or regenerate
