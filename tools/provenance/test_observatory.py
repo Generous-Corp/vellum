@@ -2857,5 +2857,199 @@ class ReportReceiverOnlyTests(unittest.TestCase):
         self.verify(self.base)  # a pull request, or main before the next coalesce
         with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
             self.verify(self.base, policy="reconciled")  # a tag judges the committed report exactly
+
+    def observe_on_branch(self, name: str, path: str) -> tuple[str, str]:
+        """A pull request with one mapped commit, carrying its own observation event."""
+        run(self.vellum, "git", "checkout", "-q", "-b", name, self.vellum_head)
+        write(self.vellum / path, f"int {name} = 1;\n")
+        source = commit_all(self.vellum, f"{name}: mapped change")
+        run(self.root, "git", "checkout", "-q", "-b", name, self.base)
+        now = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=2)
+        observatory.reconcile(root=self.root, pulp_repo=self.pulp, vellum_repo=self.vellum,
+                              pulp_target=self.pulp_head, vellum_target=source,
+                              now_text=now.strftime("%Y-%m-%dT%H:%M:%SZ"), write=True, events_only=True,
+                              vellum_main=self.vellum_head)
+        self.assertTrue((self.root / observatory.EVENTS_PATH / f"vellum-{source}.yaml").exists())
+        return source, commit_all(self.root, f"{name}: record its observation")
+
+    def test_two_observation_changes_merge_cleanly_in_either_order(self) -> None:
+        first_source, first = self.observe_on_branch("first", "graphics/first.cpp")
+        second_source, second = self.observe_on_branch("second", "graphics/second_pr.cpp")
+        # Vellum main after both pull requests landed through queue merges.
+        run(self.vellum, "git", "checkout", "-q", "--detach", self.vellum_head)
+        for branch in ("first", "second"):
+            run(self.vellum, "git", "merge", "-q", "--no-ff", "--no-edit", branch)
+        landed = run(self.vellum, "git", "rev-parse", "HEAD")
+        check_now = datetime.now(timezone.utc) + timedelta(minutes=1)
+        for order in ((first, second), (second, first)):
+            with self.subTest(order=order):
+                run(self.root, "git", "checkout", "-q", "--detach", self.base)
+                for head in order:
+                    merged = subprocess.run(["git", "merge", "-q", "--no-ff", "--no-edit", head], cwd=self.root,
+                                            capture_output=True, text=True)
+                    self.assertEqual(merged.returncode, 0, merged.stdout + merged.stderr)
+                report = observatory.verify(
+                    root=self.root, pulp_repo=self.pulp, vellum_repo=self.vellum, git_base=self.base,
+                    pulp_target=self.pulp_head, vellum_target=landed, vellum_tail_policy="coverage",
+                    check_now=check_now, time_budgets="report",
+                )
+                self.assertEqual(report["coverage_gaps"], [])
+                self.assertEqual(report["pending"], len(self.pending) + 2)  # both observations count live
+        # Negative control: the same landing with only one side's event is a coverage gap.
+        run(self.root, "git", "checkout", "-q", "--detach", self.base)
+        run(self.root, "git", "merge", "-q", "--no-ff", "--no-edit", first)
+        with self.assertRaisesRegex(observatory.ObservatoryError, "cursor-event-coverage-gap"):
+            observatory.verify(
+                root=self.root, pulp_repo=self.pulp, vellum_repo=self.vellum, git_base=self.base,
+                pulp_target=self.pulp_head, vellum_target=landed, vellum_tail_policy="coverage",
+                check_now=check_now, time_budgets="report",
+            )
+
+    def lengthen_deadlines(self) -> None:
+        path = self.root / observatory.BUDGETS_PATH
+        text = path.read_text()
+        for old, new in (("hours: 24", "hours: 48"), ("business_days: 3", "business_days: 4"),
+                         ("other_classification_days: 7", "other_classification_days: 8")):
+            self.assertIn(old, text)
+            text = text.replace(old, new)
+        path.write_text(text)
+
+    def test_a_change_to_the_report_inputs_leaves_the_report_to_the_receiver(self) -> None:
+        # A change to the budgets (or the generator) alters every deadline a
+        # fresh regenerate prints, but only the receiver may write the report.
+        run(self.root, "git", "checkout", "-q", "-b", "budgets", self.base)
+        self.lengthen_deadlines()
+        self.resolve(self.pending[0], "2026-10-11T00:10:00Z")
+        changed = commit_all(self.root, "lengthen the classification deadlines")
+        self.assertEqual(observatory.report_inputs_changed_since(self.root, self.base),
+                         [observatory.BUDGETS_PATH.as_posix()])
+        self.verify(self.base)  # a pull request
+        # main after it lands, and a later unrelated landing before the coalesce
+        run(self.root, "git", "checkout", "-q", "--detach", self.base)
+        run(self.root, "git", "merge", "-q", "--no-ff", "--no-edit", changed)
+        landed = run(self.root, "git", "rev-parse", "HEAD")
+        self.verify(run(self.root, "git", "rev-parse", "HEAD^1"))
+        self.resolve(self.pending[1], "2026-10-11T00:11:00Z")
+        commit_all(self.root, "a later classification")
+        self.verify(landed)
+        # A tag still judges the report exactly, and fails until the receiver runs.
+        with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
+            self.verify(self.base, policy="reconciled")
+        # The receiver's regenerate is judged exactly and passes.
+        write(self.vellum / "graphics/third.cpp", "int third = 1;\n")
+        third = commit_all(self.vellum, "main lands another mapped change")
+        now = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=2)
+        observatory.reconcile(root=self.root, pulp_repo=self.pulp, vellum_repo=self.vellum,
+                              pulp_target=self.pulp_head, vellum_target=third,
+                              now_text=now.strftime("%Y-%m-%dT%H:%M:%SZ"), write=True)
+        receiver_base = run(self.root, "git", "rev-parse", "HEAD")
+        commit_all(self.root, "chore(provenance): coalesce Pulp observatory evidence")
+        for policy in ("coverage", "reconciled"):
+            with self.subTest(policy=policy):
+                observatory.verify(root=self.root, pulp_repo=self.pulp, vellum_repo=self.vellum,
+                                   git_base=receiver_base, pulp_target=self.pulp_head, vellum_target=third,
+                                   vellum_tail_policy=policy, check_now=now + timedelta(minutes=1),
+                                   time_budgets="report")
+
+    def test_an_unrelated_prefixed_path_is_not_a_report_input(self) -> None:
+        run(self.root, "git", "checkout", "-q", "-b", "unrelated-observatory", self.base)
+        write(self.root / "tools/provenance/observatory-unrelated.txt", "not a generator\n")
+        report = self.root / observatory.REPORT_JSON_PATH
+        write_json(report, {**json.loads(report.read_text()), "pending": 0})
+        commit_all(self.root, "add an unrelated observatory-prefixed file")
+        self.assertEqual(observatory.report_inputs_changed_since(self.root, self.base), [])
+        with self.assertRaises(observatory.ObservatoryError):
+            self.verify(self.base)
+
+    def test_an_input_change_does_not_excuse_a_report_that_differs_from_its_writers(self) -> None:
+        # Negative control: the inputs changed, but the checked-out report is not
+        # the copy its last writer committed (a local edit nobody committed).
+        # A generator change excuses any difference it could explain, so only
+        # the report pin can refuse this.
+        run(self.root, "git", "checkout", "-q", "-b", "budgets", self.base)
+        write(self.root / "tools/provenance/observatory_report.py", "# a new report field\n")
+        commit_all(self.root, "teach the generator a new field")
+        self.verify(self.base)  # control
+        path = self.root / observatory.REPORT_MD_PATH
+        path.write_text(path.read_text() + "\nedited\n")
+        self.assertFalse(observatory.same_blob_as(self.root, self.base, observatory.REPORT_PATHS))
+        with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.md is stale"):
+            self.verify(self.base)
+
+    def test_a_stale_report_without_an_input_change_still_fails(self) -> None:
+        # Negative control: main's report does not match its ledger and nothing
+        # the report is computed from changed, so verify stays exact.
+        path = self.root / observatory.REPORT_JSON_PATH
+        write_json(path, {**json.loads(path.read_text()), "pending": 0})
+        write(self.root / "docs/note.md", "unrelated\n")
+        bad_base = commit_all(self.root, "a writer that is not the receiver")
+        run(self.root, "git", "checkout", "-q", "-b", "classify", bad_base)
+        self.resolve(self.pending[0], "2026-10-11T00:10:00Z")
+        commit_all(self.root, "classify one observation")
+        self.assertEqual(observatory.report_inputs_changed_since(self.root, bad_base), [])
+        with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
+            self.verify(bad_base)
+        # A budgets change that does not account for the difference does not excuse it:
+        # rebuilt with the writer's budgets, the report still differs.
+        path = self.root / observatory.BUDGETS_PATH
+        path.write_text(path.read_text() + "# reviewed\n")
+        commit_all(self.root, "touch the budgets")
+        self.assertEqual(observatory.report_inputs_changed_since(self.root, bad_base),
+                         [observatory.BUDGETS_PATH.as_posix()])
+        with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
+            self.verify(bad_base)
+
+    def test_an_input_change_does_not_excuse_a_cursor_edit(self) -> None:
+        # Only the receiver moves the cursor. A generator change, which excuses
+        # a difference it cannot be rebuilt to explain, must not let a cursor
+        # edit through beside it.
+        run(self.root, "git", "checkout", "-q", "-b", "cursor", self.base)
+        write(self.root / "tools/provenance/observatory_report.py", "# a new report field\n")
+        commit_all(self.root, "teach the generator a new field")
+        self.verify(self.base)  # control
+        path = self.root / observatory.CURSOR_PATH
+        write_json(path, {**json.loads(path.read_text()), "reconciled_at": "2026-10-01T00:00:00Z"})
+        commit_all(self.root, "move the cursor's clock")
+        with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
+            self.verify(self.base)
+
+    def test_a_generator_change_with_a_new_budget_key_is_accepted(self) -> None:
+        # The common pairing: the generator learns a budget key and budgets.yaml
+        # gains it. The writer's budgets no longer load, so no rebuild is tried.
+        run(self.root, "git", "checkout", "-q", "-b", "new-budget", self.base)
+        required = observatory.load_budgets.__globals__["REQUIRED_BUDGETS"] | {"new_budget"}
+        with mock.patch.dict(observatory.load_budgets.__globals__, {"REQUIRED_BUDGETS": required}):
+            self.lengthen_deadlines()
+            path = self.root / observatory.BUDGETS_PATH
+            path.write_text(path.read_text().replace("observatory:\n", "observatory:\n  new_budget: 1\n"))
+            commit_all(self.root, "a new budget")
+            with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
+                self.verify(self.base)  # control: budgets alone are rebuilt, and the writer's no longer load
+            write(self.root / "tools/provenance/observatory_common.py", "# reads new_budget\n")
+            commit_all(self.root, "the generator reads it")
+            self.verify(self.base)
+
+    def test_a_generator_change_leaves_the_report_to_the_receiver(self) -> None:
+        # A generator change cannot be rebuilt from the writer's tree, so its
+        # presence since the writer is what excuses the difference.
+        original = observatory.build_report
+
+        def new_generator(**kwargs):
+            return {**original(**kwargs), "native_policy": "framework-only"}
+
+        run(self.root, "git", "checkout", "-q", "-b", "generator", self.base)
+        self.resolve(self.pending[0], "2026-10-11T00:10:00Z")
+        commit_all(self.root, "classify one observation")
+        with mock.patch.object(observatory, "build_report", new_generator):
+            with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
+                self.verify(self.base)  # control: the generator's file is unchanged
+            write(self.root / "tools/provenance/observatory_report.py", "# a new report field\n")
+            commit_all(self.root, "teach the generator a new field")
+            self.assertEqual(observatory.report_inputs_changed_since(self.root, self.base),
+                             ["tools/provenance/observatory_report.py"])
+            self.verify(self.base)
+            with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
+                self.verify(self.base, policy="reconciled")
+
 if __name__ == "__main__":
     unittest.main()

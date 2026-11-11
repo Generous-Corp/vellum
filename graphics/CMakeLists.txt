@@ -2,6 +2,7 @@ add_library(vellum-graphics
     src/capture_stats.cpp
     src/damage.cpp
     src/image_asset.cpp
+    src/layer_cache.cpp
     src/paint_command.cpp
     src/path_geometry.cpp
     src/render_telemetry.cpp

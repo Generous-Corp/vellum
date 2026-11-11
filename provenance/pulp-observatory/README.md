@@ -84,6 +84,21 @@ field first appears in its next reconciliation.
 The list is a policy file (CODEOWNERS and `POLICY_FILES`). Adding or widening
 an entry therefore needs the two release-path reviews.
 
+### Classifying your own events `framework-only`
+
+Owner decision, 2026-11-10: an agent may classify the observation events of its
+own pull request `framework-only` when the work is Vellum-native and has no
+Pulp consumer. The limits:
+
+- Only events for commits of the agent's own pull request.
+- Only `framework-only`.
+- Never for paths under `framework/` or `mirror/`, for a schema or API change,
+  or for security or P0 work.
+- The rationale shows a search of Pulp for the touched identifiers that returns
+  0, and a control search on the same instrument that returns more than 0.
+- The owner is the agent's own handle or session, never `@danielraffel`.
+- Any later resolution overrides it.
+
 ## Pull requests: record events, leave the cursor
 
 A pull request does not advance `cursor.json` or regenerate
@@ -101,6 +116,25 @@ leaves the report alone, and two such pull requests merge in either order
 without conflict. Health and budgets are still judged on the live ledger at
 the current time. A tag keeps the exact `reconciled` comparison, so it fails
 on a report that lags its ledger.
+
+A change to what the report is computed from still leaves the report alone,
+although a fresh regenerate no longer matches it (a budgets change moves every
+deadline, for example). Under the coverage policy `verify` accepts that
+mismatch only when the report and `cursor.json` are byte-identical to the
+copies their last writer committed, and the change accounts for the
+difference:
+
+- For `product/budgets.yaml`, the lock and the trust policy, the report is
+  rebuilt with the writer's copies and must then match exactly.
+- The `observatory*.py` generator, the event schema and the path map cannot be
+  rebuilt that way, so a change to one of them since the writer is accepted,
+  with or without a rebuilt input beside it. Until the receiver regenerates
+  the report, that also holds for every later change, because the comparison
+  is with the report's writer, not with the change's base.
+
+Without such a change the comparison stays exact. The receiver writes the
+regenerated report after the change lands, and its reconciliation and every
+tag are judged exactly.
 
 To record the branch's own observations:
 

@@ -1,0 +1,23 @@
+{
+  "contract_tests": [
+    "vellum.gpu.layer-cache",
+    "vellum.layer-cache",
+    "vellum.layer-text-extent"
+  ],
+  "created_at": "2026-11-10T17:54:59Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-4c89b8860e2222f84a1b30a9f0441aa82a0ac8e9",
+  "kind": "resolution",
+  "linked_commits": [
+    "4c89b8860e2222f84a1b30a9f0441aa82a0ac8e9"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/295"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Corrects paragraph success handling inside Vellum's retained layer cache and adds focused extent and GPU cache regressions. Pulp's ownership record at aa630815630ca259b743651dacdc335f3d94a39a assigns graphics/src/skia_dawn_surface.mm to Generous-Corp/vellum as vellum_future_implementation. This changes no shared contract or Pulp source; the existing framework-only disposition for this layer-cache implementation still applies.",
+  "resolves": "vellum-4c89b8860e2222f84a1b30a9f0441aa82a0ac8e9",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
