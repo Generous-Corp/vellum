@@ -50,6 +50,40 @@ so the latest resolution wins independently of filename order. Add a later
 resolution to expand or close an obligation—never edit or delete an earlier
 observation or resolution.
 
+## Vellum-native paths: automatic framework-only
+
+`vellum-native-paths.json` lists Vellum files and directories that have no
+Pulp counterpart. Each entry names the identifiers it is built on
+(`absent_in_pulp`) and gives a reason. When `reconcile` records a Vellum
+observation whose every mapped and transitive path is listed, it writes a
+`framework-only` resolution beside it. That resolution's owner is
+`auto:vellum-native-paths@<entry ids>`, not a person, and its rationale cites
+the list and DECISIONS df7573679.
+
+The observation stays `pending`, for a person to classify, when:
+- any of its paths is not listed;
+- it carries a schema or API delta;
+- it is security or P0;
+- it touches `framework/` or `mirror/`, where Vellum carries code exported
+  from Pulp.
+
+`verify` holds the list and the automatic resolutions to account:
+- each entry's identifiers must be absent from Pulp at the observatory cursor
+  (`git grep -w`). An entry whose identifier appears there is stale and fails
+  verify;
+- every effective automatic resolution must still qualify under the current
+  list;
+- the event schema accepts the `auto:` owner only on a `framework-only`
+  resolution.
+
+Any later resolution overrides an automatic one, which is how a person
+reverses it. Once any exist, the report counts the effective automatic
+resolutions as `auto_classified`. Only the receiver writes the report, so the
+field first appears in its next reconciliation.
+
+The list is a policy file (CODEOWNERS and `POLICY_FILES`). Adding or widening
+an entry therefore needs the two release-path reviews.
+
 ### Classifying your own events `framework-only`
 
 Owner decision, 2026-11-10: an agent may classify the observation events of its

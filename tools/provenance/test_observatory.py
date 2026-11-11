@@ -2552,6 +2552,192 @@ class OwnCommitEventTests(unittest.TestCase):
             self.check()
 
 
+class VellumNativePathTests(unittest.TestCase):
+    """Automatic framework-only resolutions from provenance/pulp-observatory/vellum-native-paths.json."""
+
+    ENTRIES = [{"id": "native-thing", "paths": ["graphics/native.cpp", "graphics/native/"],
+                "absent_in_pulp": ["NativeOnlySymbol"], "reason": "Vellum-only."}]
+
+    def native_module(self):
+        return sys.modules[observatory.load_native_paths.__module__]
+
+    def observation(self, **overrides):
+        event = {"event_id": "vellum-" + "a" * 40, "source_repository": "Generous-Corp/vellum",
+                 "source_commit": "a" * 40, "mapped_paths": ["graphics/native.cpp"], "transitive_paths": [],
+                 "schema_api_deltas": [], "class": "rendering", "severity": None,
+                 "contract_tests": ["vellum.gpu-native"]}
+        event.update(overrides)
+        return event
+
+    def test_a_fully_native_observation_qualifies_and_one_inherited_path_does_not(self) -> None:
+        nat = self.native_module()
+        self.assertEqual(nat.qualifying_entries(self.observation(), self.ENTRIES), ["native-thing"])
+        self.assertEqual(nat.qualifying_entries(
+            self.observation(mapped_paths=["graphics/native/a.cpp", "graphics/native.cpp"]), self.ENTRIES),
+            ["native-thing"])
+        # Negative control: one path with a Pulp counterpart keeps it pending.
+        self.assertIsNone(nat.qualifying_entries(
+            self.observation(mapped_paths=["graphics/native.cpp", "graphics/skia_dawn_surface.mm"]), self.ENTRIES))
+        self.assertIsNone(nat.qualifying_entries(
+            self.observation(transitive_paths=["graphics/CMakeLists.txt"]), self.ENTRIES))
+
+    def test_the_guards_keep_it_pending(self) -> None:
+        nat = self.native_module()
+        for overrides in ({"schema_api_deltas": ["graphics/native.cpp"]},
+                          {"include_dependency_deltas": ["graphics/native/api.hpp"]}, {"class": "security"},
+                          {"severity": "P0"}, {"mapped_paths": ["framework/core/native.cpp"]},
+                          {"source_repository": "Generous-Corp/pulp"}, {"mapped_paths": []}):
+            with self.subTest(overrides=overrides):
+                self.assertIsNone(nat.qualifying_entries(self.observation(**overrides), self.ENTRIES))
+        self.assertIsNone(nat.qualifying_entries(self.observation(), []))
+        # framework/ never qualifies, even if an entry (bypassing the loader) lists it.
+        listed = [{"id": "exported", "paths": ["framework/core/"], "absent_in_pulp": [], "reason": "r"}]
+        self.assertIsNone(nat.qualifying_entries(self.observation(mapped_paths=["framework/core/x.cpp"]), listed))
+
+    def test_a_header_change_found_by_the_real_delta_path_never_qualifies(self) -> None:
+        nat = self.native_module()
+        git_module = sys.modules[observatory.load_native_paths.__module__.replace("observatory_native", "observatory_git")]
+        paths = ["graphics/native/api.hpp"]
+        includes, schemas = git_module.delta_paths(paths)
+        self.assertEqual((includes, schemas), (paths, []))  # the header is not a schema/API delta
+        header = self.observation(mapped_paths=paths, include_dependency_deltas=includes, schema_api_deltas=schemas)
+        self.assertIsNone(nat.qualifying_entries(header, self.ENTRIES))
+        includes, schemas = git_module.delta_paths(["graphics/native/impl.cpp"])
+        impl = self.observation(mapped_paths=["graphics/native/impl.cpp"], include_dependency_deltas=includes,
+                                schema_api_deltas=schemas)
+        self.assertEqual(nat.qualifying_entries(impl, self.ENTRIES), ["native-thing"])
+
+    def test_an_entry_with_no_absence_witness_is_rejected(self) -> None:
+        nat = self.native_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_json(root / nat.NATIVE_PATHS_PATH, {"schema_version": 1, "entries": [
+                {**self.ENTRIES[0], "absent_in_pulp": []}]})
+            with self.assertRaisesRegex(observatory.ObservatoryError, "at least one identifier"):
+                nat.load_native_paths(root)
+            write_json(root / nat.NATIVE_PATHS_PATH, {"schema_version": 1, "entries": self.ENTRIES})
+            self.assertEqual(nat.load_native_paths(root), self.ENTRIES)
+
+    def test_the_automatic_resolution_names_its_policy_not_a_person(self) -> None:
+        nat = self.native_module()
+        resolution = nat.auto_resolution(self.observation(), self.ENTRIES, "2026-11-10T00:00:00Z")
+        self.assertEqual(resolution["owner"], "auto:vellum-native-paths@native-thing")
+        self.assertEqual(resolution["disposition"], "framework-only")
+        self.assertNotIn("@danielraffel", json.dumps(resolution))
+        self.assertIn("vellum-native-paths.json", resolution["rationale"])
+        self.assertIn("df7573679", resolution["rationale"])
+        observatory.validate_event(resolution, Path(f"{resolution['event_id']}.yaml"))
+
+    def test_an_automatic_owner_is_refused_for_any_other_disposition_or_kind(self) -> None:
+        nat = self.native_module()
+        good = nat.auto_resolution(self.observation(), self.ENTRIES, "2026-11-10T00:00:00Z")
+        for disposition in sorted(observatory.DISPOSITIONS - {"framework-only", "pending"}):
+            with self.subTest(disposition=disposition), self.assertRaisesRegex(
+                    observatory.ObservatoryError, "may only resolve framework-only"):
+                observatory.validate_event({**good, "disposition": disposition}, Path(f"{good['event_id']}.yaml"))
+        with self.assertRaisesRegex(observatory.ObservatoryError, "may only resolve framework-only"):
+            nat.validate_owner({"kind": "observation", "owner": good["owner"]}, "x")
+        for owner in ("auto:vellum-native-paths@", "auto:other@x-y", "danielraffel", "@", "@bad handle"):
+            with self.subTest(owner=owner), self.assertRaises(observatory.ObservatoryError):
+                observatory.validate_event({**good, "owner": owner}, Path(f"{good['event_id']}.yaml"))
+        nat.validate_owner({"kind": "resolution", "disposition": "superseded", "owner": "@danielraffel"}, "x")
+
+    def test_the_list_is_validated(self) -> None:
+        nat = self.native_module()
+        bad_paths = (["graphics/*.cpp"], ["framework/core/x.cpp"], ["mirror/x"], ["/abs"], ["a/../b"], ["b", "a"], [])
+        for paths in bad_paths:
+            with self.subTest(paths=paths), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                write_json(root / nat.NATIVE_PATHS_PATH, {"schema_version": 1, "entries": [
+                    {"id": "x-y", "paths": paths, "absent_in_pulp": ["SomeSymbol"], "reason": "r"}]})
+                with self.assertRaises(observatory.ObservatoryError):
+                    nat.load_native_paths(root)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertEqual(nat.load_native_paths(root), [])
+            twice = [{"id": "x-y", "paths": ["a"], "absent_in_pulp": ["SomeSymbol"], "reason": "r"}] * 2
+            write_json(root / nat.NATIVE_PATHS_PATH, {"schema_version": 1, "entries": twice})
+            with self.assertRaisesRegex(observatory.ObservatoryError, "repeated"):
+                nat.load_native_paths(root)
+
+    def test_no_list_is_committed_until_the_data_follow_up(self) -> None:
+        nat = self.native_module()
+        self.assertFalse((observatory.ROOT / nat.NATIVE_PATHS_PATH).exists())
+        self.assertEqual(nat.load_native_paths(observatory.ROOT), [])
+
+    def test_an_entry_goes_stale_when_pulp_gains_its_symbol(self) -> None:
+        nat = self.native_module()
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp = Path(temporary) / "pulp"
+            base, head = init_repo(pulp, "core/canvas/canvas.cpp")
+            self.assertEqual(nat.stale_entries(self.ENTRIES, pulp, head), [])
+            write(pulp / "core/canvas/native.hpp", "struct NativeOnlySymbol {};\n")
+            gained = commit_all(pulp, "Pulp gains a counterpart")
+            problems = nat.stale_entries(self.ENTRIES, pulp, gained)
+            self.assertEqual(len(problems), 1)
+            self.assertIn("native-thing is stale", problems[0])
+            self.assertEqual(nat.stale_entries(self.ENTRIES, pulp, head), [])  # judged at the given target
+            with self.assertRaises(observatory.ObservatoryError):
+                nat.stale_entries(self.ENTRIES, pulp, "f" * 40)
+            self.assertTrue(nat.stale_entries(self.ENTRIES, None, head))  # cannot check: fails
+            # A search that errors is never read as "absent".
+            real_run = subprocess.run
+
+            def grep_fails(command, *args, **kwargs):
+                if list(command[:2]) == ["git", "grep"]:
+                    return subprocess.CompletedProcess(command, 128, "", "fatal: broken")
+                return real_run(command, *args, **kwargs)
+
+            with mock.patch.object(nat.subprocess, "run", side_effect=grep_fails):
+                with self.assertRaisesRegex(observatory.ObservatoryError, "cannot search Pulp"):
+                    nat.stale_entries(self.ENTRIES, pulp, head)
+
+    def test_an_automatic_resolution_the_list_no_longer_supports_fails_until_a_person_resolves(self) -> None:
+        nat = self.native_module()
+        observation = {**self.observation(), "disposition": "framework-only",
+                       "owner": "auto:vellum-native-paths@native-thing"}
+        self.assertEqual(nat.invalid_auto_resolutions([observation], self.ENTRIES), [])
+        narrowed = [{**self.ENTRIES[0], "paths": ["graphics/native/"]}]
+        self.assertTrue(nat.invalid_auto_resolutions([observation], narrowed))
+        # A later resolution by a person is effective instead, and the check is satisfied.
+        self.assertEqual(nat.invalid_auto_resolutions([{**observation, "owner": "@danielraffel"}], narrowed), [])
+        forged = {**self.observation(mapped_paths=["graphics/skia_dawn_surface.mm"]), "disposition": "framework-only",
+                  "owner": "auto:vellum-native-paths@native-thing"}
+        self.assertTrue(nat.invalid_auto_resolutions([forged], self.ENTRIES))
+
+    def test_reconcile_writes_the_automatic_resolution_beside_a_native_observation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            top = Path(temporary)
+            pulp, vellum, root, pulp_head, main, feature = ObservatoryTests._coverage_state(self, top)
+            write_json(root / self.native_module().NATIVE_PATHS_PATH,
+                       {"schema_version": 1, "entries": self.ENTRIES})
+            write(vellum / "graphics/native.cpp", "int native = 1;\n")
+            native_commit = commit_all(vellum, "a Vellum-native change")
+            result = observatory.reconcile(root=root, pulp_repo=pulp, vellum_repo=vellum, pulp_target=pulp_head,
+                                           vellum_target=native_commit, now_text="2026-10-11T00:05:00Z",
+                                           write=True, events_only=True)
+            self.assertIn(f"vellum-{native_commit}", result["new_events"])
+            self.assertIn(f"resolution-vellum-{native_commit}", result["new_events"])
+            # Negative control: the inherited render.cpp commit stays pending, with no resolution.
+            self.assertIn(f"vellum-{feature}", result["new_events"])
+            self.assertNotIn(f"resolution-vellum-{feature}", result["new_events"])
+            resolution = observatory.load_json(root / observatory.EVENTS_PATH / f"resolution-vellum-{native_commit}.yaml")
+            self.assertEqual(resolution["owner"], "auto:vellum-native-paths@native-thing")
+            effective = {e["event_id"]: e for e in observatory.effective_observations(observatory.load_events(root))}
+            self.assertEqual(effective[f"vellum-{native_commit}"]["disposition"], "framework-only")
+            self.assertEqual(effective[f"vellum-{feature}"]["disposition"], "pending")
+            report = observatory.verify(root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                                        allow_no_git_base=True, pulp_target=pulp_head,
+                                        vellum_target=native_commit, vellum_tail_policy="coverage")
+            self.assertEqual(report["auto_classified"], 1)
+            # Narrow the list: the committed automatic resolution no longer qualifies, so verify fails.
+            write_json(root / self.native_module().NATIVE_PATHS_PATH, {"schema_version": 1, "entries": [
+                {**self.ENTRIES[0], "paths": ["graphics/native/"]}]})
+            with self.assertRaisesRegex(observatory.ObservatoryError, "no longer supported"):
+                observatory.verify(root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None,
+                                   allow_no_git_base=True, pulp_target=pulp_head,
+                                   vellum_target=native_commit, vellum_tail_policy="coverage")
+
 class ReportReceiverOnlyTests(unittest.TestCase):
     """Only the receiver commits reports/current.*; changes leave it as their base had it."""
 

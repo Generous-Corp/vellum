@@ -141,7 +141,8 @@ def build_report(
             and event["class"] in {"security"}
         )
     ]
-    return {
+    auto_classified = sum(1 for event in effective if str(event.get("owner", "")).startswith("auto:"))
+    report = {
         "schema_version": 2,
         "state": str(lock["state"]),
         "generated_at": utc_text(now) if now is not None else None,
@@ -169,6 +170,11 @@ def build_report(
         ],
         "activation_blockers": activation_blockers(root, lock),
     }
+    # Present only once an automatic resolution exists, so a ledger without one
+    # projects to the same report the receiver already committed.
+    if auto_classified:
+        report["auto_classified"] = auto_classified
+    return report
 
 
 def render_markdown(report: dict[str, object]) -> str:
@@ -184,6 +190,7 @@ def render_markdown(report: dict[str, object]) -> str:
             f"- Observatory effort: {report['observatory_effort_percent']}% "
             "of framework effort"
         ),
+        *([f"- Automatically classified: {report['auto_classified']}"] if "auto_classified" in report else []),
         "",
         "## Events",
         "",

@@ -79,6 +79,12 @@ if __package__:
         build_report,
         render_markdown,
     )
+    from .observatory_native import (
+        auto_resolution,
+        invalid_auto_resolutions,
+        load_native_paths,
+        stale_entries,
+    )
 else:
     from observatory_common import (
         BUDGETS_PATH,
@@ -137,6 +143,12 @@ else:
         activation_blockers,
         build_report,
         render_markdown,
+    )
+    from observatory_native import (
+        auto_resolution,
+        invalid_auto_resolutions,
+        load_native_paths,
+        stale_entries,
     )
 
 
@@ -1037,6 +1049,11 @@ def verify(
     if allow_missing_source_repositories:
         gaps = [gap for gap in gaps if gap["reason"] != "source-repository-not-supplied"]
     now = parse_utc(cursor["reconciled_at"], "cursor.reconciled_at") if cursor.get("reconciled_at") else None
+    native = load_native_paths(root)
+    native_problems = stale_entries(native, pulp_repo, str(cursor["pulp"]["last_scanned_commit"]))
+    native_problems += invalid_auto_resolutions(effective_observations(events), native)
+    if native_problems:
+        raise ObservatoryError("; ".join(native_problems))
     report = build_report(root=root, lock=lock, cursor=cursor, events=events, budgets=budgets, now=now, coverage_gaps=gaps)
     # The committed report describes the reconciled range. Under the coverage
     # policy a pull request may add events for commits ahead of the cursor
@@ -1567,6 +1584,7 @@ def reconcile(
         for _, event in existing if event["kind"] == "observation"
     }
     new_events: list[dict[str, object]] = []
+    native = load_native_paths(root)
     for source, repo, target in (("pulp", pulp_repo, pulp_target), ("vellum", vellum_repo, vellum_target)):
         source_cursor = cursor[source]
         start = str(
@@ -1608,6 +1626,9 @@ def reconcile(
                 verify_event_against_git(observations[key], source, repo, mappings, rules)
             else:
                 new_events.append(event)
+                resolution = auto_resolution(event, native, now_text) if source == "vellum" else None
+                if resolution is not None:
+                    new_events.append(resolution)
         if not events_only:
             source_cursor["last_scanned_commit"] = target
     if not events_only:
