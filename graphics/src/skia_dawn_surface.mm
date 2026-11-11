@@ -2,11 +2,13 @@
 #include <vellum/graphics/capture_stats.hpp>
 #include <vellum/graphics/damage.hpp>
 #include <vellum/graphics/dawn_bootstrap.hpp>
+#include <vellum/graphics/layer_cache.hpp>
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/render_telemetry.hpp>
 #include <vellum/graphics/scene_acceptance.hpp>
 
+#include "skia_dawn_surface_test_access.hpp"
 #include <gpu_runtime/gpu_surface.hpp>
 
 #include "skia_resource_caches.hpp"
@@ -482,29 +484,36 @@ bool paragraph_for(std::vector<TextRun> runs, std::string_view directory,
     return true;
 }
 
+std::vector<TextRun> runs_of(const PaintCommand& command) {
+    if (!command.text_runs.empty() || command.text.empty()) return command.text_runs;
+    return {{
+        .text = command.text,
+        .style = {
+            .font_family = command.font_family,
+            .font_weight = command.font_weight,
+            .font_size = command.font_size,
+            .letter_spacing = command.letter_spacing,
+            .color = command.fill,
+            .underline = command.underline,
+            .strikethrough = command.strikethrough,
+        },
+    }};
+}
+
+// The runs `draw_text` shapes, with `opacity` folded into their colours.
+std::vector<TextRun> text_draw_runs(const PaintCommand& command, float opacity) {
+    auto runs = runs_of(command);
+    for (auto& run : runs) run.style.color.alpha *= opacity;
+    return runs;
+}
+
 bool draw_text(SkCanvas& canvas, const PaintCommand& command, float opacity,
                float layer_opacity, std::string_view directory, FrameResources& resources,
                ParagraphSlot* slot, std::string* error) {
-    std::vector<TextRun> runs = command.text_runs;
-    if (runs.empty() && !command.text.empty()) {
-        runs.push_back({
-            .text = command.text,
-            .style = {
-                .font_family = command.font_family,
-                .font_weight = command.font_weight,
-                .font_size = command.font_size,
-                .letter_spacing = command.letter_spacing,
-                .color = command.fill,
-                .underline = command.underline,
-                .strikethrough = command.strikethrough,
-            },
-        });
-    }
-    for (auto& run : runs) run.style.color.alpha *= opacity;
     ParagraphSlot built;
     ParagraphSlot& cached = slot != nullptr ? *slot : built;
     if (!cached.paragraph &&
-        !paragraph_for(std::move(runs), directory, resources, cached, error)) {
+        !paragraph_for(text_draw_runs(command, opacity), directory, resources, cached, error)) {
         return false;
     }
     auto& paragraph = cached.paragraph;
@@ -888,6 +897,13 @@ bool opacity_folds_into_paint(const PaintCommand& command) {
     return false;
 }
 
+// The opacity a command's own paint carries: its opacity, unless it is drawn
+// through a layer of its own because the opacity cannot fold into its paint.
+float own_paint_opacity(const PaintCommand& command) {
+    const float opacity = std::clamp(command.opacity, 0.0F, 1.0F);
+    return opacity < 1.0F && !opacity_folds_into_paint(command) ? 1.0F : opacity;
+}
+
 bool paint_command(SkCanvas& canvas, const PaintCommand& command,
                    std::string_view directory, FrameResources& resources,
                    std::string* error, ParagraphSlot* paragraph = nullptr) {
@@ -916,8 +932,8 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
 
     const int saved = canvas.save();
     if (!is_identity(command.transform)) canvas.concat(sk_matrix(command.transform));
-    const bool layered = opacity < 1.0F && !opacity_folds_into_paint(command);
-    const float paint_opacity = layered ? 1.0F : opacity;
+    const float paint_opacity = own_paint_opacity(command);
+    const bool layered = paint_opacity != opacity;
     if (layered && command.kind != PaintCommand::Kind::text) {
         const auto bounds = layer_rect(paint_extent(command).rect);
         canvas.saveLayerAlphaf(&bounds, opacity);
@@ -1074,6 +1090,57 @@ void record_gpu_time(skgpu::graphite::GpuFinishedContext context,
     owner->timer->nanoseconds = stats.elapsedTime;
 }
 
+// The area a text command's glyphs can cover, before its transform: the
+// measured paragraph plus one font size of overhang on every side, the same
+// bound `draw_text` gives a faded text layer.
+// The paragraph is shaped into `slot`, exactly as `draw_text` would shape it,
+// so drawing the command afterwards reuses it.
+std::optional<Rect> measured_text_extent(const PaintCommand& command,
+                                         std::string_view directory, ParagraphSlot& slot,
+                                         std::string* error) {
+    if (!slot.paragraph) {
+        std::unique_ptr<skia::textlayout::Paragraph> paragraph;
+        if (!build_text_paragraph(text_draw_runs(command, own_paint_opacity(command)),
+                                  directory, paragraph, slot.metrics, error)) {
+            return std::nullopt;
+        }
+        slot.paragraph = std::shared_ptr<skia::textlayout::Paragraph>(std::move(paragraph));
+    }
+    const auto& metrics = slot.metrics;
+    float overhang = command.font_size;
+    for (const auto& run : command.text_runs) overhang = std::max(overhang, run.style.font_size);
+    return Rect{
+        command.bounds.x - overhang,
+        command.bounds.y - overhang,
+        std::max(command.bounds.width, metrics.width) + overhang * 2.0F,
+        std::max(command.bounds.height, metrics.ascent + metrics.descent) + overhang * 2.0F,
+    };
+}
+
+// A layer image and where it sits on the target, in device pixels.
+struct LayerImage final {
+    sk_sp<SkImage> image;
+    PixelRect extent{};
+};
+
+// A planned layer for one frame, resolved against its image.
+struct ActiveLayer final {
+    std::size_t begin = 0;
+    std::size_t end = 0;
+    float opacity = 1.0F;
+    const LayerImage* image = nullptr;
+};
+
+void composite_layer(SkCanvas& canvas, const ActiveLayer& layer) {
+    const int saved = canvas.save();
+    canvas.resetMatrix();
+    SkPaint paint;
+    paint.setAlphaf(std::clamp(layer.opacity, 0.0F, 1.0F));
+    canvas.drawImage(layer.image->image, static_cast<float>(layer.image->extent.left),
+                     static_cast<float>(layer.image->extent.top), SkSamplingOptions(), &paint);
+    canvas.restoreToCount(saved);
+}
+
 }  // namespace
 
 std::string_view to_string(FullRepaintReason reason) noexcept {
@@ -1098,6 +1165,7 @@ std::string_view to_string(FullRepaintReason reason) noexcept {
 class SkiaDawnSurface::Impl final {
 public:
     ~Impl() {
+        layer_images_.clear();
         frame_surface_.reset();
         retained_image_.reset();
         retained_surface_.reset();
@@ -1267,9 +1335,11 @@ public:
             set_error(error, "GPU surface dimensions and scale must be positive");
             return false;
         }
+        const bool rescaled = std::memcmp(&config_.scale, &scale, sizeof(float)) != 0;
         config_.width = width;
         config_.height = height;
         config_.scale = scale;
+        drop_all_layers(rescaled ? LayerInvalidation::scale : LayerInvalidation::resize);
         frame_surface_.reset();
         retained_valid_ = false;
         retained_reason_ = FullRepaintReason::surface_recreated;
@@ -1311,6 +1381,10 @@ public:
         return draw_frame(scene, FullRepaintReason::none, &merged, error);
     }
 
+    void set_damage_model_version(std::uint32_t version) noexcept {
+        damage_model_version_ = version;
+    }
+
     void simulate_device_loss() {
         if (!device_) return;
         device_.ForceLoss(wgpu::DeviceLostReason::Unknown, "Vellum simulated device loss");
@@ -1318,9 +1392,22 @@ public:
     }
 
     void invalidate(InvalidationReason reason, std::string_view node_id) {
-        if (reason == InvalidationReason::reload) reload_pending_ = true;
+        if (reason == InvalidationReason::reload) {
+            reload_pending_ = true;
+            drop_all_layers(LayerInvalidation::reload);
+        } else if (!node_id.empty()) {
+            layer_cache_.invalidate_node(node_id);
+            release_dropped_layers();
+        }
         tracker_.invalidate(reason, node_id);
     }
+
+    void set_layer_cache_policy(const LayerCachePolicy& policy) {
+        layer_cache_.set_policy(policy);
+        release_dropped_layers();
+    }
+
+    LayerCacheStats layer_cache_stats() const { return layer_cache_.stats(); }
 
     FrameStats frame_stats() const {
         FrameStats stats = stats_;
@@ -1436,7 +1523,8 @@ public:
             const auto saved_caches = caches_.frame_state();
             const bool reload = reload_pending_;
             internal_redraw_ = true;
-            const bool redrawn = draw_frame(scene, FullRepaintReason::full_render, nullptr, error);
+            const bool redrawn = draw_frame(scene, FullRepaintReason::full_render, nullptr, error,
+                                            /*count_frame=*/false);
             internal_redraw_ = false;
             stats_ = saved;
             layer_count_ = saved_layers;
@@ -1504,15 +1592,21 @@ private:
         return true;
     }
 
+    // The pixel format of the retained surface, and of every layer image
+    // composited into it.
+    SkImageInfo retained_info(int width, int height) const {
+        return surface_
+            ? SkImageInfo::Make(width, height, kBGRA_8888_SkColorType, kPremul_SkAlphaType,
+                                SkColorSpace::MakeSRGB())
+            : SkImageInfo::MakeN32Premul(width, height);
+    }
+
     bool create_retained(std::string* error) {
         retained_image_.reset();
         retained_surface_.reset();
         retained_valid_ = false;
-        const auto image_info = surface_
-            ? SkImageInfo::Make(physical_width(), physical_height(), kBGRA_8888_SkColorType,
-                                kPremul_SkAlphaType, SkColorSpace::MakeSRGB())
-            : SkImageInfo::MakeN32Premul(physical_width(), physical_height());
-        retained_surface_ = SkSurfaces::RenderTarget(recorder_.get(), image_info);
+        retained_surface_ = SkSurfaces::RenderTarget(
+            recorder_.get(), retained_info(physical_width(), physical_height()));
         if (!retained_surface_) {
             set_error(error, "Skia Graphite could not allocate the retained GPU surface");
             return false;
@@ -1531,6 +1625,23 @@ private:
     bool device_lost() const {
         return device_lost_->load(std::memory_order_acquire) ||
             (context_ && context_->isDeviceLost());
+    }
+
+    bool serves_partial_redraw(std::uint32_t version) const noexcept {
+        return version <= damage_model_version_;
+    }
+
+    bool fail_device_lost(std::string* error, std::string message) {
+        drop_all_layers(LayerInvalidation::device_lost);
+        if (!device_loss_trimmed_) {
+            device_loss_trimmed_ = true;
+            caches_.clear();
+            note_trim(CacheTrimReason::device_lost);
+        }
+        retained_valid_ = false;
+        retained_reason_ = FullRepaintReason::previous_frame_failed;
+        set_error(error, std::move(message));
+        return false;
     }
 
     // Records that the surface now matches its size, so the frame after it
@@ -1562,18 +1673,6 @@ private:
         }
     }
 
-    bool fail_device_lost(std::string* error, std::string message) {
-        // Every cached texture belonged to the lost device.
-        if (!device_loss_trimmed_) {
-            device_loss_trimmed_ = true;
-            caches_.clear();
-            note_trim(CacheTrimReason::device_lost);
-        }
-        retained_valid_ = false;
-        retained_reason_ = FullRepaintReason::previous_frame_failed;
-        set_error(error, std::move(message));
-        return false;
-    }
 
     PixelRect target_rect() const {
         return {0, 0, physical_width(), physical_height()};
@@ -1589,7 +1688,7 @@ private:
         std::vector<PixelRect>& rects) const {
         if (!retained_valid_) return retained_reason_;
         if (!last_scene_) return FullRepaintReason::first_frame;
-        if (!partial_redraw_supported(scene.scene_version)) {
+        if (!serves_partial_redraw(scene.scene_version)) {
             return FullRepaintReason::damage_model_version;
         }
         if (last_scene_->scene_version != scene.scene_version) {
@@ -1625,7 +1724,8 @@ private:
     }
 
     bool draw_frame(const Scene& scene, FullRepaintReason forced,
-                    const DamageRegion* damage, std::string* error) {
+                    const DamageRegion* damage, std::string* error,
+                    bool count_frame = true) {
         const auto started = std::chrono::steady_clock::now();
         if (!context_ || !recorder_ || !evidence_.available || !retained_surface_) {
             set_error(error, "Skia/Dawn surface is not initialized");
@@ -1633,6 +1733,38 @@ private:
         }
         if (device_lost()) {
             return fail_device_lost(error, "the Dawn device was lost");
+        }
+
+        std::vector<PaintCommandRange> ranges;
+        const auto commands = make_paint_commands(scene, &ranges);
+        std::vector<ParagraphSlot> paragraphs(commands.size());
+        caches_.begin_frame();
+        FrameResources resources{.meshes = {.recorder = recorder_.get()}, .caches = &caches_};
+        // A texture cached by a frame that is never submitted was never
+        // written on the GPU; drop it so a later frame uploads it again.
+        struct UploadGuard final {
+            detail::SkiaResourceCaches& caches;
+            const FrameResources& resources;
+            bool submitted = false;
+            ~UploadGuard() {
+                if (submitted) return;
+                for (const auto& key : resources.uploaded) caches.textures.erase(key);
+            }
+        } upload_guard{caches_, resources};
+        std::vector<ActiveLayer> layers;
+        std::size_t layer_commands_recorded = 0;
+        // A scene that partial redraw can serve caches only exact images, so a
+        // partial frame and a full repaint agree whatever each surface cached.
+        const LayerPlanOptions options{
+            .count_frame = count_frame,
+            .exact_only = serves_partial_redraw(scene.scene_version),
+        };
+        if (!prepare_layers(commands, ranges, options, paragraphs, resources, layers,
+                            layer_commands_recorded, error)) {
+            drop_all_layers(LayerInvalidation::frame_failed);
+            retained_valid_ = false;
+            retained_reason_ = FullRepaintReason::previous_frame_failed;
+            return false;
         }
 
         std::vector<PixelRect> rects;
@@ -1643,7 +1775,6 @@ private:
             reason = FullRepaintReason::full_render;
         }
         const auto target = target_rect();
-        const auto commands = make_paint_commands(scene);
         if (reason == FullRepaintReason::none &&
             !close_over_layers(scene, commands, config_.scale, target, rects)) {
             reason = FullRepaintReason::full_damage;
@@ -1677,39 +1808,38 @@ private:
         retained_valid_ = false;
         retained_reason_ = FullRepaintReason::previous_frame_failed;
         stats.paint_commands_total = commands.size();
+        std::vector<const ActiveLayer*> layer_at(commands.size(), nullptr);
+        for (const auto& layer : layers) layer_at[layer.begin] = &layer;
         auto* canvas = retained_surface_->getCanvas();
-        caches_.begin_frame();
-        FrameResources resources{.meshes = {.recorder = recorder_.get()}, .caches = &caches_};
-        // A texture cached by a frame that is never submitted was never
-        // written on the GPU; drop it so a later frame uploads it again.
-        struct UploadGuard final {
-            detail::SkiaResourceCaches& caches;
-            const FrameResources& resources;
-            bool submitted = false;
-            ~UploadGuard() {
-                if (submitted) return;
-                for (const auto& key : resources.uploaded) caches.textures.erase(key);
-            }
-        } upload_guard{caches_, resources};
+        const auto fail = [&](int saved) {
+            canvas->restoreToCount(saved);
+            drop_all_layers(LayerInvalidation::frame_failed);
+            return false;
+        };
         if (full) {
             const int saved = canvas->save();
             canvas->resetMatrix();
             canvas->clear(sk_color(scene.background));
             canvas->scale(config_.scale, config_.scale);
-            for (const auto& command : commands) {
-                if (!paint_command(*canvas, command, config_.font_directory,
-                                   resources, error)) {
-                    canvas->restoreToCount(saved);
-                    return false;
+            std::size_t recorded = 0;
+            for (std::size_t index = 0; index < commands.size(); ++index) {
+                if (const auto* layer = layer_at[index]; layer != nullptr) {
+                    composite_layer(*canvas, *layer);
+                    index = layer->end - 1U;
+                    continue;
                 }
+                if (!paint_command(*canvas, commands[index], config_.font_directory,
+                                   resources, error, &paragraphs[index])) {
+                    return fail(saved);
+                }
+                ++recorded;
             }
             canvas->restoreToCount(saved);
-            stats.paint_commands_recorded = commands.size();
-            stats.paint_command_draws = commands.size();
+            stats.paint_commands_recorded = recorded + layer_commands_recorded;
+            stats.paint_command_draws = recorded;
         } else if (!rects.empty()) {
             const auto extents = paint_command_extents(scene, commands, config_.scale);
             std::vector<bool> drawn(commands.size(), false);
-            std::vector<ParagraphSlot> paragraphs(commands.size());
             for (const auto& rect : rects) {
                 const int saved = canvas->save();
                 canvas->resetMatrix();
@@ -1719,11 +1849,15 @@ private:
                 canvas->clear(sk_color(scene.background));
                 canvas->scale(config_.scale, config_.scale);
                 for (std::size_t index = 0; index < commands.size(); ++index) {
+                    if (const auto* layer = layer_at[index]; layer != nullptr) {
+                        if (overlaps(layer->image->extent, rect)) composite_layer(*canvas, *layer);
+                        index = layer->end - 1U;
+                        continue;
+                    }
                     if (extents[index] && !overlaps(*extents[index], rect)) continue;
                     if (!paint_command(*canvas, commands[index], config_.font_directory,
                                        resources, error, &paragraphs[index])) {
-                        canvas->restoreToCount(saved);
-                        return false;
+                        return fail(saved);
                     }
                     drawn[index] = true;
                     ++stats.paint_command_draws;
@@ -1731,10 +1865,16 @@ private:
                 canvas->restoreToCount(saved);
             }
             stats.paint_commands_recorded =
-                static_cast<std::size_t>(std::count(drawn.begin(), drawn.end(), true));
+                static_cast<std::size_t>(std::count(drawn.begin(), drawn.end(), true)) +
+                layer_commands_recorded;
+        } else {
+            stats.paint_commands_recorded = layer_commands_recorded;
         }
 
-        if (!submit_frame(&stats, nullptr, error)) return false;
+        if (!submit_frame(&stats, nullptr, error)) {
+            drop_all_layers(LayerInvalidation::frame_failed);
+            return false;
+        }
         upload_guard.submitted = true;
         layer_count_ = resources.layers;
         note_frame_presented();
@@ -1746,6 +1886,108 @@ private:
             std::chrono::steady_clock::now() - started).count();
         stats_ = stats;
         return true;
+    }
+
+    // The device-pixel extent a layer's image must cover: every member's paint
+    // extent under its transform, with text measured, clipped to the target.
+    // `std::nullopt` when an extent is not finite or text cannot be measured.
+    std::optional<PixelRect> layer_extent(const std::vector<PaintCommand>& commands,
+                                          std::size_t begin, std::size_t end,
+                                          std::vector<ParagraphSlot>& paragraphs) const {
+        PixelRect extent{};
+        for (auto index = begin; index < end; ++index) {
+            const auto& command = commands[index];
+            if (!draws_content(command.kind)) continue;
+            if (!sane_box(command.bounds)) return std::nullopt;
+            Rect local = paint_extent(command).rect;
+            if (command.kind == PaintCommand::Kind::text) {
+                const auto measured =
+                    measured_text_extent(command, config_.font_directory, paragraphs[index], nullptr);
+                if (!measured) return std::nullopt;
+                local = *measured;
+            }
+            const auto pixels =
+                to_pixel_rect(transformed_bounds(command.transform, local), config_.scale);
+            if (!pixels) return std::nullopt;
+            if (pixels->empty()) continue;
+            extent = bounding_union(extent, {pixels->left - kExtentMargin,
+                                             pixels->top - kExtentMargin,
+                                             pixels->right + kExtentMargin,
+                                             pixels->bottom + kExtentMargin});
+        }
+        return intersection(extent, target_rect());
+    }
+
+    // Plans the frame's cached layers and records every image that must be
+    // rebuilt. Layers whose image cannot be recorded are drawn directly.
+    bool prepare_layers(const std::vector<PaintCommand>& commands,
+                        const std::vector<PaintCommandRange>& ranges,
+                        const LayerPlanOptions& options,
+                        std::vector<ParagraphSlot>& paragraphs,
+                        FrameResources& resources, std::vector<ActiveLayer>& layers,
+                        std::size_t& recorded, std::string* error) {
+        const auto planned =
+            layer_cache_.plan(commands, ranges, target_rect().area(), options);
+        release_dropped_layers();
+        layers.reserve(planned.size());
+        for (const auto& layer : planned) {
+            const float opacity = layer.opacity_layer ? commands[layer.begin].opacity : 1.0F;
+            const std::size_t content_begin = layer.opacity_layer ? layer.begin + 1U : layer.begin;
+            const std::size_t content_end = layer.opacity_layer ? layer.end - 1U : layer.end;
+            if (!layer.build) {
+                const auto found = layer_images_.find(layer.node_id);
+                if (found == layer_images_.end()) {
+                    layer_cache_.abandon(layer.node_id, LayerInvalidation::frame_failed);
+                    continue;
+                }
+                layer_cache_.record_hit(layer.node_id);
+                layers.push_back({layer.begin, layer.end, opacity, &found->second});
+                continue;
+            }
+            const auto extent = layer_extent(commands, content_begin, content_end, paragraphs);
+            if (!extent || extent->empty()) {
+                (void)layer_cache_.admit(layer.node_id, 0);
+                continue;
+            }
+            if (!layer_cache_.admit(layer.node_id, extent->area())) continue;
+            const auto info = retained_info(static_cast<int>(extent->width()),
+                                            static_cast<int>(extent->height()));
+            auto surface = SkSurfaces::RenderTarget(recorder_.get(), info);
+            sk_sp<SkImage> image = surface ? SkSurfaces::AsImage(surface) : nullptr;
+            if (!image) {
+                layer_cache_.abandon(layer.node_id, LayerInvalidation::frame_failed);
+                continue;
+            }
+            auto* canvas = surface->getCanvas();
+            canvas->clear(SkColors::kTransparent);
+            canvas->translate(static_cast<float>(-extent->left),
+                              static_cast<float>(-extent->top));
+            canvas->scale(config_.scale, config_.scale);
+            for (auto index = content_begin; index < content_end; ++index) {
+                if (!paint_command(*canvas, commands[index], config_.font_directory,
+                                   resources, error, &paragraphs[index])) {
+                    return false;
+                }
+                ++recorded;
+            }
+            auto& stored = layer_images_[layer.node_id];
+            stored = {std::move(image), *extent};
+            layers.push_back({layer.begin, layer.end, opacity, &stored});
+        }
+        return true;
+    }
+
+    // Releases the images the cache dropped.
+    void release_dropped_layers() {
+        for (const auto& dropped : layer_cache_.take_dropped()) {
+            layer_images_.erase(dropped.node_id);
+        }
+    }
+
+    void drop_all_layers(LayerInvalidation reason) {
+        layer_cache_.invalidate_all(reason);
+        (void)layer_cache_.take_dropped();
+        layer_images_.clear();
     }
 
     bool acquire_frame_surface(std::string* error) {
@@ -1937,7 +2179,11 @@ private:
     bool retained_valid_ = false;
     FullRepaintReason retained_reason_ = FullRepaintReason::first_frame;
     bool reload_pending_ = false;
+    // The newest scene version this surface redraws from damage alone.
+    std::uint32_t damage_model_version_ = kDamageModelSceneVersion;
     DamageTracker tracker_;
+    LayerCache layer_cache_;
+    std::unordered_map<std::string, LayerImage> layer_images_;
     FrameStats stats_{};
     bool gpu_stats_supported_ = false;
     std::shared_ptr<GpuTimer> gpu_timer_;
@@ -1954,6 +2200,12 @@ private:
     std::uint64_t trims_ = 0;
     CacheTrimReason last_trim_ = CacheTrimReason::none;
 };
+
+std::optional<Rect> SkiaDawnSurfaceTestAccess::measure_layer_text_extent(
+    const PaintCommand& command, std::string_view directory, std::string* error) {
+    ParagraphSlot slot;
+    return measured_text_extent(command, directory, slot, error);
+}
 
 SkiaDawnSurface::SkiaDawnSurface(std::unique_ptr<Impl> impl) noexcept
     : impl_(std::move(impl)) {}
@@ -2001,6 +2253,19 @@ void SkiaDawnSurface::invalidate(InvalidationReason reason, std::string_view nod
 
 FrameStats SkiaDawnSurface::frame_stats() const {
     return impl_->frame_stats();
+}
+
+void SkiaDawnSurface::set_layer_cache_policy(const LayerCachePolicy& policy) {
+    impl_->set_layer_cache_policy(policy);
+}
+
+LayerCacheStats SkiaDawnSurface::layer_cache_stats() const {
+    return impl_->layer_cache_stats();
+}
+
+void SkiaDawnSurfaceTestAccess::set_damage_model_version(SkiaDawnSurface& surface,
+                                                         std::uint32_t version) noexcept {
+    surface.impl_->set_damage_model_version(version);
 }
 
 void SkiaDawnSurface::set_cache_budgets(const RenderCacheBudgets& budgets) {
