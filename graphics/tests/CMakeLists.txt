@@ -6,6 +6,7 @@ target_link_libraries(vellum-scene-capture-harness PUBLIC
     Vellum::Gpu Vellum::DawnHeaders)
 target_compile_definitions(vellum-scene-capture-harness PRIVATE
     VELLUM_CAPTURE_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/capture"
+    VELLUM_CAPTURE_IMAGE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/images"
     VELLUM_CAPTURE_BUILD_GOLDEN_ROOT="${CMAKE_CURRENT_BINARY_DIR}")
 set_target_properties(vellum-scene-capture-harness PROPERTIES
     OSX_ARCHITECTURES arm64
@@ -58,6 +59,19 @@ set_target_properties(vellum-render-cache-gpu-test PROPERTIES
     BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
 add_test(NAME vellum.gpu.render-cache
     COMMAND vellum-render-cache-gpu-test)
+
+add_executable(vellum-image-gpu-test
+    image_gpu_test.cpp)
+target_link_libraries(vellum-image-gpu-test PRIVATE
+    vellum-scene-capture-harness)
+target_compile_definitions(vellum-image-gpu-test PRIVATE
+    VELLUM_CAPTURE_IMAGE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/images")
+set_target_properties(vellum-image-gpu-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.image-node
+    COMMAND vellum-image-gpu-test)
 
 add_executable(vellum-partial-present-bench
     partial_present_bench.mm)

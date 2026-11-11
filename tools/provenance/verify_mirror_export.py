@@ -1242,8 +1242,9 @@ def history_base(root: Path) -> tuple[str | None, str | None]:
     names nothing this repository has (a push's all-zero `before`), HEAD's
     first parent, the tip the push replaced; a root commit then has no base and
     fails closed. Without VELLUM_GIT_BASE (a local run) the merge base with
-    main or origin/main, whichever resolves first; with neither, (None, None):
-    there is nothing to compare.
+    origin/main whenever that ref resolves, else with local main; with neither,
+    (None, None): there is nothing to compare. Local main is never preferred
+    over origin/main, because it may be stale, or ahead with unreviewed commits.
     """
     configured = os.environ.get("VELLUM_GIT_BASE")
     if configured:
@@ -1253,7 +1254,7 @@ def history_base(root: Path) -> tuple[str | None, str | None]:
             return None, f"history base is unavailable: {configured} names no commit and HEAD has no parent"
         return base, None
     return next((found for found in (git_try(root, "merge-base", "HEAD", ref)
-                                     for ref in ("main", "origin/main")) if found), None), None
+                                     for ref in ("origin/main", "main")) if found), None), None
 
 
 def receipt_history_errors(root: Path, receipts: list[str], stored: list[str]) -> list[str]:
@@ -1263,8 +1264,8 @@ def receipt_history_errors(root: Path, receipts: list[str], stored: list[str]) -
     commit. When that names nothing this repository has (a push's all-zero
     `before`), the base is HEAD's first parent, the tip the push replaced; a
     root commit then has no base and fails closed. Without VELLUM_GIT_BASE
-    (a local run) the base is the merge base with main or origin/main,
-    whichever resolves first, and with neither there is nothing to compare.
+    (a local run) the base is the merge base with origin/main when it
+    resolves, else local main, and with neither there is nothing to compare.
     """
     base, error = history_base(root)
     if error:
