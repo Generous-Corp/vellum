@@ -1,0 +1,89 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-11T07:15:48Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-055a8e84159d58292da248c8be6e0aa5543da745",
+  "include_dependency_deltas": [
+    "graphics/CMakeLists.txt",
+    "graphics/include/vellum/graphics/damage.hpp",
+    "graphics/include/vellum/graphics/image_asset.hpp",
+    "graphics/include/vellum/graphics/lowering_diagnostic.hpp",
+    "graphics/include/vellum/graphics/paint_command.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/include/vellum/graphics/scene_acceptance.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/src/skia_resource_caches.hpp",
+    "graphics/tests/CMakeLists.txt",
+    "graphics/tests/support/scene_capture_harness.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/src/rendered_tree_materializer.mm",
+    "authoring/tests/rendered_tree_materializer_test.cpp",
+    "graphics/CMakeLists.txt",
+    "graphics/include/vellum/graphics/damage.hpp",
+    "graphics/include/vellum/graphics/image_asset.hpp",
+    "graphics/include/vellum/graphics/lowering_diagnostic.hpp",
+    "graphics/include/vellum/graphics/paint_command.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/include/vellum/graphics/scene_acceptance.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/src/damage.cpp",
+    "graphics/src/image_asset.cpp",
+    "graphics/src/image_decode.mm",
+    "graphics/src/paint_command.cpp",
+    "graphics/src/scene_acceptance.cpp",
+    "graphics/src/skia_dawn_surface.mm",
+    "graphics/src/skia_resource_caches.hpp",
+    "graphics/tests/CMakeLists.txt",
+    "graphics/tests/fixtures/images/quadrants.png",
+    "graphics/tests/gpu_style_test.cpp",
+    "graphics/tests/image_gpu_test.cpp",
+    "graphics/tests/image_node_test.cpp",
+    "graphics/tests/paint_command_test.cpp",
+    "graphics/tests/render_cache_gpu_test.cpp",
+    "graphics/tests/support/scene_capture_harness.cpp",
+    "graphics/tests/support/scene_capture_harness.hpp",
+    "packages/vellum-ui/src/index.d.ts",
+    "packages/vellum-ui/src/runtime.js",
+    "packages/vellum-ui/test/runtime.test.js",
+    "packages/vellum-ui/test/types/application.tsx"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "94f4f9649514786dec6bc2cb54e574a795242385",
+    "to_commit": "055a8e84159d58292da248c8be6e0aa5543da745"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-ui/src/index.d.ts"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "055a8e84159d58292da248c8be6e0aa5543da745",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
