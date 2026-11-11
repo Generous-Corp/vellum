@@ -183,10 +183,14 @@ Rect sorted(const Rect& rect) noexcept {
 }
 
 Rect transformed_shadow_bounds(const Rect& shadow, float blur_radius, const Affine2D& transform) {
-    const Rect mapped = transformed_bounds(transform, shadow);
     const float sigma = std::max(0.0F, blur_radius) * kBlurSigmaPerRadius;
-    const float reach = sigma * blur_reach_sigmas.load() * largest_scale(transform);
-    return outset(mapped, reach);
+    const float reach = sigma * blur_reach_sigmas.load();
+    // Expand in local space so rotation carries both matrix components into
+    // each frame axis. Keep the historical largest-scale envelope as a
+    // conservative floor for anisotropic transforms.
+    const Rect mapped = transformed_bounds(transform, shadow);
+    const Rect local_expansion = transformed_bounds(transform, outset(shadow, reach));
+    return unite(local_expansion, outset(mapped, reach * largest_scale(transform)));
 }
 
 std::optional<Rect> mapped_box_bounds(const SceneNode& node, const Rect& absolute,
