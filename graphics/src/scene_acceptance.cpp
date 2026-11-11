@@ -72,7 +72,11 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node) {
         return "scene node " + invalid->id +
                " has a non-finite transform, opacity, or corner radius";
     }
+    if (scene.root.mask) return "scene root " + scene.root.id + " cannot be a mask";
     std::string reason;
+    if (const auto* clipped = find_invalid_clip(scene.root, reason); clipped != nullptr) {
+        return "clip of " + clipped->id + " cannot be applied: " + reason;
+    }
     if (const auto* path = find_undrawable_path(scene.root, reason); path != nullptr) {
         return path->path ? "path " + path->id + " cannot be drawn: " + reason
                           : "path " + path->id + " has no geometry";

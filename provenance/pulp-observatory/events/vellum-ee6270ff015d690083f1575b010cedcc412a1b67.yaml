@@ -1,0 +1,68 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-10T08:33:00Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-ee6270ff015d690083f1575b010cedcc412a1b67",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/damage.hpp",
+    "graphics/include/vellum/graphics/paint_command.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/tests/support/scene_capture_harness.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/src/rendered_tree_materializer.mm",
+    "authoring/tests/rendered_tree_materializer_test.cpp",
+    "graphics/include/vellum/graphics/damage.hpp",
+    "graphics/include/vellum/graphics/paint_command.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/src/damage.cpp",
+    "graphics/src/paint_command.cpp",
+    "graphics/src/skia_dawn_surface.mm",
+    "graphics/tests/gpu_grouping_test.cpp",
+    "graphics/tests/gpu_style_test.cpp",
+    "graphics/tests/grouping_test.cpp",
+    "graphics/tests/paint_command_test.cpp",
+    "graphics/tests/support/scene_capture_harness.cpp",
+    "graphics/tests/support/scene_capture_harness.hpp",
+    "packages/vellum-ui/src/index.d.ts",
+    "packages/vellum-ui/test/types/application.tsx"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "42d4b959e4535b60212589d9edfd6ccb4563cc74",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "0903ae8312b4cb3707378a39e1ffee5f554235d0",
+    "to_commit": "c4518e1e854c0f26f63d2250e670f045476a555a"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-ui/src/index.d.ts"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "ee6270ff015d690083f1575b010cedcc412a1b67",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

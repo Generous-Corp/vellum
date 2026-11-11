@@ -674,6 +674,105 @@ Scene compositing(float width, float height) {
     return scene;
 }
 
+Scene clip_nested(float width, float height) {
+    auto scene = empty(width, height);
+    const float cell = std::min(width, height) * 0.25F;
+    // A rounded clip holds a group whose own clip is a diamond path; the
+    // stripes reach past both, so each clip cuts something visible.
+    auto diamond = std::make_shared<PathGeometry>();
+    diamond->verbs = {PathVerb::move, PathVerb::line, PathVerb::line, PathVerb::line,
+                      PathVerb::close};
+    diamond->values = {cell, 0.0F, cell * 2.0F, cell, cell, cell * 2.0F, 0.0F, cell};
+    SceneNode inner{
+        .id = "clip/inner",
+        .kind = SceneNode::Kind::group,
+        .bounds = {cell * 0.5F, cell * 0.5F, cell * 2.0F, cell * 2.0F},
+        .clip = NodeClip{.path = diamond},
+    };
+    for (int stripe = 0; stripe < 4; ++stripe) {
+        inner.children.push_back({
+            .id = "clip/inner/stripe-" + std::to_string(stripe),
+            .kind = SceneNode::Kind::rectangle,
+            .bounds = {-cell, cell * 0.5F * static_cast<float>(stripe), cell * 4.0F, cell * 0.25F},
+            .fill = Color::hex(stripe % 2 == 0 ? 0x22D3EE : 0xFACC15),
+        });
+    }
+    SceneNode outer{
+        .id = "clip/outer",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {cell * 0.5F, cell * 0.5F, cell * 2.5F, cell * 2.5F},
+        .fill = Color::hex(0x334155),
+        .clip = NodeClip{.rect = {0.0F, 0.0F, cell * 2.5F, cell * 2.5F},
+                         .radii = uniform_corner_radii(cell * 0.6F)},
+    };
+    outer.children.push_back(std::move(inner));
+    outer.children.push_back({
+        .id = "clip/outer/overhang",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {cell * 1.5F, cell * 1.5F, cell * 3.0F, cell * 3.0F},
+        .fill = Color::hex(0xF43F5E),
+    });
+    scene.root.children.push_back(std::move(outer));
+    return scene;
+}
+
+Scene mask_luminance(float width, float height) {
+    auto scene = empty(width, height);
+    const float cell = std::min(width, height) * 0.25F;
+    SceneNode masked{
+        .id = "mask",
+        .kind = SceneNode::Kind::group,
+        .bounds = {cell * 0.5F, cell * 0.5F, cell * 3.0F, cell * 3.0F},
+    };
+    masked.children.push_back({
+        .id = "mask/content",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {0.0F, 0.0F, cell * 3.0F, cell * 3.0F},
+        .fill_gradients = {{.angle_degrees = 90.0F,
+                            .stops = {{0.0F, Color::hex(0xF97316)},
+                                      {1.0F, Color::hex(0x8B5CF6)}}}},
+    });
+    // White keeps the content, black hides it, and the grey gradient fades it.
+    masked.children.push_back({
+        .id = "mask/luma",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {0.0F, 0.0F, cell * 3.0F, cell * 3.0F},
+        .fill_gradients = {{.angle_degrees = 180.0F,
+                            .stops = {{0.0F, Color::hex(0xFFFFFF)},
+                                      {1.0F, Color::hex(0x000000)}}}},
+        .corner_radius = cell * 0.5F,
+        .mask = MaskMode::luminance,
+    });
+    scene.root.children.push_back(std::move(masked));
+    return scene;
+}
+
+Scene isolated_overlap(float width, float height) {
+    auto scene = empty(width, height);
+    const float cell = std::min(width, height) * 0.25F;
+    SceneNode group{
+        .id = "isolated",
+        .kind = SceneNode::Kind::group,
+        .bounds = {cell * 0.5F, cell * 0.5F, cell * 3.0F, cell * 3.0F},
+        .isolate = true,
+    };
+    const std::uint32_t colors[]{0xEF4444, 0x22C55E, 0x3B82F6};
+    for (int index = 0; index < 3; ++index) {
+        auto color = Color::hex(colors[index]);
+        color.alpha = 0.6F;
+        group.children.push_back({
+            .id = "isolated/disc-" + std::to_string(index),
+            .kind = SceneNode::Kind::rectangle,
+            .bounds = {cell * 0.6F * static_cast<float>(index), cell * 0.4F * static_cast<float>(index),
+                       cell * 1.6F, cell * 1.6F},
+            .fill = color,
+            .corner_radius = cell * 0.8F,
+        });
+    }
+    scene.root.children.push_back(std::move(group));
+    return scene;
+}
+
 Scene combined(float width, float height) {
     auto scene = empty(width, height);
     const float half_width = width * 0.5F;
@@ -694,6 +793,9 @@ std::vector<NamedScene> all(float width, float height) {
         {"path_cubic_gradient", path_cubic_gradient(width, height)},
         {"image", image(width, height)},
         {"compositing", compositing(width, height)},
+        {"clip_nested", clip_nested(width, height)},
+        {"mask_luminance", mask_luminance(width, height)},
+        {"isolated_overlap", isolated_overlap(width, height)},
         {"combined", combined(width, height)},
     };
 }
