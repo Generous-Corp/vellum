@@ -485,6 +485,11 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
     return output;
 }
 
+// A shadow's blur sigma is half its radius; the layer that holds it must cover
+// the same five-sigma tail the transformed damage bounds do (damage.cpp), or a
+// save-layer clips the tail that damage already repaints.
+constexpr float kShadowBlurReach = 2.5F;
+
 PaintExtent paint_extent(const PaintCommand& command) {
     const auto& box = command.bounds;
     if (command.kind == PaintCommand::Kind::text) return {box, false};
@@ -527,7 +532,7 @@ PaintExtent paint_extent(const PaintCommand& command) {
     Rect extent = box;
     for (const auto& shadow : command.box_shadows) {
         const float outset = std::max(0.0F, shadow.spread_radius) +
-                             1.5F * std::max(0.0F, shadow.blur_radius);
+                             kShadowBlurReach * std::max(0.0F, shadow.blur_radius);
         extent = union_of(extent, {box.x + shadow.offset_x - outset,
                                    box.y + shadow.offset_y - outset,
                                    box.width + outset * 2.0F,
