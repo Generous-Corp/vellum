@@ -148,13 +148,13 @@ LIVE_OPEN_PR_REPOSITORIES = frozenset(
 )
 RETIRED_OPEN_PR_REPOSITORIES = frozenset({"Generous-Corp/pulp", "Generous-Corp/vellum"})
 # The release readiness check for vX accepts one kind of open overlap the
-# Pulp acceptance cannot list: vX's own version-bump pull request, which is
-# open while vX's dry run is judged. It is recognised by content, never by a
-# number or head pin (Decision recorded 2026-11-08): one commit by the
-# version-at-land bot on the pull request's base, changing only the files
-# below, each changed line a version-string change to exactly vX (or the
-# install.sh digest line of the installer sums). Anything else is judged as
-# an unaccepted overlap. scripts/version_at_land.py owns this file list; a
+# Pulp acceptance cannot list: the version-at-land bot's bump of X to the next
+# version, which is open while vX's dry run, and often vX's release, is
+# judged. It is recognised by content, never by a number or head pin: one
+# commit by the bot on the pull request's base, changing only the files below,
+# each changed line the same line with X replaced by one single later version
+# (or the install.sh digest line of the installer sums). Anything else is
+# judged as an unaccepted overlap. scripts/version_at_land.py owns this file list; a
 # test fails if the two drift.
 RELEASE_BUMP_REPOSITORY = "Generous-Corp/vellum"
 # version-at-land.yml's BUMP_BRANCH, pushed to this repository, targeting main.
@@ -1572,17 +1572,19 @@ def patch_line_pairs(patch: str) -> list[tuple[str, str]] | None:
 def release_bump_problems(
     evidence: Any, *, base_commit: str, head_commit: str, paths: list[str], release_tag: str
 ) -> list[str]:
-    """Why an open Vellum pull request is not exactly release_tag's own version bump.
+    """Why an open Vellum pull request is not the version bump away from release_tag.
 
-    An empty list means it is: one commit by the version-at-land bot whose
+    A release (or its dry run) is judged at main's version X while the bot's
+    bump of X to the next version is open. An empty list means the pull
+    request is exactly that bump: one commit by the version-at-land bot whose
     parent is the pull request's base, changing only RELEASE_BUMP_FILES, every
-    changed line a change from one earlier version to exactly release_tag's.
+    changed line the same line with X replaced by one single version Y > X.
     """
     problems: list[str] = []
     match = re.fullmatch(r"v(" + RELEASE_VERSION.pattern + r")", release_tag or "")
     if match is None:
         return ["no release version to judge a version bump against"]
-    new = match.group(1)
+    old = match.group(1)
     if not isinstance(evidence, dict):
         return ["no content evidence for this pull request"]
     if evidence.get("head_commit") != head_commit or evidence.get("base_commit") != base_commit:
@@ -1607,7 +1609,7 @@ def release_bump_problems(
     names = [row.get("filename") for row in files]
     if sorted(names) != sorted(set(paths)) or len(names) != len(set(names)):
         problems.append("changed files differ from the snapshot's tree diff")
-    old_versions: set[str] = set()
+    new_versions: set[str] = set()
     for row in files:
         name = row.get("filename")
         if name not in RELEASE_BUMP_FILES:
@@ -1628,22 +1630,22 @@ def release_bump_problems(
                     problems.append(f"{name}: changes a line that is not the install.sh digest")
                     break
                 continue
-            candidates = {found.group(0) for found in RELEASE_VERSION.finditer(before)}
+            candidates = {found.group(0) for found in RELEASE_VERSION.finditer(after)}
             found = {
                 text for text in candidates
-                if text != new and version_occurrence(text).search(before)
-                and version_occurrence(text).sub(new, before) == after
+                if text != old and version_occurrence(old).search(before)
+                and version_occurrence(old).sub(text, before) == after
             }
             if len(found) != 1:
-                problems.append(f"{name}: changes a line other than a version string to {new}")
+                problems.append(f"{name}: changes a line other than {old} to one version")
                 break
-            old_versions |= found
-    if len(old_versions) > 1:
-        problems.append(f"changes more than one earlier version: {sorted(old_versions)}")
-    for old in old_versions:
-        if tuple(map(int, old.split("."))) >= tuple(map(int, new.split("."))):
-            problems.append(f"moves the version from {old}, which is not earlier than {new}")
-    if not old_versions and not problems:
+            new_versions |= found
+    if len(new_versions) > 1:
+        problems.append(f"changes {old} to more than one version: {sorted(new_versions)}")
+    for new in new_versions:
+        if tuple(map(int, new.split("."))) <= tuple(map(int, old.split("."))):
+            problems.append(f"moves the version from {old} to {new}, which is not later")
+    if not new_versions and not problems:
         problems.append("changes no version string")
     return problems
 
@@ -1656,7 +1658,7 @@ def validate_open_pr_snapshot(
     """Compare the accepted overlap audit with a fresh GitHub API snapshot.
 
     With a release tag, an overlap the Pulp acceptance lacks is still accepted
-    when it is exactly that release's own version bump (release_bump_problems),
+    when it is exactly the version bump away from that release (release_bump_problems),
     judged from release_bump_evidence.
     """
     errors: list[str] = []
@@ -1819,7 +1821,7 @@ def validate_open_pr_snapshot(
                     continue
                 errors.append(
                     f"open PR snapshot: live overlap {label} is absent from acceptance and is "
-                    f"not {release_tag}'s own version bump: {'; '.join(bump_problems)}"
+                    f"not the version bump away from {release_tag}: {'; '.join(bump_problems)}"
                 )
                 continue
             errors.append(f"open PR snapshot: live overlap {label} is absent from acceptance")

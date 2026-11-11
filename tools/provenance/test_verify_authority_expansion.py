@@ -1636,7 +1636,7 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         self.assertTrue(any("live overlap danielraffel/vellum#44 is absent" in error for error in errors))
 
     def release_bump_case(self):
-        """A real-shaped version bump to 0.1.11 overlapping one exact Vellum route."""
+        """The bot's bump of 0.1.10 to 0.1.11, judged while v0.1.10's release readiness runs."""
         acknowledgement = self.exact_boundary_acknowledgement()
         acceptance = self.pulp_exact_boundary_acceptance(acknowledgement)
         matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
@@ -1665,7 +1665,7 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
                 "merge_base_commit": base, "head_commit": head,
                 "paths": sorted(row["filename"] for row in files)}
 
-        def check(evidence_row=evidence, release_tag="v0.1.11", pull=pull):
+        def check(evidence_row=evidence, release_tag="v0.1.10", pull=pull):
             bundle = {"schema": "vellum.release-bump-evidence.v1",
                       "repository": "Generous-Corp/vellum", "pulls": [evidence_row]}
             return verifier.validate_open_pr_snapshot(
@@ -1676,7 +1676,7 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
     def test_a_release_bump_is_accepted_only_by_its_exact_content(self) -> None:
         evidence, pull, check = self.release_bump_case()
         self.assertEqual(check(), [])
-        # Control: the same overlap is refused outside release readiness for v0.1.11.
+        # Control: the same overlap is refused outside release readiness.
         self.assertTrue(any("is absent from acceptance" in e for e in check(release_tag=None)))
         files = evidence["files"]
 
@@ -1700,9 +1700,17 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             "an added line": with_file(0, patch="@@ -2 +2,2 @@\n-    VERSION 0.1.10\n+    VERSION 0.1.11\n+evil()"),
             "a removed line": with_file(0, patch="@@ -2,2 +2 @@\n-    VERSION 0.1.10\n-guard()\n+    VERSION 0.1.11"),
             "another digest line": with_file(2, patch="@@ -1 +1 @@\n-" + "5" * 64 + "  install_core.py\n+" + "b" * 64 + "  install_core.py"),
-            "a version that is not vX": with_file(0, patch="@@ -2 +2 @@\n-    VERSION 0.1.10\n+    VERSION 0.1.12"),
-            "a downgrade": with_file(0, patch="@@ -2 +2 @@\n-    VERSION 0.1.12\n+    VERSION 0.1.11"),
-            "two earlier versions": with_file(1, patch='@@ -9 +9 @@\n-a = "vellum-sdk-0.1.9-x"\n+a = "vellum-sdk-0.1.11-x"'),
+            "mixed later versions across files": with_file(0, patch="@@ -2 +2 @@\n-    VERSION 0.1.10\n+    VERSION 0.1.12"),
+            "mixed later versions within a file": with_file(1, patch='@@ -9,2 +9,2 @@\n-a = "0.1.10"\n-b = "0.1.10"\n'
+                                                            '+a = "0.1.11"\n+b = "0.1.12"'),
+            "a downgrade (Y < X)": evidence | {"files": [
+                files[0] | {"patch": "@@ -2 +2 @@\n-    VERSION 0.1.10\n+    VERSION 0.1.9"},
+                files[1] | {"patch": '@@ -9 +9 @@\n-a = "vellum-sdk-0.1.10-x"\n+a = "vellum-sdk-0.1.9-x"'},
+                files[2]]},
+            "a stale X (the base is not at the rehearsed version)": with_file(
+                1, patch='@@ -9 +9 @@\n-a = "vellum-sdk-0.1.9-x"\n+a = "vellum-sdk-0.1.11-x"'),
+            "a non-version change on a version line": with_file(
+                1, patch='@@ -9 +9 @@\n-a = "vellum-sdk-0.1.10-x"\n+a = "vellum-sdkk-0.1.11-x"'),
             "a missing patch": with_file(0, patch=None),
             "an added file": with_file(0, status="added"),
             "another head": evidence | {"head_commit": "9" * 40},
@@ -1713,14 +1721,16 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             with self.subTest(violation=label):
                 broken_pull = pull | {"paths": sorted(row["filename"] for row in broken["files"])}
                 errors = check(broken, pull=broken_pull)
-                self.assertTrue(any("is not v0.1.11's own version bump" in e for e in errors), errors)
-        with self.subTest(violation="judged against another release"):
-            self.assertTrue(any("is not v0.1.12's own version bump" in e for e in check(release_tag="v0.1.12")))
+                self.assertTrue(any("is not the version bump away from v0.1.10" in e for e in errors), errors)
+        for stale in ("v0.1.9", "v0.1.11"):
+            with self.subTest(violation=f"judged at a stale or later release {stale}"):
+                self.assertTrue(any(f"is not the version bump away from {stale}" in e
+                                    for e in check(release_tag=stale)))
         with self.subTest(violation="no evidence"):
             self.assertTrue(any("no content evidence" in e for e in check(evidence | {"number": 189})))
         with self.subTest(violation="evidence hides a changed file"):
             hidden = pull | {"paths": sorted(pull["paths"] + ["scripts/release_request.py"])}
-            self.assertTrue(any("is not v0.1.11's own version bump" in e for e in check(pull=hidden)))
+            self.assertTrue(any("is not the version bump away from v0.1.10" in e for e in check(pull=hidden)))
 
     def test_tag_scoped_audit_accepts_the_bump_and_refuses_other_overlaps(self) -> None:
         # A release or dry-run tag enforces the live audit (the scope test
