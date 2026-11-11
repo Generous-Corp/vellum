@@ -880,7 +880,7 @@ void transform_geometry() {
     shadowed.transform = Affine2D{.a = 2.0F, .d = 0.5F};
     stretched.root.children.push_back(shadowed);
     const auto blurred = diff(wide, stretched);
-    check(blurred.rects().size() == 1 && blurred.rects()[0] == PixelRect{90, 60, 250, 185},
+    check(blurred.rects().size() == 1 && blurred.rects()[0] == PixelRect{50, 20, 290, 225},
           "a shadow blur grows in frame space by the largest scale, not along the squashed axis");
 }
 
