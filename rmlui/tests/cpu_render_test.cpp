@@ -60,11 +60,16 @@ CpuFrameTarget frame(std::vector<std::uint8_t>& buffer, std::uint32_t w = kSize,
 
 const Rml::ColourbPremultiplied kRed{255, 0, 0, 255};
 
+// Every test runs twice: drawing at once (1 thread) and recording the frame
+// and replaying it in bands (3 threads).
+unsigned g_threads = 1;
+
 void test_fill_and_untouched_pixels() {
     // A padded stride and a prefilled buffer: only covered pixels change.
     const std::size_t stride = kSize * 4 + 12;
     std::vector<std::uint8_t> buffer(stride * kSize, 0x7f);
     CpuRenderInterface r;
+    r.set_threads(g_threads);
     VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer, kSize, kSize, stride, 1.0f, false)));
     r.RenderGeometry(quad(r, 2, 2, 6, 6, kRed), {0, 0}, 0);
     r.end_frame();
@@ -85,6 +90,7 @@ void test_fill_and_untouched_pixels() {
 void test_premultiplied_blend() {
     std::vector<std::uint8_t> buffer(kSize * kSize * 4);
     CpuRenderInterface r;
+    r.set_threads(g_threads);
     VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
     r.RenderGeometry(quad(r, 0, 0, 8, 8, {0, 0, 255, 255}), {0, 0}, 0);
     r.RenderGeometry(quad(r, 0, 0, 8, 8, {128, 0, 0, 128}), {0, 0}, 0);
@@ -103,6 +109,7 @@ void test_premultiplied_blend() {
 void test_textures_nearest() {
     std::vector<std::uint8_t> buffer(kSize * kSize * 4);
     CpuRenderInterface r;
+    r.set_threads(g_threads);
     const std::array<std::uint8_t, 16> texels = {255, 0, 0, 255, 0, 255, 0, 255,   // red, green
                                                  0, 0, 255, 255, 255, 255, 255, 255}; // blue, white
     const auto texture = r.GenerateTexture(Rml::Span<const Rml::byte>(texels.data(), texels.size()), {2, 2});
@@ -120,6 +127,7 @@ void test_textures_nearest() {
 void test_scissor_transform_and_scale() {
     std::vector<std::uint8_t> buffer(kSize * kSize * 4);
     CpuRenderInterface r;
+    r.set_threads(g_threads);
     VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
     r.EnableScissorRegion(true);
     r.SetScissorRegion(Rml::Rectanglei::FromPositionSize({0, 0}, {4, 8}));
@@ -151,6 +159,7 @@ void test_scissor_transform_and_scale() {
 void test_invalid_frames_draw_nothing() {
     std::vector<std::uint8_t> buffer(kSize * kSize * 4, 9);
     CpuRenderInterface r;
+    r.set_threads(g_threads);
     VELLUM_RMLUI_CHECK(!r.begin_frame(frame(buffer, kSize, kSize, kSize * 4 - 1)));
     VELLUM_RMLUI_CHECK(!r.begin_frame(frame(buffer, 0, kSize)));
     VELLUM_RMLUI_CHECK(!r.begin_frame(frame(buffer, kSize, kSize, 0, 0.0f)));
@@ -162,6 +171,7 @@ void test_invalid_frames_draw_nothing() {
 
 void test_unsupported_calls_are_counted() {
     CpuRenderInterface r;
+    r.set_threads(g_threads);
     std::vector<std::uint8_t> buffer(kSize * kSize * 4);
     VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
     const auto geometry = quad(r, 0, 0, 1, 1, kRed);
@@ -191,6 +201,7 @@ Rml::CompiledGeometryHandle lower_left(CpuRenderInterface& r) {
 void test_clip_masks() {
     std::vector<std::uint8_t> buffer(kSize * kSize * 4);
     CpuRenderInterface r;
+    r.set_threads(g_threads);
     const auto fill = quad(r, 0, 0, 8, 8, {0, 255, 0, 255});
     const auto mask = lower_left(r);
 
@@ -237,6 +248,7 @@ void test_clip_masks() {
 void test_layers() {
     std::vector<std::uint8_t> buffer(kSize * kSize * 4);
     CpuRenderInterface r;
+    r.set_threads(g_threads);
     const auto blue = quad(r, 0, 0, 8, 8, {0, 0, 255, 255});
     const auto half_red = quad(r, 0, 0, 4, 8, {128, 0, 0, 128});
 
@@ -246,7 +258,10 @@ void test_layers() {
     const auto layer = r.PushLayer();
     VELLUM_RMLUI_CHECK(layer == 1);
     r.RenderGeometry(half_red, {0, 0}, 0);
-    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 1, 1), 0, 0, 255, 255));
+    // Drawn at once, the base is visible mid-frame; recorded, it is drawn at
+    // end_frame(), so there is nothing to read yet.
+    if (g_threads == 1)
+        VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 1, 1), 0, 0, 255, 255));
     r.CompositeLayers(layer, 0, Rml::BlendMode::Blend, {});
     r.PopLayer();
     // After the pop, draws reach the base again.
@@ -300,6 +315,122 @@ void test_layers() {
 }
 
 // A 1 x 28,544 texture whose rows past 8192 are blue and the rest red.
+// A Set inside a scissor clears the mask only there: values the previous Set
+// left outside the scissor still count. Then the next frame starts clear.
+void test_mask_reuse_outside_the_scissor() {
+    std::vector<std::uint8_t> buffer(kSize * kSize * 4);
+    CpuRenderInterface r;
+    r.set_threads(g_threads);
+    const auto fill = quad(r, 0, 0, 8, 8, {0, 255, 0, 255});
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    r.EnableClipMask(true);
+    r.RenderToClipMask(Rml::ClipMaskOperation::Set, quad(r, 0, 0, 8, 8, kRed), {0, 0}); // all 1
+    r.EnableScissorRegion(true);
+    r.SetScissorRegion(Rml::Rectanglei::FromPositionSize({0, 0}, {4, 8}));
+    r.RenderToClipMask(Rml::ClipMaskOperation::Set, quad(r, 0, 0, 2, 8, kRed), {0, 0}); // left 4: 1,1,0,0
+    r.EnableScissorRegion(false);
+    r.RenderGeometry(fill, {0, 0}, 0);
+    r.EnableClipMask(false);
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 1, 3), 0, 255, 0, 255)); // inside both Sets
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 3, 3), 0, 0, 0, 0));     // cleared by the second
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 6, 3), 0, 255, 0, 255)); // outside its scissor: kept
+
+    // A new frame: SetInverse of nothing draws everywhere, so no 1 survived.
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    r.EnableClipMask(true);
+    r.EnableScissorRegion(true);
+    r.SetScissorRegion(Rml::Rectanglei::FromPositionSize({0, 0}, {1, 1}));
+    r.RenderToClipMask(Rml::ClipMaskOperation::SetInverse, quad(r, 0, 0, 1, 1, kRed), {0, 0});
+    r.EnableScissorRegion(false);
+    r.RenderGeometry(fill, {0, 0}, 0);
+    r.EnableClipMask(false);
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 6, 6), 0, 255, 0, 255));
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 0, 0), 0, 0, 0, 0));
+}
+
+// A pooled layer pushed again starts transparent: nothing drawn into it
+// before, in this frame or the last, comes back when it is composited.
+void test_layer_reuse_starts_clear() {
+    std::vector<std::uint8_t> buffer(kSize * kSize * 4);
+    CpuRenderInterface r;
+    r.set_threads(g_threads);
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    auto layer = r.PushLayer();
+    r.RenderGeometry(quad(r, 0, 0, 4, 4, kRed), {0, 0}, 0);
+    r.PopLayer(); // never composited
+    layer = r.PushLayer();
+    r.RenderGeometry(quad(r, 4, 4, 8, 8, {0, 0, 255, 255}), {0, 0}, 0);
+    r.CompositeLayers(layer, 0, Rml::BlendMode::Blend, {});
+    r.PopLayer();
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 1, 1), 0, 0, 0, 0));
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 5, 5), 0, 0, 255, 255));
+
+    // Next frame: Replace writes the whole (empty) layer over a red base.
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    r.RenderGeometry(quad(r, 0, 0, 8, 8, kRed), {0, 0}, 0);
+    layer = r.PushLayer();
+    r.CompositeLayers(layer, 0, Rml::BlendMode::Replace, {});
+    r.PopLayer();
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 5, 5), 0, 0, 0, 0));
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 1, 1), 0, 0, 0, 0));
+}
+
+void test_equal_area_resize_clears_reused_buffers() {
+    const auto check_mask = [](std::uint32_t old_width, std::uint32_t old_height, std::uint32_t width,
+                               std::uint32_t height) {
+        CpuRenderInterface r;
+        std::vector<std::uint8_t> old_buffer(static_cast<std::size_t>(old_width) * old_height * 4u);
+        std::vector<std::uint8_t> buffer(static_cast<std::size_t>(width) * height * 4u);
+        const auto old_full = quad(r, 0, 0, static_cast<float>(old_width), static_cast<float>(old_height), kRed);
+        const auto full = quad(r, 0, 0, static_cast<float>(width), static_cast<float>(height), kRed);
+
+        VELLUM_RMLUI_CHECK(r.begin_frame(frame(old_buffer, old_width, old_height)));
+        r.EnableClipMask(true);
+        r.RenderToClipMask(Rml::ClipMaskOperation::Set, old_full, {0, 0});
+        r.end_frame();
+
+        VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer, width, height)));
+        r.EnableClipMask(true);
+        r.RenderGeometry(full, {0, 0}, 0);
+        r.EnableClipMask(false);
+        r.end_frame();
+        for (std::uint32_t y = 0; y < height; ++y)
+            for (std::uint32_t x = 0; x < width; ++x)
+                VELLUM_RMLUI_CHECK(is(px(buffer, static_cast<std::size_t>(width) * 4u, x, y), 255, 0, 0, 255));
+    };
+
+    const auto check_layer = [](std::uint32_t old_width, std::uint32_t old_height, std::uint32_t width,
+                                std::uint32_t height) {
+        CpuRenderInterface r;
+        std::vector<std::uint8_t> old_buffer(static_cast<std::size_t>(old_width) * old_height * 4u);
+        std::vector<std::uint8_t> buffer(static_cast<std::size_t>(width) * height * 4u);
+        const auto old_full = quad(r, 0, 0, static_cast<float>(old_width), static_cast<float>(old_height), kRed);
+
+        VELLUM_RMLUI_CHECK(r.begin_frame(frame(old_buffer, old_width, old_height)));
+        r.PushLayer();
+        r.RenderGeometry(old_full, {0, 0}, 0);
+        r.PopLayer();
+        r.end_frame();
+
+        VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer, width, height)));
+        const auto layer = r.PushLayer();
+        r.CompositeLayers(layer, 0, Rml::BlendMode::Blend, {});
+        r.PopLayer();
+        r.end_frame();
+        for (const auto value : buffer)
+            VELLUM_RMLUI_CHECK(value == 0);
+    };
+
+    check_mask(8, 8, 16, 4);
+    check_mask(16, 4, 8, 8);
+    check_layer(8, 8, 16, 4);
+    check_layer(16, 4, 8, 8);
+}
+
 std::vector<std::uint8_t> tall_texture() {
     std::vector<std::uint8_t> texels(28544u * 4u);
     for (std::size_t y = 0; y < 28544u; ++y) {
@@ -352,9 +483,10 @@ void test_texture_limit() {
 }
 
 // The same scene, drawn by one renderer into one buffer.
-std::vector<std::uint8_t> scene(std::uint8_t garbage) {
+std::vector<std::uint8_t> scene(std::uint8_t garbage, unsigned threads = 1) {
     std::vector<std::uint8_t> buffer(64 * 48 * 4, garbage);
     CpuRenderInterface r;
+    r.set_threads(threads);
     const std::array<std::uint8_t, 16> texels = {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 40, 40, 40, 80};
     const auto texture = r.GenerateTexture(Rml::Span<const Rml::byte>(texels.data(), texels.size()), {2, 2});
     r.begin_frame(frame(buffer, 64, 48, 0, 1.5f));
@@ -383,6 +515,14 @@ void test_deterministic_across_threads() {
     second.join();
     VELLUM_RMLUI_CHECK(a == alone);
     VELLUM_RMLUI_CHECK(b == alone);
+    // Two instances on two threads, each splitting its draws across its own
+    // workers.
+    std::thread third([&] { a = scene(0x33, 3); });
+    std::thread fourth([&] { b = scene(0x44, 4); });
+    third.join();
+    fourth.join();
+    VELLUM_RMLUI_CHECK(a == alone);
+    VELLUM_RMLUI_CHECK(b == alone);
     // The scene draws something: not all zero.
     bool any = false;
     for (const auto value : alone)
@@ -393,15 +533,21 @@ void test_deterministic_across_threads() {
 } // namespace
 
 int main() {
-    test_fill_and_untouched_pixels();
-    test_premultiplied_blend();
-    test_textures_nearest();
-    test_scissor_transform_and_scale();
-    test_invalid_frames_draw_nothing();
-    test_unsupported_calls_are_counted();
-    test_clip_masks();
-    test_layers();
-    test_texture_limit();
-    test_deterministic_across_threads();
+    for (const unsigned threads : {1u, 3u}) {
+        g_threads = threads;
+        test_fill_and_untouched_pixels();
+        test_premultiplied_blend();
+        test_textures_nearest();
+        test_scissor_transform_and_scale();
+        test_invalid_frames_draw_nothing();
+        test_unsupported_calls_are_counted();
+        test_clip_masks();
+        test_layers();
+        test_mask_reuse_outside_the_scissor();
+        test_layer_reuse_starts_clear();
+        test_equal_area_resize_clears_reused_buffers();
+        test_texture_limit();
+        test_deterministic_across_threads();
+    }
     return 0;
 }

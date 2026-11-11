@@ -1,0 +1,60 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-10T08:41:54Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-e487ff66f31099b2a5559f99a669d3724773d25b",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/image_asset.hpp",
+    "graphics/include/vellum/graphics/lowering_diagnostic.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "graphics/include/vellum/graphics/image_asset.hpp",
+    "graphics/include/vellum/graphics/lowering_diagnostic.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/src/paint_command.cpp",
+    "graphics/src/skia_dawn_surface.mm",
+    "graphics/tests/image_gpu_test.cpp",
+    "graphics/tests/image_node_test.cpp",
+    "packages/vellum-ui/src/runtime.js",
+    "packages/vellum-ui/test/runtime.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "c414f54917ed873bdb4ab41ab78d9363120d4e13",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "0903ae8312b4cb3707378a39e1ffee5f554235d0",
+    "to_commit": "e487ff66f31099b2a5559f99a669d3724773d25b"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "e487ff66f31099b2a5559f99a669d3724773d25b",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

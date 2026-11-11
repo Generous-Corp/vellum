@@ -22,6 +22,7 @@
 #include <limits>
 #include <memory>
 #include <span>
+#include <string>
 
 namespace vellum::graphics::detail {
 
@@ -46,10 +47,26 @@ struct CachedParagraph final {
     return digest;
 }
 
+/// The texel digest of an image asset, remembered under its content hash so
+/// an unchanged asset is hashed once rather than on every frame. The entry
+/// holds the asset weakly and its digest is reused only while it still names
+/// the very asset being drawn, so a hash that arrives with other texels is
+/// rehashed instead of reaching a stale upload.
+struct ImageDigest final {
+    std::weak_ptr<const ImageAsset> asset;
+    TextureDigest digest{};
+};
+
+/// How many content hashes keep their texel digest. An entry is small, so the
+/// budget is a count; the bytes are a nominal per-entry size.
+inline constexpr CacheBudget kImageDigestBudget{1024, 1024U * 128U};
+inline constexpr std::size_t kImageDigestBytes = 128U;
+
 struct SkiaResourceCaches final {
     LruCache<ParagraphKey, CachedParagraph, ParagraphKeyHash> paragraphs;
     LruCache<GradientKey, sk_sp<SkShader>, GradientKeyHash> gradients;
     LruCache<TextureKey, sk_sp<SkImage>, TextureKeyHash> textures;
+    LruCache<std::string, ImageDigest, std::hash<std::string>> image_digests{kImageDigestBudget};
     /// Counts every frame the renderer starts; entries are stamped with it.
     std::uint64_t frame = 0;
 
@@ -63,6 +80,7 @@ struct SkiaResourceCaches final {
         paragraphs.begin_frame();
         gradients.begin_frame();
         textures.begin_frame();
+        image_digests.begin_frame();
     }
 
     /// Applies new budgets. Returns how many entries no longer fit.
@@ -80,7 +98,8 @@ struct SkiaResourceCaches final {
     std::size_t trim_unused_since(std::uint64_t first_frame) {
         return paragraphs.trim_unused_since(first_frame) +
                gradients.trim_unused_since(first_frame) +
-               textures.trim_unused_since(first_frame);
+               textures.trim_unused_since(first_frame) +
+               image_digests.trim_unused_since(first_frame);
     }
 
     /// The per-frame counters of every cache.
@@ -100,7 +119,9 @@ struct SkiaResourceCaches final {
         textures.restore_frame_counters(state.textures);
     }
 
-    std::size_t clear() { return paragraphs.clear() + gradients.clear() + textures.clear(); }
+    std::size_t clear() {
+        return paragraphs.clear() + gradients.clear() + textures.clear() + image_digests.clear();
+    }
 };
 
 }  // namespace vellum::graphics::detail

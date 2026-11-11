@@ -867,16 +867,17 @@ bool legacy_scene_paths() {
 
 bool scene_versioning() {
     using vellum::graphics::SceneNode;
-    static_assert(vellum::graphics::kSceneVersion == 3U);
+    static_assert(vellum::graphics::kSceneVersion == 4U);
     static_assert(vellum::graphics::kMinSupportedSceneVersion == 1U);
     static_assert(vellum::graphics::scene_version_is_supported(vellum::graphics::kSceneVersion));
     static_assert(vellum::graphics::scene_version_is_supported(1U));
     static_assert(vellum::graphics::scene_version_is_supported(2U));
     static_assert(!vellum::graphics::scene_version_is_supported(0U));
-    static_assert(!vellum::graphics::scene_version_is_supported(4U));
+    static_assert(vellum::graphics::scene_version_is_supported(3U));
+    static_assert(!vellum::graphics::scene_version_is_supported(5U));
 
     vellum::graphics::Scene scene;
-    if (scene.scene_version != vellum::graphics::kSceneVersion || scene.scene_version != 3U) {
+    if (scene.scene_version != vellum::graphics::kSceneVersion || scene.scene_version != 4U) {
         return false;
     }
     scene.root.children.push_back({
