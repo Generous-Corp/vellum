@@ -198,8 +198,7 @@ if(VELLUM_BUILD_TESTS)
 
         add_executable(vellum-image-decode-queue-test
             graphics/tests/image_decode_queue_test.cpp)
-        find_package(Threads REQUIRED)
-        target_link_libraries(vellum-image-decode-queue-test PRIVATE Vellum::Graphics Threads::Threads)
+        target_link_libraries(vellum-image-decode-queue-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.image-decode-queue COMMAND vellum-image-decode-queue-test)
 
         add_executable(vellum-grouping-test

@@ -44,6 +44,10 @@ unset(_vellum_consumer_architectures)
 unset(_vellum_architecture)
 unset(_vellum_unsupported)
 
+# Vellum::Graphics exports Threads::Threads in its link interface.
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+
 include("${CMAKE_CURRENT_LIST_DIR}/VellumTargets.cmake")
 if(@VELLUM_PACKAGE_HAS_MIRROR@)
     # Units built from the landed mirror (Decision 0010) live in their own
