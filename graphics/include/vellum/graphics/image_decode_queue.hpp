@@ -66,14 +66,20 @@ struct DecodedImage final {
 /// A refused input is never queued or copied. Hashing and decoding run on a
 /// worker.
 ///
-/// Jobs run in submission order. Over budget a job waits; it is never dropped.
+/// Jobs start in submission order, so with one worker they also finish in that
+/// order. Over budget a job waits; it is never dropped.
 /// Only the render thread publishes: `take_finished` hands the finished assets
 /// over, and the host puts them in the scene (see `publish_decoded_images`) and
 /// uploads them there. The scene diff then damages exactly the nodes whose
 /// asset changed. Every member may be called from any thread.
 ///
-/// Destruction discards queued jobs, waits for the decodes in progress and
-/// drops their results.
+/// `shutdown` and destruction discard queued jobs and drop the results of the
+/// decodes in progress; destruction also waits for those decodes to return.
+///
+/// Lifetime: the queue must outlive every call on it. A member call that is
+/// running or starting while the destructor runs is undefined behaviour, so
+/// stop every thread that uses the queue (or call `shutdown` and wait for them
+/// to see a refusal) before destroying it.
 class ImageDecodeQueue final {
 public:
     enum class Submit : std::uint8_t {
@@ -91,8 +97,14 @@ public:
     ImageDecodeQueue(const ImageDecodeQueue&) = delete;
     ImageDecodeQueue& operator=(const ImageDecodeQueue&) = delete;
 
+    /// Stops accepting jobs, discards the queued and finished ones and drops
+    /// the results of decodes in progress, without waiting for them. Later
+    /// `submit` calls are refused. The destructor does this and then waits.
+    void shutdown();
+
     /// Queues `encoded` to decode as the asset named `content_hash`, which
-    /// must be a SHA-256 hash (bare or prefixed). The decode function checks
+    /// must be a SHA-256 hash (bare or prefixed); `cancel` and `is_pending` take
+    /// either form too. The decode function checks
     /// the bytes against it.
     Submit submit(std::vector<std::uint8_t> encoded, std::string_view content_hash,
                   std::string* error = nullptr);

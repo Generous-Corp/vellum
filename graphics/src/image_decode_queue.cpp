@@ -25,6 +25,19 @@ struct Job final {
     std::string error;
 };
 
+std::string thrown_message(const char* prefix, const char* what) noexcept {
+    try {
+        return what != nullptr ? std::string(prefix) + ": " + what : std::string(prefix);
+    } catch (...) {
+        return {};
+    }
+}
+
+std::string canonical(std::string_view content_hash) {
+    auto hash = normalize_content_hash(content_hash);
+    return hash ? std::move(*hash) : std::string{};
+}
+
 void set_error(std::string* error, std::string message) {
     if (error != nullptr) *error = std::move(message);
 }
@@ -103,22 +116,34 @@ struct ImageDecodeQueue::State final {
                 if (!asset && error.empty()) error = "the image could not be decoded";
             } catch (const std::exception& exception) {
                 asset = nullptr;
-                error = std::string("the decoder threw: ") + exception.what();
+                error = thrown_message("the decoder threw", exception.what());
             } catch (...) {
                 asset = nullptr;
-                error = "the decoder threw";
+                error = thrown_message("the decoder threw", nullptr);
             }
 
             lock.lock();
             --running;
             inflight -= job->estimate;
             std::vector<std::uint8_t>().swap(job->encoded);
-            if (!job->cancelled) {
-                job->phase = Job::Phase::finished;
-                job->asset = std::move(asset);
-                job->error = std::move(error);
-                ++(job->asset ? stats.completed : stats.failed);
-                finished.push_back(job);
+            if (!job->cancelled && !stopping) {
+                // Nothing here allocates: `finished` was given room when the
+                // job was submitted. A failure anyway still ends as a failed
+                // result with the budget already released.
+                try {
+                    job->phase = Job::Phase::finished;
+                    job->asset = std::move(asset);
+                    job->error = std::move(error);
+                    ++(job->asset ? stats.completed : stats.failed);
+                    finished.push_back(job);
+                } catch (...) {
+                    job->asset.reset();
+                    job->error.clear();
+                    ++stats.failed;
+                    if (std::find(finished.begin(), finished.end(), job) == finished.end()) {
+                        jobs.erase(job->hash);
+                    }
+                }
             }
             idle.notify_all();
             work.notify_all();
@@ -126,18 +151,7 @@ struct ImageDecodeQueue::State final {
     }
 };
 
-ImageDecodeQueue::ImageDecodeQueue(ImageDecodeFunction decode, ImageDecodeBudget budget)
-    : state_(std::make_unique<State>()) {
-    budget.max_concurrent = std::max<std::size_t>(budget.max_concurrent, 1U);
-    state_->decode = std::move(decode);
-    state_->budget = budget;
-    state_->workers.reserve(budget.max_concurrent);
-    for (std::size_t index = 0; index < budget.max_concurrent; ++index) {
-        state_->workers.emplace_back([state = state_.get()] { state->run(); });
-    }
-}
-
-ImageDecodeQueue::~ImageDecodeQueue() {
+void ImageDecodeQueue::shutdown() {
     {
         const std::lock_guard lock(state_->mutex);
         state_->stopping = true;
@@ -146,6 +160,28 @@ ImageDecodeQueue::~ImageDecodeQueue() {
         state_->finished.clear();
     }
     state_->work.notify_all();
+    state_->idle.notify_all();
+}
+
+ImageDecodeQueue::ImageDecodeQueue(ImageDecodeFunction decode, ImageDecodeBudget budget)
+    : state_(std::make_unique<State>()) {
+    budget.max_concurrent = std::max<std::size_t>(budget.max_concurrent, 1U);
+    state_->decode = std::move(decode);
+    state_->budget = budget;
+    try {
+        state_->workers.reserve(budget.max_concurrent);
+        for (std::size_t index = 0; index < budget.max_concurrent; ++index) {
+            state_->workers.emplace_back([state = state_.get()] { state->run(); });
+        }
+    } catch (...) {
+        shutdown();
+        for (auto& worker : state_->workers) worker.join();
+        throw;
+    }
+}
+
+ImageDecodeQueue::~ImageDecodeQueue() {
+    shutdown();
     for (auto& worker : state_->workers) worker.join();
 }
 
@@ -181,6 +217,7 @@ ImageDecodeQueue::Submit ImageDecodeQueue::submit(
     job->hash = *hash;
     job->encoded = std::move(encoded);
     job->estimate = static_cast<std::size_t>(declared->width) * declared->height * 4U;
+    state_->finished.reserve(state_->jobs.size() + 1U);
     state_->jobs.emplace(*hash, job);
     state_->queue.push_back(std::move(job));
     ++state_->stats.submitted;
@@ -190,7 +227,8 @@ ImageDecodeQueue::Submit ImageDecodeQueue::submit(
 
 bool ImageDecodeQueue::cancel(std::string_view content_hash) {
     const std::lock_guard lock(state_->mutex);
-    return state_->cancel_locked(std::string(content_hash));
+    const auto hash = canonical(content_hash);
+    return !hash.empty() && state_->cancel_locked(hash);
 }
 
 std::size_t ImageDecodeQueue::cancel_unreferenced(const Scene& scene) {
@@ -207,7 +245,8 @@ std::size_t ImageDecodeQueue::cancel_unreferenced(const Scene& scene) {
 
 bool ImageDecodeQueue::is_pending(std::string_view content_hash) const {
     const std::lock_guard lock(state_->mutex);
-    return state_->jobs.contains(std::string(content_hash));
+    const auto hash = canonical(content_hash);
+    return !hash.empty() && state_->jobs.contains(hash);
 }
 
 std::vector<DecodedImage> ImageDecodeQueue::take_finished() {

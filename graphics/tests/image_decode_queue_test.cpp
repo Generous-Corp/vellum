@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <new>
 #include <mutex>
 #include <set>
 #include <string>
@@ -140,8 +141,11 @@ void refusals() {
     auto truncated = fake_png(4, 4);
     truncated.resize(12);
     refused(std::move(truncated), hash_of(1), "a truncated header is refused");
-    expect(queue.wait_idle(1s) && gate.calls == 0 && queue.stats().submitted == 0U &&
-               queue.stats().queued == 0U && !queue.is_pending(hash_of(1)),
+    const auto after = queue.stats();
+    expect(queue.wait_idle(1s) && gate.calls == 0 && after.submitted == 0U && after.queued == 0U &&
+               after.running == 0U && after.finished == 0U && after.inflight_bytes == 0U &&
+               after.completed == 0U && after.failed == 0U && after.cancelled == 0U &&
+               !queue.is_pending(hash_of(1)),
            "a refused input is never queued and never reaches the decoder");
     expect(queue.submit(fake_png(8192, 8192), hash_of(2)) == ImageDecodeQueue::Submit::queued,
            "an image at the limits is accepted");
@@ -150,7 +154,15 @@ void refusals() {
     expect(queue.submit(fake_png(4, 4), bare) == ImageDecodeQueue::Submit::queued,
            "a bare hash is accepted");
     expect(queue.wait_idle(5s), "the bare-hash image decodes");
-    expect(queue.is_pending(hash_of(3)), "a bare hash is queued under its prefixed form");
+    expect(queue.is_pending(hash_of(3)) && queue.is_pending(bare),
+           "a bare hash is queued under its prefixed form and found by either");
+    bool published = false;
+    const bool cancelled = queue.cancel(bare);
+    for (const auto& decoded : queue.take_finished()) published |= decoded.content_hash == hash_of(3);
+    expect(cancelled && !queue.is_pending(hash_of(3)) && !published,
+           "cancelling by the bare hash drops the job, so it never publishes");
+    expect(!queue.cancel("not a hash") && !queue.is_pending("not a hash"),
+           "a malformed hash names no job");
 }
 
 void decoding_does_not_block_the_caller() {
@@ -198,7 +210,6 @@ void concurrency_budget() {
         queue.submit(fake_png(4, 4), hash_of(index));
     }
     expect(gate.wait_for_running(2), "two decodes start");
-    std::this_thread::sleep_for(100ms);
     auto stats = queue.stats();
     expect(stats.running == 2U && stats.queued == 4U && gate.calls == 2,
            "the rest wait in the queue", "running " + std::to_string(stats.running));
@@ -237,7 +248,6 @@ void byte_budget() {
         queue.submit(fake_png(16, 16), hash_of(index));
     }
     expect(gate.wait_for_running(2), "two decodes fit the byte budget");
-    std::this_thread::sleep_for(100ms);
     auto stats = queue.stats();
     expect(stats.running == 2U && stats.queued == 3U && stats.inflight_bytes == 2048U,
            "the byte budget holds the rest back although workers are free",
@@ -249,19 +259,22 @@ void byte_budget() {
                stats.inflight_bytes == 0U,
            "all five complete within the budget", std::to_string(stats.peak_inflight_bytes));
 
-    // One image over the whole budget runs alone instead of starving.
+    // One image over the whole budget runs alone, then the queue proceeds.
     Gate lone;
     lone.close();
     ImageDecodeQueue small(lone.decoder(), {.max_concurrent = 3, .max_inflight_bytes = 100});
     small.submit(fake_png(64, 64), hash_of(1));
-    small.submit(fake_png(64, 64), hash_of(2));
+    for (unsigned index = 2; index < 5; ++index) small.submit(fake_png(4, 4), hash_of(index));
     expect(lone.wait_for_running(1), "an image over the whole budget still starts");
-    std::this_thread::sleep_for(100ms);
-    expect(small.stats().running == 1U && small.stats().queued == 1U,
-           "a second one waits for it");
+    auto held = small.stats();
+    expect(held.running == 1U && held.queued == 3U && held.inflight_bytes == 64U * 64U * 4U,
+           "the others wait while it runs alone");
     lone.release();
-    expect(small.wait_idle(5s) && small.stats().completed == 2U && lone.peak == 1,
-           "images over the byte budget run one at a time");
+    expect(small.wait_idle(5s), "the queue proceeds after the large image");
+    held = small.stats();
+    expect(held.completed == 4U && held.peak_inflight_bytes == 64U * 64U * 4U &&
+               held.inflight_bytes == 0U,
+           "all four complete and the budget is released");
 }
 
 void cancellation() {
@@ -286,6 +299,19 @@ void cancellation() {
     const auto published = publish_decoded_images(queue, scene);
     expect(published.published == 0U && scene.images.empty() && queue.take_finished().empty(),
            "a cancelled decode never publishes an asset");
+
+    // A job running or finished while cancel_unreferenced runs never publishes.
+    gate.close();
+    queue.submit(fake_png(4, 4), hash_of(6));
+    expect(gate.wait_for_running(1), "the sixth decode runs");
+    const auto nothing = scene_naming({});
+    expect(queue.cancel_unreferenced(nothing) == 1U, "the running job is cancelled");
+    gate.release();
+    expect(queue.wait_idle(5s), "the cancelled decode returns");
+    queue.submit(fake_png(4, 4), hash_of(7));
+    expect(queue.wait_idle(5s), "the seventh decode finishes");
+    expect(queue.cancel_unreferenced(nothing) == 1U && queue.take_finished().empty(),
+           "a finished job is cancelled before it is taken");
 
     // A decode that finished but was not taken yet is cancelled too.
     queue.submit(fake_png(4, 4), hash_of(4));
@@ -340,24 +366,66 @@ void publishing_rules() {
            "a throwing decoder is a failed decode");
 }
 
+void exception_safety() {
+    std::atomic<int> calls{0};
+    ImageDecodeQueue queue(
+        [&](std::span<const std::uint8_t>, std::string_view hash, std::string*)
+            -> std::shared_ptr<const ImageAsset> {
+            if (calls++ == 0) throw std::bad_alloc();
+            return tiny_asset(std::string(hash));
+        },
+        {.max_concurrent = 1, .max_inflight_bytes = 64});
+    queue.submit(fake_png(4, 4), hash_of(1));
+    queue.submit(fake_png(4, 4), hash_of(2));
+    expect(queue.wait_idle(5s), "a worker survives an allocation failure in the decoder");
+    const auto done = queue.take_finished();
+    expect(done.size() == 2U && !done[0].asset && !done[0].error.empty() && done[1].asset,
+           "the failure becomes a failed result and the next job runs");
+    const auto stats = queue.stats();
+    expect(stats.failed == 1U && stats.completed == 1U && stats.inflight_bytes == 0U &&
+               stats.running == 0U,
+           "the budget is released on the failure path");
+}
+
+void cancel_racing_completion() {
+    Gate gate;
+    ImageDecodeQueue queue(gate.decoder(), {.max_concurrent = 3});
+    const auto nothing = scene_naming({});
+    std::atomic<bool> submitting{true};
+    std::thread canceller([&] {
+        while (submitting) queue.cancel_unreferenced(nothing);
+    });
+    for (unsigned index = 0; index < 300; ++index) {
+        queue.submit(fake_png(4, 4), hash_of(index));
+    }
+    submitting = false;
+    canceller.join();
+    expect(queue.wait_idle(30s), "the racing run drains");
+    queue.cancel_unreferenced(nothing);
+    expect(queue.take_finished().empty() && !queue.is_pending(hash_of(0)),
+           "no job a scene does not name is left to publish");
+    auto scene = scene_naming({});
+    expect(publish_decoded_images(queue, scene).published == 0U && scene.images.empty(),
+           "nothing is published for a scene that names none of them");
+}
+
 void teardown_with_decodes_in_flight() {
     Gate gate;
     gate.close();
-    std::thread opener;
     {
         ImageDecodeQueue queue(gate.decoder(), {.max_concurrent = 2});
         for (unsigned index = 0; index < 8; ++index) {
             queue.submit(fake_png(4, 4), hash_of(index));
         }
         expect(gate.wait_for_running(2), "two decodes are in flight");
-        opener = std::thread([&] {
-            std::this_thread::sleep_for(100ms);
-            gate.release();
-        });
+        queue.shutdown();
+        std::string error;
+        expect(queue.submit(fake_png(4, 4), hash_of(9), &error) == ImageDecodeQueue::Submit::refused &&
+                   queue.stats().queued == 0U && !queue.is_pending(hash_of(5)),
+               "shutdown discards the queued jobs and refuses new ones", error);
+        gate.release();
     }
-    opener.join();
-    expect(gate.calls == 2, "queued jobs that never started are discarded at teardown",
-           std::to_string(gate.calls));
+    expect(gate.calls == 2, "queued jobs that never started never run", std::to_string(gate.calls));
     bool leaked = false;
     for (const auto& weak : gate.made) leaked |= !weak.expired();
     expect(!leaked, "the results of decodes running at teardown are freed");
@@ -442,6 +510,8 @@ int main() {
     byte_budget();
     cancellation();
     publishing_rules();
+    exception_safety();
+    cancel_racing_completion();
     teardown_with_decodes_in_flight();
     stress();
     if (failures == 0) std::cout << "image decode queue tests passed\n";
