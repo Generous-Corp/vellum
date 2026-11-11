@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-11T13:19:16Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-d3d649fedeffda7f9ce3fe7bf30a7dbd1b9090cc",
+  "kind": "resolution",
+  "linked_commits": [
+    "d3d649fedeffda7f9ce3fe7bf30a7dbd1b9090cc"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/327"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-native graphics change with no Pulp consumer; owner-approved agent classification 2026-11-10",
+  "resolves": "vellum-d3d649fedeffda7f9ce3fe7bf30a7dbd1b9090cc",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

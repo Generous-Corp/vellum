@@ -1186,27 +1186,36 @@ bool path_arc_gradient_and_refusal() {
 // diagonal square-capped segment and for a sharp miter that reaches far past
 // half the stroke width.
 bool path_damage_bounds_contain_paint() {
-    const auto stroked = [](std::vector<float> values, StrokeJoin join, StrokeCap cap) {
+    const auto stroked = [](std::vector<float> values, StrokeJoin join, StrokeCap cap,
+                            float miter_limit = 10.0F) {
         auto geometry = std::make_shared<PathGeometry>();
         geometry->values = std::move(values);
         geometry->verbs.assign(geometry->values.size() / 2U, PathVerb::line);
         geometry->verbs.front() = PathVerb::move;
         geometry->stroke = {.color = Color::hex(0xFFFFFF), .width = 4.0F, .join = join,
-                            .cap = cap, .miter_limit = 10.0F};
+                            .cap = cap, .miter_limit = miter_limit};
         return geometry;
     };
+    const float turn = 29.7F * 3.14159265F / 180.0F;
     struct Case final {
         const char* what;
         Rect origin;
         std::shared_ptr<const PathGeometry> path;
         float painted_right_at_least;
     };
-    const std::array<Case, 2> cases{{
+    const std::array<Case, 4> cases{{
         {"diagonal square cap", {10.0F, 10.0F, 0.0F, 0.0F},
          stroked({0.0F, 0.0F, 30.0F, 40.0F}, StrokeJoin::bevel, StrokeCap::square), 41.0F},
         {"sharp miter", {8.0F, 16.0F, 0.0F, 0.0F},
          stroked({0.0F, 0.0F, 40.0F, 0.0F, 0.0F, 10.0F}, StrokeJoin::miter, StrokeCap::butt),
          62.0F},
+        {"miter at 3.9 of a 4.0 limit", {8.0F, 16.0F, 0.0F, 0.0F},
+         stroked({0.0F, 0.0F, 40.0F, 0.0F, 40.0F - 40.0F * std::cos(turn),
+                  40.0F * std::sin(turn)},
+                 StrokeJoin::miter, StrokeCap::butt, 4.0F),
+         54.0F},
+        {"45-degree square cap", {10.0F, 10.0F, 0.0F, 0.0F},
+         stroked({0.0F, 0.0F, 30.0F, 30.0F}, StrokeJoin::bevel, StrokeCap::square), 42.0F},
     }};
     bool passed = true;
     for (const auto& test : cases) {

@@ -11,6 +11,7 @@
 #include "skia_dawn_surface_test_access.hpp"
 #include <gpu_runtime/gpu_surface.hpp>
 
+#include "skia_dawn_surface_testing.hpp"
 #include "skia_resource_caches.hpp"
 #include "utf8_text.hpp"
 
@@ -83,6 +84,11 @@
 
 namespace vellum::graphics {
 namespace {
+
+std::atomic<std::uint32_t> internal_samples{1U};
+std::atomic<bool> enclose_paths{true};
+std::atomic<bool> enclose_own_layers{true};
+std::atomic<bool> enclose_interpolated_fills{true};
 
 void set_error(std::string* destination, std::string message) {
     if (destination != nullptr) {
@@ -899,6 +905,34 @@ bool opacity_folds_into_paint(const PaintCommand& command) {
     return false;
 }
 
+bool composites_own_layer(const PaintCommand& command) {
+    if (!draws_content(command.kind) || command.kind == PaintCommand::Kind::text) return false;
+    const float opacity = std::clamp(command.opacity, 0.0F, 1.0F);
+    return opacity > 0.0F && opacity < 1.0F && !opacity_folds_into_paint(command);
+}
+
+bool visible(const PaintCommand& command) {
+    return draws_content(command.kind) && std::clamp(command.opacity, 0.0F, 1.0F) > 0.0F;
+}
+
+bool path_paints(const PaintCommand& command) {
+    if (command.kind != PaintCommand::Kind::path || !command.path || !visible(command)) {
+        return false;
+    }
+    const auto& path = *command.path;
+    const bool stroked = path.stroke.width > 0.0F && path.stroke.color.alpha > 0.0F;
+    return !path.verbs.empty() &&
+           (command.fill.alpha > 0.0F || !command.fill_gradients.empty() || stroked);
+}
+
+bool interpolates_colour(const PaintCommand& command) {
+    if (!visible(command)) return false;
+    if (command.kind == PaintCommand::Kind::mesh) {
+        return command.mesh && !command.mesh->indices.empty();
+    }
+    return !command.fill_gradients.empty();
+}
+
 // The opacity a command's own paint carries: its opacity, unless it is drawn
 // through a layer of its own because the opacity cannot fold into its paint.
 float own_paint_opacity(const PaintCommand& command) {
@@ -1068,19 +1102,26 @@ std::vector<Extent> paint_command_extents(
 }
 
 bool close_over_layers(const Scene& scene, const std::vector<PaintCommand>& commands, float scale,
-                       const PixelRect& target, std::vector<PixelRect>& rects) {
+                       const PixelRect& target, const std::vector<char>& composited,
+                       std::vector<PixelRect>& rects) {
     if (rects.empty()) return true;
     std::vector<PixelRect> layers;
     std::vector<Extent> extents;
     for (std::size_t begin = 0; begin < commands.size(); ++begin) {
+        if (composited[begin] != 0) continue;
         const auto& command = commands[begin];
         const bool transformed_blur =
             command.kind == PaintCommand::Kind::rectangle && !is_identity(command.transform) &&
             std::any_of(command.box_shadows.begin(), command.box_shadows.end(),
                         [](const BoxShadow& shadow) { return shadow.blur_radius > 0.0F; });
-        if (command.kind != PaintCommand::Kind::begin_layer && !transformed_blur) continue;
+        const bool whole =
+            transformed_blur || (enclose_own_layers && composites_own_layer(command)) ||
+            (enclose_paths && path_paints(command)) ||
+            (enclose_interpolated_fills && interpolates_colour(command));
+        if (command.kind != PaintCommand::Kind::begin_layer && !whole) continue;
         if (extents.empty()) extents = paint_command_extents(scene, commands, scale);
-        if (transformed_blur) {
+        if (whole) {
+            if (extents[begin] && extents[begin]->empty()) continue;
             layers.push_back(intersection(extents[begin] ? *extents[begin] : target, target));
             continue;
         }
@@ -1330,6 +1371,8 @@ public:
         backend_context.fDevice = device_;
         backend_context.fQueue = queue_;
         skgpu::graphite::ContextOptions context_options;
+        context_options.fInternalMultisampleCount =
+            skgpu::graphite::ToSampleCount(internal_samples.load());
         context_ = skgpu::graphite::ContextFactory::MakeDawn(
             backend_context, context_options);
         if (!context_) {
@@ -1818,9 +1861,22 @@ private:
             reason = FullRepaintReason::full_render;
         }
         const auto target = target_rect();
+        std::vector<char> composited(commands.size(), 0);
+        for (const auto& layer : layers) {
+            std::fill(composited.begin() + static_cast<std::ptrdiff_t>(layer.begin),
+                      composited.begin() + static_cast<std::ptrdiff_t>(layer.end), 1);
+        }
         if (reason == FullRepaintReason::none &&
-            !close_over_layers(scene, commands, config_.scale, target, rects)) {
+            !close_over_layers(scene, commands, config_.scale, target, composited, rects)) {
             reason = FullRepaintReason::full_damage;
+        }
+        if (reason == FullRepaintReason::none && damage != nullptr) {
+            std::int64_t enclosed = 0;
+            for (const auto& rect : rects) enclosed += rect.area();
+            if (static_cast<double>(enclosed) >=
+                damage->policy().full_repaint_fraction * static_cast<double>(target.area())) {
+                reason = FullRepaintReason::damage_threshold;
+            }
         }
         const bool full = reason != FullRepaintReason::none;
 
@@ -2352,6 +2408,26 @@ bool SkiaDawnSurface::capture_rgba(
 const GpuEvidence& SkiaDawnSurface::evidence() const noexcept {
     return impl_->evidence();
 }
+
+namespace testing {
+
+void set_partial_redraw_rules(const PartialRedrawRules& rules) noexcept {
+    enclose_paths = rules.enclose_paths;
+    enclose_own_layers = rules.enclose_own_layers;
+    enclose_interpolated_fills = rules.enclose_interpolated_fills;
+}
+
+PartialRedrawRules partial_redraw_rules() noexcept {
+    return {.enclose_paths = enclose_paths,
+            .enclose_own_layers = enclose_own_layers,
+            .enclose_interpolated_fills = enclose_interpolated_fills};
+}
+
+void set_internal_sample_count(std::uint32_t count) noexcept { internal_samples = count; }
+
+std::uint32_t internal_sample_count() noexcept { return internal_samples; }
+
+}  // namespace testing
 
 const std::vector<LoweringDiagnostic>& SkiaDawnSurface::diagnostics() const noexcept {
     return impl_->diagnostics();

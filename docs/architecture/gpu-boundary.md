@@ -191,18 +191,41 @@ swapchain when there is one. `render(scene)` repaints the whole frame and stays
 the deterministic capture path. `render_incremental` commits each scene to a
 renderer-owned `DamageTracker`, clears only the damage rectangles, and redraws
 only the paint commands whose paint extent (shadows and text overhang
-included) meets them; the rest of the retained image is left as it was, and
-the output is byte-identical to a full redraw. The first frame, a resize or
-surface recreation, a failed or lost-device frame, a scene version, size or
-background change, a host `reload`, and damage past the policy threshold fall
-back to a full repaint. Hosts pass `invalidate` reasons and node ids through
+included) meets them; the rest of the retained image is left as it was. The
+output is byte-identical to a full redraw given the enclosure rules below,
+which the partial presentation tests check on Dawn Metal. The first frame, a
+resize or surface recreation, a failed or lost-device frame, a scene version,
+size or background change, a host `reload`, and damage past the policy
+threshold fall back to a full repaint. Hosts pass `invalidate` reasons and node ids through
 `SkiaDawnSurface::invalidate`, and `frame_stats` reports the damage area, the
 rectangle counts, the commands re-recorded and why a frame repainted fully.
 What is cached and when it is discarded is renderer policy: the scene schema
 carries no cache hints. Partial redraw is enabled only for scene versions the
-damage model understands, up to `kDamageModelSceneVersion`; a newer scene,
-which can carry paths, images, clips, masks and isolation, repaints fully until
-the damage model learns those fields.
+damage model understands, up to `kDamageModelSceneVersion` (3), which covers
+transforms, group opacity, per-corner radii and paths. Version 4 adds images,
+and version 5 adds clips, masks and isolation; both repaint fully until the
+damage model learns those fields. A version the
+renderer accepts but the damage model does not yet understand repaints fully
+with reason `damage_model_version`. A version outside
+[`kMinSupportedSceneVersion`, `kSceneVersion`] is refused before anything is
+drawn.
+
+A path damages its control box outset by its stroke reach: half the width,
+times the miter limit for miter joins or sqrt(2) for square and round caps,
+with dashes ignored. A stroke of zero width, or with a transparent colour,
+adds no reach. The box is mapped through the composed transform, and the
+renderer culls with the same box. When the reach overflows to a non-finite
+box, damage covers the frame.
+
+Some content does not reproduce when a damage rectangle cuts it: path coverage,
+gradient and vertex-coloured fills, and a command that composites its own
+opacity layer. The surface grows the damage to hold each such command it
+touches whole, as it does for group layers. This can raise the damage of a
+small change sharply, for example from 7% to 72% of a frame dense with
+gradients, and the policy threshold is applied again after this growth. The
+surface also disables Graphite's internal multisampling. Otherwise a pass
+containing a path renders multisampled, and other content in that pass
+rasterizes differently from a pass without the path.
 
 The surface also caches subtrees as Graphite images, under a renderer-owned
 `LayerCachePolicy` keyed by node id (`layer_cache.hpp`); scenes carry no

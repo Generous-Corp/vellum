@@ -192,9 +192,10 @@ public:
 /// effect radius, transform and clips. Empty for nodes that paint nothing.
 /// `frame` is the scene's logical frame.
 ///
-/// A path paints within `path_control_bounds` outset by
-/// `path_stroke_outset`; a path without geometry, or whose geometry fails
+/// A path paints within `path_paint_box`, the same box the renderer culls
+/// and bounds layers with; a path without geometry, or whose geometry fails
 /// `path_is_valid`, reports `frame`. An image paints within its box.
+
 [[nodiscard]] std::optional<Rect> node_paint_bounds(
     const SceneNode& node, const Rect& absolute_bounds, const Rect& frame,
     const DamagePropagation& propagation);
@@ -249,7 +250,7 @@ public:
 /// damage model understands. Partial redraw is enabled only for scene
 /// versions the damage model understands; a newer scene repaints fully until
 /// the damage model learns its fields and this constant is raised.
-inline constexpr std::uint32_t kDamageModelSceneVersion = 2U;
+inline constexpr std::uint32_t kDamageModelSceneVersion = 3U;
 
 /// Whether a scene of `version` may be redrawn from its damage alone.
 [[nodiscard]] constexpr bool partial_redraw_supported(std::uint32_t version) noexcept {

@@ -633,10 +633,10 @@ void exact_layer_inside_damage_rect() {
         float opacity = 0.0F;
     };
     const std::vector<Step> steps{
-        {"a damage rectangle covering a re-faded group", {0, 280, 420, 472}, 0.3F},
-        {"a damage rectangle cutting through the faded group", {100, 300, 240, 400}, 0.3F},
+        {"a damage rectangle covering a re-faded group", {0, 306, 420, 472}, 0.3F},
+        {"a damage rectangle cutting through the faded group", {100, 306, 240, 400}, 0.3F},
         {"a damage rectangle beside the faded group", {440, 40, 600, 200}, 0.3F},
-        {"a damage rectangle covering a group faded back up", {0, 280, 420, 472}, 0.85F},
+        {"a damage rectangle covering a group faded back up", {0, 306, 420, 472}, 0.85F},
     };
     std::string error;
     for (const auto& step : steps) {

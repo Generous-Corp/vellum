@@ -661,6 +661,14 @@ float path_stroke_outset(const PathStroke& stroke) noexcept {
     return 0.5F * stroke.width * factor;
 }
 
+std::optional<Rect> path_paint_box(const PathGeometry& path) {
+    const auto control = path_control_bounds(path);
+    if (!control) return std::nullopt;
+    const float outset = path_stroke_outset(path.stroke);
+    return Rect{control->x - outset, control->y - outset, control->width + 2.0F * outset,
+                control->height + 2.0F * outset};
+}
+
 bool parse_svg_path_data(std::string_view data, PathGeometry& output, std::string* reason) {
     return PathDataParser(data).parse(output, reason);
 }

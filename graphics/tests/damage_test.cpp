@@ -1045,6 +1045,111 @@ void tracker() {
     check(damage.is_full_frame() && damage.frame() == PixelRect{0, 0, 400, 200}, "scale change repaints the frame");
 }
 
+
+bool same_box(const std::optional<Rect>& a, const std::optional<Rect>& b) {
+    if (a.has_value() != b.has_value()) return false;
+    return !a || (a->x == b->x && a->y == b->y && a->width == b->width && a->height == b->height);
+}
+
+void path_extent_agreement() {
+    const DamagePropagation none;
+    auto zigzag = std::make_shared<PathGeometry>();
+    zigzag->verbs = {PathVerb::move, PathVerb::line, PathVerb::line, PathVerb::line};
+    zigzag->values = {0.0F, 0.0F, 14.0F, 36.0F, 28.0F, 0.0F, 42.0F, 36.0F};
+    zigzag->stroke = {.color = Color::hex(0xFFFFFF), .width = 6.0F, .miter_limit = 4.0F};
+    const auto variant = [&](auto edit) {
+        auto copy = std::make_shared<PathGeometry>(*zigzag);
+        edit(*copy);
+        return std::shared_ptr<const PathGeometry>(copy);
+    };
+    const std::vector<std::shared_ptr<const PathGeometry>> paths = {
+        zigzag,
+        variant([](PathGeometry& p) { p.stroke.join = StrokeJoin::round; }),
+        variant([](PathGeometry& p) {
+            p.stroke.join = StrokeJoin::bevel;
+            p.stroke.cap = StrokeCap::square;
+        }),
+        variant([](PathGeometry& p) { p.stroke.cap = StrokeCap::round; }),
+        variant([](PathGeometry& p) { p.stroke.width = 0.0F; }),
+        variant([](PathGeometry& p) { p.stroke.color = Color::rgba(1.0F, 1.0F, 1.0F, 0.0F); }),
+    };
+    const vellum::graphics::Affine2D rotated{.a = 0.8F, .b = 0.6F, .c = -0.6F, .d = 0.8F};
+    bool agree = true;
+    bool transformed_agree = true;
+    for (const auto& path : paths) {
+        Scene scene = base_scene();
+        SceneNode shape;
+        shape.id = "shape";
+        shape.kind = SceneNode::Kind::path;
+        shape.bounds = {60.0F, 30.0F, 42.0F, 36.0F};
+        shape.fill = Color::hex(0x22C55E);
+        shape.path = path;
+        scene.root.children.push_back(shape);
+        const auto commands = vellum::graphics::make_paint_commands(scene);
+        const auto& command = commands.back();
+        const Rect frame{0.0F, 0.0F, scene.width, scene.height};
+        const auto extent = vellum::graphics::paint_extent(command);
+        const auto damage = vellum::graphics::node_paint_bounds(shape, command.bounds, frame, none);
+        agree = agree && extent.bounded && same_box(damage, extent.rect);
+        const auto mapped = vellum::graphics::transformed_paint_bounds(
+            shape, command.bounds, rotated, frame, none);
+        transformed_agree = transformed_agree &&
+            same_box(mapped, vellum::graphics::transformed_bounds(rotated, extent.rect));
+    }
+    check(agree, "a path's damage bounds equal the renderer's paint extent for every stroke");
+    check(transformed_agree,
+          "a transformed path's damage bounds are its paint extent mapped by the transform");
+
+    SceneNode solid;
+    solid.kind = SceneNode::Kind::path;
+    solid.path = zigzag;
+    SceneNode dashed = solid;
+    dashed.path = variant([](PathGeometry& p) {
+        p.stroke.dash_array = {9.0F, 5.0F};
+        p.stroke.dash_offset = 4.0F;
+    });
+    const Rect origin{10.0F, 10.0F, 0.0F, 0.0F};
+    const Rect frame{0.0F, 0.0F, 200.0F, 100.0F};
+    const auto solid_bounds = vellum::graphics::node_paint_bounds(solid, origin, frame, none);
+    check(same_box(solid_bounds, Rect{-2.0F, -2.0F, 66.0F, 60.0F}),
+          "a mitered stroke reaches half its width times the miter limit");
+    check(same_box(vellum::graphics::node_paint_bounds(dashed, origin, frame, none),
+                   solid_bounds),
+          "a dashed stroke damages the same box as the solid one");
+}
+
+void non_finite_stroke_reach() {
+    const DamagePropagation none;
+    const Rect frame{0.0F, 0.0F, 200.0F, 100.0F};
+    auto wedge = std::make_shared<PathGeometry>();
+    wedge->verbs = {PathVerb::move, PathVerb::line, PathVerb::line};
+    wedge->values = {0.0F, 0.0F, 40.0F, 0.0F, 0.0F, 10.0F};
+    wedge->stroke = {.color = Color::hex(0xFFFFFF), .width = 10.0F,
+                     .miter_limit = std::numeric_limits<float>::max()};
+    check(vellum::graphics::path_is_valid(*wedge), "a huge finite miter limit is valid");
+    SceneNode node;
+    node.id = "wedge";
+    node.kind = SceneNode::Kind::path;
+    node.bounds = {10.0F, 10.0F, 0.0F, 0.0F};
+    node.path = wedge;
+    check(same_box(vellum::graphics::node_paint_bounds(node, node.bounds, frame, none), frame),
+          "a stroke reach that overflows damages the whole frame");
+    const vellum::graphics::Affine2D turned{.a = 0.8F, .b = 0.6F, .c = -0.6F, .d = 0.8F};
+    check(same_box(vellum::graphics::transformed_paint_bounds(node, node.bounds, turned, frame,
+                                                              none),
+                   frame),
+          "an overflowing stroke reach under a transform damages the whole frame");
+    Scene scene = base_scene();
+    scene.root.children.push_back(node);
+    const auto commands = vellum::graphics::make_paint_commands(scene);
+    check(!vellum::graphics::paint_extent(commands.back()).bounded,
+          "an overflowing stroke reach makes the paint extent unbounded");
+    Scene moved = scene;
+    child(moved, "wedge")->bounds.x += 1.0F;
+    check(diff(scene, moved).is_full_frame(),
+          "moving a path whose reach overflows damages the whole frame");
+}
+
 }  // namespace
 
 int main() {
@@ -1068,6 +1173,8 @@ int main() {
     composite_path_changes();
     whole_area_closure();
     path_damage();
+    path_extent_agreement();
+    non_finite_stroke_reach();
     tracker();
     if (failures != 0) {
         std::fprintf(stderr, "%d damage check(s) failed\n", failures);

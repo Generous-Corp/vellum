@@ -513,11 +513,14 @@ PaintExtent paint_extent(const PaintCommand& command) {
     }
     if (command.kind == PaintCommand::Kind::path) {
         if (!command.path || !path_is_valid(*command.path)) return {box, false};
-        const auto control = path_control_bounds(*command.path);
-        if (!control) return {{box.x, box.y, 0.0F, 0.0F}};
-        const float outset = path_stroke_outset(command.path->stroke);
-        return {{box.x + control->x - outset, box.y + control->y - outset,
-                 control->width + 2.0F * outset, control->height + 2.0F * outset}};
+        const auto painted = path_paint_box(*command.path);
+        if (!painted) return {{box.x, box.y, 0.0F, 0.0F}};
+        const Rect moved{box.x + painted->x, box.y + painted->y, painted->width,
+                         painted->height};
+        const bool finite = std::isfinite(moved.x) && std::isfinite(moved.y) &&
+                            std::isfinite(moved.width) && std::isfinite(moved.height);
+        if (!finite) return {box, false};
+        return {moved};
     }
     if (command.kind == PaintCommand::Kind::image) return {box};
     if (!draws_content(command.kind)) return {box};

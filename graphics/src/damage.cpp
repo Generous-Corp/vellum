@@ -232,12 +232,10 @@ std::optional<Rect> mesh_paint_bounds(const TriangleMesh& mesh, const Rect& abso
 std::optional<Rect> path_paint_bounds(const SceneNode& node, const Rect& absolute,
                                       const Rect& frame) {
     if (!node.path || !path_is_valid(*node.path)) return frame;
-    if (node.path->verbs.empty()) return std::nullopt;
-    const auto control = path_control_bounds(*node.path);
-    if (!control) return std::nullopt;
-    const Rect moved{absolute.x + control->x, absolute.y + control->y, control->width,
-                     control->height};
-    return outset(moved, path_stroke_outset(node.path->stroke));
+    const auto box = path_paint_box(*node.path);
+    if (!box) return std::nullopt;
+    const Rect moved{absolute.x + box->x, absolute.y + box->y, box->width, box->height};
+    return finite_rect(moved) ? moved : frame;
 }
 
 bool same_floats(const std::vector<float>& a, const std::vector<float>& b) {
@@ -893,9 +891,13 @@ std::optional<Rect> transformed_paint_bounds(const SceneNode& node, const Rect& 
     }
     case SceneNode::Kind::path: {
         if (!node.path || !path_is_valid(*node.path)) return frame;
-        const auto local = path_paint_bounds(node, absolute_bounds, frame);
-        if (!local) return std::nullopt;
-        return transformed_bounds(transform, *local);
+        const auto box = path_paint_box(*node.path);
+        if (!box) return std::nullopt;
+        const Rect local{absolute_bounds.x + box->x, absolute_bounds.y + box->y, box->width,
+                         box->height};
+        if (!finite_rect(local)) return frame;
+        const Rect mapped = transformed_bounds(transform, local);
+        return finite_rect(mapped) ? mapped : frame;
     }
     }
     return std::nullopt;
