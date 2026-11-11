@@ -145,6 +145,17 @@ void logo;
 // @ts-expect-error fit takes the CSS object-fit keywords.
 const stretched = <Image id="stretched" fit="stretch" />;
 void stretched;
+const masked = (
+    <Stack id="window" style={{ width: 40, height: 30, overflow: 'hidden', isolation: 'isolate' }}>
+        <Stack id="window/content" style={{ backgroundColor: '#ff0000' }} />
+        <Stack id="window/mask" style={{ backgroundColor: '#ffffff', maskMode: 'luminance' }} />
+        <Stack id="window/shaped" style={{ clipPath: 'M0 0 h20 v20 z' }} />
+    </Stack>
+);
+void masked;
+// @ts-expect-error maskMode is alpha or luminance.
+const badMask = <Stack id="bad-mask" style={{ maskMode: 'inverted' }} />;
+void badMask;
 
 const imported = materializeDesign({
     root: {

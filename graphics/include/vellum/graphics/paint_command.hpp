@@ -23,6 +23,12 @@ namespace vellum::graphics {
 /// `transform` maps those coordinates into the frame. A `begin_layer` and its
 /// matching `end_layer` bracket the commands of a subtree that is composited
 /// as one group and then drawn with the layer's `opacity`; layers nest.
+///
+/// A `begin_clip` and its `end_clip` bracket the commands a node's clip
+/// limits. A `begin_mask` and its `end_mask` bracket a mask node's subtree;
+/// they always sit at the end of a `begin_layer` group holding the masked
+/// siblings, and the mask's coverage multiplies that group before it is
+/// composited. Clips, layers and masks nest properly.
 struct PaintCommand final {
     enum class Kind {
         rectangle,
@@ -39,6 +45,18 @@ struct PaintCommand final {
         /// `fill`, clipped to `corner_radii`; without an asset it draws
         /// `kMissingImagePlaceholder` over the box.
         image,
+        /// Intersects the clip with `clip_rect` and `corner_radii`, or with
+        /// the area `path` fills when it is set, both in `bounds` coordinates
+        /// mapped by `transform`, until the matching `end_clip`.
+        begin_clip,
+        /// Restores the clip in effect before the matching `begin_clip`.
+        end_clip,
+        /// Starts rendering the mask node `node_id`; the commands up to the
+        /// matching `end_mask` draw its coverage rather than visible paint.
+        begin_mask,
+        /// Multiplies the enclosing group by the mask's coverage, taken by
+        /// `mask_mode`.
+        end_mask,
     };
 
     Kind kind = Kind::rectangle;
@@ -74,6 +92,14 @@ struct PaintCommand final {
     /// On a `begin_layer`, set when a member can paint outside `bounds`,
     /// which text can, so the group needs the whole frame.
     bool layer_unbounded = false;
+    /// On a `begin_layer`, set when the group must stay offscreen whatever
+    /// its opacity: an isolated node, or the siblings a mask applies to.
+    bool layer_isolated = false;
+    /// On a `begin_clip` without `path`, the clip rectangle in `bounds`
+    /// coordinates; `corner_radii` gives its corners.
+    Rect clip_rect{};
+    /// On a `begin_mask`, how the mask's rendering becomes coverage.
+    MaskMode mask_mode = MaskMode::alpha;
     /// What an `image` command draws.
     std::optional<ImageReference> image;
     /// The asset `Scene::images` holds for `image`, or null when it is missing.
@@ -89,6 +115,10 @@ struct PaintCommand final {
     case PaintCommand::Kind::image: return "image";
     case PaintCommand::Kind::begin_layer: return "begin_layer";
     case PaintCommand::Kind::end_layer: return "end_layer";
+    case PaintCommand::Kind::begin_clip: return "begin_clip";
+    case PaintCommand::Kind::end_clip: return "end_clip";
+    case PaintCommand::Kind::begin_mask: return "begin_mask";
+    case PaintCommand::Kind::end_mask: return "end_mask";
     }
     return "unknown";
 }
@@ -158,7 +188,32 @@ struct ResolvedLinearGradient final {
 /// command is wrapped in a `begin_layer`/`end_layer` pair; when it draws
 /// exactly one, its opacity is folded into that command's. A node whose
 /// opacity is zero or less contributes nothing.
+///
+/// An isolated node is always wrapped in a layer, with `layer_isolated` set. A
+/// node whose clip `clips_own_paint` wraps its layer, paint and subtree in a
+/// `begin_clip`/`end_clip` pair; any other clip wraps only its subtree, after
+/// the node's own paint and inside its layer. A node with mask children wraps
+/// its other children in a `layer_isolated` layer named `node_id + "/masked"`
+/// and ends that layer with one `begin_mask`/`end_mask` pair per mask child, in
+/// child order, holding the mask's own commands; a mask child whose subtree
+/// draws nothing still emits its pair, which hides the siblings entirely. A
+/// node whose clip fails `clip_is_valid` contributes nothing, and a scene whose
+/// root is a mask yields no commands.
 [[nodiscard]] std::vector<PaintCommand> make_paint_commands(const Scene& scene);
+
+/// Whether a clip can be applied as given: its rectangle and radii are
+/// finite, and its path, when set, passes `path_is_valid`. On failure
+/// `reason`, when non-null, says which rule failed.
+[[nodiscard]] bool clip_is_valid(const NodeClip& clip, std::string* reason = nullptr);
+
+/// The first node, in depth-first order, whose clip fails `clip_is_valid`,
+/// with `reason` set to the rule that failed.
+[[nodiscard]] const SceneNode* find_invalid_clip(const SceneNode& node, std::string& reason);
+
+/// A clip's area in absolute coordinates before any transform, for a node
+/// whose box starts at `absolute_x`, `absolute_y`: the rectangle, or the
+/// path's `path_control_bounds`. Empty sizes are clamped to zero.
+[[nodiscard]] Rect clip_extent(const NodeClip& clip, float absolute_x, float absolute_y);
 
 /// The paint commands one scene node and its subtree contribute: the
 /// half-open index range [`begin`, `end`) of the command stream, which holds

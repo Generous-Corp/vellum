@@ -166,6 +166,10 @@ public:
     /// A frame-space logical clip that bounds the damage of `node` and its
     /// descendants, or `std::nullopt` for none. `absolute_bounds` is the
     /// node's box after its composed transform.
+    /// The walk applies a node's own `SceneNode::clip` itself, mapped through
+    /// the composed transform to the box around it, so the default adds
+    /// nothing. A clip that spares the node's own paint bounds only the
+    /// descendants' damage.
     [[nodiscard]] virtual std::optional<Rect> clip_bounds(
         const SceneNode& node, const Rect& absolute_bounds) const;
 
@@ -219,6 +223,13 @@ public:
 /// field; the scene diff also compares the `ImageAsset` each image resolves
 /// to by pointer, so replacing an asset damages the images that draw it.
 [[nodiscard]] bool paint_differs(const SceneNode& previous, const SceneNode& next);
+
+/// Whether two nodes with the same identity group their subtree differently:
+/// a different clip (compared like paths in `paint_differs`), mask mode, or
+/// isolation. Such a change damages the node's whole subtree, and a changed
+/// mask mode also damages its parent's subtree, as does a change to a mask's
+/// opacity or transform.
+[[nodiscard]] bool grouping_differs(const SceneNode& previous, const SceneNode& next);
 
 /// Damage between two scenes, keyed by node id (nodes with an empty or
 /// repeated id are keyed by position). Added, removed, moved, resized,

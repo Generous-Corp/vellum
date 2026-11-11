@@ -189,9 +189,16 @@ inline constexpr std::string_view kQuadrantImageHash =
 /// Rotated, scaled, faded and per-corner rounded rectangles: node transforms,
 /// a group opacity layer, a folded opacity, and `corner_radii`.
 [[nodiscard]] Scene compositing(float width, float height);
+/// A rounded rectangle clip holding a group clipped to a diamond path:
+/// nested clips, each cutting content that reaches past it.
+[[nodiscard]] Scene clip_nested(float width, float height);
+/// A gradient masked by a sibling whose luminance falls from white to black.
+[[nodiscard]] Scene mask_luminance(float width, float height);
+/// Three overlapping translucent discs composited as one isolated group.
+[[nodiscard]] Scene isolated_overlap(float width, float height);
 /// The version 1 node kinds above in one scene, so it can also be drawn at
-/// `kDamageModelSceneVersion`. The compositing, path and image fixtures need
-/// versions 2, 3 and 4 and stay separate.
+/// `kDamageModelSceneVersion`. The compositing, path, image, clip, mask and
+/// isolation fixtures need versions 2 to 5 and stay separate.
 [[nodiscard]] Scene combined(float width, float height);
 /// Each content fixture, named, excluding `empty`.
 [[nodiscard]] std::vector<NamedScene> all(float width, float height);

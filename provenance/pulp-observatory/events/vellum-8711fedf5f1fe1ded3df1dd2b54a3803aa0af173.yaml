@@ -1,0 +1,51 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-10T08:50:02Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-8711fedf5f1fe1ded3df1dd2b54a3803aa0af173",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/core_graphics_canvas.hpp",
+    "graphics/include/vellum/graphics/paint_command.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/src/rendered_tree_materializer.mm",
+    "authoring/tests/rendered_tree_materializer_test.cpp",
+    "graphics/include/vellum/graphics/core_graphics_canvas.hpp",
+    "graphics/include/vellum/graphics/paint_command.hpp",
+    "graphics/tests/gpu_grouping_test.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "29eb3598a49b250cc856c2ad0af9548e315448c1",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "0903ae8312b4cb3707378a39e1ffee5f554235d0",
+    "to_commit": "8711fedf5f1fe1ded3df1dd2b54a3803aa0af173"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "8711fedf5f1fe1ded3df1dd2b54a3803aa0af173",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

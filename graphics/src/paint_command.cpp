@@ -17,11 +17,81 @@ Rect union_of(const Rect& left, const Rect& right) {
             std::max(left.y + left.height, right.y + right.height) - y};
 }
 
+// The frame-space union of the paint extents of the commands in
+// [first, last), and whether every one of them is bounded. Nested layers
+// contribute their own bounds; clips and masks contribute nothing.
+struct GroupExtent final {
+    Rect bounds{};
+    bool bounded = true;
+};
+
+GroupExtent group_extent(const std::vector<PaintCommand>& output, std::size_t first,
+                         std::size_t last) {
+    GroupExtent group;
+    bool any = false;
+    for (auto index = first; index < last; ++index) {
+        const auto& member = output[index];
+        Rect extent;
+        if (member.kind == PaintCommand::Kind::begin_layer) {
+            group.bounded = group.bounded && !member.layer_unbounded;
+            extent = member.bounds;
+        } else if (draws_content(member.kind)) {
+            const auto local = paint_extent(member);
+            group.bounded = group.bounded && local.bounded;
+            extent = transformed_bounds(member.transform, local.rect);
+        } else {
+            continue;
+        }
+        group.bounds = any ? union_of(group.bounds, extent) : extent;
+        any = true;
+    }
+    return group;
+}
+
+void append_node(const ImageAssetIndex& images, const SceneNode& node, float parent_x,
+                 float parent_y, const Affine2D& parent_transform,
+                 std::vector<PaintCommand>& output, std::vector<PaintCommandRange>* ranges);
+
+void append_children(const ImageAssetIndex& images, const SceneNode& node, const Rect& absolute,
+                     const Affine2D& transform, std::vector<PaintCommand>& output,
+                     std::vector<PaintCommandRange>* ranges) {
+    const bool masked = std::any_of(node.children.begin(), node.children.end(),
+        [](const SceneNode& child) { return child.mask.has_value(); });
+    if (!masked) {
+        for (const auto& child : node.children) {
+            append_node(images, child, absolute.x, absolute.y, transform, output, ranges);
+        }
+        return;
+    }
+    const auto slot = output.size();
+    output.push_back({.kind = PaintCommand::Kind::begin_layer,
+                      .node_id = node.id + "/masked",
+                      .layer_isolated = true});
+    for (const auto& child : node.children) {
+        if (!child.mask) append_node(images, child, absolute.x, absolute.y, transform, output, ranges);
+    }
+    const auto group = group_extent(output, slot + 1U, output.size());
+    output[slot].bounds = group.bounds;
+    output[slot].layer_unbounded = !group.bounded;
+    for (const auto& child : node.children) {
+        if (!child.mask) continue;
+        output.push_back({.kind = PaintCommand::Kind::begin_mask,
+                          .node_id = child.id,
+                          .mask_mode = *child.mask});
+        // The mask node's own flag is consumed here; its subtree renders
+        // as ordinary paint into the mask.
+        append_node(images, child, absolute.x, absolute.y, transform, output, ranges);
+        output.push_back({.kind = PaintCommand::Kind::end_mask, .node_id = child.id});
+    }
+    output.push_back({.kind = PaintCommand::Kind::end_layer, .node_id = node.id + "/masked"});
+}
+
 void append_node(const ImageAssetIndex& images, const SceneNode& node, float parent_x,
                  float parent_y, const Affine2D& parent_transform,
                  std::vector<PaintCommand>& output,
                  std::vector<PaintCommandRange>* ranges) {
     if (!is_known_kind(node.kind) || !compositing_is_finite(node)) return;
+    if (node.clip && !clip_is_valid(*node.clip)) return;
     const float opacity = std::clamp(node.opacity, 0.0F, 1.0F);
     if (opacity <= 0.0F) return;
     // Recorded before the children so the vector is in depth-first preorder.
@@ -42,8 +112,25 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
             concat(*node.transform, translation(-absolute.x, -absolute.y))));
     }
     const auto radii = resolved_corner_radii(node);
+    const auto open_clip = [&] {
+        output.push_back({
+            .kind = PaintCommand::Kind::begin_clip,
+            .node_id = node.id,
+            .bounds = absolute,
+            .path = node.clip->path,
+            .transform = transform,
+            .corner_radii = node.clip->radii,
+            .clip_rect = {absolute.x + node.clip->rect.x, absolute.y + node.clip->rect.y,
+                          std::max(0.0F, node.clip->rect.width),
+                          std::max(0.0F, node.clip->rect.height)},
+        });
+    };
+    const bool own_clip = node.clip && node.clip->clips_own_paint;
+    const bool subtree_clip = node.clip && !node.clip->clips_own_paint;
+    if (own_clip) open_clip();
+    const bool layered = opacity < 1.0F || node.isolate;
     const auto slot = output.size();
-    if (opacity < 1.0F) {
+    if (layered) {
         output.push_back({.kind = PaintCommand::Kind::begin_layer, .node_id = node.id});
     }
     const auto first = output.size();
@@ -119,25 +206,35 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
             .transform = transform,
         });
     }
-    for (const auto& child : node.children) {
-        append_node(images, child, absolute.x, absolute.y, transform, output, ranges);
-    }
-    if (opacity >= 1.0F) {
+    if (subtree_clip) open_clip();
+    append_children(images, node, absolute, transform, output, ranges);
+    if (subtree_clip) output.push_back({.kind = PaintCommand::Kind::end_clip, .node_id = node.id});
+    const auto close_clip = [&] {
+        if (own_clip) output.push_back({.kind = PaintCommand::Kind::end_clip, .node_id = node.id});
+    };
+    if (!layered) {
+        close_clip();
         if (ranges != nullptr) (*ranges)[range_index].end = output.size();
         return;
     }
 
     std::size_t drawn = 0;
     std::size_t last_drawn = first;
+    bool structured = false;
     for (auto index = first; index < output.size(); ++index) {
         if (draws_content(output[index].kind)) {
             ++drawn;
             last_drawn = index;
+        } else if (output[index].kind == PaintCommand::Kind::begin_mask) {
+            structured = true;
         }
     }
-    if (drawn <= 1U) {
+    // A mask's commands draw coverage, so folding opacity into one of them, or
+    // into a sibling it masks, would change what the mask hides.
+    if (!node.isolate && !structured && drawn <= 1U) {
         if (drawn == 1U) output[last_drawn].opacity *= opacity;
         output.erase(output.begin() + static_cast<std::ptrdiff_t>(slot));
+        close_clip();
         if (ranges != nullptr) {
             // Every descendant's range lies past the erased slot.
             for (auto index = range_index + 1U; index < ranges->size(); ++index) {
@@ -150,26 +247,12 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
     }
     auto& layer = output[slot];
     layer.opacity = opacity;
-    bool bounded = true;
-    bool any = false;
-    for (auto index = first; index < output.size(); ++index) {
-        const auto& member = output[index];
-        Rect extent;
-        if (member.kind == PaintCommand::Kind::begin_layer) {
-            bounded = bounded && !member.layer_unbounded;
-            extent = member.bounds;
-        } else if (draws_content(member.kind)) {
-            const auto local = paint_extent(member);
-            bounded = bounded && local.bounded;
-            extent = transformed_bounds(member.transform, local.rect);
-        } else {
-            continue;
-        }
-        layer.bounds = any ? union_of(layer.bounds, extent) : extent;
-        any = true;
-    }
-    layer.layer_unbounded = !bounded;
+    layer.layer_isolated = node.isolate;
+    const auto group = group_extent(output, first, output.size());
+    layer.bounds = group.bounds;
+    layer.layer_unbounded = !group.bounded;
     output.push_back({.kind = PaintCommand::Kind::end_layer, .node_id = node.id});
+    close_clip();
     if (ranges != nullptr) (*ranges)[range_index].end = output.size();
 }
 
@@ -254,6 +337,39 @@ std::optional<Rect> path_gradient_box(const PaintCommand& command) {
                 control->height};
 }
 
+bool clip_is_valid(const NodeClip& clip, std::string* reason) {
+    const auto& rect = clip.rect;
+    if (!std::isfinite(rect.x) || !std::isfinite(rect.y) || !std::isfinite(rect.width) ||
+        !std::isfinite(rect.height)) {
+        if (reason != nullptr) *reason = "the clip rectangle is not finite";
+        return false;
+    }
+    if (!is_finite(clip.radii)) {
+        if (reason != nullptr) *reason = "a clip corner radius is not finite";
+        return false;
+    }
+    return !clip.path || path_is_valid(*clip.path, reason);
+}
+
+const SceneNode* find_invalid_clip(const SceneNode& node, std::string& reason) {
+    if (node.clip && !clip_is_valid(*node.clip, &reason)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_invalid_clip(child, reason); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
+Rect clip_extent(const NodeClip& clip, float absolute_x, float absolute_y) {
+    if (clip.path) {
+        const auto control = path_control_bounds(*clip.path);
+        if (!control) return {absolute_x, absolute_y, 0.0F, 0.0F};
+        return {absolute_x + control->x, absolute_y + control->y, control->width,
+                control->height};
+    }
+    return {absolute_x + clip.rect.x, absolute_y + clip.rect.y, std::max(0.0F, clip.rect.width),
+            std::max(0.0F, clip.rect.height)};
+}
+
 std::vector<PaintCommand> make_paint_commands(const Scene& scene) {
     return make_paint_commands(scene, nullptr);
 }
@@ -264,6 +380,7 @@ std::vector<PaintCommand> make_paint_commands(
     if (ranges != nullptr) ranges->clear();
     if (!scene_version_is_supported(scene.scene_version)) return output;
     if (!scene_fields_match_version(scene)) return output;
+    if (scene.root.mask) return output;
     append_node(ImageAssetIndex(scene), scene.root, 0.0F, 0.0F, Affine2D{}, output, ranges);
     return output;
 }
@@ -326,13 +443,32 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
         if (!is_known_kind(node->kind)) {
             return refuse(node->id, "node " + node->id + " has a kind this build does not know");
         }
-        if (node->kind == SceneNode::Kind::image) {
+        // Name the field or kind the scene's version is too old for; a node
+        // can carry several, and only the oldest one its version lacks is
+        // the one `find_version_mismatch` found it by.
+        const auto needs = [&](std::uint32_t introduced) {
+            return scene.scene_version < introduced;
+        };
+        const bool compositing = needs(2U) && uses_version_2_fields(*node);
+        if (!compositing && needs(4U) && node->kind == SceneNode::Kind::image) {
             return refuse(node->id, "scene version " + version +
                                         " cannot carry the image node " + node->id);
         }
-        if (node->kind == SceneNode::Kind::path) {
+        if (!compositing && needs(3U) && node->kind == SceneNode::Kind::path) {
             return refuse(node->id, "scene version " + version +
                                         " cannot carry the path node " + node->id);
+        }
+        if (!compositing && needs(5U) && uses_version_5_fields(*node)) {
+            output.push_back({
+                .severity = LoweringDiagnostic::Severity::error,
+                .disposition = LoweringDiagnostic::Disposition::unsupported,
+                .code = std::string(kSceneVersionMismatchCode),
+                .node_id = node->id,
+                .property = node->clip ? "clip" : node->mask ? "mask" : "isolate",
+                .message = "scene version " + version +
+                           " cannot carry the clip, mask, or isolation at " + node->id,
+            });
+            return output;
         }
         output.push_back({
             .severity = LoweringDiagnostic::Severity::error,

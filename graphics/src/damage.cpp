@@ -1,8 +1,7 @@
 #include <vellum/graphics/damage.hpp>
 #include <vellum/graphics/image_asset.hpp>
-#include <vellum/graphics/path_geometry.hpp>
-
 #include <vellum/graphics/paint_command.hpp>
+#include <vellum/graphics/path_geometry.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -298,7 +297,19 @@ SceneNode paint_fields(const SceneNode& node) {
     copy.corner_radii = node.corner_radii;
     copy.path = node.path;
     copy.image = node.image;
+    copy.clip = node.clip;
+    copy.mask = node.mask;
+    copy.isolate = node.isolate;
     return copy;
+}
+
+bool same_clip(const std::optional<NodeClip>& a, const std::optional<NodeClip>& b) {
+    if (a.has_value() != b.has_value()) return false;
+    if (!a) return true;
+    return same_float(a->rect.x, b->rect.x) && same_float(a->rect.y, b->rect.y) &&
+           same_float(a->rect.width, b->rect.width) &&
+           same_float(a->rect.height, b->rect.height) && same_radii(a->radii, b->radii) &&
+           a->clips_own_paint == b->clips_own_paint && same_path(a->path, b->path);
 }
 
 }  // namespace
@@ -373,7 +384,18 @@ private:
                 translation(absolute.x, absolute.y),
                 concat(*node.transform, translation(-absolute.x, -absolute.y))));
         }
-        if (const auto own_clip = propagation.clip_bounds(node, transformed_bounds(transform, absolute))) {
+        const std::optional<Rect> parent_clip = clip;
+        // The node's own clip, mapped into the frame as the box around its
+        // transformed extent, narrowed by any clip the propagation adds.
+        std::optional<Rect> own_clip;
+        if (node.clip && finite && clip_is_valid(*node.clip)) {
+            own_clip = transformed_bounds(transform, clip_extent(*node.clip, absolute.x, absolute.y));
+        }
+        if (const auto extra = propagation.clip_bounds(node, transformed_bounds(transform, absolute))) {
+            own_clip = own_clip ? clip_to(*own_clip, *extra).value_or(Rect{extra->x, extra->y, 0.0F, 0.0F})
+                                : *extra;
+        }
+        if (own_clip) {
             if (clip) {
                 const auto narrowed = clip_to(*clip, *own_clip);
                 clip = narrowed.value_or(Rect{own_clip->x, own_clip->y, 0.0F, 0.0F});
@@ -381,6 +403,9 @@ private:
                 clip = own_clip;
             }
         }
+        // A clip that spares the node's own paint bounds only its subtree.
+        const auto& paint_clip =
+            node.clip && !node.clip->clips_own_paint ? parent_clip : clip;
 
         const Rect logical_frame{0.0F, 0.0F, width_, height_};
         std::optional<Rect> damage;
@@ -394,7 +419,7 @@ private:
                 if (std::isfinite(radius) && radius > 0.0F) {
                     damage = outset(*damage, radius * largest_scale(transform));
                 }
-                if (clip) damage = clip_to(*damage, *clip);
+                if (paint_clip) damage = clip_to(*damage, *paint_clip);
             }
         }
 
@@ -478,6 +503,18 @@ std::vector<std::string> shared_children(const Snapshot& from, const Snapshot& o
     return shared;
 }
 
+// A mask hides its siblings wherever it draws nothing, so adding, removing
+// or retargeting one changes its parent's whole subtree.
+void add_parent(DamageRegion& region, const Snapshot& snapshot, const NodeRecord& record) {
+    if (const auto* parent = snapshot.find(record.parent_key); parent != nullptr) {
+        add_subtree(region, snapshot, *parent);
+    }
+}
+
+void add_mask_parent(DamageRegion& region, const Snapshot& snapshot, const NodeRecord& record) {
+    if (record.paint.mask) add_parent(region, snapshot, record);
+}
+
 void diff_snapshots(const Snapshot& before, const Snapshot& after, DamageRegion& region) {
     if (!before.same_canvas(after)) {
         region.add_full_frame();
@@ -488,13 +525,26 @@ void diff_snapshots(const Snapshot& before, const Snapshot& after, DamageRegion&
         const NodeRecord* was = before.find(now.key);
         if (was == nullptr) {
             add_logical(region, now.damage, scale);
+            add_mask_parent(region, after, now);
             continue;
         }
         if (was->parent_key != now.parent_key || was->composite != now.composite ||
             compositing_differs(was->paint, now.paint)) {
             add_subtree(region, before, *was);
             add_subtree(region, after, now);
+            // A mask's opacity or transform changes where it covers, and a
+            // mask that stops drawing hides its siblings everywhere.
+            add_mask_parent(region, before, *was);
+            add_mask_parent(region, after, now);
             continue;
+        }
+        if (grouping_differs(was->paint, now.paint)) {
+            add_subtree(region, before, *was);
+            add_subtree(region, after, now);
+            if (was->paint.mask != now.paint.mask) {
+                add_parent(region, before, *was);
+                add_parent(region, after, now);
+            }
         }
         if (!same_rect(was->absolute, now.absolute) || paint_differs(was->paint, now.paint) ||
             was->image_asset != now.image_asset ||
@@ -504,7 +554,9 @@ void diff_snapshots(const Snapshot& before, const Snapshot& after, DamageRegion&
         }
     }
     for (const auto& was : before.records()) {
-        if (after.find(was.key) == nullptr) add_logical(region, was.damage, scale);
+        if (after.find(was.key) != nullptr) continue;
+        add_logical(region, was.damage, scale);
+        add_mask_parent(region, before, was);
     }
     for (const auto& parent : after.records()) {
         const auto now_order = shared_children(after, before, parent.key);
@@ -767,6 +819,11 @@ float DamagePropagation::effect_radius(const SceneNode&) const {
 
 std::optional<Rect> DamagePropagation::clip_bounds(const SceneNode&, const Rect&) const {
     return std::nullopt;
+}
+
+bool grouping_differs(const SceneNode& previous, const SceneNode& next) {
+    return !same_clip(previous.clip, next.clip) || previous.mask != next.mask ||
+           previous.isolate != next.isolate;
 }
 
 Rect DamagePropagation::text_extent(const SceneNode& node, const Rect& absolute_bounds,
