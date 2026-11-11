@@ -2551,5 +2551,126 @@ class OwnCommitEventTests(unittest.TestCase):
         with self.assertRaisesRegex(observatory.ObservatoryError, "only for its own commits"):
             self.check()
 
+
+class ReportReceiverOnlyTests(unittest.TestCase):
+    """Only the receiver commits reports/current.*; changes leave it as their base had it."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        top = Path(self.temporary.name)
+        self.pulp = top / "pulp"
+        self.vellum = top / "vellum-source"
+        self.root = top / "state"
+        pulp_base, self.pulp_head = init_repo(self.pulp, "unmapped/pulp.cpp")
+        vellum_base, vellum_head = init_repo(self.vellum, "graphics/render.cpp")
+        write(self.vellum / "graphics/second.cpp", "int second = 1;\n")
+        self.vellum_head = commit_all(self.vellum, "a second mapped change")
+        make_state(self.root, pulp_base, vellum_base)
+        # The receiver's reconcile: writes events, advances the cursor, writes the report.
+        observatory.reconcile(root=self.root, pulp_repo=self.pulp, vellum_repo=self.vellum,
+                              pulp_target=self.pulp_head, vellum_target=self.vellum_head,
+                              now_text="2026-10-11T00:00:00Z", write=True)
+        run(self.root, "git", "init", "-q", "-b", "main")
+        run(self.root, "git", "config", "user.email", "observatory@example.invalid")
+        run(self.root, "git", "config", "user.name", "Observatory Test")
+        self.base = commit_all(self.root, "main with the receiver's report")
+        pending = [e for e in observatory.effective_observations(observatory.load_events(self.root))
+                   if e["disposition"] == "pending" and e["source_repository"].endswith("/vellum")]
+        self.assertGreaterEqual(len(pending), 2)
+        self.pending = pending
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def resolve(self, observation: dict, created_at: str) -> None:
+        resolution = {
+            "schema_version": 1, "event_id": f"resolution-{observation['event_id']}", "kind": "resolution",
+            "created_at": created_at, "resolves": observation["event_id"], "disposition": "framework-only",
+            "rationale": "Vellum-native.", "owner": "@danielraffel",
+            "linked_commits": [observation["source_commit"]], "linked_pull_requests": [],
+            "contract_tests": observation["contract_tests"], "shared_contract_release_blocker": False,
+            "effort_minutes": 0,
+        }
+        write_json(self.root / observatory.EVENTS_PATH / f"{resolution['event_id']}.yaml", resolution)
+
+    def branch(self, name: str, observation: dict, created_at: str) -> str:
+        run(self.root, "git", "checkout", "-q", "-b", name, self.base)
+        self.resolve(observation, created_at)
+        return commit_all(self.root, f"{name}: classify one observation")
+
+    def verify(self, git_base: str, policy: str = "coverage") -> dict:
+        return observatory.verify(root=self.root, pulp_repo=self.pulp, vellum_repo=self.vellum,
+                                  git_base=git_base, pulp_target=self.pulp_head,
+                                  vellum_target=self.vellum_head, vellum_tail_policy=policy,
+                                  check_now=datetime(2026, 10, 11, 1, 0, tzinfo=timezone.utc),
+                                  time_budgets="report")
+
+    def test_two_classification_changes_merge_cleanly_in_either_order(self) -> None:
+        first = self.branch("first", self.pending[0], "2026-10-11T00:10:00Z")
+        second = self.branch("second", self.pending[1], "2026-10-11T00:11:00Z")
+        for order in ((first, second), (second, first)):
+            with self.subTest(order=order):
+                run(self.root, "git", "checkout", "-q", "--detach", self.base)
+                for head in order:
+                    merged = subprocess.run(["git", "merge", "-q", "--no-ff", "--no-edit", head], cwd=self.root,
+                                            capture_output=True, text=True)
+                    self.assertEqual(merged.returncode, 0, merged.stdout + merged.stderr)
+                report = self.verify(self.base)
+                self.assertEqual(report["pending"], len(self.pending) - 2)  # health judged on the live ledger
+
+    def test_a_change_that_rewrites_the_report_is_refused(self) -> None:
+        self.branch("rewrite", self.pending[0], "2026-10-11T00:10:00Z")
+        self.verify(self.base)  # control: the same change without the report passes
+        path = self.root / observatory.REPORT_JSON_PATH
+        value = json.loads(path.read_text())
+        value["pending"] = 0
+        write_json(path, value)
+        commit_all(self.root, "regenerate the report on the branch")
+        with self.assertRaisesRegex(observatory.ObservatoryError, "may not commit provenance/pulp-observatory/reports"):
+            self.verify(self.base)
+
+    def test_the_receivers_reconciliation_may_rewrite_the_report(self) -> None:
+        run(self.root, "git", "checkout", "-q", "-b", "automation/pulp-observatory-coalesced", self.base)
+        write(self.vellum / "graphics/third.cpp", "int third = 1;\n")
+        third = commit_all(self.vellum, "main lands another mapped change")
+        now = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=2)
+        observatory.reconcile(root=self.root, pulp_repo=self.pulp, vellum_repo=self.vellum,
+                              pulp_target=self.pulp_head, vellum_target=third,
+                              now_text=now.strftime("%Y-%m-%dT%H:%M:%SZ"), write=True)
+        commit_all(self.root, "chore(provenance): coalesce Pulp observatory evidence")
+        for policy in ("coverage", "reconciled"):
+            with self.subTest(policy=policy):
+                observatory.verify(root=self.root, pulp_repo=self.pulp, vellum_repo=self.vellum, git_base=self.base,
+                                   pulp_target=self.pulp_head, vellum_target=third, vellum_tail_policy=policy,
+                                   check_now=now + timedelta(minutes=1), time_budgets="report")
+
+    def test_a_net_zero_report_edit_on_the_branch_does_not_become_the_anchor(self) -> None:
+        # The branch edits the report in a commit dated in the future, next to a
+        # resolution, then restores the report. Its net diff leaves the report
+        # alone, but the restoring commit is the report's last writer in HEAD's
+        # history, where the ledger already holds the branch's resolution.
+        run(self.root, "git", "checkout", "-q", "-b", "spoof", self.base)
+        future = {**os.environ, "GIT_AUTHOR_DATE": "2030-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "2030-01-01T00:00:00Z"}
+        self.resolve(self.pending[0], "2026-10-11T00:10:00Z")
+        path = self.root / observatory.REPORT_JSON_PATH
+        original = path.read_text()
+        write_json(path, {**json.loads(original), "pending": 0})
+        run(self.root, "git", "add", "-A")
+        subprocess.run(["git", "commit", "-q", "-m", "edit the report"], cwd=self.root, env=future, check=True)
+        path.write_text(original)
+        run(self.root, "git", "add", "-A")
+        later = {**future, "GIT_COMMITTER_DATE": "2030-01-01T00:00:01Z", "GIT_AUTHOR_DATE": "2030-01-01T00:00:01Z"}
+        subprocess.run(["git", "commit", "-q", "-m", "restore the report"], cwd=self.root, env=later, check=True)
+        restore = run(self.root, "git", "rev-parse", "HEAD")
+        self.assertEqual(run(self.root, "git", "log", "-1", "--format=%H", "--", str(observatory.REPORT_JSON_PATH)),
+                         restore)  # HEAD's history would anchor here
+        self.verify(self.base)  # anchored on the base's writer instead, so the branch's resolution is left out
+
+    def test_a_report_lagging_on_main_passes_coverage_and_fails_a_tag(self) -> None:
+        self.branch("lands", self.pending[0], "2026-10-11T00:10:00Z")
+        self.verify(self.base)  # a pull request, or main before the next coalesce
+        with self.assertRaisesRegex(observatory.ObservatoryError, "reports/current.json is stale"):
+            self.verify(self.base, policy="reconciled")  # a tag judges the committed report exactly
+
 if __name__ == "__main__":
     unittest.main()

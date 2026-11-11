@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-10T10:30:12Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-e94953a668d412e5cfdec8efa95681bbaa164b2d",
+  "kind": "resolution",
+  "linked_commits": [
+    "e94953a668d412e5cfdec8efa95681bbaa164b2d"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Hardens Vellum's path node. Path geometry is shared and immutable, a path without a layout box resolves gradients against its control box, path_is_valid caps a stroke at 100000 drawn dashes (kMaxPathDashSegments), and the authoring host reports the failing path field. Pulp's Canvas::set_line_dash mirrors the Canvas2D API and has no path-validation contract to extend, so no port is owed.",
+  "resolves": "vellum-e94953a668d412e5cfdec8efa95681bbaa164b2d",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

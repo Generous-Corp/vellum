@@ -22,7 +22,7 @@ The public slice consists of:
   application builds, plus a headers-only `Vellum::DawnHeaders` target for an
   embedding host's authenticated bootstrap and compute code.
 
-The scene carries a single integer schema version, `kSceneVersion`, now 3.
+The scene carries a single integer schema version, `kSceneVersion`, now 4.
 A change that can alter rendered output bumps it: a new node kind, a new field
 that changes how a scene is drawn, or a change in meaning. A change that only
 adds metadata keeps it. Consumers accept versions from
@@ -34,7 +34,8 @@ group. The authoring materializer rejects an unknown node type with an error
 diagnostic and reports authored style or content it drops as warnings on
 `RenderedApplication::diagnostics`. Those diagnostics share the DesignIR
 severity and disposition words but identify content by node ID, not by
-DesignIR document path.
+DesignIR document path. Versions are claimed in order: version 4: image nodes;
+version 5: clip, mask and isolation on groups (reserved).
 
 Nodes carry an optional affine transform about their origin, a group opacity,
 and per-corner radii beside the uniform `corner_radius` shorthand. All three
@@ -92,6 +93,48 @@ larger of the miter limit for miter joins and sqrt(2) for round or square
 caps. The web shell does not draw paths and counts each one in
 `vellum_web_lowering_loss_count`.
 
+An `image` node carries an `ImageReference`: the content hash of an asset
+(`sha256:` and 64 lowercase hex digits, the DesignIR convention), an optional
+source rectangle in image pixels, a fit (fill, contain, cover or none, as CSS
+`object-fit`) and nearest or linear sampling. The decoded pixels live beside
+the tree in `Scene::images`, premultiplied RGBA8 `ImageAsset`s that are shared
+and immutable like a mesh texture, at most 8192 pixels on a side (the WebGPU
+default texture limit) and 256 MiB.
+`make_image_asset` premultiplies straight alpha once, and
+`SkiaDawnSurface::decode_image_asset` decodes a PNG into an asset named by the
+SHA-256 of its bytes, refusing bytes that do not match an expected hash. It
+refuses input over 64 MiB (`kMaxEncodedImageBytes`) and a header whose
+dimensions are over the image budgets before it hashes the bytes or builds a
+codec. The
+node's fill paints behind the image and its corner radii clip both;
+`image_placement` is the pure fit and crop the renderer draws with. An image
+whose asset the scene does not hold draws `kMissingImagePlaceholder` over its
+box and is reported as a `VELLUM_IMAGE_ASSET_MISSING` warning by
+`scene_loss_diagnostics` and `SkiaDawnSurface::diagnostics`; an image without
+a reference or with a malformed one, and a scene whose assets are invalid or
+list a hash twice, are refused; an asset is invalid when its texel buffer does
+not match its size or a colour channel is above its alpha. Every backend
+decides through `accept_scene`, so the web shell refuses the scenes the
+surface refuses, with the same reason and diagnostics. The kind arrived with version 4, so an earlier
+scene with an image node is refused with a `VELLUM_SCENE_VERSION_MISMATCH`
+diagnostic. Damage treats an image as its box and compares its asset by
+pointer; a command's paint extent, `transformed_paint_bounds`, is that box mapped
+through the command's transform. The surface remembers each asset's texel digest under its content
+hash while the hash still names the same asset object, so an unchanged image
+is not rehashed each frame, and uploads through the texture cache below; hosts
+should keep an unchanged asset's object rather than rebuild it each frame. An
+image with children is refused, and a source rectangle that selects nothing of
+its asset draws only the fill and is reported with the same warning. The
+damage tracker and the surface hold the previous scene's assets until the next
+frame. The
+web shell draws the placeholder and counts each image in
+`vellum_web_lowering_loss_count`; a refused scene draws nothing, `vellum_web_render`
+returns 0, and `vellum_web_refused`, `vellum_web_refusal_reason` and the
+`vellum_web_diagnostic_*` accessors report the refusal. The authoring materializer lowers an `image`
+whose `source` is a SHA-256 content hash, with `fit`, `sampling` and
+`sourceRect` attributes; any other source keeps only the box and reports
+`VELLUM_NODE_CONTENT_DROPPED`.
+
 The surface draws every frame into a retained offscreen Graphite surface the
 size of its target in device pixels, and presents by drawing that image into
 the swapchain texture; captures read the retained surface back, through the
@@ -108,9 +151,9 @@ back to a full repaint. Hosts pass `invalidate` reasons and node ids through
 rectangle counts, the commands re-recorded and why a frame repainted fully.
 What is cached and when it is discarded is renderer policy: the scene schema
 carries no cache hints. Partial redraw is enabled only for scene versions the
-damage model understands, up to `kDamageModelSceneVersion` (1); a version 2
-or 3 scene, which can carry transforms, group opacity, per-corner radii and
-paths, repaints fully until the damage model learns those fields.
+damage model understands, up to `kDamageModelSceneVersion` (1); a version 2,
+3 or 4 scene, which can carry transforms, group opacity, per-corner radii,
+paths and images, repaints fully until the damage model learns those fields.
 
 The surface also caches subtrees as Graphite images, under a renderer-owned
 `LayerCachePolicy` keyed by node id (`layer_cache.hpp`); scenes carry no
@@ -143,10 +186,13 @@ The surface keeps three cross-frame resource caches under
 `RenderCacheBudgets`: laid-out text paragraphs keyed by every run's text and
 style (the colour with any folded opacity included) and the font directory;
 linear-gradient shaders keyed by their exact end points, colours, positions and
-tile mode; and GPU textures uploaded from mesh textures, keyed by size and the
-SHA-256 of the texels rather than by address, so texels rewritten in place are
-uploaded again. Keys compare floats by their bits. A hit returns the object a
-miss would build from the same inputs, so captures are byte-identical with
+tile mode; and GPU textures uploaded from mesh textures and image assets,
+keyed by size and the SHA-256 of the texels rather than by address, so mesh
+texels rewritten in place are uploaded again; an image asset's digest is
+remembered per asset object, so image assets must be replaced, never
+rewritten in place. Keys compare floats by their bits. A hit returns the
+object a miss would build from the same inputs, so captures are byte-identical
+with
 every cache on or off; the render-cache GPU test checks that for each capture
 fixture, on the partial-redraw path, and for each key input. Each cache has an
 entry and a byte budget and evicts its least recently used entry first; an

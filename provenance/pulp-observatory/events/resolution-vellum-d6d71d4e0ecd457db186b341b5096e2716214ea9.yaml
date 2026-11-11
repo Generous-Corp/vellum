@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-10T10:30:07Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-d6d71d4e0ecd457db186b341b5096e2716214ea9",
+  "kind": "resolution",
+  "linked_commits": [
+    "d6d71d4e0ecd457db186b341b5096e2716214ea9"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Keeps Vellum's partial redraw fail-closed: a capture after a failed frame re-baselines the damage tracker, caller damage keeps pending host invalidations, and culling uses each paint command's own bounds. Fixes code that exists only in Vellum's retained surface. Pulp main has no SkiaDawnSurface, retained scene, DamageRegion or render caches.",
+  "resolves": "vellum-d6d71d4e0ecd457db186b341b5096e2716214ea9",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
