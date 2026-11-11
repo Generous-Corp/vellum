@@ -1059,11 +1059,13 @@ std::vector<Extent> paint_command_extents(
 }
 
 bool close_over_layers(const Scene& scene, const std::vector<PaintCommand>& commands, float scale,
-                       const PixelRect& target, std::vector<PixelRect>& rects) {
+                       const PixelRect& target, const std::vector<char>& composited,
+                       std::vector<PixelRect>& rects) {
     if (rects.empty()) return true;
     std::vector<PixelRect> layers;
     std::vector<Extent> extents;
     for (std::size_t begin = 0; begin < commands.size(); ++begin) {
+        if (composited[begin] != 0) continue;
         const auto& command = commands[begin];
         const bool transformed_blur =
             command.kind == PaintCommand::Kind::rectangle && !is_identity(command.transform) &&
@@ -1816,8 +1818,13 @@ private:
             reason = FullRepaintReason::full_render;
         }
         const auto target = target_rect();
+        std::vector<char> composited(commands.size(), 0);
+        for (const auto& layer : layers) {
+            std::fill(composited.begin() + static_cast<std::ptrdiff_t>(layer.begin),
+                      composited.begin() + static_cast<std::ptrdiff_t>(layer.end), 1);
+        }
         if (reason == FullRepaintReason::none &&
-            !close_over_layers(scene, commands, config_.scale, target, rects)) {
+            !close_over_layers(scene, commands, config_.scale, target, composited, rects)) {
             reason = FullRepaintReason::full_damage;
         }
         if (reason == FullRepaintReason::none && damage != nullptr) {
