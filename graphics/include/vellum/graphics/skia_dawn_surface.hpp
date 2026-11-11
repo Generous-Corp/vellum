@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vellum/graphics/damage.hpp>
+#include <vellum/graphics/layer_cache.hpp>
 #include <vellum/graphics/lowering_diagnostic.hpp>
 #include <vellum/graphics/render_telemetry.hpp>
 #include <vellum/graphics/scene.hpp>
@@ -74,9 +75,13 @@ struct FrameStats final {
     std::size_t damage_rects_before_coalescing = 0;
     std::size_t damage_rects_after_coalescing = 0;
     std::size_t paint_commands_total = 0;
-    /// Distinct paint commands drawn because their paint extent met the damage.
+    /// Distinct paint commands recorded this frame: those drawn because their
+    /// paint extent met the damage, plus those recorded into layer images
+    /// built this frame. Commands drawn from an existing layer image are not
+    /// recorded, so a full repaint can record fewer than the total.
     std::size_t paint_commands_recorded = 0;
-    /// Paint command draws summed over every damage rectangle.
+    /// Paint command draws into the retained surface, summed over every
+    /// damage rectangle; drawing a layer image is not counted.
     std::size_t paint_command_draws = 0;
     /// The retained image was drawn into a native swapchain texture and presented.
     bool presented = false;
@@ -109,6 +114,12 @@ struct TextMetrics final {
 /// image into the swapchain texture; captures read the retained surface back,
 /// through the swapchain when there is one.
 ///
+/// Subtrees the `LayerCachePolicy` selects are drawn from cached Graphite
+/// images on every render path. By default only faded groups are cached, and
+/// their images composite exactly as an uncached group layer, so output does
+/// not depend on caching. The opt-in static and expensive triggers can differ
+/// from drawing the commands directly where translucent or antialiased paint
+/// overlaps, and apply only to scenes that always repaint fully.
 /// Shaped text paragraphs, gradient shaders, and the textures uploaded from
 /// mesh textures and image assets are cached across frames under
 /// `RenderCacheBudgets`. Each cache is keyed on every input that affects its
@@ -169,7 +180,10 @@ public:
     /// resize, a failed previous frame, a scene version, size or background
     /// change, a `reload`, whole-frame damage and a scene version newer than
     /// `kDamageModelSceneVersion` repaint everything. The output is
-    /// byte-identical to `render(scene)`.
+    /// byte-identical to `render(scene)`: a scene partial redraw serves
+    /// caches only images that composite exactly (see `LayerPlanOptions`).
+    /// With `LayerCachePolicy::allow_inexact`, a scene that always repaints
+    /// fully can depend on what the surface has cached.
     [[nodiscard]] bool render_incremental(const Scene& scene, std::string* error = nullptr);
 
     /// Draws `scene`, repainting `damage` (device pixels, clipped to the
@@ -190,6 +204,13 @@ public:
     /// Telemetry for the most recent frame; the GPU time fills in once that
     /// frame has finished on the GPU (see `finish`).
     [[nodiscard]] FrameStats frame_stats() const;
+
+    /// Replaces the layer-cache policy (see `LayerCachePolicy`) and drops
+    /// every cached image. Caching is on by default.
+    void set_layer_cache_policy(const LayerCachePolicy& policy);
+
+    /// Layer-cache telemetry for the most recent frame.
+    [[nodiscard]] LayerCacheStats layer_cache_stats() const;
 
     /// Waits until every frame submitted so far has finished on the GPU.
     [[nodiscard]] bool finish(std::string* error = nullptr);
@@ -227,6 +248,7 @@ public:
     [[nodiscard]] RenderTelemetry telemetry() const;
 
 private:
+    friend struct SkiaDawnSurfaceTestAccess;
     class Impl;
     explicit SkiaDawnSurface(std::unique_ptr<Impl> impl) noexcept;
     std::unique_ptr<Impl> impl_;
