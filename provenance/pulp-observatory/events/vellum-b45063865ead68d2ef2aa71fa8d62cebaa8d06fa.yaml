@@ -1,0 +1,44 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel"
+  ],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-11T18:41:53Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-b45063865ead68d2ef2aa71fa8d62cebaa8d06fa",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/image_decode_queue.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel"
+  ],
+  "mapped_paths": [
+    "graphics/include/vellum/graphics/image_decode_queue.hpp",
+    "graphics/src/image_decode_queue.cpp",
+    "graphics/tests/image_decode_queue_test.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "0be21afb176f3d4b03aaa551ff2a48e50d9ed5dd",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "b4846c1e34bf20cb9df824a73cc72f7b21ad5090",
+    "to_commit": "b45063865ead68d2ef2aa71fa8d62cebaa8d06fa"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "b45063865ead68d2ef2aa71fa8d62cebaa8d06fa",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
