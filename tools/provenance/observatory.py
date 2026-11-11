@@ -1238,8 +1238,15 @@ def last_report_writer(root: Path, anchor: str = "HEAD") -> str | None:
 # event schema and the path map cannot be read back that way.
 TRUST_POLICY_PATH = Path("provenance/authority/trust-policy.v1.json")
 REPORT_REBUILT_INPUTS = (BUDGETS_PATH, LOCK_PATH, TRUST_POLICY_PATH)
-REPORT_CODE_INPUT_PATHS = frozenset({MAP_PATH.as_posix()})
-REPORT_CODE_INPUT_PREFIXES = ("tools/provenance/observatory", (OBSERVATORY / "schemas").as_posix() + "/")
+REPORT_CODE_INPUT_PATHS = frozenset({
+    MAP_PATH.as_posix(),
+    "tools/provenance/observatory.py",
+    "tools/provenance/observatory_common.py",
+    "tools/provenance/observatory_events.py",
+    "tools/provenance/observatory_git.py",
+    "tools/provenance/observatory_report.py",
+})
+REPORT_CODE_INPUT_PREFIXES = ((OBSERVATORY / "schemas").as_posix() + "/",)
 
 
 def report_inputs_changed_since(root: Path, writer: str) -> list[str]:

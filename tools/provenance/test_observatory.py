@@ -2765,6 +2765,16 @@ class ReportReceiverOnlyTests(unittest.TestCase):
                                    vellum_tail_policy=policy, check_now=now + timedelta(minutes=1),
                                    time_budgets="report")
 
+    def test_an_unrelated_prefixed_path_is_not_a_report_input(self) -> None:
+        run(self.root, "git", "checkout", "-q", "-b", "unrelated-observatory", self.base)
+        write(self.root / "tools/provenance/observatory-unrelated.txt", "not a generator\n")
+        report = self.root / observatory.REPORT_JSON_PATH
+        write_json(report, {**json.loads(report.read_text()), "pending": 0})
+        commit_all(self.root, "add an unrelated observatory-prefixed file")
+        self.assertEqual(observatory.report_inputs_changed_since(self.root, self.base), [])
+        with self.assertRaises(observatory.ObservatoryError):
+            self.verify(self.base)
+
     def test_an_input_change_does_not_excuse_a_report_that_differs_from_its_writers(self) -> None:
         # Negative control: the inputs changed, but the checked-out report is not
         # the copy its last writer committed (a local edit nobody committed).
