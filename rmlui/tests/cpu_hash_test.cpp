@@ -10,6 +10,11 @@
 // contraction rules, so a document is not the same input everywhere, while
 // these calls are.
 //
+// The scene is also drawn on 2 and 4 threads, where the frame is recorded and
+// replayed in bands of rows, and must hash the same. Its SaveLayerAsTexture
+// comes mid-frame, after draws into the layer it copies, so it must flush the
+// recording first: a copy taken without the flush reads an undrawn layer.
+//
 // The control renders the same scene into a buffer of random bytes with
 // clear=false. The scene leaves pixels untouched, so the hash must change:
 // a hash that cannot see uninitialised memory proves nothing about it.
@@ -67,8 +72,10 @@ Rml::CompiledGeometryHandle triangle(CpuRenderInterface& r, Rml::Vector2f a, Rml
 }
 
 // Renders the scene into `buffer` (kWidth x kHeight, tightly packed).
-void scene(std::vector<std::uint8_t>& buffer, bool clear) {
+void scene(std::vector<std::uint8_t>& buffer, bool clear, unsigned threads = 1) {
     CpuRenderInterface r;
+    r.set_threads(threads);
+    VELLUM_RMLUI_CHECK(r.threads() == threads);
     // A 4x4 texture with translucent texels.
     std::array<std::uint8_t, 64> texels{};
     for (int i = 0; i < 16; ++i) {
@@ -164,6 +171,17 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Split into bands on 2 and 4 threads: the same bytes.
+    for (const unsigned threads : {2u, 4u}) {
+        std::vector<std::uint8_t> banded(buffer.size(), 0);
+        scene(banded, true, threads);
+        if (hash(banded) != kExpected) {
+            std::fprintf(stderr, "cpu output hash on %u threads %s differs from the pinned %s\n", threads,
+                         hash(banded).c_str(), kExpected);
+            return 1;
+        }
+    }
+
     // Control: uninitialised memory under an uncleared frame changes the hash.
     std::vector<std::uint8_t> garbage(buffer.size());
     std::random_device device;
@@ -176,6 +194,7 @@ int main(int argc, char** argv) {
                              "cannot see uninitialised pixels\n");
         return 1;
     }
-    std::printf("cpu output hash %s (pinned); the uncleared control differs\n", actual.c_str());
+    std::printf("cpu output hash %s (pinned) on 1, 2 and 4 threads; the uncleared control differs\n",
+                actual.c_str());
     return 0;
 }

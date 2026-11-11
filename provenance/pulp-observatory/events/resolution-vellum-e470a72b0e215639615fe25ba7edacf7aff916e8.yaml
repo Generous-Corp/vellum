@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-10T12:49:07Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-e470a72b0e215639615fe25ba7edacf7aff916e8",
+  "kind": "resolution",
+  "linked_commits": [
+    "e470a72b0e215639615fe25ba7edacf7aff916e8"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/295"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-native retained layer caching (Visage WI8): adds GPU tests that exact layer composites stay inside damage rectangles, with a test-only SkiaDawnSurface access header. The files are Vellum's own graphics backend; Pulp's .github/vellum-ownership.json routes skia_dawn_surface.{hpp,mm} to owner Generous-Corp/vellum as vellum_future_implementation, and layer_cache/paint_command are Vellum-only. Pulp main has its own separate retained layer cache (CanvasCapability::retained_layer_cache in core/canvas and core/view) and no consumer of vellum::graphics, so no port is owed.",
+  "resolves": "vellum-e470a72b0e215639615fe25ba7edacf7aff916e8",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

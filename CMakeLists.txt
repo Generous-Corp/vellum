@@ -196,6 +196,11 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-image-node-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.image-node COMMAND vellum-image-node-test)
 
+        add_executable(vellum-layer-cache-test
+            graphics/tests/layer_cache_test.cpp)
+        target_link_libraries(vellum-layer-cache-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.layer-cache COMMAND vellum-layer-cache-test)
+
         add_executable(vellum-damage-test
             graphics/tests/damage_test.cpp)
         target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
