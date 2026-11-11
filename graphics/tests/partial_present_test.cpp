@@ -152,6 +152,11 @@ std::unique_ptr<SkiaDawnSurface> make_surface(std::uint32_t width, std::uint32_t
     auto surface = SkiaDawnSurface::create(
         {.width = width, .height = height, .scale = scale}, &error);
     expect(surface != nullptr, "offscreen surface is created", error);
+    if (surface) {
+        LayerCachePolicy policy;
+        policy.enabled = false;
+        surface->set_layer_cache_policy(policy);
+    }
     return surface;
 }
 
