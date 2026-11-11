@@ -10,7 +10,7 @@
 
 include(FetchContent)
 
-set(VELLUM_RMLUI_RMLUI_COMMIT 58c751531f4c1a1eb2dc56f409b8e8a323a0c9ad)
+set(VELLUM_RMLUI_RMLUI_COMMIT ba95ffe8bfb6370efb2cdcca927eaad4710c5413)
 set(VELLUM_RMLUI_FREETYPE_URL
     https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.gz)
 set(VELLUM_RMLUI_FREETYPE_SHA256
@@ -76,16 +76,11 @@ function(vellum_rmlui_fetch_dependencies)
     # VellumRmlUi::Lua drives its own per-instance sandboxed state instead.
     set(RMLUI_LUA_BINDINGS OFF CACHE BOOL "" FORCE)
     set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${_vellum_rmlui_rmlui_component})
-    # One upstream fix backported to the pin (RmlUi 3707ab53, upstream issue
-    # #958): a text input starts with one empty line, so a click into a field
-    # whose font does not resolve cannot read before its line list. Retire it
-    # when the pin moves past 3707ab53.
     # One Vellum patch to the default font engine: glyph advances and kerning
     # accumulate in 26.6 fixed point and only the pen position is rounded, so
     # text no longer comes out up to 5 % wider at small sizes. Upstream has the
     # same code; retire it only if upstream takes an equivalent change.
     set(_vellum_rmlui_patches
-        "${CMAKE_CURRENT_LIST_DIR}/patches/rmlui-3707ab53-text-input-initial-line.patch"
         "${CMAKE_CURRENT_LIST_DIR}/patches/rmlui-fractional-glyph-advances.patch")
     FetchContent_Declare(vellum_rmlui_rmlui
         GIT_REPOSITORY https://github.com/mikke89/RmlUi.git

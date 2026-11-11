@@ -70,7 +70,7 @@ if(_native)
     # whenever FreeType's archive is in the package.
     set(_docs "${_prefix}/share/doc/VellumRmlUi")
     set(_required_notice_lines
-        "Copyright (c) 2019-2025 The RmlUi Team, and contributors"
+        "Copyright (c) 2019-2026 The RmlUi Team, and contributors"
         "MIT License")
     if(NOT EXISTS "${_docs}/RmlUi-LICENSE.txt")
         message(FATAL_ERROR "the Native component did not install RmlUi's licence file")
