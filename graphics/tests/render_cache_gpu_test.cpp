@@ -498,6 +498,80 @@ void failed_frame_drops_its_uploads() {
                      "the frame after a failed one draws the texture exactly");
 }
 
+// A frame that fails partway leaves the telemetry describing the last frame
+// that was submitted: its frame number, layers and per-frame cache counters.
+// The failed attempt's lookups still count toward the cumulative totals.
+void failed_frame_keeps_the_last_frame_telemetry() {
+    auto texture = checker_texture(200);
+    const auto good = telemetry_scene(texture);
+    auto bad = good;
+    bad.root.children.push_back({.id = "broken", .kind = SceneNode::Kind::rectangle,
+                                 .bounds = {200.0F, 150.0F, 40.0F, 40.0F},
+                                 .fill_gradients = {{.stops = {{0.0F, Color::hex(0xFFFFFF)}}}}});
+    auto surface = make_surface(true);
+    render(*surface, good);
+    const auto before = surface->telemetry();
+    std::string error;
+    expect(!surface->render(bad, &error), "a frame with a one-stop gradient fails");
+    const auto after = surface->telemetry();
+    const auto same_frame = [](const CacheStats& a, const CacheStats& b) {
+        return a.frame_hits == b.frame_hits && a.frame_misses == b.frame_misses;
+    };
+    expect(after.frame == before.frame && after.layer_count == before.layer_count &&
+               after.full_repaint_reason == before.full_repaint_reason &&
+               same_frame(after.paragraphs, before.paragraphs) &&
+               same_frame(after.gradients, before.gradients) &&
+               same_frame(after.textures, before.textures),
+           "a failed frame leaves the last submitted frame's telemetry",
+           to_json(before) + " then " + to_json(after));
+    expect(before.paragraphs.frame_misses == 3 && after.paragraphs.frame_hits == 0,
+           "the snapshot is the cold first frame", to_json(after));
+    expect(after.paragraphs.hits > before.paragraphs.hits &&
+               after.paragraphs.hits + after.paragraphs.misses >
+                   before.paragraphs.hits + before.paragraphs.misses,
+           "the failed attempt's lookups stay in the cumulative totals", to_json(after));
+    render(*surface, good);
+    const auto next = surface->telemetry();
+    expect(next.frame == before.frame + 1U && next.paragraphs.frame_hits == 3 &&
+               next.paragraphs.frame_misses == 0 && next.layer_count == before.layer_count,
+           "the frame after a failed one reports itself", to_json(next));
+}
+
+// After a failed frame a capture redraws the last submitted scene in full.
+// That redraw is not a frame, so it must leave the counters of the partial
+// frame that was last submitted, which looked up no paragraph at all.
+void capture_redraw_keeps_the_partial_frame_counters() {
+    auto scene = empty_scene(kDamageModelSceneVersion);
+    scene.root.children.push_back(text_node("title", "Redraw", 10.0F, 10.0F));
+    scene.root.children.push_back(gradient_node("ramp", {150.0F, 10.0F, 140.0F, 50.0F}));
+    scene.root.children.push_back({.id = "mover", .kind = SceneNode::Kind::rectangle,
+                                   .bounds = {20.0F, 150.0F, 20.0F, 20.0F},
+                                   .fill = Color::hex(0xF472B6)});
+    auto surface = make_surface(true);
+    std::string error;
+    expect(surface->render_incremental(scene, &error), "redraw scene renders", error);
+    scene.root.children[2].bounds.x += 25.0F;
+    expect(surface->render_incremental(scene, &error), "a partial frame", error);
+    auto bad = scene;
+    bad.root.children.push_back({.id = "broken", .kind = SceneNode::Kind::rectangle,
+                                 .bounds = {200.0F, 120.0F, 40.0F, 40.0F},
+                                 .fill_gradients = {{.stops = {{0.0F, Color::hex(0xFFFFFF)}}}}});
+    expect(!surface->render_incremental(bad, &error), "a one-stop gradient fails the frame");
+    const auto before = surface->telemetry();
+    expect(!before.full_repaint && before.paragraphs.frame_hits == 0 &&
+               before.paragraphs.frame_misses == 0 && before.gradients.frame_hits == 0 &&
+               before.gradients.frame_misses == 0,
+           "the last submitted frame is partial and looked up nothing", to_json(before));
+    (void)capture(*surface);
+    const auto after = surface->telemetry();
+    expect(after.paragraphs.frame_hits == 0 && after.paragraphs.frame_misses == 0 &&
+               after.gradients.frame_hits == 0 && after.gradients.frame_misses == 0 &&
+               after.frame == before.frame && after.layer_count == before.layer_count,
+           "the capture's full redraw leaves the partial frame's counters", to_json(after));
+    expect(after.paragraphs.hits > before.paragraphs.hits,
+           "the capture's redraw lookups stay in the cumulative totals", to_json(after));
+}
+
 void scripted_telemetry() {
     auto texture = checker_texture(60);
     const auto full = telemetry_scene(texture);
@@ -577,8 +651,12 @@ void scripted_telemetry() {
                t.paragraphs.entries == 0 && t.gradients.entries == 0 &&
                t.textures.entries == 0 && t.atlas_bytes == 0 && t.textures.bytes == 0,
            "a device loss drops every cache", to_json(t));
+    // A second loss notification must still invalidate caches. The public
+    // surface remains fail-closed after loss, so this exercises the repeated
+    // failure path that a recovered device would use before its next frame.
+    surface->simulate_device_loss();
     expect(!surface->render(full, &error) && surface->telemetry().trims == 3,
-           "a lost device trims once");
+           "a second device loss remains fail-closed without double-counting");
 }
 
 }  // namespace
@@ -597,6 +675,8 @@ int main() {
         scripted_telemetry();
         settle_counts_presented_frames();
         failed_frame_drops_its_uploads();
+        failed_frame_keeps_the_last_frame_telemetry();
+        capture_redraw_keeps_the_partial_frame_counters();
     } catch (const std::exception& exception) {
         std::cout << "FAIL " << exception.what() << '\n';
         return 1;

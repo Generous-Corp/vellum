@@ -1733,6 +1733,10 @@ private:
     // Records that the surface now matches its size, so the frame after it
     // restarts the settle count.
     void note_configured() {
+        // A successful device/surface configuration starts a new device
+        // lifetime.  The next loss must invalidate that device's resources
+        // even if an earlier loss already accounted for a trim.
+        device_loss_trimmed_ = false;
         resize_state_.request(static_cast<std::uint32_t>(physical_width()),
                               static_cast<std::uint32_t>(physical_height()));
         resize_state_.mark_configured();
@@ -1824,19 +1828,26 @@ private:
         std::vector<PaintCommandRange> ranges;
         const auto commands = make_paint_commands(scene, &ranges);
         std::vector<ParagraphSlot> paragraphs(commands.size());
+        // stats_ and layer_count_ describe the last submitted frame until
+        // this one submits, so the per-frame cache counters must too.
+        const auto last_submitted = caches_.frame_state();
         caches_.begin_frame();
         FrameResources resources{.meshes = {.recorder = recorder_.get()}, .caches = &caches_};
-        // A texture cached by a frame that is never submitted was never
-        // written on the GPU; drop it so a later frame uploads it again.
+        // A frame that is never submitted leaves no trace in the per-frame
+        // telemetry; its lookups stay in the cumulative totals. A texture it
+        // cached was never written on the GPU, so drop it and a later frame
+        // uploads it again.
         struct UploadGuard final {
             detail::SkiaResourceCaches& caches;
             const FrameResources& resources;
+            detail::SkiaResourceCaches::FrameState last_submitted;
             bool submitted = false;
             ~UploadGuard() {
                 if (submitted) return;
+                caches.restore(last_submitted);
                 for (const auto& key : resources.uploaded) caches.textures.erase(key);
             }
-        } upload_guard{caches_, resources};
+        } upload_guard{caches_, resources, last_submitted};
         std::vector<ActiveLayer> layers;
         std::size_t layer_commands_recorded = 0;
         // A scene that partial redraw can serve caches only exact images, so a

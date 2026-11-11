@@ -64,9 +64,10 @@ public:
         }
         ++stats_.hits;
         ++stats_.frame_hits;
-        order_.splice(order_.begin(), order_, found->second);
-        found->second->last_used = frame;
-        return &found->second->value;
+        const Iterator entry = found->second;
+        order_.splice(order_.begin(), order_, entry);
+        entry->last_used = frame;
+        return &entry->value;
     }
 
     /// Caches `value` as the most recently used entry, evicting least
@@ -81,8 +82,19 @@ public:
         if (const auto existing = index_.find(key); existing != index_.end()) {
             erase(existing->second);
         }
-        order_.push_front(Entry{key, std::move(value), bytes, frame});
-        index_.emplace(std::move(key), order_.begin());
+        // The key lives only in the index; its list entry points at it. An
+        // unordered_map node never moves, so the pointer survives rehashing.
+        // The list entry goes in first: if it throws, the index is untouched,
+        // and if indexing then throws, the entry is unlinked again, so the
+        // index never holds an iterator that is not in the list.
+        order_.push_front(Entry{nullptr, std::move(value), bytes, frame});
+        try {
+            const auto slot = index_.emplace(std::move(key), order_.begin()).first;
+            order_.front().key = &slot->first;
+        } catch (...) {
+            order_.pop_front();
+            throw;
+        }
         bytes_ += bytes;
         while (over_budget()) {
             erase(std::prev(order_.end()));
@@ -145,7 +157,7 @@ public:
 
 private:
     struct Entry final {
-        Key key;
+        const Key* key = nullptr;
         Value value;
         std::size_t bytes = 0;
         std::uint64_t last_used = 0;
@@ -158,8 +170,10 @@ private:
 
     void erase(Iterator entry) {
         bytes_ -= entry->bytes;
-        index_.erase(entry->key);
+        // Unlink the list entry before its key, which the entry points into.
+        const auto slot = index_.find(*entry->key);
         order_.erase(entry);
+        index_.erase(slot);
     }
 
     CacheBudget budget_;
@@ -268,12 +282,25 @@ struct ParagraphKeyHash final {
     }
 };
 
-/// An estimate of a laid-out paragraph's memory: Skia does not report it.
-/// Shaping keeps glyphs, positions and clusters per code unit plus a fixed
-/// overhead per run and per paragraph.
+/// The memory a cached paragraph key owns: the key itself, its font
+/// directory, and every run with its text and font family.
+[[nodiscard]] inline std::size_t key_bytes(const ParagraphKey& key) noexcept {
+    std::size_t bytes = sizeof(ParagraphKey) + key.font_directory.size();
+    for (const auto& run : key.runs) {
+        bytes += sizeof(TextRun) + run.text.size() + run.style.font_family.size();
+    }
+    return bytes;
+}
+
+/// An estimate of a cached paragraph's memory: its key plus the laid-out
+/// paragraph, which Skia does not report. Shaping keeps glyphs, positions and
+/// clusters per code unit, its own copy of the text and of every run's font
+/// family, and a fixed overhead per run and per paragraph.
 [[nodiscard]] inline std::size_t estimated_paragraph_bytes(const ParagraphKey& key) noexcept {
-    std::size_t bytes = 1024U;
-    for (const auto& run : key.runs) bytes += 256U + run.text.size() * 48U;
+    std::size_t bytes = key_bytes(key) + 1024U;
+    for (const auto& run : key.runs) {
+        bytes += 256U + run.text.size() * 49U + run.style.font_family.size();
+    }
     return bytes;
 }
 
@@ -314,8 +341,17 @@ struct GradientKeyHash final {
     }
 };
 
+/// The memory a cached gradient key owns: the key and its stop arrays.
+[[nodiscard]] inline std::size_t key_bytes(const GradientKey& key) noexcept {
+    return sizeof(GradientKey) + key.colors.size() * sizeof(Color) +
+           key.positions.size() * sizeof(float);
+}
+
+/// A cached gradient's memory: its key plus the shader, which keeps its own
+/// copy of every stop's colour and position.
 [[nodiscard]] inline std::size_t gradient_bytes(const GradientKey& key) noexcept {
-    return 128U + key.colors.size() * (sizeof(Color) + sizeof(float));
+    return key_bytes(key) + 128U + key.colors.size() * sizeof(Color) +
+           key.positions.size() * sizeof(float);
 }
 
 using TextureDigest = std::array<std::uint8_t, 32>;
