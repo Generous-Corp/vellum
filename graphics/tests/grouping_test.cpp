@@ -1,6 +1,7 @@
 #include <vellum/graphics/damage.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/path_geometry.hpp>
+#include <vellum/graphics/scene_acceptance.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -298,8 +299,22 @@ void versioning() {
                    "a version " + std::to_string(version) + " scene with a " + name +
                        " is refused");
         }
+        scene.scene_version = 4U;
+        const auto loss = scene_loss_diagnostics(scene);
+        const std::string property = node.clip ? "clip" : node.mask ? "mask" : "isolate";
+        expect(loss.size() == 1U && loss[0].code == kSceneVersionMismatchCode &&
+                   loss[0].severity == LoweringDiagnostic::Severity::error &&
+                   loss[0].node_id == "node" && loss[0].property == property &&
+                   loss[0].message ==
+                       "scene version 4 cannot carry the clip, mask, or isolation at node",
+               "a version 4 scene with a " + name + " reports a version-mismatch loss");
+        const auto acceptance = accept_scene(scene);
+        expect(!acceptance.accepted && acceptance.reason == loss[0].message &&
+                   acceptance.diagnostics.size() == 1U,
+               "accept_scene refuses a version 4 scene with a " + name);
         scene.scene_version = 5U;
-        expect(scene_fields_match_version(scene) && !make_paint_commands(scene).empty(),
+        expect(scene_fields_match_version(scene) && !make_paint_commands(scene).empty() &&
+                   scene_loss_diagnostics(scene).empty() && accept_scene(scene).accepted,
                "a version 5 scene with a " + name + " draws");
     }
     auto plain = scene_with({box("plain", {0.0F, 0.0F, 1.0F, 1.0F})});
