@@ -16,6 +16,7 @@
 /.github/workflows/release-tag.yml @danielraffel
 /.github/workflows/version-at-land.yml @danielraffel
 /.shipyard/config.toml @danielraffel
+/provenance/active-source-boundary.json @danielraffel
 /provenance/authority-signers.allowed_signers @danielraffel
 /provenance/framework-name-debt.json @danielraffel
 /provenance/framework/external-updates.json @danielraffel
@@ -24,6 +25,7 @@
 /provenance/release-signers.allowed_signers @danielraffel
 /provenance/retired-release-tags.json @danielraffel
 /scripts/check_release_policy.py @danielraffel
+/scripts/install_core.py @danielraffel
 /scripts/pretag_checks.py @danielraffel
 /scripts/release_cadence.py @danielraffel
 /scripts/release_dry_run.py @danielraffel
@@ -37,6 +39,14 @@
 /scripts/version_at_land.py @danielraffel
 /tools/provenance/content_scan_policy.py @danielraffel
 /tools/provenance/framework_trusted_verify.py @danielraffel
+/tools/provenance/live_delivery.py @danielraffel
+/tools/provenance/observatory.py @danielraffel
+/tools/provenance/observatory_common.py @danielraffel
+/tools/provenance/observatory_events.py @danielraffel
+/tools/provenance/observatory_git.py @danielraffel
+/tools/provenance/observatory_native.py @danielraffel
+/tools/provenance/observatory_report.py @danielraffel
+/tools/provenance/receiver.py @danielraffel
 /tools/provenance/mirror_edge_patterns.json @danielraffel
 /tools/provenance/mirror_edge_patterns.pin.json @danielraffel
 /provenance/mirror/link-policy.json @danielraffel
@@ -44,3 +54,4 @@
 /tools/provenance/verify_extraction.py @danielraffel
 /tools/provenance/verify_mirror_export.py @danielraffel
 /tools/provenance/verify_renderer_dependency.py @danielraffel
+/tools/provenance/verify_pulp_observation_scope.py @danielraffel

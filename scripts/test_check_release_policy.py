@@ -218,7 +218,18 @@ class Policy(unittest.TestCase):
                      "/scripts/version_at_land.py",
                      "/provenance/authority-signers.allowed_signers",
                      "/provenance/mirror/link-policy.json",
-                     "/tools/provenance/verify_renderer_dependency.py"):
+                     "/tools/provenance/verify_renderer_dependency.py",
+                     "/provenance/active-source-boundary.json",
+                     "/scripts/install_core.py",
+                     "/tools/provenance/live_delivery.py",
+                     "/tools/provenance/observatory.py",
+                     "/tools/provenance/observatory_common.py",
+                     "/tools/provenance/observatory_events.py",
+                     "/tools/provenance/observatory_git.py",
+                     "/tools/provenance/observatory_native.py",
+                     "/tools/provenance/observatory_report.py",
+                     "/tools/provenance/receiver.py",
+                     "/tools/provenance/verify_pulp_observation_scope.py"):
             with self.subTest(path=path):
                 shutil.copy(ROOT / policy.CODEOWNERS, self.tmp / policy.CODEOWNERS)
                 owners = self.tmp / policy.CODEOWNERS
@@ -235,7 +246,18 @@ class Policy(unittest.TestCase):
                      "/scripts/version_at_land.py",
                      "/provenance/authority-signers.allowed_signers",
                      "/provenance/mirror/link-policy.json",
-                     "/tools/provenance/verify_renderer_dependency.py"):
+                     "/tools/provenance/verify_renderer_dependency.py",
+                     "/provenance/active-source-boundary.json",
+                     "/scripts/install_core.py",
+                     "/tools/provenance/live_delivery.py",
+                     "/tools/provenance/observatory.py",
+                     "/tools/provenance/observatory_common.py",
+                     "/tools/provenance/observatory_events.py",
+                     "/tools/provenance/observatory_git.py",
+                     "/tools/provenance/observatory_native.py",
+                     "/tools/provenance/observatory_report.py",
+                     "/tools/provenance/receiver.py",
+                     "/tools/provenance/verify_pulp_observation_scope.py"):
             with self.subTest(path=path):
                 self.assertIn(path, policy.POLICY_FILES)
                 kept = tuple(p for p in policy.POLICY_FILES if p != path)
@@ -245,6 +267,16 @@ class Policy(unittest.TestCase):
                                   policy.problems(self.tmp))
                 finally:
                     policy.POLICY_FILES = original
+
+    def test_every_observatory_module_is_a_policy_file(self) -> None:
+        # observatory-verify runs the pull request's own copy of these modules, so
+        # a module that joins the package unowned would let one review edit the verifier.
+        modules = sorted(f"/tools/provenance/{p.name}" for p in (ROOT / "tools/provenance").glob("observatory*.py")
+                         if not p.name.startswith("test_"))
+        self.assertTrue(modules)
+        for path in modules:
+            with self.subTest(path=path):
+                self.assertIn(path, policy.POLICY_FILES)
 
     def test_a_policy_script_importing_an_unowned_module_fails(self) -> None:
         (self.tmp / "scripts").mkdir()
@@ -585,7 +617,18 @@ class Repository(unittest.TestCase):
                      "/scripts/version_at_land.py",
                      "/provenance/authority-signers.allowed_signers",
                      "/provenance/mirror/link-policy.json",
-                     "/tools/provenance/verify_renderer_dependency.py"):
+                     "/tools/provenance/verify_renderer_dependency.py",
+                     "/provenance/active-source-boundary.json",
+                     "/scripts/install_core.py",
+                     "/tools/provenance/live_delivery.py",
+                     "/tools/provenance/observatory.py",
+                     "/tools/provenance/observatory_common.py",
+                     "/tools/provenance/observatory_events.py",
+                     "/tools/provenance/observatory_git.py",
+                     "/tools/provenance/observatory_native.py",
+                     "/tools/provenance/observatory_report.py",
+                     "/tools/provenance/receiver.py",
+                     "/tools/provenance/verify_pulp_observation_scope.py"):
             with self.subTest(path=path):
                 self.assertIn(path, policy.POLICY_FILES)
 
