@@ -6,6 +6,7 @@ import fnmatch
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
 import subprocess
+import tempfile
 from typing import Iterable
 
 if __package__:
@@ -104,9 +105,12 @@ def integration_merge_covered(
     events when every observable path changed since the merge base carries
     exactly the (mode, blob) entry of the side that changed it (a path absent
     on both counts as equal, so a deletion lands). A path both sides changed
-    is covered only when both sides and the merge hold the same entry (the
-    same fix landed twice); a path only the merge changed, or a path the merge
-    did not carry over, is a change of the merge's own and needs its own event.
+    is covered when both sides and the merge hold the same entry (the same fix
+    landed twice), or when the merge holds exactly git's conflict-free
+    three-way merge of the two sides (two pull requests editing different
+    hunks of one file); a path only the merge changed, a hand-resolved path,
+    or a path the merge did not carry over is a change of the merge's own and
+    needs its own event.
 
     Only paths that would create an observation matter when `mappings` is
     given: unmapped content can never need an event, so two entries that
@@ -118,21 +122,24 @@ def integration_merge_covered(
     sides = _merge_sides(repo, commit, mappings, transitive_rules)
     if sides is None:
         return False
-    first, second, first_paths, second_paths, observable = sides
+    base, first, second, first_paths, second_paths, observable = sides
     # Symmetric rule, so it judges a queue merge (first = main, second = the
     # pull request) and an author's merge of main (first = the pull request,
     # second = main) alike: every observable path must carry exactly the entry
-    # of the one side that changed it. A path both sides changed differently,
-    # a path the merge changed that neither side did, and a path the merge did
-    # not carry over from the side that changed it are all changes of the
-    # merge's own.
+    # of the one side that changed it. A path both sides changed that the
+    # merge does not hold as their clean three-way merge, a path the merge
+    # changed that neither side did, and a path the merge did not carry over
+    # from the side that changed it are all changes of the merge's own.
     for path in observable:
         on_first = path in first_paths
         on_second = path in second_paths
         merged = tree_entry_at(repo, commit, path)
         if on_first and on_second:
             first_entry = tree_entry_at(repo, first, path)
-            if first_entry != tree_entry_at(repo, second, path) or merged != first_entry:
+            second_entry = tree_entry_at(repo, second, path)
+            if first_entry == second_entry and merged == first_entry:
+                continue
+            if not _is_clean_content_merge(repo, base, first, second, commit, path):
                 return False
         elif on_second:
             if merged != tree_entry_at(repo, second, path):
@@ -143,6 +150,67 @@ def integration_merge_covered(
         else:
             return False
     return True
+
+
+_REGULAR_MODES = frozenset({"100644", "100755"})
+
+
+def _is_clean_content_merge(
+    repo: Path, base: str | None, first: str, second: str, commit: str, path: str
+) -> bool:
+    """True when `commit` holds exactly git's conflict-free three-way merge of
+    `path`, so the merge adds no content beyond the two sides' own changes.
+
+    Two pull requests that edit different hunks of one file land through a
+    queue merge whose blob matches neither side. Each side's observation
+    already describes its own hunks, and the merged blob is a deterministic
+    function of the base and those two sides. Anything else stays a change of
+    the merge's own: a conflicted or hand-resolved file, a file added or
+    deleted on either side, a symlink or submodule, or a mode both sides
+    changed differently."""
+    if base is None:
+        return False
+    entries = [tree_entry_at(repo, rev, path) for rev in (base, first, second, commit)]
+    if any(entry is None or entry[0] not in _REGULAR_MODES for entry in entries):
+        return False
+    base_entry, first_entry, second_entry, merged_entry = entries
+    if first_entry[0] == base_entry[0]:
+        expected_mode = second_entry[0]
+    elif second_entry[0] in (base_entry[0], first_entry[0]):
+        expected_mode = first_entry[0]
+    else:
+        return False
+    if merged_entry[0] != expected_mode:
+        return False
+    merged = _blob_bytes(repo, merged_entry[1])
+    with tempfile.TemporaryDirectory() as scratch:
+        names = []
+        for label, entry in (("first", first_entry), ("base", base_entry), ("second", second_entry)):
+            target = Path(scratch) / label
+            target.write_bytes(_blob_bytes(repo, entry[1]))
+            names.append(str(target))
+        # merge-ort merges content with the histogram algorithm; plain
+        # merge-file uses myers. Either result is a conflict-free merge of the
+        # two sides, so a merge holding exactly one of them is covered.
+        for algorithm in ("histogram", None):
+            command = ["git", "merge-file", "-p"]
+            if algorithm:
+                command.append(f"--diff-algorithm={algorithm}")
+            completed = subprocess.run(
+                [*command, *names], cwd=repo, capture_output=True, check=False
+            )
+            if completed.returncode == 0 and completed.stdout == merged:
+                return True
+    return False
+
+
+def _blob_bytes(repo: Path, object_id: str) -> bytes:
+    completed = subprocess.run(
+        ["git", "cat-file", "blob", object_id], cwd=repo, capture_output=True, check=False
+    )
+    if completed.returncode != 0:
+        raise ObservatoryError(f"cannot read blob {object_id} in {repo}")
+    return completed.stdout
 
 
 def merge_observable_paths(
@@ -157,7 +225,7 @@ def merge_observable_paths(
     changed something observable, even when its diff against the first parent
     shows nothing (a merge that drops the other side's change)."""
     sides = _merge_sides(repo, commit, mappings, transitive_rules)
-    return set() if sides is None else sides[4]
+    return set() if sides is None else sides[5]
 
 
 def _merge_sides(
@@ -165,14 +233,15 @@ def _merge_sides(
     commit: str,
     mappings: list[dict[str, object]] | None,
     transitive_rules: list[str] | None,
-) -> tuple[str, str, set[str], set[str], set[str]] | None:
+) -> tuple[str | None, str, str, set[str], set[str], set[str]] | None:
     row = git(repo, "rev-list", "--parents", "-n", "1", commit).split()
     if len(row) != 3:
         return None
     first, second = row[1], row[2]
-    base = git(repo, "merge-base", first, second)
-    if not base:
+    bases = git(repo, "merge-base", "--all", first, second).split()
+    if not bases:
         return None
+    base = bases[0]
 
     def changed(a: str, b: str) -> set[str]:
         return {
@@ -204,7 +273,11 @@ def _merge_sides(
             observable = set(observation["mapped_paths"]) | set(
                 observation["transitive_paths"]
             )
-    return first, second, first_paths, second_paths, observable
+    # A criss-cross history has no single base, so no three-way content merge
+    # can be judged against it: the first element is None and only the exact
+    # entry rules apply.
+    unique_base = base if len(bases) == 1 else None
+    return unique_base, first, second, first_paths, second_paths, observable
 
 
 def path_matches(path: str, patterns: Iterable[str]) -> bool:
