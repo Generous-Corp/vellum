@@ -1,9 +1,12 @@
+#include "damage_testing.hpp"
+
 #include <vellum/graphics/damage.hpp>
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/path_geometry.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <limits>
@@ -17,6 +20,9 @@ namespace {
 
 constexpr double kPixelLimit = kMaxPixelCoordinate;
 constexpr float kShadowBlurExtent = 1.5F;
+constexpr float kBlurSigmaPerRadius = 0.5F;
+constexpr float kDefaultTransformedBlurSigmas = 5.0F;
+std::atomic<float> blur_reach_sigmas{kDefaultTransformedBlurSigmas};
 constexpr float kLineHeightFactor = 1.4F;
 
 std::int32_t clamp_pixel(double value) noexcept {
@@ -176,17 +182,22 @@ Rect sorted(const Rect& rect) noexcept {
             std::abs(rect.width), std::abs(rect.height)};
 }
 
+Rect transformed_shadow_bounds(const Rect& shadow, float blur_radius, const Affine2D& transform) {
+    const Rect mapped = transformed_bounds(transform, shadow);
+    const float sigma = std::max(0.0F, blur_radius) * kBlurSigmaPerRadius;
+    const float reach = sigma * blur_reach_sigmas.load() * largest_scale(transform);
+    return outset(mapped, reach);
+}
+
 std::optional<Rect> mapped_box_bounds(const SceneNode& node, const Rect& absolute,
                                       const Affine2D& transform) {
     std::optional<Rect> painted;
     if (!rect_empty(absolute)) painted = transformed_bounds(transform, absolute);
-    const float scale = largest_scale(transform);
     for (const auto& shadow : node.box_shadows) {
         const Rect moved{absolute.x + shadow.offset_x, absolute.y + shadow.offset_y,
                          absolute.width, absolute.height};
         const Rect spread = sorted(outset(moved, shadow.spread_radius));
-        const float blur = std::max(0.0F, shadow.blur_radius) * kShadowBlurExtent * scale;
-        const Rect blurred = outset(transformed_bounds(transform, spread), blur);
+        const Rect blurred = transformed_shadow_bounds(spread, shadow.blur_radius, transform);
         if (!rect_empty(blurred)) painted = unite(painted, blurred);
     }
     return painted;
@@ -1055,5 +1066,13 @@ DamageRegion DamageTracker::take_damage() {
     pending_ = DamageRegion(committed_ ? committed_->frame() : PixelRect{}, policy_);
     return taken;
 }
+
+namespace testing {
+
+void set_transformed_blur_sigmas(float sigmas) noexcept { blur_reach_sigmas.store(sigmas); }
+
+float transformed_blur_sigmas() noexcept { return blur_reach_sigmas.load(); }
+
+}  // namespace testing
 
 }  // namespace vellum::graphics
