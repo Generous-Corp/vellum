@@ -981,6 +981,16 @@ jobs:
              ! git cat-file -e "$observatory_git_base^{commit}" 2>/dev/null; then
             observatory_git_base="$(git rev-parse HEAD^)"
           fi
+          # A push to main can carry several landings (a merge-queue batch,
+          # or two merges seconds apart). Each landing was already judged on
+          # its own merge-group run against its own base, so judging the whole
+          # push range as one change would see an unrelated landing and the
+          # receiver's report rewrite together and refuse the report edit.
+          # Judge the push by its tip landing (first parent), the same shape
+          # a merge-group run has. Tags keep the event range.
+          if [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/* ]]; then
+            observatory_git_base="$(git rev-parse HEAD^1)"
+          fi
           observatory_git_base="$(
             git merge-base "$observatory_git_base" HEAD
           )"
