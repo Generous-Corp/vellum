@@ -15,7 +15,7 @@ namespace {
 // PaintCommand field: a field they skip lets a cached image survive a change
 // to it. This size changes when a field is added; update both functions, and
 // the field-coverage test in layer_cache_test.cpp, then this number.
-static_assert(sizeof(PaintCommand) == 368,
+static_assert(sizeof(PaintCommand) == 392,
               "PaintCommand changed: update paint_commands_equal and hash_command");
 static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 80,
               "TextStyle or TextRun changed: update same_style, same_runs and hash_command");
@@ -159,8 +159,9 @@ bool same_paint(const PaintCommand& a, const PaintCommand& b) {
            a.underline == b.underline && a.strikethrough == b.strikethrough &&
            same_runs(a.text_runs, b.text_runs) && same_float(a.opacity, b.opacity) &&
            same_radii(a.corner_radii, b.corner_radii) &&
-           a.layer_unbounded == b.layer_unbounded && same_image_reference(a.image, b.image) &&
-           a.image_asset == b.image_asset;
+           a.layer_unbounded == b.layer_unbounded && a.layer_isolated == b.layer_isolated &&
+           same_rect(a.clip_rect, b.clip_rect) && a.mask_mode == b.mask_mode &&
+           same_image_reference(a.image, b.image) && a.image_asset == b.image_asset;
 }
 
 class Hasher final {
@@ -243,7 +244,12 @@ std::uint64_t hash_command(const PaintCommand& command) {
     hash.number(static_cast<std::uint64_t>(command.font_weight));
     hash.real(command.letter_spacing);
     hash.number((command.underline ? 1U : 0U) | (command.strikethrough ? 2U : 0U) |
-                (command.layer_unbounded ? 4U : 0U));
+                (command.layer_unbounded ? 4U : 0U) | (command.layer_isolated ? 8U : 0U));
+    hash.real(command.clip_rect.x);
+    hash.real(command.clip_rect.y);
+    hash.real(command.clip_rect.width);
+    hash.real(command.clip_rect.height);
+    hash.number(static_cast<std::uint64_t>(command.mask_mode));
     hash.number(command.text_runs.size());
     for (const auto& run : command.text_runs) {
         hash.text(run.text);

@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 if __package__ in {None, ""}:
     sys.path.append(str(Path(__file__).resolve().parent))
@@ -1086,12 +1087,15 @@ def verify(
                 "merge-changes-other-side-without-first-parent-diff",
             )
         ]
+    receiver = False
+    report_writer: str | None = None
     if vellum_tail_policy == "coverage":
         # Only the receiver commits the report. A change judged under the
         # coverage policy leaves it as its base had it, and the comparison
         # leaves out every event added after the commit that last wrote it.
         receiver = refuse_report_edit(root, git_base)
-        since = events_since_report(root, events, "HEAD" if receiver or git_base is None else git_base)
+        report_writer = last_report_writer(root, "HEAD" if receiver or git_base is None else git_base)
+        since = new_event_ids(root, report_writer, events) if report_writer else set()
         if since:
             committed_events = [
                 (path, event) for path, event in committed_events
@@ -1106,11 +1110,24 @@ def verify(
         )
     )
     committed_json = load_json(root / REPORT_JSON_PATH)
-    if committed_json != committed_expected:
-        raise ObservatoryError("reports/current.json is stale; run observatory reconcile")
     committed_md = (root / REPORT_MD_PATH).read_text(encoding="utf-8")
-    if committed_md != render_markdown(committed_expected):
-        raise ObservatoryError("reports/current.md is stale; run observatory reconcile")
+    stale = (
+        "reports/current.json is stale; run observatory reconcile"
+        if committed_json != committed_expected
+        else "reports/current.md is stale; run observatory reconcile"
+        if committed_md != render_markdown(committed_expected)
+        else None
+    )
+    if stale and not (
+        vellum_tail_policy == "coverage"
+        and not receiver
+        and report_writer
+        and report_explained_by_input_change(
+            root, report_writer, cursor=cursor, events=committed_events,
+            coverage_gaps=committed_gaps, now=now,
+        )
+    ):
+        raise ObservatoryError(stale)
     if check_now is not None:
         report = build_report(root=root, lock=lock, cursor=cursor, events=events, budgets=budgets,
                               now=check_now, coverage_gaps=gaps)
@@ -1196,24 +1213,107 @@ def is_evidence_path(path: str) -> bool:
 REPORT_PATHS = (REPORT_JSON_PATH.as_posix(), REPORT_MD_PATH.as_posix())
 
 
-def events_since_report(root: Path, events: list[tuple[Path, dict[str, object]]], anchor: str = "HEAD") -> set[str]:
-    """IDs of the events added after the commit that last wrote the committed report.
+def last_report_writer(root: Path, anchor: str = "HEAD") -> str | None:
+    """The commit that last wrote the committed report, looked up from `anchor`.
 
     The receiver writes the report; every change after it (a pull request's
     observations and resolutions, or main's landings before the next
     coalesce) adds events without rewriting it, so the report describes the
-    ledger as that commit held it. The writer is looked up from `anchor`: the
-    git base for any change that is not the receiver's, since such a change
-    cannot edit the report and so carries its base's copy. Base history is
-    main's own and the change cannot place a commit there. The receiver's
-    reconciliation is anchored on itself. Outside a Git checkout nothing is
-    left out.
+    ledger as that commit held it. The writer is looked up from the git base
+    for any change that is not the receiver's, since such a change cannot edit
+    the report and so carries its base's copy. Base history is main's own and
+    the change cannot place a commit there. The receiver's reconciliation is
+    anchored on itself. Outside a Git checkout there is no writer.
     """
     try:
         commit = git(root, "log", "-1", "--format=%H", anchor, "--", REPORT_JSON_PATH.as_posix())
     except ObservatoryError:
-        return set()
-    return new_event_ids(root, commit, events) if commit else set()
+        return None
+    return commit or None
+
+
+# What the report is computed from besides the ledger and the cursor. The
+# writer's own copy of each rebuilt input is read back, so a change to one of
+# them must still reproduce the committed report exactly. The generator, the
+# event schema and the path map cannot be read back that way.
+TRUST_POLICY_PATH = Path("provenance/authority/trust-policy.v1.json")
+REPORT_REBUILT_INPUTS = (BUDGETS_PATH, LOCK_PATH, TRUST_POLICY_PATH)
+REPORT_CODE_INPUT_PATHS = frozenset({
+    MAP_PATH.as_posix(),
+    "tools/provenance/observatory.py",
+    "tools/provenance/observatory_common.py",
+    "tools/provenance/observatory_events.py",
+    "tools/provenance/observatory_git.py",
+    "tools/provenance/observatory_report.py",
+})
+REPORT_CODE_INPUT_PREFIXES = ((OBSERVATORY / "schemas").as_posix() + "/",)
+
+
+def report_inputs_changed_since(root: Path, writer: str) -> list[str]:
+    """Report inputs, other than the ledger and the cursor, that changed after `writer`."""
+    rebuilt = {path.as_posix() for path in REPORT_REBUILT_INPUTS}
+    changed = git(root, "diff", "--name-only", "--no-renames", writer, "HEAD").splitlines()
+    return sorted(
+        path for path in changed
+        if path in rebuilt or path in REPORT_CODE_INPUT_PATHS or path.startswith(REPORT_CODE_INPUT_PREFIXES)
+    )
+
+
+def same_blob_as(root: Path, writer: str, paths: tuple[str, ...]) -> bool:
+    """Each checked-out path is byte-identical to the copy `writer` committed."""
+    for path in paths:
+        try:
+            if git(root, "hash-object", "--", path) != git(root, "rev-parse", f"{writer}:{path}"):
+                return False
+        except ObservatoryError:
+            return False
+    return True
+
+
+def report_explained_by_input_change(
+    root: Path, writer: str, *, cursor: dict[str, object],
+    events: list[tuple[Path, dict[str, object]]], coverage_gaps: list[dict[str, str]],
+    now: datetime | None,
+) -> bool:
+    """A stale report is the writer's, and a change to its inputs accounts for the difference.
+
+    Only the receiver writes the report and the cursor, so a change that is
+    not the receiver's must carry both exactly as their last writer committed
+    them. A change to the budgets, the lock or the trust policy alters what
+    a fresh regenerate prints (every deadline, for example); rebuilding with
+    the writer's copies must then reproduce the committed report exactly. A
+    change to the generator, the event schema or the path map cannot be
+    rebuilt that way, so its presence since the writer is accepted, whether
+    or not a rebuilt input changed beside it. Until the receiver regenerates
+    the report, that holds for every later change too.
+    """
+    if not same_blob_as(root, writer, REPORT_PATHS + (CURSOR_PATH.as_posix(),)):
+        return False
+    changed = report_inputs_changed_since(root, writer)
+    if not changed:
+        return False
+    rebuilt = {path.as_posix() for path in REPORT_REBUILT_INPUTS}
+    if any(path not in rebuilt for path in changed):
+        # The generator may read the rebuilt inputs differently now (a new
+        # budget key, say), so the writer's copies may not even load.
+        return True
+    try:
+        with tempfile.TemporaryDirectory() as temporary:
+            snapshot = Path(temporary)
+            for path in REPORT_REBUILT_INPUTS:
+                content = git(root, "show", f"{writer}:{path.as_posix()}")
+                (snapshot / path).parent.mkdir(parents=True, exist_ok=True)
+                (snapshot / path).write_text(content + "\n", encoding="utf-8")
+            expected = build_report(
+                root=snapshot, lock=load_json(snapshot / LOCK_PATH), cursor=cursor, events=events,
+                budgets=load_budgets(snapshot / BUDGETS_PATH), now=now, coverage_gaps=coverage_gaps,
+            )
+    except (ObservatoryError, KeyError, ValueError, TypeError, OSError):
+        return False
+    return (
+        load_json(root / REPORT_JSON_PATH) == expected
+        and (root / REPORT_MD_PATH).read_text(encoding="utf-8") == render_markdown(expected)
+    )
 
 
 def refuse_report_edit(root: Path, git_base: str | None) -> bool:

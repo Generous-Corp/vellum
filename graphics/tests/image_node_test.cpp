@@ -233,7 +233,7 @@ bool placement() {
 
 bool versions() {
     bool ok = true;
-    static_assert(vellum::graphics::kSceneVersion == 4U);
+    static_assert(vellum::graphics::kSceneVersion >= 4U);
     static_assert(vellum::graphics::is_known_kind(SceneNode::Kind::image));
     Scene scene;
     scene.root.id = "root";
@@ -272,7 +272,9 @@ bool versions() {
     scene.root.children.pop_back();
     scene.scene_version = vellum::graphics::kSceneVersion + 1U;
     const auto newer = vellum::graphics::scene_loss_diagnostics(scene);
-    ok &= expect(newer.size() == 1U && newer[0].message == "scene version 5 is not supported",
+    const auto newest = std::to_string(vellum::graphics::kSceneVersion + 1U);
+    ok &= expect(newer.size() == 1U &&
+                     newer[0].message == "scene version " + newest + " is not supported",
                  "a newer scene version is reported");
     return ok;
 }

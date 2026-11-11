@@ -25,7 +25,8 @@ struct SceneAcceptance final {
 
 /// Decides whether `scene` can be drawn. It is refused for an unsupported
 /// version, an unknown kind, a field or kind newer than its version, a
-/// non-finite transform, opacity or corner radius, an undrawable path, an
+/// non-finite transform, opacity or corner radius, a root marked as a mask, a
+/// clip that fails `clip_is_valid`, an undrawable path, an
 /// image node without a valid reference or with children, or an image table
 /// that `scene_images_are_valid` rejects.
 [[nodiscard]] SceneAcceptance accept_scene(const Scene& scene);

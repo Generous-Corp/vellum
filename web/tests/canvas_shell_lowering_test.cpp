@@ -230,5 +230,38 @@ int main() {
                   << vellum::web::canvas_shell_loss_count(layered) << '\n';
         return 1;
     }
+
+    // A clip counts once; a mask counts once and its commands are skipped,
+    // so the shell never draws mask coverage as visible paint. The masked
+    // group's layer is flattened and counts once, as any layer does.
+    vellum::graphics::Scene grouped;
+    grouped.root.id = "root";
+    auto clipped = box("clipped");
+    clipped.clip = vellum::graphics::NodeClip{.rect = {0.0F, 0.0F, 2.0F, 2.0F}};
+    grouped.root.children.push_back(clipped);
+    SceneNode masked{.id = "masked", .kind = SceneNode::Kind::group};
+    masked.children.push_back(box("masked/content"));
+    auto mask = box("masked/mask");
+    mask.mask = vellum::graphics::MaskMode::luminance;
+    mask.children.push_back(box("masked/mask/inner"));
+    auto nested = box("masked/mask/nested");
+    nested.mask = vellum::graphics::MaskMode::alpha;
+    mask.children.push_back(nested);
+    masked.children.push_back(mask);
+    grouped.root.children.push_back(masked);
+    const auto grouped_commands = vellum::graphics::make_paint_commands(grouped);
+    const auto skipped = vellum::web::canvas_shell_masked(grouped_commands);
+    std::vector<std::string> drawn;
+    for (std::size_t index = 0; index < grouped_commands.size(); ++index) {
+        if (!skipped[index] && vellum::graphics::draws_content(grouped_commands[index].kind)) {
+            drawn.push_back(grouped_commands[index].node_id);
+        }
+    }
+    if (drawn != std::vector<std::string>{"clipped", "masked/content"} ||
+        vellum::web::canvas_shell_loss_count(grouped_commands) != 3) {
+        std::cerr << "clips and masks were not lowered as declared: "
+                  << vellum::web::canvas_shell_loss_count(grouped_commands) << '\n';
+        return 1;
+    }
     return 0;
 }

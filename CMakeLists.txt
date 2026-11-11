@@ -196,6 +196,11 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-image-node-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.image-node COMMAND vellum-image-node-test)
 
+        add_executable(vellum-grouping-test
+            graphics/tests/grouping_test.cpp)
+        target_link_libraries(vellum-grouping-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.grouping COMMAND vellum-grouping-test)
+
         add_executable(vellum-layer-cache-test
             graphics/tests/layer_cache_test.cpp)
         target_link_libraries(vellum-layer-cache-test PRIVATE Vellum::Graphics)
@@ -311,6 +316,21 @@ if(VELLUM_BUILD_TESTS)
                 path_damage_bounds_contain_paint)
             add_test(NAME "vellum.gpu.${_vellum_fixture}"
                 COMMAND vellum-gpu-style-test "${_vellum_fixture}")
+        endforeach()
+
+        add_executable(vellum-gpu-grouping-test
+            graphics/tests/gpu_grouping_test.cpp)
+        target_link_libraries(vellum-gpu-grouping-test PRIVATE Vellum::Gpu Vellum::DawnHeaders)
+        foreach(_vellum_fixture IN ITEMS
+                nested_rounded_and_path_clips
+                transformed_clip
+                subtree_clip_keeps_own_shadow
+                clipped_text_overflow
+                alpha_and_luminance_masks
+                isolated_overlap_matches_flat
+                grouping_version_refusal)
+            add_test(NAME "vellum.gpu.${_vellum_fixture}"
+                COMMAND vellum-gpu-grouping-test "${_vellum_fixture}")
         endforeach()
     endif()
 

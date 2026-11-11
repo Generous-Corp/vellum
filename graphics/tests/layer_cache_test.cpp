@@ -214,6 +214,12 @@ void equality_covers_every_field() {
         {"radius bottom_right", [](PaintCommand& c) { c.corner_radii.bottom_right = 1.0F; }},
         {"radius bottom_left", [](PaintCommand& c) { c.corner_radii.bottom_left = 1.0F; }},
         {"layer_unbounded", [](PaintCommand& c) { c.layer_unbounded = true; }},
+        {"layer_isolated", [](PaintCommand& c) { c.layer_isolated = true; }},
+        {"clip_rect x", [](PaintCommand& c) { c.clip_rect.x = 1.0F; }},
+        {"clip_rect y", [](PaintCommand& c) { c.clip_rect.y = 1.0F; }},
+        {"clip_rect width", [](PaintCommand& c) { c.clip_rect.width = 1.0F; }},
+        {"clip_rect height", [](PaintCommand& c) { c.clip_rect.height = 1.0F; }},
+        {"mask_mode", [](PaintCommand& c) { c.mask_mode = MaskMode::luminance; }},
     };
     for (const auto& [name, mutate] : mutations) {
         PaintCommand changed = base;
