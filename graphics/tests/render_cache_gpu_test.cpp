@@ -589,8 +589,28 @@ void scripted_telemetry() {
                t.damage_fraction == 1.0 &&
                t.damage_area_pixels == static_cast<std::int64_t>(kWidth) * kHeight,
            "frame 1 is a full repaint of the whole frame", to_json(t));
-    expect(layers == 1 && t.layer_count == layers, "frame 1 opens the faded group's layer",
-           to_json(t));
+    // The faded group is cached as an image from its first frame, so the frame
+    // composites it instead of opening an offscreen layer; `layer_count`
+    // counts only the layers a frame opens.
+    const auto layer_stats = surface->layer_cache_stats();
+    expect(layers == 1 && layer_stats.layers == 1 && layer_stats.builds == 1 &&
+               t.layer_count == 0,
+           "frame 1 caches the faded group's layer as an image", to_json(t));
+
+    // With the layer cache off the same frame opens the layer itself, and
+    // draws the same pixels.
+    auto direct = make_surface(true);
+    direct->set_layer_cache_policy({.enabled = false});
+    render(*direct, full);
+    t = direct->telemetry();
+    expect(direct->layer_cache_stats().layers == 0 && t.layer_count == layers,
+           "without the layer cache frame 1 opens the faded group's layer", to_json(t));
+    // A separate surface keeps the capture's redraw out of `surface`'s totals.
+    auto sibling = make_surface(true);
+    render(*sibling, full);
+    expect(capture(*direct) == capture(*sibling),
+           "the cached faded group draws the pixels the opened layer draws");
+    t = surface->telemetry();
     expect(t.paragraphs.frame_misses == 3 && t.paragraphs.frame_hits == 0 &&
                t.paragraphs.entries == 3 && t.gradients.frame_misses == 1 &&
                t.gradients.entries == 1 && t.textures.frame_misses == 1 &&
