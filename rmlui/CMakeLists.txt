@@ -182,6 +182,7 @@ endif()
 if(VELLUM_RMLUI_METAL)
     add_library(vellum-rmlui-metal STATIC
         src/metal_render_interface.mm
+        src/metal_image_decode.mm
         src/metal_effects.cpp)
     add_library(VellumRmlUi::Metal ALIAS vellum-rmlui-metal)
     set_target_properties(vellum-rmlui-metal PROPERTIES

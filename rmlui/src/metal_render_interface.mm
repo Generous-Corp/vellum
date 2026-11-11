@@ -9,6 +9,7 @@
 #import <vellum/rmlui/metal_render_interface.hpp>
 
 #include "metal_effects.hpp"
+#include "metal_image_decode.hpp"
 #include "metal_shaders.hpp"
 
 #import <CoreGraphics/CoreGraphics.h>
@@ -76,40 +77,6 @@ struct Pipelines {
     id<MTLRenderPipelineState> post_mask = nil;
     id<MTLRenderPipelineState> post_over = nil;        // premultiplied over
 };
-
-// Decodes an encoded image to premultiplied RGBA8, top row first.
-bool decode_premultiplied(const std::vector<Rml::byte>& encoded, int& width, int& height,
-                          std::vector<std::uint8_t>& out) {
-    NSData* data = [NSData dataWithBytesNoCopy:const_cast<Rml::byte*>(encoded.data())
-                                        length:encoded.size()
-                                  freeWhenDone:NO];
-    CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, nullptr);
-    if (!source)
-        return false;
-    CGImageRef image = CGImageSourceCreateImageAtIndex(source, 0, nullptr);
-    CFRelease(source);
-    if (!image)
-        return false;
-    width = static_cast<int>(CGImageGetWidth(image));
-    height = static_cast<int>(CGImageGetHeight(image));
-    bool ok = width > 0 && height > 0;
-    if (ok) {
-        out.assign(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u, 0);
-        CGColorSpaceRef colour_space = CGColorSpaceCreateDeviceRGB();
-        CGContextRef context = CGBitmapContextCreate(
-            out.data(), static_cast<std::size_t>(width), static_cast<std::size_t>(height), 8,
-            static_cast<std::size_t>(width) * 4u, colour_space,
-            static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedLast) | kCGBitmapByteOrderDefault);
-        CGColorSpaceRelease(colour_space);
-        ok = context != nullptr;
-        if (ok) {
-            CGContextDrawImage(context, CGRectMake(0, 0, width, height), image);
-            CGContextRelease(context);
-        }
-    }
-    CGImageRelease(image);
-    return ok;
-}
 
 } // namespace
 
@@ -841,7 +808,7 @@ Rml::TextureHandle MetalRenderInterface::LoadTexture(Rml::Vector2i& dimensions,
     int width = 0;
     int height = 0;
     std::vector<std::uint8_t> pixels;
-    if (!decode_premultiplied(encoded, width, height, pixels))
+    if (!detail::decode_premultiplied(encoded, width, height, pixels))
         return 0;
     dimensions = {width, height};
     return GenerateTexture(Rml::Span<const Rml::byte>(pixels.data(), pixels.size()), dimensions);
