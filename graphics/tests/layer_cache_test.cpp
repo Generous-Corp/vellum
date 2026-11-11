@@ -142,6 +142,11 @@ void equality_covers_every_field() {
         .text_runs = {{.text = "r"}},
         .mesh = std::make_shared<TriangleMesh>(),
         .path = std::make_shared<PathGeometry>(),
+        .image = ImageReference{.content_hash = "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+                                .source_rect = Rect{1.0F, 2.0F, 3.0F, 4.0F},
+                                .fit = ImageFit::cover,
+                                .sampling = ImageSampling::nearest},
+        .image_asset = std::make_shared<ImageAsset>(),
     };
     expect(paint_commands_equal(base, base), "a command equals itself");
     const std::vector<Mutation> mutations{
@@ -192,6 +197,11 @@ void equality_covers_every_field() {
              changed->values = {1.0F, 2.0F};
              c.path = std::move(changed);
          }},
+        {"image hash", [](PaintCommand& c) { c.image->content_hash[7] = '1'; }},
+        {"image source rect", [](PaintCommand& c) { c.image->source_rect->x += 1.0F; }},
+        {"image fit", [](PaintCommand& c) { c.image->fit = ImageFit::none; }},
+        {"image sampling", [](PaintCommand& c) { c.image->sampling = ImageSampling::linear; }},
+        {"image asset", [](PaintCommand& c) { c.image_asset = std::make_shared<ImageAsset>(); }},
         {"transform a", [](PaintCommand& c) { c.transform.a = 2.0F; }},
         {"transform b", [](PaintCommand& c) { c.transform.b = 2.0F; }},
         {"transform c", [](PaintCommand& c) { c.transform.c = 2.0F; }},

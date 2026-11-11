@@ -15,7 +15,7 @@ namespace {
 // PaintCommand field: a field they skip lets a cached image survive a change
 // to it. This size changes when a field is added; update both functions, and
 // the field-coverage test in layer_cache_test.cpp, then this number.
-static_assert(sizeof(PaintCommand) == 296,
+static_assert(sizeof(PaintCommand) == 368,
               "PaintCommand changed: update paint_commands_equal and hash_command");
 static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 80,
               "TextStyle or TextRun changed: update same_style, same_runs and hash_command");
@@ -138,6 +138,17 @@ bool same_path(const std::shared_ptr<const PathGeometry>& a,
 }
 
 // Everything except `bounds`, `transform`, `mesh` and `path`.
+bool same_image_reference(const std::optional<ImageReference>& a,
+                          const std::optional<ImageReference>& b) {
+    if (a.has_value() != b.has_value()) return false;
+    if (!a) return true;
+    if (a->content_hash != b->content_hash || a->fit != b->fit || a->sampling != b->sampling ||
+        a->source_rect.has_value() != b->source_rect.has_value()) {
+        return false;
+    }
+    return !a->source_rect || same_rect(*a->source_rect, *b->source_rect);
+}
+
 bool same_paint(const PaintCommand& a, const PaintCommand& b) {
     return a.kind == b.kind && a.node_id == b.node_id && same_color(a.fill, b.fill) &&
            same_gradients(a.fill_gradients, b.fill_gradients) &&
@@ -148,7 +159,8 @@ bool same_paint(const PaintCommand& a, const PaintCommand& b) {
            a.underline == b.underline && a.strikethrough == b.strikethrough &&
            same_runs(a.text_runs, b.text_runs) && same_float(a.opacity, b.opacity) &&
            same_radii(a.corner_radii, b.corner_radii) &&
-           a.layer_unbounded == b.layer_unbounded;
+           a.layer_unbounded == b.layer_unbounded && same_image_reference(a.image, b.image) &&
+           a.image_asset == b.image_asset;
 }
 
 class Hasher final {
@@ -257,6 +269,20 @@ std::uint64_t hash_command(const PaintCommand& command) {
     hash.real(command.corner_radii.top_right);
     hash.real(command.corner_radii.bottom_right);
     hash.real(command.corner_radii.bottom_left);
+    hash.number(command.image ? 1U : 0U);
+    if (command.image) {
+        hash.text(command.image->content_hash);
+        hash.number(command.image->source_rect ? 1U : 0U);
+        if (command.image->source_rect) {
+            hash.real(command.image->source_rect->x);
+            hash.real(command.image->source_rect->y);
+            hash.real(command.image->source_rect->width);
+            hash.real(command.image->source_rect->height);
+        }
+        hash.number(static_cast<std::uint64_t>(command.image->fit));
+        hash.number(static_cast<std::uint64_t>(command.image->sampling));
+    }
+    hash.number(reinterpret_cast<std::uintptr_t>(command.image_asset.get()));
     return hash.value();
 }
 
@@ -314,7 +340,8 @@ LayerInvalidation classify_change(
         const auto& before = previous[index];
         const auto& after = next[index];
         if (before.kind != after.kind) return LayerInvalidation::structure;
-        if (before.mesh != after.mesh || !same_path(before.path, after.path)) {
+        if (before.mesh != after.mesh || !same_path(before.path, after.path) ||
+            before.image_asset != after.image_asset) {
             return LayerInvalidation::resource;
         }
     }
