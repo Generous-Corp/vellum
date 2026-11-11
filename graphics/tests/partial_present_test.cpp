@@ -147,12 +147,12 @@ Capture capture(SkiaDawnSurface& surface) {
 }
 
 std::unique_ptr<SkiaDawnSurface> make_surface(std::uint32_t width, std::uint32_t height,
-                                              float scale) {
+                                              float scale, bool layer_cache = false) {
     std::string error;
     auto surface = SkiaDawnSurface::create(
         {.width = width, .height = height, .scale = scale}, &error);
     expect(surface != nullptr, "offscreen surface is created", error);
-    if (surface) {
+    if (surface && !layer_cache) {
         LayerCachePolicy policy;
         policy.enabled = false;
         surface->set_layer_cache_policy(policy);
@@ -788,6 +788,22 @@ void compositing_sequence(std::uint32_t width, std::uint32_t height, float scale
     }
 }
 
+void cached_compositing_sequence(std::uint32_t width, std::uint32_t height, float scale) {
+    const std::string size = "cache on " + std::to_string(width) + "x" + std::to_string(height) +
+        "@" + std::to_string(static_cast<int>(scale)) + " ";
+    auto full = make_surface(width, height, scale);
+    auto partial = make_surface(width, height, scale, true);
+    if (!full || !partial) return;
+    Scene scene = compositing_scene(static_cast<float>(width), static_cast<float>(height));
+    if (!render_both(*full, *partial, scene)) return;
+    compare(size + "the first compositing frame", *full, *partial);
+    for (const auto& step : compositing_steps()) {
+        step.edit(scene);
+        if (!render_both(*full, *partial, scene)) return;
+        compare(size + step.name, *full, *partial);
+    }
+}
+
 void path_scenes() {
     constexpr std::uint32_t width = 400;
     constexpr std::uint32_t height = 300;
@@ -1325,6 +1341,8 @@ int main() {
         damage_model_version_gate();
         compositing_sequence(400, 300, 1.0F);
         compositing_sequence(400, 300, 2.0F);
+        cached_compositing_sequence(400, 300, 1.0F);
+        cached_compositing_sequence(400, 300, 2.0F);
         path_scenes();
         whole_path_enclosure();
         stroke_outset_negative_control();
