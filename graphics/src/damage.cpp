@@ -3,8 +3,6 @@
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/path_geometry.hpp>
 
-#include <vellum/graphics/paint_command.hpp>
-
 #include <algorithm>
 #include <bit>
 #include <cmath>

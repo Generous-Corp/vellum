@@ -169,8 +169,8 @@ counts each clip once, skips each mask's commands so a mask is never drawn as
 paint, counts the mask once, and draws its siblings unmasked. The CoreGraphics
 smoke canvas takes no scene and does not lower clips, masks or isolation. The
 authoring host maps CSS `overflow: hidden` or `clip` to a subtree clip of the
-border box (not the padding box) with its border radii, except on text and
-path nodes, whose glyphs or geometry are their own paint, so the clip covers
+border box (not the padding box) with its border radii, except on text, path
+and image nodes, whose glyphs, geometry or pixels are their own paint, so the clip covers
 their own paint and a box shadow on them is clipped too, with a
 `VELLUM_STYLE_DROPPED` warning; `auto` and `scroll`
 clip the same way with a `VELLUM_STYLE_DROPPED` warning, since nothing
