@@ -162,8 +162,9 @@ public:
     /// kernel) spreads its damage beyond its painted bounds.
     [[nodiscard]] virtual float effect_radius(const SceneNode& node) const;
 
-    /// An absolute logical clip that bounds the damage of `node` and its
-    /// descendants, or `std::nullopt` for none.
+    /// A frame-space logical clip that bounds the damage of `node` and its
+    /// descendants, or `std::nullopt` for none. `absolute_bounds` is the
+    /// node's box after its composed transform.
     [[nodiscard]] virtual std::optional<Rect> clip_bounds(
         const SceneNode& node, const Rect& absolute_bounds) const;
 
@@ -173,29 +174,57 @@ public:
     /// largest font size per line break, plus one font size of overhang on
     /// every side. A renderer-backed override can measure exactly, for
     /// example with `SkiaDawnSurface::measure_text`.
+    ///
+    /// The extent is in the node's untransformed coordinates. A text node
+    /// under a non-identity composed transform damages the whole frame
+    /// instead, because a rotated or scaled line can leave this box.
     [[nodiscard]] virtual Rect text_extent(
         const SceneNode& node, const Rect& absolute_bounds, const Rect& frame) const;
 };
 
 /// The absolute logical area a node paints by itself, including shadows,
-/// text extent and mesh geometry, before effect radius and clips. Empty for
-/// nodes that paint nothing. `frame` is the scene's logical frame.
+/// text extent and mesh geometry, in its untransformed coordinates and before
+/// effect radius, transform and clips. Empty for nodes that paint nothing.
+/// `frame` is the scene's logical frame.
+///
+/// A path paints within `path_control_bounds` outset by
+/// `path_stroke_outset`; a path without geometry, or whose geometry fails
+/// `path_is_valid`, reports `frame`.
 [[nodiscard]] std::optional<Rect> node_paint_bounds(
     const SceneNode& node, const Rect& absolute_bounds, const Rect& frame,
     const DamagePropagation& propagation);
 
-/// Whether two nodes with the same identity paint differently in place.
-/// Floats compare bitwise, so a NaN changing to a different NaN is a change.
-/// Likewise +0.0 and -0.0 compare as different.
+/// The frame-space logical area a node paints under `transform`. With the
+/// identity it is `node_paint_bounds`. Otherwise the box and each shadow's
+/// spread box are mapped first, and each shadow then grows by 1.5 times its
+/// blur radius times the transform's largest singular value, because the
+/// renderer blurs in frame space. Text under a non-identity transform covers
+/// `frame`.
+[[nodiscard]] std::optional<Rect> transformed_paint_bounds(
+    const SceneNode& node, const Rect& absolute_bounds, const Affine2D& transform,
+    const Rect& frame, const DamagePropagation& propagation);
+
+/// Whether two nodes with the same identity paint differently in place,
+/// including their transform, opacity and resolved corner radii. An absent
+/// transform equals the identity. Floats compare bitwise, so a NaN changing
+/// to a different NaN is a change. Likewise +0.0 and -0.0 compare as different.
 ///
 /// Meshes compare by pointer: a `TriangleMesh` or `MeshTexture` must not be
 /// mutated once a scene references it; replace the pointer to change it.
+/// Paths compare their fill paint and every geometry and stroke field, so two
+/// distinct `PathGeometry` objects with the same content do not differ.
 [[nodiscard]] bool paint_differs(const SceneNode& previous, const SceneNode& next);
 
 /// Damage between two scenes, keyed by node id (nodes with an empty or
 /// repeated id are keyed by position). Added, removed, moved, resized,
 /// restyled, reparented and reordered nodes damage both their old and new
-/// areas. A changed frame size, background or `scene_version` damages the
+/// areas. Areas are mapped through each node's composed transform, the way
+/// `make_paint_commands` composes it. A transform or opacity change damages
+/// the node's whole subtree, old and new, and so does a faded node switching
+/// between folding its opacity into one command and compositing a layer. A
+/// subtree at zero opacity paints nothing. A non-finite transform, opacity or
+/// radius damages the whole frame; `SkiaDawnSurface::render` refuses such a
+/// scene. A changed frame size, background or `scene_version` damages the
 /// whole frame.
 [[nodiscard]] DamageRegion compute_scene_damage(
     const Scene& previous, const Scene& next, float scale,
@@ -205,12 +234,20 @@ public:
 /// damage model understands. Partial redraw is enabled only for scene
 /// versions the damage model understands; a newer scene repaints fully until
 /// the damage model learns its fields and this constant is raised.
-inline constexpr std::uint32_t kDamageModelSceneVersion = 1U;
+inline constexpr std::uint32_t kDamageModelSceneVersion = 2U;
 
 /// Whether a scene of `version` may be redrawn from its damage alone.
 [[nodiscard]] constexpr bool partial_redraw_supported(std::uint32_t version) noexcept {
     return version <= kDamageModelSceneVersion;
 }
+
+/// Grows `rects` until every one of `areas` that a rect overlaps lies wholly
+/// inside a single rect, merging rects that overlap, to a fixed point. The
+/// result is disjoint and clipped to `target`. A renderer passes the extents
+/// of content that does not reproduce when drawn through a partial clip,
+/// such as a composited layer.
+[[nodiscard]] std::vector<PixelRect> enclose_whole_areas(
+    std::vector<PixelRect> rects, const std::vector<PixelRect>& areas, const PixelRect& target);
 
 /// Why the authoring host asked for a redraw (`invalidate.reason`).
 enum class InvalidationReason {

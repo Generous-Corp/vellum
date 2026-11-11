@@ -61,6 +61,11 @@ option(VELLUM_RMLUI_NATIVE
     "Build VellumRmlUi::Native, which links RmlUi publicly and accepts any Rml::RenderInterface" OFF)
 option(VELLUM_RMLUI_METAL
     "Build VellumRmlUi::Metal, an Rml::RenderInterface on Metal (Apple only; needs VELLUM_RMLUI_NATIVE)" OFF)
+option(VELLUM_RMLUI_CPU
+    "Build VellumRmlUi::Cpu, an Rml::RenderInterface on the CPU into an RGBA8 buffer (needs VELLUM_RMLUI_NATIVE)" OFF)
+if(VELLUM_RMLUI_CPU AND NOT VELLUM_RMLUI_NATIVE)
+    message(FATAL_ERROR "VELLUM_RMLUI_CPU needs VELLUM_RMLUI_NATIVE=ON, which packages RmlUi for it")
+endif()
 if(VELLUM_RMLUI_METAL)
     if(NOT APPLE)
         message(FATAL_ERROR "VELLUM_RMLUI_METAL needs an Apple platform")
@@ -193,6 +198,27 @@ if(VELLUM_RMLUI_METAL)
     list(APPEND VELLUM_RMLUI_COMPONENTS Metal)
 endif()
 
+if(VELLUM_RMLUI_CPU)
+    add_library(vellum-rmlui-cpu STATIC
+        src/cpu_render_interface.cpp)
+    add_library(VellumRmlUi::Cpu ALIAS vellum-rmlui-cpu)
+    set_target_properties(vellum-rmlui-cpu PROPERTIES
+        EXPORT_NAME Cpu
+        POSITION_INDEPENDENT_CODE ON)
+    target_compile_features(vellum-rmlui-cpu PUBLIC cxx_std_20)
+    target_include_directories(vellum-rmlui-cpu PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    target_link_libraries(vellum-rmlui-cpu PUBLIC RmlUi::Core)
+    # Same output on every platform: no fused multiply-add in the projection.
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(vellum-rmlui-cpu PRIVATE -ffp-contract=off)
+    elseif(MSVC)
+        target_compile_options(vellum-rmlui-cpu PRIVATE /fp:precise)
+    endif()
+    list(APPEND VELLUM_RMLUI_COMPONENTS Cpu)
+endif()
+
 if(VELLUM_RMLUI_VELLUM_RENDERER)
     # Inside a Vellum build the GPU target already exists; on its own the
     # module takes it from an installed Vellum package.
@@ -228,11 +254,28 @@ if(VELLUM_RMLUI_INSTALL)
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    # The Native-only headers include RmlUi's, which this package does not
+    # carry; the Native component installs them with RmlUi.
+    set(_vellum_rmlui_native_headers
+        native.hpp element_classes_native.hpp midi_learn_native.hpp
+        cpu_render_interface.hpp metal_render_interface.hpp)
+    set(_vellum_rmlui_native_header_excludes)
+    foreach(_header IN LISTS _vellum_rmlui_native_headers)
+        list(APPEND _vellum_rmlui_native_header_excludes PATTERN "${_header}" EXCLUDE)
+    endforeach()
     install(DIRECTORY include/vellum
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-        COMPONENT VellumRmlUi)
+        COMPONENT VellumRmlUi
+        ${_vellum_rmlui_native_header_excludes})
     install(FILES assets/midi-learn.rcss assets/midi-panic.rcss
         DESTINATION ${CMAKE_INSTALL_DATADIR}/VellumRmlUi
+        COMPONENT VellumRmlUi)
+    # Core links RmlUi privately, so the package that carries Core carries
+    # RmlUi's licence. Native installs the same file for its own component.
+    FetchContent_GetProperties(vellum_rmlui_rmlui SOURCE_DIR _vellum_rmlui_core_rmlui_src)
+    install(FILES "${_vellum_rmlui_core_rmlui_src}/LICENSE.txt"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/VellumRmlUi
+        RENAME RmlUi-LICENSE.txt
         COMPONENT VellumRmlUi)
     install(EXPORT VellumRmlUiTargets
         NAMESPACE VellumRmlUi::
@@ -259,6 +302,11 @@ if(VELLUM_RMLUI_INSTALL)
             EXPORT VellumRmlUiNativeTargets
             COMPONENT VellumRmlUiNative
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+        list(TRANSFORM _vellum_rmlui_native_headers PREPEND include/vellum/rmlui/
+            OUTPUT_VARIABLE _vellum_rmlui_native_header_files)
+        install(FILES ${_vellum_rmlui_native_header_files}
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/vellum/rmlui
+            COMPONENT VellumRmlUiNative)
         install(EXPORT VellumRmlUiNativeTargets
             NAMESPACE VellumRmlUi::
             DESTINATION ${_vellum_rmlui_cmake_dir}
@@ -269,6 +317,16 @@ if(VELLUM_RMLUI_INSTALL)
                 COMPONENT VellumRmlUiNative
                 ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
             install(EXPORT VellumRmlUiMetalTargets
+                NAMESPACE VellumRmlUi::
+                DESTINATION ${_vellum_rmlui_cmake_dir}
+                COMPONENT VellumRmlUiNative)
+        endif()
+        if(VELLUM_RMLUI_CPU)
+            install(TARGETS vellum-rmlui-cpu
+                EXPORT VellumRmlUiCpuTargets
+                COMPONENT VellumRmlUiNative
+                ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+            install(EXPORT VellumRmlUiCpuTargets
                 NAMESPACE VellumRmlUi::
                 DESTINATION ${_vellum_rmlui_cmake_dir}
                 COMPONENT VellumRmlUiNative)

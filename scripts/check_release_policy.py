@@ -101,6 +101,7 @@ POLICY_FILES = (
     "/scripts/retired_release_tags.py",
     "/scripts/run_ci_lane.py",
     "/scripts/verify_immutable_release_preflight.py",
+    "/scripts/verify_release_attestation.py",
     "/scripts/verify_release_tag.py",
     "/scripts/version_at_land.py",
     "/tools/provenance/content_scan_policy.py",

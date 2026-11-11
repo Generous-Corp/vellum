@@ -132,6 +132,7 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_add_text(
 
 EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     if (!kernel || scene.width <= 0.0F || scene.height <= 0.0F) return 0;
+    using Kind = vellum::graphics::PaintCommand::Kind;
     commands = vellum::graphics::make_paint_commands(scene);
     lowering_losses = vellum::web::canvas_shell_loss_count(commands);
     const auto opacities = vellum::graphics::effective_opacities(commands);
@@ -140,22 +141,26 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
                  background.blue, background.alpha);
     for (std::size_t index = 0; index < commands.size(); ++index) {
         const auto& command = commands[index];
-        if (!vellum::graphics::draws_content(command.kind) ||
-            command.kind == vellum::graphics::PaintCommand::Kind::mesh) {
-            continue;
-        }
         auto color = command.fill;
         color.alpha *= opacities[index];
-        if (command.kind == vellum::graphics::PaintCommand::Kind::rectangle) {
+        switch (command.kind) {
+        case Kind::rectangle:
             canvas_rectangle(
                 command.bounds.x, command.bounds.y, command.bounds.width,
                 command.bounds.height, command.corner_radius,
                 color.red, color.green, color.blue, color.alpha);
-        } else {
+            break;
+        case Kind::text:
             canvas_text(
                 command.text.c_str(), command.bounds.x,
                 command.bounds.y + command.font_size, command.font_size,
                 color.red, color.green, color.blue, color.alpha);
+            break;
+        case Kind::begin_layer:
+        case Kind::end_layer:
+        case Kind::mesh:
+        case Kind::path:
+            break;
         }
     }
     canvas_finish();

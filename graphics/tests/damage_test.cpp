@@ -1,8 +1,11 @@
 #include <vellum/graphics/damage.hpp>
+#include <vellum/graphics/paint_command.hpp>
 
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <limits>
 #include <memory>
 #include <string>
@@ -24,6 +27,10 @@ using vellum::graphics::Scene;
 using vellum::graphics::SceneNode;
 using vellum::graphics::TextRun;
 using vellum::graphics::TriangleMesh;
+using vellum::graphics::PathGeometry;
+using vellum::graphics::PathVerb;
+using vellum::graphics::StrokeCap;
+using vellum::graphics::StrokeJoin;
 
 int failures = 0;
 
@@ -372,6 +379,198 @@ void mesh_diff() {
     check(clip_only.bounds() == PixelRect{20, 60, 25, 65}, "mesh clip change is bounded by the clips");
 }
 
+PathGeometry& edit_path(SceneNode& node) {
+    auto copy = std::make_shared<PathGeometry>(node.path ? *node.path : PathGeometry{});
+    node.path = copy;
+    return *copy;
+}
+
+void path_diff() {
+    Scene before;
+    before.width = 200.0F;
+    before.height = 100.0F;
+    SceneNode node;
+    node.id = "p";
+    node.kind = SceneNode::Kind::path;
+    node.bounds = {20.0F, 20.0F, 0.0F, 0.0F};
+    node.fill = Color::hex(0xFF0000);
+    edit_path(node).verbs = {PathVerb::move, PathVerb::line, PathVerb::quadratic};
+    edit_path(node).values = {0.0F, 0.0F, 40.0F, 0.0F, 60.0F, 30.0F, 40.0F, 20.0F};
+    edit_path(node).stroke = {
+        .color = Color::hex(0x0000FF), .width = 4.0F, .join = StrokeJoin::bevel};
+    before.root.children.push_back(node);
+
+    const DamagePropagation none;
+    const Rect frame{0.0F, 0.0F, 200.0F, 100.0F};
+    const auto paint_bounds = [&](const SceneNode& candidate) {
+        return vellum::graphics::node_paint_bounds(candidate, {20.0F, 20.0F, 0.0F, 0.0F}, frame,
+                                                   none);
+    };
+    const auto bounds = paint_bounds(node);
+    check(bounds && bounds->x == 18.0F && bounds->y == 18.0F && bounds->width == 64.0F &&
+              bounds->height == 34.0F,
+          "path paint bounds are the control box outset by half the stroke width");
+
+    SceneNode mitered = node;
+    edit_path(mitered).stroke.join = StrokeJoin::miter;
+    edit_path(mitered).stroke.miter_limit = 3.0F;
+    const auto miter = paint_bounds(mitered);
+    check(miter && miter->x == 14.0F && miter->width == 72.0F,
+          "a miter join outsets by the miter limit");
+
+    SceneNode capped = node;
+    edit_path(capped).stroke.cap = StrokeCap::round;
+    const auto round = paint_bounds(capped);
+    check(round && std::abs(round->x - (20.0F - 2.0F * std::sqrt(2.0F))) < 0.0001F,
+          "a round cap outsets by sqrt(2) times half the width");
+
+    SceneNode unstroked = node;
+    edit_path(unstroked).stroke.width = 0.0F;
+    const auto fill_only = paint_bounds(unstroked);
+    check(fill_only && fill_only->x == 20.0F && fill_only->width == 60.0F &&
+              fill_only->height == 30.0F,
+          "an unstroked path paints its control box");
+
+    SceneNode empty = node;
+    empty.path = std::make_shared<const PathGeometry>();
+    check(!paint_bounds(empty),
+          "an empty path paints nothing");
+
+    SceneNode broken = node;
+    edit_path(broken).values.pop_back();
+    const auto invalid = paint_bounds(broken);
+    check(invalid && invalid->width == 200.0F && invalid->height == 100.0F,
+          "an invalid path reports the whole frame");
+
+    SceneNode ghost = node;
+    ghost.path = nullptr;
+    const auto missing = paint_bounds(ghost);
+    check(missing && missing->width == 200.0F && missing->height == 100.0F,
+          "a path without geometry reports the whole frame");
+    for (const float bad : {std::numeric_limits<float>::quiet_NaN(),
+                            std::numeric_limits<float>::infinity()}) {
+        SceneNode direct = node;
+        auto geometry = std::make_shared<PathGeometry>();
+        geometry->verbs = {PathVerb::move, PathVerb::line};
+        geometry->values = {0.0F, 0.0F, bad, 10.0F};
+        direct.path = geometry;
+        const auto bounds_of_bad = paint_bounds(direct);
+        check(bounds_of_bad && bounds_of_bad->width == 200.0F && bounds_of_bad->height == 100.0F,
+              "a directly built non-finite path reports the whole frame");
+    }
+
+    Scene same = before;
+    check(diff(before, same).empty(), "an identical path has no damage");
+    Scene copied = before;
+    child(copied, "p")->path = std::make_shared<const PathGeometry>(*node.path);
+    check(diff(before, copied).empty(), "a distinct path with the same content has no damage");
+
+    const PixelRect painted{18, 18, 82, 52};
+    const auto changed = [&](auto mutate, const char* what) {
+        Scene next = before;
+        mutate(*child(next, "p"));
+        const auto damage = diff(before, next);
+        check(!damage.empty() && covers(damage, painted) && disjoint(damage), what);
+        return damage;
+    };
+    changed([](SceneNode& p) { p.fill = Color::hex(0x00FF00); },
+            "fill colour change damages the path");
+    changed([](SceneNode& p) {
+        p.fill_gradients = {{.stops = {{.position = 0.0F}, {.position = 1.0F}}}};
+    }, "fill gradient change damages the path");
+    changed([](SceneNode& p) { edit_path(p).fill_rule = vellum::graphics::FillRule::evenodd; },
+            "fill rule change damages the path");
+    changed([](SceneNode& p) { edit_path(p).stroke.color = Color::hex(0xFFFFFF); },
+            "stroke colour change damages the path");
+    changed([](SceneNode& p) { edit_path(p).stroke.dash_array = {4.0F, 2.0F}; },
+            "dash array change damages the path");
+    changed([](SceneNode& p) { edit_path(p).stroke.dash_offset = 1.0F; },
+            "dash offset change damages the path");
+    changed([](SceneNode& p) { edit_path(p).stroke.join = StrokeJoin::round; },
+            "join change damages the path");
+    changed([](SceneNode& p) { edit_path(p).stroke.cap = StrokeCap::square; },
+            "cap change damages the path");
+    changed([](SceneNode& p) { edit_path(p).antialias = false; },
+            "anti-aliasing change damages the path");
+    changed([](SceneNode& p) { edit_path(p).verbs[1] = PathVerb::move; }, "verb change damages the path");
+
+    const auto moved = changed([](SceneNode& p) { edit_path(p).values[4] = 120.0F; },
+                               "geometry change damages the old path");
+    check(moved.bounds() == PixelRect{18, 18, 142, 52},
+          "geometry change damages the old and new paths");
+
+    Scene stroke_grown = before;
+    edit_path(*child(stroke_grown, "p")).stroke.width = 10.0F;
+    check(diff(before, stroke_grown).bounds() == PixelRect{15, 15, 85, 55},
+          "a wider stroke damages its larger reach");
+
+    Scene invisible = before;
+    edit_path(*child(invisible, "p")).stroke.width = 0.0F;
+    Scene invisible_again = invisible;
+    edit_path(*child(invisible_again, "p")).stroke.miter_limit = 9.0F;
+    check(diff(invisible, invisible_again).bounds() == PixelRect{20, 20, 80, 50},
+          "an invisible stroke change damages only the fill");
+}
+
+bool contains(const std::optional<Rect>& bounds, float x, float y) {
+    return bounds && x >= bounds->x && x <= bounds->x + bounds->width && y >= bounds->y &&
+           y <= bounds->y + bounds->height;
+}
+
+// The geometry of a stroke's outline, worked out by hand, must lie inside the
+// damage bounds for a diagonal square-capped segment and a sharp miter.
+void stroke_reach() {
+    const DamagePropagation none;
+    const Rect frame{0.0F, 0.0F, 200.0F, 100.0F};
+    const Rect origin{10.0F, 10.0F, 0.0F, 0.0F};
+
+    SceneNode diagonal;
+    diagonal.kind = SceneNode::Kind::path;
+    auto segment = std::make_shared<PathGeometry>();
+    segment->verbs = {PathVerb::move, PathVerb::line};
+    segment->values = {0.0F, 0.0F, 30.0F, 40.0F};
+    segment->stroke = {.color = Color::hex(0xFFFFFF), .width = 4.0F, .join = StrokeJoin::bevel,
+                       .cap = StrokeCap::square};
+    diagonal.path = segment;
+    const auto capped = vellum::graphics::node_paint_bounds(diagonal, origin, frame, none);
+    const float along[2]{0.6F, 0.8F};
+    const float across[2]{-0.8F, 0.6F};
+    bool corners_inside = true;
+    for (const auto& end : {std::pair{0.0F, -1.0F}, std::pair{1.0F, 1.0F}}) {
+        for (const float side : {-1.0F, 1.0F}) {
+            const float x =
+                10.0F + 30.0F * end.first + 2.0F * (end.second * along[0] + side * across[0]);
+            const float y =
+                10.0F + 40.0F * end.first + 2.0F * (end.second * along[1] + side * across[1]);
+            corners_inside = corners_inside && contains(capped, x, y);
+        }
+    }
+    check(corners_inside, "a diagonal square cap's corners lie inside the damage bounds");
+
+    SceneNode sharp;
+    sharp.kind = SceneNode::Kind::path;
+    auto turn = std::make_shared<PathGeometry>();
+    turn->verbs = {PathVerb::move, PathVerb::line, PathVerb::line};
+    turn->values = {0.0F, 0.0F, 40.0F, 0.0F, 0.0F, 10.0F};
+    turn->stroke = {.color = Color::hex(0xFFFFFF), .width = 4.0F, .miter_limit = 10.0F};
+    sharp.path = turn;
+    const auto mitered = vellum::graphics::node_paint_bounds(sharp, origin, frame, none);
+    const double in_x = 1.0;
+    const double in_y = 0.0;
+    const double out_length = std::hypot(-40.0, 10.0);
+    const double out_x = -40.0 / out_length;
+    const double out_y = 10.0 / out_length;
+    const double half_angle = 0.5 * std::acos(-(in_x * out_x + in_y * out_y));
+    const double reach = 2.0 / std::sin(half_angle);
+    const double bisector_length = std::hypot(in_x - out_x, in_y - out_y);
+    const double tip_x = 10.0 + 40.0 + reach * (in_x - out_x) / bisector_length;
+    const double tip_y = 10.0 + reach * (in_y - out_y) / bisector_length;
+    check(1.0 / std::sin(half_angle) < 10.0, "the sharp turn is within its miter limit");
+    check(tip_x > 10.0 + 40.0 + 2.0 * 6.0, "the miter tip reaches well past half the width");
+    check(contains(mitered, static_cast<float>(tip_x), static_cast<float>(tip_y)),
+          "a sharp miter's tip lies inside the damage bounds");
+}
+
 class TestPropagation final : public DamagePropagation {
 public:
     float effect_radius(const SceneNode& node) const override {
@@ -501,6 +700,288 @@ void review_hardening() {
     check(!forced.stats().explicit_full_frame, "clear resets the explicit flag");
 }
 
+Scene grouped_scene() {
+    Scene scene;
+    scene.width = 200.0F;
+    scene.height = 100.0F;
+    SceneNode group;
+    group.id = "g";
+    group.bounds = {0.0F, 0.0F, 200.0F, 100.0F};
+    group.children.push_back(rectangle("a", {10.0F, 10.0F, 20.0F, 20.0F}));
+    group.children.push_back(rectangle("b", {100.0F, 10.0F, 20.0F, 20.0F}));
+    scene.root.children.push_back(group);
+    return scene;
+}
+
+void compositing_damage() {
+    using vellum::graphics::Affine2D;
+    using vellum::graphics::CornerRadii;
+    const Affine2D quarter_turn{.a = 0.0F, .b = 1.0F, .c = -1.0F, .d = 0.0F};
+    const Affine2D doubled{.a = 2.0F, .d = 2.0F};
+
+    const Scene before = base_scene();
+    Scene rotated = before;
+    child(rotated, "a")->transform = quarter_turn;
+    auto damage = diff(before, rotated);
+    check(covers(damage, {10, 10, 30, 30}) && covers(damage, {0, 10, 10, 30}) && damage.area() == 600,
+          "a rotation damages the old box and the rotated box about the node origin");
+    check(!damage.intersects({100, 10, 120, 30}), "a rotation leaves other nodes alone");
+
+    Scene identity = before;
+    child(identity, "a")->transform = Affine2D{};
+    check(diff(before, identity).empty(), "an identity transform equals no transform");
+
+    const Scene group = grouped_scene();
+    Scene scaled = group;
+    child(scaled, "g")->transform = doubled;
+    damage = diff(group, scaled);
+    check(covers(damage, {10, 10, 30, 30}) && covers(damage, {20, 20, 60, 60}) &&
+              covers(damage, {100, 10, 120, 30}),
+          "a group transform damages its descendants' old and transformed areas");
+    check(damage.area() == 1900 + 400,
+          "group transform damage is exactly the mapped areas, clipped to the frame");
+
+    Scene faded = group;
+    child(faded, "g")->opacity = 0.5F;
+    damage = diff(group, faded);
+    check(damage.area() == 800 && covers(damage, {10, 10, 30, 30}) && covers(damage, {100, 10, 120, 30}),
+          "an opacity change damages the whole subtree");
+
+    Scene hidden = group;
+    child(hidden, "g")->opacity = 0.0F;
+    check(diff(group, hidden).area() == 800, "fading to zero damages what the subtree painted");
+    check(diff(hidden, group).area() == 800, "fading back in damages what the subtree paints");
+    Scene hidden_moved = hidden;
+    child(hidden_moved, "a")->bounds.x = 60.0F;
+    check(diff(hidden, hidden_moved).empty(), "a change inside a zero-opacity subtree is not damage");
+
+    Scene rounded = before;
+    child(rounded, "a")->corner_radii = CornerRadii{8.0F, 0.0F, 4.0F, 2.0F};
+    damage = diff(before, rounded);
+    check(damage.rects().size() == 1 && damage.rects()[0] == PixelRect{10, 10, 30, 30},
+          "setting per-corner radii damages the node");
+    Scene rerounded = rounded;
+    child(rerounded, "a")->corner_radii->bottom_left = 6.0F;
+    check(diff(rounded, rerounded).area() == 400, "changing one corner radius damages the node");
+
+    Scene broken = before;
+    child(broken, "a")->transform = Affine2D{.a = std::numeric_limits<float>::quiet_NaN()};
+    check(diff(before, broken).is_full_frame(), "a non-finite transform repaints the frame");
+    Scene broken_opacity = before;
+    child(broken_opacity, "a")->opacity = std::numeric_limits<float>::infinity();
+    check(diff(before, broken_opacity).is_full_frame(), "a non-finite opacity repaints the frame");
+
+    Scene labelled = before;
+    SceneNode label;
+    label.id = "t";
+    label.kind = SceneNode::Kind::text;
+    label.bounds = {10.0F, 50.0F, 40.0F, 20.0F};
+    label.text = "Hello";
+    label.font_size = 10.0F;
+    labelled.root.children.push_back(label);
+    Scene turned = labelled;
+    child(turned, "t")->transform = quarter_turn;
+    check(diff(labelled, turned).is_full_frame(), "text under a non-identity transform repaints the frame");
+    check(diff(turned, turned).empty(), "unchanged transformed text adds no damage");
+
+    class Blur final : public DamagePropagation {
+    public:
+        float effect_radius(const SceneNode& node) const override { return node.id == "a" ? 5.0F : 0.0F; }
+    };
+    const Blur blur;
+    Scene recoloured = scaled;
+    child(recoloured, "a")->fill = Color::hex(0x00FF00);
+    damage = diff(scaled, recoloured, 1.0F, exact_policy(), &blur);
+    check(damage.rects().size() == 1 && damage.rects()[0] == PixelRect{10, 10, 70, 70},
+          "an effect radius scales with the transform");
+}
+
+PixelRect lowered_pixels(const Scene& scene, const std::string& id) {
+    for (const auto& command : vellum::graphics::make_paint_commands(scene)) {
+        if (command.node_id != id || !vellum::graphics::draws_content(command.kind)) continue;
+        const auto extent = vellum::graphics::paint_extent(command);
+        const auto mapped = vellum::graphics::transformed_bounds(command.transform, extent.rect);
+        const auto pixels = vellum::graphics::to_pixel_rect(mapped, 1.0F);
+        return pixels ? vellum::graphics::intersection(*pixels, vellum::graphics::frame_rect(scene, 1.0F))
+                      : PixelRect{};
+    }
+    return {};
+}
+
+vellum::graphics::Affine2D rotation(float degrees, float tx = 0.0F, float ty = 0.0F) {
+    const float radians = degrees * 3.14159265358979323846F / 180.0F;
+    return {.a = std::cos(radians), .b = std::sin(radians), .c = -std::sin(radians),
+            .d = std::cos(radians), .tx = tx, .ty = ty};
+}
+
+bool added_matches_lowering(const Scene& base, const Scene& next, const std::string& leaf) {
+    const auto damage = diff(base, next);
+    const auto expected = lowered_pixels(next, leaf);
+    if (expected.empty()) return damage.empty();
+    return damage.rects().size() == 1 && damage.rects()[0] == expected;
+}
+
+void transform_geometry() {
+    using vellum::graphics::Affine2D;
+    Scene base;
+    base.width = 200.0F;
+    base.height = 100.0F;
+
+    const auto with_leaf = [&](Affine2D transform, Rect bounds) {
+        Scene next = base;
+        SceneNode leaf = rectangle("leaf", bounds);
+        leaf.transform = transform;
+        next.root.children.push_back(leaf);
+        return next;
+    };
+    check(added_matches_lowering(base, with_leaf(rotation(30.0F), {60.0F, 30.0F, 30.0F, 20.0F}), "leaf"),
+          "a 30 degree rotation matches the lowered transform");
+    check(added_matches_lowering(base, with_leaf({.a = -1.0F, .tx = 4.0F}, {10.0F, 30.0F, 30.0F, 20.0F}),
+                                 "leaf"),
+          "a horizontal mirror with translation clips at the frame edge like the lowering");
+    check(added_matches_lowering(base, with_leaf({.d = -1.0F, .ty = 3.0F}, {50.0F, 8.0F, 30.0F, 20.0F}),
+                                 "leaf"),
+          "a vertical mirror with translation clips at the frame edge like the lowering");
+    check(added_matches_lowering(
+              base, with_leaf({.a = -1.0F, .d = -1.0F, .tx = 7.0F, .ty = -2.0F}, {190.0F, 90.0F, 30.0F, 20.0F}),
+              "leaf"),
+          "a combined mirror matches the lowering");
+    check(!lowered_pixels(with_leaf({.a = -1.0F, .tx = 4.0F}, {10.0F, 30.0F, 30.0F, 20.0F}), "leaf").empty(),
+          "the mirror oracle is not vacuous");
+
+    const auto with_group = [&](Affine2D group_transform, Affine2D child_transform) {
+        Scene next = base;
+        SceneNode group;
+        group.id = "group";
+        group.bounds = {70.0F, 20.0F, 60.0F, 40.0F};
+        group.transform = group_transform;
+        SceneNode leaf = rectangle("leaf", {15.0F, 10.0F, 24.0F, 12.0F});
+        leaf.transform = child_transform;
+        group.children.push_back(leaf);
+        next.root.children.push_back(group);
+        return next;
+    };
+    check(added_matches_lowering(base, with_group(rotation(20.0F), rotation(35.0F, 2.0F, 1.0F)), "leaf"),
+          "a rotated child of a rotated group composes in the lowering's order");
+    check(added_matches_lowering(base, with_group({.a = -1.0F, .tx = 5.0F}, rotation(-50.0F)), "leaf"),
+          "a rotated child of a mirrored group composes in the lowering's order");
+    check(added_matches_lowering(base, with_group({.d = -1.0F, .ty = 2.0F}, {.a = 1.5F, .d = 0.5F}), "leaf"),
+          "a scaled child of a vertically mirrored group composes in the lowering's order");
+    const auto forward = lowered_pixels(with_group(rotation(20.0F), rotation(35.0F, 2.0F, 1.0F)), "leaf");
+    const auto swapped = lowered_pixels(with_group(rotation(35.0F, 2.0F, 1.0F), rotation(20.0F)), "leaf");
+    check(forward != swapped, "the nested-transform cases do not commute, so they test order");
+
+    Scene wide;
+    wide.width = 400.0F;
+    wide.height = 300.0F;
+    Scene stretched = wide;
+    SceneNode shadowed = rectangle("shadowed", {150.0F, 120.0F, 20.0F, 10.0F});
+    shadowed.box_shadows.push_back({.blur_radius = 20.0F, .color = Color::hex(0x000000)});
+    shadowed.transform = Affine2D{.a = 2.0F, .d = 0.5F};
+    stretched.root.children.push_back(shadowed);
+    const auto blurred = diff(wide, stretched);
+    check(blurred.rects().size() == 1 && blurred.rects()[0] == PixelRect{90, 60, 250, 185},
+          "a shadow blur grows in frame space by the largest scale, not along the squashed axis");
+}
+
+void composite_path_changes() {
+    Scene base = grouped_scene();
+    child(base, "g")->opacity = 0.5F;
+    Scene single = base;
+    child(single, "g")->children.pop_back();
+    auto damage = diff(base, single);
+    check(covers(damage, {10, 10, 30, 30}) && covers(damage, {100, 10, 120, 30}),
+          "removing a sibling under a faded group damages the survivor, whose opacity now folds");
+    damage = diff(single, base);
+    check(covers(damage, {10, 10, 30, 30}) && covers(damage, {100, 10, 120, 30}),
+          "adding a sibling under a faded group damages the survivor, which now composites a layer");
+
+    Scene hidden_sibling = base;
+    child(hidden_sibling, "b")->opacity = 0.0F;
+    check(covers(diff(base, hidden_sibling), {10, 10, 30, 30}),
+          "hiding a sibling under a faded group damages the survivor");
+
+    Scene with_text = base;
+    SceneNode label;
+    label.id = "label";
+    label.kind = SceneNode::Kind::text;
+    label.bounds = {40.0F, 50.0F, 40.0F, 20.0F};
+    label.text = "Hi";
+    child(with_text, "g")->children.pop_back();
+    child(with_text, "g")->children.push_back(label);
+    Scene emptied = with_text;
+    child(emptied, "label")->text.clear();
+    check(covers(diff(with_text, emptied), {10, 10, 30, 30}),
+          "emptying a text sibling under a faded group damages the survivor");
+
+    Scene opaque = grouped_scene();
+    Scene opaque_single = opaque;
+    child(opaque_single, "g")->children.pop_back();
+    check(!diff(opaque, opaque_single).intersects({10, 10, 30, 30}),
+          "removing a sibling under an opaque group leaves the survivor alone");
+}
+
+void whole_area_closure() {
+    using vellum::graphics::enclose_whole_areas;
+    const PixelRect target{0, 0, 200, 100};
+    const PixelRect layer{20, 0, 60, 40};
+    auto grown = enclose_whole_areas({{25, 5, 35, 15}}, {layer}, target);
+    check(grown.size() == 1 && grown[0] == layer, "a rect inside a layer becomes the layer's bounds");
+    grown = enclose_whole_areas({{10, 10, 30, 30}}, {layer}, target);
+    check(grown.size() == 1 && grown[0] == PixelRect{10, 0, 60, 40},
+          "a rect cutting a layer grows to hold the whole layer");
+    const PixelRect chained{55, 30, 90, 70};
+    grown = enclose_whole_areas({{25, 5, 35, 15}}, {layer, chained}, target);
+    check(grown.size() == 1 && grown[0] == PixelRect{20, 0, 90, 70},
+          "two layers chained by overlap both grow into the rect");
+    grown = enclose_whole_areas({{100, 80, 110, 90}, {150, 10, 160, 20}}, {layer, chained}, target);
+    check(grown.size() == 2 && grown[0] == PixelRect{100, 80, 110, 90} &&
+              grown[1] == PixelRect{150, 10, 160, 20},
+          "rects that miss every layer are unchanged");
+    grown = enclose_whole_areas({{25, 5, 35, 15}, {58, 2, 64, 6}}, {layer}, target);
+    check(grown.size() == 1 && grown[0] == PixelRect{20, 0, 64, 40},
+          "a rect the grown layer reaches is merged, so the result stays disjoint");
+    grown = enclose_whole_areas({{190, 90, 220, 120}}, {{180, 80, 260, 140}}, target);
+    check(grown.size() == 1 && grown[0] == PixelRect{180, 80, 200, 100},
+          "growth is clipped to the target");
+}
+
+void path_damage() {
+    using vellum::graphics::PathGeometry;
+    using vellum::graphics::PathVerb;
+    auto triangle = std::make_shared<PathGeometry>();
+    triangle->verbs = {PathVerb::move, PathVerb::line, PathVerb::line, PathVerb::close};
+    triangle->values = {0.0F, 0.0F, 30.0F, 0.0F, 0.0F, 20.0F};
+    SceneNode shape;
+    shape.id = "shape";
+    shape.kind = SceneNode::Kind::path;
+    shape.bounds = {60.0F, 30.0F, 0.0F, 0.0F};
+    shape.fill = Color::hex(0x22C55E);
+    shape.path = triangle;
+
+    Scene base;
+    base.width = 200.0F;
+    base.height = 100.0F;
+    Scene rotated = base;
+    shape.transform = rotation(30.0F);
+    rotated.root.children.push_back(shape);
+    check(!lowered_pixels(rotated, "shape").empty() && added_matches_lowering(base, rotated, "shape"),
+          "a path under a rotation damages its lowered, transformed extent");
+
+    Scene faded = base;
+    SceneNode group;
+    group.id = "g";
+    group.opacity = 0.5F;
+    group.children.push_back(rectangle("a", {10.0F, 10.0F, 20.0F, 20.0F}));
+    shape.transform.reset();
+    group.children.push_back(shape);
+    faded.root.children.push_back(group);
+    Scene folded = faded;
+    child(folded, "g")->children.erase(child(folded, "g")->children.begin());
+    check(covers(diff(faded, folded), lowered_pixels(folded, "shape")),
+          "a path left alone in a faded group is damaged when the group's opacity folds into it");
+}
+
 void tracker() {
     check(vellum::graphics::parse_invalidation_reason("state") == InvalidationReason::state &&
               vellum::graphics::parse_invalidation_reason("timer") == InvalidationReason::timer &&
@@ -576,10 +1057,17 @@ int main() {
     group_diff();
     text_diff();
     mesh_diff();
+    path_diff();
+    stroke_reach();
     propagation_hooks();
     unusual_bounds();
     duplicate_ids();
     review_hardening();
+    compositing_damage();
+    transform_geometry();
+    composite_path_changes();
+    whole_area_closure();
+    path_damage();
     tracker();
     if (failures != 0) {
         std::fprintf(stderr, "%d damage check(s) failed\n", failures);

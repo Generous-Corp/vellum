@@ -197,6 +197,12 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.damage COMMAND vellum-damage-test)
 
+        add_executable(vellum-render-cache-test
+            graphics/tests/render_cache_test.cpp)
+        target_include_directories(vellum-render-cache-test PRIVATE graphics/src)
+        target_link_libraries(vellum-render-cache-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.render-cache COMMAND vellum-render-cache-test)
+
         add_executable(vellum-web-canvas-shell-lowering-test
             web/tests/canvas_shell_lowering_test.cpp)
         target_include_directories(vellum-web-canvas-shell-lowering-test
@@ -290,7 +296,10 @@ if(VELLUM_BUILD_TESTS)
                 radii_overflow_scaling
                 faded_command_layers
                 nested_faded_shadow_layers
-                transformed_shadow_and_text)
+                transformed_shadow_and_text
+                path_fill_rule_and_stroke
+                path_arc_gradient_and_refusal
+                path_damage_bounds_contain_paint)
             add_test(NAME "vellum.gpu.${_vellum_fixture}"
                 COMMAND vellum-gpu-style-test "${_vellum_fixture}")
         endforeach()
@@ -383,6 +392,9 @@ if(VELLUM_BUILD_TESTS)
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.gpu-runtime-artifact-unit
         COMMAND "${Python3_EXECUTABLE}" -I scripts/test_verify_gpu_runtime_artifact.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.sdk-artifact-builder-unit
+        COMMAND "${Python3_EXECUTABLE}" -I scripts/test_build_sdk_artifact.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.provenance-unit
         COMMAND "${Python3_EXECUTABLE}"
