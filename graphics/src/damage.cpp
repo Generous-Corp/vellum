@@ -536,6 +536,8 @@ void diff_snapshots(const Snapshot& before, const Snapshot& after, DamageRegion&
             compositing_differs(was->paint, now.paint)) {
             add_subtree(region, before, *was);
             add_subtree(region, after, now);
+            // A mask's opacity or transform changes where it covers, and a
+            // mask that stops drawing hides its siblings everywhere.
             add_mask_parent(region, before, *was);
             add_mask_parent(region, after, now);
             continue;
@@ -547,14 +549,6 @@ void diff_snapshots(const Snapshot& before, const Snapshot& after, DamageRegion&
                 add_parent(region, before, *was);
                 add_parent(region, after, now);
             }
-        }
-        // A mask's opacity or transform changes where it covers, and a mask
-        // that stops drawing hides its siblings everywhere.
-        if ((was->paint.mask || now.paint.mask) &&
-            (!same_float(was->paint.opacity, now.paint.opacity) ||
-             !same_transform(was->paint.transform, now.paint.transform))) {
-            add_mask_parent(region, before, *was);
-            add_mask_parent(region, after, now);
         }
         if (!same_rect(was->absolute, now.absolute) || paint_differs(was->paint, now.paint) ||
             was->image_asset != now.image_asset ||
