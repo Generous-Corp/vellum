@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-10T12:49:07Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-646091499a4b21026c019e6f0e24ca1988983af4",
+  "kind": "resolution",
+  "linked_commits": [
+    "646091499a4b21026c019e6f0e24ca1988983af4"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/295"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Integration merge of origin/main into the vellum#295 branch. The main commits it brings carry their own observations on main, and its conflict resolution only reconciles this PR's layer cache with main's render cache in Vellum's graphics backend, which the framework-only resolutions of fb79b94a, e470a72b and da06a394 cover. No separate port decision remains.",
+  "resolves": "vellum-646091499a4b21026c019e6f0e24ca1988983af4",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

@@ -1,6 +1,7 @@
 // The CPU renderer's speed, recorded and not gated, on a 2275 x 1197 context
 // through Rml::RenderInterface calls. The first argument is the target scale
-// (default 1; 2 gives a 4550 x 2394 pixel frame). Two scenes:
+// (default 1; 2 gives a 4550 x 2394 pixel frame), the second the renderer's
+// thread count (default 1). Two scenes:
 //
 // - quads: 400 textured quads (a 20 x 20 grid of 64 x 64 texel tiles, each
 //   about 113 x 59 context units, half of them translucent) over a full-frame
@@ -101,8 +102,11 @@ double median_ms(int frames, const std::function<void()>& draw, double* fastest 
 int main(int argc, char** argv) {
     const float scale = argc > 1 ? std::strtof(argv[1], nullptr) : 1.0f;
     VELLUM_RMLUI_CHECK(scale >= 1.0f && scale <= 4.0f);
+    const auto threads = argc > 2 ? static_cast<unsigned>(std::strtoul(argv[2], nullptr, 10)) : 1u;
+    VELLUM_RMLUI_CHECK(threads >= 1 && threads <= 16);
 
     CpuRenderInterface r;
+    r.set_threads(threads);
     std::vector<std::uint8_t> texels(64 * 64 * 4);
     for (std::size_t i = 0; i < 64 * 64; ++i) {
         const auto alpha = static_cast<std::uint8_t>(i % 3 == 0 ? 160 : 255);
@@ -200,7 +204,8 @@ int main(int argc, char** argv) {
         &clips_fastest);
     VELLUM_RMLUI_CHECK(r.unsupported_calls() == 0);
 
-    std::printf("cpu bench: %ux%u px (scale %.0f)\n", pixels_w, pixels_h, scale);
+    std::printf("cpu bench: %ux%u px (scale %.0f), %u thread%s\n", pixels_w, pixels_h, scale, threads,
+                threads == 1 ? "" : "s");
     std::printf("  quads: %zu textured quads: median %.2f ms, fastest %.2f ms; clear alone %.2f ms, "
                 "clear + background %.2f ms\n",
                 tiles.size(), quads_ms, quads_fastest, clear_ms, background_ms);

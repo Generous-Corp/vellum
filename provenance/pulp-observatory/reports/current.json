@@ -9055,14 +9055,68 @@
       ],
       "source_commit": "80c860095360dbd467a3d8bb4f87d6f69fa042c8",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-11-13T08:41:54Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-3708cae9a7a0b1554b88ff525d3280f47f178a0b",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "render-skia-dawn",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "3708cae9a7a0b1554b88ff525d3280f47f178a0b",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-13T08:41:54Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-e487ff66f31099b2a5559f99a669d3724773d25b",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "render-skia-dawn",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "e487ff66f31099b2a5559f99a669d3724773d25b",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-13T11:05:36Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-7b18f85edaea3bbff4093341a9c41d3a3cc80d49",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "render-skia-dawn"
+      ],
+      "source_commit": "7b18f85edaea3bbff4093341a9c41d3a3cc80d49",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-13T20:53:33Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-aee88b9a51a3279bf9eb36d98e727c4416acc0de",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "render-skia-dawn"
+      ],
+      "source_commit": "aee88b9a51a3279bf9eb36d98e727c4416acc0de",
+      "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-11-11T02:14:11Z",
+  "generated_at": "2026-11-11T05:51:05Z",
   "health": "pass",
-  "maximum_pending_age_days": 0.0,
+  "maximum_pending_age_days": 0.881,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
-  "pending": 0,
+  "pending": 4,
   "release_blockers": [],
   "repeated_generic_fixes": {
     "canvas-kernel": 2,

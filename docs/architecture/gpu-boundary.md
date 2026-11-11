@@ -204,6 +204,33 @@ damage model understands, up to `kDamageModelSceneVersion`; a newer scene,
 which can carry paths, images, clips, masks and isolation, repaints fully until
 the damage model learns those fields.
 
+The surface also caches subtrees as Graphite images, under a renderer-owned
+`LayerCachePolicy` keyed by node id (`layer_cache.hpp`); scenes carry no
+caching hints. A subtree whose node is not the root, has an id no other node
+shares, and draws at least two commands is a candidate. A faded group is cached
+from its first frame, and an opacity change alone reuses its image; its image
+composites exactly as the uncached offscreen group layer did, so captures are
+byte-identical with and without caching. Only the outermost cached subtree on
+a path is drawn from its image, which covers the subtree's paint extent in
+device pixels, with text measured, clipped to the target. An image is dropped
+when a command in it changes (content, bounds, structure or a replaced mesh),
+when its node leaves the scene, when an enclosing subtree is cached instead,
+on a resize or scale change, a host `reload` or an `invalidate` naming a node
+inside it, a failed frame, a lost device, or a policy change;
+`layer_cache_stats` counts each reason. Images are capped at 32 and at twice
+the target's area, and a subtree the budget refuses, or whose image changed
+before it was ever drawn from, waits a few frames before it is tried again.
+
+Two more triggers are opt-in through `LayerCachePolicy::allow_inexact`: a
+subtree of at least 32 commands once it repeats a frame, and any candidate once
+it repeats its commands for three frames. Such an image rounds its translucent
+and antialiased pixels once more when it is composited, so a frame can differ
+from an uncached one by about half a level per overlapping translucent draw
+(two levels on the layered test scene) and depends on the surface's history.
+Even when allowed, they apply only to scenes that always repaint fully
+(versions past `kDamageModelSceneVersion`); a scene partial redraw serves
+caches only faded groups, so its partial frames stay byte-identical to full
+repaints whatever each surface has cached.
 The surface keeps three cross-frame resource caches under
 `RenderCacheBudgets`: laid-out text paragraphs keyed by every run's text and
 style (the colour with any folded opacity included) and the font directory;
@@ -229,7 +256,6 @@ it uploaded.
 it opened, each cache's hits, misses, evictions, trims and bytes, the texture
 (atlas) bytes and Graphite's GPU time, and the capture harness writes it into
 its evidence JSON.
-
 Native self-test is deliberately fail-closed. A requested native surface is
 not allowed to fall back to CoreGraphics or an offscreen surface. The test also
 contains a blank-frame negative control so a broken capture detector cannot

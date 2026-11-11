@@ -50,15 +50,16 @@ GroupExtent group_extent(const std::vector<PaintCommand>& output, std::size_t fi
 
 void append_node(const ImageAssetIndex& images, const SceneNode& node, float parent_x,
                  float parent_y, const Affine2D& parent_transform,
-                 std::vector<PaintCommand>& output);
+                 std::vector<PaintCommand>& output, std::vector<PaintCommandRange>* ranges);
 
-void append_children(const ImageAssetIndex& images, const SceneNode& node, const Rect& absolute, const Affine2D& transform,
-                     std::vector<PaintCommand>& output) {
+void append_children(const ImageAssetIndex& images, const SceneNode& node, const Rect& absolute,
+                     const Affine2D& transform, std::vector<PaintCommand>& output,
+                     std::vector<PaintCommandRange>* ranges) {
     const bool masked = std::any_of(node.children.begin(), node.children.end(),
         [](const SceneNode& child) { return child.mask.has_value(); });
     if (!masked) {
         for (const auto& child : node.children) {
-            append_node(images, child, absolute.x, absolute.y, transform, output);
+            append_node(images, child, absolute.x, absolute.y, transform, output, ranges);
         }
         return;
     }
@@ -67,7 +68,7 @@ void append_children(const ImageAssetIndex& images, const SceneNode& node, const
                       .node_id = node.id + "/masked",
                       .layer_isolated = true});
     for (const auto& child : node.children) {
-        if (!child.mask) append_node(images, child, absolute.x, absolute.y, transform, output);
+        if (!child.mask) append_node(images, child, absolute.x, absolute.y, transform, output, ranges);
     }
     const auto group = group_extent(output, slot + 1U, output.size());
     output[slot].bounds = group.bounds;
@@ -79,19 +80,25 @@ void append_children(const ImageAssetIndex& images, const SceneNode& node, const
                           .mask_mode = *child.mask});
         // The mask node's own flag is consumed here; its subtree renders
         // as ordinary paint into the mask.
-        append_node(images, child, absolute.x, absolute.y, transform, output);
+        append_node(images, child, absolute.x, absolute.y, transform, output, ranges);
         output.push_back({.kind = PaintCommand::Kind::end_mask, .node_id = child.id});
     }
     output.push_back({.kind = PaintCommand::Kind::end_layer, .node_id = node.id + "/masked"});
 }
 
 void append_node(const ImageAssetIndex& images, const SceneNode& node, float parent_x,
-                 float parent_y,
-                 const Affine2D& parent_transform, std::vector<PaintCommand>& output) {
+                 float parent_y, const Affine2D& parent_transform,
+                 std::vector<PaintCommand>& output,
+                 std::vector<PaintCommandRange>* ranges) {
     if (!is_known_kind(node.kind) || !compositing_is_finite(node)) return;
     if (node.clip && !clip_is_valid(*node.clip)) return;
     const float opacity = std::clamp(node.opacity, 0.0F, 1.0F);
     if (opacity <= 0.0F) return;
+    // Recorded before the children so the vector is in depth-first preorder.
+    const auto range_index = ranges != nullptr ? ranges->size() : 0U;
+    if (ranges != nullptr) {
+        ranges->push_back({.node = &node, .begin = output.size(), .end = output.size()});
+    }
     const Rect absolute{
         parent_x + node.bounds.x,
         parent_y + node.bounds.y,
@@ -200,13 +207,14 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
         });
     }
     if (subtree_clip) open_clip();
-    append_children(images, node, absolute, transform, output);
+    append_children(images, node, absolute, transform, output, ranges);
     if (subtree_clip) output.push_back({.kind = PaintCommand::Kind::end_clip, .node_id = node.id});
     const auto close_clip = [&] {
         if (own_clip) output.push_back({.kind = PaintCommand::Kind::end_clip, .node_id = node.id});
     };
     if (!layered) {
         close_clip();
+        if (ranges != nullptr) (*ranges)[range_index].end = output.size();
         return;
     }
 
@@ -227,6 +235,14 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
         if (drawn == 1U) output[last_drawn].opacity *= opacity;
         output.erase(output.begin() + static_cast<std::ptrdiff_t>(slot));
         close_clip();
+        if (ranges != nullptr) {
+            // Every descendant's range lies past the erased slot.
+            for (auto index = range_index + 1U; index < ranges->size(); ++index) {
+                --(*ranges)[index].begin;
+                --(*ranges)[index].end;
+            }
+            (*ranges)[range_index].end = output.size();
+        }
         return;
     }
     auto& layer = output[slot];
@@ -237,6 +253,7 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
     layer.layer_unbounded = !group.bounded;
     output.push_back({.kind = PaintCommand::Kind::end_layer, .node_id = node.id});
     close_clip();
+    if (ranges != nullptr) (*ranges)[range_index].end = output.size();
 }
 
 }  // namespace
@@ -354,11 +371,17 @@ Rect clip_extent(const NodeClip& clip, float absolute_x, float absolute_y) {
 }
 
 std::vector<PaintCommand> make_paint_commands(const Scene& scene) {
+    return make_paint_commands(scene, nullptr);
+}
+
+std::vector<PaintCommand> make_paint_commands(
+    const Scene& scene, std::vector<PaintCommandRange>* ranges) {
     std::vector<PaintCommand> output;
+    if (ranges != nullptr) ranges->clear();
     if (!scene_version_is_supported(scene.scene_version)) return output;
     if (!scene_fields_match_version(scene)) return output;
     if (scene.root.mask) return output;
-    append_node(ImageAssetIndex(scene), scene.root, 0.0F, 0.0F, Affine2D{}, output);
+    append_node(ImageAssetIndex(scene), scene.root, 0.0F, 0.0F, Affine2D{}, output, ranges);
     return output;
 }
 

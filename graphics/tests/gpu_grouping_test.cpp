@@ -23,7 +23,9 @@ struct Capture final {
     std::size_t layers = 0;
 };
 
-bool capture(const Scene& scene, Capture& result) {
+// With `cached` false the layer cache is off, so every group is drawn with
+// its own `saveLayer` and `layers` counts them.
+bool capture(const Scene& scene, Capture& result, bool cached = true) {
     std::string error;
     if (!vellum::app_host::register_native_dawn_bootstrap(&error)) {
         std::cerr << error << '\n';
@@ -32,6 +34,7 @@ bool capture(const Scene& scene, Capture& result) {
     auto surface = SkiaDawnSurface::create(
         {.width = static_cast<std::uint32_t>(scene.width),
          .height = static_cast<std::uint32_t>(scene.height)}, &error);
+    if (surface && !cached) surface->set_layer_cache_policy({.enabled = false});
     if (!surface || !surface->render(scene, &error) ||
         !surface->capture_rgba(result.rgba, result.width, result.height, &error)) {
         std::cerr << error << '\n';
@@ -275,10 +278,17 @@ bool isolated_overlap_matches_flat() {
     }
     scene.root.children.push_back(group);
     Capture flat;
-    if (!capture(scene, flat)) return false;
+    if (!capture(scene, flat, false)) return false;
     scene.root.children[0].isolate = true;
     Capture isolated;
-    if (!capture_and_probe("isolated_overlap_matches_flat", scene, {}, &isolated)) return false;
+    Capture cached;
+    if (!capture(scene, isolated, false) || !capture(scene, cached)) return false;
+    // The layer cache may serve the isolated group from an image; it must
+    // match drawing the group through its own layer exactly.
+    if (cached.rgba != isolated.rgba) {
+        std::cerr << "a cached isolated group differs from its drawn layer\n";
+        return false;
+    }
     if (isolated.layers != flat.layers + 1U) {
         std::cerr << "isolation did not open one layer: " << flat.layers << " then "
                   << isolated.layers << '\n';
