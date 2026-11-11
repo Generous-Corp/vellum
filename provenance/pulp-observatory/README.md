@@ -68,6 +68,16 @@ without conflict. Health and budgets are still judged on the live ledger at
 the current time. A tag keeps the exact `reconciled` comparison, so it fails
 on a report that lags its ledger.
 
+A change to what the report is computed from (the `observatory*.py`
+generator, the event schema, `product/budgets.yaml`, the path map or the lock)
+changes what a fresh regenerate prints, for example every deadline. Such a
+change still leaves the report alone. Under the coverage policy `verify` then
+accepts the committed report only when it is byte-identical to the copy its
+last writer committed, and only while one of those inputs differs from that
+writer's. Without an input change the comparison stays exact. The receiver
+writes the regenerated report after the change lands, and its reconciliation
+and every tag are judged exactly.
+
 To record the branch's own observations:
 
 ```sh
