@@ -8,7 +8,7 @@
     "vellum.install-consumer"
   ],
   "direction": "framework-to-Pulp",
-  "discovered_at": "2026-11-11T17:43:14Z",
+  "discovered_at": "2026-11-11T17:21:00Z",
   "disposition": "pending",
   "effort_minutes": 0,
   "event_id": "vellum-632b3daaab69e0f18bffddc50abaeddd09147602",
@@ -29,7 +29,7 @@
   "rename_candidates": [],
   "scan_cursor": {
     "from_commit": "418cdfe0796f3e84064e451182ca50af4e43c3b4",
-    "to_commit": "db5103982df83bf3b72c400ee611c2dfbd982849"
+    "to_commit": "632b3daaab69e0f18bffddc50abaeddd09147602"
   },
   "schema_api_deltas": [],
   "schema_version": 1,
