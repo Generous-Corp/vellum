@@ -78,7 +78,11 @@ OWNER = "@danielraffel"
 # transfer's judges and the records they hold the transfer to (owned before
 # the records exist, so the change that adds them is a release-path change).
 # The list of Vellum-native paths the observatory classifies framework-only
-# on its own is a policy file too: widening it decides observations.
+# on its own is a policy file too: widening it decides observations. So is the
+# code that applies it: the observatory and receiver modules and the other
+# verifiers the observatory-verify job runs from the pull request's own checkout,
+# and the two framework rule files (the active-source boundary and
+# scripts/install_core.py) that the extraction judge passes on a single review.
 POLICY_FILES = (
     "/.github/CODEOWNERS",
     "/.github/workflows/release-path-review-trigger.yml",
@@ -87,6 +91,7 @@ POLICY_FILES = (
     "/.github/workflows/release-tag.yml",
     "/.github/workflows/version-at-land.yml",
     "/.shipyard/config.toml",
+    "/provenance/active-source-boundary.json",
     "/provenance/authority-signers.allowed_signers",
     "/provenance/framework-name-debt.json",
     "/provenance/framework/external-updates.json",
@@ -96,6 +101,7 @@ POLICY_FILES = (
     "/provenance/release-signers.allowed_signers",
     "/provenance/retired-release-tags.json",
     "/scripts/check_release_policy.py",
+    "/scripts/install_core.py",
     "/scripts/pretag_checks.py",
     "/scripts/release_cadence.py",
     "/scripts/release_dry_run.py",
@@ -109,12 +115,21 @@ POLICY_FILES = (
     "/scripts/version_at_land.py",
     "/tools/provenance/content_scan_policy.py",
     "/tools/provenance/framework_trusted_verify.py",
+    "/tools/provenance/live_delivery.py",
+    "/tools/provenance/observatory.py",
+    "/tools/provenance/observatory_common.py",
+    "/tools/provenance/observatory_events.py",
+    "/tools/provenance/observatory_git.py",
+    "/tools/provenance/observatory_native.py",
+    "/tools/provenance/observatory_report.py",
+    "/tools/provenance/receiver.py",
     "/tools/provenance/mirror_edge_patterns.json",
     "/tools/provenance/mirror_edge_patterns.pin.json",
     "/tools/provenance/verify_authority_expansion.py",
     "/tools/provenance/verify_extraction.py",
     "/tools/provenance/verify_mirror_export.py",
     "/tools/provenance/verify_renderer_dependency.py",
+    "/tools/provenance/verify_pulp_observation_scope.py",
 )
 # GitHub Actions accepts quoted YAML keys and optional whitespace before the
 # colon. Keep both spellings in the structural scanner so a release
