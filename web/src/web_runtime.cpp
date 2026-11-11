@@ -1,5 +1,6 @@
 #include "canvas_shell_lowering.hpp"
 
+#include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/runtime/kernel.hpp>
 
@@ -15,8 +16,8 @@
 namespace {
 
 vellum::graphics::Scene scene;
-std::vector<vellum::graphics::PaintCommand> commands;
-int lowering_losses = 0;
+vellum::web::CanvasShellLowering lowering;
+const std::vector<vellum::graphics::PaintCommand>& commands = lowering.commands;
 std::unique_ptr<vellum::runtime::Kernel> kernel;
 
 EM_JS(void, canvas_begin,
@@ -92,7 +93,7 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_begin_frame(
     scene.root.id = "web-root";
     scene.root.kind = vellum::graphics::SceneNode::Kind::group;
     scene.root.bounds = {0.0F, 0.0F, width, height};
-    commands.clear();
+    lowering = {};
     return 1;
 }
 
@@ -133,8 +134,10 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_add_text(
 EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     if (!kernel || scene.width <= 0.0F || scene.height <= 0.0F) return 0;
     using Kind = vellum::graphics::PaintCommand::Kind;
-    commands = vellum::graphics::make_paint_commands(scene);
-    lowering_losses = vellum::web::canvas_shell_loss_count(commands);
+    // A refused scene draws nothing and keeps the previous canvas, as the
+    // native renderer keeps its previous frame.
+    lowering = vellum::web::lower_for_canvas_shell(scene);
+    if (!lowering.accepted) return 0;
     const auto opacities = vellum::graphics::effective_opacities(commands);
     const auto masked = vellum::web::canvas_shell_masked(commands);
     const auto background = scene.background;
@@ -158,6 +161,17 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
                 command.bounds.y + command.font_size, command.font_size,
                 color.red, color.green, color.blue, color.alpha);
             break;
+        case Kind::image: {
+            // The shell has no image decoding; it marks the box and counts
+            // the loss.
+            auto placeholder = vellum::graphics::kMissingImagePlaceholder;
+            placeholder.alpha *= opacities[index];
+            canvas_rectangle(
+                command.bounds.x, command.bounds.y, command.bounds.width,
+                command.bounds.height, command.corner_radius,
+                placeholder.red, placeholder.green, placeholder.blue, placeholder.alpha);
+            break;
+        }
         case Kind::begin_layer:
         case Kind::end_layer:
         case Kind::mesh:
@@ -176,7 +190,38 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
 /// The number of commands the last render drew with a loss; see
 /// `vellum::web::canvas_shell_loses`.
 EMSCRIPTEN_KEEPALIVE int vellum_web_lowering_loss_count() {
-    return lowering_losses;
+    return lowering.losses;
+}
+
+/// Whether the last render refused its scene; its reason is
+/// `vellum_web_refusal_reason`.
+EMSCRIPTEN_KEEPALIVE int vellum_web_refused() {
+    return !lowering.accepted && !lowering.reason.empty() ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE const char* vellum_web_refusal_reason() {
+    return lowering.reason.c_str();
+}
+
+/// The diagnostics of the last render, as `vellum::graphics::accept_scene`
+/// reports them: a refused scene's refusal, or an accepted scene's warnings.
+EMSCRIPTEN_KEEPALIVE int vellum_web_diagnostic_count() {
+    return static_cast<int>(lowering.diagnostics.size());
+}
+
+EMSCRIPTEN_KEEPALIVE const char* vellum_web_diagnostic_code(int index) {
+    if (index < 0 || static_cast<std::size_t>(index) >= lowering.diagnostics.size()) return "";
+    return lowering.diagnostics[static_cast<std::size_t>(index)].code.c_str();
+}
+
+EMSCRIPTEN_KEEPALIVE const char* vellum_web_diagnostic_node_id(int index) {
+    if (index < 0 || static_cast<std::size_t>(index) >= lowering.diagnostics.size()) return "";
+    return lowering.diagnostics[static_cast<std::size_t>(index)].node_id.c_str();
+}
+
+EMSCRIPTEN_KEEPALIVE const char* vellum_web_diagnostic_message(int index) {
+    if (index < 0 || static_cast<std::size_t>(index) >= lowering.diagnostics.size()) return "";
+    return lowering.diagnostics[static_cast<std::size_t>(index)].message.c_str();
 }
 
 EMSCRIPTEN_KEEPALIVE int vellum_web_command_count() {

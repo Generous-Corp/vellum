@@ -174,6 +174,54 @@ struct PathGeometry final {
     bool antialias = true;
 };
 
+/// How an image fills its node's box.
+enum class ImageFit : std::uint8_t {
+    /// Stretches the source to the box, as CSS `object-fit: fill`.
+    fill,
+    /// Scales the source uniformly to fit inside the box and centres it.
+    contain,
+    /// Scales the source uniformly to cover the box, centres it, and crops
+    /// what falls outside.
+    cover,
+    /// Draws the source at one logical pixel per image pixel, centred and
+    /// cropped to the box.
+    none,
+};
+
+enum class ImageSampling : std::uint8_t {
+    nearest,
+    linear,
+};
+
+/// Decoded image pixels, named by the content hash of the asset they were
+/// decoded from. Like a mesh texture, an asset must not be mutated once a
+/// scene references it; replace the pointer to change it. Keep the same
+/// object from frame to frame: a renderer may remember work per object (the
+/// Skia surface hashes an asset's texels once per object), so rebuilding an
+/// unchanged asset every frame costs that work every frame.
+struct ImageAsset final {
+    /// `sha256:` followed by 64 lowercase hexadecimal digits, the DesignIR
+    /// asset convention (see `is_content_hash`).
+    std::string content_hash;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    /// Premultiplied RGBA8 texels, row-major, top row first.
+    std::vector<std::uint8_t> premultiplied_rgba;
+};
+
+/// What an `image` node draws: the asset named by `content_hash` in
+/// `Scene::images`, cropped to `source_rect` and fitted into the node's box.
+/// A reference whose asset is not in the scene draws
+/// `kMissingImagePlaceholder` over the box instead.
+struct ImageReference final {
+    std::string content_hash;
+    /// The part of the image to draw, in image pixels. Absent draws the whole
+    /// image; a rectangle reaching past the image is clipped to it.
+    std::optional<Rect> source_rect;
+    ImageFit fit = ImageFit::fill;
+    ImageSampling sampling = ImageSampling::linear;
+};
+
 /// A point in logical pixels.
 struct Point final {
     float x = 0.0F;
@@ -303,12 +351,16 @@ enum class MaskMode : std::uint8_t {
 /// accepted when it has no path node; one that does fails
 /// `scene_fields_match_version` and is refused.
 ///
-/// Version 4 is reserved for the image node kind; this build accepts it and
-/// draws it like version 3.
+/// Version 4 adds the `image` node kind and `Scene::images`. A scene of an
+/// earlier version is still accepted when it has no image node; one that does
+/// fails `scene_fields_match_version` and is refused.
 ///
 /// Version 5 adds `SceneNode::clip`, `mask`, and `isolate`. A scene of an
 /// earlier version is still accepted when none of its nodes sets them; one
 /// that does fails `scene_fields_match_version` and is refused.
+///
+/// Claimed versions, in order:
+/// version 4: image nodes; version 5: clip, mask and isolation on groups
 inline constexpr std::uint32_t kSceneVersion = 5U;
 
 /// The oldest scene schema version this build still consumes.
@@ -337,6 +389,7 @@ struct SceneNode final {
         custom,
         mesh,
         path,
+        image,
     };
 
     std::string id;
@@ -375,6 +428,10 @@ struct SceneNode final {
     /// a mesh, it must not be mutated once a scene references it; replace the
     /// pointer to change it.
     std::shared_ptr<const PathGeometry> path;
+    /// What an `image` node draws. An image node without it, or with
+    /// children, is refused. The node's `fill` paints behind the image, and
+    /// its corner radii clip both.
+    std::optional<ImageReference> image;
     /// Clips the node's own paint and its whole subtree. The clip is in the
     /// node's coordinates, so it moves with `transform`.
     std::optional<NodeClip> clip;
@@ -461,6 +518,7 @@ struct SceneNode final {
     case SceneNode::Kind::custom:
     case SceneNode::Kind::mesh:
     case SceneNode::Kind::path:
+    case SceneNode::Kind::image:
         return true;
     }
     return false;
@@ -483,6 +541,9 @@ struct Scene final {
     Color background = Color::hex(0x111827);
     SceneNode root;
     std::uint32_t scene_version = kSceneVersion;
+    /// The decoded assets image nodes name by content hash. Each hash appears
+    /// at most once.
+    std::vector<std::shared_ptr<const ImageAsset>> images;
 };
 
 /// The first node, in depth-first order, of a kind version 3 introduced: a
@@ -495,15 +556,48 @@ struct Scene final {
     return nullptr;
 }
 
+/// The first node, in depth-first order, of a kind version 4 introduced: an
+/// `image` node.
+[[nodiscard]] inline const SceneNode* find_version_4_kinds(const SceneNode& node) noexcept {
+    if (node.kind == SceneNode::Kind::image) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_4_kinds(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
 /// Whether every field and kind the scene uses exists at its version: a
-/// version 1 scene sets no field that `uses_version_2_fields` reports, and a
-/// version 1 or 2 scene has no node that `find_version_3_kinds` reports, and
-/// a scene before version 5 sets no field that `uses_version_5_fields`
+/// version 1 scene sets no field that `uses_version_2_fields` reports, a
+/// version 1 or 2 scene has no node that `find_version_3_kinds` reports, a
+/// scene before version 4 has no node that `find_version_4_kinds` reports,
+/// and a scene before version 5 sets no field that `uses_version_5_fields`
 /// reports.
 [[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
     return (scene.scene_version >= 2U || find_version_2_fields(scene.root) == nullptr) &&
            (scene.scene_version >= 3U || find_version_3_kinds(scene.root) == nullptr) &&
+           (scene.scene_version >= 4U || find_version_4_kinds(scene.root) == nullptr) &&
            (scene.scene_version >= 5U || find_version_5_fields(scene.root) == nullptr);
+}
+
+/// The first node, in depth-first order, that its scene's version cannot
+/// carry: a field or kind newer than `scene.scene_version`, or a kind outside
+/// `is_known_kind`. Null when `scene_fields_match_version` holds and every
+/// kind is known.
+[[nodiscard]] inline const SceneNode* find_version_mismatch(const Scene& scene) noexcept {
+    if (const auto* unknown = find_unknown_kind(scene.root); unknown != nullptr) return unknown;
+    if (scene.scene_version < 2U) {
+        if (const auto* found = find_version_2_fields(scene.root); found != nullptr) return found;
+    }
+    if (scene.scene_version < 3U) {
+        if (const auto* found = find_version_3_kinds(scene.root); found != nullptr) return found;
+    }
+    if (scene.scene_version < 4U) {
+        if (const auto* found = find_version_4_kinds(scene.root); found != nullptr) return found;
+    }
+    if (scene.scene_version < 5U) {
+        if (const auto* found = find_version_5_fields(scene.root); found != nullptr) return found;
+    }
+    return nullptr;
 }
 
 [[nodiscard]] inline const SceneNode* find_node(

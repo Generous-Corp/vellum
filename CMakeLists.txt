@@ -191,6 +191,10 @@ if(VELLUM_BUILD_TESTS)
             graphics/tests/paint_command_test.cpp)
         target_link_libraries(vellum-paint-command-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.paint-command COMMAND vellum-paint-command-test)
+        add_executable(vellum-image-node-test
+            graphics/tests/image_node_test.cpp)
+        target_link_libraries(vellum-image-node-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.image-node COMMAND vellum-image-node-test)
 
         add_executable(vellum-grouping-test
             graphics/tests/grouping_test.cpp)
@@ -412,6 +416,9 @@ if(VELLUM_BUILD_TESTS)
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.gpu-runtime-artifact-unit
         COMMAND "${Python3_EXECUTABLE}" -I scripts/test_verify_gpu_runtime_artifact.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.sdk-artifact-builder-unit
+        COMMAND "${Python3_EXECUTABLE}" -I scripts/test_build_sdk_artifact.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.provenance-unit
         COMMAND "${Python3_EXECUTABLE}"

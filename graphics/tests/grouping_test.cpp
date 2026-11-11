@@ -331,8 +331,11 @@ void damage() {
     turned.root.children[0].transform->b = 0.5F;
     auto turned_moved = turned;
     turned_moved.root.children[0].children[0].bounds.y = 10.0F;
-    expect(damage_bounds(turned, turned_moved).right > 31,
-           "a transformed node's clip does not bound damage the model cannot map");
+    // A shear about the window's origin (10, 10) maps its clip to the frame
+    // box x 10..30, y 10..40; the slider still reaches no further right.
+    const auto sheared = damage_bounds(turned, turned_moved);
+    expect(sheared.right <= 31 && sheared.bottom <= 41 && sheared.bottom > 31,
+           "a transformed node's clip bounds damage through its transform");
 
     auto radii = before;
     radii.root.children[0].clip->radii = uniform_corner_radii(4.0F);
@@ -364,15 +367,16 @@ void damage() {
     expect(damage_bounds(card_before, slid).right <= 31,
            "a subtree clip bounds its descendants' damage");
 
-    // Under a transformed ancestor the clip's position is unknown to the model.
+    // Under a sheared ancestor the clip maps to the frame box x 10..30, y 15..45.
     SceneNode turner{.id = "turner", .kind = SceneNode::Kind::group,
                      .transform = Affine2D{.b = 0.5F}};
     turner.children.push_back(before.root.children[0]);
     const auto under = scene_with({turner});
     auto under_moved = under;
     under_moved.root.children[0].children[0].children[0].bounds.y = 10.0F;
-    expect(damage_bounds(under, under_moved).right > 31,
-           "a clip under a transformed ancestor does not bound damage");
+    const auto under_damage = damage_bounds(under, under_moved);
+    expect(under_damage.right <= 31 && under_damage.bottom <= 46 && under_damage.bottom > 31,
+           "a clip under a transformed ancestor bounds damage through the composed transform");
 
     auto isolated = before;
     isolated.root.children[0].isolate = true;

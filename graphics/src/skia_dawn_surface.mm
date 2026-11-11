@@ -2,8 +2,10 @@
 #include <vellum/graphics/capture_stats.hpp>
 #include <vellum/graphics/damage.hpp>
 #include <vellum/graphics/dawn_bootstrap.hpp>
+#include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/render_telemetry.hpp>
+#include <vellum/graphics/scene_acceptance.hpp>
 
 #include <gpu_runtime/gpu_surface.hpp>
 
@@ -61,6 +63,7 @@
 #include <dlfcn.h>
 
 #include <algorithm>
+#include <functional>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -196,6 +199,8 @@ std::string replace_unsupported_text(
 struct MeshTextureCache final {
     skgpu::graphite::Recorder* recorder = nullptr;
     std::unordered_map<const MeshTexture*, sk_sp<SkImage>> images;
+    /// The same for image assets, which the scene keeps alive for the frame.
+    std::unordered_map<const ImageAsset*, sk_sp<SkImage>> assets;
 };
 
 // What one frame draws with: the per-frame texture map, the surface's
@@ -521,50 +526,85 @@ bool draw_text(SkCanvas& canvas, const PaintCommand& command, float opacity,
     return true;
 }
 
+// Uploads premultiplied RGBA8 texels, or reuses the cross-frame upload of the
+// same size and texel digest. `digest` is called only when the texture cache
+// is on. `what` names the texture in errors.
+sk_sp<SkImage> upload_texels(
+    std::uint32_t width, std::uint32_t height, std::span<const std::uint8_t> texels,
+    const std::function<detail::TextureDigest()>& digest, FrameResources& resources,
+    const char* what, std::string* error) {
+    // Across frames a texture is found by its content, never its address: a
+    // producer may reuse an allocation for different texels.
+    auto* caches = resources.caches;
+    detail::TextureKey key{.width = width, .height = height};
+    if (caches != nullptr && !caches->textures.enabled()) caches = nullptr;
+    if (caches != nullptr) {
+        key.digest = digest();
+        if (const auto* cached = caches->textures.find(key, caches->frame)) return *cached;
+    }
+    const auto info = SkImageInfo::Make(
+        static_cast<int>(width), static_cast<int>(height),
+        kRGBA_8888_SkColorType, kPremul_SkAlphaType);
+    auto raster = SkImages::RasterFromData(
+        info, SkData::MakeWithCopy(texels.data(), texels.size()),
+        static_cast<std::size_t>(width) * 4U);
+    if (!raster) {
+        set_error(error, std::string("Skia could not wrap ") + what);
+        return nullptr;
+    }
+    auto* recorder = resources.meshes.recorder;
+    auto uploaded = recorder != nullptr
+        ? SkImages::TextureFromImage(recorder, raster.get(), {})
+        : nullptr;
+    if (!uploaded) {
+        set_error(error, std::string("Skia Graphite could not upload ") + what);
+        return nullptr;
+    }
+    if (caches != nullptr &&
+        caches->textures.insert(key, uploaded, texels.size(), caches->frame)) {
+        resources.uploaded.push_back(key);
+    }
+    return uploaded;
+}
+
 sk_sp<SkImage> mesh_texture_image(
     const MeshTexture& texture, FrameResources& resources, std::string* error) {
     auto& cache = resources.meshes;
     if (const auto found = cache.images.find(&texture); found != cache.images.end()) {
         return found->second;
     }
-    // Across frames a texture is found by its content, never its address: a
-    // producer may reuse an allocation for different texels.
-    auto* caches = resources.caches;
-    detail::TextureKey key{.width = texture.width, .height = texture.height};
-    if (caches != nullptr && !caches->textures.enabled()) caches = nullptr;
-    if (caches != nullptr) {
-        key.digest = detail::sha256(texture.premultiplied_rgba);
-        if (const auto* cached = caches->textures.find(key, caches->frame)) {
-            cache.images.emplace(&texture, *cached);
-            return *cached;
+    auto image = upload_texels(
+        texture.width, texture.height, texture.premultiplied_rgba,
+        [&texture] { return detail::sha256(texture.premultiplied_rgba); }, resources,
+        "a mesh texture", error);
+    if (image) cache.images.emplace(&texture, image);
+    return image;
+}
+
+// An image asset's texture. Its texel digest is remembered under the content
+// hash while the hash still names this asset (see `detail::ImageDigest`).
+sk_sp<SkImage> image_asset_texture(
+    const std::shared_ptr<const ImageAsset>& asset, FrameResources& resources,
+    std::string* error) {
+    auto& cache = resources.meshes;
+    if (const auto found = cache.assets.find(asset.get()); found != cache.assets.end()) {
+        return found->second;
+    }
+    const auto digest = [&asset, &resources] {
+        auto* caches = resources.caches;
+        if (auto* known = caches->image_digests.find(asset->content_hash, caches->frame);
+            known != nullptr && known->asset.lock() == asset) {
+            return known->digest;
         }
-    }
-    const auto info = SkImageInfo::Make(
-        static_cast<int>(texture.width), static_cast<int>(texture.height),
-        kRGBA_8888_SkColorType, kPremul_SkAlphaType);
-    auto raster = SkImages::RasterFromData(
-        info,
-        SkData::MakeWithCopy(texture.premultiplied_rgba.data(),
-                             texture.premultiplied_rgba.size()),
-        static_cast<std::size_t>(texture.width) * 4U);
-    if (!raster) {
-        set_error(error, "Skia could not wrap a mesh texture");
-        return nullptr;
-    }
-    auto uploaded = cache.recorder != nullptr
-        ? SkImages::TextureFromImage(cache.recorder, raster.get(), {})
-        : nullptr;
-    if (!uploaded) {
-        set_error(error, "Skia Graphite could not upload a mesh texture");
-        return nullptr;
-    }
-    if (caches != nullptr &&
-        caches->textures.insert(key, uploaded, texture.premultiplied_rgba.size(),
-                                caches->frame)) {
-        resources.uploaded.push_back(key);
-    }
-    cache.images.emplace(&texture, uploaded);
-    return uploaded;
+        const auto computed = detail::sha256(asset->premultiplied_rgba);
+        caches->image_digests.insert(asset->content_hash, {asset, computed},
+                                     detail::kImageDigestBytes, caches->frame);
+        return computed;
+    };
+    auto image = upload_texels(asset->width, asset->height, asset->premultiplied_rgba, digest,
+                               resources, "an image asset", error);
+    if (image) cache.assets.emplace(asset.get(), image);
+    return image;
 }
 
 // Vertex colours arrive premultiplied; SkVertices takes straight-alpha SkColor.
@@ -711,21 +751,6 @@ bool path_is_drawable(const PathGeometry& path, const Color& fill, std::string* 
     return true;
 }
 
-// The first path node, in depth-first order, that cannot be drawn.
-const SceneNode* find_undrawable_path(const SceneNode& node, std::string& reason) {
-    if (node.kind == SceneNode::Kind::path &&
-        (!node.path || !path_is_drawable(*node.path, node.fill, &reason))) {
-        if (!node.path) reason.clear();
-        return &node;
-    }
-    for (const auto& child : node.children) {
-        if (const auto* found = find_undrawable_path(child, reason); found != nullptr) {
-            return found;
-        }
-    }
-    return nullptr;
-}
-
 bool draw_path(SkCanvas& canvas, const PaintCommand& command, float opacity,
                FrameResources& resources, std::string* error) {
     if (!command.path) {
@@ -791,6 +816,52 @@ bool draw_path(SkCanvas& canvas, const PaintCommand& command, float opacity,
     return true;
 }
 
+bool draw_image(SkCanvas& canvas, const PaintCommand& command, float opacity,
+                FrameResources& resources, std::string* error) {
+    const auto& box = command.bounds;
+    if (!command.image) {
+        set_error(error, "image " + command.node_id + " has no image reference");
+        return false;
+    }
+    if (box.width <= 0.0F || box.height <= 0.0F) return true;
+    const auto rect = SkRect::MakeXYWH(box.x, box.y, box.width, box.height);
+    const auto clip = rounded_rect(rect, command.corner_radii);
+    const auto fill_box = [&](const Color& color) {
+        if (color.alpha <= 0.0F) return;
+        SkPaint paint;
+        paint.setAntiAlias(true);
+        paint.setColor4f(sk_color(color, opacity));
+        canvas.drawRRect(clip, paint);
+    };
+    fill_box(command.fill);
+    if (!command.image_asset) {
+        fill_box(kMissingImagePlaceholder);
+        return true;
+    }
+    const auto& asset = *command.image_asset;
+    const auto placement = image_placement(*command.image, asset.width, asset.height, box);
+    if (!placement) return true;
+    auto texture = image_asset_texture(command.image_asset, resources, error);
+    if (!texture) return false;
+    const int saved = canvas.save();
+    if (is_rounded(command.corner_radii)) canvas.clipRRect(clip, true);
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setAlphaf(opacity);
+    const auto sampling = command.image->sampling == ImageSampling::nearest
+        ? SkSamplingOptions(SkFilterMode::kNearest)
+        : SkSamplingOptions(SkFilterMode::kLinear);
+    const auto& source = placement->source;
+    const auto& destination = placement->destination;
+    canvas.drawImageRect(texture.get(),
+                         SkRect::MakeXYWH(source.x, source.y, source.width, source.height),
+                         SkRect::MakeXYWH(destination.x, destination.y, destination.width,
+                                          destination.height),
+                         sampling, &paint, SkCanvas::kStrict_SrcRectConstraint);
+    canvas.restoreToCount(saved);
+    return true;
+}
+
 // Folding is exact when the command's paint operations do not overlap; text
 // accepts the double blend of glyphs that overlap one another.
 bool opacity_folds_into_paint(const PaintCommand& command) {
@@ -806,6 +877,10 @@ bool opacity_folds_into_paint(const PaintCommand& command) {
         const std::size_t operations = (command.fill.alpha > 0.0F ? 1U : 0U) +
                                        command.fill_gradients.size() + (stroked ? 1U : 0U);
         return operations <= 1U;
+    }
+    if (command.kind == PaintCommand::Kind::image) {
+        // The image, or its placeholder, over a visible fill is two operations.
+        return command.fill.alpha <= 0.0F;
     }
     if (command.kind == PaintCommand::Kind::text) {
         if (command.text_runs.empty()) return !command.underline && !command.strikethrough;
@@ -894,6 +969,8 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
         drawn = draw_rectangle(canvas, command, paint_opacity, resources, error);
     } else if (command.kind == PaintCommand::Kind::path) {
         drawn = draw_path(canvas, command, paint_opacity, resources, error);
+    } else if (command.kind == PaintCommand::Kind::image) {
+        drawn = draw_image(canvas, command, paint_opacity, resources, error);
     } else {
         drawn = draw_text(canvas, command, paint_opacity, layered ? opacity : 1.0F,
                           directory, resources, paragraph, error);
@@ -921,9 +998,10 @@ bool sane_box(const Rect& rect) {
         rect.width >= 0.0F && rect.height >= 0.0F;
 }
 
+// A command whose box is not finite has no known extent and is always drawn.
 Extent command_extent(const PaintCommand& command, const Rect& frame, float scale) {
     static const DamagePropagation propagation;
-    if (!sane_box(command.bounds)) return std::nullopt;
+    if (!sane_box(command.bounds) || !draws_content(command.kind)) return std::nullopt;
     SceneNode painted;
     painted.bounds = command.bounds;
     switch (command.kind) {
@@ -945,6 +1023,10 @@ Extent command_extent(const PaintCommand& command, const Rect& frame, float scal
             painted.kind = SceneNode::Kind::path;
             painted.path = command.path;
             break;
+        case PaintCommand::Kind::image:
+            painted.kind = SceneNode::Kind::image;
+            painted.image = command.image;
+            break;
         case PaintCommand::Kind::begin_layer:
         case PaintCommand::Kind::end_layer:
         case PaintCommand::Kind::begin_clip:
@@ -953,7 +1035,9 @@ Extent command_extent(const PaintCommand& command, const Rect& frame, float scal
         case PaintCommand::Kind::end_mask:
             return std::nullopt;
     }
-    return pixel_extent(node_paint_bounds(painted, command.bounds, frame, propagation), scale);
+    return pixel_extent(
+        transformed_paint_bounds(painted, command.bounds, command.transform, frame, propagation),
+        scale);
 }
 
 std::vector<Extent> paint_command_extents(
@@ -965,6 +1049,47 @@ std::vector<Extent> paint_command_extents(
         extents.push_back(command_extent(command, frame, scale));
     }
     return extents;
+}
+
+bool close_over_layers(const Scene& scene, const std::vector<PaintCommand>& commands, float scale,
+                       const PixelRect& target, std::vector<PixelRect>& rects) {
+    if (rects.empty()) return true;
+    std::vector<PixelRect> layers;
+    std::vector<Extent> extents;
+    for (std::size_t begin = 0; begin < commands.size(); ++begin) {
+        const auto& command = commands[begin];
+        const bool transformed_blur =
+            command.kind == PaintCommand::Kind::rectangle && !is_identity(command.transform) &&
+            std::any_of(command.box_shadows.begin(), command.box_shadows.end(),
+                        [](const BoxShadow& shadow) { return shadow.blur_radius > 0.0F; });
+        if (command.kind != PaintCommand::Kind::begin_layer && !transformed_blur) continue;
+        if (extents.empty()) extents = paint_command_extents(scene, commands, scale);
+        if (transformed_blur) {
+            layers.push_back(intersection(extents[begin] ? *extents[begin] : target, target));
+            continue;
+        }
+        PixelRect area{};
+        std::size_t depth = 0;
+        for (std::size_t index = begin + 1; index < commands.size(); ++index) {
+            const auto kind = commands[index].kind;
+            if (kind == PaintCommand::Kind::begin_layer) {
+                ++depth;
+                continue;
+            }
+            if (kind == PaintCommand::Kind::end_layer) {
+                if (depth == 0) break;
+                --depth;
+                continue;
+            }
+            area = bounding_union(area, extents[index] ? *extents[index] : target);
+        }
+        layers.push_back(intersection(area, target));
+    }
+    if (layers.empty()) return true;
+    rects = enclose_whole_areas(std::move(rects), layers, target);
+    std::int64_t area = 0;
+    for (const auto& rect : rects) area += rect.area();
+    return area < target.area();
 }
 
 bool same_color(const Color& a, const Color& b) {
@@ -1202,20 +1327,20 @@ public:
     }
 
     bool render(const Scene& scene, std::string* error) {
-        if (!accepts(scene, error)) return false;
+        if (!accepts_with_diagnostics(scene, error)) return false;
         discard_tracked_damage(scene);
         return draw_frame(scene, FullRepaintReason::full_render, nullptr, error);
     }
 
     bool render_incremental(const Scene& scene, std::string* error) {
-        if (!accepts(scene, error)) return false;
+        if (!accepts_with_diagnostics(scene, error)) return false;
         tracker_.commit(scene, config_.scale);
         const auto damage = tracker_.take_damage();
         return draw_frame(scene, FullRepaintReason::none, &damage, error);
     }
 
     bool render(const Scene& scene, const DamageRegion& damage, std::string* error) {
-        if (!accepts(scene, error)) return false;
+        if (!accepts_with_diagnostics(scene, error)) return false;
         const auto invalidated = tracker_.take_damage();
         discard_tracked_damage(scene);
         const auto frame = frame_rect(scene, config_.scale);
@@ -1254,6 +1379,8 @@ public:
     }
 
     RenderCacheBudgets cache_budgets() const { return caches_.budgets(); }
+
+    const std::vector<LoweringDiagnostic>& diagnostics() const noexcept { return diagnostics_; }
 
     RenderTelemetry telemetry() const {
         const auto frame = frame_stats();
@@ -1294,61 +1421,14 @@ public:
         return true;
     }
 
-    bool accepts(const Scene& scene, std::string* error) {
-        if (!scene_version_is_supported(scene.scene_version)) {
-            set_error(error, "scene version " + std::to_string(scene.scene_version) +
-                                 " is not supported by this renderer");
-            return false;
-        }
-        if (const auto* unknown = find_unknown_kind(scene.root); unknown != nullptr) {
-            set_error(error, "scene contains unsupported node kind " +
-                                 std::to_string(static_cast<int>(unknown->kind)) + " at " +
-                                 unknown->id);
-            return false;
-        }
-        if (!scene_fields_match_version(scene)) {
-            const auto* compositing =
-                scene.scene_version < 2U ? find_version_2_fields(scene.root) : nullptr;
-            const auto* grouping =
-                scene.scene_version < 5U ? find_version_5_fields(scene.root) : nullptr;
-            const auto* path_node =
-                scene.scene_version < 3U ? find_version_3_kinds(scene.root) : nullptr;
-            if (compositing != nullptr) {
-                set_error(error, "scene version " + std::to_string(scene.scene_version) +
-                                     " cannot carry the transform, opacity, or corner radii at " +
-                                     compositing->id);
-            } else if (path_node == nullptr && grouping != nullptr) {
-                set_error(error, "scene version " + std::to_string(scene.scene_version) +
-                                     " cannot carry the clip, mask, or isolation at " +
-                                     grouping->id);
-            } else {
-                set_error(error, "scene version " + std::to_string(scene.scene_version) +
-                                     " cannot carry the path node " +
-                                     find_version_3_kinds(scene.root)->id);
-            }
-            return false;
-        }
-        if (const auto* invalid = find_non_finite_compositing(scene.root);
-            invalid != nullptr) {
-            set_error(error, "scene node " + invalid->id +
-                                 " has a non-finite transform, opacity, or corner radius");
-            return false;
-        }
-        if (scene.root.mask) {
-            set_error(error, "scene root " + scene.root.id + " cannot be a mask");
-            return false;
-        }
-        std::string reason;
-        if (const auto* clipped = find_invalid_clip(scene.root, reason); clipped != nullptr) {
-            set_error(error, "clip of " + clipped->id + " cannot be applied: " + reason);
-            return false;
-        }
-        if (const auto* path = find_undrawable_path(scene.root, reason); path != nullptr) {
-            set_error(error, path->path ? "path " + path->id + " cannot be drawn: " + reason
-                                        : "path " + path->id + " has no geometry");
-            return false;
-        }
-        return true;
+    // Records what the frame loses through `accept_scene`, the decision every
+    // backend shares.
+    bool accepts_with_diagnostics(const Scene& scene, std::string* error) {
+        auto acceptance = accept_scene(scene);
+        diagnostics_ = std::move(acceptance.diagnostics);
+        if (acceptance.accepted) return true;
+        set_error(error, std::move(acceptance.reason));
+        return false;
     }
 
     bool capture_png(std::vector<std::uint8_t>& png, std::string* error) {
@@ -1605,8 +1685,13 @@ private:
         } else if (reason == FullRepaintReason::none) {
             reason = FullRepaintReason::full_render;
         }
-        const bool full = reason != FullRepaintReason::none;
         const auto target = target_rect();
+        const auto commands = make_paint_commands(scene);
+        if (reason == FullRepaintReason::none &&
+            !close_over_layers(scene, commands, config_.scale, target, rects)) {
+            reason = FullRepaintReason::full_damage;
+        }
+        const bool full = reason != FullRepaintReason::none;
 
         FrameStats stats;
         stats.frame = stats_.frame + 1;
@@ -1634,7 +1719,6 @@ private:
 
         retained_valid_ = false;
         retained_reason_ = FullRepaintReason::previous_frame_failed;
-        const auto commands = make_paint_commands(scene);
         stats.paint_commands_total = commands.size();
         auto* canvas = retained_surface_->getCanvas();
         caches_.begin_frame();
@@ -1909,6 +1993,7 @@ private:
     std::uint64_t trim_since_frame_ = 0;
     bool internal_redraw_ = false;
     bool device_loss_trimmed_ = false;
+    std::vector<LoweringDiagnostic> diagnostics_;
     std::uint64_t trims_ = 0;
     CacheTrimReason last_trim_ = CacheTrimReason::none;
 };
@@ -2001,6 +2086,10 @@ bool SkiaDawnSurface::capture_rgba(
 
 const GpuEvidence& SkiaDawnSurface::evidence() const noexcept {
     return impl_->evidence();
+}
+
+const std::vector<LoweringDiagnostic>& SkiaDawnSurface::diagnostics() const noexcept {
+    return impl_->diagnostics();
 }
 
 }  // namespace vellum::graphics

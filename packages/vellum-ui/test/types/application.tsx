@@ -2,6 +2,7 @@ import {
     Button,
     CustomComponent,
     Fragment,
+    Image,
     Path,
     Stack,
     Text,
@@ -130,6 +131,20 @@ void star;
 const missingData = <Path id="no-data" />;
 void missingData;
 
+const logo = (
+    <Image
+        id="logo"
+        source="sha256:62b291469de86bed297f617edd0d939148a65c31b7f871329f88baf0adb41dbc"
+        fit="cover"
+        sampling="nearest"
+        sourceRect={{ x: 0, y: 0, width: 4, height: 8 }}
+        style={{ width: 40, height: 40, borderRadius: 6 }}
+    />
+);
+void logo;
+// @ts-expect-error fit takes the CSS object-fit keywords.
+const stretched = <Image id="stretched" fit="stretch" />;
+void stretched;
 const masked = (
     <Stack id="window" style={{ width: 40, height: 30, overflow: 'hidden', isolation: 'isolate' }}>
         <Stack id="window/content" style={{ backgroundColor: '#ff0000' }} />

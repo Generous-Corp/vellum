@@ -49,6 +49,14 @@ target_compile_definitions(vellum-rmlui-midi-learn-test PRIVATE
     VELLUM_RMLUI_MIDI_LEARN_RCSS="${CMAKE_CURRENT_SOURCE_DIR}/../assets/midi-learn.rcss")
 add_test(NAME vellum.rmlui.midi-learn COMMAND vellum-rmlui-midi-learn-test)
 
+vellum_rmlui_add_test(vellum-rmlui-settings-test settings_test.cpp VellumRmlUi::Core)
+add_test(NAME vellum.rmlui.settings COMMAND vellum-rmlui-settings-test)
+
+vellum_rmlui_add_test(vellum-rmlui-midi-panic-test midi_panic_test.cpp VellumRmlUi::Core)
+target_compile_definitions(vellum-rmlui-midi-panic-test PRIVATE
+    VELLUM_RMLUI_MIDI_PANIC_RCSS="${CMAKE_CURRENT_SOURCE_DIR}/../assets/midi-panic.rcss")
+add_test(NAME vellum.rmlui.midi-panic COMMAND vellum-rmlui-midi-panic-test)
+
 vellum_rmlui_add_test(vellum-rmlui-two-instances-test two_instances_test.cpp VellumRmlUi::Core)
 add_test(NAME vellum.rmlui.two-instances COMMAND vellum-rmlui-two-instances-test)
 
@@ -62,6 +70,34 @@ add_test(NAME vellum.rmlui.core-flattening COMMAND vellum-rmlui-core-flattening-
 if(VELLUM_RMLUI_CPU)
     vellum_rmlui_add_test(vellum-rmlui-cpu-render-test cpu_render_test.cpp VellumRmlUi::Cpu)
     add_test(NAME vellum.rmlui.cpu-render COMMAND vellum-rmlui-cpu-render-test)
+
+    # NativeContext::warm(): the first frame after it loads no texture.
+    vellum_rmlui_add_test(vellum-rmlui-native-warm-test native_warm_test.cpp VellumRmlUi::Native VellumRmlUi::Cpu)
+    add_test(NAME vellum.rmlui.native-warm COMMAND vellum-rmlui-native-warm-test)
+
+    # The output pinned by hash, the same constant on every platform.
+    vellum_rmlui_add_test(vellum-rmlui-cpu-hash-test cpu_hash_test.cpp VellumRmlUi::Cpu)
+    add_test(NAME vellum.rmlui.cpu-hash COMMAND vellum-rmlui-cpu-hash-test)
+
+    # The rasteriser's fast paths against the per-pixel rasteriser they
+    # replaced, and its control.
+    vellum_rmlui_add_test(vellum-rmlui-cpu-raster-equivalence-test cpu_raster_equivalence_test.cpp)
+    target_include_directories(vellum-rmlui-cpu-raster-equivalence-test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_features(vellum-rmlui-cpu-raster-equivalence-test PRIVATE cxx_std_20)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        target_compile_options(vellum-rmlui-cpu-raster-equivalence-test PRIVATE -ffp-contract=off)
+    elseif(MSVC)
+        target_compile_options(vellum-rmlui-cpu-raster-equivalence-test PRIVATE /fp:precise)
+    endif()
+    add_test(NAME vellum.rmlui.cpu-raster-equivalence COMMAND vellum-rmlui-cpu-raster-equivalence-test)
+    add_test(NAME vellum.rmlui.cpu-raster-equivalence-control
+        COMMAND vellum-rmlui-cpu-raster-equivalence-test --break-flat)
+
+    # Speed, recorded and not gated: outside the required tests (ctest -LE bench).
+    vellum_rmlui_add_test(vellum-rmlui-cpu-bench cpu_bench.cpp VellumRmlUi::Cpu)
+    add_test(NAME vellum.rmlui.cpu-bench COMMAND vellum-rmlui-cpu-bench 1)
+    add_test(NAME vellum.rmlui.cpu-bench-2x COMMAND vellum-rmlui-cpu-bench 2)
+    set_tests_properties(vellum.rmlui.cpu-bench vellum.rmlui.cpu-bench-2x PROPERTIES LABELS bench)
 endif()
 
 if(VELLUM_RMLUI_NATIVE)
@@ -160,6 +196,31 @@ if(VELLUM_RMLUI_METAL AND VELLUM_RMLUI_FONTS)
     set_tests_properties(vellum.rmlui.metal-blend-control PROPERTIES
         FIXTURES_REQUIRED vellum_rmlui_metal_references
         SKIP_RETURN_CODE 77)
+
+    # The CPU renderer against the Metal renderer, in one process, and its
+    # control: the CPU renderer compiled with a straight-alpha blend.
+    if(VELLUM_RMLUI_CPU)
+        vellum_rmlui_add_test(vellum-rmlui-cpu-vs-metal-test metal/cpu_vs_metal_test.mm
+            VellumRmlUi::Native VellumRmlUi::Metal VellumRmlUi::Cpu
+            "-framework CoreGraphics" "-framework ImageIO")
+        target_compile_options(vellum-rmlui-cpu-vs-metal-test PRIVATE -fobjc-arc)
+        add_test(NAME vellum.rmlui.cpu-vs-metal
+            COMMAND vellum-rmlui-cpu-vs-metal-test "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}")
+        set_tests_properties(vellum.rmlui.cpu-vs-metal PROPERTIES SKIP_RETURN_CODE 77)
+
+        vellum_rmlui_add_test(vellum-rmlui-cpu-blend-control metal/cpu_vs_metal_test.mm
+            VellumRmlUi::Native VellumRmlUi::Metal
+            "-framework CoreGraphics" "-framework ImageIO")
+        target_sources(vellum-rmlui-cpu-blend-control PRIVATE
+            "${PROJECT_SOURCE_DIR}/src/cpu_render_interface.cpp")
+        target_compile_definitions(vellum-rmlui-cpu-blend-control PRIVATE
+            VELLUM_RMLUI_CPU_TEST_STRAIGHT_ALPHA_BLEND)
+        target_compile_options(vellum-rmlui-cpu-blend-control PRIVATE
+            $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc> $<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=off>)
+        add_test(NAME vellum.rmlui.cpu-blend-control
+            COMMAND vellum-rmlui-cpu-blend-control "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}")
+        set_tests_properties(vellum.rmlui.cpu-blend-control PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
 endif()
 
 vellum_rmlui_add_test(vellum-rmlui-hot-reload-test hot_reload_test.cpp VellumRmlUi::DevAssets)

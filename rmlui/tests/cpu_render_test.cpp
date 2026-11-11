@@ -162,30 +162,258 @@ void test_invalid_frames_draw_nothing() {
 
 void test_unsupported_calls_are_counted() {
     CpuRenderInterface r;
+    std::vector<std::uint8_t> buffer(kSize * kSize * 4);
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
     const auto geometry = quad(r, 0, 0, 1, 1, kRed);
-    r.EnableClipMask(false); // turning a mask off is not a draw
-    VELLUM_RMLUI_CHECK(r.unsupported_calls() == 0);
-    r.EnableClipMask(true);
-    r.RenderToClipMask(Rml::ClipMaskOperation::Set, geometry, {0, 0});
-    const auto layer = r.PushLayer();
-    VELLUM_RMLUI_CHECK(layer != 0);
-    const Rml::CompiledFilterHandle filters[] = {7};
-    r.CompositeLayers(layer, 0, Rml::BlendMode::Blend, Rml::Span<const Rml::CompiledFilterHandle>(filters, 1));
-    r.PopLayer();
-    VELLUM_RMLUI_CHECK(r.SaveLayerAsTexture() == 0);
     VELLUM_RMLUI_CHECK(r.SaveLayerAsMaskImage() == 0);
     VELLUM_RMLUI_CHECK(r.CompileFilter("blur", {}) == 0);
     VELLUM_RMLUI_CHECK(r.CompileShader("linear-gradient", {}) == 0);
     r.RenderShader(0, geometry, {0, 0}, 0);
-    VELLUM_RMLUI_CHECK(r.unsupported("clip_mask") == 2);
-    VELLUM_RMLUI_CHECK(r.unsupported("layer") == 3);
+    const auto layer = r.PushLayer();
+    const Rml::CompiledFilterHandle filters[] = {7};
+    r.CompositeLayers(layer, 0, Rml::BlendMode::Blend, Rml::Span<const Rml::CompiledFilterHandle>(filters, 1));
+    r.PopLayer();
+    r.end_frame();
     VELLUM_RMLUI_CHECK(r.unsupported("filter") == 2);
     VELLUM_RMLUI_CHECK(r.unsupported("shader") == 2);
     VELLUM_RMLUI_CHECK(r.unsupported("mask_image") == 1);
-    VELLUM_RMLUI_CHECK(r.unsupported_calls() == 10);
+    VELLUM_RMLUI_CHECK(r.unsupported("clip_mask") == 0 && r.unsupported("layer") == 0);
+    VELLUM_RMLUI_CHECK(r.unsupported_calls() == 5);
+}
+
+// A right triangle over the lower-left half of the 8x8 frame.
+Rml::CompiledGeometryHandle lower_left(CpuRenderInterface& r) {
+    const std::array<Rml::Vertex, 3> v = {vertex(0, 0, kRed), vertex(8, 8, kRed), vertex(0, 8, kRed)};
+    const std::array<int, 3> i = {0, 1, 2};
+    return r.CompileGeometry(Rml::Span<const Rml::Vertex>(v.data(), v.size()), Rml::Span<const int>(i.data(), i.size()));
+}
+
+void test_clip_masks() {
+    std::vector<std::uint8_t> buffer(kSize * kSize * 4);
+    CpuRenderInterface r;
+    const auto fill = quad(r, 0, 0, 8, 8, {0, 255, 0, 255});
+    const auto mask = lower_left(r);
+
+    // Set: only under the triangle.
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    r.EnableClipMask(true);
+    r.RenderToClipMask(Rml::ClipMaskOperation::Set, mask, {0, 0});
+    r.RenderGeometry(fill, {0, 0}, 0);
+    r.EnableClipMask(false);
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 1, 6), 0, 255, 0, 255));
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 6, 1), 0, 0, 0, 0));
+
+    // SetInverse: everywhere but the triangle.
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    r.EnableClipMask(true);
+    r.RenderToClipMask(Rml::ClipMaskOperation::SetInverse, mask, {0, 0});
+    r.RenderGeometry(fill, {0, 0}, 0);
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 1, 6), 0, 0, 0, 0));
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 6, 1), 0, 255, 0, 255));
+
+    // Intersect: the triangle and the left half.
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    r.EnableClipMask(true);
+    r.RenderToClipMask(Rml::ClipMaskOperation::Set, mask, {0, 0});
+    r.RenderToClipMask(Rml::ClipMaskOperation::Intersect, quad(r, 0, 0, 4, 8, kRed), {0, 0});
+    r.RenderGeometry(fill, {0, 0}, 0);
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 1, 6), 0, 255, 0, 255));  // both
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 6, 7), 0, 0, 0, 0));      // triangle only
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 2, 0), 0, 0, 0, 0));      // left half only
+
+    // A mask disabled again draws everywhere.
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    r.EnableClipMask(true);
+    r.RenderToClipMask(Rml::ClipMaskOperation::Set, mask, {0, 0});
+    r.EnableClipMask(false);
+    r.RenderGeometry(fill, {0, 0}, 0);
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 6, 1), 0, 255, 0, 255));
+}
+
+void test_layers() {
+    std::vector<std::uint8_t> buffer(kSize * kSize * 4);
+    CpuRenderInterface r;
+    const auto blue = quad(r, 0, 0, 8, 8, {0, 0, 255, 255});
+    const auto half_red = quad(r, 0, 0, 4, 8, {128, 0, 0, 128});
+
+    // Drawing into a layer leaves the base alone until it is composited.
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    r.RenderGeometry(blue, {0, 0}, 0);
+    const auto layer = r.PushLayer();
+    VELLUM_RMLUI_CHECK(layer == 1);
+    r.RenderGeometry(half_red, {0, 0}, 0);
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 1, 1), 0, 0, 255, 255));
+    r.CompositeLayers(layer, 0, Rml::BlendMode::Blend, {});
+    r.PopLayer();
+    // After the pop, draws reach the base again.
+    r.RenderGeometry(quad(r, 7, 7, 8, 8, kRed), {0, 0}, 0);
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 1, 1), 128, 0, 127, 255)); // blended
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 6, 1), 0, 0, 255, 255));   // layer empty there
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 7, 7), 255, 0, 0, 255));
+
+    // Replace writes the layer's pixels, transparent ones included.
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    r.RenderGeometry(blue, {0, 0}, 0);
+    const auto replaced = r.PushLayer();
+    r.RenderGeometry(half_red, {0, 0}, 0);
+    r.CompositeLayers(replaced, 0, Rml::BlendMode::Replace, {});
+    r.PopLayer();
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 1, 1), 128, 0, 0, 128));
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 6, 1), 0, 0, 0, 0));
+
+    // The composite honours the scissor and the clip mask.
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    const auto clipped = r.PushLayer();
+    r.RenderGeometry(quad(r, 0, 0, 8, 8, kRed), {0, 0}, 0);
+    r.EnableScissorRegion(true);
+    r.SetScissorRegion(Rml::Rectanglei::FromPositionSize({0, 0}, {8, 4}));
+    r.EnableClipMask(true);
+    r.RenderToClipMask(Rml::ClipMaskOperation::Set, lower_left(r), {0, 0});
+    r.CompositeLayers(clipped, 0, Rml::BlendMode::Blend, {});
+    r.EnableClipMask(false);
+    r.EnableScissorRegion(false);
+    r.PopLayer();
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 0, 3), 255, 0, 0, 255)); // inside both
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 6, 1), 0, 0, 0, 0));     // outside the mask
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 1, 6), 0, 0, 0, 0));     // outside the scissor
+
+    // SaveLayerAsTexture copies the scissored region of the top layer.
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    r.RenderGeometry(quad(r, 2, 2, 4, 4, kRed), {0, 0}, 0);
+    VELLUM_RMLUI_CHECK(r.SaveLayerAsTexture() == 0); // needs a scissor
+    r.EnableScissorRegion(true);
+    r.SetScissorRegion(Rml::Rectanglei::FromPositionSize({2, 2}, {2, 2}));
+    const auto saved = r.SaveLayerAsTexture();
+    VELLUM_RMLUI_CHECK(saved != 0);
+    r.EnableScissorRegion(false);
+    r.RenderGeometry(quad(r, 4, 4, 8, 8, {255, 255, 255, 255}), {0, 0}, saved);
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 6, 6), 255, 0, 0, 255)); // the copy was all red
+    VELLUM_RMLUI_CHECK(r.unsupported_calls() == 0);
 }
 
 // A 1 x 28,544 texture whose rows past 8192 are blue and the rest red.
+// A Set inside a scissor clears the mask only there: values the previous Set
+// left outside the scissor still count. Then the next frame starts clear.
+void test_mask_reuse_outside_the_scissor() {
+    std::vector<std::uint8_t> buffer(kSize * kSize * 4);
+    CpuRenderInterface r;
+    const auto fill = quad(r, 0, 0, 8, 8, {0, 255, 0, 255});
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    r.EnableClipMask(true);
+    r.RenderToClipMask(Rml::ClipMaskOperation::Set, quad(r, 0, 0, 8, 8, kRed), {0, 0}); // all 1
+    r.EnableScissorRegion(true);
+    r.SetScissorRegion(Rml::Rectanglei::FromPositionSize({0, 0}, {4, 8}));
+    r.RenderToClipMask(Rml::ClipMaskOperation::Set, quad(r, 0, 0, 2, 8, kRed), {0, 0}); // left 4: 1,1,0,0
+    r.EnableScissorRegion(false);
+    r.RenderGeometry(fill, {0, 0}, 0);
+    r.EnableClipMask(false);
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 1, 3), 0, 255, 0, 255)); // inside both Sets
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 3, 3), 0, 0, 0, 0));     // cleared by the second
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 6, 3), 0, 255, 0, 255)); // outside its scissor: kept
+
+    // A new frame: SetInverse of nothing draws everywhere, so no 1 survived.
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    r.EnableClipMask(true);
+    r.EnableScissorRegion(true);
+    r.SetScissorRegion(Rml::Rectanglei::FromPositionSize({0, 0}, {1, 1}));
+    r.RenderToClipMask(Rml::ClipMaskOperation::SetInverse, quad(r, 0, 0, 1, 1, kRed), {0, 0});
+    r.EnableScissorRegion(false);
+    r.RenderGeometry(fill, {0, 0}, 0);
+    r.EnableClipMask(false);
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 6, 6), 0, 255, 0, 255));
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 0, 0), 0, 0, 0, 0));
+}
+
+// A pooled layer pushed again starts transparent: nothing drawn into it
+// before, in this frame or the last, comes back when it is composited.
+void test_layer_reuse_starts_clear() {
+    std::vector<std::uint8_t> buffer(kSize * kSize * 4);
+    CpuRenderInterface r;
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    auto layer = r.PushLayer();
+    r.RenderGeometry(quad(r, 0, 0, 4, 4, kRed), {0, 0}, 0);
+    r.PopLayer(); // never composited
+    layer = r.PushLayer();
+    r.RenderGeometry(quad(r, 4, 4, 8, 8, {0, 0, 255, 255}), {0, 0}, 0);
+    r.CompositeLayers(layer, 0, Rml::BlendMode::Blend, {});
+    r.PopLayer();
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 1, 1), 0, 0, 0, 0));
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 5, 5), 0, 0, 255, 255));
+
+    // Next frame: Replace writes the whole (empty) layer over a red base.
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    r.RenderGeometry(quad(r, 0, 0, 8, 8, kRed), {0, 0}, 0);
+    layer = r.PushLayer();
+    r.CompositeLayers(layer, 0, Rml::BlendMode::Replace, {});
+    r.PopLayer();
+    r.end_frame();
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 5, 5), 0, 0, 0, 0));
+    VELLUM_RMLUI_CHECK(is(px(buffer, kSize * 4, 1, 1), 0, 0, 0, 0));
+}
+
+void test_equal_area_resize_clears_reused_buffers() {
+    const auto check_mask = [](std::uint32_t old_width, std::uint32_t old_height, std::uint32_t width,
+                               std::uint32_t height) {
+        CpuRenderInterface r;
+        std::vector<std::uint8_t> old_buffer(static_cast<std::size_t>(old_width) * old_height * 4u);
+        std::vector<std::uint8_t> buffer(static_cast<std::size_t>(width) * height * 4u);
+        const auto old_full = quad(r, 0, 0, static_cast<float>(old_width), static_cast<float>(old_height), kRed);
+        const auto full = quad(r, 0, 0, static_cast<float>(width), static_cast<float>(height), kRed);
+
+        VELLUM_RMLUI_CHECK(r.begin_frame(frame(old_buffer, old_width, old_height)));
+        r.EnableClipMask(true);
+        r.RenderToClipMask(Rml::ClipMaskOperation::Set, old_full, {0, 0});
+        r.end_frame();
+
+        VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer, width, height)));
+        r.EnableClipMask(true);
+        r.RenderGeometry(full, {0, 0}, 0);
+        r.EnableClipMask(false);
+        r.end_frame();
+        for (std::uint32_t y = 0; y < height; ++y)
+            for (std::uint32_t x = 0; x < width; ++x)
+                VELLUM_RMLUI_CHECK(is(px(buffer, static_cast<std::size_t>(width) * 4u, x, y), 255, 0, 0, 255));
+    };
+
+    const auto check_layer = [](std::uint32_t old_width, std::uint32_t old_height, std::uint32_t width,
+                                std::uint32_t height) {
+        CpuRenderInterface r;
+        std::vector<std::uint8_t> old_buffer(static_cast<std::size_t>(old_width) * old_height * 4u);
+        std::vector<std::uint8_t> buffer(static_cast<std::size_t>(width) * height * 4u);
+        const auto old_full = quad(r, 0, 0, static_cast<float>(old_width), static_cast<float>(old_height), kRed);
+
+        VELLUM_RMLUI_CHECK(r.begin_frame(frame(old_buffer, old_width, old_height)));
+        r.PushLayer();
+        r.RenderGeometry(old_full, {0, 0}, 0);
+        r.PopLayer();
+        r.end_frame();
+
+        VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer, width, height)));
+        const auto layer = r.PushLayer();
+        r.CompositeLayers(layer, 0, Rml::BlendMode::Blend, {});
+        r.PopLayer();
+        r.end_frame();
+        for (const auto value : buffer)
+            VELLUM_RMLUI_CHECK(value == 0);
+    };
+
+    check_mask(8, 8, 16, 4);
+    check_mask(16, 4, 8, 8);
+    check_layer(8, 8, 16, 4);
+    check_layer(16, 4, 8, 8);
+}
+
 std::vector<std::uint8_t> tall_texture() {
     std::vector<std::uint8_t> texels(28544u * 4u);
     for (std::size_t y = 0; y < 28544u; ++y) {
@@ -285,6 +513,11 @@ int main() {
     test_scissor_transform_and_scale();
     test_invalid_frames_draw_nothing();
     test_unsupported_calls_are_counted();
+    test_clip_masks();
+    test_layers();
+    test_mask_reuse_outside_the_scissor();
+    test_layer_reuse_starts_clear();
+    test_equal_area_resize_clears_reused_buffers();
     test_texture_limit();
     test_deterministic_across_threads();
     return 0;

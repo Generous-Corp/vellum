@@ -7,8 +7,10 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
 #include <system_error>
 #include <utility>
 
@@ -579,6 +581,64 @@ Scene path_cubic_gradient(float width, float height) {
     return scene;
 }
 
+std::shared_ptr<const ImageAsset> quadrant_image() {
+    const auto path = std::filesystem::path(VELLUM_CAPTURE_IMAGE_DIR) / "quadrants.png";
+    std::ifstream file(path, std::ios::binary);
+    const std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>(file),
+                                          std::istreambuf_iterator<char>()};
+    std::string error;
+    auto asset = SkiaDawnSurface::decode_image_asset(bytes, kQuadrantImageHash, &error);
+    if (!asset) throw std::runtime_error("cannot load " + path.string() + ": " + error);
+    return asset;
+}
+
+Scene image(float width, float height) {
+    auto scene = empty(width, height);
+    const auto asset = quadrant_image();
+    scene.images.push_back(asset);
+    const float cell = width / 5.0F;
+    const float side = std::min(cell * 0.9F, height * 0.45F);
+    const auto node = [&](std::string id, int column, float row, Rect box, ImageFit fit,
+                          ImageSampling sampling) {
+        return SceneNode{
+            .id = std::move(id),
+            .kind = SceneNode::Kind::image,
+            .bounds = {cell * static_cast<float>(column) + (cell - box.width) * 0.5F,
+                       row, box.width, box.height},
+            .image = ImageReference{.content_hash = asset->content_hash,
+                                    .fit = fit,
+                                    .sampling = sampling},
+        };
+    };
+    const float top = height * 0.05F;
+    const Rect square{0.0F, 0.0F, side, side};
+    const Rect wide{0.0F, 0.0F, side, side * 0.5F};
+    scene.root.children.push_back(
+        node("fill-nearest", 0, top, square, ImageFit::fill, ImageSampling::nearest));
+    scene.root.children.push_back(
+        node("fill-linear", 1, top, square, ImageFit::fill, ImageSampling::linear));
+    auto contained = node("contain", 2, top, wide, ImageFit::contain, ImageSampling::nearest);
+    contained.fill = Color::hex(0xFDE68A);
+    scene.root.children.push_back(std::move(contained));
+    auto covered = node("cover-rounded", 3, top, wide, ImageFit::cover, ImageSampling::nearest);
+    covered.corner_radius = side * 0.2F;
+    scene.root.children.push_back(std::move(covered));
+    scene.root.children.push_back(
+        node("none", 4, top, square, ImageFit::none, ImageSampling::nearest));
+    auto cropped = node("source-rect", 0, height * 0.55F, square, ImageFit::fill,
+                        ImageSampling::nearest);
+    cropped.image->source_rect = Rect{4.0F, 0.0F, 4.0F, 8.0F};
+    scene.root.children.push_back(std::move(cropped));
+    auto turned = node("rotated", 2, height * 0.55F, square, ImageFit::fill,
+                       ImageSampling::linear);
+    turned.transform = concat(translation(side * 0.5F, side * 0.5F),
+        concat(Affine2D{.a = 0.7071068F, .b = 0.7071068F, .c = -0.7071068F, .d = 0.7071068F},
+               translation(-side * 0.5F, -side * 0.5F)));
+    turned.opacity = 0.75F;
+    scene.root.children.push_back(std::move(turned));
+    return scene;
+}
+
 Scene compositing(float width, float height) {
     auto scene = empty(width, height);
     const float cell = std::min(width, height) * 0.25F;
@@ -731,6 +791,7 @@ std::vector<NamedScene> all(float width, float height) {
         {"path_fill_rules", path_fill_rules(width, height)},
         {"path_dashed_stroke", path_dashed_stroke(width, height)},
         {"path_cubic_gradient", path_cubic_gradient(width, height)},
+        {"image", image(width, height)},
         {"compositing", compositing(width, height)},
         {"clip_nested", clip_nested(width, height)},
         {"mask_luminance", mask_luminance(width, height)},

@@ -873,6 +873,7 @@ bool scene_versioning() {
     static_assert(vellum::graphics::scene_version_is_supported(1U));
     static_assert(vellum::graphics::scene_version_is_supported(2U));
     static_assert(!vellum::graphics::scene_version_is_supported(0U));
+    static_assert(vellum::graphics::scene_version_is_supported(3U));
     static_assert(vellum::graphics::scene_version_is_supported(4U));
     static_assert(!vellum::graphics::scene_version_is_supported(6U));
 

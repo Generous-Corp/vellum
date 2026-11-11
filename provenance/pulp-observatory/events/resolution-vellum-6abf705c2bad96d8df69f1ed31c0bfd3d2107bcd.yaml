@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-10T10:30:14Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-6abf705c2bad96d8df69f1ed31c0bfd3d2107bcd",
+  "kind": "resolution",
+  "linked_commits": [
+    "6abf705c2bad96d8df69f1ed31c0bfd3d2107bcd"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Merge of main into the partial presentation branch. Its own conflict resolution touches only Vellum-native files (graphics/src/skia_dawn_surface.mm, graphics/tests/partial_present_bench.mm, graphics/tests/partial_present_test.cpp, graphics/tests/support/scene_capture_harness.cpp, graphics/tests/support/scene_capture_harness.hpp), combining both sides' retained-scene and surface work. Pulp has no counterpart to those files, so nothing is owed to Pulp.",
+  "resolves": "vellum-6abf705c2bad96d8df69f1ed31c0bfd3d2107bcd",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

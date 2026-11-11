@@ -1,5 +1,7 @@
 #include <vellum/graphics/paint_command.hpp>
 
+#include <vellum/graphics/image_asset.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -46,16 +48,17 @@ GroupExtent group_extent(const std::vector<PaintCommand>& output, std::size_t fi
     return group;
 }
 
-void append_node(const SceneNode& node, float parent_x, float parent_y,
-                 const Affine2D& parent_transform, std::vector<PaintCommand>& output);
+void append_node(const ImageAssetIndex& images, const SceneNode& node, float parent_x,
+                 float parent_y, const Affine2D& parent_transform,
+                 std::vector<PaintCommand>& output);
 
-void append_children(const SceneNode& node, const Rect& absolute, const Affine2D& transform,
+void append_children(const ImageAssetIndex& images, const SceneNode& node, const Rect& absolute, const Affine2D& transform,
                      std::vector<PaintCommand>& output) {
     const bool masked = std::any_of(node.children.begin(), node.children.end(),
         [](const SceneNode& child) { return child.mask.has_value(); });
     if (!masked) {
         for (const auto& child : node.children) {
-            append_node(child, absolute.x, absolute.y, transform, output);
+            append_node(images, child, absolute.x, absolute.y, transform, output);
         }
         return;
     }
@@ -64,7 +67,7 @@ void append_children(const SceneNode& node, const Rect& absolute, const Affine2D
                       .node_id = node.id + "/masked",
                       .layer_isolated = true});
     for (const auto& child : node.children) {
-        if (!child.mask) append_node(child, absolute.x, absolute.y, transform, output);
+        if (!child.mask) append_node(images, child, absolute.x, absolute.y, transform, output);
     }
     const auto group = group_extent(output, slot + 1U, output.size());
     output[slot].bounds = group.bounds;
@@ -76,13 +79,14 @@ void append_children(const SceneNode& node, const Rect& absolute, const Affine2D
                           .mask_mode = *child.mask});
         // The mask node's own flag is consumed here; its subtree renders
         // as ordinary paint into the mask.
-        append_node(child, absolute.x, absolute.y, transform, output);
+        append_node(images, child, absolute.x, absolute.y, transform, output);
         output.push_back({.kind = PaintCommand::Kind::end_mask, .node_id = child.id});
     }
     output.push_back({.kind = PaintCommand::Kind::end_layer, .node_id = node.id + "/masked"});
 }
 
-void append_node(const SceneNode& node, float parent_x, float parent_y,
+void append_node(const ImageAssetIndex& images, const SceneNode& node, float parent_x,
+                 float parent_y,
                  const Affine2D& parent_transform, std::vector<PaintCommand>& output) {
     if (!is_known_kind(node.kind) || !compositing_is_finite(node)) return;
     if (node.clip && !clip_is_valid(*node.clip)) return;
@@ -174,6 +178,18 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
             .path = node.path,
             .transform = transform,
         });
+    } else if (node.kind == SceneNode::Kind::image) {
+        output.push_back({
+            .kind = PaintCommand::Kind::image,
+            .node_id = node.id,
+            .bounds = absolute,
+            .fill = node.fill,
+            .corner_radius = node.corner_radius,
+            .transform = transform,
+            .corner_radii = radii,
+            .image = node.image,
+            .image_asset = node.image ? images.find(node.image->content_hash) : nullptr,
+        });
     } else if (node.kind == SceneNode::Kind::mesh && node.mesh) {
         output.push_back({
             .kind = PaintCommand::Kind::mesh,
@@ -184,7 +200,7 @@ void append_node(const SceneNode& node, float parent_x, float parent_y,
         });
     }
     if (subtree_clip) open_clip();
-    append_children(node, absolute, transform, output);
+    append_children(images, node, absolute, transform, output);
     if (subtree_clip) output.push_back({.kind = PaintCommand::Kind::end_clip, .node_id = node.id});
     const auto close_clip = [&] {
         if (own_clip) output.push_back({.kind = PaintCommand::Kind::end_clip, .node_id = node.id});
@@ -342,7 +358,107 @@ std::vector<PaintCommand> make_paint_commands(const Scene& scene) {
     if (!scene_version_is_supported(scene.scene_version)) return output;
     if (!scene_fields_match_version(scene)) return output;
     if (scene.root.mask) return output;
-    append_node(scene.root, 0.0F, 0.0F, Affine2D{}, output);
+    append_node(ImageAssetIndex(scene), scene.root, 0.0F, 0.0F, Affine2D{}, output);
+    return output;
+}
+
+namespace {
+
+void report_missing_images(const ImageAssetIndex& images, const SceneNode& node,
+                           std::vector<LoweringDiagnostic>& output) {
+    const auto asset = node.kind == SceneNode::Kind::image && node.image
+        ? images.find(node.image->content_hash)
+        : nullptr;
+    // A unit box always has area, so an empty placement means the source
+    // rectangle selects nothing of the image.
+    if (asset &&
+        !image_placement(*node.image, asset->width, asset->height, {0.0F, 0.0F, 1.0F, 1.0F})) {
+        output.push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::lowered,
+            .code = std::string(kImageAssetMissingCode),
+            .node_id = node.id,
+            .property = "image",
+            .message = "image " + node.id +
+                       " has a source rectangle outside its asset; only its fill was drawn",
+        });
+    }
+    if (node.kind == SceneNode::Kind::image && node.image && !asset) {
+        output.push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::lowered,
+            .code = std::string(kImageAssetMissingCode),
+            .node_id = node.id,
+            .property = "image",
+            .message = "image " + node.id + " names asset " + node.image->content_hash +
+                       ", which the scene does not hold; a placeholder was drawn",
+        });
+    }
+    for (const auto& child : node.children) report_missing_images(images, child, output);
+}
+
+}  // namespace
+
+std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
+    std::vector<LoweringDiagnostic> output;
+    const auto refuse = [&](std::string node_id, std::string message) {
+        output.push_back({
+            .severity = LoweringDiagnostic::Severity::error,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(kSceneVersionMismatchCode),
+            .node_id = std::move(node_id),
+            .property = "kind",
+            .message = std::move(message),
+        });
+        return output;
+    };
+    const std::string version = std::to_string(scene.scene_version);
+    if (!scene_version_is_supported(scene.scene_version)) {
+        return refuse(scene.root.id, "scene version " + version + " is not supported");
+    }
+    if (const auto* node = find_version_mismatch(scene); node != nullptr) {
+        if (!is_known_kind(node->kind)) {
+            return refuse(node->id, "node " + node->id + " has a kind this build does not know");
+        }
+        // Name the field or kind the scene's version is too old for; a node
+        // can carry several, and only the oldest one its version lacks is
+        // the one `find_version_mismatch` found it by.
+        const auto needs = [&](std::uint32_t introduced) {
+            return scene.scene_version < introduced;
+        };
+        const bool compositing = needs(2U) && uses_version_2_fields(*node);
+        if (!compositing && needs(4U) && node->kind == SceneNode::Kind::image) {
+            return refuse(node->id, "scene version " + version +
+                                        " cannot carry the image node " + node->id);
+        }
+        if (!compositing && needs(3U) && node->kind == SceneNode::Kind::path) {
+            return refuse(node->id, "scene version " + version +
+                                        " cannot carry the path node " + node->id);
+        }
+        if (!compositing && needs(5U) && uses_version_5_fields(*node)) {
+            output.push_back({
+                .severity = LoweringDiagnostic::Severity::error,
+                .disposition = LoweringDiagnostic::Disposition::unsupported,
+                .code = std::string(kSceneVersionMismatchCode),
+                .node_id = node->id,
+                .property = node->clip ? "clip" : node->mask ? "mask" : "isolate",
+                .message = "scene version " + version +
+                           " cannot carry the clip, mask, or isolation at " + node->id,
+            });
+            return output;
+        }
+        output.push_back({
+            .severity = LoweringDiagnostic::Severity::error,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(kSceneVersionMismatchCode),
+            .node_id = node->id,
+            .property = "transform",
+            .message = "scene version " + version +
+                       " cannot carry the transform, opacity, or corner radii at " + node->id,
+        });
+        return output;
+    }
+    report_missing_images(ImageAssetIndex(scene), scene.root, output);
     return output;
 }
 
@@ -380,6 +496,7 @@ PaintExtent paint_extent(const PaintCommand& command) {
         return {{box.x + control->x - outset, box.y + control->y - outset,
                  control->width + 2.0F * outset, control->height + 2.0F * outset}};
     }
+    if (command.kind == PaintCommand::Kind::image) return {box};
     if (!draws_content(command.kind)) return {box};
     Rect extent = box;
     for (const auto& shadow : command.box_shadows) {

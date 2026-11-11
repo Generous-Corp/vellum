@@ -1,0 +1,732 @@
+#include <vellum/view/context_menu.hpp>
+#include <vellum/view/widget_painter.hpp>
+
+#include <vellum/canvas/text_shaper.hpp>
+
+#include <algorithm>
+#include <vector>
+
+namespace vellum::view {
+
+namespace {
+
+bool is_selectable(const ContextMenu::Item& it) {
+    return !it.separator && it.enabled;
+}
+
+}  // namespace
+
+void ContextMenu::replace_items(std::vector<Item> items) {
+    items_ = std::move(items);
+    // A rebuild during a slider gesture ends the gesture: the row the pointer
+    // was driving no longer exists, and the capture taken at mouse-down would
+    // otherwise never be released (the release path only runs for an active
+    // slider), leaving the host sending every later event to this menu.
+    if (active_slider_index_ >= 0) {
+        release_pointer_capture(active_pointer_id_);
+        active_pointer_id_ = 0;
+    }
+    active_slider_index_ = -1;
+    scroll_ = 0.0f;
+    if (hover_index_ >= static_cast<int>(items_.size()))
+        hover_index_ = -1;
+}
+
+void ContextMenu::flush_deferred_items() {
+    if (!deferred_items_)
+        return;
+    auto items = std::move(*deferred_items_);
+    deferred_items_.reset();
+    replace_items(std::move(items));
+}
+
+void ContextMenu::notify_item_change(Item& item) {
+    auto callback = item.on_change;
+    if (!callback)
+        return;
+    ++item_change_dispatch_depth_;
+    try {
+        callback(item);
+    } catch (...) {
+        --item_change_dispatch_depth_;
+        if (item_change_dispatch_depth_ == 0)
+            flush_deferred_items();
+        throw;
+    }
+    --item_change_dispatch_depth_;
+    if (item_change_dispatch_depth_ == 0)
+        flush_deferred_items();
+}
+
+ContextMenu::MenuLayout ContextMenu::layout() const {
+    MenuLayout lay;
+
+    // ── The sizing delegate (widget_metrics.hpp) ─────────────────────────
+    // A menu's panel size is a pure function of its rows, so the delegate is
+    // asked three things — the row font, each row's natural size, and the panel
+    // border — and the menu does the arithmetic. Each hook may decline, in
+    // which case the stock metric below is used for that hook alone.
+    WidgetMetrics* metrics = effective_metrics();
+
+    lay.font = FontSpec{"Inter", kFontSize, 400, 0.0f};
+    if (metrics != nullptr)
+        metrics->menu_font(lay.font, const_cast<ContextMenu&>(*this));
+
+    lay.border = 0.0f;
+    if (metrics != nullptr)
+        metrics->menu_border(lay.border, const_cast<ContextMenu&>(*this));
+
+    // Measure with the SAME shaper the painter draws with, so a measured width
+    // and a drawn width cannot disagree. This runs with no canvas, which is
+    // what lets a menu be sized before it is shown.
+    auto& shaper = canvas::global_text_shaper();
+
+    // The stock minimum width is a floor on the STOCK look only. Once a metrics
+    // delegate is sizing the rows it owns the width outright, and silently
+    // clamping its answer up to a widget constant would make a skinned menu
+    // that asked for 60px come out 120px wide for no reason the skin can see.
+    float widest = 0.0f;
+    bool any_delegated_width = false;
+    float stacked = 0.0f;
+    std::vector<float> heights;
+    heights.reserve(items_.size());
+
+    // A separator is a divider BETWEEN rows, so a trailing one divides nothing
+    // and is dropped rather than adding a strip of empty panel at the bottom.
+    std::size_t count = items_.size();
+    while (count > 0 && items_[count - 1].separator) --count;
+
+    for (std::size_t idx = 0; idx < count; ++idx) {
+        const auto& it = items_[idx];
+        BoxSize size;
+        bool sized = false;
+        if (metrics != nullptr) {
+            MenuItemMetricsQuery q;
+            q.text = it.label;
+            q.separator = it.separator;
+            q.header = it.header;
+            q.ticked = it.checked;
+            q.has_submenu = it.has_submenu;
+            // The height this row WOULD get if the delegate declines. A skin that
+            // only wants to widen a menu can hand this straight back and keep the
+            // stock vertical rhythm instead of having to rediscover it.
+            q.standard_height = it.separator ? kSeparatorHeight : kRowHeight;
+            sized = metrics->menu_item_size(q, size, const_cast<ContextMenu&>(*this));
+        }
+        if (sized && size.width > 0.0f) any_delegated_width = true;
+        if (!sized || size.width <= 0.0f) {
+            size.width = it.separator
+                ? 0.0f
+                : shaper.prepare(it.label, lay.font.family, lay.font.size).total_width() + kHPad;
+        }
+        if (!sized || size.height <= 0.0f)
+            size.height = it.separator ? kSeparatorHeight : kRowHeight;
+
+        widest = std::max(widest, size.width);
+        heights.push_back(size.height);
+        stacked += size.height;
+    }
+
+    if (!any_delegated_width) widest = std::max(widest, kMinWidth);
+    widest = std::max(widest, min_width_);
+    const float width = widest + lay.border * 2.0f;
+    lay.content_height = stacked + lay.border * 2.0f;
+    float height = lay.content_height;
+
+    // Position: flip left / up if the box would spill past the overlay bounds.
+    auto b = local_bounds();
+    float x = anchor_.x;
+    float y = anchor_.y;
+    if (b.width > 0.0f && x + width > b.width) x = anchor_.x - width;
+
+    // A menu taller than the overlay cannot be made to fit by flipping it up:
+    // the flip drives `y` negative, the clamp to 0 pins the panel to the top
+    // edge, and the panel keeps its full content height — so every row past
+    // the overlay was laid out, hit-tested and PAINTED outside the panel, on
+    // top of the app behind it. Cap the panel to the space available and let
+    // the rows scroll inside it instead.
+    if (b.height > 0.0f) {
+        const float avail = std::max(kRowHeight, b.height - kEdgeMargin * 2.0f);
+        height = std::min(height, avail);
+        if (y + height > b.height - kEdgeMargin)
+            y = anchor_.y - height;
+        const float y_max = std::max(kEdgeMargin, b.height - height - kEdgeMargin);
+        y = std::clamp(y, kEdgeMargin, y_max);
+    }
+    x = std::max(0.0f, x);
+    y = std::max(0.0f, y);
+    lay.box = {x, y, width, height};
+
+    // Rows carry the scroll offset in their own rects, so painting and
+    // hit-testing cannot disagree about where a row is: both walk `rows`.
+    lay.max_scroll = std::max(0.0f, lay.content_height - height);
+    const float scroll = std::clamp(scroll_, 0.0f, lay.max_scroll);
+
+    float row_y = y + lay.border - scroll;
+    lay.rows.reserve(items_.size());
+    for (float h : heights) {
+        lay.rows.push_back({x + lay.border, row_y, widest, h});
+        row_y += h;
+    }
+    // Dropped trailing separators still need a rect so `rows` stays index-
+    // aligned with `items`; they are simply empty.
+    while (lay.rows.size() < items_.size())
+        lay.rows.push_back({x + lay.border, row_y, widest, 0.0f});
+    return lay;
+}
+
+int ContextMenu::row_at(Point local_point, const MenuLayout& lay) const {
+    const Rect& box = lay.box;
+    if (local_point.x < box.x || local_point.x > box.x + box.width ||
+        local_point.y < box.y || local_point.y > box.y + box.height)
+        return -1;
+    for (int i = 0; i < static_cast<int>(lay.rows.size()); ++i) {
+        const Rect& r = lay.rows[static_cast<size_t>(i)];
+        if (local_point.y >= r.y && local_point.y < r.y + r.height) return i;
+    }
+    return -1;
+}
+
+void ContextMenu::adjust_control(Item& item, float delta) {
+    if (!item.enabled)
+        return;
+    if (item.control_kind == Item::ControlKind::toggle) {
+        item.checked = !item.checked;
+        notify_item_change(item);
+    } else if (item.control_kind == Item::ControlKind::slider) {
+        const float next = std::clamp(item.normalized_value + delta, 0.0f, 1.0f);
+        if (next != item.normalized_value) {
+            item.normalized_value = next;
+            notify_item_change(item);
+        }
+    } else if (item.control_kind == Item::ControlKind::choice && !item.choices.empty()) {
+        const auto n = static_cast<long long>(item.choices.size());
+        auto next = static_cast<long long>(item.choice_index) + (delta < 0.0f ? -1 : 1);
+        next = std::clamp(next, 0LL, n - 1);
+        if (static_cast<std::size_t>(next) != item.choice_index) {
+            item.choice_index = static_cast<std::size_t>(next);
+            notify_item_change(item);
+        }
+    }
+    request_repaint();
+}
+
+float ContextMenu::slider_track_right(const Item& item, const Rect& row) {
+    // A value label owns the right end of the row, so the track (and the
+    // pointer mapping that drives it) stops short of it instead of running
+    // underneath the text.
+    return item.value_label.empty() ? row.x + row.width - 10.0f
+                                    : row.x + row.width - kValueLabelWidth;
+}
+
+bool ContextMenu::set_control_from_pointer(Item& item, const Rect& row, Point point) {
+    if (!item.enabled || item.control_kind != Item::ControlKind::slider || row.width <= 0.0f)
+        return false;
+    // The right-hand half of a slider row is the value track. Keeping the
+    // label area available for selection makes the menu usable at narrow
+    // sizes and mirrors ordinary parameter popovers.
+    const float left = row.x + std::min(90.0f, row.width * 0.45f);
+    const float right = slider_track_right(item, row);
+    const float value =
+        right > left ? std::clamp((point.x - left) / (right - left), 0.0f, 1.0f) : 0.0f;
+    const bool changed = value != item.normalized_value;
+    if (changed) {
+        item.normalized_value = value;
+        // The callback may rebuild the rows; `item` is dangling after this
+        // call and nothing below may touch it.
+        notify_item_change(item);
+    }
+    request_repaint();
+    return changed;
+}
+
+void ContextMenu::move_hover(int delta) {
+    if (items_.empty()) return;
+    const int n = static_cast<int>(items_.size());
+    int idx = hover_index_;
+    for (int step = 0; step < n; ++step) {
+        int next = idx + delta;
+        if (next < 0 || next >= n) {
+            // No selectable row found yet but we ran off the end: if we have no
+            // current hover, seed from the appropriate end on the next pass.
+            if (idx < 0) {
+                next = (delta > 0) ? 0 : n - 1;
+            } else {
+                break;  // stay put at the edge
+            }
+        }
+        idx = next;
+        if (is_selectable(items_[static_cast<size_t>(idx)])) {
+            hover_index_ = idx;
+            scroll_row_into_view(idx);
+            request_repaint();
+            return;
+        }
+    }
+}
+
+void ContextMenu::move_hover_to_edge(bool last) {
+    // Home / End. Walks inward from the requested end past separators and
+    // disabled rows, so neither key can park the cursor somewhere Enter would
+    // refuse. Matches ComboBox's `move_hover_to_edge`.
+    const int n = static_cast<int>(items_.size());
+    for (int step = 0; step < n; ++step) {
+        const int idx = last ? n - 1 - step : step;
+        if (is_selectable(items_[static_cast<size_t>(idx)])) {
+            hover_index_ = idx;
+            scroll_row_into_view(idx);
+            request_repaint();
+            return;
+        }
+    }
+}
+
+void ContextMenu::scroll_row_into_view(int index) {
+    if (index < 0)
+        return;
+    const MenuLayout lay = layout();
+    if (lay.max_scroll <= 0.0f)
+        return;
+    if (index >= static_cast<int>(lay.rows.size()))
+        return;
+    const Rect& r = lay.rows[static_cast<size_t>(index)];
+    const float top = lay.box.y + lay.border;
+    const float bottom = lay.box.y + lay.box.height - lay.border;
+    float delta = 0.0f;
+    if (r.y < top)
+        delta = r.y - top;
+    else if (r.y + r.height > bottom)
+        delta = (r.y + r.height) - bottom;
+    if (delta != 0.0f) {
+        scroll_ = std::clamp(scroll_ + delta, 0.0f, lay.max_scroll);
+        request_repaint();
+    }
+}
+
+void ContextMenu::fire_close(std::optional<int> result) {
+    if (closed_) return;
+    closed_ = true;
+    if (on_close) on_close(result);  // may delete `this` (removes from root)
+}
+
+void ContextMenu::paint(canvas::Canvas& canvas) {
+    if (items_.empty()) return;
+
+    const MenuLayout lay = layout();
+    const Rect& box = lay.box;
+
+    auto bg = resolve_color("bg.elevated", canvas::Color::rgba8(45, 45, 60));
+    auto border_c = resolve_color("control.border", canvas::Color::rgba8(80, 80, 100));
+    auto text_c = resolve_color("text.primary", canvas::Color::rgba8(220, 220, 230));
+    auto text_dim = resolve_color("text.secondary", canvas::Color::rgba8(150, 150, 170));
+    auto accent_c = resolve_color("accent.primary", canvas::Color::rgba8(100, 150, 255));
+
+    canvas.save();
+
+    // Paint delegate (widget_painter.hpp): the panel surface and each row are
+    // separate hooks, so a skin can restyle rows and keep the stock panel, or
+    // the reverse. Each declines by default.
+    WidgetPainter* delegate = effective_painter();
+
+    bool panel_skinned = false;
+    if (delegate != nullptr) {
+        MenuBackgroundPaintState ps;
+        ps.bounds = box;
+        ps.enabled = enabled();
+        panel_skinned = delegate->paint_menu_background(canvas, ps, *this);
+    }
+    if (!panel_skinned) {
+        // Menu box background + 1px rounded border.
+        canvas.set_fill_color(bg);
+        canvas.fill_rounded_rect(box.x, box.y, box.width, box.height, kRadius);
+        canvas.set_stroke_color(border_c);
+        canvas.set_line_width(1);
+        canvas.stroke_rounded_rect(box.x, box.y, box.width, box.height, kRadius);
+    }
+
+    // Rows are clipped to the panel. A capped menu scrolls, so a row can sit
+    // partly or wholly outside the box; without this clip it painted over the
+    // app behind the menu, which is what made an overflowing menu look garbled.
+    canvas.save();
+    canvas.clip_rect(box.x, box.y, box.width, box.height);
+
+    canvas.set_font(lay.font.family, lay.font.size);
+    for (int i = 0; i < static_cast<int>(items_.size()); ++i) {
+        const auto& it = items_[static_cast<size_t>(i)];
+        const Rect row = lay.rows[static_cast<size_t>(i)];
+        const float iy = row.y;
+        const float rh = row.height;
+
+        if (delegate != nullptr) {
+            if (it.header) {
+                MenuHeaderPaintState hs;
+                hs.bounds = row;
+                hs.text = it.label;
+                if (delegate->paint_menu_section_header(canvas, hs, *this)) continue;
+            } else {
+                MenuItemPaintState is;
+                is.bounds = row;
+                is.enabled = it.enabled;
+                is.text = it.label;
+                is.separator = it.separator;
+                is.highlighted = (i == hover_index_ && it.enabled);
+                is.hovered = is.highlighted;
+                is.ticked = it.checked;
+                is.has_submenu = it.has_submenu;
+                if (delegate->paint_menu_item(canvas, is, *this)) continue;
+            }
+        }
+
+        if (it.separator) {
+            canvas.set_stroke_color(border_c);
+            canvas.set_line_width(0.5f);
+            canvas.stroke_line(row.x + 4, iy + rh * 0.5f,
+                               row.x + row.width - 4, iy + rh * 0.5f);
+            continue;
+        }
+
+        // Hover highlight only on enabled rows.
+        if (i == hover_index_ && it.enabled) {
+            canvas.set_fill_color(accent_c);
+            canvas.fill_rect(row.x + 1, iy, row.width - 2, rh);
+        }
+
+        // A toggle is live state, so it reads as a switch at the right end
+        // of the row; a checkmark made such rows look like one-shot commands.
+        // A tab among siblings shows a leading accent bar when selected, and
+        // a checked action row keeps the checkmark.
+        const bool is_switch = it.control_kind == Item::ControlKind::toggle && !it.tab;
+        if (is_switch) {
+            const float switch_w = 28.0f;
+            const float switch_h = 14.0f;
+            const float sx = row.x + row.width - switch_w - 10.0f;
+            const float sy = iy + (rh - switch_h) * 0.5f;
+            const auto switch_on = resolve_color("control.fill", canvas::Color::rgba8(70, 98, 125));
+            const auto switch_off =
+                resolve_color("control.track", canvas::Color::rgba8(80, 80, 100));
+            const auto thumb_on =
+                resolve_color("control.thumb", canvas::Color::rgba8(238, 240, 232));
+            canvas.set_fill_color(it.checked ? switch_on : switch_off);
+            canvas.fill_rounded_rect(sx, sy, switch_w, switch_h, switch_h * 0.5f);
+            canvas.set_fill_color(it.checked ? thumb_on : text_dim);
+            canvas.fill_circle(sx + (it.checked ? switch_w - switch_h * 0.5f : switch_h * 0.5f),
+                               sy + switch_h * 0.5f, switch_h * 0.38f);
+        } else if (it.tab) {
+            if (it.checked) {
+                canvas.set_fill_color(accent_c);
+                canvas.fill_rect(row.x + 3.0f, iy + 3.0f, 2.0f, std::max(2.0f, rh - 6.0f));
+            }
+        } else if (it.checked) {
+            auto check_color = (i == hover_index_ && it.enabled)
+                                   ? canvas::Color::rgba8(255, 255, 255)
+                                   : accent_c;
+            canvas.set_fill_color(check_color);
+            canvas.fill_text("\xe2\x9c\x93", row.x + 6, iy + rh * 0.5f + 4.0f);
+        }
+
+        // Dim disabled rows; white text on the hovered row.
+        canvas::Color row_text = text_c;
+        if (!it.enabled) row_text = text_dim;
+        else if (i == hover_index_ || (it.tab && it.checked))
+            row_text = canvas::Color::rgba8(255, 255, 255);
+        canvas.set_fill_color(row_text);
+        canvas.set_text_align(canvas::TextAlign::left);
+        canvas.fill_text(it.label, row.x + (it.tab ? 14.0f : 22.0f), iy + rh * 0.5f + 4.0f);
+
+        if (it.control_kind == Item::ControlKind::slider) {
+            const float left = row.x + std::min(90.0f, row.width * 0.45f);
+            const float right = slider_track_right(it, row);
+            const float cy = iy + rh * 0.5f;
+            // Track and thumb stay off the accent so they read on the
+            // accent-filled hovered row as well as on the plain one.
+            canvas.set_stroke_color(
+                resolve_color("slider.track", canvas::Color::rgba8(145, 153, 164)));
+            canvas.set_line_width(2.0f);
+            canvas.stroke_line(left, cy, right, cy);
+            const float thumb = left + (right - left) * std::clamp(it.normalized_value, 0.0f, 1.0f);
+            canvas.set_fill_color(
+                resolve_color("slider.thumb", canvas::Color::rgba8(232, 235, 228)));
+            canvas.fill_circle(thumb, cy, 4.0f);
+            if (!it.value_label.empty()) {
+                canvas.set_text_align(canvas::TextAlign::right);
+                canvas.set_fill_color(i == hover_index_ && it.enabled ? text_c : text_dim);
+                canvas.fill_text(it.value_label, row.x + row.width - 8.0f, iy + rh * 0.5f + 4.0f);
+                canvas.set_text_align(canvas::TextAlign::left);
+            }
+        } else if (it.control_kind == Item::ControlKind::choice && !it.choices.empty()) {
+            const auto selected = std::min(it.choice_index, it.choices.size() - 1);
+            canvas.set_text_align(canvas::TextAlign::right);
+            canvas.set_fill_color(i == hover_index_ && it.enabled ? text_c : text_dim);
+            canvas.fill_text(it.choices[selected], row.x + row.width - 10, iy + rh * 0.5f + 4.0f);
+            canvas.set_text_align(canvas::TextAlign::left);
+        }
+    }
+
+    // Scroll affordance: a chevron on whichever edge has rows beyond it, so a
+    // capped menu does not read as a menu that simply lost its remaining rows.
+    if (lay.max_scroll > 0.0f) {
+        const float scroll = std::clamp(scroll_, 0.0f, lay.max_scroll);
+        const float cx = box.x + box.width * 0.5f;
+        const float w = 4.0f;
+        canvas.set_stroke_color(text_dim);
+        canvas.set_line_width(1.0f);
+        if (scroll > 0.0f) {
+            const float cy = box.y + 3.0f;
+            canvas.stroke_line(cx - w, cy + w * 0.5f, cx, cy - w * 0.5f);
+            canvas.stroke_line(cx, cy - w * 0.5f, cx + w, cy + w * 0.5f);
+        }
+        if (scroll < lay.max_scroll) {
+            const float cy = box.y + box.height - 3.0f;
+            canvas.stroke_line(cx - w, cy - w * 0.5f, cx, cy + w * 0.5f);
+            canvas.stroke_line(cx, cy + w * 0.5f, cx + w, cy - w * 0.5f);
+        }
+    }
+
+    canvas.restore(); // row clip
+
+    canvas.restore();
+}
+
+void ContextMenu::on_mouse_event(const MouseEvent& event) {
+    if (closed_ || items_.empty()) return;
+    if (event.is_wheel) {
+        // Matches the text-editor idiom: the host's delta is already pixels.
+        const MenuLayout lay = layout();
+        if (lay.max_scroll <= 0.0f)
+            return;
+        const float before = scroll_;
+        scroll_ = std::clamp(scroll_ + event.scroll_delta_y, 0.0f, lay.max_scroll);
+        if (scroll_ != before)
+            request_repaint();
+        return;
+    }
+
+    const MenuLayout lay = layout();  // canvas-free geometry
+
+    // Slider rows stay live while the pointer is dragged. Pointer capture is
+    // important here: once the thumb leaves the row, the host still sends the
+    // gesture to the menu instead of handing it to the view underneath.
+    if (active_slider_index_ >= 0) {
+        const int slider = active_slider_index_;
+        if (event.phase == MousePhase::drag || event.has_movement_delta ||
+            event.phase == MousePhase::automatic) {
+            if (slider < static_cast<int>(items_.size())) {
+                set_control_from_pointer(items_[static_cast<size_t>(slider)],
+                                         lay.rows[static_cast<size_t>(slider)], event.position);
+            }
+            return;
+        }
+        if (!event.is_down || event.phase == MousePhase::release) {
+            release_pointer_capture(active_pointer_id_);
+            active_slider_index_ = -1;
+            active_pointer_id_ = 0;
+            request_repaint();
+            return;
+        }
+    }
+    const int row = row_at(event.position, lay);
+
+    if (!event.is_down) {
+        // Hover: only over enabled, non-separator rows.
+        if (row >= 0 && is_selectable(items_[static_cast<size_t>(row)]))
+            hover_index_ = row;
+        else
+            hover_index_ = -1;
+        // A slider row is a drag target, so the pointer says so.
+        const bool over_slider =
+            hover_index_ >= 0 &&
+            items_[static_cast<size_t>(hover_index_)].control_kind == Item::ControlKind::slider;
+        set_cursor(over_slider ? CursorStyle::pointer : CursorStyle::default_);
+        request_repaint();
+        return;
+    }
+
+    // Mouse-down.
+    if (row < 0) {
+        // Click outside the menu box → dismiss.
+        fire_close(std::nullopt);
+        return;
+    }
+    auto& it = items_[static_cast<size_t>(row)];
+    if (is_selectable(it)) {
+        if (it.control_kind == Item::ControlKind::toggle) {
+            adjust_control(it, 0.0f);
+        } else if (it.control_kind == Item::ControlKind::slider) {
+            active_slider_index_ = row;
+            active_pointer_id_ = event.pointer_id;
+            set_pointer_capture(active_pointer_id_);
+            set_control_from_pointer(it, lay.rows[static_cast<size_t>(row)], event.position);
+        } else if (it.control_kind == Item::ControlKind::choice) {
+            adjust_control(it, 1.0f);
+        } else {
+            fire_close(it.id); // commit action selection
+        }
+    }
+    // Click on a disabled row or separator: ignore (menu stays open).
+}
+
+bool ContextMenu::on_key_event(const KeyEvent& event) {
+    if (!event.is_down || closed_) return false;
+    switch (event.key) {
+    case KeyCode::up:
+        move_hover(-1);
+        return true;
+    case KeyCode::down:
+        move_hover(+1);
+        return true;
+    case KeyCode::left:
+    case KeyCode::right: {
+        // Only rows with an adjustable control consume horizontal arrows;
+        // other rows leave them to the host.
+        if (hover_index_ < 0 || hover_index_ >= static_cast<int>(items_.size()))
+            return false;
+        auto& item = items_[static_cast<size_t>(hover_index_)];
+        if (item.control_kind != Item::ControlKind::slider &&
+            item.control_kind != Item::ControlKind::choice)
+            return false;
+        adjust_control(item,
+                       event.key == KeyCode::left ? -item.normalized_step : item.normalized_step);
+        return true;
+    }
+    case KeyCode::home:
+        move_hover_to_edge(false);
+        return true;
+    case KeyCode::end_:
+        move_hover_to_edge(true);
+        return true;
+    case KeyCode::escape:
+        fire_close(std::nullopt);
+        return true;
+    case KeyCode::enter:
+    case KeyCode::space:
+        if (hover_index_ >= 0 && hover_index_ < static_cast<int>(items_.size()) &&
+            is_selectable(items_[static_cast<size_t>(hover_index_)])) {
+            auto& item = items_[static_cast<size_t>(hover_index_)];
+            if (item.control_kind == Item::ControlKind::toggle)
+                adjust_control(item, 0.0f);
+            else if (item.control_kind == Item::ControlKind::slider)
+                adjust_control(item, item.normalized_step);
+            else if (item.control_kind == Item::ControlKind::choice)
+                adjust_control(item, 1.0f);
+            else
+                fire_close(item.id);
+        }
+        return true;
+    default:
+        return false;
+    }
+}
+
+View* ContextMenu::hit_test(Point local_point) {
+    // The whole overlay is hit-testable so clicks anywhere (inside or outside
+    // the menu box) reach us — outside clicks must dismiss.
+    if (!visible() || !enabled() || !hit_testable()) return nullptr;
+    auto b = local_bounds();
+    if (local_point.x >= 0.0f && local_point.x <= b.width &&
+        local_point.y >= 0.0f && local_point.y <= b.height)
+        return this;
+    return nullptr;
+}
+
+ContextMenu* ContextMenu::show(View* root, Point pos, std::vector<Item> items,
+                               std::function<void(std::optional<int>)> on_close) {
+    if (!root) return nullptr;
+
+    auto menu = std::make_unique<ContextMenu>();
+    ContextMenu* raw = menu.get();
+    raw->set_items(std::move(items));
+    raw->set_anchor(pos);
+    raw->set_bounds(root->local_bounds());
+    raw->set_focusable(true);
+
+    // Wrap the caller's callback so it ALSO removes the menu from root. The
+    // user callback fires first (so it can read state), then we detach. Capture
+    // `root` and `raw` by value; `raw` stays valid until remove_child runs.
+    raw->on_close = [root, raw, cb = std::move(on_close)](std::optional<int> result) {
+        if (cb) cb(result);
+        // Detach from the tree; this destroys the ContextMenu (and its closure,
+        // so nothing else may touch `raw` after this line).
+        root->remove_child(raw);
+    };
+
+    root->add_child(std::move(menu));  // last child → painted/hit-tested on top
+    // Context menus are full-window overlays. Claiming the overlay is what
+    // makes the platform host route Escape/arrow keys to this view and send
+    // outside presses through the dismissal path instead of letting them hit
+    // the DAW or the control underneath. The old implementation only added a
+    // painted child, so it looked correct while keyboard and outside-click
+    // behavior was inert in embedded editors.
+    raw->set_overlay_consumes_outside_click(true);
+    raw->claim_overlay();
+    raw->set_focus(true);
+    raw->claim_input_focus();
+    return raw;
+}
+
+std::vector<ContextMenu::Item> ContextMenu::make_modulation_items(const ModulationMenuSpec& spec) {
+    std::vector<Item> items;
+    items.reserve(16);
+    // Keep one live copy for the lifetime of the popup. Without this shared
+    // model, each row callback would capture the lane as it looked when the
+    // menu opened and a later edit could silently restore an earlier rate or
+    // depth when the product persisted the whole lane.
+    auto lanes = std::make_shared<std::array<ModulationLane, 2>>();
+    (*lanes)[0] = spec.lanes[0];
+    (*lanes)[1] = spec.lanes[1];
+    if (!spec.target_label.empty()) {
+        items.push_back(Item::make_header("Modulate " + spec.target_label));
+        items.push_back(Item::make_separator());
+    }
+    const auto lane_count = std::min<std::size_t>(spec.lane_count, 2);
+    for (std::size_t lane_index = 0; lane_index < lane_count; ++lane_index) {
+        const auto lane = (*lanes)[lane_index];
+        const int base = 100 + static_cast<int>(lane_index) * 10;
+        const auto notify = [lanes, lane_index](auto update) {
+            auto& next = (*lanes)[lane_index];
+            update(next);
+            if (next.on_change)
+                next.on_change(next);
+        };
+        items.push_back(Item::make_header(
+            lane.label.empty() ? ("LFO " + std::to_string(lane_index + 1)) : lane.label));
+        items.push_back(
+            Item::make_toggle(base, "Enabled", lane.enabled, [notify](const Item& item) {
+                notify([&](auto& next) { next.enabled = item.checked; });
+            }));
+        items.push_back(Item::make_choice(
+            base + 1, "Shape", lane.shapes, lane.shape_index, [notify](const Item& item) {
+                notify([&](auto& next) { next.shape_index = item.choice_index; });
+            }));
+        items.push_back(Item::make_slider(
+            base + 2, "Rate", lane.rate_normalized, 0.05f, [notify](const Item& item) {
+                notify([&](auto& next) { next.rate_normalized = item.normalized_value; });
+            }));
+        items.push_back(Item::make_slider(
+            base + 3, "Depth", lane.depth_normalized, 0.05f, [notify](const Item& item) {
+                notify([&](auto& next) { next.depth_normalized = item.normalized_value; });
+            }));
+        if (lane_index + 1 < lane_count)
+            items.push_back(Item::make_separator());
+    }
+    items.push_back({1, "Reset modulation"});
+    return items;
+}
+
+ContextMenu* ContextMenu::show_modulation(View* root, Point pos, ModulationMenuSpec spec) {
+    auto items = make_modulation_items(spec);
+    auto reset = std::move(spec.on_reset);
+    auto dismiss = std::move(spec.on_dismiss);
+    return show(root, pos, std::move(items),
+                [reset = std::move(reset), dismiss = std::move(dismiss)](std::optional<int> id) {
+                    if (!id) {
+                        if (dismiss)
+                            dismiss();
+                    } else if (*id == 1 && reset) {
+                        reset();
+                        if (dismiss)
+                            dismiss();
+                    }
+                });
+}
+
+}  // namespace vellum::view

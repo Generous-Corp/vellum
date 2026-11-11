@@ -1,5 +1,6 @@
 #pragma once
 
+#include <vellum/graphics/lowering_diagnostic.hpp>
 #include <vellum/graphics/path_geometry.hpp>
 #include <vellum/graphics/scene.hpp>
 
@@ -39,6 +40,10 @@ struct PaintCommand final {
         /// Composites the innermost open group with its `begin_layer`'s opacity.
         end_layer,
         path,
+        /// Draws `image_asset` as `image` places it within `bounds`, over
+        /// `fill`, clipped to `corner_radii`; without an asset it draws
+        /// `kMissingImagePlaceholder` over the box.
+        image,
         /// Intersects the clip with `clip_rect` and `corner_radii`, or with
         /// the area `path` fills when it is set, both in `bounds` coordinates
         /// mapped by `transform`, until the matching `end_clip`.
@@ -94,6 +99,10 @@ struct PaintCommand final {
     Rect clip_rect{};
     /// On a `begin_mask`, how the mask's rendering becomes coverage.
     MaskMode mask_mode = MaskMode::alpha;
+    /// What an `image` command draws.
+    std::optional<ImageReference> image;
+    /// The asset `Scene::images` holds for `image`, or null when it is missing.
+    std::shared_ptr<const ImageAsset> image_asset;
 };
 
 [[nodiscard]] constexpr std::string_view to_string(PaintCommand::Kind kind) noexcept {
@@ -102,6 +111,7 @@ struct PaintCommand final {
     case PaintCommand::Kind::text: return "text";
     case PaintCommand::Kind::mesh: return "mesh";
     case PaintCommand::Kind::path: return "path";
+    case PaintCommand::Kind::image: return "image";
     case PaintCommand::Kind::begin_layer: return "begin_layer";
     case PaintCommand::Kind::end_layer: return "end_layer";
     case PaintCommand::Kind::begin_clip: return "begin_clip";
@@ -133,7 +143,8 @@ struct PaintExtent final {
 /// Whether the command draws content, as opposed to opening or closing a layer.
 [[nodiscard]] constexpr bool draws_content(PaintCommand::Kind kind) noexcept {
     return kind == PaintCommand::Kind::rectangle || kind == PaintCommand::Kind::text ||
-           kind == PaintCommand::Kind::mesh || kind == PaintCommand::Kind::path;
+           kind == PaintCommand::Kind::mesh || kind == PaintCommand::Kind::path ||
+           kind == PaintCommand::Kind::image;
 }
 
 /// The axis-aligned box that contains `rect` once mapped by `transform`.
@@ -169,7 +180,8 @@ struct ResolvedLinearGradient final {
 /// `scene_fields_match_version` yields no commands. A path node emits its
 /// command even when it has no geometry or its geometry fails `path_is_valid`,
 /// so the renderer refuses it rather than silently skipping it; a valid path
-/// with no commands emits nothing.
+/// with no commands emits nothing. An image node always emits its command,
+/// with the asset `find_image_asset` resolves, or none when it is missing.
 ///
 /// A node whose opacity is below one and whose subtree draws more than one
 /// command is wrapped in a `begin_layer`/`end_layer` pair; when it draws
@@ -207,5 +219,12 @@ struct ResolvedLinearGradient final {
 /// finite, and a texture's pixel buffer matches its dimensions. On failure
 /// `reason`, when non-null, says which rule failed.
 [[nodiscard]] bool mesh_is_valid(const TriangleMesh& mesh, std::string* reason = nullptr);
+
+/// What a consumer loses drawing `scene`, as diagnostics against node ids:
+/// a `kSceneVersionMismatchCode` error for an unsupported scene version or
+/// the first node that `find_version_mismatch` reports (the scene is then
+/// refused, so nothing else is listed), otherwise a `kImageAssetMissingCode`
+/// warning for each image node whose asset `Scene::images` does not hold.
+[[nodiscard]] std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene);
 
 }  // namespace vellum::graphics

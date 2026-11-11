@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vellum/graphics/capture_stats.hpp>
+#include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/render_telemetry.hpp>
 #include <vellum/graphics/scene.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
@@ -10,8 +11,10 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 /// Deterministic offscreen capture harness for scene rendering tests.
@@ -173,6 +176,16 @@ struct NamedScene final {
 [[nodiscard]] Scene path_dashed_stroke(float width, float height);
 /// A closed cubic curve with a linear gradient fill and a thin stroke.
 [[nodiscard]] Scene path_cubic_gradient(float width, float height);
+/// The content hash of `fixtures/images/quadrants.png`, an 8 by 8 PNG of four
+/// 4 by 4 quadrants: opaque red, green and blue, and white at half alpha.
+inline constexpr std::string_view kQuadrantImageHash =
+    "sha256:62b291469de86bed297f617edd0d939148a65c31b7f871329f88baf0adb41dbc";
+/// `fixtures/images/quadrants.png`, decoded. Throws when it cannot be read.
+[[nodiscard]] std::shared_ptr<const ImageAsset> quadrant_image();
+/// The quadrant PNG drawn by image nodes: fill with nearest and with linear
+/// sampling, contain over a fill, cover clipped to rounded corners, none, a
+/// source rectangle, and a rotated, faded image.
+[[nodiscard]] Scene image(float width, float height);
 /// Rotated, scaled, faded and per-corner rounded rectangles: node transforms,
 /// a group opacity layer, a folded opacity, and `corner_radii`.
 [[nodiscard]] Scene compositing(float width, float height);
@@ -184,8 +197,8 @@ struct NamedScene final {
 /// Three overlapping translucent discs composited as one isolated group.
 [[nodiscard]] Scene isolated_overlap(float width, float height);
 /// The version 1 node kinds above in one scene, so it can also be drawn at
-/// `kDamageModelSceneVersion`. The compositing, path, clip, mask and isolation
-/// fixtures need versions 2, 3 and 5 and stay separate.
+/// `kDamageModelSceneVersion`. The compositing, path, image, clip, mask and
+/// isolation fixtures need versions 2 to 5 and stay separate.
 [[nodiscard]] Scene combined(float width, float height);
 /// Each content fixture, named, excluding `empty`.
 [[nodiscard]] std::vector<NamedScene> all(float width, float height);

@@ -527,6 +527,128 @@ bool path_nodes() {
                     "path bad does not accept children", "children");
 }
 
+bool image_nodes() {
+    using vellum::graphics::ImageFit;
+    using vellum::graphics::ImageSampling;
+    using vellum::graphics::LoweringDiagnostic;
+    using vellum::graphics::SceneNode;
+    const std::string bare(64, 'A');
+    const std::string canonical = "sha256:" + std::string(64, 'a');
+    const std::string good = std::string(R"JSON({
+      "protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
+        "type":"stack","id":"art","style":{"width":200,"height":120},
+        "children":[
+          {"type":"image","id":"logo","source":")JSON") + bare + R"JSON(",
+            "fit":"cover","sampling":"nearest",
+            "sourceRect":{"x":1,"y":2,"width":3,"height":4},
+            "style":{"width":40,"height":30,"backgroundColor":"#112233","borderRadius":4,
+              "boxShadow":{"color":"#000000"},"opacity":0.5},
+            "children":[]},
+          {"type":"image","id":"plain","source":"sha256:)JSON" + std::string(64, 'b') +
+                             R"JSON(","style":{"width":10,"height":10}},
+          {"type":"image","id":"remote","source":"https://example.com/logo.png",
+            "style":{"width":10,"height":10}},
+          {"type":"image","id":"unsourced","style":{"width":10,"height":10}}
+        ]}}
+    )JSON";
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    std::vector<LoweringDiagnostic> failure_diagnostics;
+    if (!vellum::authoring::materialize_rendered_tree(good, rendered, &error,
+                                                      &failure_diagnostics)) {
+        std::cerr << "image: " << error << '\n';
+        return false;
+    }
+    const auto* logo = vellum::graphics::find_node(rendered.scene, "logo");
+    const auto* plain = vellum::graphics::find_node(rendered.scene, "plain");
+    const auto* remote = vellum::graphics::find_node(rendered.scene, "remote");
+    const auto* unsourced = vellum::graphics::find_node(rendered.scene, "unsourced");
+    if (logo == nullptr || logo->kind != SceneNode::Kind::image || !logo->image ||
+        logo->image->content_hash != canonical || logo->image->fit != ImageFit::cover ||
+        logo->image->sampling != ImageSampling::nearest || !logo->image->source_rect ||
+        logo->image->source_rect->x != 1.0F || logo->image->source_rect->height != 4.0F ||
+        logo->fill.alpha != 1.0F || logo->corner_radius != 4.0F || logo->opacity != 0.5F ||
+        !logo->box_shadows.empty() || logo->bounds.width != 40.0F) {
+        std::cerr << "image: a hashed image was not materialized\n";
+        return false;
+    }
+    if (plain == nullptr || plain->kind != SceneNode::Kind::image ||
+        plain->image->fit != ImageFit::fill ||
+        plain->image->sampling != ImageSampling::linear || plain->image->source_rect ||
+        remote == nullptr || remote->kind == SceneNode::Kind::image ||
+        unsourced == nullptr || unsourced->kind == SceneNode::Kind::image) {
+        std::cerr << "image: defaults or non-hash sources were not handled\n";
+        return false;
+    }
+    const auto has = [&](std::string_view node, std::string_view code,
+                         std::string_view property) {
+        return std::any_of(rendered.diagnostics.begin(), rendered.diagnostics.end(),
+            [&](const LoweringDiagnostic& diagnostic) {
+                return diagnostic.node_id == node && diagnostic.code == code &&
+                       diagnostic.property == property &&
+                       diagnostic.severity == LoweringDiagnostic::Severity::warning;
+            });
+    };
+    if (rendered.diagnostics.size() != 3U ||
+        !has("logo", vellum::graphics::kStyleDroppedCode, "boxShadow") ||
+        !has("remote", vellum::graphics::kNodeContentDroppedCode, "source") ||
+        !has("unsourced", vellum::graphics::kNodeContentDroppedCode, "type") ||
+        !failure_diagnostics.empty()) {
+        std::cerr << "image: diagnostics were not reported as expected ("
+                  << rendered.diagnostics.size() << ")\n";
+        return false;
+    }
+    // The materialized scene draws at the current version; at version 3 the
+    // image node is refused with a version-mismatch loss.
+    const auto commands = vellum::graphics::make_paint_commands(rendered.scene);
+    const auto missing = vellum::graphics::scene_loss_diagnostics(rendered.scene);
+    auto older = rendered.scene;
+    older.scene_version = 3U;
+    const auto refused = vellum::graphics::scene_loss_diagnostics(older);
+    if (std::count_if(commands.begin(), commands.end(), [](const auto& command) {
+            return command.kind == vellum::graphics::PaintCommand::Kind::image;
+        }) != 2 ||
+        missing.size() != 2U || missing[0].code != vellum::graphics::kImageAssetMissingCode ||
+        refused.size() != 1U || refused[0].code != vellum::graphics::kSceneVersionMismatchCode ||
+        refused[0].node_id != "logo") {
+        std::cerr << "image: the materialized scene did not version as expected\n";
+        return false;
+    }
+
+    const auto rejected = [&](std::string_view attributes, std::string_view expected_error,
+                              std::string_view property) {
+        const std::string tree =
+            std::string(R"JSON({"protocol":"vellum.authoring-host.v2","kind":"render-result",
+              "tree":{"type":"stack","id":"art","style":{"width":100,"height":100},
+              "children":[{"type":"image","id":"bad","source":")JSON") + canonical + "\"" +
+            std::string(attributes) + "}]}}";
+        vellum::authoring::RenderedApplication kept = rendered;
+        std::string why;
+        std::vector<LoweringDiagnostic> diagnostics;
+        const bool ok = !vellum::authoring::materialize_rendered_tree(
+                            tree, kept, &why, &diagnostics) &&
+                        why == expected_error && diagnostics.size() == 1U &&
+                        diagnostics[0].severity == LoweringDiagnostic::Severity::error &&
+                        diagnostics[0].code == vellum::graphics::kInvalidImageCode &&
+                        diagnostics[0].node_id == "bad" && diagnostics[0].property == property &&
+                        kept.scene.width == rendered.scene.width;
+        if (!ok) std::cerr << "image was not rejected as expected: " << why << '\n';
+        return ok;
+    };
+    static_assert(vellum::graphics::kInvalidImageCode == "VELLUM_INVALID_IMAGE");
+    return rejected(R"(,"fit":"stretch")", "image bad fit must be fill, contain, cover or none",
+                    "fit") &&
+           rejected(R"(,"sampling":"cubic")", "image bad sampling must be nearest or linear",
+                    "sampling") &&
+           rejected(R"(,"sourceRect":[0,0,1,1])", "image bad sourceRect must be an object",
+                    "sourceRect") &&
+           rejected(R"(,"sourceRect":{"x":0,"y":0,"width":-1,"height":1})",
+                    "image bad sourceRect needs finite x, y and non-negative width and height",
+                    "sourceRect") &&
+           rejected(R"(,"children":[{"type":"view","id":"inner"}])",
+                    "image bad does not accept children", "children");
+}
+
 // overflow, clipPath, maskMode and isolation reach the scene; bad values fail
 // atomically, and keys that cannot apply are reported.
 bool grouping_keys() {
@@ -1040,6 +1162,7 @@ int main() {
 
 
     return compositing_keys() && transform_pivots_once() && transform_ignores_locale() &&
+           image_nodes() &&
                    path_nodes() && grouping_keys()
                ? 0
                : 1;
