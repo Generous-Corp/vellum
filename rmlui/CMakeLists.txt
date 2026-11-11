@@ -209,7 +209,9 @@ if(VELLUM_RMLUI_CPU)
     target_include_directories(vellum-rmlui-cpu PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-    target_link_libraries(vellum-rmlui-cpu PUBLIC RmlUi::Core)
+    # The renderer may own worker threads (set_threads()).
+    find_package(Threads REQUIRED)
+    target_link_libraries(vellum-rmlui-cpu PUBLIC RmlUi::Core PRIVATE Threads::Threads)
     # Same output on every platform: no fused multiply-add in the projection.
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         target_compile_options(vellum-rmlui-cpu PRIVATE -ffp-contract=off)
