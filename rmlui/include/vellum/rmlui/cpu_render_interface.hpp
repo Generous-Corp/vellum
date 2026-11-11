@@ -11,7 +11,8 @@
 //
 // Frame contract: begin_frame() names the buffer (top row first, the stride
 // given), RmlUi renders, end_frame() finishes. The renderer never allocates
-// or presents the target.
+// or presents the target. With worker threads (set_threads()) the pixels are
+// written by end_frame(), not as each call arrives.
 //
 // Drawn: compiled geometry with vertex colours and texture coordinates,
 // generated textures, loaded textures (through a decoder the caller
@@ -25,7 +26,9 @@
 //
 // Threading: one instance per thread, no global state, so several editors and
 // an offline renderer can each own one. (RmlUi itself is process-global; this
-// is about the renderer.)
+// is about the renderer.) An instance may also split its own large draws
+// across a small pool of worker threads it owns (set_threads()); the output is
+// the same bytes for every thread count.
 //
 // Provenance: written from RmlUi's public RenderInterface documentation and
 // headers (MIT) and Vellum's own SoftRenderer. It contains no code from any
@@ -74,6 +77,15 @@ class CpuRenderInterface final : public Rml::RenderInterface {
     void end_frame();
 
     void set_image_decoder(ImageDecoder decoder);
+
+    // Draws on `threads` threads, the calling thread included: 1, the
+    // default, starts none; more starts threads - 1 workers owned by this
+    // instance. With workers, a frame's calls are recorded and drawn at
+    // end_frame() (or earlier where a call needs the pixels, as
+    // SaveLayerAsTexture does), each worker taking bands of rows. Every thread
+    // count gives the same bytes. Not to be called during a frame.
+    void set_threads(unsigned threads);
+    [[nodiscard]] unsigned threads() const noexcept;
     // 0 means no limit (the default).
     void set_texture_limit(std::uint32_t max_side, TextureClampRule rule);
     [[nodiscard]] std::uint32_t texture_limit() const noexcept;

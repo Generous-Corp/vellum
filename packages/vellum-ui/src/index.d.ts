@@ -199,7 +199,18 @@ export interface TextRunProps {
 export declare const TextRun: Component<TextRunProps>;
 export declare const TextInput: Component<TextInputProps>;
 export declare const Button: Component;
-export declare const Image: Component;
+/**
+ * An image. A `source` that is a SHA-256 content hash (64 hex digits,
+ * optionally prefixed `sha256:`) names an asset the host supplies; any other
+ * source keeps only the box and reports the loss.
+ */
+export interface ImageProps extends ElementProps {
+    fit?: 'fill' | 'contain' | 'cover' | 'none';
+    sampling?: 'nearest' | 'linear';
+    /** The part of the image to draw, in image pixels. */
+    sourceRect?: { x: number; y: number; width: number; height: number };
+}
+export declare const Image: Component<ImageProps>;
 export declare const Canvas: Component;
 
 /** A retained vector path. Paint follows SVG: fill defaults to black, stroke to none. */

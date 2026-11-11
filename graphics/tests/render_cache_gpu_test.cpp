@@ -215,7 +215,8 @@ void fixtures_with_and_without_caches() {
             return !c.fill_gradients.empty();
         });
         const bool has_texture = std::any_of(commands.begin(), commands.end(), [](const auto& c) {
-            return c.mesh && c.mesh->texture;
+            return (c.mesh && c.mesh->texture) ||
+                   (c.kind == PaintCommand::Kind::image && c.image_asset);
         });
         expect((!has_text || (telemetry.paragraphs.frame_hits > 0 &&
                               telemetry.paragraphs.frame_misses == 0)) &&

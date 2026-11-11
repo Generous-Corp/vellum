@@ -5,6 +5,7 @@ import {
     Button,
     CustomComponent,
     Design,
+    Image,
     Path,
     Stack,
     Text,
@@ -400,6 +401,42 @@ test('serializes a path node with SVG paint properties', () => {
     rejects({ strokeDasharray: Array(65).fill(1) }, /at most 64 numbers/);
     rejects({ strokeDashoffset: Infinity }, /strokeDashoffset must be a finite number/);
     rejects({ children: jsx(View, {}) }, /Path does not accept children/);
+});
+
+test('serializes an image node with fit, sampling and a source rectangle', () => {
+    const hash = 'sha256:' + 'a'.repeat(64);
+    const logo = JSON.parse(mount(() => jsx(Image, {
+        id: 'logo',
+        source: hash,
+        fit: 'contain',
+        sampling: 'nearest',
+        sourceRect: { x: 1, y: 2, width: 3, height: 4 },
+        style: { width: 40, height: 40 },
+    })).renderJSON()).tree;
+    assert.equal(logo.type, 'image');
+    assert.equal(logo.source, hash);
+    assert.equal(logo.fit, 'contain');
+    assert.equal(logo.sampling, 'nearest');
+    assert.deepEqual(logo.sourceRect, { x: 1, y: 2, width: 3, height: 4 });
+
+    const plain = JSON.parse(mount(() => jsx(Image, { id: 'plain', source: hash })).renderJSON())
+        .tree;
+    assert.deepEqual(
+        Object.keys(plain).filter((name) => name !== 'style').sort(),
+        ['children', 'id', 'source', 'type'],
+    );
+
+    const rejects = (properties, pattern) => assert.throws(
+        () => mount(() => jsx(Image, { id: 'bad', source: hash, ...properties })).renderJSON(),
+        pattern);
+    rejects({ fit: 'stretch' }, /fit must be one of fill, contain, cover, none/);
+    rejects({ sampling: 'cubic' }, /sampling must be one of nearest, linear/);
+    rejects({ sourceRect: [0, 0, 1, 1] }, /sourceRect/);
+    rejects({ sourceRect: { x: 0, y: 0, width: -1, height: 1 } },
+        /sourceRect.width must be a non-negative finite number/);
+    rejects({ sourceRect: { x: Number.NaN, y: 0, width: 1, height: 1 } },
+        /sourceRect.x must be a finite number/);
+    rejects({ children: jsx(View, {}) }, /content-hash source does not accept children/);
 });
 
 test('retains declared scroll containers for native and browser hosts', () => {

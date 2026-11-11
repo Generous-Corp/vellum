@@ -38,6 +38,9 @@ if("Cpu" IN_LIST VellumRmlUi_FIND_COMPONENTS AND
     if(NOT TARGET RmlUi::Core)
         include("${CMAKE_CURRENT_LIST_DIR}/VellumRmlUiRmlUiTargets.cmake")
     endif()
+    # The static CPU renderer links the platform's threads library.
+    include(CMakeFindDependencyMacro)
+    find_dependency(Threads)
     include("${CMAKE_CURRENT_LIST_DIR}/VellumRmlUiCpuTargets.cmake")
 endif()
 
