@@ -803,7 +803,7 @@ bool legacy_scene_fields() {
            });
 }
 
-// Shadows grow the paint extent by offset, spread, and 1.5 blur radii, and a
+// Shadows grow the paint extent by offset, spread, and 2.5 blur radii (five sigma), and a
 // mesh's extent is its clipped vertex box.
 bool paint_extents() {
     using vellum::graphics::PaintCommand;
@@ -824,7 +824,7 @@ bool paint_extents() {
          .mesh = mesh});
     const auto text_extent = vellum::graphics::paint_extent(
         {.kind = PaintCommand::Kind::text, .bounds = {1.0F, 2.0F, 3.0F, 4.0F}});
-    return extent.bounded && near_rect(extent.rect, 10.0F, 4.0F, 28.0F, 20.0F) &&
+    return extent.bounded && near_rect(extent.rect, 8.0F, 4.0F, 32.0F, 22.0F) &&
            mesh_extent.bounded && near_rect(mesh_extent.rect, 101.0F, 102.0F, 4.0F, 6.0F) &&
            !text_extent.bounded && near_rect(text_extent.rect, 1.0F, 2.0F, 3.0F, 4.0F);
 }

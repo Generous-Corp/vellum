@@ -1,3 +1,4 @@
+#include "../src/damage_testing.hpp"
 #include "../src/skia_dawn_surface_test_access.hpp"
 #include "../src/skia_dawn_surface_testing.hpp"
 #include "support/scene_capture_harness.hpp"
@@ -1740,6 +1741,147 @@ void explicit_damage() {
     expect(partial->finish(&error), "finish waits for the GPU", error);
 }
 
+struct BlurReachOverride final {
+    explicit BlurReachOverride(float sigmas) : saved(hooks::transformed_blur_sigmas()) {
+        hooks::set_transformed_blur_sigmas(sigmas);
+    }
+    ~BlurReachOverride() { hooks::set_transformed_blur_sigmas(saved); }
+    BlurReachOverride(const BlurReachOverride&) = delete;
+    BlurReachOverride& operator=(const BlurReachOverride&) = delete;
+    float saved;
+};
+
+Scene blurred_turn_scene(float angle, float turn_scale, Color nudge_fill, int nudge_x,
+                         int nudge_y) {
+    Scene scene = plain_scene(400.0F, 300.0F);
+    scene.root.children.push_back({
+        .id = "turned",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {120.0F, 80.0F, 100.0F, 80.0F},
+        .fill = Color::hex(0x38BDF8),
+        .box_shadows = {{.offset_x = 4.0F, .offset_y = 4.0F, .blur_radius = 6.0F,
+                         .color = Color::rgba(1.0F, 1.0F, 1.0F, 0.5F)},
+                        {.offset_x = -3.0F, .offset_y = 2.0F, .blur_radius = 10.0F,
+                         .color = Color::rgba(1.0F, 0.0F, 0.0F, 0.5F)}},
+        .corner_radius = 9.0F,
+        .transform = angle == 0.0F ? Affine2D{} : rotation_degrees(angle, turn_scale),
+        .opacity = 0.55F,
+    });
+    scene.root.children.push_back({
+        .id = "nudge",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {static_cast<float>(nudge_x), static_cast<float>(nudge_y), 14.0F, 14.0F},
+        .fill = nudge_fill,
+    });
+    return scene;
+}
+
+struct TurnConfig final {
+    float angle;
+    float turn_scale;
+    float device_scale;
+};
+
+int blurred_turn_differing(const TurnConfig& config, std::string& first) {
+    auto full = make_surface(400, 300, config.device_scale);
+    auto partial = make_surface(400, 300, config.device_scale);
+    if (!full || !partial) return -1;
+    int differing = 0;
+    std::string error;
+    for (int y = 60; y <= 170; y += 10) {
+        for (int x = 90; x <= 230; x += 10) {
+            const Scene before = blurred_turn_scene(config.angle, config.turn_scale,
+                                                    Color::hex(0xF59E0B), x, y);
+            const Scene after = blurred_turn_scene(config.angle, config.turn_scale,
+                                                   Color::hex(0x10B981), x, y);
+            if (!full->render(after, &error) || !partial->render(before, &error) ||
+                !partial->render_incremental(after, &error)) {
+                return -1;
+            }
+            std::string message;
+            if (!identical(*full, *partial, message) && differing++ == 0) {
+                first = "first at " + std::to_string(x) + "," + std::to_string(y) + ": " + message;
+            }
+        }
+    }
+    return differing;
+}
+
+std::int64_t blurred_turn_damage_area(const TurnConfig& config) {
+    auto partial = make_surface(400, 300, config.device_scale);
+    if (!partial) return -1;
+    std::string error;
+    const Scene before = blurred_turn_scene(config.angle, config.turn_scale,
+                                            Color::hex(0xF59E0B), 90, 60);
+    const Scene after = blurred_turn_scene(config.angle, config.turn_scale,
+                                           Color::hex(0x10B981), 90, 60);
+    if (!partial->render(before, &error) || !partial->render_incremental(after, &error)) {
+        return -1;
+    }
+    return partial->frame_stats().damage_area_pixels;
+}
+
+void transformed_blur_reach_sweep() {
+    std::vector<TurnConfig> configs;
+    for (const float device_scale : {1.0F, 2.0F}) {
+        for (const float turn_scale : {0.7F, 1.0F, 1.3F, 2.0F}) {
+            for (const float angle : {9.0F, 30.0F, 45.0F, 120.0F}) {
+                configs.push_back({angle, turn_scale, device_scale});
+            }
+        }
+    }
+    const auto sweep = [&configs](int& swept, std::string& first) {
+        int bad = 0;
+        swept = 0;
+        for (const auto& config : configs) {
+            std::string detail;
+            const int differing = blurred_turn_differing(config, detail);
+            ++swept;
+            if (differing != 0 && bad++ == 0) {
+                first = "angle " + std::to_string(config.angle) + " turn " +
+                    std::to_string(config.turn_scale) + " @" +
+                    std::to_string(static_cast<int>(config.device_scale)) + "x: " + detail;
+            }
+        }
+        return bad;
+    };
+    int swept = 0;
+    std::string first;
+    const int enclosed = sweep(swept, first);
+    expect(enclosed == 0,
+           "damage cutting a rotated blurred-shadow rectangle's tail leaves every frame "
+           "byte-identical",
+           std::to_string(enclosed) + " of " + std::to_string(swept) + " configurations differ " +
+               first);
+    for (const float device_scale : {1.0F, 2.0F}) {
+        const TurnConfig issue{9.0F, 1.0F, device_scale};
+        const auto area = blurred_turn_damage_area(issue);
+        BlurReachOverride legacy(3.0F);
+        const auto legacy_area = blurred_turn_damage_area(issue);
+        std::cout << "INFO damage area at " << static_cast<int>(device_scale)
+                  << "x, 9 degrees: " << area << " px, old 1.5 x radius reach " << legacy_area
+                  << " px\n";
+    }
+    {
+        BlurReachOverride legacy(3.0F);
+        std::string legacy_first;
+        const int cut = sweep(swept, legacy_first);
+        expect(cut > 0,
+               "negative control: with the old 1.5 x radius reach some rotated blurred-shadow "
+               "rectangles are not byte-identical",
+               std::to_string(cut) + " of " + std::to_string(swept) +
+                   " configurations differ " + legacy_first);
+    }
+    for (const float device_scale : {1.0F, 2.0F}) {
+        std::string unturned;
+        const int differing = blurred_turn_differing({0.0F, 1.0F, device_scale}, unturned);
+        expect(differing == 0,
+               "an untransformed blurred-shadow rectangle stays byte-identical under a damage "
+               "sweep @" + std::to_string(static_cast<int>(device_scale)) + "x",
+               std::to_string(differing) + " of 180 positions differ " + unturned);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1772,6 +1914,7 @@ int main() {
         interpolated_fill_sweep();
         multisampling_cross_pass();
         large_path();
+        transformed_blur_reach_sweep();
         grouping_sweeps();
         for (const bool cached : {false, true}) {
             grouping_sequence(1.0F, cached);
