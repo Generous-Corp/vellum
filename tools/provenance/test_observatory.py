@@ -1383,6 +1383,86 @@ class ObservatoryTests(unittest.TestCase):
             )
             self.assertFalse(observatory.integration_merge_covered(vellum, differing))
 
+    def test_disjoint_hunks_of_one_file_from_both_sides_are_covered(self) -> None:
+        # Two pull requests edit different hunks of one mapped file. The queue
+        # merge's blob matches neither side, but it is exactly git's clean
+        # three-way merge of them, so each side's own event covers it and the
+        # entry must not be ejected for a gap no branch can record.
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp, vellum, root, pulp_head, main, _feature = self._coverage_state(Path(temporary))
+            lines = [f"int line_{index} = {index};" for index in range(12)]
+            run(vellum, "git", "checkout", "-q", "main")
+            write(vellum / "graphics/shared.cpp", "\n".join(lines) + "\n")
+            base = commit_all(vellum, "a longer shared file")
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=base,
+                now_text="2026-10-11T00:04:00Z", write=True,
+            )
+            run(vellum, "git", "checkout", "-q", "-b", "top-edit", base)
+            write(vellum / "graphics/shared.cpp",
+                  "\n".join(["int line_0 = 100;", *lines[1:]]) + "\n")
+            top = commit_all(vellum, "edit the top hunk")
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=top,
+                now_text="2026-10-11T00:05:00Z", write=True, events_only=True,
+            )
+            run(vellum, "git", "checkout", "-q", "main")
+            write(vellum / "graphics/shared.cpp",
+                  "\n".join([*lines[:-1], "int line_11 = 1100;"]) + "\n")
+            bottom = commit_all(vellum, "main edits the bottom hunk")
+            observatory.reconcile(
+                root=root, pulp_repo=pulp, vellum_repo=vellum,
+                pulp_target=pulp_head, vellum_target=bottom,
+                now_text="2026-10-11T00:06:00Z", write=True, events_only=True,
+            )
+            run(vellum, "git", "checkout", "-q", "-B", "queue", "main")
+            run(vellum, "git", "merge", "--no-ff", "-q", "top-edit", "-m", "queue merge")
+            queue = run(vellum, "git", "rev-parse", "HEAD")
+            mapping = observatory.load_json(root / observatory.MAP_PATH)
+            rules = mapping.get("transitive_path_rules", [])
+            self.assertTrue(observatory.integration_merge_covered(vellum, queue))
+            self.assertTrue(observatory.integration_merge_covered(
+                vellum, queue, mapping["mappings"], rules))
+            report = observatory.verify(
+                root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
+                pulp_target=pulp_head, vellum_target=queue, vellum_tail_policy="coverage",
+            )
+            self.assertEqual(report["coverage_gaps"], [])
+            # Negative control: the same merge with one extra line of its own
+            # is not the clean merge of its sides, so it needs its own event.
+            run(vellum, "git", "checkout", "-q", "-B", "queue-edit", "main")
+            run(vellum, "git", "merge", "--no-ff", "--no-commit", "-q", "top-edit")
+            with (vellum / "graphics/shared.cpp").open("a", encoding="utf-8") as handle:
+                handle.write("int smuggled = 1;\n")
+            run(vellum, "git", "add", ".")
+            run(vellum, "git", "commit", "-q", "-m", "queue merge with a line of its own")
+            edited = run(vellum, "git", "rev-parse", "HEAD")
+            self.assertFalse(observatory.integration_merge_covered(vellum, edited))
+            with self.assertRaisesRegex(observatory.ObservatoryError, "health budgets failed"):
+                observatory.verify(
+                    root=root, pulp_repo=pulp, vellum_repo=vellum, git_base=None, allow_no_git_base=True,
+                    pulp_target=pulp_head, vellum_target=edited, vellum_tail_policy="coverage",
+                )
+            # Negative control: a mode both sides changed differently is a
+            # change of the merge's own even when the content merges cleanly.
+            run(vellum, "git", "checkout", "-q", "-B", "mode-pr", base)
+            write(vellum / "graphics/shared.cpp",
+                  "\n".join(["int line_0 = 7;", *lines[1:]]) + "\n")
+            commit_all(vellum, "pr hunk")
+            run(vellum, "git", "checkout", "-q", "-B", "mode-main", base)
+            write(vellum / "graphics/shared.cpp",
+                  "\n".join([*lines[:-1], "int line_11 = 7;"]) + "\n")
+            os.chmod(vellum / "graphics/shared.cpp", 0o755)
+            commit_all(vellum, "main hunk and an executable bit")
+            run(vellum, "git", "merge", "--no-ff", "--no-commit", "-q", "mode-pr")
+            os.chmod(vellum / "graphics/shared.cpp", 0o644)
+            run(vellum, "git", "add", ".")
+            run(vellum, "git", "commit", "-q", "-m", "merge that drops main's mode")
+            reset = run(vellum, "git", "rev-parse", "HEAD")
+            self.assertFalse(observatory.integration_merge_covered(vellum, reset))
+
     def test_merge_that_reverts_a_transitive_build_file_needs_its_own_event(self) -> None:
         # R7 delta D5: with a file-level mapping (cli/backend.py), cli/CMakeLists.txt
         # is transitive-only: never mapped on its own, but listed under
