@@ -1,5 +1,6 @@
 #pragma once
 
+#include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/scene.hpp>
 
 #include <cstddef>
@@ -189,7 +190,8 @@ public:
 ///
 /// A path paints within `path_paint_box`, the same box the renderer culls
 /// and bounds layers with; a path without geometry, or whose geometry fails
-/// `path_is_valid`, reports `frame`.
+/// `path_is_valid`, reports `frame`. An image paints within its box.
+
 [[nodiscard]] std::optional<Rect> node_paint_bounds(
     const SceneNode& node, const Rect& absolute_bounds, const Rect& frame,
     const DamagePropagation& propagation);
@@ -213,6 +215,9 @@ public:
 /// mutated once a scene references it; replace the pointer to change it.
 /// Paths compare their fill paint and every geometry and stroke field, so two
 /// distinct `PathGeometry` objects with the same content do not differ.
+/// Images compare their fill, uniform radius and every `ImageReference`
+/// field; the scene diff also compares the `ImageAsset` each image resolves
+/// to by pointer, so replacing an asset damages the images that draw it.
 [[nodiscard]] bool paint_differs(const SceneNode& previous, const SceneNode& next);
 
 /// Damage between two scenes, keyed by node id (nodes with an empty or

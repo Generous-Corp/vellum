@@ -376,6 +376,24 @@ function validatePath(properties, path) {
     return output;
 }
 
+function validateImage(properties, path) {
+    const output = {};
+    const fit = pathKeyword(properties.fit, `${path}.fit`, ['fill', 'contain', 'cover', 'none']);
+    if (fit !== undefined) output.fit = fit;
+    const sampling = pathKeyword(properties.sampling, `${path}.sampling`, ['nearest', 'linear']);
+    if (sampling !== undefined) output.sampling = sampling;
+    const { sourceRect } = properties;
+    if (sourceRect !== undefined) {
+        const rect = paintStyleObject(sourceRect, `${path}.sourceRect`, ['x', 'y', 'width', 'height']);
+        finitePaintNumber(rect.x, `${path}.sourceRect.x`);
+        finitePaintNumber(rect.y, `${path}.sourceRect.y`);
+        finitePaintNumber(rect.width, `${path}.sourceRect.width`, { nonNegative: true });
+        finitePaintNumber(rect.height, `${path}.sourceRect.height`, { nonNegative: true });
+        output.sourceRect = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    }
+    return output;
+}
+
 function validateStyle(style, path) {
     if (style === undefined) return undefined;
     if (style === null || typeof style !== 'object' || Array.isArray(style)) {
@@ -491,7 +509,13 @@ function materialize(value, runtime, path) {
     if (value.type === 'path' && childValues.length > 0) {
         throw new TypeError(`${path}.Path does not accept children`);
     }
+    if (value.type === 'image' && childValues.length > 0 &&
+        typeof value.props.source === 'string' &&
+        /^(?:sha256:)?[0-9a-f]{64}$/i.test(value.props.source.trim())) {
+        throw new TypeError(`${path}.Image with a content-hash source does not accept children`);
+    }
     const pathProperties = value.type === 'path' ? validatePath(value.props, path) : undefined;
+    const imageProperties = value.type === 'image' ? validateImage(value.props, path) : undefined;
     let textRunText;
     if (value.type === 'text-run') {
         const unsupported = Object.keys(value.props).filter(
@@ -557,6 +581,7 @@ function materialize(value, runtime, path) {
     else if (typeof value.props.text === 'string') node.text = value.props.text;
     if (typeof value.props.source === 'string') node.source = value.props.source;
     if (pathProperties !== undefined) Object.assign(node, pathProperties);
+    if (imageProperties !== undefined) Object.assign(node, imageProperties);
     if (value.type === 'custom') {
         if (typeof value.props.component !== 'string' ||
             !/^[a-z][a-z0-9-]{0,63}$/.test(value.props.component)) {

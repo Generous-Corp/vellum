@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-10T10:30:01Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-982c47e72d8e15cf00281f57ac8d822bd800c1ef",
+  "kind": "resolution",
+  "linked_commits": [
+    "982c47e72d8e15cf00281f57ac8d822bd800c1ef"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Test-only. It proves Vellum's partial presentation is byte-identical to a full redraw across a scripted scene sequence, and checks native CAMetalLayer frames. It tests Vellum's retained surface, which has no Pulp counterpart.",
+  "resolves": "vellum-982c47e72d8e15cf00281f57ac8d822bd800c1ef",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
