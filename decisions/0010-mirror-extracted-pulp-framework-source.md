@@ -154,3 +154,89 @@ Rejected alternatives:
   identity before it has served as the oracle;
 - a bidirectional flow, or a Vellum-to-Pulp backport before the flip, which
   creates two editable owners.
+
+## Amendment: the rename moves the units to `framework/` (2026-11-07)
+
+The rename this decision deferred to "after the flip" lands as one commit for
+every unit of the newest export, and that commit is the ownership flip for
+those units. It supersedes, for them, the flip sequence in "One editable owner,
+one direction" and the per-unit forwarding-header rename in "Relationship to
+earlier decisions".
+
+- **Where the units go.** The rename tool renames `pulp` to `vellum` and moves
+  the whole export into the native root `framework/`, keeping its layout:
+  `mirror/<path>` becomes `framework/<renamed path>`, where only
+  `include/pulp/` becomes `include/vellum/`. The mirror root never holds a
+  renamed file, and `mirror/` is gone once the move lands. Vellum code reaches
+  no `pulp::` name, so no forwarding header is needed.
+- **The transfer record.** `provenance/framework/transfer.json` pairs each Pulp
+  path and blob at the export receipt's commit with its `framework/` path and
+  blob, and carries the rename's specification and tool blobs. The required
+  provenance lane proves that record against a Pulp checkout through the
+  tool-free identity verifier: the inverse of the rename reproduces Pulp's
+  bytes, and an independent forward pass reproduces the recorded tree. The
+  proof is of the transfer commit's tree, not of `HEAD`'s. The commit that
+  introduces the record is judged by the `framework-trusted-verify` status,
+  which runs the default branch's rules: the landed rename tool must re-derive
+  `framework/` and the record from the base's `mirror/`, and the commit may
+  change no rule file. Once landed the record is immutable:
+  `verify_extraction.py` requires it to equal its copy at the merge base, so it
+  cannot be repointed at another receipt, record set or tree.
+- **Three rules, the same in Pulp's freeze contract:**
+  1. The renamed units are Vellum-native and editable. Generic work on them
+     starts in Vellum.
+  2. Pulp's frozen copies change only by `framework-backport` from a named
+     Vellum commit.
+  3. Pulp's copies of the UI units (canvas, render-2d, view-core,
+     design-import and view-script) are deleted when Pulp consumes Vellum.
+     The foundation, state-core, dataplane and gpu-device-api units stay in
+     Pulp, which audio-only builds still need: there Pulp's copies become
+     ordinary Pulp code again, and Vellum's renamed copies evolve
+     independently.
+- **The `framework/` content regime.** `framework/` is a native root with its
+  own rules, checked by `verify_extraction.py`:
+  - the mirror-edge table's rules, exactly as `mirror/` had them: no audio, DSP,
+    MIDI, product, plug-in SDK or audio-framework edges, and no Pulp-kept file;
+  - no `pulp::`, `namespace pulp` or `<pulp/` spelling anywhere in it,
+    case-sensitive;
+  - the native-tree checks: no symlinks, fail-closed decoding (a file the
+    ratchet cannot decode is an error, not a skip), and no normalized second
+    copy of a `framework/` file in any other native root;
+  - `framework/external/` is third-party source, outside the name-debt
+    ratchet's scope; it may hold only the transferred files, so first-party
+    code cannot be placed there to escape the count, and each file is pinned
+    to its recorded blob. A third-party update lands in its own reviewed pull
+    request that appends an entry to the append-only
+    `provenance/framework/external-updates.json`, chaining the file's previous
+    blob to its new one. An updated file loses the third-party exemption: the
+    collision census reads it as native, and it may not name the `vellum`
+    namespace or carry Pulp, plug-in or audio-SDK names.
+- **Name debt, ratcheted.** The units keep Pulp's `PULP_*` macros and `pulp-*`
+  target names, and their prose names plug-in hosts. The native name rules
+  `pulp-package-or-target`, `audio-plugin-sdk` and `pulp-public-namespace`
+  therefore hold as a counted debt in `provenance/framework-name-debt.json`, per
+  rule and file, including the units' Python generators. A count may fall but
+  never rise, the committed baseline may not rise above its value at the merge
+  base, and the respelling that retires the debt is a later, separate change.
+- **What a native edit is still held to.** The build compiles the export's
+  closures, so `framework/` keeps exactly the transferred file set: an edit may
+  change a file's bytes but not add or remove one. `verify_extraction.py`
+  checks the set in the required provenance lane, and `mirror_package.py`
+  again when it plans the build. An edited file is held to
+  the edge rules, the residual-spelling check and the ratchet; it is not
+  re-proven against its closure, so an include of another framework or native
+  header is policed by the edge table alone. Generated inputs (the JavaScript
+  preludes, embedded data, the build-info template) are still checked against
+  Pulp's closure digests through the rename's inverse, so their sources are not
+  yet natively editable until 8c regenerates those digests from Vellum's own
+  build, and the check is no pure-rename proof once a generator is edited.
+- **Unchanged.** The installed SDK keeps its `mirror/` directory and the
+  `Vellum::Mirror*` target names. Two gates stay permanent, because the units
+  now share the `vellum` namespace with native code: the collision census of
+  `framework/` against the native roots runs in `verify_extraction.py` (the
+  required provenance lane), and the defined-symbol intersection across the
+  whole `vellum` namespace of the installed mirror libraries against the native
+  archives runs in the installed-mirror consumer check
+  (`tools/mirror/RunMirrorConsumer.cmake`), with a planted-name control. Each
+  fails when it cannot see both sides. The export receipts and blob-origin
+  records stay as history; no later export applies to these units.

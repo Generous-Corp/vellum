@@ -49,6 +49,14 @@ target_compile_definitions(vellum-rmlui-midi-learn-test PRIVATE
     VELLUM_RMLUI_MIDI_LEARN_RCSS="${CMAKE_CURRENT_SOURCE_DIR}/../assets/midi-learn.rcss")
 add_test(NAME vellum.rmlui.midi-learn COMMAND vellum-rmlui-midi-learn-test)
 
+vellum_rmlui_add_test(vellum-rmlui-settings-test settings_test.cpp VellumRmlUi::Core)
+add_test(NAME vellum.rmlui.settings COMMAND vellum-rmlui-settings-test)
+
+vellum_rmlui_add_test(vellum-rmlui-midi-panic-test midi_panic_test.cpp VellumRmlUi::Core)
+target_compile_definitions(vellum-rmlui-midi-panic-test PRIVATE
+    VELLUM_RMLUI_MIDI_PANIC_RCSS="${CMAKE_CURRENT_SOURCE_DIR}/../assets/midi-panic.rcss")
+add_test(NAME vellum.rmlui.midi-panic COMMAND vellum-rmlui-midi-panic-test)
+
 vellum_rmlui_add_test(vellum-rmlui-two-instances-test two_instances_test.cpp VellumRmlUi::Core)
 add_test(NAME vellum.rmlui.two-instances COMMAND vellum-rmlui-two-instances-test)
 
@@ -62,6 +70,10 @@ add_test(NAME vellum.rmlui.core-flattening COMMAND vellum-rmlui-core-flattening-
 if(VELLUM_RMLUI_CPU)
     vellum_rmlui_add_test(vellum-rmlui-cpu-render-test cpu_render_test.cpp VellumRmlUi::Cpu)
     add_test(NAME vellum.rmlui.cpu-render COMMAND vellum-rmlui-cpu-render-test)
+
+    # NativeContext::warm(): the first frame after it loads no texture.
+    vellum_rmlui_add_test(vellum-rmlui-native-warm-test native_warm_test.cpp VellumRmlUi::Native VellumRmlUi::Cpu)
+    add_test(NAME vellum.rmlui.native-warm COMMAND vellum-rmlui-native-warm-test)
 
     # The output pinned by hash, the same constant on every platform.
     vellum_rmlui_add_test(vellum-rmlui-cpu-hash-test cpu_hash_test.cpp VellumRmlUi::Cpu)

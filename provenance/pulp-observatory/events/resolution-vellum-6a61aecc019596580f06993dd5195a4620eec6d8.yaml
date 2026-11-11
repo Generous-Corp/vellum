@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-10T15:20:58Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-6a61aecc019596580f06993dd5195a4620eec6d8",
+  "kind": "resolution",
+  "linked_commits": [
+    "6a61aecc019596580f06993dd5195a4620eec6d8"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-native damage-model change on PR #301 (vellum::graphics damage tracking: transforms, opacity, corner radii, fold-to-layer, path bounds) and its partial-present wiring in skia_dawn_surface.mm. Pulp main has no consumer of vellum::graphics::Scene or its damage model; it consumes gpu-runtime only through its pinned dependency (pulp#11596). Same classification as the earlier damage model commit in 5a50ff0c6.",
+  "resolves": "vellum-6a61aecc019596580f06993dd5195a4620eec6d8",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

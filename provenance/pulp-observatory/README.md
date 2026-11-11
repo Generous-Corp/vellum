@@ -54,7 +54,21 @@ observation or resolution.
 
 A pull request does not advance `cursor.json` or regenerate
 `reports/current.*`. It records the observation events for its own mapped
-commits and nothing else:
+commits and nothing else.
+
+Only the receiver commits the report. Under the coverage policy (pull
+requests, merge-queue builds and `main`), `verify` refuses a change that edits
+`reports/current.{json,md}`. The exception is the receiver's reconciliation,
+which it recognises by content: only observatory evidence, with the cursor
+moved. `verify` then compares the committed report with the ledger as it stood
+at the commit that last wrote the report, leaving out every event added since.
+A pull request that classifies observations by adding resolutions therefore
+leaves the report alone, and two such pull requests merge in either order
+without conflict. Health and budgets are still judged on the live ledger at
+the current time. A tag keeps the exact `reconciled` comparison, so it fails
+on a report that lags its ledger.
+
+To record the branch's own observations:
 
 ```sh
 python3 tools/provenance/observatory.py reconcile \

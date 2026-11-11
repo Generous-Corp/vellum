@@ -825,7 +825,8 @@ class RunnerPolicyTests(unittest.TestCase):
         self.assertIn('git show "$SOURCE_COMMIT:scripts/install_core.py"', finalizer)
         self.assertIn('> "$RUNNER_TEMP/trusted/SHA256SUMS"', finalizer)
         self.assertIn("immutable-release-attestation.json", finalizer)
-        self.assertIn('{"sha1": os.environ["TAG_OBJECT_SHA"]}', finalizer)
+        self.assertIn('python3 -I scripts/verify_release_attestation.py \\\n', finalizer)
+        self.assertIn('--tag-object-sha "$TAG_OBJECT_SHA"', finalizer)
         self.assertIn("release-final-prepublish.json", finalizer)
         self.assertIn("release-assets-final-prepublish-verification.json", finalizer)
         self.assertIn("scripts/verify_sdk_artifact.py", finalizer)
@@ -1053,6 +1054,26 @@ class RunnerPolicyTests(unittest.TestCase):
                 continue
             for line in runs_on_lines:
                 with self.subTest(workflow=path.name, selector=line):
+                    if line == "runs-on: ${{ fromJSON(matrix.runs_on) }}":
+                        # A matrix job picks its runner per entry; hold each
+                        # entry to the same public-repo rule: a hosted label,
+                        # or the reviewed variable with a hosted fallback.
+                        entries = [
+                            entry.strip()
+                            for entry in path.read_text(encoding="utf-8").splitlines()
+                            if entry.strip().startswith("runs_on:")
+                        ]
+                        self.assertTrue(entries, path.name)
+                        for entry in entries:
+                            self.assertNotIn("self-hosted", entry)
+                            self.assertTrue(
+                                any(label in entry for label in HOSTED_LABELS)
+                                or "windows-2022" in entry,
+                                f"{path.name} matrix entry is not hosted: {entry}",
+                            )
+                            if "vars." in entry:
+                                self.assertIn("vars.VELLUM_LINUX_RUNS_ON_JSON", entry)
+                        continue
                     if variable == "__hosted__":
                         self.assertEqual(line, f"runs-on: {fallback}")
                         continue
