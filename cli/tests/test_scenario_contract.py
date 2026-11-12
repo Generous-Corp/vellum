@@ -107,6 +107,31 @@ class Tests(unittest.TestCase):
             arguments, _ = scenario_arguments({"root": root}, "clock")
             self.assertNotIn("--manual-clock", arguments)
 
+    def test_named_captures_lower_to_frame_steps_only_with_a_frame_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scenario = root / "tests/scenarios/frames.json"
+            scenario.parent.mkdir(parents=True)
+            scenario.write_text(json.dumps({
+                "schema": "vellum.scenario.v2", "name": "frames",
+                "steps": [
+                    {"action": "advance", "ms": 50},
+                    {"action": "capture", "name": "early"},
+                    {"action": "advance", "ms": 70},
+                    {"action": "capture"},
+                ],
+            }), encoding="utf-8")
+            frames = root / "out"
+            arguments, _ = scenario_arguments({"root": root}, "frames", frames)
+            self.assertEqual(arguments, [
+                "--manual-clock", "--capture-dir", str(frames),
+                "--advance", "50", "--capture-step", "early",
+                "--advance", "70", "--capture-step", "capture-3",
+            ])
+            # Control: without a frame directory captures stay no-ops.
+            arguments, _ = scenario_arguments({"root": root}, "frames")
+            self.assertNotIn("--capture-step", arguments)
+
     def test_advance_rejects_non_integer_and_out_of_range_durations(self) -> None:
         for bad in (-1, 1.5, "10", True, 86400001):
             with self.subTest(ms=bad), self.assertRaisesRegex(

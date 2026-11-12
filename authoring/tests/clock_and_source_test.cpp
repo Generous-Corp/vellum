@@ -123,19 +123,19 @@ constexpr const char* kSourceTree = R"JSON({
   "tree":{"type":"stack","id":"root","style":{"width":200,"height":120},
     "children":[
       {"type":"view","id":"panel","anchor":"figma:12:34",
-        "source":{"file":"src/Panel.tsx","line":12,"column":7},
+        "sourceLocation":{"file":"src/Panel.tsx","line":12,"column":7},
         "style":{"x":10,"y":20,"width":100,"height":60},
         "children":[
           {"type":"view","id":"knob","anchor":"figma:12:35",
-            "source":{"file":"src/Knob.tsx","line":3,"column":5},
+            "sourceLocation":{"file":"src/Knob.tsx","line":3,"column":5},
             "style":{"x":5,"y":6,"width":20,"height":20},"children":[]}]},
       {"type":"view","id":"bare","style":{"x":0,"y":90,"width":50,"height":10},
         "children":[]}]}})JSON";
 
 std::string strip_source(std::string tree) {
     for (const std::string field : {
-             R"("source":{"file":"src/Panel.tsx","line":12,"column":7},)",
-             R"("source":{"file":"src/Knob.tsx","line":3,"column":5},)"}) {
+             R"("sourceLocation":{"file":"src/Panel.tsx","line":12,"column":7},)",
+             R"("sourceLocation":{"file":"src/Knob.tsx","line":3,"column":5},)"}) {
         const auto at = tree.find(field);
         if (at != std::string::npos) tree.erase(at, field.size());
     }

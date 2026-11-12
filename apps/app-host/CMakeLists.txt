@@ -26,6 +26,16 @@ set_target_properties(vellum-app-host PROPERTIES
 install(TARGETS vellum-app-host
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
+if(VELLUM_BUILD_TESTS)
+    find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME vellum.app-host-manual-clock-capture
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_manual_clock_capture.py"
+            "$<TARGET_FILE:vellum-app-host>")
+    set_tests_properties(vellum.app-host-manual-clock-capture PROPERTIES
+        ENVIRONMENT "MTL_DEBUG_LAYER=0")
+endif()
+
 if(VELLUM_BUILD_TESTS AND VELLUM_AUTHORING_TEST_BUNDLE)
     find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
     find_program(VELLUM_NODE_EXECUTABLE NAMES node)

@@ -192,6 +192,50 @@ bool write_png(SkiaDawnSurface& surface, const std::filesystem::path& output,
     return true;
 }
 
+struct FrameInfo final {
+    std::uint32_t pixel_width = 0;
+    std::uint32_t pixel_height = 0;
+    std::size_t png_bytes = 0;
+};
+
+// Renders the scene on the GPU, checks it has content, and writes a PNG when
+// `png_path` is non-empty.
+bool capture_frame(const RenderedApplication& rendered,
+                   const std::filesystem::path& png_path, FrameInfo& frame,
+                   std::string* error) {
+    static bool bootstrapped = false;
+    if (!bootstrapped) {
+        if (!vellum::app_host::register_native_dawn_bootstrap(error)) return false;
+        bootstrapped = true;
+    }
+    auto surface = SkiaDawnSurface::create(
+        {.width = static_cast<std::uint32_t>(rendered.scene.width),
+         .height = static_cast<std::uint32_t>(rendered.scene.height),
+         .scale = 1.0F},
+        error);
+    if (!surface || !validate_gpu(*surface, false, error) ||
+        !surface->render(rendered.scene, error)) {
+        return false;
+    }
+    std::vector<std::uint8_t> rgba;
+    if (!surface->capture_rgba(rgba, frame.pixel_width, frame.pixel_height, error)) {
+        return false;
+    }
+    const auto stats = vellum::graphics::analyze_capture_rgba(
+        rgba, frame.pixel_width, frame.pixel_height);
+    if (!vellum::graphics::passes_content_floor(stats)) {
+        if (error) {
+            *error = "rendered frame failed content floor: colors=" +
+                     std::to_string(stats.unique_colors) + " stddev=" +
+                     std::to_string(stats.luminance_standard_deviation) +
+                     " content=" + std::to_string(stats.non_background_pixels);
+        }
+        return false;
+    }
+    frame.png_bytes = 0;
+    return png_path.empty() || write_png(*surface, png_path, frame.png_bytes, error);
+}
+
 // Under the manual clock only ready work runs, so time stays where the
 // scenario put it. Otherwise the clock jumps to each next deadline until idle.
 bool settle(JsApplication& application, const Options& options,
@@ -252,6 +296,7 @@ int run_headless(const Options& options, std::string_view bundle) {
         }
         for (const auto& step : options.steps) {
             bool succeeded = false;
+            std::string pending_capture;
             switch (step.kind) {
                 case AutomationStep::Kind::press:
                     succeeded = press_node(*application, rendered, step.node_id, &error);
@@ -310,6 +355,10 @@ int run_headless(const Options& options, std::string_view bundle) {
                     }
                     break;
                 }
+                case AutomationStep::Kind::capture:
+                    succeeded = true;
+                    pending_capture = step.value;
+                    break;
                 case AutomationStep::Kind::advance:
                     succeeded = options.manual_clock &&
                         advance_clock(*application, std::stoull(step.value),
@@ -346,6 +395,16 @@ int run_headless(const Options& options, std::string_view bundle) {
                 std::cerr << error << '\n';
                 return 1;
             }
+            if (!pending_capture.empty()) {
+                FrameInfo step_frame;
+                const auto directory = options.capture_dir.empty()
+                    ? std::filesystem::path(".") : options.capture_dir;
+                if (!capture_frame(rendered, directory / (pending_capture + ".png"),
+                                   step_frame, &error)) {
+                    std::cerr << error << '\n';
+                    return 1;
+                }
+            }
         }
         if (!options.dump_tree.empty()) {
             std::ofstream dump(options.dump_tree, std::ios::binary | std::ios::trunc);
@@ -363,42 +422,14 @@ int run_headless(const Options& options, std::string_view bundle) {
                       << " does not match scenario viewport\n";
             return 1;
         }
-        if (!vellum::app_host::register_native_dawn_bootstrap(&error)) {
+        FrameInfo frame;
+        if (!capture_frame(rendered, options.capture, frame, &error)) {
             std::cerr << error << '\n';
             return 1;
         }
-        auto surface = SkiaDawnSurface::create(
-            {.width = width,
-             .height = height,
-             .scale = 1.0F},
-            &error);
-        if (!surface || !validate_gpu(*surface, false, &error) ||
-            !surface->render(rendered.scene, &error)) {
-            std::cerr << error << '\n';
-            return 1;
-        }
-        std::vector<std::uint8_t> rgba;
-        std::uint32_t pixel_width = 0;
-        std::uint32_t pixel_height = 0;
-        if (!surface->capture_rgba(rgba, pixel_width, pixel_height, &error)) {
-            std::cerr << error << '\n';
-            return 1;
-        }
-        const auto stats = vellum::graphics::analyze_capture_rgba(
-            rgba, pixel_width, pixel_height);
-        if (!vellum::graphics::passes_content_floor(stats)) {
-            std::cerr << "rendered frame failed content floor: colors="
-                      << stats.unique_colors << " stddev="
-                      << stats.luminance_standard_deviation << " content="
-                      << stats.non_background_pixels << '\n';
-            return 1;
-        }
-        std::size_t png_bytes = 0;
-        if (!options.capture.empty() &&
-            !write_png(*surface, options.capture, png_bytes, &error)) {
-            std::cerr << error << '\n';
-            return 1;
-        }
+        const std::uint32_t pixel_width = frame.pixel_width;
+        const std::uint32_t pixel_height = frame.pixel_height;
+        const std::size_t png_bytes = frame.png_bytes;
         std::cout << "vellum-app-host: renderer=Skia Graphite backend=Metal "
                   << "fallback=false width=" << pixel_width
                   << " height=" << pixel_height

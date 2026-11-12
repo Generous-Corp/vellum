@@ -441,7 +441,11 @@ def ensure_app(context: dict[str, Any], sdk: Path, no_build: bool = False) -> di
     return build_app(context, sdk)
 
 
-def scenario_arguments(context: dict[str, Any], scenario_value: str | None) -> tuple[list[str], str]:
+def scenario_arguments(
+    context: dict[str, Any],
+    scenario_value: str | None,
+    frame_directory: Path | None = None,
+) -> tuple[list[str], str]:
     project: Path = context["root"]
     name = scenario_value or "smoke"
     relative = name if name.endswith(".json") or "/" in name else f"tests/scenarios/{name}.json"
@@ -487,8 +491,15 @@ def scenario_arguments(context: dict[str, Any], scenario_value: str | None) -> t
     if any(step["action"] == "advance" for step in scenario["steps"]):
         arguments.append("--manual-clock")
 
-    for step in scenario["steps"]:
+    if frame_directory is not None:
+        arguments.extend(["--capture-dir", str(frame_directory)])
+
+    for index, step in enumerate(scenario["steps"]):
         action = step["action"]
+        if action == "capture" and frame_directory is not None:
+            name = step.get("name") or step.get("value") or f"capture-{index}"
+            arguments.extend(["--capture-step", name])
+            continue
         if action in {"wait-for-idle", "capture"}:
             continue
         if action in {"press", "click"}:
@@ -716,10 +727,14 @@ def command_result(command: str, args: argparse.Namespace, context: dict[str, An
             })
         if args.montage:
             raise BackendFailure("--montage requires --matrix", status="invalid_arguments", exit_code=2)
-        scenario_args, scenario_name = scenario_arguments(context, args.scenario)
+        scenario_name = scenario_arguments(context, args.scenario)[1]
         output = output_path(context["root"], args.output, f"artifacts/{scenario_name}.png", "capture output")
         if output.suffix.lower() != ".png":
             raise BackendFailure("Capture output must end in .png", status="invalid_arguments", exit_code=2)
+        # Named capture steps write one frame each beside the final capture.
+        scenario_args, _ = scenario_arguments(
+            context, args.scenario, output.parent / f"{output.stem}-frames"
+        )
         completed = execute_host(app, [*scenario_args, "--capture", str(output)])
         if not output.is_file():
             raise BackendFailure("Native host did not produce the requested capture", status="capture_failed")

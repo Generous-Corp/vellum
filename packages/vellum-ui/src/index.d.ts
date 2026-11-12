@@ -147,6 +147,9 @@ export interface ElementProps {
     text?: string;
     source?: string;
     accessibilityLabel?: string;
+    /** Identity in the source design, such as `figma:<node id>`. */
+    anchor?: string;
+    sourceLocation?: { file: string; line?: number; column?: number };
     accessibilityValue?: string;
     accessibilityRole?: 'button' | 'group' | 'image' | 'list' | 'text' | 'text-field';
     accessibilityState?: {

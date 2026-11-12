@@ -560,8 +560,8 @@ NodeSource read_node_source(NSDictionary* source) {
         std::string anchor = cpp_string(source[@"anchor"]);
         if (anchor.size() <= kMaximumAnchorBytes) result.anchor = std::move(anchor);
     }
-    if (![source[@"source"] isKindOfClass:NSDictionary.class]) return result;
-    NSDictionary* location = source[@"source"];
+    if (![source[@"sourceLocation"] isKindOfClass:NSDictionary.class]) return result;
+    NSDictionary* location = source[@"sourceLocation"];
     if (![location[@"file"] isKindOfClass:NSString.class]) return result;
     std::string file = cpp_string(location[@"file"]);
     if (file.empty() || file.size() > kMaximumSourceFileBytes) return result;

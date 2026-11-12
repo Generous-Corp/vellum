@@ -37,6 +37,14 @@ std::optional<std::uint32_t> positive_dimension(std::string_view text) {
     }
 }
 
+bool valid_frame_name(std::string_view name) {
+    if (name.empty() || name.size() > 128U || name.front() == '.') return false;
+    return std::all_of(name.begin(), name.end(), [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+               (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
+    });
+}
+
 std::optional<std::uint64_t> advance_milliseconds(std::string_view text) {
     if (text.empty() || text.size() > 9U) return std::nullopt;
     std::uint64_t value = 0;
@@ -59,7 +67,7 @@ void print_usage() {
                  "[--service-result NODE_ID RESPONSE_JSON] "
                  "[--expected-throw NODE_ID EXPECTED_TEXT] "
                  "[--service-capabilities JSON] "
-                 "[--manual-clock] [--advance MS] [--dump-tree JSON] "
+                 "[--manual-clock] [--advance MS] [--capture-step NAME] [--capture-dir DIR] [--dump-tree JSON] "
                  "[--component ID=DYLIB] [--state-file FILE] "
                  "[--expect-width N --expect-height N] [--capture PNG]\n";
 }
@@ -79,6 +87,14 @@ std::optional<Options> parse_options(int argc, const char* argv[]) {
             options.steps.push_back({
                 AutomationStep::Kind::advance, {}, std::to_string(*milliseconds),
             });
+        } else if (argument == "--capture-step") {
+            if (++index >= argc || !valid_frame_name(argv[index])) return std::nullopt;
+            options.steps.push_back({
+                AutomationStep::Kind::capture, {}, argv[index],
+            });
+        } else if (argument == "--capture-dir") {
+            if (++index >= argc || argv[index][0] == '\0') return std::nullopt;
+            options.capture_dir = argv[index];
         } else if (argument == "--dump-tree") {
             if (++index >= argc || argv[index][0] == '\0') return std::nullopt;
             options.dump_tree = argv[index];
