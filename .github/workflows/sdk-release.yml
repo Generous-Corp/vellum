@@ -216,7 +216,10 @@ jobs:
           python3 scripts/build_sterile_acceptance_bundle.py \
             --output "$RUNNER_TEMP/trusted-sterile-acceptance.tar.gz" --json \
             > "$RUNNER_TEMP/trusted-sterile-bundle.json"
-          cmp "$RUNNER_TEMP/trusted-sterile-acceptance.tar.gz" \
+          # Same tar stream, not same gzip bytes: the two runners' zlib builds
+          # may compress identical input differently.
+          python3 -I scripts/build_sterile_acceptance_bundle.py --compare \
+            "$RUNNER_TEMP/trusted-sterile-acceptance.tar.gz" \
             "$input/vellum-sterile-acceptance.tar.gz"
           mkdir "$RUNNER_TEMP/trusted-sterile"
           tar -xzf "$RUNNER_TEMP/trusted-sterile-acceptance.tar.gz" \
