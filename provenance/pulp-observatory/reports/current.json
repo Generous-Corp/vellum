@@ -9191,7 +9191,7 @@
       "class": "rendering",
       "deadline": "2026-11-13T08:41:54Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-e487ff66f31099b2a5559f99a669d3724773d25b",
       "mapped_contracts": [
         "canvas-kernel",
@@ -9205,7 +9205,7 @@
       "class": "rendering",
       "deadline": "2026-11-13T08:50:02Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-8711fedf5f1fe1ded3df1dd2b54a3803aa0af173",
       "mapped_contracts": [
         "canvas-kernel",
@@ -9218,7 +9218,7 @@
       "class": "rendering",
       "deadline": "2026-11-13T08:50:02Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-e1bebdda1f0d3dba1a49a94f1a4a618f1f477c47",
       "mapped_contracts": [
         "canvas-kernel"
@@ -9244,7 +9244,7 @@
       "class": "rendering",
       "deadline": "2026-11-13T11:05:36Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-7b18f85edaea3bbff4093341a9c41d3a3cc80d49",
       "mapped_contracts": [
         "canvas-kernel",
@@ -9282,7 +9282,7 @@
       "class": "rendering",
       "deadline": "2026-11-13T20:53:33Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-aee88b9a51a3279bf9eb36d98e727c4416acc0de",
       "mapped_contracts": [
         "canvas-kernel",
@@ -9335,7 +9335,7 @@
       "class": "rendering",
       "deadline": "2026-11-16T03:54:25Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-6536455b20095b00510dc1fb38a4603dcf98bb79",
       "mapped_contracts": [
         "canvas-kernel"
@@ -9347,7 +9347,7 @@
       "class": "rendering",
       "deadline": "2026-11-16T04:12:23Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-55ebf5ded1208973729055fbed5d8a96f879d01c",
       "mapped_contracts": [
         "canvas-kernel"
@@ -9359,7 +9359,7 @@
       "class": "rendering",
       "deadline": "2026-11-16T04:12:23Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-e9fef5819a981c976b3c03a16019a756b0ba91d3",
       "mapped_contracts": [
         "canvas-kernel"
@@ -9399,7 +9399,7 @@
       "class": "rendering",
       "deadline": "2026-11-16T05:03:32Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-333729c2d2a7a61ab5de71b203fcabf4da743a43",
       "mapped_contracts": [
         "canvas-kernel",
@@ -9412,7 +9412,7 @@
       "class": "rendering",
       "deadline": "2026-11-16T05:03:32Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-544a8dc80f47ba8d0fa36ee9dc005ee66ddfd581",
       "mapped_contracts": [
         "canvas-kernel"
@@ -9465,7 +9465,7 @@
       "class": "rendering",
       "deadline": "2026-11-16T10:11:33Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-b58a307b7b46ae85cd366b66b2c4e6b5f8e94660",
       "mapped_contracts": [
         "canvas-kernel",
@@ -9556,7 +9556,7 @@
       "class": "rendering",
       "deadline": "2026-11-16T17:21:00Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-632b3daaab69e0f18bffddc50abaeddd09147602",
       "mapped_contracts": [
         "canvas-kernel"
@@ -9568,7 +9568,7 @@
       "class": "rendering",
       "deadline": "2026-11-16T17:27:00Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-0b3d4a0fb8ef32f51955c137f2cb33651bf7e39b",
       "mapped_contracts": [
         "canvas-kernel"
@@ -9578,23 +9578,59 @@
     },
     {
       "class": "rendering",
-      "deadline": "2026-11-16T20:00:00Z",
+      "deadline": "2026-11-16T18:05:35Z",
       "direction": "framework-to-Pulp",
       "disposition": "pending",
+      "event_id": "vellum-3a55fcd7a4f4df908c66bfde258ba490ea894132",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "3a55fcd7a4f4df908c66bfde258ba490ea894132",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-16T18:41:53Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-b45063865ead68d2ef2aa71fa8d62cebaa8d06fa",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "b45063865ead68d2ef2aa71fa8d62cebaa8d06fa",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-16T20:00:00Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
       "event_id": "vellum-f52253f6c86ad93c56faeaea7f0212983e28cdcb",
       "mapped_contracts": [
         "canvas-kernel"
       ],
       "source_commit": "f52253f6c86ad93c56faeaea7f0212983e28cdcb",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-16T23:45:00Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-33e10ef3f63ebf2a0ddfa71b55f2cb1ec611b00f",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "33e10ef3f63ebf2a0ddfa71b55f2cb1ec611b00f",
+      "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-11-12T01:54:50Z",
+  "generated_at": "2026-11-12T07:18:57Z",
   "health": "pass",
-  "maximum_pending_age_days": 1.723,
+  "maximum_pending_age_days": 1.949,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
-  "pending": 19,
+  "pending": 8,
   "release_blockers": [],
   "repeated_generic_fixes": {
     "canvas-kernel": 2,
