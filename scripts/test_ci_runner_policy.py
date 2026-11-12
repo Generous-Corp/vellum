@@ -98,6 +98,81 @@ BROWSER_JOBS = {
     "sdk-release.yml": ("validate-sdk-artifacts",),
 }
 
+# Both gpu-macos.yml jobs select their runner with exactly this expression:
+# merge-group and push runs take the merge-group class variable when it is set,
+# and everything else is the reviewed local variable with a hosted fallback.
+GPU_RUNS_ON = (
+    "runs-on: ${{ fromJSON(((github.event_name == 'merge_group' || "
+    "github.event_name == 'push') && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) "
+    "|| vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '[\"macos-15\"]') }}"
+)
+
+
+def evaluate_actions_expression(expression: str, context: dict[str, str]) -> str:
+    """Evaluate the GitHub Actions expression subset a runs-on selector uses.
+
+    Strings, `github.event_name`, `vars.NAME` (unset reads as ''), `==`, `&&`,
+    `||` and parentheses, with the documented semantics: `a && b` is `a` when
+    `a` is falsy, else `b`; `a || b` is `a` when `a` is truthy, else `b`; the
+    empty string is falsy; `==` yields 'true' or ''.
+    """
+    tokens = re.findall(r"'(?:[^']|'')*'|==|&&|\|\||[()]|[A-Za-z_][A-Za-z0-9_.]*", expression)
+    if "".join(tokens) != re.sub(r"\s+", "", expression):
+        raise ValueError(f"unsupported expression: {expression}")
+    position = 0
+
+    def peek() -> str:
+        return tokens[position] if position < len(tokens) else ""
+
+    def take() -> str:
+        nonlocal position
+        position += 1
+        return tokens[position - 1]
+
+    def primary() -> str:
+        token = take()
+        if token == "(":
+            value = disjunction()
+            if take() != ")":
+                raise ValueError("unbalanced parentheses")
+            return value
+        if token.startswith("'"):
+            return token[1:-1].replace("''", "'")
+        if token == "github.event_name":
+            return context["event_name"]
+        if token.startswith("vars."):
+            return context.get(token, "")
+        raise ValueError(f"unsupported token {token!r}")
+
+    def comparison() -> str:
+        left = primary()
+        while peek() == "==":
+            take()
+            left = "true" if left == primary() else ""
+        return left
+
+    def conjunction() -> str:
+        left = comparison()
+        while peek() == "&&":
+            take()
+            right = comparison()
+            left = right if left else left
+        return left
+
+    def disjunction() -> str:
+        left = conjunction()
+        while peek() == "||":
+            take()
+            right = conjunction()
+            left = left if left else right
+        return left
+
+    value = disjunction()
+    if position != len(tokens):
+        raise ValueError("trailing tokens")
+    return value
+
+
 JOB_HEADER = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
 GPU_GUARD = (
     "    if: github.event_name != 'pull_request' || "
@@ -1094,6 +1169,35 @@ class RunnerPolicyTests(unittest.TestCase):
             body = workflow_jobs(gpu).get(job)
             self.assertIsNotNone(body, f"gpu-macos.yml: {job} is missing")
         assert_gpu_local_runner_policy(gpu)
+
+    def test_gpu_jobs_select_the_merge_group_class_only_when_it_is_set(self) -> None:
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        for job in ("gpu-macos-arm64", "sterile-consumer"):
+            lines = [line.strip() for line in workflow_jobs(gpu)[job].splitlines()
+                     if line.strip().startswith("runs-on:")]
+            self.assertEqual(lines, [GPU_RUNS_ON], job)
+        expression = GPU_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")]
+        local = '["self-hosted","macOS","ARM64","vellum-build-macos"]'
+        merge = '["self-hosted","macOS","ARM64","vellum-build-macos-merge-group"]'
+        before = "vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '[\"macos-15\"]'"
+        events = ("pull_request", "merge_group", "push", "workflow_dispatch")
+        for local_value in ("", local):
+            for event in events:
+                with self.subTest(event=event, local=bool(local_value)):
+                    context = {"event_name": event, "vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local_value}
+                    # Unset merge-group variable: identical to the selector before it.
+                    self.assertEqual(evaluate_actions_expression(expression, context),
+                                     evaluate_actions_expression(before, context))
+                    context["vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON"] = merge
+                    expected = (merge if event in ("merge_group", "push")
+                                else evaluate_actions_expression(before, context))
+                    self.assertEqual(evaluate_actions_expression(expression, context), expected)
+        # Control: the evaluator is not reading every selector as the fallback.
+        self.assertEqual(evaluate_actions_expression(before, {"event_name": "push"}), '["macos-15"]')
+        self.assertEqual(
+            evaluate_actions_expression(before, {"event_name": "push",
+                                                 "vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local}),
+            local)
 
     def test_gpu_local_runner_policy_rejects_guard_mutations(self) -> None:
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")

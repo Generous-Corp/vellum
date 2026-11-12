@@ -37,7 +37,11 @@ jobs:
     # Only first-party PRs may use the private local fleet. Fork PRs are
     # intentionally skipped while the local selector is enabled.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''
-    runs-on: ${{ fromJSON(vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    # Merge-group and push (main, release tags) runs select their own runner
+    # class when VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a
+    # merge-queue proof is not handed to whichever PR-head job GitHub picks.
+    # Unset, every event selects exactly what it did before.
+    runs-on: ${{ fromJSON(((github.event_name == 'merge_group' || github.event_name == 'push') && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     # $GITHUB_ENV does not cross jobs; dependent jobs read the validated
     # release identity through these outputs.
     outputs:
@@ -952,7 +956,11 @@ jobs:
     needs: gpu-macos-arm64
     # Keep the dependent job on the same first-party-only policy.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''
-    runs-on: ${{ fromJSON(vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    # Merge-group and push (main, release tags) runs select their own runner
+    # class when VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a
+    # merge-queue proof is not handed to whichever PR-head job GitHub picks.
+    # Unset, every event selects exactly what it did before.
+    runs-on: ${{ fromJSON(((github.event_name == 'merge_group' || github.event_name == 'push') && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     env:
       VELLUM_RELEASE_ARCHIVE: ${{ needs.gpu-macos-arm64.outputs.release_archive }}
     steps:

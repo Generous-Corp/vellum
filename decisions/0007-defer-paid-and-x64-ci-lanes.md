@@ -32,6 +32,7 @@ Three layers agree, so a lane cannot drift back to a paid runner by accident:
    | `VELLUM_LINUX_RUNS_ON_JSON` | `["self-hosted","Linux","ARM64","vellum-build-linux"]` | `product-quality.yml`, `provenance.yml` |
    | `VELLUM_MACOS_RUNS_ON_JSON` | `["self-hosted","macOS","ARM64","vellum-build-macos"]` | `gpu-macos.yml`, `readme-quick-start.yml` |
    | `VELLUM_AUTHORITY_RUNS_ON_JSON` | `["self-hosted","Linux","ARM64","vellum-authority-linux"]` | `authority-activation.yml`, `authority-release.yml` |
+   | `VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON` | none: unset, merge-group and push runs use the local variable and fallback above | `gpu-macos.yml` (merge-group and push runs only) |
 
 2. `scripts/test_ci_runner_policy.py` asserts the exact variable and fallback
    for every workflow, and rejects the GitHub-hosted labels outright through
