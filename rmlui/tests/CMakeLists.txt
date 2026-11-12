@@ -170,6 +170,7 @@ if(VELLUM_RMLUI_METAL AND VELLUM_RMLUI_FONTS)
         VellumRmlUi::Native)
     target_sources(vellum-rmlui-metal-blend-control PRIVATE
         "${PROJECT_SOURCE_DIR}/src/metal_render_interface.mm"
+        "${PROJECT_SOURCE_DIR}/src/metal_image_decode.mm"
         "${PROJECT_SOURCE_DIR}/src/metal_effects.cpp")
     target_compile_definitions(vellum-rmlui-metal-blend-control PRIVATE
         VELLUM_RMLUI_METAL_TEST_STRAIGHT_ALPHA_BLEND)
@@ -190,6 +191,15 @@ if(VELLUM_RMLUI_METAL AND VELLUM_RMLUI_FONTS)
     add_test(NAME vellum.rmlui.metal-filters
         COMMAND vellum-rmlui-metal-filters-test "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}")
     set_tests_properties(vellum.rmlui.metal-filters PROPERTIES SKIP_RETURN_CODE 77)
+
+    # The Metal renderer's image decode premultiplies as round(c * a / 255)
+    # for every (c, a) pair; CoreGraphics does the arithmetic, so this catches
+    # a change in its rounding.
+    vellum_rmlui_add_test(vellum-rmlui-metal-image-decode-test metal/metal_image_decode_test.mm
+        VellumRmlUi::Metal "-framework CoreGraphics" "-framework ImageIO")
+    target_include_directories(vellum-rmlui-metal-image-decode-test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_options(vellum-rmlui-metal-image-decode-test PRIVATE -fobjc-arc)
+    add_test(NAME vellum.rmlui.metal-image-decode COMMAND vellum-rmlui-metal-image-decode-test)
 
     vellum_rmlui_add_test(vellum-rmlui-metal-effects-test metal/metal_effects_test.cpp
         VellumRmlUi::Metal)
