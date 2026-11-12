@@ -160,6 +160,32 @@ class SterileAcceptanceBundleTest(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_compare_command_rejects_changed_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            built = root / "built.tar.gz"
+            tampered = root / "tampered.tar.gz"
+            bundle.build(built)
+            stream = bytearray(bundle.tar_stream(built))
+            marker = b"vellum.sterile-acceptance-bundle.v1"
+            offset = stream.index(marker)
+            stream[offset] ^= 1
+            bundle.write_gzip(bytes(stream), tampered)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_DIR / "build_sterile_acceptance_bundle.py"),
+                    "--compare",
+                    str(built),
+                    str(tampered),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("hold different tar streams", result.stderr)
+
     def test_checkout_negative_control_is_observed_red(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
