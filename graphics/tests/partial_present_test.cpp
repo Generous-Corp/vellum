@@ -1,8 +1,10 @@
 #include "../src/damage_testing.hpp"
+#include "../src/skia_dawn_surface_test_access.hpp"
 #include "../src/skia_dawn_surface_testing.hpp"
 #include "support/scene_capture_harness.hpp"
 
 #include <vellum/graphics/damage.hpp>
+#include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/path_geometry.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
@@ -455,12 +457,15 @@ void command_extents() {
     }
 }
 
+Scene grouping_scene(float width, float height);
+
 void damage_model_version_gate() {
-    expect(kDamageModelSceneVersion == 3U && partial_redraw_supported(3U) &&
+    expect(kDamageModelSceneVersion == 5U && partial_redraw_supported(3U) &&
+               partial_redraw_supported(4U) && partial_redraw_supported(5U) &&
                partial_redraw_supported(kDamageModelSceneVersion) &&
                !partial_redraw_supported(kDamageModelSceneVersion + 1U) &&
-               !partial_redraw_supported(4U),
-           "partial redraw covers scene versions up to 3 and refuses version 4");
+               !partial_redraw_supported(6U),
+           "partial redraw covers scene versions up to 5 and refuses version 6");
     expect(to_string(FullRepaintReason::damage_model_version) == "damage_model_version",
            "the damage-model version fallback has a telemetry name");
     constexpr std::uint32_t width = 400;
@@ -477,9 +482,9 @@ void damage_model_version_gate() {
         const auto stats = partial->frame_stats();
         expect(!stats.full_repaint && stats.full_repaint_reason == FullRepaintReason::none &&
                    stats.paint_commands_recorded < stats.paint_commands_total,
-               "a default version 3 scene takes the partial path, step " + std::to_string(step),
+               "a default version 5 scene takes the partial path, step " + std::to_string(step),
                describe(stats));
-        compare("a default version 3 scene, step " + std::to_string(step), *full, *partial);
+        compare("a default version 5 scene, step " + std::to_string(step), *full, *partial);
     }
     Scene newer = scene;
     newer.scene_version = kSceneVersion + 1U;
@@ -489,6 +494,20 @@ void damage_model_version_gate() {
                partial->frame_stats().frame == before,
            "a scene version this build cannot draw is refused before any redraw",
            describe(partial->frame_stats()));
+
+    auto older = make_surface(width, height, 2.0F);
+    if (!older) return;
+    SkiaDawnSurfaceTestAccess::set_damage_model_version(*older, 4U);
+    Scene grouped = grouping_scene(width, height);
+    if (!render_both(*full, *older, grouped)) return;
+    node(grouped, "mover").bounds.x += 6.0F;
+    if (!render_both(*full, *older, grouped)) return;
+    const auto refused = older->frame_stats();
+    expect(refused.full_repaint &&
+               refused.full_repaint_reason == FullRepaintReason::damage_model_version,
+           "a version 5 scene past a version 4 damage model repaints fully",
+           describe(refused));
+    compare("a version 5 scene past a version 4 damage model", *full, *older);
 }
 
 Affine2D rotation_degrees(float degrees, float scale = 1.0F) {
@@ -1080,6 +1099,407 @@ void interpolated_fill_sweep() {
            std::to_string(cut) + " of 261 edges differ; first " + first);
 }
 
+struct SweepCount final {
+    int differing = 0;
+    int partial = 0;
+    int edges = 0;
+    std::string first;
+};
+
+// Cuts `scene` with a damage rectangle whose left edge, then top edge, steps
+// across the frame one device pixel at a time, comparing each frame with a
+// full redraw.
+SweepCount sweep_damage_edges(const Scene& scene, float scale, bool layer_cache = false) {
+    SweepCount count;
+    const auto width = static_cast<std::uint32_t>(scene.width);
+    const auto height = static_cast<std::uint32_t>(scene.height);
+    auto full = make_surface(width, height, scale);
+    auto partial = make_surface(width, height, scale, layer_cache);
+    if (!full || !partial) return {.differing = -1};
+    std::string error;
+    if (!full->render(scene, &error)) return {.differing = -1, .first = error};
+    const PixelRect frame = frame_rect(scene, scale);
+    for (const bool vertical : {true, false}) {
+        const std::int32_t extent = vertical ? frame.right : frame.bottom;
+        for (std::int32_t edge = 1; edge < extent; ++edge) {
+            DamageRegion damage(frame, {.full_repaint_fraction = 2.0});
+            damage.add(vertical ? PixelRect{edge, 0, frame.right, frame.bottom}
+                                : PixelRect{0, edge, frame.right, frame.bottom});
+            if (!partial->render(scene, &error) || !partial->render(scene, damage, &error)) {
+                return {.differing = -1, .first = error};
+            }
+            ++count.edges;
+            if (!partial->frame_stats().full_repaint) ++count.partial;
+            std::string message;
+            if (!identical(*full, *partial, message)) {
+                if (count.differing == 0) {
+                    count.first = std::string(vertical ? "x=" : "y=") + std::to_string(edge) +
+                                  ": " + message;
+                }
+                ++count.differing;
+            }
+        }
+    }
+    return count;
+}
+
+std::string sweep_detail(const SweepCount& count) {
+    return std::to_string(count.differing) + " of " + std::to_string(count.edges) +
+           " edges differ, " + std::to_string(count.partial) + " partial; first " + count.first;
+}
+
+Scene grouped_version(Scene scene) {
+    scene.scene_version = kDamageModelSceneVersion;
+    return scene;
+}
+
+Scene plain_mask_scene(float width, float height) {
+    Scene scene = plain_scene(width, height);
+    SceneNode masked{.id = "masked", .kind = SceneNode::Kind::group,
+                     .bounds = {60.0F, 50.0F, 220.0F, 180.0F}};
+    masked.children.push_back({.id = "masked/back", .kind = SceneNode::Kind::rectangle,
+                               .bounds = {0.0F, 0.0F, 200.0F, 160.0F},
+                               .fill = Color::rgba(0.22F, 0.74F, 0.97F, 0.8F)});
+    masked.children.push_back({.id = "masked/front", .kind = SceneNode::Kind::rectangle,
+                               .bounds = {40.5F, 30.25F, 150.0F, 120.0F},
+                               .fill = Color::rgba(0.98F, 0.45F, 0.09F, 0.7F),
+                               .corner_radius = 18.0F});
+    masked.children.push_back({.id = "masked/mask", .kind = SceneNode::Kind::rectangle,
+                               .bounds = {20.25F, 15.5F, 170.0F, 130.0F},
+                               .fill = Color::rgba(1.0F, 1.0F, 1.0F, 0.6F),
+                               .corner_radius = 40.0F,
+                               .mask = MaskMode::alpha});
+    scene.root.children.push_back(std::move(masked));
+    return scene;
+}
+
+// The image fixture plus opaque linear-sampled images that are rotated,
+// skewed, upscaled at fractional offsets and rounded, none of which composite
+// their own layer.
+Scene image_sweep_scene(float width, float height) {
+    Scene scene = grouped_version(harness::fixtures::image(width, height));
+    const auto& hash = scene.images.front()->content_hash;
+    const auto image = [&](std::string id, Rect bounds) {
+        return SceneNode{.id = std::move(id), .kind = SceneNode::Kind::image, .bounds = bounds,
+                         .image = ImageReference{.content_hash = hash,
+                                                 .sampling = ImageSampling::linear}};
+    };
+    auto turned = image("turned-opaque", {250.3F, 175.6F, 52.7F, 41.2F});
+    turned.transform = rotation_degrees(17.0F);
+    scene.root.children.push_back(std::move(turned));
+    auto skewed = image("skewed", {320.4F, 170.2F, 44.0F, 44.0F});
+    skewed.transform = Affine2D{.a = 1.1F, .b = 0.15F, .c = 0.35F, .d = 0.9F};
+    scene.root.children.push_back(std::move(skewed));
+    scene.root.children.push_back(image("upscaled", {12.37F, 236.81F, 97.3F, 51.9F}));
+    auto rounded = image("rounded-linear", {130.6F, 232.2F, 88.0F, 60.0F});
+    rounded.corner_radii = CornerRadii{14.0F, 3.0F, 22.0F, 9.5F};
+    scene.root.children.push_back(std::move(rounded));
+    return scene;
+}
+
+struct SweepCase final {
+    std::string what;
+    Scene scene;
+    hooks::PartialRedrawRules off;
+};
+
+void grouping_sweeps() {
+    const std::vector<SweepCase> cases = {
+        {"images", image_sweep_scene(400.0F, 300.0F),
+         {.enclose_images = false}},
+        {"nested clips", grouped_version(harness::fixtures::clip_nested(400.0F, 300.0F)),
+         {.enclose_clips = false}},
+        {"an alpha mask", plain_mask_scene(400.0F, 300.0F), {.enclose_group_layers = false}},
+        {"a luminance mask", grouped_version(harness::fixtures::mask_luminance(400.0F, 300.0F)),
+         {.enclose_interpolated_fills = false, .enclose_group_layers = false}},
+        {"an isolated group", grouped_version(harness::fixtures::isolated_overlap(400.0F, 300.0F)),
+         {.enclose_group_layers = false}},
+    };
+    for (const float scale : {1.0F, 2.0F}) {
+        const std::string size = "@" + std::to_string(static_cast<int>(scale)) + " ";
+        for (const auto& sweep : cases) {
+            const auto enclosed = sweep_damage_edges(sweep.scene, scale);
+            expect(enclosed.differing == 0 && enclosed.partial > 0,
+                   size + "a damage edge swept across " + sweep.what +
+                       " leaves every frame byte-identical",
+                   sweep_detail(enclosed));
+            RulesOverride off(sweep.off);
+            const auto cut = sweep_damage_edges(sweep.scene, scale);
+            expect(cut.differing > 0,
+                   size + "negative control: without its enclosure rule a swept edge cuts " +
+                       sweep.what + " visibly",
+                   sweep_detail(cut));
+        }
+    }
+}
+
+std::shared_ptr<const ImageAsset> checker(char digit, std::uint8_t red, std::uint8_t blue) {
+    std::vector<std::uint8_t> texels;
+    for (int index = 0; index < 4; ++index) {
+        const bool lit = index == 0 || index == 3;
+        texels.insert(texels.end(), {lit ? red : std::uint8_t{20}, 60, lit ? blue : std::uint8_t{30},
+                                     255});
+    }
+    return make_image_asset("sha256:" + std::string(64, digit), 2, 2, texels,
+                            ImageAlpha::premultiplied);
+}
+
+std::shared_ptr<const PathGeometry> triangle_path(float width, float height) {
+    auto path = std::make_shared<PathGeometry>();
+    path->verbs = {PathVerb::move, PathVerb::line, PathVerb::line, PathVerb::close};
+    path->values = {width * 0.5F, 0.0F, width, height, 0.0F, height};
+    return path;
+}
+
+NodeClip viewport_clip() {
+    return {.rect = {4.0F, 3.0F, 112.0F, 74.0F}, .radii = uniform_corner_radii(10.0F)};
+}
+
+SceneNode translucent_box(std::string id, Rect bounds, Color color, float alpha,
+                          float radius = 0.0F) {
+    color.alpha = alpha;
+    return {.id = std::move(id), .kind = SceneNode::Kind::rectangle, .bounds = bounds,
+            .fill = color, .corner_radius = radius};
+}
+
+Scene with_grouping_nodes(Scene scene) {
+    scene.images = {checker('a', 240, 40), checker('b', 30, 220)};
+
+    SceneNode viewport{.id = "viewport", .kind = SceneNode::Kind::rectangle,
+                       .bounds = {30.0F, 30.0F, 120.0F, 80.0F}, .fill = Color::hex(0x1E293B),
+                       .clip = viewport_clip()};
+    for (int row = 0; row < 3; ++row) {
+        viewport.children.push_back(translucent_box(
+            "viewport/row-" + std::to_string(row),
+            {-20.0F + 9.5F * static_cast<float>(row), 8.0F + 22.0F * static_cast<float>(row),
+             170.0F, 14.0F},
+            Color::hex(row % 2 == 0 ? 0x22D3EE : 0xFACC15), 0.85F, 4.0F));
+    }
+    SceneNode inner{.id = "viewport/inner", .kind = SceneNode::Kind::group,
+                    .bounds = {60.0F, 20.0F, 60.0F, 44.0F},
+                    .transform = rotation_degrees(20.0F),
+                    .clip = NodeClip{.rect = {0.0F, 0.0F, 60.0F, 44.0F}}};
+    inner.children.push_back(translucent_box("viewport/inner/bar", {-15.0F, 12.0F, 90.0F, 18.0F},
+                                             Color::hex(0xF43F5E), 1.0F));
+    viewport.children.push_back(std::move(inner));
+    scene.root.children.push_back(std::move(viewport));
+
+    SceneNode masked{.id = "masked", .kind = SceneNode::Kind::group,
+                     .bounds = {205.0F, 28.0F, 150.0F, 100.0F}};
+    masked.children.push_back(translucent_box("masked/back", {0.0F, 0.0F, 150.0F, 100.0F},
+                                              Color::hex(0x38BDF8), 0.8F));
+    masked.children.push_back(translucent_box("masked/front", {30.5F, 20.25F, 100.0F, 60.0F},
+                                              Color::hex(0xF97316), 0.9F, 14.0F));
+    auto mask = translucent_box("masked/mask", {12.25F, 10.5F, 120.0F, 76.0F},
+                                Color::hex(0xFFFFFF), 0.7F, 30.0F);
+    mask.mask = MaskMode::alpha;
+    masked.children.push_back(std::move(mask));
+    scene.root.children.push_back(std::move(masked));
+
+    SceneNode isolated{.id = "isolated", .kind = SceneNode::Kind::group,
+                       .bounds = {225.0F, 145.0F, 120.0F, 70.0F}, .isolate = true};
+    const std::uint32_t colours[]{0xEF4444, 0x22C55E, 0x3B82F6};
+    for (int index = 0; index < 3; ++index) {
+        isolated.children.push_back(translucent_box(
+            "isolated/disc-" + std::to_string(index),
+            {28.0F * static_cast<float>(index), 9.0F * static_cast<float>(index), 56.0F, 50.0F},
+            Color::hex(colours[index]), 0.6F, 24.0F));
+    }
+    scene.root.children.push_back(std::move(isolated));
+
+    scene.root.children.push_back({
+        .id = "photo",
+        .kind = SceneNode::Kind::image,
+        .bounds = {40.0F, 140.0F, 64.0F, 48.0F},
+        .image = ImageReference{.content_hash = scene.images[0]->content_hash},
+    });
+    return scene;
+}
+
+Scene grouping_scene(float width, float height) {
+    return with_grouping_nodes(base_scene(width, height));
+}
+
+std::vector<Step> grouping_steps() {
+    return {
+        {"move a clip", [](Scene& scene) { node(scene, "viewport").clip->rect.x += 7.5F; }},
+        {"resize a clip", [](Scene& scene) {
+             auto& clip = *node(scene, "viewport").clip;
+             clip.rect.width -= 18.25F;
+             clip.rect.height += 6.0F;
+         }},
+        {"move content past the clip edge", [](Scene& scene) {
+             node(scene, "viewport/row-1").bounds.x += 23.0F;
+         }},
+        {"rotate a clipped node", [](Scene& scene) {
+             node(scene, "viewport").transform = rotation_degrees(8.0F);
+         }},
+        {"move a nested clip under rotation", [](Scene& scene) {
+             node(scene, "viewport/inner").clip->rect.y += 5.5F;
+         }},
+        {"move content inside the nested clip", [](Scene& scene) {
+             node(scene, "viewport/inner/bar").bounds.x -= 9.0F;
+         }},
+        {"clip only the subtree", [](Scene& scene) {
+             node(scene, "viewport").clip->clips_own_paint = false;
+         }},
+        {"remove a clip", [](Scene& scene) { node(scene, "viewport").clip.reset(); }},
+        {"restore the clip", [](Scene& scene) { node(scene, "viewport").clip = viewport_clip(); }},
+        {"clip to a path under rotation", [](Scene& scene) {
+             node(scene, "viewport/inner").clip = NodeClip{.path = triangle_path(60.0F, 44.0F)};
+         }},
+        {"recolour the mask", [](Scene& scene) { node(scene, "masked/mask").fill.alpha = 0.4F; }},
+        {"move the mask", [](Scene& scene) { node(scene, "masked/mask").bounds.x += 11.0F; }},
+        {"fade the mask", [](Scene& scene) { node(scene, "masked/mask").opacity = 0.5F; }},
+        {"recolour masked content", [](Scene& scene) {
+             node(scene, "masked/front").fill = Color::hex(0x10B981);
+         }},
+        {"switch to a luminance mask", [](Scene& scene) {
+             node(scene, "masked/mask").mask = MaskMode::luminance;
+         }},
+        {"stop masking", [](Scene& scene) { node(scene, "masked/mask").mask.reset(); }},
+        {"mask again", [](Scene& scene) { node(scene, "masked/mask").mask = MaskMode::alpha; }},
+        {"fade the masked group", [](Scene& scene) { node(scene, "masked").opacity = 0.7F; }},
+        {"move inside an isolated group", [](Scene& scene) {
+             node(scene, "isolated/disc-1").bounds.x += 6.0F;
+         }},
+        {"stop isolating", [](Scene& scene) { node(scene, "isolated").isolate = false; }},
+        {"isolate again", [](Scene& scene) { node(scene, "isolated").isolate = true; }},
+        {"move an image", [](Scene& scene) {
+             node(scene, "photo").bounds.x += 5.5F;
+             node(scene, "photo").bounds.y += 3.25F;
+         }},
+        {"swap an image's asset", [](Scene& scene) {
+             node(scene, "photo").image->content_hash = scene.images[1]->content_hash;
+         }},
+        {"replace an asset's pixels", [](Scene& scene) { scene.images[1] = checker('b', 200, 90); }},
+        {"rotate an image", [](Scene& scene) {
+             node(scene, "photo").transform = rotation_degrees(12.0F);
+         }},
+        {"sample an image nearest", [](Scene& scene) {
+             node(scene, "photo").image->sampling = ImageSampling::nearest;
+         }},
+        {"change nothing", [](Scene&) {}},
+    };
+}
+
+void grouping_sequence(float scale, bool layer_cache) {
+    constexpr std::uint32_t width = 400;
+    constexpr std::uint32_t height = 300;
+    const std::string size = std::string(layer_cache ? "cache on " : "cache off ") + "@" +
+                             std::to_string(static_cast<int>(scale)) + " ";
+    auto full = make_surface(width, height, scale);
+    auto partial = make_surface(width, height, scale, layer_cache);
+    if (!full || !partial) return;
+    Scene scene = grouping_scene(static_cast<float>(width), static_cast<float>(height));
+    expect(scene.scene_version == 5U && partial_redraw_supported(scene.scene_version),
+           size + "the grouping scene is a version 5 scene partial redraw serves");
+    if (!render_both(*full, *partial, scene)) return;
+    compare(size + "the first grouping frame", *full, *partial);
+    // Removing or restoring the viewport's clip changes enough of this dense
+    // frame, once enclosed, to cross the repaint threshold.
+    const std::set<std::string> crossing = {"remove a clip", "restore the clip"};
+    for (const auto& step : grouping_steps()) {
+        const Scene previous = scene;
+        step.edit(scene);
+        if (!render_both(*full, *partial, scene)) return;
+        const auto stats = partial->frame_stats();
+        const auto modelled = compute_scene_damage(previous, scene, scale).stats();
+        const std::string percentages =
+            "modelled " + std::to_string(modelled.frame_fraction * 100.0) + "%, drawn " +
+            std::to_string(stats.damage_fraction * 100.0) + "% " + describe(stats);
+        if (crossing.contains(step.name)) {
+            expect(stats.full_repaint &&
+                       stats.full_repaint_reason == FullRepaintReason::damage_threshold,
+                   size + step.name + " crosses the repaint threshold once enclosed",
+                   percentages);
+        } else {
+            expect(!stats.full_repaint && stats.full_repaint_reason == FullRepaintReason::none,
+                   size + step.name + " repaints only its damage", percentages);
+        }
+        compare(size + step.name, *full, *partial);
+    }
+}
+
+bool redraws_identically(const Scene& before, const Scene& after, const DamageRegion& damage,
+                         float scale, std::string& message) {
+    auto full = make_surface(400, 300, scale);
+    auto partial = make_surface(400, 300, scale);
+    if (!full || !partial) return false;
+    std::string error;
+    if (!full->render(before, &error) || !partial->render(before, &error) ||
+        !full->render(after, &error) || !partial->render(after, damage, &error)) {
+        message = error;
+        return false;
+    }
+    return identical(*full, *partial, message);
+}
+
+PixelRect outset_pixels(const Rect& logical, float scale, std::int32_t margin) {
+    const auto pixels = to_pixel_rect(logical, scale).value_or(PixelRect{});
+    return {pixels.left - margin, pixels.top - margin, pixels.right + margin,
+            pixels.bottom + margin};
+}
+
+Rect clip_box(const SceneNode& clipped) {
+    return {clipped.bounds.x + clipped.clip->rect.x, clipped.bounds.y + clipped.clip->rect.y,
+            clipped.clip->rect.width, clipped.clip->rect.height};
+}
+
+bool contains(const PixelRect& outer, const PixelRect& inner) {
+    return outer.left <= inner.left && outer.top <= inner.top && outer.right >= inner.right &&
+           outer.bottom >= inner.bottom;
+}
+
+// Each damage rule for clips and masks, with a control that drops the area
+// the rule adds and leaves stale pixels.
+void grouping_damage_controls() {
+    constexpr float scale = 2.0F;
+    Scene before = with_grouping_nodes(plain_scene(400.0F, 300.0F));
+
+    Scene moved = before;
+    node(moved, "viewport").clip->rect.x += 30.0F;
+    const auto clip_damage = compute_scene_damage(before, moved, scale);
+    std::string message;
+    expect(redraws_identically(before, moved, clip_damage, scale, message),
+           "moving a clip damages its old and new extents", message);
+    DamageRegion new_extent_only = clip_damage;
+    new_extent_only.intersect(outset_pixels(clip_box(node(moved, "viewport")), scale, 2));
+    expect(new_extent_only.area() < clip_damage.area() &&
+               !redraws_identically(before, moved, new_extent_only, scale, message),
+           "negative control: damage limited to the new clip extent leaves stale pixels",
+           message);
+
+    Scene slid = before;
+    node(slid, "viewport/row-1").bounds.x += 23.0F;
+    const auto clip_pixels = outset_pixels(clip_box(node(before, "viewport")), scale, 2);
+    const auto slid_damage = compute_scene_damage(before, slid, scale);
+    expect(!slid_damage.empty() && contains(clip_pixels, slid_damage.bounds()) &&
+               redraws_identically(before, slid, slid_damage, scale, message),
+           "content moved past a clip edge damages only what the clip shows", message);
+    Scene unclipped = before;
+    node(unclipped, "viewport").clip.reset();
+    Scene unclipped_slid = unclipped;
+    node(unclipped_slid, "viewport/row-1").bounds.x += 23.0F;
+    expect(!contains(clip_pixels, compute_scene_damage(unclipped, unclipped_slid, scale).bounds()),
+           "negative control: without the clip the same move damages past the clip extent");
+
+    Scene unmasked = before;
+    node(unmasked, "masked/mask").mask.reset();
+    const auto mask_damage = compute_scene_damage(before, unmasked, scale);
+    expect(redraws_identically(before, unmasked, mask_damage, scale, message),
+           "a mask that stops masking damages the siblings it revealed", message);
+    const auto& mask = node(before, "masked/mask");
+    DamageRegion own_only(frame_rect(before, scale));
+    own_only.add(outset_pixels({node(before, "masked").bounds.x + mask.bounds.x,
+                                node(before, "masked").bounds.y + mask.bounds.y,
+                                mask.bounds.width, mask.bounds.height}, scale, 2));
+    expect(own_only.area() < mask_damage.area() &&
+               !redraws_identically(before, unmasked, own_only, scale, message),
+           "negative control: damage limited to the mask's own box leaves its siblings stale",
+           message);
+}
+
 Scene cross_pass_scene(bool with_path) {
     Scene scene = plain_scene(400.0F, 300.0F);
     scene.root.children.push_back({
@@ -1495,6 +1915,12 @@ int main() {
         multisampling_cross_pass();
         large_path();
         transformed_blur_reach_sweep();
+        grouping_sweeps();
+        for (const bool cached : {false, true}) {
+            grouping_sequence(1.0F, cached);
+            grouping_sequence(2.0F, cached);
+        }
+        grouping_damage_controls();
     } catch (const std::exception& exception) {
         std::cerr << "FAIL " << exception.what() << '\n';
         return 1;

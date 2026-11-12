@@ -247,11 +247,9 @@ void clip_validity() {
 void versioning() {
     static_assert(kSceneVersion == 5U);
     static_assert(scene_version_is_supported(5U));
-    // The damage model has not learnt these fields, so version 5 scenes
-    // repaint fully whatever the damage model's own version is.
-    static_assert(kDamageModelSceneVersion < 5U);
-    static_assert(!partial_redraw_supported(5U));
-    static_assert(partial_redraw_supported(kDamageModelSceneVersion));
+    static_assert(kDamageModelSceneVersion == 5U);
+    static_assert(partial_redraw_supported(5U));
+    static_assert(!partial_redraw_supported(6U));
 
     const auto variants = std::vector<std::pair<std::string, SceneNode>>{
         {"clip",

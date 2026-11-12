@@ -89,6 +89,9 @@ std::atomic<std::uint32_t> internal_samples{1U};
 std::atomic<bool> enclose_paths{true};
 std::atomic<bool> enclose_own_layers{true};
 std::atomic<bool> enclose_interpolated_fills{true};
+std::atomic<bool> enclose_images{true};
+std::atomic<bool> enclose_clips{true};
+std::atomic<bool> enclose_group_layers{true};
 
 void set_error(std::string* destination, std::string message) {
     if (destination != nullptr) {
@@ -1101,6 +1104,44 @@ std::vector<Extent> paint_command_extents(
     return extents;
 }
 
+// The device pixels a clip can let through: its shape's box under the clip's
+// transform, outset like a command extent.
+Extent clip_region_extent(const PaintCommand& command, float scale) {
+    if (!sane_box(command.bounds) || !sane_box(command.clip_rect)) return std::nullopt;
+    const NodeClip clip{
+        .rect = {command.clip_rect.x - command.bounds.x, command.clip_rect.y - command.bounds.y,
+                 command.clip_rect.width, command.clip_rect.height},
+        .path = command.path,
+    };
+    return pixel_extent(
+        transformed_bounds(command.transform, clip_extent(clip, command.bounds.x, command.bounds.y)),
+        scale);
+}
+
+// The union of the extents drawn between `begin` and the command that closes
+// it, which nests with its own kind. Clip and mask brackets draw nothing.
+PixelRect region_area(const std::vector<PaintCommand>& commands, const std::vector<Extent>& extents,
+                      std::size_t begin, PaintCommand::Kind open, PaintCommand::Kind close,
+                      const PixelRect& target) {
+    PixelRect area{};
+    std::size_t depth = 0;
+    for (std::size_t index = begin + 1; index < commands.size(); ++index) {
+        const auto kind = commands[index].kind;
+        if (kind == open) {
+            ++depth;
+            continue;
+        }
+        if (kind == close) {
+            if (depth == 0) break;
+            --depth;
+            continue;
+        }
+        if (!draws_content(kind)) continue;
+        area = bounding_union(area, extents[index] ? *extents[index] : target);
+    }
+    return area;
+}
+
 bool close_over_layers(const Scene& scene, const std::vector<PaintCommand>& commands, float scale,
                        const PixelRect& target, const std::vector<char>& composited,
                        std::vector<PixelRect>& rects) {
@@ -1117,30 +1158,29 @@ bool close_over_layers(const Scene& scene, const std::vector<PaintCommand>& comm
         const bool whole =
             transformed_blur || (enclose_own_layers && composites_own_layer(command)) ||
             (enclose_paths && path_paints(command)) ||
-            (enclose_interpolated_fills && interpolates_colour(command));
-        if (command.kind != PaintCommand::Kind::begin_layer && !whole) continue;
+            (enclose_interpolated_fills && interpolates_colour(command)) ||
+            (enclose_images && command.kind == PaintCommand::Kind::image && visible(command));
+        const bool group_layer =
+            enclose_group_layers && command.kind == PaintCommand::Kind::begin_layer;
+        const bool clip_region = enclose_clips && command.kind == PaintCommand::Kind::begin_clip;
+        if (!group_layer && !clip_region && !whole) continue;
         if (extents.empty()) extents = paint_command_extents(scene, commands, scale);
         if (whole) {
             if (extents[begin] && extents[begin]->empty()) continue;
             layers.push_back(intersection(extents[begin] ? *extents[begin] : target, target));
             continue;
         }
-        PixelRect area{};
-        std::size_t depth = 0;
-        for (std::size_t index = begin + 1; index < commands.size(); ++index) {
-            const auto kind = commands[index].kind;
-            if (kind == PaintCommand::Kind::begin_layer) {
-                ++depth;
-                continue;
-            }
-            if (kind == PaintCommand::Kind::end_layer) {
-                if (depth == 0) break;
-                --depth;
-                continue;
-            }
-            area = bounding_union(area, extents[index] ? *extents[index] : target);
+        if (group_layer) {
+            layers.push_back(intersection(
+                region_area(commands, extents, begin, PaintCommand::Kind::begin_layer,
+                            PaintCommand::Kind::end_layer, target),
+                target));
+            continue;
         }
-        layers.push_back(intersection(area, target));
+        const PixelRect drawn = region_area(commands, extents, begin, PaintCommand::Kind::begin_clip,
+                                            PaintCommand::Kind::end_clip, target);
+        const auto shape = clip_region_extent(command, scale);
+        layers.push_back(intersection(shape ? intersection(drawn, *shape) : drawn, target));
     }
     if (layers.empty()) return true;
     rects = enclose_whole_areas(std::move(rects), layers, target);
@@ -2426,12 +2466,18 @@ void set_partial_redraw_rules(const PartialRedrawRules& rules) noexcept {
     enclose_paths = rules.enclose_paths;
     enclose_own_layers = rules.enclose_own_layers;
     enclose_interpolated_fills = rules.enclose_interpolated_fills;
+    enclose_images = rules.enclose_images;
+    enclose_clips = rules.enclose_clips;
+    enclose_group_layers = rules.enclose_group_layers;
 }
 
 PartialRedrawRules partial_redraw_rules() noexcept {
     return {.enclose_paths = enclose_paths,
             .enclose_own_layers = enclose_own_layers,
-            .enclose_interpolated_fills = enclose_interpolated_fills};
+            .enclose_interpolated_fills = enclose_interpolated_fills,
+            .enclose_images = enclose_images,
+            .enclose_clips = enclose_clips,
+            .enclose_group_layers = enclose_group_layers};
 }
 
 void set_internal_sample_count(std::uint32_t count) noexcept { internal_samples = count; }

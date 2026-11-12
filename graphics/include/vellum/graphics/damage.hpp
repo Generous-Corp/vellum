@@ -250,7 +250,7 @@ public:
 /// damage model understands. Partial redraw is enabled only for scene
 /// versions the damage model understands; a newer scene repaints fully until
 /// the damage model learns its fields and this constant is raised.
-inline constexpr std::uint32_t kDamageModelSceneVersion = 3U;
+inline constexpr std::uint32_t kDamageModelSceneVersion = 5U;
 
 /// Whether a scene of `version` may be redrawn from its damage alone.
 [[nodiscard]] constexpr bool partial_redraw_supported(std::uint32_t version) noexcept {

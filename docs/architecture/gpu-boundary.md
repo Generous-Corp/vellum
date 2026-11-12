@@ -218,12 +218,10 @@ threshold fall back to a full repaint. Hosts pass `invalidate` reasons and node 
 rectangle counts, the commands re-recorded and why a frame repainted fully.
 What is cached and when it is discarded is renderer policy: the scene schema
 carries no cache hints. Partial redraw is enabled only for scene versions the
-damage model understands, up to `kDamageModelSceneVersion` (3), which covers
-transforms, group opacity, per-corner radii and paths. Version 4 adds images,
-and version 5 adds clips, masks and isolation; both repaint fully until the
-damage model learns those fields. A version the
-renderer accepts but the damage model does not yet understand repaints fully
-with reason `damage_model_version`. A version outside
+damage model understands, up to `kDamageModelSceneVersion` (5), which covers
+transforms, group opacity, per-corner radii, paths, images, and clips, masks
+and isolation on groups. A version the renderer accepts but the damage model
+does not yet understand repaints fully with reason `damage_model_version`. A version outside
 [`kMinSupportedSceneVersion`, `kSceneVersion`] is refused before anything is
 drawn.
 
@@ -234,10 +232,26 @@ adds no reach. The box is mapped through the composed transform, and the
 renderer culls with the same box. When the reach overflows to a non-finite
 box, damage covers the frame.
 
+An image damages its box, mapped through the composed transform. Replacing
+the asset an image resolves to damages the images that draw it.
+
+A clip bounds the damage of what it clips: its box, mapped through the
+composed transform, limits the damage of its subtree and, unless the node
+spares its own paint, of the node itself, so content clipped away damages
+nothing. Changing a clip damages the clipped subtree under both the old and
+the new clip, and toggling isolation damages the subtree. A mask hides its
+siblings wherever it draws nothing, so adding or removing a mask, changing its
+mode, opacity or transform, or a mask that stops masking damages its parent's
+whole subtree. A change to what a mask draws damages where it draws.
+
 Some content does not reproduce when a damage rectangle cuts it: path coverage,
-gradient and vertex-coloured fills, and a command that composites its own
-opacity layer. The surface grows the damage to hold each such command it
-touches whole, as it does for group layers. This can raise the damage of a
+gradient and vertex-coloured fills, images (a linear-sampled image at a
+fractional position moves by a level where it is cut), a command that
+composites its own opacity layer, group layers (faded, isolated and masked
+groups), and the content of a clip, whose anti-aliased edge Graphite folds
+into the geometry of each draw. The surface grows the damage to hold each such
+command or group it touches whole, and the content of a clip whole up to the
+clip's extent. This can raise the damage of a
 small change sharply, for example from 7% to 72% of a frame dense with
 gradients, and the policy threshold is applied again after this growth. The
 surface also disables Graphite's internal multisampling. Otherwise a pass
@@ -268,7 +282,9 @@ and antialiased pixels once more when it is composited, so a frame can differ
 from an uncached one by about half a level per overlapping translucent draw
 (two levels on the layered test scene) and depends on the surface's history.
 Even when allowed, they apply only to scenes that always repaint fully
-(versions past `kDamageModelSceneVersion`); a scene partial redraw serves
+(versions past `kDamageModelSceneVersion`, which currently covers every
+version the renderer accepts, so the triggers change no accepted scene);
+a scene partial redraw serves
 caches only faded groups, so its partial frames stay byte-identical to full
 repaints whatever each surface has cached.
 The surface keeps three cross-frame resource caches under

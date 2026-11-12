@@ -10,6 +10,9 @@ struct PartialRedrawRules final {
     bool enclose_paths = true;
     bool enclose_own_layers = true;
     bool enclose_interpolated_fills = true;
+    bool enclose_images = true;
+    bool enclose_clips = true;
+    bool enclose_group_layers = true;
 };
 
 /// Sets the rules for every surface in the process.
