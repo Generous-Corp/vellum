@@ -57,6 +57,9 @@ target_compile_definitions(vellum-rmlui-midi-panic-test PRIVATE
     VELLUM_RMLUI_MIDI_PANIC_RCSS="${CMAKE_CURRENT_SOURCE_DIR}/../assets/midi-panic.rcss")
 add_test(NAME vellum.rmlui.midi-panic COMMAND vellum-rmlui-midi-panic-test)
 
+vellum_rmlui_add_test(vellum-rmlui-settings-bridge-test settings_bridge_test.cpp VellumRmlUi::Core)
+add_test(NAME vellum.rmlui.settings-bridge COMMAND vellum-rmlui-settings-bridge-test)
+
 vellum_rmlui_add_test(vellum-rmlui-two-instances-test two_instances_test.cpp VellumRmlUi::Core)
 add_test(NAME vellum.rmlui.two-instances COMMAND vellum-rmlui-two-instances-test)
 
