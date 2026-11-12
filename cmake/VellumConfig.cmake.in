@@ -44,9 +44,15 @@ unset(_vellum_consumer_architectures)
 unset(_vellum_architecture)
 unset(_vellum_unsupported)
 
-# Vellum::Graphics exports Threads::Threads in its link interface.
-include(CMakeFindDependencyMacro)
-find_dependency(Threads)
+# Vellum::Graphics exports Threads::Threads in its link interface. CMake's
+# FindThreads module requires a language to be enabled, while the architecture
+# guard intentionally probes this package from a language-less project. Resolve
+# the dependency for real consumers and leave the language-less probe focused
+# on platform refusal and target importability.
+if(CMAKE_C_COMPILER_LOADED OR CMAKE_CXX_COMPILER_LOADED)
+    include(CMakeFindDependencyMacro)
+    find_dependency(Threads)
+endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/VellumTargets.cmake")
 if(@VELLUM_PACKAGE_HAS_MIRROR@)
