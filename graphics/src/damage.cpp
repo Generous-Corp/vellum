@@ -21,7 +21,13 @@ namespace {
 constexpr double kPixelLimit = kMaxPixelCoordinate;
 constexpr float kShadowBlurExtent = 1.5F;
 constexpr float kBlurSigmaPerRadius = 0.5F;
-constexpr float kDefaultTransformedBlurSigmas = 5.0F;
+// Reach of a transformed blurred shadow, in blur sigmas. Skia's own bound for
+// the blur mask filter is three sigma, and the GPU still writes a one-level tail
+// beyond it under rotation, so damage cutting that tail changes pixels. This is
+// the smallest whole number of sigmas for which the transformed blur sweep in
+// partial_present_test.cpp stays byte-identical (five, six and seven do not).
+// This file builds without Skia, so it cannot ask the filter for its bound.
+constexpr float kDefaultTransformedBlurSigmas = 8.0F;
 std::atomic<float> blur_reach_sigmas{kDefaultTransformedBlurSigmas};
 constexpr float kLineHeightFactor = 1.4F;
 

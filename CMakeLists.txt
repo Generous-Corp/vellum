@@ -92,6 +92,20 @@ endif()
 
 if(VELLUM_ENABLE_GRAPHICS)
     add_subdirectory(graphics)
+    # The graphics tests are the only coverage of the GPU renderer's cache and
+    # damage paths. A configure that builds the GPU backend with tests on but
+    # registers none of them would otherwise pass every lane silently.
+    if(VELLUM_BUILD_TESTS AND TARGET vellum-gpu)
+        foreach(_vellum_graphics_test IN ITEMS
+                vellum-layer-cache-gpu-test vellum-render-cache-gpu-test
+                vellum-partial-present-test vellum-scene-capture-harness-test)
+            if(NOT TARGET ${_vellum_graphics_test})
+                message(FATAL_ERROR
+                    "Vellum: VELLUM_BUILD_TESTS is on and the GPU backend is built, "
+                    "but graphics/tests did not define ${_vellum_graphics_test}")
+            endif()
+        endforeach()
+    endif()
 endif()
 
 if(VELLUM_ENABLE_WEB)
