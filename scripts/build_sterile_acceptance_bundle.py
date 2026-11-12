@@ -42,6 +42,8 @@ SUPPORT_FILES = (
     "web/consumer/text_semantics.js",
     "web/consumer/vellum_host.js",
     "web/tests/run_text_semantics_browser.py",
+    "tools/rmlui/sterile-consumer/CMakeLists.txt",
+    "tools/rmlui/sterile-consumer/main.cpp",
     "tools/mirror/consumer/CMakeLists.txt",
     "tools/mirror/consumer/main.cpp",
     "tools/mirror/consumer/cross_image_main.cpp",

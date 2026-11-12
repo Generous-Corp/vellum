@@ -347,6 +347,63 @@ def validate_installed_mirror(
     }
 
 
+def prefix_without_rmlui_package(sdk_prefix: Path, destination: Path) -> Path:
+    """A symlinked view of the SDK prefix whose lib/cmake/VellumRmlUi is absent."""
+    package = Path("lib/cmake/VellumRmlUi")
+    spine = {Path("."), Path("lib"), Path("lib/cmake")}
+
+    def mirror(relative: Path) -> None:
+        (destination / relative).mkdir(parents=True, exist_ok=True)
+        for entry in sorted((sdk_prefix / relative).iterdir()):
+            child = relative / entry.name if relative != Path(".") else Path(entry.name)
+            if child == package:
+                continue
+            if child in spine:
+                mirror(child)
+            else:
+                (destination / child).symlink_to(entry)
+
+    mirror(Path("."))
+    return destination
+
+
+def validate_installed_rmlui(sdk_prefix: Path, root: Path) -> dict[str, object]:
+    """Build and run a consumer of the installed VellumRmlUi package alone.
+
+    The consumer asks for the VellumRenderer component and links the CPU and
+    Vellum renderers. The same configure against a prefix without the package
+    must fail, so a green result cannot come from a consumer that never reached
+    the package.
+    """
+    if not (sdk_prefix / "lib/cmake/VellumRmlUi").is_dir():
+        raise ValidationError("GPU artifact does not carry the VellumRmlUi package")
+    cmake_common = [
+        "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE",
+        "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE",
+        "-DCMAKE_BUILD_TYPE=Release",
+    ]
+    if shutil.which("ninja"):
+        cmake_common.extend(["-G", "Ninja"])
+    source = root / "rmlui-consumer-source"
+    shutil.copytree(SUPPORT_ROOT / "tools/rmlui/sterile-consumer", source)
+    build = root / "rmlui-consumer-build"
+    run(["cmake", "-S", str(source), "-B", str(build),
+         f"-DCMAKE_PREFIX_PATH={sdk_prefix}", *cmake_common], cwd=root)
+    run(["cmake", "--build", str(build)], cwd=root)
+    output = run([str(build / "vellum-rmlui-sterile-consumer")], cwd=root).stdout.strip()
+
+    stripped = prefix_without_rmlui_package(sdk_prefix, root / "rmlui-prefix-without-package")
+    refused = subprocess.run([
+        "cmake", "-S", str(source), "-B", str(root / "rmlui-consumer-refused-build"),
+        f"-DCMAKE_PREFIX_PATH={stripped}", *cmake_common,
+    ], cwd=root, text=True, capture_output=True, check=False)
+    return {
+        "consumer_ran": output.startswith("installed VellumRmlUi soft render ok"),
+        "consumer_output": output,
+        "missing_package_refused": refused.returncode != 0 and "VellumRmlUi" in refused.stderr,
+    }
+
+
 RELEASE_NATIVE_COMMANDS = ("build", "run", "test", "capture", "package")
 
 
@@ -514,6 +571,9 @@ def validate(
         mirror_evidence = (
             validate_installed_mirror(sdk_prefix, root, view_audio_archive)
             if gpu_claimed else None
+        )
+        rmlui_evidence = (
+            validate_installed_rmlui(sdk_prefix, root) if gpu_claimed else None
         )
         installed_phase3_scenario = (
             validate_installed_phase3(prefix, root, journey_env)
@@ -858,6 +918,10 @@ def validate(
         "installed_mirror_single_skia_provider": (
             not gpu_claimed or mirror_evidence["two_providers_refused"]
         ),
+        "installed_rmlui_consumer": not gpu_claimed or rmlui_evidence["consumer_ran"],
+        "installed_rmlui_missing_package_refused": (
+            not gpu_claimed or rmlui_evidence["missing_package_refused"]
+        ),
         "sterile_consumer_configure": True,
         "sterile_consumer_build": True,
         "sterile_consumer_test": True,
@@ -927,6 +991,7 @@ def validate(
         "gpu_claims_required": require_gpu_claims,
         "checks": checks,
         "mirror": mirror_evidence,
+        "rmlui": rmlui_evidence,
     }
 
 

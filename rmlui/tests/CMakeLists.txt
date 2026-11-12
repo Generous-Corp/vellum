@@ -57,6 +57,9 @@ target_compile_definitions(vellum-rmlui-midi-panic-test PRIVATE
     VELLUM_RMLUI_MIDI_PANIC_RCSS="${CMAKE_CURRENT_SOURCE_DIR}/../assets/midi-panic.rcss")
 add_test(NAME vellum.rmlui.midi-panic COMMAND vellum-rmlui-midi-panic-test)
 
+vellum_rmlui_add_test(vellum-rmlui-settings-bridge-test settings_bridge_test.cpp VellumRmlUi::Core)
+add_test(NAME vellum.rmlui.settings-bridge COMMAND vellum-rmlui-settings-bridge-test)
+
 vellum_rmlui_add_test(vellum-rmlui-two-instances-test two_instances_test.cpp VellumRmlUi::Core)
 add_test(NAME vellum.rmlui.two-instances COMMAND vellum-rmlui-two-instances-test)
 
@@ -74,6 +77,12 @@ if(VELLUM_RMLUI_CPU)
     # NativeContext::warm(): the first frame after it loads no texture.
     vellum_rmlui_add_test(vellum-rmlui-native-warm-test native_warm_test.cpp VellumRmlUi::Native VellumRmlUi::Cpu)
     add_test(NAME vellum.rmlui.native-warm COMMAND vellum-rmlui-native-warm-test)
+
+    # A newly shown element draws its first frame with every transform it
+    # inherits, so a host that repaints only on change never keeps a wrong one.
+    vellum_rmlui_add_test(vellum-rmlui-first-frame-transform-test first_frame_transform_test.cpp
+        VellumRmlUi::Native VellumRmlUi::Cpu)
+    add_test(NAME vellum.rmlui.first-frame-transform COMMAND vellum-rmlui-first-frame-transform-test)
 
     # The output pinned by hash, the same constant on every platform.
     vellum_rmlui_add_test(vellum-rmlui-cpu-hash-test cpu_hash_test.cpp VellumRmlUi::Cpu)
@@ -164,6 +173,7 @@ if(VELLUM_RMLUI_METAL AND VELLUM_RMLUI_FONTS)
         VellumRmlUi::Native)
     target_sources(vellum-rmlui-metal-blend-control PRIVATE
         "${PROJECT_SOURCE_DIR}/src/metal_render_interface.mm"
+        "${PROJECT_SOURCE_DIR}/src/metal_image_decode.mm"
         "${PROJECT_SOURCE_DIR}/src/metal_effects.cpp")
     target_compile_definitions(vellum-rmlui-metal-blend-control PRIVATE
         VELLUM_RMLUI_METAL_TEST_STRAIGHT_ALPHA_BLEND)
@@ -184,6 +194,15 @@ if(VELLUM_RMLUI_METAL AND VELLUM_RMLUI_FONTS)
     add_test(NAME vellum.rmlui.metal-filters
         COMMAND vellum-rmlui-metal-filters-test "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}")
     set_tests_properties(vellum.rmlui.metal-filters PROPERTIES SKIP_RETURN_CODE 77)
+
+    # The Metal renderer's image decode premultiplies as round(c * a / 255)
+    # for every (c, a) pair; CoreGraphics does the arithmetic, so this catches
+    # a change in its rounding.
+    vellum_rmlui_add_test(vellum-rmlui-metal-image-decode-test metal/metal_image_decode_test.mm
+        VellumRmlUi::Metal "-framework CoreGraphics" "-framework ImageIO")
+    target_include_directories(vellum-rmlui-metal-image-decode-test PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_compile_options(vellum-rmlui-metal-image-decode-test PRIVATE -fobjc-arc)
+    add_test(NAME vellum.rmlui.metal-image-decode COMMAND vellum-rmlui-metal-image-decode-test)
 
     vellum_rmlui_add_test(vellum-rmlui-metal-effects-test metal/metal_effects_test.cpp
         VellumRmlUi::Metal)
