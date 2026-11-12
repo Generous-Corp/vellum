@@ -311,6 +311,18 @@ class ReceiverTests(unittest.TestCase):
                 payload=self.payload(divergent, "landed", event),
             )
 
+    def test_commit_beyond_observation_boundary_names_the_boundary(self) -> None:
+        boundary, _ = self.add_event("boundary")
+        self.set_cursor(boundary)
+        newer, _ = self.add_event("newer")
+        with self.assertRaisesRegex(receiver.ReceiverError, "not landed") as caught:
+            receiver.plan(
+                root=self.vellum, pulp_repo=self.pulp, pulp_main=boundary,
+                lower_bound=newer, payload=None,
+            )
+        self.assertIn(boundary, str(caught.exception))
+        self.assertIn("Decision 0011", str(caught.exception))
+
     def test_missing_durable_coverage_fails_closed(self) -> None:
         (self.pulp / "README.md").write_text("no event\n", encoding="utf-8")
         git(self.pulp, "add", ".")

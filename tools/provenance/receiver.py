@@ -325,7 +325,12 @@ def plan(
     ):
         raise ReceiverError("dispatch lower bound is divergent from the cursor")
     if not is_ancestor(pulp_repo, lower, main):
-        raise ReceiverError("supplied lower bound is not landed on fresh Pulp main")
+        raise ReceiverError(
+            "supplied lower bound is not landed on fresh Pulp main "
+            f"(the observation boundary is {main}, frozen by Decision 0011; "
+            "a commit newer than the boundary is rejected by design, so "
+            "replay with the boundary commit itself)"
+        )
     if payload is not None:
         validate_payload(payload, pulp_repo=pulp_repo, source_commit=lower)
     latest, oldest_event = durable_event_range(pulp_repo, cursor, main)

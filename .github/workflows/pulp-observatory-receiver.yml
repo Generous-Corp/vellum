@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       pulp_commit:
-        description: Exact landed Pulp commit used as a required lower bound
+        description: Exact landed Pulp commit used as a required lower bound; while Decision 0011 freezes observation, use frozen_pulp_commit from pulp-observation-scope.json (newer commits are rejected)
         required: true
         type: string
       operation:
