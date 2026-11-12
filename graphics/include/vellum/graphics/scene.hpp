@@ -399,6 +399,28 @@ struct TokenReceipt final {
     Color value{};
 };
 
+/// A colour of a node other than `SceneNode::fill`, named so a token receipt
+/// can drive it.
+struct TokenSlot final {
+    enum class Kind : std::uint8_t {
+        /// `text_runs[index].style.color`.
+        text_run,
+        /// `box_shadows[index].color`.
+        box_shadow,
+        /// `fill_gradients[index].stops[stop].color`.
+        gradient_stop,
+        /// `path->stroke.color`; `index` and `stop` are zero.
+        path_stroke,
+    };
+
+    Kind kind = Kind::text_run;
+    std::uint32_t index = 0;
+    std::uint32_t stop = 0;
+    /// The index in `Scene::tokens` of the receipt the slot's colour was
+    /// resolved from.
+    std::uint32_t token = 0;
+};
+
 struct SceneNode final {
     enum class Kind {
         group,
@@ -467,6 +489,11 @@ struct SceneNode final {
     /// consulting the table; the reference lets a theme switch find the nodes
     /// a changed receipt affects.
     std::optional<std::uint32_t> fill_token;
+    /// The receipts that drive the node's other colours: text runs, box
+    /// shadows, gradient stops and a path's stroke. Each slot must exist and
+    /// hold its receipt's value, as `fill` does. A slot appears at most once.
+    /// A mesh's packed vertex colours are not slots.
+    std::vector<TokenSlot> color_tokens;
 };
 
 /// The corner radii a node is drawn with: `corner_radii` when present,
@@ -534,8 +561,8 @@ struct SceneNode final {
 }
 
 /// Whether a node sets a field version 7 introduced: a token reference.
-[[nodiscard]] constexpr bool uses_version_7_fields(const SceneNode& node) noexcept {
-    return node.fill_token.has_value();
+[[nodiscard]] inline bool uses_version_7_fields(const SceneNode& node) noexcept {
+    return node.fill_token.has_value() || !node.color_tokens.empty();
 }
 
 /// The first node, in depth-first order, that `uses_version_7_fields`.

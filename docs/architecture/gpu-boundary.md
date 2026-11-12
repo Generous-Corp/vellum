@@ -42,16 +42,21 @@ receipts.
 receipt of its path, the layer that produced the value (`primitive`,
 `semantic` or `theme`) and the resolved colour. A node names its receipt by
 index in `SceneNode::fill_token`, and its `fill` always holds the receipt's
-value, so a renderer draws it without reading the table. `Design` in
+value, so a renderer draws it without reading the table. The other colours of
+a node, its text runs, box shadows, gradient stops and a path's stroke, are
+named the same way through `SceneNode::color_tokens`; a mesh's packed vertex
+colours are not. `Design` in
 `@vellum/ui` emits a `tokenRefs` entry beside the resolved style colour, the
 runtime interns the entries into a `tokens` array on the root of the rendered
 tree, and the materializer rebuilds the table and the references. A theme
-switch calls `apply_token_values`, which re-resolves the table and rewrites the
-`fill` of only the nodes whose receipt changed, so the scene diff damages those
-nodes and no others. A text run that carries its node's old colour follows it.
+switch calls `apply_token_values`, which re-resolves the table and rewrites
+only the fills, text runs, shadows, stops and strokes whose receipt changed, so
+the scene diff damages those nodes and no others. A text run without a slot of its own that
+carries its node's old colour follows it.
 A scene before version 7 that carries a table or a reference is refused with a
 version diagnostic. At any version, a repeated path, a non-finite value, a
-reference past the end of the table, or a `fill` that differs from its receipt
+reference past the end of the table, a slot the node lacks, or a colour that
+differs from its receipt
 is refused with `VELLUM_INVALID_TOKEN_REFERENCE`, so a table edited without its
 nodes is never drawn stale.
 

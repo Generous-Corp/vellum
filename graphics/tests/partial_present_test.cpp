@@ -1429,7 +1429,36 @@ Scene themed_scene(float width, float height) {
     scene.tokens = {
         {"theme.accent", "primitive", Color::hex(0xF472B6)},
         {"theme.good", "primitive", Color::hex(0x22C55E)},
+        {"theme.stroke", "primitive", Color::hex(0xF59E0B)},
+        {"theme.text", "primitive", Color::hex(0xE5E7EB)},
+        {"theme.shadow", "primitive", Color::rgba(0.0F, 0.0F, 0.0F, 0.6F)},
+        {"theme.stop", "primitive", Color::hex(0x6366F1)},
     };
+    scene.root.children.push_back(path_node(
+        "zig", {width * 0.62F, height * 0.40F, 44.0F, 38.0F}, Color::hex(0x1E293B), 3.0F,
+        Color::hex(0xF59E0B)));
+    node(scene, "zig").color_tokens = {{TokenSlot::Kind::path_stroke, 0, 0, 2U}};
+    scene.root.children.push_back({
+        .id = "themed-label",
+        .kind = SceneNode::Kind::text,
+        .bounds = {width * 0.05F, height * 0.78F, 120.0F, 16.0F},
+        .text_runs = {{.text = "Theme", .style = {.font_family = "Inter", .font_size = 13.0F,
+                                                    .color = Color::hex(0xE5E7EB)}}},
+        .color_tokens = {{TokenSlot::Kind::text_run, 0, 0, 3U}},
+    });
+    scene.root.children.push_back({
+        .id = "glow",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {width * 0.30F, height * 0.42F, 54.0F, 40.0F},
+        .fill_gradients = {{.angle_degrees = 90.0F,
+                            .stops = {{0.0F, Color::hex(0x6366F1)},
+                                      {1.0F, Color::hex(0xEC4899)}}}},
+        .box_shadows = {{.offset_x = 2.0F, .offset_y = 3.0F, .blur_radius = 6.0F,
+                         .color = Color::rgba(0.0F, 0.0F, 0.0F, 0.6F)}},
+        .corner_radius = 5.0F,
+        .color_tokens = {{TokenSlot::Kind::box_shadow, 0, 0, 4U},
+                         {TokenSlot::Kind::gradient_stop, 0, 0, 5U}},
+    });
     node(scene, "mover").fill_token = 0U;
     node(scene, "swatch").fill_token = 1U;
     SceneNode faded{
@@ -1453,10 +1482,23 @@ Scene themed_scene(float width, float height) {
     return scene;
 }
 
-std::vector<TokenReceipt> theme_receipts(std::uint32_t accent, std::uint32_t good) {
+struct ThemeValues final {
+    std::uint32_t accent = 0xF472B6;
+    std::uint32_t good = 0x22C55E;
+    std::uint32_t stroke = 0xF59E0B;
+    std::uint32_t text = 0xE5E7EB;
+    float shadow_alpha = 0.6F;
+    std::uint32_t stop = 0x6366F1;
+};
+
+std::vector<TokenReceipt> theme_receipts(const ThemeValues& values) {
     return {
-        {"theme.accent", "primitive", Color::hex(accent)},
-        {"theme.good", "primitive", Color::hex(good)},
+        {"theme.accent", "primitive", Color::hex(values.accent)},
+        {"theme.good", "primitive", Color::hex(values.good)},
+        {"theme.stroke", "primitive", Color::hex(values.stroke)},
+        {"theme.text", "primitive", Color::hex(values.text)},
+        {"theme.shadow", "primitive", Color::rgba(0.0F, 0.0F, 0.0F, values.shadow_alpha)},
+        {"theme.stop", "primitive", Color::hex(values.stop)},
     };
 }
 
@@ -1479,10 +1521,26 @@ void theme_switch_sequence(float scale, bool layer_cache) {
         bool damages;
     };
     const std::vector<Switch> switches = {
-        {"switch the accent", theme_receipts(0x3B82F6, 0x22C55E), 1U, true},
-        {"switch the other token", theme_receipts(0x3B82F6, 0xEAB308), 1U, true},
-        {"switch both", theme_receipts(0xF472B6, 0x22C55E), 2U, true},
-        {"switch to the same values", theme_receipts(0xF472B6, 0x22C55E), 0U, false},
+        {"switch the accent", theme_receipts({.accent = 0x3B82F6}), 1U, true},
+        {"switch the other token", theme_receipts({.accent = 0x3B82F6, .good = 0xEAB308}), 1U,
+         true},
+        {"switch a stroke", theme_receipts({.accent = 0x3B82F6, .good = 0xEAB308,
+                                            .stroke = 0x10B981}), 1U, true},
+        {"switch a text colour", theme_receipts({.accent = 0x3B82F6, .good = 0xEAB308,
+                                                 .stroke = 0x10B981, .text = 0xFDE68A}), 1U, true},
+        {"switch a shadow colour", theme_receipts({.accent = 0x3B82F6, .good = 0xEAB308,
+                                                   .stroke = 0x10B981, .text = 0xFDE68A,
+                                                   .shadow_alpha = 0.9F}), 1U, true},
+        {"switch a gradient stop", theme_receipts({.accent = 0x3B82F6, .good = 0xEAB308,
+                                                   .stroke = 0x10B981, .text = 0xFDE68A,
+                                                   .shadow_alpha = 0.9F, .stop = 0xF97316}),
+         1U, true},
+        {"switch a stroke and a stop back",
+         theme_receipts({.accent = 0x3B82F6, .good = 0xEAB308, .text = 0xFDE68A,
+                         .shadow_alpha = 0.9F}), 2U, true},
+        {"switch to the same values",
+         theme_receipts({.accent = 0x3B82F6, .good = 0xEAB308, .text = 0xFDE68A,
+                         .shadow_alpha = 0.9F}), 0U, false},
     };
     for (const auto& step : switches) {
         const auto result = apply_token_values(scene, step.values);

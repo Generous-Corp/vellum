@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <limits>
 #include <string>
 #include <vector>
@@ -239,6 +240,125 @@ void negative_control_stale_fill_would_not_damage() {
           "and such a scene is refused rather than drawn stale");
 }
 
+constexpr Color kStroke = Color::hex(0xF59E0B);
+constexpr Color kShadow = Color::rgba(0.0F, 0.0F, 0.0F, 0.5F);
+constexpr Color kStopA = Color::hex(0x6366F1);
+constexpr Color kStopB = Color::hex(0xEC4899);
+
+std::vector<TokenReceipt> slot_receipts(Color stroke, Color shadow, Color stop_a, Color run) {
+    return {
+        {"s.stroke", "primitive", stroke},
+        {"s.shadow", "primitive", shadow},
+        {"s.stop", "primitive", stop_a},
+        {"s.run", "primitive", run},
+        {"s.fixed", "primitive", kStopB},
+    };
+}
+
+Scene slotted_scene() {
+    Scene scene;
+    scene.width = 500.0F;
+    scene.height = 300.0F;
+    scene.tokens = slot_receipts(kStroke, kShadow, kStopA, kLabel);
+    scene.root = {.id = "root", .kind = SceneNode::Kind::group, .bounds = {0, 0, 500, 300}};
+    auto path = std::make_shared<PathGeometry>();
+    path->verbs = {PathVerb::move, PathVerb::line, PathVerb::line, PathVerb::close};
+    path->values = {0.0F, 0.0F, 30.0F, 0.0F, 15.0F, 30.0F};
+    path->stroke = {.color = kStroke, .width = 3.0F};
+    scene.root.children.push_back({
+        .id = "path", .kind = SceneNode::Kind::path, .bounds = {20, 20, 40, 40},
+        .path = path,
+        .color_tokens = {{TokenSlot::Kind::path_stroke, 0, 0, 0U}},
+    });
+    scene.root.children.push_back({
+        .id = "card", .kind = SceneNode::Kind::rectangle, .bounds = {120, 20, 40, 40},
+        .fill = kLiteral,
+        .fill_gradients = {{.stops = {{0.0F, kStopA}, {1.0F, kStopB}}}},
+        .box_shadows = {{.offset_x = 1, .offset_y = 2, .blur_radius = 4, .color = kShadow}},
+        .color_tokens = {{TokenSlot::Kind::box_shadow, 0, 0, 1U},
+                         {TokenSlot::Kind::gradient_stop, 0, 0, 2U},
+                         {TokenSlot::Kind::gradient_stop, 0, 1, 4U}},
+    });
+    scene.root.children.push_back({
+        .id = "text", .kind = SceneNode::Kind::text, .bounds = {20, 200, 200, 20},
+        .fill = kLabel,
+        .text_runs = {{.text = "a", .style = {.color = kLabel}},
+                      {.text = "b", .style = {.color = kLabel}}},
+        .color_tokens = {{TokenSlot::Kind::text_run, 1, 0, 3U}},
+    });
+    return scene;
+}
+
+void every_slot_follows_its_receipt() {
+    Scene scene = slotted_scene();
+    check(!find_invalid_token_reference(scene).has_value() && accept_scene(scene).accepted,
+          "a scene with every slot kind is sound");
+    const Scene before = scene;
+    const Color red = Color::hex(0xEF4444);
+    const auto result = apply_token_values(
+        scene, slot_receipts(red, Color::rgba(1.0F, 0.0F, 0.0F, 0.25F), red, red));
+    check(result.applied && result.changed == std::vector<std::uint32_t>{0U, 1U, 2U, 3U} &&
+              result.nodes_updated == 3U,
+          "four receipts change three nodes");
+    check(same_token_color(find(scene, "path")->path->stroke.color, red), "the stroke follows");
+    check(same_token_color(before.root.children[0].path->stroke.color, kStroke),
+          "the earlier scene keeps its own path object");
+    const auto* card = find(scene, "card");
+    check(card->box_shadows[0].color.alpha == 0.25F, "the shadow follows");
+    check(same_token_color(card->fill_gradients[0].stops[0].color, red), "a stop follows");
+    check(same_token_color(card->fill_gradients[0].stops[1].color, kStopB),
+          "a stop on an unchanged receipt is untouched");
+    check(same_token_color(card->fill, kLiteral), "the literal fill is untouched");
+    const auto* text = find(scene, "text");
+    check(same_token_color(text->text_runs[1].style.color, red) &&
+              same_token_color(text->text_runs[0].style.color, kLabel) &&
+              same_token_color(text->fill, kLabel),
+          "only the run with a slot follows, and the node fill is untouched");
+    check(!find_invalid_token_reference(scene).has_value() && accept_scene(scene).accepted,
+          "the switched scene stays sound");
+    std::vector<std::uint32_t> stroke_only = {0U};
+    check(count_token_references(before, stroke_only) == 1U,
+          "reference counting sees slot references");
+}
+
+void bad_slots_are_refused() {
+    const auto refused = [](Scene scene, const char* what) {
+        const auto verdict = accept_scene(scene);
+        check(!verdict.accepted && verdict.diagnostics.size() == 1U &&
+                  verdict.diagnostics[0].code == kInvalidTokenReferenceCode,
+              what);
+    };
+    Scene past = slotted_scene();
+    past.root.children[1].color_tokens[0].token = 9U;
+    refused(past, "a slot reference past the table is refused");
+    Scene stale = slotted_scene();
+    stale.root.children[1].box_shadows[0].color = kLabel;
+    refused(stale, "a shadow that differs from its receipt is refused");
+    Scene missing = slotted_scene();
+    missing.root.children[1].color_tokens[1].stop = 5U;
+    refused(missing, "a gradient stop the node lacks is refused");
+    Scene no_path = slotted_scene();
+    no_path.root.children[0].path.reset();
+    refused(no_path, "a stroke slot without a path is refused");
+    Scene twice = slotted_scene();
+    twice.root.children[1].color_tokens.push_back(twice.root.children[1].color_tokens[0]);
+    refused(twice, "a slot named twice is refused");
+    Scene old = slotted_scene();
+    for (auto& child : old.root.children) child.color_tokens.clear();
+    old.tokens.clear();
+    old.scene_version = 6U;
+    check(accept_scene(old).accepted, "control: the same scene without slots is drawn at 6");
+    Scene slots_only = slotted_scene();
+    slots_only.tokens.clear();
+    slots_only.scene_version = 6U;
+    check(!accept_scene(slots_only).accepted, "a version 6 scene with slots is refused");
+    Scene slot_nodes_only = slotted_scene();
+    slot_nodes_only.scene_version = 6U;
+    check(!accept_scene(slot_nodes_only).accepted &&
+              accept_scene(slot_nodes_only).diagnostics[0].code == kSceneVersionMismatchCode,
+          "a version 6 scene with slots gets a version diagnostic");
+}
+
 }  // namespace
 
 int main() {
@@ -253,6 +373,8 @@ int main() {
     switch_failures_and_no_ops();
     damage_covers_exactly_the_referencing_nodes();
     negative_control_stale_fill_would_not_damage();
+    every_slot_follows_its_receipt();
+    bad_slots_are_refused();
     if (failures != 0) {
         std::fprintf(stderr, "%d token receipt checks failed\n", failures);
         return 1;
