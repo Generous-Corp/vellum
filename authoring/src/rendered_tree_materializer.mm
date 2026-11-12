@@ -545,7 +545,38 @@ struct MaterializeContext final {
     std::vector<TextInputControl>* text_inputs = nullptr;
     std::vector<AccessibilityNode>* accessibility_nodes = nullptr;
     std::vector<LoweringDiagnostic>* diagnostics = nullptr;
+    std::vector<NodeRecord>* node_records = nullptr;
 };
+
+constexpr std::size_t kMaximumSourceFileBytes = 4096U;
+constexpr std::size_t kMaximumAnchorBytes = 1024U;
+
+// Reads the optional `source` ({file, line, column}) and `anchor` fields of an
+// authored node. Malformed values are ignored: source is diagnostic metadata
+// and never changes what is drawn.
+NodeSource read_node_source(NSDictionary* source) {
+    NodeSource result;
+    if ([source[@"anchor"] isKindOfClass:NSString.class]) {
+        std::string anchor = cpp_string(source[@"anchor"]);
+        if (anchor.size() <= kMaximumAnchorBytes) result.anchor = std::move(anchor);
+    }
+    if (![source[@"source"] isKindOfClass:NSDictionary.class]) return result;
+    NSDictionary* location = source[@"source"];
+    if (![location[@"file"] isKindOfClass:NSString.class]) return result;
+    std::string file = cpp_string(location[@"file"]);
+    if (file.empty() || file.size() > kMaximumSourceFileBytes) return result;
+    result.file = std::move(file);
+    const auto position = [&](NSString* key) {
+        id raw = location[key];
+        if (![raw isKindOfClass:NSNumber.class] ||
+            CFGetTypeID((__bridge CFTypeRef)raw) == CFBooleanGetTypeID()) return 0;
+        const double value = [raw doubleValue];
+        return value >= 0.0 && value <= 1.0e9 ? static_cast<int>(value) : 0;
+    };
+    result.line = position(@"line");
+    result.column = position(@"column");
+    return result;
+}
 
 template <typename Consumed>
 void report_dropped_style(
@@ -1113,6 +1144,8 @@ bool materialize_node(
     }
     const vellum::graphics::Rect absolute_box{
         absolute_x + proposed.x, absolute_y + proposed.y, proposed.width, proposed.height};
+    context.node_records->push_back(
+        {identity, type_name, absolute_box, read_node_source(source)});
     vellum::graphics::Affine2D node_transform = parent_transform;
     if (output.transform) {
         node_transform = vellum::graphics::concat(parent_transform, vellum::graphics::concat(
@@ -1476,6 +1509,7 @@ bool materialize_rendered_tree(
         .text_inputs = &candidate.text_inputs,
         .accessibility_nodes = &candidate.accessibility_nodes,
         .diagnostics = &candidate.diagnostics,
+        .node_records = &candidate.nodes,
     };
     if (!materialize_node(
             tree, {0.0F, 0.0F, width, height}, 0.0F, 0.0F, vellum::graphics::Affine2D{}, 0U,

@@ -192,6 +192,30 @@ bool write_png(SkiaDawnSurface& surface, const std::filesystem::path& output,
     return true;
 }
 
+// Under the manual clock only ready work runs, so time stays where the
+// scenario put it. Otherwise the clock jumps to each next deadline until idle.
+bool settle(JsApplication& application, const Options& options,
+            RenderedApplication& rendered, vellum::authoring::PumpResult& idle,
+            std::string* error) {
+    return options.manual_clock
+        ? application.pump(0, 4096, rendered, idle, error)
+        : application.wait_for_idle(4096, rendered, idle, error);
+}
+
+// Advances script time in fixed 16 ms increments, then the remainder, so the
+// work that runs between two captures does not depend on host speed.
+bool advance_clock(JsApplication& application, std::uint64_t milliseconds,
+                   RenderedApplication& rendered, std::string* error) {
+    constexpr std::uint64_t kStepMilliseconds = 16U;
+    vellum::authoring::PumpResult result;
+    while (milliseconds > 0U) {
+        const std::uint64_t step = std::min(milliseconds, kStepMilliseconds);
+        if (!application.pump(step, 4096, rendered, result, error)) return false;
+        milliseconds -= step;
+    }
+    return true;
+}
+
 int run_headless(const Options& options, std::string_view bundle) {
     @autoreleasepool {
         std::string error;
@@ -200,7 +224,10 @@ int run_headless(const Options& options, std::string_view bundle) {
             std::cerr << error << '\n';
             return 1;
         }
-        auto application = JsApplication::create(bundle, &error);
+        vellum::authoring::JsApplicationOptions application_options;
+        application_options.manual_clock = options.manual_clock;
+        auto application = JsApplication::create(
+            bundle, application_options, &error);
         RenderedApplication rendered;
         if (!application ||
             (!options.service_capabilities.empty() &&
@@ -215,7 +242,7 @@ int run_headless(const Options& options, std::string_view bundle) {
             return 1;
         }
         vellum::authoring::PumpResult idle;
-        if (!application->wait_for_idle(4096, rendered, idle, &error)) {
+        if (!settle(*application, options, rendered, idle, &error)) {
             std::cerr << error << '\n';
             return 1;
         }
@@ -283,6 +310,14 @@ int run_headless(const Options& options, std::string_view bundle) {
                     }
                     break;
                 }
+                case AutomationStep::Kind::advance:
+                    succeeded = options.manual_clock &&
+                        advance_clock(*application, std::stoull(step.value),
+                                      rendered, &error);
+                    if (!succeeded && error.empty()) {
+                        error = "scenario advance requires --manual-clock";
+                    }
+                    break;
                 case AutomationStep::Kind::expected_throw: {
                     const bool dispatched = press_node(
                         *application, rendered, step.node_id, &error);
@@ -305,10 +340,18 @@ int run_headless(const Options& options, std::string_view bundle) {
                 }
             }
             if (!succeeded ||
-                !application->wait_for_idle(4096, rendered, idle, &error) ||
+                !settle(*application, options, rendered, idle, &error) ||
                 !components.expand(rendered.scene, &error) ||
                 !persist_state(*application, options.state_file, &error)) {
                 std::cerr << error << '\n';
+                return 1;
+            }
+        }
+        if (!options.dump_tree.empty()) {
+            std::ofstream dump(options.dump_tree, std::ios::binary | std::ios::trunc);
+            dump << vellum::authoring::tree_dump_json(rendered) << '\n';
+            if (!dump) {
+                std::cerr << "could not write tree dump: " << options.dump_tree << '\n';
                 return 1;
             }
         }
@@ -903,7 +946,8 @@ int main(int argc, const char* argv[]) {
         std::cerr << "could not read application bundle: " << options.bundle << '\n';
         return 2;
     }
-    if (options.no_window || !options.capture.empty() || !options.steps.empty() ||
+    if (options.no_window || options.manual_clock || !options.dump_tree.empty() ||
+        !options.capture.empty() || !options.steps.empty() ||
         !options.state_file.empty()) {
         return run_headless(options, bundle);
     }

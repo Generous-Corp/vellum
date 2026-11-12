@@ -9,9 +9,10 @@ SCENARIO_SCHEMAS = {"vellum.scenario.v1", "vellum.scenario.v2"}
 SCENARIO_V2_ACTIONS = frozenset({
     "wait-for-idle", "press", "touch", "focus", "input", "key", "compose",
     "command", "service-result", "assert-text", "assert-accessibility",
-    "capture", "throw",
+    "capture", "throw", "advance",
 })
 MAX_SCENARIO_STEPS = 1000
+MAX_SCENARIO_ADVANCE_MS = 24 * 60 * 60 * 1000
 MAX_SCENARIO_TARGET_BYTES = 1024
 MAX_SCENARIO_INPUT_BYTES = 64 * 1024
 SUPPORTED_SCENARIO_KEYS = {
@@ -72,6 +73,14 @@ def validate_scenario_document(scenario: dict[str, Any]) -> None:
         valid = False
         if action == "wait-for-idle":
             valid = set(step) == {"action"}
+        elif action == "advance":
+            valid = (
+                scenario["schema"] == "vellum.scenario.v2"
+                and set(step) == {"action", "ms"}
+                and isinstance(step.get("ms"), int)
+                and not isinstance(step["ms"], bool)
+                and 0 <= step["ms"] <= MAX_SCENARIO_ADVANCE_MS
+            )
         elif action == "capture":
             valid = set(step) in (
                 {"action"}, {"action", "name"}, {"action", "value"}

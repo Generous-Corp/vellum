@@ -484,6 +484,9 @@ def scenario_arguments(context: dict[str, Any], scenario_value: str | None) -> t
         arguments.extend(["--expect-width", str(viewport["width"])])
         arguments.extend(["--expect-height", str(viewport["height"])])
 
+    if any(step["action"] == "advance" for step in scenario["steps"]):
+        arguments.append("--manual-clock")
+
     for step in scenario["steps"]:
         action = step["action"]
         if action in {"wait-for-idle", "capture"}:
@@ -539,6 +542,9 @@ def scenario_arguments(context: dict[str, Any], scenario_value: str | None) -> t
                     ensure_ascii=False,
                 ),
             ])
+            continue
+        if action == "advance":
+            arguments.extend(["--advance", str(step["ms"])])
             continue
         if action == "throw":
             arguments.extend([

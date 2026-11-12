@@ -38,6 +38,7 @@ STEPS = {
     },
     "capture": {"action": "capture", "name": "proof"},
     "throw": {"action": "throw", "target": "fail", "expect": "expected"},
+    "advance": {"action": "advance", "ms": 250},
 }
 WEB_PATTERNS = {
     "wait-for-idle": "step.action === 'wait-for-idle'",
@@ -53,6 +54,7 @@ WEB_PATTERNS = {
     "assert-accessibility": "step.action === 'assert-accessibility'",
     "capture": "step.action === 'capture'",
     "throw": "step.action === 'throw'",
+    "advance": "step.action === 'advance'",
 }
 
 
@@ -84,6 +86,36 @@ class Tests(unittest.TestCase):
                     }), encoding="utf-8")
                     _, name = scenario_arguments({"root": root}, "action")
                     self.assertEqual(name, action)
+
+    def test_advance_lowers_with_the_manual_clock_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scenario = root / "tests/scenarios/clock.json"
+            scenario.parent.mkdir(parents=True)
+            scenario.write_text(json.dumps({
+                "schema": "vellum.scenario.v2",
+                "name": "clock",
+                "steps": [{"action": "advance", "ms": 250}, {"action": "capture"}],
+            }), encoding="utf-8")
+            arguments, _ = scenario_arguments({"root": root}, "clock")
+            self.assertEqual(arguments, ["--manual-clock", "--advance", "250"])
+            # Control: a scenario without advance keeps the wall-paced host.
+            scenario.write_text(json.dumps({
+                "schema": "vellum.scenario.v2", "name": "idle",
+                "steps": [{"action": "wait-for-idle"}],
+            }), encoding="utf-8")
+            arguments, _ = scenario_arguments({"root": root}, "clock")
+            self.assertNotIn("--manual-clock", arguments)
+
+    def test_advance_rejects_non_integer_and_out_of_range_durations(self) -> None:
+        for bad in (-1, 1.5, "10", True, 86400001):
+            with self.subTest(ms=bad), self.assertRaisesRegex(
+                ScenarioValidationError, "invalid fields"
+            ):
+                validate_scenario_document({
+                    "schema": "vellum.scenario.v2", "name": "bad",
+                    "steps": [{"action": "advance", "ms": bad}],
+                })
 
     def test_every_v2_action_has_a_browser_handler(self) -> None:
         host = (ROOT / "web/consumer/vellum_host.js").read_text(encoding="utf-8")

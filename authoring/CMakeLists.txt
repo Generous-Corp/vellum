@@ -1,7 +1,8 @@
 add_library(vellum-authoring SHARED
     src/js_application.mm
     src/rendered_tree_materializer.mm
-    src/service_bridge.cpp)
+    src/service_bridge.cpp
+    src/tree_dump.cpp)
 add_library(Vellum::Authoring ALIAS vellum-authoring)
 
 set_target_properties(vellum-authoring PROPERTIES
@@ -22,6 +23,12 @@ target_link_libraries(vellum-authoring
         "-framework JavaScriptCore")
 
 if(VELLUM_BUILD_TESTS)
+    add_executable(vellum-clock-and-source-test
+        tests/clock_and_source_test.cpp)
+    target_include_directories(vellum-clock-and-source-test PRIVATE src)
+    target_link_libraries(vellum-clock-and-source-test PRIVATE Vellum::Authoring)
+    add_test(NAME vellum.clock-and-source COMMAND vellum-clock-and-source-test)
+
     add_executable(vellum-service-bridge-test
         tests/service_bridge_test.cpp)
     target_link_libraries(vellum-service-bridge-test PRIVATE Vellum::Authoring)

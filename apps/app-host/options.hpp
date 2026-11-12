@@ -13,7 +13,7 @@ namespace vellum::app_host {
 struct AutomationStep final {
     enum class Kind {
         press, input, key, focus, compose, assert_accessibility, assert_text,
-        touch, command, service_result, expected_throw,
+        touch, command, service_result, expected_throw, advance,
     };
     Kind kind;
     std::string node_id;
@@ -24,12 +24,15 @@ struct Options final {
     std::filesystem::path bundle;
     std::filesystem::path capture;
     std::filesystem::path state_file;
+    std::filesystem::path dump_tree;
     std::string service_capabilities;
     std::vector<AutomationStep> steps;
     std::vector<ComponentModuleSpec> components;
     std::optional<std::uint32_t> expected_width;
     std::optional<std::uint32_t> expected_height;
     bool no_window = false;
+    /// Script time moves only through `advance` steps.
+    bool manual_clock = false;
 };
 
 void print_usage();

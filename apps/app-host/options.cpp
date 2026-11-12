@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <cstdint>
 #include <iterator>
 #include <string_view>
 
@@ -36,6 +37,16 @@ std::optional<std::uint32_t> positive_dimension(std::string_view text) {
     }
 }
 
+std::optional<std::uint64_t> advance_milliseconds(std::string_view text) {
+    if (text.empty() || text.size() > 9U) return std::nullopt;
+    std::uint64_t value = 0;
+    for (const char c : text) {
+        if (c < '0' || c > '9') return std::nullopt;
+        value = value * 10U + static_cast<std::uint64_t>(c - '0');
+    }
+    return value;
+}
+
 }  // namespace
 
 void print_usage() {
@@ -48,6 +59,7 @@ void print_usage() {
                  "[--service-result NODE_ID RESPONSE_JSON] "
                  "[--expected-throw NODE_ID EXPECTED_TEXT] "
                  "[--service-capabilities JSON] "
+                 "[--manual-clock] [--advance MS] [--dump-tree JSON] "
                  "[--component ID=DYLIB] [--state-file FILE] "
                  "[--expect-width N --expect-height N] [--capture PNG]\n";
 }
@@ -58,6 +70,18 @@ std::optional<Options> parse_options(int argc, const char* argv[]) {
         const std::string_view argument = argv[index];
         if (argument == "--self-test" || argument == "--no-window") {
             options.no_window = true;
+        } else if (argument == "--manual-clock") {
+            options.manual_clock = true;
+        } else if (argument == "--advance") {
+            if (++index >= argc) return std::nullopt;
+            const auto milliseconds = advance_milliseconds(argv[index]);
+            if (!milliseconds) return std::nullopt;
+            options.steps.push_back({
+                AutomationStep::Kind::advance, {}, std::to_string(*milliseconds),
+            });
+        } else if (argument == "--dump-tree") {
+            if (++index >= argc || argv[index][0] == '\0') return std::nullopt;
+            options.dump_tree = argv[index];
         } else if (argument == "--bundle" || argument == "--capture" ||
                    argument == "--state-file" || argument == "--press" ||
                    argument == "--command" ||
