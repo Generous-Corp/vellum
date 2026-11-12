@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-12T02:59:36Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-8e310c5768624deae6e4947f221ea87369e0112f",
+  "kind": "resolution",
+  "linked_commits": [
+    "8e310c5768624deae6e4947f221ea87369e0112f"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@claude-observatory-agent",
+  "rationale": "Merge commit with a non-empty combined diff (git show --cc): conflict-resolution content in Vellum-native scene groups, layer cache, harness and vellum-ui runtime; classified from that content, which has no Pulp counterpart. Pulp search at aa630815 for LayerCache, NodeClip, clips_own_paint, SceneAcceptance, PaintCommand, damage_testing, RenderedTreeMaterializer, vellum::graphics returns 0; control SkiaSurface returns 43. Agent classification under the owner's delegation; any later resolution overrides it.",
+  "resolves": "vellum-8e310c5768624deae6e4947f221ea87369e0112f",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
