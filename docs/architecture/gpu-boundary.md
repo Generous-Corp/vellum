@@ -105,7 +105,24 @@ default texture limit) and 256 MiB.
 SHA-256 of its bytes, refusing bytes that do not match an expected hash. It
 refuses input over 64 MiB (`kMaxEncodedImageBytes`) and a header whose
 dimensions are over the image budgets before it hashes the bytes or builds a
-codec. The
+codec.
+A host that cannot afford to decode on the render thread can hand PNG bytes to
+an `ImageDecodeQueue` instead. `submit` runs those same checks on the calling
+thread and queues only input that passes; worker threads hash and decode in
+submission order, at most `max_concurrent` at a time and within
+`max_inflight_bytes` of decoded texels, and an over-budget job waits rather
+than being dropped. The queue is a standalone helper: `SkiaDawnSurface` and the
+capture paths do not own or call it yet, so nothing in the renderer enforces the
+following and the host must do it. Before a frame the host calls
+`publish_decoded_images`, which appends the finished assets the scene still
+names to `Scene::images`; the scene diff then damages exactly the nodes whose
+asset arrived. Until then such a node draws the placeholder and
+`pending_images` names it. A host that needs a deterministic capture calls
+`wait_idle` and publishes before it snapshots. Wiring the queue into the render
+and capture owners is not part of this change. `cancel_unreferenced` drops jobs
+no node names, and a cancelled decode never publishes an asset. The queue never touches a
+frame, a canvas or the Dawn device.
+The
 node's fill paints behind the image and its corner radii clip both;
 `image_placement` is the pure fit and crop the renderer draws with. An image
 whose asset the scene does not hold draws `kMissingImagePlaceholder` over its

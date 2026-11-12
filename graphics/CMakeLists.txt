@@ -2,6 +2,7 @@ add_library(vellum-graphics
     src/capture_stats.cpp
     src/damage.cpp
     src/image_asset.cpp
+    src/image_decode_queue.cpp
     src/layer_cache.cpp
     src/paint_command.cpp
     src/path_geometry.cpp
@@ -18,8 +19,12 @@ target_include_directories(vellum-graphics
         $<INSTALL_INTERFACE:include>)
 
 target_compile_features(vellum-graphics PUBLIC cxx_std_20)
+# image_decode_queue.cpp uses std::thread, std::mutex and
+# std::condition_variable, so every consumer of the library needs the thread
+# link contract, not just the tests.
+find_package(Threads REQUIRED)
 target_link_libraries(vellum-graphics
-    PUBLIC Vellum::Runtime)
+    PUBLIC Vellum::Runtime Threads::Threads)
 
 if(APPLE)
     target_sources(vellum-graphics PRIVATE src/core_graphics_canvas.mm)

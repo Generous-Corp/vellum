@@ -5,6 +5,7 @@
 #include "support/scene_capture_harness.hpp"
 
 #include <vellum/graphics/image_asset.hpp>
+#include <vellum/graphics/image_decode_queue.hpp>
 #include <vellum/graphics/lowering_diagnostic.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/scene_acceptance.hpp>
@@ -12,10 +13,15 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <condition_variable>
+#include <cstdio>
+#include <mutex>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -408,6 +414,99 @@ void cache_identity() {
            "with the texture cache off nothing is kept");
 }
 
+std::vector<std::uint8_t> quadrant_png_bytes() {
+    const auto path = std::string(VELLUM_CAPTURE_IMAGE_DIR) + "/quadrants.png";
+    std::FILE* file = std::fopen(path.c_str(), "rb");
+    std::vector<std::uint8_t> png(4096);
+    png.resize(file != nullptr ? std::fread(png.data(), 1, png.size(), file) : 0U);
+    if (file != nullptr) std::fclose(file);
+    return png;
+}
+
+void off_thread_decode() {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool open = false;
+    bool started = false;
+    ImageDecodeQueue queue(
+        [&](std::span<const std::uint8_t> encoded, std::string_view hash, std::string* error) {
+            {
+                std::unique_lock lock(mutex);
+                started = true;
+                changed.notify_all();
+                changed.wait(lock, [&] { return open; });
+            }
+            return SkiaDawnSurface::decode_image_asset(encoded, hash, error);
+        });
+
+    Scene scene = scene_of(32.0F, 32.0F);
+    scene.images.clear();
+    scene.root.children.push_back(image_node("photo", {4, 4, 16, 16}));
+    scene.root.children.push_back(
+        {.id = "bar", .kind = SceneNode::Kind::rectangle, .bounds = {24, 0, 8, 32},
+         .fill = Color::hex(0x2040C0)});
+
+    std::string error;
+    auto surface = SkiaDawnSurface::create({.width = 32, .height = 32}, &error);
+    expect(surface != nullptr, "the decode surface is created", error);
+    if (!surface) return;
+    expect(queue.submit(quadrant_png_bytes(), harness::fixtures::kQuadrantImageHash) ==
+               ImageDecodeQueue::Submit::queued,
+           "the PNG is queued");
+    {
+        std::unique_lock lock(mutex);
+        expect(changed.wait_for(lock, std::chrono::seconds(5), [&] { return started; }),
+               "the decode starts on a worker");
+    }
+
+    Capture pending;
+    expect(surface->render(scene, &error) &&
+               surface->capture_rgba(pending.rgba, pending.width, pending.height, &error),
+           "a frame renders while the decode is held", error);
+    const std::array<int, 4> grey{kMissingImagePlaceholder.red8(),
+                                  kMissingImagePlaceholder.green8(),
+                                  kMissingImagePlaceholder.blue8(), 255};
+    probe(pending, 12, 12, grey, "the pending node draws the placeholder");
+    const auto waiting = pending_images(scene, queue);
+    expect(waiting.size() == 1U && waiting[0].node_id == "photo" &&
+               waiting[0].content_hash == harness::fixtures::kQuadrantImageHash,
+           "the frame's pending node is reported");
+    expect(surface->diagnostics().size() == 1U &&
+               surface->diagnostics()[0].code == kImageAssetMissingCode,
+           "the surface still reports the absent asset");
+
+    {
+        const std::lock_guard lock(mutex);
+        open = true;
+    }
+    changed.notify_all();
+    expect(queue.wait_idle(std::chrono::seconds(30)), "the decode completes");
+    const Scene before = scene;
+    const auto published = publish_decoded_images(queue, scene);
+    expect(published.published == 1U && pending_images(scene, queue).empty(),
+           "the finished asset reaches the scene and nothing is pending");
+
+    Capture decoded;
+    expect(surface->render(scene, &error) &&
+               surface->capture_rgba(decoded.rgba, decoded.width, decoded.height, &error),
+           "the follow-up frame renders", error);
+    // Scenes with image nodes are newer than the damage model, so the surface
+    // repaints them whole; the scene diff still names the node that changed.
+    const auto damage = compute_scene_damage(before, scene, 1.0F).bounds();
+    expect(!compute_scene_damage(before, scene, 1.0F).is_full_frame() && damage.left >= 3 &&
+               damage.top >= 3 && damage.right <= 21 && damage.bottom <= 21 &&
+               damage.right > damage.left,
+           "the follow-up frame damages only the node that was pending");
+    probe(decoded, 6, 6, kRed, "the decoded image is drawn");
+    probe(decoded, 28, 16, {0x20, 0x40, 0xC0, 255}, "the other node is untouched");
+
+    auto synchronous = scene_of(32.0F, 32.0F);
+    synchronous.root.children = scene.root.children;
+    const auto expected = render(synchronous);
+    expect(decoded.rgba == expected.rgba,
+           "the frame after an off-thread decode is byte-identical to a synchronous decode");
+}
+
 }  // namespace
 
 int main() {
@@ -422,6 +521,7 @@ int main() {
         opacity();
         placeholder_and_refusals();
         cache_identity();
+        off_thread_decode();
     } catch (const std::exception& exception) {
         std::cerr << "FAIL: " << exception.what() << '\n';
         return 1;
