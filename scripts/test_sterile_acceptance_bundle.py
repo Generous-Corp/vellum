@@ -187,5 +187,64 @@ class RequireGpuClaimsTest(unittest.TestCase):
             self.assertIs(seen["require_gpu_claims"], False)
 
 
+class RmlUiConsumerControlTest(unittest.TestCase):
+    """The consumer's package lookup is red when the archive drops VellumRmlUi."""
+
+    def fake_sdk(self, root: Path) -> Path:
+        sdk = root / "sdk"
+        package = sdk / "lib/cmake/VellumRmlUi"
+        package.mkdir(parents=True)
+        (package / "VellumRmlUiConfig.cmake").write_text("set(VellumRmlUi_FOUND TRUE)\n")
+        (package / "VellumRmlUiConfigVersion.cmake").write_text(
+            "set(PACKAGE_VERSION_COMPATIBLE TRUE)\n"
+        )
+        (sdk / "lib/cmake/Vellum").mkdir()
+        (sdk / "lib/cmake/Vellum/VellumConfig.cmake").write_text("\n")
+        (sdk / "lib/libvellum.a").write_text("\n")
+        (sdk / "include").mkdir()
+        return sdk
+
+    def configure(self, prefix: Path, root: Path, name: str) -> subprocess.CompletedProcess:
+        source = root / f"{name}-src"
+        source.mkdir()
+        (source / "CMakeLists.txt").write_text(
+            "cmake_minimum_required(VERSION 3.24)\nproject(P LANGUAGES NONE)\n"
+            "find_package(VellumRmlUi CONFIG REQUIRED)\n"
+        )
+        return subprocess.run([
+            "cmake", "-S", str(source), "-B", str(root / f"{name}-build"),
+            f"-DCMAKE_PREFIX_PATH={prefix}",
+            "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE",
+            "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE",
+        ], text=True, capture_output=True, check=False)
+
+    def test_view_keeps_everything_but_the_package(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sdk = self.fake_sdk(root)
+            view = validator.prefix_without_rmlui_package(sdk, root / "view")
+            self.assertFalse((view / "lib/cmake/VellumRmlUi").exists())
+            self.assertTrue((view / "lib/cmake/Vellum/VellumConfig.cmake").is_file())
+            self.assertTrue((view / "lib/libvellum.a").is_file())
+            self.assertTrue((view / "include").is_dir())
+
+    def test_package_lookup_is_green_with_and_red_without_the_package(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sdk = self.fake_sdk(root)
+            present = self.configure(sdk, root, "present")
+            self.assertEqual(present.returncode, 0, present.stderr)
+            view = validator.prefix_without_rmlui_package(sdk, root / "view")
+            absent = self.configure(view, root, "absent")
+            self.assertNotEqual(absent.returncode, 0)
+            self.assertIn("VellumRmlUi", absent.stderr)
+
+    def test_bundle_carries_the_rmlui_consumer(self) -> None:
+        for relative in ("tools/rmlui/sterile-consumer/CMakeLists.txt",
+                         "tools/rmlui/sterile-consumer/main.cpp"):
+            self.assertIn(relative, bundle.SUPPORT_FILES)
+            self.assertTrue((SCRIPT_DIR.parent / relative).is_file())
+
+
 if __name__ == "__main__":
     unittest.main()
