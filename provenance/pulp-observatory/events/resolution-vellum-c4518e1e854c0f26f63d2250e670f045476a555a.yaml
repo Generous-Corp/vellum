@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-12T02:59:25Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-c4518e1e854c0f26f63d2250e670f045476a555a",
+  "kind": "resolution",
+  "linked_commits": [
+    "c4518e1e854c0f26f63d2250e670f045476a555a"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@claude-observatory-agent",
+  "rationale": "Vellum-native retained scene graphics (scene groups, image nodes, damage model, layer cache, authoring materializer); Pulp has no counterpart. Pulp search at aa630815 (core tools test examples apple ship inspect) for LayerCache, NodeClip, clips_own_paint, SceneAcceptance, PaintCommand, damage_testing, RenderedTreeMaterializer, vellum::graphics returns 0; control SkiaSurface returns 43. Agent classification under the owner's delegation of Vellum-side calls; any later resolution overrides it.",
+  "resolves": "vellum-c4518e1e854c0f26f63d2250e670f045476a555a",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
