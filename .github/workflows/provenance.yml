@@ -1021,8 +1021,14 @@ jobs:
           # still fail on them, so nothing is released with overdue events.
           # Coverage gaps and every other budget stay fatal everywhere.
           observatory_time_budgets=enforce
+          observatory_pending_event_scope=all
           if [[ "$GITHUB_EVENT_NAME" == pull_request || "$GITHUB_EVENT_NAME" == merge_group ]]; then
             observatory_time_budgets=report
+            # A PR cannot clear pending events already on its base. Keep the
+            # ledger-wide budget enforced on main, while judging a change by
+            # the pending observations it introduces. A PR that introduces
+            # more than the full budget still fails closed.
+            observatory_pending_event_scope=introduced
           fi
           python3 -I tools/provenance/test_observatory.py
           python3 -I tools/provenance/test_observatory_mirror_import.py
@@ -1048,6 +1054,7 @@ jobs:
             --vellum-target "$observatory_vellum_target" \
             --vellum-tail-policy "$observatory_tail_policy" \
             --time-budgets "$observatory_time_budgets" \
+            --pending-event-scope "$observatory_pending_event_scope" \
             "${observatory_now_args[@]}" \
             --output "$RUNNER_TEMP/observatory-health-report.json"
           jq -r '(.reported_time_budget_violations // [])[] |
