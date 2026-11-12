@@ -338,6 +338,7 @@ TIME_BUDGET_VIOLATIONS = frozenset({
     "pending-event-age-exceeded",
 })
 TIME_BUDGET_MODES = frozenset({"enforce", "report"})
+PENDING_EVENT_SCOPES = frozenset({"all", "introduced"})
 MIRROR_RECEIPT_INDEX = Path("provenance/mirror/receipts/index.json")
 
 
@@ -1007,6 +1008,7 @@ def verify(
     vellum_pr_main: str | None = None,
     check_now: datetime | None = None,
     time_budgets: str = "enforce",
+    pending_event_scope: str = "all",
     allow_no_git_base: bool = False,
 ) -> dict[str, object]:
     """Verify the ledger; with `check_now`, judge the health budgets at that time.
@@ -1023,6 +1025,10 @@ def verify(
         raise ObservatoryError(
             "verify needs --git-base to tell the observations a change adds from those "
             "already on its base; pass --no-git-base only for a local check"
+        )
+    if pending_event_scope not in PENDING_EVENT_SCOPES:
+        raise ObservatoryError(
+            f"unknown pending-event scope: {pending_event_scope}"
         )
     git_base = current_main_git_base(root, git_base)
     lock, mapping, cursor, budgets = validate_lock_map_cursor(root)
@@ -1151,6 +1157,16 @@ def verify(
     if time_budgets not in TIME_BUDGET_MODES:
         raise ObservatoryError(f"unknown time-budget mode: {time_budgets}")
     violations = list(report["budget_violations"])
+    pending_budget_count: int | None = None
+    if pending_event_scope == "introduced":
+        pending_budget_count = pending_event_count(
+            root, git_base, events, pending_event_scope
+        )
+        violations = [
+            item for item in violations if item != "pending-event-count-exceeded"
+        ]
+        if pending_budget_count > budgets["maximum_pending_events"]:
+            violations.append("pending-event-count-exceeded")
     if time_budgets == "report":
         fatal = [item for item in violations if item not in TIME_BUDGET_VIOLATIONS]
         reported = [item for item in violations if item in TIME_BUDGET_VIOLATIONS]
@@ -1171,6 +1187,12 @@ def verify(
         )
     if reported:
         report = {**report, "reported_time_budget_violations": reported}
+    if pending_budget_count is not None:
+        report = {
+            **report,
+            "pending_event_budget_scope": pending_event_scope,
+            "pending_event_budget_count": pending_budget_count,
+        }
     return report
 
 
@@ -1190,6 +1212,24 @@ def new_event_ids(root: Path, git_base: str | None,
         str(event["event_id"]) for path, event in events
         if path.resolve().relative_to(root.resolve()).as_posix() not in existing
     }
+
+
+def pending_event_count(
+    root: Path,
+    git_base: str | None,
+    events: list[tuple[Path, dict[str, object]]],
+    scope: str,
+) -> int:
+    """Count pending observations for the selected health-budget scope."""
+    if scope not in PENDING_EVENT_SCOPES:
+        raise ObservatoryError(f"unknown pending-event scope: {scope}")
+    introduced = new_event_ids(root, git_base, events) if scope == "introduced" else None
+    return sum(
+        1
+        for event in effective_observations(events)
+        if event["disposition"] == "pending"
+        and (introduced is None or str(event["event_id"]) in introduced)
+    )
 
 
 def verify_new_event_times(
@@ -1710,6 +1750,16 @@ def main(argv: list[str] | None = None) -> int:
             "queue entries, which cannot change them)"
         ),
     )
+    verify_parser.add_argument(
+        "--pending-event-scope",
+        choices=sorted(PENDING_EVENT_SCOPES),
+        default="all",
+        help=(
+            "all: enforce the ledger-wide pending-event budget; "
+            "introduced: on pull requests and queue entries, enforce it only "
+            "for pending events introduced by this change"
+        ),
+    )
     verify_parser.add_argument("--output", type=Path)
     verify_parser.add_argument(
         "--no-git-base", action="store_true",
@@ -1760,6 +1810,7 @@ def main(argv: list[str] | None = None) -> int:
                     else datetime.now(timezone.utc).replace(microsecond=0)
                 ),
                 time_budgets=args.time_budgets,
+                pending_event_scope=args.pending_event_scope,
                 allow_no_git_base=args.no_git_base,
             )
         else:

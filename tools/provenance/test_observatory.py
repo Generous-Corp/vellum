@@ -283,7 +283,45 @@ class ObservatoryTests(unittest.TestCase):
         )
         self.assertIn('--git-base "$observatory_git_base"', workflow)
         self.assertIn('--vellum-tail-policy "$observatory_tail_policy"', workflow)
+        self.assertIn('observatory_pending_event_scope=all', workflow)
+        self.assertIn('observatory_pending_event_scope=introduced', workflow)
+        self.assertIn('--pending-event-scope "$observatory_pending_event_scope"', workflow)
         self.assertIn('observatory_tail_policy=reconciled', workflow)
+
+    def test_pending_budget_scope_ignores_base_debt_but_rejects_too_many_new_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run(root, "git", "init", "-q", "-b", "main")
+            run(root, "git", "config", "user.email", "observatory@example.invalid")
+            run(root, "git", "config", "user.name", "Observatory Test")
+            base_events = []
+            for index in range(20):
+                path = root / observatory.EVENTS_PATH / f"base-{index}.yaml"
+                value = {"event_id": f"base-{index}", "kind": "observation", "disposition": "pending",
+                         "discovered_at": "2026-01-01T00:00:00Z"}
+                write_json(path, value)
+                base_events.append((path, value))
+            base = commit_all(root, "base pending events")
+
+            branch_events = list(base_events)
+            for index in range(3):
+                path = root / observatory.EVENTS_PATH / f"introduced-{index}.yaml"
+                value = {"event_id": f"introduced-{index}", "kind": "observation", "disposition": "pending",
+                         "discovered_at": "2026-01-01T00:00:00Z"}
+                write_json(path, value)
+                branch_events.append((path, value))
+            self.assertEqual(observatory.pending_event_count(root, base, branch_events, "all"), 23)
+            self.assertEqual(observatory.pending_event_count(root, base, branch_events, "introduced"), 3)
+            self.assertLess(3, 20)
+
+            for index in range(3, 24):
+                path = root / observatory.EVENTS_PATH / f"introduced-{index}.yaml"
+                value = {"event_id": f"introduced-{index}", "kind": "observation", "disposition": "pending",
+                         "discovered_at": "2026-01-01T00:00:00Z"}
+                write_json(path, value)
+                branch_events.append((path, value))
+            self.assertEqual(observatory.pending_event_count(root, base, branch_events, "introduced"), 24)
+            self.assertGreater(24, 20)
 
     def test_existing_event_mutations_are_rejected_against_git_base(self) -> None:
         for operation in ("modify", "delete", "rename"):
@@ -1989,6 +2027,31 @@ class ObservatoryTests(unittest.TestCase):
                 with self.assertRaisesRegex(observatory.ObservatoryError,
                                             "pending-event-count-exceeded"):
                     observatory.verify(**arguments, check_now=later, time_budgets="report")
+                # The same ledger-wide debt is already on the PR base. It is
+                # visible in the report, but it cannot fail the PR-side gate.
+                scoped = observatory.verify(
+                    **arguments,
+                    check_now=later,
+                    time_budgets="report",
+                    pending_event_scope="introduced",
+                )
+                self.assertEqual(scoped["pending_event_budget_scope"], "introduced")
+                self.assertEqual(scoped["pending_event_budget_count"], 0)
+                # Negative control: an introduced pending count above the
+                # configured budget remains fatal even in PR scope.
+                with mock.patch.object(
+                    observatory, "pending_event_count", return_value=21
+                ):
+                    with self.assertRaisesRegex(
+                        observatory.ObservatoryError,
+                        "pending-event-count-exceeded",
+                    ):
+                        observatory.verify(
+                            **arguments,
+                            check_now=later,
+                            time_budgets="report",
+                            pending_event_scope="introduced",
+                        )
             # In time, nothing is reported at all.
             on_time = observatory.verify(**arguments, check_now=discovered, time_budgets="report")
             self.assertNotIn("reported_time_budget_violations", on_time)
