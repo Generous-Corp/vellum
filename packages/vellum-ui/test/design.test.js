@@ -5,10 +5,11 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { createApp, Design, materializeDesign, mount } from '../src/index.js';
+import { createApp, Design, jsx, materializeDesign, mount, View } from '../src/index.js';
 import {
     decodeFigmaPluginExport,
     normalizeImport,
+    resolveTokenLayers,
 } from '../../vellum-design-ir/src/index.js';
 
 const protocol = 'vellum.authoring-host.v1';
@@ -218,4 +219,142 @@ test('materializes pinned Pulp emitter output into the capture-ready retained ho
     }))).tree;
     assert.equal(tree.id, 'main/1:2');
     assert.equal(JSON.parse(bridge.snapshotStateJSON()).state.model.presses, 1);
+});
+
+function tokenSource() {
+    return {
+        source: {
+            key: 'main', adapter: 'fixture', adapterVersion: '1', formatVersion: '1',
+            revision: 'tokens-a',
+        },
+        tokens: {
+            color: {
+                canvas: { $value: '#0f172a' },
+                accent: { $value: '#14b8a6' },
+                label: { $value: '{color.accent}' },
+            },
+        },
+        root: {
+            kind: 'view',
+            sourceId: 'root',
+            properties: {
+                layout: { display: 'flex', direction: 'column', gap: 8, height: 300, width: 400 },
+                paint: { backgroundColor: '{color.canvas}' },
+            },
+            children: [
+                {
+                    kind: 'button', sourceId: 'create', text: 'Create',
+                    properties: { paint: { backgroundColor: '{main.color.accent}' } },
+                },
+                {
+                    kind: 'view', sourceId: 'card',
+                    properties: { paint: { backgroundColor: '{color.accent}' } },
+                },
+                {
+                    kind: 'text', sourceId: 'title', text: 'Board',
+                    properties: { text: { color: '{color.label}' } },
+                },
+                {
+                    kind: 'view', sourceId: 'literal',
+                    properties: { paint: { backgroundColor: '#123456' } },
+                },
+            ],
+        },
+    };
+}
+
+function renderTree(document, options = {}) {
+    const app = createApp({
+        id: 'token-app',
+        stateVersion: '1',
+        initialState: {},
+        render: () => Design({ document, ...options }),
+    });
+    return JSON.parse(mount(app).renderJSON()).tree;
+}
+
+function flatten(node, output = []) {
+    output.push(node);
+    for (const child of node.children) flatten(child, output);
+    return output;
+}
+
+test('Design emits each token receipt once and references it from every node', () => {
+    const document = normalizeImport(tokenSource());
+    const tree = renderTree(document);
+    const paths = tree.tokens.map((receipt) => receipt.path).sort();
+    assert.deepEqual(paths, ['main.color.accent', 'main.color.canvas', 'main.color.label']);
+    assert.equal(new Set(paths).size, tree.tokens.length);
+    const named = (suffix) => flatten(tree).find((node) => node.id.endsWith(suffix));
+    const accent = tree.tokens.findIndex((receipt) => receipt.path === 'main.color.accent');
+    const canvas = tree.tokens.findIndex((receipt) => receipt.path === 'main.color.canvas');
+    assert.deepEqual(tree.tokenRefs, { backgroundColor: canvas });
+    assert.deepEqual(named('/create').tokenRefs, { backgroundColor: accent });
+    assert.deepEqual(named('/card').tokenRefs, { backgroundColor: accent });
+    assert.equal(named('/create').style.backgroundColor, tree.tokens[accent].value);
+    assert.equal(named('/literal').tokenRefs, undefined);
+    assert.equal(named('/literal').style.backgroundColor, '#123456');
+});
+
+test('a token reached through another token keeps the path the node names', () => {
+    const tree = renderTree(normalizeImport(tokenSource()));
+    const title = flatten(tree).find((node) => node.id.endsWith('/title'));
+    assert.equal(title.style.color, '#14b8a6');
+    assert.deepEqual(tree.tokens[title.tokenRefs.color], {
+        layer: 'primitive', path: 'main.color.label', value: '#14b8a6',
+    });
+});
+
+test('a theme layer re-resolves receipts without moving any reference', () => {
+    const document = normalizeImport(tokenSource());
+    const light = renderTree(document);
+    const layers = resolveTokenLayers(document, {
+        themeOverrides: { 'main.color.canvas': '#f8fafc' },
+    });
+    const dark = renderTree(document, { tokenLayers: layers });
+    assert.deepEqual(layers.diagnostics, []);
+    assert.equal(dark.style.backgroundColor, '#f8fafc');
+    const canvas = dark.tokens.findIndex((receipt) => receipt.path === 'main.color.canvas');
+    assert.deepEqual(dark.tokens[canvas], {
+        layer: 'theme', path: 'main.color.canvas', value: '#f8fafc',
+    });
+    assert.deepEqual(
+        dark.tokens.filter((_, index) => index !== canvas),
+        light.tokens.filter((_, index) => index !== canvas));
+    const refs = (tree) => flatten(tree).map((node) => [node.id, node.tokenRefs]);
+    assert.deepEqual(refs(dark), refs(light));
+});
+
+test('the runtime refuses token references that disagree with the node', () => {
+    const receipt = { layer: 'primitive', path: 'a.b', value: '#112233' };
+    const render = (props, extra = []) => {
+        const app = createApp({
+            id: 'token-refusal',
+            stateVersion: '1',
+            initialState: {},
+            render: () => jsx(View, { id: 'root', style: { width: 10, height: 10 }, children: [
+                jsx(View, { id: 'one', ...props }), ...extra] }),
+        });
+        return mount(app).renderJSON();
+    };
+    assert.match(JSON.parse(render({
+        style: { backgroundColor: '#112233' }, tokenRefs: { backgroundColor: receipt },
+    })).tree.tokens[0].path, /a\.b/);
+    assert.throws(() => render({
+        style: { backgroundColor: '#445566' }, tokenRefs: { backgroundColor: receipt },
+    }), /disagrees with style.backgroundColor/);
+    assert.throws(() => render({
+        style: { backgroundColor: '#112233' }, tokenRefs: { fill: receipt },
+    }), /not a token slot/);
+    assert.throws(() => render({
+        style: { backgroundColor: '#112233' },
+        tokenRefs: { backgroundColor: { ...receipt, value: 'red' } },
+    }), /path, a layer and a colour value/);
+    assert.throws(() => render({
+        style: { backgroundColor: '#112233' }, tokenRefs: { backgroundColor: receipt },
+    }, [jsx(View, {
+        id: 'two',
+        style: { backgroundColor: '#445566' },
+        tokenRefs: { backgroundColor: { ...receipt, value: '#445566' } },
+    })]), /two different receipts/);
 });

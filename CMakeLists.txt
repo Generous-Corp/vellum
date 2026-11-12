@@ -230,6 +230,11 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.damage COMMAND vellum-damage-test)
 
+        add_executable(vellum-token-receipts-test
+            graphics/tests/token_receipts_test.cpp)
+        target_link_libraries(vellum-token-receipts-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.token-receipts COMMAND vellum-token-receipts-test)
+
         add_executable(vellum-render-cache-test
             graphics/tests/render_cache_test.cpp)
         target_include_directories(vellum-render-cache-test PRIVATE graphics/src)

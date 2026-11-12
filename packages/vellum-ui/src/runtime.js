@@ -432,6 +432,51 @@ function validateStyle(style, path) {
     return result;
 }
 
+const TOKEN_SLOTS = Object.freeze(['backgroundColor', 'color']);
+const TOKEN_COLOR = /^#(?:[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const MAXIMUM_TOKENS = 65536;
+
+function internTokenRefs(value, style, state, path) {
+    if (value === undefined) return undefined;
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+        throw new TypeError(`${path}.tokenRefs must be an object`);
+    }
+    const result = {};
+    for (const slot of Object.keys(value).sort()) {
+        if (!TOKEN_SLOTS.includes(slot)) {
+            throw new TypeError(`${path}.tokenRefs.${slot} is not a token slot`);
+        }
+        const receipt = value[slot];
+        if (receipt === null || typeof receipt !== 'object' ||
+            typeof receipt.path !== 'string' || receipt.path.length === 0 ||
+            typeof receipt.layer !== 'string' || receipt.layer.length === 0 ||
+            typeof receipt.value !== 'string' || !TOKEN_COLOR.test(receipt.value)) {
+            throw new TypeError(
+                `${path}.tokenRefs.${slot} must hold a path, a layer and a colour value`);
+        }
+        if (style?.[slot] !== receipt.value) {
+            throw new Error(`${path}.tokenRefs.${slot} disagrees with style.${slot}`);
+        }
+        const known = state.tokens.get(receipt.path);
+        if (known === undefined) {
+            if (state.tokens.size >= MAXIMUM_TOKENS) {
+                throw new Error('the token table exceeds its size limit');
+            }
+            state.tokens.set(receipt.path, {
+                index: state.tokens.size,
+                receipt: { layer: receipt.layer, path: receipt.path, value: receipt.value },
+            });
+            result[slot] = state.tokens.size - 1;
+        } else {
+            if (known.receipt.layer !== receipt.layer || known.receipt.value !== receipt.value) {
+                throw new Error(`token ${receipt.path} resolves to two different receipts`);
+            }
+            result[slot] = known.index;
+        }
+    }
+    return Object.keys(result).length === 0 ? undefined : result;
+}
+
 function textNode(value, runtime, path) {
     const id = `${path}/text`;
     if (runtime.renderState.nodeIds.has(id)) throw new Error(`duplicate Vellum node id: ${id}`);
@@ -577,6 +622,8 @@ function materialize(value, runtime, path) {
     };
     const style = validateStyle(value.props.style, path);
     if (style !== undefined) node.style = style;
+    const tokenRefs = internTokenRefs(value.props.tokenRefs, style, state, path);
+    if (tokenRefs !== undefined) node.tokenRefs = tokenRefs;
     if (value.type === 'text-run') node.text = textRunText;
     else if (typeof value.props.text === 'string') node.text = value.props.text;
     if (typeof value.props.source === 'string') node.source = value.props.source;
@@ -755,6 +802,7 @@ class Runtime {
             frames: cloneFrames(baseFrames),
             handlers: new Map(),
             nodeIds: new Set(),
+            tokens: new Map(),
             visitedFrames: new Set(),
             componentTypes: new Map(),
             frameStack: [],
@@ -777,6 +825,9 @@ class Runtime {
             if (typeof rootStyle.width !== 'number') rootStyle.width = 800;
             if (typeof rootStyle.height !== 'number') rootStyle.height = 600;
             materialized[0].style = rootStyle;
+            if (state.tokens.size > 0) {
+                materialized[0].tokens = [...state.tokens.values()].map((entry) => entry.receipt);
+            }
             return { frames: state.frames, handlers: state.handlers, tree: materialized[0] };
         } finally {
             this.renderState = null;

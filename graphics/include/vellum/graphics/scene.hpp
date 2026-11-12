@@ -359,9 +359,15 @@ enum class MaskMode : std::uint8_t {
 /// earlier version is still accepted when none of its nodes sets them; one
 /// that does fails `scene_fields_match_version` and is refused.
 ///
+/// Version 7 adds `Scene::tokens` and `SceneNode::fill_token`. A scene of an
+/// earlier version is still accepted when its token table is empty and no node
+/// sets a token reference; one that does fails `scene_fields_match_version`
+/// and is refused.
+///
 /// Claimed versions, in order:
-/// version 4: image nodes; version 5: clip, mask and isolation on groups
-inline constexpr std::uint32_t kSceneVersion = 5U;
+/// version 4: image nodes; version 5: clip, mask and isolation on groups;
+/// version 7: interned token receipts
+inline constexpr std::uint32_t kSceneVersion = 7U;
 
 /// The oldest scene schema version this build still consumes.
 inline constexpr std::uint32_t kMinSupportedSceneVersion = 1U;
@@ -381,6 +387,18 @@ inline constexpr std::uint32_t kMinSupportedSceneVersion = 1U;
 /// it does not know refuses the scene rather than treating the node as a
 /// `group`; producers report authored content they cannot express as a known
 /// kind through `LoweringDiagnostic` instead of emitting it.
+/// One design token as it resolved for a scene: where it came from and the
+/// colour it produced. A scene holds each receipt once in `Scene::tokens`, and
+/// nodes name it by index.
+struct TokenReceipt final {
+    /// The token's name in its design document, unique within a scene.
+    std::string path;
+    /// The layer the value came from, such as `primitive`, `semantic` or
+    /// `theme`.
+    std::string layer;
+    Color value{};
+};
+
 struct SceneNode final {
     enum class Kind {
         group,
@@ -444,6 +462,11 @@ struct SceneNode final {
     /// Composites the node and its subtree offscreen as one group even at
     /// full opacity, so the group meets what lies beneath it only once.
     bool isolate = false;
+    /// The index in `Scene::tokens` of the receipt `fill` was resolved from.
+    /// `fill` always holds the receipt's value, so a renderer draws it without
+    /// consulting the table; the reference lets a theme switch find the nodes
+    /// a changed receipt affects.
+    std::optional<std::uint32_t> fill_token;
 };
 
 /// The corner radii a node is drawn with: `corner_radii` when present,
@@ -510,6 +533,20 @@ struct SceneNode final {
     return nullptr;
 }
 
+/// Whether a node sets a field version 7 introduced: a token reference.
+[[nodiscard]] constexpr bool uses_version_7_fields(const SceneNode& node) noexcept {
+    return node.fill_token.has_value();
+}
+
+/// The first node, in depth-first order, that `uses_version_7_fields`.
+[[nodiscard]] inline const SceneNode* find_version_7_fields(const SceneNode& node) noexcept {
+    if (uses_version_7_fields(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_7_fields(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
 [[nodiscard]] constexpr bool is_known_kind(SceneNode::Kind kind) noexcept {
     switch (kind) {
     case SceneNode::Kind::group:
@@ -544,6 +581,9 @@ struct Scene final {
     /// The decoded assets image nodes name by content hash. Each hash appears
     /// at most once.
     std::vector<std::shared_ptr<const ImageAsset>> images;
+    /// The interned token receipts nodes reference through
+    /// `SceneNode::fill_token`. Each path appears at most once.
+    std::vector<TokenReceipt> tokens;
 };
 
 /// The first node, in depth-first order, of a kind version 3 introduced: a
@@ -570,13 +610,16 @@ struct Scene final {
 /// version 1 scene sets no field that `uses_version_2_fields` reports, a
 /// version 1 or 2 scene has no node that `find_version_3_kinds` reports, a
 /// scene before version 4 has no node that `find_version_4_kinds` reports,
-/// and a scene before version 5 sets no field that `uses_version_5_fields`
-/// reports.
+/// a scene before version 5 sets no field that `uses_version_5_fields`
+/// reports, and a scene before version 7 has no token table and no node that
+/// `uses_version_7_fields` reports.
 [[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
     return (scene.scene_version >= 2U || find_version_2_fields(scene.root) == nullptr) &&
            (scene.scene_version >= 3U || find_version_3_kinds(scene.root) == nullptr) &&
            (scene.scene_version >= 4U || find_version_4_kinds(scene.root) == nullptr) &&
-           (scene.scene_version >= 5U || find_version_5_fields(scene.root) == nullptr);
+           (scene.scene_version >= 5U || find_version_5_fields(scene.root) == nullptr) &&
+           (scene.scene_version >= 7U ||
+            (scene.tokens.empty() && find_version_7_fields(scene.root) == nullptr));
 }
 
 /// The first node, in depth-first order, that its scene's version cannot
@@ -596,6 +639,10 @@ struct Scene final {
     }
     if (scene.scene_version < 5U) {
         if (const auto* found = find_version_5_fields(scene.root); found != nullptr) return found;
+    }
+    if (scene.scene_version < 7U) {
+        if (const auto* found = find_version_7_fields(scene.root); found != nullptr) return found;
+        if (!scene.tokens.empty()) return &scene.root;
     }
     return nullptr;
 }

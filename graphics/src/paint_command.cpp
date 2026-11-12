@@ -470,6 +470,19 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
             });
             return output;
         }
+        if (!compositing && needs(7U) &&
+            (uses_version_7_fields(*node) || !scene.tokens.empty())) {
+            output.push_back({
+                .severity = LoweringDiagnostic::Severity::error,
+                .disposition = LoweringDiagnostic::Disposition::unsupported,
+                .code = std::string(kSceneVersionMismatchCode),
+                .node_id = node->id,
+                .property = "fill_token",
+                .message = "scene version " + version +
+                           " cannot carry token receipts, found at " + node->id,
+            });
+            return output;
+        }
         output.push_back({
             .severity = LoweringDiagnostic::Severity::error,
             .disposition = LoweringDiagnostic::Disposition::unsupported,

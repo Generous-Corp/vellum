@@ -66,6 +66,11 @@ inline constexpr std::string_view kImageAssetMissingCode = "VELLUM_IMAGE_ASSET_M
 /// whole scene rather than drawing it with the node missing.
 inline constexpr std::string_view kSceneVersionMismatchCode = "VELLUM_SCENE_VERSION_MISMATCH";
 
+/// A scene whose token table repeats a path or holds a value that is not
+/// finite, or a node whose token reference is out of range or disagrees with
+/// its `fill`; always an error.
+inline constexpr std::string_view kInvalidTokenReferenceCode = "VELLUM_INVALID_TOKEN_REFERENCE";
+
 [[nodiscard]] constexpr std::string_view to_string(
     LoweringDiagnostic::Severity severity) noexcept {
     switch (severity) {

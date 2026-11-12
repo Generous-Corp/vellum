@@ -22,7 +22,7 @@ The public slice consists of:
   application builds, plus a headers-only `Vellum::DawnHeaders` target for an
   embedding host's authenticated bootstrap and compute code.
 
-The scene carries a single integer schema version, `kSceneVersion`, now 5.
+The scene carries a single integer schema version, `kSceneVersion`, now 7.
 A change that can alter rendered output bumps it: a new node kind, a new field
 that changes how a scene is drawn, or a change in meaning. A change that only
 adds metadata keeps it. Consumers accept versions from
@@ -35,7 +35,25 @@ diagnostic and reports authored style or content it drops as warnings on
 `RenderedApplication::diagnostics`. Those diagnostics share the DesignIR
 severity and disposition words but identify content by node ID, not by
 DesignIR document path. Versions are claimed in order: version 4: image nodes;
-version 5: clip, mask and isolation on groups (reserved).
+version 5: clip, mask and isolation on groups; version 7: interned token
+receipts.
+
+`Scene::tokens` interns each design token that resolved to a colour once, as a
+receipt of its path, the layer that produced the value (`primitive`,
+`semantic` or `theme`) and the resolved colour. A node names its receipt by
+index in `SceneNode::fill_token`, and its `fill` always holds the receipt's
+value, so a renderer draws it without reading the table. `Design` in
+`@vellum/ui` emits a `tokenRefs` entry beside the resolved style colour, the
+runtime interns the entries into a `tokens` array on the root of the rendered
+tree, and the materializer rebuilds the table and the references. A theme
+switch calls `apply_token_values`, which re-resolves the table and rewrites the
+`fill` of only the nodes whose receipt changed, so the scene diff damages those
+nodes and no others. A text run that carries its node's old colour follows it.
+A scene before version 7 that carries a table or a reference is refused with a
+version diagnostic. At any version, a repeated path, a non-finite value, a
+reference past the end of the table, or a `fill` that differs from its receipt
+is refused with `VELLUM_INVALID_TOKEN_REFERENCE`, so a table edited without its
+nodes is never drawn stale.
 
 Nodes carry an optional affine transform about their origin, a group opacity,
 and per-corner radii beside the uniform `corner_radius` shorthand. All three
@@ -218,9 +236,9 @@ threshold fall back to a full repaint. Hosts pass `invalidate` reasons and node 
 rectangle counts, the commands re-recorded and why a frame repainted fully.
 What is cached and when it is discarded is renderer policy: the scene schema
 carries no cache hints. Partial redraw is enabled only for scene versions the
-damage model understands, up to `kDamageModelSceneVersion` (5), which covers
-transforms, group opacity, per-corner radii, paths, images, and clips, masks
-and isolation on groups. A version the renderer accepts but the damage model
+damage model understands, up to `kDamageModelSceneVersion` (7), which covers
+transforms, group opacity, per-corner radii, paths, images, clips, masks
+and isolation on groups, and token references. A version the renderer accepts but the damage model
 does not yet understand repaints fully with reason `damage_model_version`. A version outside
 [`kMinSupportedSceneVersion`, `kSceneVersion`] is refused before anything is
 drawn.

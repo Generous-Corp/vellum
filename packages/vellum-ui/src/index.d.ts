@@ -141,9 +141,23 @@ export interface Style {
 export type EventPayload = JsonValue;
 export type EventHandler = string | ((payload: EventPayload) => void);
 
+export interface TokenReceipt {
+    path: string;
+    layer: string;
+    value: string;
+}
+export interface TokenRefs {
+    backgroundColor?: TokenReceipt;
+    color?: TokenReceipt;
+}
+export interface TokenLayers {
+    semantic?: Record<string, string>;
+    theme?: Record<string, string>;
+}
 export interface ElementProps {
     id?: string;
     style?: Style;
+    tokenRefs?: TokenRefs;
     text?: string;
     source?: string;
     accessibilityLabel?: string;
@@ -279,6 +293,7 @@ export interface DesignProps {
     document: DesignDocument;
     actions?: Record<string, EventHandler>;
     bindings?: DesignBindingsDocument | null;
+    tokenLayers?: TokenLayers;
 }
 export declare function Design(properties: DesignProps): VellumElement;
 
@@ -343,6 +358,7 @@ export interface MaterializedDesignDocument {
     tokens?: Record<string, { $type?: string; $value: JsonValue }>;
 }
 export interface MaterializeDesignOptions {
+    tokenLayers?: TokenLayers;
     viewport?: { width?: number; height?: number; padding?: number };
     actions?: Record<string, Partial<Record<
         'press' | 'change' | 'submit' | 'keyDown',

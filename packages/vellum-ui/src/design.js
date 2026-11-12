@@ -20,17 +20,42 @@ function plainObject(value, path) {
     return value;
 }
 
-function tokenValue(tokens, value, stack = []) {
+const TOKEN_COLOR = /^#(?:[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const LAYER_NAMES = Object.freeze(['theme', 'semantic']);
+const CANONICAL_NAMES = new WeakMap();
+
+function canonicalName(tokens, name) {
+    return CANONICAL_NAMES.get(tokens)?.get(tokens[name]) ?? name;
+}
+
+function layerEntry(layers, tokens, name) {
+    if (!layers) return undefined;
+    const names = [name, canonicalName(tokens, name)];
+    for (const layer of LAYER_NAMES) {
+        const table = layers[layer];
+        if (!table || typeof table !== 'object') continue;
+        for (const candidate of names) {
+            if (Object.hasOwn(table, candidate)) return { layer, value: table[candidate] };
+        }
+    }
+    return undefined;
+}
+
+function tokenValue(tokens, value, stack = [], layers = undefined) {
     if (typeof value !== 'string') return value;
     const match = /^\{([^{}]+)\}$/.exec(value);
     if (!match) return value;
     const name = match[1];
     if (stack.includes(name)) throw new Error(`design token cycle: ${[...stack, name].join(' -> ')}`);
+    const override = layerEntry(layers, tokens, name);
+    if (override !== undefined) {
+        return tokenValue(tokens, override.value, [...stack, name], layers);
+    }
     const token = tokens[name];
     if (!token || typeof token !== 'object' || !('$value' in token)) {
         throw new Error(`unresolved design token: ${name}`);
     }
-    const resolved = tokenValue(tokens, token.$value, [...stack, name]);
+    const resolved = tokenValue(tokens, token.$value, [...stack, name], layers);
     if (resolved && typeof resolved === 'object' &&
         typeof resolved.value === 'number' && resolved.unit === 'px') {
         return resolved.value;
@@ -38,8 +63,29 @@ function tokenValue(tokens, value, stack = []) {
     return resolved;
 }
 
-function retainedStyle(document, node, viewport, root) {
+function colorToken(context, value) {
+    const resolved = tokenValue(context.document.tokens ?? {}, value, [], context.tokenLayers);
+    const match = typeof value === 'string' ? /^\{([^{}]+)\}$/.exec(value) : null;
+    if (!match || typeof resolved !== 'string' || !TOKEN_COLOR.test(resolved)) {
+        return { value: resolved };
+    }
+    const name = match[1];
+    const tokens = context.document.tokens;
+    const override = layerEntry(context.tokenLayers, tokens, name);
+    return {
+        value: resolved,
+        receipt: {
+            layer: override?.layer ?? 'primitive',
+            path: canonicalName(tokens, name),
+            value: resolved,
+        },
+    };
+}
+
+function retainedStyle(context, node, viewport, root) {
+    const { document } = context;
     const tokens = document.tokens ?? {};
+    const refs = Object.create(null);
     const properties = node.properties && typeof node.properties === 'object'
         ? node.properties : {};
     const layout = properties.layout && typeof properties.layout === 'object'
@@ -57,14 +103,18 @@ function retainedStyle(document, node, viewport, root) {
     if (layout.direction === 'row') style.direction = 'horizontal';
     else if (layout.direction === 'column') style.direction = 'vertical';
     if (typeof paint.backgroundColor === 'string') {
-        style.backgroundColor = tokenValue(tokens, paint.backgroundColor);
+        const color = colorToken(context, paint.backgroundColor);
+        style.backgroundColor = color.value;
+        if (color.receipt) refs.backgroundColor = color.receipt;
     }
     if (typeof paint.borderRadius === 'number' || typeof paint.borderRadius === 'string') {
-        const radius = tokenValue(tokens, paint.borderRadius);
+        const radius = tokenValue(tokens, paint.borderRadius, [], context.tokenLayers);
         if (typeof radius === 'number' && Number.isFinite(radius)) style.borderRadius = radius;
     }
     if (typeof typography.color === 'string') {
-        style.color = tokenValue(tokens, typography.color);
+        const color = colorToken(context, typography.color);
+        style.color = color.value;
+        if (color.receipt) refs.color = color.receipt;
     }
     if (typeof typography.fontSize === 'number' && Number.isFinite(typography.fontSize)) {
         style.fontSize = typography.fontSize;
@@ -74,7 +124,7 @@ function retainedStyle(document, node, viewport, root) {
         style.height = viewport.height;
         if (style.padding === undefined) style.padding = viewport.padding;
     }
-    return style;
+    return { style, refs };
 }
 
 function componentFor(node) {
@@ -101,12 +151,14 @@ function materializeNode(node, context, depth, root = false) {
     context.ids.add(node.id);
     if (!Array.isArray(node.children)) throw new Error(`design node ${node.id} requires children`);
 
+    const { style, refs } = retainedStyle(context, node, context.viewport, root);
     const properties = {
         id: node.id,
-        style: retainedStyle(context.document, node, context.viewport, root),
+        style,
         accessibilityLabel: typeof node.name === 'string' ? node.name : undefined,
         children: node.children.map((child) => materializeNode(child, context, depth + 1)),
     };
+    if (Object.keys(refs).length > 0) properties.tokenRefs = { ...refs };
     if (typeof node.text === 'string') properties.text = node.text;
     const bindings = context.actions[node.id];
     if (bindings !== undefined) {
@@ -146,6 +198,7 @@ function materialize(document, options, missingActionTarget) {
         document,
         ids: new Set(),
         nodes: 0,
+        tokenLayers: options.tokenLayers,
         visitedActions: new Set(),
         viewport,
     };
@@ -163,8 +216,11 @@ function namespacedTokens(document) {
     const namespace = document.source?.namespace;
     if (!tokens || typeof namespace !== 'string' || namespace.length === 0) return tokens;
     const aliases = Object.create(null);
+    const names = new Map();
+    CANONICAL_NAMES.set(aliases, names);
     for (const [name, token] of Object.entries(tokens)) {
         aliases[name] = token;
+        if (!names.has(token)) names.set(token, name);
         const prefix = `${namespace}.`;
         if (name.startsWith(prefix)) aliases[name.slice(prefix.length)] ??= token;
     }
@@ -247,14 +303,14 @@ function resolvedDesignActions(document, bindings, actions) {
     return resolved;
 }
 
-export function Design({ document, actions = {}, bindings = null }) {
+export function Design({ document, actions = {}, bindings = null, tokenLayers = undefined }) {
     if (!document || typeof document !== 'object' || !document.root ||
         typeof actions !== 'object' || actions === null || Array.isArray(actions)) {
         throw new TypeError('Design requires a normalized document and an action map');
     }
     return materialize(
         normalizedDocument(document),
-        { actions: resolvedDesignActions(document, bindings, actions) },
+        { actions: resolvedDesignActions(document, bindings, actions), tokenLayers },
         (nodeId) => `Design binding target is missing from imported design: ${nodeId}`,
     );
 }

@@ -28,7 +28,8 @@ struct SceneAcceptance final {
 /// non-finite transform, opacity or corner radius, a root marked as a mask, a
 /// clip that fails `clip_is_valid`, an undrawable path, an
 /// image node without a valid reference or with children, or an image table
-/// that `scene_images_are_valid` rejects.
+/// that `scene_images_are_valid` rejects, or a token table or reference that
+/// `find_invalid_token_reference` reports.
 [[nodiscard]] SceneAcceptance accept_scene(const Scene& scene);
 
 }  // namespace vellum::graphics

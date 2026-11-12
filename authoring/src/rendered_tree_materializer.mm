@@ -7,6 +7,7 @@
 
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/path_geometry.hpp>
+#include <vellum/graphics/token_receipts.hpp>
 
 #include <algorithm>
 #include <array>
@@ -29,6 +30,7 @@ constexpr std::size_t kMaximumJsonBytes = 16U * 1024U * 1024U;
 constexpr std::size_t kMaximumNodes = 100000U;
 constexpr std::size_t kMaximumDepth = 256U;
 constexpr NSUInteger kMaximumGradientStops = 64U;
+constexpr NSUInteger kMaximumTokens = 65536U;
 constexpr NSUInteger kMaximumTextInputBytes = 64U * 1024U;
 constexpr NSUInteger kMaximumPlaceholderBytes = 4U * 1024U;
 // Retained-tree consumers share these defaults across native and web. Controls
@@ -545,7 +547,66 @@ struct MaterializeContext final {
     std::vector<TextInputControl>* text_inputs = nullptr;
     std::vector<AccessibilityNode>* accessibility_nodes = nullptr;
     std::vector<LoweringDiagnostic>* diagnostics = nullptr;
+    const std::vector<vellum::graphics::TokenReceipt>* tokens = nullptr;
 };
+
+bool bind_token(
+    NSDictionary* source, NSString* slot, const MaterializeContext& context,
+    vellum::graphics::SceneNode& node, std::string* error) {
+    id references = source[@"tokenRefs"];
+    if (references == nil) return true;
+    if (![references isKindOfClass:NSDictionary.class]) {
+        set_error(error, "tokenRefs of " + node.id + " must be an object");
+        return false;
+    }
+    id raw = static_cast<NSDictionary*>(references)[slot];
+    if (raw == nil) return true;
+    const std::size_t count = context.tokens != nullptr ? context.tokens->size() : 0U;
+    float index = 0.0F;
+    if (!finite_number(raw, index) || index < 0.0F || index != std::floor(index) ||
+        static_cast<std::size_t>(index) >= count) {
+        set_error(error, "tokenRefs." + cpp_string(slot) + " of " + node.id +
+                             " must name an entry of the token table");
+        return false;
+    }
+    const auto entry = static_cast<std::uint32_t>(index);
+    if (!vellum::graphics::same_token_color(node.fill, (*context.tokens)[entry].value)) {
+        set_error(error, "tokenRefs." + cpp_string(slot) + " of " + node.id +
+                             " disagrees with its resolved colour");
+        return false;
+    }
+    node.fill_token = entry;
+    return true;
+}
+
+bool parse_token_table(
+    NSDictionary* tree, std::vector<vellum::graphics::TokenReceipt>& output, std::string* error) {
+    id raw = tree[@"tokens"];
+    if (raw == nil) return true;
+    if (![raw isKindOfClass:NSArray.class] || static_cast<NSArray*>(raw).count > kMaximumTokens) {
+        set_error(error, "the token table must be an array of bounded size");
+        return false;
+    }
+    std::set<std::string> paths;
+    for (id item in static_cast<NSArray*>(raw)) {
+        if (![item isKindOfClass:NSDictionary.class] ||
+            ![item[@"path"] isKindOfClass:NSString.class] ||
+            ![item[@"layer"] isKindOfClass:NSString.class] || [item[@"path"] length] == 0U ||
+            [item[@"layer"] length] == 0U) {
+            set_error(error, "each token receipt requires string path, layer and value fields");
+            return false;
+        }
+        const auto value = parse_color(item[@"value"]);
+        std::string path = cpp_string(item[@"path"]);
+        if (!value || !paths.insert(path).second) {
+            set_error(error, "token receipt " + path +
+                                 " has no colour value or repeats a path");
+            return false;
+        }
+        output.push_back({std::move(path), cpp_string(item[@"layer"]), *value});
+    }
+    return true;
+}
 
 template <typename Consumed>
 void report_dropped_style(
@@ -1230,6 +1291,13 @@ bool materialize_node(
         output.kind = vellum::graphics::SceneNode::Kind::group;
     }
 
+    if (output.kind == vellum::graphics::SceneNode::Kind::text) {
+        if (!bind_token(source, @"color", context, output, error)) return false;
+    } else if (output.kind == vellum::graphics::SceneNode::Kind::rectangle &&
+               parse_color(style[@"backgroundColor"]).has_value()) {
+        if (!bind_token(source, @"backgroundColor", context, output, error)) return false;
+    }
+
     if (!parse_grouping(style, identity, style_use, context, output, error)) return false;
 
     for (NSString* event in events) {
@@ -1356,6 +1424,7 @@ bool materialize_node(
                             std::max(0.0F, proposed.width - 32.0F), font_size * 1.4F};
             label.fill = parse_color(style[@"color"])
                 .value_or(vellum::graphics::Color::hex(0x041412));
+            if (!bind_token(source, @"color", context, label, error)) return false;
             label.font_size = font_size;
             label.text = label_text;
             output.children.push_back(std::move(label));
@@ -1381,6 +1450,9 @@ bool materialize_node(
                             std::max(0.0F, proposed.width - 24.0F), font_size * 1.4F};
             label.fill = parse_color(style[@"color"]).value_or(
                 vellum::graphics::Color::hex(showing_placeholder ? 0x94A3B8 : 0x111827));
+            if (!showing_placeholder && !bind_token(source, @"color", context, label, error)) {
+                return false;
+            }
             label.font_size = font_size;
             label.text = cpp_string(display);
             output.children.push_back(std::move(label));
@@ -1471,11 +1543,13 @@ bool materialize_rendered_tree(
     candidate.scene.height = height;
     candidate.scene.background = parse_color(style[@"backgroundColor"])
         .value_or(vellum::graphics::Color::hex(0xF8FAFC));
+    if (!parse_token_table(tree, candidate.scene.tokens, error)) return false;
     MaterializeContext context{
         .interactions = &candidate.interactions,
         .text_inputs = &candidate.text_inputs,
         .accessibility_nodes = &candidate.accessibility_nodes,
         .diagnostics = &candidate.diagnostics,
+        .tokens = &candidate.scene.tokens,
     };
     if (!materialize_node(
             tree, {0.0F, 0.0F, width, height}, 0.0F, 0.0F, vellum::graphics::Affine2D{}, 0U,

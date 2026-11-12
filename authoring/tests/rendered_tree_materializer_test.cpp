@@ -1,6 +1,8 @@
 #include "rendered_tree_materializer.hpp"
 
 #include <vellum/graphics/paint_command.hpp>
+#include <vellum/graphics/scene_acceptance.hpp>
+#include <vellum/graphics/token_receipts.hpp>
 
 #include <algorithm>
 #include <clocale>
@@ -649,6 +651,121 @@ bool image_nodes() {
                     "image bad does not accept children", "children");
 }
 
+std::string token_tree(std::string_view accent, std::string_view canvas,
+                       std::string_view extra_attributes = {},
+                       std::string_view table_override = {}) {
+    const std::string table = table_override.empty()
+        ? std::string(R"({"path":"main.color.accent","layer":"primitive","value":")") +
+              std::string(accent) +
+              R"("},{"path":"main.color.canvas","layer":"primitive","value":")" +
+              std::string(canvas) + R"("})"
+        : std::string(table_override);
+    return std::string(R"JSON({"protocol":"vellum.authoring-host.v2","kind":"render-result",
+      "tree":{"type":"stack","id":"themed","style":{"width":200,"height":200,
+        "backgroundColor":")JSON") + std::string(canvas) +
+        R"JSON("},"tokenRefs":{"backgroundColor":1},"tokens":[)JSON" + table + R"JSON(],
+      "children":[
+        {"type":"button","id":"go","text":"Go","tokenRefs":{"backgroundColor":0,"color":0},
+          "style":{"width":80,"height":30,"backgroundColor":")JSON" + std::string(accent) +
+        R"JSON(","color":")JSON" + std::string(accent) + R"JSON("}},
+        {"type":"view","id":"card","tokenRefs":{"backgroundColor":0},
+          "style":{"width":40,"height":40,"backgroundColor":")JSON" + std::string(accent) +
+        R"JSON("}},
+        {"type":"text","id":"title","text":"Board","tokenRefs":{"color":1},
+          "style":{"height":20,"color":")JSON" + std::string(canvas) + R"JSON("}},
+        {"type":"view","id":"literal","style":{"width":40,"height":40,
+          "backgroundColor":"#123456"}})JSON" + std::string(extra_attributes) + R"JSON(]}}
+    )JSON";
+}
+
+bool token_receipts() {
+    using vellum::graphics::find_node;
+    using vellum::graphics::same_token_color;
+    vellum::authoring::RenderedApplication light;
+    std::string error;
+    if (!vellum::authoring::materialize_rendered_tree(
+            token_tree("#14b8a6", "#0f172a"), light, &error)) {
+        std::cerr << "token tree was not materialized: " << error << '\n';
+        return false;
+    }
+    const auto& scene = light.scene;
+    const auto fill_token = [&](std::string_view id) {
+        const auto* node = find_node(scene, id);
+        return node != nullptr && node->fill_token ? static_cast<int>(*node->fill_token) : -1;
+    };
+    if (scene.tokens.size() != 2U || scene.tokens[0].path != "main.color.accent" ||
+        scene.tokens[0].layer != "primitive" || scene.tokens[1].path != "main.color.canvas" ||
+        scene.scene_version != vellum::graphics::kSceneVersion || fill_token("themed") != 1 ||
+        fill_token("go") != 0 || fill_token("go/label") != 0 || fill_token("card") != 0 ||
+        fill_token("title") != 1 || fill_token("literal") != -1 ||
+        vellum::graphics::find_invalid_token_reference(scene).has_value() ||
+        !vellum::graphics::accept_scene(scene).accepted) {
+        std::cerr << "token receipts did not round trip into the scene\n";
+        return false;
+    }
+
+    vellum::authoring::RenderedApplication dark;
+    if (!vellum::authoring::materialize_rendered_tree(
+            token_tree("#ef4444", "#f8fafc"), dark, &error)) {
+        std::cerr << error << '\n';
+        return false;
+    }
+    auto switched = light.scene;
+    const auto result = vellum::graphics::apply_token_values(switched, dark.scene.tokens);
+    bool same = result.applied && result.changed.size() == 2U && result.nodes_updated == 5U;
+    for (const auto* id : {"themed", "go", "go/label", "card", "title", "literal"}) {
+        const auto* left = find_node(switched, id);
+        const auto* right = find_node(dark.scene, id);
+        same = same && left != nullptr && right != nullptr &&
+               same_token_color(left->fill, right->fill) && left->fill_token == right->fill_token;
+    }
+    if (!same) {
+        std::cerr << "a theme switch did not equal materializing the new theme\n";
+        return false;
+    }
+
+    auto older = light.scene;
+    older.scene_version = 6U;
+    const auto refused = vellum::graphics::accept_scene(older);
+    if (refused.accepted || refused.diagnostics.size() != 1U ||
+        refused.diagnostics[0].code != vellum::graphics::kSceneVersionMismatchCode) {
+        std::cerr << "a version 6 scene using the token table was not refused\n";
+        return false;
+    }
+
+    const auto rejected = [&](const std::string& tree, std::string_view expected) {
+        auto kept = light;
+        std::string why;
+        const bool failed = !vellum::authoring::materialize_rendered_tree(tree, kept, &why);
+        if (!failed || why.find(expected) == std::string::npos ||
+            kept.scene.tokens.size() != light.scene.tokens.size()) {
+            std::cerr << "token tree was not rejected as expected: " << why << '\n';
+            return false;
+        }
+        return true;
+    };
+    constexpr std::string_view kStale = R"JSON(,{"type":"view","id":"stale","tokenRefs":{"backgroundColor":0},
+        "style":{"width":4,"height":4,"backgroundColor":"#000000"}})JSON";
+    constexpr std::string_view kPast = R"JSON(,{"type":"view","id":"past","tokenRefs":{"backgroundColor":2},
+        "style":{"width":4,"height":4,"backgroundColor":"#14b8a6"}})JSON";
+    constexpr std::string_view kFraction = R"JSON(,{"type":"view","id":"half","tokenRefs":{"backgroundColor":0.5},
+        "style":{"width":4,"height":4,"backgroundColor":"#14b8a6"}})JSON";
+    constexpr std::string_view kShape = R"JSON(,{"type":"view","id":"shape","tokenRefs":[0],
+        "style":{"width":4,"height":4,"backgroundColor":"#14b8a6"}})JSON";
+    const std::string repeated =
+        R"({"path":"a","layer":"primitive","value":"#14b8a6"},)"
+        R"({"path":"a","layer":"primitive","value":"#0f172a"})";
+    const std::string not_a_colour =
+        R"({"path":"a","layer":"primitive","value":"red"},)"
+        R"({"path":"b","layer":"primitive","value":"#0f172a"})";
+    return rejected(token_tree("#14b8a6", "#0f172a", kStale), "disagrees with its resolved colour") &&
+           rejected(token_tree("#14b8a6", "#0f172a", kPast), "must name an entry of the token table") &&
+           rejected(token_tree("#14b8a6", "#0f172a", kFraction), "must name an entry of the token table") &&
+           rejected(token_tree("#14b8a6", "#0f172a", kShape), "tokenRefs of shape must be an object") &&
+           rejected(token_tree("#14b8a6", "#0f172a", {}, repeated), "repeats a path") &&
+           rejected(token_tree("#14b8a6", "#0f172a", {}, not_a_colour), "has no colour value");
+}
+
 // overflow, clipPath, maskMode and isolation reach the scene; bad values fail
 // atomically, and keys that cannot apply are reported.
 bool grouping_keys() {
@@ -1163,7 +1280,7 @@ int main() {
 
     return compositing_keys() && transform_pivots_once() && transform_ignores_locale() &&
            image_nodes() &&
-                   path_nodes() && grouping_keys()
+                   path_nodes() && grouping_keys() && token_receipts()
                ? 0
                : 1;
 }

@@ -7,6 +7,7 @@
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/path_geometry.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
+#include <vellum/graphics/token_receipts.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -460,12 +461,13 @@ void command_extents() {
 Scene grouping_scene(float width, float height);
 
 void damage_model_version_gate() {
-    expect(kDamageModelSceneVersion == 5U && partial_redraw_supported(3U) &&
+    expect(kDamageModelSceneVersion == 7U && partial_redraw_supported(3U) &&
                partial_redraw_supported(4U) && partial_redraw_supported(5U) &&
+               partial_redraw_supported(6U) && partial_redraw_supported(7U) &&
                partial_redraw_supported(kDamageModelSceneVersion) &&
                !partial_redraw_supported(kDamageModelSceneVersion + 1U) &&
-               !partial_redraw_supported(6U),
-           "partial redraw covers scene versions up to 5 and refuses version 6");
+               !partial_redraw_supported(8U),
+           "partial redraw covers scene versions up to 7 and refuses version 8");
     expect(to_string(FullRepaintReason::damage_model_version) == "damage_model_version",
            "the damage-model version fallback has a telemetry name");
     constexpr std::uint32_t width = 400;
@@ -1392,7 +1394,8 @@ void grouping_sequence(float scale, bool layer_cache) {
     auto partial = make_surface(width, height, scale, layer_cache);
     if (!full || !partial) return;
     Scene scene = grouping_scene(static_cast<float>(width), static_cast<float>(height));
-    expect(scene.scene_version == 5U && partial_redraw_supported(scene.scene_version),
+    expect(scene.scene_version == kDamageModelSceneVersion &&
+               partial_redraw_supported(scene.scene_version),
            size + "the grouping scene is a version 5 scene partial redraw serves");
     if (!render_both(*full, *partial, scene)) return;
     compare(size + "the first grouping frame", *full, *partial);
@@ -1419,6 +1422,95 @@ void grouping_sequence(float scale, bool layer_cache) {
         }
         compare(size + step.name, *full, *partial);
     }
+}
+
+Scene themed_scene(float width, float height) {
+    Scene scene = base_scene(width, height);
+    scene.tokens = {
+        {"theme.accent", "primitive", Color::hex(0xF472B6)},
+        {"theme.good", "primitive", Color::hex(0x22C55E)},
+    };
+    node(scene, "mover").fill_token = 0U;
+    node(scene, "swatch").fill_token = 1U;
+    SceneNode faded{
+        .id = "faded",
+        .kind = SceneNode::Kind::group,
+        .bounds = {width * 0.55F, height * 0.10F, 90.0F, 60.0F},
+        .opacity = 0.6F,
+    };
+    for (int index = 0; index < 2; ++index) {
+        faded.children.push_back({
+            .id = "faded/" + std::to_string(index),
+            .kind = SceneNode::Kind::rectangle,
+            .bounds = {static_cast<float>(index) * 30.0F, static_cast<float>(index) * 14.0F,
+                       56.0F, 40.0F},
+            .fill = Color::hex(0xF472B6),
+            .corner_radius = 6.0F,
+            .fill_token = 0U,
+        });
+    }
+    scene.root.children.push_back(std::move(faded));
+    return scene;
+}
+
+std::vector<TokenReceipt> theme_receipts(std::uint32_t accent, std::uint32_t good) {
+    return {
+        {"theme.accent", "primitive", Color::hex(accent)},
+        {"theme.good", "primitive", Color::hex(good)},
+    };
+}
+
+void theme_switch_sequence(float scale, bool layer_cache) {
+    constexpr std::uint32_t width = 400;
+    constexpr std::uint32_t height = 300;
+    const std::string size = std::string(layer_cache ? "cache on " : "cache off ") + "@" +
+                             std::to_string(static_cast<int>(scale)) + " theme ";
+    auto full = make_surface(width, height, scale);
+    auto partial = make_surface(width, height, scale, layer_cache);
+    if (!full || !partial) return;
+    Scene scene = themed_scene(static_cast<float>(width), static_cast<float>(height));
+    if (!render_both(*full, *partial, scene)) return;
+    compare(size + "the first frame", *full, *partial);
+
+    struct Switch final {
+        std::string name;
+        std::vector<TokenReceipt> values;
+        std::size_t changed;
+        bool damages;
+    };
+    const std::vector<Switch> switches = {
+        {"switch the accent", theme_receipts(0x3B82F6, 0x22C55E), 1U, true},
+        {"switch the other token", theme_receipts(0x3B82F6, 0xEAB308), 1U, true},
+        {"switch both", theme_receipts(0xF472B6, 0x22C55E), 2U, true},
+        {"switch to the same values", theme_receipts(0xF472B6, 0x22C55E), 0U, false},
+    };
+    for (const auto& step : switches) {
+        const auto result = apply_token_values(scene, step.values);
+        expect(result.applied && result.changed.size() == step.changed,
+               size + step.name + " re-resolves the expected entries");
+        if (!render_both(*full, *partial, scene)) return;
+        const auto stats = partial->frame_stats();
+        expect(!stats.full_repaint && stats.full_repaint_reason == FullRepaintReason::none,
+               size + step.name + " repaints only its damage", describe(stats));
+        if (step.damages) {
+            expect(stats.damage_area_pixels > 0 &&
+                       stats.paint_commands_recorded < stats.paint_commands_total,
+                   size + step.name + " re-records a subset of the paint commands",
+                   describe(stats));
+        } else {
+            expect(stats.damage_area_pixels == 0 && stats.paint_commands_recorded == 0,
+                   size + step.name + " records nothing", describe(stats));
+        }
+        compare(size + step.name, *full, *partial);
+    }
+
+    Scene stale = scene;
+    stale.tokens[0].value = Color::hex(0x00FF00);
+    std::string error;
+    const auto before = partial->frame_stats().frame;
+    expect(!partial->render_incremental(stale, &error) && !error.empty() &&
+               partial->frame_stats().frame == before,
+           size + "a table edit that leaves node fills stale is refused, not drawn", error);
 }
 
 bool redraws_identically(const Scene& before, const Scene& after, const DamageRegion& damage,
@@ -1921,6 +2013,10 @@ int main() {
             grouping_sequence(2.0F, cached);
         }
         grouping_damage_controls();
+        for (const bool cached : {false, true}) {
+            theme_switch_sequence(1.0F, cached);
+            theme_switch_sequence(2.0F, cached);
+        }
     } catch (const std::exception& exception) {
         std::cerr << "FAIL " << exception.what() << '\n';
         return 1;
