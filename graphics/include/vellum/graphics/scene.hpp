@@ -2,6 +2,7 @@
 
 #include <vellum/graphics/color.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cmath>
 #include <cstdint>
@@ -333,6 +334,153 @@ enum class MaskMode : std::uint8_t {
     luminance,
 };
 
+/// How a node's composited group meets what lies beneath it.
+///
+/// `normal` is the default and draws no group of its own. Every other mode
+/// composites the node and its subtree offscreen as one group, as `isolate`
+/// does, and then combines that group with the backdrop by the mode's formula:
+/// the separable and non-separable blend modes of the W3C Compositing and
+/// Blending specification, and the Porter-Duff operators of the canvas
+/// `globalCompositeOperation` list. `source_over` is the same arithmetic as
+/// `normal` but always draws the group offscreen.
+///
+/// The backdrop is whatever the enclosing group holds, or the frame. A mode
+/// that empties the backdrop wherever the group draws nothing, such as
+/// `destination_in`, `clear` or `source` (see `blend_mode_clears_backdrop`),
+/// does so across the whole backdrop, as the canvas operators of the same name
+/// do, not only within the group's paint extent.
+///
+/// Tier 1 modes are required on every backend. Tier 2 modes are required on
+/// Skia Graphite and optional elsewhere; a backend without one draws the group
+/// as `normal` and reports `kBlendModeFallbackCode`.
+enum class BlendMode : std::uint8_t {
+    // Tier 1.
+    normal,
+    multiply,
+    screen,
+    overlay,
+    darken,
+    lighten,
+    difference,
+    exclusion,
+    source_over,
+    destination_in,
+    destination_out,
+    // Tier 2.
+    hue,
+    saturation,
+    color,
+    luminosity,
+    color_dodge,
+    color_burn,
+    hard_light,
+    soft_light,
+    clear,
+    source,
+    destination,
+    source_in,
+    source_out,
+    source_atop,
+    destination_over,
+    destination_atop,
+    exclusive_or,
+    plus,
+};
+
+inline constexpr std::array<BlendMode, 29> kAllBlendModes{
+    BlendMode::normal, BlendMode::multiply, BlendMode::screen, BlendMode::overlay,
+    BlendMode::darken, BlendMode::lighten, BlendMode::difference, BlendMode::exclusion,
+    BlendMode::source_over, BlendMode::destination_in, BlendMode::destination_out,
+    BlendMode::hue, BlendMode::saturation, BlendMode::color, BlendMode::luminosity,
+    BlendMode::color_dodge, BlendMode::color_burn, BlendMode::hard_light, BlendMode::soft_light,
+    BlendMode::clear, BlendMode::source, BlendMode::destination, BlendMode::source_in,
+    BlendMode::source_out, BlendMode::source_atop, BlendMode::destination_over,
+    BlendMode::destination_atop, BlendMode::exclusive_or, BlendMode::plus,
+};
+
+[[nodiscard]] constexpr bool is_known_blend_mode(BlendMode mode) noexcept {
+    return static_cast<std::uint8_t>(mode) <= static_cast<std::uint8_t>(BlendMode::plus);
+}
+
+/// Whether the mode leaves nothing of the backdrop where the group draws
+/// nothing, so a group using it empties the whole backdrop outside its own
+/// paint: `clear`, `source`, `source_in`, `source_out`, `destination_in` and
+/// `destination_atop`.
+[[nodiscard]] constexpr bool blend_mode_clears_backdrop(BlendMode mode) noexcept {
+    switch (mode) {
+    case BlendMode::clear:
+    case BlendMode::source:
+    case BlendMode::source_in:
+    case BlendMode::source_out:
+    case BlendMode::destination_in:
+    case BlendMode::destination_atop: return true;
+    default: return false;
+    }
+}
+
+/// 1 for the modes every backend must draw, 2 for the rest, 0 for a value
+/// outside the enumeration.
+[[nodiscard]] constexpr int blend_mode_tier(BlendMode mode) noexcept {
+    if (!is_known_blend_mode(mode)) return 0;
+    return static_cast<std::uint8_t>(mode) <= static_cast<std::uint8_t>(BlendMode::destination_out)
+        ? 1
+        : 2;
+}
+
+/// The mode's name as DesignIR and the authoring `mixBlendMode` style spell
+/// it: lowercase with underscores.
+[[nodiscard]] constexpr std::string_view to_string(BlendMode mode) noexcept {
+    switch (mode) {
+    case BlendMode::normal: return "normal";
+    case BlendMode::multiply: return "multiply";
+    case BlendMode::screen: return "screen";
+    case BlendMode::overlay: return "overlay";
+    case BlendMode::darken: return "darken";
+    case BlendMode::lighten: return "lighten";
+    case BlendMode::difference: return "difference";
+    case BlendMode::exclusion: return "exclusion";
+    case BlendMode::source_over: return "source_over";
+    case BlendMode::destination_in: return "destination_in";
+    case BlendMode::destination_out: return "destination_out";
+    case BlendMode::hue: return "hue";
+    case BlendMode::saturation: return "saturation";
+    case BlendMode::color: return "color";
+    case BlendMode::luminosity: return "luminosity";
+    case BlendMode::color_dodge: return "color_dodge";
+    case BlendMode::color_burn: return "color_burn";
+    case BlendMode::hard_light: return "hard_light";
+    case BlendMode::soft_light: return "soft_light";
+    case BlendMode::clear: return "clear";
+    case BlendMode::source: return "source";
+    case BlendMode::destination: return "destination";
+    case BlendMode::source_in: return "source_in";
+    case BlendMode::source_out: return "source_out";
+    case BlendMode::source_atop: return "source_atop";
+    case BlendMode::destination_over: return "destination_over";
+    case BlendMode::destination_atop: return "destination_atop";
+    case BlendMode::exclusive_or: return "xor";
+    case BlendMode::plus: return "plus";
+    }
+    return "unknown";
+}
+
+/// The mode a name spells, with `-` accepted for `_` as CSS writes it, or
+/// nothing for an unknown name.
+[[nodiscard]] constexpr std::optional<BlendMode> parse_blend_mode(
+    std::string_view name) noexcept {
+    for (const auto mode : kAllBlendModes) {
+        const auto canonical = to_string(mode);
+        if (canonical.size() != name.size()) continue;
+        bool same = true;
+        for (std::size_t index = 0; index < name.size() && same; ++index) {
+            const char given = name[index] == '-' ? '_' : name[index];
+            same = given == canonical[index];
+        }
+        if (same) return mode;
+    }
+    return std::nullopt;
+}
+
 /// The scene schema version this build produces.
 ///
 /// The version is a single integer. Bump it when a change can alter rendered
@@ -359,9 +507,15 @@ enum class MaskMode : std::uint8_t {
 /// earlier version is still accepted when none of its nodes sets them; one
 /// that does fails `scene_fields_match_version` and is refused.
 ///
+/// Version 6 adds `SceneNode::blend_mode`. A scene of an earlier version is
+/// still accepted when none of its nodes sets it; one that does fails
+/// `scene_fields_match_version` and is refused.
+///
 /// Claimed versions, in order:
-/// version 4: image nodes; version 5: clip, mask and isolation on groups
-inline constexpr std::uint32_t kSceneVersion = 5U;
+/// version 4: image nodes; version 5: clip, mask and isolation on groups;
+/// version 6: blend modes and DesignIR compositing fields; version 7: token
+/// table (reserved)
+inline constexpr std::uint32_t kSceneVersion = 6U;
 
 /// The oldest scene schema version this build still consumes.
 inline constexpr std::uint32_t kMinSupportedSceneVersion = 1U;
@@ -444,6 +598,12 @@ struct SceneNode final {
     /// Composites the node and its subtree offscreen as one group even at
     /// full opacity, so the group meets what lies beneath it only once.
     bool isolate = false;
+    /// How the node's group combines with what lies beneath it. Anything but
+    /// `normal` draws the node and its subtree as one offscreen group, faded
+    /// by `opacity`, and then blends that group over the backdrop. The
+    /// backdrop is whatever the enclosing group holds, so an ancestor that
+    /// fades or isolates contains the blend.
+    BlendMode blend_mode = BlendMode::normal;
 };
 
 /// The corner radii a node is drawn with: `corner_radii` when present,
@@ -510,6 +670,21 @@ struct SceneNode final {
     return nullptr;
 }
 
+/// Whether a node sets a field version 6 introduced: a blend mode other than
+/// `normal`.
+[[nodiscard]] constexpr bool uses_version_6_fields(const SceneNode& node) noexcept {
+    return node.blend_mode != BlendMode::normal;
+}
+
+/// The first node, in depth-first order, that `uses_version_6_fields`.
+[[nodiscard]] inline const SceneNode* find_version_6_fields(const SceneNode& node) noexcept {
+    if (uses_version_6_fields(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_6_fields(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
 [[nodiscard]] constexpr bool is_known_kind(SceneNode::Kind kind) noexcept {
     switch (kind) {
     case SceneNode::Kind::group:
@@ -522,6 +697,16 @@ struct SceneNode final {
         return true;
     }
     return false;
+}
+
+/// The first node, in depth-first order, whose blend mode is outside
+/// `BlendMode`.
+[[nodiscard]] inline const SceneNode* find_unknown_blend_mode(const SceneNode& node) noexcept {
+    if (!is_known_blend_mode(node.blend_mode)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_unknown_blend_mode(child); found != nullptr) return found;
+    }
+    return nullptr;
 }
 
 /// The first node, in depth-first order, whose kind fails `is_known_kind`.
@@ -570,21 +755,26 @@ struct Scene final {
 /// version 1 scene sets no field that `uses_version_2_fields` reports, a
 /// version 1 or 2 scene has no node that `find_version_3_kinds` reports, a
 /// scene before version 4 has no node that `find_version_4_kinds` reports,
-/// and a scene before version 5 sets no field that `uses_version_5_fields`
-/// reports.
+/// a scene before version 5 sets no field that `uses_version_5_fields`
+/// reports, and a scene before version 6 sets no field that
+/// `uses_version_6_fields` reports.
 [[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
     return (scene.scene_version >= 2U || find_version_2_fields(scene.root) == nullptr) &&
            (scene.scene_version >= 3U || find_version_3_kinds(scene.root) == nullptr) &&
            (scene.scene_version >= 4U || find_version_4_kinds(scene.root) == nullptr) &&
-           (scene.scene_version >= 5U || find_version_5_fields(scene.root) == nullptr);
+           (scene.scene_version >= 5U || find_version_5_fields(scene.root) == nullptr) &&
+           (scene.scene_version >= 6U || find_version_6_fields(scene.root) == nullptr);
 }
 
 /// The first node, in depth-first order, that its scene's version cannot
 /// carry: a field or kind newer than `scene.scene_version`, or a kind outside
 /// `is_known_kind`. Null when `scene_fields_match_version` holds and every
-/// kind is known.
+/// kind and blend mode is known.
 [[nodiscard]] inline const SceneNode* find_version_mismatch(const Scene& scene) noexcept {
     if (const auto* unknown = find_unknown_kind(scene.root); unknown != nullptr) return unknown;
+    if (const auto* unknown = find_unknown_blend_mode(scene.root); unknown != nullptr) {
+        return unknown;
+    }
     if (scene.scene_version < 2U) {
         if (const auto* found = find_version_2_fields(scene.root); found != nullptr) return found;
     }
@@ -596,6 +786,9 @@ struct Scene final {
     }
     if (scene.scene_version < 5U) {
         if (const auto* found = find_version_5_fields(scene.root); found != nullptr) return found;
+    }
+    if (scene.scene_version < 6U) {
+        if (const auto* found = find_version_6_fields(scene.root); found != nullptr) return found;
     }
     return nullptr;
 }

@@ -460,12 +460,13 @@ void command_extents() {
 Scene grouping_scene(float width, float height);
 
 void damage_model_version_gate() {
-    expect(kDamageModelSceneVersion == 5U && partial_redraw_supported(3U) &&
+    expect(kDamageModelSceneVersion == 6U && partial_redraw_supported(3U) &&
                partial_redraw_supported(4U) && partial_redraw_supported(5U) &&
+               partial_redraw_supported(6U) &&
                partial_redraw_supported(kDamageModelSceneVersion) &&
                !partial_redraw_supported(kDamageModelSceneVersion + 1U) &&
-               !partial_redraw_supported(6U),
-           "partial redraw covers scene versions up to 5 and refuses version 6");
+               !partial_redraw_supported(7U),
+           "partial redraw covers scene versions up to 6 and refuses version 7");
     expect(to_string(FullRepaintReason::damage_model_version) == "damage_model_version",
            "the damage-model version fallback has a telemetry name");
     constexpr std::uint32_t width = 400;
@@ -482,9 +483,9 @@ void damage_model_version_gate() {
         const auto stats = partial->frame_stats();
         expect(!stats.full_repaint && stats.full_repaint_reason == FullRepaintReason::none &&
                    stats.paint_commands_recorded < stats.paint_commands_total,
-               "a default version 5 scene takes the partial path, step " + std::to_string(step),
+               "a default version 6 scene takes the partial path, step " + std::to_string(step),
                describe(stats));
-        compare("a default version 5 scene, step " + std::to_string(step), *full, *partial);
+        compare("a default version 6 scene, step " + std::to_string(step), *full, *partial);
     }
     Scene newer = scene;
     newer.scene_version = kSceneVersion + 1U;
@@ -505,9 +506,9 @@ void damage_model_version_gate() {
     const auto refused = older->frame_stats();
     expect(refused.full_repaint &&
                refused.full_repaint_reason == FullRepaintReason::damage_model_version,
-           "a version 5 scene past a version 4 damage model repaints fully",
+           "a version 6 scene past a version 4 damage model repaints fully",
            describe(refused));
-    compare("a version 5 scene past a version 4 damage model", *full, *older);
+    compare("a version 6 scene past a version 4 damage model", *full, *older);
 }
 
 Affine2D rotation_degrees(float degrees, float scale = 1.0F) {
@@ -1392,8 +1393,8 @@ void grouping_sequence(float scale, bool layer_cache) {
     auto partial = make_surface(width, height, scale, layer_cache);
     if (!full || !partial) return;
     Scene scene = grouping_scene(static_cast<float>(width), static_cast<float>(height));
-    expect(scene.scene_version == 5U && partial_redraw_supported(scene.scene_version),
-           size + "the grouping scene is a version 5 scene partial redraw serves");
+    expect(scene.scene_version == 6U && partial_redraw_supported(scene.scene_version),
+           size + "the grouping scene is a version 6 scene partial redraw serves");
     if (!render_both(*full, *partial, scene)) return;
     compare(size + "the first grouping frame", *full, *partial);
     // Removing or restoring the viewport's clip changes enough of this dense
@@ -1453,6 +1454,228 @@ bool contains(const PixelRect& outer, const PixelRect& inner) {
 
 // Each damage rule for clips and masks, with a control that drops the area
 // the rule adds and leaves stale pixels.
+
+// A frame of varied backdrops under a blended group: a vertical gradient, a
+// rounded opaque card, a translucent chip, a text line, and
+// the group itself, two overlapping discs and a bar blended by `mode`.
+Scene blend_scene(float width, float height, BlendMode mode,
+                  BlendMode nested_mode = BlendMode::difference) {
+    Scene scene = plain_scene(width, height);
+    scene.background = Color::hex(0x203040);
+    scene.root.children.push_back({
+        .id = "sky",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {16.0F, 14.0F, 250.0F, 190.0F},
+        .fill_gradients = {{.angle_degrees = 160.0F,
+                            .stops = {{0.0F, Color::hex(0xFB7185)}, {0.5F, Color::hex(0xFACC15)},
+                                      {1.0F, Color::hex(0x22D3EE)}}}},
+        .corner_radius = 12.0F,
+    });
+    scene.root.children.push_back({
+        .id = "card",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {210.0F, 90.0F, 150.0F, 120.0F},
+        .fill = Color::hex(0x7C3AED),
+    });
+    scene.root.children.push_back({
+        .id = "chip",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {40.0F, 214.0F, 120.0F, 40.0F},
+        .fill = Color::rgba(0.20F, 0.83F, 0.60F, 0.65F),
+        .corner_radius = 20.0F,
+    });
+    scene.root.children.push_back({
+        .id = "caption",
+        .kind = SceneNode::Kind::text,
+        .bounds = {24.0F, 266.0F, 240.0F, 20.0F},
+        .text_runs = {{.text = "Blend over varied backdrops",
+                       .style = {.font_family = "Inter", .font_size = 15.0F,
+                                 .color = Color::hex(0xF1F5F9)}}},
+    });
+    SceneNode group{.id = "blend", .kind = SceneNode::Kind::group,
+                    .bounds = {96.0F, 64.0F, 230.0F, 150.0F}, .blend_mode = mode};
+    group.children.push_back(translucent_box("blend/a", {0.0F, 0.0F, 110.0F, 90.0F},
+                                             Color::hex(0x3B82F6), 0.9F, 40.0F));
+    group.children.push_back(translucent_box("blend/b", {60.0F, 30.0F, 110.0F, 90.0F},
+                                             Color::hex(0xF97316), 0.8F, 30.0F));
+    group.children.push_back(translucent_box("blend/c", {20.0F, 100.0F, 190.0F, 28.0F},
+                                             Color::hex(0xE2E8F0), 1.0F, 6.0F));
+    scene.root.children.push_back(std::move(group));
+    SceneNode fade{.id = "fade", .kind = SceneNode::Kind::group,
+                   .bounds = {280.0F, 14.0F, 100.0F, 64.0F}, .opacity = 0.8F};
+    fade.children.push_back(translucent_box("fade/base", {0.0F, 0.0F, 70.0F, 44.0F},
+                                            Color::hex(0x10B981), 1.0F, 8.0F));
+    auto nested = translucent_box("fade/nested", {30.0F, 14.0F, 66.0F, 46.0F},
+                                  Color::hex(0xF43F5E), 0.9F, 10.0F);
+    nested.blend_mode = nested_mode;
+    fade.children.push_back(std::move(nested));
+    scene.root.children.push_back(std::move(fade));
+    return scene;
+}
+
+const std::vector<BlendMode> kTierOneModes{
+    BlendMode::multiply, BlendMode::screen, BlendMode::overlay, BlendMode::darken,
+    BlendMode::lighten, BlendMode::difference, BlendMode::exclusion, BlendMode::source_over,
+    BlendMode::destination_in, BlendMode::destination_out,
+};
+
+// Cuts every Tier 1 blend over varied backdrops with a damage edge swept across
+// the frame, at 1x and 2x, with the layer cache off and on, and compares each
+// frame with a full redraw.
+void blend_sweeps() {
+    for (const float scale : {1.0F, 2.0F}) {
+        const std::string size = "@" + std::to_string(static_cast<int>(scale)) + " ";
+        for (const bool cached : {false, true}) {
+            for (const auto mode : kTierOneModes) {
+                const auto outcome = sweep_damage_edges(blend_scene(400.0F, 300.0F, mode), scale, cached);
+                expect(outcome.differing == 0 && outcome.partial > 0,
+                       size + (cached ? "cache on " : "cache off ") +
+                           "a damage edge swept across a " + std::string(to_string(mode)) +
+                           " group over varied backdrops leaves every frame byte-identical",
+                       sweep_detail(outcome));
+            }
+        }
+        for (const auto mode :
+             {BlendMode::multiply, BlendMode::difference, BlendMode::destination_in}) {
+            RulesOverride off({.enclose_group_layers = false});
+            const auto cut = sweep_damage_edges(blend_scene(400.0F, 300.0F, mode), scale);
+            expect(cut.differing > 0,
+                   size + "negative control: without its enclosure rule a swept edge cuts a " +
+                       std::string(to_string(mode)) + " group visibly",
+                   sweep_detail(cut));
+        }
+    }
+}
+
+std::vector<Step> blend_steps() {
+    return {
+        {"move a backdrop under the group", [](Scene& scene) {
+             node(scene, "sky").bounds.x += 11.3F;
+             node(scene, "sky").bounds.y += 4.7F;
+         }},
+        {"move a member of the group", [](Scene& scene) {
+             node(scene, "blend/b").bounds.x += 9.5F;
+             node(scene, "blend/b").bounds.y -= 6.25F;
+         }},
+        {"change a member's colour", [](Scene& scene) {
+             node(scene, "blend/a").fill = Color::rgba(0.9F, 0.2F, 0.4F, 0.9F);
+         }},
+        {"switch to screen", [](Scene& scene) { node(scene, "blend").blend_mode = BlendMode::screen; }},
+        {"switch to difference", [](Scene& scene) {
+             node(scene, "blend").blend_mode = BlendMode::difference;
+         }},
+        {"fade the blended group", [](Scene& scene) { node(scene, "blend").opacity = 0.55F; }},
+        {"fade the blended group to nothing", [](Scene& scene) { node(scene, "blend").opacity = 0.0F; }},
+        {"bring the blended group back", [](Scene& scene) { node(scene, "blend").opacity = 1.0F; }},
+        {"switch to destination_in", [](Scene& scene) {
+             node(scene, "blend").blend_mode = BlendMode::destination_in;
+         }},
+        {"move a member under destination_in", [](Scene& scene) {
+             node(scene, "blend/a").bounds.x += 14.0F;
+         }},
+        {"change a backdrop under destination_in", [](Scene& scene) {
+             node(scene, "card").fill = Color::hex(0x16A34A);
+         }},
+        {"switch to destination_out", [](Scene& scene) {
+             node(scene, "blend").blend_mode = BlendMode::destination_out;
+         }},
+        {"switch to multiply", [](Scene& scene) {
+             node(scene, "blend").blend_mode = BlendMode::multiply;
+         }},
+        {"change the mode nested in a faded group", [](Scene& scene) {
+             node(scene, "fade/nested").blend_mode = BlendMode::exclusion;
+         }},
+        {"fade the group holding that blend", [](Scene& scene) { node(scene, "fade").opacity = 0.4F; }},
+        {"add text to the blended group", [](Scene& scene) {
+             node(scene, "blend").children.push_back({
+                 .id = "blend/label",
+                 .kind = SceneNode::Kind::text,
+                 .bounds = {14.0F, 40.0F, 150.0F, 18.0F},
+                 .text_runs = {{.text = "blended text",
+                                .style = {.font_family = "Inter", .font_size = 14.0F,
+                                          .color = Color::hex(0xFFFFFF)}}},
+             });
+         }},
+        {"remove the blend mode", [](Scene& scene) {
+             node(scene, "blend").blend_mode = BlendMode::normal;
+         }},
+        {"blend a lone command", [](Scene& scene) {
+             node(scene, "chip").blend_mode = BlendMode::overlay;
+         }},
+        {"change nothing", [](Scene&) {}},
+    };
+}
+
+// Blend edits keep the retained frame correct: switching modes, fading, moving
+// the group or what lies beneath it, and moving into and out of a mode that
+// empties the whole backdrop each match a full redraw.
+void blend_sequence(float scale, bool layer_cache) {
+    constexpr std::uint32_t width = 400;
+    constexpr std::uint32_t height = 300;
+    const std::string size = std::string(layer_cache ? "cache on " : "cache off ") + "@" +
+                             std::to_string(static_cast<int>(scale)) + " blend ";
+    auto full = make_surface(width, height, scale);
+    auto partial = make_surface(width, height, scale, layer_cache);
+    if (!full || !partial) return;
+    Scene scene = blend_scene(static_cast<float>(width), static_cast<float>(height),
+                              BlendMode::multiply);
+    expect(scene.scene_version == kDamageModelSceneVersion &&
+               partial_redraw_supported(scene.scene_version),
+           size + "the blend scene is a version partial redraw serves");
+    if (!render_both(*full, *partial, scene)) return;
+    compare(size + "the first frame", *full, *partial);
+    for (const auto& step : blend_steps()) {
+        step.edit(scene);
+        if (!render_both(*full, *partial, scene)) return;
+        const auto stats = partial->frame_stats();
+        expect(stats.full_repaint_reason != FullRepaintReason::damage_model_version &&
+                   stats.full_repaint_reason != FullRepaintReason::scene_version,
+               size + step.name + " is served by the damage model", describe(stats));
+        compare(size + step.name, *full, *partial);
+    }
+}
+
+// Switching a group out of a mode that empties the whole backdrop restores
+// pixels far from the group, so its damage is the whole frame; damage limited
+// to the group's own extent leaves those pixels stale.
+void blend_damage_controls() {
+    constexpr float scale = 2.0F;
+    const auto small = [](BlendMode mode) {
+        Scene scene = blend_scene(400.0F, 300.0F, mode);
+        auto& group = node(scene, "blend");
+        group.bounds = {150.0F, 120.0F, 70.0F, 50.0F};
+        group.children = {group.children.front()};
+        group.children.front().bounds = {0.0F, 0.0F, 60.0F, 40.0F};
+        return scene;
+    };
+    const Scene clearing = small(BlendMode::destination_in);
+    Scene restored = clearing;
+    node(restored, "blend").blend_mode = BlendMode::multiply;
+    const auto whole = compute_scene_damage(clearing, restored, scale);
+    std::string message;
+    expect(whole.is_full_frame() || whole.area() >= frame_rect(clearing, scale).area(),
+           "leaving a backdrop-clearing mode damages the whole frame");
+    expect(redraws_identically(clearing, restored, whole, scale, message),
+           "leaving a backdrop-clearing mode redraws identically from its damage", message);
+    const auto& group = node(restored, "blend");
+    DamageRegion own_only(frame_rect(clearing, scale));
+    own_only.add(outset_pixels(group.bounds, scale, 2));
+    expect(own_only.area() < whole.area() &&
+               !redraws_identically(clearing, restored, own_only, scale, message),
+           "negative control: damage limited to the group's extent leaves the cleared backdrop "
+           "stale",
+           message);
+
+    Scene plain = blend_scene(400.0F, 300.0F, BlendMode::multiply);
+    Scene moved = plain;
+    node(moved, "blend/a").bounds.x += 9.0F;
+    const auto local = compute_scene_damage(plain, moved, scale);
+    expect(!local.is_full_frame() && local.area() < frame_rect(plain, scale).area() / 4,
+           "moving a member of a multiply group damages far less than the frame");
+    expect(redraws_identically(plain, moved, local, scale, message),
+           "a multiply group's member redraws identically from its damage", message);
+}
+
 void grouping_damage_controls() {
     constexpr float scale = 2.0F;
     Scene before = with_grouping_nodes(plain_scene(400.0F, 300.0F));
@@ -1921,6 +2144,12 @@ int main() {
             grouping_sequence(2.0F, cached);
         }
         grouping_damage_controls();
+        blend_sweeps();
+        for (const bool cached : {false, true}) {
+            blend_sequence(1.0F, cached);
+            blend_sequence(2.0F, cached);
+        }
+        blend_damage_controls();
     } catch (const std::exception& exception) {
         std::cerr << "FAIL " << exception.what() << '\n';
         return 1;

@@ -241,11 +241,121 @@ bool mask_reports() {
     if (!ok) std::cerr << "a mask report did not follow the scene's own warnings\n";
     return ok;
 }
+
+// Every blend mode has a canvas operation except `clear` and `destination`; the
+// shell flattens a blended layer, so each command inside it takes the layer's
+// operation, the innermost blended layer wins, and a mode the canvas lacks is
+// drawn as normal with one warning naming the node.
+bool blend_lowering() {
+    using vellum::graphics::BlendMode;
+    using vellum::graphics::kAllBlendModes;
+    const auto box = [](std::string id, BlendMode mode) {
+        return SceneNode{
+            .id = std::move(id),
+            .kind = SceneNode::Kind::rectangle,
+            .bounds = {0.0F, 0.0F, 4.0F, 4.0F},
+            .fill = vellum::graphics::Color::hex(0xFFFFFF),
+            .blend_mode = mode,
+        };
+    };
+    int lacking = 0;
+    for (const auto mode : kAllBlendModes) {
+        const auto operation = vellum::web::canvas_shell_blend_operation(mode);
+        const bool expected_lack = mode == BlendMode::clear || mode == BlendMode::destination;
+        lacking += operation ? 0 : 1;
+        if (operation.has_value() == expected_lack ||
+            (operation && operation->empty())) {
+            std::cerr << "blend mode " << vellum::graphics::to_string(mode)
+                      << " has the wrong canvas operation\n";
+            return false;
+        }
+    }
+    if (lacking != 2 ||
+        vellum::web::canvas_shell_blend_operation(BlendMode::normal) != "source-over" ||
+        vellum::web::canvas_shell_blend_operation(BlendMode::color_dodge) != "color-dodge" ||
+        vellum::web::canvas_shell_blend_operation(BlendMode::plus) != "lighter" ||
+        vellum::web::canvas_shell_blend_operation(BlendMode::source) != "copy" ||
+        vellum::web::canvas_shell_blend_operation(BlendMode::destination_in) != "destination-in") {
+        std::cerr << "a blend mode maps to the wrong canvas operation\n";
+        return false;
+    }
+
+    vellum::graphics::Scene scene;
+    scene.root.id = "root";
+    auto group = box("group", BlendMode::multiply);
+    group.children.push_back(box("group/plain", BlendMode::normal));
+    group.children.push_back(box("group/inner", BlendMode::screen));
+    scene.root.children.push_back(box("before", BlendMode::normal));
+    scene.root.children.push_back(std::move(group));
+    scene.root.children.push_back(box("after", BlendMode::normal));
+    auto lowering = vellum::web::lower_for_canvas_shell(scene);
+    std::vector<std::string> drawn;
+    for (std::size_t index = 0; index < lowering.commands.size(); ++index) {
+        if (!vellum::graphics::draws_content(lowering.commands[index].kind)) continue;
+        drawn.push_back(lowering.commands[index].node_id + "=" +
+                        std::string(vellum::web::canvas_shell_blend_operations(
+                            lowering.commands)[index]));
+    }
+    const std::vector<std::string> expected{
+        "before=", "group=multiply", "group/plain=multiply", "group/inner=screen", "after="};
+    if (!lowering.accepted || !lowering.diagnostics.empty() || drawn != expected) {
+        std::cerr << "a blended group was not flattened to per-command operations\n";
+        for (const auto& entry : drawn) std::cerr << "  " << entry << '\n';
+        return false;
+    }
+
+    scene.root.children[1].blend_mode = BlendMode::clear;
+    scene.root.children[1].children[1].blend_mode = BlendMode::destination;
+    lowering = vellum::web::lower_for_canvas_shell(scene);
+    const auto operations = vellum::web::canvas_shell_blend_operations(lowering.commands);
+    const bool plain = std::all_of(operations.begin(), operations.end(),
+                                   [](std::string_view operation) { return operation.empty(); });
+    const auto reported = [&](std::size_t index, std::string_view node, std::string_view mode) {
+        const auto& diagnostic = lowering.diagnostics[index];
+        return diagnostic.code == vellum::graphics::kBlendModeFallbackCode &&
+               diagnostic.node_id == node && diagnostic.property == "blendMode" &&
+               diagnostic.severity == LoweringDiagnostic::Severity::warning &&
+               diagnostic.disposition == LoweringDiagnostic::Disposition::lowered &&
+               diagnostic.message.find(std::string("blend mode ") + std::string(mode)) !=
+                   std::string::npos &&
+               diagnostic.message.find("drawn as normal") != std::string::npos;
+    };
+    if (!lowering.accepted || !plain || lowering.diagnostics.size() != 2U ||
+        !reported(0U, "group", "clear") || !reported(1U, "group/inner", "destination")) {
+        std::cerr << "a blend mode without a canvas operation was not drawn as normal with a "
+                     "warning each, got "
+                  << lowering.diagnostics.size() << " diagnostics\n";
+        return false;
+    }
+
+    // Negative control: a scene that uses only modes the canvas has reports
+    // nothing, so the warnings above come from the missing operations.
+    scene.root.children[1].blend_mode = BlendMode::hue;
+    scene.root.children[1].children[1].blend_mode = BlendMode::exclusive_or;
+    if (!vellum::web::lower_for_canvas_shell(scene).diagnostics.empty()) {
+        std::cerr << "a scene of supported blend modes reported a fallback\n";
+        return false;
+    }
+
+    scene.scene_version = 5U;
+    const auto refused = vellum::web::lower_for_canvas_shell(scene);
+    const auto native = vellum::graphics::accept_scene(scene);
+    if (refused.accepted || !refused.commands.empty() || refused.diagnostics.size() != 1U ||
+        refused.diagnostics[0].code != vellum::graphics::kSceneVersionMismatchCode ||
+        refused.reason != native.reason ||
+        refused.reason != "scene version 5 cannot carry the blend mode at group") {
+        std::cerr << "a version 5 scene with a blend mode was not refused like the native "
+                     "renderer\n";
+        return false;
+    }
+    return true;
+}
 }  // namespace
 
 int main() {
     if (!image_refusals()) return 1;
     if (!mask_reports()) return 1;
+    if (!blend_lowering()) return 1;
     using vellum::graphics::Affine2D;
     using vellum::graphics::CornerRadii;
     using vellum::graphics::SceneNode;

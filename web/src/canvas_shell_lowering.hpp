@@ -6,6 +6,7 @@
 #include <vellum/graphics/scene_acceptance.hpp>
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -95,6 +96,101 @@ canvas_shell_mask_diagnostics(
     return output;
 }
 
+/// The canvas `globalCompositeOperation` that draws `mode`, or nothing for a
+/// mode the canvas has no operation for (`clear` and `destination`). `normal`
+/// and `source_over` are `source-over`, `source` is `copy` and `plus` is
+/// `lighter`.
+[[nodiscard]] constexpr std::optional<std::string_view> canvas_shell_blend_operation(
+    vellum::graphics::BlendMode mode) noexcept {
+    using vellum::graphics::BlendMode;
+    switch (mode) {
+    case BlendMode::normal:
+    case BlendMode::source_over: return "source-over";
+    case BlendMode::multiply: return "multiply";
+    case BlendMode::screen: return "screen";
+    case BlendMode::overlay: return "overlay";
+    case BlendMode::darken: return "darken";
+    case BlendMode::lighten: return "lighten";
+    case BlendMode::difference: return "difference";
+    case BlendMode::exclusion: return "exclusion";
+    case BlendMode::destination_in: return "destination-in";
+    case BlendMode::destination_out: return "destination-out";
+    case BlendMode::hue: return "hue";
+    case BlendMode::saturation: return "saturation";
+    case BlendMode::color: return "color";
+    case BlendMode::luminosity: return "luminosity";
+    case BlendMode::color_dodge: return "color-dodge";
+    case BlendMode::color_burn: return "color-burn";
+    case BlendMode::hard_light: return "hard-light";
+    case BlendMode::soft_light: return "soft-light";
+    case BlendMode::source: return "copy";
+    case BlendMode::source_in: return "source-in";
+    case BlendMode::source_out: return "source-out";
+    case BlendMode::source_atop: return "source-atop";
+    case BlendMode::destination_over: return "destination-over";
+    case BlendMode::destination_atop: return "destination-atop";
+    case BlendMode::exclusive_or: return "xor";
+    case BlendMode::plus: return "lighter";
+    case BlendMode::clear:
+    case BlendMode::destination: break;
+    }
+    return std::nullopt;
+}
+
+/// For each command, the canvas operation it is drawn with, or an empty view
+/// for plain source-over. The shell has no group compositing, so a blended
+/// layer is flattened: every command inside it is blended on its own, and the
+/// innermost blended layer wins. A mode the canvas has
+/// no operation for is drawn as `normal`; see `canvas_shell_blend_diagnostics`.
+[[nodiscard]] inline std::vector<std::string_view> canvas_shell_blend_operations(
+    const std::vector<vellum::graphics::PaintCommand>& commands) {
+    using Kind = vellum::graphics::PaintCommand::Kind;
+    std::vector<std::string_view> stack;
+    std::vector<std::string_view> output;
+    output.reserve(commands.size());
+    for (const auto& command : commands) {
+        if (command.kind == Kind::begin_layer) {
+            const auto operation = canvas_shell_blend_operation(command.blend_mode);
+            std::string_view effective = !stack.empty() ? stack.back() : std::string_view{};
+            if (command.blend_mode != vellum::graphics::BlendMode::normal && operation) {
+                effective = *operation;
+            }
+            stack.push_back(effective);
+        } else if (command.kind == Kind::end_layer && !stack.empty()) {
+            stack.pop_back();
+        }
+        output.push_back(stack.empty() ? std::string_view{} : stack.back());
+    }
+    return output;
+}
+
+/// One warning for each blended layer whose mode the canvas has no operation
+/// for, naming the node and saying the group was drawn as `normal`.
+[[nodiscard]] inline std::vector<vellum::graphics::LoweringDiagnostic>
+canvas_shell_blend_diagnostics(const std::vector<vellum::graphics::PaintCommand>& commands) {
+    using Kind = vellum::graphics::PaintCommand::Kind;
+    std::vector<vellum::graphics::LoweringDiagnostic> output;
+    for (const auto& command : commands) {
+        if (command.kind != Kind::begin_layer ||
+            command.blend_mode == vellum::graphics::BlendMode::normal ||
+            canvas_shell_blend_operation(command.blend_mode)) {
+            continue;
+        }
+        output.push_back({
+            .severity = vellum::graphics::LoweringDiagnostic::Severity::warning,
+            .disposition = vellum::graphics::LoweringDiagnostic::Disposition::lowered,
+            .code = std::string(vellum::graphics::kBlendModeFallbackCode),
+            .node_id = command.node_id,
+            .property = "blendMode",
+            .message = std::string("blend mode ") +
+                       std::string(vellum::graphics::to_string(command.blend_mode)) + " of " +
+                       command.node_id +
+                       " has no canvas operation; the group was drawn as normal",
+        });
+    }
+    return output;
+}
+
 /// What the canvas shell draws for a scene and what it reports. The shell
 /// accepts a scene through `accept_scene`, the decision the native renderer
 /// makes, so a scene the native renderer refuses draws nothing here and
@@ -105,7 +201,8 @@ struct CanvasShellLowering final {
     std::string reason;
     /// `SceneAcceptance::diagnostics`: the refusal of a refused scene, or the
     /// warnings of an accepted one followed by one `kMaskNotCompositedCode`
-    /// warning for each mask the shell skips.
+    /// warning for each mask the shell skips and one `kBlendModeFallbackCode`
+    /// warning for each blend mode the canvas lacks.
     std::vector<vellum::graphics::LoweringDiagnostic> diagnostics;
     /// The commands the shell draws; empty for a refused scene.
     std::vector<vellum::graphics::PaintCommand> commands;
@@ -126,6 +223,9 @@ struct CanvasShellLowering final {
     lowering.commands = vellum::graphics::make_paint_commands(scene);
     lowering.losses = canvas_shell_loss_count(lowering.commands);
     for (auto& diagnostic : canvas_shell_mask_diagnostics(lowering.commands)) {
+        lowering.diagnostics.push_back(std::move(diagnostic));
+    }
+    for (auto& diagnostic : canvas_shell_blend_diagnostics(lowering.commands)) {
         lowering.diagnostics.push_back(std::move(diagnostic));
     }
     return lowering;

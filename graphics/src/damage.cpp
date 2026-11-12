@@ -149,7 +149,7 @@ bool same_radii(const CornerRadii& a, const CornerRadii& b) noexcept {
 
 bool compositing_differs(const SceneNode& previous, const SceneNode& next) noexcept {
     return !same_transform(previous.transform, next.transform) ||
-           !same_float(previous.opacity, next.opacity);
+           !same_float(previous.opacity, next.opacity) || previous.blend_mode != next.blend_mode;
 }
 
 bool same_runs(const std::vector<TextRun>& a, const std::vector<TextRun>& b) {
@@ -317,6 +317,7 @@ SceneNode paint_fields(const SceneNode& node) {
     copy.clip = node.clip;
     copy.mask = node.mask;
     copy.isolate = node.isolate;
+    copy.blend_mode = node.blend_mode;
     return copy;
 }
 
@@ -431,6 +432,7 @@ private:
             damage = Rect{nan, nan, nan, nan};
         } else if (!hidden) {
             damage = transformed_paint_bounds(node, absolute, transform, logical_frame, propagation);
+            if (blend_mode_clears_backdrop(node.blend_mode)) damage = logical_frame;
             if (damage) {
                 const float radius = propagation.effect_radius(node);
                 if (std::isfinite(radius) && radius > 0.0F) {
@@ -456,7 +458,9 @@ private:
                           absolute.y, transform, clip, !drawing);
         }
         records_[position].subtree_end = records_.size();
-        if (drawing && std::clamp(node.opacity, 0.0F, 1.0F) < 1.0F) {
+        if (drawing && node.blend_mode != BlendMode::normal) {
+            records_[position].composite = 3;
+        } else if (drawing && std::clamp(node.opacity, 0.0F, 1.0F) < 1.0F) {
             records_[position].composite = drawn > 1 ? 2 : 1;
         }
         return drawing ? drawn : 0;

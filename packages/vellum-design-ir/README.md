@@ -96,6 +96,24 @@ The package includes three public JSON Schemas:
 - `@vellum/design-ir/schema/authored-overlay-v1`
 - `@vellum/design-ir/schema/reimport-report-v1`
 
+## Compositing
+
+A node can carry a `compositing` object that mirrors the renderer's scene node:
+`opacity` from 0 to 1, a `blendMode`, `isolate`, a `mask` mode (`alpha` or
+`luminance`) that makes the node a mask for its siblings, and `maskRef`, the
+identity of the sibling mask that applies to it. Blend modes are named as the
+renderer spells them (`multiply`, `color_dodge`, `destination_in`, and so on).
+The first eleven, `normal` through `destination_out`, are Tier 1 and required of
+every renderer; `BLEND_MODES_TIER_2` lists the rest, which a renderer may lack
+and then draws as `normal` with a loss diagnostic. `blendModeTier(mode)` returns
+the tier.
+
+The object adds schema version 2. `normalizeImport` emits version 2 only when a
+node uses `compositing`, and only the values that differ from their defaults, so
+other documents stay at version 1. A version 1 document that carries the object
+is refused, as is an unknown field, an out-of-range opacity, an unknown blend
+mode, a root with a mask, or a mask reference that does not name a sibling mask.
+
 ## Audio/control import contract
 
 The package exports `validateAudioControlMap()` and the public schema

@@ -95,6 +95,10 @@ struct PaintCommand final {
     /// On a `begin_layer`, set when the group must stay offscreen whatever
     /// its opacity: an isolated node, or the siblings a mask applies to.
     bool layer_isolated = false;
+    /// On a `begin_layer`, how the composited group meets the backdrop beneath
+    /// it. A group blended by anything but `normal` is always a layer, so a
+    /// blend never folds into a single command's paint.
+    BlendMode blend_mode = BlendMode::normal;
     /// On a `begin_clip` without `path`, the clip rectangle in `bounds`
     /// coordinates; `corner_radii` gives its corners.
     Rect clip_rect{};
@@ -188,6 +192,10 @@ struct ResolvedLinearGradient final {
 /// command is wrapped in a `begin_layer`/`end_layer` pair; when it draws
 /// exactly one, its opacity is folded into that command's. A node whose
 /// opacity is zero or less contributes nothing.
+///
+/// A node with a `blend_mode` other than `normal` is always wrapped in a
+/// layer, whose `blend_mode` it carries, and a node whose blend mode is outside
+/// `BlendMode` contributes nothing.
 ///
 /// An isolated node is always wrapped in a layer, with `layer_isolated` set. A
 /// node whose clip `clips_own_paint` wraps its layer, paint and subtree in a

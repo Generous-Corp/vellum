@@ -149,6 +149,11 @@ bool same_image_reference(const std::optional<ImageReference>& a,
     return !a->source_rect || same_rect(*a->source_rect, *b->source_rect);
 }
 
+bool reads_backdrop(const PaintCommand& command) noexcept {
+    return command.kind == PaintCommand::Kind::begin_layer &&
+           command.blend_mode != BlendMode::normal;
+}
+
 bool same_paint(const PaintCommand& a, const PaintCommand& b) {
     return a.kind == b.kind && a.node_id == b.node_id && same_color(a.fill, b.fill) &&
            same_gradients(a.fill_gradients, b.fill_gradients) &&
@@ -160,6 +165,7 @@ bool same_paint(const PaintCommand& a, const PaintCommand& b) {
            same_runs(a.text_runs, b.text_runs) && same_float(a.opacity, b.opacity) &&
            same_radii(a.corner_radii, b.corner_radii) &&
            a.layer_unbounded == b.layer_unbounded && a.layer_isolated == b.layer_isolated &&
+           a.blend_mode == b.blend_mode &&
            same_rect(a.clip_rect, b.clip_rect) && a.mask_mode == b.mask_mode &&
            same_image_reference(a.image, b.image) && a.image_asset == b.image_asset;
 }
@@ -250,6 +256,7 @@ std::uint64_t hash_command(const PaintCommand& command) {
     hash.real(command.clip_rect.width);
     hash.real(command.clip_rect.height);
     hash.number(static_cast<std::uint64_t>(command.mask_mode));
+    hash.number(static_cast<std::uint64_t>(command.blend_mode));
     hash.number(command.text_runs.size());
     for (const auto& run : command.text_runs) {
         hash.text(run.text);
@@ -429,10 +436,13 @@ std::vector<LayerCache::Layer> LayerCache::plan(
     std::vector<std::uint64_t> hashes;
     hashes.reserve(commands.size());
     std::vector<std::size_t> draws_before(commands.size() + 1U, 0U);
+    std::vector<std::size_t> blends_before(commands.size() + 1U, 0U);
     for (std::size_t index = 0; index < commands.size(); ++index) {
         hashes.push_back(hash_command(commands[index]));
         draws_before[index + 1U] =
             draws_before[index] + (draws_content(commands[index].kind) ? 1U : 0U);
+        blends_before[index + 1U] =
+            blends_before[index] + (reads_backdrop(commands[index]) ? 1U : 0U);
     }
 
     std::size_t selected_end = 0;
@@ -452,6 +462,14 @@ std::vector<LayerCache::Layer> LayerCache::plan(
                                    commands[range.end - 1U].kind == PaintCommand::Kind::end_layer;
         const std::size_t content_begin = opacity_layer ? range.begin + 1U : range.begin;
         const std::size_t content_end = opacity_layer ? range.end - 1U : range.end;
+        // A blended group reads the pixels beneath it, and so does anything
+        // holding one that is not itself a group: an image drawn on a
+        // transparent surface would blend with nothing. A faded or isolated
+        // group is its own backdrop, so one nested inside it caches whole.
+        if ((opacity_layer && reads_backdrop(commands[range.begin])) ||
+            (!opacity_layer && blends_before[content_end] != blends_before[content_begin])) {
+            continue;
+        }
         ++stats_.candidates;
 
         Hasher hash;

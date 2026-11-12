@@ -8,6 +8,49 @@ export type CapabilityDeclaration =
     | 'text-v1'
     | 'external-v1'
     | 'state-v1';
+export type BlendMode =
+    | 'normal'
+    | 'multiply'
+    | 'screen'
+    | 'overlay'
+    | 'darken'
+    | 'lighten'
+    | 'difference'
+    | 'exclusion'
+    | 'source_over'
+    | 'source-over'
+    | 'destination_in'
+    | 'destination-in'
+    | 'destination_out'
+    | 'destination-out'
+    | 'hue'
+    | 'saturation'
+    | 'color'
+    | 'luminosity'
+    | 'color_dodge'
+    | 'color-dodge'
+    | 'color_burn'
+    | 'color-burn'
+    | 'hard_light'
+    | 'hard-light'
+    | 'soft_light'
+    | 'soft-light'
+    | 'clear'
+    | 'source'
+    | 'destination'
+    | 'source_in'
+    | 'source-in'
+    | 'source_out'
+    | 'source-out'
+    | 'source_atop'
+    | 'source-atop'
+    | 'destination_over'
+    | 'destination-over'
+    | 'destination_atop'
+    | 'destination-atop'
+    | 'xor'
+    | 'plus';
+
 export interface ServiceCapabilities {
     commands?: 'v1' | 'denied' | 'unsupported';
     files?: 'user-selected-text-v1' | 'denied' | 'unsupported';
@@ -126,6 +169,12 @@ export interface Style {
     maskMode?: 'alpha' | 'luminance';
     /** `isolate` composites the node and its subtree as one group. */
     isolation?: 'auto' | 'isolate';
+    /**
+     * Blends the node and its subtree with what lies beneath it. The CSS spelling
+     * (`color-dodge`) and the underscore spelling are the same mode. Tier 2 modes
+     * may be drawn as `normal` with a warning on a renderer that lacks them.
+     */
+    mixBlendMode?: BlendMode;
     backgroundColor?: string;
     color?: string;
     direction?: 'horizontal' | 'vertical';

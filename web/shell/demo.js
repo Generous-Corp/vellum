@@ -33,6 +33,13 @@ globalThis.VellumCanvasBackend = Object.freeze({
         context.fillStyle = cssColor(red, green, blue, alpha);
         context.fillText(text, x, baseline);
     },
+    blendBegin(operation) {
+        context.save();
+        context.globalCompositeOperation = operation;
+    },
+    blendEnd() {
+        context.restore();
+    },
     finish() {},
 });
 

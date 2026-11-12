@@ -91,6 +91,7 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
                  std::vector<PaintCommand>& output,
                  std::vector<PaintCommandRange>* ranges) {
     if (!is_known_kind(node.kind) || !compositing_is_finite(node)) return;
+    if (!is_known_blend_mode(node.blend_mode)) return;
     if (node.clip && !clip_is_valid(*node.clip)) return;
     const float opacity = std::clamp(node.opacity, 0.0F, 1.0F);
     if (opacity <= 0.0F) return;
@@ -128,7 +129,8 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
     const bool own_clip = node.clip && node.clip->clips_own_paint;
     const bool subtree_clip = node.clip && !node.clip->clips_own_paint;
     if (own_clip) open_clip();
-    const bool layered = opacity < 1.0F || node.isolate;
+    const bool blended = node.blend_mode != BlendMode::normal;
+    const bool layered = opacity < 1.0F || node.isolate || blended;
     const auto slot = output.size();
     if (layered) {
         output.push_back({.kind = PaintCommand::Kind::begin_layer, .node_id = node.id});
@@ -231,7 +233,7 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
     }
     // A mask's commands draw coverage, so folding opacity into one of them, or
     // into a sibling it masks, would change what the mask hides.
-    if (!node.isolate && !structured && drawn <= 1U) {
+    if (!node.isolate && !blended && !structured && drawn <= 1U) {
         if (drawn == 1U) output[last_drawn].opacity *= opacity;
         output.erase(output.begin() + static_cast<std::ptrdiff_t>(slot));
         close_clip();
@@ -248,6 +250,7 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
     auto& layer = output[slot];
     layer.opacity = opacity;
     layer.layer_isolated = node.isolate;
+    layer.blend_mode = node.blend_mode;
     const auto group = group_extent(output, first, output.size());
     layer.bounds = group.bounds;
     layer.layer_unbounded = !group.bounded;
@@ -443,6 +446,17 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
         if (!is_known_kind(node->kind)) {
             return refuse(node->id, "node " + node->id + " has a kind this build does not know");
         }
+        if (!is_known_blend_mode(node->blend_mode)) {
+            output.push_back({
+                .severity = LoweringDiagnostic::Severity::error,
+                .disposition = LoweringDiagnostic::Disposition::unsupported,
+                .code = std::string(kSceneVersionMismatchCode),
+                .node_id = node->id,
+                .property = "blendMode",
+                .message = "node " + node->id + " has a blend mode this build does not know",
+            });
+            return output;
+        }
         // Name the field or kind the scene's version is too old for; a node
         // can carry several, and only the oldest one its version lacks is
         // the one `find_version_mismatch` found it by.
@@ -467,6 +481,18 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
                 .property = node->clip ? "clip" : node->mask ? "mask" : "isolate",
                 .message = "scene version " + version +
                            " cannot carry the clip, mask, or isolation at " + node->id,
+            });
+            return output;
+        }
+        if (!compositing && needs(6U) && uses_version_6_fields(*node)) {
+            output.push_back({
+                .severity = LoweringDiagnostic::Severity::error,
+                .disposition = LoweringDiagnostic::Disposition::unsupported,
+                .code = std::string(kSceneVersionMismatchCode),
+                .node_id = node->id,
+                .property = "blendMode",
+                .message = "scene version " + version + " cannot carry the blend mode at " +
+                           node->id,
             });
             return output;
         }

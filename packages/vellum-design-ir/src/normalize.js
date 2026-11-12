@@ -1,9 +1,11 @@
 import {
     COMPILER_NAME,
     COMPILER_VERSION,
+    DESIGN_IR_COMPOSITING_VERSION,
     DESIGN_IR_SCHEMA,
     DESIGN_IR_VERSION,
 } from './constants.js';
+import { canonicalCompositing, compositingProblems } from './compositing.js';
 import { buildLossReport, diagnosticSort, normalizeDiagnostic } from './diagnostics.js';
 import {
     assertSourceKey,
@@ -18,6 +20,7 @@ import { validateDesignIR } from './validate.js';
 
 const KNOWN_NODE_FIELDS = new Set([
     'children',
+    'compositing',
     'extensions',
     'kind',
     'losses',
@@ -61,13 +64,17 @@ export function normalizeImport(input, options = {}) {
         },
         diagnostics: diagnostics.sort(diagnosticSort),
         root,
-        schemaVersion: DESIGN_IR_VERSION,
+        schemaVersion: usesCompositing(root) ? DESIGN_IR_COMPOSITING_VERSION : DESIGN_IR_VERSION,
         source,
         tokens: normalizeTokens(input.tokens, source.key),
     });
     document.lossReport = buildLossReport(document.diagnostics);
     validateDesignIR(document, { throwOnError: true });
     return canonicalize(document);
+}
+
+function usesCompositing(node) {
+    return node.compositing !== undefined || node.children.some(usesCompositing);
 }
 
 function normalizeSource(source) {
@@ -118,6 +125,14 @@ function normalizeNode(rawNode, context) {
         if (rawNode[field] !== undefined) output[field] = String(rawNode[field]);
     }
     if (rawNode.extensions !== undefined) output.extensions = canonicalize(rawNode.extensions);
+    if (rawNode.compositing !== undefined) {
+        const problems = compositingProblems(rawNode.compositing, `${context.path}.compositing`);
+        if (problems.length > 0) {
+            throw new TypeError(`${problems[0].path}: ${problems[0].message}`);
+        }
+        const compositing = canonicalCompositing(rawNode.compositing);
+        if (compositing !== undefined) output.compositing = canonicalize(compositing);
+    }
 
     const unrecognized = Object.create(null);
     for (const key of Object.keys(rawNode)) {

@@ -22,7 +22,7 @@ The public slice consists of:
   application builds, plus a headers-only `Vellum::DawnHeaders` target for an
   embedding host's authenticated bootstrap and compute code.
 
-The scene carries a single integer schema version, `kSceneVersion`, now 5.
+The scene carries a single integer schema version, `kSceneVersion`, now 6.
 A change that can alter rendered output bumps it: a new node kind, a new field
 that changes how a scene is drawn, or a change in meaning. A change that only
 adds metadata keeps it. Consumers accept versions from
@@ -35,7 +35,8 @@ diagnostic and reports authored style or content it drops as warnings on
 `RenderedApplication::diagnostics`. Those diagnostics share the DesignIR
 severity and disposition words but identify content by node ID, not by
 DesignIR document path. Versions are claimed in order: version 4: image nodes;
-version 5: clip, mask and isolation on groups (reserved).
+version 5: clip, mask and isolation on groups; version 6: blend modes and
+DesignIR compositing fields; version 7: token table (reserved).
 
 Nodes carry an optional affine transform about their origin, a group opacity,
 and per-corner radii beside the uniform `corner_radius` shorthand. All three
@@ -179,7 +180,7 @@ version 5 that uses any of the three fields is refused with a
 frame-space box around its clip's extent (the rectangle, or the path's control
 box) mapped through the node's composed transform; a clip that spares the
 node's own paint does not bound the node's own damage.
-A changed clip or isolation damages the node's subtree, and adding, removing
+A changed clip, isolation or blend mode damages the node's subtree, and adding, removing
 or changing a mask, including its opacity or transform, damages its parent's
 subtree. The web shell neither clips nor masks: it
 counts each clip once, skips each mask's commands so a mask is never drawn as
@@ -201,6 +202,58 @@ dropped with a warning, any other invalid value fails the tree, and invalid
 clip path data fails it with `VELLUM_INVALID_PATH`. Hit testing and
 accessibility boxes ignore clips and masks.
 
+## Blend modes
+
+`SceneNode::blend_mode` (scene version 6) combines a node and its subtree with
+what lies beneath it. `normal`, the default, draws no group. Any other mode
+draws the node's subtree offscreen as one group, faded by its opacity, and
+then blends that group over the backdrop, which is whatever the enclosing
+group holds or the frame. A blended node is always a `begin_layer`, so a blend
+never folds into a lone command's paint, and an ancestor that fades or
+isolates contains the blend: inside it the backdrop is the group's own pixels.
+Paint commands carry the mode on the layer's `blend_mode`; a scene before
+version 6 that sets one is refused with a `VELLUM_SCENE_VERSION_MISMATCH`
+diagnostic, as is a mode outside the enumeration.
+
+The vocabulary is `BlendMode` in `scene.hpp`, with the names DesignIR and the
+authoring `mixBlendMode` style use (`-` is accepted for `_`, as CSS writes
+it). Tier 1 is required of every backend: `normal`, `multiply`, `screen`,
+`overlay`, `darken`, `lighten`, `difference`, `exclusion`, `source_over`,
+`destination_in` and `destination_out`. Tier 2 is required of Skia Graphite and
+optional elsewhere: `hue`, `saturation`, `color`, `luminosity`, `color_dodge`,
+`color_burn`, `hard_light`, `soft_light` and the remaining Porter-Duff
+operators `clear`, `source`, `destination`, `source_in`, `source_out`,
+`source_atop`, `destination_over`, `destination_atop`, `xor` and `plus`. A
+backend that lacks a Tier 2 mode draws the group as `normal` and reports a
+`VELLUM_BLEND_MODE_FALLBACK` warning naming the node.
+
+| Backend | Tier 1 | Tier 2 |
+| --- | --- | --- |
+| Skia Graphite | every mode, as the matching Skia blend mode on the layer | every mode |
+| Web canvas shell | `globalCompositeOperation`, per command | every mode except `clear` and `destination`, which fall back to `normal` with a warning |
+
+The shell has no group compositing, so it flattens a blended layer: each command
+inside takes the layer's canvas operation, and the innermost blended layer wins.
+`source` is `copy`, `plus` is `lighter` and `xor` is `xor`.
+
+A mode that leaves nothing of the backdrop where the group draws nothing
+(`clear`, `source`, `source_in`, `source_out`, `destination_in` and
+`destination_atop`, see `blend_mode_clears_backdrop`) empties the whole
+backdrop, as the canvas operators do, so a node using one damages the whole
+frame. Other modes touch only the pixels the group covers. The layer cache
+never draws a blended group, or a plain group that holds one, from an image,
+because an image is drawn on a transparent surface and the blend would meet no
+backdrop; a faded or isolated group that holds a blend is its own backdrop and
+caches whole. A blended group is enclosed whole when damage cuts it, like any
+other group layer. The authoring host maps the `mixBlendMode` style to the mode
+on any node type and fails the tree for an unknown name.
+
+DesignIR schema version 2 adds the node `compositing` object (opacity, blend
+mode, isolation, a mask mode and a mask reference to a sibling mask) with the
+same names. A normalizer emits version 2 only when a node uses it, a version 1
+document that carries one is refused, and a mask reference must name a sibling
+that is a mask.
+
 The surface draws every frame into a retained offscreen Graphite surface the
 size of its target in device pixels, and presents by drawing that image into
 the swapchain texture; captures read the retained surface back, through the
@@ -218,9 +271,9 @@ threshold fall back to a full repaint. Hosts pass `invalidate` reasons and node 
 rectangle counts, the commands re-recorded and why a frame repainted fully.
 What is cached and when it is discarded is renderer policy: the scene schema
 carries no cache hints. Partial redraw is enabled only for scene versions the
-damage model understands, up to `kDamageModelSceneVersion` (5), which covers
-transforms, group opacity, per-corner radii, paths, images, and clips, masks
-and isolation on groups. A version the renderer accepts but the damage model
+damage model understands, up to `kDamageModelSceneVersion` (6), which covers
+transforms, group opacity, per-corner radii, paths, images, clips, masks and
+isolation on groups, and blend modes. A version the renderer accepts but the damage model
 does not yet understand repaints fully with reason `damage_model_version`. A version outside
 [`kMinSupportedSceneVersion`, `kSceneVersion`] is refused before anything is
 drawn.

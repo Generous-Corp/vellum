@@ -792,6 +792,70 @@ bool grouping_keys() {
            refuses(R"("clipPath":"M0 0 L")", "node bad has an invalid clipPath: ", true);
 }
 
+// `mixBlendMode` reaches the scene in the canonical and CSS spellings on every
+// node type, and an unknown name fails the tree atomically.
+bool blend_mode_key() {
+    using vellum::graphics::BlendMode;
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    const auto tree = wrap_tree(R"JSON(
+      {"type":"view","id":"multiplied","style":{"width":20,"height":20,
+        "backgroundColor":"#FF0000","mixBlendMode":"multiply"},"children":[]},
+      {"type":"view","id":"dodged","style":{"width":20,"height":20,
+        "mixBlendMode":"color-dodge"},"children":[]},
+      {"type":"view","id":"keyed","style":{"width":20,"height":20,
+        "mixBlendMode":"destination_in"},"children":[]},
+      {"type":"text","id":"caption","text":"Hi","style":{"height":20,
+        "mixBlendMode":"difference"},"children":[]},
+      {"type":"path","id":"shape","d":"M0 0 L10 10","stroke":"#FF0000",
+        "style":{"width":20,"height":20,"mixBlendMode":"screen"}},
+      {"type":"view","id":"plain","style":{"width":20,"height":20},"children":[]}
+    )JSON");
+    if (!vellum::authoring::materialize_rendered_tree(tree, rendered, &error)) {
+        std::cerr << "blend mode: " << error << '\n';
+        return false;
+    }
+    const auto mode = [&](std::string_view id) {
+        const auto* node = vellum::graphics::find_node(rendered.scene, id);
+        return node == nullptr ? BlendMode::clear : node->blend_mode;
+    };
+    if (mode("multiplied") != BlendMode::multiply || mode("dodged") != BlendMode::color_dodge ||
+        mode("keyed") != BlendMode::destination_in || mode("caption") != BlendMode::difference ||
+        mode("shape") != BlendMode::screen || mode("plain") != BlendMode::normal) {
+        std::cerr << "blend mode: mixBlendMode did not reach the scene\n";
+        return false;
+    }
+    if (rendered.scene.scene_version != vellum::graphics::kSceneVersion ||
+        !vellum::graphics::scene_fields_match_version(rendered.scene) ||
+        !rendered.diagnostics.empty()) {
+        std::cerr << "blend mode: the scene is not a clean version " << vellum::graphics::kSceneVersion
+                  << " scene\n";
+        return false;
+    }
+    const auto commands = vellum::graphics::make_paint_commands(rendered.scene);
+    const auto layer = std::find_if(commands.begin(), commands.end(), [](const auto& command) {
+        return command.kind == vellum::graphics::PaintCommand::Kind::begin_layer &&
+               command.node_id == "multiplied";
+    });
+    if (layer == commands.end() || layer->blend_mode != BlendMode::multiply) {
+        std::cerr << "blend mode: the blend did not reach a paint-command layer\n";
+        return false;
+    }
+    const auto width_before = rendered.scene.width;
+    for (const char* bad : {R"("mixBlendMode":"plus-lighter")", R"("mixBlendMode":"Multiply")",
+                            R"("mixBlendMode":3)", R"("mixBlendMode":"")"}) {
+        const auto refused = wrap_tree(std::string(R"JSON({"type":"view","id":"bad","style":{)JSON") +
+                                       bad + R"JSON(},"children":[]})JSON");
+        if (vellum::authoring::materialize_rendered_tree(refused, rendered, &error) ||
+            error != "node bad mixBlendMode must be a blend mode name" ||
+            rendered.scene.width != width_before) {
+            std::cerr << "blend mode: '" << bad << "' gave '" << error << "'\n";
+            return false;
+        }
+    }
+    return true;
+}
+
 int main() {
     vellum::authoring::RenderedApplication rendered;
     std::string error;
@@ -1163,7 +1227,7 @@ int main() {
 
     return compositing_keys() && transform_pivots_once() && transform_ignores_locale() &&
            image_nodes() &&
-                   path_nodes() && grouping_keys()
+                   path_nodes() && grouping_keys() && blend_mode_key()
                ? 0
                : 1;
 }

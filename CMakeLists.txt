@@ -220,6 +220,11 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-grouping-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.grouping COMMAND vellum-grouping-test)
 
+        add_executable(vellum-blend-mode-test
+            graphics/tests/blend_mode_test.cpp)
+        target_link_libraries(vellum-blend-mode-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.blend-mode COMMAND vellum-blend-mode-test)
+
         add_executable(vellum-layer-cache-test
             graphics/tests/layer_cache_test.cpp)
         target_link_libraries(vellum-layer-cache-test PRIVATE Vellum::Graphics)
@@ -350,6 +355,20 @@ if(VELLUM_BUILD_TESTS)
                 grouping_version_refusal)
             add_test(NAME "vellum.gpu.${_vellum_fixture}"
                 COMMAND vellum-gpu-grouping-test "${_vellum_fixture}")
+        endforeach()
+
+        add_executable(vellum-gpu-blend-test
+            graphics/tests/gpu_blend_test.cpp)
+        target_link_libraries(vellum-gpu-blend-test PRIVATE Vellum::Gpu Vellum::DawnHeaders)
+        foreach(_vellum_fixture IN ITEMS
+                tier1_mode_captures
+                tier2_mode_captures
+                blend_with_opacity
+                blend_stays_inside_an_isolated_parent
+                blend_layer_cache_matches_direct
+                blend_version_refusal)
+            add_test(NAME "vellum.gpu.${_vellum_fixture}"
+                COMMAND vellum-gpu-blend-test "${_vellum_fixture}")
         endforeach()
     endif()
 

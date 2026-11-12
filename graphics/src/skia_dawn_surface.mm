@@ -119,6 +119,41 @@ std::string string_view(wgpu::StringView value) {
     return {value.data, value.length};
 }
 
+SkBlendMode sk_blend_mode(BlendMode mode) {
+    switch (mode) {
+        case BlendMode::normal:
+        case BlendMode::source_over: return SkBlendMode::kSrcOver;
+        case BlendMode::multiply: return SkBlendMode::kMultiply;
+        case BlendMode::screen: return SkBlendMode::kScreen;
+        case BlendMode::overlay: return SkBlendMode::kOverlay;
+        case BlendMode::darken: return SkBlendMode::kDarken;
+        case BlendMode::lighten: return SkBlendMode::kLighten;
+        case BlendMode::difference: return SkBlendMode::kDifference;
+        case BlendMode::exclusion: return SkBlendMode::kExclusion;
+        case BlendMode::destination_in: return SkBlendMode::kDstIn;
+        case BlendMode::destination_out: return SkBlendMode::kDstOut;
+        case BlendMode::hue: return SkBlendMode::kHue;
+        case BlendMode::saturation: return SkBlendMode::kSaturation;
+        case BlendMode::color: return SkBlendMode::kColor;
+        case BlendMode::luminosity: return SkBlendMode::kLuminosity;
+        case BlendMode::color_dodge: return SkBlendMode::kColorDodge;
+        case BlendMode::color_burn: return SkBlendMode::kColorBurn;
+        case BlendMode::hard_light: return SkBlendMode::kHardLight;
+        case BlendMode::soft_light: return SkBlendMode::kSoftLight;
+        case BlendMode::clear: return SkBlendMode::kClear;
+        case BlendMode::source: return SkBlendMode::kSrc;
+        case BlendMode::destination: return SkBlendMode::kDst;
+        case BlendMode::source_in: return SkBlendMode::kSrcIn;
+        case BlendMode::source_out: return SkBlendMode::kSrcOut;
+        case BlendMode::source_atop: return SkBlendMode::kSrcATop;
+        case BlendMode::destination_over: return SkBlendMode::kDstOver;
+        case BlendMode::destination_atop: return SkBlendMode::kDstATop;
+        case BlendMode::exclusive_or: return SkBlendMode::kXor;
+        case BlendMode::plus: return SkBlendMode::kPlus;
+    }
+    return SkBlendMode::kSrcOver;
+}
+
 SkColor4f sk_color(Color color) {
     return {color.red, color.green, color.blue, color.alpha};
 }
@@ -947,12 +982,14 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
                    std::string_view directory, FrameResources& resources,
                    std::string* error, ParagraphSlot* paragraph = nullptr) {
     if (command.kind == PaintCommand::Kind::begin_layer) {
-        const float alpha = std::clamp(command.opacity, 0.0F, 1.0F);
+        SkPaint group;
+        group.setAlphaf(std::clamp(command.opacity, 0.0F, 1.0F));
+        group.setBlendMode(sk_blend_mode(command.blend_mode));
         if (command.layer_unbounded) {
-            canvas.saveLayerAlphaf(nullptr, alpha);
+            canvas.saveLayer(nullptr, &group);
         } else {
             const auto bounds = layer_rect(command.bounds);
-            canvas.saveLayerAlphaf(&bounds, alpha);
+            canvas.saveLayer(&bounds, &group);
         }
         ++resources.layers;
         return true;
@@ -1252,6 +1289,7 @@ struct ActiveLayer final {
     std::size_t begin = 0;
     std::size_t end = 0;
     float opacity = 1.0F;
+    BlendMode blend_mode = BlendMode::normal;
     const LayerImage* image = nullptr;
 };
 
@@ -1260,6 +1298,7 @@ void composite_layer(SkCanvas& canvas, const ActiveLayer& layer) {
     canvas.resetMatrix();
     SkPaint paint;
     paint.setAlphaf(std::clamp(layer.opacity, 0.0F, 1.0F));
+    paint.setBlendMode(sk_blend_mode(layer.blend_mode));
     canvas.drawImage(layer.image->image, static_cast<float>(layer.image->extent.left),
                      static_cast<float>(layer.image->extent.top), SkSamplingOptions(), &paint);
     canvas.restoreToCount(saved);
@@ -2082,6 +2121,8 @@ private:
         layers.reserve(planned.size());
         for (const auto& layer : planned) {
             const float opacity = layer.opacity_layer ? commands[layer.begin].opacity : 1.0F;
+            const auto blend =
+                layer.opacity_layer ? commands[layer.begin].blend_mode : BlendMode::normal;
             const std::size_t content_begin = layer.opacity_layer ? layer.begin + 1U : layer.begin;
             const std::size_t content_end = layer.opacity_layer ? layer.end - 1U : layer.end;
             if (!layer.build) {
@@ -2091,7 +2132,7 @@ private:
                     continue;
                 }
                 layer_cache_.record_hit(layer.node_id);
-                layers.push_back({layer.begin, layer.end, opacity, &found->second});
+                layers.push_back({layer.begin, layer.end, opacity, blend, &found->second});
                 continue;
             }
             const auto extent = layer_extent(commands, content_begin, content_end, paragraphs);
@@ -2122,7 +2163,7 @@ private:
             }
             auto& stored = layer_images_[layer.node_id];
             stored = {std::move(image), *extent};
-            layers.push_back({layer.begin, layer.end, opacity, &stored});
+            layers.push_back({layer.begin, layer.end, opacity, blend, &stored});
         }
         return true;
     }

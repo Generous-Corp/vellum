@@ -64,6 +64,9 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node) {
         return "scene contains unsupported node kind " +
                std::to_string(static_cast<int>(unknown->kind)) + " at " + unknown->id;
     }
+    if (const auto* unknown = find_unknown_blend_mode(scene.root); unknown != nullptr) {
+        return "node " + unknown->id + " has a blend mode this build does not know";
+    }
     if (!scene_fields_match_version(scene)) {
         const auto loss = scene_loss_diagnostics(scene);
         return loss.empty() ? "scene fields do not match its version" : loss.front().message;

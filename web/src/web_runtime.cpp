@@ -39,6 +39,14 @@ EM_JS(void, canvas_text,
         UTF8ToString(text), x, baseline, size, red, green, blue, alpha);
 });
 
+EM_JS(void, canvas_blend_begin, (const char* operation), {
+    globalThis.VellumCanvasBackend.blendBegin(UTF8ToString(operation));
+});
+
+EM_JS(void, canvas_blend_end, (), {
+    globalThis.VellumCanvasBackend.blendEnd();
+});
+
 EM_JS(void, canvas_finish, (), {
     globalThis.VellumCanvasBackend.finish();
 });
@@ -140,6 +148,7 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     if (!lowering.accepted) return 0;
     const auto opacities = vellum::graphics::effective_opacities(commands);
     const auto masked = vellum::web::canvas_shell_masked(commands);
+    const auto blends = vellum::web::canvas_shell_blend_operations(commands);
     const auto background = scene.background;
     canvas_begin(scene.width, scene.height, background.red, background.green,
                  background.blue, background.alpha);
@@ -148,6 +157,12 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
         if (masked[index]) continue;
         auto color = command.fill;
         color.alpha *= opacities[index];
+        const bool blended = !blends[index].empty() &&
+                             vellum::graphics::draws_content(command.kind);
+        if (blended) {
+            const std::string operation(blends[index]);
+            canvas_blend_begin(operation.c_str());
+        }
         switch (command.kind) {
         case Kind::rectangle:
             canvas_rectangle(
@@ -182,6 +197,7 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
         case Kind::end_mask:
             break;
         }
+        if (blended) canvas_blend_end();
     }
     canvas_finish();
     return 1;
