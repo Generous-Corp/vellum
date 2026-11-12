@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import importlib.util
+import gzip
+import io
 import json
 from pathlib import Path
 import subprocess
-import gzip
-import io
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -137,6 +138,27 @@ class SterileAcceptanceBundleTest(unittest.TestCase):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/sdk-release.yml").read_text()
         self.assertIn("python3 -I scripts/build_sterile_acceptance_bundle.py --compare", workflow)
         self.assertNotIn('cmp "$RUNNER_TEMP/trusted-sterile-acceptance.tar.gz"', workflow)
+
+    def test_compare_command_accepts_different_gzip_headers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            built = root / "built.tar.gz"
+            alternate = root / "alternate.tar.gz"
+            bundle.build(built)
+            alternate.write_bytes(gzip.compress(bundle.tar_stream(built), compresslevel=6, mtime=0))
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_DIR / "build_sterile_acceptance_bundle.py"),
+                    "--compare",
+                    str(built),
+                    str(alternate),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_checkout_negative_control_is_observed_red(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
