@@ -125,10 +125,127 @@ bool image_refusals() {
     return ok;
 }
 
+
+// The shell reports each skipped mask once, as a warning naming the mask node,
+// and the diagnostics hold nothing else for a scene that is otherwise clean.
+bool reports_masks(const char* what, const Scene& scene, int losses,
+                   const std::vector<std::string>& mask_ids,
+                   const std::vector<std::string>& drawn) {
+    using Kind = vellum::graphics::PaintCommand::Kind;
+    const auto lowering = vellum::web::lower_for_canvas_shell(scene);
+    bool ok = lowering.accepted && lowering.losses == losses &&
+              lowering.diagnostics.size() == mask_ids.size();
+    for (std::size_t index = 0; ok && index < mask_ids.size(); ++index) {
+        const auto& diagnostic = lowering.diagnostics[index];
+        ok = diagnostic.code == vellum::web::kMaskNotCompositedCode &&
+             diagnostic.node_id == mask_ids[index] && diagnostic.property == "mask" &&
+             diagnostic.severity == LoweringDiagnostic::Severity::warning &&
+             diagnostic.message.find("mask " + mask_ids[index]) != std::string::npos &&
+             diagnostic.message.find("not composited") != std::string::npos;
+    }
+    const auto skipped = vellum::web::canvas_shell_masked(lowering.commands);
+    std::vector<std::string> kept;
+    for (std::size_t index = 0; index < lowering.commands.size(); ++index) {
+        const auto& command = lowering.commands[index];
+        if (!skipped[index] && vellum::graphics::draws_content(command.kind)) {
+            kept.push_back(command.node_id);
+        }
+    }
+    ok = ok && kept == drawn;
+    if (!ok) {
+        std::cerr << what << ": expected " << losses << " losses and " << mask_ids.size()
+                  << " mask reports, got accepted=" << lowering.accepted
+                  << " losses=" << lowering.losses
+                  << " diagnostics=" << lowering.diagnostics.size() << '\n';
+    }
+    return ok;
+}
+
+bool mask_reports() {
+    const auto box = [](std::string id) {
+        return SceneNode{
+            .id = std::move(id),
+            .kind = SceneNode::Kind::rectangle,
+            .bounds = {0.0F, 0.0F, 4.0F, 4.0F},
+            .fill = vellum::graphics::Color::hex(0xFFFFFF),
+        };
+    };
+    const auto scene_of = [](SceneNode node) {
+        Scene scene;
+        scene.root.id = "root";
+        scene.root.children.push_back(std::move(node));
+        return scene;
+    };
+    const auto masked_group = [&](std::string id, vellum::graphics::MaskMode mode) {
+        SceneNode group{.id = id, .kind = SceneNode::Kind::group};
+        group.children.push_back(box(id + "/content"));
+        auto mask = box(id + "/mask");
+        mask.mask = mode;
+        group.children.push_back(std::move(mask));
+        return group;
+    };
+    using vellum::graphics::MaskMode;
+    bool ok = true;
+
+    ok &= reports_masks("no mask", scene_of(box("plain")), 0, {}, {"plain"});
+
+    ok &= reports_masks("single mask", scene_of(masked_group("g", MaskMode::alpha)), 2,
+                        {"g/mask"}, {"g/content"});
+    const auto single = vellum::web::lower_for_canvas_shell(
+        scene_of(masked_group("g", MaskMode::luminance)));
+    ok &= single.diagnostics.size() == 1U &&
+          single.diagnostics[0].message.find("luminance") != std::string::npos;
+
+    auto clip_in_mask = masked_group("g", MaskMode::alpha);
+    auto& mask_node = clip_in_mask.children.back();
+    auto inner = box("g/mask/inner");
+    inner.clip = vellum::graphics::NodeClip{.rect = {0.0F, 0.0F, 2.0F, 2.0F}};
+    mask_node.children.push_back(std::move(inner));
+    ok &= reports_masks("clip inside a mask", scene_of(clip_in_mask), 2, {"g/mask"},
+                        {"g/content"});
+
+    auto nested_mask = masked_group("g", MaskMode::alpha);
+    auto inner_mask = box("g/mask/nested");
+    inner_mask.mask = MaskMode::luminance;
+    nested_mask.children.back().children.push_back(std::move(inner_mask));
+    ok &= reports_masks("mask inside a mask", scene_of(nested_mask), 2, {"g/mask"},
+                        {"g/content"});
+
+    auto mask_in_clip = masked_group("g", MaskMode::alpha);
+    mask_in_clip.clip = vellum::graphics::NodeClip{.rect = {0.0F, 0.0F, 8.0F, 8.0F}};
+    ok &= reports_masks("mask inside a clip", scene_of(mask_in_clip), 3, {"g/mask"},
+                        {"g/content"});
+
+    auto isolated = masked_group("g", MaskMode::alpha);
+    isolated.isolate = true;
+    ok &= reports_masks("isolated group with a mask", scene_of(isolated), 3, {"g/mask"},
+                        {"g/content"});
+
+    SceneNode two{.id = "pair", .kind = SceneNode::Kind::group};
+    two.children.push_back(masked_group("first", MaskMode::alpha));
+    two.children.push_back(masked_group("second", MaskMode::luminance));
+    ok &= reports_masks("two masks", scene_of(two), 4, {"first/mask", "second/mask"},
+                        {"first/content", "second/content"});
+
+    auto missing = scene_of(masked_group("g", MaskMode::alpha));
+    missing.root.children.push_back({
+        .id = "logo",
+        .kind = SceneNode::Kind::image,
+        .bounds = {0.0F, 0.0F, 8.0F, 8.0F},
+        .image = ImageReference{.content_hash = kHash},
+    });
+    const auto mixed = vellum::web::lower_for_canvas_shell(missing);
+    ok &= mixed.accepted && mixed.diagnostics.size() == 2U &&
+          mixed.diagnostics[0].code == vellum::graphics::kImageAssetMissingCode &&
+          mixed.diagnostics[1].code == vellum::web::kMaskNotCompositedCode;
+    if (!ok) std::cerr << "a mask report did not follow the scene's own warnings\n";
+    return ok;
+}
 }  // namespace
 
 int main() {
     if (!image_refusals()) return 1;
+    if (!mask_reports()) return 1;
     using vellum::graphics::Affine2D;
     using vellum::graphics::CornerRadii;
     using vellum::graphics::SceneNode;
