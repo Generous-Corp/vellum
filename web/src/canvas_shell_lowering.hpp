@@ -7,10 +7,15 @@
 
 #include <cstddef>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace vellum::web {
+
+/// A mask the canvas shell cannot composite; a warning. The shell draws the
+/// masked siblings unmasked and does not draw the mask's own commands.
+inline constexpr std::string_view kMaskNotCompositedCode = "VELLUM_WEB_MASK_NOT_COMPOSITED";
 
 /// Whether the canvas shell draws `command` with a loss it reports. The shell
 /// has no group compositing, so a `begin_layer` is flattened to per-command
@@ -62,6 +67,34 @@ namespace vellum::web {
     return losses;
 }
 
+/// One warning for each mask the shell counts as a loss, naming the mask node
+/// and why it was not applied. A mask nested inside another mask is skipped
+/// with it and, like its count, has no report of its own.
+[[nodiscard]] inline std::vector<vellum::graphics::LoweringDiagnostic>
+canvas_shell_mask_diagnostics(
+    const std::vector<vellum::graphics::PaintCommand>& commands) {
+    using Kind = vellum::graphics::PaintCommand::Kind;
+    using vellum::graphics::MaskMode;
+    const auto masked = canvas_shell_masked(commands);
+    std::vector<vellum::graphics::LoweringDiagnostic> output;
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        const auto& command = commands[index];
+        if (masked[index] || command.kind != Kind::begin_mask) continue;
+        const char* mode = command.mask_mode == MaskMode::luminance ? "luminance" : "alpha";
+        output.push_back({
+            .severity = vellum::graphics::LoweringDiagnostic::Severity::warning,
+            .disposition = vellum::graphics::LoweringDiagnostic::Disposition::lowered,
+            .code = std::string(kMaskNotCompositedCode),
+            .node_id = command.node_id,
+            .property = "mask",
+            .message = std::string("mask ") + command.node_id + " (" + mode +
+                       ") was not composited: the canvas shell has no group compositing, "
+                       "so its siblings were drawn unmasked",
+        });
+    }
+    return output;
+}
+
 /// What the canvas shell draws for a scene and what it reports. The shell
 /// accepts a scene through `accept_scene`, the decision the native renderer
 /// makes, so a scene the native renderer refuses draws nothing here and
@@ -71,7 +104,8 @@ struct CanvasShellLowering final {
     /// Why the scene is refused; empty when it is accepted.
     std::string reason;
     /// `SceneAcceptance::diagnostics`: the refusal of a refused scene, or the
-    /// warnings of an accepted one.
+    /// warnings of an accepted one followed by one `kMaskNotCompositedCode`
+    /// warning for each mask the shell skips.
     std::vector<vellum::graphics::LoweringDiagnostic> diagnostics;
     /// The commands the shell draws; empty for a refused scene.
     std::vector<vellum::graphics::PaintCommand> commands;
@@ -91,6 +125,9 @@ struct CanvasShellLowering final {
     if (!lowering.accepted) return lowering;
     lowering.commands = vellum::graphics::make_paint_commands(scene);
     lowering.losses = canvas_shell_loss_count(lowering.commands);
+    for (auto& diagnostic : canvas_shell_mask_diagnostics(lowering.commands)) {
+        lowering.diagnostics.push_back(std::move(diagnostic));
+    }
     return lowering;
 }
 
