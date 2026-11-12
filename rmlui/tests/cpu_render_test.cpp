@@ -383,6 +383,7 @@ void test_equal_area_resize_clears_reused_buffers() {
     const auto check_mask = [](std::uint32_t old_width, std::uint32_t old_height, std::uint32_t width,
                                std::uint32_t height) {
         CpuRenderInterface r;
+        r.set_threads(g_threads);
         std::vector<std::uint8_t> old_buffer(static_cast<std::size_t>(old_width) * old_height * 4u);
         std::vector<std::uint8_t> buffer(static_cast<std::size_t>(width) * height * 4u);
         const auto old_full = quad(r, 0, 0, static_cast<float>(old_width), static_cast<float>(old_height), kRed);
@@ -406,6 +407,7 @@ void test_equal_area_resize_clears_reused_buffers() {
     const auto check_layer = [](std::uint32_t old_width, std::uint32_t old_height, std::uint32_t width,
                                 std::uint32_t height) {
         CpuRenderInterface r;
+        r.set_threads(g_threads);
         std::vector<std::uint8_t> old_buffer(static_cast<std::size_t>(old_width) * old_height * 4u);
         std::vector<std::uint8_t> buffer(static_cast<std::size_t>(width) * height * 4u);
         const auto old_full = quad(r, 0, 0, static_cast<float>(old_width), static_cast<float>(old_height), kRed);
