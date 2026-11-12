@@ -75,6 +75,12 @@ if(VELLUM_RMLUI_CPU)
     vellum_rmlui_add_test(vellum-rmlui-native-warm-test native_warm_test.cpp VellumRmlUi::Native VellumRmlUi::Cpu)
     add_test(NAME vellum.rmlui.native-warm COMMAND vellum-rmlui-native-warm-test)
 
+    # A newly shown element draws its first frame with every transform it
+    # inherits, so a host that repaints only on change never keeps a wrong one.
+    vellum_rmlui_add_test(vellum-rmlui-first-frame-transform-test first_frame_transform_test.cpp
+        VellumRmlUi::Native VellumRmlUi::Cpu)
+    add_test(NAME vellum.rmlui.first-frame-transform COMMAND vellum-rmlui-first-frame-transform-test)
+
     # The output pinned by hash, the same constant on every platform.
     vellum_rmlui_add_test(vellum-rmlui-cpu-hash-test cpu_hash_test.cpp VellumRmlUi::Cpu)
     add_test(NAME vellum.rmlui.cpu-hash COMMAND vellum-rmlui-cpu-hash-test)
