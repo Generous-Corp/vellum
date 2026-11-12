@@ -101,11 +101,11 @@
     },
     {
       "name": "RmlUi",
-      "version": "6.1",
+      "version": "6.3",
       "license": "MIT",
       "source": "https://github.com/mikke89/RmlUi",
-      "commit": "58c751531f4c1a1eb2dc56f409b8e8a323a0c9ad",
-      "surface": "optional rmlui/ module only (VELLUM_ENABLE_RMLUI or a standalone rmlui build); built from source as a static hidden-visibility archive linked privately into VellumRmlUi::Core; with VELLUM_RMLUI_NATIVE=ON its headers and archives are redistributed in the opt-in VellumRmlUi::Native package; built with upstream commit 3707ab53 backported (rmlui/cmake/patches/rmlui-3707ab53-text-input-initial-line.patch) and one Vellum font-engine patch (rmlui/cmake/patches/rmlui-fractional-glyph-advances.patch)"
+      "commit": "ba95ffe8bfb6370efb2cdcca927eaad4710c5413",
+      "surface": "optional rmlui/ module only (VELLUM_ENABLE_RMLUI or a standalone rmlui build); built from source as a static hidden-visibility archive linked privately into VellumRmlUi::Core; with VELLUM_RMLUI_NATIVE=ON its headers and archives are redistributed in the opt-in VellumRmlUi::Native package; built with one Vellum font-engine patch (rmlui/cmake/patches/rmlui-fractional-glyph-advances.patch)"
     },
     {
       "name": "stb_image_write",

@@ -1400,7 +1400,7 @@ SOFTWARE.
 ### RmlUi
 
 Copyright (c) 2008-2014 CodePoint Ltd, Shift Technology Ltd, and contributors
-Copyright (c) 2019-2025 The RmlUi Team, and contributors
+Copyright (c) 2019-2026 The RmlUi Team, and contributors
 
 MIT License
 
