@@ -384,7 +384,6 @@ class VerifyExtractionTests(unittest.TestCase):
 
     def test_framework_tests_may_name_the_units_but_only_consume_them(self) -> None:
         legitimate = {
-            "tools/framework-tests/CMakeLists.txt": b"add_executable(t widget_bridge_test.cpp)\n",
             "tools/framework-tests/README.md": b"Tests of vellum::view.\n",
             "tools/framework-tests/support.hpp": b"#include <vellum/view/view.hpp>\nnamespace support {}\n",
             "tools/framework-tests/widget_bridge_test.cpp":
@@ -397,12 +396,17 @@ class VerifyExtractionTests(unittest.TestCase):
             "tools/framework-tests/defines_test.cpp": b"namespace vellum::view { int x; }\n",
             "tools/framework-tests/nested.hpp": b"#pragma once\n  namespace vellum {\nnamespace view {}\n}\n",
             "tools/framework-tests/inline.hpp": b"inline namespace vellum { }\n",
+            # A library could be linked into something that ships.
+            "tools/framework-tests/CMakeLists.txt": b"add_executable(t t_test.cpp)\nadd_library(kept STATIC k.cpp)\n",
             # Shapes a kept framework source would take.
             "tools/framework-tests/widget_bridge.cpp": b"#include <vellum/view/view.hpp>\n",
             "tools/framework-tests/sub/deep_test.cpp": b"#include <vellum/view/view.hpp>\n",
             "tools/framework-tests/prelude.js": b"function on() {}\n",
             # A Pulp file that kept its names.
             "tools/framework-tests/copied_test.cpp": b"#include <pulp/view/view.hpp>\npulp::view::View v;\n",
+            # The same legitimate test anywhere else is held to the renamed-mirror rule.
+            "tools/framework-tests-extra/widget_bridge_test.cpp": b"#include <vellum/view/widget_bridge.hpp>\n",
+            "graphics/widget_bridge_test.cpp": b"namespace view = vellum::view;\n",
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -416,7 +420,65 @@ class VerifyExtractionTests(unittest.TestCase):
             self.assertEqual(sorted({f["path"] for f in findings}), sorted(refused))
             self.assertEqual({f["rule"] for f in findings},
                              {"framework-test-defines-vellum", "framework-test-file-shape",
-                              "pulp-public-namespace"})
+                              "pulp-public-namespace", "renamed-mirror-namespace", "framework-test-library"})
+            self.assertEqual({f["path"] for f in findings if f["rule"] == "renamed-mirror-namespace"},
+                             {"tools/framework-tests-extra/widget_bridge_test.cpp",
+                              "graphics/widget_bridge_test.cpp"})
+
+    def test_framework_tests_refuse_pulp_origin_blobs(self) -> None:
+        recorded = b"// recorded in the transfer\nint recorded_marker = 1;\n"
+        pasted = b"// a Pulp test no record names\nint pasted_marker = 2;\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "vellum"
+            pulp = Path(temporary) / "pulp"
+            (root / "provenance/framework").mkdir(parents=True)
+            (root / verify_extraction.FRAMEWORK_TRANSFER_RECORD).write_text(json.dumps({"records": [
+                {"pulp_git_blob_sha": verify_extraction.git_blob_sha(recorded),
+                 "framework_git_blob_sha": verify_extraction.git_blob_sha(b"other\n")}]}))
+            tests = root / "tools/framework-tests"
+            tests.mkdir(parents=True)
+            (tests / "recorded_test.cpp").write_bytes(recorded)
+            (tests / "pasted_test.cpp").write_bytes(pasted)
+            (tests / "native_test.cpp").write_bytes(b"int native_marker = 3;\n")
+            (pulp / "test").mkdir(parents=True)
+            (pulp / "test/test_pasted.cpp").write_bytes(pasted)
+            git = ["git", "-C", str(pulp), "-c", "user.name=t", "-c", "user.email=t@t"]
+            subprocess.run(git + ["init", "-q"], check=True)
+            subprocess.run(git + ["add", "-A"], check=True)
+            subprocess.run(git + ["commit", "-q", "-m", "pulp"], check=True)
+            seed = verify_extraction.git_blob_sha(b"seed\n")
+            (tests / "seed_test.cpp").write_bytes(b"seed\n")
+
+            without_pulp, checked = verify_extraction.framework_test_blob_findings(root, {seed}, None)
+            self.assertFalse(checked)
+            self.assertEqual(sorted(f["path"] for f in without_pulp),
+                             ["tools/framework-tests/recorded_test.cpp", "tools/framework-tests/seed_test.cpp"])
+            with_pulp, checked = verify_extraction.framework_test_blob_findings(root, {seed}, pulp)
+            self.assertTrue(checked)
+            self.assertEqual(sorted(f["path"] for f in with_pulp),
+                             ["tools/framework-tests/pasted_test.cpp", "tools/framework-tests/recorded_test.cpp",
+                              "tools/framework-tests/seed_test.cpp"])
+
+    def test_nothing_installs_framework_test_content(self) -> None:
+        files = {
+            "CMakeLists.txt": "install(TARGETS vellum-runtime EXPORT VellumTargets)\n"
+                              "add_subdirectory(tools/framework-tests)\n"
+                              "install(DIRECTORY\n    tools/framework-tests/\n    DESTINATION share)\n",
+            "cmake/Other.cmake": "install(FILES \"${PROJECT_SOURCE_DIR}/tools/framework-tests/README.md\" DESTINATION doc)\n",
+            "tools/framework-tests/CMakeLists.txt": "add_executable(t t_test.cpp)\n  install(TARGETS t)\n",
+            "framework/core/view/CMakeLists.txt": "install(DIRECTORY framework-tests)\n",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for relative, content in files.items():
+                (root / relative).parent.mkdir(parents=True, exist_ok=True)
+                (root / relative).write_text(content)
+
+            findings = verify_extraction.framework_test_install_findings(root)
+
+            self.assertEqual([(f["path"], f["line"]) for f in findings],
+                             [("CMakeLists.txt", 3), ("cmake/Other.cmake", 1),
+                              ("tools/framework-tests/CMakeLists.txt", 2)])
 
     def test_framework_test_root_still_refuses_copies_of_framework_files(self) -> None:
         source = (b"namespace vellum::view {\nint widget_bridge_marker(int a, int b) {\n"

@@ -141,6 +141,7 @@ RENAMED_MIRROR_EXEMPT_PREFIXES: tuple[str, ...] = ()
 FRAMEWORK_TEST_ROOT = "tools/framework-tests/"
 FRAMEWORK_TEST_FILE = re.compile(r"(?:[a-z0-9_]+_test\.(?:cpp|mm)|[a-z0-9_]+\.hpp|CMakeLists\.txt|README\.md)")
 FRAMEWORK_TEST_NAMESPACE = re.compile(r"(?m)^[ \t]*(?:inline[ \t]+)?namespace[ \t]+vellum\b")
+FRAMEWORK_TEST_LIBRARY = re.compile(r"(?im)^[ \t]*add_library[ \t]*\(")
 RENAMED_MIRROR_EXEMPT_PATHS = {
     # The consumer built against the installed mirror, file by file: a new
     # file under tools/mirror/consumer/ is scanned like any other.
@@ -358,9 +359,79 @@ def framework_test_findings(relative: str, path: Path) -> list[dict[str, object]
         return [{"rule": "undecodable-native-text", "path": relative, "line": 0, "match": ""}]
     # The native name rules apply too, so a Pulp file cannot land here unrenamed.
     patterns = {"framework-test-defines-vellum": FRAMEWORK_TEST_NAMESPACE, **FORBIDDEN_ACTIVE_PATTERNS}
+    if name == "CMakeLists.txt":
+        # Test executables only: a library here could be linked into one that ships.
+        patterns["framework-test-library"] = FRAMEWORK_TEST_LIBRARY
     return [{"rule": rule, "path": relative,
              "line": text.count("\n", 0, match.start()) + 1, "match": match.group(0).strip()[:120]}
             for rule, pattern in patterns.items() for match in pattern.finditer(text)]
+
+
+def framework_test_blob_findings(root: Path, recorded: set[str],
+                                 pulp_root: Path | None) -> tuple[list[dict[str, str]], bool]:
+    """Framework test files whose exact bytes are a Pulp-origin blob.
+
+    The recorded set (the historical seed, the mirror's origin records and both
+    sides of the transfer record) is always read. With a Pulp checkout, every
+    blob of its checked-out tree is too, so a Pulp test pasted verbatim fails
+    even though no record names it. Returns the findings and whether the Pulp
+    tree was read.
+    """
+    blobs = set(recorded)
+    transfer = root / FRAMEWORK_TRANSFER_RECORD
+    if transfer.is_file():
+        for record in json.loads(transfer.read_text(encoding="utf-8")).get("records", []):
+            blobs.update(record.get(key, "") for key in ("pulp_git_blob_sha", "framework_git_blob_sha"))
+    pulp_tree_checked = False
+    if pulp_root is not None:
+        listing = subprocess.run(["git", "-C", str(pulp_root), "ls-tree", "-r", "HEAD"],
+                                 capture_output=True, text=True, check=False)
+        if listing.returncode == 0:
+            blobs.update(line.split()[2] for line in listing.stdout.splitlines() if " blob " in line)
+            pulp_tree_checked = True
+    blobs.discard(EMPTY_BLOB_SHA)
+    blobs.discard("")
+    findings = []
+    for path in active_files(root, (FRAMEWORK_TEST_ROOT.rstrip("/"),)):
+        blob = git_blob_sha(path.read_bytes())
+        if blob in blobs:
+            findings.append({"path": path.relative_to(root).as_posix(), "git_blob_sha": blob})
+    return findings, pulp_tree_checked
+
+
+# An install() call, its arguments allowed one level of parentheses.
+_CMAKE_INSTALL = re.compile(r"(?im)^[ \t]*install[ \t]*\((?:[^()]|\([^()]*\))*\)")
+
+
+def framework_test_install_findings(root: Path) -> list[dict[str, object]]:
+    """Install rules that would ship framework test content into a package.
+
+    Any install() in the test directory is refused, and so is one anywhere
+    else whose arguments name the directory. A rule that reaches a test
+    target through a variable is not seen; the SDK builder also configures
+    with tests off, so the directory is never added there.
+    """
+    listed = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--", "*CMakeLists.txt", "*.cmake"],
+                            capture_output=True, check=False)
+    if listed.returncode == 0:
+        names = [name for name in listed.stdout.decode("utf-8", errors="surrogateescape").split("\0") if name]
+    else:
+        names = [path.relative_to(root).as_posix() for path in root.rglob("*")
+                 if path.is_file() and (path.name == "CMakeLists.txt" or path.suffix == ".cmake")]
+    findings: list[dict[str, object]] = []
+    for name in sorted(names):
+        if name.startswith((FRAMEWORK_ROOT, MIRROR_ROOT)):
+            continue
+        path = root / name
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        inside = name.startswith(FRAMEWORK_TEST_ROOT)
+        for match in _CMAKE_INSTALL.finditer(text):
+            if inside or "framework-tests" in match.group(0):
+                findings.append({"path": name, "line": text.count("\n", 0, match.start()) + 1,
+                                 "match": " ".join(match.group(0).split())[:120]})
+    return findings
 
 
 # A mirror file copied into a native root and edited only in comments,
@@ -1604,6 +1675,15 @@ def verify(
         errors.append(
             f"native source contains {len(copied_findings)} unrecorded Pulp-origin blob copies"
         )
+    test_blob_findings, pulp_tree_checked = framework_test_blob_findings(root, pulp_origin_blobs, pulp_root)
+    checks["framework_test_pulp_blob_matches"] = test_blob_findings
+    checks["framework_test_pulp_tree_checked"] = pulp_tree_checked
+    if test_blob_findings:
+        errors.append(f"{FRAMEWORK_TEST_ROOT} holds {len(test_blob_findings)} Pulp-origin blob copies")
+    test_install_findings = framework_test_install_findings(root)
+    checks["framework_test_install_rules"] = test_install_findings
+    if test_install_findings:
+        errors.append(f"{len(test_install_findings)} install rules would ship {FRAMEWORK_TEST_ROOT} content")
 
     mirror_inventory = sorted(path.relative_to(root).as_posix() for path in mirror_files(root))
     checks["mirror_file_count"] = len(mirror_inventory)
