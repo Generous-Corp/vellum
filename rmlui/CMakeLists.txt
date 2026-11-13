@@ -161,6 +161,15 @@ if(VELLUM_RMLUI_LUA)
     list(APPEND _vellum_rmlui_install_targets vellum-rmlui-lua vellum-rmlui-lua54)
 endif()
 
+# Native (and the render interfaces built on its RmlUi) and Core each carry
+# their own copy of RmlUi, so one program links one or the other. Each target
+# names its copy in INTERFACE_VELLUM_RMLUI_RUNTIME; CMake refuses to generate a
+# target whose link closure names both.
+function(vellum_rmlui_mark_runtime target runtime)
+    set_property(TARGET ${target} PROPERTY INTERFACE_VELLUM_RMLUI_RUNTIME ${runtime})
+    set_property(TARGET ${target} APPEND PROPERTY COMPATIBLE_INTERFACE_STRING VELLUM_RMLUI_RUNTIME)
+endfunction()
+
 if(VELLUM_RMLUI_NATIVE)
     # The same runtime, asset and log sources as Core, compiled again into a
     # static library that exposes RmlUi instead of hiding it.
@@ -181,6 +190,7 @@ if(VELLUM_RMLUI_NATIVE)
         PUBLIC VELLUM_RMLUI_STATIC
         PRIVATE VELLUM_RMLUI_FONTS_ENABLED=$<BOOL:${VELLUM_RMLUI_FONTS}>)
     target_link_libraries(vellum-rmlui-native PUBLIC RmlUi::Core RmlUi::Debugger)
+    vellum_rmlui_mark_runtime(vellum-rmlui-native native)
     list(APPEND VELLUM_RMLUI_COMPONENTS Native)
 endif()
 
@@ -201,6 +211,7 @@ if(VELLUM_RMLUI_METAL)
     target_link_libraries(vellum-rmlui-metal
         PUBLIC RmlUi::Core "-framework Metal" "-framework QuartzCore" "-framework Foundation"
         PRIVATE "-framework CoreGraphics" "-framework ImageIO")
+    vellum_rmlui_mark_runtime(vellum-rmlui-metal native)
     list(APPEND VELLUM_RMLUI_COMPONENTS Metal)
 endif()
 

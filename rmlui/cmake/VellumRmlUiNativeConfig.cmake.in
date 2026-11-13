@@ -44,6 +44,20 @@ if(_vellum_rmlui_native_other)
     find_dependency(VellumRmlUi COMPONENTS ${_vellum_rmlui_native_other})
 endif()
 
+# Core carries its own RmlUi, as Native does, so one program must not link
+# both. Native's targets name their copy in INTERFACE_VELLUM_RMLUI_RUNTIME;
+# Core is given the other name here, so CMake refuses to generate a target
+# that links both. (A VellumRmlUi package found after this one is not tagged.)
+if(TARGET VellumRmlUi::Core)
+    get_property(_vellum_rmlui_runtime TARGET VellumRmlUi::Core PROPERTY INTERFACE_VELLUM_RMLUI_RUNTIME)
+    if(NOT _vellum_rmlui_runtime)
+        set_property(TARGET VellumRmlUi::Core PROPERTY INTERFACE_VELLUM_RMLUI_RUNTIME core)
+        set_property(TARGET VellumRmlUi::Core APPEND PROPERTY
+            COMPATIBLE_INTERFACE_STRING VELLUM_RMLUI_RUNTIME)
+    endif()
+    unset(_vellum_rmlui_runtime)
+endif()
+
 foreach(_component IN LISTS VellumRmlUiNative_FIND_COMPONENTS)
     if(TARGET VellumRmlUi::${_component})
         set(VellumRmlUiNative_${_component}_FOUND TRUE)
