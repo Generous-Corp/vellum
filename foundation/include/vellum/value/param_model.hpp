@@ -24,6 +24,15 @@
 ///   returned `Subscription` removes the listener when it is reset or
 ///   destroyed.
 ///
+/// - `info()` describes a parameter. `plain()` and `normalized_from_plain()`
+///   convert between a normalized value and the parameter's own units (hertz,
+///   decibels, a step index) through the model's range, so a widget that needs
+///   the plain axis never carries a copy of the curve. `parse_text()` is the
+///   inverse of `display_text()`.
+/// - `modulated_normalized()` reads the value a parameter is shown at when
+///   something modulates it; it is a read, not a subscription, so a widget
+///   polls it at tick.
+///
 /// Call context: every call runs on the one UI thread that owns the model,
 /// from event handling or the frame tick. None is called from paint: a view
 /// snapshots what it draws at tick and paints from the snapshot. The audio
@@ -34,6 +43,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -91,6 +101,18 @@ private:
     std::function<void()> cancel_;
 };
 
+/// What a model knows about one parameter besides its value.
+struct ParamInfo {
+    /// The parameter's display name.
+    std::string name;
+    /// The unit shown after a plain value ("Hz", "dB"); empty when none.
+    std::string unit;
+    /// The value the parameter resets to, normalized.
+    double default_normalized = 0.0;
+    /// Number of values; 0 means continuous (see `value_count()`).
+    int value_count = 0;
+};
+
 /// Key-based, normalized parameter access for widgets. See the file comment
 /// for the contract every implementation keeps.
 class ParamModel {
@@ -129,7 +151,47 @@ public:
 
     /// Register `listener` for every value change on every parameter.
     [[nodiscard]] virtual Subscription subscribe(Listener listener) = 0;
+
+    /// Name, unit, default and value count. A default-constructed `ParamInfo`
+    /// for an invalid or foreign handle.
+    [[nodiscard]] virtual ParamInfo info(ParamHandle param) = 0;
+
+    /// The plain value (in the parameter's own units) that `normalized` maps
+    /// to. `normalized` is clamped to [0, 1] and, for a stepped parameter,
+    /// snapped first. 0 for a bad handle or NaN.
+    [[nodiscard]] virtual double plain(ParamHandle param, double normalized) = 0;
+
+    /// The normalized value of `plain`, clamped to the parameter's range and
+    /// snapped for a stepped parameter. The inverse of `plain()`. 0 for a bad
+    /// handle or NaN.
+    [[nodiscard]] virtual double normalized_from_plain(ParamHandle param, double plain) = 0;
+
+    /// Parse what a user typed into a normalized value, or `nullopt` when the
+    /// text is not a value of this parameter (a bad handle included). Accepts
+    /// what `display_text()` produces; a model may accept more.
+    [[nodiscard]] virtual std::optional<double> parse_text(ParamHandle param,
+                                                           std::string_view text) = 0;
+
+    /// The normalized value the parameter is shown at while modulated: its
+    /// base value plus the current modulation, clamped to [0, 1]. `nullopt`
+    /// when nothing modulates it (or for a bad handle); the base value is then
+    /// `normalized()`.
+    [[nodiscard]] virtual std::optional<double> modulated_normalized(ParamHandle param) = 0;
 };
+
+/// Call `on_change(normalized)` for every change of `param`, whatever made it,
+/// until the returned `Subscription` is reset or destroyed. A thin filter over
+/// `ParamModel::subscribe()`, so a widget need not match handles itself. It
+/// does not call `on_change` for the current value.
+[[nodiscard]] inline Subscription watch(ParamModel& model, ParamHandle param,
+                                        std::function<void(double normalized)> on_change) {
+    if (!param.valid() || !on_change)
+        return {};
+    return model.subscribe([param, fn = std::move(on_change)](ParamHandle changed, double n) {
+        if (changed == param)
+            fn(n);
+    });
+}
 
 /// Normalized value of value index `index` among `value_count` values, with
 /// the index clamped into range. 0 for a continuous (0) or single-valued (1)
