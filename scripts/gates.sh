@@ -248,7 +248,7 @@ check_release_policy_base() {
   # The base branch's copy of the policy judges this tree, as CI does.
   local base_dir="$WORK/policy-base"
   git worktree add --detach "$base_dir" "$GIT_BASE" >/dev/null
-  trap 'git -C "$ROOT" worktree remove --force "$base_dir" >/dev/null 2>&1 || true' EXIT
+  trap "git -C '$ROOT' worktree remove --force '$base_dir' >/dev/null 2>&1 || true" EXIT
   if ! grep -q -- '--from-base' "$base_dir/scripts/check_release_policy.py"; then
     echo "base check_release_policy.py predates --from-base; nothing to run"
     return 0
