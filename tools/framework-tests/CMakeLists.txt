@@ -35,3 +35,7 @@ endfunction()
 vellum_add_framework_test(widget-bridge
     SOURCES widget_bridge_test.cpp
     UNITS Vellum::MirrorView_script)
+
+vellum_add_framework_test(param-model-binding
+    SOURCES param_model_binding_test.cpp
+    UNITS Vellum::MirrorView_core vellum-value)
