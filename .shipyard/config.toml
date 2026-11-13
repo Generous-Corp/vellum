@@ -24,3 +24,12 @@ enabled = true
 # Declare it so `shipyard pr` skips them instead of failing on the missing
 # skill_sync_check.py; agents then use the normal Shipyard PR flow.
 pr_gates = false
+
+[base_health]
+# Red-main fix-first (Shipyard PR 1279; docs/automated-draining.md in the
+# Shipyard repo): when one required check fails in consecutive merge groups and
+# the base tip confirms it, hold other approved heads and enqueue the named fix
+# with `jump: true`. `merge_group_pause` is left unset (dry-run): nothing
+# already queued is removed.
+merge_group_hold = "on"
+auto_jump = "on"
