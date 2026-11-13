@@ -132,6 +132,15 @@ RENAMED_MIRROR_SCAN_ROOTS = EXPECTED_ACTIVE_ROOTS + ("components", "product", "t
 # Paths that must spell the forbidden names: the consumer built against the
 # installed mirror, and the policy, its installer copy and their tests.
 RENAMED_MIRROR_EXEMPT_PREFIXES: tuple[str, ...] = ()
+# The framework units' behavior tests include and call the units by their
+# names, so the renamed-mirror rule does not read them. A test only consumes:
+# it may hold flat files of the shapes below and may not open a `vellum`
+# namespace, so no framework source can be kept here under a test's name. The
+# native name rules, the normalized-copy quarantine and the collision census
+# still read this tree.
+FRAMEWORK_TEST_ROOT = "tools/framework-tests/"
+FRAMEWORK_TEST_FILE = re.compile(r"(?:[a-z0-9_]+_test\.(?:cpp|mm)|[a-z0-9_]+\.hpp|CMakeLists\.txt|README\.md)")
+FRAMEWORK_TEST_NAMESPACE = re.compile(r"(?m)^[ \t]*(?:inline[ \t]+)?namespace[ \t]+vellum\b")
 RENAMED_MIRROR_EXEMPT_PATHS = {
     # The consumer built against the installed mirror, file by file: a new
     # file under tools/mirror/consumer/ is scanned like any other.
@@ -320,6 +329,9 @@ def scan_renamed_mirror(root: Path, roots: Iterable[str] = RENAMED_MIRROR_SCAN_R
     findings: list[dict[str, object]] = []
     for path in active_files(root, roots):
         relative = path.relative_to(root).as_posix()
+        if relative.startswith(FRAMEWORK_TEST_ROOT):
+            findings.extend(framework_test_findings(relative, path))
+            continue
         if (relative.startswith(MIRROR_ROOT) or relative in RENAMED_MIRROR_EXEMPT_PATHS
                 or relative.startswith(RENAMED_MIRROR_EXEMPT_PREFIXES)
                 or not content_scan_policy.should_scan_content(relative, extensionless=True)):
@@ -333,6 +345,22 @@ def scan_renamed_mirror(root: Path, roots: Iterable[str] = RENAMED_MIRROR_SCAN_R
             findings.append({"rule": RENAMED_MIRROR_RULE, "path": relative,
                              "line": text.count("\n", 0, match.start()) + 1, "match": match.group(0)[:120]})
     return findings
+
+
+def framework_test_findings(relative: str, path: Path) -> list[dict[str, object]]:
+    """A framework test file that is not a flat test-shaped file, or that opens a vellum namespace."""
+    name = relative[len(FRAMEWORK_TEST_ROOT):]
+    if not FRAMEWORK_TEST_FILE.fullmatch(name):
+        return [{"rule": "framework-test-file-shape", "path": relative, "line": 0, "match": name[:120]}]
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return [{"rule": "undecodable-native-text", "path": relative, "line": 0, "match": ""}]
+    # The native name rules apply too, so a Pulp file cannot land here unrenamed.
+    patterns = {"framework-test-defines-vellum": FRAMEWORK_TEST_NAMESPACE, **FORBIDDEN_ACTIVE_PATTERNS}
+    return [{"rule": rule, "path": relative,
+             "line": text.count("\n", 0, match.start()) + 1, "match": match.group(0).strip()[:120]}
+            for rule, pattern in patterns.items() for match in pattern.finditer(text)]
 
 
 # A mirror file copied into a native root and edited only in comments,

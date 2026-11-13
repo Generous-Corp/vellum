@@ -488,6 +488,8 @@ if(VELLUM_BUILD_TESTS)
                 "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
                 ${_vellum_view_audio_archive_arg}
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
+        # Behavior tests of the framework units (ctest label `framework`).
+        add_subdirectory(tools/framework-tests)
         if(TARGET yogacore)
             # The mirror recipe builds yogacore with RTTI (as Pulp does); prove
             # it took effect in the built archive, not only in the plan.
