@@ -1030,6 +1030,7 @@ jobs:
             # more than the full budget still fails closed.
             observatory_pending_event_scope=introduced
           fi
+          python3 -I tools/provenance/test_deadline_warning.py
           python3 -I tools/provenance/test_observatory.py
           python3 -I tools/provenance/test_observatory_mirror_import.py
           python3 -I tools/provenance/test_receiver.py

@@ -336,6 +336,7 @@
     "graphics/tests/test_dawn_provider_topology.py": "cmake:CMakeLists.txt",
     "packages/vellum-swift/scripts/test_run_sterile_proof.py": "cmake:packages/vellum-swift/CMakeLists.txt",
     "tools/provenance/test_collect_release_evidence.py": "workflow:provenance.yml",
+    "tools/provenance/test_deadline_warning.py": "workflow:provenance.yml",
     "tools/provenance/test_finalize_authority_reconciliation.py": "workflow:provenance.yml",
     "tools/provenance/test_observatory.py": "workflow:provenance.yml",
     "tools/provenance/test_observatory_mirror_import.py": "workflow:provenance.yml",
