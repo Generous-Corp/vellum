@@ -147,6 +147,57 @@ RENAMED_MIRROR_EXEMPT_PREFIXES: tuple[str, ...] = ()
 FRAMEWORK_TEST_ROOT = "tools/framework-tests/"
 FRAMEWORK_TEST_FILE = re.compile(r"(?:[a-z0-9_]+_test\.(?:cpp|mm)|[a-z0-9_]+\.hpp|CMakeLists\.txt|README\.md)")
 FRAMEWORK_TEST_NAMESPACE = re.compile(r"\bnamespace\s+vellum\b")
+
+
+def _strip_cxx_comments(text: str) -> str:
+    """Blank C/C++ comments while preserving newlines and string literals."""
+    chars = list(text)
+    i = 0
+    state = "code"
+    while i < len(chars):
+        if state == "code":
+            if chars[i] == '"':
+                state = "string"
+                i += 1
+                continue
+            if chars[i] == "'":
+                state = "char"
+                i += 1
+                continue
+            if chars[i:i + 2] == ["/", "/"]:
+                chars[i:i + 2] = [" ", " "]
+                i += 2
+                while i < len(chars) and chars[i] != "\n":
+                    chars[i] = " "
+                    i += 1
+                continue
+            if chars[i:i + 2] == ["/", "*"]:
+                chars[i:i + 2] = [" ", " "]
+                i += 2
+                state = "block_comment"
+                continue
+            i += 1
+            continue
+        if state == "block_comment":
+            if chars[i:i + 2] == ["*", "/"]:
+                chars[i:i + 2] = [" ", " "]
+                i += 2
+                state = "code"
+                continue
+            if chars[i] != "\n":
+                chars[i] = " "
+            i += 1
+            continue
+        if chars[i] == "\\":
+            i += 2
+        elif (state == "string" and chars[i] == '"') or (state == "char" and chars[i] == "'"):
+            state = "code"
+            i += 1
+        else:
+            i += 1
+    return "".join(chars)
+
+
 # CMake commands the test directory may not invoke: a library could be linked
 # into something that ships, and the others reach code this check cannot read.
 FRAMEWORK_TEST_CMAKE_REFUSED = {
@@ -377,6 +428,7 @@ def framework_test_findings(relative: str, path: Path) -> list[dict[str, object]
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return [{"rule": "undecodable-native-text", "path": relative, "line": 0, "match": ""}]
+    scan_text = _strip_cxx_comments(text)
     # The native name rules apply too, so a Pulp file cannot land here unrenamed.
     patterns = {"framework-test-defines-vellum": FRAMEWORK_TEST_NAMESPACE,
                 "framework-test-qualified-definition": FRAMEWORK_TEST_QUALIFIED_DEFINITION,
@@ -387,10 +439,10 @@ def framework_test_findings(relative: str, path: Path) -> list[dict[str, object]
                       "match": f"{command}({' '.join(args.split())[:100]})"}
                      for command, args, line in cmake_invocations(text) if command in FRAMEWORK_TEST_CMAKE_REFUSED]
     for rule, pattern in patterns.items():
-        for match in pattern.finditer(text):
+        for match in pattern.finditer(scan_text):
             if rule == "framework-test-defines-vellum":
-                line_start = text.rfind("\n", 0, match.start()) + 1
-                if re.search(r"\busing\s*$", text[line_start:match.start()]):
+                line_start = scan_text.rfind("\n", 0, match.start()) + 1
+                if re.search(r"\busing\s*$", scan_text[line_start:match.start()]):
                     continue
             findings.append({"rule": rule, "path": relative,
                              "line": text.count("\n", 0, match.start()) + 1,

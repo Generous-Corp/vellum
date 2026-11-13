@@ -405,6 +405,8 @@ class VerifyExtractionTests(unittest.TestCase):
                 b"int x; namespace vellum::view { }\n",
             "tools/framework-tests/macro_namespace_test.cpp":
                 b"#define OPEN namespace vellum::view {\nOPEN\n",
+            "tools/framework-tests/comment_namespace_test.cpp":
+                b"namespace /* the framework namespace is forbidden */ vellum::view { int x; }\n",
             # Out-of-line definitions of unit symbols, directly or through an alias.
             "tools/framework-tests/qualified_test.cpp":
                 b"void vellum::view::WidgetBridge::load_script(const std::string& code) {\n}\n",
@@ -419,6 +421,8 @@ class VerifyExtractionTests(unittest.TestCase):
                 b"namespace view = vellum::view;\n"
                 b"view::Widget::Widget(int value)\n"
                 b"    : value_(value)\n{\n}\n",
+            "tools/framework-tests/comment_qualified_test.cpp":
+                b"void view /* split the qualification */ :: Toggle::is_on() {\n}\n",
             # A library could be linked into something that ships.
             "tools/framework-tests/CMakeLists.txt": b"add_executable(t t_test.cpp)\nadd_library(kept STATIC k.cpp)\n",
             # Shapes a kept framework source would take.
