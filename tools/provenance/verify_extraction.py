@@ -142,6 +142,12 @@ FRAMEWORK_TEST_ROOT = "tools/framework-tests/"
 FRAMEWORK_TEST_FILE = re.compile(r"(?:[a-z0-9_]+_test\.(?:cpp|mm)|[a-z0-9_]+\.hpp|CMakeLists\.txt|README\.md)")
 FRAMEWORK_TEST_NAMESPACE = re.compile(r"(?m)^[ \t]*(?:inline[ \t]+)?namespace[ \t]+vellum\b")
 FRAMEWORK_TEST_LIBRARY = re.compile(r"(?im)^[ \t]*add_library[ \t]*\(")
+# A qualified out-of-line function definition (`void vellum::view::X::f() {`,
+# or the same through a namespace alias): a test defines its own functions
+# unqualified, so any qualified definition is refused.
+FRAMEWORK_TEST_QUALIFIED_DEFINITION = re.compile(
+    r"(?m)^[ \t]*(?:[\w:<>,*&\t ]+[\s*&])?(?:::)?\w+(?:[ \t]*::[ \t]*~?\w+)+[ \t]*"
+    r"\([^;{}()]*(?:\([^;{}()]*\)[^;{}()]*)*\)[\w\t ]*(?:->[^;{}()]*)?\{")
 RENAMED_MIRROR_EXEMPT_PATHS = {
     # The consumer built against the installed mirror, file by file: a new
     # file under tools/mirror/consumer/ is scanned like any other.
@@ -358,7 +364,9 @@ def framework_test_findings(relative: str, path: Path) -> list[dict[str, object]
     except UnicodeDecodeError:
         return [{"rule": "undecodable-native-text", "path": relative, "line": 0, "match": ""}]
     # The native name rules apply too, so a Pulp file cannot land here unrenamed.
-    patterns = {"framework-test-defines-vellum": FRAMEWORK_TEST_NAMESPACE, **FORBIDDEN_ACTIVE_PATTERNS}
+    patterns = {"framework-test-defines-vellum": FRAMEWORK_TEST_NAMESPACE,
+                "framework-test-qualified-definition": FRAMEWORK_TEST_QUALIFIED_DEFINITION,
+                **FORBIDDEN_ACTIVE_PATTERNS}
     if name == "CMakeLists.txt":
         # Test executables only: a library here could be linked into one that ships.
         patterns["framework-test-library"] = FRAMEWORK_TEST_LIBRARY

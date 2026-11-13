@@ -390,12 +390,20 @@ class VerifyExtractionTests(unittest.TestCase):
                 b"#include <vellum/view/widget_bridge.hpp>\nnamespace view = vellum::view;\n"
                 b"using namespace vellum::view;\nint main() { view::View root; }\n",
             "tools/framework-tests/window_test.mm": b"#import <vellum/view/window_host.hpp>\n",
+            "tools/framework-tests/calls_test.cpp":
+                b"#include <vellum/view/view.hpp>\nstatic void f() {\n    if (vellum::view::is_x(1)) {\n    }\n"
+                b"    auto g = [](vellum::view::View& v) {\n    };\n}\n",
         }
         refused = {
             # A vellum namespace opened in any spelling.
             "tools/framework-tests/defines_test.cpp": b"namespace vellum::view { int x; }\n",
             "tools/framework-tests/nested.hpp": b"#pragma once\n  namespace vellum {\nnamespace view {}\n}\n",
             "tools/framework-tests/inline.hpp": b"inline namespace vellum { }\n",
+            # Out-of-line definitions of unit symbols, directly or through an alias.
+            "tools/framework-tests/qualified_test.cpp":
+                b"void vellum::view::WidgetBridge::load_script(const std::string& code) {\n}\n",
+            "tools/framework-tests/aliased_test.cpp":
+                b"namespace view = vellum::view;\nbool view::Toggle::is_on() const noexcept {\n    return true;\n}\n",
             # A library could be linked into something that ships.
             "tools/framework-tests/CMakeLists.txt": b"add_executable(t t_test.cpp)\nadd_library(kept STATIC k.cpp)\n",
             # Shapes a kept framework source would take.
@@ -420,7 +428,8 @@ class VerifyExtractionTests(unittest.TestCase):
             self.assertEqual(sorted({f["path"] for f in findings}), sorted(refused))
             self.assertEqual({f["rule"] for f in findings},
                              {"framework-test-defines-vellum", "framework-test-file-shape",
-                              "pulp-public-namespace", "renamed-mirror-namespace", "framework-test-library"})
+                              "pulp-public-namespace", "renamed-mirror-namespace", "framework-test-library",
+                              "framework-test-qualified-definition"})
             self.assertEqual({f["path"] for f in findings if f["rule"] == "renamed-mirror-namespace"},
                              {"tools/framework-tests-extra/widget_bridge_test.cpp",
                               "graphics/widget_bridge_test.cpp"})

@@ -17,7 +17,8 @@ declares a case, `CHECK` records a failure and continues.
 The provenance verifier lets these files name the units (`vellum::view`,
 `<vellum/view/...>`), which other native trees may not, and holds them to
 being consumers: flat files named `*_test.cpp`, `*_test.mm`, `*.hpp`,
-`CMakeLists.txt` or `README.md`, none of which opens a `vellum` namespace.
+`CMakeLists.txt` or `README.md`, none of which opens a `vellum` namespace or defines a function out of line
+under a qualified name.
 Whole-file copies of `framework/` sources are refused here as anywhere else,
 and so is any file whose exact bytes are a Pulp-origin blob: a recorded one
 always, and any blob of the Pulp checkout the provenance lane reads. Nothing
