@@ -119,6 +119,31 @@ class RmlUiSdkArtifactTest(unittest.TestCase):
             metadata["files"] = [row for row in metadata["files"] if row["path"] != "lib/librmlui.a"]
         self.assert_refused(self.archive(metadata_edit=drop), "file list differs")
 
+    def test_an_archive_from_another_commit_or_version_is_refused(self) -> None:
+        archive = self.archive()
+        verifier.verify(archive, source_commit="0" * 40, expected_version=VERSION)
+        with self.assertRaises(verifier.VerificationError) as caught:
+            verifier.verify(archive, source_commit="1" * 40)
+        self.assertIn("was built from", str(caught.exception))
+        with self.assertRaises(verifier.VerificationError) as caught:
+            verifier.verify(archive, expected_version="0.2.1")
+        self.assertIn("not 0.2.1", str(caught.exception))
+
+    def test_the_command_line_writes_a_verification_record(self) -> None:
+        archive = self.archive()
+        record = self.root / "record.json"
+        with open(self.root / "stdout", "w") as sink:
+            stdout, sys.stdout = sys.stdout, sink
+            try:
+                code = verifier.main(["--archive", str(archive), "--source-commit", "0" * 40,
+                                      "--version", VERSION, "--output", str(record)])
+            finally:
+                sys.stdout = stdout
+        self.assertEqual(code, 0)
+        written = json.loads(record.read_text(encoding="utf-8"))
+        self.assertEqual(written["schema"], "vellum.rmlui-sdk-verification.v1")
+        self.assertEqual(written["source_commit"], "0" * 40)
+
     def test_a_name_that_disagrees_with_the_metadata_is_refused(self) -> None:
         self.assert_refused(self.archive(version="0.2.1"), "differs from the archive name")
 

@@ -18,7 +18,11 @@ Checks, without building anything:
     FreeType License with its credit whenever FreeType's archive is present;
   - no package file names a build or source path.
 
-    verify_rmlui_sdk_artifact.py --archive <file> [--json]
+    verify_rmlui_sdk_artifact.py --archive <file> [--source-commit <sha>]
+        [--version <x.y.z>] [--output <record.json>] [--json]
+
+--source-commit and --version hold the archive to the release it is published
+in; --output writes the verification record the release carries.
 """
 
 from __future__ import annotations
@@ -120,7 +124,8 @@ def read_members(archive: Path) -> tuple[dict[str, bytes], set[str], dict[str, b
     return files, directories, executable, raw
 
 
-def verify(archive: Path) -> dict[str, object]:
+def verify(archive: Path, source_commit: str | None = None,
+           expected_version: str | None = None) -> dict[str, object]:
     match = NAME.fullmatch(archive.name)
     require(match is not None, f"not an RmlUi SDK archive name: {archive.name}")
     version, target = match.groups()
@@ -154,6 +159,10 @@ def verify(archive: Path) -> dict[str, object]:
     require(metadata.get("package") == "VellumRmlUiNative", "unexpected package name")
     require(re.fullmatch(r"[0-9a-f]{40}", str(metadata.get("source_commit", ""))) is not None,
             "the metadata names no source commit")
+    require(source_commit is None or metadata["source_commit"] == source_commit,
+            f"the archive was built from {metadata['source_commit']}, not {source_commit}")
+    require(expected_version is None or version == expected_version,
+            f"the archive is version {version}, not {expected_version}")
     rows = metadata.get("files")
     require(isinstance(rows, list), "the metadata has no file list")
     listed = {}
@@ -202,13 +211,19 @@ def verify(archive: Path) -> dict[str, object]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--archive", type=Path, required=True)
+    parser.add_argument("--source-commit")
+    parser.add_argument("--version")
+    parser.add_argument("--output", type=Path, help="write the verification record here")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     try:
-        result = verify(args.archive)
+        result = verify(args.archive, args.source_commit, args.version)
     except (VerificationError, OSError, tarfile.TarError) as error:
         print(f"vellum-rmlui-sdk-verify: {error}", file=sys.stderr)
         return 1
+    if args.output:
+        record = {"schema": "vellum.rmlui-sdk-verification.v1", **result}
+        args.output.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2, sort_keys=True) if args.json
           else f"{result['archive']}: verified ({result['files']} files)")
     return 0
