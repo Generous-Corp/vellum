@@ -253,7 +253,8 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
 - **The ports ledger.** `provenance/framework/ports.json` lists every change
   to the file set after the transfer. Each row names one `framework/` path,
   whether it is `added` or `removed`, its `origin`, and a `reason`. A row of
-  origin `pulp` names the Pulp path and the Pulp commits the content came from.
+  origin `pulp` names the Pulp path and the Pulp commits the content came from,
+  and a row that adds such a file records the git blob the file joins with.
   A row of origin `native` names neither, for a file Vellum wrote; its file is
   refused when its bytes are a blob the mirror's origin records list or Pulp's
   object store holds, so Pulp content copied as it is cannot pass as native.
@@ -272,11 +273,24 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
   `framework/external/`, whose third-party bytes still change only through
   `external-updates.json`. Every Pulp commit a row names must be a commit on
   Pulp's main in the lane's Pulp checkout, and an added row's Pulp path must be
-  a regular file (mode 100644 or 100755) in one of its commits. A removed
+  a regular file (mode 100644 or 100755) at the last commit it names. A removed
   row's Pulp path is not looked up: Pulp may have deleted the file in the named
   commits or never held it at that path, and the row grants nothing, since the
   file's absence from `framework/` is what the file set checks. The proof reads
   the checkout, never the row's text, and fails closed without one.
+- **A Pulp row's file is Pulp's bytes.** For an added row of origin `pulp`,
+  the recorded blob must be the blob of Pulp's file at the last named commit,
+  put through the rename the transfer used (the transfer record's rename
+  table, applied as the transfer proof applies it), and the `framework/` path
+  must be the path that rename gives the Pulp path. The provenance lane proves
+  this against the Pulp checkout and fails closed without one. In the change
+  that appends the row, the file in `framework/` must be exactly the recorded
+  blob; that check needs no Pulp checkout, so every lane runs it. After the
+  row has landed the file is ordinary framework source and a reviewed edit
+  may change it. A port that deliberately differs from Pulp, by one byte or by
+  a respelled name the rename table does not cover, is not a `pulp` row. It is
+  a `native` row, it names no Pulp commit, and its observatory events stay
+  with the owner.
 - **A ported file is framework content.** It is held to the edge rules, the
   residual-spelling check and the collision census like every other file
   there. The name-debt baseline may only fall, so a ported file starts with no

@@ -6,7 +6,9 @@ The transfer record lists the files Pulp's export carried into framework/.
 change to that file set. Each row names one framework/ path, whether it was
 added or removed, where it came from (the Pulp path and commits, or `native`
 for a file Vellum wrote), and the mirrored target that compiles it when it is
-a compilable source. The file set framework/ must hold is the transfer
+a compilable source. A row that adds a file of Pulp origin also records the
+blob the file has when it joins: Pulp's file at the last named commit, put
+through the transfer's rename. A port that differs from that is a native row. The file set framework/ must hold is the transfer
 record's paths, minus the removed rows, plus the added rows.
 
 This module reads the ledger and replays it; it runs no git. Two tools share
@@ -30,7 +32,8 @@ FRAMEWORK_PREFIX = "framework/"
 # Third-party source is pinned by blob and changes only through
 # provenance/framework/external-updates.json, never through this ledger.
 EXTERNAL_PREFIX = "framework/external/"
-ROW_KEYS = {"framework_path", "change", "target", "origin", "pulp_path", "pulp_commits", "reason"}
+ROW_KEYS = {"framework_path", "change", "target", "origin", "pulp_path", "pulp_commits", "framework_blob",
+            "reason"}
 CHANGES = ("added", "removed")
 ORIGINS = ("pulp", "native")
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".m", ".mm"}
@@ -77,6 +80,12 @@ def row_errors(row: Any, where: str) -> list[str]:
             errors.append(f"{where}: a native row has pulp_path null and no pulp_commits")
     else:
         errors.append(f"{where}: origin must be one of {list(ORIGINS)}")
+    blob = row["framework_blob"]
+    if change == "added" and origin == "pulp":
+        if not isinstance(blob, str) or not COMMIT.match(blob):
+            errors.append(f"{where}: a row adding a Pulp file records the file's git blob id in framework_blob")
+    elif blob is not None:
+        errors.append(f"{where}: framework_blob is null unless the row adds a file of Pulp origin")
     target = row["target"]
     if change == "added" and compiled(path):
         if not isinstance(target, str) or not TARGET_NAME.match(target):

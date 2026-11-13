@@ -203,24 +203,32 @@ class FrameworkTrustedVerifyTests(unittest.TestCase):
                 self.assertTrue(any("exist without framework/" in e for e in verdict["errors"]), verdict)
 
     PORTED = "framework/core/a/src/ported.cpp"
+    PORTED_BYTES = b"int ported_value() { return 2; }\n"
 
     def ports_ledger(self, rows: list[dict]) -> bytes:
         return json.dumps({"schema": "vellum.framework-ports.v1", "rows": rows}).encode()
 
     def ported_row(self) -> dict:
         return {"framework_path": self.PORTED, "change": "added", "target": "a-target", "origin": "pulp",
-                "pulp_path": "core/a/src/ported.cpp", "pulp_commits": ["9" * 40], "reason": "port"}
+                "pulp_path": "core/a/src/ported.cpp", "pulp_commits": ["9" * 40],
+                "framework_blob": verifier.git_blob_sha(self.PORTED_BYTES), "reason": "port"}
 
     def test_a_port_is_refused_without_its_ledger_row_and_passes_with_it(self):
         self.repo.introduce_transfer()
         self.repo.base = commit_all(self.repo.root, "land the transfer")
-        self.repo.write(self.PORTED, b"int ported_value() { return 2; }\n")
+        self.repo.write(self.PORTED, self.PORTED_BYTES)
         code, verdict = self.repo.judge()
         self.assertEqual((code, verdict["mode"]), (1, "framework-change"))
         self.assertTrue(any("does not list" in e and self.PORTED in e for e in verdict["errors"]), verdict)
         # The row makes the file part of the set. This judge has no Pulp
         # checkout, so the commits are proved by the required provenance lane.
         self.repo.write(verifier.FRAMEWORK_PORTS, self.ports_ledger([self.ported_row()]))
+        # The file must join as the blob its row records; this judge needs no Pulp checkout for that.
+        self.repo.write(self.PORTED, self.PORTED_BYTES + b"// not what the row records\n")
+        code, verdict = self.repo.judge()
+        self.assertEqual(code, 1)
+        self.assertTrue(any("not the recorded" in e for e in verdict["errors"]), verdict)
+        self.repo.write(self.PORTED, self.PORTED_BYTES)
         code, verdict = self.repo.judge()
         self.assertEqual((code, verdict["mode"], verdict["errors"]), (0, "framework-change", []))
         # Once landed, the row cannot be rewritten or dropped.
@@ -244,7 +252,7 @@ class FrameworkTrustedVerifyTests(unittest.TestCase):
     def test_a_ports_ledger_cannot_ride_in_with_the_transfer(self):
         # The introduction must be the rename tool's output exactly, whatever a ledger says.
         self.repo.introduce_transfer()
-        self.repo.write(self.PORTED, b"int ported_value() { return 2; }\n")
+        self.repo.write(self.PORTED, self.PORTED_BYTES)
         self.repo.write(verifier.FRAMEWORK_PORTS, self.ports_ledger([self.ported_row()]))
         code, verdict = self.repo.judge()
         self.assertEqual((code, verdict["mode"]), (1, "introduction"))

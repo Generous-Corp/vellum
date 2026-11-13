@@ -68,8 +68,10 @@ that may only fall. An edit may change any file's bytes. The file set changes
 only through the append-only
 [`provenance/framework/ports.json`](../provenance/framework/ports.json): each
 row adds or removes one `framework/` path and names the Pulp path and commits
-the content came from, or `native` for a file Vellum wrote. The provenance lane
-proves the rows append-only and the Pulp commits real against a Pulp checkout,
+the content came from, or `native` for a file Vellum wrote. A file of Pulp
+origin joins as Pulp's bytes at the named commit put through the transfer's
+rename; a port that differs from Pulp is a `native` row. The provenance lane
+proves the rows append-only and the Pulp commits and bytes against a Pulp checkout,
 and the mirror build compiles each added source into the target its row names.
 A file with neither a transfer record nor a ledger row fails both. The
 JavaScript preludes are generated from Vellum's own sources once any of them

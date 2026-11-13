@@ -109,7 +109,8 @@ them. The limits:
 - Only `ported`, and only when every `framework/` path the event maps is
   covered by a row of `provenance/framework/ports.json` in the same pull
   request whose origin is `pulp`. The row names the Pulp commits the code came
-  from, and the provenance lane proves them against a Pulp checkout.
+  from, and the provenance lane proves against a Pulp checkout that the file
+  joins as Pulp's bytes at that commit, put through the transfer's rename.
 - The rationale names the ledger rows, and `linked_commits` names their Pulp
   commits.
 - Never for a `native` row, for a `framework/` edit with no ledger row, for a

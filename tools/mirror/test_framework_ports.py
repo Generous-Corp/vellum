@@ -23,7 +23,7 @@ def row(path: str = "framework/core/a/src/new.cpp", change: str = "added", **ove
     base = {"framework_path": path, "change": change,
             "target": "a-target" if change == "added" and fp.compiled(path) else None,
             "origin": "pulp", "pulp_path": path.removeprefix("framework/"), "pulp_commits": [COMMIT],
-            "reason": "port"}
+            "framework_blob": "b" * 40 if change == "added" else None, "reason": "port"}
     return {**base, **overrides}
 
 
@@ -41,7 +41,7 @@ class RowShapeTest(unittest.TestCase):
             row(),
             row("framework/core/a/include/vellum/a/new.hpp"),
             row("framework/core/a/src/old.cpp", "removed"),
-            row(origin="native", pulp_path=None, pulp_commits=[]),
+            row(origin="native", pulp_path=None, pulp_commits=[], framework_blob=None),
             row(pulp_commits=[COMMIT, "b" * 40]),
         ):
             self.assertEqual(fp.row_errors(candidate, "row"), [], candidate)
@@ -72,6 +72,13 @@ class RowShapeTest(unittest.TestCase):
             self.assertRowRefused(row(pulp_commits=commits), "distinct full Pulp commit ids")
         self.assertRowRefused(row(pulp_path="../core/a.cpp"), "not a safe relative path")
         self.assertRowRefused(row(pulp_path=None), "not a safe relative path")
+
+    def test_only_an_added_pulp_row_records_the_joining_blob(self) -> None:
+        for blob in (None, "b" * 39, "B" * 40, 7):
+            self.assertRowRefused(row(framework_blob=blob), "records the file's git blob id")
+        self.assertRowRefused(row("framework/core/a/src/old.cpp", "removed", framework_blob="b" * 40),
+                              "framework_blob is null unless")
+        self.assertRowRefused(row(origin="native", pulp_path=None, pulp_commits=[]), "framework_blob is null unless")
 
     def test_a_native_row_names_no_pulp_source(self) -> None:
         self.assertRowRefused(row(origin="native"), "a native row has pulp_path null")

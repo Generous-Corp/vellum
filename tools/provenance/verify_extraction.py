@@ -1141,15 +1141,59 @@ def framework_ports_history_errors(root: Path, ports) -> list[str]:
     return []
 
 
-def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[dict]) -> list[str]:
-    """Prove every Pulp commit a row names against the Pulp checkout, never from the row's text.
+def framework_ports_landed(root: Path, ports) -> int:
+    """How many ledger rows the history base already holds; 0 when there is no base or no ledger there."""
+    base, base_error = load_mirror_export_verifier().history_base(root)
+    if base_error or base is None:
+        return 0
+    shown = subprocess.run(["git", "-C", str(root), "show", f"{base}:{FRAMEWORK_PORTS}"],
+                           capture_output=True, check=False)
+    if shown.returncode != 0:
+        return 0
+    return len(ports.parse(shown.stdout.decode("utf-8", errors="replace"))[0])
+
+
+def framework_ports_joining_errors(root: Path, rows: list[dict], added: dict[str, dict], landed: int) -> list[str]:
+    """A file of Pulp origin joins framework/ with exactly the blob its row records.
+
+    Judged for the rows this change appends, and needing no Pulp checkout: the
+    Pulp proof ties the recorded blob to Pulp, and this ties the file to the
+    recorded blob. Once the row has landed the file is ordinary framework
+    source and its bytes may change by a reviewed edit.
+    """
+    errors: list[str] = []
+    for index, row in enumerate(rows):
+        path = row["framework_path"]
+        if index < landed or row["change"] != "added" or row["origin"] != "pulp" or added.get(path) != row:
+            continue
+        file = root / path
+        if not file.is_file() or file.is_symlink():
+            continue  # reported as a missing file
+        blob = git_blob_sha(file.read_bytes())
+        if blob != row["framework_blob"]:
+            errors.append(f"{FRAMEWORK_PORTS} rows[{index}]: {path} is blob {blob[:12]}, not the recorded "
+                          f"{row['framework_blob'][:12]}; a file of Pulp origin joins as Pulp's renamed bytes, "
+                          "and a port that differs from Pulp is a native row")
+    return errors
+
+
+def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[dict],
+                                rename: dict | None = None) -> list[str]:
+    """Prove every Pulp claim a row makes against the Pulp checkout, never from the row's text.
 
     Each commit must be a commit object in the checkout and an ancestor of
-    `pulp_main_ref`. An added row's pulp_path must be a regular file in at
-    least one of its commits, so the row names commits that carry the content.
-    A removed row's pulp_path is not looked up: the file may be gone from
-    every commit it names.
+    `pulp_main_ref`. For an added row, pulp_path must be a regular file at the
+    last named commit; framework_path must be the path the transfer's rename
+    gives it; and framework_blob must be the blob of that file's bytes put
+    through the transfer's rename (verify_mirror_rename_identity.forward_bytes
+    with the transfer record's rename table, the transform the transfer proof
+    itself applies). A removed row's pulp_path is not looked up: the file may
+    be gone from every commit it names.
     """
+    identity = load_rename_identity_verifier()
+    rename = rename or {}
+    table_ok = all(key in rename for key in ("from", "to", "include_units", "objc_classes", "objc_class_prefix",
+                                             "literal_exclusions", "edge_table"))
     def pulp(*args: str) -> subprocess.CompletedProcess:
         return subprocess.run(["git", "-C", str(pulp_root), *args], capture_output=True, check=False)
 
@@ -1174,16 +1218,36 @@ def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[
                 errors.append(f"{where}: Pulp commit {commit} is not a commit on Pulp {pulp_main_ref}")
         if not real or row["change"] != "added":
             continue
-        holds = False
-        for commit in row["pulp_commits"]:
-            listing = pulp("--literal-pathspecs", "ls-tree", "-z", commit, "--", row["pulp_path"]).stdout
-            entries = [entry for entry in listing.split(b"\0") if entry]
-            # A regular file: a symlink or a tree at the path is not the content.
-            if len(entries) == 1 and entries[0].split(b"\t", 1)[0].split()[0] in (b"100644", b"100755"):
-                holds = True
-                break
-        if not holds:
-            errors.append(f"{where}: none of the named Pulp commits holds a file at {row['pulp_path']}")
+        commit, pulp_path = row["pulp_commits"][-1], row["pulp_path"]
+        listing = pulp("--literal-pathspecs", "ls-tree", "-z", commit, "--", pulp_path).stdout
+        entries = [entry for entry in listing.split(b"\0") if entry]
+        # A regular file: a symlink or a tree at the path is not the content.
+        meta = entries[0].split(b"\t", 1)[0].split() if len(entries) == 1 else []
+        if not meta or meta[0] not in (b"100644", b"100755"):
+            errors.append(f"{where}: the last named Pulp commit {commit[:12]} holds no file at {pulp_path}")
+            continue
+        if not table_ok:
+            errors.append(f"{where}: {FRAMEWORK_TRANSFER_RECORD} carries no rename table to put {pulp_path} through")
+            continue
+        expected_path = FRAMEWORK_ROOT + identity.renamed_path(pulp_path, rename["from"], rename["to"])
+        if row["framework_path"] != expected_path:
+            errors.append(f"{where}: Pulp {pulp_path} renames to {expected_path}, not {row['framework_path']}")
+            continue
+        content = pulp("cat-file", "blob", meta[2].decode())
+        if content.returncode != 0:
+            errors.append(f"{where}: cannot read Pulp {commit[:12]}:{pulp_path}")
+            continue
+        data = content.stdout
+        edge = rename["edge_table"]
+        if identity.is_text(pulp_path, data, {x.lower() for x in edge.get("suffixes", [])},
+                            {x.lower() for x in edge.get("binary_suffixes", [])}):
+            protected = [x["literal"].encode() for x in rename["literal_exclusions"] if x.get("path") == pulp_path]
+            data, _ = identity.forward_bytes(data, rename, protected)
+        renamed_blob = git_blob_sha(data)
+        if renamed_blob != row["framework_blob"]:
+            errors.append(f"{where}: framework_blob {row['framework_blob'][:12]} is not Pulp {commit[:12]}:{pulp_path} "
+                          f"put through the transfer's rename ({renamed_blob[:12]}); a port that differs from "
+                          "Pulp is a native row")
     return errors
 
 
@@ -1219,7 +1283,8 @@ def framework_ports_native_errors(root: Path, added: dict[str, dict], pulp_root:
 
 
 def framework_ports_state(root: Path, transferred: set[str], pulp_root: Path | None, pulp_main_ref: str,
-                          defer_identity: bool) -> tuple[set[str], list[str], dict[str, object]]:
+                          defer_identity: bool, rename: dict | None = None
+                          ) -> tuple[set[str], list[str], dict[str, object]]:
     """The file set framework/ must hold, and what is wrong with the ledger: (expected, errors, checks)."""
     ports = load_framework_ports()
     expected, added, removed, errors = ports.file_set(root, transferred)
@@ -1227,6 +1292,8 @@ def framework_ports_state(root: Path, transferred: set[str], pulp_root: Path | N
     errors = errors + framework_ports_native_errors(root, added, pulp_root)
     checks: dict[str, object] = {"framework_ports_added": sorted(added), "framework_ports_removed": sorted(removed)}
     rows, row_errors = ports.load(root)
+    if not row_errors:
+        errors.extend(framework_ports_joining_errors(root, rows, added, framework_ports_landed(root, ports)))
     pulp_rows = [row for row in rows if row["origin"] == "pulp"] if not row_errors else []
     if not pulp_rows:
         checks["framework_ports_proved"] = not row_errors
@@ -1236,7 +1303,7 @@ def framework_ports_state(root: Path, transferred: set[str], pulp_root: Path | N
         if not defer_identity:
             errors.append(f"{FRAMEWORK_PORTS}: no Pulp checkout proved the Pulp commits it names; pass --pulp-root")
     else:
-        proof = framework_ports_pulp_errors(pulp_root, pulp_main_ref, rows)
+        proof = framework_ports_pulp_errors(pulp_root, pulp_main_ref, rows, rename)
         checks["framework_ports_proved"] = not proof
         errors.extend(proof)
     return expected, errors, checks
@@ -1416,7 +1483,7 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
     # framework/external/, which the ratchet skips, is reported on its own.
     recorded, ports_errors, ports_checks = framework_ports_state(
         root, {r.get("framework_path") for r in transfer.get("records", [])},
-        pulp_root, pulp_main_ref, defer_identity)
+        pulp_root, pulp_main_ref, defer_identity, transfer.get("rename"))
     errors.extend(ports_errors)
     checks.update(ports_checks)
     # What git tracks (every entry, gitlinks included) and what the checkout

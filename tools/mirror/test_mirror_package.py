@@ -1195,7 +1195,8 @@ class TransferredFixture(Fixture):
     @staticmethod
     def row(path: str, change: str = "added", target: str | None = None) -> dict:
         return {"framework_path": path, "change": change, "target": target, "origin": "pulp",
-                "pulp_path": path.removeprefix("framework/"), "pulp_commits": [PORT_COMMIT], "reason": "port"}
+                "pulp_path": path.removeprefix("framework/"), "pulp_commits": [PORT_COMMIT],
+                "framework_blob": "b" * 40 if change == "added" else None, "reason": "port"}
 
     def prelude(self, suffix: str = "cpp") -> bytes:
         return (self.generated / f"preludes/web_compat_preludes_gen.{suffix}").read_bytes()
