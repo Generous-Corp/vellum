@@ -91,8 +91,8 @@ cleanup() {
   if [[ -n "$POLICY_WORKTREE" ]]; then
     git -C "$ROOT" worktree remove --force "$POLICY_WORKTREE" >/dev/null 2>&1 || true
   fi
-  rm -f "$WORK"/*.log "$WORK"/*.json 2>/dev/null || true
-  rmdir "$WORK" 2>/dev/null || true
+  find "$WORK" -type f -delete 2>/dev/null || true
+  find "$WORK" -depth -type d -empty -delete 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -100,26 +100,64 @@ passed=()
 failed=()
 skipped=()
 
-# run_check <name> <function>: the function runs in a subshell under set -e, its
-# output goes to a log, and only a failure prints it.
-run_check() {
-  local name="$1" fn="$2" log="$WORK/$1.log" rc
-  if [[ -n "${GATES_ONLY:-}" && ",$GATES_ONLY," != *",$name,"* ]]; then
-    return 0
-  fi
-  printf 'gates: RUN  %s\n' "$name"
-  local started=$SECONDS elapsed
-  ( set -euo pipefail; "$fn" ) >"$log" 2>&1
-  rc=$?
-  elapsed=$((SECONDS - started))
-  if [[ $rc -eq 0 ]]; then
+# run_check <name> <function>: the function runs in a subshell under set -e with
+# its own RUNNER_TEMP, its output goes to a log, and only a failure prints it.
+# With PARALLEL=1 the check starts in the background and finish_checks reports
+# it; otherwise it runs and reports now.
+PARALLEL=0
+pending=()
+pending_pids=()
+
+report_check() {
+  local name="$1" rc elapsed
+  rc="$(cat "$WORK/$name.rc")"
+  elapsed="$(cat "$WORK/$name.sec")"
+  if [[ "$rc" -eq 0 ]]; then
     printf 'gates: PASS %s (%ds)\n' "$name" "$elapsed"
     passed+=("$name")
   else
     printf 'gates: FAIL %s (exit %d, %ds)\n' "$name" "$rc" "$elapsed"
-    tail -n 40 "$log" | sed 's/^/    | /'
+    tail -n 40 "$WORK/$name.log" | sed 's/^/    | /'
     failed+=("$name")
   fi
+}
+
+run_check() {
+  local name="$1" fn="$2"
+  if [[ -n "${GATES_ONLY:-}" && ",$GATES_ONLY," != *",$name,"* ]]; then
+    return 0
+  fi
+  mkdir -p "$WORK/tmp-$name"
+  if [[ $PARALLEL -eq 1 ]]; then
+    printf 'gates: START %s\n' "$name"
+  else
+    printf 'gates: RUN  %s\n' "$name"
+  fi
+  (
+    started=$SECONDS
+    export RUNNER_TEMP="$WORK/tmp-$name"
+    ( set -euo pipefail; "$fn" ) >"$WORK/$name.log" 2>&1
+    rc=$?
+    echo "$((SECONDS - started))" >"$WORK/$name.sec"
+    echo "$rc" >"$WORK/$name.rc"
+  ) &
+  if [[ $PARALLEL -eq 1 ]]; then
+    pending+=("$name")
+    pending_pids+=("$!")
+  else
+    wait "$!"
+    report_check "$name"
+  fi
+}
+
+finish_checks() {
+  local i
+  for i in "${!pending[@]}"; do
+    wait "${pending_pids[$i]}"
+    report_check "${pending[$i]}"
+  done
+  pending=()
+  pending_pids=()
 }
 
 skip_check() {
@@ -210,7 +248,7 @@ check_release_policy_base() {
   # The base branch's copy of the policy judges this tree, as CI does.
   local base_dir="$WORK/policy-base"
   git worktree add --detach "$base_dir" "$GIT_BASE" >/dev/null
-  POLICY_WORKTREE="$base_dir"
+  trap 'git -C "$ROOT" worktree remove --force "$base_dir" >/dev/null 2>&1 || true' EXIT
   if ! grep -q -- '--from-base' "$base_dir/scripts/check_release_policy.py"; then
     echo "base check_release_policy.py predates --from-base; nothing to run"
     return 0
@@ -376,6 +414,7 @@ check_release_rehearsal() {
 # ---- run -------------------------------------------------------------------
 printf 'gates: base=%s merge-base=%s head=%s mode=%s\n' "$BASE" "$GIT_BASE" "$HEAD_SHA" "$([[ $FULL -eq 1 ]] && echo full || echo fast)"
 
+if [[ $FULL -eq 0 ]]; then PARALLEL=1; fi
 run_check prose-lint check_prose_lint
 run_check product-quality check_product_quality
 if command -v npm >/dev/null; then
@@ -393,6 +432,8 @@ if [[ $FULL -eq 1 ]]; then
 else
   run_check authority-tests check_authority_tests
   run_check observatory-tests check_observatory_tests
+  finish_checks
+  PARALLEL=0
   printf 'gates: fast run; --full adds forbidden-deps, provenance-verify, authority-protocol and observatory-verify\n'
 fi
 
