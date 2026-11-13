@@ -14,6 +14,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,20 @@ namespace vellum::value {
 struct ParamSpec {
     /// The design key `resolve()` matches verbatim. Unique within a model.
     std::string key;
+    /// Display name reported by `info()`; the key when empty.
+    std::string name;
+    /// Unit appended to the default plain-value text and accepted by the
+    /// default parser ("Hz"); empty for none.
+    std::string unit;
+    /// The parameter's plain range. `plain()` maps normalized 0 to `plain_min`
+    /// and 1 to `plain_max`. The defaults make plain equal normalized.
+    double plain_min = 0.0;
+    double plain_max = 1.0;
+    /// Curve between normalized and plain: plain is
+    /// `plain_min + (plain_max - plain_min) * pow(normalized, skew)`. 1 is
+    /// linear; values above 1 spend more of the range near `plain_min`. Must be
+    /// positive.
+    double skew = 1.0;
     /// Starting normalized value, clamped and snapped like `set_normalized()`.
     double default_normalized = 0.0;
     /// Number of values; 0 means continuous. Never negative.
@@ -34,6 +49,10 @@ struct ParamSpec {
     /// `value_labels`. Without either, the text is the normalized value with
     /// two decimals ("0.25").
     std::function<std::string(double normalized)> format;
+    /// Parses typed text to a normalized value for `parse_text()`. Without it
+    /// the model accepts a value label, or a plain number with an optional
+    /// `unit` suffix.
+    std::function<std::optional<double>(std::string_view text)> parse;
 };
 
 class InMemoryParamModel final : public ParamModel {
@@ -59,6 +78,18 @@ public:
     [[nodiscard]] int value_count(ParamHandle param) override;
     [[nodiscard]] Subscription subscribe(Listener listener) override;
 
+    [[nodiscard]] ParamInfo info(ParamHandle param) override;
+    [[nodiscard]] double plain(ParamHandle param, double normalized) override;
+    [[nodiscard]] double normalized_from_plain(ParamHandle param, double plain) override;
+    [[nodiscard]] std::optional<double> parse_text(ParamHandle param,
+                                                   std::string_view text) override;
+    [[nodiscard]] std::optional<double> modulated_normalized(ParamHandle param) override;
+
+    /// Set the modulation offset added to `param`'s value as seen by
+    /// `modulated_normalized()`; `nullopt` clears it. An offset does not change
+    /// `normalized()` and is not a value change. Ignored for a bad handle or NaN.
+    void set_modulation_offset(ParamHandle param, std::optional<double> offset);
+
     /// Replace the gesture observer (an empty function removes it).
     void set_gesture_observer(GestureObserver observer);
 
@@ -73,6 +104,7 @@ private:
         ParamSpec spec;
         double value = 0.0;
         int gesture_depth = 0;
+        std::optional<double> modulation_offset;
     };
     struct ListenerSet;
 
