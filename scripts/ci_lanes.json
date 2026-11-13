@@ -124,6 +124,10 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_pinned_cmake.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_build_sdk_artifact.py",
         "isolated": true
       },
@@ -257,6 +261,10 @@
       },
       {
         "script": "scripts/test_verify_gpu_runtime_artifact.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_pinned_cmake.py",
         "isolated": true
       },
       {

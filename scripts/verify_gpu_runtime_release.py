@@ -14,9 +14,10 @@ checkout's verifiers, as it does for the SDK archive.
   * the renderer archive the source's gpu-runtime/renderer-lock.json pins is
     fetched from the pinned builder and matches the locked digest;
   * main's verify_gpu_runtime_artifact holds the archive to the source (the
-    file set, every byte, the regenerated package files) and builds and runs
-    the audio-only consumer against it, with a GPU adapter required: the
-    installed journey;
+    file set, every byte, the package files regenerated with the CMake the
+    source pins, so the comparison does not depend on this host's CMake) and
+    builds and runs the audio-only consumer against it, with a GPU adapter
+    required: the installed journey;
   * main's device API closure check passes on the source's headers.
 It writes gpu-runtime-verification.json, the record the release publishes.
 
@@ -159,6 +160,8 @@ def validate(gpu_dir: Path, source_root: Path, version: str, source_commit: str,
                           ("source_commit", source_commit), ("checked_against_source", True)):
         require(trusted.get(key) == expected, f"the trusted gpu-runtime verification {key} differs")
     require(bool(trusted.get("consumer")), "the trusted gpu-runtime verification ran no consumer")
+    require(bool(VERSION.fullmatch(str(trusted.get("package_files_cmake")))),
+            "the trusted gpu-runtime verification names no pinned CMake for the package files")
     problems = closure_fn(source_root / HEADERS)
     require(not problems, f"the device API closure fails at the release source: {problems[0] if problems else ''}")
     return {
@@ -171,6 +174,7 @@ def validate(gpu_dir: Path, source_root: Path, version: str, source_commit: str,
         "source_commit": source_commit,
         "renderer_lock_sha256": trusted.get("renderer_lock_sha256"),
         "files_verified": trusted.get("files_verified"),
+        "package_files_cmake": trusted["package_files_cmake"],
         "checked_against_source": True,
         "consumer": trusted["consumer"],
         "gpu_adapter_required": True,
