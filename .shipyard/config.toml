@@ -43,7 +43,7 @@ platforms = ["macos"]
 # is scripts/gates.sh: the required checks that need no GPU, run against the
 # committed range. The GPU and sterile-consumer lanes run only in CI.
 [validation.default]
-command = "scripts/gates.sh origin/main"
+command = "scripts/gates.sh --full origin/main"
 
 [targets.mac]
 backend = "local"

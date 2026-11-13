@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 # Run the required CI checks that need no GPU and no VM, locally, before a push.
 #
-# Usage: scripts/gates.sh [base]        default base: origin/main
+# Usage: scripts/gates.sh [--full] [base]        default base: origin/main
+#
+# Default (fast, about 5 minutes): prose-lint, product-quality,
+# product-ui-packages, release-policy, release-policy-base, and the authority
+# and observatory unit tests. Run it before every push.
+# --full (what shipyard pr runs): everything, including the mirror-export
+# proofs (forbidden-deps, provenance-verify), the authority expansion verdict
+# and the full observatory verification, which read Pulp and take 25+ minutes.
+# Each check prints its elapsed time.
 #
 # Each check runs the command CI runs, against the committed range base..HEAD.
 # Covered (workflow: job):
@@ -18,10 +26,10 @@
 # Not covered: gpu-macos, sterile-consumer (need a GPU VM), renderer eligibility
 # (downloads builder release assets), live open-PR audits (release tags only).
 #
-# Checks that read Pulp need a Pulp clone: set VELLUM_GATES_UPSTREAM_CLONE (default
-# /Volumes/Atelier/Code/pulp). Exact commits are checked out into a cache under
-# ${VELLUM_GATES_CACHE:-$HOME/.cache/vellum-gates}; the clone itself is never
-# touched except to fetch a missing commit.
+# The --full checks read Pulp from a clone this script owns: it clones over
+# HTTPS once into ${VELLUM_GATES_CACHE:-$HOME/.cache/vellum-gates}/pulp-src and
+# fetches there. It never touches any other checkout. VELLUM_GATES_UPSTREAM_CLONE
+# overrides the clone path (the script fetches into whatever it names).
 #
 # When the diff touches release-path files and the planning directory variable is set, the tag
 # pipeline rehearsal also runs; without it that step is skipped with a notice.
@@ -34,7 +42,16 @@ set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 2
 ROOT="$PWD"
-BASE="${1:-origin/main}"
+FULL=0
+BASE=""
+for arg in "$@"; do
+  case "$arg" in
+    --full) FULL=1 ;;
+    -*) echo "gates: unknown option $arg" >&2; exit 2 ;;
+    *) BASE="$arg" ;;
+  esac
+done
+BASE="${BASE:-origin/main}"
 
 if ! git rev-parse --verify --quiet "$BASE^{commit}" >/dev/null; then
   echo "gates: cannot resolve base '$BASE'" >&2
@@ -66,7 +83,8 @@ NAME="pul""p"
 KEY_SHA="${NAME}_sha"
 KEY_COMMIT="${NAME}_commit"
 KEY_ACCEPTANCE="${NAME}_acceptance_merge_commit"
-UPSTREAM_SRC="${VELLUM_GATES_UPSTREAM_CLONE:-/Volumes/Atelier/Code/pulp}"
+UPSTREAM_SRC="${VELLUM_GATES_UPSTREAM_CLONE:-$CACHE/pulp-src}"
+UPSTREAM_URL="${VELLUM_GATES_UPSTREAM_URL:-https://github.com/Generous-Corp/pulp.git}"
 POLICY_WORKTREE=""
 
 cleanup() {
@@ -90,13 +108,15 @@ run_check() {
     return 0
   fi
   printf 'gates: RUN  %s\n' "$name"
+  local started=$SECONDS elapsed
   ( set -euo pipefail; "$fn" ) >"$log" 2>&1
   rc=$?
+  elapsed=$((SECONDS - started))
   if [[ $rc -eq 0 ]]; then
-    printf 'gates: PASS %s\n' "$name"
+    printf 'gates: PASS %s (%ds)\n' "$name" "$elapsed"
     passed+=("$name")
   else
-    printf 'gates: FAIL %s (exit %d)\n' "$name" "$rc"
+    printf 'gates: FAIL %s (exit %d, %ds)\n' "$name" "$rc" "$elapsed"
     tail -n 40 "$log" | sed 's/^/    | /'
     failed+=("$name")
   fi
@@ -113,7 +133,9 @@ skip_check() {
 # upstream_at <cache-name> <sha>: a detached shared clone of Pulp at an exact commit.
 upstream_at() {
   local name="$1" sha="$2" dir="$CACHE/$1"
-  [[ -d "$UPSTREAM_SRC/.git" || -f "$UPSTREAM_SRC/.git" ]] || { echo "no Pulp clone at $UPSTREAM_SRC; set VELLUM_GATES_UPSTREAM_CLONE" >&2; return 1; }
+  if [[ ! -d "$UPSTREAM_SRC/.git" ]]; then
+    git clone -q --no-checkout "$UPSTREAM_URL" "$UPSTREAM_SRC" >&2 || { echo "cannot clone $UPSTREAM_URL" >&2; return 1; }
+  fi
   git -C "$UPSTREAM_SRC" fetch -q --no-tags origin main >&2 || true
   if ! git -C "$UPSTREAM_SRC" cat-file -e "$sha^{commit}" 2>/dev/null; then
     git -C "$UPSTREAM_SRC" fetch --no-tags origin "$sha" >&2
@@ -250,13 +272,7 @@ PY
   python3 -I tools/agent_instructions/verify.py --json > "$WORK/agent-instructions-report.json"
 }
 
-check_authority_protocol() {
-  local ack="provenance/authority/expansions/full-design-import-render-v1/exact-boundary-acknowledgement-1.json"
-  local upstream_sha="" upstream_root=""
-  if [[ -f "$ack" ]]; then
-    upstream_sha="$(json_field "$ack" 'd["coordinates"][sys.argv[3]]' "$KEY_ACCEPTANCE")"
-    upstream_root="$(upstream_at exact-boundary "$upstream_sha")"
-  fi
+check_authority_tests() {
   python3 -I tools/provenance/test_verify_authority_activation.py
   python3 -I tools/provenance/test_finalize_authority_reconciliation.py
   python3 -I tools/provenance/test_verify_current_state_docs.py
@@ -264,23 +280,28 @@ check_authority_protocol() {
   python3 -I tools/provenance/test_collect_release_evidence.py
   python3 scripts/test_select_exact_provenance_run.py
   python3 scripts/test_verify_exact_provenance_artifact.py
+  python3 .agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py
+}
+
+check_authority_protocol() {
+  local ack="provenance/authority/expansions/full-design-import-render-v1/exact-boundary-acknowledgement-1.json"
+  local upstream_sha="" upstream_root=""
+  if [[ -f "$ack" ]]; then
+    upstream_sha="$(json_field "$ack" 'd["coordinates"][sys.argv[3]]' "$KEY_ACCEPTANCE")"
+    upstream_root="$(upstream_at exact-boundary "$upstream_sha")"
+  fi
+  check_authority_tests
   local evidence=(--repository Generous-Corp/vellum --defer-live-open-pr-audit)
   if [[ -n "$upstream_root" ]]; then
     evidence+=(--pulp-root "$upstream_root")
   fi
   python3 -I tools/provenance/verify_authority_expansion.py "${evidence[@]}" \
     --output "$WORK/authority-expansion-report.json"
-  python3 .agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py
   python3 -I tools/provenance/verify_current_state_docs.py
 }
 
 # ---- observatory-verify ----------------------------------------------------
-check_observatory() {
-  local cursor_sha upstream_root
-  cursor_sha="$(json_field provenance/pulp-observatory/cursor.json 'd["pulp"]["last_scanned_commit"]')"
-  upstream_root="$(upstream_at observatory "$cursor_sha")"
-  # A pull request run: time budgets are reported, pending events are judged by
-  # what this change introduces, the Vellum tail by event coverage.
+check_observatory_tests() {
   python3 -I tools/provenance/test_observatory.py
   python3 -I tools/provenance/test_observatory_mirror_import.py
   python3 -I tools/provenance/test_receiver.py
@@ -297,6 +318,16 @@ scope = json.loads(Path("provenance/pulp-observatory/pulp-observation-scope.json
 cursor = json.loads(Path("provenance/pulp-observatory/cursor.json").read_text())
 validate_enabled_barrier(switch, scope, cursor)
 PY
+  python3 -I tools/provenance/test_verify_${NAME}_observation_scope.py
+}
+
+check_observatory() {
+  local cursor_sha upstream_root
+  cursor_sha="$(json_field provenance/pulp-observatory/cursor.json 'd["pulp"]["last_scanned_commit"]')"
+  upstream_root="$(upstream_at observatory "$cursor_sha")"
+  check_observatory_tests
+  # A pull request run: time budgets are reported, pending events are judged by
+  # what this change introduces, the Vellum tail by event coverage.
   python3 -I tools/provenance/observatory.py verify \
     --pulp-repo "$upstream_root" \
     --vellum-repo . \
@@ -307,7 +338,6 @@ PY
     --time-budgets report \
     --pending-event-scope introduced \
     --output "$WORK/observatory-health-report.json"
-  python3 -I tools/provenance/test_verify_${NAME}_observation_scope.py
   python3 -I tools/provenance/verify_${NAME}_observation_scope.py \
     --output "$WORK/pulp-observation-scope-report.json"
 }
@@ -344,7 +374,7 @@ check_release_rehearsal() {
 }
 
 # ---- run -------------------------------------------------------------------
-printf 'gates: base=%s merge-base=%s head=%s\n' "$BASE" "$GIT_BASE" "$HEAD_SHA"
+printf 'gates: base=%s merge-base=%s head=%s mode=%s\n' "$BASE" "$GIT_BASE" "$HEAD_SHA" "$([[ $FULL -eq 1 ]] && echo full || echo fast)"
 
 run_check prose-lint check_prose_lint
 run_check product-quality check_product_quality
@@ -355,10 +385,16 @@ else
 fi
 run_check release-policy check_release_policy_lane
 run_check release-policy-base check_release_policy_base
-run_check forbidden-deps check_forbidden_deps
-run_check provenance-verify check_provenance_verify
-run_check authority-protocol check_authority_protocol
-run_check observatory-verify check_observatory
+if [[ $FULL -eq 1 ]]; then
+  run_check forbidden-deps check_forbidden_deps
+  run_check provenance-verify check_provenance_verify
+  run_check authority-protocol check_authority_protocol
+  run_check observatory-verify check_observatory
+else
+  run_check authority-tests check_authority_tests
+  run_check observatory-tests check_observatory_tests
+  printf 'gates: fast run; --full adds forbidden-deps, provenance-verify, authority-protocol and observatory-verify\n'
+fi
 
 if touches_release_path; then
   if [[ -n "${!PLANNING_VAR:-}" && -f "${!PLANNING_VAR}/vellum-move/tools/rehearse_tag_pipeline.py" ]]; then
@@ -368,7 +404,7 @@ if touches_release_path; then
   fi
 fi
 
-printf 'gates: %d passed, %d failed, %d skipped\n' "${#passed[@]}" "${#failed[@]}" "${#skipped[@]}"
+printf 'gates: %d passed, %d failed, %d skipped in %ds\n' "${#passed[@]}" "${#failed[@]}" "${#skipped[@]}" "$SECONDS"
 if [[ ${#failed[@]} -gt 0 ]]; then
   printf 'gates: FAIL %s\n' "${failed[*]}"
   exit 1
