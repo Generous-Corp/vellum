@@ -27,6 +27,14 @@ and run the audio-only consumer with a GPU adapter, and check the device API
 closure. `finalize` then ties the bytes it publishes to that record. Like the
 SDK archive, it is covered by the immutable release's attestation.
 
+CMake writes four of that archive's package files, and their text changes
+between CMake releases. The GPU run and `sdk-release.yml` run on different
+hosts, so both generate those files with the CMake `gpu-runtime/cmake-lock.json`
+pins (`scripts/pinned_cmake.py` fetches it and checks its SHA-256), not the one
+installed on the runner. To move to another CMake, change the version and
+digest in that lock; the next GPU run builds with it and the finalizer
+regenerates with it.
+
 Only the bot's pull request can release: `release-tag.yml` re-derives the bump
 from main's history and tags nothing when the landed version differs from it in
 any way (a hand-set number, an extra hunk, a skipped version). To release a
