@@ -9686,9 +9686,9 @@
       "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-11-13T05:23:15Z",
+  "generated_at": "2026-11-13T06:34:03Z",
   "health": "pass",
-  "maximum_pending_age_days": 2.868,
+  "maximum_pending_age_days": 2.917,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
   "pending": 10,
