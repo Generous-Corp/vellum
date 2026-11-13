@@ -26,7 +26,7 @@ NSString* ns(const std::string& text) {
     return s != nil ? s : @"";
 }
 
-// -vellumChoose: records the sender's tag on the root menu, which is the
+// -pulpChoose: records the sender's tag on the root menu, which is the
 // target's context (not retained: the menu retains the target).
 void choose_item(id self, SEL, id sender) {
     auto* root = static_cast<NSMenu*>(mac::instance_context((__bridge void*)self));
@@ -37,12 +37,12 @@ void choose_item(id self, SEL, id sender) {
 }
 
 void add_target_methods(void* cls, void*) {
-    class_addMethod(static_cast<Class>(cls), sel_registerName("vellumChoose:"),
+    class_addMethod(static_cast<Class>(cls), sel_registerName("pulpChoose:"),
                     reinterpret_cast<IMP>(&choose_item), "v@:@");
 }
 
 id make_target(NSMenu* root) {
-    void* cls = mac::unique_objc_class("VellumPlatformMenuTarget", (__bridge void*)[NSObject class],
+    void* cls = mac::unique_objc_class("PulpPlatformMenuTarget", (__bridge void*)[NSObject class],
                                        &add_target_methods);
     if (cls == nullptr)
         return nil;
@@ -85,7 +85,7 @@ void fill_menu(NSMenu* menu, const std::vector<MenuItem>& items, id target) {
             [sub release];
         } else {
             row.target = target;
-            row.action = sel_registerName("vellumChoose:");
+            row.action = sel_registerName("pulpChoose:");
         }
         [menu addItem:row];
         [row release];

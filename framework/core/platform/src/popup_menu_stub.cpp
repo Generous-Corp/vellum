@@ -6,7 +6,7 @@
 
 // macOS has a native popup_menu_mac.mm impl. iOS has no native popover
 // menu impl yet (UIMenu / UIContextMenuInteraction wiring is a follow-
-// up), so the link step for any iOS bundle that pulls vellum-view-core
+// up), so the link step for any iOS bundle that pulls pulp-view-core
 // fails on PopupMenu::show / show_at_view. Provide a nullopt stub for
 // iOS and every other non-mac platform so the symbols exist; callers
 // treat nullopt as "menu unsupported / user dismissed".

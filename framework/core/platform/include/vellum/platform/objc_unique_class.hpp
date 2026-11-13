@@ -3,7 +3,7 @@
 /// @file objc_unique_class.hpp
 /// Objective-C classes whose names are unique to the binary that defines them.
 ///
-/// Objective-C class names are process-wide. When two plug-ins built from Vellum
+/// Objective-C class names are process-wide. When two plug-ins built from Pulp
 /// load into one host, a class compiled into both under a fixed name exists
 /// twice; the runtime warns and lets the first loaded copy win, so one
 /// plug-in's views or delegates silently run the other's code. That is
@@ -11,7 +11,7 @@
 ///
 /// The helper registers a class at run time under `<base>_<token>`, where the
 /// token is the load address of the image that contains this helper.
-/// vellum-platform is a static library, so each plug-in, app or test binary
+/// pulp-platform is a static library, so each plug-in, app or test binary
 /// links its own copy and so names its own classes. Methods are added from C
 /// functions with `class_addMethod` inside the `configure` callback, before
 /// the class is registered.
