@@ -84,5 +84,8 @@ promotion release; it cannot be an ordinary patch release.
 - `full-design-import-render-v1/exact-boundary-acknowledgement-1.json`, bound
   to a landed Pulp exact-boundary acceptance;
 - `full-design-import-render-v1/parity-completion-1.json` at the tagged commit;
-- a Pulp acceptance whose open-PR audit lists every open pull request that
-  touches an exact route at release time (refresh it in Pulp if needed).
+- a Pulp acceptance whose open-PR audit lists every landable open pull request
+  that touches an exact route at release time (refresh it in Pulp if needed).
+  A pull request is landable when it is in its repository's merge queue or
+  carries a counted reviewer APPROVE of its exact head; see
+  [the open pull request audit](../../../docs/provenance/release-signing.md#the-open-pull-request-audit).

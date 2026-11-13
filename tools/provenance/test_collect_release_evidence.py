@@ -69,13 +69,24 @@ def run_cli(*argv: str) -> str:
     return stdout.getvalue()
 
 
+REVIEWER_CONFIG = """[auto_merge]
+reviewer_signers = ["pulp-review", "infra-review2"]
+reviewer_stamp_sessions = ["fleet-pass-reviewer-*"]
+"""
+
+
 class SnapshotFixture:
     """The on-disk layout the workflow writes under open-pr-snapshot-input."""
 
     def __init__(self, root: Path) -> None:
         self.root = root
+        self.checkouts = {}
         for repository in collector.OPEN_PR_REPOSITORIES:
             write(self.repository_root(repository) / "pulls.json", [])
+            checkout = root.parent / "checkouts" / repository.replace("/", "__")
+            (checkout / ".shipyard").mkdir(parents=True, exist_ok=True)
+            (checkout / ".shipyard" / "config.toml").write_text(REVIEWER_CONFIG, encoding="utf-8")
+            self.checkouts[repository] = checkout
 
     def repository_root(self, repository: str) -> Path:
         return self.root / repository.replace("/", "__")
@@ -242,6 +253,8 @@ class OpenPullRequestTests(unittest.TestCase):
         run_cli(
             "open-pr-snapshot", "--snapshot-root", str(self.fixture.root),
             "--output", str(output), "--cursor-output", str(cursor),
+            "--vellum-checkout", str(self.fixture.checkouts["Generous-Corp/vellum"]),
+            "--pulp-checkout", str(self.fixture.checkouts["Generous-Corp/pulp"]),
         )
         return (
             json.loads(output.read_text(encoding="utf-8")),
@@ -302,7 +315,7 @@ class OpenPullRequestTests(unittest.TestCase):
         for listed in pulls:
             self.fixture.add_pull("Generous-Corp/pulp", listed, unchanged, unchanged)
         snapshot, cursor = self.snapshot()
-        self.assertEqual(snapshot["schema_version"], 2)
+        self.assertEqual(snapshot["schema_version"], 3)
         self.assertEqual(snapshot["kind"], "github-open-pull-request-snapshot")
         self.assertEqual(
             [row["repository"] for row in snapshot["repositories"]],
@@ -417,6 +430,196 @@ class OpenPullRequestTests(unittest.TestCase):
         write(live_root / "Generous-Corp__vellum.json", duplicate)
         with self.assertRaisesRegex(SystemExit, "Generous-Corp/vellum: duplicate open PR numbers"):
             run_cli("live-cursor", "--cursor-root", str(live_root), "--output", str(self.root / "c.json"))
+
+
+ROOT = HERE.parents[1]
+APPROVER = "pulp-review"
+
+
+def verdict_comment(
+    head: str, *, login: str = "shipyard-local[bot]", user_type: str = "Bot",
+    signer: str = APPROVER, session: str = "fleet-pass-reviewer-7", verdict: str = "APPROVE",
+) -> dict[str, Any]:
+    """A fleet reviewer's verdict comment, as `ghapp` posts it."""
+    body = (
+        f"Reviewed.\n\nreviewer: {signer}\n"
+        f"<!-- session: m3/{session} agent: {signer} -->\n"
+        f"verdict: {verdict} head:{head}\n"
+    )
+    return {"id": 1, "body": body, "user": {"login": login, "type": user_type}}
+
+
+def queue_read(number: int, head: str, entry: Any) -> dict[str, Any]:
+    return {"data": {"repository": {"pullRequest": {
+        "number": number, "headRefOid": head, "mergeQueueEntry": entry,
+    }}}}
+
+
+class LandabilityTests(unittest.TestCase):
+    """Only an open pull request that can land before the tag blocks a release."""
+
+    REPOSITORY = "Generous-Corp/pulp"
+    NUMBER = 12198
+    HEAD = sha("b")
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.fixture = SnapshotFixture(self.root / "snapshot")
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text(encoding="utf-8"))
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text(encoding="utf-8"))
+        self.matrix, self.amendment = matrix, amendment
+        self.route = next(
+            row["path"] for row in verifier.exact_route_rows(matrix, amendment)
+            if row["repository"] == self.REPOSITORY
+        )
+        # An open pull request that changes one routed path among unrelated ones.
+        listed = pull(self.NUMBER, sha("a"), self.HEAD)
+        self.fixture.add_pages(self.REPOSITORY, [[listed]])
+        self.fixture.add_pull(
+            self.REPOSITORY, listed,
+            tree([blob("docs/unrelated.md", sha("1"))]),
+            tree([blob("docs/unrelated.md", sha("2")), blob(self.route, sha("3"))]),
+        )
+        self.reads = self.fixture.repository_root(self.REPOSITORY) / "landability"
+        self.set_queue(None)
+        self.set_comments([])
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def set_queue(self, entry: Any) -> None:
+        write(self.reads / f"{self.NUMBER}-merge-queue.json", queue_read(self.NUMBER, self.HEAD, entry))
+
+    def set_comments(self, comments: list[dict[str, Any]]) -> None:
+        write(self.reads / f"{self.NUMBER}-comments.json", [comments])
+
+    def snapshot(self) -> dict[str, Any]:
+        output = self.root / "snapshot.json"
+        run_cli(
+            "open-pr-snapshot", "--snapshot-root", str(self.fixture.root),
+            "--output", str(output), "--cursor-output", str(self.root / "cursor.json"),
+            "--vellum-checkout", str(self.fixture.checkouts["Generous-Corp/vellum"]),
+            "--pulp-checkout", str(self.fixture.checkouts["Generous-Corp/pulp"]),
+        )
+        return json.loads(output.read_text(encoding="utf-8"))
+
+    def row(self) -> dict[str, Any]:
+        return self.snapshot()["repositories"][0]["pulls"][0]
+
+    def audit(self, accepted: list[dict[str, Any]] | None = None) -> list[str]:
+        """The release readiness audit of the collected snapshot, as the tag run judges it."""
+        acceptance = {"refresh": {"open_pr_rows": accepted or []}}
+        return verifier.validate_open_pr_snapshot(
+            self.snapshot(), acceptance, self.matrix, self.amendment, delivery_retired=True,
+        )
+
+    def assert_blocks(self) -> None:
+        errors = self.audit()
+        self.assertEqual(
+            errors, [f"open PR snapshot: live overlap {self.REPOSITORY}#{self.NUMBER} is absent from acceptance"]
+        )
+        self.assertEqual(self.row()["landability"], "landable")
+
+    def assert_does_not_block(self) -> None:
+        self.assertEqual(self.audit(), [])
+        self.assertEqual(self.row()["landability"], "not_landable")
+
+    def test_an_unapproved_unqueued_pull_request_does_not_block(self) -> None:
+        self.assert_does_not_block()
+        self.assertEqual(
+            self.row()["landability_reason"],
+            f"not in the merge queue and no counted APPROVE names head {self.HEAD}",
+        )
+
+    def test_a_queued_pull_request_blocks(self) -> None:
+        self.set_queue({"id": "MQE_1"})
+        self.assert_blocks()
+        self.assertEqual(self.row()["landability_reason"], "in the merge queue")
+
+    def test_an_exact_head_counted_approve_blocks(self) -> None:
+        self.set_comments([verdict_comment(self.HEAD)])
+        self.assert_blocks()
+        self.assertEqual(
+            self.row()["landability_reason"], f"counted APPROVE of {self.HEAD} by {APPROVER}"
+        )
+
+    def test_an_approve_of_an_older_head_does_not_count(self) -> None:
+        self.set_comments([verdict_comment(sha("9"))])
+        self.assert_does_not_block()
+
+    def test_an_approve_from_a_non_counted_author_does_not_count(self) -> None:
+        for label, comment in {
+            "the pull request's author": verdict_comment(self.HEAD, login="someone", user_type="User"),
+            "an account named like the App": verdict_comment(self.HEAD, user_type="User"),
+            "an unlisted signer": verdict_comment(self.HEAD, signer="pulp-author"),
+            "an unscheduled session": verdict_comment(self.HEAD, session="interactive-3"),
+        }.items():
+            with self.subTest(author=label):
+                self.set_comments([comment])
+                self.assert_does_not_block()
+
+    def test_a_comment_cannot_make_a_landable_pull_request_not_landable(self) -> None:
+        # A HOLD, or a newer comment of any kind, is not consulted: no author
+        # can withdraw their own pull request from the audit by commenting.
+        hold = verdict_comment(self.HEAD, verdict="HOLD")
+        self.set_comments([verdict_comment(self.HEAD), hold, {"id": 3, "body": "not landable", "user": {}}])
+        self.assert_blocks()
+        self.set_comments([hold])
+        self.set_queue({"id": "MQE_1"})
+        self.assert_blocks()
+
+    def test_a_lookup_that_cannot_be_judged_blocks(self) -> None:
+        queue = self.reads / f"{self.NUMBER}-merge-queue.json"
+        comments = self.reads / f"{self.NUMBER}-comments.json"
+        cases = {
+            "the merge-queue read failed": lambda: queue.unlink(),
+            "the merge-queue read returned errors": lambda: write(
+                queue, {"errors": [{"message": "rate limited"}], "data": None}),
+            "the merge-queue read names another head": lambda: write(
+                queue, queue_read(self.NUMBER, sha("9"), None)),
+            "the merge-queue read lacks the entry field": lambda: write(
+                queue, {"data": {"repository": {"pullRequest": {
+                    "number": self.NUMBER, "headRefOid": self.HEAD}}}}),
+            "the merge-queue entry is malformed": lambda: write(
+                queue, queue_read(self.NUMBER, self.HEAD, "queued")),
+            "the comment read failed": lambda: comments.unlink(),
+            "the comment read is not JSON": lambda: comments.write_text("{", encoding="utf-8"),
+            "the comment read is not pages of comments": lambda: write(comments, {"message": "Not Found"}),
+            "the reviewer policy is unreadable": lambda: (
+                self.fixture.checkouts[self.REPOSITORY] / ".shipyard" / "config.toml").write_text(
+                    "[auto_merge]\n", encoding="utf-8"),
+        }
+        for label, breaks in cases.items():
+            with self.subTest(lookup=label):
+                self.set_queue(None)
+                self.set_comments([])
+                (self.fixture.checkouts[self.REPOSITORY] / ".shipyard" / "config.toml").write_text(
+                    REVIEWER_CONFIG, encoding="utf-8")
+                self.assert_does_not_block()  # control: the same pull request, judged
+                breaks()
+                self.assert_blocks()
+                self.assertIn("unknown", self.row()["landability_reason"])
+
+    def test_the_acceptance_list_still_binds_every_open_overlap(self) -> None:
+        accepted = {
+            "repository": self.REPOSITORY, "pull_request": self.NUMBER,
+            "merge_base_commit": sha("c"), "head_commit": self.HEAD, "paths": [self.route],
+            "disposition": "audited exact-route overlap", "resolution": "pulp-retained",
+        }
+        for queued in (None, {"id": "MQE_1"}):
+            with self.subTest(queued=queued is not None):
+                self.set_queue(queued)
+                self.assertEqual(self.audit([accepted]), [])
+                self.assertEqual(
+                    self.audit([accepted | {"head_commit": sha("9")}]),
+                    [f"open PR snapshot: live overlap {self.REPOSITORY}#{self.NUMBER} head differs"],
+                )
+        self.fixture.add_pages(self.REPOSITORY, [])
+        self.assertEqual(
+            self.audit([accepted]),
+            [f"open PR snapshot: accepted overlap {self.REPOSITORY}#{self.NUMBER} is not currently open"],
+        )
 
 
 if __name__ == "__main__":

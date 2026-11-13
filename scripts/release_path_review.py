@@ -13,7 +13,8 @@ A verdict counts on the same terms as the `review-verdict` status: a comment by
 the fleet App whose last line is `verdict: APPROVE head:<sha>` (or
 `reviewed: <sha>`), carrying exactly one canonical `ghapp` session stamp whose
 session matches the base's `[auto_merge] reviewer_stamp_sessions`, and signed
-with one `reviewer: <name>` from the base's `[auto_merge] reviewer_signers`. An
+with one `reviewer: <name>` from the base's `[auto_merge] reviewer_signers`
+(counted_verdicts.py, which the release readiness open-PR audit shares). An
 APPROVE naming any other head never counts, and nothing carries one forward. A
 HOLD naming the head, from the fleet App or a trusted account, as a comment or
 a changes-requested review, refuses the head.
@@ -52,7 +53,6 @@ the Actions token can post the status it decides.
 
 from __future__ import annotations
 
-import fnmatch
 import json
 import os
 import re
@@ -60,7 +60,6 @@ import secrets
 import subprocess
 import sys
 import time
-import tomllib
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable
@@ -68,27 +67,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+sys.path.append(str(Path(__file__).resolve().parent))  # -I drops the script dir; append keeps the standard library first
+from counted_verdicts import (  # noqa: E402
+    FLEET_APP, Approval, ReviewerPolicyError, counted_approval, is_fleet_app, load_reviewer_policy,
+    marker_verdict,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 CODEOWNERS = Path(".github/CODEOWNERS")
-SHIPYARD_CONFIG = Path(".shipyard/config.toml")
 CONTEXT = "release-path-review"
 # GitHub refuses a status description over 140 characters.
 DESCRIPTION_LIMIT = 140
-FLEET_APP = "shipyard-local[bot]"
 TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 REQUIRED_APPROVALS = 2
 # GitHub lists at most 3000 files of a pull request.
 FILE_LIST_LIMIT = 3000
 PAGE = 100
-# Same patterns as Shipyard's ghapp_queue_arm_guard.py.
-MARKER = re.compile(
-    r"^[ \t]*(?:reviewed:[ \t]*([0-9a-f]{40})"
-    r"|verdict:[ \t]*(APPROVE|HOLD)[ \t]+head:[ \t]*([0-9a-f]{40}))[ \t]*$"
-)
-SESSION_STAMP = re.compile(r"<!-- session: ([!-.0-~]+)/([!-~]+?)(?: agent: ([!-~]+?))? -->")
-STAMP_VARIANT = re.compile(r"<!--\s*session\s*:", re.IGNORECASE)
-SIGNER_LINE = re.compile(r"^[ \t]*reviewer:[ \t]*([A-Za-z0-9._-]+)[ \t]*$", re.MULTILINE)
-UNATTRIBUTED = "unattributed"
 # Every workflow and local action, and the mirror tooling the framework
 # transfer is derived and censused with (rename_mirror_namespace.py and the
 # collision and symbol censuses that verify_extraction.py runs).
@@ -109,13 +103,6 @@ class Policy:
     protected: frozenset[str]
     signers: frozenset[str]
     sessions: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class Approval:
-    signer: str
-    session: str
-    comment: Any
 
 
 def protected_paths(codeowners: str) -> frozenset[str]:
@@ -140,60 +127,14 @@ def protected_paths(codeowners: str) -> frozenset[str]:
 def load_policy(root: Path) -> Policy:
     try:
         codeowners = (root / CODEOWNERS).read_text(encoding="utf-8")
-        config = tomllib.loads((root / SHIPYARD_CONFIG).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
+        reviewers = load_reviewer_policy(root)
+    except (OSError, ReviewerPolicyError) as error:
         raise GateError(f"the base policy is unreadable: {error}") from error
-    section = config.get("auto_merge")
-    section = section if isinstance(section, dict) else {}
-    signers = section.get("reviewer_signers")
-    sessions = section.get("reviewer_stamp_sessions")
-    if not (isinstance(signers, list) and signers and all(isinstance(s, str) and s.strip() for s in signers)):
-        raise GateError(f"{SHIPYARD_CONFIG} [auto_merge] reviewer_signers must be a non-empty list of names")
-    if not (isinstance(sessions, list) and sessions and all(isinstance(s, str) and s.strip() for s in sessions)):
-        raise GateError(f"{SHIPYARD_CONFIG} [auto_merge] reviewer_stamp_sessions must be a non-empty list of globs")
-    return Policy(
-        protected=protected_paths(codeowners),
-        signers=frozenset(s.strip().lower() for s in signers),
-        sessions=tuple(s.strip().lower() for s in sessions),
-    )
-
-
-def marker_verdict(body: str) -> tuple[str, str] | None:
-    """`(APPROVE|HOLD, head)` from a comment's last non-blank line."""
-    lines = [line for line in body.splitlines() if line.strip()]
-    match = MARKER.match(lines[-1]) if lines else None
-    if match is None:
-        return None
-    return ("APPROVE", match.group(1)) if match.group(1) else (match.group(2), match.group(3))
-
-
-def is_fleet_app(user: Any) -> bool:
-    return isinstance(user, dict) and user.get("login") == FLEET_APP and user.get("type") == "Bot"
+    return Policy(protected=protected_paths(codeowners), signers=reviewers.signers, sessions=reviewers.sessions)
 
 
 def trusted(record: dict[str, Any]) -> bool:
     return is_fleet_app(record.get("user")) or record.get("author_association") in TRUSTED_ASSOCIATIONS
-
-
-def counted_approval(comment: dict[str, Any], head: str, policy: Policy) -> Approval | None:
-    """The `(signer, session)` of a counted APPROVE naming `head`, or None."""
-    body = comment.get("body")
-    if not isinstance(body, str) or not is_fleet_app(comment.get("user")):
-        return None
-    found = marker_verdict(body)
-    if found != ("APPROVE", head):
-        return None
-    stamps = SESSION_STAMP.findall(body)
-    if len(stamps) != 1 or STAMP_VARIANT.search(SESSION_STAMP.sub("", body)):
-        return None
-    session, agent = stamps[0][1].lower(), stamps[0][2].lower()
-    if session == UNATTRIBUTED or not any(fnmatch.fnmatchcase(session, glob) for glob in policy.sessions):
-        return None
-    named = {name.lower() for name in SIGNER_LINE.findall(body)}
-    # The stamp's agent is the identity ghapp posted as; the signer line must name it.
-    if len(named) != 1 or not named <= policy.signers or named != {agent}:
-        return None
-    return Approval(signer=named.pop(), session=session, comment=comment.get("id"))
 
 
 def holds_on(head: str, comments: Iterable[dict[str, Any]], reviews: Iterable[dict[str, Any]]) -> list[str]:
