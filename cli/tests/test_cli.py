@@ -720,12 +720,17 @@ class CliTests(unittest.TestCase):
             root = Path(temporary)
             project = root / "app"
             self.assertEqual(invoke("create", "Pinned", "-d", str(project)).returncode, 0)
+            # An SDK of any version but the one the project pinned. Derived from
+            # the pin, so no release of Vellum can make the two equal.
+            pinned = json.loads((project / "framework.lock").read_text())["framework"]["version"]
+            major, minor, patch = (int(part) for part in pinned.split("."))
+            other = f"{major}.{minor}.{patch + 1}"
             sdk = root / "sdk"
             sdk.mkdir()
             (sdk / "metadata.json").write_text(json.dumps({
                 "schema": "vellum.sdk-artifact.v1",
-                "framework_version": "0.2.0",
-                "cli_version": "0.2.0",
+                "framework_version": other,
+                "cli_version": other,
                 "cli_api": 1,
                 "source_commit": "a" * 40,
                 "target": "test-host",
@@ -747,9 +752,9 @@ class CliTests(unittest.TestCase):
             (sdk / "install-manifest.json").write_text(json.dumps({
                 "schema": "vellum.sdk-install.v1",
                 "verified": True,
-                "artifact": "vellum-sdk-0.2.0-test-host.tar.gz",
+                "artifact": f"vellum-sdk-{other}-test-host.tar.gz",
                 "artifact_sha256": "b" * 64,
-                "framework_version": "0.2.0",
+                "framework_version": other,
                 "target": "test-host",
                 "source_commit": "a" * 40,
             }), encoding="utf-8")

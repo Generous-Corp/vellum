@@ -209,11 +209,15 @@ RELEASE_PIPELINE_ATTESTER = "release-pipeline:Generous-Corp/vellum"
 # release carrying everything since 2026-10-25 under the same parity waiver
 # (owner decision 2026-11-01, ruling 1). The parity re-freeze gates every later
 # release.
+# One exception: the owner also waived v0.2.0, which carries the same parity
+# state v0.1.11 was waived for. The set is exact names, never a pattern, and
+# every release after v0.2.0 needs parity-completion-1.json at its release
+# commit.
 AUTHORITY_PROMOTION_KIND = "vellum-authority-promotion-attestation"
 MIRROR_PROMOTION_KIND = "vellum-mirror-promotion-attestation"
 MIRROR_PROMOTION_ATTESTATION_ID = "full-design-import-render-v1-mirror-promotion-1"
 MIRROR_PROMOTION_PARITY = "not-proven-deferred-to-matrix-refreeze"
-MIRROR_PROMOTION_RELEASE_TAGS = frozenset({"v0.1.10", "v0.1.11"})
+MIRROR_PROMOTION_RELEASE_TAGS = frozenset({"v0.1.10", "v0.1.11", "v0.2.0"})
 MIRROR_RECEIPT_INDEX_PATH = "provenance/mirror/receipts/index.json"
 MIRROR_RECEIPT_INDEX_SCHEMA = "vellum.mirror-receipt-index.v1"
 MIRROR_RECEIPT_PATH = re.compile(r"^provenance/mirror/receipts/[A-Za-z0-9][A-Za-z0-9._-]*\.json$")
