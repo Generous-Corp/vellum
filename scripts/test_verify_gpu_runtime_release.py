@@ -47,7 +47,8 @@ class Fixture(unittest.TestCase):
     def verify(self, **overrides):
         def fn(archive, source_root, renderer):
             self.calls.append(("verify", archive.name, source_root, renderer.name))
-            return {**source_record(), "renderer_lock_sha256": "f" * 64, "files_verified": 40, **overrides}
+            return {**source_record(), "renderer_lock_sha256": "f" * 64, "files_verified": 40,
+                    "package_files_cmake": "4.3.3", **overrides}
         return fn
 
     def run_validate(self, verify=None, closure=None, head=COMMIT, version=VERSION, commit=COMMIT):
@@ -68,8 +69,15 @@ class Validate(Fixture):
                          (release.SCHEMA, True, DIGEST, NAME))
         self.assertTrue(record["gpu_adapter_required"])
         self.assertEqual(record["device_api_closure"], "ok")
+        self.assertEqual(record["package_files_cmake"], "4.3.3")
         self.assertIn(("fetch", self.source / release.LOCK), self.calls)
         self.assertEqual([c[0] for c in self.calls], ["fetch", "verify"])
+
+    def test_a_verification_that_names_no_pinned_cmake_refuses(self):
+        for value in (None, "", "cmake on PATH"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(release.ReleaseError, "names no pinned CMake"):
+                    self.run_validate(verify=self.verify(package_files_cmake=value))
 
     def test_the_source_checkout_must_be_the_release_commit(self):
         with self.assertRaisesRegex(release.ReleaseError, "release source commit"):

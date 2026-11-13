@@ -93,9 +93,29 @@ Pulp consumer. The limits:
 - Only events for commits of the agent's own pull request.
 - Only `framework-only`.
 - Never for paths under `framework/` or `mirror/`, for a schema or API change,
-  or for security or P0 work.
+  or for security or P0 work. A port into `framework/` has its own rule below.
 - The rationale shows a search of Pulp for the touched identifiers that returns
   0, and a control search on the same instrument that returns more than 0.
+- The owner is the agent's own handle or session, never `@danielraffel`.
+- Any later resolution overrides it.
+
+### Classifying your own port's events `ported`
+
+Owner decision, 2026-11-13: a change that ports Pulp code into `framework/`
+records observation events like any other, and the porting agent may classify
+them. The limits:
+
+- Only events for commits of the agent's own port pull request.
+- Only `ported`, and only when every `framework/` path the event maps is
+  covered by a row of `provenance/framework/ports.json` in the same pull
+  request whose origin is `pulp`. The row names the Pulp commits the code came
+  from, and the provenance lane proves against a Pulp checkout that the file
+  joins as Pulp's bytes at that commit, put through the transfer's rename.
+- The rationale names the ledger rows, and `linked_commits` names their Pulp
+  commits.
+- Never for a `native` row, for a `framework/` edit with no ledger row, for a
+  schema or API change, or for security or P0 work. Those events, and
+  everything else under `framework/`, stay with the owner.
 - The owner is the agent's own handle or session, never `@danielraffel`.
 - Any later resolution overrides it.
 
