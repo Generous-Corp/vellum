@@ -850,6 +850,47 @@ class VerifyExtractionTests(unittest.TestCase):
             self.assertEqual(errors, [])
             self.assertIs(checks["framework_ports_proved"], True)
 
+    def test_a_native_row_may_not_carry_pulp_bytes(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root, pulp = Path(temporary) / "vellum", Path(temporary) / "pulp"
+            root.mkdir()
+            pulp.mkdir()
+            run = lambda *args: subprocess.check_output(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=pulp, text=True).strip()
+            run("init", "-q", "-b", "main")
+            (pulp / "new.cpp").write_bytes(b"int from_the_other_side;\n")
+            run("add", "-A"); run("commit", "-q", "-m", "source")
+            commit = run("rev-parse", "HEAD")
+            run("update-ref", "refs/remotes/origin/main", commit)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            self.write_ports(root, [self.ports_row(self.PORTED)])
+            refused = "is added as native, but its bytes are a Pulp blob"
+            # Control: a file Vellum wrote passes as native, with or without a checkout.
+            (root / self.PORTED).write_bytes(b"int written_here;\n")
+            for checkout in (None, pulp):
+                self.assertEqual(self.ports_verdict(root, pulp_root=checkout, defer=False)[0], [])
+            # Bytes Pulp's object store holds are refused under a native row.
+            (root / self.PORTED).write_bytes(b"int from_the_other_side;\n")
+            errors, _ = self.ports_verdict(root, pulp_root=pulp, defer=False)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn(refused, errors[0])
+            # The same bytes under a row that names the commit are a port.
+            self.write_ports(root, [self.ports_row(self.PORTED, commits=[commit], pulp_path="new.cpp")])
+            self.assertEqual(self.ports_verdict(root, pulp_root=pulp, defer=False)[0], [])
+            # Without a checkout, a blob the mirror's origin records list is still refused.
+            self.write_ports(root, [self.ports_row(self.PORTED)])
+            self.assertEqual(self.ports_verdict(root)[0], [])
+            origins = root / verify_extraction.MIRROR_ORIGIN_RECORDS
+            origins.parent.mkdir(parents=True, exist_ok=True)
+            origins.write_text(json.dumps({"schema": verify_extraction.MIRROR_ORIGIN_SCHEMA,
+                                           "pulp_repository": "Generous-Corp/pulp", "records": [{
+                "mirror_path": "mirror/new.cpp", "pulp_path": "new.cpp", "pulp_commit": commit,
+                "git_blob_sha": verify_extraction.git_blob_sha(b"int from_the_other_side;\n"),
+                "export_receipt": "provenance/mirror/receipts/r.json"}]}), encoding="utf-8")
+            errors, _ = self.ports_verdict(root)
+            self.assertTrue(any(refused in e for e in errors), errors)
+
     def test_a_ported_file_is_held_to_the_framework_content_rules(self) -> None:
         self.hide_ci_git_base()
         with tempfile.TemporaryDirectory() as temporary:

@@ -1187,12 +1187,44 @@ def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[
     return errors
 
 
+def framework_ports_native_errors(root: Path, added: dict[str, dict], pulp_root: Path | None) -> list[str]:
+    """A `native` row may not carry Pulp's bytes past the Pulp proof.
+
+    The file a native row adds is refused when its blob is one the mirror's
+    origin records list, or, with a Pulp checkout, one Pulp's object store
+    holds. This is the native roots' exact-blob rule: it catches Pulp content
+    copied as it is, not content respelled on the way.
+    """
+    native = {}
+    for path, row in sorted(added.items()):
+        file = root / path
+        if row["origin"] == "native" and file.is_file() and not file.is_symlink():
+            native[path] = git_blob_sha(file.read_bytes())
+    if not native:
+        return []
+    records, _ = load_mirror_origin_records(root / MIRROR_ORIGIN_RECORDS)
+    known = {record["git_blob_sha"] for record in records}
+    if pulp_root is not None:
+        asked = sorted(set(native.values()))
+        batch = subprocess.run(["git", "-C", str(pulp_root), "cat-file", "--batch-check"],
+                               input="".join(f"{blob}\n" for blob in asked).encode(), capture_output=True, check=False)
+        lines = batch.stdout.decode("utf-8", errors="replace").splitlines()
+        if batch.returncode != 0 or len(lines) != len(asked):
+            return [f"{FRAMEWORK_PORTS}: Pulp checkout {pulp_root} could not be asked for the native rows' blobs"]
+        known |= {blob for blob, line in zip(asked, lines) if line.split()[1:2] == ["blob"]}
+    known.discard(EMPTY_BLOB_SHA)
+    return [f"{FRAMEWORK_PORTS}: {path} is added as native, but its bytes are a Pulp blob ({blob[:12]}); "
+            "a row for Pulp content names its Pulp path and commits"
+            for path, blob in native.items() if blob in known]
+
+
 def framework_ports_state(root: Path, transferred: set[str], pulp_root: Path | None, pulp_main_ref: str,
                           defer_identity: bool) -> tuple[set[str], list[str], dict[str, object]]:
     """The file set framework/ must hold, and what is wrong with the ledger: (expected, errors, checks)."""
     ports = load_framework_ports()
     expected, added, removed, errors = ports.file_set(root, transferred)
     errors = errors + framework_ports_history_errors(root, ports)
+    errors = errors + framework_ports_native_errors(root, added, pulp_root)
     checks: dict[str, object] = {"framework_ports_added": sorted(added), "framework_ports_removed": sorted(removed)}
     rows, row_errors = ports.load(root)
     pulp_rows = [row for row in rows if row["origin"] == "pulp"] if not row_errors else []

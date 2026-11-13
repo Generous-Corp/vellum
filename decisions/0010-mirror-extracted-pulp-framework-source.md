@@ -254,7 +254,10 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
   to the file set after the transfer. Each row names one `framework/` path,
   whether it is `added` or `removed`, its `origin`, and a `reason`. A row of
   origin `pulp` names the Pulp path and the Pulp commits the content came from.
-  A row of origin `native` names neither, for a file Vellum wrote. A row that
+  A row of origin `native` names neither, for a file Vellum wrote; its file is
+  refused when its bytes are a blob the mirror's origin records list or Pulp's
+  object store holds, so Pulp content copied as it is cannot pass as native.
+  A row that
   adds a compilable source names the mirrored target that compiles it.
 - **The file set.** `framework/` holds exactly the transfer record's paths,
   minus the ledger's removals, plus its additions. A file with neither a
@@ -269,8 +272,11 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
   `framework/external/`, whose third-party bytes still change only through
   `external-updates.json`. Every Pulp commit a row names must be a commit on
   Pulp's main in the lane's Pulp checkout, and an added row's Pulp path must be
-  a file in one of its commits. The proof reads the checkout, never the row's
-  text, and fails closed without one.
+  a regular file (mode 100644 or 100755) in one of its commits. A removed
+  row's Pulp path is not looked up: Pulp may have deleted the file in the named
+  commits or never held it at that path, and the row grants nothing, since the
+  file's absence from `framework/` is what the file set checks. The proof reads
+  the checkout, never the row's text, and fails closed without one.
 - **A ported file is framework content.** It is held to the edge rules, the
   residual-spelling check and the collision census like every other file
   there. The name-debt baseline may only fall, so a ported file starts with no
@@ -278,10 +284,18 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
 - **The build compiles the ledger.** The mirror build plan compiles each
   closure's sources, leaves out a source the ledger removed, and adds each
   ledger-added source to the target its row names. A row naming a target no
-  closure builds fails the plan.
+  closure builds fails the plan. A ledger row cannot remove a file the plan
+  generates from: `core/canvas/CMakeLists.txt`,
+  `core/runtime/include/vellum/runtime/build_info.hpp.in`,
+  `core/view/cmake/PulpViewJsPreludes.cmake`, `core/view/js/embed_js.py`, the
+  binary-data encoder `tools/cmake/scripts/encode_binary_data.py`, and every
+  JavaScript or binary-data source those producers still list. The plan fails
+  on such a removal until the producer stops naming the file.
 - **Preludes are generated from Vellum's sources.** While the prelude producer,
   its embedder and every JavaScript source are still their transferred blobs,
-  the generated preludes must match the closure digests as before. Once any of
+  the generated preludes must match the closure digests as before. Every
+  prelude input the producer lists must be a file of the `framework/` file
+  set, so the producer cannot embed a path outside it. Once any of
   them is edited or joined through the ledger, the preludes are Vellum's own:
   the plan generates them twice and fails unless both runs give the same
   bytes, and it records their digests. The build-info header and the embedded
