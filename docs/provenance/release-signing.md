@@ -148,9 +148,10 @@ accepts exactly one of two closed shapes:
 
   The release must also show the required parity check runs and their `vellum-parity-proof-execution` receipts.
 - **Mirror promotion** (`vellum-mirror-promotion-attestation`). Only `v0.1.10`, the Phase 4 promotion release
-  (owner decision 2026-10-31, third sitting; `v0.1.9` was retired unpublished, owner decision 2026-11-02), and
+  (owner decision 2026-10-31, third sitting; `v0.1.9` was retired unpublished, owner decision 2026-11-02),
   `v0.1.11`, the release carrying everything since 2026-10-25 under the same parity waiver (owner decision
-  2026-11-01), may carry it. It binds:
+  2026-11-01), and `v0.2.0`, which carries the same parity state (owner decision 2026-11-13), may carry it. The
+  list is exact tag names. It binds:
   - the promoted commit and tree;
   - the exact-boundary acknowledgement;
   - the newest export receipt in `provenance/mirror/receipts/index.json` at the release commit, by SHA-256.
@@ -163,7 +164,7 @@ accepts exactly one of two closed shapes:
   - when a parity completion record exists at the release commit;
   - when the receipt is not the newest one in the index.
 
-The parity re-freeze to the mirror is the next milestone. Every release after `v0.1.11` must carry the authority
+The parity re-freeze to the mirror is the next milestone. Every release after `v0.2.0` must carry the authority
 promotion attestation and prove full-matrix parity.
 
 ## Who can do what

@@ -1037,13 +1037,16 @@ class Tests(unittest.TestCase):
         )
 
     def test_mirror_promotion_is_only_for_the_listed_tags(self) -> None:
-        # v0.1.10 is the Phase 4 promotion and v0.1.11 rides the same parity
-        # waiver; v0.1.9 is retired, and anything later must prove parity.
-        self.assertEqual(verifier.MIRROR_PROMOTION_RELEASE_TAGS, {"v0.1.10", "v0.1.11"})
+        # v0.1.10 is the Phase 4 promotion; v0.1.11 and v0.2.0 ride the same
+        # parity waiver; v0.1.9 is retired, and anything later must prove
+        # parity. The names near v0.2.0 are refused, so the set cannot have
+        # become a prefix or a pattern.
+        self.assertEqual(verifier.MIRROR_PROMOTION_RELEASE_TAGS, {"v0.1.10", "v0.1.11", "v0.2.0"})
         fixture = self.mirror_promotion_fixture()
-        for tag in ("v0.1.10", "v0.1.11"):
+        for tag in ("v0.1.10", "v0.1.11", "v0.2.0"):
             self.assertEqual(self.mirror_release_errors(fixture, fixture["data"], release_tag=tag), [], tag)
-        for tag in ("v0.1.9", "v0.1.12", "v0.2.0", None):
+        for tag in ("v0.1.9", "v0.1.12", "v0.2.1", "v0.2.00", "v0.2.0.1", "v0.2", "0.2.0", "v0.3.0",
+                    "v1.0.0", None):
             errors = self.mirror_release_errors(fixture, fixture["data"], release_tag=tag)
             self.assertTrue(any("is not a mirror-promotion release" in e for e in errors),
                             (tag, errors))
