@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-13T09:50:33Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-c4518e1e854c0f26f63d2250e670f045476a555a",
+  "kind": "resolution",
+  "linked_commits": [
+    "c4518e1e854c0f26f63d2250e670f045476a555a"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@claude-observatory-agent",
+  "rationale": "Vellum-native retained scene change: a node clip may spare the node's own paint (clips_own_paint) and the damage model follows; the @vellum/ui overflow type widens. Pulp has no counterpart. Owner decision 2026-11-13, \"framework-only, all three\", recorded in pulp-planning vellum-move/DECISIONS.md at 9ad91243c800bc6381a0e862a543eceb4b56b134 and recorded here by an agent; it clears vellum#407. Pulp search at origin/main d486ff70c6b0 (git grep -w over core tools test examples apple ship inspect) for clips_own_paint, NodeClip, PaintCommand, vellum/graphics/scene.hpp, vellum/graphics/damage.hpp, vellum/graphics/paint_command.hpp, vellum/graphics/core_graphics_canvas.hpp and @vellum/ui returns 0; control SkiaSurface on the same search returns 288 in 64 files. Pulp's one vellum::graphics consumer, test/editor_host_slice/rmlui_vellum_renderer_main.cpp, includes only skia_dawn_surface.hpp and dawn_native_bootstrap.hpp, none of the headers this change touches. Any later resolution overrides this.",
+  "resolves": "vellum-c4518e1e854c0f26f63d2250e670f045476a555a",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
