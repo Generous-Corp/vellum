@@ -793,6 +793,9 @@ class VerifyExtractionTests(unittest.TestCase):
             run("add", "-A"); run("commit", "-q", "-m", "never landed")
             off_main = run("rev-parse", "HEAD")
             tree = run("rev-parse", f"{on_main}^{{tree}}")
+            run("tag", "-a", "-m", "names a commit on main", "port-tag", on_main)
+            tag = run("rev-parse", "port-tag")
+            self.assertNotEqual(tag, on_main)
             self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
             (root / self.PORTED).write_bytes(b"int n;\n")
 
@@ -805,9 +808,10 @@ class VerifyExtractionTests(unittest.TestCase):
                 errors, checks = verdict(commits, pulp_root=pulp, defer=False)
                 self.assertEqual(errors, [])
                 self.assertIs(checks["framework_ports_proved"], True)
-            # A commit that is not on Pulp main, an id Pulp does not have, and
-            # a tree's id are each refused, alone or beside a real commit.
-            for bad in (off_main, "d" * 40, tree):
+            # A commit that is not on Pulp main, an id Pulp does not have, a
+            # tree's id, and the id of a tag object that peels to a commit on
+            # main are each refused, alone or beside a real commit.
+            for bad in (off_main, "d" * 40, tree, tag):
                 for commits in ([bad], [on_main, bad]):
                     errors, checks = verdict(commits, pulp_root=pulp, defer=False)
                     self.assertEqual(errors, [f"{verify_extraction.FRAMEWORK_PORTS} rows[0]: Pulp commit {bad} is "
