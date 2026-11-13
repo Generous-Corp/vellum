@@ -639,6 +639,405 @@ class VerifyExtractionTests(unittest.TestCase):
             self.assertEqual(checks["framework_missing_files"], ["framework/core/a/src/a.cpp"])
             self.assertTrue(any("does not list" in e for e in errors) and any("is missing" in e for e in errors))
 
+    PORTED = "framework/core/a/src/new.cpp"
+
+    def ports_row(self, path: str, change: str = "added", commits: list[str] | None = None,
+                  pulp_path: str | None = None, blob: str | None = None) -> dict:
+        """A ledger row: native unless Pulp commits are named."""
+        target = "a-target" if change == "added" and path.endswith(".cpp") else None
+        if commits is None:
+            return {"framework_path": path, "change": change, "target": target, "origin": "native",
+                    "pulp_path": None, "pulp_commits": [], "framework_blob": None, "reason": "port"}
+        return {"framework_path": path, "change": change, "target": target, "origin": "pulp",
+                "pulp_path": pulp_path or path.removeprefix("framework/"), "pulp_commits": commits,
+                "framework_blob": (blob or "b" * 40) if change == "added" else None, "reason": "port"}
+
+    RENAME = {"from": "pulp", "to": "vellum", "include_units": ["a"], "objc_classes": [],
+              "objc_class_prefix": "VellumMirror", "literal_exclusions": [],
+              "edge_table": {"suffixes": [".cpp", ".hpp"], "binary_suffixes": []}}
+
+    def record_rename(self, root: Path) -> None:
+        """Give the fixture's transfer record the rename table the transfer used."""
+        path = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+        path.write_text(json.dumps(dict(json.loads(path.read_text(encoding="utf-8")), rename=self.RENAME)),
+                        encoding="utf-8")
+
+    def write_ports(self, root: Path, rows: list[dict]) -> None:
+        path = root / verify_extraction.FRAMEWORK_PORTS
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"schema": "vellum.framework-ports.v1", "rows": rows}), encoding="utf-8")
+
+    def ports_verdict(self, root: Path, pulp_root: Path | None = None, defer: bool = True) -> tuple[list[str], dict]:
+        """verify_framework's errors about the file set and the ledger, and its checks."""
+        errors, checks = verify_extraction.verify_framework(root, pulp_root, "origin/main", defer_identity=defer)
+        return [e for e in errors if "file set" in e or verify_extraction.FRAMEWORK_PORTS in e], checks
+
+    def test_the_file_set_changes_only_through_the_ports_ledger(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            old = "framework/core/a/src/a.cpp"
+            self.framework_fixture(root, {old: b"int a;\n", "framework/core/a/src/b.cpp": b"int b;\n"})
+            # A file with neither a transfer record nor a ledger row fails.
+            (root / self.PORTED).write_bytes(b"int n;\n")
+            errors, checks = self.ports_verdict(root)
+            self.assertEqual(checks["framework_unrecorded_files"], [self.PORTED])
+            self.assertEqual(len(errors), 1, errors)
+            # The row that adds it makes it part of the set.
+            self.write_ports(root, [self.ports_row(self.PORTED)])
+            errors, checks = self.ports_verdict(root)
+            self.assertEqual(errors, [])
+            self.assertEqual((checks["framework_unrecorded_files"], checks["framework_missing_files"]), ([], []))
+            self.assertEqual(checks["framework_ports_added"], [self.PORTED])
+            self.assertIs(checks["framework_ports_proved"], True)
+            # A row with no file fails.
+            (root / self.PORTED).unlink()
+            errors, checks = self.ports_verdict(root)
+            self.assertEqual(checks["framework_missing_files"], [self.PORTED])
+            self.assertTrue(any("is missing 1 files" in e for e in errors), errors)
+            (root / self.PORTED).write_bytes(b"int n;\n")
+            # A removal row for a transferred file: its presence is then the
+            # extra, and its absence is accepted.
+            self.write_ports(root, [self.ports_row(self.PORTED), self.ports_row(old, "removed")])
+            errors, checks = self.ports_verdict(root)
+            self.assertEqual(checks["framework_unrecorded_files"], [old])
+            (root / old).unlink()
+            errors, checks = self.ports_verdict(root)
+            self.assertEqual(errors, [])
+            self.assertEqual((checks["framework_unrecorded_files"], checks["framework_missing_files"]), ([], []))
+            self.assertEqual(checks["framework_ports_removed"], [old])
+            # Control: without its row, the same absence is a missing file.
+            self.write_ports(root, [self.ports_row(self.PORTED)])
+            self.assertEqual(self.ports_verdict(root)[1]["framework_missing_files"], [old])
+
+    def test_a_ports_row_may_not_readd_a_transferred_file_or_reach_outside_framework(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            old = "framework/core/a/src/a.cpp"
+            self.framework_fixture(root, {old: b"int a;\n", "framework/external/x/x.c": b"int x;\n",
+                                          "graphics/native.cpp": b"int g;\n"})
+            for rows, fragment in (
+                ([self.ports_row(old)], "a ledger row may only remove it"),
+                ([self.ports_row(old, "removed"), self.ports_row(old)], "a ledger row may only remove it"),
+                ([self.ports_row("graphics/native.cpp")], "not a safe path inside framework/"),
+                ([self.ports_row("framework/../graphics/native.cpp")], "not a safe path inside framework/"),
+                ([self.ports_row("framework/external/x/x.c", "removed")], "third-party source"),
+                ([self.ports_row("framework/external/x/first_party.cpp")], "third-party source"),
+            ):
+                self.write_ports(root, rows)
+                errors, checks = self.ports_verdict(root)
+                self.assertTrue(any(fragment in e for e in errors), (rows, errors))
+                # A refused ledger changes nothing about the set.
+                self.assertEqual((checks["framework_ports_added"], checks["framework_ports_removed"]), ([], []))
+            # A first-party file under external/ is still an unrecorded extra with a row naming it.
+            (root / "framework/external/x/first_party.cpp").write_bytes(b"int y;\n")
+            _, checks = self.ports_verdict(root)
+            self.assertEqual(checks["framework_external_unrecorded"], ["framework/external/x/first_party.cpp"])
+
+    def test_the_ports_ledger_is_append_only(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            second = "framework/core/a/src/second.cpp"
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n", self.PORTED: b"int n;\n",
+                                          second: b"int s;\n"})
+            record = json.loads((root / verify_extraction.FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
+            record["records"] = [r for r in record["records"] if r["framework_path"].endswith("/a.cpp")]
+            (root / verify_extraction.FRAMEWORK_TRANSFER_RECORD).write_text(json.dumps(record), encoding="utf-8")
+            first_row, second_row = self.ports_row(self.PORTED), self.ports_row(second)
+            self.write_ports(root, [first_row])
+            (root / second).unlink()
+            base = self.git_commit_all(root, "a landed port")
+            os.environ["VELLUM_GIT_BASE"] = base
+            append_only = "the ledger is append-only"
+            # Control: the landed ledger, unchanged, passes.
+            self.assertEqual(self.ports_verdict(root)[0], [])
+            # Appending a row, with its file, passes.
+            (root / second).write_bytes(b"int s;\n")
+            self.write_ports(root, [first_row, second_row])
+            self.assertEqual(self.ports_verdict(root)[0], [])
+            # Rewriting, reordering, replacing or deleting a landed row fails.
+            for rows in ([dict(first_row, reason="rewritten"), second_row], [second_row, first_row],
+                         [second_row], [dict(first_row, target="other-target"), second_row]):
+                self.write_ports(root, rows)
+                errors, _ = self.ports_verdict(root)
+                self.assertTrue(any(append_only in e for e in errors), (rows, errors))
+            # Deleting the row together with its file fails too, though the set then agrees.
+            (root / self.PORTED).unlink()
+            self.write_ports(root, [second_row])
+            errors, checks = self.ports_verdict(root)
+            self.assertEqual((checks["framework_unrecorded_files"], checks["framework_missing_files"]), ([], []))
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn(append_only, errors[0])
+            # So does deleting the ledger, or emptying it.
+            (root / second).unlink()
+            self.write_ports(root, [])
+            self.assertTrue(any(append_only in e for e in self.ports_verdict(root)[0]))
+            (root / verify_extraction.FRAMEWORK_PORTS).unlink()
+            errors, _ = self.ports_verdict(root)
+            self.assertTrue(any("present at the merge base and removed" in e for e in errors), errors)
+            # The recorded way to take a ported file out is a removal row.
+            self.write_ports(root, [first_row, self.ports_row(self.PORTED, "removed")])
+            self.assertEqual(self.ports_verdict(root)[0], [])
+
+    def test_ports_rows_name_real_commits_on_pulp_main(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root, pulp = Path(temporary) / "vellum", Path(temporary) / "pulp"
+            root.mkdir()
+            pulp.mkdir()
+            run = lambda *args: subprocess.check_output(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=pulp, text=True).strip()
+            run("init", "-q", "-b", "main")
+            (pulp / "core/a/src").mkdir(parents=True)
+            (pulp / "core/a/src/old.cpp").write_text("int old;\n")
+            run("add", "-A"); run("commit", "-q", "-m", "before the port's source")
+            before = run("rev-parse", "HEAD")
+            (pulp / "core/a/src/new.cpp").write_text("int n;\n")
+            run("add", "-A"); run("commit", "-q", "-m", "the port's source")
+            on_main = run("rev-parse", "HEAD")
+            run("update-ref", "refs/remotes/origin/main", on_main)
+            run("checkout", "-q", "-b", "side")
+            (pulp / "core/a/src/new.cpp").write_text("int side;\n")
+            run("add", "-A"); run("commit", "-q", "-m", "never landed")
+            off_main = run("rev-parse", "HEAD")
+            tree = run("rev-parse", f"{on_main}^{{tree}}")
+            run("tag", "-a", "-m", "names a commit on main", "port-tag", on_main)
+            tag = run("rev-parse", "port-tag")
+            self.assertNotEqual(tag, on_main)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            self.record_rename(root)
+            (root / self.PORTED).write_bytes(b"int n;\n")
+            blob = verify_extraction.git_blob_sha(b"int n;\n")
+
+            def verdict(commits: list[str], pulp_path: str | None = None, **kwargs) -> tuple[list[str], dict]:
+                self.write_ports(root, [self.ports_row(self.PORTED, commits=commits, pulp_path=pulp_path, blob=blob)])
+                return self.ports_verdict(root, **kwargs)
+
+            # Real commits on Pulp main, the last of which holds the file: proved.
+            for commits in ([on_main], [before, on_main]):
+                errors, checks = verdict(commits, pulp_root=pulp, defer=False)
+                self.assertEqual(errors, [])
+                self.assertIs(checks["framework_ports_proved"], True)
+            # A commit that is not on Pulp main, an id Pulp does not have, a
+            # tree's id, and the id of a tag object that peels to a commit on
+            # main are each refused, alone or beside a real commit.
+            for bad in (off_main, "d" * 40, tree, tag):
+                for commits in ([bad], [bad, on_main]):
+                    errors, checks = verdict(commits, pulp_root=pulp, defer=False)
+                    self.assertEqual(errors, [f"{verify_extraction.FRAMEWORK_PORTS} rows[0]: Pulp commit {bad} is "
+                                              "not a commit on Pulp origin/main"])
+                    self.assertIs(checks["framework_ports_proved"], False)
+            # The last named commit must hold the file: one that never did, or
+            # that holds a directory there, is refused.
+            for commits in ([before], [on_main, before]):
+                errors, _ = verdict(commits, pulp_root=pulp, defer=False)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn(f"the last named Pulp commit {before[:12]} holds no file at core/a/src/new.cpp", errors[0])
+            errors, _ = verdict([on_main], pulp_path="core/a/src", pulp_root=pulp, defer=False)
+            self.assertIn("holds no file at core/a/src", errors[0])
+            # A symlink at the path is not the content either.
+            run("checkout", "-q", "--detach", on_main)
+            os.symlink("new.cpp", pulp / "core/a/src/link.cpp")
+            run("add", "-A"); run("commit", "-q", "-m", "a link")
+            linked = run("rev-parse", "HEAD")
+            run("update-ref", "refs/remotes/origin/main", linked)
+            errors, _ = verdict([linked], pulp_path="core/a/src/link.cpp", pulp_root=pulp, defer=False)
+            self.assertIn("holds no file at core/a/src/link.cpp", errors[0])
+            self.assertEqual(verdict([linked], pulp_root=pulp, defer=False)[0], [])  # control: the file beside it
+            # Without a Pulp checkout the proof fails closed; only a lane that
+            # defers to the required provenance lane may skip it.
+            errors, checks = verdict([on_main], pulp_root=None, defer=False)
+            self.assertEqual(errors, [f"{verify_extraction.FRAMEWORK_PORTS}: no Pulp checkout proved the Pulp commits "
+                                      "it names; pass --pulp-root"])
+            errors, checks = verdict(["d" * 40], pulp_root=None, defer=True)
+            self.assertEqual(errors, [])
+            self.assertEqual(checks["framework_ports_proved"], "deferred: no Pulp checkout")
+            # A checkout with no main ref proves nothing.
+            run("update-ref", "-d", "refs/remotes/origin/main")
+            errors, _ = verdict([on_main], pulp_root=pulp, defer=False)
+            self.assertIn("has no origin/main", errors[0])
+            # A native row names no Pulp commit, so it needs no checkout.
+            (root / self.PORTED).write_bytes(b"int written_here;\n")
+            self.write_ports(root, [self.ports_row(self.PORTED)])
+            errors, checks = self.ports_verdict(root, pulp_root=None, defer=False)
+            self.assertEqual(errors, [])
+            self.assertIs(checks["framework_ports_proved"], True)
+
+    def test_a_pulp_row_s_file_is_pulp_s_renamed_bytes(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root, pulp = Path(temporary) / "vellum", Path(temporary) / "pulp"
+            root.mkdir()
+            pulp.mkdir()
+            run = lambda *args: subprocess.check_output(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=pulp, text=True).strip()
+            pulp_path, ported = "core/a/include/pulp/a/new.hpp", "framework/core/a/include/vellum/a/new.hpp"
+            first = b"#include <pulp/a/a.hpp>\nnamespace pulp::a { int first(); }\n"
+            second = b"#include <pulp/a/a.hpp>\nnamespace pulp::a { int second(); }\n"
+            renamed = {first: b"#include <vellum/a/a.hpp>\nnamespace vellum::a { int first(); }\n",
+                       second: b"#include <vellum/a/a.hpp>\nnamespace vellum::a { int second(); }\n"}
+            run("init", "-q", "-b", "main")
+            (pulp / pulp_path).parent.mkdir(parents=True)
+            commits = {}
+            for data in (first, second):
+                (pulp / pulp_path).write_bytes(data)
+                run("add", "-A"); run("commit", "-q", "-m", "a version")
+                commits[data] = run("rev-parse", "HEAD")
+            run("update-ref", "refs/remotes/origin/main", commits[second])
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            self.record_rename(root)
+            (root / ported).parent.mkdir(parents=True)
+
+            def verdict(data: bytes, commit: str, blob_of: bytes | None = None, path: str = ported, **kwargs):
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                (root / path).write_bytes(data)
+                recorded = verify_extraction.git_blob_sha(data if blob_of is None else blob_of)
+                self.write_ports(root, [self.ports_row(path, commits=[commit], pulp_path=pulp_path, blob=recorded)])
+                errors, _ = self.ports_verdict(root, **kwargs)
+                (root / path).unlink()
+                return errors
+
+            checked = dict(pulp_root=pulp, defer=False)
+            # The file is Pulp's file at the named commit, put through the transfer's rename: proved.
+            for data in (first, second):
+                self.assertEqual(verdict(renamed[data], commits[data], **checked), [])
+            # One byte changed, with the row recording the changed file's own blob.
+            errors = verdict(renamed[second] + b" ", commits[second], **checked)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("is not Pulp", errors[0])
+            self.assertIn("put through the transfer's rename", errors[0])
+            # Bytes that are another commit's version of the file.
+            errors = verdict(renamed[first], commits[second], **checked)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("put through the transfer's rename", errors[0])
+            # Pulp's bytes copied without the rename are not the transferred form.
+            errors = verdict(second, commits[second], **checked)
+            self.assertTrue(any("put through the transfer's rename" in e for e in errors), errors)
+            # Arbitrary content labelled as Pulp.
+            errors = verdict(b"int anything;\n", commits[second], **checked)
+            self.assertTrue(any("put through the transfer's rename" in e for e in errors), errors)
+            # The row records Pulp's renamed blob but the file is something else:
+            # refused with or without a Pulp checkout.
+            for kwargs in (checked, dict(pulp_root=None, defer=True)):
+                errors = verdict(b"int anything;\n", commits[second], blob_of=renamed[second], **kwargs)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("not the recorded", errors[0])
+            # The path is the renamed path too.
+            errors = verdict(renamed[second], commits[second], path="framework/core/a/include/vellum/a/moved.hpp",
+                             **checked)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn(f"renames to {ported}", errors[0])
+            # With no rename table in the transfer record nothing can be proved.
+            record = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+            body = json.loads(record.read_text(encoding="utf-8"))
+            record.write_text(json.dumps({k: v for k, v in body.items() if k != "rename"}), encoding="utf-8")
+            errors = verdict(renamed[second], commits[second], **checked)
+            self.assertIn("carries no rename table", errors[0])
+
+    def test_a_landed_pulp_row_s_file_may_be_edited(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            before_the_port = self.git_commit_all(root, "the transfer")
+            (root / self.PORTED).write_bytes(b"int n;\n")
+            row = self.ports_row(self.PORTED, commits=["9" * 40], blob=verify_extraction.git_blob_sha(b"int n;\n"))
+            self.write_ports(root, [row])
+            landed = self.git_commit_all(root, "a landed port")
+            (root / self.PORTED).write_bytes(b"int n = 1;\n")
+            # Landed: the file is framework source and a reviewed edit may change it.
+            os.environ["VELLUM_GIT_BASE"] = landed
+            self.assertEqual(self.ports_verdict(root)[0], [])
+            # Control: judged as the change that appends the row, the same bytes are refused.
+            os.environ["VELLUM_GIT_BASE"] = before_the_port
+            errors, _ = self.ports_verdict(root)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("not the recorded", errors[0])
+            # A row appended after a landed one is judged, by its own index.
+            os.environ["VELLUM_GIT_BASE"] = landed
+            second = "framework/core/a/src/second.cpp"
+            (root / second).write_bytes(b"int s = 2;\n")
+            self.write_ports(root, [row, self.ports_row(second, commits=["9" * 40],
+                                                        blob=verify_extraction.git_blob_sha(b"int s;\n"))])
+            errors, _ = self.ports_verdict(root)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("rows[1]", errors[0])
+            self.assertIn("not the recorded", errors[0])
+
+    def test_a_native_row_may_not_carry_pulp_bytes(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root, pulp = Path(temporary) / "vellum", Path(temporary) / "pulp"
+            root.mkdir()
+            pulp.mkdir()
+            run = lambda *args: subprocess.check_output(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=pulp, text=True).strip()
+            run("init", "-q", "-b", "main")
+            (pulp / "new.cpp").write_bytes(b"int from_the_other_side;\n")
+            run("add", "-A"); run("commit", "-q", "-m", "source")
+            commit = run("rev-parse", "HEAD")
+            run("update-ref", "refs/remotes/origin/main", commit)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            self.write_ports(root, [self.ports_row(self.PORTED)])
+            refused = "is added as native, but its bytes are a Pulp blob"
+            # Control: a file Vellum wrote passes as native, with or without a checkout.
+            (root / self.PORTED).write_bytes(b"int written_here;\n")
+            for checkout in (None, pulp):
+                self.assertEqual(self.ports_verdict(root, pulp_root=checkout, defer=False)[0], [])
+            # Bytes Pulp's object store holds are refused under a native row.
+            (root / self.PORTED).write_bytes(b"int from_the_other_side;\n")
+            errors, _ = self.ports_verdict(root, pulp_root=pulp, defer=False)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn(refused, errors[0])
+            # The same bytes under a row that names the commit are a port.
+            self.record_rename(root)
+            self.write_ports(root, [self.ports_row(
+                "framework/new.cpp", commits=[commit], pulp_path="new.cpp",
+                blob=verify_extraction.git_blob_sha(b"int from_the_other_side;\n"))])
+            (root / "framework/new.cpp").write_bytes(b"int from_the_other_side;\n")
+            (root / self.PORTED).unlink()
+            self.assertEqual(self.ports_verdict(root, pulp_root=pulp, defer=False)[0], [])
+            (root / "framework/new.cpp").unlink()
+            (root / self.PORTED).write_bytes(b"int from_the_other_side;\n")
+            # Without a checkout, a blob the mirror's origin records list is still refused.
+            self.write_ports(root, [self.ports_row(self.PORTED)])
+            self.assertEqual(self.ports_verdict(root)[0], [])
+            origins = root / verify_extraction.MIRROR_ORIGIN_RECORDS
+            origins.parent.mkdir(parents=True, exist_ok=True)
+            origins.write_text(json.dumps({"schema": verify_extraction.MIRROR_ORIGIN_SCHEMA,
+                                           "pulp_repository": "Generous-Corp/pulp", "records": [{
+                "mirror_path": "mirror/new.cpp", "pulp_path": "new.cpp", "pulp_commit": commit,
+                "git_blob_sha": verify_extraction.git_blob_sha(b"int from_the_other_side;\n"),
+                "export_receipt": "provenance/mirror/receipts/r.json"}]}), encoding="utf-8")
+            errors, _ = self.ports_verdict(root)
+            self.assertTrue(any(refused in e for e in errors), errors)
+
+    def test_a_ported_file_is_held_to_the_framework_content_rules(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            self.write_ports(root, [self.ports_row(self.PORTED)])
+            (root / self.PORTED).write_bytes(b"int n;\n")
+            errors, _ = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            # Control: a clean ported file raises no debt and no residual spelling.
+            self.assertFalse(any("name debt" in e or "still spells" in e for e in errors), errors)
+            # It starts with no name debt, and none may be recorded for it.
+            (root / self.PORTED).write_bytes(b"#if PULP_HAS_SKIA\nint n;\n#endif\n")
+            errors, _ = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertIn(f"framework name debt rose: pulp-package-or-target in {self.PORTED} is 1, baseline 0", errors)
+            base = self.git_commit_all(root, "base")
+            os.environ["VELLUM_GIT_BASE"] = base
+            self.write_framework_debt(root, {"pulp-package-or-target": {self.PORTED: 1}})
+            errors, _ = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertTrue(any("the baseline may only fall" in e for e in errors), errors)
+            # The old spelling is refused in it as in any framework file.
+            (root / self.PORTED).write_bytes(b"namespace pulp { int n; }\n")
+            errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+            self.assertEqual(checks["framework_residual_pulp_spellings"], [self.PORTED])
+
     def test_a_gitlink_under_framework_is_an_unrecorded_entry(self) -> None:
         self.hide_ci_git_base()
         with tempfile.TemporaryDirectory() as temporary:
