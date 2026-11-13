@@ -26,8 +26,8 @@ enabled = true
 pr_gates = false
 
 [release.canary]
-# Daily: would the next patch release be refused? Runs on a clean clone of
-# main and stages a throwaway local bump; nothing is pushed.
-command = "scripts/release_canary.sh {next_version}"
-timeout_secs = 1200
-bump = "patch"
+command = "VELLUM_CANARY_PULP_SOURCE=\"https://x-access-token:${SHIPYARD_CANARY_READ_TOKEN_GENEROUS_CORP_PULP}@github.com/Generous-Corp/pulp.git\" scripts/release_canary.sh {next_version}"
+timeout_secs = 2400
+inconclusive_exit_codes = [2]
+read_token = "ghread"
+read_repos = ["Generous-Corp/pulp"]
