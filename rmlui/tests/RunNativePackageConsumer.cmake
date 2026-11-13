@@ -126,7 +126,10 @@ endif()
 # refused when CMake generates it, naming the conflicting property.
 execute_process(COMMAND "${CMAKE_COMMAND}"
         -S "${CMAKE_CURRENT_LIST_DIR}/native_package_mixed_consumer" -B "${_work}/mixed"
-        "-DCMAKE_PREFIX_PATH=${_native}\;${_main}"
+        # Package directories rather than a prefix list: execute_process
+        # would split a list into separate arguments.
+        "-DVellumRmlUiNative_DIR=${_native}/${_libdir}/cmake/VellumRmlUiNative"
+        "-DVellumRmlUi_DIR=${_main}/${_libdir}/cmake/VellumRmlUi"
     RESULT_VARIABLE _mixed_result OUTPUT_VARIABLE _mixed_out ERROR_VARIABLE _mixed_err)
 if(_mixed_result EQUAL 0)
     message(FATAL_ERROR "a target linking both Native and Core was generated; the one-RmlUi rule is not enforced")
@@ -137,7 +140,8 @@ if(_named_runtime EQUAL -1)
 endif()
 
 _run("${CMAKE_COMMAND}" -S "${_consumer_source}" -B "${_work}/build"
-     "-DCMAKE_PREFIX_PATH=${_native}\;${_main}")
+     "-DVellumRmlUiNative_DIR=${_native}/${_libdir}/cmake/VellumRmlUiNative"
+     "-DVellumRmlUi_DIR=${_main}/${_libdir}/cmake/VellumRmlUi")
 _run("${CMAKE_COMMAND}" --build "${_work}/build" ${_config_args})
 foreach(_consumer vellum-rmlui-native-metal-consumer vellum-rmlui-core-consumer)
     file(GLOB_RECURSE _binary "${_work}/build/*${_consumer}")
