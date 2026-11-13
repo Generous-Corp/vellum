@@ -236,7 +236,7 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
     // THIS window's root, never the process-wide `active_popup_` mirror, which
     // can name another window's (or a hosted plugin editor's) open menu.
     if (!self.rootView) return NO;
-    auto* combo = vellum::view::ComboBox::active_popup_in(*self.rootView);
+    auto* combo = vellum::view::enabled_open_popup_in(*self.rootView);
     if (!combo) return NO;
     float ddx = 0, ddy = 0, ddw = 0, ddh = 0;
     if (!combo->dropdown_window_rect(ddx, ddy, ddw, ddh)) return NO;
@@ -1126,7 +1126,7 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
             }
 
             if (auto* combo = self.rootView
-                    ? vellum::view::ComboBox::active_popup_in(*self.rootView)
+                    ? vellum::view::enabled_open_popup_in(*self.rootView)
                     : nullptr) {
                 float cx = 0, cy = 0;
                 auto* v = static_cast<vellum::view::View*>(combo);
