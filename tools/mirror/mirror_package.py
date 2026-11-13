@@ -14,6 +14,14 @@ build plan and refuses to plan anything it cannot prove:
 - every generated input the build needs is produced here or by its mirrored
   producer, and must hash to the closure's recorded digest.
 
+Once the units are transferred to ``framework/`` the file set is the transfer
+record's, minus the removals and plus the additions of the ports ledger
+(``tools/mirror/framework_ports.py``). A ledger-added source is compiled into
+the target its row names, a closure source the ledger removed is left out, and
+the JavaScript preludes are generated from the framework's own sources: they
+are held to the closure digest only while every input is still the
+transferred blob, and to a repeatable result always.
+
 The closures describe the mirrored targets, but not how third-party link
 targets are built. ``DEPENDENCIES`` below is the Vellum-owned recipe for each
 pinned dependency a closure names; a closure dependency or link target with no
@@ -37,6 +45,7 @@ from typing import Any
 
 sys.path.append(str(Path(__file__).resolve().parent))
 import source_compile_options  # noqa: E402
+import framework_ports  # noqa: E402
 import gpu_surface_guard  # noqa: E402
 
 
@@ -311,26 +320,44 @@ def newest_receipt(repo: Path) -> tuple[str, dict[str, Any]]:
     return relative, receipt
 
 
+def framework_file_set(repo: Path) -> tuple[set[str], dict[str, dict[str, Any]], set[str]]:
+    """The files framework/ must hold: (expected, ledger-added rows by path, ledger-removed paths).
+
+    The transfer record's paths, minus the ports ledger's removals, plus its
+    additions. A ledger that is malformed or does not replay is refused.
+    """
+    record = load_json(repo / FRAMEWORK_TRANSFER)
+    transferred = {row["framework_path"] for row in record.get("records", [])}
+    expected, added, removed, errors = framework_ports.file_set(repo, transferred)
+    if errors:
+        raise PlanError(errors[0])
+    return expected, added, removed
+
+
 def verify_framework_identity(repo: Path, receipt_path: str, receipt: dict[str, Any]) -> int:
-    """Hold framework/ to the transfer record's file set.
+    """Hold framework/ to its file set: the transfer record and the ports ledger.
 
     The record itself is proved against authoritative Pulp by
-    verify_extraction's framework check. framework/ is Vellum-native after the
-    transfer (Decision 0010), so a file's bytes may change by a reviewed Vellum
-    edit; its file set may not, because the build still compiles the receipt's
-    closures, which name exactly the transferred files.
+    verify_extraction's framework check, which also proves the ledger
+    append-only and its Pulp commits real. framework/ is Vellum-native after
+    the transfer (Decision 0010), so a file's bytes may change by a reviewed
+    Vellum edit. A file may join or leave only through a ledger row: a file
+    with neither a record nor a row is refused, and so is a listed file that
+    is absent.
     """
     record = load_json(repo / FRAMEWORK_TRANSFER)
     if record.get("export_receipt") != receipt_path or record.get("mirror_tree") != receipt.get("mirror_tree"):
         raise PlanError(f"{FRAMEWORK_TRANSFER} does not name the newest receipt {receipt_path}")
-    expected = {row["framework_path"]: row["framework_git_blob_sha"] for row in record.get("records", [])}
+    expected, _, _ = framework_file_set(repo)
     root = repo / FRAMEWORK_DIR
     actual = {path.relative_to(repo).as_posix() for path in root.rglob("*") if path.is_file() or path.is_symlink()}
-    extra, missing = sorted(actual - set(expected)), sorted(set(expected) - actual)
+    extra, missing = sorted(actual - expected), sorted(expected - actual)
     if extra:
-        raise PlanError(f"framework/ holds files the transfer record does not list: {extra[:5]}")
+        raise PlanError("framework/ holds files its file set (the transfer record and the ports ledger) "
+                        f"does not list: {extra[:5]}")
     if missing:
-        raise PlanError(f"framework/ is missing files the transfer record lists: {missing[:5]}")
+        raise PlanError("framework/ is missing files its file set (the transfer record and the ports ledger) "
+                        f"lists: {missing[:5]}")
     symlinks = sorted(path for path in expected if (repo / path).is_symlink())
     if symlinks:
         raise PlanError(f"framework/ holds symlinks: {symlinks[:5]}")
@@ -338,10 +365,36 @@ def verify_framework_identity(repo: Path, receipt_path: str, receipt: dict[str, 
 
 
 def framework_native_edits(repo: Path) -> list[str]:
-    """framework/ files whose bytes differ from the transfer record: Vellum edits since the transfer."""
+    """Transferred framework/ files whose bytes differ from the transfer record: Vellum edits since the transfer.
+
+    A file the ports ledger removed is not an edit; the plan reports it as a port.
+    """
     record = load_json(repo / FRAMEWORK_TRANSFER)
+    _, _, removed = framework_file_set(repo)
     return sorted(row["framework_path"] for row in record.get("records", [])
-                  if git_blob_sha((repo / row["framework_path"]).read_bytes()) != row["framework_git_blob_sha"])
+                  if row["framework_path"] not in removed
+                  and git_blob_sha((repo / row["framework_path"]).read_bytes()) != row["framework_git_blob_sha"])
+
+
+def ledger_removed(repo: Path, relative: str, removed: set[str]) -> bool:
+    """Whether the ports ledger removed the file a closure names by its Pulp-relative path."""
+    return bool(removed) and f"{FRAMEWORK_DIR}/{renamed_path(relative)}" in removed
+
+
+def prelude_inputs_transferred(repo: Path, inputs: list[Path]) -> bool:
+    """Whether every prelude input is still the blob the transfer record lists for it.
+
+    While that holds the generated preludes are Pulp's, and the closure digest
+    still proves them. Once an input is edited, or joined through the ports
+    ledger, the preludes are Vellum's own and no Pulp digest describes them.
+    """
+    record = load_json(repo / FRAMEWORK_TRANSFER)
+    blobs = {row["framework_path"]: row["framework_git_blob_sha"] for row in record.get("records", [])}
+    for path in inputs:
+        relative = path.relative_to(repo).as_posix()
+        if not path.is_file() or blobs.get(relative) != git_blob_sha(path.read_bytes()):
+            return False
+    return True
 
 
 def verify_mirror_identity(repo: Path, receipt: dict[str, Any]) -> int:
@@ -415,6 +468,11 @@ def source_compile_options_for(repo: Path, receipt: dict[str, Any],
         raise PlanError("the landed closures record no configure options")
     exported = {str(row.get("mirror_path", "")).removeprefix(f"{MIRROR_DIR}/")
                 for row in receipt.get("files", [])}
+    if transferred(repo):
+        # A ledger-added source is compiled like an exported one, so the
+        # framework's CMake may set its per-source options the same way.
+        _, added, _ = framework_file_set(repo)
+        exported |= {path.removeprefix(f"{FRAMEWORK_DIR}/") for path in added if framework_ports.compiled(path)}
     try:
         targets = {target["name"] for _, closure in units for target in closure.get("targets", [])}
         return source_compile_options.evaluate(mirror_cmake_files(repo), options, exported, targets)
@@ -789,6 +847,7 @@ def prepare_generated(repo: Path, receipt: dict[str, Any], units: list[tuple[str
     prelude_dir = generated_dir / "preludes"
     binary_targets = binary_data_targets(repo)
     used_binary: dict[str, dict[str, Any]] = {}
+    native_preludes: dict[str, str] = {}
     seen: set[str] = set()
     for unit, closure in units:
         for row in closure.get("generated_inputs", []):
@@ -821,19 +880,40 @@ def prepare_generated(repo: Path, receipt: dict[str, Any], units: list[tuple[str
                 if not target.is_file() or target.read_text(encoding="utf-8") != rendered:
                     target.write_text(rendered, encoding="utf-8")
             elif prelude:
-                cmake = mirrored(repo, "core/view/cmake/PulpViewJsPreludes.cmake").read_text(encoding="utf-8")
+                producer = mirrored(repo, "core/view/cmake/PulpViewJsPreludes.cmake")
+                cmake = producer.read_text(encoding="utf-8")
                 js_paths = re.findall(r"\$\{CMAKE_CURRENT_SOURCE_DIR\}/(js/[^\s)]+)", cmake)
                 js_paths = [js for js in js_paths if js != "js/embed_js.py"]
+                embedder = mirrored(repo, "core/view/js/embed_js.py")
+                js_files = [mirrored(repo, "core/view/" + js) for js in js_paths]
                 prelude_dir.mkdir(parents=True, exist_ok=True)
-                out = prelude_dir / f"web_compat_preludes_gen.{prelude.group('suffix')}"
-                if prelude.group("suffix") == "hpp":
-                    out.write_text(render_prelude_header(cmake, js_paths), encoding="utf-8")
+                suffix = prelude.group("suffix")
+                out = prelude_dir / f"web_compat_preludes_gen.{suffix}"
+
+                def generate(destination: Path) -> bytes:
+                    if suffix == "hpp":
+                        destination.write_text(render_prelude_header(cmake, js_paths), encoding="utf-8")
+                    else:
+                        completed = subprocess.run([sys.executable, str(embedder), str(destination),
+                                                    *(str(js) for js in js_files)],
+                                                   capture_output=True, text=True, check=False)
+                        if completed.returncode:
+                            raise PlanError(f"{unit}: prelude generator failed: {completed.stderr.strip()}")
+                    return destination.read_bytes()
+
+                produced = generate(out)
+                if not transferred(repo) or prelude_inputs_transferred(repo, [producer, embedder, *js_files]):
+                    if not generated_matches(repo, produced, digest):
+                        raise PlanError(f"{path} generated by the mirrored producer does not match the closure digest")
                 else:
-                    completed = subprocess.run([sys.executable, str(mirrored(repo, "core/view/js/embed_js.py")), str(out), *(str(mirrored(repo, "core/view/" + js)) for js in js_paths)], capture_output=True, text=True, check=False)
-                    if completed.returncode:
-                        raise PlanError(f"{unit}: prelude generator failed: {completed.stderr.strip()}")
-                if not generated_matches(repo, out.read_bytes(), digest):
-                    raise PlanError(f"{path} generated by the mirrored producer does not match the closure digest")
+                    # The framework's own prelude sources: no Pulp digest
+                    # describes them, so the generator must at least give the
+                    # same bytes for the same inputs.
+                    with tempfile.TemporaryDirectory(prefix="vellum-preludes-") as temporary:
+                        if generate(Path(temporary) / out.name) != produced:
+                            raise PlanError(f"{path} is not deterministic: two runs of the framework's prelude "
+                                            "generator over the same sources differ")
+                    native_preludes[out.name] = sha256_bytes(produced)
             elif data:
                 name = data.group("target")
                 if name not in binary_targets:
@@ -864,7 +944,8 @@ def prepare_generated(repo: Path, receipt: dict[str, Any], units: list[tuple[str
             raise PlanError(f"binary-data target {name} has no recorded header digest")
         if set(spec["sources_sha256"]) != {c_identifier(Path(s).name) for s in spec["sources"]}:
             raise PlanError(f"binary-data target {name}'s closure rows do not cover its declared sources")
-    return {"build_info_dir": build_info_dir, "prelude_dir": prelude_dir, "binary_data": used_binary}
+    return {"build_info_dir": build_info_dir, "prelude_dir": prelude_dir, "binary_data": used_binary,
+            "native_preludes": native_preludes}
 
 
 def in_tree_include_dependency(path: str) -> tuple[str, str, str | None] | None:
@@ -957,9 +1038,11 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     receipt_path, receipt = newest_receipt(repo)
     file_count = (verify_framework_identity(repo, receipt_path, receipt) if transferred(repo)
                   else verify_mirror_identity(repo, receipt))
+    _, ports_added, ports_removed = framework_file_set(repo) if transferred(repo) else (set(), {}, set())
     units = load_closures(repo, receipt)
     source_options = source_compile_options_for(repo, receipt, units)
     attached: set[str] = set()
+    ported_targets: set[str] = set()
     deps = external_dependencies(units)
     roots = prepare_dependencies(deps, deps_dir, skia_dir, skia_asset_sha256, repo)
     generated = prepare_generated(repo, receipt, units, generated_dir)
@@ -999,10 +1082,17 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                         raise PlanError(f"{unit}/{name}: generated source {source} was not produced")
                     sources.append(str(generated_source))
                     continue
+                if ledger_removed(repo, source, ports_removed):
+                    continue
                 if not candidate.is_file():
                     raise PlanError(f"{unit}/{name}: source {source} is not in the landed mirror")
                 if candidate.suffix in SOURCE_SUFFIXES:
                     sources.append(str(candidate))
+            # Sources the ports ledger added to this target: the closures do
+            # not know them, so the ledger row is what gets them compiled.
+            ported = sorted(path for path, row in ports_added.items() if row["target"] == name)
+            sources.extend(str(repo / path) for path in ported)
+            ported_targets.update(ported)
             include_dirs = [map_include(p, repo, roots, generated, binary_dir_token, deps) for p in target.get("include_dirs", [])]
             # Compilable inputs the closure attributes to a dependency whose
             # headers only this target reads are compiled into it.
@@ -1053,8 +1143,14 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
             option_sources = []
             for source in target.get("sources", []):
                 if source in source_options:
-                    option_sources.append({"source": str(mirrored(repo, source)),
-                                           "options": source_options[source]})
+                    if not ledger_removed(repo, source, ports_removed):
+                        option_sources.append({"source": str(mirrored(repo, source)),
+                                               "options": source_options[source]})
+                    attached.add(source)
+            for path in ported:
+                source = path.removeprefix(f"{FRAMEWORK_DIR}/")
+                if source in source_options:
+                    option_sources.append({"source": str(repo / path), "options": source_options[source]})
                     attached.add(source)
             targets.append({
                 "name": name,
@@ -1082,6 +1178,10 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
             "targets": targets,
             "compile_definitions": sorted(closure.get("compile_definitions", [])),
         })
+    uncompiled = sorted(f"{path} (target {row['target']})" for path, row in ports_added.items()
+                        if row["target"] is not None and path not in ported_targets)
+    if uncompiled:
+        raise PlanError(f"the ports ledger adds sources to targets no closure builds: {uncompiled[:5]}")
     unattached = sorted(set(source_options) - attached)
     if unattached:
         raise PlanError(f"per-source compile options name sources no mirrored target compiles: {unattached}")
@@ -1117,6 +1217,8 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         "mirror_tree": receipt["mirror_tree"],
         "mirror_files_verified": file_count,
         "framework_native_edits": framework_native_edits(repo) if transferred(repo) else [],
+        "framework_ports": {"added": sorted(ports_added), "removed": sorted(ports_removed)},
+        "native_preludes": generated["native_preludes"],
         "closures": [unit["closure_manifest"] for unit in receipt["units"]],
         "dependencies": {name: {"pin": entry["pin"], "source": entry["source"],
                                  "files_verified": len(entry["files"])}

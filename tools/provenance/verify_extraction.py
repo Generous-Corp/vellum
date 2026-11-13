@@ -68,6 +68,12 @@ FRAMEWORK_TRANSFER_RECORD = "provenance/framework/transfer.json"
 # append-only list, which is how a third-party update lands.
 FRAMEWORK_EXTERNAL_UPDATES = "provenance/framework/external-updates.json"
 FRAMEWORK_EXTERNAL_UPDATE_KEYS = {"path", "from_blob", "to_blob", "reason", "dependency", "version"}
+# The file set of framework/ is the transfer record's paths, minus the removed
+# rows of this append-only ledger, plus its added rows. Each row names where
+# the file came from: a Pulp path and commits, proved against a Pulp checkout,
+# or `native` for a file Vellum wrote. tools/mirror/framework_ports.py reads
+# and replays it for this verifier and for the mirror build plan.
+FRAMEWORK_PORTS_TOOL = Path(__file__).resolve().parents[1] / "mirror" / "framework_ports.py"
 FRAMEWORK_VELLUM_DECLARATION = re.compile(r"namespace\s+vellum(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])vellum\s*::")
 # The rules the framework transfer is judged by. A change that introduces the
 # transfer record may touch none of them, so the rename tool and checks that
@@ -1096,8 +1102,109 @@ def derive_framework_transfer(root: Path, base: str, scratch: Path) -> dict:
     return {"files": files, "record": record, "framework": framework}
 
 
+def load_framework_ports():
+    spec = importlib.util.spec_from_file_location("framework_ports", FRAMEWORK_PORTS_TOOL)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+FRAMEWORK_PORTS = load_framework_ports().LEDGER
 # The files that only exist together with framework/.
-FRAMEWORK_DATA_FILES = (FRAMEWORK_TRANSFER_RECORD, FRAMEWORK_NAME_DEBT, FRAMEWORK_EXTERNAL_UPDATES)
+FRAMEWORK_DATA_FILES = (FRAMEWORK_TRANSFER_RECORD, FRAMEWORK_NAME_DEBT, FRAMEWORK_EXTERNAL_UPDATES, FRAMEWORK_PORTS)
+
+
+def framework_ports_history_errors(root: Path, ports) -> list[str]:
+    """Append-only: the ledger at the history base must be a prefix of this one."""
+    base, base_error = load_mirror_export_verifier().history_base(root)
+    if base_error:
+        return [f"{FRAMEWORK_PORTS}: {base_error}"]
+    if base is None:
+        return []
+    shown = subprocess.run(["git", "-C", str(root), "show", f"{base}:{FRAMEWORK_PORTS}"],
+                           capture_output=True, check=False)
+    if shown.returncode != 0:
+        return []  # the change that adds the ledger
+    if not (root / FRAMEWORK_PORTS).exists():
+        return [f"{FRAMEWORK_PORTS}: present at the merge base and removed; the ledger is append-only"]
+    landed, landed_errors = ports.parse(shown.stdout.decode("utf-8", errors="replace"))
+    if landed_errors:
+        return [f"{FRAMEWORK_PORTS}: unreadable at {base}: {landed_errors[0]}"]
+    try:
+        rows = json.loads((root / FRAMEWORK_PORTS).read_text(encoding="utf-8"))["rows"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []  # reported by the ledger's own reading
+    if not isinstance(rows, list) or rows[:len(landed)] != landed:
+        return [f"{FRAMEWORK_PORTS}: rows present at the merge base were removed, reordered or edited; "
+                "the ledger is append-only"]
+    return []
+
+
+def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[dict]) -> list[str]:
+    """Prove every Pulp commit a row names against the Pulp checkout, never from the row's text.
+
+    Each commit must be a commit object in the checkout and an ancestor of
+    `pulp_main_ref`. An added row's pulp_path must be a file in at least one
+    of its commits, so the row names commits that carry the content.
+    """
+    def pulp(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(pulp_root), *args], capture_output=True, check=False)
+
+    main = pulp("rev-parse", "--verify", "--quiet", f"{pulp_main_ref}^{{commit}}")
+    if main.returncode != 0:
+        return [f"{FRAMEWORK_PORTS}: Pulp checkout {pulp_root} has no {pulp_main_ref}"]
+    main_sha = main.stdout.decode().strip()
+    errors: list[str] = []
+    proved: dict[str, bool] = {}
+    for index, row in enumerate(rows):
+        if row["origin"] != "pulp":
+            continue
+        where = f"{FRAMEWORK_PORTS} rows[{index}]"
+        real = True
+        for commit in row["pulp_commits"]:
+            if commit not in proved:
+                resolved = pulp("rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}")
+                proved[commit] = (resolved.returncode == 0 and resolved.stdout.decode().strip() == commit
+                                  and pulp("merge-base", "--is-ancestor", commit, main_sha).returncode == 0)
+            if not proved[commit]:
+                real = False
+                errors.append(f"{where}: Pulp commit {commit} is not a commit on Pulp {pulp_main_ref}")
+        if not real or row["change"] != "added":
+            continue
+        holds = False
+        for commit in row["pulp_commits"]:
+            listing = pulp("--literal-pathspecs", "ls-tree", "-z", commit, "--", row["pulp_path"]).stdout
+            entries = [entry for entry in listing.split(b"\0") if entry]
+            if len(entries) == 1 and entries[0].split(b"\t", 1)[0].split()[1] == b"blob":
+                holds = True
+                break
+        if not holds:
+            errors.append(f"{where}: none of the named Pulp commits holds a file at {row['pulp_path']}")
+    return errors
+
+
+def framework_ports_state(root: Path, transferred: set[str], pulp_root: Path | None, pulp_main_ref: str,
+                          defer_identity: bool) -> tuple[set[str], list[str], dict[str, object]]:
+    """The file set framework/ must hold, and what is wrong with the ledger: (expected, errors, checks)."""
+    ports = load_framework_ports()
+    expected, added, removed, errors = ports.file_set(root, transferred)
+    errors = errors + framework_ports_history_errors(root, ports)
+    checks: dict[str, object] = {"framework_ports_added": sorted(added), "framework_ports_removed": sorted(removed)}
+    rows, row_errors = ports.load(root)
+    pulp_rows = [row for row in rows if row["origin"] == "pulp"] if not row_errors else []
+    if not pulp_rows:
+        checks["framework_ports_proved"] = not row_errors
+    elif pulp_root is None:
+        # Fail closed, as the transfer proof does.
+        checks["framework_ports_proved"] = "deferred: no Pulp checkout"
+        if not defer_identity:
+            errors.append(f"{FRAMEWORK_PORTS}: no Pulp checkout proved the Pulp commits it names; pass --pulp-root")
+    else:
+        proof = framework_ports_pulp_errors(pulp_root, pulp_main_ref, rows)
+        checks["framework_ports_proved"] = not proof
+        errors.extend(proof)
+    return expected, errors, checks
 
 
 def framework_transfer_state(root: Path) -> tuple[dict[str, object], list[str]]:
@@ -1267,11 +1374,16 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
                 errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: framework/ landed without its record")
             elif before.stdout != transfer_bytes:
                 errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: changed from the merge base; it is immutable")
-    # The file set is the transfer record's: a native edit may change a file's
-    # bytes but not add or remove one, because the build compiles the export's
-    # closures (mirror_package.verify_framework_identity holds the same set).
+    # The file set is the transfer record's paths, minus the ports ledger's
+    # removals, plus its additions (mirror_package.verify_framework_identity
+    # holds the same set). A file with neither a record nor a row is an
+    # extra, and a recorded or added file that is absent is missing.
     # framework/external/, which the ratchet skips, is reported on its own.
-    recorded = {r.get("framework_path") for r in transfer.get("records", [])}
+    recorded, ports_errors, ports_checks = framework_ports_state(
+        root, {r.get("framework_path") for r in transfer.get("records", [])},
+        pulp_root, pulp_main_ref, defer_identity)
+    errors.extend(ports_errors)
+    checks.update(ports_checks)
     # What git tracks (every entry, gitlinks included) and what the checkout
     # holds: a submodule or other non-file entry under framework/ is an extra.
     staged = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z", "--", FRAMEWORK_ROOT.rstrip("/")],
@@ -1287,9 +1399,11 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
         errors.append(f"framework/external/ holds {len(checks['framework_external_unrecorded'])} files "
                       "the transfer record does not list")
     if unrecorded:
-        errors.append(f"framework/ holds {len(unrecorded)} files the transfer record does not list: {unrecorded[:5]}")
+        errors.append(f"framework/ holds {len(unrecorded)} files its file set (the transfer record and the "
+                      f"ports ledger) does not list: {unrecorded[:5]}")
     if missing:
-        errors.append(f"framework/ is missing {len(missing)} files the transfer record lists: {missing[:5]}")
+        errors.append(f"framework/ is missing {len(missing)} files its file set (the transfer record and the "
+                      f"ports ledger) lists: {missing[:5]}")
     # The runtime collision census, permanent: framework/ now shares the
     # vellum namespace with native code, so a native declaration that collides
     # with a framework/ name fails here. A census that sees no declarations on
