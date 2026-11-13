@@ -141,7 +141,15 @@ RENAMED_MIRROR_EXEMPT_PREFIXES: tuple[str, ...] = ()
 FRAMEWORK_TEST_ROOT = "tools/framework-tests/"
 FRAMEWORK_TEST_FILE = re.compile(r"(?:[a-z0-9_]+_test\.(?:cpp|mm)|[a-z0-9_]+\.hpp|CMakeLists\.txt|README\.md)")
 FRAMEWORK_TEST_NAMESPACE = re.compile(r"\bnamespace\s+vellum\b")
-FRAMEWORK_TEST_LIBRARY = re.compile(r"(?im)^[ \t]*add_library[ \t]*\(")
+# CMake commands the test directory may not invoke: a library could be linked
+# into something that ships, and the others reach code this check cannot read.
+FRAMEWORK_TEST_CMAKE_REFUSED = {
+    "add_library": "framework-test-library",
+    "cmake_language": "framework-test-cmake-indirection",
+    "include": "framework-test-cmake-indirection",
+    "add_subdirectory": "framework-test-cmake-indirection",
+    "export": "framework-test-cmake-indirection",
+}
 # A qualified out-of-line function definition (`void vellum::view::X::f() {`,
 # or the same through a namespace alias): a test defines its own functions
 # unqualified, so any qualified definition is refused.
@@ -367,10 +375,11 @@ def framework_test_findings(relative: str, path: Path) -> list[dict[str, object]
     patterns = {"framework-test-defines-vellum": FRAMEWORK_TEST_NAMESPACE,
                 "framework-test-qualified-definition": FRAMEWORK_TEST_QUALIFIED_DEFINITION,
                 **FORBIDDEN_ACTIVE_PATTERNS}
-    if name == "CMakeLists.txt":
-        # Test executables only: a library here could be linked into one that ships.
-        patterns["framework-test-library"] = FRAMEWORK_TEST_LIBRARY
     findings = []
+    if name == "CMakeLists.txt":
+        findings += [{"rule": FRAMEWORK_TEST_CMAKE_REFUSED[command], "path": relative, "line": line,
+                      "match": f"{command}({' '.join(args.split())[:100]})"}
+                     for command, args, line in cmake_invocations(text) if command in FRAMEWORK_TEST_CMAKE_REFUSED]
     for rule, pattern in patterns.items():
         for match in pattern.finditer(text):
             if rule == "framework-test-defines-vellum":
@@ -408,6 +417,9 @@ def framework_test_blob_findings(root: Path, recorded: set[str],
     blobs.discard(EMPTY_BLOB_SHA)
     blobs.discard("")
     findings = []
+    if pulp_root is not None and not pulp_tree_checked:
+        # Asked to compare against Pulp and unable to: refuse rather than pass unchecked.
+        findings.append({"path": f"{pulp_root} (unreadable Pulp tree)", "git_blob_sha": ""})
     for path in active_files(root, (FRAMEWORK_TEST_ROOT.rstrip("/"),)):
         blob = git_blob_sha(path.read_bytes())
         if blob in blobs:
@@ -415,8 +427,83 @@ def framework_test_blob_findings(root: Path, recorded: set[str],
     return findings, pulp_tree_checked
 
 
-# An install() call, its arguments allowed one level of parentheses.
-_CMAKE_INSTALL = re.compile(r"(?im)^[ \t]*install[ \t]*\((?:[^()]|\([^()]*\))*\)")
+# CMake source read as commands, not lines (CMake language reference): a
+# command is `identifier (args)`, case-insensitive, anywhere a line may hold
+# several and a block may nest them. Comments (`#...` and `#[[...]]`), quoted
+# arguments and bracket arguments are removed before commands are found, so a
+# command name inside them is not an invocation; their text is kept as the
+# argument it is.
+_CMAKE_BRACKET_OPEN = re.compile(r"\[(=*)\[")
+_CMAKE_COMMAND = re.compile(r"(?<![\w])([A-Za-z_][A-Za-z0-9_]*)[ \t\r\n]*\(")
+_CMAKE_LITERAL = re.compile(r"\x00(\d+)\x00")
+
+
+def _cmake_strip(text: str) -> tuple[str, list[str]]:
+    """Text with comments blanked and each quoted or bracket argument replaced by a numbered token."""
+    text = text.replace("\x00", " ")
+    out: list[str] = []
+    literals: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        bracket = _CMAKE_BRACKET_OPEN.match(text, i + 1 if c == "#" else i) if c in "#[" else None
+        if bracket:
+            close = "]" + bracket.group(1) + "]"
+            end = text.find(close, bracket.end())
+            stop = n if end < 0 else end + len(close)
+            body = text[bracket.end():n if end < 0 else end]
+            if c == "[":
+                literals.append(body)
+                out.append(f"\x00{len(literals) - 1}\x00")
+            out.append("\n" * text.count("\n", i, stop))
+            i = stop
+        elif c == "#":
+            end = text.find("\n", i)
+            i = n if end < 0 else end
+        elif c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            literals.append(text[i + 1:j])
+            out.append(f"\x00{len(literals) - 1}\x00" + "\n" * text.count("\n", i, j))
+            i = j + 1
+        elif c == "\\":
+            # An escaped character (`\(`) is an argument character, never syntax.
+            out.append(" ")
+            i += 2
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out), literals
+
+
+def cmake_invocations(text: str) -> list[tuple[str, str, int]]:
+    """Every `identifier(...)` in CMake source as (lowercase name, argument text, line)."""
+    stripped, literals = _cmake_strip(text)
+    invocations = []
+    for match in _CMAKE_COMMAND.finditer(stripped):
+        depth, j = 1, match.end()
+        while j < len(stripped) and depth:
+            depth += {"(": 1, ")": -1}.get(stripped[j], 0)
+            j += 1
+        args = stripped[match.end():j - 1 if depth == 0 else j]
+        args = _CMAKE_LITERAL.sub(lambda m: f" {literals[int(m.group(1))]} ", args)
+        invocations.append((match.group(1).lower(), args, stripped.count("\n", 0, match.start()) + 1))
+    return invocations
+
+
+def _cmake_installs(text: str) -> list[tuple[str, int]]:
+    """The install rules in CMake source, including `cmake_language(CALL install ...)` and EVAL code."""
+    found = []
+    for command, args, line in cmake_invocations(text):
+        words = args.split()
+        if command == "install":
+            found.append((args, line))
+        elif command == "cmake_language" and words[:2] and words[0].upper() == "CALL" and words[1].lower() == "install":
+            found.append((args, line))
+        elif command == "cmake_language" and words[:1] and words[0].upper() == "EVAL":
+            found += [(nested, line) for name, nested, _ in cmake_invocations(args) if name == "install"]
+    return found
 
 
 def framework_test_install_findings(root: Path) -> list[dict[str, object]]:
@@ -436,17 +523,16 @@ def framework_test_install_findings(root: Path) -> list[dict[str, object]]:
                  if path.is_file() and (path.name == "CMakeLists.txt" or path.suffix == ".cmake")]
     findings: list[dict[str, object]] = []
     for name in sorted(names):
-        if name.startswith((FRAMEWORK_ROOT, MIRROR_ROOT)):
+        if name.startswith(MIRROR_ROOT):
             continue
         path = root / name
         if not path.is_file():
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
         inside = name.startswith(FRAMEWORK_TEST_ROOT)
-        for match in _CMAKE_INSTALL.finditer(text):
-            if inside or "framework-tests" in match.group(0):
-                findings.append({"path": name, "line": text.count("\n", 0, match.start()) + 1,
-                                 "match": " ".join(match.group(0).split())[:120]})
+        for args, line in _cmake_installs(text):
+            if inside or "framework-tests" in args:
+                findings.append({"path": name, "line": line, "match": f"install({' '.join(args.split())[:110]})"})
     return findings
 
 

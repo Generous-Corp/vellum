@@ -491,6 +491,19 @@ class VerifyExtractionTests(unittest.TestCase):
             "cmake/Other.cmake": "install(FILES \"${PROJECT_SOURCE_DIR}/tools/framework-tests/README.md\" DESTINATION doc)\n",
             "tools/framework-tests/CMakeLists.txt": "add_executable(t t_test.cpp)\n  install(TARGETS t)\n",
             "framework/core/view/CMakeLists.txt": "install(DIRECTORY framework-tests)\n",
+            "framework/core/view/Other.cmake": "install(TARGETS vellum-view)\n",
+            "mirror/core/CMakeLists.txt": "install(DIRECTORY framework-tests)\n",
+            # Commands after another, nested, in any case, spaced before the parenthesis.
+            "cmake/SameLine.cmake": "if(TRUE) install(DIRECTORY tools/framework-tests DESTINATION x) endif()\n",
+            "cmake/Upper.cmake": "IF(ON)\n  INSTALL (\n    DIRECTORY tools/framework-tests)\nENDIF()\n",
+            "cmake/Mixed.cmake": "Install\n(FILES tools/framework-tests/a.cpp DESTINATION x)\n",
+            "cmake/Call.cmake": "cmake_language(CALL install DIRECTORY tools/framework-tests DESTINATION x)\n",
+            "cmake/Eval.cmake": "cmake_language(EVAL CODE \"install(DIRECTORY tools/framework-tests)\")\n",
+            # Only in comments, strings and bracket arguments: not an install rule.
+            "cmake/Inert.cmake": "# install(DIRECTORY tools/framework-tests)\n"
+                                 "#[[ install(DIRECTORY tools/framework-tests) ]]\n"
+                                 "message(\"install(DIRECTORY tools/framework-tests)\")\n"
+                                 "set(x [=[install(DIRECTORY tools/framework-tests)]=])\n",
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -501,8 +514,55 @@ class VerifyExtractionTests(unittest.TestCase):
             findings = verify_extraction.framework_test_install_findings(root)
 
             self.assertEqual([(f["path"], f["line"]) for f in findings],
-                             [("CMakeLists.txt", 3), ("cmake/Other.cmake", 1),
+                             [("CMakeLists.txt", 3), ("cmake/Call.cmake", 1), ("cmake/Eval.cmake", 1),
+                              ("cmake/Mixed.cmake", 1), ("cmake/Other.cmake", 1), ("cmake/SameLine.cmake", 1),
+                              ("cmake/Upper.cmake", 2), ("framework/core/view/CMakeLists.txt", 1),
                               ("tools/framework-tests/CMakeLists.txt", 2)])
+
+    def test_framework_test_cmake_commands_are_found_however_written(self) -> None:
+        refused = {
+            "add_executable(t t_test.cpp) add_library(k STATIC k.cpp)\n": "framework-test-library",
+            "if(TRUE)\n  add_library(k STATIC k.cpp)\nendif()\n": "framework-test-library",
+            "if(TRUE) add_library(k STATIC k.cpp) endif()\n": "framework-test-library",
+            "ADD_LIBRARY(k STATIC k.cpp)\n": "framework-test-library",
+            "Add_Library(k k.cpp)\n": "framework-test-library",
+            "add_library (k k.cpp)\n": "framework-test-library",
+            "add_library\n(k k.cpp)\n": "framework-test-library",
+            "set(x \\() add_library(k k.cpp)\n": "framework-test-library",
+            "cmake_language(CALL add_library k k.cpp)\n": "framework-test-cmake-indirection",
+            "include(../../cmake/Lib.cmake)\n": "framework-test-cmake-indirection",
+            "add_subdirectory(lib)\n": "framework-test-cmake-indirection",
+        }
+        inert = ("# add_library(k k.cpp)\n#[[ add_library(k) install(TARGETS k) ]]\n"
+                 "message(\"add_library(k) install(TARGETS k) include(x)\")\n"
+                 "set(x [==[add_library(k)]==])\nadd_executable(t t_test.cpp)\nfunction(helper)\nendfunction()\n")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "tools/framework-tests/CMakeLists.txt"
+            path.parent.mkdir(parents=True)
+            for content, rule in refused.items():
+                path.write_text(content)
+                findings = verify_extraction.framework_test_findings("tools/framework-tests/CMakeLists.txt", path)
+                self.assertEqual([f["rule"] for f in findings], [rule], content)
+            path.write_text(inert)
+            self.assertEqual(verify_extraction.framework_test_findings("tools/framework-tests/CMakeLists.txt", path), [])
+            self.assertEqual(verify_extraction.framework_test_install_findings(root), [])
+
+    def test_unreadable_pulp_tree_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "vellum"
+            (root / "tools/framework-tests").mkdir(parents=True)
+            (root / "tools/framework-tests/native_test.cpp").write_bytes(b"int native_marker = 3;\n")
+            notgit = Path(temporary) / "not-a-checkout"
+            notgit.mkdir()
+
+            findings, checked = verify_extraction.framework_test_blob_findings(root, set(), notgit)
+
+            self.assertFalse(checked)
+            self.assertEqual(len(findings), 1)
+            self.assertIn("unreadable Pulp tree", findings[0]["path"])
+            clean, _ = verify_extraction.framework_test_blob_findings(root, set(), None)
+            self.assertEqual(clean, [])
 
     def test_framework_test_root_still_refuses_copies_of_framework_files(self) -> None:
         source = (b"namespace vellum::view {\nint widget_bridge_marker(int a, int b) {\n"
