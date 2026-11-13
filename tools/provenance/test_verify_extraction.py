@@ -382,6 +382,57 @@ class VerifyExtractionTests(unittest.TestCase):
             # The main native scan leaves this rule to the wider one.
             self.assertNotIn("renamed-mirror-namespace", verify_extraction.FORBIDDEN_ACTIVE_PATTERNS)
 
+    def test_framework_tests_may_name_the_units_but_only_consume_them(self) -> None:
+        legitimate = {
+            "tools/framework-tests/CMakeLists.txt": b"add_executable(t widget_bridge_test.cpp)\n",
+            "tools/framework-tests/README.md": b"Tests of vellum::view.\n",
+            "tools/framework-tests/support.hpp": b"#include <vellum/view/view.hpp>\nnamespace support {}\n",
+            "tools/framework-tests/widget_bridge_test.cpp":
+                b"#include <vellum/view/widget_bridge.hpp>\nnamespace view = vellum::view;\n"
+                b"using namespace vellum::view;\nint main() { view::View root; }\n",
+            "tools/framework-tests/window_test.mm": b"#import <vellum/view/window_host.hpp>\n",
+        }
+        refused = {
+            # A vellum namespace opened in any spelling.
+            "tools/framework-tests/defines_test.cpp": b"namespace vellum::view { int x; }\n",
+            "tools/framework-tests/nested.hpp": b"#pragma once\n  namespace vellum {\nnamespace view {}\n}\n",
+            "tools/framework-tests/inline.hpp": b"inline namespace vellum { }\n",
+            # Shapes a kept framework source would take.
+            "tools/framework-tests/widget_bridge.cpp": b"#include <vellum/view/view.hpp>\n",
+            "tools/framework-tests/sub/deep_test.cpp": b"#include <vellum/view/view.hpp>\n",
+            "tools/framework-tests/prelude.js": b"function on() {}\n",
+            # A Pulp file that kept its names.
+            "tools/framework-tests/copied_test.cpp": b"#include <pulp/view/view.hpp>\npulp::view::View v;\n",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_mirror(root, "mirror/core/view/src/a.cpp", b"namespace vellum::view { int x; }\n")
+            for relative, content in {**legitimate, **refused}.items():
+                (root / relative).parent.mkdir(parents=True, exist_ok=True)
+                (root / relative).write_bytes(content)
+
+            findings = verify_extraction.scan_renamed_mirror(root)
+
+            self.assertEqual(sorted({f["path"] for f in findings}), sorted(refused))
+            self.assertEqual({f["rule"] for f in findings},
+                             {"framework-test-defines-vellum", "framework-test-file-shape",
+                              "pulp-public-namespace"})
+
+    def test_framework_test_root_still_refuses_copies_of_framework_files(self) -> None:
+        source = (b"namespace vellum::view {\nint widget_bridge_marker(int a, int b) {\n"
+                  b"    return a * 31 + b * 17 + 5;\n}\n}\n")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "framework/core/view/src").mkdir(parents=True)
+            (root / "framework/core/view/src/widget_bridge.cpp").write_bytes(source)
+            (root / "tools/framework-tests").mkdir(parents=True)
+            (root / "tools/framework-tests/widget_bridge_test.cpp").write_bytes(b"// kept\n" + source)
+
+            findings = verify_extraction.normalized_copy_findings(root)
+
+            self.assertEqual(findings, [{"path": "tools/framework-tests/widget_bridge_test.cpp",
+                                         "mirror": "framework/core/view/src/widget_bridge.cpp"}])
+
     def test_renamed_mirror_units_match_the_mirror_namespace_census(self) -> None:
         # The refused units are the mirror's top-level pulp::<unit> namespaces
         # and include units, less the ones native Vellum owns. A new mirrored
@@ -406,6 +457,7 @@ class VerifyExtractionTests(unittest.TestCase):
     def test_renamed_mirror_exemptions_are_pinned(self) -> None:
         # Any change to what the rule skips must show up as an edit here.
         self.assertEqual(verify_extraction.RENAMED_MIRROR_EXEMPT_PREFIXES, ())
+        self.assertEqual(verify_extraction.FRAMEWORK_TEST_ROOT, "tools/framework-tests/")
         self.assertEqual(verify_extraction.RENAMED_MIRROR_EXEMPT_PATHS, {
             "tools/mirror/consumer/cross_image_main.cpp",
             "tools/mirror/consumer/direct_gpu_main.cpp",
