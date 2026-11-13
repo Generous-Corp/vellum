@@ -1051,8 +1051,14 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
     }
     if (inspector_cursor >= 0)
         return static_cast<vellum::view::View::CursorStyle>(inspector_cursor);
-    if (auto* target = vellum::view::hover_target_at(*self.rootView, pt)) return target->cursor();
-    return std::nullopt;
+    // Nothing under the pointer leaves the current cursor alone. Anything
+    // painted there, a disabled view included, is resolved by hover_cursor_at,
+    // which answers the default cursor over a disabled view.
+    {
+        vellum::view::View::DisabledHitTestScope include_disabled;
+        if (!vellum::view::hover_target_at(*self.rootView, pt)) return std::nullopt;
+    }
+    return vellum::view::hover_cursor_at(*self.rootView, pt);
 }
 
 // AppKit asks the owner of a NSTrackingCursorUpdate area what cursor to show
