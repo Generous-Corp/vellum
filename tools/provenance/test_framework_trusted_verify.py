@@ -450,11 +450,12 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
         self.text = WORKFLOW.read_text(encoding="utf-8")
         self.runs = run_blocks(self.text)
 
-    def test_it_runs_on_the_base_definition_with_exactly_contents_read_and_statuses_write(self):
+    def test_it_runs_on_the_base_definition_with_exactly_actions_read_contents_read_and_statuses_write(self):
         trigger = self.text.split("\non:\n", 1)[1].split("\n\n", 1)[0]
         self.assertEqual(re.findall(r"^  (\w+):", trigger, re.MULTILINE), ["pull_request_target", "merge_group"])
         self.assertEqual(re.findall(r"^ *permissions:\n((?: +\w[\w-]*: \w+\n)+)", self.text, re.MULTILINE),
-                         ["  contents: read\n  statuses: write\n", "      contents: read\n      statuses: write\n"])
+                         ["  actions: read\n  contents: read\n  statuses: write\n",
+                          "      actions: read\n      contents: read\n      statuses: write\n"])
         self.assertNotIn("secrets.", self.text)
         self.assertEqual(re.findall(r"\$\{\{ *github\.token *\}\}", self.text), ["${{ github.token }}"])
         self.assertIn("GITHUB_TOKEN: ${{ github.token }}", self.text)
