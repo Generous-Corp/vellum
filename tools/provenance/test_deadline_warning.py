@@ -30,7 +30,8 @@ BUDGETS = """observatory:
 """
 
 
-def summary_at(hours_before_deadline: float, event_class: str = "documentation") -> dict[str, object]:
+def summary_at(hours_before_deadline: float, event_class: str = "documentation",
+               api_deltas: list[str] | None = None) -> dict[str, object]:
     """overdue_events output for one pending event whose deadline is DEADLINE."""
     discovered = DEADLINE - timedelta(days=7 if event_class == "documentation" else 3)
     now = DEADLINE - timedelta(hours=hours_before_deadline)
@@ -46,7 +47,7 @@ def summary_at(hours_before_deadline: float, event_class: str = "documentation")
             "effort_minutes": 0, "event_id": EVENT_ID, "include_dependency_deltas": [], "kind": "observation",
             "linked_commits": [], "linked_pull_requests": [], "mapped_contracts": [], "mapped_paths": [],
             "owner": "@danielraffel", "patch_id": None, "rationale": "r", "rename_candidates": [],
-            "scan_cursor": {"from_commit": "a" * 40, "to_commit": "b" * 40}, "schema_api_deltas": [],
+            "scan_cursor": {"from_commit": "a" * 40, "to_commit": "b" * 40}, "schema_api_deltas": api_deltas or [],
             "schema_version": 1, "severity": None, "shared_contract_release_blocker": False,
             "source_commit": "c" * 40, "source_repository": "Generous-Corp/pulp", "transitive_paths": [],
         }
@@ -88,6 +89,21 @@ class RoutingTests(unittest.TestCase):
         for action in deadline_warning.plan(late, [{"number": 7, "title": deadline_warning.TITLE,
                                                     "body": deadline_warning.render(early, LOOKUP)}], LOOKUP):
             self.assertNotIn("@danielraffel", str(action))
+
+    def test_api_change_mentions_the_owner_at_24h_only(self) -> None:
+        early = summary_at(23, "correctness", ["Widget::draw"])["due_soon"]
+        late = summary_at(3, "correctness", ["Widget::draw"])["due_soon"]
+        self.assertTrue(early[0]["needs_ruling"])
+        self.assertIn("@danielraffel", deadline_warning.render(early, LOOKUP))
+        self.assertNotIn("@danielraffel", deadline_warning.render(late, LOOKUP))
+
+    def test_api_class_needs_a_ruling_even_without_deltas(self) -> None:
+        # The loader accepts no "api" class today; this pins the predicate
+        # for the day one is added.
+        import observatory_common  # noqa: PLC0415
+        self.assertNotIn("api", observatory_common.CLASSES)
+        source = Path(overdue_events.__file__).read_text()
+        self.assertIn('{"schema", "security", "api"}', source)
 
     def test_issue_is_labelled_for_the_escalation_ladder(self) -> None:
         calls: list[tuple[str, ...]] = []

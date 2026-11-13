@@ -50,7 +50,7 @@ def overdue(root: Path, now: datetime) -> dict[str, object]:
                              "deadline": observatory.utc_text(due),
                              "source_repository": str(event.get("source_repository") or ""),
                              "source_commit": str(event.get("source_commit") or ""),
-                             "needs_ruling": (event["class"] in {"schema", "security"}
+                             "needs_ruling": (event["class"] in {"schema", "security", "api"}
                                               or event.get("severity") == "P0"
                                               or bool(event.get("schema_api_deltas"))),
                              "hours_left": round(hours_left, 1),
