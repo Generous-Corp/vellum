@@ -516,7 +516,7 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
         # Every verdict post outside the trap.
         posts = [i for i, line in enumerate(lines) if re.search(r"\bpost_status (success|failure) ", line)
                  and "did not finish" not in line]
-        self.assertEqual(len(posts), 6)  # control: two refusals before the judge, four verdicts after
+        self.assertEqual(len(posts), 7)  # control: guard failure and two refusals before the judge, four verdicts after
         finishes = [i for i, line in enumerate(lines) if line.strip() == "finished=1"]
         self.assertGreater(max(finishes), max(posts))
         # Every verdict the step posts itself is marked finished before the
@@ -536,7 +536,7 @@ class WorkflowIsTrustedOnlyTests(unittest.TestCase):
         uses = [i for i, line in enumerate(lines) if "GITHUB_TOKEN" in line or "status_token" in line]
         self.assertEqual([lines[i] for i in uses if i not in (moved, moved + 1)],
                          ["printf 'Authorization: Bearer %s\\n' \"$status_token\" |",
-                          "printf 'Authorization: Bearer %s\\n' \"$status_token\" |",
+                          "if printf 'Authorization: Bearer %s\\n' \"$status_token\" |",
                           "timeout 8m env -u GITHUB_TOKEN -u GH_TOKEN -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN \\"])
         self.assertIsNone(re.search(r"(?<![\w-])(export|declare -x)\s", run))
         # The token reaches curl on stdin, never in its argv.
@@ -685,22 +685,79 @@ class WorkflowStepBehaviourTests(unittest.TestCase):
         self.assertIn("run 2 is newer than run 1", done.stdout)
         self.assertEqual(self.states(), [])
 
-    def test_an_unreadable_run_list_posts_nothing_and_fails(self):
+    def test_an_unreadable_run_list_posts_a_failure_never_nothing(self):
         (self.top / "runs.json").write_text("{", encoding="utf-8")
         work = Path(tempfile.mkdtemp(dir=self.top))
         done = subprocess.run(["bash", str(self.step)], cwd=work, env=self.environment(self.new_main),
                               capture_output=True, text=True, timeout=300)
         self.assertNotEqual(done.returncode, 0)
-        self.assertEqual(self.states(), [])
+        self.assertEqual(self.states(), [("failure", "The newest-run check failed; rerun this job")])
+
+    def legacy_main(self) -> str:
+        """A main whose judge predates the newest-run command, as merge_group's base was for this change."""
+        work = self.top / "work-repo"
+        git(work, "checkout", "-q", "-b", "legacy", self.old_main)
+        for tree in ("tools/provenance", "tools/mirror"):
+            shutil.copytree(ROOT / tree, work / tree, ignore=shutil.ignore_patterns("__pycache__"))
+        script = work / "tools/provenance/framework_trusted_verify.py"
+        text = script.read_text(encoding="utf-8")
+        self.assertIn("newest_run_main", text)  # control: the rewrite below changes something
+        script.write_text(text.replace("newest_run_main", "legacy_main").replace('["newest-run"]', '["legacy"]'),
+                          encoding="utf-8")
+        legacy = commit_all(work, "main before the newest-run guard")
+        git(work, "push", "-q", str(self.server / "Generous-Corp/vellum.git"), f"{legacy}:refs/heads/legacy")
+        return legacy
+
+    def merge_group_environment(self, trusted: str) -> dict[str, str]:
+        env = self.environment(trusted)
+        env.update(EVENT_NAME="merge_group", PR_NUMBER="")
+        return env
+
+    def test_a_merge_group_run_on_a_base_without_the_guard_still_judges(self):
+        # The defect: the guard ran the base's script with its own arguments, the base
+        # had no such command, argparse demanded the judge's arguments, and no status posted.
+        legacy = self.legacy_main()
+        work = Path(tempfile.mkdtemp(dir=self.top))
+        done = subprocess.run(["bash", str(self.step)], cwd=work, env=self.merge_group_environment(legacy),
+                              capture_output=True, text=True, timeout=300)
+        self.assertEqual(done.returncode, 0, done.stdout[-500:] + done.stderr[-500:])
+        self.assertIn("predate the newest-run guard", done.stdout)
+        self.assertNotIn("arguments are required", done.stderr)
+        self.assertEqual(self.states(), [("pending", "Judging with the base rules"),
+                                         ("success", "Passed the base rules")])
+
+    def test_a_merge_group_run_on_a_base_with_the_guard_judges(self):
+        done = subprocess.run(["bash", str(self.step)], cwd=Path(tempfile.mkdtemp(dir=self.top)),
+                              env=self.merge_group_environment(self.new_main),
+                              capture_output=True, text=True, timeout=300)
+        self.assertEqual(done.returncode, 0, done.stdout[-500:] + done.stderr[-500:])
+        self.assertEqual(self.states(), [("pending", "Judging with the base rules"),
+                                         ("success", "Passed the base rules")])
+
+    def test_a_judge_that_errors_still_posts_a_failure(self):
+        (self.bin / "python3").write_text(
+            f"#!/bin/bash\ncase \"$*\" in *newest-run*) exec {sys.executable} \"$@\";; esac\nexit 5\n", encoding="utf-8")
+        (self.bin / "python3").chmod(0o755)
+        for event, trusted in (("pull_request_target", self.new_main), ("merge_group", self.new_main)):
+            with self.subTest(event=event):
+                self.posts.unlink(missing_ok=True)
+                env = self.environment(trusted)
+                env.update(EVENT_NAME=event)
+                done = subprocess.run(["bash", str(self.step)], cwd=Path(tempfile.mkdtemp(dir=self.top)), env=env,
+                                      capture_output=True, text=True, timeout=300)
+                self.assertNotEqual(done.returncode, 0)
+                self.assertEqual(self.states(), [("pending", "Judging with the base rules"),
+                                                 ("failure", "The change could not be read")])
 
     def test_rules_from_the_old_base_cannot_be_read(self):
         # The defect this guards against: the old base predates the judge.
         work = Path(tempfile.mkdtemp(dir=self.top))
         done = subprocess.run(["bash", str(self.step)], cwd=work, env=self.environment(self.old_main),
                               capture_output=True, text=True, timeout=300)
-        # The guard script does not exist on the old base: fail closed, post nothing.
+        # The judge does not exist on the old base: the run fails, and says so in a status.
         self.assertNotEqual(done.returncode, 0)
-        self.assertEqual(self.states(), [])
+        self.assertEqual(self.states(), [("pending", "Judging with the base rules"),
+                                         ("failure", "The change could not be read")])
 
     def test_a_cancelled_run_posts_nothing_more(self):
         started = self.top / "judge-started"
