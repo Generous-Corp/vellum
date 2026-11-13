@@ -776,9 +776,21 @@ def render_build_info(template: str, receipt: dict[str, Any], version: str, conf
     return re.sub(r"@([A-Z0-9_]+)@", substitute, template)
 
 
+def read_producer(repo: Path, relative: str) -> str:
+    """The text of a file the plan generates from; a missing one is refused, not a crash.
+
+    The ports ledger may remove a transferred file, but not one the build
+    plan still reads to produce a generated input.
+    """
+    path = mirrored(repo, relative)
+    if not path.is_file():
+        raise PlanError(f"{relative} is not in the landed mirror, and the build plan generates from it")
+    return path.read_text(encoding="utf-8")
+
+
 def binary_data_targets(repo: Path) -> dict[str, dict[str, Any]]:
     """Read the mirrored canvas CMake for each binary-data target's inputs."""
-    text = mirrored(repo, "core/canvas/CMakeLists.txt").read_text(encoding="utf-8")
+    text = read_producer(repo, "core/canvas/CMakeLists.txt")
     targets: dict[str, dict[str, Any]] = {}
     for match in re.finditer(r"pulp_add_binary_data\(\s*([A-Za-z0-9-]+)\s+SOURCES\s+(.*?)\s+NAMESPACE\s+([A-Za-z0-9_]+)\s*\)", text, re.S):
         sources = [
@@ -866,7 +878,7 @@ def prepare_generated(repo: Path, receipt: dict[str, Any], units: list[tuple[str
                 inputs = BUILD_INFO_INPUTS.get(receipt["export_id"])
                 if not inputs:
                     raise PlanError(f"no build-info inputs are recorded for export {receipt['export_id']}")
-                template = mirrored(repo, "core/runtime/include/pulp/runtime/build_info.hpp.in").read_text(encoding="utf-8")
+                template = read_producer(repo, "core/runtime/include/pulp/runtime/build_info.hpp.in")
                 normalized = render_build_info(template, receipt, inputs["version"], config, BUILD_TIMESTAMP_PLACEHOLDER)
                 if (row.get("normalization") or {}).get("build_timestamp") != BUILD_TIMESTAMP_PLACEHOLDER:
                     raise PlanError(f"{path} is not timestamp-normalized")
@@ -881,11 +893,20 @@ def prepare_generated(repo: Path, receipt: dict[str, Any], units: list[tuple[str
                     target.write_text(rendered, encoding="utf-8")
             elif prelude:
                 producer = mirrored(repo, "core/view/cmake/PulpViewJsPreludes.cmake")
-                cmake = producer.read_text(encoding="utf-8")
+                cmake = read_producer(repo, "core/view/cmake/PulpViewJsPreludes.cmake")
                 js_paths = re.findall(r"\$\{CMAKE_CURRENT_SOURCE_DIR\}/(js/[^\s)]+)", cmake)
                 js_paths = [js for js in js_paths if js != "js/embed_js.py"]
                 embedder = mirrored(repo, "core/view/js/embed_js.py")
                 js_files = [mirrored(repo, "core/view/" + js) for js in js_paths]
+                if transferred(repo):
+                    # Every prelude input is a file of the framework's file
+                    # set: the producer cannot name a path that climbs out of
+                    # framework/ or that neither the transfer record nor the
+                    # ports ledger lists.
+                    listed, _, _ = framework_file_set(repo)
+                    for js in ["js/embed_js.py", *js_paths]:
+                        if f"{FRAMEWORK_DIR}/core/view/{js}" not in listed:
+                            raise PlanError(f"{path}: prelude input {js} is not a file of the framework's file set")
                 prelude_dir.mkdir(parents=True, exist_ok=True)
                 suffix = prelude.group("suffix")
                 out = prelude_dir / f"web_compat_preludes_gen.{suffix}"

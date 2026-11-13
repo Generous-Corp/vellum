@@ -823,6 +823,15 @@ class VerifyExtractionTests(unittest.TestCase):
             self.assertIn("none of the named Pulp commits holds a file at core/a/src/new.cpp", errors[0])
             errors, _ = verdict([on_main], pulp_path="core/a/src", pulp_root=pulp, defer=False)
             self.assertIn("none of the named Pulp commits holds a file at core/a/src", errors[0])
+            # A symlink at the path is not the content either.
+            run("checkout", "-q", "--detach", on_main)
+            os.symlink("new.cpp", pulp / "core/a/src/link.cpp")
+            run("add", "-A"); run("commit", "-q", "-m", "a link")
+            linked = run("rev-parse", "HEAD")
+            run("update-ref", "refs/remotes/origin/main", linked)
+            errors, _ = verdict([linked], pulp_path="core/a/src/link.cpp", pulp_root=pulp, defer=False)
+            self.assertIn("none of the named Pulp commits holds a file at core/a/src/link.cpp", errors[0])
+            self.assertEqual(verdict([linked], pulp_root=pulp, defer=False)[0], [])  # control: the file beside it
             # Without a Pulp checkout the proof fails closed; only a lane that
             # defers to the required provenance lane may skip it.
             errors, checks = verdict([on_main], pulp_root=None, defer=False)

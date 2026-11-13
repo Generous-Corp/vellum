@@ -1145,8 +1145,10 @@ def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[
     """Prove every Pulp commit a row names against the Pulp checkout, never from the row's text.
 
     Each commit must be a commit object in the checkout and an ancestor of
-    `pulp_main_ref`. An added row's pulp_path must be a file in at least one
-    of its commits, so the row names commits that carry the content.
+    `pulp_main_ref`. An added row's pulp_path must be a regular file in at
+    least one of its commits, so the row names commits that carry the content.
+    A removed row's pulp_path is not looked up: the file may be gone from
+    every commit it names.
     """
     def pulp(*args: str) -> subprocess.CompletedProcess:
         return subprocess.run(["git", "-C", str(pulp_root), *args], capture_output=True, check=False)
@@ -1176,7 +1178,8 @@ def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[
         for commit in row["pulp_commits"]:
             listing = pulp("--literal-pathspecs", "ls-tree", "-z", commit, "--", row["pulp_path"]).stdout
             entries = [entry for entry in listing.split(b"\0") if entry]
-            if len(entries) == 1 and entries[0].split(b"\t", 1)[0].split()[1] == b"blob":
+            # A regular file: a symlink or a tree at the path is not the content.
+            if len(entries) == 1 and entries[0].split(b"\t", 1)[0].split()[0] in (b"100644", b"100755"):
                 holds = True
                 break
         if not holds:

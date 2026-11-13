@@ -1346,6 +1346,35 @@ class FrameworkPortsPlanTest(unittest.TestCase):
         self.assertEqual(sorted(plan["native_preludes"]),
                          ["web_compat_preludes_gen.cpp", "web_compat_preludes_gen.hpp"])
 
+    def test_a_prelude_input_outside_the_file_set_is_refused(self) -> None:
+        producer = f"{self.fixture.VIEW}/cmake/PulpViewJsPreludes.cmake"
+        self.fixture.write("native_secret.js", b"var secret = 1;\n")
+        for listed in ("js/../../../../native_secret.js", "js/unlisted.js"):
+            self.fixture.write(producer, PRELUDES_CMAKE.replace(
+                "/js/second.js\n", f"/js/second.js\n    ${{CMAKE_CURRENT_SOURCE_DIR}}/{listed}\n").encode())
+            self.assertRefused(f"prelude input {listed} is not a file of the framework's file set")
+        # Control: the same producer edit naming a ledger-added file plans
+        # (test_a_ported_prelude_source_is_embedded), and so does the untouched one.
+        self.fixture.write(producer, PRELUDES_CMAKE.encode())
+        self.fixture.plan()
+
+    def test_removing_a_file_the_plan_generates_from_is_refused(self) -> None:
+        for relative in ("framework/core/canvas/CMakeLists.txt",
+                         "framework/core/runtime/include/vellum/runtime/build_info.hpp.in",
+                         f"{self.fixture.VIEW}/cmake/PulpViewJsPreludes.cmake",
+                         f"{self.fixture.VIEW}/js/embed_js.py"):
+            data = (self.fixture.repo / relative).read_bytes()
+            (self.fixture.repo / relative).unlink()
+            self.fixture.write_ledger([self.fixture.row(relative, "removed")])
+            with self.assertRaises(mp.PlanError, msg=relative):
+                self.fixture.plan()
+            self.fixture.write(relative, data)
+        # Control: a removal the plan does not generate from still plans.
+        header = "framework/core/runtime/include/vellum/runtime/a.hpp"
+        (self.fixture.repo / header).unlink()
+        self.fixture.write_ledger([self.fixture.row(header, "removed")])
+        self.fixture.plan()
+
     def test_a_prelude_generator_that_is_not_deterministic_is_refused(self) -> None:
         self.fixture.write(f"{self.fixture.VIEW}/js/embed_js.py", UNSTABLE_EMBEDDER.encode())
         self.assertRefused("is not deterministic")
