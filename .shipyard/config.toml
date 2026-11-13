@@ -31,3 +31,12 @@ timeout_secs = 2400
 inconclusive_exit_codes = [2]
 read_token = "ghread"
 read_repos = ["Generous-Corp/pulp"]
+
+[base_health]
+# Red-main fix-first (Shipyard PR 1279; docs/automated-draining.md in the
+# Shipyard repo): when one required check fails in consecutive merge groups and
+# the base tip confirms it, hold other approved heads and enqueue the named fix
+# with `jump: true`. `merge_group_pause` is left unset (dry-run): nothing
+# already queued is removed.
+merge_group_hold = "on"
+auto_jump = "on"
