@@ -5,7 +5,7 @@
 
 Prints {overdue: [{event_id, class, deadline}], oldest_pending_days,
 maximum_pending_event_age_days, pending_age_exceeded, due_soon: [{event_id,
-class, deadline, owner, hours_left, urgent}]}, overdue oldest first. due_soon
+class, deadline, source_repository, source_commit, needs_ruling, hours_left, urgent}]}, overdue oldest first. due_soon
 lists pending events not yet overdue whose deadline is within WARN_HOURS, with
 urgent set within URGENT_HOURS; the deadline_warning issue is built from it.
 The Observatory overdue issue workflow keeps one tracking issue current from it: pull
@@ -48,7 +48,11 @@ def overdue(root: Path, now: datetime) -> dict[str, object]:
             if hours_left <= WARN_HOURS:
                 soon.append({"event_id": str(event["event_id"]), "class": str(event["class"]),
                              "deadline": observatory.utc_text(due),
-                             "owner": str(event.get("owner") or ""),
+                             "source_repository": str(event.get("source_repository") or ""),
+                             "source_commit": str(event.get("source_commit") or ""),
+                             "needs_ruling": (event["class"] in {"schema", "security"}
+                                              or event.get("severity") == "P0"
+                                              or bool(event.get("schema_api_deltas"))),
                              "hours_left": round(hours_left, 1),
                              "urgent": hours_left <= URGENT_HOURS})
     limit = budgets["maximum_pending_event_age_days"]
