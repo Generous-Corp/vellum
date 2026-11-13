@@ -30,6 +30,10 @@ function(vellum_add_framework_test name)
         BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
     add_test(NAME "vellum.framework.${name}" COMMAND "${_target}")
     set_tests_properties("vellum.framework.${name}" PROPERTIES LABELS framework)
+    foreach(_source IN LISTS _test_SOURCES)
+        get_filename_component(_source "${_source}" NAME)
+        set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES "${_source}")
+    endforeach()
 endfunction()
 
 vellum_add_framework_test(widget-bridge
@@ -39,3 +43,20 @@ vellum_add_framework_test(widget-bridge
 vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
+
+# Every test file here must be registered above. A test file that no
+# vellum_add_framework_test() names would build nothing and run nothing while
+# the lane stays green, so configure refuses it.
+file(GLOB _vellum_framework_test_files RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+    CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*_test.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*_test.mm")
+get_property(_vellum_framework_registered GLOBAL PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES)
+set(_vellum_framework_unregistered)
+foreach(_file IN LISTS _vellum_framework_test_files)
+    if(NOT _file IN_LIST _vellum_framework_registered)
+        list(APPEND _vellum_framework_unregistered "${_file}")
+    endif()
+endforeach()
+if(_vellum_framework_unregistered)
+    message(FATAL_ERROR "tools/framework-tests: no vellum_add_framework_test() registers "
+        "${_vellum_framework_unregistered}")
+endif()
