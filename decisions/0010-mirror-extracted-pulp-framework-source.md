@@ -240,3 +240,57 @@ earlier decisions".
   (`tools/mirror/RunMirrorConsumer.cmake`), with a planted-name control. Each
   fails when it cannot see both sides. The export receipts and blob-origin
   records stay as history; no later export applies to these units.
+
+## Amendment: the `framework/` file set is Vellum's (2026-11-13)
+
+The amendment above fixed `framework/` to the transferred file set and proved
+the JavaScript preludes against Pulp's closure digests. Both rules end here.
+They are replaced, not relaxed in place: the paragraph "What a native edit is
+still held to" stays as the record of the earlier rule, and this section is
+the rule in force. No export follows the transfer, so a Pulp change reaches
+`framework/` as an ordinary reviewed Vellum port.
+
+- **The ports ledger.** `provenance/framework/ports.json` lists every change
+  to the file set after the transfer. Each row names one `framework/` path,
+  whether it is `added` or `removed`, its `origin`, and a `reason`. A row of
+  origin `pulp` names the Pulp path and the Pulp commits the content came from.
+  A row of origin `native` names neither, for a file Vellum wrote. A row that
+  adds a compilable source names the mirrored target that compiles it.
+- **The file set.** `framework/` holds exactly the transfer record's paths,
+  minus the ledger's removals, plus its additions. A file with neither a
+  transfer record nor a ledger row fails, and so does a listed file that is
+  absent. `verify_extraction.py` checks this in the required provenance lane
+  and `mirror_package.py` again when it plans the build; both read the ledger
+  through `tools/mirror/framework_ports.py`.
+- **What a row is held to.** The ledger is append-only against the merge base:
+  a landed row is never edited, reordered or deleted, and a ported file leaves
+  through a later removal row. A path the transfer record lists may only be
+  removed, once. Paths stay inside `framework/` and outside
+  `framework/external/`, whose third-party bytes still change only through
+  `external-updates.json`. Every Pulp commit a row names must be a commit on
+  Pulp's main in the lane's Pulp checkout, and an added row's Pulp path must be
+  a file in one of its commits. The proof reads the checkout, never the row's
+  text, and fails closed without one.
+- **A ported file is framework content.** It is held to the edge rules, the
+  residual-spelling check and the collision census like every other file
+  there. The name-debt baseline may only fall, so a ported file starts with no
+  `PULP_*`, `pulp-*` or plug-in-host debt and none can be recorded for it.
+- **The build compiles the ledger.** The mirror build plan compiles each
+  closure's sources, leaves out a source the ledger removed, and adds each
+  ledger-added source to the target its row names. A row naming a target no
+  closure builds fails the plan.
+- **Preludes are generated from Vellum's sources.** While the prelude producer,
+  its embedder and every JavaScript source are still their transferred blobs,
+  the generated preludes must match the closure digests as before. Once any of
+  them is edited or joined through the ledger, the preludes are Vellum's own:
+  the plan generates them twice and fails unless both runs give the same
+  bytes, and it records their digests. The build-info header and the embedded
+  binary data are still proved against the closure digests.
+- **Review.** The ledger is data, judged mechanically, and is not a
+  release-path file: a port lands by normal review. The rules that judge it
+  (`tools/provenance/`, `tools/mirror/`) stay release-path files.
+  `transfer.json` stays immutable.
+- **Observatory.** A porting agent may classify the observatory events of its
+  own port when the ledger row names the Pulp commits
+  (`provenance/pulp-observatory/README.md`). Every other event under
+  `framework/` stays with the owner.

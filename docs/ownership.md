@@ -64,9 +64,16 @@ spelling, no symlinks, and no second copy of its files elsewhere in Vellum. The
 units' kept `PULP_*` macros, `pulp-*` target names and plug-in-host prose are a
 counted debt in
 [`provenance/framework-name-debt.json`](../provenance/framework-name-debt.json)
-that may only fall. Until 8c regenerates the closures from Vellum, an edit may
-change a file's bytes but not the transferred file set, and the generated-input
-sources (preludes, embedded data, build info) stay as Pulp produced them.
+that may only fall. An edit may change any file's bytes. The file set changes
+only through the append-only
+[`provenance/framework/ports.json`](../provenance/framework/ports.json): each
+row adds or removes one `framework/` path and names the Pulp path and commits
+the content came from, or `native` for a file Vellum wrote. The provenance lane
+proves the rows append-only and the Pulp commits real against a Pulp checkout,
+and the mirror build compiles each added source into the target its row names.
+A file with neither a transfer record nor a ledger row fails both. The
+JavaScript preludes are generated from Vellum's own sources once any of them
+is edited; the build-info header and embedded data stay as Pulp produced them.
 `framework/external/` is third-party source, and its bytes are pinned: each
 file must hold its transfer-record blob. A third-party update changes the file
 and appends an entry (`path`, `from_blob`, `to_blob`, `reason`, `dependency`,
