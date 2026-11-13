@@ -33,3 +33,18 @@ pr_gates = false
 # already queued is removed.
 merge_group_hold = "on"
 auto_jump = "on"
+
+[project]
+name = "vellum"
+type = "python"
+platforms = ["macos"]
+
+# `shipyard pr` validates through a declared target. Vellum's local validation
+# is scripts/gates.sh: the required checks that need no GPU, run against the
+# committed range. The GPU and sterile-consumer lanes run only in CI.
+[validation.default]
+command = "scripts/gates.sh origin/main"
+
+[targets.mac]
+backend = "local"
+platform = "macos-arm64"
