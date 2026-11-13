@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import importlib.util
+import gzip
+import io
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -86,6 +89,102 @@ class SterileAcceptanceBundleTest(unittest.TestCase):
                 "vellum-sterile-acceptance/scripts/build_sdk_artifact.py", names
             )
             self.assertFalse(any("/.git/" in name for name in names))
+
+    def test_two_builds_of_one_tree_are_the_same_bundle(self) -> None:
+        # The GPU proof and the finalizer each run build(); same tree, same bytes.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle.build(root / "gpu.tar.gz")
+            bundle.build(root / "trusted.tar.gz")
+            self.assertEqual((root / "gpu.tar.gz").read_bytes(), (root / "trusted.tar.gz").read_bytes())
+            self.assertEqual(bundle.compare(root / "gpu.tar.gz", root / "trusted.tar.gz"), [])
+            # The header is fixed: no name, mtime 0, XFL 2 (level 9), OS unknown.
+            self.assertEqual((root / "gpu.tar.gz").read_bytes()[:10],
+                             b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff")
+
+    def test_compare_ignores_gzip_bytes_but_not_content(self) -> None:
+        # Finalizer run 43302131142: the two runners' bundles differed at the
+        # gzip header's XFL byte. Content identity must survive that, and a
+        # single changed file must still fail.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            built = root / "built.tar.gz"
+            bundle.build(built)
+            tar = bundle.tar_stream(built)
+            other_level = root / "other-level.tar.gz"
+            other_level.write_bytes(gzip.compress(tar, compresslevel=6, mtime=0))
+            self.assertNotEqual(other_level.read_bytes(), built.read_bytes())
+            self.assertEqual(bundle.compare(built, other_level), [])
+            with tarfile.open(built) as archive:
+                members = [(m, archive.extractfile(m).read() if m.isfile() else None)
+                           for m in archive.getmembers()]
+            changed = io.BytesIO()
+            with tarfile.open(fileobj=changed, mode="w", format=tarfile.PAX_FORMAT) as archive:
+                edited = False
+                for member, data in members:
+                    if data is not None and not edited and member.name.endswith(".py"):
+                        data = data + b"\n# changed\n"
+                        member.size = len(data)
+                        edited = True
+                    archive.addfile(member, io.BytesIO(data) if data is not None else None)
+            self.assertTrue(edited)
+            tampered = root / "tampered.tar.gz"
+            bundle.write_gzip(changed.getvalue(), tampered)
+            problems = bundle.compare(built, tampered)
+            self.assertEqual(len(problems), 1)
+            self.assertIn("hold different tar streams", problems[0])
+
+    def test_the_finalizer_compares_tar_streams(self) -> None:
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/sdk-release.yml").read_text()
+        self.assertIn("python3 -I scripts/build_sterile_acceptance_bundle.py --compare", workflow)
+        self.assertNotIn('cmp "$RUNNER_TEMP/trusted-sterile-acceptance.tar.gz"', workflow)
+
+    def test_compare_command_accepts_different_gzip_headers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            built = root / "built.tar.gz"
+            alternate = root / "alternate.tar.gz"
+            bundle.build(built)
+            alternate.write_bytes(gzip.compress(bundle.tar_stream(built), compresslevel=6, mtime=0))
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_DIR / "build_sterile_acceptance_bundle.py"),
+                    "--compare",
+                    str(built),
+                    str(alternate),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_compare_command_rejects_changed_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            built = root / "built.tar.gz"
+            tampered = root / "tampered.tar.gz"
+            bundle.build(built)
+            stream = bytearray(bundle.tar_stream(built))
+            marker = b"vellum.sterile-acceptance-bundle.v1"
+            offset = stream.index(marker)
+            stream[offset] ^= 1
+            bundle.write_gzip(bytes(stream), tampered)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT_DIR / "build_sterile_acceptance_bundle.py"),
+                    "--compare",
+                    str(built),
+                    str(tampered),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("hold different tar streams", result.stderr)
 
     def test_checkout_negative_control_is_observed_red(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
