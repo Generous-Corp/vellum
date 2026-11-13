@@ -1125,5 +1125,265 @@ class FrameworkTransferTest(unittest.TestCase):
                 mp.verify_framework_identity(root, "provenance/mirror/receipts/r.json", receipt)
 
 
+PORT_COMMIT = "9" * 40
+PRELUDES_CMAKE = r"""set(PULP_JS_PRELUDES
+    ${CMAKE_CURRENT_SOURCE_DIR}/js/first.js
+    ${CMAKE_CURRENT_SOURCE_DIR}/js/second.js
+)
+set(_pulp_prelude_decls "#pragma once\n// preludes\n")
+foreach(_prelude ${PULP_JS_PRELUDES})
+    string(APPEND _pulp_prelude_decls "extern const char* const ${_prelude_var};\n")
+endforeach()
+string(APPEND _pulp_prelude_decls "// end\n")
+add_custom_command(COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/js/embed_js.py)
+"""
+EMBEDDER = (
+    "import sys\n"
+    "from pathlib import Path\n"
+    "out = Path(sys.argv[1])\n"
+    "out.write_bytes(b''.join(b'// ' + Path(p).name.encode() + b'\\n' + Path(p).read_bytes() for p in sys.argv[2:]))\n"
+)
+UNSTABLE_EMBEDDER = EMBEDDER + "import os\nout.write_bytes(out.read_bytes() + os.urandom(8).hex().encode())\n"
+
+
+class TransferredFixture(Fixture):
+    """The minimal export after the transfer: framework/ and its record, with a prelude producer."""
+
+    VIEW = "framework/core/view"
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        (self.repo / "mirror").rename(self.repo / "framework")
+        include = self.repo / "framework/core/runtime/include"
+        (include / "pulp").rename(include / "vellum")
+        self.transferred = {
+            "framework/" + mp.renamed_path(path.removeprefix("mirror/")): data for path, data in self.files.items()
+        }
+        self.transferred.update({
+            f"{self.VIEW}/cmake/PulpViewJsPreludes.cmake": PRELUDES_CMAKE.encode(),
+            f"{self.VIEW}/js/embed_js.py": EMBEDDER.encode(),
+            f"{self.VIEW}/js/first.js": b"var first = 1;\n",
+            f"{self.VIEW}/js/second.js": b"var second = 2;\n",
+        })
+        for path, data in self.transferred.items():
+            self.write(path, data)
+        # The closure's digests are Pulp's: what the transferred producer
+        # makes of the transferred sources, read through the rename's inverse.
+        header = mp.render_prelude_header(PRELUDES_CMAKE, ["js/first.js", "js/second.js"]).encode()
+        source = b"// first.js\nvar first = 1;\n// second.js\nvar second = 2;\n"
+        self.closure["generated_inputs"] += [
+            {"path": PRELUDE_HEADER_PATH, "sha256": sha(mp.inverse_renamed(header)), "producer_paths": []},
+            {"path": "@build/core/view/web_compat_preludes_gen.cpp", "sha256": sha(mp.inverse_renamed(source)),
+             "producer_paths": []},
+        ]
+        target = self.closure["targets"][0]
+        target["sources"].append("@build/core/view/web_compat_preludes_gen.cpp")
+        target["include_dirs"].append("@build/core/view")
+        self.write_receipt()
+        record = {"export_receipt": f"provenance/mirror/receipts/{EXPORT_ID}.json", "mirror_tree": "e" * 40,
+                  "records": [{"framework_path": path, "framework_git_blob_sha": mp.git_blob_sha(data)}
+                              for path, data in sorted(self.transferred.items())]}
+        self.write(mp.FRAMEWORK_TRANSFER, json.dumps(record).encode())
+
+    def write(self, path: str, data: bytes) -> None:
+        (self.repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / path).write_bytes(data)
+
+    def write_ledger(self, rows: list[dict]) -> None:
+        self.write(mp.framework_ports.LEDGER, json.dumps({"schema": mp.framework_ports.SCHEMA, "rows": rows}).encode())
+
+    @staticmethod
+    def row(path: str, change: str = "added", target: str | None = None) -> dict:
+        return {"framework_path": path, "change": change, "target": target, "origin": "pulp",
+                "pulp_path": path.removeprefix("framework/"), "pulp_commits": [PORT_COMMIT],
+                "framework_blob": "b" * 40 if change == "added" else None, "reason": "port"}
+
+    def prelude(self, suffix: str = "cpp") -> bytes:
+        return (self.generated / f"preludes/web_compat_preludes_gen.{suffix}").read_bytes()
+
+
+class FrameworkPortsPlanTest(unittest.TestCase):
+    """The build plan holds framework/ to the transfer record and the ports ledger, and compiles ported sources."""
+
+    NEW = "framework/core/runtime/src/ported.mm"
+    OLD = "framework/core/runtime/src/a.cpp"
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = TransferredFixture(Path(self.temporary.name))
+        mp.BUILD_INFO_INPUTS[EXPORT_ID] = {"version": "1.2.3"}
+
+    def tearDown(self) -> None:
+        mp.BUILD_INFO_INPUTS.pop(EXPORT_ID, None)
+        self.temporary.cleanup()
+
+    def assertRefused(self, fragment: str) -> None:
+        with self.assertRaises(mp.PlanError) as caught:
+            self.fixture.plan()
+        self.assertIn(fragment, str(caught.exception))
+
+    def sources(self, plan: dict) -> list[str]:
+        return plan["units"][0]["targets"][0]["sources"]
+
+    def planned(self, relative: str) -> str:
+        """A framework file as the plan spells it: under the resolved checkout."""
+        return str(self.fixture.repo.resolve() / relative)
+
+    def test_the_transferred_tree_plans_with_no_ledger(self) -> None:
+        plan = self.fixture.plan()
+        self.assertEqual(plan["framework_ports"], {"added": [], "removed": []})
+        self.assertEqual(plan["mirror_files_verified"], len(self.fixture.transferred))
+        self.assertIn(self.planned(self.OLD), self.sources(plan))
+        self.assertEqual(plan["framework_native_edits"], [])
+
+    def test_an_unrecorded_file_is_refused_until_a_ledger_row_adds_it(self) -> None:
+        self.fixture.write(self.NEW, b"int ported() { return 2; }\n")
+        self.assertRefused("does not list")
+        self.fixture.write_ledger([self.fixture.row(self.NEW, target="pulp-runtime")])
+        plan = self.fixture.plan()
+        self.assertEqual(plan["framework_ports"], {"added": [self.NEW], "removed": []})
+        self.assertEqual(plan["mirror_files_verified"], len(self.fixture.transferred) + 1)
+        # The ported source is compiled: it is in the target's source list and
+        # in the CMake the build reads.
+        self.assertIn(self.planned(self.NEW), self.sources(plan))
+        output = Path(self.temporary.name) / "plan.cmake"
+        mp.write_cmake(plan, output)
+        listed = output.read_text().split("set(VELLUM_MIRROR_TARGET_PULP_RUNTIME_SOURCES")[1].split(")")[0]
+        self.assertIn(self.NEW, listed)
+        self.assertIn(self.OLD, listed)  # control: the closure's own source is still there
+        # A ported file is a port, not a native edit of a transferred file.
+        self.assertEqual(plan["framework_native_edits"], [])
+
+    def test_a_ledger_row_with_no_file_is_refused(self) -> None:
+        self.fixture.write_ledger([self.fixture.row(self.NEW, target="pulp-runtime")])
+        self.assertRefused("is missing files")
+
+    def test_a_ported_source_for_a_target_no_closure_builds_is_refused(self) -> None:
+        self.fixture.write(self.NEW, b"int ported() { return 2; }\n")
+        self.fixture.write_ledger([self.fixture.row(self.NEW, target="pulp-nowhere")])
+        self.assertRefused("adds sources to targets no closure builds")
+
+    def test_a_ported_header_joins_the_set_and_is_not_compiled(self) -> None:
+        header = "framework/core/runtime/include/vellum/runtime/ported.hpp"
+        self.fixture.write(header, b"int ported();\n")
+        self.fixture.write_ledger([self.fixture.row(header)])
+        plan = self.fixture.plan()
+        self.assertEqual(plan["framework_ports"]["added"], [header])
+        self.assertNotIn(self.planned(header), self.sources(plan))
+
+    def test_a_removal_row_accepts_a_transferred_files_absence(self) -> None:
+        # Deleted with no row: missing. A row with the file still there: extra.
+        (self.fixture.repo / self.OLD).unlink()
+        self.assertRefused("is missing files")
+        self.fixture.write(self.OLD, self.fixture.transferred[self.OLD])
+        self.fixture.write_ledger([self.fixture.row(self.OLD, "removed")])
+        self.assertRefused("does not list")
+        (self.fixture.repo / self.OLD).unlink()
+        plan = self.fixture.plan()
+        self.assertEqual(plan["framework_ports"], {"added": [], "removed": [self.OLD]})
+        self.assertEqual(plan["mirror_files_verified"], len(self.fixture.transferred) - 1)
+        # The closure still names the source; the plan leaves it out.
+        self.assertNotIn(self.planned(self.OLD), self.sources(plan))
+        self.assertEqual(plan["framework_native_edits"], [])
+
+    def test_a_closure_source_that_is_absent_without_a_row_is_still_refused(self) -> None:
+        # Control for the removal: only the ledger excuses a closure source.
+        # The header's removal is recorded, the source's is not.
+        header = "framework/core/runtime/include/vellum/runtime/a.hpp"
+        (self.fixture.repo / header).unlink()
+        self.fixture.write_ledger([self.fixture.row(header, "removed")])
+        self.fixture.plan()
+        (self.fixture.repo / self.OLD).unlink()
+        self.assertRefused("is missing files")
+
+    def test_a_ledger_that_does_not_replay_is_refused(self) -> None:
+        self.fixture.write_ledger([self.fixture.row(self.OLD, target="pulp-runtime")])
+        self.assertRefused("a ledger row may only remove it")
+        self.fixture.write(mp.framework_ports.LEDGER, b"[]")
+        self.assertRefused("must be an object with schema")
+
+    def test_untouched_preludes_are_still_held_to_the_closure_digest(self) -> None:
+        plan = self.fixture.plan()
+        self.assertEqual(plan["native_preludes"], {})
+        self.assertEqual(self.fixture.prelude(), b"// first.js\nvar first = 1;\n// second.js\nvar second = 2;\n")
+        # Control: with every input still the transferred blob, a closure
+        # digest the producer does not reproduce is refused.
+        self.fixture.closure["generated_inputs"][-1]["sha256"] = sha(b"other")
+        self.fixture.write_receipt()
+        self.assertRefused("does not match the closure digest")
+
+    def test_an_edited_prelude_source_is_generated_from_the_framework(self) -> None:
+        self.fixture.plan()
+        before = self.fixture.prelude()
+        self.fixture.write(f"{self.fixture.VIEW}/js/second.js", b"var second = 22;\n")
+        plan = self.fixture.plan()
+        after = self.fixture.prelude()
+        self.assertNotEqual(after, before)
+        self.assertIn(b"var second = 22;", after)
+        # Both generated files are now the framework's own, with their digests in the plan.
+        self.assertEqual(plan["native_preludes"], {
+            "web_compat_preludes_gen.cpp": sha(after),
+            "web_compat_preludes_gen.hpp": sha(self.fixture.prelude("hpp")),
+        })
+        self.assertEqual(plan["framework_native_edits"], [f"{self.fixture.VIEW}/js/second.js"])
+        # Deterministic: a second plan over the same sources gives the same bytes.
+        self.assertEqual(self.fixture.plan()["native_preludes"], plan["native_preludes"])
+        self.assertEqual(self.fixture.prelude(), after)
+        # Control: restoring the transferred bytes restores the Pulp proof.
+        self.fixture.write(f"{self.fixture.VIEW}/js/second.js", b"var second = 2;\n")
+        self.assertEqual(self.fixture.plan()["native_preludes"], {})
+        self.assertEqual(self.fixture.prelude(), before)
+
+    def test_a_ported_prelude_source_is_embedded(self) -> None:
+        third = f"{self.fixture.VIEW}/js/third.js"
+        self.fixture.write(third, b"var third = 3;\n")
+        self.fixture.write(f"{self.fixture.VIEW}/cmake/PulpViewJsPreludes.cmake", PRELUDES_CMAKE.replace(
+            "/js/second.js\n", "/js/second.js\n    ${CMAKE_CURRENT_SOURCE_DIR}/js/third.js\n").encode())
+        self.assertRefused("does not list")
+        self.fixture.write_ledger([self.fixture.row(third)])
+        plan = self.fixture.plan()
+        self.assertIn(b"// third.js\nvar third = 3;\n", self.fixture.prelude())
+        self.assertIn(b"extern const char* const third;", self.fixture.prelude("hpp"))
+        self.assertEqual(sorted(plan["native_preludes"]),
+                         ["web_compat_preludes_gen.cpp", "web_compat_preludes_gen.hpp"])
+
+    def test_a_prelude_input_outside_the_file_set_is_refused(self) -> None:
+        producer = f"{self.fixture.VIEW}/cmake/PulpViewJsPreludes.cmake"
+        self.fixture.write("native_secret.js", b"var secret = 1;\n")
+        for listed in ("js/../../../../native_secret.js", "js/unlisted.js"):
+            self.fixture.write(producer, PRELUDES_CMAKE.replace(
+                "/js/second.js\n", f"/js/second.js\n    ${{CMAKE_CURRENT_SOURCE_DIR}}/{listed}\n").encode())
+            self.assertRefused(f"prelude input {listed} is not a file of the framework's file set")
+        # Control: the same producer edit naming a ledger-added file plans
+        # (test_a_ported_prelude_source_is_embedded), and so does the untouched one.
+        self.fixture.write(producer, PRELUDES_CMAKE.encode())
+        self.fixture.plan()
+
+    def test_removing_a_file_the_plan_generates_from_is_refused(self) -> None:
+        for relative in ("framework/core/canvas/CMakeLists.txt",
+                         "framework/core/runtime/include/vellum/runtime/build_info.hpp.in",
+                         f"{self.fixture.VIEW}/cmake/PulpViewJsPreludes.cmake",
+                         f"{self.fixture.VIEW}/js/embed_js.py"):
+            data = (self.fixture.repo / relative).read_bytes()
+            (self.fixture.repo / relative).unlink()
+            self.fixture.write_ledger([self.fixture.row(relative, "removed")])
+            with self.assertRaises(mp.PlanError, msg=relative):
+                self.fixture.plan()
+            self.fixture.write(relative, data)
+        # Control: a removal the plan does not generate from still plans.
+        header = "framework/core/runtime/include/vellum/runtime/a.hpp"
+        (self.fixture.repo / header).unlink()
+        self.fixture.write_ledger([self.fixture.row(header, "removed")])
+        self.fixture.plan()
+
+    def test_a_prelude_generator_that_is_not_deterministic_is_refused(self) -> None:
+        self.fixture.write(f"{self.fixture.VIEW}/js/embed_js.py", UNSTABLE_EMBEDDER.encode())
+        self.assertRefused("is not deterministic")
+        # Control: the same edit-shaped change with a stable generator plans.
+        self.fixture.write(f"{self.fixture.VIEW}/js/embed_js.py", (EMBEDDER + "# edited\n").encode())
+        self.assertEqual(sorted(self.fixture.plan()["native_preludes"]),
+                         ["web_compat_preludes_gen.cpp", "web_compat_preludes_gen.hpp"])
+
+
 if __name__ == "__main__":
     unittest.main()
