@@ -75,6 +75,11 @@ if(VELLUM_RMLUI_METAL)
     endif()
     enable_language(OBJCXX)
 endif()
+option(VELLUM_RMLUI_NATIVE_PACKAGE
+    "Install Native, Metal, Cpu and RmlUi as their own VellumRmlUiNative package, beside rather than inside VellumRmlUi" OFF)
+if(VELLUM_RMLUI_NATIVE_PACKAGE AND NOT VELLUM_RMLUI_NATIVE)
+    message(FATAL_ERROR "VELLUM_RMLUI_NATIVE_PACKAGE needs VELLUM_RMLUI_NATIVE=ON")
+endif()
 option(VELLUM_RMLUI_BUILD_TESTS "Build the RmlUi module tests" ${BUILD_TESTING})
 option(VELLUM_RMLUI_INSTALL "Install the VellumRmlUi CMake package" ON)
 
@@ -297,6 +302,15 @@ if(VELLUM_RMLUI_INSTALL)
             COMPONENT VellumRmlUi)
     endif()
     if(VELLUM_RMLUI_NATIVE)
+        # With VELLUM_RMLUI_NATIVE_PACKAGE the Native component is a package
+        # of its own, VellumRmlUiNative, so it can ship beside an installed
+        # VellumRmlUi without replacing that package's files.
+        set(_vellum_rmlui_native_cmake_dir "${_vellum_rmlui_cmake_dir}")
+        set(_vellum_rmlui_doc_dir "${CMAKE_INSTALL_DATADIR}/doc/VellumRmlUi")
+        if(VELLUM_RMLUI_NATIVE_PACKAGE)
+            set(_vellum_rmlui_native_cmake_dir "${CMAKE_INSTALL_LIBDIR}/cmake/VellumRmlUiNative")
+            set(_vellum_rmlui_doc_dir "${CMAKE_INSTALL_DATADIR}/doc/VellumRmlUiNative")
+        endif()
         # Native exposes RmlUi, so its package carries RmlUi: the pinned
         # static archives and headers, exported under RmlUi's own names
         # (RmlUi::Core, RmlUi::Debugger). It is a separate component and
@@ -312,7 +326,7 @@ if(VELLUM_RMLUI_INSTALL)
             COMPONENT VellumRmlUiNative)
         install(EXPORT VellumRmlUiNativeTargets
             NAMESPACE VellumRmlUi::
-            DESTINATION ${_vellum_rmlui_cmake_dir}
+            DESTINATION ${_vellum_rmlui_native_cmake_dir}
             COMPONENT VellumRmlUiNative)
         if(VELLUM_RMLUI_METAL)
             install(TARGETS vellum-rmlui-metal
@@ -321,7 +335,7 @@ if(VELLUM_RMLUI_INSTALL)
                 ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
             install(EXPORT VellumRmlUiMetalTargets
                 NAMESPACE VellumRmlUi::
-                DESTINATION ${_vellum_rmlui_cmake_dir}
+                DESTINATION ${_vellum_rmlui_native_cmake_dir}
                 COMPONENT VellumRmlUiNative)
         endif()
         if(VELLUM_RMLUI_CPU)
@@ -331,7 +345,7 @@ if(VELLUM_RMLUI_INSTALL)
                 ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
             install(EXPORT VellumRmlUiCpuTargets
                 NAMESPACE VellumRmlUi::
-                DESTINATION ${_vellum_rmlui_cmake_dir}
+                DESTINATION ${_vellum_rmlui_native_cmake_dir}
                 COMPONENT VellumRmlUiNative)
         endif()
         if(VELLUM_RMLUI_FONTS)
@@ -344,7 +358,6 @@ if(VELLUM_RMLUI_INSTALL)
         endif()
         # The notices for what this component redistributes. A package built
         # with fonts carries FreeType's archive, so it carries the FTL too.
-        set(_vellum_rmlui_doc_dir "${CMAKE_INSTALL_DATADIR}/doc/VellumRmlUi")
         FetchContent_GetProperties(vellum_rmlui_rmlui SOURCE_DIR _vellum_rmlui_rmlui_src)
         install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/NOTICE-Native.md"
             DESTINATION ${_vellum_rmlui_doc_dir}
@@ -363,8 +376,23 @@ if(VELLUM_RMLUI_INSTALL)
         install(EXPORT RmlUiTargets
             NAMESPACE RmlUi::
             FILE VellumRmlUiRmlUiTargets.cmake
-            DESTINATION ${_vellum_rmlui_cmake_dir}
+            DESTINATION ${_vellum_rmlui_native_cmake_dir}
             COMPONENT VellumRmlUiNative)
+        if(VELLUM_RMLUI_NATIVE_PACKAGE)
+            set(VELLUM_RMLUI_NATIVE_COMPONENTS ${VELLUM_RMLUI_COMPONENTS})
+            list(FILTER VELLUM_RMLUI_NATIVE_COMPONENTS INCLUDE REGEX "^(Native|Metal|Cpu)$")
+            configure_package_config_file(cmake/VellumRmlUiNativeConfig.cmake.in
+                "${CMAKE_CURRENT_BINARY_DIR}/VellumRmlUiNativeConfig.cmake"
+                INSTALL_DESTINATION ${_vellum_rmlui_native_cmake_dir})
+            write_basic_package_version_file(
+                "${CMAKE_CURRENT_BINARY_DIR}/VellumRmlUiNativeConfigVersion.cmake"
+                COMPATIBILITY SameMinorVersion)
+            install(FILES
+                "${CMAKE_CURRENT_BINARY_DIR}/VellumRmlUiNativeConfig.cmake"
+                "${CMAKE_CURRENT_BINARY_DIR}/VellumRmlUiNativeConfigVersion.cmake"
+                DESTINATION ${_vellum_rmlui_native_cmake_dir}
+                COMPONENT VellumRmlUiNative)
+        endif()
     endif()
     configure_package_config_file(cmake/VellumRmlUiConfig.cmake.in
         "${CMAKE_CURRENT_BINARY_DIR}/VellumRmlUiConfig.cmake"
