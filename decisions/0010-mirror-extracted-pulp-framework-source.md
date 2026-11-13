@@ -290,12 +290,17 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
   `core/view/cmake/PulpViewJsPreludes.cmake`, `core/view/js/embed_js.py`, the
   binary-data encoder `tools/cmake/scripts/encode_binary_data.py`, and every
   JavaScript or binary-data source those producers still list. The plan fails
-  on such a removal until the producer stops naming the file.
+  on such a removal until the producer stops naming the file. Nor can a row
+  remove the last file of an include directory a closure names: the directory
+  is then gone from the checkout and the plan refuses it.
 - **Preludes are generated from Vellum's sources.** While the prelude producer,
   its embedder and every JavaScript source are still their transferred blobs,
   the generated preludes must match the closure digests as before. Every
   prelude input the producer lists must be a file of the `framework/` file
-  set, so the producer cannot embed a path outside it. Once any of
+  set. That confines the listed inputs, not the embedder: `embed_js.py` is
+  transferred code that runs during the build, so an edit to it is an ordinary
+  reviewed edit of a `framework/` file and can change what is embedded, as an
+  edit to any compiled source can change what ships. Once any of
   them is edited or joined through the ledger, the preludes are Vellum's own:
   the plan generates them twice and fails unless both runs give the same
   bytes, and it records their digests. The build-info header and the embedded
