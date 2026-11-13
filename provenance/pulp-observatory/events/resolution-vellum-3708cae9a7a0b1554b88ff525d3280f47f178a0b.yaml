@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-13T09:50:35Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-3708cae9a7a0b1554b88ff525d3280f47f178a0b",
+  "kind": "resolution",
+  "linked_commits": [
+    "3708cae9a7a0b1554b88ff525d3280f47f178a0b"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@claude-observatory-agent",
+  "rationale": "Vellum-native retained scene change: a retained image node with its asset index, placement and sampling. Pulp has no counterpart. Owner decision 2026-11-13, \"framework-only, all three\", recorded in pulp-planning vellum-move/DECISIONS.md at 9ad91243c800bc6381a0e862a543eceb4b56b134 and recorded here by an agent; it clears vellum#407. Pulp search at origin/main d486ff70c6b0 (git grep -w over core tools test examples apple ship inspect) for ImageAssetIndex, ImageAsset, ImageReference, ImagePlacement, ImageSampling, ImageAlpha, decode_image_asset, find_image_asset, make_image_asset, image_placement, image_reference_is_valid, scene_images_are_valid and vellum/graphics/scene.hpp returns 0; ImageFit is left out of that list because Pulp declares its own pulp::canvas ImageFit (core/canvas/include/pulp/canvas/canvas.hpp, 19 hits in 2 files), which is not Vellum's type; control SkiaSurface on the same search returns 288 in 64 files. Pulp's one vellum::graphics consumer, test/editor_host_slice/rmlui_vellum_renderer_main.cpp, includes only skia_dawn_surface.hpp and dawn_native_bootstrap.hpp, none of the headers this change touches. Any later resolution overrides this.",
+  "resolves": "vellum-3708cae9a7a0b1554b88ff525d3280f47f178a0b",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

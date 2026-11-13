@@ -191,7 +191,7 @@ class Runner:
             "github.repository": REPOSITORY, "github.event_name": "push", "github.token": token,
             "runner.temp": str(temp), "github.workspace": str(root),
             # provenance.yml resolves this only on refs/tags/authority/*.
-            "steps.authority-record.outputs.authority-start": "",
+            "steps.observatory-authority-start.outputs.authority-start": "",
         }
         self.environment = {
             **os.environ, "GITHUB_REF": f"refs/tags/{tag}", "GITHUB_REF_NAME": tag, "GITHUB_REF_TYPE": "tag",
