@@ -39,6 +39,7 @@ on:
     branches: [main]
 
 permissions:
+  actions: read
   contents: read
   statuses: write
 
@@ -52,6 +53,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
+      actions: read
       contents: read
       statuses: write
     steps:
