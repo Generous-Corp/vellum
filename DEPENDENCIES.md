@@ -172,6 +172,14 @@ tools. The macOS proof additionally uses Xcode command-line tools and Apple
 system frameworks. These tools and frameworks are not bundled or redistributed
 by Vellum.
 
+One build does not use the developer's CMake: the published
+`vellum-gpu-runtime` archive. Its pinned build tool is fetched for that build
+and for the release check that follows, and is not redistributed.
+
+| Name | Version | License | Source | Why |
+|---|---|---|---|---|
+| CMake | `4.3.3`, `cmake-4.3.3-macos-universal.tar.gz` SHA-256 `5221a13450c7a0219a2a0d1b6c9085eb06489721fafd8488ccebc1584175d2fb` | BSD-3-Clause | Kitware's GitHub release `v4.3.3`, pinned in `gpu-runtime/cmake-lock.json` | CMake writes four of the archive's package files and their text differs between CMake releases. The archive is built on one host and held to its source on another, so both generate those files with this release. |
+
 ## Historical extraction material
 
 The filtered seed once placed 232 projected source and vendored files in the
