@@ -28,6 +28,10 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_release_canary.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_sdk_release_draft_lookup.py",
         "isolated": true
       },

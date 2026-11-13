@@ -124,6 +124,21 @@ class Fixture(unittest.TestCase):
         self.assertNotIn("Verify active repository documentation", self.ran())
 
 
+class CheckRunsCommit(unittest.TestCase):
+    SCRIPT = 'gh api "repos/$R/commits/$GITHUB_SHA/check-runs?per_page=100"\n'
+
+    def test_the_check_runs_read_names_the_given_commit(self) -> None:
+        self.assertEqual(pc.use_check_runs_commit(self.SCRIPT, "b" * 40),
+                         f'gh api "repos/$R/commits/{"b" * 40}/check-runs?per_page=100"\n')
+
+    def test_without_a_commit_the_script_is_unchanged(self) -> None:
+        self.assertEqual(pc.use_check_runs_commit(self.SCRIPT, None), self.SCRIPT)
+
+    def test_a_malformed_commit_refuses(self) -> None:
+        with self.assertRaises(pc.PretagError):
+            pc.use_check_runs_commit(self.SCRIPT, "main")
+
+
 class Coverage(unittest.TestCase):
     def test_every_tag_only_content_check_is_listed(self) -> None:
         # Each of these can refuse a v* tag on the tagged commit's content and

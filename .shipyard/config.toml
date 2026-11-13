@@ -24,3 +24,10 @@ enabled = true
 # Declare it so `shipyard pr` skips them instead of failing on the missing
 # skill_sync_check.py; agents then use the normal Shipyard PR flow.
 pr_gates = false
+
+[release.canary]
+# Daily: would the next patch release be refused? Runs on a clean clone of
+# main and stages a throwaway local bump; nothing is pushed.
+command = "scripts/release_canary.sh {next_version}"
+timeout_secs = 1200
+bump = "patch"
