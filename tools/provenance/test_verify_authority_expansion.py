@@ -1037,10 +1037,10 @@ class Tests(unittest.TestCase):
         )
 
     def test_mirror_promotion_is_only_for_the_listed_tags(self) -> None:
-        # v0.1.10 is the Phase 4 promotion; v0.1.11 and v0.2.0 ride the same
-        # parity waiver; v0.1.9 is retired, and anything later must prove
-        # parity. The names near v0.2.0 are refused, so the set cannot have
-        # become a prefix or a pattern.
+        # v0.1.10 is the Phase 4 promotion and v0.1.11 rides the same parity
+        # waiver; v0.1.9 is retired, and anything later must prove parity.
+        # v0.2.0 is waived too. The names near it are refused, so the set
+        # cannot have become a prefix or a pattern.
         self.assertEqual(verifier.MIRROR_PROMOTION_RELEASE_TAGS, {"v0.1.10", "v0.1.11", "v0.2.0"})
         fixture = self.mirror_promotion_fixture()
         for tag in ("v0.1.10", "v0.1.11", "v0.2.0"):

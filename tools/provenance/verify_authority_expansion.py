@@ -205,12 +205,14 @@ RELEASE_PIPELINE_ATTESTER = "release-pipeline:Generous-Corp/vellum"
 # export receipt, and states that full-matrix parity is not yet proven. It is
 # accepted only for the tags listed here and only while no parity completion
 # record exists at the release commit: v0.1.10, the Phase 4 promotion release
-# (v0.1.9 was retired unpublished, owner decision 2026-11-02), v0.1.11, the
+# (v0.1.9 was retired unpublished, owner decision 2026-11-02), and v0.1.11, the
 # release carrying everything since 2026-10-25 under the same parity waiver
-# (owner decision 2026-11-01, ruling 1), and v0.2.0, which carries the same
-# parity state v0.1.11 was waived for (owner decision 2026-11-13). The set is
-# exact names, never a pattern: every release after v0.2.0 needs
-# parity-completion-1.json at its release commit.
+# (owner decision 2026-11-01, ruling 1). The parity re-freeze gates every later
+# release.
+# One exception: the owner also waived v0.2.0, which carries the same parity
+# state v0.1.11 was waived for. The set is exact names, never a pattern, and
+# every release after v0.2.0 needs parity-completion-1.json at its release
+# commit.
 AUTHORITY_PROMOTION_KIND = "vellum-authority-promotion-attestation"
 MIRROR_PROMOTION_KIND = "vellum-mirror-promotion-attestation"
 MIRROR_PROMOTION_ATTESTATION_ID = "full-design-import-render-v1-mirror-promotion-1"
