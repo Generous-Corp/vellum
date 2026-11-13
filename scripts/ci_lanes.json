@@ -222,6 +222,12 @@
         "script": "scripts/readme_lint.py"
       },
       {
+        "script": "scripts/test_check_plugin_editor_async.py"
+      },
+      {
+        "script": "scripts/check_plugin_editor_async.py"
+      },
+      {
         "script": "scripts/test_prose_lint.py",
         "isolated": true
       },
