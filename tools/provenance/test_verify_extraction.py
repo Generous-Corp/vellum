@@ -399,11 +399,26 @@ class VerifyExtractionTests(unittest.TestCase):
             "tools/framework-tests/defines_test.cpp": b"namespace vellum::view { int x; }\n",
             "tools/framework-tests/nested.hpp": b"#pragma once\n  namespace vellum {\nnamespace view {}\n}\n",
             "tools/framework-tests/inline.hpp": b"inline namespace vellum { }\n",
+            "tools/framework-tests/split_namespace_test.cpp":
+                b"namespace\nvellum::view { int x; }\n",
+            "tools/framework-tests/inline_namespace_statement_test.cpp":
+                b"int x; namespace vellum::view { }\n",
+            "tools/framework-tests/macro_namespace_test.cpp":
+                b"#define OPEN namespace vellum::view {\nOPEN\n",
             # Out-of-line definitions of unit symbols, directly or through an alias.
             "tools/framework-tests/qualified_test.cpp":
                 b"void vellum::view::WidgetBridge::load_script(const std::string& code) {\n}\n",
             "tools/framework-tests/aliased_test.cpp":
                 b"namespace view = vellum::view;\nbool view::Toggle::is_on() const noexcept {\n    return true;\n}\n",
+            "tools/framework-tests/allman_qualified_test.cpp":
+                b"void vellum::view::WidgetBridge::load_script(const std::string& code)\n{\n}\n",
+            "tools/framework-tests/direct_ctor_initializer_test.cpp":
+                b"vellum::view::WidgetBridge::WidgetBridge(int value)\n"
+                b"    : state_(value)\n{\n}\n",
+            "tools/framework-tests/aliased_ctor_initializer_test.cpp":
+                b"namespace view = vellum::view;\n"
+                b"view::Widget::Widget(int value)\n"
+                b"    : value_(value)\n{\n}\n",
             # A library could be linked into something that ships.
             "tools/framework-tests/CMakeLists.txt": b"add_executable(t t_test.cpp)\nadd_library(kept STATIC k.cpp)\n",
             # Shapes a kept framework source would take.

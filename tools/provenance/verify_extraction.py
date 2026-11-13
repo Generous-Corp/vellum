@@ -140,14 +140,14 @@ RENAMED_MIRROR_EXEMPT_PREFIXES: tuple[str, ...] = ()
 # still read this tree.
 FRAMEWORK_TEST_ROOT = "tools/framework-tests/"
 FRAMEWORK_TEST_FILE = re.compile(r"(?:[a-z0-9_]+_test\.(?:cpp|mm)|[a-z0-9_]+\.hpp|CMakeLists\.txt|README\.md)")
-FRAMEWORK_TEST_NAMESPACE = re.compile(r"(?m)^[ \t]*(?:inline[ \t]+)?namespace[ \t]+vellum\b")
+FRAMEWORK_TEST_NAMESPACE = re.compile(r"\bnamespace\s+vellum\b")
 FRAMEWORK_TEST_LIBRARY = re.compile(r"(?im)^[ \t]*add_library[ \t]*\(")
 # A qualified out-of-line function definition (`void vellum::view::X::f() {`,
 # or the same through a namespace alias): a test defines its own functions
 # unqualified, so any qualified definition is refused.
 FRAMEWORK_TEST_QUALIFIED_DEFINITION = re.compile(
-    r"(?m)^[ \t]*(?:[\w:<>,*&\t ]+[\s*&])?(?:::)?\w+(?:[ \t]*::[ \t]*~?\w+)+[ \t]*"
-    r"\([^;{}()]*(?:\([^;{}()]*\)[^;{}()]*)*\)[\w\t ]*(?:->[^;{}()]*)?\{")
+    r"(?ms)^[ \t]*(?:[\w:<>,*&\t ]+[\s*&])?(?:::)?\w+(?:[ \t]*::[ \t]*~?\w+)+[ \t]*"
+    r"\([^;{}]*\)[^;{}]*\{")
 RENAMED_MIRROR_EXEMPT_PATHS = {
     # The consumer built against the installed mirror, file by file: a new
     # file under tools/mirror/consumer/ is scanned like any other.
@@ -370,9 +370,17 @@ def framework_test_findings(relative: str, path: Path) -> list[dict[str, object]
     if name == "CMakeLists.txt":
         # Test executables only: a library here could be linked into one that ships.
         patterns["framework-test-library"] = FRAMEWORK_TEST_LIBRARY
-    return [{"rule": rule, "path": relative,
-             "line": text.count("\n", 0, match.start()) + 1, "match": match.group(0).strip()[:120]}
-            for rule, pattern in patterns.items() for match in pattern.finditer(text)]
+    findings = []
+    for rule, pattern in patterns.items():
+        for match in pattern.finditer(text):
+            if rule == "framework-test-defines-vellum":
+                line_start = text.rfind("\n", 0, match.start()) + 1
+                if re.search(r"\busing\s*$", text[line_start:match.start()]):
+                    continue
+            findings.append({"rule": rule, "path": relative,
+                             "line": text.count("\n", 0, match.start()) + 1,
+                             "match": match.group(0).strip()[:120]})
+    return findings
 
 
 def framework_test_blob_findings(root: Path, recorded: set[str],
