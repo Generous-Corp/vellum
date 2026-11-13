@@ -499,6 +499,8 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                 "-DTEST_CONFIG=$<CONFIG>"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
+        # Behavior tests of the framework units (ctest label `framework`).
+        add_subdirectory(tools/framework-tests)
         if(TARGET yogacore)
             # The mirror recipe builds yogacore with RTTI (as Pulp does); prove
             # it took effect in the built archive, not only in the plan.

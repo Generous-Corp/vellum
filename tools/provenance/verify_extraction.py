@@ -138,6 +138,81 @@ RENAMED_MIRROR_SCAN_ROOTS = EXPECTED_ACTIVE_ROOTS + ("components", "product", "t
 # Paths that must spell the forbidden names: the consumer built against the
 # installed mirror, and the policy, its installer copy and their tests.
 RENAMED_MIRROR_EXEMPT_PREFIXES: tuple[str, ...] = ()
+# The framework units' behavior tests include and call the units by their
+# names, so the renamed-mirror rule does not read them. A test only consumes:
+# it may hold flat files of the shapes below and may not open a `vellum`
+# namespace, so no framework source can be kept here under a test's name. The
+# native name rules, the normalized-copy quarantine and the collision census
+# still read this tree.
+FRAMEWORK_TEST_ROOT = "tools/framework-tests/"
+FRAMEWORK_TEST_FILE = re.compile(r"(?:[a-z0-9_]+_test\.(?:cpp|mm)|[a-z0-9_]+\.hpp|CMakeLists\.txt|README\.md)")
+FRAMEWORK_TEST_NAMESPACE = re.compile(r"\bnamespace\s+vellum\b")
+
+
+def _strip_cxx_comments(text: str) -> str:
+    """Blank C/C++ comments while preserving newlines and string literals."""
+    chars = list(text)
+    i = 0
+    state = "code"
+    while i < len(chars):
+        if state == "code":
+            if chars[i] == '"':
+                state = "string"
+                i += 1
+                continue
+            if chars[i] == "'":
+                state = "char"
+                i += 1
+                continue
+            if chars[i:i + 2] == ["/", "/"]:
+                chars[i:i + 2] = [" ", " "]
+                i += 2
+                while i < len(chars) and chars[i] != "\n":
+                    chars[i] = " "
+                    i += 1
+                continue
+            if chars[i:i + 2] == ["/", "*"]:
+                chars[i:i + 2] = [" ", " "]
+                i += 2
+                state = "block_comment"
+                continue
+            i += 1
+            continue
+        if state == "block_comment":
+            if chars[i:i + 2] == ["*", "/"]:
+                chars[i:i + 2] = [" ", " "]
+                i += 2
+                state = "code"
+                continue
+            if chars[i] != "\n":
+                chars[i] = " "
+            i += 1
+            continue
+        if chars[i] == "\\":
+            i += 2
+        elif (state == "string" and chars[i] == '"') or (state == "char" and chars[i] == "'"):
+            state = "code"
+            i += 1
+        else:
+            i += 1
+    return "".join(chars)
+
+
+# CMake commands the test directory may not invoke: a library could be linked
+# into something that ships, and the others reach code this check cannot read.
+FRAMEWORK_TEST_CMAKE_REFUSED = {
+    "add_library": "framework-test-library",
+    "cmake_language": "framework-test-cmake-indirection",
+    "include": "framework-test-cmake-indirection",
+    "add_subdirectory": "framework-test-cmake-indirection",
+    "export": "framework-test-cmake-indirection",
+}
+# A qualified out-of-line function definition (`void vellum::view::X::f() {`,
+# or the same through a namespace alias): a test defines its own functions
+# unqualified, so any qualified definition is refused.
+FRAMEWORK_TEST_QUALIFIED_DEFINITION = re.compile(
+    r"(?ms)^[ \t]*(?:[\w:<>,*&\t ]+[\s*&])?(?:::)?\w+(?:[ \t]*::[ \t]*~?\w+)+[ \t]*"
+    r"\([^;{}]*\)[^;{}]*\{")
 RENAMED_MIRROR_EXEMPT_PATHS = {
     # The consumer built against the installed mirror, file by file: a new
     # file under tools/mirror/consumer/ is scanned like any other.
@@ -326,6 +401,9 @@ def scan_renamed_mirror(root: Path, roots: Iterable[str] = RENAMED_MIRROR_SCAN_R
     findings: list[dict[str, object]] = []
     for path in active_files(root, roots):
         relative = path.relative_to(root).as_posix()
+        if relative.startswith(FRAMEWORK_TEST_ROOT):
+            findings.extend(framework_test_findings(relative, path))
+            continue
         if (relative.startswith(MIRROR_ROOT) or relative in RENAMED_MIRROR_EXEMPT_PATHS
                 or relative.startswith(RENAMED_MIRROR_EXEMPT_PREFIXES)
                 or not content_scan_policy.should_scan_content(relative, extensionless=True)):
@@ -338,6 +416,181 @@ def scan_renamed_mirror(root: Path, roots: Iterable[str] = RENAMED_MIRROR_SCAN_R
         for match in RENAMED_MIRROR_PATTERN.finditer(text):
             findings.append({"rule": RENAMED_MIRROR_RULE, "path": relative,
                              "line": text.count("\n", 0, match.start()) + 1, "match": match.group(0)[:120]})
+    return findings
+
+
+def framework_test_findings(relative: str, path: Path) -> list[dict[str, object]]:
+    """A framework test file that is not a flat test-shaped file, or that opens a vellum namespace."""
+    name = relative[len(FRAMEWORK_TEST_ROOT):]
+    if not FRAMEWORK_TEST_FILE.fullmatch(name):
+        return [{"rule": "framework-test-file-shape", "path": relative, "line": 0, "match": name[:120]}]
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return [{"rule": "undecodable-native-text", "path": relative, "line": 0, "match": ""}]
+    scan_text = _strip_cxx_comments(text)
+    # The native name rules apply too, so a Pulp file cannot land here unrenamed.
+    patterns = {"framework-test-defines-vellum": FRAMEWORK_TEST_NAMESPACE,
+                "framework-test-qualified-definition": FRAMEWORK_TEST_QUALIFIED_DEFINITION,
+                **FORBIDDEN_ACTIVE_PATTERNS}
+    findings = []
+    if name == "CMakeLists.txt":
+        findings += [{"rule": FRAMEWORK_TEST_CMAKE_REFUSED[command], "path": relative, "line": line,
+                      "match": f"{command}({' '.join(args.split())[:100]})"}
+                     for command, args, line in cmake_invocations(text) if command in FRAMEWORK_TEST_CMAKE_REFUSED]
+    for rule, pattern in patterns.items():
+        for match in pattern.finditer(scan_text):
+            if rule == "framework-test-defines-vellum":
+                line_start = scan_text.rfind("\n", 0, match.start()) + 1
+                if re.search(r"\busing\s*$", scan_text[line_start:match.start()]):
+                    continue
+            findings.append({"rule": rule, "path": relative,
+                             "line": text.count("\n", 0, match.start()) + 1,
+                             "match": match.group(0).strip()[:120]})
+    return findings
+
+
+def framework_test_blob_findings(root: Path, recorded: set[str],
+                                 pulp_root: Path | None) -> tuple[list[dict[str, str]], bool]:
+    """Framework test files whose exact bytes are a Pulp-origin blob.
+
+    The recorded set (the historical seed, the mirror's origin records and both
+    sides of the transfer record) is always read. With a Pulp checkout, every
+    blob of its checked-out tree is too, so a Pulp test pasted verbatim fails
+    even though no record names it. Returns the findings and whether the Pulp
+    tree was read.
+    """
+    blobs = set(recorded)
+    transfer = root / FRAMEWORK_TRANSFER_RECORD
+    if transfer.is_file():
+        for record in json.loads(transfer.read_text(encoding="utf-8")).get("records", []):
+            blobs.update(record.get(key, "") for key in ("pulp_git_blob_sha", "framework_git_blob_sha"))
+    pulp_tree_checked = False
+    if pulp_root is not None:
+        listing = subprocess.run(["git", "-C", str(pulp_root), "ls-tree", "-r", "HEAD"],
+                                 capture_output=True, text=True, check=False)
+        if listing.returncode == 0:
+            blobs.update(line.split()[2] for line in listing.stdout.splitlines() if " blob " in line)
+            pulp_tree_checked = True
+    blobs.discard(EMPTY_BLOB_SHA)
+    blobs.discard("")
+    findings = []
+    if pulp_root is not None and not pulp_tree_checked:
+        # Asked to compare against Pulp and unable to: refuse rather than pass unchecked.
+        findings.append({"path": f"{pulp_root} (unreadable Pulp tree)", "git_blob_sha": ""})
+    for path in active_files(root, (FRAMEWORK_TEST_ROOT.rstrip("/"),)):
+        blob = git_blob_sha(path.read_bytes())
+        if blob in blobs:
+            findings.append({"path": path.relative_to(root).as_posix(), "git_blob_sha": blob})
+    return findings, pulp_tree_checked
+
+
+# CMake source read as commands, not lines (CMake language reference): a
+# command is `identifier (args)`, case-insensitive, anywhere a line may hold
+# several and a block may nest them. Comments (`#...` and `#[[...]]`), quoted
+# arguments and bracket arguments are removed before commands are found, so a
+# command name inside them is not an invocation; their text is kept as the
+# argument it is.
+_CMAKE_BRACKET_OPEN = re.compile(r"\[(=*)\[")
+_CMAKE_COMMAND = re.compile(r"(?<![\w])([A-Za-z_][A-Za-z0-9_]*)[ \t\r\n]*\(")
+_CMAKE_LITERAL = re.compile(r"\x00(\d+)\x00")
+
+
+def _cmake_strip(text: str) -> tuple[str, list[str]]:
+    """Text with comments blanked and each quoted or bracket argument replaced by a numbered token."""
+    text = text.replace("\x00", " ")
+    out: list[str] = []
+    literals: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        bracket = _CMAKE_BRACKET_OPEN.match(text, i + 1 if c == "#" else i) if c in "#[" else None
+        if bracket:
+            close = "]" + bracket.group(1) + "]"
+            end = text.find(close, bracket.end())
+            stop = n if end < 0 else end + len(close)
+            body = text[bracket.end():n if end < 0 else end]
+            if c == "[":
+                literals.append(body)
+                out.append(f"\x00{len(literals) - 1}\x00")
+            out.append("\n" * text.count("\n", i, stop))
+            i = stop
+        elif c == "#":
+            end = text.find("\n", i)
+            i = n if end < 0 else end
+        elif c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            literals.append(text[i + 1:j])
+            out.append(f"\x00{len(literals) - 1}\x00" + "\n" * text.count("\n", i, j))
+            i = j + 1
+        elif c == "\\":
+            # An escaped character (`\(`) is an argument character, never syntax.
+            out.append(" ")
+            i += 2
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out), literals
+
+
+def cmake_invocations(text: str) -> list[tuple[str, str, int]]:
+    """Every `identifier(...)` in CMake source as (lowercase name, argument text, line)."""
+    stripped, literals = _cmake_strip(text)
+    invocations = []
+    for match in _CMAKE_COMMAND.finditer(stripped):
+        depth, j = 1, match.end()
+        while j < len(stripped) and depth:
+            depth += {"(": 1, ")": -1}.get(stripped[j], 0)
+            j += 1
+        args = stripped[match.end():j - 1 if depth == 0 else j]
+        args = _CMAKE_LITERAL.sub(lambda m: f" {literals[int(m.group(1))]} ", args)
+        invocations.append((match.group(1).lower(), args, stripped.count("\n", 0, match.start()) + 1))
+    return invocations
+
+
+def _cmake_installs(text: str) -> list[tuple[str, int]]:
+    """The install rules in CMake source, including `cmake_language(CALL install ...)` and EVAL code."""
+    found = []
+    for command, args, line in cmake_invocations(text):
+        words = args.split()
+        if command == "install":
+            found.append((args, line))
+        elif command == "cmake_language" and words[:2] and words[0].upper() == "CALL" and words[1].lower() == "install":
+            found.append((args, line))
+        elif command == "cmake_language" and words[:1] and words[0].upper() == "EVAL":
+            found += [(nested, line) for name, nested, _ in cmake_invocations(args) if name == "install"]
+    return found
+
+
+def framework_test_install_findings(root: Path) -> list[dict[str, object]]:
+    """Install rules that would ship framework test content into a package.
+
+    Any install() in the test directory is refused, and so is one anywhere
+    else whose arguments name the directory. A rule that reaches a test
+    target through a variable is not seen; the SDK builder also configures
+    with tests off, so the directory is never added there.
+    """
+    listed = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--", "*CMakeLists.txt", "*.cmake"],
+                            capture_output=True, check=False)
+    if listed.returncode == 0:
+        names = [name for name in listed.stdout.decode("utf-8", errors="surrogateescape").split("\0") if name]
+    else:
+        names = [path.relative_to(root).as_posix() for path in root.rglob("*")
+                 if path.is_file() and (path.name == "CMakeLists.txt" or path.suffix == ".cmake")]
+    findings: list[dict[str, object]] = []
+    for name in sorted(names):
+        if name.startswith(MIRROR_ROOT):
+            continue
+        path = root / name
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        inside = name.startswith(FRAMEWORK_TEST_ROOT)
+        for args, line in _cmake_installs(text):
+            if inside or "framework-tests" in args:
+                findings.append({"path": name, "line": line, "match": f"install({' '.join(args.split())[:110]})"})
     return findings
 
 
@@ -1792,6 +2045,15 @@ def verify(
         errors.append(
             f"native source contains {len(copied_findings)} unrecorded Pulp-origin blob copies"
         )
+    test_blob_findings, pulp_tree_checked = framework_test_blob_findings(root, pulp_origin_blobs, pulp_root)
+    checks["framework_test_pulp_blob_matches"] = test_blob_findings
+    checks["framework_test_pulp_tree_checked"] = pulp_tree_checked
+    if test_blob_findings:
+        errors.append(f"{FRAMEWORK_TEST_ROOT} holds {len(test_blob_findings)} Pulp-origin blob copies")
+    test_install_findings = framework_test_install_findings(root)
+    checks["framework_test_install_rules"] = test_install_findings
+    if test_install_findings:
+        errors.append(f"{len(test_install_findings)} install rules would ship {FRAMEWORK_TEST_ROOT} content")
 
     mirror_inventory = sorted(path.relative_to(root).as_posix() for path in mirror_files(root))
     checks["mirror_file_count"] = len(mirror_inventory)
