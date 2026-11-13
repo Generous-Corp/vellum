@@ -8,6 +8,7 @@
 #if TARGET_OS_OSX
 
 #include <vellum/canvas/text_utf8.hpp>
+#include <vellum/view/pointer_dispatch.hpp>
 #include <vellum/view/text_editor.hpp>
 #include <vellum/view/view.hpp>
 
@@ -30,6 +31,9 @@ extern "C" void pulp_mac_text_input_client_category_anchor() {}
     // hasMarkedTextWithCompletionHandler:] on the next keypress.
     auto* fv = vellum::view::View::focused_input_;
     auto* te = dynamic_cast<vellum::view::TextEditor*>(fv);
+    // A disabled field takes no composition either.
+    if (te && !te->effectively_enabled())
+        return nullptr;
     return te;
 }
 
@@ -55,7 +59,7 @@ extern "C" void pulp_mac_text_input_client_category_anchor() {}
             ? [(NSAttributedString*)string string] : (NSString*)string;
         vellum::view::TextInputEvent te;
         te.text = [str UTF8String];
-        fv->on_text_input(te);
+        vellum::view::deliver_text_input(*fv, te);
         [self setNeedsDisplay:YES];
     }
 }

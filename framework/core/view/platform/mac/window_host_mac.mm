@@ -236,7 +236,7 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
     // THIS window's root, never the process-wide `active_popup_` mirror, which
     // can name another window's (or a hosted plugin editor's) open menu.
     if (!self.rootView) return NO;
-    auto* combo = vellum::view::ComboBox::active_popup_in(*self.rootView);
+    auto* combo = vellum::view::enabled_open_popup_in(*self.rootView);
     if (!combo) return NO;
     float ddx = 0, ddy = 0, ddw = 0, ddh = 0;
     if (!combo->dropdown_window_rect(ddx, ddy, ddw, ddh)) return NO;
@@ -801,7 +801,7 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
     gke.is_repeat = event.isARepeat;
 
     if (auto* fv = [self liveFocusedView]) {
-        if (fv->on_key_event(gke)) {
+        if (vellum::view::deliver_key_event(*fv, gke)) {
             [self startAnimationTimerIfNeeded];
             [self setNeedsDisplay:YES];
             return YES;
@@ -874,7 +874,7 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
                 ke.modifiers = mods;
                 ke.is_down = true;
                 ke.is_repeat = event.isARepeat;
-                if (fv->on_key_event(ke)) {
+                if (vellum::view::deliver_key_event(*fv, ke)) {
                     [self startAnimationTimerIfNeeded];
                     [self setNeedsDisplay:YES];
                     return;
@@ -991,7 +991,7 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
                 ke.modifiers = mods;
                 ke.is_down = true;
                 ke.is_repeat = event.isARepeat;
-                fv->on_key_event(ke);
+                vellum::view::deliver_key_event(*fv, ke);
                 [self startAnimationTimerIfNeeded];
                 [self setNeedsDisplay:YES];
             }
@@ -1019,7 +1019,8 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
             ke.is_down = false;
             if (self.rootView && self.rootView->on_global_key)
                 self.rootView->on_global_key(ke);
-            if (auto* fv = [self liveFocusedView]) fv->on_key_event(ke);
+            if (auto* fv = [self liveFocusedView])
+                vellum::view::deliver_key_event(*fv, ke);
             [self setNeedsDisplay:YES];
         } catch (const std::exception& e) {
             std::cerr << "MacWindowHost keyUp error: " << e.what() << "\n";
@@ -1050,8 +1051,14 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
     }
     if (inspector_cursor >= 0)
         return static_cast<vellum::view::View::CursorStyle>(inspector_cursor);
-    if (auto* target = vellum::view::hover_target_at(*self.rootView, pt)) return target->cursor();
-    return std::nullopt;
+    // Nothing under the pointer leaves the current cursor alone. Anything
+    // painted there, a disabled view included, is resolved by hover_cursor_at,
+    // which answers the default cursor over a disabled view.
+    {
+        vellum::view::View::DisabledHitTestScope include_disabled;
+        if (!vellum::view::hover_target_at(*self.rootView, pt)) return std::nullopt;
+    }
+    return vellum::view::hover_cursor_at(*self.rootView, pt);
 }
 
 // AppKit asks the owner of a NSTrackingCursorUpdate area what cursor to show
@@ -1119,7 +1126,7 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
             }
 
             if (auto* combo = self.rootView
-                    ? vellum::view::ComboBox::active_popup_in(*self.rootView)
+                    ? vellum::view::enabled_open_popup_in(*self.rootView)
                     : nullptr) {
                 float cx = 0, cy = 0;
                 auto* v = static_cast<vellum::view::View*>(combo);

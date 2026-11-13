@@ -9,6 +9,8 @@
 # and framework_trusted_verify.py against the transfer record, the name-debt
 # baseline and the external-updates log under provenance/; the record files
 # are owned before they exist so the change that adds them needs both reviews.
+# provenance/framework/ports.json is left out on purpose: the ledger is data
+# those judges check row by row, so a port lands by normal review.
 /.github/CODEOWNERS @danielraffel
 /.github/workflows/release-path-review-trigger.yml @danielraffel
 /.github/workflows/release-path-review.yml @danielraffel
