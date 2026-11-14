@@ -84,6 +84,16 @@ def gh(*args: str, stdin: str | None = None) -> str:
                           capture_output=True).stdout
 
 
+def open_issues(repo: str) -> list[dict[str, object]]:
+    """Return every open issue, including issues beyond the first API page."""
+    pages = json.loads(gh("api", "--paginate", "--slurp",
+                          f"repos/{repo}/issues?state=open&per_page=100"))
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        raise ValueError("GitHub open-issues response is not a list of pages")
+    return [issue for page in pages for issue in page
+            if isinstance(issue, dict) and "pull_request" not in issue]
+
+
 def commit_author(repository: str, commit: str) -> str | None:
     """Login of the author of the pull request that carried the commit, else the commit's."""
     for path, query in ((f"repos/{repository}/commits/{commit}/pulls", ".[0].user.login"),
@@ -119,8 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     due_soon = json.loads(args.summary.read_text(encoding="utf-8"))["due_soon"]
-    issues = json.loads(gh("issue", "list", "--repo", args.repo, "--state", "open", "--limit", "200",
-                           "--json", "number,title,body"))
+    issues = open_issues(args.repo)
     actions = plan(due_soon, issues, None if args.dry_run else commit_author)
     print(json.dumps(actions, indent=2))
     if not args.dry_run:

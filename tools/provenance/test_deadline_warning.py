@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.append(str(Path(__file__).resolve().parent))
 import deadline_warning  # noqa: E402
@@ -113,6 +114,15 @@ class RoutingTests(unittest.TestCase):
 
 
 class IssueTests(unittest.TestCase):
+    def test_open_issues_reads_every_api_page(self) -> None:
+        pages = [[{"number": 7, "title": "other"}],
+                 [{"number": 301, "title": deadline_warning.TITLE, "body": "b"}]]
+        with patch.object(deadline_warning, "gh", return_value=json.dumps(pages)) as mocked:
+            issues = deadline_warning.open_issues("o/r")
+        self.assertEqual(issues, pages[0] + pages[1])
+        mocked.assert_called_once_with("api", "--paginate", "--slurp",
+                                       "repos/o/r/issues?state=open&per_page=100")
+
     def issue(self, number: int, due_soon: list[dict[str, object]]) -> dict[str, object]:
         return {"number": number, "title": deadline_warning.TITLE, "body": deadline_warning.render(due_soon, LOOKUP)}
 
