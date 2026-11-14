@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { normalizeImport, validateDesignIR } from '../src/index.js';
+import {
+    DESIGN_IR_PLOTS_VERSION,
+    SUPPORTED_DESIGN_IR_VERSIONS,
+    normalizeImport,
+    validateDesignIR,
+} from '../src/index.js';
 
 const fixtures = new URL('../../../fixtures/design-ir/', import.meta.url);
 const schema = new URL('../schema/design-ir-v1.schema.json', import.meta.url);
@@ -11,9 +16,10 @@ async function document() {
     return normalizeImport(source);
 }
 
-function withPlot(design, plot) {
+function withPlot(design, plot, schemaVersion = DESIGN_IR_PLOTS_VERSION) {
     const copy = structuredClone(design);
     copy.root.plot = plot;
+    copy.schemaVersion = schemaVersion;
     return copy;
 }
 
@@ -51,16 +57,52 @@ test('a plot binding refuses what the renderer cannot draw', async () => {
     }
 });
 
+test('plot bindings need schema version 5 and documents without them stay version 1', async () => {
+    const design = await document();
+    assert.equal(design.schemaVersion, 1);
+    assert.deepEqual(validateDesignIR(design), { issues: [], valid: true });
+    assert.deepEqual(SUPPORTED_DESIGN_IR_VERSIONS, [1, 5]);
+    const plot = { style: 'meter', channel: 'meters' };
+    assert.deepEqual(validateDesignIR(withPlot(design, plot)), { issues: [], valid: true });
+    const old = validateDesignIR(withPlot(design, plot, 1));
+    assert.equal(old.valid, false);
+    assert.ok(old.issues.some((entry) => entry.path === '$.root.plot' && entry.code === 'version'),
+        JSON.stringify(old.issues));
+    for (const reserved of [2, 3, 4]) {
+        const result = validateDesignIR(withPlot(design, plot, reserved));
+        assert.ok(result.issues.some((entry) => entry.path === '$.schemaVersion' &&
+            entry.code === 'version'), `version ${reserved} is reserved`);
+    }
+    const nested = structuredClone(design);
+    nested.schemaVersion = 1;
+    nested.root.children.push({
+        id: `${design.source.key}/nested-plot`, identity: { strategy: 'semantic', semanticId: 'nested-plot' },
+        kind: 'plot', properties: {}, children: [], plot,
+    });
+    assert.ok(validateDesignIR(nested).issues.some((entry) => entry.code === 'version'),
+        'a nested plot at version 1 is refused');
+});
+
 test('normalization keeps a source node plot binding', async () => {
     const source = JSON.parse(await readFile(new URL('revision-a.source.json', fixtures), 'utf8'));
     source.root.plot = { slots: 8, channel: 'spectrum', style: 'bar' };
     const design = normalizeImport(source);
     assert.deepEqual(design.root.plot, { channel: 'spectrum', slots: 8, style: 'bar' });
+    assert.equal(design.schemaVersion, DESIGN_IR_PLOTS_VERSION);
     assert.deepEqual(validateDesignIR(design), { issues: [], valid: true });
 });
 
 test('the schema declares plot bindings without samples', async () => {
     const definitions = JSON.parse(await readFile(schema, 'utf8')).$defs;
+    const published = JSON.parse(await readFile(schema, 'utf8'));
+    assert.deepEqual(published.properties.schemaVersion.enum, [1, 5]);
+    assert.deepEqual(published.allOf, [{
+        if: { properties: { schemaVersion: { const: 1 } } },
+        then: { properties: { root: { $ref: '#/$defs/nodeWithoutPlot' } } },
+    }]);
+    assert.equal(definitions.nodeWithoutPlot.properties.plot, false);
+    assert.deepEqual(definitions.nodeWithoutPlot.properties.children.items,
+        { $ref: '#/$defs/nodeWithoutPlot' });
     assert.deepEqual(definitions.node.properties.plot, { $ref: '#/$defs/plotBinding' });
     assert.equal(definitions.plotBinding.additionalProperties, false);
     assert.deepEqual(definitions.plotBinding.required, ['style', 'channel']);

@@ -2,7 +2,9 @@ import {
     COMPILER_NAME,
     COMPILER_VERSION,
     DESIGN_IR_SCHEMA,
+    DESIGN_IR_PLOTS_VERSION,
     DESIGN_IR_VERSION,
+    SUPPORTED_DESIGN_IR_VERSIONS,
 } from './constants.js';
 import { buildLossReport, diagnosticSort, normalizeDiagnostic } from './diagnostics.js';
 import {
@@ -62,7 +64,8 @@ export function normalizeImport(input, options = {}) {
         },
         diagnostics: diagnostics.sort(diagnosticSort),
         root,
-        schemaVersion: DESIGN_IR_VERSION,
+        schemaVersion: options.schemaVersion ??
+            (carriesPlot(root) ? DESIGN_IR_PLOTS_VERSION : DESIGN_IR_VERSION),
         source,
         tokens: normalizeTokens(input.tokens, source.key),
     });
@@ -89,6 +92,10 @@ function normalizeSource(source) {
     }
     if (source.provenance !== undefined) output.provenance = canonicalize(source.provenance);
     return output;
+}
+
+function carriesPlot(node) {
+    return node.plot !== undefined || node.children.some(carriesPlot);
 }
 
 function normalizeNode(rawNode, context) {
