@@ -61,6 +61,16 @@ class NativeContext {
     // same provider.
     Status load_document(std::string_view path);
     void set_dimensions(std::uint32_t width, std::uint32_t height);
+    // Sets how many target pixels make one RmlUi density-independent pixel
+    // (dp), for example a window's backing scale, as Backend::set_density_ratio
+    // does: dp lengths and dp font sizes lay out and rasterize at that many
+    // pixels per dp, px lengths are unchanged. Applies at once when open and
+    // to every later open(); the default is 1. Rejected unless the ratio is
+    // finite and > 0.
+    Status set_density_ratio(float ratio);
+    [[nodiscard]] float density_ratio() const noexcept {
+        return density_ratio_;
+    }
     // Context::Update() then Context::Render(), with this instance in scope.
     void update();
     void render();
@@ -135,6 +145,7 @@ class NativeContext {
     Rml::RenderInterface& renderer_;
     Rml::Context* context_ = nullptr;
     Rml::ElementDocument* document_ = nullptr;
+    float density_ratio_ = 1.0f;
     LogSink log_sink_;
     LoadDiagnostics loading_;
     LoadDiagnostics last_load_;

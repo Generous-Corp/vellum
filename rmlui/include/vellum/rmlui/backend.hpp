@@ -180,6 +180,16 @@ class VELLUM_RMLUI_API Backend {
     Backend& operator=(const Backend&) = delete;
 
     Status open(std::uint32_t width, std::uint32_t height);
+    // Sets how many target pixels make one RmlUi density-independent pixel
+    // (dp), for example a window's backing scale. Lengths in dp, font sizes
+    // included, then lay out and rasterize at that many pixels per dp, so dp
+    // text is drawn at the target's resolution rather than magnified. Lengths
+    // in px are unchanged. Applies at once when open and to every later
+    // open(); the default is 1. Rejected unless the ratio is finite and > 0.
+    Status set_density_ratio(float ratio);
+    [[nodiscard]] float density_ratio() const noexcept {
+        return density_ratio_;
+    }
     Status load_document(std::string_view path);
     // Reloads the current document from the AssetProvider, discarding RmlUi's
     // process-wide style sheet and template caches first so edited linked
@@ -250,6 +260,7 @@ class VELLUM_RMLUI_API Backend {
     ExtensionHost* extensions_ = nullptr;
     std::uint32_t width_ = 0;
     std::uint32_t height_ = 0;
+    float density_ratio_ = 1.0f;
     bool open_ = false;
     Asset document_;
     std::vector<CustomPropertyRegistration> custom_properties_;
