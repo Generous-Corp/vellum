@@ -296,6 +296,9 @@ ResolvedLinearGradient resolve_linear_gradient(
         .radius_y = (gradient.radius_y > 0.0F ? gradient.radius_y : 0.5F) * bounds.height,
         .focal_x = bounds.x + gradient.focal_x * bounds.width,
         .focal_y = bounds.y + gradient.focal_y * bounds.height,
+        .start_radius = std::max(0.0F, gradient.start_radius) *
+                        std::min(bounds.width, bounds.height),
+        .end_radius = std::max(0.0F, gradient.end_radius) * std::min(bounds.width, bounds.height),
         .angle_degrees = gradient.angle_degrees,
         .end_angle_degrees = gradient.angle_degrees + 360.0F,
         .color_space = gradient.color_space,
@@ -357,6 +360,24 @@ std::optional<Rect> path_gradient_box(const PaintCommand& command) {
     if (!control || !has_area(*control)) return std::nullopt;
     return Rect{command.bounds.x + control->x, command.bounds.y + control->y, control->width,
                 control->height};
+}
+
+std::optional<Rect> path_stroke_gradient_box(const PaintCommand& command) {
+    if (auto box = path_gradient_box(command)) return box;
+    if (!command.path) return std::nullopt;
+    const auto control = path_control_bounds(*command.path);
+    if (!control) return std::nullopt;
+    Rect box{command.bounds.x + control->x, command.bounds.y + control->y, control->width,
+             control->height};
+    if (!(box.width > 0.0F)) {
+        box.x -= 0.5F;
+        box.width = 1.0F;
+    }
+    if (!(box.height > 0.0F)) {
+        box.y -= 0.5F;
+        box.height = 1.0F;
+    }
+    return box;
 }
 
 bool clip_is_valid(const NodeClip& clip, std::string* reason) {
@@ -492,7 +513,7 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
             });
             return output;
         }
-        if (!compositing && needs(8U) && node_uses_version_8_fields(*node)) {
+        if (!compositing && needs(8U) && node_own_gradient_uses_version_8(*node)) {
             return refuse(node->id, "scene version " + version +
                                   " cannot carry gradient vocabulary at " + node->id);
         }
@@ -507,7 +528,8 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
         });
         return output;
     }
-    if (const auto* node = find_unsupported_gradient_color_space(scene.root);
+    std::string gradient_reason;
+    if (const auto* node = find_inexpressible_gradient(scene.root, &gradient_reason);
         node != nullptr) {
         output.push_back({
             .severity = LoweringDiagnostic::Severity::error,
@@ -515,8 +537,9 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
             .code = std::string(kGradientNotExpressibleCode),
             .node_id = node->id,
             .property = "gradient",
-            .message = "gradient interpolation or colour space at " + node->id +
-                       " is unsupported by the native Skia lowering",
+            .message = "the gradient at " + node->id +
+                       " cannot be drawn exactly by the native Skia lowering: " +
+                       gradient_reason,
         });
         return output;
     }

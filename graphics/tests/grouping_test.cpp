@@ -326,7 +326,7 @@ void versioning() {
     auto gradient_fill = box("gradient-fill", {0.0F, 0.0F, 10.0F, 10.0F});
     gradient_fill.fill_gradients = {gradient};
     auto fill_scene = scene_with({gradient_fill});
-    for (std::uint32_t version = 1U; version < 8U; ++version) {
+    for (std::uint32_t version = 1U; version <= 5U; ++version) {
         fill_scene.scene_version = version;
         expect(scene_fields_match_version(fill_scene) && accept_scene(fill_scene).accepted &&
                    scene_loss_diagnostics(fill_scene).empty(),
@@ -338,7 +338,7 @@ void versioning() {
     auto radial_fill = box("radial-fill", {0.0F, 0.0F, 10.0F, 10.0F});
     radial_fill.fill_gradients = {radial};
     auto radial_scene = scene_with({radial_fill});
-    for (std::uint32_t version = 1U; version < 8U; ++version) {
+    for (std::uint32_t version = 1U; version <= 5U; ++version) {
         radial_scene.scene_version = version;
         const auto loss = scene_loss_diagnostics(radial_scene);
         expect(!scene_fields_match_version(radial_scene) && !accept_scene(radial_scene).accepted &&
@@ -357,11 +357,11 @@ void versioning() {
     stroke_path->stroke.gradient = gradient;
     stroke_node.path = stroke_path;
     auto stroke_scene = scene_with({stroke_node});
-    stroke_scene.scene_version = 7U;
+    stroke_scene.scene_version = 5U;
     expect(!scene_fields_match_version(stroke_scene) &&
                scene_loss_diagnostics(stroke_scene)[0].code == kSceneVersionMismatchCode &&
                !accept_scene(stroke_scene).accepted,
-           "a version 7 scene with a stroke gradient is refused");
+           "a version 5 scene with a stroke gradient is refused");
     stroke_scene.scene_version = 8U;
     expect(scene_fields_match_version(stroke_scene) && accept_scene(stroke_scene).accepted,
            "a version 8 scene with a stroke gradient is accepted");
@@ -373,6 +373,119 @@ PixelRect damage_bounds(const Scene& before, const Scene& after) {
 
 // A clip bounds its subtree's damage; changing a clip, a mask mode or
 // isolation damages the subtrees that change.
+// Each gradient form the native lowering cannot draw exactly is refused with
+// VELLUM_GRADIENT_NOT_EXPRESSIBLE, and each one it can draw is accepted.
+void gradient_expressibility() {
+    LinearGradient base;
+    base.stops = {{.position = 0.0F, .color = Color::hex(0xFF0000)},
+                  {.position = 1.0F, .color = Color::hex(0x0000FF)}};
+    const auto verdict = [](const LinearGradient& gradient, std::uint32_t version = 8U) {
+        auto node = box("g", {0.0F, 0.0F, 30.0F, 10.0F});
+        node.fill_gradients = {gradient};
+        auto scene = scene_with({node});
+        scene.scene_version = version;
+        return std::pair{accept_scene(scene).accepted, scene_loss_diagnostics(scene)};
+    };
+    const auto accepted = [&](const std::string& what, const LinearGradient& gradient) {
+        const auto [ok, loss] = verdict(gradient);
+        expect(ok && loss.empty(), what + " is accepted");
+    };
+    const auto refused = [&](const std::string& what, const LinearGradient& gradient,
+                             const std::string& reason) {
+        const auto [ok, loss] = verdict(gradient);
+        expect(!ok && loss.size() == 1U && loss[0].code == kGradientNotExpressibleCode &&
+                   loss[0].node_id == "g" &&
+                   loss[0].message.find(reason) != std::string::npos,
+               what + " is refused as not expressible" +
+                   (loss.empty() ? std::string() : ": " + loss[0].message));
+    };
+
+    for (const std::string space : {"srgb", "linear-srgb", "display-p3"}) {
+        for (const auto interpolation : {GradientInterpolation::srgb,
+                                         GradientInterpolation::linear_srgb,
+                                         GradientInterpolation::oklab}) {
+            auto gradient = base;
+            gradient.color_space = space;
+            gradient.interpolation = interpolation;
+            accepted("stops in " + space + " with interpolation " +
+                         std::to_string(static_cast<int>(interpolation)),
+                     gradient);
+        }
+    }
+    for (const auto interpolation : {GradientInterpolation::srgb,
+                                     GradientInterpolation::linear_srgb,
+                                     GradientInterpolation::oklab}) {
+        auto gradient = base;
+        gradient.color_space = "oklab";
+        gradient.interpolation = interpolation;
+        refused("an oklab stop colour space", gradient, "interpolation space");
+    }
+    auto unknown = base;
+    unknown.color_space = "rec2020";
+    refused("an unknown colour space", unknown, "rec2020");
+
+    for (const auto kind :
+         {GradientKind::radial, GradientKind::two_circle_radial, GradientKind::conic}) {
+        auto gradient = base;
+        gradient.kind = kind;
+        gradient.spread = GradientSpread::repeat;
+        gradient.repeating = true;
+        gradient.repeat_length = 30.0F;
+        refused("a repeat length on a non-linear gradient", gradient, "repeat length");
+        gradient.repeat_length = 0.0F;
+        accepted("a repeating non-linear gradient without a repeat length", gradient);
+    }
+    auto linear_repeat = base;
+    linear_repeat.spread = GradientSpread::reflect;
+    linear_repeat.repeat_length = 30.0F;
+    accepted("a reflecting linear gradient with a repeat length", linear_repeat);
+
+    for (const auto kind : {GradientKind::linear, GradientKind::two_circle_radial,
+                            GradientKind::conic}) {
+        auto gradient = base;
+        gradient.kind = kind;
+        gradient.radius_x = 0.3F;
+        refused("an ellipse radius on another kind", gradient, "radius x and y");
+    }
+    for (const auto kind : {GradientKind::linear, GradientKind::radial, GradientKind::conic}) {
+        auto gradient = base;
+        gradient.kind = kind;
+        gradient.start_radius = 0.1F;
+        refused("a start radius on another kind", gradient, "start and end radius");
+        gradient.start_radius = 0.0F;
+        gradient.end_radius = 0.2F;
+        refused("an end radius on another kind", gradient, "start and end radius");
+    }
+
+    auto two = base;
+    two.kind = GradientKind::two_circle_radial;
+    accepted("a default two-circle gradient, a point growing to half the shorter side", two);
+    two.start_radius = 0.5F;
+    refused("two identical circles", two, "identical");
+    two.focal_x = 0.3F;
+    accepted("two equal circles at different centres", two);
+    two.end_radius = -0.1F;
+    refused("a negative end radius", two, "non-negative");
+    auto infinite = base;
+    infinite.kind = GradientKind::radial;
+    infinite.radius_y = std::numeric_limits<float>::infinity();
+    refused("an infinite ellipse radius", infinite, "finite");
+
+    auto start_only = base;
+    expect(!gradient_uses_version_8(start_only), "a plain linear gradient needs no version 8");
+    start_only.end_radius = 0.6F;
+    expect(gradient_uses_version_8(start_only), "an end radius needs version 8");
+    start_only.end_radius = 0.5F;
+    start_only.start_radius = 0.2F;
+    expect(gradient_uses_version_8(start_only), "a start radius needs version 8");
+    auto old = base;
+    old.kind = GradientKind::two_circle_radial;
+    old.start_radius = 0.2F;
+    const auto [old_ok, old_loss] = verdict(old, 5U);
+    expect(!old_ok && old_loss.size() == 1U && old_loss[0].code == kSceneVersionMismatchCode,
+           "a version 5 scene with a two-circle start radius is refused");
+}
+
 void damage() {
     auto window = box("window", {10.0F, 10.0F, 20.0F, 20.0F});
     window.clip = NodeClip{.rect = {0.0F, 0.0F, 20.0F, 20.0F}};
@@ -491,6 +604,7 @@ int main() {
     mask_commands();
     clip_validity();
     versioning();
+    gradient_expressibility();
     damage();
     if (failures != 0) {
         std::cerr << failures << " grouping check(s) failed\n";

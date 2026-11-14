@@ -33,13 +33,20 @@ may expose build/test/run-instructions/static-package for web while unsupported
 targets continue to fail closed.
 
 Gradient scenes use schema version 8. The native Skia path supports linear,
-elliptical radial, two-circle radial, and conic gradients, including repeat or
-reflect spread, sRGB, linear-sRGB, OKLab, and Display-P3 colour spaces where
-Skia provides the interpolation. An unknown colour space is refused with a
+elliptical radial, two-circle radial, and conic gradients with pad, repeat, or
+reflect spread. Linear and conic angles follow CSS: 0 points up and angles run
+clockwise. Positions are fractions of the painted box; an ellipse's `radiusX`
+and `radiusY` are fractions of its width and height (0 means half), and the
+two-circle form's `startRadius` and `endRadius` are fractions of its shorter
+side (0 means 0). `colorSpace` names the space the stops are written in (srgb,
+linear-srgb or display-p3) and `interpolation` the space they blend in (srgb,
+linear-srgb or oklab); without either, gradients blend exactly as before
+version 8. `repeatLength` applies to linear gradients only. A field on the
+wrong kind, an unknown colour space, or two identical circles is refused with a
 `VELLUM_GRADIENT_NOT_EXPRESSIBLE` diagnostic instead of being approximated.
 The Canvas2D proof shell reports `VELLUM_WEB_GRADIENT_NOT_EXPRESSIBLE` for
-gradient forms and gradient strokes it cannot retain before drawing its base
-colour fallback.
+each version 8 gradient and gradient stroke it cannot draw before drawing its
+base colour.
 
 The history-preserving Pulp projection has been removed from the active tip.
 Its authorship and exact blobs remain auditable in Git history and immutable

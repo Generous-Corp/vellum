@@ -340,6 +340,35 @@ test('serializes bounded gradient, shadow, and attributed-run styles', () => {
     })).renderJSON(), /between 2 and 64 stops/);
 });
 
+test('serializes and validates the gradient vocabulary', () => {
+    const stops = [{ position: 0, color: '#ff0000' }, { position: 1, color: '#0000ff' }];
+    const twoCircle = {
+        kind: 'two-circle-radial', focalX: 0.25, focalY: 0.5, startRadius: 0, endRadius: 0.75,
+        spread: 'reflect', interpolation: 'oklab', colorSpace: 'display-p3', stops,
+    };
+    const tree = JSON.parse(mount(() => jsx(View, {
+        id: 'gradient', style: { width: 100, height: 60, backgroundGradient: twoCircle },
+    })).renderJSON()).tree;
+    assert.deepEqual(tree.style.backgroundGradient, twoCircle);
+    const root = JSON.parse(mount(() => jsx(View, {
+        id: 'line-root', style: { width: 20, height: 20 },
+        children: jsx(Path, {
+            id: 'line', d: 'M0 0 L10 0', stroke: { angle: 90, stops }, strokeWidth: 2,
+        }),
+    })).renderJSON()).tree;
+    assert.deepEqual(root.children[0].stroke, { angle: 90, stops });
+    const rejects = (gradient, pattern) => assert.throws(() => mount(() => jsx(View, {
+        style: { backgroundGradient: { stops, ...gradient } },
+    })).renderJSON(), pattern);
+    rejects({ kind: 'spiral' }, /kind must be one of linear, radial, two-circle-radial, conic/);
+    rejects({ kind: 'conic', spread: 1 }, /spread must be one of pad, repeat, reflect/);
+    rejects({ angle: 0, spread: 'pad', repeating: true }, /repeating contradicts/);
+    rejects({ kind: 'radial', radiusX: -1 }, /radiusX must be a non-negative finite number/);
+    rejects({ kind: 'conic', colorSpace: 'oklab' },
+        /colorSpace must be one of srgb, linear-srgb, display-p3/);
+    rejects({ stops }, /angle must be a finite number/);
+});
+
 test('serializes a path node with SVG paint properties', () => {
     const tree = JSON.parse(mount(() => jsx(View, {
         id: 'canvas-root',

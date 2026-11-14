@@ -5,6 +5,7 @@
 #include <vellum/graphics/scene.hpp>
 #include <vellum/graphics/scene_acceptance.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -27,9 +28,11 @@ inline constexpr std::string_view kGradientNotExpressibleCode = "VELLUM_WEB_GRAD
 /// `begin_clip` counts once; and it cannot mask, so it skips every command
 /// from a `begin_mask` to its `end_mask` and counts the mask once, drawing
 /// the masked siblings unmasked rather than drawing the mask as paint.
-/// Gradients and shadows, which the shell also does not draw, are counted as
-/// fidelity losses through the command that owns them.  The diagnostic pass
-/// below reports each retained gradient before the base-colour fallback.
+/// Shadows and plain linear fill gradients, which the shell has never drawn,
+/// are not counted, so scenes without the version 8 gradient vocabulary keep
+/// their loss counts. A fill gradient that uses that vocabulary counts once
+/// for its command; a gradient stroke counts through its path, which is
+/// already a loss. `canvas_shell_gradient_diagnostics` names each of them.
 [[nodiscard]] inline bool canvas_shell_loses(
     const vellum::graphics::PaintCommand& command) noexcept {
     using Kind = vellum::graphics::PaintCommand::Kind;
@@ -39,7 +42,9 @@ inline constexpr std::string_view kGradientNotExpressibleCode = "VELLUM_WEB_GRAD
         return true;
     }
     if (!vellum::graphics::draws_content(command.kind)) return false;
-    return !command.fill_gradients.empty() || !vellum::graphics::is_identity(command.transform) ||
+    return std::any_of(command.fill_gradients.begin(), command.fill_gradients.end(),
+                       vellum::graphics::gradient_uses_version_8) ||
+           !vellum::graphics::is_identity(command.transform) ||
            !vellum::graphics::is_uniform(command.corner_radii);
 }
 
@@ -98,9 +103,11 @@ canvas_shell_mask_diagnostics(
     return output;
 }
 
-/// Reports every gradient paint that the Canvas 2D shell cannot retain.  A
-/// path command may carry both fill and stroke gradients, so they are emitted
-/// independently even though the path itself contributes one loss count.
+/// Reports each gradient paint in the version 8 vocabulary that the shell
+/// draws as its base colour: every fill gradient that uses it and every
+/// gradient stroke. Plain linear fill gradients are not reported, as before
+/// version 8. A path may carry both a fill and a stroke gradient, so each is
+/// reported though the path counts as one loss.
 [[nodiscard]] inline std::vector<vellum::graphics::LoweringDiagnostic>
 canvas_shell_gradient_diagnostics(
     const std::vector<vellum::graphics::PaintCommand>& commands) {
@@ -114,10 +121,11 @@ canvas_shell_gradient_diagnostics(
         case Kind::linear: form = "linear gradient"; break;
         case Kind::radial:
             {
-                const bool explicit_radii = gradient.radius_x > 0.0F || gradient.radius_y > 0.0F;
-                const bool elliptical = explicit_radii
-                    ? gradient.radius_x != gradient.radius_y
-                    : command.bounds.width != command.bounds.height;
+                const float radius_x =
+                    (gradient.radius_x > 0.0F ? gradient.radius_x : 0.5F) * command.bounds.width;
+                const float radius_y =
+                    (gradient.radius_y > 0.0F ? gradient.radius_y : 0.5F) * command.bounds.height;
+                const bool elliptical = radius_x != radius_y;
                 form = elliptical ? "elliptical radial gradient" : "radial gradient";
             }
             break;
@@ -136,7 +144,11 @@ canvas_shell_gradient_diagnostics(
     };
     for (const auto& command : commands) {
         if (!vellum::graphics::draws_content(command.kind)) continue;
-        for (const auto& gradient : command.fill_gradients) report(command, gradient, "gradient");
+        for (const auto& gradient : command.fill_gradients) {
+            if (vellum::graphics::gradient_uses_version_8(gradient)) {
+                report(command, gradient, "gradient");
+            }
+        }
         if (command.kind == vellum::graphics::PaintCommand::Kind::path && command.path &&
             command.path->stroke.gradient) {
             report(command, *command.path->stroke.gradient, "strokeGradient");

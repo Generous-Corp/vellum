@@ -313,7 +313,8 @@ struct GradientKey final {
     GradientInterpolation interpolation = GradientInterpolation::srgb;
     std::string color_space = "srgb";
     float repeat_length = 0.0F;
-    std::array<float, 6> geometry{}; // center, radii, focal point
+    /// Centre, ellipse radii, focal point, then start and end radius.
+    std::array<float, 8> geometry{};
     float angle_degrees = 0.0F;
     float end_angle_degrees = 360.0F;
     std::vector<Color> colors;

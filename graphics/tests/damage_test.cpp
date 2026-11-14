@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 #include <optional>
 #include <limits>
 #include <memory>
@@ -478,6 +479,22 @@ void path_diff() {
     changed([](SceneNode& p) {
         p.fill_gradients = {{.stops = {{.position = 0.0F}, {.position = 1.0F}}}};
     }, "fill gradient change damages the path");
+    for (const auto& [what, mutate] :
+         std::initializer_list<std::pair<const char*, void (*)(vellum::graphics::LinearGradient&)>>{
+             {"a two-circle start radius change damages the path",
+              [](vellum::graphics::LinearGradient& g) { g.start_radius = 0.2F; }},
+             {"a two-circle end radius change damages the path",
+              [](vellum::graphics::LinearGradient& g) { g.end_radius = 0.3F; }},
+         }) {
+        Scene circles = before;
+        auto& node = *child(circles, "p");
+        node.fill_gradients = {{.kind = vellum::graphics::GradientKind::two_circle_radial,
+                                .stops = {{.position = 0.0F}, {.position = 1.0F}}}};
+        Scene next = circles;
+        mutate(child(next, "p")->fill_gradients[0]);
+        const auto damage = diff(circles, next);
+        check(!damage.empty() && covers(damage, painted) && disjoint(damage), what);
+    }
     changed([](SceneNode& p) { edit_path(p).fill_rule = vellum::graphics::FillRule::evenodd; },
             "fill rule change damages the path");
     changed([](SceneNode& p) { edit_path(p).stroke.color = Color::hex(0xFFFFFF); },

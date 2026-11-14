@@ -109,6 +109,8 @@ bool same_gradients(const std::vector<LinearGradient>& a, const std::vector<Line
                    same_float(left.center_x, right.center_x) && same_float(left.center_y, right.center_y) &&
                    same_float(left.radius_x, right.radius_x) && same_float(left.radius_y, right.radius_y) &&
                    same_float(left.focal_x, right.focal_x) && same_float(left.focal_y, right.focal_y) &&
+                   same_float(left.start_radius, right.start_radius) &&
+                   same_float(left.end_radius, right.end_radius) &&
                    std::equal(left.stops.begin(), left.stops.end(), right.stops.begin(),
                               right.stops.end(),
                               [](const GradientStop& l, const GradientStop& r) {

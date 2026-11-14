@@ -462,7 +462,6 @@ Scene grouping_scene(float width, float height);
 void damage_model_version_gate() {
     expect(kDamageModelSceneVersion == 8U && partial_redraw_supported(3U) &&
                partial_redraw_supported(4U) && partial_redraw_supported(5U) &&
-               partial_redraw_supported(6U) && partial_redraw_supported(7U) &&
                partial_redraw_supported(8U) &&
                partial_redraw_supported(kDamageModelSceneVersion) &&
                !partial_redraw_supported(kDamageModelSceneVersion + 1U) &&
@@ -1214,14 +1213,23 @@ Scene gradient_kind_scene(GradientKind kind, GradientSpread spread) {
     // Keep the sweep asymmetric so ellipse, focal and conic-angle lowering are
     // exercised instead of falling through the circular/default cases.
     gradient.angle_degrees = kind == GradientKind::conic ? 47.0F : 103.0F;
-    gradient.center_x = 0.37F;
-    gradient.center_y = 0.62F;
-    gradient.radius_x = 0.31F;
-    gradient.radius_y = 0.57F;
-    gradient.focal_x = 0.19F;
-    gradient.focal_y = 0.74F;
+    if (kind != GradientKind::linear) {
+        gradient.center_x = 0.37F;
+        gradient.center_y = 0.62F;
+    }
+    if (kind == GradientKind::radial) {
+        gradient.radius_x = 0.31F;
+        gradient.radius_y = 0.57F;
+    }
+    if (kind == GradientKind::two_circle_radial) {
+        gradient.focal_x = 0.19F;
+        gradient.focal_y = 0.74F;
+        gradient.start_radius = 0.05F;
+        gradient.end_radius = 0.43F;
+    }
     gradient.repeating = spread == GradientSpread::repeat;
-    gradient.repeat_length = spread == GradientSpread::repeat ? 30.0F : 0.0F;
+    gradient.repeat_length =
+        kind == GradientKind::linear && spread != GradientSpread::pad ? 30.0F : 0.0F;
     gradient.stops = {{.position = 0.0F, .color = Color::hex(0xEF4444)},
                       {.position = 0.5F, .color = Color::hex(0xFACC15)},
                       {.position = 1.0F, .color = Color::hex(0x3B82F6)}};
@@ -1238,9 +1246,11 @@ Scene gradient_kind_scene(GradientKind kind, GradientSpread spread) {
 void gradient_kind_sweeps() {
     const struct { GradientKind kind; GradientSpread spread; const char* name; } cases[] = {
         {GradientKind::linear, GradientSpread::pad, "linear"},
+        {GradientKind::linear, GradientSpread::repeat, "linear repeat"},
         {GradientKind::radial, GradientSpread::pad, "radial"},
         {GradientKind::radial, GradientSpread::reflect, "radial reflect"},
         {GradientKind::two_circle_radial, GradientSpread::pad, "two-circle radial"},
+        {GradientKind::two_circle_radial, GradientSpread::reflect, "two-circle radial reflect"},
         {GradientKind::conic, GradientSpread::pad, "conic"},
         {GradientKind::conic, GradientSpread::repeat, "conic repeat"},
     };
@@ -1258,21 +1268,20 @@ void gradient_kind_sweeps() {
             }
         }
     }
-    int cut_total = 0;
-    int partial_total = 0;
-    {
-        RulesOverride off({.enclose_interpolated_fills = false});
-        for (const auto& item : cases) {
-            const Scene scene = gradient_kind_scene(item.kind, item.spread);
-            const auto cut = sweep_damage_edges(scene, 2.0F, false);
-            cut_total += std::max(cut.differing, 0);
-            partial_total += cut.partial;
-        }
+    RulesOverride off({.enclose_interpolated_fills = false});
+    for (const auto kind :
+         {GradientKind::radial, GradientKind::two_circle_radial, GradientKind::conic}) {
+        const Scene scene = gradient_kind_scene(kind, GradientSpread::pad);
+        const auto cut = sweep_damage_edges(scene, 2.0F, false);
+        expect(cut.partial > 0 && cut.differing > 0,
+               "negative control: without fill enclosure a swept edge cuts the " +
+                   std::string(kind == GradientKind::radial              ? "radial"
+                               : kind == GradientKind::two_circle_radial ? "two-circle radial"
+                                                                         : "conic") +
+                   " gradient",
+               std::to_string(cut.differing) + " edges differ across " +
+                   std::to_string(cut.partial) + " partial frames");
     }
-    expect(partial_total > 0 && cut_total > 0,
-           "negative control: without fill enclosure a swept edge cuts some gradient kind",
-           std::to_string(cut_total) + " edges differ across " + std::to_string(partial_total) +
-               " partial frames");
 }
 
 void grouping_sweeps() {

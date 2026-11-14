@@ -401,6 +401,8 @@ void gradient_keys() {
         key.geometry[4] = 0.25F;
         key.geometry[5] = 0.75F;
     });
+    differs("the start radius", [](GradientKey& key) { key.geometry[6] = 3.0F; });
+    differs("the end radius", [](GradientKey& key) { key.geometry[7] = 40.0F; });
     differs("the conic start angle", [](GradientKey& key) { key.angle_degrees = 30.0F; });
     differs("the conic end angle", [](GradientKey& key) { key.end_angle_degrees = 270.0F; });
     differs("a stop", [](GradientKey& key) {
