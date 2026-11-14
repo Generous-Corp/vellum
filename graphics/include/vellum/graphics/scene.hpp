@@ -41,6 +41,8 @@ struct LinearGradient final {
     std::string color_space = "srgb";
     float center_x = 0.5F;
     float center_y = 0.5F;
+    /// Radii as fractions of the painted box, like the centre and focal point;
+    /// zero means half the box.
     float radius_x = 0.0F;
     float radius_y = 0.0F;
     float focal_x = 0.5F;
@@ -571,20 +573,26 @@ struct SceneNode final {
     return nullptr;
 }
 
+[[nodiscard]] inline bool node_own_gradient_uses_version_8(const SceneNode& node) noexcept {
+    // A plain linear fill gradient has been legal since version 1 and stays
+    // legal.  Only the new vocabulary needs version 8: any fill gradient that
+    // uses a new kind, spread, interpolation, colour space or geometry, and any
+    // stroke gradient, whose presence alone is new.
+    for (const auto& gradient : node.fill_gradients) {
+        if (gradient_uses_version_8(gradient)) return true;
+    }
+    return node.stroke_gradient.has_value() ||
+           (node.path && node.path->stroke.gradient.has_value());
+}
+
 [[nodiscard]] inline bool node_uses_version_8_fields(const SceneNode& node) noexcept {
-    // The retained gradient vocabulary was introduced as one atomic schema
-    // field in version 8.  Presence is significant even when every value is
-    // the default: a version-7 consumer has no gradient slot to read and
-    // must refuse instead of silently dropping the paint.
-    if (!node.fill_gradients.empty() || node.stroke_gradient.has_value() ||
-        (node.path && node.path->stroke.gradient.has_value())) return true;
+    if (node_own_gradient_uses_version_8(node)) return true;
     for (const auto& child : node.children) if (node_uses_version_8_fields(child)) return true;
     return false;
 }
 
 [[nodiscard]] inline const SceneNode* find_version_8_fields(const SceneNode& node) noexcept {
-    if (!node.fill_gradients.empty() || node.stroke_gradient.has_value() ||
-        (node.path && node.path->stroke.gradient.has_value())) return &node;
+    if (node_own_gradient_uses_version_8(node)) return &node;
     for (const auto& child : node.children) if (const auto* found = find_version_8_fields(child)) return found;
     return nullptr;
 }

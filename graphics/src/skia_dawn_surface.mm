@@ -327,8 +327,8 @@ sk_sp<SkShader> linear_gradient_shader(
             const float rx = std::max(gradient.radius_x, 1.0e-6F);
             const float ry = std::max(gradient.radius_y, 1.0e-6F);
             const SkMatrix local = SkMatrix::MakeAll(
-                1.0F / rx, 0.0F, -gradient.center_x / rx,
-                0.0F, 1.0F / ry, -gradient.center_y / ry,
+                rx, 0.0F, gradient.center_x,
+                0.0F, ry, gradient.center_y,
                 0.0F, 0.0F, 1.0F);
             shader = SkShaders::RadialGradient({0.0F, 0.0F}, 1.0F,
                                                 shader_gradient, &local);

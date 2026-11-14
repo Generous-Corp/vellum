@@ -1258,6 +1258,21 @@ void gradient_kind_sweeps() {
             }
         }
     }
+    int cut_total = 0;
+    int partial_total = 0;
+    {
+        RulesOverride off({.enclose_interpolated_fills = false});
+        for (const auto& item : cases) {
+            const Scene scene = gradient_kind_scene(item.kind, item.spread);
+            const auto cut = sweep_damage_edges(scene, 2.0F, false);
+            cut_total += std::max(cut.differing, 0);
+            partial_total += cut.partial;
+        }
+    }
+    expect(partial_total > 0 && cut_total > 0,
+           "negative control: without fill enclosure a swept edge cuts some gradient kind",
+           std::to_string(cut_total) + " edges differ across " + std::to_string(partial_total) +
+               " partial frames");
 }
 
 void grouping_sweeps() {

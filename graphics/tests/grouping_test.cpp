@@ -328,11 +328,23 @@ void versioning() {
     auto fill_scene = scene_with({gradient_fill});
     for (std::uint32_t version = 1U; version < 8U; ++version) {
         fill_scene.scene_version = version;
-        const auto loss = scene_loss_diagnostics(fill_scene);
-        expect(!scene_fields_match_version(fill_scene) && !accept_scene(fill_scene).accepted &&
+        expect(scene_fields_match_version(fill_scene) && accept_scene(fill_scene).accepted &&
+                   scene_loss_diagnostics(fill_scene).empty(),
+               "a version " + std::to_string(version) +
+                   " scene with a plain linear fill gradient is accepted");
+    }
+    LinearGradient radial = gradient;
+    radial.kind = GradientKind::radial;
+    auto radial_fill = box("radial-fill", {0.0F, 0.0F, 10.0F, 10.0F});
+    radial_fill.fill_gradients = {radial};
+    auto radial_scene = scene_with({radial_fill});
+    for (std::uint32_t version = 1U; version < 8U; ++version) {
+        radial_scene.scene_version = version;
+        const auto loss = scene_loss_diagnostics(radial_scene);
+        expect(!scene_fields_match_version(radial_scene) && !accept_scene(radial_scene).accepted &&
                    loss.size() == 1U && loss[0].code == kSceneVersionMismatchCode,
                "a version " + std::to_string(version) +
-                   " scene with a present gradient is refused");
+                   " scene with a radial fill gradient is refused");
     }
     fill_scene.scene_version = 8U;
     expect(scene_fields_match_version(fill_scene) && accept_scene(fill_scene).accepted,
