@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -535,6 +536,38 @@ FRAMEWORK_TEST(discrete_store_overloads_keep_plain_index_values) {
     CHECK(store.get_value(5) == 1.0f);
     CHECK(rs.host_begins == 1 + 11 + 1);
     CHECK(rs.host_ends == rs.host_begins);
+}
+
+FRAMEWORK_TEST(a_store_binding_keeps_its_model_alive) {
+    RecordingStore rs;
+    auto& store = rs.store;
+    vellum::view::Knob knob;
+    vellum::view::Fader fader;
+    vellum::view::RangeSlider slider;
+    vellum::view::XYPad pad;
+    std::vector<vellum::view::ParameterBinding> bindings;
+    // The overloads build their StateStoreParamModel internally; nothing but
+    // the binding holds it once the call returns.
+    bindings.push_back(vellum::view::bind_parameter(knob, store, 2));
+    bindings.push_back(vellum::view::bind_parameter(fader, store, 2));
+    bindings.push_back(vellum::view::bind_parameter(slider, store, 2));
+    bindings.push_back(vellum::view::bind_parameter(pad, store, 2, 4));
+    bindings.reserve(64);  // moves every binding
+
+    // Reuse freed memory, so a model the bindings did not keep is overwritten.
+    std::vector<std::unique_ptr<vellum::view::StateStoreParamModel>> scribble;
+    vellum::state::StateStore other;
+    for (int i = 0; i < 64; ++i)
+        scribble.push_back(std::make_unique<vellum::view::StateStoreParamModel>(other));
+
+    store.set_value(2, 9.0f);
+    store.set_value(4, 1.0f);
+    store.pump_listeners();
+    CHECK(near(knob.value(), 0.9));
+    CHECK(near(fader.value(), 0.9));
+    CHECK(near(slider.value(), 0.9));
+    CHECK(near(pad.x_value(), 0.9));
+    CHECK(near(pad.y_value(), 0.1));
 }
 
 }  // namespace
