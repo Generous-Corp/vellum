@@ -1,4 +1,4 @@
-import { Button, Canvas, Image, Stack, Text, View, jsx } from './runtime.js';
+import { Button, Canvas, Image, Path, Stack, Text, TextRun, View, jsx } from './runtime.js';
 
 const MAXIMUM_NODES = 100_000;
 const MAXIMUM_DEPTH = 256;
@@ -20,7 +20,13 @@ function plainObject(value, path) {
     return value;
 }
 
-const TOKEN_COLOR = /^#(?:[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const TOKEN_COLOR = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const SHORT_COLOR = /^#[0-9a-f]{3,4}$/i;
+
+function canonicalColor(value) {
+    if (typeof value !== 'string' || !SHORT_COLOR.test(value)) return value;
+    return `#${[...value.slice(1)].map((digit) => digit + digit).join('')}`;
+}
 const LAYER_NAMES = Object.freeze(['theme', 'semantic']);
 const CANONICAL_NAMES = new WeakMap();
 
@@ -64,7 +70,8 @@ function tokenValue(tokens, value, stack = [], layers = undefined) {
 }
 
 function colorToken(context, value) {
-    const resolved = tokenValue(context.document.tokens ?? {}, value, [], context.tokenLayers);
+    const resolved = canonicalColor(
+        tokenValue(context.document.tokens ?? {}, value, [], context.tokenLayers));
     const match = typeof value === 'string' ? /^\{([^{}]+)\}$/.exec(value) : null;
     if (!match || typeof resolved !== 'string' || !TOKEN_COLOR.test(resolved)) {
         return { value: resolved };
@@ -80,6 +87,54 @@ function colorToken(context, value) {
             value: resolved,
         },
     };
+}
+
+function paintNumbers(source, names) {
+    const output = {};
+    for (const name of names) {
+        if (typeof source[name] === 'number' && Number.isFinite(source[name])) {
+            output[name] = source[name];
+        }
+    }
+    return output;
+}
+
+function colorSlot(context, refs, slot, value) {
+    const color = colorToken(context, value);
+    if (color.receipt) refs[slot] = color.receipt;
+    return color.value;
+}
+
+function retainedGradient(context, refs, prefix, gradient) {
+    if (!gradient || typeof gradient !== 'object' || !Array.isArray(gradient.stops)) {
+        throw new TypeError(`${prefix} must hold a stops array`);
+    }
+    const output = paintNumbers(gradient, ['angle', 'repeatLength']);
+    if (typeof gradient.repeating === 'boolean') output.repeating = gradient.repeating;
+    output.stops = gradient.stops.map((stop, index) => ({
+        position: stop?.position,
+        color: colorSlot(context, refs, `${prefix}.stops.${index}`, stop?.color),
+    }));
+    return output;
+}
+
+function pathPaint(context, node, refs) {
+    const properties = node.properties && typeof node.properties === 'object'
+        ? node.properties : {};
+    const paint = properties.paint && typeof properties.paint === 'object'
+        ? properties.paint : {};
+    const geometry = properties.path && typeof properties.path === 'object'
+        ? properties.path : {};
+    const output = { d: geometry.d };
+    if (typeof geometry.fillRule === 'string') output.fillRule = geometry.fillRule;
+    if (paint.fill !== undefined) {
+        output.fill = paint.fill && typeof paint.fill === 'object'
+            ? retainedGradient(context, refs, 'fill', paint.fill)
+            : colorSlot(context, refs, 'fill', paint.fill);
+    }
+    if (paint.stroke !== undefined) output.stroke = colorSlot(context, refs, 'stroke', paint.stroke);
+    Object.assign(output, paintNumbers(paint, ['strokeWidth']));
+    return output;
 }
 
 function retainedStyle(context, node, viewport, root) {
@@ -102,19 +157,30 @@ function retainedStyle(context, node, viewport, root) {
     }
     if (layout.direction === 'row') style.direction = 'horizontal';
     else if (layout.direction === 'column') style.direction = 'vertical';
-    if (typeof paint.backgroundColor === 'string') {
-        const color = colorToken(context, paint.backgroundColor);
-        style.backgroundColor = color.value;
-        if (color.receipt) refs.backgroundColor = color.receipt;
+    const drawsBox = node.kind !== 'path' && node.kind !== 'text-run';
+    if (drawsBox && typeof paint.backgroundColor === 'string') {
+        style.backgroundColor = colorSlot(context, refs, 'backgroundColor', paint.backgroundColor);
+    }
+    if (drawsBox && paint.boxShadow !== undefined) {
+        const shadow = paint.boxShadow;
+        if (!shadow || typeof shadow !== 'object') {
+            throw new TypeError(`design node ${node.id} paint.boxShadow must be an object`);
+        }
+        style.boxShadow = {
+            ...paintNumbers(shadow, ['offsetX', 'offsetY', 'blurRadius', 'spreadRadius']),
+            color: colorSlot(context, refs, 'boxShadow', shadow.color),
+        };
+    }
+    if (drawsBox && paint.backgroundLinearGradient !== undefined) {
+        style.backgroundLinearGradient = retainedGradient(
+            context, refs, 'backgroundLinearGradient', paint.backgroundLinearGradient);
     }
     if (typeof paint.borderRadius === 'number' || typeof paint.borderRadius === 'string') {
         const radius = tokenValue(tokens, paint.borderRadius, [], context.tokenLayers);
         if (typeof radius === 'number' && Number.isFinite(radius)) style.borderRadius = radius;
     }
-    if (typeof typography.color === 'string') {
-        const color = colorToken(context, typography.color);
-        style.color = color.value;
-        if (color.receipt) refs.color = color.receipt;
+    if (typeof typography.color === 'string' && node.kind !== 'path') {
+        style.color = colorSlot(context, refs, 'color', typography.color);
     }
     if (typeof typography.fontSize === 'number' && Number.isFinite(typography.fontSize)) {
         style.fontSize = typography.fontSize;
@@ -132,6 +198,8 @@ function componentFor(node) {
     if (node.kind === 'text') return Text;
     if (node.kind === 'image') return Image;
     if (node.kind === 'canvas') return Canvas;
+    if (node.kind === 'text-run') return TextRun;
+    if (node.kind === 'path') return Path;
     if (node.kind === 'view') {
         const display = node.properties?.layout?.display;
         return display === 'flex' || display === 'grid' ? Stack : View;
@@ -152,12 +220,24 @@ function materializeNode(node, context, depth, root = false) {
     if (!Array.isArray(node.children)) throw new Error(`design node ${node.id} requires children`);
 
     const { style, refs } = retainedStyle(context, node, context.viewport, root);
+    if ((node.kind === 'text-run' || node.kind === 'path') && node.children.length > 0) {
+        throw new Error(`design ${node.kind} ${node.id} does not accept children`);
+    }
+    if (node.kind === 'text-run') {
+        if (context.actions[node.id] !== undefined) {
+            throw new Error(`design text-run ${node.id} does not accept actions`);
+        }
+        const run = { style, text: typeof node.text === 'string' ? node.text : '' };
+        if (Object.keys(refs).length > 0) run.tokenRefs = { ...refs };
+        return jsx(TextRun, run, node.id);
+    }
     const properties = {
         id: node.id,
         style,
         accessibilityLabel: typeof node.name === 'string' ? node.name : undefined,
         children: node.children.map((child) => materializeNode(child, context, depth + 1)),
     };
+    if (node.kind === 'path') Object.assign(properties, pathPaint(context, node, refs));
     if (Object.keys(refs).length > 0) properties.tokenRefs = { ...refs };
     if (typeof node.text === 'string') properties.text = node.text;
     const bindings = context.actions[node.id];

@@ -149,6 +149,11 @@ export interface TokenReceipt {
 export interface TokenRefs {
     backgroundColor?: TokenReceipt;
     color?: TokenReceipt;
+    boxShadow?: TokenReceipt;
+    fill?: TokenReceipt;
+    stroke?: TokenReceipt;
+    [stop: `backgroundLinearGradient.stops.${number}` | `fill.stops.${number}`]:
+        TokenReceipt | undefined;
 }
 export interface TokenLayers {
     semantic?: Record<string, string>;
@@ -220,6 +225,7 @@ export declare const Stack: Component;
 export declare const Text: Component;
 export interface TextRunProps {
     style?: Style;
+    tokenRefs?: Pick<TokenRefs, 'color'>;
     text?: string;
     children?: string | number | readonly (string | number)[];
     key?: string | number;

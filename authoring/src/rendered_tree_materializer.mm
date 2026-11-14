@@ -159,12 +159,21 @@ bool number_field(
     return true;
 }
 
+// `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa`; a short form doubles each digit,
+// as CSS does, so `#fff` and `#ffffff` are the same colour.
 std::optional<vellum::graphics::Color> parse_color(id value) {
     if (![value isKindOfClass:NSString.class]) return std::nullopt;
     NSString* text = static_cast<NSString*>(value);
-    if (![text hasPrefix:@"#"] || (text.length != 7 && text.length != 9)) {
-        return std::nullopt;
+    if (![text hasPrefix:@"#"]) return std::nullopt;
+    if (text.length == 4 || text.length == 5) {
+        NSMutableString* expanded = [NSMutableString stringWithString:@"#"];
+        for (NSUInteger index = 1; index < text.length; ++index) {
+            const unichar digit = [text characterAtIndex:index];
+            [expanded appendFormat:@"%C%C", digit, digit];
+        }
+        text = expanded;
     }
+    if (text.length != 7 && text.length != 9) return std::nullopt;
     unsigned long long encoded = 0;
     NSScanner* scanner = [NSScanner scannerWithString:[text substringFromIndex:1]];
     if (![scanner scanHexLongLong:&encoded] || !scanner.isAtEnd) return std::nullopt;
@@ -550,32 +559,219 @@ struct MaterializeContext final {
     const std::vector<vellum::graphics::TokenReceipt>* tokens = nullptr;
 };
 
+bool refuse_token(
+    const MaterializeContext& context, const std::string& node_id, std::string property,
+    std::string message, std::string* error) {
+    context.diagnostics->push_back({
+        .severity = LoweringDiagnostic::Severity::error,
+        .disposition = LoweringDiagnostic::Disposition::unsupported,
+        .code = std::string(vellum::graphics::kInvalidTokenReferenceCode),
+        .node_id = node_id,
+        .property = std::move(property),
+        .message = message,
+    });
+    set_error(error, std::move(message));
+    return false;
+}
+
+// The `tokenRefs` object of `source`, or nil when it has none; `ok` is false
+// when it is present but not an object.
+NSDictionary* token_references(
+    NSDictionary* source, const MaterializeContext& context, const std::string& node_id,
+    bool& ok, std::string* error) {
+    ok = true;
+    id references = source[@"tokenRefs"];
+    if (references == nil) return nil;
+    if (![references isKindOfClass:NSDictionary.class]) {
+        ok = refuse_token(context, node_id, "tokenRefs",
+            "tokenRefs of " + node_id + " must be an object", error);
+        return nil;
+    }
+    return references;
+}
+
+// The table entry `references[key]` names, which must hold `color`.
+bool token_entry(
+    NSDictionary* references, NSString* key, const MaterializeContext& context,
+    const std::string& node_id, const vellum::graphics::Color& color, std::uint32_t& entry,
+    std::string* error) {
+    const std::string property = "tokenRefs." + cpp_string(key);
+    const std::size_t count = context.tokens != nullptr ? context.tokens->size() : 0U;
+    float index = 0.0F;
+    if (!finite_number(references[key], index) || index < 0.0F ||
+        index != std::floor(index) || static_cast<std::size_t>(index) >= count) {
+        return refuse_token(context, node_id, property,
+            property + " of " + node_id + " must name an entry of the token table", error);
+    }
+    entry = static_cast<std::uint32_t>(index);
+    if (!vellum::graphics::same_token_color(color, (*context.tokens)[entry].value)) {
+        return refuse_token(context, node_id, property,
+            property + " of " + node_id + " disagrees with its resolved colour", error);
+    }
+    return true;
+}
+
 bool bind_token(
     NSDictionary* source, NSString* slot, const MaterializeContext& context,
     vellum::graphics::SceneNode& node, std::string* error) {
-    id references = source[@"tokenRefs"];
-    if (references == nil) return true;
-    if (![references isKindOfClass:NSDictionary.class]) {
-        set_error(error, "tokenRefs of " + node.id + " must be an object");
-        return false;
-    }
-    id raw = static_cast<NSDictionary*>(references)[slot];
-    if (raw == nil) return true;
-    const std::size_t count = context.tokens != nullptr ? context.tokens->size() : 0U;
-    float index = 0.0F;
-    if (!finite_number(raw, index) || index < 0.0F || index != std::floor(index) ||
-        static_cast<std::size_t>(index) >= count) {
-        set_error(error, "tokenRefs." + cpp_string(slot) + " of " + node.id +
-                             " must name an entry of the token table");
-        return false;
-    }
-    const auto entry = static_cast<std::uint32_t>(index);
-    if (!vellum::graphics::same_token_color(node.fill, (*context.tokens)[entry].value)) {
-        set_error(error, "tokenRefs." + cpp_string(slot) + " of " + node.id +
-                             " disagrees with its resolved colour");
-        return false;
-    }
+    bool ok = true;
+    NSDictionary* references = token_references(source, context, node.id, ok, error);
+    if (references == nil || references[slot] == nil) return ok;
+    std::uint32_t entry = 0;
+    if (!token_entry(references, slot, context, node.id, node.fill, entry, error)) return false;
     node.fill_token = entry;
+    return true;
+}
+
+// The stop index of a `<prefix>.stops.<n>` slot name, or empty.
+std::optional<std::uint32_t> stop_slot(std::string_view name, std::string_view prefix) {
+    if (!name.starts_with(prefix) || !name.substr(prefix.size()).starts_with(".stops.")) {
+        return std::nullopt;
+    }
+    const auto digits = name.substr(prefix.size() + 7U);
+    if (digits.empty() || digits.size() > 6U || (digits.size() > 1U && digits[0] == '0') ||
+        !std::all_of(digits.begin(), digits.end(),
+                     [](char digit) { return digit >= '0' && digit <= '9'; })) {
+        return std::nullopt;
+    }
+    return static_cast<std::uint32_t>(std::stoul(std::string(digits)));
+}
+
+// Binds every key of a node's `tokenRefs` to the colour it names: `fill_token`
+// for `backgroundColor`, a text node's `color` and a path's `fill`, and a
+// `TokenSlot` for `boxShadow`, `backgroundLinearGradient.stops.<n>`,
+// `fill.stops.<n>` and a path's `stroke`. A key that names no slot, or a
+// colour the node lacks, is refused; a colour the node's type does not draw
+// is reported as dropped. A button or text input binds `color` on its label.
+bool bind_token_refs(
+    NSDictionary* source, NSDictionary* style, std::string_view type_name, bool labelled,
+    MaterializeContext& context, vellum::graphics::SceneNode& output, std::string* error) {
+    using vellum::graphics::SceneNode;
+    using vellum::graphics::TokenSlot;
+    bool ok = true;
+    NSDictionary* references = token_references(source, context, output.id, ok, error);
+    if (references == nil) return ok;
+    const bool path = type_name == "path";
+    const auto dropped = [&](const std::string& name) {
+        context.diagnostics->push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::lowered,
+            .code = std::string(vellum::graphics::kStyleDroppedCode),
+            .node_id = output.id,
+            .property = "tokenRefs." + name,
+            .message = "a " + std::string(type_name) + " node does not draw the colour " + name +
+                       " names, so its token reference was dropped",
+        });
+        return true;
+    };
+    const auto missing = [&](const std::string& name) {
+        return refuse_token(context, output.id, "tokenRefs." + name,
+            "tokenRefs." + name + " of " + output.id + " names a colour the node does not have",
+            error);
+    };
+    const auto bind_slot = [&](NSString* key, TokenSlot slot) {
+        const auto* color = vellum::graphics::token_slot_color(output, slot);
+        if (color == nullptr) return missing(cpp_string(key));
+        if (!token_entry(references, key, context, output.id, *color, slot.token, error)) {
+            return false;
+        }
+        output.color_tokens.push_back(slot);
+        return true;
+    };
+    const auto bind_fill = [&](NSString* key) {
+        std::uint32_t entry = 0;
+        if (!token_entry(references, key, context, output.id, output.fill, entry, error)) {
+            return false;
+        }
+        output.fill_token = entry;
+        return true;
+    };
+    NSArray* keys = [references.allKeys sortedArrayUsingSelector:@selector(compare:)];
+    for (id raw_key in keys) {
+        if (![raw_key isKindOfClass:NSString.class]) {
+            return refuse_token(context, output.id, "tokenRefs",
+                "tokenRefs of " + output.id + " must map slot names to entries", error);
+        }
+        NSString* key = raw_key;
+        const std::string name = cpp_string(key);
+        bool bound = true;
+        if (name == "backgroundColor" && !path) {
+            if (!parse_color(style[@"backgroundColor"])) {
+                bound = missing(name);
+            } else if (output.kind == SceneNode::Kind::rectangle ||
+                       output.kind == SceneNode::Kind::image) {
+                bound = bind_fill(key);
+            } else {
+                bound = dropped(name);
+            }
+        } else if (name == "color" && !path) {
+            if (output.kind == SceneNode::Kind::text) {
+                bound = bind_fill(key);
+            } else if (!labelled) {
+                bound = parse_color(style[@"color"]) ? dropped(name) : missing(name);
+            }
+        } else if (name == "boxShadow" && !path) {
+            if (style[@"boxShadow"] == nil) {
+                bound = missing(name);
+            } else if (output.box_shadows.empty()) {
+                bound = dropped(name);
+            } else {
+                bound = bind_slot(key, {TokenSlot::Kind::box_shadow, 0U, 0U, 0U});
+            }
+        } else if (const auto stop = stop_slot(name, "backgroundLinearGradient"); stop && !path) {
+            if (style[@"backgroundLinearGradient"] == nil) {
+                bound = missing(name);
+            } else if (output.fill_gradients.empty()) {
+                bound = dropped(name);
+            } else {
+                bound = bind_slot(key, {TokenSlot::Kind::gradient_stop, 0U, *stop, 0U});
+            }
+        } else if (name == "fill" && path) {
+            bound = parse_color(source[@"fill"]) ? bind_fill(key) : missing(name);
+        } else if (name == "stroke" && path) {
+            bound = parse_color(source[@"stroke"])
+                ? bind_slot(key, {TokenSlot::Kind::path_stroke, 0U, 0U, 0U})
+                : missing(name);
+        } else if (const auto fill_stop = stop_slot(name, "fill"); fill_stop && path) {
+            bound = bind_slot(key, {TokenSlot::Kind::gradient_stop, 0U, *fill_stop, 0U});
+        } else {
+            bound = refuse_token(context, output.id, "tokenRefs." + name,
+                "tokenRefs." + name + " of " + output.id + " is not a token slot of a " +
+                    std::string(type_name) + " node",
+                error);
+        }
+        if (!bound) return false;
+    }
+    return true;
+}
+
+// Binds an attributed run's `tokenRefs`; only `color` is a slot of a run.
+bool bind_run_token_refs(
+    NSDictionary* run, std::uint32_t run_index, MaterializeContext& context,
+    vellum::graphics::SceneNode& output, std::string* error) {
+    using vellum::graphics::TokenSlot;
+    const std::string run_id =
+        [run[@"id"] isKindOfClass:NSString.class] ? cpp_string(run[@"id"]) : output.id;
+    bool ok = true;
+    NSDictionary* references = token_references(run, context, run_id, ok, error);
+    if (references == nil) return ok;
+    for (id key in references) {
+        if (![key isEqual:@"color"]) {
+            return refuse_token(context, run_id, "tokenRefs",
+                "tokenRefs of text-run " + run_id + " may only name color", error);
+        }
+    }
+    if (references[@"color"] == nil) return true;
+    TokenSlot slot{TokenSlot::Kind::text_run, run_index, 0U, 0U};
+    const auto* color = vellum::graphics::token_slot_color(output, slot);
+    if (color == nullptr ||
+        !token_entry(references, @"color", context, run_id, *color, slot.token, error)) {
+        return color == nullptr
+            ? refuse_token(context, run_id, "tokenRefs.color",
+                  "text-run " + run_id + " has no run to bind", error)
+            : false;
+    }
+    output.color_tokens.push_back(slot);
     return true;
 }
 
@@ -1267,10 +1463,12 @@ bool materialize_node(
                     ![child[@"text"] isKindOfClass:NSString.class]) {
                     continue;
                 }
+                const auto run_index = static_cast<std::uint32_t>(output.text_runs.size());
                 output.text_runs.push_back({
                     .text = cpp_string(child[@"text"]),
                     .style = text_style(dictionary_or_empty(child[@"style"]), base_style),
                 });
+                if (!bind_run_token_refs(child, run_index, context, output, error)) return false;
             }
         }
     } else if (is_text_input) {
@@ -1291,11 +1489,9 @@ bool materialize_node(
         output.kind = vellum::graphics::SceneNode::Kind::group;
     }
 
-    if (output.kind == vellum::graphics::SceneNode::Kind::text) {
-        if (!bind_token(source, @"color", context, output, error)) return false;
-    } else if (output.kind == vellum::graphics::SceneNode::Kind::rectangle &&
-               parse_color(style[@"backgroundColor"]).has_value()) {
-        if (!bind_token(source, @"backgroundColor", context, output, error)) return false;
+    if (!bind_token_refs(source, style, type_name,
+            [type isEqualToString:@"button"] || is_text_input, context, output, error)) {
+        return false;
     }
 
     if (!parse_grouping(style, identity, style_use, context, output, error)) return false;
@@ -1539,6 +1735,34 @@ bool materialize_rendered_tree(
         return false;
     }
     RenderedApplication candidate;
+    // The envelope may name the scene version its tree was written for; a tree
+    // that names none is written for the current version. The scene is built at
+    // that version and refused when it carries a field the version lacks.
+    if (id raw_version = envelope[@"sceneVersion"]; raw_version != nil) {
+        float version = 0.0F;
+        if (!finite_number(raw_version, version) || version != std::floor(version) ||
+            version < 0.0F || version > 4294967295.0F ||
+            !vellum::graphics::scene_version_is_supported(static_cast<std::uint32_t>(version))) {
+            const std::string message =
+                "sceneVersion must name a scene version this renderer supports, from " +
+                std::to_string(vellum::graphics::kMinSupportedSceneVersion) + " to " +
+                std::to_string(vellum::graphics::kSceneVersion);
+            if (failure_diagnostics != nullptr) {
+                failure_diagnostics->push_back({
+                    .severity = LoweringDiagnostic::Severity::error,
+                    .disposition = LoweringDiagnostic::Disposition::unsupported,
+                    .code = std::string(vellum::graphics::kSceneVersionMismatchCode),
+                    .node_id = [tree[@"id"] isKindOfClass:NSString.class] ? cpp_string(tree[@"id"])
+                                                                         : std::string{},
+                    .property = "sceneVersion",
+                    .message = message,
+                });
+            }
+            set_error(error, message);
+            return false;
+        }
+        candidate.scene.scene_version = static_cast<std::uint32_t>(version);
+    }
     candidate.scene.width = width;
     candidate.scene.height = height;
     candidate.scene.background = parse_color(style[@"backgroundColor"])
@@ -1557,6 +1781,14 @@ bool materialize_rendered_tree(
         if (failure_diagnostics != nullptr) {
             *failure_diagnostics = std::move(candidate.diagnostics);
         }
+        return false;
+    }
+    if (vellum::graphics::find_scene_version_mismatch(candidate.scene)) {
+        auto loss = vellum::graphics::scene_loss_diagnostics(candidate.scene);
+        loss.resize(std::min<std::size_t>(loss.size(), 1U));
+        set_error(error, loss.empty() ? "the tree carries a field its scene version lacks"
+                                      : loss.front().message);
+        if (failure_diagnostics != nullptr) *failure_diagnostics = std::move(loss);
         return false;
     }
     output = std::move(candidate);

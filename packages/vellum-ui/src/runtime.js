@@ -432,19 +432,51 @@ function validateStyle(style, path) {
     return result;
 }
 
-const TOKEN_SLOTS = Object.freeze(['backgroundColor', 'color']);
-const TOKEN_COLOR = /^#(?:[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const TOKEN_COLOR = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const MAXIMUM_TOKENS = 65536;
 
-function internTokenRefs(value, style, state, path) {
+function canonicalTokenColor(value) {
+    if (typeof value !== 'string' || !TOKEN_COLOR.test(value)) return undefined;
+    const digits = value.length <= 5
+        ? [...value.slice(1)].map((digit) => digit + digit).join('') : value.slice(1);
+    return `#${digits.toLowerCase()}`;
+}
+
+// The colour each token slot names, by element type: `[property, colour]`, or
+// undefined when the slot does not exist on that element.
+function tokenSlotColor(slot, type, style, pathProperties) {
+    const stop = /^(backgroundLinearGradient|fill)\.stops\.(0|[1-9][0-9]*)$/.exec(slot);
+    if (type === 'path') {
+        if (slot === 'fill' && typeof pathProperties?.fill === 'string') {
+            return ['fill', pathProperties.fill];
+        }
+        if (slot === 'stroke') return ['stroke', pathProperties?.stroke];
+        if (stop && stop[1] === 'fill' && typeof pathProperties?.fill === 'object') {
+            return [slot, pathProperties.fill.stops?.[Number(stop[2])]?.color];
+        }
+        return undefined;
+    }
+    if (slot === 'color') return ['style.color', style?.color];
+    if (type === 'text-run') return undefined;
+    if (slot === 'backgroundColor') return ['style.backgroundColor', style?.backgroundColor];
+    if (slot === 'boxShadow') return ['style.boxShadow.color', style?.boxShadow?.color];
+    if (stop && stop[1] === 'backgroundLinearGradient') {
+        return [`style.${slot}`,
+            style?.backgroundLinearGradient?.stops?.[Number(stop[2])]?.color];
+    }
+    return undefined;
+}
+
+function internTokenRefs(value, type, style, pathProperties, state, path) {
     if (value === undefined) return undefined;
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
         throw new TypeError(`${path}.tokenRefs must be an object`);
     }
     const result = {};
     for (const slot of Object.keys(value).sort()) {
-        if (!TOKEN_SLOTS.includes(slot)) {
-            throw new TypeError(`${path}.tokenRefs.${slot} is not a token slot`);
+        const target = tokenSlotColor(slot, type, style, pathProperties);
+        if (target === undefined) {
+            throw new TypeError(`${path}.tokenRefs.${slot} is not a token slot of ${type}`);
         }
         const receipt = value[slot];
         if (receipt === null || typeof receipt !== 'object' ||
@@ -454,8 +486,9 @@ function internTokenRefs(value, style, state, path) {
             throw new TypeError(
                 `${path}.tokenRefs.${slot} must hold a path, a layer and a colour value`);
         }
-        if (style?.[slot] !== receipt.value) {
-            throw new Error(`${path}.tokenRefs.${slot} disagrees with style.${slot}`);
+        const [property, color] = target;
+        if (canonicalTokenColor(color) !== canonicalTokenColor(receipt.value)) {
+            throw new Error(`${path}.tokenRefs.${slot} disagrees with ${property}`);
         }
         const known = state.tokens.get(receipt.path);
         if (known === undefined) {
@@ -564,7 +597,7 @@ function materialize(value, runtime, path) {
     let textRunText;
     if (value.type === 'text-run') {
         const unsupported = Object.keys(value.props).filter(
-            (name) => !['style', 'text', 'children', 'key'].includes(name));
+            (name) => !['style', 'text', 'tokenRefs', 'children', 'key'].includes(name));
         if (unsupported.length > 0) {
             throw new TypeError(
                 `${path}.TextRun does not support prop ${unsupported.sort()[0]}`,
@@ -622,7 +655,8 @@ function materialize(value, runtime, path) {
     };
     const style = validateStyle(value.props.style, path);
     if (style !== undefined) node.style = style;
-    const tokenRefs = internTokenRefs(value.props.tokenRefs, style, state, path);
+    const tokenRefs = internTokenRefs(
+        value.props.tokenRefs, value.type, style, pathProperties, state, path);
     if (tokenRefs !== undefined) node.tokenRefs = tokenRefs;
     if (value.type === 'text-run') node.text = textRunText;
     else if (typeof value.props.text === 'string') node.text = value.props.text;

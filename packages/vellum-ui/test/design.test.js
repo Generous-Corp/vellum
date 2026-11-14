@@ -5,7 +5,9 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { createApp, Design, jsx, materializeDesign, mount, View } from '../src/index.js';
+import {
+    createApp, Design, jsx, materializeDesign, mount, Path, Text, TextRun, View,
+} from '../src/index.js';
 import {
     decodeFigmaPluginExport,
     normalizeImport,
@@ -357,4 +359,161 @@ test('the runtime refuses token references that disagree with the node', () => {
         style: { backgroundColor: '#445566' },
         tokenRefs: { backgroundColor: { ...receipt, value: '#445566' } },
     })]), /two different receipts/);
+});
+
+function slotDocument() {
+    const color = (value) => ({ $type: 'color', $value: value });
+    return {
+        tokens: {
+            'c.fill': color('#1e293b'),
+            'c.text': color('#e5e7eb'),
+            'c.run': color('#f472b6'),
+            'c.shadow': color('#00000099'),
+            'c.stopA': color('#6366f1'),
+            'c.stopB': color('#ec4899'),
+            'c.stroke': color('#f59e0b'),
+            'c.short': color('#fff'),
+        },
+        root: {
+            id: 'root', kind: 'view',
+            properties: { layout: { width: 300, height: 200 } },
+            children: [
+                {
+                    id: 'card', kind: 'view', children: [],
+                    properties: {
+                        layout: { width: 80, height: 60 },
+                        paint: {
+                            backgroundColor: '{c.fill}',
+                            boxShadow: { offsetX: 2, offsetY: 3, blurRadius: 6, color: '{c.shadow}' },
+                            backgroundLinearGradient: {
+                                angle: 90,
+                                stops: [
+                                    { position: 0, color: '{c.stopA}' },
+                                    { position: 1, color: '{c.stopB}' },
+                                ],
+                            },
+                        },
+                    },
+                },
+                {
+                    id: 'label', kind: 'text', properties: { text: { color: '{c.text}' } },
+                    children: [{
+                        id: 'label/run', kind: 'text-run', text: 'Hi', children: [],
+                        properties: { text: { color: '{c.run}' } },
+                    }],
+                },
+                {
+                    id: 'zig', kind: 'path', children: [],
+                    properties: {
+                        path: { d: 'M0 0 L20 10 L0 20 Z' },
+                        paint: { fill: '{c.fill}', stroke: '{c.stroke}', strokeWidth: 3 },
+                    },
+                },
+                {
+                    id: 'short', kind: 'view', children: [],
+                    properties: { paint: { backgroundColor: '{c.short}' } },
+                },
+            ],
+        },
+    };
+}
+
+function receiptOf(tree, node, slot) {
+    return tree.tokens[node.tokenRefs[slot]];
+}
+
+test('Design produces a receipt for every token slot', () => {
+    const tree = renderTree(slotDocument());
+    const nodes = flatten(tree);
+    const card = nodes.find((node) => node.id === 'card');
+    assert.deepEqual(Object.keys(card.tokenRefs).sort(), [
+        'backgroundColor', 'backgroundLinearGradient.stops.0',
+        'backgroundLinearGradient.stops.1', 'boxShadow',
+    ]);
+    assert.equal(receiptOf(tree, card, 'boxShadow').path, 'c.shadow');
+    assert.equal(card.style.boxShadow.color, '#00000099');
+    assert.equal(receiptOf(tree, card, 'backgroundLinearGradient.stops.1').path, 'c.stopB');
+    assert.equal(card.style.backgroundLinearGradient.stops[1].color, '#ec4899');
+    const label = nodes.find((node) => node.id === 'label');
+    assert.equal(receiptOf(tree, label, 'color').path, 'c.text');
+    const run = label.children.find((node) => node.type === 'text-run');
+    assert.equal(run.text, 'Hi');
+    assert.equal(receiptOf(tree, run, 'color').path, 'c.run');
+    const zig = nodes.find((node) => node.id === 'zig');
+    assert.equal(zig.type, 'path');
+    assert.equal(zig.d, 'M0 0 L20 10 L0 20 Z');
+    assert.equal(receiptOf(tree, zig, 'stroke').path, 'c.stroke');
+    assert.equal(receiptOf(tree, zig, 'fill').path, 'c.fill');
+    assert.equal(zig.stroke, '#f59e0b');
+    assert.equal(tree.tokens.filter((receipt) => receipt.path === 'c.fill').length, 1);
+});
+
+test('a short hex token colour gets a receipt in its canonical long form', () => {
+    const tree = renderTree(slotDocument());
+    const short = flatten(tree).find((node) => node.id === 'short');
+    assert.equal(short.style.backgroundColor, '#ffffff');
+    assert.deepEqual(receiptOf(tree, short, 'backgroundColor'),
+        { layer: 'primitive', path: 'c.short', value: '#ffffff' });
+    const themed = renderTree(slotDocument(), { tokenLayers: { theme: { 'c.short': '#0008' } } });
+    const dark = flatten(themed).find((node) => node.id === 'short');
+    assert.equal(dark.style.backgroundColor, '#00000088');
+    assert.deepEqual(receiptOf(themed, dark, 'backgroundColor'),
+        { layer: 'theme', path: 'c.short', value: '#00000088' });
+});
+
+test('a theme switch moves the receipt and the colour of every slot', () => {
+    const light = renderTree(slotDocument());
+    const theme = {
+        'c.fill': '#0f172a', 'c.text': '#111827', 'c.run': '#22c55e', 'c.shadow': '#ff000080',
+        'c.stopA': '#f97316', 'c.stopB': '#14b8a6', 'c.stroke': '#3b82f6', 'c.short': '#000',
+    };
+    const dark = renderTree(slotDocument(), { tokenLayers: { theme } });
+    const refs = (tree) => flatten(tree).map((node) => [node.type, node.tokenRefs]);
+    assert.deepEqual(refs(dark), refs(light));
+    assert.deepEqual(dark.tokens.map((receipt) => receipt.path),
+        light.tokens.map((receipt) => receipt.path));
+    for (const [index, receipt] of dark.tokens.entries()) {
+        assert.equal(receipt.layer, 'theme');
+        assert.notEqual(receipt.value, light.tokens[index].value, receipt.path);
+    }
+    const nodes = flatten(dark);
+    const card = nodes.find((node) => node.id === 'card');
+    assert.equal(card.style.boxShadow.color, '#ff000080');
+    assert.equal(card.style.backgroundLinearGradient.stops[0].color, '#f97316');
+    assert.equal(nodes.find((node) => node.type === 'text-run').style.color, '#22c55e');
+    assert.equal(nodes.find((node) => node.id === 'zig').stroke, '#3b82f6');
+});
+
+test('the runtime refuses token slots an element does not have', () => {
+    const receipt = { layer: 'primitive', path: 'a.b', value: '#112233' };
+    const render = (element) => mount(createApp({
+        id: 'token-slots',
+        stateVersion: '1',
+        initialState: {},
+        render: () => jsx(View, { id: 'root', style: { width: 10, height: 10 }, children: [element] }),
+    })).renderJSON();
+    assert.throws(() => render(jsx(View, {
+        id: 'v', style: { backgroundColor: '#112233' }, tokenRefs: { stroke: receipt },
+    })), /not a token slot of view/);
+    assert.throws(() => render(jsx(Path, {
+        id: 'p', d: 'M0 0 L1 1', stroke: '#112233', tokenRefs: { backgroundColor: receipt },
+    })), /not a token slot of path/);
+    assert.throws(() => render(jsx(View, {
+        id: 'g',
+        style: { backgroundLinearGradient: { angle: 0, stops: [
+            { position: 0, color: '#112233' }, { position: 1, color: '#445566' }] } },
+        tokenRefs: { 'backgroundLinearGradient.stops.1': receipt },
+    })), /disagrees with style.backgroundLinearGradient.stops.1/);
+    assert.throws(() => render(jsx(Text, { id: 't', children: [
+        jsx(TextRun, { style: { color: '#445566' }, tokenRefs: { color: receipt }, text: 'x' }),
+    ] })), /disagrees with style.color/);
+    const short = JSON.parse(render(jsx(View, {
+        id: 's', style: { backgroundColor: '#123' },
+        tokenRefs: { backgroundColor: { ...receipt, value: '#112233' } },
+    }))).tree;
+    assert.equal(short.tokens[0].value, '#112233');
+    const stroke = JSON.parse(render(jsx(Path, {
+        id: 'p', d: 'M0 0 L1 1', stroke: '#112233', tokenRefs: { stroke: receipt },
+    }))).tree;
+    assert.deepEqual(stroke.children[0].tokenRefs, { stroke: 0 });
 });
