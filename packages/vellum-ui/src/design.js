@@ -1,4 +1,4 @@
-import { Button, Canvas, Image, Stack, Text, View, jsx } from './runtime.js';
+import { Button, Canvas, Image, Path, Stack, Text, View, jsx } from './runtime.js';
 
 const MAXIMUM_NODES = 100_000;
 const MAXIMUM_DEPTH = 256;
@@ -69,6 +69,16 @@ function retainedStyle(document, node, viewport, root) {
     if (typeof typography.fontSize === 'number' && Number.isFinite(typography.fontSize)) {
         style.fontSize = typography.fontSize;
     }
+    const svg = properties.svg;
+    if (svg && typeof svg === 'object') {
+        if (typeof svg.opacity === 'string') {
+            const opacity = Number(svg.opacity);
+            if (Number.isFinite(opacity)) style.opacity = opacity;
+        }
+        if (typeof svg.transform === 'string') style.transform = svg.transform;
+        if (typeof svg.clipPath === 'string') style.clipPath = svg.clipPath;
+        if (typeof svg.maskMode === 'string') style.maskMode = svg.maskMode;
+    }
     if (root) {
         style.width = viewport.width;
         style.height = viewport.height;
@@ -82,6 +92,7 @@ function componentFor(node) {
     if (node.kind === 'text') return Text;
     if (node.kind === 'image') return Image;
     if (node.kind === 'canvas') return Canvas;
+    if (node.kind === 'path') return Path;
     if (node.kind === 'view') {
         const display = node.properties?.layout?.display;
         return display === 'flex' || display === 'grid' ? Stack : View;
@@ -107,6 +118,27 @@ function materializeNode(node, context, depth, root = false) {
         accessibilityLabel: typeof node.name === 'string' ? node.name : undefined,
         children: node.children.map((child) => materializeNode(child, context, depth + 1)),
     };
+    if (node.kind === 'path' && node.properties?.svg) {
+        const svg = node.properties.svg;
+        properties.d = svg.d;
+        for (const name of ['fill', 'stroke']) {
+            if (typeof svg[name] === 'string') properties[name] = tokenValue(context.document.tokens ?? {}, svg[name]);
+            else if (svg[name] && typeof svg[name] === 'object') {
+                properties[name] = {
+                    ...svg[name],
+                    stops: svg[name].stops.map((stop) => ({
+                        ...stop,
+                        color: tokenValue(context.document.tokens ?? {}, stop.color),
+                    })),
+                };
+            }
+        }
+        if (svg.fillRule) properties.fillRule = svg.fillRule;
+        for (const name of ['strokeWidth', 'strokeLineCap', 'strokeLineJoin',
+            'strokeMiterLimit', 'strokeDasharray', 'strokeDashoffset']) {
+            if (svg[name] !== undefined) properties[name] = svg[name];
+        }
+    }
     if (typeof node.text === 'string') properties.text = node.text;
     const bindings = context.actions[node.id];
     if (bindings !== undefined) {

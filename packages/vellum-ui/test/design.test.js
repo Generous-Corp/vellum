@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createApp, Design, materializeDesign, mount } from '../src/index.js';
 import {
     decodeFigmaPluginExport,
+    lowerSvgAsset,
     normalizeImport,
 } from '../../vellum-design-ir/src/index.js';
 
@@ -42,6 +43,26 @@ function fixture() {
         },
     };
 }
+
+test('materializes SVG source paths with resolved token colors and stable ids', () => {
+    const lowered = lowerSvgAsset('<svg id="icon"><g id="group" opacity="0.5">' +
+        '<path id="stroke" d="M0 0L10 10" fill="{accent}" stroke="#ff0000"/>' +
+        '</g></svg>');
+    const document = normalizeImport({
+        source: { key: 'icon', adapter: 'svg', adapterVersion: '1',
+            formatVersion: '1', revision: 'a' },
+        root: lowered.root,
+        diagnostics: lowered.diagnostics,
+        tokens: { accent: { $type: 'color', $value: '#00ff00' } },
+    });
+    const app = createApp({ id: 'svg-design', stateVersion: '1', initialState: {},
+        render: () => materializeDesign(document) });
+    const tree = JSON.parse(mount(app).renderJSON()).tree;
+    assert.equal(tree.children[0].style.opacity, 0.5);
+    assert.equal(tree.children[0].children[0].type, 'path');
+    assert.equal(tree.children[0].children[0].fill, '#00ff00');
+    assert.equal(tree.children[0].children[0].id, 'icon/stroke');
+});
 
 test('materializes imported design with stable ids, tokens, viewport, and behavior', () => {
     const app = createApp({
