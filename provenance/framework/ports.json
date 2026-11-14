@@ -79,13 +79,11 @@
       "framework_path": "framework/core/platform/platform/mac/file_dialog_async_mac.mm",
       "change": "added",
       "target": "pulp-platform",
-      "origin": "pulp",
-      "pulp_path": "core/platform/platform/mac/file_dialog_async_mac.mm",
-      "pulp_commits": [
-        "3da8e088da5daae6be8c297936c9b4a1320b8e8d"
-      ],
-      "framework_blob": "9aa8b0ba9880ab49ad0dc09926265f7b99eb9742",
-      "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's asynchronous native dialog sources with three fixes the Pulp originals do not yet carry: a dialog that completes inside the opening call is not cancelled by scope teardown, the unsupported-platform stubs are not compiled on macOS, and a filter of only invalid extensions shows no panel. The bytes are Pulp's fixed files put through the transfer rename."
     },
     {
       "framework_path": "framework/core/platform/platform/mac/objc_unique_class_mac.mm",
@@ -113,16 +111,11 @@
       "framework_path": "framework/core/platform/src/dialog_internal.hpp",
       "change": "added",
       "target": null,
-      "origin": "pulp",
-      "pulp_path": "core/platform/src/dialog_internal.hpp",
-      "pulp_commits": [
-        "3da8e088da5daae6be8c297936c9b4a1320b8e8d",
-        "ce460ea966064f4496c3a35be28f23ac7845c94c",
-        "794bc186b7d61ea3279f7aeb08c7d6c7a593a3fd",
-        "af234410d6a96fc4736b1005cb9db182d69cbcde"
-      ],
-      "framework_blob": "ee52e3fa8a98a81b64967d64be16307a3d5674d0",
-      "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's asynchronous native dialog sources with three fixes the Pulp originals do not yet carry: a dialog that completes inside the opening call is not cancelled by scope teardown, the unsupported-platform stubs are not compiled on macOS, and a filter of only invalid extensions shows no panel. The bytes are Pulp's fixed files put through the transfer rename."
     },
     {
       "framework_path": "framework/core/platform/src/dialog_session.cpp",
@@ -177,16 +170,11 @@
       "framework_path": "framework/core/platform/src/platform_dialogs_stub.cpp",
       "change": "added",
       "target": "pulp-platform",
-      "origin": "pulp",
-      "pulp_path": "core/platform/src/platform_dialogs_stub.cpp",
-      "pulp_commits": [
-        "3da8e088da5daae6be8c297936c9b4a1320b8e8d",
-        "ce460ea966064f4496c3a35be28f23ac7845c94c",
-        "794bc186b7d61ea3279f7aeb08c7d6c7a593a3fd",
-        "af234410d6a96fc4736b1005cb9db182d69cbcde"
-      ],
-      "framework_blob": "21a510e3ef5a81bd4ca87ec52a14d65e20243391",
-      "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's asynchronous native dialog sources with three fixes the Pulp originals do not yet carry: a dialog that completes inside the opening call is not cancelled by scope teardown, the unsupported-platform stubs are not compiled on macOS, and a filter of only invalid extensions shows no panel. The bytes are Pulp's fixed files put through the transfer rename."
     },
     {
       "framework_path": "framework/core/platform/src/popup_menu_async.cpp",
