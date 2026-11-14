@@ -344,18 +344,20 @@ void test_importer_adapter_quarantine() {
 
 struct GlyphMetrics {
     std::uint64_t atlas_area = 0; // the largest generated glyph texture, in texels
-    float text_height = 0.0f;     // the tallest text geometry, in target pixels
+    float text_height = 0.0f;     // the tallest glyph draw, in target pixels
 };
 
 GlyphMetrics glyph_metrics(const HeadlessRecorder& headless) {
     GlyphMetrics metrics;
+    // Glyphs arrive as texture draws of a generated texture (an empty asset
+    // path): its size is the atlas, the draw's bounding box the glyph quads.
     for (const auto& c : headless.commands()) {
         if (c.kind == DrawCommand::Kind::texture && c.texture_path.empty() && c.texture_bytes &&
-            !c.texture_bytes->empty())
+            !c.texture_bytes->empty()) {
             metrics.atlas_area = std::max<std::uint64_t>(
                 metrics.atlas_area, std::uint64_t{c.texture_width} * c.texture_height);
-        if (c.kind == DrawCommand::Kind::text)
             metrics.text_height = std::max(metrics.text_height, c.height);
+        }
     }
     return metrics;
 }
