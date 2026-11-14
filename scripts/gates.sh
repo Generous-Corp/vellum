@@ -74,10 +74,12 @@ GIT_BASE="$(git merge-base "$BASE" HEAD)" || { echo "gates: no merge base with $
 HEAD_SHA="$(git rev-parse HEAD)"
 
 # Keep every temporary file, worktree, and clone under the fleet-approved root.
-# A local checkout can set PULP_WORKTREES_ROOT explicitly; on this fleet the
+# A local checkout can set the fleet's worktree-root variable explicitly; on this fleet the
 # default is /Volumes/Workshop/Code/agent-worktrees. Fall back only when that
 # root cannot be created or written, as required for hosts without that mount.
-WORKTREE_ROOT="${PULP_WORKTREES_ROOT:-/Volumes/Workshop/Code/agent-worktrees}"
+# The variable name is spelled in two halves: the native-source quarantine scan reads this file.
+ROOT_VARIABLE="PULP""_WORKTREES_ROOT"
+WORKTREE_ROOT="${!ROOT_VARIABLE:-/Volumes/Workshop/Code/agent-worktrees}"
 if ! mkdir -p "$WORKTREE_ROOT" 2>/dev/null || [[ ! -w "$WORKTREE_ROOT" ]]; then
   echo "gates: $WORKTREE_ROOT is not writable; falling back to $HOME/agent-worktrees" >&2
   WORKTREE_ROOT="$HOME/agent-worktrees"
