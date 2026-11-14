@@ -58,7 +58,12 @@ inline constexpr const char* kDocuments[] = {
     "rmlui/Tests/Data/VisualTests/inline_formatting_02.rml",
     "fixtures/translucent.rml",
     "fixtures/geometry.rml",
+    "fixtures/atlas_filter.rml",
 };
+
+inline bool atlas_filter_document(std::string_view document) {
+    return document == "fixtures/atlas_filter.rml";
+}
 
 // The documents whose output depends on translucent blending.
 inline bool translucent(std::string_view document) {

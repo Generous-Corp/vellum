@@ -51,7 +51,8 @@ bool load_fonts(DirectoryAssets& assets, std::vector<std::string>& storage) {
 }
 
 bool render(id<MTLDevice> device, id<MTLCommandQueue> queue, MetalRenderInterface& renderer,
-            NativeContext& native, std::vector<std::uint8_t>& pixels) {
+            NativeContext& native, float scale, bool switch_to_nearest,
+            std::vector<std::uint8_t>& pixels) {
     MTLTextureDescriptor* descriptor =
         [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
                                                            width:kWidth
@@ -63,12 +64,14 @@ bool render(id<MTLDevice> device, id<MTLCommandQueue> queue, MetalRenderInterfac
     if (!target)
         return false;
     for (int pass = 0; pass < 2; ++pass) { // a second pass, after layout settles
+        if (switch_to_nearest && pass == 1)
+            renderer.set_atlas_filter(MetalRenderInterface::AtlasFilter::nearest);
         id<MTLCommandBuffer> commands = [queue commandBuffer];
         MetalFrameTarget frame;
         frame.command_buffer = commands;
         frame.target = target;
         frame.viewport = {0.0, 0.0, double(kWidth), double(kHeight), 0.0, 1.0};
-        frame.scale = 1.0f;
+        frame.scale = scale;
         renderer.begin_frame(frame);
         native.update();
         native.render();
@@ -116,6 +119,10 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "the Metal renderer could not build its pipelines\n");
             return 1;
         }
+        if (renderer.atlas_filter() != MetalRenderInterface::AtlasFilter::linear) {
+            std::fprintf(stderr, "Metal renderer default atlas filter changed\n");
+            return 1;
+        }
         DirectoryAssets assets(argv[1], argv[2]);
         const std::filesystem::path references(argv[3]);
         // Holds the shared RmlUi runtime, and with it the font faces, open
@@ -137,7 +144,10 @@ int main(int argc, char** argv) {
         bool control_tripped = false;
         for (const char* document : kDocuments) {
             NativeContext native(assets, renderer);
-            if (native.open(kWidth, kHeight) != Status::ok) {
+            const auto scale = atlas_filter_document(document) ? 2.0f : 1.0f;
+            if (native.set_density_ratio(scale) != Status::ok ||
+                native.open(static_cast<std::uint32_t>(kWidth / scale),
+                            static_cast<std::uint32_t>(kHeight / scale)) != Status::ok) {
                 std::fprintf(stderr, "open failed\n");
                 return 1;
             }
@@ -148,7 +158,8 @@ int main(int argc, char** argv) {
             const auto unsupported_before = renderer.unsupported_calls();
             std::vector<std::uint8_t> metal;
             const auto frame_start = std::chrono::steady_clock::now();
-            const bool rendered = render(device, queue, renderer, native, metal);
+            const bool rendered = render(device, queue, renderer, native, scale,
+                                         atlas_filter_document(document), metal);
             if (first_frame_ms < 0.0)
                 first_frame_ms = std::chrono::duration<double, std::milli>(
                                      std::chrono::steady_clock::now() - frame_start)
