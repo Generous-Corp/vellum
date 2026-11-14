@@ -98,6 +98,7 @@ bool same_color(const Color& a, const Color& b) noexcept {
 }
 
 bool same_gradients(const std::vector<LinearGradient>& a, const std::vector<LinearGradient>& b) {
+    if (a.size() != b.size()) return false;
     return std::equal(a.begin(), a.end(), b.begin(), b.end(),
         [](const LinearGradient& left, const LinearGradient& right) {
             return left.kind == right.kind && left.spread == right.spread &&
@@ -254,7 +255,14 @@ std::optional<Rect> mesh_paint_bounds(const TriangleMesh& mesh, const Rect& abso
 std::optional<Rect> path_paint_bounds(const SceneNode& node, const Rect& absolute,
                                       const Rect& frame) {
     if (!node.path || !path_is_valid(*node.path)) return frame;
-    const auto box = path_paint_box(*node.path);
+    std::optional<Rect> box;
+    if (node.stroke_gradient) {
+        auto merged = std::make_shared<PathGeometry>(*node.path);
+        merged->stroke.gradient = node.stroke_gradient;
+        box = path_paint_box(*merged);
+    } else {
+        box = path_paint_box(*node.path);
+    }
     if (!box) return std::nullopt;
     const Rect moved{absolute.x + box->x, absolute.y + box->y, box->width, box->height};
     return finite_rect(moved) ? moved : frame;
@@ -319,6 +327,7 @@ SceneNode paint_fields(const SceneNode& node) {
     copy.transform = node.transform;
     copy.opacity = node.opacity;
     copy.corner_radii = node.corner_radii;
+    copy.stroke_gradient = node.stroke_gradient;
     copy.path = node.path;
     copy.image = node.image;
     copy.clip = node.clip;
@@ -915,7 +924,14 @@ std::optional<Rect> transformed_paint_bounds(const SceneNode& node, const Rect& 
     }
     case SceneNode::Kind::path: {
         if (!node.path || !path_is_valid(*node.path)) return frame;
-        const auto box = path_paint_box(*node.path);
+        std::optional<Rect> box;
+        if (node.stroke_gradient) {
+            auto merged = std::make_shared<PathGeometry>(*node.path);
+            merged->stroke.gradient = node.stroke_gradient;
+            box = path_paint_box(*merged);
+        } else {
+            box = path_paint_box(*node.path);
+        }
         if (!box) return std::nullopt;
         const Rect local{absolute_bounds.x + box->x, absolute_bounds.y + box->y, box->width,
                          box->height};
@@ -958,6 +974,9 @@ bool paint_differs(const SceneNode& previous, const SceneNode& next) {
     case SceneNode::Kind::path:
         return !same_color(previous.fill, next.fill) ||
                !same_gradients(previous.fill_gradients, next.fill_gradients) ||
+               previous.stroke_gradient.has_value() != next.stroke_gradient.has_value() ||
+               (previous.stroke_gradient &&
+                !same_gradients({*previous.stroke_gradient}, {*next.stroke_gradient})) ||
                !same_path(previous.path, next.path);
     case SceneNode::Kind::image:
         return !same_color(previous.fill, next.fill) ||

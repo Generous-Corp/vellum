@@ -247,9 +247,9 @@ void clip_validity() {
 void versioning() {
     static_assert(kSceneVersion == 8U);
     static_assert(scene_version_is_supported(5U));
-    static_assert(kDamageModelSceneVersion == 5U);
-    static_assert(partial_redraw_supported(5U));
-    static_assert(!partial_redraw_supported(6U));
+    static_assert(kDamageModelSceneVersion == 8U);
+    static_assert(partial_redraw_supported(8U));
+    static_assert(!partial_redraw_supported(9U));
 
     const auto variants = std::vector<std::pair<std::string, SceneNode>>{
         {"clip",
@@ -319,6 +319,40 @@ void versioning() {
     plain.scene_version = 4U;
     expect(scene_fields_match_version(plain) && make_paint_commands(plain).size() == 1U,
            "a version 4 scene without grouping fields still draws");
+
+    LinearGradient gradient;
+    gradient.stops = {{.position = 0.0F, .color = Color::hex(0xFF0000)},
+                      {.position = 1.0F, .color = Color::hex(0x0000FF)}};
+    auto gradient_fill = box("gradient-fill", {0.0F, 0.0F, 10.0F, 10.0F});
+    gradient_fill.fill_gradients = {gradient};
+    auto fill_scene = scene_with({gradient_fill});
+    for (std::uint32_t version = 1U; version < 8U; ++version) {
+        fill_scene.scene_version = version;
+        const auto loss = scene_loss_diagnostics(fill_scene);
+        expect(!scene_fields_match_version(fill_scene) && !accept_scene(fill_scene).accepted &&
+                   loss.size() == 1U && loss[0].code == kSceneVersionMismatchCode,
+               "a version " + std::to_string(version) +
+                   " scene with a present gradient is refused");
+    }
+    fill_scene.scene_version = 8U;
+    expect(scene_fields_match_version(fill_scene) && accept_scene(fill_scene).accepted,
+           "a version 8 scene with a present gradient is accepted");
+
+    auto stroke_node = box("gradient-stroke", {0.0F, 0.0F, 10.0F, 10.0F});
+    stroke_node.kind = SceneNode::Kind::path;
+    auto stroke_path = std::make_shared<PathGeometry>(*triangle());
+    stroke_path->stroke.width = 2.0F;
+    stroke_path->stroke.gradient = gradient;
+    stroke_node.path = stroke_path;
+    auto stroke_scene = scene_with({stroke_node});
+    stroke_scene.scene_version = 7U;
+    expect(!scene_fields_match_version(stroke_scene) &&
+               scene_loss_diagnostics(stroke_scene)[0].code == kSceneVersionMismatchCode &&
+               !accept_scene(stroke_scene).accepted,
+           "a version 7 scene with a stroke gradient is refused");
+    stroke_scene.scene_version = 8U;
+    expect(scene_fields_match_version(stroke_scene) && accept_scene(stroke_scene).accepted,
+           "a version 8 scene with a stroke gradient is accepted");
 }
 
 PixelRect damage_bounds(const Scene& before, const Scene& after) {

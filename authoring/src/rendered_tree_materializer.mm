@@ -87,7 +87,7 @@ bool style_key_consumed(std::string_view type, std::string_view key, const Style
     }
     if (key == "padding" || key == "direction") return use.lays_out_children;
     if (key == "gap") return type == "stack" && use.lays_out_children;
-    if (key == "backgroundLinearGradient" || key == "boxShadow") return true;
+    if (key == "backgroundGradient" || key == "backgroundLinearGradient" || key == "boxShadow") return true;
     if (key == "backgroundColor") return !text;
     if (key == "borderRadius" || contains(kCornerRadiusKeys, key)) {
         return !text || use.paints_text_background;
@@ -224,6 +224,37 @@ bool parse_linear_gradient_value(
             name + ".repeatLength", error)) {
         return false;
     }
+    if (source[@"interpolation"] != nil) {
+        if (![source[@"interpolation"] isKindOfClass:NSString.class]) {
+            set_error(error, name + ".interpolation must be srgb, linear-srgb or oklab");
+            return false;
+        }
+        const std::string interpolation = cpp_string(source[@"interpolation"]);
+        if (interpolation == "srgb") {
+            gradient.interpolation = vellum::graphics::GradientInterpolation::srgb;
+        } else if (interpolation == "linear-srgb" || interpolation == "srgb-linear") {
+            gradient.interpolation = vellum::graphics::GradientInterpolation::linear_srgb;
+        } else if (interpolation == "oklab") {
+            gradient.interpolation = vellum::graphics::GradientInterpolation::oklab;
+        } else {
+            set_error(error, name + ".interpolation must be srgb, linear-srgb or oklab");
+            return false;
+        }
+    }
+    if (source[@"colorSpace"] != nil) {
+        if (![source[@"colorSpace"] isKindOfClass:NSString.class] ||
+            [source[@"colorSpace"] length] == 0U) {
+            set_error(error, name + ".colorSpace must be a non-empty string");
+            return false;
+        }
+        gradient.color_space = cpp_string(source[@"colorSpace"]);
+    }
+    if (source[@"repeating"] != nil &&
+        CFGetTypeID((__bridge CFTypeRef)source[@"repeating"]) != CFBooleanGetTypeID()) {
+        set_error(error, name + ".repeating must be boolean");
+        return false;
+    }
+    gradient.repeating = [source[@"repeating"] boolValue];
     if (![source[@"spread"] isKindOfClass:NSString.class] || source[@"spread"] == nil) {
         gradient.spread = gradient.repeating ? vellum::graphics::GradientSpread::repeat : vellum::graphics::GradientSpread::pad;
     } else {
@@ -243,12 +274,6 @@ bool parse_linear_gradient_value(
         set_error(error, name + ".repeatLength must be non-negative");
         return false;
     }
-    if (source[@"repeating"] != nil &&
-        CFGetTypeID((__bridge CFTypeRef)source[@"repeating"]) != CFBooleanGetTypeID()) {
-        set_error(error, name + ".repeating must be boolean");
-        return false;
-    }
-    gradient.repeating = [source[@"repeating"] boolValue];
     NSArray* stops = array_or_empty(source[@"stops"]);
     if (stops.count < 2U) {
         set_error(error, name + " requires at least two stops");

@@ -504,6 +504,22 @@ void path_diff() {
     check(diff(before, stroke_grown).bounds() == PixelRect{15, 15, 85, 55},
           "a wider stroke damages its larger reach");
 
+    vellum::graphics::LinearGradient gradient;
+    gradient.stops = {{.position = 0.0F, .color = Color::hex(0xFF0000)},
+                      {.position = 1.0F, .color = Color::hex(0x0000FF)}};
+    Scene gradient_stroke = before;
+    auto& gradient_geometry = edit_path(*child(gradient_stroke, "p"));
+    gradient_geometry.stroke.color = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    gradient_geometry.stroke.gradient = gradient;
+    check(paint_bounds(*child(gradient_stroke, "p"))->width == 64.0F,
+          "a gradient stroke remains visible in paint bounds");
+    Scene direct_gradient_stroke = before;
+    auto& direct_geometry = edit_path(*child(direct_gradient_stroke, "p"));
+    direct_geometry.stroke.color = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    child(direct_gradient_stroke, "p")->stroke_gradient = gradient;
+    check(paint_bounds(*child(direct_gradient_stroke, "p"))->width == 64.0F,
+          "a direct node stroke gradient remains visible in paint bounds");
+
     Scene invisible = before;
     edit_path(*child(invisible, "p")).stroke.width = 0.0F;
     Scene invisible_again = invisible;

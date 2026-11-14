@@ -535,18 +535,56 @@ struct SceneNode final {
            gradient.radius_y != 0.0F || gradient.focal_x != 0.5F || gradient.focal_y != 0.5F;
 }
 
+/// The native Skia lowering accepts these authored colour-space names.  An
+/// unknown name must be refused before drawing so it cannot silently fall
+/// back to sRGB.
+[[nodiscard]] inline bool gradient_color_space_is_supported(
+    const LinearGradient& gradient) noexcept {
+    return gradient.color_space.empty() || gradient.color_space == "srgb" ||
+           gradient.color_space == "linear-srgb" || gradient.color_space == "oklab" ||
+           gradient.color_space == "display-p3";
+}
+
+[[nodiscard]] constexpr bool gradient_interpolation_is_supported(
+    GradientInterpolation interpolation) noexcept {
+    return interpolation == GradientInterpolation::srgb ||
+           interpolation == GradientInterpolation::linear_srgb ||
+           interpolation == GradientInterpolation::oklab;
+}
+
+[[nodiscard]] inline const SceneNode* find_unsupported_gradient_color_space(
+    const SceneNode& node) noexcept {
+    const auto unsupported = [](const LinearGradient& gradient) {
+        return !gradient_color_space_is_supported(gradient) ||
+               !gradient_interpolation_is_supported(gradient.interpolation);
+    };
+    if (std::any_of(node.fill_gradients.begin(), node.fill_gradients.end(), unsupported) ||
+        (node.stroke_gradient && unsupported(*node.stroke_gradient)) ||
+        (node.path && node.path->stroke.gradient && unsupported(*node.path->stroke.gradient))) {
+        return &node;
+    }
+    for (const auto& child : node.children) {
+        if (const auto* found = find_unsupported_gradient_color_space(child); found != nullptr) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
 [[nodiscard]] inline bool node_uses_version_8_fields(const SceneNode& node) noexcept {
-    if (std::any_of(node.fill_gradients.begin(), node.fill_gradients.end(), gradient_uses_version_8)) return true;
-    if (node.stroke_gradient && gradient_uses_version_8(*node.stroke_gradient)) return true;
-    if (node.path && node.path->stroke.gradient && gradient_uses_version_8(*node.path->stroke.gradient)) return true;
+    // The retained gradient vocabulary was introduced as one atomic schema
+    // field in version 8.  Presence is significant even when every value is
+    // the default: a version-7 consumer has no gradient slot to read and
+    // must refuse instead of silently dropping the paint.
+    if (!node.fill_gradients.empty() || node.stroke_gradient.has_value() ||
+        (node.path && node.path->stroke.gradient.has_value())) return true;
     for (const auto& child : node.children) if (node_uses_version_8_fields(child)) return true;
     return false;
 }
 
 [[nodiscard]] inline const SceneNode* find_version_8_fields(const SceneNode& node) noexcept {
-    if (std::any_of(node.fill_gradients.begin(), node.fill_gradients.end(), gradient_uses_version_8) ||
-        (node.stroke_gradient && gradient_uses_version_8(*node.stroke_gradient)) ||
-        (node.path && node.path->stroke.gradient && gradient_uses_version_8(*node.path->stroke.gradient))) return &node;
+    if (!node.fill_gradients.empty() || node.stroke_gradient.has_value() ||
+        (node.path && node.path->stroke.gradient.has_value())) return &node;
     for (const auto& child : node.children) if (const auto* found = find_version_8_fields(child)) return found;
     return nullptr;
 }

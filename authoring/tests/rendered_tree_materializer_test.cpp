@@ -333,6 +333,8 @@ constexpr std::string_view kStyledTree = R"JSON({
           "borderRadius": 12,
           "backgroundLinearGradient": {
             "angle": 135,
+            "interpolation": "linear-srgb",
+            "colorSpace": "display-p3",
             "repeating": true,
             "repeatLength": 40,
             "stops": [
@@ -851,6 +853,9 @@ int main() {
         card->fill_gradients.size() != 1U ||
         !card->fill_gradients[0].repeating ||
         card->fill_gradients[0].repeat_length != 40.0F ||
+        card->fill_gradients[0].interpolation !=
+            vellum::graphics::GradientInterpolation::linear_srgb ||
+        card->fill_gradients[0].color_space != "display-p3" ||
         card->box_shadows.size() != 1U ||
         card->box_shadows[0].spread_radius != 3.0F || attributed == nullptr ||
         attributed->text_runs.size() != 2U ||

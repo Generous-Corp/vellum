@@ -65,6 +65,10 @@ inline constexpr std::string_view kImageAssetMissingCode = "VELLUM_IMAGE_ASSET_M
 /// its scene's `scene_version`; always an error. The consumer refuses the
 /// whole scene rather than drawing it with the node missing.
 inline constexpr std::string_view kSceneVersionMismatchCode = "VELLUM_SCENE_VERSION_MISMATCH";
+/// A gradient field cannot be represented by the native backend without a
+/// fidelity loss, so the scene is refused rather than approximated.
+inline constexpr std::string_view kGradientNotExpressibleCode =
+    "VELLUM_GRADIENT_NOT_EXPRESSIBLE";
 
 [[nodiscard]] constexpr std::string_view to_string(
     LoweringDiagnostic::Severity severity) noexcept {

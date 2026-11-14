@@ -241,8 +241,7 @@ sk_sp<SkShader> linear_gradient_shader(
     }
     const float direction_x = vector_x / length;
     const float direction_y = vector_y / length;
-    const float cycle = gradient.repeating && gradient.repeat_length > 0.0F
-        ? gradient.repeat_length : length;
+    const float cycle = gradient.repeat_length > 0.0F ? gradient.repeat_length : length;
     const SkPoint points[]{
         {gradient.start_x, gradient.start_y},
         {gradient.start_x + direction_x * cycle,
@@ -253,6 +252,15 @@ sk_sp<SkShader> linear_gradient_shader(
                    gradient.kind == GradientKind::linear ? points[0].fY : gradient.center_y,
                    gradient.kind == GradientKind::linear ? points[1].fX : gradient.radius_x,
                    gradient.kind == GradientKind::linear ? points[1].fY : gradient.radius_y},
+        .kind = gradient.kind,
+        .spread = gradient.spread,
+        .interpolation = gradient.interpolation,
+        .color_space = gradient.color_space,
+        .repeat_length = gradient.repeat_length,
+        .geometry = {gradient.center_x, gradient.center_y, gradient.radius_x,
+                     gradient.radius_y, gradient.focal_x, gradient.focal_y},
+        .angle_degrees = gradient.angle_degrees,
+        .end_angle_degrees = gradient.end_angle_degrees,
         .repeating = gradient.repeating || gradient.spread != GradientSpread::pad,
     };
     key.colors.reserve(gradient.stops.size());
@@ -273,21 +281,71 @@ sk_sp<SkShader> linear_gradient_shader(
         for (const auto& color : key.colors) {
             colors.push_back({color.red, color.green, color.blue, color.alpha});
         }
-        const auto tile_mode = gradient.spread == GradientSpread::repeat || gradient.repeating
+        const auto tile_mode = gradient.spread == GradientSpread::repeat
             ? SkTileMode::kRepeat : gradient.spread == GradientSpread::reflect
-            ? SkTileMode::kMirror : SkTileMode::kClamp;
+            ? SkTileMode::kMirror : gradient.repeating ? SkTileMode::kRepeat : SkTileMode::kClamp;
+        SkGradient::Interpolation interpolation;
+        interpolation.fInPremul = SkGradient::Interpolation::InPremul::kYes;
+        interpolation.fColorSpace = SkGradient::Interpolation::ColorSpace::kDestination;
+        switch (gradient.interpolation) {
+        case GradientInterpolation::srgb:
+            interpolation.fColorSpace = SkGradient::Interpolation::ColorSpace::kSRGB;
+            break;
+        case GradientInterpolation::linear_srgb:
+            interpolation.fColorSpace = SkGradient::Interpolation::ColorSpace::kSRGBLinear;
+            break;
+        case GradientInterpolation::oklab:
+            interpolation.fColorSpace = SkGradient::Interpolation::ColorSpace::kOKLab;
+            break;
+        }
+        if (gradient.color_space == "linear-srgb") {
+            interpolation.fColorSpace = SkGradient::Interpolation::ColorSpace::kSRGBLinear;
+        } else if (gradient.color_space == "oklab") {
+            interpolation.fColorSpace = SkGradient::Interpolation::ColorSpace::kOKLab;
+        } else if (gradient.color_space != "srgb" &&
+                   gradient.color_space != "display-p3" && !gradient.color_space.empty()) {
+            set_error(error, "Vellum gradient colour space is unsupported: " + gradient.color_space);
+            return nullptr;
+        }
+        sk_sp<SkColorSpace> source_color_space = SkColorSpace::MakeSRGB();
+        if (gradient.color_space == "linear-srgb") {
+            source_color_space = SkColorSpace::MakeSRGBLinear();
+        } else if (gradient.color_space == "display-p3") {
+            source_color_space = SkColorSpace::MakeRGB(
+                SkNamedTransferFn::kSRGB, SkNamedGamut::kDisplayP3);
+        }
+        if (!source_color_space) {
+            set_error(error, "Vellum could not create gradient colour space: " +
+                              gradient.color_space);
+            return nullptr;
+        }
         const SkGradient shader_gradient{
-            SkGradient::Colors(
-                colors, key.positions,
-                tile_mode),
-            {},
+            SkGradient::Colors(colors, key.positions, tile_mode, std::move(source_color_space)),
+            interpolation,
         };
-        if (gradient.kind == GradientKind::radial || gradient.kind == GradientKind::two_circle_radial) {
-            const auto radius = std::max(gradient.radius_x, gradient.radius_y);
-            shader = SkShaders::RadialGradient({gradient.center_x, gradient.center_y}, radius,
-                                                shader_gradient);
+        if (gradient.kind == GradientKind::radial) {
+            const float rx = std::max(gradient.radius_x, 1.0e-6F);
+            const float ry = std::max(gradient.radius_y, 1.0e-6F);
+            const SkMatrix local = SkMatrix::MakeAll(
+                1.0F / rx, 0.0F, -gradient.center_x / rx,
+                0.0F, 1.0F / ry, -gradient.center_y / ry,
+                0.0F, 0.0F, 1.0F);
+            shader = SkShaders::RadialGradient({0.0F, 0.0F}, 1.0F,
+                                                shader_gradient, &local);
+        } else if (gradient.kind == GradientKind::two_circle_radial) {
+            // In the two-circle form, radiusX belongs to the focal/start
+            // circle and radiusY to the centre/end circle, matching the
+            // (x0, y0, r0, x1, y1, r1) Canvas radial-gradient order.
+            const float inner_radius = std::max(gradient.radius_x, 1.0e-6F);
+            const float outer_radius = std::max(gradient.radius_y, 1.0e-6F);
+            shader = SkShaders::TwoPointConicalGradient(
+                {gradient.focal_x, gradient.focal_y}, inner_radius,
+                {gradient.center_x, gradient.center_y}, outer_radius,
+                shader_gradient);
         } else if (gradient.kind == GradientKind::conic) {
             shader = SkShaders::SweepGradient({gradient.center_x, gradient.center_y},
+                                              gradient.angle_degrees,
+                                              gradient.end_angle_degrees,
                                               shader_gradient);
         } else {
             shader = SkShaders::LinearGradient(points, shader_gradient);
@@ -820,7 +878,8 @@ bool draw_path(SkCanvas& canvas, const PaintCommand& command, float opacity,
     }
 
     const auto& stroke = path.stroke;
-    if (stroke.width > 0.0F && stroke.color.alpha > 0.0F) {
+    const bool has_gradient_stroke = stroke.width > 0.0F && stroke.gradient.has_value();
+    if (stroke.width > 0.0F && stroke.color.alpha > 0.0F && !has_gradient_stroke) {
         SkPaint paint;
         paint.setAntiAlias(path.antialias);
         paint.setColor4f(sk_color(stroke.color, opacity));
@@ -846,7 +905,7 @@ bool draw_path(SkCanvas& canvas, const PaintCommand& command, float opacity,
         }
         canvas.drawPath(outline, paint);
     }
-    if (stroke.width > 0.0F && stroke.gradient && path_gradient_box(command)) {
+    if (has_gradient_stroke && path_gradient_box(command)) {
         SkPaint paint;
         paint.setAntiAlias(path.antialias);
         auto shader = linear_gradient_shader(
@@ -859,6 +918,20 @@ bool draw_path(SkCanvas& canvas, const PaintCommand& command, float opacity,
         paint.setStrokeJoin(sk_join(stroke.join));
         paint.setStrokeCap(sk_cap(stroke.cap));
         paint.setStrokeMiter(stroke.miter_limit);
+        if (!stroke.dash_array.empty()) {
+            std::vector<SkScalar> intervals(stroke.dash_array.begin(), stroke.dash_array.end());
+            if (intervals.size() % 2U != 0U) {
+                intervals.insert(intervals.end(), stroke.dash_array.begin(),
+                                 stroke.dash_array.end());
+            }
+            auto dashes = SkDashPathEffect::Make(intervals, stroke.dash_offset);
+            if (!dashes) {
+                set_error(error,
+                          "Skia could not build the dash pattern of path " + command.node_id);
+                return false;
+            }
+            paint.setPathEffect(std::move(dashes));
+        }
         canvas.drawPath(outline, paint);
     }
     return true;
@@ -921,7 +994,8 @@ bool opacity_folds_into_paint(const PaintCommand& command) {
     if (command.kind == PaintCommand::Kind::path) {
         if (!command.path) return true;
         const auto& stroke = command.path->stroke;
-        const bool stroked = stroke.width > 0.0F && stroke.color.alpha > 0.0F;
+        const bool stroked = stroke.width > 0.0F &&
+            (stroke.color.alpha > 0.0F || stroke.gradient.has_value());
         const std::size_t operations = (command.fill.alpha > 0.0F ? 1U : 0U) +
                                        command.fill_gradients.size() + (stroked ? 1U : 0U);
         return operations <= 1U;
@@ -953,7 +1027,8 @@ bool path_paints(const PaintCommand& command) {
         return false;
     }
     const auto& path = *command.path;
-    const bool stroked = path.stroke.width > 0.0F && path.stroke.color.alpha > 0.0F;
+    const bool stroked = path.stroke.width > 0.0F &&
+        (path.stroke.color.alpha > 0.0F || path.stroke.gradient.has_value());
     return !path.verbs.empty() &&
            (command.fill.alpha > 0.0F || !command.fill_gradients.empty() || stroked);
 }
@@ -963,7 +1038,9 @@ bool interpolates_colour(const PaintCommand& command) {
     if (command.kind == PaintCommand::Kind::mesh) {
         return command.mesh && !command.mesh->indices.empty();
     }
-    return !command.fill_gradients.empty();
+    if (!command.fill_gradients.empty()) return true;
+    return command.kind == PaintCommand::Kind::path && command.path &&
+        command.path->stroke.width > 0.0F && command.path->stroke.gradient.has_value();
 }
 
 // The opacity a command's own paint carries: its opacity, unless it is drawn

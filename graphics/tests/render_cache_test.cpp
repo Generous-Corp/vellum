@@ -385,6 +385,24 @@ void gradient_keys() {
     differs("a colour", [](GradientKey& key) { key.colors[0].green = 0.1F; });
     differs("a position", [](GradientKey& key) { key.positions[1] = 0.9F; });
     differs("the tile mode", [](GradientKey& key) { key.repeating = true; });
+    differs("the gradient kind", [](GradientKey& key) { key.kind = GradientKind::radial; });
+    differs("the spread", [](GradientKey& key) { key.spread = GradientSpread::reflect; });
+    differs("the interpolation", [](GradientKey& key) {
+        key.interpolation = GradientInterpolation::linear_srgb;
+    });
+    differs("the colour space", [](GradientKey& key) { key.color_space = "linear-srgb"; });
+    differs("the repeat length", [](GradientKey& key) { key.repeat_length = 12.0F; });
+    differs("the centre", [](GradientKey& key) { key.geometry[0] = 0.25F; });
+    differs("the radii", [](GradientKey& key) {
+        key.geometry[2] = 0.25F;
+        key.geometry[3] = 0.75F;
+    });
+    differs("the focal point", [](GradientKey& key) {
+        key.geometry[4] = 0.25F;
+        key.geometry[5] = 0.75F;
+    });
+    differs("the conic start angle", [](GradientKey& key) { key.angle_degrees = 30.0F; });
+    differs("the conic end angle", [](GradientKey& key) { key.end_angle_degrees = 270.0F; });
     differs("a stop", [](GradientKey& key) {
         key.colors.push_back(Color::hex(0x00FF00));
         key.positions.push_back(1.0F);

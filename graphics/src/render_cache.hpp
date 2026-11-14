@@ -308,12 +308,25 @@ struct ParagraphKeyHash final {
 /// colours after any folded opacity, the positions and the tile mode.
 struct GradientKey final {
     std::array<float, 4> points{};
+    GradientKind kind = GradientKind::linear;
+    GradientSpread spread = GradientSpread::pad;
+    GradientInterpolation interpolation = GradientInterpolation::srgb;
+    std::string color_space = "srgb";
+    float repeat_length = 0.0F;
+    std::array<float, 6> geometry{}; // center, radii, focal point
+    float angle_degrees = 0.0F;
+    float end_angle_degrees = 360.0F;
     std::vector<Color> colors;
     std::vector<float> positions;
     bool repeating = false;
 
     friend bool operator==(const GradientKey& a, const GradientKey& b) noexcept {
-        if (a.repeating != b.repeating || a.colors.size() != b.colors.size() ||
+        if (a.kind != b.kind || a.spread != b.spread || a.interpolation != b.interpolation ||
+            a.color_space != b.color_space || !same_bits(a.repeat_length, b.repeat_length) ||
+            !same_bits(a.angle_degrees, b.angle_degrees) ||
+            !same_bits(a.end_angle_degrees, b.end_angle_degrees) ||
+            std::memcmp(a.geometry.data(), b.geometry.data(), sizeof(a.geometry)) != 0 ||
+            a.repeating != b.repeating || a.colors.size() != b.colors.size() ||
             a.positions.size() != b.positions.size() ||
             std::memcmp(a.points.data(), b.points.data(), sizeof(a.points)) != 0) {
             return false;
@@ -332,6 +345,14 @@ struct GradientKeyHash final {
     std::size_t operator()(const GradientKey& key) const noexcept {
         KeyHasher hasher;
         hasher.add_value(key.points);
+        hasher.add_value(key.kind);
+        hasher.add_value(key.spread);
+        hasher.add_value(key.interpolation);
+        hasher.add(key.color_space);
+        hasher.add_value(key.repeat_length);
+        hasher.add_value(key.geometry);
+        hasher.add_value(key.angle_degrees);
+        hasher.add_value(key.end_angle_degrees);
         hasher.add_value(key.repeating);
         hasher.add_value(key.colors.size());
         hasher.add_bytes(key.colors.data(), key.colors.size() * sizeof(Color));
@@ -343,7 +364,7 @@ struct GradientKeyHash final {
 
 /// The memory a cached gradient key owns: the key and its stop arrays.
 [[nodiscard]] inline std::size_t key_bytes(const GradientKey& key) noexcept {
-    return sizeof(GradientKey) + key.colors.size() * sizeof(Color) +
+    return sizeof(GradientKey) + key.color_space.size() + key.colors.size() * sizeof(Color) +
            key.positions.size() * sizeof(float);
 }
 

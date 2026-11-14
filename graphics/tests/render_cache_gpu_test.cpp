@@ -6,8 +6,10 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -169,6 +171,59 @@ Scene empty_scene(std::uint32_t version = kSceneVersion) {
     return scene;
 }
 
+std::array<std::uint8_t, 4> pixel_at(const std::vector<std::uint8_t>& rgba,
+                                     std::uint32_t width, std::uint32_t x,
+                                     std::uint32_t y) {
+    const auto offset = (static_cast<std::size_t>(y) * width + x) * 4U;
+    if (offset + 3U >= rgba.size()) return {};
+    return {rgba[offset], rgba[offset + 1U], rgba[offset + 2U], rgba[offset + 3U]};
+}
+
+void gradient_pixel_oracle() {
+    constexpr std::uint32_t width = kWidth;
+    const auto make_scene = [](GradientKind kind) {
+        Scene scene = empty_scene(kSceneVersion);
+        LinearGradient gradient;
+        gradient.kind = kind;
+        gradient.angle_degrees = 0.0F;
+        gradient.center_x = 0.5F;
+        gradient.center_y = 0.5F;
+        gradient.radius_x = 0.5F;
+        gradient.radius_y = 0.5F;
+        gradient.focal_x = 0.5F;
+        gradient.focal_y = 0.5F;
+        gradient.stops = {{.position = 0.0F, .color = Color::hex(0xFF0000)},
+                          {.position = 1.0F, .color = Color::hex(0x0000FF)}};
+        scene.background = Color::hex(0x000000);
+        scene.root.children.push_back({.id = "oracle", .kind = SceneNode::Kind::rectangle,
+                                       .bounds = {8.0F, 8.0F, 80.0F, 80.0F},
+                                       .fill_gradients = {gradient}});
+        return scene;
+    };
+    for (const auto kind : {GradientKind::linear, GradientKind::radial,
+                            GradientKind::two_circle_radial, GradientKind::conic}) {
+        auto surface = make_surface(false);
+        Scene scene = make_scene(kind);
+        std::string error;
+        expect(surface && surface->render(scene, &error),
+               "gradient pixel oracle renders " + std::to_string(static_cast<int>(kind)), error);
+        if (!surface) continue;
+        const auto rgba = capture(*surface);
+        // These interior zero-distance/start-angle samples have no antialiasing
+        // and are independently expected to equal the first stop.
+        const auto sample = kind == GradientKind::linear
+                                ? pixel_at(rgba, width, 48U, 87U)
+                                : kind == GradientKind::conic
+                                    ? pixel_at(rgba, width, 87U, 48U)
+                                    : pixel_at(rgba, width, 48U, 48U);
+        expect(sample[0] > 235U && sample[1] < 20U && sample[2] < 20U && sample[3] > 240U,
+               "gradient pixel oracle kind " + std::to_string(static_cast<int>(kind)) +
+                   " starts at the red stop",
+               "rgba=" + std::to_string(sample[0]) + "," + std::to_string(sample[1]) + "," +
+                   std::to_string(sample[2]) + "," + std::to_string(sample[3]));
+    }
+}
+
 // Three texts, one gradient, one textured mesh, and a faded group of two
 // rectangles that opens one layer.
 Scene telemetry_scene(const std::shared_ptr<const MeshTexture>& texture, bool all = true) {
@@ -283,6 +338,38 @@ void keys_see_every_input() {
         repeating.root.children[0].fill_gradients[0].repeating = true;
         repeating.root.children[0].fill_gradients[0].repeat_length = 30.0F;
         expect_second_frame_exact("a repeating gradient rebuilds the shader", first, repeating);
+        const auto mutate_gradient = [&](const std::string& name,
+                                         const std::function<void(LinearGradient&)>& mutate) {
+            auto changed = first;
+            mutate(changed.root.children[0].fill_gradients[0]);
+            expect_second_frame_exact("a " + name + " gradient input rebuilds the shader", first,
+                                      changed);
+        };
+        mutate_gradient("kind", [](LinearGradient& gradient) {
+            gradient.kind = GradientKind::radial;
+        });
+        mutate_gradient("spread", [](LinearGradient& gradient) {
+            gradient.spread = GradientSpread::reflect;
+            gradient.repeating = false;
+        });
+        mutate_gradient("centre", [](LinearGradient& gradient) {
+            gradient.center_x = 0.22F;
+            gradient.center_y = 0.71F;
+        });
+        mutate_gradient("radii", [](LinearGradient& gradient) {
+            gradient.radius_x = 0.2F;
+            gradient.radius_y = 0.7F;
+        });
+        mutate_gradient("focal point", [](LinearGradient& gradient) {
+            gradient.focal_x = 0.17F;
+            gradient.focal_y = 0.83F;
+        });
+        mutate_gradient("stop colour", [](LinearGradient& gradient) {
+            gradient.stops[0].color = Color::hex(0x22C55E);
+        });
+        mutate_gradient("stop position", [](LinearGradient& gradient) {
+            gradient.stops[1].position = 0.6F;
+        });
     }
     {
         // A producer may rewrite texels in place behind the scene's const view.
@@ -689,6 +776,7 @@ int main() {
             return 1;
         }
         fixtures_with_and_without_caches();
+        gradient_pixel_oracle();
         keys_see_every_input();
         partial_redraw_with_and_without_caches();
         budgets_are_enforced();

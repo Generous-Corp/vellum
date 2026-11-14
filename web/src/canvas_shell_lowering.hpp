@@ -27,7 +27,9 @@ inline constexpr std::string_view kGradientNotExpressibleCode = "VELLUM_WEB_GRAD
 /// `begin_clip` counts once; and it cannot mask, so it skips every command
 /// from a `begin_mask` to its `end_mask` and counts the mask once, drawing
 /// the masked siblings unmasked rather than drawing the mask as paint.
-/// Gradients and shadows, which the shell also does not draw, are not counted.
+/// Gradients and shadows, which the shell also does not draw, are counted as
+/// fidelity losses through the command that owns them.  The diagnostic pass
+/// below reports each retained gradient before the base-colour fallback.
 [[nodiscard]] inline bool canvas_shell_loses(
     const vellum::graphics::PaintCommand& command) noexcept {
     using Kind = vellum::graphics::PaintCommand::Kind;
@@ -96,6 +98,53 @@ canvas_shell_mask_diagnostics(
     return output;
 }
 
+/// Reports every gradient paint that the Canvas 2D shell cannot retain.  A
+/// path command may carry both fill and stroke gradients, so they are emitted
+/// independently even though the path itself contributes one loss count.
+[[nodiscard]] inline std::vector<vellum::graphics::LoweringDiagnostic>
+canvas_shell_gradient_diagnostics(
+    const std::vector<vellum::graphics::PaintCommand>& commands) {
+    using Kind = vellum::graphics::GradientKind;
+    std::vector<vellum::graphics::LoweringDiagnostic> output;
+    const auto report = [&](const vellum::graphics::PaintCommand& command,
+                            const vellum::graphics::LinearGradient& gradient,
+                            std::string property) {
+        std::string form = "gradient";
+        switch (gradient.kind) {
+        case Kind::linear: form = "linear gradient"; break;
+        case Kind::radial:
+            {
+                const bool explicit_radii = gradient.radius_x > 0.0F || gradient.radius_y > 0.0F;
+                const bool elliptical = explicit_radii
+                    ? gradient.radius_x != gradient.radius_y
+                    : command.bounds.width != command.bounds.height;
+                form = elliptical ? "elliptical radial gradient" : "radial gradient";
+            }
+            break;
+        case Kind::two_circle_radial: form = "two-circle radial gradient"; break;
+        case Kind::conic: form = "conic gradient"; break;
+        }
+        output.push_back({
+            .severity = vellum::graphics::LoweringDiagnostic::Severity::warning,
+            .disposition = vellum::graphics::LoweringDiagnostic::Disposition::lowered,
+            .code = std::string(kGradientNotExpressibleCode),
+            .node_id = command.node_id,
+            .property = std::move(property),
+            .message = "canvas 2D shell cannot express " + form +
+                       "; the base colour was drawn",
+        });
+    };
+    for (const auto& command : commands) {
+        if (!vellum::graphics::draws_content(command.kind)) continue;
+        for (const auto& gradient : command.fill_gradients) report(command, gradient, "gradient");
+        if (command.kind == vellum::graphics::PaintCommand::Kind::path && command.path &&
+            command.path->stroke.gradient) {
+            report(command, *command.path->stroke.gradient, "strokeGradient");
+        }
+    }
+    return output;
+}
+
 /// What the canvas shell draws for a scene and what it reports. The shell
 /// accepts a scene through `accept_scene`, the decision the native renderer
 /// makes, so a scene the native renderer refuses draws nothing here and
@@ -129,16 +178,8 @@ struct CanvasShellLowering final {
     for (auto& diagnostic : canvas_shell_mask_diagnostics(lowering.commands)) {
         lowering.diagnostics.push_back(std::move(diagnostic));
     }
-    for (const auto& command : lowering.commands) {
-        if (command.fill_gradients.empty() || !vellum::graphics::draws_content(command.kind)) continue;
-        lowering.diagnostics.push_back({
-            .severity = vellum::graphics::LoweringDiagnostic::Severity::warning,
-            .disposition = vellum::graphics::LoweringDiagnostic::Disposition::lowered,
-            .code = std::string(kGradientNotExpressibleCode),
-            .node_id = command.node_id,
-            .property = "gradient",
-            .message = "canvas 2D shell cannot express retained gradient paint; the base colour was drawn",
-        });
+    for (auto& diagnostic : canvas_shell_gradient_diagnostics(lowering.commands)) {
+        lowering.diagnostics.push_back(std::move(diagnostic));
     }
     return lowering;
 }

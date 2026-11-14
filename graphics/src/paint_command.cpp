@@ -176,13 +176,23 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
             .transform = transform,
         });
     } else if (node.kind == SceneNode::Kind::path && (!node.path || !node.path->verbs.empty())) {
+        std::shared_ptr<const PathGeometry> path = node.path;
+        if (path && node.stroke_gradient) {
+            // Keep the legacy node-level field wired to the canonical path
+            // stroke.  Copying here preserves the caller's immutable path
+            // object while ensuring render, damage, and cache code see the
+            // same gradient payload.
+            auto merged = std::make_shared<PathGeometry>(*path);
+            merged->stroke.gradient = node.stroke_gradient;
+            path = std::move(merged);
+        }
         output.push_back({
             .kind = PaintCommand::Kind::path,
             .node_id = node.id,
             .bounds = absolute,
             .fill = node.fill,
             .fill_gradients = node.fill_gradients,
-            .path = node.path,
+            .path = std::move(path),
             .transform = transform,
         });
     } else if (node.kind == SceneNode::Kind::image) {
@@ -286,6 +296,9 @@ ResolvedLinearGradient resolve_linear_gradient(
         .radius_y = gradient.radius_y > 0.0F ? gradient.radius_y : bounds.height * 0.5F,
         .focal_x = bounds.x + gradient.focal_x * bounds.width,
         .focal_y = bounds.y + gradient.focal_y * bounds.height,
+        .angle_degrees = gradient.angle_degrees,
+        .end_angle_degrees = gradient.angle_degrees + 360.0F,
+        .color_space = gradient.color_space,
         .stops = gradient.stops,
     };
     for (auto& stop : resolved.stops) {
@@ -491,6 +504,19 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
             .property = "transform",
             .message = "scene version " + version +
                        " cannot carry the transform, opacity, or corner radii at " + node->id,
+        });
+        return output;
+    }
+    if (const auto* node = find_unsupported_gradient_color_space(scene.root);
+        node != nullptr) {
+        output.push_back({
+            .severity = LoweringDiagnostic::Severity::error,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(kGradientNotExpressibleCode),
+            .node_id = node->id,
+            .property = "gradient",
+            .message = "gradient interpolation or colour space at " + node->id +
+                       " is unsupported by the native Skia lowering",
         });
         return output;
     }

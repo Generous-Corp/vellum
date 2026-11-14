@@ -137,7 +137,8 @@ bool same_path(const std::shared_ptr<const PathGeometry>& a,
            same_float(a->stroke.miter_limit, b->stroke.miter_limit) &&
            same_floats(a->stroke.dash_array, b->stroke.dash_array) &&
            same_float(a->stroke.dash_offset, b->stroke.dash_offset) &&
-           a->stroke.gradient.has_value() == b->stroke.gradient.has_value();
+           a->stroke.gradient.has_value() == b->stroke.gradient.has_value() &&
+           (!a->stroke.gradient || same_gradients({*a->stroke.gradient}, {*b->stroke.gradient}));
 }
 
 // Everything except `bounds`, `transform`, `mesh` and `path`.
@@ -210,6 +211,25 @@ void path(Hasher& hash, const std::shared_ptr<const PathGeometry>& geometry) {
     hash.number(geometry->stroke.dash_array.size());
     for (const float value : geometry->stroke.dash_array) hash.real(value);
     hash.real(geometry->stroke.dash_offset);
+    hash.number(geometry->stroke.gradient ? 1U : 0U);
+    if (geometry->stroke.gradient) {
+        const auto& gradient = *geometry->stroke.gradient;
+        hash.number(static_cast<std::uint64_t>(gradient.kind));
+        hash.real(gradient.angle_degrees);
+        hash.number(gradient.repeating ? 1U : 0U);
+        hash.real(gradient.repeat_length);
+        hash.number(static_cast<std::uint64_t>(gradient.spread));
+        hash.number(static_cast<std::uint64_t>(gradient.interpolation));
+        hash.text(gradient.color_space);
+        hash.real(gradient.center_x); hash.real(gradient.center_y);
+        hash.real(gradient.radius_x); hash.real(gradient.radius_y);
+        hash.real(gradient.focal_x); hash.real(gradient.focal_y);
+        hash.number(gradient.stops.size());
+        for (const auto& stop : gradient.stops) {
+            hash.real(stop.position);
+            hash.color(stop.color);
+        }
+    }
 }
 
 std::uint64_t hash_command(const PaintCommand& command) {

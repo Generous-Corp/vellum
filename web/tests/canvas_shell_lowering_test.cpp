@@ -241,11 +241,73 @@ bool mask_reports() {
     if (!ok) std::cerr << "a mask report did not follow the scene's own warnings\n";
     return ok;
 }
+
+bool gradient_reports_and_version_gate() {
+    using vellum::graphics::Color;
+    using vellum::graphics::GradientKind;
+    using vellum::graphics::LinearGradient;
+    using vellum::graphics::PathGeometry;
+    using vellum::graphics::PathVerb;
+    auto gradient = [](GradientKind kind) {
+        LinearGradient value;
+        value.kind = kind;
+        value.radius_x = 8.0F;
+        value.radius_y = 4.0F;
+        value.stops = {{.position = 0.0F, .color = Color::hex(0xFF0000)},
+                       {.position = 1.0F, .color = Color::hex(0x0000FF)}};
+        return value;
+    };
+    Scene scene;
+    scene.root.id = "root";
+    scene.root.children.push_back({
+        .id = "ellipse", .kind = SceneNode::Kind::rectangle,
+        .bounds = {0, 0, 16, 16}, .fill_gradients = {gradient(GradientKind::radial)}});
+    scene.root.children.push_back({
+        .id = "two", .kind = SceneNode::Kind::rectangle,
+        .bounds = {16, 0, 16, 16}, .fill_gradients = {gradient(GradientKind::two_circle_radial)}});
+    scene.root.children.push_back({
+        .id = "conic", .kind = SceneNode::Kind::rectangle,
+        .bounds = {32, 0, 16, 16}, .fill_gradients = {gradient(GradientKind::conic)}});
+    auto path = std::make_shared<PathGeometry>();
+    path->verbs = {PathVerb::move, PathVerb::line};
+    path->values = {0, 0, 10, 0};
+    path->stroke.width = 2.0F;
+    path->stroke.gradient = gradient(GradientKind::linear);
+    scene.root.children.push_back({
+        .id = "stroke", .kind = SceneNode::Kind::path,
+        .bounds = {0, 16, 16, 16}, .path = path});
+    const auto lowering = vellum::web::lower_for_canvas_shell(scene);
+    bool saw_ellipse = false;
+    bool saw_two = false;
+    bool saw_conic = false;
+    bool saw_stroke = false;
+    for (const auto& diagnostic : lowering.diagnostics) {
+        if (diagnostic.code != vellum::web::kGradientNotExpressibleCode) continue;
+        saw_ellipse |= diagnostic.message.find("elliptical radial") != std::string::npos;
+        saw_two |= diagnostic.message.find("two-circle") != std::string::npos;
+        saw_conic |= diagnostic.message.find("conic") != std::string::npos;
+        saw_stroke |= diagnostic.property == "strokeGradient";
+    }
+    if (!lowering.accepted || lowering.diagnostics.size() != 4U ||
+        !saw_ellipse || !saw_two || !saw_conic || !saw_stroke) {
+        std::cerr << "canvas shell did not report each gradient fidelity loss\n";
+        return false;
+    }
+    scene.scene_version = 7U;
+    const auto refused = vellum::web::lower_for_canvas_shell(scene);
+    if (refused.accepted || refused.diagnostics.size() != 1U ||
+        refused.diagnostics[0].code != vellum::graphics::kSceneVersionMismatchCode) {
+        std::cerr << "version 7 gradient scene was accepted\n";
+        return false;
+    }
+    return true;
+}
 }  // namespace
 
 int main() {
     if (!image_refusals()) return 1;
     if (!mask_reports()) return 1;
+    if (!gradient_reports_and_version_gate()) return 1;
     using vellum::graphics::Affine2D;
     using vellum::graphics::CornerRadii;
     using vellum::graphics::SceneNode;

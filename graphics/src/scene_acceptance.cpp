@@ -68,6 +68,10 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node) {
         const auto loss = scene_loss_diagnostics(scene);
         return loss.empty() ? "scene fields do not match its version" : loss.front().message;
     }
+    if (const auto* unsupported = find_unsupported_gradient_color_space(scene.root);
+        unsupported != nullptr) {
+        return "gradient interpolation or colour space is unsupported at " + unsupported->id;
+    }
     if (const auto* invalid = find_non_finite_compositing(scene.root); invalid != nullptr) {
         return "scene node " + invalid->id +
                " has a non-finite transform, opacity, or corner radius";

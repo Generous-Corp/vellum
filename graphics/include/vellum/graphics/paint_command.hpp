@@ -173,6 +173,9 @@ struct ResolvedLinearGradient final {
     float radius_y = 0.0F;
     float focal_x = 0.0F;
     float focal_y = 0.0F;
+    float angle_degrees = 0.0F;
+    float end_angle_degrees = 360.0F;
+    std::string color_space = "srgb";
     std::vector<GradientStop> stops;
 };
 

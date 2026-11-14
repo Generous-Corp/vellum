@@ -460,12 +460,14 @@ void command_extents() {
 Scene grouping_scene(float width, float height);
 
 void damage_model_version_gate() {
-    expect(kDamageModelSceneVersion == 5U && partial_redraw_supported(3U) &&
+    expect(kDamageModelSceneVersion == 8U && partial_redraw_supported(3U) &&
                partial_redraw_supported(4U) && partial_redraw_supported(5U) &&
+               partial_redraw_supported(6U) && partial_redraw_supported(7U) &&
+               partial_redraw_supported(8U) &&
                partial_redraw_supported(kDamageModelSceneVersion) &&
                !partial_redraw_supported(kDamageModelSceneVersion + 1U) &&
-               !partial_redraw_supported(6U),
-           "partial redraw covers scene versions up to 5 and refuses version 6");
+               !partial_redraw_supported(9U),
+           "partial redraw covers scene versions up to 8 and refuses version 9");
     expect(to_string(FullRepaintReason::damage_model_version) == "damage_model_version",
            "the damage-model version fallback has a telemetry name");
     constexpr std::uint32_t width = 400;
@@ -482,9 +484,9 @@ void damage_model_version_gate() {
         const auto stats = partial->frame_stats();
         expect(!stats.full_repaint && stats.full_repaint_reason == FullRepaintReason::none &&
                    stats.paint_commands_recorded < stats.paint_commands_total,
-               "a default version 5 scene takes the partial path, step " + std::to_string(step),
+               "a default version 8 scene takes the partial path, step " + std::to_string(step),
                describe(stats));
-        compare("a default version 5 scene, step " + std::to_string(step), *full, *partial);
+        compare("a default version 8 scene, step " + std::to_string(step), *full, *partial);
     }
     Scene newer = scene;
     newer.scene_version = kSceneVersion + 1U;
@@ -505,9 +507,9 @@ void damage_model_version_gate() {
     const auto refused = older->frame_stats();
     expect(refused.full_repaint &&
                refused.full_repaint_reason == FullRepaintReason::damage_model_version,
-           "a version 5 scene past a version 4 damage model repaints fully",
+           "a version 8 scene past a version 4 damage model repaints fully",
            describe(refused));
-    compare("a version 5 scene past a version 4 damage model", *full, *older);
+    compare("a version 8 scene past a version 4 damage model", *full, *older);
 }
 
 Affine2D rotation_degrees(float degrees, float scale = 1.0F) {
@@ -1209,12 +1211,17 @@ Scene gradient_kind_scene(GradientKind kind, GradientSpread spread) {
     LinearGradient gradient;
     gradient.kind = kind;
     gradient.spread = spread;
-    gradient.center_x = 0.5F;
-    gradient.center_y = 0.5F;
-    gradient.radius_x = 0.45F;
-    gradient.radius_y = 0.45F;
-    gradient.repeating = spread != GradientSpread::pad;
-    gradient.repeat_length = spread != GradientSpread::pad ? 30.0F : 0.0F;
+    // Keep the sweep asymmetric so ellipse, focal and conic-angle lowering are
+    // exercised instead of falling through the circular/default cases.
+    gradient.angle_degrees = kind == GradientKind::conic ? 47.0F : 103.0F;
+    gradient.center_x = 0.37F;
+    gradient.center_y = 0.62F;
+    gradient.radius_x = 0.31F;
+    gradient.radius_y = 0.57F;
+    gradient.focal_x = 0.19F;
+    gradient.focal_y = 0.74F;
+    gradient.repeating = spread == GradientSpread::repeat;
+    gradient.repeat_length = spread == GradientSpread::repeat ? 30.0F : 0.0F;
     gradient.stops = {{.position = 0.0F, .color = Color::hex(0xEF4444)},
                       {.position = 0.5F, .color = Color::hex(0xFACC15)},
                       {.position = 1.0F, .color = Color::hex(0x3B82F6)}};
@@ -1230,6 +1237,7 @@ Scene gradient_kind_scene(GradientKind kind, GradientSpread spread) {
 
 void gradient_kind_sweeps() {
     const struct { GradientKind kind; GradientSpread spread; const char* name; } cases[] = {
+        {GradientKind::linear, GradientSpread::pad, "linear"},
         {GradientKind::radial, GradientSpread::pad, "radial"},
         {GradientKind::radial, GradientSpread::reflect, "radial reflect"},
         {GradientKind::two_circle_radial, GradientSpread::pad, "two-circle radial"},
@@ -1241,9 +1249,9 @@ void gradient_kind_sweeps() {
             for (const bool cache : {false, true}) {
                 const Scene scene = gradient_kind_scene(item.kind, item.spread);
                 const auto count = sweep_damage_edges(scene, scale, cache);
-                expect(count.differing == 0,
+                expect(count.differing == 0 && count.partial > 0,
                        std::string("a damage edge swept across a ") + item.name +
-                           " gradient leaves every frame byte-identical at " +
+                           " gradient uses true partial redraw and leaves every frame byte-identical at " +
                            (scale == 1.0F ? "1x" : "2x") + (cache ? " with the layer cache" : ""),
                        std::to_string(count.differing) + " of " + std::to_string(count.edges) +
                            " edges differ " + count.first);
@@ -1441,8 +1449,9 @@ void grouping_sequence(float scale, bool layer_cache) {
     auto partial = make_surface(width, height, scale, layer_cache);
     if (!full || !partial) return;
     Scene scene = grouping_scene(static_cast<float>(width), static_cast<float>(height));
-    expect(scene.scene_version == 5U && partial_redraw_supported(scene.scene_version),
-           size + "the grouping scene is a version 5 scene partial redraw serves");
+    expect(scene.scene_version == kDamageModelSceneVersion &&
+               partial_redraw_supported(scene.scene_version),
+           size + "the grouping scene is a version 8 scene partial redraw serves");
     if (!render_both(*full, *partial, scene)) return;
     compare(size + "the first grouping frame", *full, *partial);
     // Removing or restoring the viewport's clip changes enough of this dense
