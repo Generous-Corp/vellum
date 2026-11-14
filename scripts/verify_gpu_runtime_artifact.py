@@ -24,8 +24,12 @@ headers, license, verbatim CMake modules and the assembled notice must be
 byte-identical to what the source produces; the four generated package files
 (config, version and both exports, all of which run at a consumer's configure
 time) must equal what configuring the source with the builder's own configure
-command generates on this host; and the record's source commit and version
-must be the checkout's HEAD and version.
+command generates; and the record's source commit and version must be the
+checkout's HEAD and version. CMake writes those four files, and their text
+follows the CMake release, so they are regenerated with the CMake the source
+pins in gpu-runtime/cmake-lock.json, never the one on this host's PATH, and
+the record must name that CMake as the one the archive was built with. A file
+that differs is reported with a unified diff of the two texts.
 
 Without --repo the result is a consistency check of the archive, not a trust
 decision: it says so on stderr and records checked_against_source false. A
@@ -41,8 +45,10 @@ Exit 0 when every check passes, 1 with the first failure otherwise.
 from __future__ import annotations
 
 import argparse
+import difflib
 import gzip
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -87,8 +93,24 @@ FIXED_FILES = frozenset({*LIBRARIES, DAWN_MEMBER, NOTICE_MEMBER, LICENSE_MEMBER,
 NOTICE_HEADINGS = ("### Dawn and Tint", "### Skia and skcms")
 
 
+DIFF_LINES = 200
+
+
 class VerificationError(RuntimeError):
     pass
+
+
+def _trusted_sibling(name: str):
+    """A module from this file's own directory. load_builder() puts the checkout
+    under verification first on sys.path, so a plain import could resolve there."""
+    spec = importlib.util.spec_from_file_location(
+        f"vellum_verifier_{name}", Path(__file__).resolve().with_name(f"{name}.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+pinned_cmake = _trusted_sibling("pinned_cmake")
 
 
 # What the package's generated export files may contain. They run at every
@@ -349,23 +371,45 @@ def load_builder(repo: Path):
     return builder
 
 
-def regenerate_package_files(repo: Path, renderer_archive: Path) -> dict[str, bytes]:
-    """Configure the source with the builder's configure command (no compile)
-    and return the package files CMake generates for it."""
+def regenerate_package_files(repo: Path, renderer_archive: Path,
+                             provide=pinned_cmake.provide) -> tuple[dict[str, bytes], str]:
+    """Configure the source with the builder's configure command (no compile),
+    run by the CMake the source pins, and return the package files that CMake
+    generates for it with the pinned version."""
     builder = load_builder(repo)
     with tempfile.TemporaryDirectory(prefix="vellum-gpu-runtime-regenerate-") as temporary_text:
         temporary = Path(temporary_text)
-        command = builder.configure_command(repo, renderer_archive.resolve(),
-                                            temporary / "build", temporary / "prefix")
+        try:
+            cmake, version = provide(repo, temporary / "cmake")
+            command = pinned_cmake.use(
+                builder.configure_command(repo, renderer_archive.resolve(),
+                                          temporary / "build", temporary / "prefix"), cmake)
+        except pinned_cmake.PinnedCMakeError as error:
+            raise VerificationError(f"could not provide the pinned CMake: {error}") from error
         completed = subprocess.run(command, text=True, capture_output=True, check=False)
         if completed.returncode:
             raise VerificationError("could not configure the source to regenerate the package "
                                     f"files:\n{completed.stderr[-3000:]}")
-        return builder.generated_package_files(temporary / "build")
+        return builder.generated_package_files(temporary / "build"), version
+
+
+def difference(member: str, shipped: bytes, expected: bytes, origin: str) -> str:
+    """A unified diff from the shipped file to the one the source gives."""
+    lines = list(difflib.unified_diff(
+        shipped.decode("utf-8", errors="replace").splitlines(),
+        expected.decode("utf-8", errors="replace").splitlines(),
+        f"shipped/{member}", f"{origin}/{member}", lineterm=""))
+    if not lines:
+        # Equal as text and unequal as bytes: a line ending or an undecodable byte.
+        lines = [f"the files differ only in bytes a text diff does not show "
+                 f"(shipped {len(shipped)} bytes, {origin} {len(expected)} bytes)"]
+    if len(lines) > DIFF_LINES:
+        lines = [*lines[:DIFF_LINES], f"... {len(lines) - DIFF_LINES} more diff lines"]
+    return "\n".join(lines)
 
 
 def verify_against_source(files: dict[str, bytes], metadata: dict, repo: Path,
-                          generated: dict[str, bytes]) -> None:
+                          generated: dict[str, bytes], cmake_version: str) -> None:
     builder = load_builder(repo)
 
     expected = set(builder.expected_files(repo))
@@ -384,9 +428,16 @@ def verify_against_source(files: dict[str, bytes], metadata: dict, repo: Path,
     require(files[NOTICE_MEMBER].decode("utf-8") == builder.dawn_notice(repo),
             "shipped notice differs from the one the source assembles")
     require(set(generated) == set(GENERATED), "regenerated package files are incomplete")
+    built_with = (metadata.get("toolchain") or {}).get("cmake")
+    require(built_with == cmake_version,
+            f"artifact record says CMake {built_with} generated the package files, "
+            f"not the CMake {cmake_version} the source pins")
     for member in GENERATED:
-        require(files[member] == generated[member],
-                f"shipped {member} differs from what the source generates")
+        if files[member] != generated[member]:
+            raise VerificationError(
+                f"shipped {member} differs from what the source generates "
+                f"with its pinned CMake {cmake_version}:\n"
+                + difference(member, files[member], generated[member], "regenerated"))
     require(metadata.get("source_commit") == git_head(repo),
             "artifact record names another source commit than the checkout")
     require(metadata.get("version") == builder.vellum_version(repo),
@@ -394,7 +445,8 @@ def verify_against_source(files: dict[str, bytes], metadata: dict, repo: Path,
 
 
 def verify(archive: Path, repo: Path | None,
-           generated: dict[str, bytes] | None = None) -> dict[str, object]:
+           generated: tuple[dict[str, bytes], str] | None = None) -> dict[str, object]:
+    """`generated` is regenerate_package_files()'s result for `repo`."""
     match = NAME.fullmatch(archive.name)
     require(match is not None, f"archive name is not vellum-gpu-runtime-<version>-<target>.tar.gz: "
                                f"{archive.name}")
@@ -457,7 +509,7 @@ def verify(archive: Path, repo: Path | None,
     if repo is not None:
         require(generated is not None, "holding an archive to its source needs the "
                                        "regenerated package files (--renderer-archive)")
-        verify_against_source(files, metadata, repo, generated)
+        verify_against_source(files, metadata, repo, *generated)
     return {
         "archive": archive.name,
         "sha256": sha256_bytes(archive.read_bytes()),
@@ -467,6 +519,7 @@ def verify(archive: Path, repo: Path | None,
         "renderer_lock_sha256": lock_digest,
         "files_verified": len(listed),
         "checked_against_source": repo is not None,
+        **({"package_files_cmake": generated[1]} if repo is not None else {}),
     }
 
 

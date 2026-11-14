@@ -454,7 +454,7 @@ bool ComboBox::dropdown_window_rect(float& x, float& y, float& w, float& h) cons
 View* ComboBox::hit_test(Point local_point) {
     // When open, the menu overlay lives outside this view's own bounds (below, or above when
     // flipped). Claim hits over it so hover/click reach us regardless of flip direction.
-    if (open_ && !items_.empty()) {
+    if (open_ && !items_.empty() && visible() && !hit_test_blocked_by_disabled()) {
         float top = 0.0f, dd_h = 0.0f;
         int first = 0, visible = 0;
         dropdown_metrics(top, dd_h, first, visible);
@@ -1347,7 +1347,8 @@ void ScrollView::paint(canvas::Canvas& canvas) {
 }
 
 View* ScrollView::hit_test(Point local_point) {
-    if (!visible() || !enabled() || !hit_testable()) return nullptr;
+    if (!visible() || hit_test_blocked_by_disabled() || !hit_testable())
+        return nullptr;
     if (!parent() && !inverse_scale_transform(local_point)) return nullptr;
     if (!local_bounds().contains(local_point)) return nullptr;
 

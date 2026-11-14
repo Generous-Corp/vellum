@@ -199,6 +199,12 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             OBJCXX_STANDARD 20)
         target_include_directories("${_vellum_mirror_target}" PRIVATE
             ${VELLUM_MIRROR_TARGET_${_tkey}_INCLUDE_DIRS})
+        # Vellum's value model (<vellum/value/...>) is a Vellum-native header
+        # dependency of the framework's parameter bindings, which Pulp's
+        # closures cannot name. Headers only: no object of Vellum::Value is
+        # compiled into or linked by a mirrored target.
+        target_include_directories("${_vellum_mirror_target}" PRIVATE
+            "$<TARGET_PROPERTY:vellum-value,INTERFACE_INCLUDE_DIRECTORIES>")
         target_compile_definitions("${_vellum_mirror_target}" PRIVATE
             ${VELLUM_MIRROR_TARGET_${_tkey}_DEFINITIONS})
         # The mirror's own build is the one place the GPU-surface guard of the
@@ -244,6 +250,21 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             ${VELLUM_MIRROR_TARGET_${_tkey}_INTERNAL_LINKS})
     endforeach()
 endforeach()
+
+# A mirrored source can include Vellum's value model: one probe compiled with
+# view-core's own include directories and definitions. It fails to compile when
+# the value-model include edge above is missing.
+if(TARGET pulp-view-core)
+    add_library(vellum-mirror-value-include-probe OBJECT
+        "${PROJECT_SOURCE_DIR}/tools/mirror/value_include_probe.cpp")
+    set_target_properties(vellum-mirror-value-include-probe PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON)
+    target_include_directories(vellum-mirror-value-include-probe PRIVATE
+        "$<TARGET_PROPERTY:pulp-view-core,INCLUDE_DIRECTORIES>")
+    target_compile_definitions(vellum-mirror-value-include-probe PRIVATE
+        "$<TARGET_PROPERTY:pulp-view-core,COMPILE_DEFINITIONS>")
+endif()
 
 # ── Package libraries ──────────────────────────────────────────────────────
 # One shared library per unit, each holding every object of its mirrored
@@ -416,6 +437,9 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     target_compile_features("${_library}" INTERFACE cxx_std_20)
     target_include_directories("${_library}" INTERFACE
         "$<INSTALL_INTERFACE:${VELLUM_MIRROR_INSTALL_DIR}/include>")
+    # A unit's public headers include <vellum/value/...>, so its consumers
+    # compile and link against Vellum's value model.
+    target_link_libraries("${_library}" INTERFACE Vellum::Value)
     list(APPEND _vellum_mirror_unit_libraries "${_library}")
 endforeach()
 
