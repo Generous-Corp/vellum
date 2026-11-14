@@ -128,6 +128,8 @@ void effect_validation() {
          {{.kind = EffectKind::color_matrix,
            .matrix = {std::numeric_limits<float>::quiet_NaN()}}}},
         {"two backdrop effects", {backdrop(4.0F), glass()}},
+        {"a shadow colour channel over one",
+         {{.kind = EffectKind::drop_shadow, .sigma = 1.0F, .color = Color{.red = 2.0F}}}},
         {"an unknown kind", {{.kind = static_cast<EffectKind>(42)}}},
     };
     for (const auto& [name, effects] : invalid) {

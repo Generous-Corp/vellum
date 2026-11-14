@@ -228,6 +228,10 @@ struct FrameResources final {
     /// Textures this frame cached. Their uploads exist only in this frame's
     /// recording, so a frame that fails before it is submitted drops them.
     std::vector<detail::TextureKey> uploaded;
+    /// Offscreen effect layers recorded this frame, kept alive until the
+    /// frame's recording is snapped so a layer drawn into another layer keeps
+    /// its pending work.
+    std::vector<sk_sp<SkSurface>> effect_layers;
 };
 
 sk_sp<SkShader> linear_gradient_shader(
@@ -1414,11 +1418,16 @@ struct EffectStages final {
 void composite_effects(SkCanvas& canvas, const PaintCommand& layer, const LayerImage* image,
                        float scale, FrameResources& resources, EffectStages stages = {}) {
     const float opacity = std::clamp(layer.opacity, 0.0F, 1.0F);
+    // The canvas holds a whole-pixel translation (an offscreen layer's
+    // origin) times the frame's scale; device-pixel work happens under that
+    // translation alone.
+    const SkM44 frame = canvas.getLocalToDevice();
+    const SkM44 base = SkM44::Translate(frame.rc(0, 3), frame.rc(1, 3));
     const int saved = canvas.save();
     const auto backdrop = backdrop_paint(layer.effects, scale);
     if (stages.backdrop && backdrop.present) {
         const int clipped = canvas.save();
-        canvas.resetMatrix();
+        canvas.setMatrix(base);
         canvas.scale(scale, scale);
         if (!is_identity(layer.transform)) canvas.concat(sk_matrix(layer.transform));
         const auto& box = layer.effect_box;
@@ -1429,7 +1438,7 @@ void composite_effects(SkCanvas& canvas, const PaintCommand& layer, const LayerI
             canvas.clipRect(rect, SkClipOp::kIntersect, true);
         }
         const SkM44 local = canvas.getLocalToDevice();
-        canvas.resetMatrix();
+        canvas.setMatrix(base);
         if (backdrop.filter) {
             SkPaint fade;
             fade.setAlphaf(opacity);
@@ -1448,7 +1457,7 @@ void composite_effects(SkCanvas& canvas, const PaintCommand& layer, const LayerI
         canvas.restoreToCount(clipped);
     }
     if (stages.content && image != nullptr && image->image) {
-        canvas.resetMatrix();
+        canvas.setMatrix(base);
         SkPaint paint;
         paint.setAlphaf(opacity);
         auto filter = filter_chain(layer.effects, scale, stages.filters);
@@ -2440,6 +2449,13 @@ private:
         PixelRect extent{};
         for (auto index = begin; index < end; ++index) {
             const auto& command = commands[index];
+            if (is_effect_layer(command)) {
+                // A nested effect group paints its declared area, past its
+                // members by the chain's radius.
+                const auto painted = effect_paint_extent(command, config_.scale);
+                extent = bounding_union(extent, painted ? *painted : target_rect());
+                continue;
+            }
             if (!draws_content(command.kind)) continue;
             if (!sane_box(command.bounds)) return std::nullopt;
             Rect local = paint_extent(command).rect;
@@ -2530,6 +2546,7 @@ private:
             set_error(error, "Skia Graphite could not sample an effect layer");
             return false;
         }
+        resources.effect_layers.push_back(std::move(surface));
         ++resources.layers;
         return true;
     }

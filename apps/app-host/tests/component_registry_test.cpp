@@ -2,6 +2,7 @@
 
 #include <vellum/graphics/scene_acceptance.hpp>
 
+#include <clocale>
 #include <iostream>
 #include <string>
 
@@ -81,7 +82,7 @@ bool application_materials(const char* module) {
         const auto& card = scene.root.children[0];
         if (!card.effects.empty() || card.children.size() != 2U ||
             card.children[0].id != "card/material/com.example.sheen" ||
-            card.children[0].children.size() != 1U ||
+            card.children[0].children.size() != 2U ||
             card.children[0].children[0].fill.alpha != 0.5F ||
             card.children[0].children[0].bounds.width != 80.0F ||
             card.children[1].id != "card/label") {
@@ -90,6 +91,67 @@ bool application_materials(const char* module) {
         }
         if (!vellum::graphics::accept_scene(scene).diagnostics.empty()) {
             std::cerr << "an expanded scene still reports the material\n";
+            return false;
+        }
+
+        // Nodes that cannot take the material keep it for acceptance.
+        auto masked = material_scene();
+        masked.root.children[0].mask = vellum::graphics::MaskMode::alpha;
+        masked.root.children.push_back({.id = "masked-sibling",
+                                        .kind = SceneNode::Kind::rectangle,
+                                        .bounds = {0.0F, 0.0F, 4.0F, 4.0F}});
+        auto old = material_scene();
+        old.scene_version = 5U;
+        auto image = material_scene();
+        image.root.children[0].kind = SceneNode::Kind::image;
+        image.root.children[0].children.clear();
+        image.root.children[0].image = vellum::graphics::ImageReference{
+            .content_hash = "sha256:" + std::string(64, '0')};
+        for (auto* kept : {&masked, &old, &image}) {
+            if (!registry.expand(*kept, &error) || kept->root.children[0].effects.size() != 1U) {
+                std::cerr << "a node that cannot take the material lost its effect\n";
+                return false;
+            }
+        }
+        if (vellum::graphics::accept_scene(masked).accepted ||
+            vellum::graphics::accept_scene(old).accepted ||
+            !image.root.children[0].children.empty() ||
+            !vellum::graphics::accept_scene(image).accepted) {
+            std::cerr << "a masked or old scene was accepted, or the image was given children\n";
+            return false;
+        }
+
+        // The properties are JSON in every locale.
+        if (std::setlocale(LC_NUMERIC, "de_DE.UTF-8") != nullptr) {
+            auto fractional = material_scene();
+            fractional.root.children[0].effects[0].values[0].value[0] = 22.5F;
+            const bool expanded = registry.expand(fractional, &error);
+            std::setlocale(LC_NUMERIC, "C");
+            const auto& echoed = fractional.root.children[0].children[0].children[1].text;
+            if (!expanded ||
+                echoed != "{\"material\":\"com.example.sheen\",\"values\":{\"angle\":22.5}}") {
+                std::cerr << "the material properties were not locale independent: " << echoed
+                          << '\n';
+                return false;
+            }
+        } else {
+            std::cout << "the de_DE.UTF-8 locale is not installed; the locale check did not run\n";
+        }
+
+        // A registry removes only the material it registered.
+        if (!MaterialRegistry::shared().unregister_extension("com.example.sheen")) return false;
+        vellum::app_host::ComponentRegistry other;
+        if (!other.load({.component_id = "sheen", .path = module}, &error) ||
+            !other.register_material(sheen(), &error)) {
+            std::cerr << "a second registry could not register the material: " << error << '\n';
+            return false;
+        }
+        const auto replacement = MaterialRegistry::shared().find("com.example.sheen");
+        {
+            vellum::app_host::ComponentRegistry stale = std::move(registry);
+        }
+        if (MaterialRegistry::shared().find("com.example.sheen") != replacement) {
+            std::cerr << "destroying the first registry removed the second one's material\n";
             return false;
         }
     }

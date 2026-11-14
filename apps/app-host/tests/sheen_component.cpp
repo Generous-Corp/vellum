@@ -17,7 +17,17 @@ int render(const vellum_component_render_context_v1* context) {
     command.id_suffix = "band";
     command.bounds = {0.0F, 0.0F, context->bounds.width, context->bounds.height * 0.5F};
     command.fill = {1.0F, 1.0F, 1.0F, alpha};
-    return context->emit(context->emit_user_data, &command);
+    if (context->emit(context->emit_user_data, &command) != 1) return 0;
+    // Echoes the properties as text so the test can read what arrived.
+    vellum_component_paint_command_v1 echo{};
+    echo.struct_size = sizeof(echo);
+    echo.kind = VELLUM_COMPONENT_PAINT_TEXT_V1;
+    echo.id_suffix = "properties";
+    echo.bounds = {0.0F, 0.0F, context->bounds.width, context->bounds.height};
+    echo.fill = {0.0F, 0.0F, 0.0F, 0.0F};
+    echo.text = context->properties_json;
+    echo.font_size = 8.0F;
+    return context->emit(context->emit_user_data, &echo);
 }
 
 const vellum_component_descriptor_v1 kDescriptor{

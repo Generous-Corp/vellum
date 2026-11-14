@@ -40,7 +40,9 @@ public:
     /// over the node's own paint and under its subtree, and removes the effect.
     /// The component receives `{"material":<id>,"values":{...}}` as its
     /// properties, with each uniform as a number, a two-number array or a
-    /// red, green, blue and alpha object.
+    /// red, green, blue and alpha object. A scene before version 10, a mask
+    /// node and an image node keep their material effects: acceptance refuses
+    /// the first two, and the renderer draws the image without the material.
     [[nodiscard]] bool expand(
         vellum::graphics::Scene& scene, std::string* error = nullptr) const;
     [[nodiscard]] std::size_t size() const noexcept;

@@ -9,6 +9,9 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
+#include <iomanip>
+#include <locale>
+#include <sstream>
 #include <map>
 #include <optional>
 #include <set>
@@ -141,10 +144,12 @@ void append_json_string(std::string& output, std::string_view value) {
     output += '"';
 }
 
+// Locale independent, so a comma-decimal locale cannot break the JSON.
 void append_json_number(std::string& output, float value) {
-    char number[32];
-    std::snprintf(number, sizeof(number), "%.9g", static_cast<double>(value));
-    output += number;
+    std::ostringstream number;
+    number.imbue(std::locale::classic());
+    number << std::setprecision(9) << static_cast<double>(value);
+    output += number.str();
 }
 
 // The properties a material's component receives: its id and every uniform
@@ -191,8 +196,9 @@ std::string material_properties(const vellum::graphics::MaterialDefinition& mate
 class ComponentRegistry::Impl final {
 public:
     ~Impl() {
-        for (const auto& id : materials_) {
-            (void)vellum::graphics::MaterialRegistry::shared().unregister_extension(id);
+        for (const auto& material : materials_) {
+            (void)vellum::graphics::MaterialRegistry::shared().unregister_extension(
+                material->id, material.get());
         }
         for (auto iterator = modules_.rbegin(); iterator != modules_.rend(); ++iterator) {
             if (iterator->handle != nullptr) dlclose(iterator->handle);
@@ -267,16 +273,15 @@ public:
             definition.provenance.source = module->path.string();
         }
         auto id = definition.id;
-        if (!vellum::graphics::MaterialRegistry::shared().register_extension(std::move(definition),
-                                                                             error)) {
-            return false;
-        }
-        materials_.push_back(std::move(id));
+        auto& shared = vellum::graphics::MaterialRegistry::shared();
+        if (!shared.register_extension(std::move(definition), error)) return false;
+        materials_.push_back(shared.find(id));
         return true;
     }
 
     bool expand(vellum::graphics::Scene& scene, std::string* error) const {
-        return expand_node(scene.root, error);
+        // A scene too old to carry effects keeps them, so acceptance refuses it.
+        return expand_node(scene.root, scene.scene_version >= 10U, error);
     }
 
     std::size_t size() const noexcept { return modules_.size(); }
@@ -334,7 +339,7 @@ private:
             }
             const auto material = vellum::graphics::MaterialRegistry::shared().find(effect->material);
             const bool ours = material && material->recipe == MaterialRecipe::extension &&
-                              std::find(materials_.begin(), materials_.end(), material->id) !=
+                              std::find(materials_.begin(), materials_.end(), material) !=
                                   materials_.end();
             // Invalid values stay for scene acceptance to refuse.
             if (!ours || !vellum::graphics::material_values_are_valid(*material, effect->values)) {
@@ -364,7 +369,8 @@ private:
         return true;
     }
 
-    bool expand_node(vellum::graphics::SceneNode& node, std::string* error) const {
+    bool expand_node(vellum::graphics::SceneNode& node, bool effects_allowed,
+                     std::string* error) const {
         if (node.kind == vellum::graphics::SceneNode::Kind::custom) {
             const auto found = modules_by_id_.find(node.custom_component);
             if (found == modules_by_id_.end()) {
@@ -403,16 +409,23 @@ private:
             node.custom_component.clear();
             node.custom_properties_json.clear();
         }
-        if (!node.effects.empty() && !expand_materials(node, error)) return false;
+        // A mask cannot carry effects and an image cannot hold the material's
+        // paint as a child; both keep the effect, so acceptance refuses the
+        // mask and the renderer draws the image without it.
+        if (effects_allowed && !node.effects.empty() && !node.mask &&
+            node.kind != vellum::graphics::SceneNode::Kind::image &&
+            !expand_materials(node, error)) {
+            return false;
+        }
         for (auto& child : node.children) {
-            if (!expand_node(child, error)) return false;
+            if (!expand_node(child, effects_allowed, error)) return false;
         }
         return true;
     }
 
     std::vector<Module> modules_;
     std::map<std::string, const vellum_component_descriptor_v1*> modules_by_id_;
-    std::vector<std::string> materials_;
+    std::vector<std::shared_ptr<const vellum::graphics::MaterialDefinition>> materials_;
 };
 
 ComponentRegistry::ComponentRegistry() : impl_(std::make_unique<Impl>()) {}

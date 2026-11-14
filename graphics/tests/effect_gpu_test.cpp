@@ -800,6 +800,66 @@ void cached_layers() {
     }
 }
 
+// An effect group inside another group drawn offscreen, placed away from
+// the outer group's origin, whose drop shadow reaches past its members.
+Scene nested_scene(bool outer_effect, float outer_opacity) {
+    Scene scene = striped_scene();
+    SceneNode outer{.id = "outer", .kind = SceneNode::Kind::group,
+                    .bounds = {20.5F, 20.25F, 200.0F, 140.0F}};
+    SceneNode inner{.id = "inner", .kind = SceneNode::Kind::group,
+                    .bounds = {120.0F, 50.0F, 50.0F, 40.0F}};
+    inner.children.push_back(box("inner/a", {0.0F, 0.0F, 30.0F, 24.0F}, Color::hex(0xEF4444), 5.0F));
+    inner.children.push_back(box("inner/b", {12.0F, 10.0F, 30.0F, 24.0F},
+                                 Color::rgba(0.23F, 0.51F, 0.96F, 0.8F), 4.0F));
+    inner.effects = {{.kind = EffectKind::drop_shadow,
+                      .sigma = 3.0F,
+                      .offset_x = 9.0F,
+                      .offset_y = 7.0F,
+                      .color = Color::rgba(0.0F, 0.0F, 0.0F, 0.8F)}};
+    outer.children.push_back(std::move(inner));
+    if (outer_effect) {
+        outer.effects = {blur(0.0F)};
+    } else {
+        outer.isolate = true;
+    }
+    outer.opacity = outer_opacity;
+    scene.root.children.push_back(std::move(outer));
+    return scene;
+}
+
+void nested_effects() {
+    for (const float scale : {1.0F, 2.0F}) {
+        const std::string size = "@" + std::to_string(static_cast<int>(scale)) + " ";
+        const auto isolated = render_pixels(nested_scene(false, 1.0F), scale);
+        const auto offscreen = render_pixels(nested_scene(true, 1.0F), scale);
+        expect(!isolated.empty() && offscreen == isolated,
+               size + "an effect group nested in another effect group lands where an isolated "
+                      "parent puts it, shadow whole");
+        auto cached = make_surface(scale, true);
+        auto direct = make_surface(scale, false);
+        std::string error;
+        const Scene faded = nested_scene(false, 0.7F);
+        if (!cached || !direct || !cached->render(faded, &error) ||
+            !direct->render(faded, &error) || !cached->render(faded, &error)) {
+            expect(false, size + "the faded nested scene renders", error);
+            continue;
+        }
+        std::string message;
+        const auto stats = cached->layer_cache_stats();
+        expect(stats.hits == 1U && identical(*cached, *direct, message),
+               size + "an effect group inside a cached faded group draws as without the cache",
+               "hits " + std::to_string(stats.hits) + " " + message);
+    }
+    for (const bool cached : {false, true}) {
+        const auto sweep = sweep_damage_edges(nested_scene(true, 0.85F), 2.0F, cached);
+        expect(sweep.differing == 0 && sweep.partial > 0,
+               std::string(cached ? "cache on " : "cache off ") +
+                   "a damage edge swept across nested effect groups leaves every frame "
+                   "byte-identical",
+               sweep_detail(sweep));
+    }
+}
+
 void extension_material_renders_without_it() {
     MaterialDefinition app{
         .id = "com.example.sheen",
@@ -831,6 +891,7 @@ int main() {
         budget_fallback();
         cached_layers();
         extension_material_renders_without_it();
+        nested_effects();
         damage_rule_controls();
         edit_sequences();
         sweeps();

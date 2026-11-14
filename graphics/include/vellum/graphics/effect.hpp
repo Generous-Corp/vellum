@@ -15,7 +15,7 @@
 namespace vellum::graphics {
 
 /// An effect whose parameters cannot be drawn: a non-finite or out-of-range
-/// sigma, offset, colour or matrix entry, more than one backdrop effect on a
+/// sigma, offset, colour (each channel in [0, 1]) or matrix entry, more than one backdrop effect on a
 /// node, or effects on a mask node; always an error.
 inline constexpr std::string_view kInvalidEffectCode = "VELLUM_INVALID_EFFECT";
 /// A material id the registry does not hold; always an error.
@@ -132,8 +132,10 @@ public:
     [[nodiscard]] bool register_extension(MaterialDefinition definition,
                                           std::string* error = nullptr);
 
-    /// Removes an application material; Vellum's own cannot be removed.
-    bool unregister_extension(std::string_view id);
+    /// Removes an application material; Vellum's own cannot be removed. With
+    /// `only`, it removes the material only while `only` is the definition
+    /// registered under `id`, so an owner cannot remove a later registration.
+    bool unregister_extension(std::string_view id, const MaterialDefinition* only = nullptr);
 
     /// Every registered material, ordered by id.
     [[nodiscard]] std::vector<std::shared_ptr<const MaterialDefinition>> definitions() const;

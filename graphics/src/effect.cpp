@@ -8,9 +8,11 @@
 namespace vellum::graphics {
 namespace {
 
-bool finite_color(const Color& color) {
-    return std::isfinite(color.red) && std::isfinite(color.green) && std::isfinite(color.blue) &&
-           std::isfinite(color.alpha);
+bool unit_color(const Color& color) {
+    const auto unit = [](float channel) {
+        return std::isfinite(channel) && channel >= 0.0F && channel <= 1.0F;
+    };
+    return unit(color.red) && unit(color.green) && unit(color.blue) && unit(color.alpha);
 }
 
 bool sigma_in_range(float sigma) {
@@ -127,10 +129,11 @@ bool MaterialRegistry::register_extension(MaterialDefinition definition, std::st
     return true;
 }
 
-bool MaterialRegistry::unregister_extension(std::string_view id) {
+bool MaterialRegistry::unregister_extension(std::string_view id, const MaterialDefinition* only) {
     const std::lock_guard lock(mutex_);
     const auto found = definitions_.find(id);
-    if (found == definitions_.end() || found->second->recipe != MaterialRecipe::extension) {
+    if (found == definitions_.end() || found->second->recipe != MaterialRecipe::extension ||
+        (only != nullptr && found->second.get() != only)) {
         return false;
     }
     definitions_.erase(found);
@@ -204,7 +207,9 @@ bool effect_is_valid(const NodeEffect& effect, std::string* reason, std::string_
             std::abs(effect.offset_y) > kMaxEffectOffset) {
             return fail(reason, "the shadow offset is not finite or too large");
         }
-        if (!finite_color(effect.color)) return fail(reason, "the shadow colour is not finite");
+        if (!unit_color(effect.color)) {
+            return fail(reason, "a shadow colour channel is not finite or outside [0, 1]");
+        }
         return true;
     case EffectKind::color_matrix:
         for (const float entry : effect.matrix) {
