@@ -59,6 +59,31 @@ class GatesTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue((worktrees / "vellum-gates-cache").is_dir())
 
+    def test_nothing_is_created_under_the_temp_dir_or_home_cache(self) -> None:
+        self.commit("docs/new.md", "A plain sentence with nothing to flag.\n")
+        fake = self.repo / ".fake"
+        for name in ("tmp", "home"):
+            (fake / name).mkdir(parents=True)
+        shim = fake / "bin"
+        shim.mkdir()
+        real = shutil.which("mktemp")
+        (shim / "mktemp").write_text(f'#!/bin/bash\necho "$*" >> "{fake}/mktemp.log"\nexec {real} "$@"\n')
+        (shim / "mktemp").chmod(0o755)
+        env = {**os.environ, "GATES_ONLY": "prose-lint", "PULP_WORKTREES_ROOT": str(self.repo / ".worktrees"),
+               "TMPDIR": str(fake / "tmp"), "HOME": str(fake / "home"), "PATH": f"{shim}:{os.environ['PATH']}"}
+        env.pop("VELLUM_GATES_CACHE", None)
+        result = subprocess.run(["bash", "scripts/gates.sh", "base"], cwd=self.repo, env=env,
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        lines = (fake / "mktemp.log").read_text().splitlines()
+        self.assertTrue(lines)
+        root = str(self.repo / ".worktrees")
+        for line in lines:
+            paths = [word for word in line.split() if not word.startswith("-")]
+            self.assertTrue(paths and all(path.startswith(root) for path in paths), line)
+        self.assertEqual(list((fake / "tmp").iterdir()), [])
+        self.assertFalse((fake / "home" / ".cache").exists())
+
     def test_planted_prose_violation_fails(self) -> None:
         self.commit("docs/new.md", f"A sentence {EM_DASH} with an em dash.\n")
         result = self.gates()

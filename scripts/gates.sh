@@ -79,6 +79,7 @@ HEAD_SHA="$(git rev-parse HEAD)"
 # root cannot be created or written, as required for hosts without that mount.
 WORKTREE_ROOT="${PULP_WORKTREES_ROOT:-/Volumes/Workshop/Code/agent-worktrees}"
 if ! mkdir -p "$WORKTREE_ROOT" 2>/dev/null || [[ ! -w "$WORKTREE_ROOT" ]]; then
+  echo "gates: $WORKTREE_ROOT is not writable; falling back to $HOME/agent-worktrees" >&2
   WORKTREE_ROOT="$HOME/agent-worktrees"
   mkdir -p "$WORKTREE_ROOT" || {
     echo "gates: cannot create writable worktree root" >&2
