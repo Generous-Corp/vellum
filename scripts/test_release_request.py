@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -189,7 +190,8 @@ INCIDENT_RULES = [{"type": "required_status_checks", "parameters": {"required_st
 BOT = {"login": "github-actions[bot]", "type": "Bot", "id": 41898282}
 
 
-def status(context: str, state: str, ident: int, creator: dict | None = None, created: str | None = None) -> dict:
+def status(context: str, state: str, ident: int, creator: dict | None = None,
+           created: str = "2026-11-13T01:00:00Z") -> dict:
     return {"id": ident, "context": context, "state": state, "creator": BOT if creator is None else creator,
             "created_at": created}
 
@@ -207,7 +209,7 @@ class StatusSatisfiedChecks(unittest.TestCase):
         for creator in ({"login": "mallory", "type": "User", "id": 7},
                         {"login": "github-actions[bot]", "type": "User", "id": 41898282},
                         {"login": "github-actions[bot]", "type": "Bot", "id": 99},
-                        {"login": "other[bot]", "type": "Bot", "id": 41898282}, {}):
+                        {"login": "other[bot]", "type": "Bot", "id": 41898282}):
             with self.subTest(creator=creator):
                 self.assertEqual(self.unmet([status("framework-trusted-verify", "success", 5, creator)]),
                                  [f"framework-trusted-verify: no run from app 15368 on {COMMIT}"])
@@ -242,22 +244,43 @@ class StatusSatisfiedChecks(unittest.TestCase):
     def test_a_malformed_statuses_file_refuses(self) -> None:
         good = status("framework-trusted-verify", "success", 5)
         nocreator = {key: value for key, value in good.items() if key != "creator"}
-        for pages in ({}, [{}], [[1]], [[nocreator]], [[{**good, "id": "5"}]], [[{**good, "state": None}]]):
-            with self.subTest(pages=pages), self.assertRaises(rr.ReleaseRequestError):
+        nodate = {key: value for key, value in good.items() if key != "created_at"}
+        for name, pages in {
+            "not a list": {}, "page not a list": [{}], "row not an object": [[1]], "no creator": [[nocreator]],
+            "string id": [[{**good, "id": "5"}]], "float id": [[{**good, "id": 5.0}]],
+            "bool id": [[{**good, "id": True}]], "zero id": [[{**good, "id": 0}]],
+            "null state": [[{**good, "state": None}]],
+            "float creator id": [[{**good, "creator": {**BOT, "id": 41898282.0}}]],
+            "bool creator id": [[{**good, "creator": {**BOT, "id": True}}]],
+            "creator login not a string": [[{**good, "creator": {**BOT, "login": 7}}]],
+            "creator type not a string": [[{**good, "creator": {**BOT, "type": None}}]],
+            "creator without id": [[{**good, "creator": {"login": BOT["login"], "type": "Bot"}}]],
+            "missing created_at": [[nodate]], "unparsable created_at": [[{**good, "created_at": "yesterday"}]],
+            "null created_at": [[{**good, "created_at": None}]],
+            "duplicate id in a page": [[good, {**good, "state": "failure"}]],
+            "duplicate id across pages": [[good], [{**good, "state": "failure"}]],
+        }.items():
+            with self.subTest(name), self.assertRaises(rr.ReleaseRequestError):
                 rr.commit_statuses(pages)
 
-    def test_a_run_and_a_status_order_by_time_and_the_worse_wins_a_tie(self) -> None:
-        old_ok = status("framework-trusted-verify", "success", 5, created="2026-11-13T01:00:00Z")
-        new_bad = status("framework-trusted-verify", "failure", 6, created="2026-11-13T03:00:00Z")
-        ok_run = {**app_run("framework-trusted-verify", 1), "head_sha": COMMIT, "started_at": "2026-11-13T02:00:00Z"}
-        self.assertEqual(self.unmet([old_ok], [ok_run]), [])
-        self.assertEqual(self.unmet([new_bad], [ok_run]), ["framework-trusted-verify: status failure"])
-        self.assertEqual(self.unmet([old_ok], [{**ok_run, "conclusion": "failure"}]),
-                         ["framework-trusted-verify: completed/failure"])
-        self.assertEqual(self.unmet([{**new_bad, "created_at": "2026-11-13T02:00:00Z"}], [ok_run]),
-                         ["framework-trusted-verify: status failure"])
-        self.assertEqual(self.unmet([{**new_bad, "created_at": None}], [ok_run]),
-                         ["framework-trusted-verify: status failure"])
+    def test_sources_are_never_ordered_against_each_other(self) -> None:
+        # A run that finished long ago must not outrank a newer pending status, whatever
+        # the run's started_at says: the worse of the two sources decides.
+        later_clock_run = {**app_run("framework-trusted-verify", 1), "head_sha": COMMIT,
+                           "started_at": "2026-11-13T09:00:00Z"}
+        pending_status = status("framework-trusted-verify", "pending", 50, created="2026-11-13T01:00:00Z")
+        failed_status = status("framework-trusted-verify", "failure", 50, created="2026-11-13T01:00:00Z")
+        ok_status = status("framework-trusted-verify", "success", 50, created="2026-11-13T01:00:00Z")
+        self.assertEqual(self.unmet([pending_status], [later_clock_run]),
+                         ["framework-trusted-verify: status pending"])
+        self.assertEqual(rr.pending(self.REQUIRED, [later_clock_run], COMMIT, rr.commit_statuses([[pending_status]])),
+                         ["framework-trusted-verify"])
+        self.assertEqual(self.unmet([failed_status], [later_clock_run]), ["framework-trusted-verify: status failure"])
+        failed_run = {**later_clock_run, "conclusion": "failure", "started_at": "2026-11-13T00:00:00Z"}
+        self.assertEqual(self.unmet([ok_status], [failed_run]), ["framework-trusted-verify: completed/failure"])
+        running = {**later_clock_run, "status": "in_progress", "conclusion": None}
+        self.assertEqual(self.unmet([ok_status], [running]), ["framework-trusted-verify: in_progress/None"])
+        self.assertEqual(self.unmet([ok_status], [later_clock_run]), [])
 
     def test_the_incident_commit(self) -> None:
         runs = [{**app_run("release-policy", 1), "head_sha": INCIDENT_COMMIT}]
@@ -281,6 +304,62 @@ class StatusSatisfiedChecks(unittest.TestCase):
             rr.check(**args)
         with self.assertRaisesRegex(rr.ReleaseRequestError, "commit status"):
             rr.check(**args, statuses=[["junk"]])
+
+
+class AppBinding(unittest.TestCase):
+    def rules(self, row: dict) -> list:
+        return [{"type": "required_status_checks", "parameters": {"required_status_checks": [row]}}]
+
+    def test_only_a_missing_or_null_binding_is_unbound(self) -> None:
+        self.assertEqual(rr.required_checks(self.rules({"context": "a", "integration_id": None}), None), [("a", None)])
+        self.assertEqual(rr.required_checks(self.rules({"context": "a"}), None), [("a", None)])
+        self.assertEqual(rr.required_checks(self.rules({"context": "a", "integration_id": 15368}), None),
+                         [("a", 15368)])
+
+    def test_an_invalid_binding_refuses(self) -> None:
+        for bad in ("15368", 0, -1, 15368.0, True, [], {}):
+            with self.subTest(bad=bad), self.assertRaisesRegex(rr.ReleaseRequestError, "invalid app binding"):
+                rr.required_checks(self.rules({"context": "a", "integration_id": bad}), None)
+            with self.subTest(protection=bad), self.assertRaisesRegex(rr.ReleaseRequestError, "invalid app binding"):
+                rr.required_checks([], {"checks": [{"context": "a", "app_id": bad}]})
+
+    def test_a_malformed_rule_refuses(self) -> None:
+        valid = self.rules({"context": "ok", "integration_id": 15368})
+        for rule in ({"type": "required_status_checks"},
+                     {"type": "required_status_checks", "parameters": {"required_status_checks": "x"}},
+                     {"type": "required_status_checks", "parameters": {"required_status_checks": ["x"]}}):
+            with self.subTest(rule=rule), self.assertRaises(rr.ReleaseRequestError):
+                rr.required_checks([*valid, rule], None)
+        with self.assertRaises(rr.ReleaseRequestError):
+            rr.required_checks(valid, {"checks": [{"context": "ok", "app_id": 15368}, "x"]})
+
+
+class ReleaseTagWorkflowWiring(unittest.TestCase):
+    """The workflow must hand the statuses to the judge, freshly read, or the fix never runs."""
+
+    def step(self) -> str:
+        text = (rr.ROOT / ".github/workflows/release-tag.yml").read_text(encoding="utf-8")
+        start = text.index("name: Decide whether the version may be tagged")
+        return text[start:text.index("name: Sign the tag", start)]
+
+    def command(self, step: str, sub: str) -> str:
+        found = [block for block in re.findall(r"release_request\.py " + sub + r"\b(?:[^\n]*\\\n)*[^\n]*", step)]
+        self.assertEqual(len(found), 1, sub)
+        return found[0]
+
+    def test_statuses_are_fetched_and_passed_to_pending_and_check(self) -> None:
+        step = self.step()
+        self.assertIn("commits/$GITHUB_SHA/statuses", step)
+        for sub in ("pending", "check"):
+            self.assertIn('--statuses "$RUNNER_TEMP/statuses.json"', self.command(step, sub), sub)
+
+    def test_check_reads_both_sources_again_just_before_it_runs(self) -> None:
+        step = self.step()
+        before_check = step[:step.index("release_request.py check")]
+        tail = before_check[before_check.index("done\n", before_check.index("while :; do")):]
+        self.assertIn("fetch_results", tail)
+        self.assertIn("check-runs?per_page=100", step)
+        self.assertEqual(step.count("fetch_results"), 3)  # definition, wait loop, refetch before check
 
 
 class LiveImmutableReleases(unittest.TestCase):

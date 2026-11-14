@@ -117,7 +117,9 @@ def required_checks(branch_rules: Any, protection: Any) -> list[tuple[str, int |
     def add(context: Any, app: Any) -> None:
         if not isinstance(context, str) or not context:
             raise ReleaseRequestError("a required check has no context")
-        app_id = app if isinstance(app, int) and app > 0 else None
+        if app is not None and (not isinstance(app, int) or isinstance(app, bool) or app <= 0):
+            raise ReleaseRequestError(f"required check {context} has an invalid app binding: {app!r}")
+        app_id = app
         if context in found and found[context] not in (None, app_id) and app_id is not None:
             raise ReleaseRequestError(f"required check {context} is bound to two different apps")
         if found.get(context) is None:
@@ -125,17 +127,23 @@ def required_checks(branch_rules: Any, protection: Any) -> list[tuple[str, int |
 
     for rule in branch_rules:
         if isinstance(rule, dict) and rule.get("type") == "required_status_checks":
-            for row in (rule.get("parameters") or {}).get("required_status_checks", []):
-                if isinstance(row, dict):
-                    add(row.get("context"), row.get("integration_id"))
+            params = rule.get("parameters")
+            rows = params.get("required_status_checks") if isinstance(params, dict) else None
+            if not isinstance(rows, list):
+                raise ReleaseRequestError("a required_status_checks rule has no check list")
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise ReleaseRequestError("a required status check row is not an object")
+                add(row.get("context"), row.get("integration_id"))
     if protection is not None:
         if not isinstance(protection, dict):
             raise ReleaseRequestError("branch protection required checks must be an object")
         checks = protection.get("checks")
         if isinstance(checks, list) and checks:
             for row in checks:
-                if isinstance(row, dict):
-                    add(row.get("context"), row.get("app_id"))
+                if not isinstance(row, dict):
+                    raise ReleaseRequestError("a required status check row is not an object")
+                add(row.get("context"), row.get("app_id"))
         else:
             for context in protection.get("contexts") or []:
                 add(context, None)
@@ -160,6 +168,10 @@ ACTIONS_APP_ID = 15368
 ACTIONS_BOT = {"login": "github-actions[bot]", "type": "Bot", "id": 41898282}
 
 
+def exact_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def commit_statuses(pages: Any) -> list[dict[str, Any]]:
     """Commit statuses from `gh api --paginate --slurp`, an array of pages of statuses.
 
@@ -170,14 +182,22 @@ def commit_statuses(pages: Any) -> list[dict[str, Any]]:
     if not isinstance(pages, list):
         raise ReleaseRequestError("commit-status pages must be an array")
     found = []
+    seen: set[int] = set()
     for page in pages:
         if not isinstance(page, list):
             raise ReleaseRequestError("a commit-status page is not a list")
         for row in page:
-            if (not isinstance(row, dict) or not isinstance(row.get("id"), int)
+            creator = row.get("creator") if isinstance(row, dict) else None
+            if (not isinstance(row, dict) or not exact_int(row.get("id")) or row["id"] <= 0
                     or not isinstance(row.get("context"), str) or not isinstance(row.get("state"), str)
-                    or not isinstance(row.get("creator"), dict)):
-                raise ReleaseRequestError("a commit status lacks an id, context, state or creator")
+                    or not isinstance(creator, dict) or not isinstance(creator.get("login"), str)
+                    or not isinstance(creator.get("type"), str) or not exact_int(creator.get("id"))
+                    or moment(row.get("created_at")) is None):
+                raise ReleaseRequestError("a commit status is malformed: it needs a positive integer id, "
+                                          "context, state, created_at and a creator with login, type and id")
+            if row["id"] in seen:
+                raise ReleaseRequestError(f"commit status id {row['id']} appears twice")
+            seen.add(row["id"])
             found.append(row)
     return found
 
@@ -231,30 +251,25 @@ def moment(text: Any) -> datetime | None:
 
 def newest_result(context: str, app_id: int | None, runs: list[dict[str, Any]],
                   statuses: list[dict[str, Any]], commit: str) -> tuple[str, str] | None:
-    """(state, description) of the newest result for `context`, or None when there is none.
+    """(state, description) of the result for `context`, or None when there is none.
 
-    The result is the newest check run from the bound app or the newest commit
-    status from the Actions bot. Run ids and status ids are different id
-    spaces, so when both exist the newer by timestamp (run started_at, status
-    created_at) decides. If the order cannot be established (a missing, unparsable
-    or equal timestamp) the result is the worse of the two, so an old success
-    never overrides a newer failure and an unorderable pair never passes
-    on the strength of one side.
+    Check run ids and commit status ids are different id spaces and the two
+    carry different clocks, so the sources are never ordered against each other.
+    Each source contributes its newest result (by id within the source); when a
+    context has both, the worse of the two decides, so it is met only when the
+    newest of each is success and neither is still running.
     """
     run = newest_run(context, app_id, runs, commit)
     row = newest_status(context, app_id, statuses)
     found = []
     if run is not None:
-        found.append((run_state(run), f"{run.get('status')}/{run.get('conclusion')}", moment(run.get("started_at"))))
+        found.append((run_state(run), f"{run.get('status')}/{run.get('conclusion')}"))
     if row is not None:
-        found.append((status_state(row), f"status {row['state']}", moment(row.get("created_at"))))
+        found.append((status_state(row), f"status {row['state']}"))
     if not found:
         return None
-    if len(found) == 2 and found[0][2] and found[1][2] and found[0][2] != found[1][2]:
-        found = [max(found, key=lambda item: item[2])]
     rank = {"failure": 0, "pending": 1, "success": 2}
-    state, text, _ = min(found, key=lambda item: rank[item[0]])
-    return state, text
+    return min(found, key=lambda item: rank[item[0]])
 
 
 def unmet(required: list[tuple[str, int | None]], runs: list[dict[str, Any]], commit: str,

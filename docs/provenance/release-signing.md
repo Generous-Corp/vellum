@@ -77,14 +77,20 @@ A Vellum release tag is signed by CI, never by a person or an agent's host key.
    - every status check the `main` rules require concluded `success` on the selected commit. A required check bound
      to GitHub Actions (app 15368) is met by a check run from that app or by a commit status from the
      `github-actions[bot]` account (login, type `Bot` and id 41898282 must all match), the way main's rules accept
-     either; `release-path-review` and `framework-trusted-verify` are statuses. A status from any other creator never
-     counts, and a check bound to any other app is never met by a status. The newest result decides, by id within a
-     source and by timestamp across a run and a status; when the order cannot be told, the worse result decides. A
-     failed, errored or `pending` status is not success, and a malformed status list refuses the release.
+     either; `release-path-review` and `framework-trusted-verify` are statuses. A status from any other creator is
+     ignored, and a check bound to any other app, or to none, is never met by a status. Each source contributes its
+     newest result by id. Check run ids and status ids are different id spaces on different clocks, so the two are
+     never ordered against each other: a context that has both is met only when the newest of each is `success` and
+     neither is still running, and the worse one decides. A `pending` status or an unfinished run is waited for;
+     `failure`, `error` and any other state is not success. A status list that is malformed refuses the release: ids
+     must be positive integers (not booleans or floats), the creator needs a string login, a string type and an
+     integer id, `created_at` must parse, and a repeated status id is refused. A required check's app binding must be
+     a positive integer or null (or absent); any other value refuses.
 
    The push that lands the reconcile starts those checks on the same commit, so the job first waits, up to 100
    minutes, until none of them is still running, meaning a run not completed or a `pending` status
-   (`release_request.py pending`).
+   (`release_request.py pending`). It then reads the check runs and statuses again, with the same retry, and
+   `release_request.py check` judges only that fresh read.
 5. The job signs an annotated tag on that commit with the key in the environment's `RELEASE_TAG_SIGNING_KEY` secret.
    It verifies the tag with `scripts/verify_release_tag.py` against `provenance/release-signers.allowed_signers`
    before pushing anything.
