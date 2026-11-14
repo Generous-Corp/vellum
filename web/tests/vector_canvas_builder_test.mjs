@@ -36,7 +36,18 @@ assert.equal(gradients.length, 3);
 const wide = node.asset.ops.find((op) => op.op === 'path' && typeof op.fill === 'object');
 assert.deepEqual(gradients[0].slice(-6), wide.fill.transform);
 assert.equal(gradients[2][2], 2, 'the focal radial is a two-circle radial');
+assert.deepEqual(gradients[0].slice(3, 6), [0, 0, 0], 'pad, srgb interpolation, srgb stops');
+
 const stops = calls.filter((call) => call[0] === 'vellum_web_vector_stop');
 assert.equal(stops.length, 6);
 assert.deepEqual(stops[0], ['vellum_web_vector_stop', 0, 0, 1, 0, 0, 1]);
+const conic = { ...node.asset, ops: [{ op: 'path', d: 'M0 0H1V1Z', stroke: 'none',
+    fill: { gradient: { kind: 'conic', interpolation: 'oklab', colorSpace: 'display-p3',
+        stops: [{ position: 0, color: '#000000' }, { position: 1, color: '#ffffff' }] } } }] };
+calls.length = 0;
+addVectorAsset(module, 'conic', 0, 0, 1, 1, conic);
+const encoded = calls.find((call) => call[0] === 'vellum_web_vector_gradient');
+assert.deepEqual(encoded.slice(2, 6), [3, 0, 2, 2], 'conic, pad, oklab, display-p3');
+assert.throws(() => addVectorAsset(module, 'bad', 0, 0, 1, 1, { ...conic, ops: [{ ...conic.ops[0],
+    fill: { gradient: { ...conic.ops[0].fill.gradient, kind: 'spiral' } } }] }), /cannot carry/);
 console.log('vector canvas builder test passed');

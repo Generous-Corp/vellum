@@ -18,6 +18,11 @@ export const SVG_ASSET_LIMITS: Readonly<{
     maxExpandedNodes: number;
     maxNumber: number;
     maxPathDataBytes: number;
+    maxPathCommands: number;
+    maxPathValues: number;
+    maxCompiledOps: number;
+    maxCompiledDepth: number;
+    maxMatrixEntry: number;
 }>;
 export const DEFAULT_SVG_NODE_BUDGET: number;
 export const DEFAULT_SVG_PATH_DATA_BUDGET: number;

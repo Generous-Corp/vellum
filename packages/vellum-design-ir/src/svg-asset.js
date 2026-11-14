@@ -13,7 +13,12 @@ export const SVG_ASSET_LIMITS = Object.freeze({
     maxAttributes: 64,
     maxExpandedNodes: 50000,
     maxNumber: 1e6,
-    maxPathDataBytes: 1024 * 1024,
+    maxPathDataBytes: 64 * 1024,
+    maxPathCommands: 4096,
+    maxPathValues: 16384,
+    maxCompiledOps: 16384,
+    maxCompiledDepth: 64,
+    maxMatrixEntry: 1e9,
 });
 export const DEFAULT_SVG_NODE_BUDGET = 512;
 export const DEFAULT_SVG_PATH_DATA_BUDGET = 64 * 1024;
@@ -338,11 +343,16 @@ function parseColor(value) {
         return [...rgb.map((part) => Math.round(Math.min(255, Math.max(0, part)))),
             Math.min(1, Math.max(0, alpha))];
     }
-    const hue = Number.parseFloat(parts[0]);
-    const saturation = channel(parts[1], 1);
-    const lightness = channel(parts[2], 1);
+    const angle = /^([+-]?(?:\d+\.?\d*|\.\d+))(deg|rad|grad|turn)?$/.exec(parts[0]);
+    if (!angle) return null;
+    const turns = { deg: 1, rad: 180 / Math.PI, grad: 0.9, turn: 360 };
+    const hue = Number(angle[1]) * turns[angle[2] ?? 'deg'];
+    let saturation = channel(parts[1], 1);
+    let lightness = channel(parts[2], 1);
     if (!Number.isFinite(hue) || saturation === null || lightness === null ||
         !parts[1].endsWith('%') || !parts[2].endsWith('%')) return null;
+    saturation = Math.min(1, Math.max(0, saturation));
+    lightness = Math.min(1, Math.max(0, lightness));
     const h = ((hue % 360) + 360) % 360 / 360;
     const q = lightness < 0.5 ? lightness * (1 + saturation) : lightness + saturation - lightness * saturation;
     const p = 2 * lightness - q;
@@ -370,7 +380,8 @@ function hexColor(hex) {
 
 function hexString(color, opacity = 1) {
     const alpha = Math.round(Math.min(1, Math.max(0, color[3] * opacity)) * 255);
-    const hex = color.slice(0, 3).map((part) => part.toString(16).padStart(2, '0')).join('');
+    const hex = color.slice(0, 3).map((part) =>
+        Math.round(Math.min(255, Math.max(0, part))).toString(16).padStart(2, '0')).join('');
     return alpha === 255 ? `#${hex}` : `#${hex}${alpha.toString(16).padStart(2, '0')}`;
 }
 
@@ -444,7 +455,8 @@ function parseTransform(value) {
         matrix = multiply(matrix, step);
     }
     if (consumed !== text.length) return null;
-    return matrix.every(Number.isFinite) ? matrix : null;
+    return matrix.every((value) => Number.isFinite(value) &&
+        Math.abs(value) <= SVG_ASSET_LIMITS.maxNumber) ? matrix : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -732,6 +744,18 @@ function pathBounds(segments) {
     return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
+// One path's segments must fit the renderer's path budgets once serialized.
+function checkPathBudget(segments) {
+    const values = segments.reduce((sum, segment) => sum + segment.length - 1, 0);
+    if (segments.length > SVG_ASSET_LIMITS.maxPathCommands ||
+        values > SVG_ASSET_LIMITS.maxPathValues ||
+        utf8Length(serializePath(segments)) > SVG_ASSET_LIMITS.maxPathDataBytes) {
+        refuse(`a path exceeds ${SVG_ASSET_LIMITS.maxPathCommands} commands, ` +
+            `${SVG_ASSET_LIMITS.maxPathValues} values or ${SVG_ASSET_LIMITS.maxPathDataBytes} bytes`);
+    }
+    return segments;
+}
+
 function hasCurves(segments) {
     return segments.some((segment) => segment[0] === 'C' || segment[0] === 'Q' || segment[0] === 'A');
 }
@@ -760,7 +784,7 @@ function shapeSegments(node, report) {
             report('svg-path-data-invalid', 'a path with malformed path data was dropped');
             return [];
         }
-        return segments;
+        return checkPathBudget(segments);
     }
     case 'rect': {
         const x = length('x');
@@ -812,7 +836,7 @@ function shapeSegments(node, report) {
             segments.push(['L', numbers[index], numbers[index + 1]]);
         }
         if (node.name === 'polygon') segments.push(['Z']);
-        return segments;
+        return checkPathBudget(segments);
     }
     }
 }
@@ -859,6 +883,37 @@ function declared(node) {
     return values;
 }
 
+const ENUMERATED = {
+    'fill-rule': ['nonzero', 'evenodd'], 'clip-rule': ['nonzero', 'evenodd'],
+    'stroke-linecap': ['butt', 'round', 'square'],
+    'stroke-linejoin': ['miter', 'round', 'bevel', 'arcs', 'miter-clip'],
+    visibility: ['visible', 'hidden', 'collapse'],
+    'color-interpolation': ['auto', 'sRGB', 'linearRGB'],
+};
+
+function validProperty(name, value) {
+    if (ENUMERATED[name]) return ENUMERATED[name].includes(value);
+    if (name === 'fill' || name === 'stroke') {
+        return value === 'none' || value === 'currentColor' || /^url\(/.test(value) ||
+            parseColor(value) !== null;
+    }
+    if (name === 'color') return parseColor(value) !== null;
+    if (name === 'fill-opacity' || name === 'stroke-opacity') {
+        const parsed = parseFraction(value, 1);
+        return parsed !== null;
+    }
+    if (name === 'stroke-width' || name === 'stroke-dashoffset') return parseLength(value) !== null;
+    if (name === 'stroke-miterlimit') {
+        const parsed = parseNumber(value);
+        return parsed !== null && parsed >= 1;
+    }
+    if (name === 'stroke-dasharray') {
+        return value === 'none' || value.split(/[\s,]+/).filter(Boolean)
+            .every((part) => { const length = parseLength(part); return length !== null && length >= 0; });
+    }
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // The importer.
 
@@ -873,6 +928,12 @@ const SHA256_K = new Uint32Array([
     0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ]);
+
+// Authored ids double their colons and dots, so no authored id can equal an
+// identity the importer generates with a single ":" or "." separator.
+function escapeId(id) {
+    return id.replace(/[:.]/g, (character) => character + character);
+}
 
 function sha256(text) {
     const bytes = new TextEncoder().encode(text);
@@ -966,6 +1027,7 @@ class Importer {
         }
         this.width = width;
         this.height = height;
+        this.viewportSize = box ? [box[2], box[3]] : [width, height];
         let viewport = [...IDENTITY];
         if (box) viewport = this.viewBoxTransform(box, width, height, a.preserveAspectRatio, this.rootId);
         const values = declared(svg);
@@ -1024,10 +1086,20 @@ class Importer {
         return title && title.text.trim() ? title.text.trim().replace(/\s+/g, ' ') : undefined;
     }
 
-    inherit(parent, node) {
+    // An invalid declaration is reported and leaves the inherited value, as
+    // a CSS parser ignores it.
+    inherit(parent, node, path = `<${node.name}>`) {
         const values = declared(node);
         const state = { ...parent };
-        for (const name of INHERITED) if (values[name] !== undefined) state[name] = values[name];
+        for (const name of INHERITED) {
+            if (values[name] === undefined) continue;
+            if (validProperty(name, values[name])) {
+                state[name] = values[name];
+            } else {
+                this.report('svg-property-invalid', path,
+                    `<${node.name}> ${name} ${values[name]} is invalid and was ignored`);
+            }
+        }
         return state;
     }
 
@@ -1045,7 +1117,7 @@ class Importer {
 
     sourceIdFor(node, path, scoped) {
         if (scoped) return path;
-        return typeof node.attributes.id === 'string' ? `${this.rootId}:${node.attributes.id}` : path;
+        return typeof node.attributes.id === 'string' ? `${this.rootId}:${escapeId(node.attributes.id)}` : path;
     }
 
     dropUnknownAttributes(node, path) {
@@ -1109,8 +1181,8 @@ class Importer {
                 this.report('svg-use-unresolved', path, `<use> names ${targetId ?? 'nothing'}, which is not in the asset`);
                 return null;
             }
-            const x = parseLength(node.attributes.x) ?? 0;
-            const y = parseLength(node.attributes.y) ?? 0;
+            const x = this.lengthOrZero(node, 'x', path);
+            const y = this.lengthOrZero(node, 'y', path);
             group.transform = multiply(group.transform, [1, 0, 0, 1, x, y]);
             const nextActive = new Set(active).add(targetId);
             if (target.name === 'symbol') {
@@ -1119,12 +1191,12 @@ class Importer {
                 const height = parseLength(node.attributes.height) ?? parseLength(target.attributes.height);
                 if (box && box.length === 4 && box[2] > 0 && box[3] > 0) {
                     if (width > 0 && height > 0) {
-                        group.children.push({ kind: 'group', id: `${sourceId}:${targetId}`,
+                        group.children.push({ kind: 'group', id: `${sourceId}:${escapeId(targetId)}`,
                             transform: this.viewBoxTransform(box, width, height,
                                 target.attributes.preserveAspectRatio, path),
                             opacity: 1,
                             clip: { units: 'user', shapes: [{ segments: [['M', 0, 0], ['L', width, 0], ['L', width, height], ['L', 0, height], ['Z']], rule: 'nonzero', transform: [...IDENTITY] }] },
-                            children: this.children(target, `${sourceId}:${targetId}`, this.inherit(inner, target), nextActive, true) });
+                            children: this.children(target, `${sourceId}:${escapeId(targetId)}`, this.inherit(inner, target), nextActive, true) });
                     } else {
                         this.report('svg-symbol-viewbox-dropped', path,
                             `<use> of a symbol with a viewBox needs a width and height; the viewBox was ignored`);
@@ -1134,7 +1206,7 @@ class Importer {
                     group.children.push(...this.instanceChildren(target, sourceId, targetId, inner, nextActive));
                 }
             } else {
-                const lowered = this.element(target, `${sourceId}:${targetId}`, inner, nextActive, true);
+                const lowered = this.element(target, `${sourceId}:${escapeId(targetId)}`, inner, nextActive, true);
                 if (lowered) group.children.push(lowered);
             }
         } else if (CONTAINERS.has(node.name)) {
@@ -1149,8 +1221,8 @@ class Importer {
                     if (lowered) group.children.push(lowered);
                 }
             } else if (node.name === 'svg') {
-                const x = parseLength(node.attributes.x) ?? 0;
-                const y = parseLength(node.attributes.y) ?? 0;
+                const x = this.lengthOrZero(node, 'x', path);
+                const y = this.lengthOrZero(node, 'y', path);
                 const width = parseLength(node.attributes.width);
                 const height = parseLength(node.attributes.height);
                 const box = node.attributes.viewBox?.trim().split(/[\s,]+/).map(Number);
@@ -1193,8 +1265,17 @@ class Importer {
         return group;
     }
 
+    lengthOrZero(node, name, path) {
+        const value = parseLength(node.attributes[name]);
+        if (value === null) {
+            this.report('svg-length-unit-dropped', path, `the ${name} of <${node.name}> uses a unit other than px; 0 was used`);
+            return 0;
+        }
+        return value ?? 0;
+    }
+
     instanceChildren(target, sourceId, targetId, inner, active) {
-        return this.children(target, `${sourceId}:${targetId}`, this.inherit(inner, target), active, true);
+        return this.children(target, `${sourceId}:${escapeId(targetId)}`, this.inherit(inner, target, `${sourceId}`), active, true);
     }
 
     paint(value, opacity, path, property, state) {
@@ -1204,7 +1285,10 @@ class Importer {
             const definition = this.ids.get(url[2]);
             if (definition && (definition.name === 'linearGradient' || definition.name === 'radialGradient')) {
                 const gradient = this.gradient(definition, path, property, state);
-                if (!gradient) return { kind: 'none' };
+                if (!gradient) {
+                    if (url[3]) return this.paint(url[3].trim(), opacity, path, property, state);
+                    return { kind: 'none' };
+                }
                 if (gradient.stops.length === 1) {
                     const [stop] = gradient.stops;
                     if (stop.color[3] * stop.opacity * opacity <= 0) return { kind: 'none' };
@@ -1238,7 +1322,9 @@ class Importer {
         // Attributes and stops inherit along the href chain, nearest first.
         const chain = [];
         let current = definition;
-        while (current && chain.length < 32) {
+        const seen = new Set();
+        while (current && !seen.has(current)) {
+            seen.add(current);
             chain.push(current);
             const next = localReference(current.attributes.href ?? current.attributes['xlink:href'] ?? '');
             current = next === null ? null : this.ids.get(next);
@@ -1256,7 +1342,10 @@ class Importer {
         for (const stop of stopsOwner?.children.filter((child) => child.name === 'stop') ?? []) {
             const values = declared(stop);
             let offset = parseFraction(values.offset, 0);
-            if (offset === null) offset = 0;
+            if (offset === null) {
+                this.report('svg-stop-offset-invalid', path, `a gradient stop offset ${values.offset} is invalid; 0 was used`);
+                offset = 0;
+            }
             offset = Math.min(1, Math.max(previous, offset));
             previous = offset;
             const raw = values['stop-color'] === 'currentColor' ? state.color : (values['stop-color'] ?? 'black');
@@ -1265,6 +1354,9 @@ class Importer {
                 this.report('svg-stop-color-dropped', path, `a gradient stop colour ${raw} is not read; black was used`);
             }
             const opacityValue = parseFraction(values['stop-opacity'], 1);
+            if (opacityValue === null) {
+                this.report('svg-stop-opacity-invalid', path, `a gradient stop opacity ${values['stop-opacity']} is invalid; 1 was used`);
+            }
             stops.push({ offset, color: color ?? [0, 0, 0, 1],
                 opacity: Math.min(1, Math.max(0, opacityValue ?? 1)) });
         }
@@ -1291,26 +1383,34 @@ class Importer {
         }
         const spread = attribute('spreadMethod') ?? 'pad';
         const geometry = {};
-        const coordinate = (name, fallback) => {
-            const value = parseFraction(attribute(name), fallback);
-            if (value === null) {
+        // In user space a percentage, like each default, is of the viewport:
+        // its width, height, or normalized diagonal.
+        const [viewWidth, viewHeight] = this.viewportSize;
+        const extent = { x: viewWidth, y: viewHeight,
+            d: Math.sqrt((viewWidth * viewWidth + viewHeight * viewHeight) / 2) };
+        const coordinate = (name, fallback, axis) => {
+            const raw = attribute(name) ?? fallback;
+            const percent = /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)%\s*$/.exec(raw);
+            if (percent) return Number(percent[1]) / 100 * (units === 'user' ? extent[axis] : 1);
+            const value = units === 'user' ? parseLength(raw) : parseNumber(raw);
+            if (value === null || value === undefined) {
                 this.report('svg-gradient-coordinate-dropped', path, `${property} gradient ${name} is malformed; its default was used`);
-                return fallback;
+                return coordinate(name === 'fx' || name === 'fy' ? name.replace('f', 'c') : '', fallback, axis);
             }
             return value;
         };
         if (kind === 'linear') {
-            geometry.x1 = coordinate('x1', 0);
-            geometry.y1 = coordinate('y1', 0);
-            geometry.x2 = coordinate('x2', 1);
-            geometry.y2 = coordinate('y2', 0);
+            geometry.x1 = coordinate('x1', '0%', 'x');
+            geometry.y1 = coordinate('y1', '0%', 'y');
+            geometry.x2 = coordinate('x2', '100%', 'x');
+            geometry.y2 = coordinate('y2', '0%', 'y');
         } else {
-            geometry.cx = coordinate('cx', 0.5);
-            geometry.cy = coordinate('cy', 0.5);
-            geometry.r = coordinate('r', 0.5);
-            geometry.fx = coordinate('fx', geometry.cx);
-            geometry.fy = coordinate('fy', geometry.cy);
-            geometry.fr = coordinate('fr', 0);
+            geometry.cx = coordinate('cx', '50%', 'x');
+            geometry.cy = coordinate('cy', '50%', 'y');
+            geometry.r = coordinate('r', '50%', 'd');
+            geometry.fx = attribute('fx') === undefined ? geometry.cx : coordinate('fx', '50%', 'x');
+            geometry.fy = attribute('fy') === undefined ? geometry.cy : coordinate('fy', '50%', 'y');
+            geometry.fr = coordinate('fr', '0%', 'd');
         }
         if (!['pad', 'repeat', 'reflect'].includes(spread)) {
             this.report('svg-gradient-spread-dropped', path, `${property} gradient spreadMethod ${spread} is unknown; pad was used`);
@@ -1368,7 +1468,11 @@ class Importer {
             } else {
                 const units = definition.attributes.clipPathUnits === 'objectBoundingBox' ? 'box' : 'user';
                 let clipTransform = [...IDENTITY];
-                if (definition.attributes.transform) clipTransform = parseTransform(definition.attributes.transform) ?? clipTransform;
+                if (definition.attributes.transform) {
+                    const parsed = parseTransform(definition.attributes.transform);
+                    if (parsed === null) this.report('svg-transform-dropped', path, 'a clipPath has a malformed transform, which was dropped');
+                    else clipTransform = parsed;
+                }
                 const shapes = [];
                 for (const child of definition.children) {
                     if (SILENT.has(child.name)) continue;
@@ -1380,7 +1484,7 @@ class Importer {
                             this.report('svg-clip-child-dropped', path, 'a clipPath <use> that does not name a shape was dropped');
                             continue;
                         }
-                        childTransform = [1, 0, 0, 1, parseLength(child.attributes.x) ?? 0, parseLength(child.attributes.y) ?? 0];
+                        childTransform = [1, 0, 0, 1, this.lengthOrZero(child, 'x', path), this.lengthOrZero(child, 'y', path)];
                         shapeNode = target;
                     }
                     if (!SHAPES.has(shapeNode.name)) {
@@ -1393,7 +1497,11 @@ class Importer {
                     }
                     const childValues = declared(shapeNode);
                     if (childValues.display === 'none') continue;
-                    if (childValues.transform) childTransform = multiply(childTransform, parseTransform(childValues.transform) ?? IDENTITY);
+                    if (childValues.transform) {
+                        const parsed = parseTransform(childValues.transform);
+                        if (parsed === null) this.report('svg-transform-dropped', path, 'a clipPath child has a malformed transform, which was dropped');
+                        else childTransform = multiply(childTransform, parsed);
+                    }
                     const segments = shapeSegments(shapeNode, (code, message) => this.report(code, path, message));
                     if (segments.length === 0) continue;
                     shapes.push({ segments, rule: (childValues['clip-rule'] ?? values['clip-rule'] ?? state['clip-rule']) === 'evenodd' ? 'evenodd' : 'nonzero',
@@ -1788,6 +1896,9 @@ function paintBounds(item, matrix = IDENTITY) {
         };
     }
     const inner = multiply(matrix, item.transform);
+    if (inner.some((value) => !Number.isFinite(value) || Math.abs(value) > SVG_ASSET_LIMITS.maxMatrixEntry)) {
+        refuse(`nested transforms compose beyond ±${SVG_ASSET_LIMITS.maxMatrixEntry}`);
+    }
     let box = null;
     for (const child of item.children) {
         const next = paintBounds(child, inner);
@@ -1862,7 +1973,6 @@ export function importSvgAsset(svg, options = {}) {
         if (!raster || typeof raster.contentHash !== 'string') {
             throw new TypeError('rasterize must return an asset with a contentHash');
         }
-        importer.diagnostics.length = 0;
         decision('svg-rasterized',
             `the asset was rasterized at ${importer.width}x${importer.height} because ${reasonsText}; ` +
             'its colours no longer follow tokens and it redraws as one image', 'rasterized', 'warning');
@@ -1902,6 +2012,19 @@ export function importSvgAsset(svg, options = {}) {
 
     const compiled = new CompiledLowering(importer);
     compiled.lower(tree);
+    let depth = 0;
+    let deepest = 0;
+    for (const op of compiled.ops) {
+        if (op.op === 'group') deepest = Math.max(deepest, ++depth);
+        else if (op.op === 'end') depth -= 1;
+    }
+    if (compiled.ops.length > SVG_ASSET_LIMITS.maxCompiledOps ||
+        deepest > SVG_ASSET_LIMITS.maxCompiledDepth) {
+        reasonsText = `its compiled form needs ${compiled.ops.length} operations nested ${deepest} deep, ` +
+            `beyond ${SVG_ASSET_LIMITS.maxCompiledOps} operations or ${SVG_ASSET_LIMITS.maxCompiledDepth} levels`;
+        if (settings.rasterize) return rasterize();
+        refuse(reasonsText);
+    }
     if (importer.compiledLimits.length > 0 && settings.rasterize) {
         reasonsText = `the compiled form cannot carry ${importer.compiledLimits.join(', ')}`;
         return rasterize();

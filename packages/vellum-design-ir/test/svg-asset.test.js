@@ -126,7 +126,7 @@ test('every dropped or approximated feature is a loss entry', () => {
     const document = svgAssetToDesignIR(svg, { source }).document;
     assert.deepEqual(codes(document), [
         'svg-animation-dropped', 'svg-attribute-dropped', 'svg-element-dropped',
-        'svg-length-unit-dropped', 'svg-link-dropped', 'svg-paint-dropped',
+        'svg-length-unit-dropped', 'svg-link-dropped', 'svg-property-invalid',
         'svg-style-element-dropped', 'svg-use-unresolved',
     ]);
 });
@@ -196,4 +196,82 @@ test('the content hash is SHA-256 of the source text', async () => {
     for (const text of ['', 'abc', 'é'.repeat(100), await fixture('over-budget')]) {
         assert.equal(sha256(text), `sha256:${createHash('sha256').update(text, 'utf8').digest('hex')}`);
     }
+});
+
+const firstPath = (imported) => {
+    const visit = (node) => node.kind === 'path' ? node
+        : node.children.map(visit).find(Boolean);
+    return visit(imported.root);
+};
+const compiledOps = (imported) => imported.root.children[0].properties.vector.asset.ops;
+
+test('user-space gradient percentages and defaults are of the viewport', () => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="10" viewBox="0 0 100 10">
+      <linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0%" x2="100%">
+        <stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>
+      <linearGradient id="d" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>
+      <rect width="100" height="5" fill="url(#g)"/><rect y="5" width="100" height="5" fill="url(#d)"/></svg>`;
+    const ops = compiledOps(importSvgAsset(svg)).filter((op) => op.op === 'path');
+    assert.deepEqual(ops[0].fill.transform, [100, 0, 0, 100, 0, -50]);
+    assert.deepEqual(ops[1].fill.transform, [100, 0, 0, 100, 0, -50]);
+});
+
+test('paths and compiled assets stay within the renderer budgets', () => {
+    const long = `M0 0${'L1 1'.repeat(SVG_ASSET_LIMITS.maxPathCommands)}`;
+    assert.throws(() => importSvgAsset(wrap(`<path d="${long}"/>`)), /exceeds 4096 commands/);
+    const many = '<rect width="1" height="1"/>'.repeat(SVG_ASSET_LIMITS.maxCompiledOps);
+    assert.throws(() => importSvgAsset(wrap(many), { nodeBudget: 1 }), /16384 operations/);
+    const raster = importSvgAsset(wrap(many), {
+        nodeBudget: 1, rasterize: () => ({ contentHash: `sha256:${'e'.repeat(64)}` }) });
+    assert.equal(raster.mode, 'rasterized');
+});
+
+test('colours, fallbacks and gradient chains resolve as SVG defines them', () => {
+    const fill = (value) => firstPath(importSvgAsset(wrap(
+        `<rect width="5" height="5" fill="${value}"/>`))).properties.path.fill;
+    assert.equal(fill('hsl(.5turn, 100%, 50%)'), '#00ffff');
+    assert.equal(fill('hsl(0, 200%, 50%)'), '#ff0000');
+    assert.equal(fill('hsl(3.14159265rad, 100%, 50%)'), '#00ffff');
+    const fallback = firstPath(importSvgAsset(wrap(
+        '<linearGradient id="empty"/><rect width="5" height="5" fill="url(#empty) red"/>')));
+    assert.equal(fallback.properties.path.fill, '#ff0000');
+    let chain = '<linearGradient id="g0"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>';
+    for (let index = 1; index <= 40; index += 1) {
+        chain += `<linearGradient id="g${index}" href="#g${index - 1}"/>`;
+    }
+    const chained = firstPath(importSvgAsset(wrap(`${chain}<rect width="5" height="5" fill="url(#g40)"/>`)));
+    assert.equal(chained.properties.path.fill.stops.length, 2);
+});
+
+test('invalid declarations keep the inherited value and are losses', () => {
+    const imported = svgAssetToDesignIR(wrap(
+        '<g fill-opacity=".5"><rect width="5" height="5" fill="#000000" fill-opacity="bogus" stroke-linecap="pointy"/></g>'),
+        { source });
+    assert.deepEqual(codes(imported.document), ['svg-property-invalid', 'svg-property-invalid']);
+    const visit = (node) => node.kind === 'path' ? node : node.children.map(visit).find(Boolean);
+    assert.equal(visit(imported.document.root).properties.path.fill, '#00000080');
+});
+
+test('oversized transforms are dropped or refused and unit offsets are losses', () => {
+    const skew = svgAssetToDesignIR(wrap('<g transform="skewX(90)"><rect width="1" height="1"/></g>'), { source });
+    assert.deepEqual(codes(skew.document), ['svg-transform-dropped']);
+    const nested = '<g transform="scale(1000)">'.repeat(4) + '<rect width="1" height="1"/>' + '</g>'.repeat(4);
+    assert.throws(() => importSvgAsset(wrap(nested)), /compose beyond/);
+    const unit = svgAssetToDesignIR(wrap('<rect id="r" width="1" height="1"/><use href="#r" x="1em"/>'), { source });
+    assert.deepEqual(codes(unit.document), ['svg-length-unit-dropped']);
+});
+
+test('rasterizing keeps the earlier losses and authored ids never collide with generated ones', () => {
+    const raster = svgAssetToDesignIR(wrap(
+        '<rect width="5" height="5" filter="url(#f)"><animate attributeName="x" to="1"/></rect><filter id="f"/>'),
+        { source, rasterize: () => ({ contentHash: `sha256:${'f'.repeat(64)}` }) });
+    assert.equal(raster.mode, 'rasterized');
+    assert.deepEqual(codes(raster.document), ['svg-animation-dropped', 'svg-rasterized']);
+    const ids = svgAssetToDesignIR(wrap(
+        '<rect id="a" transform="translate(1 1)" width="1" height="1"/><rect id="a:shape" width="1" height="1"/>' +
+        '<rect id="a.0" width="1" height="1"/>'), { source });
+    const all = [...indexTree(ids.document.root).index.keys()];
+    assert.equal(new Set(all).size, all.length);
+    assert.ok(all.includes('assets/svg:a:shape') && all.includes('assets/svg:a::shape'));
 });

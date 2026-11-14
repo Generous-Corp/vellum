@@ -9,6 +9,8 @@
 #include <emscripten.h>
 
 #include <bit>
+#include <cmath>
+#include <initializer_list>
 #include <optional>
 #include <cstddef>
 #include <cstdint>
@@ -25,6 +27,28 @@ std::unique_ptr<vellum::runtime::Kernel> kernel;
 // The vector node being built by `vellum_web_begin_vector`, if any.
 std::optional<vellum::graphics::SceneNode> building_vector;
 std::shared_ptr<vellum::graphics::VectorAsset> building_asset;
+std::size_t building_depth = 0;
+
+bool finite(std::initializer_list<float> values) {
+    for (const float value : values) {
+        if (!std::isfinite(value)) return false;
+    }
+    return true;
+}
+
+// Each builder call checks its own values and the asset's budgets, so a
+// caller cannot grow an asset past what validation would accept.
+bool room_for_op() {
+    return building_asset && building_asset->ops.size() < vellum::graphics::kMaxVectorOps;
+}
+
+vellum::graphics::VectorPaint* last_paint(int stroke) {
+    if (!building_asset || building_asset->ops.empty() ||
+        building_asset->ops.back().kind != vellum::graphics::VectorOp::Kind::path) {
+        return nullptr;
+    }
+    return stroke != 0 ? &building_asset->ops.back().stroke : &building_asset->ops.back().fill;
+}
 
 EM_JS(void, canvas_begin,
       (float width, float height, float red, float green, float blue, float alpha), {
@@ -73,6 +97,70 @@ void hash_float(std::uint32_t& hash, float value) {
     hash_u32(hash, std::bit_cast<std::uint32_t>(value));
 }
 
+void hash_color(std::uint32_t& hash, const vellum::graphics::Color& color) {
+    hash_float(hash, color.red);
+    hash_float(hash, color.green);
+    hash_float(hash, color.blue);
+    hash_float(hash, color.alpha);
+}
+
+void hash_affine(std::uint32_t& hash, const vellum::graphics::Affine2D& m) {
+    for (const float value : {m.a, m.b, m.c, m.d, m.tx, m.ty}) hash_float(hash, value);
+}
+
+void hash_geometry(std::uint32_t& hash, const vellum::graphics::PathGeometry* path) {
+    hash_u32(hash, path != nullptr ? 1U : 0U);
+    if (path == nullptr) return;
+    for (const auto verb : path->verbs) hash_u32(hash, static_cast<std::uint32_t>(verb));
+    for (const float value : path->values) hash_float(hash, value);
+    hash_u32(hash, static_cast<std::uint32_t>(path->fill_rule));
+    hash_float(hash, path->stroke.width);
+    hash_u32(hash, static_cast<std::uint32_t>(path->stroke.join));
+    hash_u32(hash, static_cast<std::uint32_t>(path->stroke.cap));
+    hash_float(hash, path->stroke.miter_limit);
+    for (const float value : path->stroke.dash_array) hash_float(hash, value);
+    hash_float(hash, path->stroke.dash_offset);
+}
+
+void hash_paint(std::uint32_t& hash, const vellum::graphics::VectorPaint& paint) {
+    hash_color(hash, paint.color);
+    hash_u32(hash, paint.gradient ? 1U : 0U);
+    if (!paint.gradient) return;
+    const auto& g = *paint.gradient;
+    hash_u32(hash, static_cast<std::uint32_t>(g.kind));
+    hash_u32(hash, static_cast<std::uint32_t>(g.spread));
+    hash_u32(hash, static_cast<std::uint32_t>(g.interpolation));
+    hash_string(hash, g.color_space);
+    for (const float value : {g.angle_degrees, g.center_x, g.center_y, g.radius_x, g.radius_y,
+                              g.focal_x, g.focal_y, g.start_radius, g.end_radius}) {
+        hash_float(hash, value);
+    }
+    for (const auto& stop : g.stops) {
+        hash_float(hash, stop.position);
+        hash_color(hash, stop.color);
+    }
+    hash_affine(hash, paint.gradient_transform);
+}
+
+// The asset's whole display list, so a replaced asset changes the digest
+// even when its node keeps its id and box.
+void hash_vector(std::uint32_t& hash, const vellum::graphics::VectorAsset& asset) {
+    hash_string(hash, asset.content_hash);
+    for (const float value : {asset.view_box.x, asset.view_box.y, asset.view_box.width,
+                              asset.view_box.height}) {
+        hash_float(hash, value);
+    }
+    for (const auto& op : asset.ops) {
+        hash_u32(hash, static_cast<std::uint32_t>(op.kind));
+        hash_affine(hash, op.transform);
+        hash_geometry(hash, op.path.get());
+        hash_paint(hash, op.fill);
+        hash_paint(hash, op.stroke);
+        hash_float(hash, op.opacity);
+        hash_geometry(hash, op.clip.get());
+    }
+}
+
 }  // namespace
 
 extern "C" {
@@ -106,6 +194,7 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_begin_frame(
     lowering = {};
     building_vector.reset();
     building_asset.reset();
+    building_depth = 0;
     return 1;
 }
 
@@ -149,9 +238,12 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_begin_vector(
     const char* id, float x, float y, float width, float height, float view_x, float view_y,
     float view_width, float view_height, const char* content_hash) {
     if (!kernel || id == nullptr || id[0] == '\0' || content_hash == nullptr ||
-        building_vector || width < 0.0F || height < 0.0F) {
+        building_vector || !finite({x, y, width, height, view_x, view_y, view_width, view_height}) ||
+        width < 0.0F || height < 0.0F || !(view_width > 0.0F) || !(view_height > 0.0F) ||
+        !vellum::graphics::is_content_hash(content_hash)) {
         return 0;
     }
+    building_depth = 0;
     building_asset = std::make_shared<vellum::graphics::VectorAsset>();
     building_asset->content_hash = content_hash;
     building_asset->view_box = {view_x, view_y, view_width, view_height};
@@ -166,7 +258,11 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_begin_vector(
 EMSCRIPTEN_KEEPALIVE int vellum_web_vector_group(
     float a, float b, float c, float d, float tx, float ty, float opacity, const char* clip,
     int clip_evenodd) {
-    if (!building_asset || clip == nullptr) return 0;
+    if (!room_for_op() || clip == nullptr || !finite({a, b, c, d, tx, ty, opacity}) ||
+        opacity < 0.0F || opacity > 1.0F ||
+        building_depth >= vellum::graphics::kMaxVectorGroupDepth) {
+        return 0;
+    }
     vellum::graphics::VectorOp op{
         .kind = vellum::graphics::VectorOp::Kind::push_group,
         .transform = {a, b, c, d, tx, ty},
@@ -180,12 +276,14 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_vector_group(
         op.clip = std::make_shared<const vellum::graphics::PathGeometry>(std::move(geometry));
     }
     building_asset->ops.push_back(std::move(op));
+    ++building_depth;
     return 1;
 }
 
 EMSCRIPTEN_KEEPALIVE int vellum_web_vector_end_group() {
-    if (!building_asset) return 0;
+    if (!room_for_op() || building_depth == 0U) return 0;
     building_asset->ops.push_back({.kind = vellum::graphics::VectorOp::Kind::pop_group});
+    --building_depth;
     return 1;
 }
 
@@ -196,7 +294,11 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_vector_path(
     float fill_red, float fill_green, float fill_blue, float fill_alpha, float stroke_red,
     float stroke_green, float stroke_blue, float stroke_alpha, float stroke_width, int join,
     int cap, float miter_limit, float dash_offset) {
-    if (!building_asset || data == nullptr || join < 0 || join > 2 || cap < 0 || cap > 2) {
+    if (!room_for_op() || data == nullptr || join < 0 || join > 2 || cap < 0 || cap > 2 ||
+        !finite({a, b, c, d, tx, ty, fill_red, fill_green, fill_blue, fill_alpha, stroke_red,
+                 stroke_green, stroke_blue, stroke_alpha, stroke_width, miter_limit,
+                 dash_offset}) ||
+        stroke_width < 0.0F || miter_limit < 1.0F) {
         return 0;
     }
     vellum::graphics::PathGeometry geometry;
@@ -223,7 +325,10 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_vector_path(
 /// Appends one dash length to the last path operation's stroke.
 EMSCRIPTEN_KEEPALIVE int vellum_web_vector_dash(float length) {
     if (!building_asset || building_asset->ops.empty() ||
-        building_asset->ops.back().kind != vellum::graphics::VectorOp::Kind::path) {
+        building_asset->ops.back().kind != vellum::graphics::VectorOp::Kind::path ||
+        !std::isfinite(length) || length < 0.0F ||
+        building_asset->ops.back().path->stroke.dash_array.size() >=
+            vellum::graphics::kMaxPathDashes) {
         return 0;
     }
     auto geometry = std::make_shared<vellum::graphics::PathGeometry>(
@@ -234,20 +339,27 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_vector_dash(float length) {
 }
 
 /// Gives the last path operation's fill (`stroke` 0) or stroke (1) a
-/// gradient. Kind is 0 linear, 1 radial, 2 two-circle radial; spread is 0
-/// pad, 1 repeat, 2 reflect. Stops follow with `vellum_web_vector_stop`.
+/// gradient. Kind is 0 linear, 1 radial, 2 two-circle radial, 3 conic;
+/// spread is 0 pad, 1 repeat, 2 reflect; interpolation is 0 srgb, 1
+/// linear-srgb, 2 oklab; colour space is 0 srgb, 1 linear-srgb, 2
+/// display-p3. Stops follow with `vellum_web_vector_stop`.
 EMSCRIPTEN_KEEPALIVE int vellum_web_vector_gradient(
-    int stroke, int kind, int spread, float angle, float center_x, float center_y,
-    float radius_x, float radius_y, float focal_x, float focal_y, float start_radius,
-    float end_radius, float a, float b, float c, float d, float tx, float ty) {
-    if (!building_asset || building_asset->ops.empty() ||
-        building_asset->ops.back().kind != vellum::graphics::VectorOp::Kind::path ||
-        kind < 0 || kind > 2 || spread < 0 || spread > 2) {
+    int stroke, int kind, int spread, int interpolation, int color_space, float angle,
+    float center_x, float center_y, float radius_x, float radius_y, float focal_x,
+    float focal_y, float start_radius, float end_radius, float a, float b, float c, float d,
+    float tx, float ty) {
+    auto* paint = last_paint(stroke);
+    if (paint == nullptr || kind < 0 || kind > 3 || spread < 0 || spread > 2 ||
+        interpolation < 0 || interpolation > 2 || color_space < 0 || color_space > 2 ||
+        !finite({angle, center_x, center_y, radius_x, radius_y, focal_x, focal_y, start_radius,
+                 end_radius, a, b, c, d, tx, ty})) {
         return 0;
     }
-    auto& target = stroke != 0 ? building_asset->ops.back().stroke
-                               : building_asset->ops.back().fill;
+    auto& target = *paint;
+    constexpr const char* kColorSpaces[] = {"srgb", "linear-srgb", "display-p3"};
     vellum::graphics::LinearGradient gradient;
+    gradient.interpolation = static_cast<vellum::graphics::GradientInterpolation>(interpolation);
+    gradient.color_space = kColorSpaces[color_space];
     gradient.kind = static_cast<vellum::graphics::GradientKind>(kind);
     gradient.spread = static_cast<vellum::graphics::GradientSpread>(spread);
     gradient.angle_degrees = angle;
@@ -267,10 +379,12 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_vector_gradient(
 
 EMSCRIPTEN_KEEPALIVE int vellum_web_vector_stop(
     int stroke, float position, float red, float green, float blue, float alpha) {
-    if (!building_asset || building_asset->ops.empty()) return 0;
-    auto& target = stroke != 0 ? building_asset->ops.back().stroke
-                               : building_asset->ops.back().fill;
-    if (!target.gradient) return 0;
+    auto* paint = last_paint(stroke);
+    if (paint == nullptr || !paint->gradient || paint->gradient->stops.size() >= 64U ||
+        !finite({position, red, green, blue, alpha})) {
+        return 0;
+    }
+    auto& target = *paint;
     target.gradient->stops.push_back(
         {.position = position, .color = vellum::graphics::Color::rgba(red, green, blue, alpha)});
     return 1;
@@ -278,7 +392,10 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_vector_stop(
 
 /// Adds the vector node `vellum_web_begin_vector` started.
 EMSCRIPTEN_KEEPALIVE int vellum_web_end_vector() {
-    if (!building_vector || !building_asset) return 0;
+    if (!building_vector || !building_asset || building_depth != 0U ||
+        !vellum::graphics::vector_asset_is_valid(*building_asset)) {
+        return 0;
+    }
     building_vector->vector = std::move(building_asset);
     scene.root.children.push_back(std::move(*building_vector));
     building_vector.reset();
@@ -404,6 +521,7 @@ EMSCRIPTEN_KEEPALIVE std::uint32_t vellum_web_command_digest() {
         hash_float(hash, command.fill.green);
         hash_float(hash, command.fill.blue);
         hash_float(hash, command.fill.alpha);
+        if (command.vector) hash_vector(hash, *command.vector);
     }
     return hash;
 }

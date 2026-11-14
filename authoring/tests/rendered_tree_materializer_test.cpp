@@ -864,6 +864,9 @@ bool vector_nodes() {
             "fill":{"gradient":{"stops":[{"position":0,"color":"#000000"},
             {"position":1,"color":"#ffffff"}]},"transform":[0,0,0,0,0,0]}})JSON")},
         {"an opacity over one", tree(R"JSON({"op":"group","opacity":2},{"op":"end"})JSON")},
+        {"opacity on a path", tree(R"JSON({"op":"path","d":"M0 0H1V1Z","opacity":0.5})JSON")},
+        {"a clip on a path", tree(R"JSON({"op":"path","d":"M0 0H1V1Z","clip":{"d":"M0 0H1V1Z"}})JSON")},
+        {"a field on a group end", tree(R"JSON({"op":"group"},{"op":"end","opacity":1})JSON")},
     };
     for (const auto& [what, json] : refusals) {
         std::vector<vellum::graphics::LoweringDiagnostic> diagnostics;

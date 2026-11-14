@@ -1041,6 +1041,25 @@ bool materialize_vector(
         }
         NSDictionary* op_source = raw;
         const std::string kind = cpp_string(op_source[@"op"]);
+        static constexpr std::array<std::string_view, 4> kGroupKeys{
+            "op", "transform", "opacity", "clip"};
+        static constexpr std::array<std::string_view, 1> kEndKeys{"op"};
+        static constexpr std::array<std::string_view, 12> kPathKeys{
+            "op", "d", "fillRule", "transform", "fill", "stroke", "strokeWidth",
+            "strokeLineJoin", "strokeLineCap", "strokeMiterLimit", "strokeDasharray",
+            "strokeDashoffset"};
+        for (id key in op_source) {
+            if (![key isKindOfClass:NSString.class]) {
+                return reject("asset", where + " has a key that is not a string");
+            }
+            const std::string name = cpp_string(key);
+            const bool known = kind == "group" ? contains(kGroupKeys, name)
+                             : kind == "end"   ? contains(kEndKeys, name)
+                                               : contains(kPathKeys, name);
+            if (!known && (kind == "group" || kind == "end" || kind == "path")) {
+                return reject("asset", where + " " + kind + " does not take " + name);
+            }
+        }
         VectorOp op;
         if (!parse_affine(op_source[@"transform"], op.transform)) {
             return reject("asset", where + " transform must be six finite numbers");

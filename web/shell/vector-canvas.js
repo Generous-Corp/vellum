@@ -77,7 +77,7 @@ const BUILDER_SIGNATURES = {
     end: ['vellum_web_vector_end_group', []],
     path: ['vellum_web_vector_path', ['string', 'number', ...Array(19).fill('number')]],
     dash: ['vellum_web_vector_dash', ['number']],
-    gradient: ['vellum_web_vector_gradient', ['number', 'number', 'number', ...Array(15).fill('number')]],
+    gradient: ['vellum_web_vector_gradient', Array(20).fill('number')],
     stop: ['vellum_web_vector_stop', ['number', 'number', 'number', 'number', 'number', 'number']],
     finish: ['vellum_web_end_vector', []],
 };
@@ -90,7 +90,15 @@ function rgba(hex) {
 }
 
 const IDENTITY = [1, 0, 0, 1, 0, 0];
-const KINDS = { linear: 0, radial: 1, 'two-circle-radial': 2 };
+const KINDS = { linear: 0, radial: 1, 'two-circle-radial': 2, conic: 3 };
+const INTERPOLATIONS = { srgb: 0, 'linear-srgb': 1, oklab: 2 };
+const COLOR_SPACES = { srgb: 0, 'linear-srgb': 1, 'display-p3': 2 };
+
+function code(table, value, fallback, what) {
+    const key = value ?? fallback;
+    if (!Object.hasOwn(table, key)) throw new Error(`the web shell cannot carry the ${what} ${key}`);
+    return table[key];
+}
 const SPREADS = { pad: 0, repeat: 1, reflect: 2 };
 const JOINS = { miter: 0, round: 1, bevel: 2 };
 const CAPS = { butt: 0, round: 1, square: 2 };
@@ -114,15 +122,19 @@ export function addVectorAsset(module, id, x, y, width, height, asset) {
             const fill = typeof op.fill === 'object' ? [0, 0, 0, 0] : rgba(op.fill ?? '#000000');
             const stroke = typeof op.stroke === 'object' ? [0, 0, 0, 0] : rgba(op.stroke);
             ok(api.path(op.d, op.fillRule === 'evenodd' ? 1 : 0, ...(op.transform ?? IDENTITY),
-                ...fill, ...stroke, op.strokeWidth ?? 1, JOINS[op.strokeLineJoin ?? 'miter'],
-                CAPS[op.strokeLineCap ?? 'butt'], op.strokeMiterLimit ?? 4,
+                ...fill, ...stroke, op.strokeWidth ?? 1, code(JOINS, op.strokeLineJoin, 'miter', 'join'),
+                code(CAPS, op.strokeLineCap, 'butt', 'cap'), op.strokeMiterLimit ?? 4,
                 op.strokeDashoffset ?? 0), 'a path');
             for (const dash of op.strokeDasharray ?? []) ok(api.dash(dash), 'a dash');
             for (const [target, paint] of [[0, op.fill], [1, op.stroke]]) {
                 if (!paint || typeof paint !== 'object') continue;
                 const g = paint.gradient;
-                ok(api.gradient(target, KINDS[g.kind ?? 'linear'], SPREADS[g.spread ?? 'pad'],
-                    g.angle ?? 180, g.centerX ?? 0.5, g.centerY ?? 0.5, g.radiusX ?? 0,
+                if (g.repeatLength) throw new Error(`vector ${id} gradients cannot set a repeat length`);
+                const spread = g.spread ?? (g.repeating ? 'repeat' : 'pad');
+                ok(api.gradient(target, code(KINDS, g.kind, 'linear', 'gradient kind'),
+                    code(SPREADS, spread, 'pad', 'spread'),
+                    code(INTERPOLATIONS, g.interpolation, 'srgb', 'interpolation'),
+                    code(COLOR_SPACES, g.colorSpace, 'srgb', 'colour space'), g.angle ?? 180, g.centerX ?? 0.5, g.centerY ?? 0.5, g.radiusX ?? 0,
                     g.radiusY ?? 0, g.focalX ?? 0.5, g.focalY ?? 0.5, g.startRadius ?? 0,
                     g.endRadius ?? 0.5, ...(paint.transform ?? IDENTITY)), 'a gradient');
                 for (const stop of g.stops) {
