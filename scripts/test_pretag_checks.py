@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import tempfile
@@ -146,6 +147,34 @@ class Reader(unittest.TestCase):
                 step = pc.read_step((workflows / check.workflow).read_text(), check.job, check.step)
                 self.assertTrue(step.run.strip())
                 self.assertFalse(step.run.startswith(" "), "the block is dedented")
+
+    def test_every_expression_of_every_check_resolves(self) -> None:
+        # Runner.run refuses a step whose run block or env holds an expression
+        # it cannot resolve, and nothing else runs these steps before a v*
+        # tag. Each expression must therefore be one the Runner supplies, or
+        # an output of an earlier check's step. A step that is moved, or that
+        # starts reading a renamed step's output, fails here, not at the tag.
+        with tempfile.TemporaryDirectory() as temporary:
+            known = set(pc.Runner(pc.ROOT, "v0.0.1", "a" * 40, Path(temporary)).expressions)
+        earlier: set[str] = set()
+        seen = 0
+        for check in pc.CHECKS:
+            workflow = (pc.ROOT / ".github/workflows" / check.workflow).read_text()
+            step = pc.read_step(workflow, check.job, check.step)
+            for where, text in (("run", step.run), *((f"env {key}", value) for key, value in step.env.items())):
+                for expression in re.findall(r"\$\{\{(.*?)\}\}", text):
+                    key = expression.strip()
+                    seen += 1
+                    produced = re.fullmatch(r"steps\.([A-Za-z0-9_-]+)\.outputs\.[A-Za-z0-9_-]+", key)
+                    with self.subTest(step=check.step, where=where, expression=key):
+                        self.assertTrue(
+                            key in known or (produced is not None and produced.group(1) in earlier),
+                            f"{check.workflow} / {check.step}: pretag_checks.py cannot resolve "
+                            f"${{{{ {key} }}}} in {where}")
+            if step.id:
+                earlier.add(step.id)
+        # The scan found the expressions it exists to judge.
+        self.assertGreaterEqual(seen, 5)
 
     def test_the_content_checks_are_the_tag_specific_ones(self) -> None:
         provenance = (pc.ROOT / ".github/workflows/provenance.yml").read_text()

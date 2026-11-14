@@ -150,7 +150,8 @@ accepts exactly one of two closed shapes:
 - **Mirror promotion** (`vellum-mirror-promotion-attestation`). Only `v0.1.10`, the Phase 4 promotion release
   (owner decision 2026-10-31, third sitting; `v0.1.9` was retired unpublished, owner decision 2026-11-02), and
   `v0.1.11`, the release carrying everything since 2026-10-25 under the same parity waiver (owner decision
-  2026-11-01), may carry it. It binds:
+  2026-11-01), may carry it. The owner also waived `v0.2.0`, which carries the same parity state as `v0.1.11`.
+  The list is exact tag names. It binds:
   - the promoted commit and tree;
   - the exact-boundary acknowledgement;
   - the newest export receipt in `provenance/mirror/receipts/index.json` at the release commit, by SHA-256.
@@ -163,7 +164,29 @@ accepts exactly one of two closed shapes:
   - when a parity completion record exists at the release commit;
   - when the receipt is not the newest one in the index.
 
-The parity re-freeze to the mirror is the next milestone. Every release after `v0.1.11` must carry the authority
+## The open pull request audit
+
+On a release or dry-run tag, `provenance.yml` reads every open pull request in `Generous-Corp/pulp` and
+`Generous-Corp/vellum` and records the paths each one changes
+(`tools/provenance/collect_release_evidence.py open-pr-snapshot`). The verifier refuses the tag while a landable
+pull request changes an exact route and the Pulp acceptance does not list it.
+
+A pull request is landable when it could land before the tag:
+
+- it is in its repository's merge queue (GraphQL `pullRequest.mergeQueueEntry`; REST `auto_merge` reads null for a
+  queued pull request), or
+- it carries a counted APPROVE naming its exact current head: a fleet App comment whose last line is
+  `verdict: APPROVE head:<sha>`, with the session stamp and `reviewer:` signer that repository's
+  `.shipyard/config.toml` counts. This is the rule `release-path-review` counts by (`scripts/counted_verdicts.py`).
+  An APPROVE of an older head, or from any other author, does not count.
+
+Every other open pull request is recorded as `not_landable`, with the reason, and blocks nothing. When the merge-queue
+read, the comment read or the reviewer policy cannot be read, the pull request counts as landable, so a failed lookup
+blocks the tag. A HOLD or any other comment is never consulted, so no author can take their own pull request out of
+the audit by commenting on it. A pull request the acceptance lists is still checked against its live head, merge base
+and paths whether or not it is landable.
+
+The parity re-freeze to the mirror is the next milestone. Every release after `v0.2.0` must carry the authority
 promotion attestation and prove full-matrix parity.
 
 ## Who can do what

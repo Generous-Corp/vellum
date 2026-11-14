@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(Vellum
-    VERSION 0.1.10
+    VERSION 0.2.0
     DESCRIPTION "Experimental audio-free native application kernel"
     LANGUAGES CXX)
 
@@ -488,6 +488,19 @@ if(VELLUM_BUILD_TESTS)
                 "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
                 ${_vellum_view_audio_archive_arg}
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
+        # An installed consumer reaches Vellum's value model through the view
+        # unit alone.
+        add_test(NAME vellum.mirror-value-consumer
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                "-DVELLUM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
+                "-DVELLUM_INSTALL_CONSUMER_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/value-consumer"
+                "-DVELLUM_INSTALL_CONSUMER_WORK=mirror-value-consumer-test"
+                "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+                "-DTEST_CONFIG=$<CONFIG>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunInstallConsumer.cmake")
+        # Behavior tests of the framework units (ctest label `framework`).
+        add_subdirectory(tools/framework-tests)
         if(TARGET yogacore)
             # The mirror recipe builds yogacore with RTTI (as Pulp does); prove
             # it took effect in the built archive, not only in the plan.
