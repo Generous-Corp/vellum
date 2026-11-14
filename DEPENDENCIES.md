@@ -152,11 +152,16 @@ Lua host is built, the static Lua archive is installed beside it for linking.
 The opt-in `VellumRmlUi::Native` component (`VELLUM_RMLUI_NATIVE=ON`) is the
 exception: it links RmlUi publicly, so its install component redistributes
 RmlUi's headers and archives, and FreeType's archive when fonts are on, with
-`rmlui/NOTICE-Native.md` and their licence files under `share/doc/VellumRmlUi/`.
+`rmlui/NOTICE-Native.md` and their licence files under `share/doc/VellumRmlUi/`
+(under `share/doc/VellumRmlUiNative/` when `VELLUM_RMLUI_NATIVE_PACKAGE=ON`
+installs it as its own `VellumRmlUiNative` package).
 The base `VellumRmlUi` package installs RmlUi's licence there too, because
 Core redistributes RmlUi. The native SDK artifact carries the base package
 (Core, SoftRenderer and VellumRenderer) and never the Native component.
-Nothing here enters the default Vellum build or the Vellum SDK artifact.
+Nothing here enters the default Vellum build or the Vellum SDK artifact. The
+optional RmlUi SDK artifact, `vellum-rmlui-sdk-<version>-darwin-arm64.tar.gz`,
+is the `VellumRmlUiNative` package alone (Native, Metal, RmlUi's headers and
+archives, and FreeType's archive), with the same notices.
 
 | Dependency | Pinned identity | License | Used by | Notes |
 |---|---|---|---|---|
