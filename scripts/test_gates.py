@@ -115,6 +115,19 @@ class GatesTest(unittest.TestCase):
         )
         self.assertNotIn(refresh + " || true", source)
 
+    def test_failed_upstream_clone_does_not_print_credentials(self) -> None:
+        secret_url = "https://x-access-token:fake-secret@example.invalid/pulp.git"
+        text = (SCRIPTS / "gates.sh").read_text(encoding="utf-8")
+        match = re.search(r"^upstream_at\(\) \{\n.*?^\}\n", text, re.S | re.M)
+        self.assertIsNotNone(match)
+        src = Path(self.tmp.name) / "src"
+        script = f'CACHE={self.tmp.name}/c; UPSTREAM_SRC={src}; UPSTREAM_URL={secret_url}\n' + match.group(0) + "\nupstream_at x 0000\n"
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("fake-secret", result.stdout + result.stderr)
+        self.assertNotIn(secret_url, result.stdout + result.stderr)
+        self.assertIn("cannot clone", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -106,6 +107,8 @@ def ensure_pulp(root: Path, name: str, ref: str, source: str) -> bool:
         try:
             subprocess.run(command, capture_output=True, text=True, check=True)
         except subprocess.CalledProcessError as error:
+            # A failed clone can leave a partial destination the caller never learns about.
+            shutil.rmtree(path, ignore_errors=True)
             detail = error.stderr or error.stdout or "clone failed"
             raise CanaryError(f"git clone failed: {redact_source(detail.strip(), source)}") from error
     if live or not git(path, "cat-file", "-t", ref, check=False):

@@ -158,6 +158,20 @@ class Failures(unittest.TestCase):
             self.assertNotIn("fake-secret", stderr.getvalue())
             self.assertNotIn(source, stderr.getvalue())
 
+    def test_a_failed_clone_removes_the_partial_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+
+            def fail_clone(command: list[str], *args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+                Path(command[-1]).mkdir()
+                (Path(command[-1]) / "partial").write_text("x", encoding="utf-8")
+                raise subprocess.CalledProcessError(128, command, stderr="fatal: boom")
+
+            with mock.patch.object(rc.subprocess, "run", side_effect=fail_clone):
+                with self.assertRaises(rc.CanaryError):
+                    rc.ensure_pulp(root, ".exact-boundary-pulp", "main", "https://example.invalid/pulp.git")
+            self.assertFalse((root / ".exact-boundary-pulp").exists())
+
     def test_a_fetch_failure_does_not_print_source_credentials(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

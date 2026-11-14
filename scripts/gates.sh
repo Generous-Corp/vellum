@@ -201,7 +201,15 @@ skip_check() {
 upstream_at() {
   local name="$1" sha="$2" dir="$CACHE/$1"
   if [[ ! -d "$UPSTREAM_SRC/.git" ]]; then
-    git clone -q --no-checkout "$UPSTREAM_URL" "$UPSTREAM_SRC" >&2 || { echo "cannot clone $UPSTREAM_URL" >&2; return 1; }
+    local clone_err
+    if ! clone_err="$(git clone -q --no-checkout "$UPSTREAM_URL" "$UPSTREAM_SRC" 2>&1)"; then
+      # The URL may carry a token; never echo it or git's own copy of it.
+      clone_err="${clone_err//"$UPSTREAM_URL"/<upstream>}"
+      clone_err="$(printf '%s\n' "$clone_err" | sed -E 's#(://)[^/@[:space:]]+@#\1<credentials>@#g')"
+      echo "gates: cannot clone upstream Pulp: $clone_err" >&2
+      rm -rf "$UPSTREAM_SRC"
+      return 1
+    fi
   fi
   if ! git -C "$UPSTREAM_SRC" fetch -q --no-tags origin main >&2; then
     echo "gates: cannot refresh upstream main; refusing to use a stale clone" >&2
