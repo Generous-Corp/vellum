@@ -234,6 +234,10 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_gates.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/prose_lint.py",
         "isolated": true
       },
