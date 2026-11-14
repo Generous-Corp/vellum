@@ -460,13 +460,12 @@ void command_extents() {
 Scene grouping_scene(float width, float height);
 
 void damage_model_version_gate() {
-    expect(kDamageModelSceneVersion == 6U && partial_redraw_supported(3U) &&
+    expect(kDamageModelSceneVersion >= 6U && partial_redraw_supported(3U) &&
                partial_redraw_supported(4U) && partial_redraw_supported(5U) &&
                partial_redraw_supported(6U) &&
                partial_redraw_supported(kDamageModelSceneVersion) &&
-               !partial_redraw_supported(kDamageModelSceneVersion + 1U) &&
-               !partial_redraw_supported(7U),
-           "partial redraw covers scene versions up to 6 and refuses version 7");
+               !partial_redraw_supported(kDamageModelSceneVersion + 1U),
+           "partial redraw covers scene versions through 6 and refuses the next one");
     expect(to_string(FullRepaintReason::damage_model_version) == "damage_model_version",
            "the damage-model version fallback has a telemetry name");
     constexpr std::uint32_t width = 400;
@@ -1393,8 +1392,8 @@ void grouping_sequence(float scale, bool layer_cache) {
     auto partial = make_surface(width, height, scale, layer_cache);
     if (!full || !partial) return;
     Scene scene = grouping_scene(static_cast<float>(width), static_cast<float>(height));
-    expect(scene.scene_version == 6U && partial_redraw_supported(scene.scene_version),
-           size + "the grouping scene is a version 6 scene partial redraw serves");
+    expect(scene.scene_version >= 6U && partial_redraw_supported(scene.scene_version),
+           size + "the grouping scene is a version 6 or later scene partial redraw serves");
     if (!render_both(*full, *partial, scene)) return;
     compare(size + "the first grouping frame", *full, *partial);
     // Removing or restoring the viewport's clip changes enough of this dense

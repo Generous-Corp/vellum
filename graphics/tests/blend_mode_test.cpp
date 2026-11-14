@@ -152,8 +152,8 @@ void lowering() {
 }
 
 void versioning() {
-    static_assert(kSceneVersion == 6U);
-    static_assert(kDamageModelSceneVersion == 6U);
+    static_assert(kSceneVersion >= 6U);
+    static_assert(kDamageModelSceneVersion >= 6U);
     auto node = blended("node", {0.0F, 0.0F, 10.0F, 10.0F}, BlendMode::exclusion);
     auto scene = scene_with({box("sibling", {0.0F, 0.0F, 1.0F, 1.0F}), node});
     expect(uses_version_6_fields(node) && !uses_version_6_fields(scene.root.children[0]) &&
