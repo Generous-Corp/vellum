@@ -71,13 +71,17 @@ set_target_properties(vellum-wgsl-validate PROPERTIES
     BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
 
 # Exit 77 means the host has no Null adapter, which ctest reports as a skip.
-# The rejecting case passes only on the positioned diagnostic, so a skip can
-# never read as a pass.
+# The rejecting case passes only on exit 1 with the positioned diagnostic, so
+# a skip can never read as a pass.
 set(_vellum_wgsl_fixtures "${PROJECT_SOURCE_DIR}/fixtures/wgsl")
 add_test(NAME vellum.framework.wgsl-validate-accepts-valid
     COMMAND vellum-wgsl-validate "${_vellum_wgsl_fixtures}/valid_fill.wgsl")
 add_test(NAME vellum.framework.wgsl-validate-rejects-invalid
-    COMMAND vellum-wgsl-validate "${_vellum_wgsl_fixtures}/invalid_identifier.wgsl")
+    COMMAND "${CMAKE_COMMAND}"
+        "-DVALIDATOR=$<TARGET_FILE:vellum-wgsl-validate>"
+        "-DSHADER=${_vellum_wgsl_fixtures}/invalid_identifier.wgsl"
+        "-DEXPECT=invalid_identifier[.]wgsl:4:[0-9]+: error: .*colour"
+        -P "${PROJECT_SOURCE_DIR}/cmake/CheckWgslRejects.cmake")
 add_test(NAME vellum.framework.wgsl-validate-creates-stamp-dir
     COMMAND "${CMAKE_COMMAND}"
         "-DVALIDATOR=$<TARGET_FILE:vellum-wgsl-validate>"
@@ -88,7 +92,6 @@ set_tests_properties(vellum.framework.wgsl-validate-accepts-valid PROPERTIES
     SKIP_RETURN_CODE 77 LABELS "framework;wgsl" TIMEOUT 60)
 set_tests_properties(vellum.framework.wgsl-validate-rejects-invalid PROPERTIES
     SKIP_REGULAR_EXPRESSION "WGSL was not validated"
-    PASS_REGULAR_EXPRESSION "invalid_identifier\\.wgsl:4:[0-9]+: error: .*colour"
     LABELS "framework;wgsl" TIMEOUT 60)
 set_tests_properties(vellum.framework.wgsl-validate-creates-stamp-dir PROPERTIES
     SKIP_REGULAR_EXPRESSION "stamp written: skipped"
