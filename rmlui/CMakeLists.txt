@@ -335,6 +335,20 @@ if(VELLUM_RMLUI_INSTALL)
         install(FILES ${_vellum_rmlui_native_header_files}
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/vellum/rmlui
             COMPONENT VellumRmlUiNative)
+        if(VELLUM_RMLUI_NATIVE_PACKAGE)
+            # The VellumRmlUi headers the Native headers include. As a package
+            # of its own, Native carries them so it builds without the
+            # VellumRmlUi prefix; they are byte-identical to that package's.
+            install(FILES
+                include/vellum/rmlui/assets.hpp
+                include/vellum/rmlui/backend.hpp
+                include/vellum/rmlui/element_classes.hpp
+                include/vellum/rmlui/export.hpp
+                include/vellum/rmlui/host_bridge.hpp
+                include/vellum/rmlui/midi_learn.hpp
+                DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/vellum/rmlui
+                COMPONENT VellumRmlUiNative)
+        endif()
         install(EXPORT VellumRmlUiNativeTargets
             NAMESPACE VellumRmlUi::
             DESTINATION ${_vellum_rmlui_native_cmake_dir}

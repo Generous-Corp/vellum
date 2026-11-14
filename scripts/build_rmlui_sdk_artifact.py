@@ -65,6 +65,16 @@ NATIVE_HEADERS = (
     "include/vellum/rmlui/midi_learn_native.hpp",
     "include/vellum/rmlui/native.hpp",
 )
+# The VellumRmlUi headers those include, carried so Native builds from this
+# archive alone; byte-identical to the Vellum SDK's copies.
+SHARED_HEADERS = (
+    "include/vellum/rmlui/assets.hpp",
+    "include/vellum/rmlui/backend.hpp",
+    "include/vellum/rmlui/element_classes.hpp",
+    "include/vellum/rmlui/export.hpp",
+    "include/vellum/rmlui/host_bridge.hpp",
+    "include/vellum/rmlui/midi_learn.hpp",
+)
 LIBRARIES = (
     "lib/libfreetype.a",
     "lib/librmlui.a",
@@ -135,11 +145,12 @@ def is_allowed(relative: str) -> bool:
     """Whether an installed path belongs in the RmlUi SDK."""
     if relative.startswith(RMLUI_HEADER_ROOT):
         return relative.endswith((".h", ".inl"))
-    return relative in {*NATIVE_HEADERS, *LIBRARIES, *PACKAGE_FILES, *DOC_FILES, METADATA_NAME}
+    return relative in {*NATIVE_HEADERS, *SHARED_HEADERS, *LIBRARIES, *PACKAGE_FILES, *DOC_FILES,
+                        METADATA_NAME}
 
 
 def required_files() -> list[str]:
-    return sorted([*NATIVE_HEADERS, *LIBRARIES, *PACKAGE_FILES, *DOC_FILES,
+    return sorted([*NATIVE_HEADERS, *SHARED_HEADERS, *LIBRARIES, *PACKAGE_FILES, *DOC_FILES,
                    f"{RMLUI_HEADER_ROOT}Core.h", f"{RMLUI_HEADER_ROOT}Debugger.h", METADATA_NAME])
 
 
