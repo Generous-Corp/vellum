@@ -514,6 +514,11 @@ void feed_updates() {
                    scrolling.frames == 40 && scrolling.over_budget == 0,
                at + "a scrolling history damages its scroll region and nothing else",
                run_detail(scrolling));
+        const auto quiet = run_feed(6, feed, sampler, scene, *full, *partial,
+                                    box_pixels(kHistoryBox, scale, 1), [](int) {});
+        expect(quiet.differing == 0 && quiet.frames == 1 && quiet.over_budget == 0,
+               at + "a history gone stale takes one neutral sample within its plot",
+               run_detail(quiet));
         const float resting_rms[]{0.5F};
         const float resting_peak[]{0.65F};
         feed.publish_meter(1, resting_rms, resting_peak);
