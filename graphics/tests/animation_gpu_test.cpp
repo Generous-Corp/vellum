@@ -241,6 +241,32 @@ Pixel gray(double fraction) {
     return {level, level, level};
 }
 
+// An independent oracle for the spring: fourth-order Runge-Kutta on
+// m x'' + c x' + k x = 0 from x = -1 at rest, with progress 1 + x.
+double integrated_spring(const Easing& easing, double seconds) {
+    const double k = easing.stiffness;
+    const double c = easing.damping;
+    const double m = easing.mass;
+    double x = -1.0;
+    double v = easing.initial_velocity;
+    const int steps = 20000;
+    const double h = seconds / steps;
+    const auto accel = [&](double position, double speed) { return (-k * position - c * speed) / m; };
+    for (int step = 0; step < steps; ++step) {
+        const double k1x = v;
+        const double k1v = accel(x, v);
+        const double k2x = v + 0.5 * h * k1v;
+        const double k2v = accel(x + 0.5 * h * k1x, v + 0.5 * h * k1v);
+        const double k3x = v + 0.5 * h * k2v;
+        const double k3v = accel(x + 0.5 * h * k2x, v + 0.5 * h * k2v);
+        const double k4x = v + h * k3v;
+        const double k4v = accel(x + h * k3x, v + h * k3v);
+        x += h / 6.0 * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
+        v += h / 6.0 * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
+    }
+    return 1.0 + x;
+}
+
 // Pixel oracles: values computed from the easing definitions, independent of
 // the renderer, checked at chosen clock values.
 void pixel_oracles(float scale) {
@@ -288,7 +314,7 @@ void pixel_oracles(float scale) {
 
     const double spring_clock = 0.12;
     const auto springing = at(spring_clock);
-    const double progress = std::clamp(spring_progress(kSpring, spring_clock), 0.0, 1.0);
+    const double progress = std::clamp(integrated_spring(kSpring, spring_clock), 0.0, 1.0);
     expect(progress > 0.2 && progress < 0.95 &&
                near(pixel(springing, 115, 75, scale), gray(progress)),
            size + "a spring mid flight draws its progress as opacity",

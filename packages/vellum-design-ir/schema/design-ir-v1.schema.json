@@ -100,10 +100,25 @@
       }
     },
     "animationTrack": {
-      "description": "A keyframed animation of one property of its node, evaluated at the host clock the caller passes. Keyframe times are seconds and strictly increase. Colour properties take #rrggbb or #rrggbbaa values; the others take numbers.",
+      "description": "A keyframed animation of one property of its node, evaluated at the host clock the caller passes. Keyframe times are seconds and strictly increase. Colour properties take #rrggbb or #rrggbbaa values; the others take numbers. index addresses a shadow, gradient or text run and stop a gradient stop; other properties take neither. A spring segment lasts at least the spring's settle time, which the validator checks.",
       "type": "object",
       "additionalProperties": false,
       "required": ["property", "keyframes"],
+      "allOf": [
+        {
+          "if": { "properties": { "property": { "enum": ["fill", "strokeColor", "shadowColor", "gradientStopColor", "textRunColor"] } } },
+          "then": { "properties": { "keyframes": { "items": { "properties": { "value": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$" } } } } } },
+          "else": { "properties": { "keyframes": { "items": { "properties": { "value": { "type": "number", "minimum": -3.4028234663852886e38, "maximum": 3.4028234663852886e38 } } } } } }
+        },
+        {
+          "if": { "properties": { "property": { "enum": ["shadowColor", "gradientStopColor", "textRunColor"] } } },
+          "else": { "not": { "required": ["index"] } }
+        },
+        {
+          "if": { "properties": { "property": { "const": "gradientStopColor" } } },
+          "else": { "not": { "required": ["stop"] } }
+        }
+      ],
       "properties": {
         "property": {
           "enum": ["opacity", "translateX", "translateY", "scaleX", "scaleY", "rotation", "fill", "strokeColor", "shadowColor", "gradientStopColor", "textRunColor"]
@@ -118,7 +133,7 @@
       "additionalProperties": false,
       "required": ["time", "value"],
       "properties": {
-        "time": { "type": "number" },
+        "time": { "type": "number", "minimum": -3.4028234663852886e38, "maximum": 3.4028234663852886e38 },
         "value": {
           "oneOf": [
             { "type": "number" },
@@ -147,6 +162,8 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["type", "steps"],
+          "if": { "properties": { "position": { "const": "none" } }, "required": ["position"] },
+          "then": { "properties": { "steps": { "minimum": 2 } } },
           "properties": {
             "type": { "const": "steps" },
             "steps": { "type": "integer", "minimum": 1, "maximum": 65535 },

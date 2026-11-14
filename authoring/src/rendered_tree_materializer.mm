@@ -908,6 +908,17 @@ std::optional<vellum::graphics::AnimatedProperty> animated_property(id value) {
     return std::nullopt;
 }
 
+// The first key of `source` outside `allowed`, or empty.
+template <std::size_t Size>
+std::string unknown_key(NSDictionary* source, const std::array<std::string_view, Size>& allowed) {
+    NSArray* keys = [source.allKeys sortedArrayUsingSelector:@selector(compare:)];
+    for (id key in keys) {
+        const std::string name = [key isKindOfClass:NSString.class] ? cpp_string(key) : "?";
+        if (!contains(allowed, name)) return name;
+    }
+    return {};
+}
+
 bool index_field(NSDictionary* source, NSString* key, std::uint32_t& output) {
     id raw = source[key];
     output = 0U;
@@ -946,6 +957,17 @@ bool parse_easing(id raw, vellum::graphics::Easing& easing, std::string& reason)
     NSDictionary* source = raw;
     const std::string type =
         [source[@"type"] isKindOfClass:NSString.class] ? cpp_string(source[@"type"]) : "";
+    const std::string extra = type == "cubicBezier"
+        ? unknown_key(source, std::array<std::string_view, 5>{"type", "x1", "y1", "x2", "y2"})
+        : type == "steps"
+        ? unknown_key(source, std::array<std::string_view, 3>{"type", "steps", "position"})
+        : unknown_key(source, std::array<std::string_view, 5>{
+              "type", "stiffness", "damping", "mass", "velocity"});
+    if (!extra.empty() &&
+        (type == "cubicBezier" || type == "steps" || type == "spring")) {
+        reason = type + " easing does not take " + extra;
+        return false;
+    }
     std::string* none = nullptr;
     if (type == "cubicBezier") {
         easing.kind = EasingKind::cubic_bezier;
@@ -1010,6 +1032,20 @@ bool parse_tracks(id raw, const std::string& identity, vellum::graphics::SceneNo
         const auto property = animated_property(source[@"property"]);
         if (!property) return fail("a track has an unknown property");
         track.property = *property;
+        using vellum::graphics::AnimatedProperty;
+        const bool indexed = track.property == AnimatedProperty::shadow_color ||
+                             track.property == AnimatedProperty::gradient_stop_color ||
+                             track.property == AnimatedProperty::text_run_color;
+        const bool stopped = track.property == AnimatedProperty::gradient_stop_color;
+        if (const auto extra = unknown_key(source, std::array<std::string_view, 4>{
+                "property", "index", "stop", "keyframes"});
+            !extra.empty() || (!indexed && source[@"index"] != nil) ||
+            (!stopped && source[@"stop"] != nil)) {
+            return fail("the " + cpp_string(source[@"property"]) + " track does not take " +
+                        (!extra.empty() ? extra : source[@"index"] != nil && !indexed
+                                                      ? std::string("index")
+                                                      : std::string("stop")));
+        }
         if (!index_field(source, @"index", track.index) ||
             !index_field(source, @"stop", track.stop)) {
             return fail("index and stop must be whole numbers from 0 to 65535");
@@ -1027,6 +1063,11 @@ bool parse_tracks(id raw, const std::string& identity, vellum::graphics::SceneNo
                 return fail("a keyframe must be an object");
             }
             NSDictionary* key = key_value;
+            if (const auto extra = unknown_key(
+                    key, std::array<std::string_view, 3>{"time", "value", "easing"});
+                !extra.empty()) {
+                return fail("a keyframe does not take " + extra);
+            }
             vellum::graphics::AnimationKeyframe keyframe;
             float time = 0.0F;
             if (!finite_number(key[@"time"], time)) return fail("a keyframe needs a finite time");

@@ -880,7 +880,22 @@ bool animation_tracks() {
                    "not have") &&
            failing(R"([{"property":"opacity","keyframes":[{"time":0,"value":0}]},
                        {"property":"opacity","keyframes":[{"time":0,"value":1}]}])",
-                   "node bad tracks: two tracks animate the same property");
+                   "node bad tracks: two tracks animate the same property") &&
+           failing(R"([{"property":"opacity","foo":1,"keyframes":[{"time":0,"value":0}]}])",
+                   "node bad tracks: the opacity track does not take foo") &&
+           failing(R"([{"property":"opacity","index":1,"keyframes":[{"time":0,"value":0}]}])",
+                   "node bad tracks: the opacity track does not take index") &&
+           failing(R"([{"property":"shadowColor","stop":1,"keyframes":[{"time":0,"value":"#000000"}]}])",
+                   "node bad tracks: the shadowColor track does not take stop") &&
+           failing(R"([{"property":"opacity","keyframes":[{"time":0,"value":0,"clock":2}]}])",
+                   "node bad tracks: a keyframe does not take clock") &&
+           failing(R"([{"property":"opacity","keyframes":[{"time":0,"value":0,
+                       "easing":{"type":"spring","stiffnes":90}}]}])",
+                   "node bad tracks: spring easing does not take stiffnes") &&
+           failing(R"([{"property":"opacity","keyframes":[{"time":0,"value":0,
+                       "easing":{"type":"spring","stiffness":100,"damping":10}},
+                       {"time":1,"value":1}]}])",
+                   "node bad tracks: keyframe 1 comes before the spring from keyframe 0 settles");
 }
 
 int main() {

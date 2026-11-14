@@ -279,6 +279,9 @@ const ANIMATED_PROPERTIES = new Set([
 const COLOR_PROPERTIES = new Set([
     'fill', 'strokeColor', 'shadowColor', 'gradientStopColor', 'textRunColor',
 ]);
+const INDEXED_PROPERTIES = new Set(['shadowColor', 'gradientStopColor', 'textRunColor']);
+const FLOAT_MAX = 3.4028234663852886e38;
+const SPRING_REST_THRESHOLD = 1e-4;
 const EASING_KEYWORDS = new Set(['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out']);
 const HEX_COLOR = /^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/;
 
@@ -305,7 +308,11 @@ function validateTracks(tracks, path, issues) {
         }
         for (const field of ['index', 'stop']) {
             const value = track[field];
-            if (value !== undefined && (!Number.isInteger(value) || value < 0 || value > 65535)) {
+            if (value === undefined) continue;
+            const used = field === 'index' ? INDEXED_PROPERTIES.has(track.property) : track.property === 'gradientStopColor';
+            if (!used) {
+                issues.push(issue(`${trackPath}.${field}`, 'unknown-field', `a ${track.property} track takes no ${field}`));
+            } else if (!Number.isInteger(value) || value < 0 || value > 65535) {
                 issues.push(issue(`${trackPath}.${field}`, 'range', `${field} must be an integer from 0 to 65535`));
             }
         }
@@ -329,25 +336,70 @@ function validateTracks(tracks, path, issues) {
                     issues.push(issue(`${keyPath}.${key}`, 'unknown-field', 'a keyframe carries time, value and easing'));
                 }
             }
-            if (typeof keyframe.time !== 'number' || !Number.isFinite(keyframe.time)) {
-                issues.push(issue(`${keyPath}.time`, 'type', 'keyframe time must be a finite number of seconds'));
+            if (typeof keyframe.time !== 'number' || !Number.isFinite(keyframe.time) || Math.abs(keyframe.time) > FLOAT_MAX) {
+                issues.push(issue(`${keyPath}.time`, 'type', 'keyframe time must be a finite number of seconds within float range'));
             } else if (!(keyframe.time > previous)) {
                 issues.push(issue(`${keyPath}.time`, 'order', 'keyframe times must strictly increase'));
             }
             if (typeof keyframe.time === 'number') previous = keyframe.time;
             const valid = color
                 ? typeof keyframe.value === 'string' && HEX_COLOR.test(keyframe.value)
-                : typeof keyframe.value === 'number' && Number.isFinite(keyframe.value);
+                : typeof keyframe.value === 'number' && Number.isFinite(keyframe.value) && Math.abs(keyframe.value) <= FLOAT_MAX;
             if (!valid) {
                 issues.push(issue(
                     `${keyPath}.value`,
                     'type',
-                    color ? 'a colour keyframe value is #rrggbb or #rrggbbaa' : 'a keyframe value is a finite number',
+                    color ? 'a colour keyframe value is #rrggbb or #rrggbbaa' : 'a keyframe value is a finite number within float range',
                 ));
             }
             if (keyframe.easing !== undefined) validateEasing(keyframe.easing, `${keyPath}.easing`, issues);
+            const next = track.keyframes[keyIndex + 1];
+            if (isObject(keyframe.easing) && keyframe.easing.type === 'spring' && isObject(next) &&
+                typeof next.time === 'number' && typeof keyframe.time === 'number' &&
+                next.time - keyframe.time < springSettleTime(keyframe.easing)) {
+                issues.push(issue(`${keyPath}.easing`, 'range', 'the next keyframe comes before this spring settles'));
+            }
         });
     });
+}
+
+// The time after release from which a spring's displacement and speed stay
+// below the rest threshold, computed as the native renderer computes it from
+// single-precision constants. Infinite for constants that never settle.
+function springSettleTime(easing) {
+    const constant = (value, fallback) => Math.fround(typeof value === 'number' ? value : fallback);
+    const stiffness = constant(easing.stiffness, 100);
+    const damping = constant(easing.damping, 10);
+    const mass = constant(easing.mass, 1);
+    const velocity = constant(easing.velocity, 0);
+    if (!(stiffness > 0 && damping > 0 && mass > 0) || !Number.isFinite(velocity)) return Infinity;
+    const omega = Math.sqrt(stiffness / mass);
+    const zeta = damping / (2 * Math.sqrt(stiffness * mass));
+    const start = -1;
+    let bound;
+    let rate;
+    if (Math.abs(zeta - 1) <= 1e-6) {
+        const b = velocity + omega * start;
+        const reach = 2 / (Math.E * omega);
+        bound = Math.max(Math.abs(start) + Math.abs(b) * reach, Math.abs(b - omega * start) + omega * Math.abs(b) * reach);
+        rate = omega / 2;
+    } else if (zeta < 1) {
+        const damped = omega * Math.sqrt(1 - zeta * zeta);
+        const b = (velocity + zeta * omega * start) / damped;
+        bound = Math.hypot(start, b) * Math.max(1, omega);
+        rate = zeta * omega;
+    } else {
+        const root = Math.sqrt(zeta * zeta - 1);
+        const slow = -omega * (zeta - root);
+        const fast = -omega * (zeta + root);
+        const c2 = (velocity - slow * start) / (fast - slow);
+        const c1 = start - c2;
+        bound = Math.max(Math.abs(c1) + Math.abs(c2), Math.abs(c1 * slow) + Math.abs(c2 * fast));
+        rate = -slow;
+    }
+    if (!Number.isFinite(bound) || !Number.isFinite(rate) || rate <= 0) return Infinity;
+    if (bound <= SPRING_REST_THRESHOLD) return 0;
+    return Math.log(bound / SPRING_REST_THRESHOLD) / rate;
 }
 
 function validateEasing(easing, path, issues) {

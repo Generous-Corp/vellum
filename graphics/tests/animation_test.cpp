@@ -249,22 +249,61 @@ void evaluation() {
           "a text run colour track writes its run only");
 }
 
-bool same_bits(const Scene& a, const Scene& b) {
-    const auto commands_a = make_paint_commands(a);
-    const auto commands_b = make_paint_commands(b);
-    if (commands_a.size() != commands_b.size()) return false;
-    for (std::size_t index = 0; index < commands_a.size(); ++index) {
-        const auto& x = commands_a[index];
-        const auto& y = commands_b[index];
-        const auto bits = [](float value) { return std::bit_cast<std::uint32_t>(value); };
-        if (bits(x.opacity) != bits(y.opacity) || bits(x.transform.a) != bits(y.transform.a) ||
-            bits(x.transform.b) != bits(y.transform.b) || bits(x.transform.tx) != bits(y.transform.tx) ||
-            bits(x.fill.red) != bits(y.fill.red) || bits(x.fill.alpha) != bits(y.fill.alpha)) {
-            return false;
+// Every drawn field of every command, as bits, so two lowerings compare
+// exactly.
+std::vector<std::uint32_t> fingerprint(const Scene& scene) {
+    std::vector<std::uint32_t> out;
+    const auto f = [&](float value) { out.push_back(std::bit_cast<std::uint32_t>(value)); };
+    const auto color = [&](const Color& value) {
+        f(value.red);
+        f(value.green);
+        f(value.blue);
+        f(value.alpha);
+    };
+    const auto rect = [&](const Rect& value) {
+        f(value.x);
+        f(value.y);
+        f(value.width);
+        f(value.height);
+    };
+    for (const auto& command : make_paint_commands(scene)) {
+        out.push_back(static_cast<std::uint32_t>(command.kind));
+        for (const char c : command.node_id) out.push_back(static_cast<unsigned char>(c));
+        rect(command.bounds);
+        color(command.fill);
+        for (const auto& gradient : command.fill_gradients) {
+            f(gradient.angle_degrees);
+            for (const auto& stop : gradient.stops) {
+                f(stop.position);
+                color(stop.color);
+            }
         }
+        for (const auto& shadow : command.box_shadows) {
+            f(shadow.offset_x);
+            f(shadow.offset_y);
+            f(shadow.blur_radius);
+            f(shadow.spread_radius);
+            color(shadow.color);
+        }
+        f(command.corner_radius);
+        for (const auto& run : command.text_runs) color(run.style.color);
+        if (command.path) {
+            color(command.path->stroke.color);
+            f(command.path->stroke.width);
+            for (const float value : command.path->values) f(value);
+        }
+        const auto& t = command.transform;
+        for (const float value : {t.a, t.b, t.c, t.d, t.tx, t.ty}) f(value);
+        f(command.opacity);
+        const auto& r = command.corner_radii;
+        for (const float value : {r.top_left, r.top_right, r.bottom_right, r.bottom_left}) f(value);
+        rect(command.clip_rect);
+        out.push_back((command.layer_unbounded ? 1U : 0U) | (command.layer_isolated ? 2U : 0U));
     }
-    return true;
+    return out;
 }
+
+bool same_bits(const Scene& a, const Scene& b) { return fingerprint(a) == fingerprint(b); }
 
 Scene busy_scene(double clock) {
     auto a = box("a", {10, 10, 20, 20}, Color::hex(0xFF0000));

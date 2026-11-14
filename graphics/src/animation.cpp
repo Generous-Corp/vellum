@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -126,6 +127,13 @@ double displacement(const Spring& spring, double t) noexcept {
 bool finite(const Color& color) noexcept {
     return std::isfinite(color.red) && std::isfinite(color.green) && std::isfinite(color.blue) &&
            std::isfinite(color.alpha);
+}
+
+bool same_bits(const Color& a, const Color& b) noexcept {
+    return std::bit_cast<std::uint32_t>(a.red) == std::bit_cast<std::uint32_t>(b.red) &&
+           std::bit_cast<std::uint32_t>(a.green) == std::bit_cast<std::uint32_t>(b.green) &&
+           std::bit_cast<std::uint32_t>(a.blue) == std::bit_cast<std::uint32_t>(b.blue) &&
+           std::bit_cast<std::uint32_t>(a.alpha) == std::bit_cast<std::uint32_t>(b.alpha);
 }
 
 bool unit(float value) noexcept { return value >= 0.0F && value <= 1.0F; }
@@ -316,8 +324,10 @@ void apply_tracks(SceneNode& node, double clock) {
                 break;
             case AnimatedProperty::fill: node.fill = color_at(track, clock); break;
             case AnimatedProperty::stroke_color: {
+                const Color color = color_at(track, clock);
+                if (same_bits(color, node.path->stroke.color)) break;
                 auto stroked = std::make_shared<PathGeometry>(*node.path);
-                stroked->stroke.color = color_at(track, clock);
+                stroked->stroke.color = color;
                 node.path = std::move(stroked);
                 break;
             }
