@@ -376,7 +376,7 @@ std::shared_ptr<const vellum::graphics::PathGeometry> rectangle_path(float width
 vellum::graphics::LinearGradient ramp(vellum::graphics::GradientKind kind) {
     vellum::graphics::LinearGradient gradient;
     gradient.kind = kind;
-    gradient.angle_degrees = 90.0F;
+    if (kind == vellum::graphics::GradientKind::linear) gradient.angle_degrees = 90.0F;
     gradient.stops = {{.position = 0.0F, .color = vellum::graphics::Color::hex(0xFF0000)},
                       {.position = 1.0F, .color = vellum::graphics::Color::hex(0x0000FF)}};
     return gradient;

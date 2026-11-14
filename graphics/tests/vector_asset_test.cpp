@@ -174,6 +174,7 @@ Scene legacy_scene(std::uint32_t version) {
     shape.clip = NodeClip{.rect = {0.0F, 0.0F, 40.0F, 40.0F}};
     LinearGradient radial = red_to_blue();
     radial.kind = GradientKind::radial;
+    radial.angle_degrees = 180.0F;
     shape.fill_gradients = {radial};
     scene.root.children.push_back(std::move(shape));
     return scene;
