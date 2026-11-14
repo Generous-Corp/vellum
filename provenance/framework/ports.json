@@ -1,0 +1,95 @@
+{
+  "schema": "vellum.framework-ports.v1",
+  "rows": [
+    {
+      "framework_path": "framework/core/render/include/vellum/render/gpu_capabilities.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/render/include/pulp/render/gpu_capabilities.hpp",
+      "pulp_commits": [
+        "9afcaf948342b8705fa53caf9dfe38ea828c3e7c"
+      ],
+      "framework_blob": "8dda6c6eee6652ccabfbf24c167f17bca201dc18",
+      "reason": "Device capability table, tier selection and WGSL diagnostics for the typed custom GPU pass API (Generous-Corp/vellum#432, Generous-Corp/pulp#11713); the pass API itself follows."
+    },
+    {
+      "framework_path": "framework/core/render/src/gpu_capabilities.cpp",
+      "change": "added",
+      "target": "pulp-render",
+      "origin": "pulp",
+      "pulp_path": "core/render/src/gpu_capabilities.cpp",
+      "pulp_commits": [
+        "9afcaf948342b8705fa53caf9dfe38ea828c3e7c",
+        "31829c27eeafaface56831aa38c9a7b5c62892c9"
+      ],
+      "framework_blob": "2eaec95c379d907611d255d4c519efeea4fa8c4e",
+      "reason": "Device capability table, tier selection and WGSL diagnostics for the typed custom GPU pass API (Generous-Corp/vellum#432, Generous-Corp/pulp#11713); the pass API itself follows."
+    },
+    {
+      "framework_path": "framework/core/render/src/wgsl_diagnostics.cpp",
+      "change": "added",
+      "target": "pulp-render",
+      "origin": "pulp",
+      "pulp_path": "core/render/src/wgsl_diagnostics.cpp",
+      "pulp_commits": [
+        "9afcaf948342b8705fa53caf9dfe38ea828c3e7c"
+      ],
+      "framework_blob": "abc864e652a21de3e0d58e6c4b5ccdcc6651671a",
+      "reason": "Device capability table, tier selection and WGSL diagnostics for the typed custom GPU pass API (Generous-Corp/vellum#432, Generous-Corp/pulp#11713); the pass API itself follows."
+    },
+    {
+      "framework_path": "framework/core/render/src/wgsl_compile.cpp",
+      "change": "added",
+      "target": "pulp-render",
+      "origin": "pulp",
+      "pulp_path": "core/render/src/wgsl_compile.cpp",
+      "pulp_commits": [
+        "9afcaf948342b8705fa53caf9dfe38ea828c3e7c",
+        "31829c27eeafaface56831aa38c9a7b5c62892c9"
+      ],
+      "framework_blob": "8d60ebee1d14fbc45d7de2187f76b97b168bbd65",
+      "reason": "Device capability table, tier selection and WGSL diagnostics for the typed custom GPU pass API (Generous-Corp/vellum#432, Generous-Corp/pulp#11713); the pass API itself follows."
+    },
+    {
+      "framework_path": "framework/core/render/include/vellum/render/wgsl_diagnostics.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Port of Pulp's wgsl_diagnostics.hpp with the build helper's comment respelled to its Vellum name, so the framework name debt does not rise."
+    },
+    {
+      "framework_path": "framework/core/render/src/wgsl_compile.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Port of Pulp's wgsl_compile.hpp with the validator's path in its comment respelled to the Vellum tool, so the framework name debt does not rise."
+    },
+    {
+      "framework_path": "framework/tools/cmake/scripts/embed_wgsl.py",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Port of Pulp's embed_wgsl.py with the CMake function's name respelled to vellum_add_wgsl_shaders, so the framework name debt does not rise."
+    },
+    {
+      "framework_path": "framework/tools/cmake/VellumWgslShaders.cmake",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "vellum_add_wgsl_shaders(): embeds .wgsl files as string_view constants and validates them at build time; adapted from Pulp's pulp_add_wgsl_shaders under the Vellum names."
+    }
+  ]
+}
