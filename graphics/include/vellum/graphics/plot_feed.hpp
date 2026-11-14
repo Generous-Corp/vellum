@@ -31,7 +31,8 @@ struct PlotFeedOptions final {
 ///
 /// `sample` is the frame tick: it reads each bound channel once, the way the
 /// `ValueFeed` contract asks (one reader thread, latest-wins, publish counts
-/// compared across ticks), and replaces the spec of every plot whose samples
+/// compared across ticks), so plots sharing a channel see the same publish,
+/// and replaces the spec of every plot whose samples
 /// changed with one carrying the new samples, so the scene stays a value the
 /// renderer paints from. Call it on the render thread, which owns the scene
 /// and the surface; the feed's producers may publish from any thread.
@@ -44,12 +45,13 @@ struct PlotFeedOptions final {
 ///   `PlotSpec::audio_channel`.
 /// - A channel never published draws nothing. A channel stale for
 ///   `stale_after_ticks` ticks shows its neutral value: the level and peak
-///   of a meter, every slot of a vector plot. A scalar history stops where
-///   it is.
+///   of a meter, every slot of a vector plot, and one neutral sample appended
+///   to a scalar history, which then stops.
 ///
-/// State is kept per plot id; a plot whose binding changes starts afresh, a
-/// plot missing from the scene at a tick is forgotten, and a plot without an
-/// id is not fed.
+/// State is kept per plot id, and per order among plots that share an id; a
+/// plot whose binding changes starts afresh, a plot missing from the scene at
+/// a tick is forgotten, a different feed starts every plot afresh, and a plot
+/// without an id or a channel is not fed.
 class PlotFeedSampler final {
 public:
     explicit PlotFeedSampler(PlotFeedOptions options = {});
@@ -62,6 +64,7 @@ public:
 private:
     struct State;
     PlotFeedOptions options_;
+    const value::ValueFeed* feed_ = nullptr;
     std::unordered_map<std::string, std::unique_ptr<State>> states_;
 };
 

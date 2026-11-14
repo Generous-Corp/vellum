@@ -40,6 +40,7 @@ test('a plot binding refuses what the renderer cannot draw', async () => {
         [{ style: 'meter', channel: 'c', source: 'vector' }, 'enum'],
         [{ style: 'line', channel: 'c', slots: 4, min: 1, max: 1 }, 'range'],
         [{ style: 'line', channel: 'c', slots: 4, lineWidth: -1 }, 'range'],
+        [{ style: 'line', channel: 'c', slots: 4, barGap: 1e30 }, 'range'],
         [{ style: 'line', channel: 'c', slots: 4, lineColor: 'red' }, 'format'],
         [{ style: 'line', channel: 'c', slots: 4, samples: [1, 2] }, 'unknown-field'],
     ];
@@ -65,4 +66,7 @@ test('the schema declares plot bindings without samples', async () => {
     assert.deepEqual(definitions.plotBinding.required, ['style', 'channel']);
     assert.equal(definitions.plotBinding.properties.samples, undefined);
     assert.equal(definitions.plotBinding.properties.slots.maximum, 4194304);
+    assert.deepEqual(definitions.plotBinding.if, { properties: { style: { const: 'meter' } } });
+    assert.deepEqual(definitions.plotBinding.else, { required: ['slots'] });
+    assert.equal(definitions.plotBinding.properties.lineWidth.maximum, 4096);
 });

@@ -7,6 +7,7 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <utility>
 
 namespace vellum::graphics {
@@ -35,22 +36,33 @@ bool same_samples(const std::vector<float>& a, const std::vector<float>& b) {
     });
 }
 
+bool fed(const PlotSpec& spec) { return !spec.channel.empty() && plot_is_valid(spec); }
+
+// One read of a channel at this tick, shared by every plot bound to it.
+struct ChannelRead final {
+    std::uint32_t count = 0;
+    bool available = false;
+    float scalar = 0.0F;
+    std::vector<float> block;
+    std::size_t written = 0;
+    std::vector<float> rms;
+    std::vector<float> peak;
+    std::size_t channels = 0;
+};
+
 }  // namespace
 
 struct PlotFeedSampler::State final {
     PlotSpec binding;
     std::optional<std::size_t> channel;
     std::uint32_t last_count = 0;
+    bool bound = false;
     bool published = false;
     std::uint32_t idle_ticks = 0;
     bool stale = false;
     // Scalar history: the slots, and how many samples have been taken.
     std::vector<float> slots;
     std::uint64_t taken = 0;
-    // Read buffers, sized once.
-    std::vector<float> block;
-    std::vector<float> rms;
-    std::vector<float> peak;
 };
 
 PlotFeedSampler::PlotFeedSampler(PlotFeedOptions options) : options_(options) {}
@@ -59,41 +71,33 @@ PlotFeedSampler::~PlotFeedSampler() = default;
 
 PlotFeedReport PlotFeedSampler::sample(value::ValueFeed& feed, Scene& scene) {
     PlotFeedReport report;
+    if (feed_ != &feed) {
+        states_.clear();
+        feed_ = &feed;
+    }
     std::vector<SceneNode*> plots;
     collect(scene.root, plots);
-    std::erase_if(states_, [&plots](const auto& entry) {
-        return std::none_of(plots.begin(), plots.end(),
-                            [&entry](const SceneNode* node) { return node->id == entry.first; });
+    // Plots sharing an id are told apart by their order among that id.
+    std::vector<std::string> keys;
+    keys.reserve(plots.size());
+    std::unordered_map<std::string, std::size_t> seen;
+    for (const SceneNode* node : plots) {
+        const std::size_t occurrence = seen[node->id]++;
+        keys.push_back(node->id + '\x1f' + std::to_string(occurrence));
+    }
+    std::erase_if(states_, [&keys](const auto& entry) {
+        return std::find(keys.begin(), keys.end(), entry.first) == keys.end();
     });
-    for (SceneNode* node : plots) {
+
+    // Resolve each plot's channel and size each channel's single read.
+    std::vector<std::optional<std::size_t>> channels(plots.size());
+    std::unordered_map<std::size_t, ChannelRead> reads;
+    for (std::size_t at = 0; at < plots.size(); ++at) {
+        const SceneNode* node = plots[at];
         const PlotSpec& spec = *node->plot;
-        if (node->id.empty() || spec.channel.empty() || !plot_is_valid(spec)) continue;
-        auto& slot = states_[node->id];
-        const bool rebound = !slot || slot->binding.channel != spec.channel ||
-                             slot->binding.shape != spec.shape ||
-                             slot->binding.audio_channel != spec.audio_channel ||
-                             slot->binding.slot_count != spec.slot_count ||
-                             slot->binding.history != spec.history ||
-                             slot->binding.style != spec.style;
-        if (rebound) {
-            slot = std::make_unique<State>();
-            slot->binding = spec;
-            slot->binding.samples.clear();
-            slot->channel = feed.find(spec.channel, feed_shape(spec.shape));
-            if (spec.shape == PlotChannelShape::scalar) slot->slots.assign(spec.slot_count, kNaN);
-            if (spec.shape == PlotChannelShape::vector) slot->block.assign(spec.slot_count, 0.0F);
-            if (spec.shape == PlotChannelShape::meter) {
-                slot->rms.assign(static_cast<std::size_t>(spec.audio_channel) + 1U, 0.0F);
-                slot->peak.assign(static_cast<std::size_t>(spec.audio_channel) + 1U, 0.0F);
-            }
-        }
-        State& state = *slot;
-        if (!state.channel || *state.channel >= feed.channel_count() ||
-            feed.channel(*state.channel).name != spec.channel ||
-            feed.channel(*state.channel).shape != feed_shape(spec.shape)) {
-            state.channel = feed.find(spec.channel, feed_shape(spec.shape));
-        }
-        if (!state.channel) {
+        if (node->id.empty() || !fed(spec)) continue;
+        channels[at] = feed.find(spec.channel, feed_shape(spec.shape));
+        if (!channels[at]) {
             report.diagnostics.push_back({
                 .severity = LoweringDiagnostic::Severity::warning,
                 .disposition = LoweringDiagnostic::Disposition::lowered,
@@ -105,11 +109,61 @@ PlotFeedReport PlotFeedSampler::sample(value::ValueFeed& feed, Scene& scene) {
             });
             continue;
         }
-        const std::size_t index = *state.channel;
-        const auto info = feed.channel(index);
-        const std::uint32_t count = feed.publish_count(index);
-        const bool fresh = count != state.last_count;
-        state.last_count = count;
+        auto& read = reads[*channels[at]];
+        if (spec.shape == PlotChannelShape::vector) {
+            read.block.resize(std::max<std::size_t>(read.block.size(), spec.slot_count));
+        }
+        if (spec.shape == PlotChannelShape::meter) {
+            const std::size_t wanted = static_cast<std::size_t>(spec.audio_channel) + 1U;
+            read.rms.resize(std::max(read.rms.size(), wanted));
+            read.peak.resize(std::max(read.peak.size(), wanted));
+        }
+    }
+    for (auto& [index, read] : reads) {
+        read.count = feed.publish_count(index);
+        switch (feed.channel(index).shape) {
+        case value::ChannelShape::scalar:
+            read.available = feed.read_scalar(index, read.scalar);
+            break;
+        case value::ChannelShape::vector:
+            read.written = feed.read_vector(index, read.block);
+            read.available = read.count != 0U || read.written != 0U;
+            break;
+        case value::ChannelShape::meter:
+            read.channels = feed.read_meter(index, read.rms, read.peak);
+            read.available = read.channels != 0U;
+            break;
+        case value::ChannelShape::events:
+            break;
+        }
+    }
+
+    for (std::size_t at = 0; at < plots.size(); ++at) {
+        if (!channels[at]) continue;
+        SceneNode* node = plots[at];
+        const PlotSpec& spec = *node->plot;
+        auto& slot = states_[keys[at]];
+        const bool rebound = !slot || slot->binding.channel != spec.channel ||
+                             slot->binding.shape != spec.shape ||
+                             slot->binding.audio_channel != spec.audio_channel ||
+                             slot->binding.slot_count != spec.slot_count ||
+                             slot->binding.history != spec.history ||
+                             slot->binding.style != spec.style || slot->channel != channels[at];
+        if (rebound) {
+            slot = std::make_unique<State>();
+            slot->binding = spec;
+            slot->binding.samples.clear();
+            slot->channel = channels[at];
+            if (spec.shape == PlotChannelShape::scalar) slot->slots.assign(spec.slot_count, kNaN);
+        }
+        State& state = *slot;
+        const auto& read = reads.at(*channels[at]);
+        const auto info = feed.channel(*channels[at]);
+        // A first look counts whatever the channel holds as fresh, so a count
+        // that has wrapped to zero still yields the value it counts.
+        const bool fresh = state.bound ? read.count != state.last_count : read.available;
+        state.bound = true;
+        state.last_count = read.count;
         if (fresh) {
             state.idle_ticks = 0;
         } else if (state.published && state.idle_ticks < std::numeric_limits<std::uint32_t>::max()) {
@@ -117,12 +171,14 @@ PlotFeedReport PlotFeedSampler::sample(value::ValueFeed& feed, Scene& scene) {
         }
         const bool stale = state.published && !fresh && options_.stale_after_ticks > 0U &&
                            state.idle_ticks >= options_.stale_after_ticks;
+        const bool falls_stale = stale && !state.stale;
+        state.stale = stale;
 
         std::optional<std::vector<float>> next;
         switch (spec.shape) {
         case PlotChannelShape::scalar: {
-            float value = 0.0F;
-            if (!fresh || !feed.read_scalar(index, value)) break;
+            if (!(fresh && read.available) && !falls_stale) break;
+            const float value = falls_stale ? info.neutral : read.scalar;
             state.published = true;
             const std::uint64_t capacity = state.slots.size();
             if (spec.history == PlotHistory::scroll) {
@@ -133,44 +189,40 @@ PlotFeedReport PlotFeedSampler::sample(value::ValueFeed& feed, Scene& scene) {
                     state.slots.back() = value;
                 }
             } else {
-                const std::uint64_t at = state.taken % capacity;
-                state.slots[at] = value;
-                if (capacity > 1U) state.slots[(at + 1U) % capacity] = kNaN;
+                const std::uint64_t at_slot = state.taken % capacity;
+                state.slots[at_slot] = value;
+                if (capacity > 1U) state.slots[(at_slot + 1U) % capacity] = kNaN;
             }
             ++state.taken;
             next = state.slots;
             break;
         }
         case PlotChannelShape::vector: {
-            if (stale && !state.stale) {
+            if (falls_stale) {
                 next = std::vector<float>(spec.slot_count, info.neutral);
                 break;
             }
-            if (!fresh) break;
-            const std::size_t written = feed.read_vector(index, state.block);
+            if (!fresh || !read.available) break;
             state.published = true;
             std::vector<float> values(spec.slot_count, kNaN);
-            std::copy_n(state.block.begin(), std::min(written, values.size()), values.begin());
+            std::copy_n(read.block.begin(), std::min(read.written, values.size()), values.begin());
             next = std::move(values);
             break;
         }
         case PlotChannelShape::meter: {
-            if (stale && !state.stale) {
+            if (falls_stale) {
                 next = std::vector<float>{info.neutral, info.neutral};
                 break;
             }
-            if (!fresh) break;
-            const std::size_t channels = feed.read_meter(index, state.rms, state.peak);
-            if (channels == 0U) break;
+            if (!fresh || !read.available) break;
             state.published = true;
-            next = spec.audio_channel < channels
-                       ? std::vector<float>{state.rms[spec.audio_channel],
-                                            state.peak[spec.audio_channel]}
+            next = spec.audio_channel < read.channels
+                       ? std::vector<float>{read.rms[spec.audio_channel],
+                                            read.peak[spec.audio_channel]}
                        : std::vector<float>{info.neutral, info.neutral};
             break;
         }
         }
-        state.stale = stale;
         if (!next || same_samples(*next, spec.samples)) continue;
         auto replaced = std::make_shared<PlotSpec>(spec);
         replaced->samples = std::move(*next);

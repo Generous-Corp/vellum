@@ -15,6 +15,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <span>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -569,7 +570,7 @@ void producer_thread() {
     spec.shape = PlotChannelShape::scalar;
     spec.value_max = 1.0e6F;
     Scene scene = plot_scene(spec);
-    PlotFeedSampler sampler;
+    PlotFeedSampler sampler({.stale_after_ticks = 0});
     std::atomic<bool> done{false};
     std::thread producer([&] {
         for (int value = 1; value <= 200000; ++value) feed.publish_scalar(0, static_cast<float>(value));
@@ -622,6 +623,110 @@ void large_feed() {
            std::to_string(naive.rects.size()) + " rects");
 }
 
+// A feed whose scalar advances on every read and whose count can be set, to
+// show the sampler reads a channel once per tick and treats a first look as
+// fresh even when the count has wrapped to zero.
+class CountingFeed final : public vellum::value::ValueFeed {
+public:
+    std::uint32_t count = 0;
+    float next = 0.0F;
+    [[nodiscard]] std::size_t channel_count() const noexcept override { return 1U; }
+    [[nodiscard]] vellum::value::ChannelInfo channel(std::size_t) const noexcept override {
+        return {.name = "tick", .shape = ChannelShape::scalar};
+    }
+    bool read_scalar(std::size_t, float& value) noexcept override {
+        value = next;
+        next += 1.0F;
+        return true;
+    }
+    std::size_t read_meter(std::size_t, std::span<float>, std::span<float>) noexcept override {
+        return 0U;
+    }
+    std::size_t read_vector(std::size_t, std::span<float>) noexcept override { return 0U; }
+    std::size_t read_events(std::size_t, std::span<vellum::value::ChannelEvent>) noexcept override {
+        return 0U;
+    }
+    [[nodiscard]] std::uint32_t publish_count(std::size_t) const noexcept override { return count; }
+};
+
+void review_fixes() {
+    auto spec = line_spec(8, {});
+    spec.channel = "tick";
+    spec.shape = PlotChannelShape::scalar;
+    Scene scene = plot_scene(spec);
+    SceneNode twin = scene.root.children[1];
+    twin.id = "twin";
+    scene.root.children.push_back(twin);
+    CountingFeed counting;
+    PlotFeedSampler sampler;
+    sampler.sample(counting, scene);
+    expect(plot_of(scene)->samples[0] == 0.0F,
+           "a first look at a channel whose count wrapped to zero still reads its value");
+    for (int tick = 0; tick < 4; ++tick) {
+        ++counting.count;
+        sampler.sample(counting, scene);
+    }
+    expect(plot_specs_equal(*plot_of(scene), *scene.root.children[2].plot) &&
+               plot_of(scene)->samples[4] == 4.0F && counting.next == 5.0F,
+           "two plots of one channel read it once per tick and see the same publish");
+
+    Scene twins = plot_scene(line_spec(4, {}));
+    twins.root.children.push_back(twins.root.children[1]);
+    InMemoryValueFeed feed({{.name = "scope", .shape = ChannelShape::vector, .capacity = 4}});
+    const std::vector<float> block{0.3F, 0.4F};
+    feed.publish_vector(0, block);
+    PlotFeedSampler shared;
+    shared.sample(feed, twins);
+    expect(twins.root.children[1].plot->samples.size() == 4U &&
+               twins.root.children[2].plot->samples.size() == 4U,
+           "two plots sharing an id are both fed");
+
+    InMemoryValueFeed first({{.name = "scope", .shape = ChannelShape::vector, .capacity = 4}});
+    InMemoryValueFeed second({{.name = "scope", .shape = ChannelShape::vector, .capacity = 4}});
+    const std::vector<float> one{0.1F};
+    const std::vector<float> two{0.9F};
+    first.publish_vector(0, one);
+    second.publish_vector(0, two);
+    Scene swapped = plot_scene(line_spec(4, {}));
+    PlotFeedSampler switching;
+    switching.sample(first, swapped);
+    switching.sample(second, swapped);
+    expect(plot_of(swapped)->samples[0] == 0.9F,
+           "a different feed with the same publish count is read afresh");
+
+    InMemoryValueFeed level({{.name = "level", .shape = ChannelShape::scalar, .neutral = 0.0F}});
+    auto history = line_spec(4, {});
+    history.channel = "level";
+    history.shape = PlotChannelShape::scalar;
+    Scene quiet = plot_scene(history);
+    PlotFeedSampler stale({.stale_after_ticks = 2});
+    level.publish_scalar(0, 1.0F);
+    for (int tick = 0; tick < 6; ++tick) stale.sample(level, quiet);
+    expect(plot_of(quiet)->samples[0] == 1.0F && plot_of(quiet)->samples[1] == 0.0F &&
+               std::isnan(plot_of(quiet)->samples[2]),
+           "a stale scalar history takes one neutral sample and stops");
+
+    auto meter = PlotSpec{.style = PlotStyle::level_meter, .shape = PlotChannelShape::meter};
+    meter.audio_channel = kMaxPlotAudioChannel + 1U;
+    expect(!accept_scene(plot_scene(meter)).accepted,
+           "a meter beyond kMaxPlotAudioChannel is refused");
+    auto wide = line_spec(4, {});
+    wide.line_width = std::numeric_limits<float>::max();
+    expect(!accept_scene(plot_scene(wide)).accepted, "a line width over kMaxPlotStroke is refused");
+    wide.line_width = kMaxPlotStroke;
+    wide.samples = {0.5F};
+    const auto heavy = plot_geometry(wide, Color::rgba(0, 0, 0, 0), {0.0F, 0.0F, 4.0F, 4.0F}, 4.0F);
+    expect(!heavy.rects.empty() && heavy.rects[0].rect.height == 4.0F,
+           "the widest line is clamped to the box");
+    const Rect vast{-1073741824.0F, -1073741824.0F, 2147483648.0F, 2147483648.0F};
+    const auto huge = plot_geometry(line_spec(4, {0.5F}), Color::hex(0x000000), vast, 1.0F);
+    const auto grid = plot_grid(vast, 1.0F);
+    expect(huge.rects.size() == 1U && grid.right - grid.left == (1 << 30),
+           "a box past the grid limit is clamped so its extent fits");
+    expect(plot_sample_damage(line_spec(4, {0.5F}), line_spec(4, {0.6F}), vast, 1.0F).empty(),
+           "sample damage on a box past the column limit is empty, as it draws no samples");
+}
+
 void lowering() {
     const Scene scene = plot_scene(line_spec(4, {0.5F}));
     const auto commands = make_paint_commands(scene);
@@ -646,6 +751,7 @@ int main() {
     sampler();
     producer_thread();
     large_feed();
+    review_fixes();
     lowering();
     if (failures != 0) {
         std::cerr << failures << " plot check(s) failed\n";

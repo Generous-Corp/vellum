@@ -881,7 +881,7 @@ bool materialize_plot(
         return reject("slots", "slots must be a whole number of at most " +
             std::to_string(vellum::graphics::kMaxPlotSlots));
     }
-    if (!count(@"audioChannel", spec.audio_channel, 1024U)) {
+    if (!count(@"audioChannel", spec.audio_channel, vellum::graphics::kMaxPlotAudioChannel)) {
         return reject("audioChannel", "audioChannel must be a whole number of at most 1024");
     }
     const auto number = [&](NSString* key, float& value) {

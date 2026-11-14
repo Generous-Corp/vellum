@@ -14,8 +14,9 @@ namespace vellum::graphics {
 /// vector channel, a level meter a meter channel), its slot count is in
 /// [1, `kMaxPlotSlots`] unless it is a level meter, it holds no more samples
 /// than slots (two for a level meter), its value range is finite and not
-/// empty, and its baseline, colours and widths are finite, with the widths
-/// and the bar gap not negative. On failure `reason`, when non-null, says
+/// empty, its baseline, colours and widths are finite, the widths and the
+/// bar gap are in [0, `kMaxPlotStroke`], and its audio channel is at most
+/// `kMaxPlotAudioChannel`. On failure `reason`, when non-null, says
 /// which rule failed.
 [[nodiscard]] bool plot_is_valid(const PlotSpec& plot, std::string* reason = nullptr);
 

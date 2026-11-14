@@ -18,7 +18,9 @@ std::atomic<bool> join_columns{true};
 std::atomic<bool> previous_spans{true};
 std::atomic<bool> every_changed_column{true};
 
-constexpr double kGridLimit = 1 << 30;
+// Grid edges stay within +/-2^29, so any difference of two fits an int32_t.
+constexpr double kGridLimit = 1 << 29;
+constexpr double kDeviceStrokeLimit = 1 << 20;
 
 bool same_float(float a, float b) noexcept {
     return std::bit_cast<std::uint32_t>(a) == std::bit_cast<std::uint32_t>(b);
@@ -103,8 +105,8 @@ float slot_value(const PlotSpec& plot, std::uint64_t slot) noexcept {
 }
 
 std::int32_t device_width(float logical, float scale) noexcept {
-    return std::max<std::int32_t>(1, static_cast<std::int32_t>(std::lround(
-                                         static_cast<double>(logical) * scale)));
+    const double device = std::clamp(static_cast<double>(logical) * scale, 0.0, kDeviceStrokeLimit);
+    return std::max<std::int32_t>(1, static_cast<std::int32_t>(std::lround(device)));
 }
 
 Span fill_span(const Axis& axis, float low, float high, float baseline) noexcept {
@@ -131,8 +133,8 @@ std::vector<Column> plot_columns(const PlotSpec& plot, const PlotGrid& grid, flo
     }
 
     if (plot.style == PlotStyle::bar && slots <= count) {
-        const std::int32_t gap = std::max<std::int32_t>(
-            0, static_cast<std::int32_t>(std::lround(static_cast<double>(plot.bar_gap) * scale)));
+        const std::int32_t gap = static_cast<std::int32_t>(std::lround(std::clamp(
+            static_cast<double>(plot.bar_gap) * scale, 0.0, kDeviceStrokeLimit)));
         for (std::uint64_t slot = 0; slot < slots; ++slot) {
             const std::uint64_t begin = slot * count / slots;
             const std::uint64_t end = (slot + 1U) * count / slots;
@@ -402,10 +404,14 @@ bool plot_is_valid(const PlotSpec& plot, std::string* reason) {
         !finite_color(plot.peak_color)) {
         return fail("a plot colour is not finite");
     }
-    if (!std::isfinite(plot.line_width) || plot.line_width < 0.0F ||
-        !std::isfinite(plot.bar_gap) || plot.bar_gap < 0.0F ||
-        !std::isfinite(plot.peak_width) || plot.peak_width < 0.0F) {
-        return fail("a plot width or gap is negative or not finite");
+    const auto stroke = [](float value) {
+        return std::isfinite(value) && value >= 0.0F && value <= kMaxPlotStroke;
+    };
+    if (!stroke(plot.line_width) || !stroke(plot.bar_gap) || !stroke(plot.peak_width)) {
+        return fail("a plot width or gap is negative, not finite or over kMaxPlotStroke");
+    }
+    if (plot.audio_channel > kMaxPlotAudioChannel) {
+        return fail("the audio channel is over kMaxPlotAudioChannel");
     }
     return true;
 }

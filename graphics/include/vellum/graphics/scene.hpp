@@ -397,10 +397,12 @@ enum class PlotOrientation : std::uint8_t {
 /// once a scene references it; replace the pointer to change it.
 struct PlotSpec final {
     PlotStyle style = PlotStyle::line;
-    /// The verbatim name of the channel the plot reads.
+    /// The verbatim name of the channel the plot reads. A plot without one
+    /// draws the samples it carries, and `PlotFeedSampler` leaves it alone.
     std::string channel;
     PlotChannelShape shape = PlotChannelShape::vector;
-    /// The audio channel of a meter channel that a level meter shows.
+    /// The audio channel of a meter channel that a level meter shows, at most
+    /// `kMaxPlotAudioChannel`.
     std::uint32_t audio_channel = 0;
     /// Slots across the box for a line, area or bar plot, at least 1 and at
     /// most `kMaxPlotSlots`; a level meter ignores it.
@@ -417,11 +419,13 @@ struct PlotSpec final {
     Color fill_color = Color::hex(0x22C55E);
     /// The peak tick of a level meter.
     Color peak_color = Color::hex(0xF8FAFC);
-    /// Logical pixels; at least one device pixel is drawn.
+    /// Logical pixels, at most `kMaxPlotStroke`; at least one device pixel is
+    /// drawn.
     float line_width = 1.0F;
-    /// Logical pixels between neighbouring bars.
+    /// Logical pixels between neighbouring bars, at most `kMaxPlotStroke`.
     float bar_gap = 0.0F;
-    /// Logical thickness of a level meter's peak tick; zero draws none.
+    /// Logical thickness of a level meter's peak tick, at most
+    /// `kMaxPlotStroke`; zero draws none.
     float peak_width = 2.0F;
     /// One value per slot (a line, area or bar plot), or the level and peak
     /// (a level meter). Missing slots draw nothing.
@@ -430,6 +434,10 @@ struct PlotSpec final {
 
 /// The largest `PlotSpec::slot_count` a scene may carry.
 inline constexpr std::uint32_t kMaxPlotSlots = 1U << 22U;
+/// The largest `PlotSpec::audio_channel`.
+inline constexpr std::uint32_t kMaxPlotAudioChannel = 1024U;
+/// The largest line width, bar gap and peak width, in logical pixels.
+inline constexpr float kMaxPlotStroke = 4096.0F;
 
 /// The scene schema version this build produces.
 ///

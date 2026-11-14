@@ -323,8 +323,9 @@ function validatePlotBinding(plot, path, issues) {
         if (plot[key] === undefined) continue;
         if (!finite(plot[key])) {
             issues.push(issue(`${path}.${key}`, 'type', `${key} must be a finite number`));
-        } else if (['lineWidth', 'barGap', 'peakWidth'].includes(key) && plot[key] < 0) {
-            issues.push(issue(`${path}.${key}`, 'range', `${key} must not be negative`));
+        } else if (['lineWidth', 'barGap', 'peakWidth'].includes(key) &&
+            (plot[key] < 0 || plot[key] > 4096)) {
+            issues.push(issue(`${path}.${key}`, 'range', `${key} must be from 0 to 4096`));
         }
     }
     if ((plot.min ?? 0) === (plot.max ?? 1)) {
