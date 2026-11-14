@@ -175,15 +175,27 @@ def resolve(text: str, expressions: dict[str, str], where: str) -> str:
     return re.sub(r"\$\{\{(.*?)\}\}", one, text)
 
 
+def use_check_runs_commit(script: str, commit: str | None) -> str:
+    """`script` reading the check runs of `commit` instead of the tagged commit, when one is given."""
+    if commit is None:
+        return script
+    if not SHA.fullmatch(commit):
+        raise PretagError("--check-runs-commit must be a full SHA")
+    return script.replace("commits/$GITHUB_SHA/check-runs", f"commits/{commit}/check-runs")
+
+
 def git(*args: str, cwd: Path) -> str:
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
 class Runner:
-    def __init__(self, root: Path, tag: str, commit: str, temp: Path) -> None:
+    def __init__(self, root: Path, tag: str, commit: str, temp: Path, check_runs_commit: str | None = None) -> None:
         if not TAG.fullmatch(tag) or not SHA.fullmatch(commit):
             raise PretagError("the tag must be vMAJOR.MINOR.PATCH and the commit a full SHA")
         self.root, self.tag, self.commit, self.temp = root, tag, commit, temp
+        # A commit that exists only locally has no check runs on GitHub; a caller that
+        # rehearses one reads the runs of a real commit instead (release_canary.py).
+        self.check_runs_commit = check_runs_commit
         self.outputs: dict[str, str] = {}
         token = os.environ.get("GH_TOKEN", "")
         self.expressions = {
@@ -208,6 +220,7 @@ class Runner:
             return True
         step = read_step(workflow, check.job, check.step)
         script = resolve(step.run, self.expressions, check.step)
+        script = use_check_runs_commit(script, self.check_runs_commit)
         env = {**self.environment, **{key: resolve(value, self.expressions, check.step)
                                       for key, value in step.env.items()}}
         output = self.temp / "github-output"
@@ -277,10 +290,12 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--tag", required=True)
     parser.add_argument("--commit", required=True)
     parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument("--check-runs-commit", help="read this commit's check runs, not the tagged commit's "
+                        "(for a rehearsal on a commit that exists only locally)")
     args = parser.parse_args(argv)
     try:
         with tempfile.TemporaryDirectory(prefix="pretag-") as temporary:
-            return Runner(args.root.resolve(), args.tag, args.commit, Path(temporary)).main()
+            return Runner(args.root.resolve(), args.tag, args.commit, Path(temporary), args.check_runs_commit).main()
     except (OSError, subprocess.CalledProcessError, PretagError) as error:
         print(f"pretag checks refused: {error}", file=sys.stderr)
         return 1
