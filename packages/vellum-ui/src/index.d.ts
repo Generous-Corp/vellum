@@ -90,7 +90,9 @@ export declare const services: Readonly<{
  * fractions of the box's shorter side (0 means 0), centred on the focal point
  * and the centre. `colorSpace` is the space the stops are written in and
  * `interpolation` the space they blend in. `repeatLength` applies to linear
- * gradients only.
+ * gradients only, `angle` to linear and conic ones, `centerX`/`centerY` to
+ * every kind but linear, and `focalX`/`focalY` to two-circle-radial ones; a
+ * field set on a kind it does not apply to is refused.
  */
 export interface LinearGradientStyle {
     kind?: 'linear' | 'radial' | 'two-circle-radial' | 'conic';

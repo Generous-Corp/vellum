@@ -457,6 +457,31 @@ void gradient_expressibility() {
         refused("an end radius on another kind", gradient, "start and end radius");
     }
 
+    for (const auto kind : {GradientKind::radial, GradientKind::two_circle_radial}) {
+        auto gradient = base;
+        gradient.kind = kind;
+        gradient.angle_degrees = 30.0F;
+        refused("an angle on a kind that ignores it", gradient, "angle applies only");
+    }
+    {
+        auto conic = base;
+        conic.kind = GradientKind::conic;
+        conic.angle_degrees = 30.0F;
+        conic.center_x = 0.3F;
+        accepted("a conic gradient with an angle and a centre", conic);
+        auto linear = base;
+        linear.angle_degrees = 30.0F;
+        accepted("a linear gradient with an angle", linear);
+        linear.center_y = 0.3F;
+        refused("a centre on a linear gradient", linear, "center x and y");
+    }
+    for (const auto kind : {GradientKind::linear, GradientKind::radial, GradientKind::conic}) {
+        auto gradient = base;
+        gradient.kind = kind;
+        gradient.focal_x = 0.3F;
+        refused("a focal point on another kind", gradient, "focal x and y");
+    }
+
     auto two = base;
     two.kind = GradientKind::two_circle_radial;
     accepted("a default two-circle gradient, a point growing to half the shorter side", two);

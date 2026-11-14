@@ -309,6 +309,35 @@ bool gradient_reports_and_version_gate() {
                   << " losses\n";
         return false;
     }
+    {
+        // A mask's own commands are skipped, never drawn as a base colour, so
+        // a gradient on them is not reported; only the mask itself is.
+        Scene masked;
+        masked.root.id = "root";
+        SceneNode group{.id = "g", .kind = SceneNode::Kind::group};
+        group.children.push_back({
+            .id = "g/content", .kind = SceneNode::Kind::rectangle,
+            .bounds = {0, 0, 16, 16}, .fill = Color::hex(0xFFFFFF)});
+        SceneNode mask{
+            .id = "g/mask", .kind = SceneNode::Kind::rectangle,
+            .bounds = {0, 0, 16, 16}, .fill_gradients = {gradient(GradientKind::conic)}};
+        mask.mask = vellum::graphics::MaskMode::alpha;
+        group.children.push_back(std::move(mask));
+        masked.root.children.push_back(std::move(group));
+        const auto masked_lowering = vellum::web::lower_for_canvas_shell(masked);
+        const bool any_gradient = std::any_of(
+            masked_lowering.diagnostics.begin(), masked_lowering.diagnostics.end(),
+            [](const LoweringDiagnostic& diagnostic) {
+                return diagnostic.code == vellum::web::kGradientNotExpressibleCode;
+            });
+        if (!masked_lowering.accepted || any_gradient ||
+            masked_lowering.diagnostics.size() != 1U ||
+            masked_lowering.diagnostics[0].code != vellum::web::kMaskNotCompositedCode) {
+            std::cerr << "a gradient inside a skipped mask was reported as drawn: "
+                      << masked_lowering.diagnostics.size() << " diagnostics\n";
+            return false;
+        }
+    }
     scene.scene_version = 5U;
     const auto refused = vellum::web::lower_for_canvas_shell(scene);
     if (refused.accepted || refused.diagnostics.size() != 1U ||

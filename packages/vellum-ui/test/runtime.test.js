@@ -367,6 +367,12 @@ test('serializes and validates the gradient vocabulary', () => {
     rejects({ kind: 'conic', colorSpace: 'oklab' },
         /colorSpace must be one of srgb, linear-srgb, display-p3/);
     rejects({ stops }, /angle must be a finite number/);
+    rejects({ kind: 'radial', angle: 30 }, /angle does not apply to a radial gradient/);
+    rejects({ kind: 'two-circle-radial', angle: 30 },
+        /angle does not apply to a two-circle-radial gradient/);
+    rejects({ angle: 0, centerX: 0.2 }, /centerX does not apply to a linear gradient/);
+    rejects({ kind: 'conic', focalY: 0.2 }, /focalY does not apply to a conic gradient/);
+    rejects({ kind: 'radial', focalX: 0.2 }, /focalX does not apply to a radial gradient/);
 });
 
 test('serializes a path node with SVG paint properties', () => {

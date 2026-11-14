@@ -1212,7 +1212,9 @@ Scene gradient_kind_scene(GradientKind kind, GradientSpread spread) {
     gradient.spread = spread;
     // Keep the sweep asymmetric so ellipse, focal and conic-angle lowering are
     // exercised instead of falling through the circular/default cases.
-    gradient.angle_degrees = kind == GradientKind::conic ? 47.0F : 103.0F;
+    if (kind == GradientKind::conic || kind == GradientKind::linear) {
+        gradient.angle_degrees = kind == GradientKind::conic ? 47.0F : 103.0F;
+    }
     if (kind != GradientKind::linear) {
         gradient.center_x = 0.37F;
         gradient.center_y = 0.62F;
