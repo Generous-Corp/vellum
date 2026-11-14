@@ -5,6 +5,11 @@ export const REIMPORT_REPORT_SCHEMA =
     'https://vellum.dev/schemas/design-ir/reimport-report/v1';
 
 export const DESIGN_IR_VERSION = 1;
+// The DesignIR schema versions this build reads and writes. Version 2 is
+// reserved for blend modes and is not supported here; version 3 adds material
+// references on nodes. A document without materials stays version 1.
+export const DESIGN_IR_MATERIALS_VERSION = 3;
+export const SUPPORTED_DESIGN_IR_VERSIONS = Object.freeze([1, 3]);
 export const AUTHORED_OVERLAY_VERSION = 1;
 export const REIMPORT_REPORT_VERSION = 1;
 export const COMPILER_NAME = '@vellum/design-ir';

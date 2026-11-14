@@ -3,6 +3,7 @@ import {
     COMPILER_VERSION,
     DESIGN_IR_SCHEMA,
     DESIGN_IR_VERSION,
+    SUPPORTED_DESIGN_IR_VERSIONS,
 } from './constants.js';
 import { buildLossReport, diagnosticSort, normalizeDiagnostic } from './diagnostics.js';
 import {
@@ -38,6 +39,14 @@ export function normalizeImport(input, options = {}) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) {
         throw new TypeError('import input must be an object');
     }
+    // Version 1 unless the caller asks for a later supported one; validation
+    // refuses a material reference below version 3.
+    const schemaVersion = options.schemaVersion ?? DESIGN_IR_VERSION;
+    if (!SUPPORTED_DESIGN_IR_VERSIONS.includes(schemaVersion)) {
+        throw new TypeError(
+            `schemaVersion must be one of ${SUPPORTED_DESIGN_IR_VERSIONS.join(', ')}`,
+        );
+    }
     const source = normalizeSource(input.source);
     const diagnostics = (input.diagnostics ?? []).map((diagnostic) =>
         normalizeDiagnostic(diagnostic),
@@ -62,7 +71,7 @@ export function normalizeImport(input, options = {}) {
         },
         diagnostics: diagnostics.sort(diagnosticSort),
         root,
-        schemaVersion: DESIGN_IR_VERSION,
+        schemaVersion,
         source,
         tokens: normalizeTokens(input.tokens, source.key),
     });

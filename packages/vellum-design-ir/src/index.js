@@ -4,11 +4,13 @@ export {
     COMPILER_NAME,
     COMPILER_VERSION,
     DESIGN_IR_SCHEMA,
+    DESIGN_IR_MATERIALS_VERSION,
     DESIGN_IR_VERSION,
     DISPOSITIONS,
     REIMPORT_REPORT_SCHEMA,
     REIMPORT_REPORT_VERSION,
     SEVERITIES,
+    SUPPORTED_DESIGN_IR_VERSIONS,
 } from './constants.js';
 export { buildLossReport, normalizeDiagnostic } from './diagnostics.js';
 export { DesignIRConflictError, DesignIRValidationError } from './errors.js';
