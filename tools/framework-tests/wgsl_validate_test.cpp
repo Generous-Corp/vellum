@@ -21,6 +21,7 @@
 // and links only the device layer, never the render unit, so the render unit's
 // own shaders can be validated while it builds.
 
+#include <gpu_runtime/dawn_native_bootstrap.hpp>
 #include <vellum/render/gpu_surface.hpp>
 #include <vellum/render/wgsl_diagnostics.hpp>
 
@@ -88,6 +89,15 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    // The host owns Dawn's proc table; without it no surface can be created.
+    std::string bootstrap_error;
+    if (!gpu_runtime::register_native_dawn_bootstrap({}, &bootstrap_error)) {
+        std::cerr << "vellum-wgsl-validate: warning: no Dawn Null adapter (" << bootstrap_error
+                  << "); WGSL was not validated\n";
+        if (!stamp.empty())
+            return write_stamp(stamp, "skipped: no Null adapter\n") ? 0 : 1;
+        return kExitSkipped;
+    }
     auto surface = vellum::render::GpuSurface::create_dawn();
     vellum::render::GpuSurface::Config config;
     config.width = 1;

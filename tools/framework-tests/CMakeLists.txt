@@ -49,15 +49,20 @@ vellum_add_framework_test(gpu-capabilities
     UNITS Vellum::MirrorRender_2d)
 
 # The WGSL validator behind vellum_add_wgsl_shaders(): it compiles each shader
-# on Dawn's Null adapter. The render unit supplies the compile helper and the
-# diagnostics; the tool only includes the helper's private header. Nothing
+# on Dawn's Null adapter. It compiles the render unit's WGSL helper and
+# diagnostics itself and links the device layer directly, as the gpu-runtime
+# device test does, so it never loads a second copy of the render unit. Nothing
 # here installs it. It is a test-side executable, so its source carries the
 # test file name and is recorded as registered for the check below.
-add_executable(vellum-wgsl-validate wgsl_validate_test.cpp)
+add_executable(vellum-wgsl-validate wgsl_validate_test.cpp
+    "${PROJECT_SOURCE_DIR}/framework/core/render/src/wgsl_compile.cpp"
+    "${PROJECT_SOURCE_DIR}/framework/core/render/src/wgsl_diagnostics.cpp")
 set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES wgsl_validate_test.cpp)
 target_include_directories(vellum-wgsl-validate PRIVATE
-    "${PROJECT_SOURCE_DIR}/framework/core/render/src" ${_vellum_framework_test_includes})
-target_link_libraries(vellum-wgsl-validate PRIVATE Vellum::MirrorRender_2d)
+    "${PROJECT_SOURCE_DIR}/framework/core/render/src" "${PROJECT_SOURCE_DIR}/gpu-runtime/include"
+    ${_vellum_framework_test_includes})
+target_compile_definitions(vellum-wgsl-validate PRIVATE PULP_GPU_RUNTIME=1 PULP_HAS_DAWN=1 PULP_HAS_WEBGPU=1)
+target_link_libraries(vellum-wgsl-validate PRIVATE VellumGpuRuntime::Device VellumGpuRuntime::Dawn)
 set_target_properties(vellum-wgsl-validate PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON
