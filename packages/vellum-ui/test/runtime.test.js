@@ -7,6 +7,7 @@ import {
     Design,
     Image,
     Path,
+    Plot,
     Stack,
     Text,
     TextRun,
@@ -401,6 +402,46 @@ test('serializes a path node with SVG paint properties', () => {
     rejects({ strokeDasharray: Array(65).fill(1) }, /at most 64 numbers/);
     rejects({ strokeDashoffset: Infinity }, /strokeDashoffset must be a finite number/);
     rejects({ children: jsx(View, {}) }, /Path does not accept children/);
+});
+
+test('serializes a plot node bound to a value-feed channel', () => {
+    const tree = JSON.parse(mount(() => jsx(View, {
+        id: 'scopes',
+        style: { width: 200, height: 100 },
+        children: [
+            jsx(Plot, {
+                id: 'scope', plot: 'line', channel: 'output', source: 'scalar', slots: 240,
+                history: 'sweep', min: -1, max: 1, lineWidth: 2, lineColor: '#f97316',
+                style: { width: 120, height: 60, backgroundColor: '#111827' },
+            }),
+            jsx(Plot, { id: 'level', plot: 'meter', channel: 'meters', audioChannel: 1 }),
+        ],
+    })).renderJSON()).tree;
+    const [scope, level] = tree.children;
+    assert.equal(scope.type, 'plot');
+    assert.deepEqual(
+        Object.keys(scope).filter((name) => !['style', 'children'].includes(name)).sort(),
+        ['channel', 'history', 'id', 'lineColor', 'lineWidth', 'max', 'min', 'plot', 'slots',
+            'source', 'type'],
+    );
+    assert.equal(scope.slots, 240);
+    assert.equal(level.audioChannel, 1);
+    assert.deepEqual(level.children, []);
+
+    const rejects = (properties, pattern) => assert.throws(
+        () => mount(() => jsx(Plot, { id: 'bad', plot: 'line', channel: 'c', slots: 4,
+            ...properties })).renderJSON(),
+        pattern);
+    rejects({ plot: 'pie' }, /plot must be one of line, area, bar, meter/);
+    rejects({ channel: '' }, /channel must name a value-feed channel/);
+    rejects({ slots: undefined }, /slots is required for a line plot/);
+    rejects({ slots: 2.5 }, /slots must be a whole number from 1 to 4194304/);
+    rejects({ audioChannel: -1 }, /audioChannel must be a whole number from 0 to 1024/);
+    rejects({ history: 'loop' }, /history must be one of scroll, sweep/);
+    rejects({ lineWidth: -1 }, /lineWidth must be a non-negative finite number/);
+    rejects({ min: Number.NaN }, /min must be a finite number/);
+    rejects({ lineColor: 'red' }, /lineColor must be a hex color/);
+    rejects({ children: jsx(View, {}) }, /Plot does not accept children/);
 });
 
 test('serializes an image node with fit, sampling and a source rectangle', () => {
