@@ -306,6 +306,28 @@ bool parse_linear_gradient_value(
                       error)) {
         return false;
     }
+    {
+        using vellum::graphics::GradientKind;
+        const auto kind = gradient.kind;
+        const bool angled = kind == GradientKind::linear || kind == GradientKind::conic;
+        const bool centred = kind != GradientKind::linear;
+        const bool focal = kind == GradientKind::two_circle_radial;
+        const std::pair<NSString*, bool> kind_fields[]{
+            {@"angle", angled},   {@"centerX", centred}, {@"centerY", centred},
+            {@"focalX", focal},   {@"focalY", focal},
+        };
+        for (const auto& [key, applies] : kind_fields) {
+            if (!applies && source[key] != nil) {
+                set_error(error, name + "." + cpp_string(key) + " does not apply to a " +
+                                     (kind == GradientKind::linear       ? "linear"
+                                      : kind == GradientKind::radial     ? "radial"
+                                      : kind == GradientKind::conic      ? "conic"
+                                                                         : "two-circle-radial") +
+                                     " gradient");
+                return false;
+            }
+        }
+    }
     const std::pair<float, const char*> non_negative[]{
         {gradient.repeat_length, ".repeatLength"}, {gradient.radius_x, ".radiusX"},
         {gradient.radius_y, ".radiusY"},           {gradient.start_radius, ".startRadius"},

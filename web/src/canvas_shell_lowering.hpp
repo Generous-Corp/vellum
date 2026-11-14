@@ -478,8 +478,12 @@ canvas_shell_gradient_diagnostics(
                        "; the base colour was drawn",
         });
     };
-    for (const auto& command : commands) {
-        if (!vellum::graphics::draws_content(command.kind)) continue;
+    // A command inside a mask is not drawn at all, so it has no base colour
+    // to report, matching `canvas_shell_loss_count`.
+    const auto masked = canvas_shell_masked(commands);
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        const auto& command = commands[index];
+        if (masked[index] || !vellum::graphics::draws_content(command.kind)) continue;
         for (const auto& gradient : command.fill_gradients) {
             if (vellum::graphics::gradient_uses_version_8(gradient)) {
                 report(command, gradient, "gradient");

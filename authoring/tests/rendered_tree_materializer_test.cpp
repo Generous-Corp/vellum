@@ -1081,6 +1081,16 @@ int main() {
          "backgroundGradient.startRadius must be non-negative"},
         {R"("kind":"two-circle-radial","endRadius":-0.1)",
          "backgroundGradient.endRadius must be non-negative"},
+        {R"("kind":"radial","angle":30)",
+         "backgroundGradient.angle does not apply to a radial gradient"},
+        {R"("kind":"two-circle-radial","angle":30)",
+         "backgroundGradient.angle does not apply to a two-circle-radial gradient"},
+        {R"("angle":90,"centerX":0.2)",
+         "backgroundGradient.centerX does not apply to a linear gradient"},
+        {R"("kind":"conic","focalY":0.2)",
+         "backgroundGradient.focalY does not apply to a conic gradient"},
+        {R"("kind":"radial","focalX":0.2)",
+         "backgroundGradient.focalX does not apply to a radial gradient"},
     };
     for (const auto& [fields, expected] : malformed_gradients) {
         if (vellum::authoring::materialize_rendered_tree(gradient_tree(fields), rendered,

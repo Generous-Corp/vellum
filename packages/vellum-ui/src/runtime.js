@@ -274,6 +274,15 @@ const GRADIENT_KINDS = ['linear', 'radial', 'two-circle-radial', 'conic'];
 const GRADIENT_SPREADS = ['pad', 'repeat', 'reflect'];
 const GRADIENT_INTERPOLATIONS = ['srgb', 'linear-srgb', 'oklab'];
 const GRADIENT_COLOR_SPACES = ['srgb', 'linear-srgb', 'display-p3'];
+// The gradient kinds each geometry field applies to; the native renderer
+// refuses a field set on any other kind rather than ignore it.
+const GRADIENT_KIND_FIELDS = [
+    ['angle', ['linear', 'conic']],
+    ['centerX', ['radial', 'two-circle-radial', 'conic']],
+    ['centerY', ['radial', 'two-circle-radial', 'conic']],
+    ['focalX', ['two-circle-radial']],
+    ['focalY', ['two-circle-radial']],
+];
 
 function gradientKeyword(value, path, allowed) {
     if (value !== undefined && !allowed.includes(value)) {
@@ -288,6 +297,12 @@ function validateLinearGradient(value, path, { coincidentStops = false } = {}) {
         'endRadius', 'stops',
     ]);
     gradientKeyword(gradient.kind, `${path}.kind`, GRADIENT_KINDS);
+    const kind = gradient.kind ?? 'linear';
+    for (const [field, kinds] of GRADIENT_KIND_FIELDS) {
+        if (gradient[field] !== undefined && !kinds.includes(kind)) {
+            throw new TypeError(`${path}.${field} does not apply to a ${kind} gradient`);
+        }
+    }
     finitePaintNumber(gradient.angle, `${path}.angle`, {
         optional: gradient.kind !== undefined && gradient.kind !== 'linear',
     });

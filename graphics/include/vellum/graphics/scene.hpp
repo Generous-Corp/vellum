@@ -686,6 +686,23 @@ struct SceneNode final {
         (gradient.start_radius != 0.0F || gradient.end_radius != 0.5F)) {
         return "start and end radius apply only to two-circle radial gradients";
     }
+    // The renderer reads the angle only for linear and conic gradients, the
+    // centre only for radial, two-circle radial and conic ones, and the focal
+    // point only for two-circle radial ones; a field set on another kind
+    // would be ignored, so it is refused instead.
+    if ((gradient.kind == GradientKind::radial ||
+         gradient.kind == GradientKind::two_circle_radial) &&
+        gradient.angle_degrees != 180.0F) {
+        return "angle applies only to linear and conic gradients";
+    }
+    if (gradient.kind == GradientKind::linear &&
+        (gradient.center_x != 0.5F || gradient.center_y != 0.5F)) {
+        return "center x and y apply only to radial, two-circle radial and conic gradients";
+    }
+    if (gradient.kind != GradientKind::two_circle_radial &&
+        (gradient.focal_x != 0.5F || gradient.focal_y != 0.5F)) {
+        return "focal x and y apply only to two-circle radial gradients";
+    }
     if (!(gradient.radius_x >= 0.0F) || !(gradient.radius_y >= 0.0F) ||
         !(gradient.start_radius >= 0.0F) || !(gradient.end_radius >= 0.0F) ||
         !std::isfinite(gradient.radius_x) || !std::isfinite(gradient.radius_y) ||
