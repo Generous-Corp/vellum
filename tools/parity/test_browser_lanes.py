@@ -222,8 +222,10 @@ class OutcomeRecorder(unittest.TestCase):
         reject = self.record(self.py("import sys; print('refusing', file=sys.stderr); sys.exit(1)"),
                              self.py("raise SystemExit('never runs')"))
         self.assertEqual((reject["outcome"], reject["codes"], len(reject["commands"])), ("reject", ["bad-input"], 1))
-        crash = self.record(self.py("pass"), self.py("import os, signal; os.kill(os.getpid(), signal.SIGSEGV)"))
-        self.assertEqual((crash["outcome"], crash["signal"]), ("crash", 11))
+        # Any death by signal is a crash. SIGKILL proves it without a faulting
+        # process, so the run leaves no macOS crash report behind.
+        crash = self.record(self.py("pass"), self.py("import os, signal; os.kill(os.getpid(), signal.SIGKILL)"))
+        self.assertEqual((crash["outcome"], crash["signal"]), ("crash", 9))
 
     def test_unstartable_tool_is_a_skip_not_an_outcome(self) -> None:
         self.assertEqual(self.record(["/nonexistent/importer"]), {"recorder_exit": ph.SKIP_EXIT})
