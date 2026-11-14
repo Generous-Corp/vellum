@@ -57,7 +57,7 @@ const SceneNode* find_undrawable_image(const SceneNode& node, std::string& reaso
 // Why `scene` is refused, or empty. `image_node` is set to the refused
 // image's id, and `image` to true, for an image or image-table refusal.
 std::string refusal(const Scene& scene, bool& image, std::string& image_node,
-                    std::string& token_node) {
+                    std::optional<TokenRefusal>& token_refusal) {
     if (!scene_version_is_supported(scene.scene_version)) {
         return "scene version " + std::to_string(scene.scene_version) +
                " is not supported by this renderer";
@@ -75,9 +75,10 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node,
                " has a non-finite transform, opacity, or corner radius";
     }
     if (scene.root.mask) return "scene root " + scene.root.id + " cannot be a mask";
-    if (const auto token = find_invalid_token_reference(scene); token) {
-        token_node = token->node_id;
-        return token->reason;
+    if (auto token = find_invalid_token_reference(scene); token) {
+        auto reason = token->reason;
+        token_refusal = std::move(token);
+        return reason;
     }
     std::string reason;
     if (const auto* clipped = find_invalid_clip(scene.root, reason); clipped != nullptr) {
@@ -107,27 +108,21 @@ SceneAcceptance accept_scene(const Scene& scene) {
     result.diagnostics = scene_loss_diagnostics(scene);
     bool image = false;
     std::string image_node;
-    std::string token_node;
-    result.reason = refusal(scene, image, image_node, token_node);
+    std::optional<TokenRefusal> token;
+    result.reason = refusal(scene, image, image_node, token);
     result.accepted = result.reason.empty();
     if (result.accepted) return result;
 
     const bool version = !result.diagnostics.empty() &&
-        result.diagnostics.front().severity == LoweringDiagnostic::Severity::error;
+        result.diagnostics.front().severity == LoweringDiagnostic::Severity::error &&
+        result.diagnostics.front().code == kSceneVersionMismatchCode;
     if (version) {
         result.diagnostics.resize(1U);
         return result;
     }
     result.diagnostics.clear();
-    if (!token_node.empty()) {
-        result.diagnostics.push_back({
-            .severity = LoweringDiagnostic::Severity::error,
-            .disposition = LoweringDiagnostic::Disposition::unsupported,
-            .code = std::string(kInvalidTokenReferenceCode),
-            .node_id = std::move(token_node),
-            .property = "fill",
-            .message = result.reason,
-        });
+    if (token) {
+        result.diagnostics.push_back(token_refusal_diagnostic(*token));
         return result;
     }
     if (image) {

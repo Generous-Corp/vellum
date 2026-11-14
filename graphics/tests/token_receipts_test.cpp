@@ -1,4 +1,5 @@
 #include <vellum/graphics/damage.hpp>
+#include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/scene_acceptance.hpp>
 #include <vellum/graphics/token_receipts.hpp>
@@ -359,6 +360,176 @@ void bad_slots_are_refused() {
           "a version 6 scene with slots gets a version diagnostic");
 }
 
+
+void lowering_refuses_invalid_references() {
+    const Scene sound = themed_scene();
+    std::vector<PaintCommandRange> ranges;
+    check(!make_paint_commands(sound, &ranges).empty() && !ranges.empty() &&
+              scene_loss_diagnostics(sound).empty(),
+          "control: a sound token scene lowers and reports no loss");
+
+    Scene stale = themed_scene();
+    stale.root.children[0].fill = kCanvas;
+    check(make_paint_commands(stale).empty(), "make_paint_commands refuses a stale fill");
+    check(make_paint_commands(stale, &ranges).empty() && ranges.empty(),
+          "make_paint_commands with ranges refuses a stale fill");
+    const auto loss = scene_loss_diagnostics(stale);
+    check(loss.size() == 1U && loss[0].code == kInvalidTokenReferenceCode &&
+              loss[0].severity == LoweringDiagnostic::Severity::error &&
+              loss[0].node_id == "a0" && loss[0].property == "fill_token",
+          "scene_loss_diagnostics reports a stale fill with its node and property");
+    const auto verdict = accept_scene(stale);
+    check(!verdict.accepted && verdict.diagnostics.size() == 1U &&
+              verdict.diagnostics[0].code == kInvalidTokenReferenceCode &&
+              verdict.diagnostics[0].node_id == "a0" &&
+              verdict.diagnostics[0].property == "fill_token" &&
+              verdict.diagnostics[0].message == verdict.reason,
+          "accept_scene reports the same refusal");
+
+    Scene bad_slot = slotted_scene();
+    bad_slot.root.children[1].box_shadows[0].color = kLabel;
+    const auto refusal = find_invalid_token_reference(bad_slot);
+    check(refusal && refusal->node_id == "card" && refusal->property == "color_tokens" &&
+              refusal->slot && refusal->slot->kind == TokenSlot::Kind::box_shadow,
+          "a slot refusal carries the slot");
+    const auto slot_loss = scene_loss_diagnostics(bad_slot);
+    check(make_paint_commands(bad_slot).empty() && slot_loss.size() == 1U &&
+              slot_loss[0].code == kInvalidTokenReferenceCode &&
+              slot_loss[0].property == "color_tokens" && slot_loss[0].node_id == "card",
+          "lowering refuses a stale slot and reports it");
+
+    Scene table = themed_scene();
+    table.tokens[1].path = table.tokens[0].path;
+    const auto table_refusal = find_invalid_token_reference(table);
+    check(table_refusal && table_refusal->property == "tokens" && !table_refusal->slot &&
+              make_paint_commands(table).empty() &&
+              scene_loss_diagnostics(table).at(0).property == "tokens",
+          "a broken table is refused by lowering with the tokens property");
+}
+
+void id_less_root_refusal_has_a_diagnostic() {
+    Scene scene = themed_scene();
+    scene.root.id.clear();
+    scene.root.kind = SceneNode::Kind::rectangle;
+    scene.root.fill = kCanvas;
+    scene.root.fill_token = 1U;
+    check(accept_scene(scene).accepted, "control: an id-less root with a sound reference is drawn");
+    scene.root.fill = kAccent;
+    const auto verdict = accept_scene(scene);
+    check(!verdict.accepted && verdict.diagnostics.size() == 1U &&
+              verdict.diagnostics[0].code == kInvalidTokenReferenceCode &&
+              verdict.diagnostics[0].node_id.empty() &&
+              verdict.diagnostics[0].property == "fill_token",
+          "an id-less root with a stale reference is refused with a diagnostic");
+    check(make_paint_commands(scene).empty(), "lowering refuses the id-less root too");
+}
+
+void slots_are_canonical() {
+    check(accept_scene(slotted_scene()).accepted, "control: canonical slots are accepted");
+    const auto refused = [](Scene scene, TokenSlot::Kind kind, const char* what) {
+        const auto refusal = find_invalid_token_reference(scene);
+        const auto verdict = accept_scene(scene);
+        check(refusal && refusal->property == "color_tokens" && refusal->slot &&
+                  refusal->slot->kind == kind && !verdict.accepted &&
+                  verdict.diagnostics.size() == 1U &&
+                  verdict.diagnostics[0].code == kInvalidTokenReferenceCode &&
+                  make_paint_commands(scene).empty(),
+              what);
+    };
+    Scene indexed = slotted_scene();
+    indexed.root.children[0].color_tokens[0].index = 1U;
+    refused(indexed, TokenSlot::Kind::path_stroke, "a path stroke slot with an index is refused");
+    Scene stopped = slotted_scene();
+    stopped.root.children[0].color_tokens[0].stop = 2U;
+    refused(stopped, TokenSlot::Kind::path_stroke, "a path stroke slot with a stop is refused");
+    Scene run = slotted_scene();
+    run.root.children[2].color_tokens[0].stop = 1U;
+    refused(run, TokenSlot::Kind::text_run, "a text run slot with a stop is refused");
+    Scene shadow = slotted_scene();
+    shadow.root.children[1].color_tokens[0].stop = 1U;
+    refused(shadow, TokenSlot::Kind::box_shadow, "a box shadow slot with a stop is refused");
+    Scene two_strokes = slotted_scene();
+    two_strokes.root.children[0].color_tokens.push_back({TokenSlot::Kind::path_stroke, 7, 0, 0U});
+    refused(two_strokes, TokenSlot::Kind::path_stroke,
+            "a second stroke slot with a different index is refused");
+    Scene same_stroke = slotted_scene();
+    same_stroke.root.children[0].color_tokens.push_back({TokenSlot::Kind::path_stroke, 0, 0, 0U});
+    refused(same_stroke, TokenSlot::Kind::path_stroke, "the same stroke slot twice is refused");
+
+    Scene rewrite = slotted_scene();
+    rewrite.root.children[0].color_tokens[0].index = 3U;
+    const Color red = Color::hex(0xEF4444);
+    (void)apply_token_values(rewrite, slot_receipts(red, kShadow, kStopA, kLabel));
+    check(same_token_color(find(rewrite, "path")->path->stroke.color, kStroke),
+          "a theme switch does not rewrite through a non-canonical slot");
+}
+
+void versioned_fields_are_gated() {
+    auto line = std::make_shared<const PathGeometry>(PathGeometry{
+        .verbs = {PathVerb::move, PathVerb::line}, .values = {0.0F, 0.0F, 4.0F, 4.0F}});
+    Scene plain;
+    plain.width = 20.0F;
+    plain.height = 20.0F;
+    plain.root = {.id = "root", .kind = SceneNode::Kind::group, .bounds = {0, 0, 20, 20}};
+    plain.root.children.push_back({.id = "box",
+                                   .kind = SceneNode::Kind::rectangle,
+                                   .bounds = {0, 0, 4, 4},
+                                   .fill = kAccent,
+                                   .fill_gradients = {{.stops = {{0.0F, kStopA}, {1.0F, kStopB}}}},
+                                   .box_shadows = {{.blur_radius = 2, .color = kShadow}},
+                                   .text = "kept"});
+    plain.root.children.push_back({.id = "label",
+                                   .kind = SceneNode::Kind::text,
+                                   .bounds = {0, 8, 20, 8},
+                                   .fill = kLabel,
+                                   .text_runs = {{.text = "a", .style = {.color = kLabel}}}});
+    for (std::uint32_t version = kMinSupportedSceneVersion; version <= kSceneVersion; ++version) {
+        plain.scene_version = version;
+        check(scene_fields_match_version(plain) && accept_scene(plain).accepted &&
+                  make_paint_commands(plain).size() == 2U,
+              "control: version 1 fields stay legal at every supported version");
+    }
+
+    const auto refused_until = [](Scene scene, std::uint32_t introduced, const char* node_id,
+                                  const char* property, const char* what) {
+        for (std::uint32_t version = kMinSupportedSceneVersion; version < introduced;
+             ++version) {
+            scene.scene_version = version;
+            const auto verdict = accept_scene(scene);
+            const auto loss = scene_loss_diagnostics(scene);
+            check(!scene_fields_match_version(scene) && make_paint_commands(scene).empty() &&
+                      !verdict.accepted && verdict.diagnostics.size() == 1U &&
+                      verdict.diagnostics[0].code == kSceneVersionMismatchCode &&
+                      verdict.diagnostics[0].node_id == node_id &&
+                      verdict.diagnostics[0].property == property && loss.size() == 1U &&
+                      loss[0].code == kSceneVersionMismatchCode,
+                  what);
+        }
+        scene.scene_version = introduced;
+        check(scene_fields_match_version(scene),
+              "control: the field is legal from the version that introduced it");
+    };
+    Scene path_data = plain;
+    path_data.root.children[0].path = line;
+    refused_until(path_data, 3U, "box", "path",
+                  "a rectangle carrying path data before version 3 is refused");
+    Scene image_reference = plain;
+    image_reference.root.children[0].image = ImageReference{.content_hash = std::string(64, 'a')};
+    refused_until(image_reference, 4U, "box", "image",
+                  "a rectangle carrying an image reference before version 4 is refused");
+    Scene image_table = plain;
+    std::vector<std::uint8_t> texels(4U, 255U);
+    image_table.images = {make_image_asset("sha256:" + std::string(64, 'a'), 1, 1, texels,
+                                           ImageAlpha::premultiplied)};
+    check(image_table.images[0] != nullptr, "the fixture asset is built");
+    refused_until(image_table, 4U, "root", "images",
+                  "an image table before version 4 is refused");
+    Scene token_table = plain;
+    token_table.tokens = receipts(kAccent, kCanvas, kLabel);
+    refused_until(token_table, 7U, "root", "tokens",
+                  "a token table before version 7 is refused");
+}
+
 }  // namespace
 
 int main() {
@@ -375,6 +546,10 @@ int main() {
     negative_control_stale_fill_would_not_damage();
     every_slot_follows_its_receipt();
     bad_slots_are_refused();
+    lowering_refuses_invalid_references();
+    id_less_root_refusal_has_a_diagnostic();
+    slots_are_canonical();
+    versioned_fields_are_gated();
     if (failures != 0) {
         std::fprintf(stderr, "%d token receipt checks failed\n", failures);
         return 1;

@@ -48,17 +48,30 @@ named the same way through `SceneNode::color_tokens`; a mesh's packed vertex
 colours are not. `Design` in
 `@vellum/ui` emits a `tokenRefs` entry beside the resolved style colour, the
 runtime interns the entries into a `tokens` array on the root of the rendered
-tree, and the materializer rebuilds the table and the references. A theme
+tree, and the materializer rebuilds the table and the references. The slot
+names are `backgroundColor`, `color` (a text node or an attributed text run),
+`boxShadow`, `backgroundLinearGradient.stops.<n>`, and on a path `fill`,
+`fill.stops.<n>` and `stroke`. A name that is not a slot of the element, or
+that names a colour the element lacks, is refused with
+`VELLUM_INVALID_TOKEN_REFERENCE`; a colour the node type does not draw is
+reported as dropped. A short hex colour (`#fff`, `#ffff`) is the same colour
+as its long form everywhere and its receipt carries the long form. A theme
 switch calls `apply_token_values`, which re-resolves the table and rewrites
 only the fills, text runs, shadows, stops and strokes whose receipt changed, so
 the scene diff damages those nodes and no others. A text run without a slot of its own that
 carries its node's old colour follows it.
 A scene before version 7 that carries a table or a reference is refused with a
-version diagnostic. At any version, a repeated path, a non-finite value, a
+version diagnostic. Version gates inspect fields and tables, not only kinds:
+path geometry on any node needs version 3, and an image reference on any node
+or a non-empty `Scene::images` needs version 4. A rendered-tree envelope may
+name its `sceneVersion`; without one the tree is built at the current
+version, and with one it is built at that version and refused when it carries
+a field the version lacks. At any version, a repeated path, a non-finite value, a
 reference past the end of the table, a slot the node lacks, or a colour that
-differs from its receipt
-is refused with `VELLUM_INVALID_TOKEN_REFERENCE`, so a table edited without its
-nodes is never drawn stale.
+differs from its receipt, or a slot whose unused index or stop is not zero
+is refused with `VELLUM_INVALID_TOKEN_REFERENCE` by `accept_scene`,
+`make_paint_commands` and `scene_loss_diagnostics` alike, so a table edited
+without its nodes is never drawn stale.
 
 Nodes carry an optional affine transform about their origin, a group opacity,
 and per-corner radii beside the uniform `corner_radius` shorthand. All three
@@ -246,7 +259,9 @@ transforms, group opacity, per-corner radii, paths, images, clips, masks
 and isolation on groups, and token references. A version the renderer accepts but the damage model
 does not yet understand repaints fully with reason `damage_model_version`. A version outside
 [`kMinSupportedSceneVersion`, `kSceneVersion`] is refused before anything is
-drawn.
+drawn, and partial redraw likewise serves no version below
+`kMinSupportedSceneVersion`. The layer cache compares mesh and texture
+content, not pointers, so texels rewritten in place drop a cached image.
 
 A path damages its control box outset by its stroke reach: half the width,
 times the miter limit for miter joins or sqrt(2) for square and round caps,

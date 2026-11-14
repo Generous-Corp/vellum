@@ -347,19 +347,21 @@ enum class MaskMode : std::uint8_t {
 /// version 1 scene is still accepted when none of its nodes sets them; one
 /// that does fails `scene_fields_match_version` and is refused.
 ///
-/// Version 3 adds the `path` node kind. A version 1 or 2 scene is still
-/// accepted when it has no path node; one that does fails
-/// `scene_fields_match_version` and is refused.
+/// Version 3 adds the `path` node kind and `SceneNode::path`. A version 1 or
+/// 2 scene is still accepted when no node is a path or carries path geometry;
+/// one that does fails `scene_fields_match_version` and is refused.
 ///
-/// Version 4 adds the `image` node kind and `Scene::images`. A scene of an
-/// earlier version is still accepted when it has no image node; one that does
-/// fails `scene_fields_match_version` and is refused.
+/// Version 4 adds the `image` node kind, `SceneNode::image` and
+/// `Scene::images`. A scene of an earlier version is still accepted when no
+/// node is an image or carries an image reference and its image table is
+/// empty; one that does fails `scene_fields_match_version` and is refused.
 ///
 /// Version 5 adds `SceneNode::clip`, `mask`, and `isolate`. A scene of an
 /// earlier version is still accepted when none of its nodes sets them; one
 /// that does fails `scene_fields_match_version` and is refused.
 ///
-/// Version 7 adds `Scene::tokens` and `SceneNode::fill_token`. A scene of an
+/// Version 7 adds `Scene::tokens`, `SceneNode::fill_token` and
+/// `SceneNode::color_tokens`. A scene of an
 /// earlier version is still accepted when its token table is empty and no node
 /// sets a token reference; one that does fails `scene_fields_match_version`
 /// and is refused.
@@ -633,45 +635,110 @@ struct Scene final {
     return nullptr;
 }
 
-/// Whether every field and kind the scene uses exists at its version: a
-/// version 1 scene sets no field that `uses_version_2_fields` reports, a
-/// version 1 or 2 scene has no node that `find_version_3_kinds` reports, a
-/// scene before version 4 has no node that `find_version_4_kinds` reports,
-/// a scene before version 5 sets no field that `uses_version_5_fields`
-/// reports, and a scene before version 7 has no token table and no node that
-/// `uses_version_7_fields` reports.
-[[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
-    return (scene.scene_version >= 2U || find_version_2_fields(scene.root) == nullptr) &&
-           (scene.scene_version >= 3U || find_version_3_kinds(scene.root) == nullptr) &&
-           (scene.scene_version >= 4U || find_version_4_kinds(scene.root) == nullptr) &&
-           (scene.scene_version >= 5U || find_version_5_fields(scene.root) == nullptr) &&
-           (scene.scene_version >= 7U ||
-            (scene.tokens.empty() && find_version_7_fields(scene.root) == nullptr));
+/// Whether a node sets a field version 3 introduced: the `path` kind or path
+/// geometry on a node of any kind.
+[[nodiscard]] inline bool uses_version_3_fields(const SceneNode& node) noexcept {
+    return node.kind == SceneNode::Kind::path || node.path != nullptr;
 }
 
-/// The first node, in depth-first order, that its scene's version cannot
-/// carry: a field or kind newer than `scene.scene_version`, or a kind outside
-/// `is_known_kind`. Null when `scene_fields_match_version` holds and every
-/// kind is known.
-[[nodiscard]] inline const SceneNode* find_version_mismatch(const Scene& scene) noexcept {
-    if (const auto* unknown = find_unknown_kind(scene.root); unknown != nullptr) return unknown;
-    if (scene.scene_version < 2U) {
-        if (const auto* found = find_version_2_fields(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 3U) {
-        if (const auto* found = find_version_3_kinds(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 4U) {
-        if (const auto* found = find_version_4_kinds(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 5U) {
-        if (const auto* found = find_version_5_fields(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 7U) {
-        if (const auto* found = find_version_7_fields(scene.root); found != nullptr) return found;
-        if (!scene.tokens.empty()) return &scene.root;
+/// Whether a node sets a field version 4 introduced: the `image` kind or an
+/// image reference on a node of any kind.
+[[nodiscard]] inline bool uses_version_4_fields(const SceneNode& node) noexcept {
+    return node.kind == SceneNode::Kind::image || node.image.has_value();
+}
+
+/// A field, kind or table that a scene's version cannot carry.
+struct SceneVersionMismatch final {
+    /// The node that carries it; the root for a scene-level table.
+    const SceneNode* node = nullptr;
+    /// The version that introduced it, or zero for a kind outside
+    /// `is_known_kind`.
+    std::uint32_t introduced = 0;
+    /// The property that carries it: `kind`, `transform`, `path`, `image`,
+    /// `images`, `clip`, `mask`, `isolate`, `fill_token`, `color_tokens` or
+    /// `tokens`.
+    std::string_view property;
+};
+
+namespace detail {
+
+template <typename Predicate>
+[[nodiscard]] const SceneNode* find_first(const SceneNode& node, Predicate predicate) noexcept {
+    if (predicate(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_first(child, predicate); found != nullptr) return found;
     }
     return nullptr;
+}
+
+[[nodiscard]] inline std::optional<SceneVersionMismatch> find_version_field_mismatch(
+    const Scene& scene) noexcept {
+    const auto version = scene.scene_version;
+    if (version < 2U) {
+        if (const auto* found = find_version_2_fields(scene.root)) {
+            return SceneVersionMismatch{found, 2U, "transform"};
+        }
+    }
+    if (version < 3U) {
+        if (const auto* found = find_first(
+                scene.root, [](const SceneNode& node) { return uses_version_3_fields(node); })) {
+            return SceneVersionMismatch{
+                found, 3U, found->kind == SceneNode::Kind::path ? "kind" : "path"};
+        }
+    }
+    if (version < 4U) {
+        if (const auto* found = find_first(
+                scene.root, [](const SceneNode& node) { return uses_version_4_fields(node); })) {
+            return SceneVersionMismatch{
+                found, 4U, found->kind == SceneNode::Kind::image ? "kind" : "image"};
+        }
+        if (!scene.images.empty()) return SceneVersionMismatch{&scene.root, 4U, "images"};
+    }
+    if (version < 5U) {
+        if (const auto* found = find_version_5_fields(scene.root)) {
+            return SceneVersionMismatch{
+                found, 5U, found->clip ? "clip" : found->mask ? "mask" : "isolate"};
+        }
+    }
+    if (version < 7U) {
+        if (const auto* found = find_version_7_fields(scene.root)) {
+            return SceneVersionMismatch{
+                found, 7U, found->fill_token ? "fill_token" : "color_tokens"};
+        }
+        if (!scene.tokens.empty()) return SceneVersionMismatch{&scene.root, 7U, "tokens"};
+    }
+    return std::nullopt;
+}
+
+}  // namespace detail
+
+/// Whether every field, kind and table the scene uses exists at its version:
+/// a version 1 scene sets no field that `uses_version_2_fields` reports, a
+/// version 1 or 2 scene has no node that `uses_version_3_fields` reports, a
+/// scene before version 4 has no node that `uses_version_4_fields` reports
+/// and no image table, a scene before version 5 sets no field that
+/// `uses_version_5_fields` reports, and a scene before version 7 has no token
+/// table and no node that `uses_version_7_fields` reports.
+[[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
+    return !detail::find_version_field_mismatch(scene).has_value();
+}
+
+/// The first field, kind or table its scene's version cannot carry, oldest
+/// version first and depth-first within a version, after any kind outside
+/// `is_known_kind`. Empty when `scene_fields_match_version` holds and every
+/// kind is known.
+[[nodiscard]] inline std::optional<SceneVersionMismatch> find_scene_version_mismatch(
+    const Scene& scene) noexcept {
+    if (const auto* unknown = find_unknown_kind(scene.root); unknown != nullptr) {
+        return SceneVersionMismatch{unknown, 0U, "kind"};
+    }
+    return detail::find_version_field_mismatch(scene);
+}
+
+/// The node `find_scene_version_mismatch` reports, or null.
+[[nodiscard]] inline const SceneNode* find_version_mismatch(const Scene& scene) noexcept {
+    const auto found = find_scene_version_mismatch(scene);
+    return found ? found->node : nullptr;
 }
 
 [[nodiscard]] inline const SceneNode* find_node(

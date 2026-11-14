@@ -34,30 +34,44 @@ std::string slot_name(const TokenSlot& slot) {
 
 std::optional<TokenRefusal> check_node(const Scene& scene, const SceneNode& node) {
     const auto check_receipt = [&](std::uint32_t token, const Color& color,
-                                   const std::string& what) -> std::optional<TokenRefusal> {
+                                   const std::string& what, const char* property,
+                                   std::optional<TokenSlot> slot) -> std::optional<TokenRefusal> {
         if (token >= scene.tokens.size()) {
-            return TokenRefusal{node.id, "node " + node.id + " " + what + " references token " +
-                                             std::to_string(token) +
-                                             ", which the scene's token table does not hold"};
+            return TokenRefusal{node.id, property, slot,
+                                "node " + node.id + " " + what + " references token " +
+                                    std::to_string(token) +
+                                    ", which the scene's token table does not hold"};
         }
         if (!same_token_color(color, scene.tokens[token].value)) {
-            return TokenRefusal{node.id, "node " + node.id + " " + what +
-                                             " differs from its token " + scene.tokens[token].path};
+            return TokenRefusal{node.id, property, slot,
+                                "node " + node.id + " " + what + " differs from its token " +
+                                    scene.tokens[token].path};
         }
         return std::nullopt;
     };
     if (node.fill_token) {
-        if (auto found = check_receipt(*node.fill_token, node.fill, "fill")) return found;
+        if (auto found = check_receipt(*node.fill_token, node.fill, "fill", "fill_token",
+                                       std::nullopt)) {
+            return found;
+        }
     }
     std::set<std::tuple<int, std::uint32_t, std::uint32_t>> seen;
     for (const auto& slot : node.color_tokens) {
+        if (!token_slot_is_canonical(slot)) {
+            return TokenRefusal{node.id, "color_tokens", slot,
+                                "node " + node.id + " names " + slot_name(slot) +
+                                    " with an index or stop its kind does not take"};
+        }
         const auto key = std::make_tuple(static_cast<int>(slot.kind), slot.index, slot.stop);
         const Color* color = token_slot_color(node, slot);
         if (color == nullptr || !seen.insert(key).second) {
-            return TokenRefusal{node.id, "node " + node.id + " names " + slot_name(slot) +
-                                             ", which it does not have or names twice"};
+            return TokenRefusal{node.id, "color_tokens", slot,
+                                "node " + node.id + " names " + slot_name(slot) +
+                                    ", which it does not have or names twice"};
         }
-        if (auto found = check_receipt(slot.token, *color, slot_name(slot))) return found;
+        if (auto found = check_receipt(slot.token, *color, slot_name(slot), "color_tokens", slot)) {
+            return found;
+        }
     }
     for (const auto& child : node.children) {
         if (auto found = check_node(scene, child)) return found;
@@ -81,6 +95,7 @@ std::size_t count_node(const SceneNode& node, const std::unordered_set<std::uint
 
 Color* mutable_slot_color(SceneNode& node, const TokenSlot& slot,
                           std::shared_ptr<PathGeometry>& stroke) {
+    if (!token_slot_is_canonical(slot)) return nullptr;
     switch (slot.kind) {
     case TokenSlot::Kind::text_run:
         return slot.index < node.text_runs.size() ? &node.text_runs[slot.index].style.color
@@ -137,7 +152,18 @@ std::size_t rewrite_node(SceneNode& node, const std::unordered_map<std::uint32_t
 
 }  // namespace
 
+bool token_slot_is_canonical(const TokenSlot& slot) noexcept {
+    switch (slot.kind) {
+    case TokenSlot::Kind::text_run:
+    case TokenSlot::Kind::box_shadow: return slot.stop == 0U;
+    case TokenSlot::Kind::gradient_stop: return true;
+    case TokenSlot::Kind::path_stroke: return slot.index == 0U && slot.stop == 0U;
+    }
+    return false;
+}
+
 const Color* token_slot_color(const SceneNode& node, const TokenSlot& slot) noexcept {
+    if (!token_slot_is_canonical(slot)) return nullptr;
     switch (slot.kind) {
     case TokenSlot::Kind::text_run:
         return slot.index < node.text_runs.size() ? &node.text_runs[slot.index].style.color
@@ -165,15 +191,26 @@ std::optional<TokenRefusal> find_invalid_token_reference(const Scene& scene) {
     std::unordered_set<std::string> paths;
     for (const auto& receipt : scene.tokens) {
         if (!paths.insert(receipt.path).second) {
-            return TokenRefusal{scene.root.id,
+            return TokenRefusal{scene.root.id, "tokens", std::nullopt,
                                 "the token table holds " + receipt.path + " more than once"};
         }
         if (!finite_color(receipt.value)) {
-            return TokenRefusal{scene.root.id,
+            return TokenRefusal{scene.root.id, "tokens", std::nullopt,
                                 "token " + receipt.path + " has a value that is not finite"};
         }
     }
     return check_node(scene, scene.root);
+}
+
+LoweringDiagnostic token_refusal_diagnostic(const TokenRefusal& refusal) {
+    return {
+        .severity = LoweringDiagnostic::Severity::error,
+        .disposition = LoweringDiagnostic::Disposition::unsupported,
+        .code = std::string(kInvalidTokenReferenceCode),
+        .node_id = refusal.node_id,
+        .property = refusal.property,
+        .message = refusal.reason,
+    };
 }
 
 std::vector<std::uint32_t> changed_token_entries(const Scene& previous, const Scene& next) {

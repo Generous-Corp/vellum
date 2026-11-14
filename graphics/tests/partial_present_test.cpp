@@ -466,8 +466,9 @@ void damage_model_version_gate() {
                partial_redraw_supported(6U) && partial_redraw_supported(7U) &&
                partial_redraw_supported(kDamageModelSceneVersion) &&
                !partial_redraw_supported(kDamageModelSceneVersion + 1U) &&
-               !partial_redraw_supported(8U),
-           "partial redraw covers scene versions up to 7 and refuses version 8");
+               !partial_redraw_supported(8U) && !partial_redraw_supported(0U) &&
+               partial_redraw_supported(kMinSupportedSceneVersion),
+           "partial redraw covers scene versions 1 to 7 and refuses versions 0 and 8");
     expect(to_string(FullRepaintReason::damage_model_version) == "damage_model_version",
            "the damage-model version fallback has a telemetry name");
     constexpr std::uint32_t width = 400;

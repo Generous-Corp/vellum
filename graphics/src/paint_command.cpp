@@ -1,6 +1,7 @@
 #include <vellum/graphics/paint_command.hpp>
 
 #include <vellum/graphics/image_asset.hpp>
+#include <vellum/graphics/token_receipts.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -381,6 +382,7 @@ std::vector<PaintCommand> make_paint_commands(
     if (!scene_version_is_supported(scene.scene_version)) return output;
     if (!scene_fields_match_version(scene)) return output;
     if (scene.root.mask) return output;
+    if (find_invalid_token_reference(scene)) return output;
     append_node(ImageAssetIndex(scene), scene.root, 0.0F, 0.0F, Affine2D{}, output, ranges);
     return output;
 }
@@ -439,59 +441,46 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
     if (!scene_version_is_supported(scene.scene_version)) {
         return refuse(scene.root.id, "scene version " + version + " is not supported");
     }
-    if (const auto* node = find_version_mismatch(scene); node != nullptr) {
-        if (!is_known_kind(node->kind)) {
-            return refuse(node->id, "node " + node->id + " has a kind this build does not know");
+    if (const auto mismatch = find_scene_version_mismatch(scene); mismatch) {
+        const auto& node = *mismatch->node;
+        if (mismatch->introduced == 0U) {
+            return refuse(node.id, "node " + node.id + " has a kind this build does not know");
         }
-        // Name the field or kind the scene's version is too old for; a node
-        // can carry several, and only the oldest one its version lacks is
-        // the one `find_version_mismatch` found it by.
-        const auto needs = [&](std::uint32_t introduced) {
-            return scene.scene_version < introduced;
-        };
-        const bool compositing = needs(2U) && uses_version_2_fields(*node);
-        if (!compositing && needs(4U) && node->kind == SceneNode::Kind::image) {
-            return refuse(node->id, "scene version " + version +
-                                        " cannot carry the image node " + node->id);
-        }
-        if (!compositing && needs(3U) && node->kind == SceneNode::Kind::path) {
-            return refuse(node->id, "scene version " + version +
-                                        " cannot carry the path node " + node->id);
-        }
-        if (!compositing && needs(5U) && uses_version_5_fields(*node)) {
-            output.push_back({
-                .severity = LoweringDiagnostic::Severity::error,
-                .disposition = LoweringDiagnostic::Disposition::unsupported,
-                .code = std::string(kSceneVersionMismatchCode),
-                .node_id = node->id,
-                .property = node->clip ? "clip" : node->mask ? "mask" : "isolate",
-                .message = "scene version " + version +
-                           " cannot carry the clip, mask, or isolation at " + node->id,
-            });
-            return output;
-        }
-        if (!compositing && needs(7U) &&
-            (uses_version_7_fields(*node) || !scene.tokens.empty())) {
-            output.push_back({
-                .severity = LoweringDiagnostic::Severity::error,
-                .disposition = LoweringDiagnostic::Disposition::unsupported,
-                .code = std::string(kSceneVersionMismatchCode),
-                .node_id = node->id,
-                .property = "fill_token",
-                .message = "scene version " + version +
-                           " cannot carry token receipts, found at " + node->id,
-            });
-            return output;
+        std::string message;
+        switch (mismatch->introduced) {
+        case 2U:
+            message = "cannot carry the transform, opacity, or corner radii at " + node.id;
+            break;
+        case 3U:
+            message = node.kind == SceneNode::Kind::path
+                ? "cannot carry the path node " + node.id
+                : "cannot carry the path geometry of " + node.id;
+            break;
+        case 4U:
+            message = node.kind == SceneNode::Kind::image ? "cannot carry the image node " + node.id
+                      : mismatch->property == "images"
+                          ? std::string("cannot carry an image table")
+                          : "cannot carry the image reference of " + node.id;
+            break;
+        case 5U: message = "cannot carry the clip, mask, or isolation at " + node.id; break;
+        default:
+            message = mismatch->property == "tokens"
+                ? std::string("cannot carry a token table")
+                : "cannot carry token receipts, found at " + node.id;
+            break;
         }
         output.push_back({
             .severity = LoweringDiagnostic::Severity::error,
             .disposition = LoweringDiagnostic::Disposition::unsupported,
             .code = std::string(kSceneVersionMismatchCode),
-            .node_id = node->id,
-            .property = "transform",
-            .message = "scene version " + version +
-                       " cannot carry the transform, opacity, or corner radii at " + node->id,
+            .node_id = node.id,
+            .property = std::string(mismatch->property),
+            .message = "scene version " + version + " " + message,
         });
+        return output;
+    }
+    if (const auto token = find_invalid_token_reference(scene); token) {
+        output.push_back(token_refusal_diagnostic(*token));
         return output;
     }
     report_missing_images(ImageAssetIndex(scene), scene.root, output);
