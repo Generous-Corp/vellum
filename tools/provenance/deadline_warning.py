@@ -129,7 +129,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
     due_soon = json.loads(args.summary.read_text(encoding="utf-8"))["due_soon"]
-    issues = open_issues(args.repo)
+    try:
+        issues = open_issues(args.repo)
+    except (subprocess.CalledProcessError, ValueError) as error:
+        print(f"could not read open issues; nothing was created or changed: {error}", file=sys.stderr)
+        return 1
     actions = plan(due_soon, issues, None if args.dry_run else commit_author)
     print(json.dumps(actions, indent=2))
     if not args.dry_run:

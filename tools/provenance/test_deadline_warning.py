@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -122,6 +123,17 @@ class IssueTests(unittest.TestCase):
         self.assertEqual(issues, pages[0] + pages[1])
         mocked.assert_called_once_with("api", "--paginate", "--slurp",
                                        "repos/o/r/issues?state=open&per_page=100")
+
+    def test_failed_issue_read_creates_nothing(self) -> None:
+        failure = subprocess.CalledProcessError(1, "gh")
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(deadline_warning, "gh", side_effect=failure), \
+                patch.object(deadline_warning, "apply") as apply, \
+                patch("sys.stderr"):
+            path = Path(temporary) / "s.json"
+            path.write_text(json.dumps({"due_soon": summary_at(23)["due_soon"]}))
+            self.assertEqual(deadline_warning.main(["--summary", str(path), "--repo", "o/r"]), 1)
+        apply.assert_not_called()
 
     def issue(self, number: int, due_soon: list[dict[str, object]]) -> dict[str, object]:
         return {"number": number, "title": deadline_warning.TITLE, "body": deadline_warning.render(due_soon, LOOKUP)}
