@@ -49,9 +49,10 @@ interfaces, never both.
 
 CMake enforces this. Native's targets and Core name their copy in
 `INTERFACE_VELLUM_RMLUI_RUNTIME`, so generating a target whose link closure
-contains both fails with an error naming that property. Core is tagged when
-the VellumRmlUiNative package is found, so the check covers a VellumRmlUi
-package found before or through it, not one a project finds afterwards.
+contains both fails with an error naming that property. Core is tagged where
+it is built, so the check holds whichever of the two packages a project finds
+first; a VellumRmlUi package exported before Core carried the tag is given it
+when VellumRmlUiNative is found after it.
 
 A project that needs both, such as a test comparing the two renderers, builds
 them into separate executables.

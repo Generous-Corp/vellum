@@ -45,9 +45,11 @@ if(_vellum_rmlui_native_other)
 endif()
 
 # Core carries its own RmlUi, as Native does, so one program must not link
-# both. Native's targets name their copy in INTERFACE_VELLUM_RMLUI_RUNTIME;
-# Core is given the other name here, so CMake refuses to generate a target
-# that links both. (A VellumRmlUi package found after this one is not tagged.)
+# both. Native's targets name their copy in INTERFACE_VELLUM_RMLUI_RUNTIME,
+# and Core names its own in the VellumRmlUi package, whichever package is
+# found first. A Core exported without the mark (an older VellumRmlUi package
+# already loaded) is given it here, so CMake still refuses a target that links
+# both.
 if(TARGET VellumRmlUi::Core)
     get_property(_vellum_rmlui_runtime TARGET VellumRmlUi::Core PROPERTY INTERFACE_VELLUM_RMLUI_RUNTIME)
     if(NOT _vellum_rmlui_runtime)
