@@ -27,6 +27,7 @@
 /provenance/release-signers.allowed_signers @danielraffel
 /provenance/retired-release-tags.json @danielraffel
 /scripts/check_release_policy.py @danielraffel
+/scripts/counted_verdicts.py @danielraffel
 /scripts/install_core.py @danielraffel
 /scripts/pretag_checks.py @danielraffel
 /scripts/release_cadence.py @danielraffel
@@ -39,6 +40,7 @@
 /scripts/verify_release_attestation.py @danielraffel
 /scripts/verify_release_tag.py @danielraffel
 /scripts/version_at_land.py @danielraffel
+/tools/provenance/collect_release_evidence.py @danielraffel
 /tools/provenance/content_scan_policy.py @danielraffel
 /tools/provenance/framework_trusted_verify.py @danielraffel
 /tools/provenance/live_delivery.py @danielraffel

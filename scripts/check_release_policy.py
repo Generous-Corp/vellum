@@ -74,7 +74,9 @@ OWNER = "@danielraffel"
 # owned; lane_problems holds the release-policy lane's contents instead), the
 # workflow that holds an App token to propose each version (version-at-land.yml),
 # the release-path review: its rule, its two workflows and the Shipyard
-# config naming the reviewer signers and sessions it counts, and the framework
+# config naming the reviewer signers and sessions it counts, the counted-verdict
+# parser it shares with the release readiness open-PR audit and that audit's
+# collector (which decides which open pull requests can land before a tag), and the framework
 # transfer's judges and the records they hold the transfer to (owned before
 # the records exist, so the change that adds them is a release-path change).
 # The list of Vellum-native paths the observatory classifies framework-only
@@ -101,6 +103,7 @@ POLICY_FILES = (
     "/provenance/release-signers.allowed_signers",
     "/provenance/retired-release-tags.json",
     "/scripts/check_release_policy.py",
+    "/scripts/counted_verdicts.py",
     "/scripts/install_core.py",
     "/scripts/pretag_checks.py",
     "/scripts/release_cadence.py",
@@ -113,6 +116,7 @@ POLICY_FILES = (
     "/scripts/verify_release_attestation.py",
     "/scripts/verify_release_tag.py",
     "/scripts/version_at_land.py",
+    "/tools/provenance/collect_release_evidence.py",
     "/tools/provenance/content_scan_policy.py",
     "/tools/provenance/framework_trusted_verify.py",
     "/tools/provenance/live_delivery.py",

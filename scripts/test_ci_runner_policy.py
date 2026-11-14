@@ -292,6 +292,10 @@ PULP_API_READER_GH_CALLS = {
     'api "repos/$repository/git/commits/$head_commit"',
     'api "repos/$repository/git/trees/$merge_base_tree?recursive=1"',
     'api "repos/$repository/git/trees/$head_tree?recursive=1"',
+    'api "repos/$repository/issues/$pull_number/comments?per_page=100"',
+    # The one GraphQL read: whether a pull request is in its merge queue. The
+    # query itself is held by the step digest below.
+    "api graphql",
     "api repos/Generous-Corp/pulp/git/ref/heads/main",
     'run download "$run_id" --name pulp-vellum-routing-contract-execution',
     'run download "$run_id" --name vellum-parity-proof-execution',
@@ -312,12 +316,16 @@ PULP_API_READER_GIT_CALLS = {
 # backslash continuation inside a word, a glued `os.system` argument, a
 # value written to a file for a later step), so any change to the reader is
 # a reviewed change to this digest. The checks below only explain a failure.
-PULP_API_READER_SHA256 = "5caffd0f51432c9ea8904e6978c86bc1184a12b9c451771fd6ae159a5773c8f6"
+PULP_API_READER_SHA256 = "374a28e9eb5dec1fbdd07e1aeb085756b97d921827d74d3c68ac1c1d36664370"
 # The reader reshapes the GitHub responses it fetched through this script, so
 # the script is part of the reader: it is pinned byte for byte like the step
 # and must carry no transport of its own (every read stays a gh call above).
 PULP_API_READER_COLLECTOR = ROOT / "tools" / "provenance" / "collect_release_evidence.py"
-PULP_API_READER_COLLECTOR_SHA256 = "60d5b35495d89d2fcd8e5ec34aa33932cce57dbf1001b4932056aaa52b7136a0"
+PULP_API_READER_COLLECTOR_SHA256 = "62d21a08fb82c503178a9636ddc5442a6b3fe1bb39d28ba6c0991aff77361511"
+# The collector judges approvals with the counted-verdict parser, so that
+# module is part of the reader too: pinned and transport-free like it.
+PULP_API_READER_VERDICTS = ROOT / "scripts" / "counted_verdicts.py"
+PULP_API_READER_VERDICTS_SHA256 = "5fcc988cdbe9f02fac930a570c35ba535d8f9fd37a77e9a0acda15bcff6086ff"
 # Every reader line that names Pulp, stripped, verbatim. A new line naming
 # Pulp (an anchor, an env export, a command through a variable) fails.
 PULP_API_READER_PULP_LINES = {
@@ -523,7 +531,9 @@ def gh_calls(code: str) -> list[str]:
     calls = []
     for match in re.finditer(r"\bgh\s+(.*)", joined):
         tokens = re.findall(r'"[^"]*"|\S+', match.group(1))
-        if tokens[:1] == ["api"]:
+        if tokens[:2] == ["api", "graphql"]:
+            calls.append("api graphql")
+        elif tokens[:1] == ["api"]:
             paths = [t for t in tokens[1:] if not t.startswith("-") and re.match(r'"?repos/', t)]
             calls.append("api " + (paths[0] if paths else "<no path>"))
         elif tokens[:2] == ["run", "download"]:
@@ -616,15 +626,17 @@ def pulp_reach_problems(workflow: str, text: str) -> tuple[list[str], int]:
                 problems.append(f"{label} names Pulp on an unreviewed line: {sorted(naming - PULP_API_READER_PULP_LINES)}")
             if STEP_STATE_EXPORT.search(code):
                 problems.append(f"{label} writes step state another step could read")
-            collector = PULP_API_READER_COLLECTOR.read_bytes()
-            if hashlib.sha256(collector).hexdigest() != PULP_API_READER_COLLECTOR_SHA256:
-                problems.append(f"{label} runs a collector that is not the reviewed one")
-            collector_text = collector.decode("utf-8")
-            if PULP_API_READER_FORBIDDEN.search(collector_text) or re.search(
-                r"\bos\.(?:system|popen|exec|spawn|posix_spawn)|\bpty\b|\bctypes\b|\b__import__\b",
-                collector_text,
-            ):
-                problems.append(f"{label} runs a collector with its own transport")
+            for module, digest in ((PULP_API_READER_COLLECTOR, PULP_API_READER_COLLECTOR_SHA256),
+                                   (PULP_API_READER_VERDICTS, PULP_API_READER_VERDICTS_SHA256)):
+                collector = module.read_bytes()
+                if hashlib.sha256(collector).hexdigest() != digest:
+                    problems.append(f"{label} runs a collector module ({module.name}) that is not the reviewed one")
+                collector_text = collector.decode("utf-8")
+                if PULP_API_READER_FORBIDDEN.search(collector_text) or re.search(
+                    r"\bos\.(?:system|popen|exec|spawn|posix_spawn)|\bpty\b|\bctypes\b|\b__import__\b",
+                    collector_text,
+                ):
+                    problems.append(f"{label} runs a collector module ({module.name}) with its own transport")
             if COMMAND_INDIRECTION.search(code):
                 problems.append(f"{label} runs a command through a variable")
             continue
@@ -1555,6 +1567,12 @@ class RunnerPolicyTests(unittest.TestCase):
                             self.assertEqual(problems, [])
                         else:
                             self.assertTrue(problems)
+                    # The counted-verdict parser the collector imports is held the same way.
+                    with self.subTest(module="counted_verdicts", mutation=label, repinned=repinned), \
+                            mock.patch(f"{__name__}.PULP_API_READER_VERDICTS", collector), \
+                            mock.patch(f"{__name__}.PULP_API_READER_VERDICTS_SHA256", pinned):
+                        problems = pulp_reach_problems("provenance.yml", workflow)[0]
+                        self.assertEqual(problems == [], label == "edited" and repinned)
 
     def test_view_audio_archive_fetch_bypasses_fail_closed(self) -> None:
         self.assertNotEqual(PULP_VIEW_AUDIO_RELEASE_FETCH, PULP_VIEW_AUDIO_FETCH)
