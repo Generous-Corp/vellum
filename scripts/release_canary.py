@@ -8,9 +8,10 @@ itself as an old waived version. This stages the version bump a release would
 land, as one throwaway local commit that is never pushed, and runs
 pretag_checks.py against it: the tag pipeline's own content checks, with the
 environment a push of the tag gives them. The version defaults to the next
-patch release. Exit 0 when every check passes; exit 2 when the live audit could not hold still
-(Pulp moved on every attempt: run it again); exit 1, naming the failing
-check and printing its output, when the tag would be refused. The checkout is
+patch release. Exit 0 when every check passes. Exit 1 when the tag would be
+refused (naming the failing check and printing its output) and on any other
+failure. Exit 2 only when the live open-PR audit never held still on its last
+attempt (Pulp moved every time: run it again). The checkout is
 restored with git afterwards. The one check that reads a commit's GitHub check
 runs reads the checkout's own HEAD's, since the throwaway commit has none
 (override with $RELEASE_CANARY_CHECK_RUNS_COMMIT when HEAD is itself unpushed).
@@ -43,7 +44,8 @@ FAILURE = re.compile(r"^(FAIL  .*|pretag checks refused: .*|.* would fail .*)$",
 
 # provenance.yml's live open-pull-request audit asks to be re-run when Pulp main or its
 # open pull requests move while it reads them; that says nothing about the tree.
-MOVED = re.compile(r"Re-run this job")
+MOVED = re.compile(r"on attempt (\d+) of \1; the authority evidence was never judged against a Pulp main and open PRs "
+                   r"that held still\. Re-run this job")
 
 
 class CanaryError(RuntimeError):
@@ -65,6 +67,17 @@ def failing_check(output: str) -> str:
 def inconclusive(output: str) -> bool:
     """True when the failure is Pulp moving under the live audit, not a refusal of the tree."""
     return MOVED.search(output) is not None
+
+
+def run_pretag(root: Path, version: str, commit: str, check_runs_commit: str) -> tuple[int, str]:
+    """pretag_checks.py's exit code and combined output for the staged commit."""
+    with tempfile.TemporaryFile("w+") as log:
+        result = subprocess.run([sys.executable, "-I", str(root / "scripts/pretag_checks.py"),
+                                 "--tag", f"v{version}", "--commit", commit, "--root", str(root),
+                                 "--check-runs-commit", check_runs_commit],
+                                stdout=log, stderr=subprocess.STDOUT, check=False, cwd=root)
+        log.seek(0)
+        return result.returncode, log.read()
 
 
 def git(root: Path, *args: str, check: bool = True) -> str:
@@ -96,6 +109,8 @@ def run(root: Path, version: str) -> int:
     original = git(root, "rev-parse", "HEAD")
     source = os.environ.get("VELLUM_CANARY_PULP_SOURCE", PULP_DEFAULT)
     created: list[str] = []
+    # A tag that was already here is not the canary's to delete.
+    tag_existed = bool(git(root, "tag", "--list", f"v{version}"))
     try:
         cursor = json.loads((root / CURSOR).read_text(encoding="utf-8"))["pulp"]["last_scanned_commit"]
         if ensure_pulp(root, ".exact-boundary-pulp", "main", source):
@@ -108,15 +123,8 @@ def run(root: Path, version: str) -> int:
             "-c", "commit.gpgsign=false", "commit", "--quiet", "--no-verify",
             "-m", f"chore: throwaway bump to {version} for the release canary")
         commit = git(root, "rev-parse", "HEAD")
-        with tempfile.TemporaryFile("w+") as log:
-            result = subprocess.run([sys.executable, "-I", str(root / "scripts/pretag_checks.py"),
-                                     "--tag", f"v{version}", "--commit", commit, "--root", str(root),
-                                     "--check-runs-commit",
-                                     os.environ.get("RELEASE_CANARY_CHECK_RUNS_COMMIT", original)],
-                                    stdout=log, stderr=subprocess.STDOUT, check=False, cwd=root)
-            log.seek(0)
-            output = log.read()
-        if result.returncode == 0:
+        code, output = run_pretag(root, version, commit, os.environ.get("RELEASE_CANARY_CHECK_RUNS_COMMIT", original))
+        if code == 0:
             print(f"release canary: v{version} would pass every pre-tag content check")
             return 0
         if inconclusive(output):
@@ -126,7 +134,8 @@ def run(root: Path, version: str) -> int:
         print(f"release canary: v{version} would be refused\nfailing check: {failing_check(output)}\n\n{output}")
         return 1
     finally:
-        git(root, "tag", "-d", f"v{version}", check=False)
+        if not tag_existed:
+            git(root, "tag", "-d", f"v{version}", check=False)
         git(root, "reset", "--hard", "--quiet", original, check=False)
         for name in created:
             git(root, "clean", "-ffdxq", "--", name, check=False)
@@ -135,14 +144,15 @@ def run(root: Path, version: str) -> int:
 def main(argv: list[str]) -> int:
     if len(argv) > 1 or argv[:1] in (["-h"], ["--help"]):
         print(__doc__)
-        return 2
+        return 1
     try:
         version = argv[0] if argv else next_patch((ROOT / "CMakeLists.txt").read_text(encoding="utf-8"))
         version_at_land.parse_version(version)
         return run(ROOT, version)
     except (CanaryError, version_at_land.VersionError, subprocess.CalledProcessError, OSError, KeyError) as error:
+        # Exit 2 is reserved for the live audit that never held still; anything else is a failure to file.
         print(f"release canary could not run: {error}", file=sys.stderr)
-        return 2
+        return 1
 
 
 if __name__ == "__main__":
