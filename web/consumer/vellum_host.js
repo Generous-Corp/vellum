@@ -360,6 +360,8 @@ async function runScenario(path) {
             await new Promise(resolve => requestAnimationFrame(() =>
                 requestAnimationFrame(resolve)));
             if (bridge.isDirty()) current = render();
+        } else if (step.action === 'advance') {
+            throw new Error('scenario advance needs the native host manual clock');
         } else if (step.action === 'capture') {
             captures.push({name: step.name || step.value || 'capture', ...current});
         } else if (step.action === 'press' || step.action === 'click') {

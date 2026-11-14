@@ -62,7 +62,8 @@ std::optional<std::string> json_object(id value) {
 
 class JsApplication::Impl final {
 public:
-    bool initialize(std::string_view bundle, std::string* error) {
+    bool initialize(std::string_view bundle, const JsApplicationOptions& options,
+                    std::string* error) {
         if (bundle.empty() || bundle.size() > kMaximumBundleBytes) {
             set_error(error, "JavaScript bundle is empty or exceeds 16 MiB");
             return false;
@@ -79,6 +80,21 @@ public:
         context_[@"clearTimeout"] = ^(double identifier) {
             cancel_timer(identifier);
         };
+        if (options.manual_clock) {
+            manual_clock_ = true;
+            context_[@"__vellumClockNow"] = ^double() {
+                ++manual_clock_reads_;
+                return static_cast<double>(clock_milliseconds_);
+            };
+            // A fixed epoch keeps `Date.now()` arithmetic stable across runs.
+            [context_ evaluateScript:
+                @"(() => { const now = globalThis.__vellumClockNow;"
+                 "delete globalThis.__vellumClockNow;"
+                 "const epoch = 1700000000000;"
+                 "Date.now = () => epoch + now();"
+                 "globalThis.performance = { now: () => now() }; })();"];
+            if (!consume_exception(error)) return false;
+        }
         [context_ evaluateScript:source withSourceURL:[NSURL URLWithString:@"vellum-app.js"]];
         if (!consume_exception(error)) return false;
         JSValue* bridge = context_[@"__vellum"];
@@ -323,6 +339,8 @@ public:
     }
 
     std::string last_diagnostic_json() const { return last_diagnostic_json_; }
+    std::uint64_t clock_milliseconds() const { return clock_milliseconds_; }
+    std::uint64_t manual_clock_reads() const { return manual_clock_reads_; }
 
 private:
     struct Timer final {
@@ -490,6 +508,8 @@ private:
     __strong JSContext* context_ = nil;
     std::vector<Timer> timers_;
     std::uint64_t clock_milliseconds_ = 0;
+    bool manual_clock_ = false;
+    std::uint64_t manual_clock_reads_ = 0;
     std::uint64_t next_timer_id_ = 1;
     std::uint64_t next_timer_order_ = 1;
     std::string last_diagnostic_json_;
@@ -504,9 +524,15 @@ JsApplication& JsApplication::operator=(JsApplication&&) noexcept = default;
 
 std::unique_ptr<JsApplication> JsApplication::create(
     std::string_view bundle, std::string* error) {
+    return create(bundle, JsApplicationOptions{}, error);
+}
+
+std::unique_ptr<JsApplication> JsApplication::create(
+    std::string_view bundle, const JsApplicationOptions& options,
+    std::string* error) {
     @autoreleasepool {
         auto implementation = std::make_unique<Impl>();
-        if (!implementation->initialize(bundle, error)) return nullptr;
+        if (!implementation->initialize(bundle, options, error)) return nullptr;
         return std::unique_ptr<JsApplication>(
             new JsApplication(std::move(implementation)));
     }
@@ -573,6 +599,14 @@ bool JsApplication::wait_for_idle(
     @autoreleasepool {
         return impl_->wait_for_idle(maximum_tasks, output, result, error);
     }
+}
+
+std::uint64_t JsApplication::clock_milliseconds() const {
+    return impl_->clock_milliseconds();
+}
+
+std::uint64_t JsApplication::manual_clock_reads() const {
+    return impl_->manual_clock_reads();
 }
 
 std::string JsApplication::last_diagnostic_json() const {

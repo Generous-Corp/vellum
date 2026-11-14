@@ -33,11 +33,13 @@
             "assert-text",
             "assert-accessibility",
             "capture",
-            "throw"
+            "throw",
+            "advance"
           ]
         },
         "target": { "type": "string" },
         "value": {},
+        "ms": { "type": "integer", "minimum": 0, "maximum": 86400000 },
         "event": { "$ref": "events-v2.schema.json" },
         "service": { "$ref": "services-v1.schema.json" },
         "expect": {}
