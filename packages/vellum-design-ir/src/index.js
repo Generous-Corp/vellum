@@ -4,6 +4,9 @@ export {
     COMPILER_NAME,
     COMPILER_VERSION,
     DESIGN_IR_SCHEMA,
+    DESIGN_IR_MIN_VERSION,
+    DESIGN_IR_RESERVED_VERSIONS,
+    DESIGN_IR_VECTOR_ASSET_VERSION,
     DESIGN_IR_VERSION,
     DISPOSITIONS,
     REIMPORT_REPORT_SCHEMA,
@@ -35,6 +38,7 @@ export {
 } from './browser-capture.js';
 export { applyAuthoredOverlay, emptyAuthoredOverlay, resolveReference } from './overlay.js';
 export { reimportDesign } from './reimport.js';
+export { designIRVersionProblem, findVectorAssetField, requiredDesignIRVersion } from './versions.js';
 export {
     DEFAULT_SVG_NODE_BUDGET,
     DEFAULT_SVG_PATH_DATA_BUDGET,

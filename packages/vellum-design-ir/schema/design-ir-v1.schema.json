@@ -18,7 +18,10 @@
   ],
   "properties": {
     "$schema": { "const": "https://vellum.dev/schemas/design-ir/v1" },
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": {
+      "enum": [1, 6],
+      "description": "1, or 6 for a document with vector asset fields. Versions 2 to 5 are reserved for blend modes, effects and materials, animation tracks and plots."
+    },
     "compiler": {
       "type": "object",
       "additionalProperties": false,
@@ -44,7 +47,37 @@
     },
     "lossReport": { "$ref": "#/$defs/lossReport" }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "schemaVersion": { "const": 1 } } },
+      "then": { "properties": { "root": { "$ref": "#/$defs/nodeBeforeVectorAssets" } } }
+    }
+  ],
   "$defs": {
+    "nodeBeforeVectorAssets": {
+      "description": "A node without the vector asset fields DesignIR version 6 adds.",
+      "allOf": [{ "$ref": "#/$defs/node" }],
+      "properties": {
+        "kind": { "not": { "enum": ["path", "vector"] } },
+        "properties": {
+          "not": { "anyOf": [{ "required": ["path"] }, { "required": ["vector"] }] },
+          "properties": {
+            "image": { "not": { "type": "object", "required": ["source"] } },
+            "paint": {
+              "not": {
+                "type": "object",
+                "anyOf": [
+                  { "required": ["opacity"] }, { "required": ["transform"] },
+                  { "required": ["clipPath"] }, { "required": ["maskMode"] },
+                  { "required": ["isolation"] }, { "required": ["overflow"] }
+                ]
+              }
+            }
+          }
+        },
+        "children": { "type": "array", "items": { "$ref": "#/$defs/nodeBeforeVectorAssets" } }
+      }
+    },
     "jsonValue": {
       "oneOf": [
         { "type": ["null", "boolean", "number", "string"] },

@@ -63,6 +63,13 @@ types, entities, scripts, event handlers, external or data references,
 reference cycles, `use` expansion past 50,000 nodes and numbers beyond one
 million are refused before any lowering.
 
+A DesignIR document that uses these fields (path and vector nodes, their
+property buckets, image sources and the opacity, transform, clip, mask,
+isolation and overflow paint keys) is written at DesignIR schema version 6;
+one without them stays at version 1. The validator and the published schema
+refuse those fields below version 6, and versions 2 to 5 are reserved for
+blend modes, effects and materials, animation tracks and plots.
+
 The history-preserving Pulp projection has been removed from the active tip.
 Its authorship and exact blobs remain auditable in Git history and immutable
 `provenance/` records; Vellum does not maintain a synchronized editable copy.

@@ -2,7 +2,6 @@ import {
     COMPILER_NAME,
     COMPILER_VERSION,
     DESIGN_IR_SCHEMA,
-    DESIGN_IR_VERSION,
 } from './constants.js';
 import { buildLossReport, diagnosticSort, normalizeDiagnostic } from './diagnostics.js';
 import {
@@ -15,6 +14,7 @@ import { canonicalize, deepClone } from './stable-json.js';
 import { normalizeTokens } from './tokens.js';
 import { normalizeSha256ContentHash } from './assets.js';
 import { validateDesignIR } from './validate.js';
+import { requiredDesignIRVersion } from './versions.js';
 
 const KNOWN_NODE_FIELDS = new Set([
     'children',
@@ -61,7 +61,7 @@ export function normalizeImport(input, options = {}) {
         },
         diagnostics: diagnostics.sort(diagnosticSort),
         root,
-        schemaVersion: DESIGN_IR_VERSION,
+        schemaVersion: requiredDesignIRVersion(root),
         source,
         tokens: normalizeTokens(input.tokens, source.key),
     });
