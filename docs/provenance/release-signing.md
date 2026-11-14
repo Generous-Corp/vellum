@@ -113,6 +113,22 @@ Nobody approves a routine release by hand. Authorization is the bot's exact, re-
 the queue, plus the required checks on the tagged commit. The version line is parsed in one place
 (`version_at_land.project_version`), which reads CMake with comments removed and refuses a second declaration.
 
+### Trust limit
+
+A required context bound to the Actions app is met by a check run from that app, or by a commit status whose
+creator is the Actions bot (login `github-actions[bot]`, type `Bot`, id 41898282).
+
+A status carries no link to the run that created it, so the creator identity is the only thing the release job can
+check. Any workflow whose token has `statuses: write` can post a status under those contexts on any commit,
+including a workflow on an unmerged branch. A check run from the Actions app can be posted the same way by a token
+with `checks: write`.
+
+Main's own rules bind the same two contexts to the same identity, so the release job trusts exactly what merging
+already trusts and adds no new trust boundary.
+
+Removing the limit takes a dedicated App identity for these two statuses, with the ruleset's integration binding and
+this job's identity check both moved to that App. That is an owner-run change to secrets and rulesets.
+
 ## Release dry run
 
 A release cannot be undone, so the whole path is rehearsed on GitHub first. A dry run starts by itself when an observatory
