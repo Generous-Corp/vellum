@@ -48,6 +48,21 @@ The Canvas2D proof shell reports `VELLUM_WEB_GRADIENT_NOT_EXPRESSIBLE` for
 each version 8 gradient and gradient stroke it cannot draw before drawing its
 base colour.
 
+Vector assets use schema version 9. `importSvgAsset` in `@vellum/design-ir`
+turns a sanitized SVG into a canonical subtree of path and group nodes when
+it can, so colours bound through `colorTokens` keep following their tokens,
+every element keeps a stable identity, and a change redraws only its node.
+An asset over its node or path-data budget, or one using what only the
+compiled form carries (user-space or transformed gradients, focal radial
+gradients, diagonal linear gradients, coincident stops), becomes one
+`vector` node holding a compiled display list that the Skia renderer and
+the Canvas2D shell both draw. Rasterization is the last fallback, through a
+caller's `rasterize` hook, and is always a `rasterized` loss. Every dropped
+or approximated feature is a loss in the DesignIR `lossReport`. Document
+types, entities, scripts, event handlers, external or data references,
+reference cycles, `use` expansion past 50,000 nodes and numbers beyond one
+million are refused before any lowering.
+
 The history-preserving Pulp projection has been removed from the active tip.
 Its authorship and exact blobs remain auditable in Git history and immutable
 `provenance/` records; Vellum does not maintain a synchronized editable copy.

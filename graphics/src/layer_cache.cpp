@@ -16,7 +16,7 @@ namespace {
 // PaintCommand field: a field they skip lets a cached image survive a change
 // to it. This size changes when a field is added; update both functions, and
 // the field-coverage test in layer_cache_test.cpp, then this number.
-static_assert(sizeof(PaintCommand) == 392,
+static_assert(sizeof(PaintCommand) == 408,
               "PaintCommand changed: update paint_commands_equal and hash_command");
 static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 80,
               "TextStyle or TextRun changed: update same_style, same_runs and hash_command");
@@ -171,7 +171,8 @@ bool same_paint(const PaintCommand& a, const PaintCommand& b) {
            same_radii(a.corner_radii, b.corner_radii) &&
            a.layer_unbounded == b.layer_unbounded && a.layer_isolated == b.layer_isolated &&
            same_rect(a.clip_rect, b.clip_rect) && a.mask_mode == b.mask_mode &&
-           same_image_reference(a.image, b.image) && a.image_asset == b.image_asset;
+           same_image_reference(a.image, b.image) && a.image_asset == b.image_asset &&
+           a.vector == b.vector;
 }
 
 class Hasher final {
@@ -312,6 +313,7 @@ std::uint64_t hash_command(const PaintCommand& command) {
         hash.number(static_cast<std::uint64_t>(command.image->sampling));
     }
     hash.number(reinterpret_cast<std::uintptr_t>(command.image_asset.get()));
+    hash.number(reinterpret_cast<std::uintptr_t>(command.vector.get()));
     return hash.value();
 }
 
@@ -370,7 +372,7 @@ LayerInvalidation classify_change(
         const auto& after = next[index];
         if (before.kind != after.kind) return LayerInvalidation::structure;
         if (before.mesh != after.mesh || !same_path(before.path, after.path) ||
-            before.image_asset != after.image_asset) {
+            before.image_asset != after.image_asset || before.vector != after.vector) {
             return LayerInvalidation::resource;
         }
     }

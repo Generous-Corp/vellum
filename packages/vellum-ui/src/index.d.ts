@@ -267,6 +267,46 @@ export interface PathProps extends Omit<ElementProps, 'children' | 'text' | 'sou
 }
 export declare const Path: Component<PathProps>;
 
+/** A paint of a compiled vector asset: a hex colour, none, or a gradient in its own space. */
+export type VectorPaint = string | {
+    gradient: LinearGradientStyle;
+    /** Maps the gradient's unit box into the operation's coordinates. */
+    transform?: readonly [number, number, number, number, number, number];
+};
+export type VectorOp =
+    | {
+        op: 'group';
+        transform?: readonly [number, number, number, number, number, number];
+        opacity?: number;
+        clip?: { d: string; rule?: 'nonzero' | 'evenodd' };
+    }
+    | { op: 'end' }
+    | {
+        op: 'path';
+        d: string;
+        fillRule?: 'nonzero' | 'evenodd';
+        transform?: readonly [number, number, number, number, number, number];
+        fill?: VectorPaint;
+        stroke?: VectorPaint;
+        strokeWidth?: number;
+        strokeLineJoin?: 'miter' | 'round' | 'bevel';
+        strokeLineCap?: 'butt' | 'round' | 'square';
+        strokeMiterLimit?: number;
+        strokeDasharray?: readonly number[];
+        strokeDashoffset?: number;
+    };
+/** A compiled vector asset, drawn by one node with its view box stretched onto the box. */
+export interface VectorAsset {
+    contentHash: string;
+    viewBox: readonly [number, number, number, number];
+    ops: readonly VectorOp[];
+}
+export interface VectorProps extends Omit<ElementProps, 'children' | 'text' | 'source'> {
+    asset: VectorAsset;
+    children?: never;
+}
+export declare const Vector: Component<VectorProps>;
+
 export interface CustomComponentProps extends ElementProps {
     component: string;
     properties?: Record<string, JsonValue>;

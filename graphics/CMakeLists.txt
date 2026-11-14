@@ -6,6 +6,7 @@ add_library(vellum-graphics
     src/layer_cache.cpp
     src/paint_command.cpp
     src/path_geometry.cpp
+    src/vector_asset.cpp
     src/render_telemetry.cpp
     src/scene_acceptance.cpp)
 add_library(Vellum::Graphics ALIAS vellum-graphics)

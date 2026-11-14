@@ -1,6 +1,7 @@
 #include <vellum/graphics/paint_command.hpp>
 
 #include <vellum/graphics/image_asset.hpp>
+#include <vellum/graphics/vector_asset.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -214,6 +215,14 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
             .bounds = absolute,
             .mesh = node.mesh,
             .transform = transform,
+        });
+    } else if (node.kind == SceneNode::Kind::vector) {
+        output.push_back({
+            .kind = PaintCommand::Kind::vector,
+            .node_id = node.id,
+            .bounds = absolute,
+            .transform = transform,
+            .vector = node.vector,
         });
     }
     if (subtree_clip) open_clip();
@@ -513,6 +522,18 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
             });
             return output;
         }
+        if (!compositing && needs(9U) && uses_version_9_fields(*node)) {
+            output.push_back({
+                .severity = LoweringDiagnostic::Severity::error,
+                .disposition = LoweringDiagnostic::Disposition::unsupported,
+                .code = std::string(kSceneVersionMismatchCode),
+                .node_id = node->id,
+                .property = "vector",
+                .message = "scene version " + version +
+                           " cannot carry the compiled vector asset at " + node->id,
+            });
+            return output;
+        }
         if (!compositing && needs(8U) && node_own_gradient_uses_version_8(*node)) {
             return refuse(node->id, "scene version " + version +
                                   " cannot carry gradient vocabulary at " + node->id);
@@ -585,6 +606,15 @@ PaintExtent paint_extent(const PaintCommand& command) {
         return {moved};
     }
     if (command.kind == PaintCommand::Kind::image) return {box};
+    if (command.kind == PaintCommand::Kind::vector) {
+        if (!command.vector || !vector_asset_is_valid(*command.vector)) return {box, false};
+        const auto painted = vector_paint_bounds(*command.vector, box);
+        if (!painted) return {{box.x, box.y, 0.0F, 0.0F}};
+        const bool finite = std::isfinite(painted->x) && std::isfinite(painted->y) &&
+                            std::isfinite(painted->width) && std::isfinite(painted->height);
+        if (!finite) return {box, false};
+        return {*painted};
+    }
     if (!draws_content(command.kind)) return {box};
     Rect extent = box;
     for (const auto& shadow : command.box_shadows) {

@@ -1,0 +1,1952 @@
+// SVG asset import. A sanitized SVG becomes, in order of preference, a
+// canonical subtree of path and group nodes (so token-bound colours, stable
+// identities and per-node damage keep working), one compiled vector resource
+// drawn by a single node, or, last, a raster image. Every feature that is
+// dropped or approximated is reported as a loss diagnostic, and hostile input
+// is refused before any lowering starts.
+import { normalizeImport } from './normalize.js';
+
+export const SVG_ASSET_LIMITS = Object.freeze({
+    maxBytes: 1024 * 1024,
+    maxDepth: 64,
+    maxElements: 20000,
+    maxAttributes: 64,
+    maxExpandedNodes: 50000,
+    maxNumber: 1e6,
+    maxPathDataBytes: 1024 * 1024,
+});
+export const DEFAULT_SVG_NODE_BUDGET = 512;
+export const DEFAULT_SVG_PATH_DATA_BUDGET = 64 * 1024;
+
+export class SvgAssetRefusal extends TypeError {
+    constructor(reason) {
+        super(`SVG asset refused: ${reason}`);
+        this.name = 'SvgAssetRefusal';
+        this.reason = reason;
+    }
+}
+
+function refuse(reason) {
+    throw new SvgAssetRefusal(reason);
+}
+
+const IDENTITY = Object.freeze([1, 0, 0, 1, 0, 0]);
+
+function multiply(m, n) {
+    return [
+        m[0] * n[0] + m[2] * n[1],
+        m[1] * n[0] + m[3] * n[1],
+        m[0] * n[2] + m[2] * n[3],
+        m[1] * n[2] + m[3] * n[3],
+        m[0] * n[4] + m[2] * n[5] + m[4],
+        m[1] * n[4] + m[3] * n[5] + m[5],
+    ];
+}
+
+function isIdentity(m) {
+    return m[0] === 1 && m[1] === 0 && m[2] === 0 && m[3] === 1 && m[4] === 0 && m[5] === 0;
+}
+
+function apply(m, x, y) {
+    return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+}
+
+function fmt(value) {
+    const rounded = Math.round(value * 1e6) / 1e6;
+    return Object.is(rounded, -0) ? '0' : String(rounded);
+}
+
+function cleanMatrix(m) {
+    return m.map((value) => Number(fmt(value)));
+}
+
+// ---------------------------------------------------------------------------
+// XML: a strict subset. Declarations other than the leading XML declaration,
+// document types, entities, CDATA and processing instructions are refused.
+
+const PREDEFINED_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+
+function decodeText(value) {
+    return value.replace(/&([^;&\s]*);?/g, (match, name) => {
+        if (!match.endsWith(';')) refuse('a bare ampersand is not well-formed XML');
+        if (name.startsWith('#')) {
+            const hex = /^#x[0-9a-fA-F]{1,6}$/.test(name);
+            const decimal = /^#[0-9]{1,7}$/.test(name);
+            if (!hex && !decimal) refuse(`malformed character reference &${name};`);
+            const code = hex ? Number.parseInt(name.slice(2), 16) : Number.parseInt(name.slice(1), 10);
+            if (code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) {
+                refuse(`invalid character reference &${name};`);
+            }
+            return String.fromCodePoint(code);
+        }
+        if (!Object.hasOwn(PREDEFINED_ENTITIES, name)) refuse(`unknown entity &${name};`);
+        return PREDEFINED_ENTITIES[name];
+    });
+}
+
+const TEXT_ELEMENTS = new Set(['title', 'desc', 'text', 'tspan', 'textPath', 'style', 'metadata']);
+
+function parseXml(svg) {
+    if (typeof svg !== 'string') refuse('the asset is not a string');
+    if (utf8Length(svg) > SVG_ASSET_LIMITS.maxBytes) {
+        refuse(`the asset exceeds ${SVG_ASSET_LIMITS.maxBytes} bytes`);
+    }
+    let text = svg.replace(/^﻿/, '');
+    const declaration = /^\s*<\?xml\s[^?]*\?>/.exec(text);
+    if (declaration) text = text.slice(declaration[0].length);
+    if (/<!DOCTYPE/i.test(text)) refuse('a document type declaration is not allowed');
+    if (/<!ENTITY/i.test(text)) refuse('an entity declaration is not allowed');
+    if (/<!\[CDATA\[/i.test(text)) refuse('a CDATA section is not allowed');
+    if (/<\?/.test(text)) refuse('a processing instruction is not allowed');
+    text = text.replace(/<!--[\s\S]*?-->/g, (comment) => {
+        if (comment.slice(4, -3).includes('--')) refuse('a malformed comment');
+        return '';
+    });
+    if (/<!/.test(text)) refuse('a markup declaration is not allowed');
+
+    const root = { name: '#document', attributes: Object.create(null), children: [], text: '' };
+    const stack = [root];
+    let elements = 0;
+    let cursor = 0;
+    const tag = /<(\/?)([A-Za-z_][\w.:-]*)((?:\s+[A-Za-z_:][\w.:-]*\s*=\s*(?:"[^"<]*"|'[^'<]*'))*)\s*(\/?)>/y;
+    while (cursor < text.length) {
+        const next = text.indexOf('<', cursor);
+        const content = text.slice(cursor, next === -1 ? text.length : next);
+        if (content.trim()) {
+            const parent = stack.at(-1);
+            if (!TEXT_ELEMENTS.has(parent.name)) refuse(`text content inside <${parent.name}>`);
+            parent.text += decodeText(content);
+        }
+        if (next === -1) break;
+        tag.lastIndex = next;
+        const match = tag.exec(text);
+        if (!match) refuse(`malformed markup at byte ${next}`);
+        cursor = tag.lastIndex;
+        const [, closing, name, attributeText, selfClosing] = match;
+        if (closing) {
+            if (attributeText || selfClosing) refuse(`malformed closing tag </${name}>`);
+            if (stack.length < 2 || stack.at(-1).name !== name) {
+                refuse(`mismatched closing tag </${name}>`);
+            }
+            stack.pop();
+            continue;
+        }
+        if (++elements > SVG_ASSET_LIMITS.maxElements) {
+            refuse(`the asset has more than ${SVG_ASSET_LIMITS.maxElements} elements`);
+        }
+        const attributes = Object.create(null);
+        let count = 0;
+        for (const found of attributeText.matchAll(/([A-Za-z_:][\w.:-]*)\s*=\s*(?:"([^"<]*)"|'([^'<]*)')/g)) {
+            if (++count > SVG_ASSET_LIMITS.maxAttributes) {
+                refuse(`<${name}> has more than ${SVG_ASSET_LIMITS.maxAttributes} attributes`);
+            }
+            if (Object.hasOwn(attributes, found[1])) refuse(`duplicate attribute ${found[1]} on <${name}>`);
+            attributes[found[1]] = decodeText(found[2] ?? found[3]);
+        }
+        const node = { name, attributes, children: [], text: '' };
+        stack.at(-1).children.push(node);
+        if (!selfClosing) {
+            stack.push(node);
+            if (stack.length - 1 > SVG_ASSET_LIMITS.maxDepth) {
+                refuse(`elements nest deeper than ${SVG_ASSET_LIMITS.maxDepth}`);
+            }
+        }
+    }
+    if (stack.length !== 1) refuse(`unclosed element <${stack.at(-1).name}>`);
+    if (root.children.length !== 1 || root.children[0].name !== 'svg') {
+        refuse('the document must have exactly one <svg> root element');
+    }
+    return root.children[0];
+}
+
+// ---------------------------------------------------------------------------
+// Hostile-input checks, all run before lowering starts.
+
+const FORBIDDEN_ELEMENTS = new Set([
+    'script', 'foreignObject', 'iframe', 'object', 'embed', 'audio', 'video', 'canvas',
+    'handler', 'listener', 'html', 'body',
+]);
+const COLOR_ATTRIBUTES = new Set(['fill', 'stroke', 'stop-color', 'color', 'flood-color',
+    'lighting-color']);
+const NON_NUMERIC_ATTRIBUTES = new Set(['id', 'class', 'href', 'xlink:href', 'xmlns',
+    'xmlns:xlink', 'version', 'baseProfile', 'preserveAspectRatio', 'style', 'xml:space',
+    'font-family', 'clip-path', 'mask', 'filter', 'marker-start', 'marker-mid', 'marker-end',
+    'gradientUnits', 'spreadMethod', 'clipPathUnits', 'maskUnits', 'maskContentUnits',
+    'mask-type', 'fill-rule', 'clip-rule', 'stroke-linecap', 'stroke-linejoin', 'display',
+    'visibility', 'overflow', 'color-interpolation', 'shape-rendering', 'vector-effect',
+    'paint-order', 'mix-blend-mode', 'isolation', 'xml:lang', 'lang', 'role',
+    'aria-label', 'patternUnits', 'patternContentUnits', 'filterUnits', 'primitiveUnits',
+    'text-anchor', 'dominant-baseline', 'font-weight', 'font-style', 'pointer-events',
+    'cursor', 'title']);
+const NUMBER = /[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/g;
+
+function checkNumbers(value, where) {
+    for (const match of value.matchAll(NUMBER)) {
+        const number = Number(match[0]);
+        if (!Number.isFinite(number) || Math.abs(number) > SVG_ASSET_LIMITS.maxNumber) {
+            refuse(`${where} has the number ${match[0]}, beyond ±${SVG_ASSET_LIMITS.maxNumber}`);
+        }
+    }
+}
+
+function localReference(value) {
+    const match = /^\s*#([^\s#]+)\s*$/.exec(value);
+    return match ? match[1] : null;
+}
+
+function urlReferences(value, where) {
+    const references = [];
+    for (const match of value.matchAll(/url\(\s*(['"]?)([^'")]*)\1\s*\)/gi)) {
+        const id = localReference(match[2]);
+        if (id === null) refuse(`${where} references ${match[2] || 'an empty URL'} outside the asset`);
+        references.push(id);
+    }
+    if (/url\(/i.test(value.replace(/url\(\s*(['"]?)[^'")]*\1\s*\)/gi, ''))) {
+        refuse(`${where} has a malformed url()`);
+    }
+    return references;
+}
+
+function styleDeclarations(value, where) {
+    if (/@import|expression\s*\(|javascript:|\\/i.test(value)) {
+        refuse(`${where} has a style with an import, expression or escape`);
+    }
+    const declarations = Object.create(null);
+    for (const part of value.split(';')) {
+        if (!part.trim()) continue;
+        const colon = part.indexOf(':');
+        if (colon <= 0) refuse(`${where} has a malformed style declaration`);
+        const name = part.slice(0, colon).trim().toLowerCase();
+        const declared = part.slice(colon + 1).trim().replace(/\s*!important$/i, '');
+        if (!/^[a-z-]+$/.test(name)) refuse(`${where} has a malformed style property`);
+        declarations[name] = declared;
+    }
+    return declarations;
+}
+
+function checkHostility(root) {
+    const ids = new Map();
+    const references = new Map();
+    const visit = (node, holders) => {
+        const where = `<${node.name}>`;
+        if (FORBIDDEN_ELEMENTS.has(node.name)) refuse(`${where} is not allowed in an asset`);
+        if (node.name === 'style' && /@import|url\(|expression|javascript:/i.test(node.text)) {
+            refuse('a <style> element with an import, URL or expression');
+        }
+        const own = [];
+        for (const [name, value] of Object.entries(node.attributes)) {
+            const lower = name.toLowerCase();
+            if (lower.startsWith('on')) refuse(`${where} has the event handler ${name}`);
+            if (lower === 'xml:base') refuse(`${where} sets xml:base`);
+            if (lower === 'href' || lower === 'xlink:href') {
+                const id = localReference(value);
+                if (id === null) refuse(`${where} references ${value} outside the asset`);
+                own.push(id);
+                continue;
+            }
+            if (/javascript:|data:/i.test(value)) refuse(`${where} ${name} holds a script or data URL`);
+            own.push(...urlReferences(value, `${where} ${name}`));
+            if (name === 'style') {
+                for (const [property, declared] of Object.entries(styleDeclarations(value, where))) {
+                    own.push(...urlReferences(declared, `${where} style ${property}`));
+                    if (!COLOR_ATTRIBUTES.has(property)) checkNumbers(declared, `${where} style ${property}`);
+                }
+                continue;
+            }
+            if (!COLOR_ATTRIBUTES.has(name) && !NON_NUMERIC_ATTRIBUTES.has(name)) {
+                checkNumbers(value, `${where} ${name}`);
+            }
+        }
+        if (typeof node.attributes.id === 'string') {
+            const id = node.attributes.id;
+            if (!id || id.length > 256) refuse(`${where} has an empty or overlong id`);
+            if (ids.has(id)) refuse(`the id ${id} is used twice`);
+            ids.set(id, node);
+        }
+        const inner = typeof node.attributes.id === 'string' ? [...holders, node.attributes.id] : holders;
+        for (const id of own) {
+            for (const holder of inner) {
+                if (!references.has(holder)) references.set(holder, new Set());
+                references.get(holder).add(id);
+            }
+        }
+        for (const child of node.children) visit(child, inner);
+    };
+    visit(root, []);
+    // A referenced element that, directly or through its descendants,
+    // references itself would expand forever: refuse every reference cycle.
+    const state = new Map();
+    const walk = (id, trail) => {
+        if (state.get(id) === 'done') return;
+        if (state.get(id) === 'open') refuse(`the reference cycle ${[...trail, id].join(' -> ')}`);
+        state.set(id, 'open');
+        for (const next of references.get(id) ?? []) {
+            if (ids.has(next)) walk(next, [...trail, id]);
+        }
+        state.set(id, 'done');
+    };
+    for (const id of references.keys()) walk(id, []);
+    // Bound the work `use` expansion can cause before doing any of it.
+    const sizes = new Map();
+    const size = (node) => {
+        if (sizes.has(node)) return sizes.get(node);
+        let total = 1;
+        for (const child of node.children) total += size(child);
+        if (node.name === 'use') {
+            const target = ids.get(localReference(node.attributes.href ?? node.attributes['xlink:href'] ?? '') ?? '');
+            if (target) total += size(target);
+        }
+        total = Math.min(total, SVG_ASSET_LIMITS.maxExpandedNodes + 1);
+        sizes.set(node, total);
+        return total;
+    };
+    if (size(root) > SVG_ASSET_LIMITS.maxExpandedNodes) {
+        refuse(`use references expand to more than ${SVG_ASSET_LIMITS.maxExpandedNodes} nodes`);
+    }
+    return ids;
+}
+
+// ---------------------------------------------------------------------------
+// Values.
+
+const NAMED_COLORS = (() => {
+    const table = 'aliceblue f0f8ff antiquewhite faebd7 aqua 00ffff aquamarine 7fffd4 azure f0ffff beige f5f5dc bisque ffe4c4 black 000000 blanchedalmond ffebcd blue 0000ff blueviolet 8a2be2 brown a52a2a burlywood deb887 cadetblue 5f9ea0 chartreuse 7fff00 chocolate d2691e coral ff7f50 cornflowerblue 6495ed cornsilk fff8dc crimson dc143c cyan 00ffff darkblue 00008b darkcyan 008b8b darkgoldenrod b8860b darkgray a9a9a9 darkgreen 006400 darkgrey a9a9a9 darkkhaki bdb76b darkmagenta 8b008b darkolivegreen 556b2f darkorange ff8c00 darkorchid 9932cc darkred 8b0000 darksalmon e9967a darkseagreen 8fbc8f darkslateblue 483d8b darkslategray 2f4f4f darkslategrey 2f4f4f darkturquoise 00ced1 darkviolet 9400d3 deeppink ff1493 deepskyblue 00bfff dimgray 696969 dimgrey 696969 dodgerblue 1e90ff firebrick b22222 floralwhite fffaf0 forestgreen 228b22 fuchsia ff00ff gainsboro dcdcdc ghostwhite f8f8ff gold ffd700 goldenrod daa520 gray 808080 green 008000 greenyellow adff2f grey 808080 honeydew f0fff0 hotpink ff69b4 indianred cd5c5c indigo 4b0082 ivory fffff0 khaki f0e68c lavender e6e6fa lavenderblush fff0f5 lawngreen 7cfc00 lemonchiffon fffacd lightblue add8e6 lightcoral f08080 lightcyan e0ffff lightgoldenrodyellow fafad2 lightgray d3d3d3 lightgreen 90ee90 lightgrey d3d3d3 lightpink ffb6c1 lightsalmon ffa07a lightseagreen 20b2aa lightskyblue 87cefa lightslategray 778899 lightslategrey 778899 lightsteelblue b0c4de lightyellow ffffe0 lime 00ff00 limegreen 32cd32 linen faf0e6 magenta ff00ff maroon 800000 mediumaquamarine 66cdaa mediumblue 0000cd mediumorchid ba55d3 mediumpurple 9370db mediumseagreen 3cb371 mediumslateblue 7b68ee mediumspringgreen 00fa9a mediumturquoise 48d1cc mediumvioletred c71585 midnightblue 191970 mintcream f5fffa mistyrose ffe4e1 moccasin ffe4b5 navajowhite ffdead navy 000080 oldlace fdf5e6 olive 808000 olivedrab 6b8e23 orange ffa500 orangered ff4500 orchid da70d6 palegoldenrod eee8aa palegreen 98fb98 paleturquoise afeeee palevioletred db7093 papayawhip ffefd5 peachpuff ffdab9 peru cd853f pink ffc0cb plum dda0dd powderblue b0e0e6 purple 800080 rebeccapurple 663399 red ff0000 rosybrown bc8f8f royalblue 4169e1 saddlebrown 8b4513 salmon fa8072 sandybrown f4a460 seagreen 2e8b57 seashell fff5ee sienna a0522d silver c0c0c0 skyblue 87ceeb slateblue 6a5acd slategray 708090 slategrey 708090 snow fffafa springgreen 00ff7f steelblue 4682b4 tan d2b48c teal 008080 thistle d8bfd8 tomato ff6347 turquoise 40e0d0 violet ee82ee wheat f5deb3 white ffffff whitesmoke f5f5f5 yellow ffff00 yellowgreen 9acd32'.split(' ');
+    const colors = new Map();
+    for (let index = 0; index < table.length; index += 2) colors.set(table[index], table[index + 1]);
+    return colors;
+})();
+
+// An RGBA colour with 0-255 channels and a 0-1 alpha, or null when the
+// value is not a colour this importer reads.
+function parseColor(value) {
+    const text = value.trim().toLowerCase();
+    if (text === 'transparent') return [0, 0, 0, 0];
+    if (NAMED_COLORS.has(text)) return hexColor(NAMED_COLORS.get(text));
+    if (/^#[0-9a-f]{3,4}$/.test(text)) {
+        return hexColor([...text.slice(1)].map((digit) => digit + digit).join(''));
+    }
+    if (/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/.test(text)) return hexColor(text.slice(1));
+    const functional = /^(rgba?|hsla?)\(\s*([^)]*)\)$/.exec(text);
+    if (!functional) return null;
+    const parts = functional[2].split(/\s*[,/]\s*|\s+/).filter(Boolean);
+    if (parts.length !== 3 && parts.length !== 4) return null;
+    const alpha = parts.length === 4 ? channel(parts[3], 1) : 1;
+    if (alpha === null) return null;
+    if (functional[1].startsWith('rgb')) {
+        const rgb = parts.slice(0, 3).map((part) => channel(part, 255));
+        if (rgb.some((part) => part === null)) return null;
+        return [...rgb.map((part) => Math.round(Math.min(255, Math.max(0, part)))),
+            Math.min(1, Math.max(0, alpha))];
+    }
+    const hue = Number.parseFloat(parts[0]);
+    const saturation = channel(parts[1], 1);
+    const lightness = channel(parts[2], 1);
+    if (!Number.isFinite(hue) || saturation === null || lightness === null ||
+        !parts[1].endsWith('%') || !parts[2].endsWith('%')) return null;
+    const h = ((hue % 360) + 360) % 360 / 360;
+    const q = lightness < 0.5 ? lightness * (1 + saturation) : lightness + saturation - lightness * saturation;
+    const p = 2 * lightness - q;
+    const component = (t) => {
+        const wrapped = (t % 1 + 1) % 1;
+        if (wrapped < 1 / 6) return p + (q - p) * 6 * wrapped;
+        if (wrapped < 1 / 2) return q;
+        if (wrapped < 2 / 3) return p + (q - p) * (2 / 3 - wrapped) * 6;
+        return p;
+    };
+    return [component(h + 1 / 3), component(h), component(h - 1 / 3)]
+        .map((part) => Math.round(part * 255)).concat(Math.min(1, Math.max(0, alpha)));
+}
+
+function channel(part, scale) {
+    if (/^[+-]?(?:\d+\.?\d*|\.\d+)%$/.test(part)) return Number.parseFloat(part) / 100 * scale;
+    if (/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(part)) return Number.parseFloat(part);
+    return null;
+}
+
+function hexColor(hex) {
+    const values = [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16));
+    return [...values, hex.length === 8 ? Number.parseInt(hex.slice(6, 8), 16) / 255 : 1];
+}
+
+function hexString(color, opacity = 1) {
+    const alpha = Math.round(Math.min(1, Math.max(0, color[3] * opacity)) * 255);
+    const hex = color.slice(0, 3).map((part) => part.toString(16).padStart(2, '0')).join('');
+    return alpha === 255 ? `#${hex}` : `#${hex}${alpha.toString(16).padStart(2, '0')}`;
+}
+
+function parseNumber(value) {
+    if (value === undefined) return undefined;
+    const text = value.trim();
+    if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(text)) return null;
+    return Number(text);
+}
+
+// A length in user units: a number, optionally in px. Other units are not
+// read, so the caller reports the attribute and uses its default.
+function parseLength(value) {
+    if (value === undefined) return undefined;
+    const match = /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(px)?\s*$/.exec(value);
+    return match ? Number(match[1]) : null;
+}
+
+function parseFraction(value, fallback) {
+    if (value === undefined) return fallback;
+    const text = value.trim();
+    if (/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?%$/.test(text)) return Number(text.slice(0, -1)) / 100;
+    const number = parseNumber(text);
+    return number === null ? null : number;
+}
+
+function parseTransform(value) {
+    let matrix = [...IDENTITY];
+    const text = value.trim();
+    if (!text) return matrix;
+    const pattern = /\s*(matrix|translate|scale|rotate|skewX|skewY)\s*\(([^)]*)\)\s*,?/gy;
+    let consumed = 0;
+    for (const match of text.matchAll(pattern)) {
+        consumed = match.index + match[0].length;
+        const args = match[2].trim().split(/[\s,]+/).filter(Boolean).map(Number);
+        if (args.some((number) => !Number.isFinite(number))) return null;
+        const [a, b, c] = args;
+        let step;
+        switch (match[1]) {
+        case 'matrix':
+            if (args.length !== 6) return null;
+            step = args;
+            break;
+        case 'translate':
+            if (args.length < 1 || args.length > 2) return null;
+            step = [1, 0, 0, 1, a, b ?? 0];
+            break;
+        case 'scale':
+            if (args.length < 1 || args.length > 2) return null;
+            step = [a, 0, 0, b ?? a, 0, 0];
+            break;
+        case 'rotate': {
+            if (args.length !== 1 && args.length !== 3) return null;
+            const radians = a * Math.PI / 180;
+            const cos = Math.cos(radians);
+            const sin = Math.sin(radians);
+            step = [cos, sin, -sin, cos, 0, 0];
+            if (args.length === 3) {
+                step = multiply(multiply([1, 0, 0, 1, b, c], step), [1, 0, 0, 1, -b, -c]);
+            }
+            break;
+        }
+        case 'skewX':
+            if (args.length !== 1) return null;
+            step = [1, 0, Math.tan(a * Math.PI / 180), 1, 0, 0];
+            break;
+        default:
+            if (args.length !== 1) return null;
+            step = [1, Math.tan(a * Math.PI / 180), 0, 1, 0, 0];
+        }
+        matrix = multiply(matrix, step);
+    }
+    if (consumed !== text.length) return null;
+    return matrix.every(Number.isFinite) ? matrix : null;
+}
+
+// ---------------------------------------------------------------------------
+// Path data: normalized to absolute M, L, C, Q, A and Z segments.
+
+function parsePathData(data) {
+    const segments = [];
+    const text = data.trim();
+    let index = 0;
+    const skip = () => {
+        while (index < text.length && /[\s,]/.test(text[index])) index += 1;
+    };
+    const numberAt = () => {
+        skip();
+        const match = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/.exec(text.slice(index, index + 64));
+        if (!match) return null;
+        index += match[0].length;
+        return Number(match[0]);
+    };
+    const flagAt = () => {
+        skip();
+        const flag = text[index];
+        if (flag !== '0' && flag !== '1') return null;
+        index += 1;
+        return Number(flag);
+    };
+    let x = 0;
+    let y = 0;
+    let startX = 0;
+    let startY = 0;
+    let lastControl = null;
+    let lastQuadratic = null;
+    let command = null;
+    const arity = { M: 2, L: 2, H: 1, V: 1, C: 6, S: 4, Q: 4, T: 2, A: 7, Z: 0 };
+    while (true) {
+        skip();
+        if (index >= text.length) break;
+        if (/[MmLlHhVvCcSsQqTtAaZz]/.test(text[index])) {
+            command = text[index];
+            index += 1;
+        } else if (command === null || command === 'Z' || command === 'z') {
+            return null;
+        }
+        const upper = command.toUpperCase();
+        const relative = command !== upper;
+        if (segments.length === 0 && upper !== 'M') return null;
+        if (upper === 'Z') {
+            segments.push(['Z']);
+            x = startX;
+            y = startY;
+            lastControl = null;
+            lastQuadratic = null;
+            continue;
+        }
+        const values = [];
+        for (let item = 0; item < arity[upper]; item += 1) {
+            const value = upper === 'A' && (item === 3 || item === 4) ? flagAt() : numberAt();
+            if (value === null) return null;
+            values.push(value);
+        }
+        const ox = relative ? x : 0;
+        const oy = relative ? y : 0;
+        switch (upper) {
+        case 'M':
+            x = values[0] + ox;
+            y = values[1] + oy;
+            startX = x;
+            startY = y;
+            segments.push(['M', x, y]);
+            command = relative ? 'l' : 'L';
+            lastControl = null;
+            lastQuadratic = null;
+            break;
+        case 'L':
+        case 'H':
+        case 'V':
+            if (upper === 'L') {
+                x = values[0] + ox;
+                y = values[1] + oy;
+            } else if (upper === 'H') {
+                x = values[0] + ox;
+            } else {
+                y = values[0] + oy;
+            }
+            segments.push(['L', x, y]);
+            lastControl = null;
+            lastQuadratic = null;
+            break;
+        case 'C':
+        case 'S': {
+            let c1x;
+            let c1y;
+            let rest = values;
+            if (upper === 'C') {
+                c1x = values[0] + ox;
+                c1y = values[1] + oy;
+                rest = values.slice(2);
+            } else {
+                c1x = lastControl ? 2 * x - lastControl[0] : x;
+                c1y = lastControl ? 2 * y - lastControl[1] : y;
+            }
+            const c2x = rest[0] + ox;
+            const c2y = rest[1] + oy;
+            x = rest[2] + ox;
+            y = rest[3] + oy;
+            segments.push(['C', c1x, c1y, c2x, c2y, x, y]);
+            lastControl = [c2x, c2y];
+            lastQuadratic = null;
+            break;
+        }
+        case 'Q':
+        case 'T': {
+            let cx;
+            let cy;
+            if (upper === 'Q') {
+                cx = values[0] + ox;
+                cy = values[1] + oy;
+                x = values[2] + ox;
+                y = values[3] + oy;
+            } else {
+                cx = lastQuadratic ? 2 * x - lastQuadratic[0] : x;
+                cy = lastQuadratic ? 2 * y - lastQuadratic[1] : y;
+                x = values[0] + ox;
+                y = values[1] + oy;
+            }
+            segments.push(['Q', cx, cy, x, y]);
+            lastQuadratic = [cx, cy];
+            lastControl = null;
+            break;
+        }
+        default: {
+            const [rx, ry, rotation, large, sweep] = values;
+            const ex = values[5] + ox;
+            const ey = values[6] + oy;
+            if (rx === 0 || ry === 0) segments.push(['L', ex, ey]);
+            else segments.push(['A', Math.abs(rx), Math.abs(ry), rotation, large, sweep, ex, ey]);
+            x = ex;
+            y = ey;
+            lastControl = null;
+            lastQuadratic = null;
+        }
+        }
+    }
+    return segments;
+}
+
+function serializePath(segments, dx = 0, dy = 0) {
+    let out = '';
+    for (const segment of segments) {
+        const [kind, ...values] = segment;
+        out += kind;
+        if (kind === 'A') {
+            out += [values[0], values[1], values[2]].map(fmt).join(' ') +
+                ` ${values[3]} ${values[4]} ` + fmt(values[5] + dx) + ' ' + fmt(values[6] + dy);
+        } else {
+            out += values.map((value, index) => fmt(value + (index % 2 === 0 ? dx : dy))).join(' ');
+        }
+    }
+    return out;
+}
+
+function quadraticRoots(a, b, c) {
+    if (Math.abs(a) < 1e-12) return Math.abs(b) < 1e-12 ? [] : [-c / b];
+    const discriminant = b * b - 4 * a * c;
+    if (discriminant < 0) return [];
+    const root = Math.sqrt(discriminant);
+    return [(-b + root) / (2 * a), (-b - root) / (2 * a)];
+}
+
+function arcCenter(x1, y1, segment) {
+    let [, rx, ry, rotation, large, sweep, x2, y2] = segment;
+    const phi = rotation * Math.PI / 180;
+    const cos = Math.cos(phi);
+    const sin = Math.sin(phi);
+    const dx = (x1 - x2) / 2;
+    const dy = (y1 - y2) / 2;
+    const xp = cos * dx + sin * dy;
+    const yp = -sin * dx + cos * dy;
+    const lambda = (xp * xp) / (rx * rx) + (yp * yp) / (ry * ry);
+    if (lambda > 1) {
+        rx *= Math.sqrt(lambda);
+        ry *= Math.sqrt(lambda);
+    }
+    const numerator = rx * rx * ry * ry - rx * rx * yp * yp - ry * ry * xp * xp;
+    const denominator = rx * rx * yp * yp + ry * ry * xp * xp;
+    const coefficient = (large === sweep ? -1 : 1) *
+        Math.sqrt(Math.max(0, denominator === 0 ? 0 : numerator / denominator));
+    const cxp = coefficient * rx * yp / ry;
+    const cyp = -coefficient * ry * xp / rx;
+    const cx = cos * cxp - sin * cyp + (x1 + x2) / 2;
+    const cy = sin * cxp + cos * cyp + (y1 + y2) / 2;
+    const angle = (ux, uy, vx, vy) => Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy);
+    const theta = angle(1, 0, (xp - cxp) / rx, (yp - cyp) / ry);
+    let delta = angle((xp - cxp) / rx, (yp - cyp) / ry, (-xp - cxp) / rx, (-yp - cyp) / ry);
+    if (!sweep && delta > 0) delta -= 2 * Math.PI;
+    if (sweep && delta < 0) delta += 2 * Math.PI;
+    return { cx, cy, rx, ry, cos, sin, theta, delta };
+}
+
+// The tight bounding box of the geometry, as SVG's getBBox defines it, or
+// null for a path with no extent at all.
+function pathBounds(segments) {
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    const include = (px, py) => {
+        left = Math.min(left, px);
+        right = Math.max(right, px);
+        top = Math.min(top, py);
+        bottom = Math.max(bottom, py);
+    };
+    let x = 0;
+    let y = 0;
+    let startX = 0;
+    let startY = 0;
+    for (const segment of segments) {
+        const kind = segment[0];
+        if (kind === 'M') {
+            [x, y] = [segment[1], segment[2]];
+            [startX, startY] = [x, y];
+            include(x, y);
+        } else if (kind === 'L') {
+            [x, y] = [segment[1], segment[2]];
+            include(x, y);
+        } else if (kind === 'Z') {
+            [x, y] = [startX, startY];
+        } else if (kind === 'Q') {
+            const [, cx, cy, ex, ey] = segment;
+            for (const [p0, p1, p2, axis] of [[x, cx, ex, 0], [y, cy, ey, 1]]) {
+                const denominator = p0 - 2 * p1 + p2;
+                if (Math.abs(denominator) > 1e-12) {
+                    const t = (p0 - p1) / denominator;
+                    if (t > 0 && t < 1) {
+                        const u = 1 - t;
+                        const px = u * u * x + 2 * u * t * cx + t * t * ex;
+                        const py = u * u * y + 2 * u * t * cy + t * t * ey;
+                        include(px, py);
+                    }
+                }
+                void axis;
+            }
+            [x, y] = [ex, ey];
+            include(x, y);
+        } else if (kind === 'C') {
+            const [, c1x, c1y, c2x, c2y, ex, ey] = segment;
+            const at = (t) => {
+                const u = 1 - t;
+                return [
+                    u * u * u * x + 3 * u * u * t * c1x + 3 * u * t * t * c2x + t * t * t * ex,
+                    u * u * u * y + 3 * u * u * t * c1y + 3 * u * t * t * c2y + t * t * t * ey,
+                ];
+            };
+            for (const [p0, p1, p2, p3] of [[x, c1x, c2x, ex], [y, c1y, c2y, ey]]) {
+                const a = -p0 + 3 * p1 - 3 * p2 + p3;
+                const b = 2 * (p0 - 2 * p1 + p2);
+                const c = p1 - p0;
+                for (const t of quadraticRoots(a, b, c)) if (t > 0 && t < 1) include(...at(t));
+            }
+            [x, y] = [ex, ey];
+            include(x, y);
+        } else {
+            const arc = arcCenter(x, y, segment);
+            const point = (theta) => [
+                arc.cx + arc.rx * arc.cos * Math.cos(theta) - arc.ry * arc.sin * Math.sin(theta),
+                arc.cy + arc.rx * arc.sin * Math.cos(theta) + arc.ry * arc.cos * Math.sin(theta),
+            ];
+            const candidates = [
+                Math.atan2(-arc.ry * arc.sin, arc.rx * arc.cos),
+                Math.atan2(arc.ry * arc.cos, arc.rx * arc.sin),
+            ];
+            for (const base of candidates) {
+                for (const theta of [base, base + Math.PI]) {
+                    const start = Math.min(arc.theta, arc.theta + arc.delta);
+                    const span = Math.abs(arc.delta);
+                    const offset = (((theta - start) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+                    if (offset <= span) include(...point(theta));
+                }
+            }
+            [x, y] = [segment[6], segment[7]];
+            include(x, y);
+        }
+    }
+    if (!Number.isFinite(left)) return null;
+    return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+function hasCurves(segments) {
+    return segments.some((segment) => segment[0] === 'C' || segment[0] === 'Q' || segment[0] === 'A');
+}
+
+// ---------------------------------------------------------------------------
+// Shapes.
+
+function shapeSegments(node, report) {
+    const a = node.attributes;
+    const length = (name, fallback = 0) => {
+        const value = parseLength(a[name]);
+        if (value === null) {
+            report('svg-length-unit-dropped', `the ${name} of <${node.name}> uses a unit other than px; 0 was used`);
+            return fallback;
+        }
+        return value ?? fallback;
+    };
+    switch (node.name) {
+    case 'path': {
+        if (a.d === undefined || !a.d.trim()) return [];
+        if (utf8Length(a.d) > SVG_ASSET_LIMITS.maxPathDataBytes) {
+            refuse(`a path has more than ${SVG_ASSET_LIMITS.maxPathDataBytes} bytes of path data`);
+        }
+        const segments = parsePathData(a.d);
+        if (segments === null) {
+            report('svg-path-data-invalid', 'a path with malformed path data was dropped');
+            return [];
+        }
+        return segments;
+    }
+    case 'rect': {
+        const x = length('x');
+        const y = length('y');
+        const width = length('width');
+        const height = length('height');
+        if (!(width > 0) || !(height > 0)) return [];
+        let rx = a.rx === undefined ? undefined : length('rx');
+        let ry = a.ry === undefined ? undefined : length('ry');
+        if (rx === undefined) rx = ry ?? 0;
+        if (ry === undefined) ry = rx;
+        rx = Math.min(Math.max(0, rx), width / 2);
+        ry = Math.min(Math.max(0, ry), height / 2);
+        if (rx === 0 || ry === 0) {
+            return [['M', x, y], ['L', x + width, y], ['L', x + width, y + height],
+                ['L', x, y + height], ['Z']];
+        }
+        return [['M', x + rx, y], ['L', x + width - rx, y],
+            ['A', rx, ry, 0, 0, 1, x + width, y + ry], ['L', x + width, y + height - ry],
+            ['A', rx, ry, 0, 0, 1, x + width - rx, y + height], ['L', x + rx, y + height],
+            ['A', rx, ry, 0, 0, 1, x, y + height - ry], ['L', x, y + ry],
+            ['A', rx, ry, 0, 0, 1, x + rx, y], ['Z']];
+    }
+    case 'circle':
+    case 'ellipse': {
+        const cx = length('cx');
+        const cy = length('cy');
+        const rx = node.name === 'circle' ? length('r') : length('rx');
+        const ry = node.name === 'circle' ? rx : length('ry');
+        if (!(rx > 0) || !(ry > 0)) return [];
+        return [['M', cx + rx, cy], ['A', rx, ry, 0, 0, 1, cx - rx, cy],
+            ['A', rx, ry, 0, 0, 1, cx + rx, cy], ['Z']];
+    }
+    case 'line':
+        return [['M', length('x1'), length('y1')], ['L', length('x2'), length('y2')]];
+    default: {
+        const numbers = (a.points ?? '').trim().split(/[\s,]+/).filter(Boolean).map(Number);
+        if (numbers.some((value) => !Number.isFinite(value))) {
+            report('svg-points-invalid', `<${node.name}> has malformed points and was dropped`);
+            return [];
+        }
+        if (numbers.length % 2 !== 0) {
+            report('svg-points-odd', `<${node.name}> has an odd number of coordinates; the last was dropped`);
+            numbers.pop();
+        }
+        if (numbers.length < 4) return [];
+        const segments = [['M', numbers[0], numbers[1]]];
+        for (let index = 2; index < numbers.length; index += 2) {
+            segments.push(['L', numbers[index], numbers[index + 1]]);
+        }
+        if (node.name === 'polygon') segments.push(['Z']);
+        return segments;
+    }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Presentation state.
+
+const SHAPES = new Set(['path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon']);
+const CONTAINERS = new Set(['svg', 'g', 'a', 'switch']);
+const DEFINITIONS = new Set(['defs', 'symbol', 'clipPath', 'mask', 'linearGradient',
+    'radialGradient', 'stop']);
+const SILENT = new Set(['title', 'desc', 'metadata']);
+const RASTER_ELEMENTS = new Set(['text', 'image', 'pattern', 'filter', 'marker']);
+const ANIMATION = new Set(['animate', 'animateTransform', 'animateMotion', 'set', 'animateColor']);
+const INHERITED = ['fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-opacity',
+    'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'stroke-miterlimit',
+    'stroke-dasharray', 'stroke-dashoffset', 'color', 'visibility', 'clip-rule',
+    'color-interpolation'];
+const OWN = ['opacity', 'transform', 'clip-path', 'mask', 'display', 'filter',
+    'marker-start', 'marker-mid', 'marker-end', 'stop-color', 'stop-opacity'];
+const READ_ELSEWHERE = new Set(['id', 'd', 'points', 'x', 'y', 'width', 'height', 'cx', 'cy',
+    'r', 'rx', 'ry', 'x1', 'y1', 'x2', 'y2', 'fx', 'fy', 'fr', 'href', 'xlink:href', 'xmlns',
+    'xmlns:xlink', 'viewBox', 'preserveAspectRatio', 'version', 'baseProfile', 'style',
+    'offset', 'gradientUnits', 'gradientTransform', 'spreadMethod', 'clipPathUnits',
+    'maskUnits', 'maskContentUnits', 'mask-type', 'xml:space', 'class', 'role', 'aria-label',
+    'xml:lang', 'lang', 'overflow']);
+const INITIAL = Object.freeze({
+    fill: 'black', 'fill-opacity': '1', 'fill-rule': 'nonzero', stroke: 'none',
+    'stroke-opacity': '1', 'stroke-width': '1', 'stroke-linecap': 'butt',
+    'stroke-linejoin': 'miter', 'stroke-miterlimit': '4', 'stroke-dasharray': 'none',
+    'stroke-dashoffset': '0', color: 'black', visibility: 'visible', 'clip-rule': 'nonzero',
+    'color-interpolation': 'sRGB',
+});
+
+function declared(node) {
+    const values = Object.create(null);
+    for (const [name, value] of Object.entries(node.attributes)) values[name] = value.trim();
+    if (node.attributes.style !== undefined) {
+        Object.assign(values, styleDeclarations(node.attributes.style, `<${node.name}>`));
+    }
+    for (const [name, value] of Object.entries(values)) {
+        if (value === 'inherit') delete values[name];
+    }
+    return values;
+}
+
+// ---------------------------------------------------------------------------
+// The importer.
+
+// SHA-256 in plain JavaScript, so the package keeps running in a browser.
+const SHA256_K = new Uint32Array([
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+
+function sha256(text) {
+    const bytes = new TextEncoder().encode(text);
+    const length = Math.ceil((bytes.length + 9) / 64) * 64;
+    const padded = new Uint8Array(length);
+    padded.set(bytes);
+    padded[bytes.length] = 0x80;
+    const view = new DataView(padded.buffer);
+    view.setUint32(length - 8, Math.floor(bytes.length / 0x20000000));
+    view.setUint32(length - 4, (bytes.length * 8) >>> 0);
+    const hash = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]);
+    const words = new Uint32Array(64);
+    const rotate = (value, bits) => (value >>> bits) | (value << (32 - bits));
+    for (let offset = 0; offset < length; offset += 64) {
+        for (let index = 0; index < 16; index += 1) words[index] = view.getUint32(offset + index * 4);
+        for (let index = 16; index < 64; index += 1) {
+            const a = words[index - 15];
+            const b = words[index - 2];
+            const s0 = rotate(a, 7) ^ rotate(a, 18) ^ (a >>> 3);
+            const s1 = rotate(b, 17) ^ rotate(b, 19) ^ (b >>> 10);
+            words[index] = (words[index - 16] + s0 + words[index - 7] + s1) >>> 0;
+        }
+        let [a, b, c, d, e, f, g, h] = hash;
+        for (let index = 0; index < 64; index += 1) {
+            const s1 = rotate(e, 6) ^ rotate(e, 11) ^ rotate(e, 25);
+            const choice = (e & f) ^ (~e & g);
+            const t1 = (h + s1 + choice + SHA256_K[index] + words[index]) >>> 0;
+            const s0 = rotate(a, 2) ^ rotate(a, 13) ^ rotate(a, 22);
+            const majority = (a & b) ^ (a & c) ^ (b & c);
+            const t2 = (s0 + majority) >>> 0;
+            [h, g, f, e, d, c, b, a] = [g, f, e, (d + t1) >>> 0, c, b, a, (t1 + t2) >>> 0];
+        }
+        [a, b, c, d, e, f, g, h].forEach((value, index) => { hash[index] = (hash[index] + value) >>> 0; });
+    }
+    return `sha256:${[...hash].map((value) => value.toString(16).padStart(8, '0')).join('')}`;
+}
+
+function utf8Length(text) {
+    return new TextEncoder().encode(text).length;
+}
+
+class Importer {
+    constructor(svg, options) {
+        this.svg = svg;
+        this.options = options;
+        this.diagnostics = [];
+        this.compiledOnly = [];
+        this.rasterOnly = [];
+        this.tokensBound = new Set();
+        this.tokenMatches = new Set();
+        this.nodeCount = 0;
+        this.pathBytes = 0;
+        this.root = parseXml(svg);
+        this.ids = checkHostility(this.root);
+        this.rootId = options.sourceId;
+        this.colorTokens = new Map(Object.entries(options.colorTokens ?? {})
+            .map(([color, token]) => [color.toLowerCase(), token]));
+    }
+
+    report(code, path, message, disposition = 'unsupported', severity = 'warning') {
+        this.diagnostics.push({ code, disposition, message, path, severity });
+    }
+
+    // The drawable intermediate tree: groups and shapes with resolved paint.
+    build() {
+        const svg = this.root;
+        const a = svg.attributes;
+        const box = a.viewBox === undefined ? null
+            : a.viewBox.trim().split(/[\s,]+/).map(Number);
+        if (box !== null && (box.length !== 4 || box.some((value) => !Number.isFinite(value)) ||
+            !(box[2] > 0) || !(box[3] > 0))) {
+            refuse('the viewBox must be four numbers with a positive width and height');
+        }
+        const lengthOr = (name, fallback) => {
+            const value = parseLength(a[name]);
+            if (value === null) {
+                if (!/^\s*100%\s*$/.test(a[name])) {
+                    this.report('svg-length-unit-dropped', `${this.rootId}`,
+                        `the root ${name} uses a unit other than px; the view box size was used`);
+                }
+                return fallback;
+            }
+            return value ?? fallback;
+        };
+        const width = this.options.width ?? lengthOr('width', box ? box[2] : 300);
+        const height = this.options.height ?? lengthOr('height', box ? box[3] : 150);
+        if (!(width > 0) || !(height > 0) || width > SVG_ASSET_LIMITS.maxNumber ||
+            height > SVG_ASSET_LIMITS.maxNumber) {
+            refuse('the asset needs a positive, bounded width and height');
+        }
+        this.width = width;
+        this.height = height;
+        let viewport = [...IDENTITY];
+        if (box) viewport = this.viewBoxTransform(box, width, height, a.preserveAspectRatio, this.rootId);
+        const values = declared(svg);
+        if (values.transform !== undefined) {
+            const parsed = parseTransform(values.transform);
+            if (parsed === null) this.report('svg-transform-dropped', this.rootId, 'the root has a malformed transform, which was dropped');
+            else viewport = multiply(parsed, viewport);
+        }
+        let opacity = 1;
+        if (values.opacity !== undefined) opacity = Math.min(1, Math.max(0, parseFraction(values.opacity, 1) ?? 1));
+        for (const name of ['clip-path', 'mask']) {
+            if (values[name] !== undefined && values[name] !== 'none') {
+                this.report('svg-root-reference-dropped', this.rootId, `${name} on the root <svg> was dropped`);
+            }
+        }
+        if (values.filter !== undefined && values.filter !== 'none') {
+            this.rasterOnly.push({ path: this.rootId, reason: 'filter needs rasterization' });
+        }
+        this.dropUnknownAttributes(svg, this.rootId);
+        const children = this.children(svg, this.rootId, this.inherit(INITIAL, svg), new Set());
+        return { kind: 'group', id: `${this.rootId}:viewport`, transform: viewport, opacity,
+            children, name: this.title(svg) };
+    }
+
+    viewBoxTransform(box, width, height, aspect = 'xMidYMid meet', path) {
+        const [vx, vy, vw, vh] = box;
+        const parts = aspect.trim().split(/\s+/);
+        const align = parts[0] === 'defer' ? parts[1] : parts[0];
+        const slice = parts.includes('slice');
+        let sx = width / vw;
+        let sy = height / vh;
+        if (align !== 'none') {
+            if (!/^x(Min|Mid|Max)Y(Min|Mid|Max)$/.test(align ?? '')) {
+                this.report('svg-aspect-ratio-dropped', path,
+                    `preserveAspectRatio ${aspect} is not understood; xMidYMid meet was used`);
+            }
+            const scale = slice ? Math.max(sx, sy) : Math.min(sx, sy);
+            sx = scale;
+            sy = scale;
+        }
+        let tx = -vx * sx;
+        let ty = -vy * sy;
+        if (align !== 'none') {
+            const extraX = width - vw * sx;
+            const extraY = height - vh * sy;
+            const fraction = (name) => (name === 'Min' ? 0 : name === 'Mid' ? 0.5 : 1);
+            const match = /^x(Min|Mid|Max)Y(Min|Mid|Max)$/.exec(align ?? 'xMidYMid') ?? [null, 'Mid', 'Mid'];
+            tx += extraX * fraction(match[1]);
+            ty += extraY * fraction(match[2]);
+        }
+        return [sx, 0, 0, sy, tx, ty];
+    }
+
+    title(node) {
+        const title = node.children.find((child) => child.name === 'title');
+        return title && title.text.trim() ? title.text.trim().replace(/\s+/g, ' ') : undefined;
+    }
+
+    inherit(parent, node) {
+        const values = declared(node);
+        const state = { ...parent };
+        for (const name of INHERITED) if (values[name] !== undefined) state[name] = values[name];
+        return state;
+    }
+
+    // Inside a use instance, a mask or a symbol, identities come from the
+    // path of the referencing element (`scoped`), so two uses of one
+    // definition never share an id; elsewhere an id attribute names the node.
+    children(node, path, state, active, scoped = false) {
+        const output = [];
+        node.children.forEach((child, index) => {
+            const lowered = this.element(child, `${path}.${index}`, state, active, scoped);
+            if (lowered) output.push(lowered);
+        });
+        return output;
+    }
+
+    sourceIdFor(node, path, scoped) {
+        if (scoped) return path;
+        return typeof node.attributes.id === 'string' ? `${this.rootId}:${node.attributes.id}` : path;
+    }
+
+    dropUnknownAttributes(node, path) {
+        for (const name of Object.keys(declared(node))) {
+            if (INHERITED.includes(name) || OWN.includes(name) || READ_ELSEWHERE.has(name)) continue;
+            if (name.startsWith('xmlns') || name.startsWith('aria-') || name.startsWith('data-')) continue;
+            if (/^(font|text|letter|word|dominant|alignment|baseline|writing|unicode|direction|glyph|kerning)/.test(name)) continue;
+            this.report('svg-attribute-dropped', path, `<${node.name}> ${name} is not supported and was dropped`);
+        }
+    }
+
+    element(node, path, state, active, scoped = false) {
+        if (SILENT.has(node.name) || DEFINITIONS.has(node.name)) return null;
+        if (ANIMATION.has(node.name)) {
+            this.report('svg-animation-dropped', path, `<${node.name}> was dropped; the static frame is drawn`);
+            return null;
+        }
+        if (node.name === 'style') {
+            this.report('svg-style-element-dropped', path, 'a <style> element was dropped; CSS selectors are not applied');
+            return null;
+        }
+        if (RASTER_ELEMENTS.has(node.name) || node.name === 'tspan' || node.name === 'textPath') {
+            this.rasterOnly.push({ path, reason: `<${node.name}> needs rasterization` });
+            return { kind: 'raster-only', path, element: node.name };
+        }
+        if (!SHAPES.has(node.name) && !CONTAINERS.has(node.name) && node.name !== 'use') {
+            this.report('svg-element-dropped', path, `<${node.name}> is not supported and was dropped`);
+            return null;
+        }
+        const values = declared(node);
+        if (values.display === 'none') return null;
+        const inner = this.inherit(state, node);
+        this.dropUnknownAttributes(node, path);
+        for (const name of ['filter', 'marker-start', 'marker-mid', 'marker-end']) {
+            if (values[name] !== undefined && values[name] !== 'none') {
+                this.rasterOnly.push({ path, reason: `${name} needs rasterization` });
+            }
+        }
+        const sourceId = this.sourceIdFor(node, path, scoped);
+        let transform = [...IDENTITY];
+        if (values.transform !== undefined) {
+            const parsed = parseTransform(values.transform);
+            if (parsed === null) {
+                this.report('svg-transform-dropped', path, `<${node.name}> has a malformed transform, which was dropped`);
+            } else {
+                transform = parsed;
+            }
+        }
+        let opacity = 1;
+        if (values.opacity !== undefined) {
+            const parsed = parseFraction(values.opacity, 1);
+            if (parsed === null) this.report('svg-opacity-dropped', path, `<${node.name}> has a malformed opacity`);
+            else opacity = Math.min(1, Math.max(0, parsed));
+        }
+        const group = { kind: 'group', id: sourceId, transform, opacity, children: [],
+            name: this.title(node) };
+        if (node.name === 'use') {
+            const targetId = localReference(node.attributes.href ?? node.attributes['xlink:href'] ?? '');
+            const target = targetId === null ? null : this.ids.get(targetId);
+            if (!target) {
+                this.report('svg-use-unresolved', path, `<use> names ${targetId ?? 'nothing'}, which is not in the asset`);
+                return null;
+            }
+            const x = parseLength(node.attributes.x) ?? 0;
+            const y = parseLength(node.attributes.y) ?? 0;
+            group.transform = multiply(group.transform, [1, 0, 0, 1, x, y]);
+            const nextActive = new Set(active).add(targetId);
+            if (target.name === 'symbol') {
+                const box = target.attributes.viewBox?.trim().split(/[\s,]+/).map(Number);
+                const width = parseLength(node.attributes.width) ?? parseLength(target.attributes.width);
+                const height = parseLength(node.attributes.height) ?? parseLength(target.attributes.height);
+                if (box && box.length === 4 && box[2] > 0 && box[3] > 0) {
+                    if (width > 0 && height > 0) {
+                        group.children.push({ kind: 'group', id: `${sourceId}:${targetId}`,
+                            transform: this.viewBoxTransform(box, width, height,
+                                target.attributes.preserveAspectRatio, path),
+                            opacity: 1,
+                            clip: { units: 'user', shapes: [{ segments: [['M', 0, 0], ['L', width, 0], ['L', width, height], ['L', 0, height], ['Z']], rule: 'nonzero', transform: [...IDENTITY] }] },
+                            children: this.children(target, `${sourceId}:${targetId}`, this.inherit(inner, target), nextActive, true) });
+                    } else {
+                        this.report('svg-symbol-viewbox-dropped', path,
+                            `<use> of a symbol with a viewBox needs a width and height; the viewBox was ignored`);
+                        group.children.push(...this.instanceChildren(target, sourceId, targetId, inner, nextActive));
+                    }
+                } else {
+                    group.children.push(...this.instanceChildren(target, sourceId, targetId, inner, nextActive));
+                }
+            } else {
+                const lowered = this.element(target, `${sourceId}:${targetId}`, inner, nextActive, true);
+                if (lowered) group.children.push(lowered);
+            }
+        } else if (CONTAINERS.has(node.name)) {
+            if (node.name === 'a') {
+                this.report('svg-link-dropped', path, 'the link of an <a> element was dropped; its content is drawn');
+            }
+            if (node.name === 'switch') {
+                this.report('svg-switch-approximated', path, '<switch> draws its first child; conditions are not evaluated');
+                const first = node.children.find((child) => !SILENT.has(child.name));
+                if (first) {
+                    const lowered = this.element(first, `${sourceId}.0`, inner, active, scoped);
+                    if (lowered) group.children.push(lowered);
+                }
+            } else if (node.name === 'svg') {
+                const x = parseLength(node.attributes.x) ?? 0;
+                const y = parseLength(node.attributes.y) ?? 0;
+                const width = parseLength(node.attributes.width);
+                const height = parseLength(node.attributes.height);
+                const box = node.attributes.viewBox?.trim().split(/[\s,]+/).map(Number);
+                group.transform = multiply(group.transform, [1, 0, 0, 1, x, y]);
+                const inside = this.children(node, scoped ? sourceId : path, inner, active, scoped);
+                if (width > 0 && height > 0) {
+                    group.clip = { units: 'user', shapes: [{ segments: [['M', 0, 0], ['L', width, 0], ['L', width, height], ['L', 0, height], ['Z']], rule: 'nonzero', transform: [...IDENTITY] }] };
+                    if (box && box.length === 4 && box[2] > 0 && box[3] > 0) {
+                        group.children.push({ kind: 'group', id: `${sourceId}:viewport`,
+                            transform: this.viewBoxTransform(box, width, height, node.attributes.preserveAspectRatio, path),
+                            opacity: 1, children: inside });
+                    } else {
+                        group.children.push(...inside);
+                    }
+                } else {
+                    this.report('svg-nested-viewport-dropped', path, 'a nested <svg> without a px width and height draws unclipped');
+                    group.children.push(...inside);
+                }
+            } else {
+                group.children.push(...this.children(node, scoped ? sourceId : path, inner, active, scoped));
+            }
+        } else {
+            node.children.forEach((child, index) => {
+                if (SILENT.has(child.name)) return;
+                this.report(ANIMATION.has(child.name) ? 'svg-animation-dropped' : 'svg-element-dropped',
+                    `${path}.${index}`, ANIMATION.has(child.name)
+                        ? `<${child.name}> was dropped; the static frame is drawn`
+                        : `<${child.name}> inside <${node.name}> was dropped`);
+            });
+            const shape = this.shape(node, sourceId, path, inner);
+            if (!shape) return null;
+            if (isIdentity(transform) && opacity === 1 && values['clip-path'] === undefined &&
+                values.mask === undefined) {
+                return shape;
+            }
+            shape.id = `${sourceId}:shape`;
+            group.children.push(shape);
+        }
+        this.clipAndMask(group, values, path, inner, active);
+        return group;
+    }
+
+    instanceChildren(target, sourceId, targetId, inner, active) {
+        return this.children(target, `${sourceId}:${targetId}`, this.inherit(inner, target), active, true);
+    }
+
+    paint(value, opacity, path, property, state) {
+        if (value === undefined || value === 'none') return { kind: 'none' };
+        const url = /^url\(\s*(['"]?)#([^'")]+)\1\s*\)\s*(.*)$/.exec(value);
+        if (url) {
+            const definition = this.ids.get(url[2]);
+            if (definition && (definition.name === 'linearGradient' || definition.name === 'radialGradient')) {
+                const gradient = this.gradient(definition, path, property, state);
+                if (!gradient) return { kind: 'none' };
+                if (gradient.stops.length === 1) {
+                    const [stop] = gradient.stops;
+                    if (stop.color[3] * stop.opacity * opacity <= 0) return { kind: 'none' };
+                    return { kind: 'color', color: stop.color, opacity: opacity * stop.opacity };
+                }
+                return { kind: 'gradient', gradient, opacity };
+            }
+            if (definition && definition.name === 'pattern') {
+                this.rasterOnly.push({ path, reason: `the ${property} pattern needs rasterization` });
+                return { kind: 'none' };
+            }
+            if (url[3]) return this.paint(url[3].trim(), opacity, path, property, state);
+            this.report('svg-paint-unresolved', path, `${property} names ${url[2]}, which is not a gradient in the asset; nothing was painted`);
+            return { kind: 'none' };
+        }
+        const source = value === 'currentColor' ? state.color : value;
+        const color = parseColor(source);
+        if (!color) {
+            this.report('svg-paint-dropped', path, `${property} ${value} is not a colour this importer reads; nothing was painted`);
+            return { kind: 'none' };
+        }
+        const hex = hexString(color);
+        const effective = color[3] * opacity;
+        if (effective <= 0) return { kind: 'none' };
+        const token = effective === 1 ? this.colorTokens.get(hex) : undefined;
+        if (token) this.tokenMatches.add(token);
+        return { kind: 'color', color, opacity, token };
+    }
+
+    gradient(definition, path, property, state) {
+        // Attributes and stops inherit along the href chain, nearest first.
+        const chain = [];
+        let current = definition;
+        while (current && chain.length < 32) {
+            chain.push(current);
+            const next = localReference(current.attributes.href ?? current.attributes['xlink:href'] ?? '');
+            current = next === null ? null : this.ids.get(next);
+            if (current && current.name !== 'linearGradient' && current.name !== 'radialGradient') current = null;
+        }
+        const attribute = (name) => {
+            for (const item of chain) {
+                if (item.attributes[name] !== undefined) return item.attributes[name];
+            }
+            return undefined;
+        };
+        const stopsOwner = chain.find((item) => item.children.some((child) => child.name === 'stop'));
+        const stops = [];
+        let previous = 0;
+        for (const stop of stopsOwner?.children.filter((child) => child.name === 'stop') ?? []) {
+            const values = declared(stop);
+            let offset = parseFraction(values.offset, 0);
+            if (offset === null) offset = 0;
+            offset = Math.min(1, Math.max(previous, offset));
+            previous = offset;
+            const raw = values['stop-color'] === 'currentColor' ? state.color : (values['stop-color'] ?? 'black');
+            const color = parseColor(raw);
+            if (!color) {
+                this.report('svg-stop-color-dropped', path, `a gradient stop colour ${raw} is not read; black was used`);
+            }
+            const opacityValue = parseFraction(values['stop-opacity'], 1);
+            stops.push({ offset, color: color ?? [0, 0, 0, 1],
+                opacity: Math.min(1, Math.max(0, opacityValue ?? 1)) });
+        }
+        if (stops.length === 0) return null;
+        if (stops.length > 64) {
+            this.report('svg-gradient-stops-dropped', path, `${property} gradient has ${stops.length} stops; the stops after the 64th were dropped`);
+            stops.length = 64;
+        }
+        for (const stop of stops) {
+            const token = stop.opacity * stop.color[3] === 1 ? this.colorTokens.get(hexString(stop.color)) : undefined;
+            if (token) this.tokenMatches.add(token);
+        }
+        const kind = definition.name === 'linearGradient' ? 'linear' : 'radial';
+        const units = attribute('gradientUnits') === 'userSpaceOnUse' ? 'user' : 'box';
+        let transform = [...IDENTITY];
+        const transformText = attribute('gradientTransform');
+        if (transformText !== undefined) {
+            const parsed = parseTransform(transformText);
+            if (parsed === null) {
+                this.report('svg-gradient-transform-dropped', path, `${property} gradient has a malformed gradientTransform, which was dropped`);
+            } else {
+                transform = parsed;
+            }
+        }
+        const spread = attribute('spreadMethod') ?? 'pad';
+        const geometry = {};
+        const coordinate = (name, fallback) => {
+            const value = parseFraction(attribute(name), fallback);
+            if (value === null) {
+                this.report('svg-gradient-coordinate-dropped', path, `${property} gradient ${name} is malformed; its default was used`);
+                return fallback;
+            }
+            return value;
+        };
+        if (kind === 'linear') {
+            geometry.x1 = coordinate('x1', 0);
+            geometry.y1 = coordinate('y1', 0);
+            geometry.x2 = coordinate('x2', 1);
+            geometry.y2 = coordinate('y2', 0);
+        } else {
+            geometry.cx = coordinate('cx', 0.5);
+            geometry.cy = coordinate('cy', 0.5);
+            geometry.r = coordinate('r', 0.5);
+            geometry.fx = coordinate('fx', geometry.cx);
+            geometry.fy = coordinate('fy', geometry.cy);
+            geometry.fr = coordinate('fr', 0);
+        }
+        if (!['pad', 'repeat', 'reflect'].includes(spread)) {
+            this.report('svg-gradient-spread-dropped', path, `${property} gradient spreadMethod ${spread} is unknown; pad was used`);
+        }
+        const interpolation = state['color-interpolation'] === 'linearRGB' ? 'linear-srgb' : 'srgb';
+        return { kind, units, transform, spread: ['pad', 'repeat', 'reflect'].includes(spread) ? spread : 'pad',
+            geometry, stops, interpolation, id: definition.attributes.id };
+    }
+
+    shape(node, sourceId, path, state) {
+        const segments = shapeSegments(node, (code, message) => this.report(code, path, message));
+        if (segments.length === 0) return null;
+        if (state.visibility === 'hidden' || state.visibility === 'collapse') return null;
+        const fillOpacity = Math.min(1, Math.max(0, parseFraction(state['fill-opacity'], 1) ?? 1));
+        const strokeOpacity = Math.min(1, Math.max(0, parseFraction(state['stroke-opacity'], 1) ?? 1));
+        const fill = node.name === 'line' ? { kind: 'none' }
+            : this.paint(state.fill, fillOpacity, path, 'fill', state);
+        const stroke = this.paint(state.stroke, strokeOpacity, path, 'stroke', state);
+        const width = parseLength(state['stroke-width']);
+        const strokeWidth = width === null ? 1 : Math.max(0, width);
+        if (width === null) this.report('svg-length-unit-dropped', path, 'stroke-width uses a unit other than px; 1 was used');
+        let dashes;
+        if (state['stroke-dasharray'] && state['stroke-dasharray'] !== 'none') {
+            const parsed = state['stroke-dasharray'].split(/[\s,]+/).filter(Boolean).map((part) => parseLength(part));
+            if (parsed.some((part) => part === null || part === undefined || part < 0)) {
+                this.report('svg-dash-dropped', path, 'stroke-dasharray is malformed and was dropped');
+            } else if (parsed.reduce((sum, part) => sum + part, 0) > 0) {
+                dashes = parsed;
+            }
+        }
+        const join = ['miter', 'round', 'bevel'].includes(state['stroke-linejoin']) ? state['stroke-linejoin'] : 'miter';
+        if (!['miter', 'round', 'bevel'].includes(state['stroke-linejoin'])) {
+            this.report('svg-linejoin-approximated', path, `stroke-linejoin ${state['stroke-linejoin']} is drawn as miter`);
+        }
+        const cap = ['butt', 'round', 'square'].includes(state['stroke-linecap']) ? state['stroke-linecap'] : 'butt';
+        const miter = Math.max(1, parseNumber(state['stroke-miterlimit']) ?? 4);
+        const bounds = pathBounds(segments);
+        const shape = { kind: 'shape', id: sourceId, segments, bounds,
+            curved: hasCurves(segments), fill, stroke: strokeWidth > 0 ? stroke : { kind: 'none' },
+            fillRule: state['fill-rule'] === 'evenodd' ? 'evenodd' : 'nonzero', strokeWidth, join,
+            cap, miter, dashes, dashOffset: parseLength(state['stroke-dashoffset']) ?? 0,
+            name: this.title(node) };
+        if (shape.fill.kind === 'none' && shape.stroke.kind === 'none') return null;
+        return shape;
+    }
+
+    clipAndMask(group, values, path, state, active) {
+        const clip = values['clip-path'];
+        if (clip !== undefined && clip !== 'none') {
+            const id = localReference(/^url\(\s*(['"]?)([^'")]*)\1\s*\)$/.exec(clip)?.[2] ?? '');
+            const definition = id === null ? null : this.ids.get(id);
+            if (!definition || definition.name !== 'clipPath') {
+                this.report('svg-clip-unresolved', path, `clip-path ${clip} names no clipPath in the asset; the content is hidden`);
+                group.hidden = true;
+            } else {
+                const units = definition.attributes.clipPathUnits === 'objectBoundingBox' ? 'box' : 'user';
+                let clipTransform = [...IDENTITY];
+                if (definition.attributes.transform) clipTransform = parseTransform(definition.attributes.transform) ?? clipTransform;
+                const shapes = [];
+                for (const child of definition.children) {
+                    if (SILENT.has(child.name)) continue;
+                    let shapeNode = child;
+                    let childTransform = [...IDENTITY];
+                    if (child.name === 'use') {
+                        const target = this.ids.get(localReference(child.attributes.href ?? child.attributes['xlink:href'] ?? '') ?? '');
+                        if (!target || !SHAPES.has(target.name)) {
+                            this.report('svg-clip-child-dropped', path, 'a clipPath <use> that does not name a shape was dropped');
+                            continue;
+                        }
+                        childTransform = [1, 0, 0, 1, parseLength(child.attributes.x) ?? 0, parseLength(child.attributes.y) ?? 0];
+                        shapeNode = target;
+                    }
+                    if (!SHAPES.has(shapeNode.name)) {
+                        if (RASTER_ELEMENTS.has(shapeNode.name)) {
+                            this.rasterOnly.push({ path, reason: `a clipPath <${shapeNode.name}> needs rasterization` });
+                        } else {
+                            this.report('svg-clip-child-dropped', path, `a clipPath <${shapeNode.name}> was dropped`);
+                        }
+                        continue;
+                    }
+                    const childValues = declared(shapeNode);
+                    if (childValues.display === 'none') continue;
+                    if (childValues.transform) childTransform = multiply(childTransform, parseTransform(childValues.transform) ?? IDENTITY);
+                    const segments = shapeSegments(shapeNode, (code, message) => this.report(code, path, message));
+                    if (segments.length === 0) continue;
+                    shapes.push({ segments, rule: (childValues['clip-rule'] ?? values['clip-rule'] ?? state['clip-rule']) === 'evenodd' ? 'evenodd' : 'nonzero',
+                        transform: multiply(clipTransform, childTransform) });
+                }
+                group.clip = { shapes, units };
+                if (definition.attributes['clip-path']) {
+                    this.report('svg-clip-nested-dropped', path, 'a clip-path on a clipPath was dropped');
+                }
+            }
+        }
+        const mask = values.mask;
+        if (mask !== undefined && mask !== 'none') {
+            const id = localReference(/^url\(\s*(['"]?)([^'")]*)\1\s*\)$/.exec(mask)?.[2] ?? '');
+            const definition = id === null ? null : this.ids.get(id);
+            if (!definition || definition.name !== 'mask') {
+                this.report('svg-mask-unresolved', path, `mask ${mask} names no mask in the asset; the content is hidden`);
+                group.hidden = true;
+                return;
+            }
+            const maskValues = declared(definition);
+            const mode = (maskValues['mask-type'] ?? 'luminance') === 'alpha' ? 'alpha' : 'luminance';
+            if (definition.attributes.maskContentUnits === 'objectBoundingBox') {
+                this.report('svg-mask-units-dropped', path, 'maskContentUnits objectBoundingBox is drawn in user space');
+            }
+            const region = ['x', 'y', 'width', 'height'].some((name) => definition.attributes[name] !== undefined) ||
+                definition.attributes.maskUnits === 'userSpaceOnUse';
+            if (region) {
+                this.report('svg-mask-region-dropped', path, 'the explicit mask region was not applied');
+            }
+            this.report('svg-mask-region-unclipped', path,
+                'the mask region is not applied: content farther than 10% beyond the masked bounding box is masked but not clipped');
+            group.mask = { mode, id: `${group.id}:mask`,
+                children: this.children(definition, `${group.id}:mask`, this.inherit(INITIAL, definition), new Set(active).add(id), true) };
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Subtree lowering. Returns null and records why when a feature only the
+// compiled form carries is met.
+
+function subtreeGradient(gradient, why) {
+    if (gradient.units !== 'box') return why('userSpaceOnUse gradient units');
+    if (!isIdentity(gradient.transform)) return why('a gradientTransform');
+    if (gradient.interpolation !== 'srgb') return why('linearRGB colour interpolation');
+    const offsets = gradient.stops.map((stop) => stop.offset);
+    for (let index = 1; index < offsets.length; index += 1) {
+        if (offsets[index] <= offsets[index - 1]) return why('coincident gradient stops');
+    }
+    if (gradient.stops.length < 2 || gradient.stops.length > 64) return why('a gradient with fewer than two or more than 64 stops');
+    const g = gradient.geometry;
+    if (gradient.kind === 'linear') {
+        if (gradient.spread !== 'pad') return why('a repeating or reflecting linear gradient');
+        const horizontal = g.y1 === g.y2 && g.x1 !== g.x2;
+        const vertical = g.x1 === g.x2 && g.y1 !== g.y2;
+        if (!horizontal && !vertical) return why('a diagonal linear gradient');
+        const [from, to] = horizontal ? [g.x1, g.x2] : [g.y1, g.y2];
+        if (Math.min(from, to) < 0 || Math.max(from, to) > 1) return why('a linear gradient whose ends leave the box');
+        const forward = to > from;
+        const angle = horizontal ? (forward ? 90 : 270) : (forward ? 180 : 0);
+        const start = forward ? from : 1 - from;
+        const span = Math.abs(to - from);
+        return { kind: 'linear', angle, map: (offset) => start + offset * span };
+    }
+    if (g.fx !== g.cx || g.fy !== g.cy || g.fr !== 0) return why('a radial gradient with a focal point');
+    if (!(g.r > 0)) return why('a radial gradient with no radius');
+    return { kind: 'radial', centerX: g.cx, centerY: g.cy, radiusX: g.r, radiusY: g.r,
+        spread: gradient.spread, map: (offset) => offset };
+}
+
+function stopColor(stop, opacity, tokens, bound) {
+    const hex = hexString(stop.color, stop.opacity * opacity);
+    const token = stop.opacity * opacity * stop.color[3] === 1 ? tokens.get(hex) : undefined;
+    if (token) {
+        bound.add(token);
+        return `{${token}}`;
+    }
+    return hex;
+}
+
+class SubtreeLowering {
+    constructor(importer) {
+        this.importer = importer;
+        this.blocked = [];
+        this.nodes = 0;
+        this.pathBytes = 0;
+    }
+
+    why(reason) {
+        this.blocked.push(reason);
+        return null;
+    }
+
+    paint(paint, bounds, tokens) {
+        if (paint.kind === 'none') return 'none';
+        if (paint.kind === 'color') {
+            if (paint.token) {
+                this.importer.tokensBound.add(paint.token);
+                return `{${paint.token}}`;
+            }
+            return hexString(paint.color, paint.opacity);
+        }
+        if (!bounds || !(bounds.width > 0) || !(bounds.height > 0)) return 'none';
+        const resolved = subtreeGradient(paint.gradient, (reason) => this.why(reason));
+        if (!resolved) return 'none';
+        const stops = paint.gradient.stops.map((stop) => ({
+            position: Number(fmt(resolved.map(stop.offset))),
+            color: stopColor(stop, paint.opacity, tokens, this.importer.tokensBound),
+        }));
+        for (let index = 1; index < stops.length; index += 1) {
+            if (stops[index].position <= stops[index - 1].position) return this.why('gradient stops that meet after remapping') ?? 'none';
+        }
+        if (resolved.kind === 'linear') return { kind: 'linear', angle: resolved.angle, stops };
+        return { kind: 'radial', spread: resolved.spread, centerX: resolved.centerX,
+            centerY: resolved.centerY, radiusX: resolved.radiusX, radiusY: resolved.radiusY, stops };
+    }
+
+    shape(shape, tokens) {
+        this.nodes += 1;
+        const bounds = shape.bounds ?? { x: 0, y: 0, width: 0, height: 0 };
+        const needsBox = shape.fill.kind === 'gradient' || shape.stroke.kind === 'gradient';
+        const origin = needsBox ? bounds : { x: 0, y: 0, width: 0, height: 0 };
+        const d = serializePath(shape.segments, -origin.x, -origin.y);
+        this.pathBytes += utf8Length(d);
+        const path = { d };
+        if (shape.fillRule === 'evenodd') path.fillRule = 'evenodd';
+        path.fill = this.paint(shape.fill, bounds, tokens);
+        path.stroke = this.paint(shape.stroke, bounds, tokens);
+        if (shape.stroke.kind !== 'none') {
+            path.strokeWidth = shape.strokeWidth;
+            if (shape.join !== 'miter') path.strokeLineJoin = shape.join;
+            if (shape.cap !== 'butt') path.strokeLineCap = shape.cap;
+            if (shape.miter !== 4) path.strokeMiterLimit = shape.miter;
+            if (shape.dashes) {
+                path.strokeDasharray = shape.dashes;
+                if (shape.dashOffset) path.strokeDashoffset = shape.dashOffset;
+            }
+        }
+        const node = {
+            kind: 'path', sourceId: shape.id,
+            properties: {
+                layout: { x: Number(fmt(origin.x)), y: Number(fmt(origin.y)),
+                    width: Number(fmt(origin.width)), height: Number(fmt(origin.height)) },
+                path,
+            },
+            children: [],
+        };
+        if (shape.name) node.name = shape.name;
+        return node;
+    }
+
+    clipShapes(clip) {
+        if (clip.units === 'box') return this.why('a clipPath in objectBoundingBox units');
+        return clip.shapes;
+    }
+
+    group(group, tokens) {
+        this.nodes += 1;
+        const paint = {};
+        if (!isIdentity(group.transform)) paint.transform = `matrix(${cleanMatrix(group.transform).join(', ')})`;
+        if (group.opacity !== 1) paint.opacity = Number(fmt(group.opacity));
+        const node = {
+            kind: 'view', sourceId: group.id,
+            properties: { layout: { x: 0, y: 0, width: 0, height: 0 }, paint },
+            children: [],
+        };
+        if (group.name) node.name = group.name;
+        if (group.hidden) paint.opacity = 0;
+        const content = [];
+        for (const child of group.children) {
+            const lowered = this.lower(child, tokens);
+            if (lowered) content.push(lowered);
+        }
+        let masks = [];
+        if (group.clip) {
+            const shapes = this.clipShapes(group.clip);
+            if (shapes && shapes.length === 0) {
+                paint.opacity = 0;
+            } else if (shapes && shapes.length === 1 && isIdentity(shapes[0].transform) &&
+                shapes[0].rule === 'nonzero') {
+                paint.clipPath = serializePath(shapes[0].segments);
+                this.pathBytes += utf8Length(paint.clipPath);
+            } else if (shapes) {
+                // A union of clip shapes is coverage: an alpha mask of the
+                // shapes filled opaque.
+                this.nodes += 1;
+                const mask = { kind: 'view', sourceId: `${group.id}:clip`,
+                    properties: { layout: { x: 0, y: 0, width: 0, height: 0 }, paint: { maskMode: 'alpha' } },
+                    children: [] };
+                shapes.forEach((shape, index) => {
+                    this.nodes += 2;
+                    const d = serializePath(shape.segments);
+                    this.pathBytes += utf8Length(d);
+                    const holder = { kind: 'view', sourceId: `${group.id}:clip.${index}`,
+                        properties: { layout: { x: 0, y: 0, width: 0, height: 0 }, paint: {} }, children: [] };
+                    if (!isIdentity(shape.transform)) holder.properties.paint.transform = `matrix(${cleanMatrix(shape.transform).join(', ')})`;
+                    holder.children.push({ kind: 'path', sourceId: `${group.id}:clip.${index}:shape`,
+                        properties: { layout: { x: 0, y: 0, width: 0, height: 0 },
+                            path: { d, fill: '#ffffff', stroke: 'none', ...(shape.rule === 'evenodd' ? { fillRule: 'evenodd' } : {}) } },
+                        children: [] });
+                    mask.children.push(holder);
+                });
+                masks.push(mask);
+            }
+        }
+        if (group.mask) {
+            if (group.mask.region) this.why('a mask with an explicit region');
+            this.nodes += 1;
+            const mask = { kind: 'view', sourceId: group.mask.id,
+                properties: { layout: { x: 0, y: 0, width: 0, height: 0 }, paint: { maskMode: group.mask.mode } },
+                children: [] };
+            for (const child of group.mask.children) {
+                const lowered = this.lower(child, tokens);
+                if (lowered) mask.children.push(lowered);
+            }
+            masks.push(mask);
+        }
+        if (masks.length > 0) {
+            // A clip on the group must not clip its masks' own coordinates
+            // differently, and a mask applies to its siblings, so the masked
+            // content sits beside its masks inside the group.
+            this.nodes += 1;
+            node.children.push({ kind: 'view', sourceId: `${group.id}:content`,
+                properties: { layout: { x: 0, y: 0, width: 0, height: 0 }, paint: {} },
+                children: content });
+            node.children.push(...masks);
+        } else {
+            node.children.push(...content);
+        }
+        return node;
+    }
+
+    lower(item, tokens) {
+        if (item.kind === 'raster-only') return null;
+        return item.kind === 'shape' ? this.shape(item, tokens) : this.group(item, tokens);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Compiled lowering: one display list.
+
+function compiledGradient(gradient, bounds, opacity) {
+    const stops = gradient.stops.map((stop) => ({
+        position: Number(fmt(stop.offset)),
+        color: hexString(stop.color, stop.opacity * opacity),
+    }));
+    let space = gradient.units === 'box'
+        ? [bounds.width, 0, 0, bounds.height, bounds.x, bounds.y]
+        : [...IDENTITY];
+    space = multiply(space, gradient.transform);
+    const g = gradient.geometry;
+    let shape;
+    if (gradient.kind === 'linear') {
+        const dx = g.x2 - g.x1;
+        const dy = g.y2 - g.y1;
+        if (dx === 0 && dy === 0) return { solid: stops.at(-1).color };
+        // The unit box's horizontal ramp, carried onto the gradient vector,
+        // with the perpendicular kept perpendicular in gradient space.
+        space = multiply(space, [dx, dy, -dy, dx, g.x1 + dy * 0.5, g.y1 - dx * 0.5]);
+        shape = { kind: 'linear', angle: 90 };
+    } else {
+        if (!(g.r > 0) || (g.fr >= g.r && g.fx === g.cx && g.fy === g.cy)) {
+            return { solid: stops.at(-1).color };
+        }
+        shape = { kind: 'two-circle-radial', centerX: Number(fmt(g.cx)), centerY: Number(fmt(g.cy)),
+            focalX: Number(fmt(g.fx)), focalY: Number(fmt(g.fy)), startRadius: Number(fmt(Math.max(0, g.fr))),
+            endRadius: Number(fmt(g.r)) };
+    }
+    const determinant = space[0] * space[3] - space[1] * space[2];
+    if (!Number.isFinite(determinant) || determinant === 0) return { solid: stops.at(-1).color };
+    return {
+        gradient: { ...shape, spread: gradient.spread,
+            ...(gradient.interpolation !== 'srgb' ? { interpolation: gradient.interpolation } : {}),
+            stops },
+        transform: cleanMatrix(space),
+    };
+}
+
+function compiledPaint(paint, bounds) {
+    if (paint.kind === 'none') return 'none';
+    if (paint.kind === 'color') return hexString(paint.color, paint.opacity);
+    if (paint.gradient.units === 'box' && (!bounds || !(bounds.width > 0) || !(bounds.height > 0))) {
+        return 'none';
+    }
+    const resolved = compiledGradient(paint.gradient, bounds, paint.opacity);
+    if (resolved.solid) return resolved.solid;
+    return { gradient: resolved.gradient, transform: resolved.transform };
+}
+
+class CompiledLowering {
+    constructor(importer) {
+        this.importer = importer;
+        this.ops = [];
+    }
+
+    lower(item) {
+        if (item.kind === 'raster-only') return;
+        if (item.kind === 'shape') {
+            const op = { op: 'path', d: serializePath(item.segments),
+                fill: compiledPaint(item.fill, item.bounds),
+                stroke: compiledPaint(item.stroke, item.bounds) };
+            if (item.fillRule === 'evenodd') op.fillRule = 'evenodd';
+            if (op.stroke !== 'none') {
+                op.strokeWidth = item.strokeWidth;
+                if (item.join !== 'miter') op.strokeLineJoin = item.join;
+                if (item.cap !== 'butt') op.strokeLineCap = item.cap;
+                if (item.miter !== 4) op.strokeMiterLimit = item.miter;
+                if (item.dashes) {
+                    op.strokeDasharray = item.dashes;
+                    if (item.dashOffset) op.strokeDashoffset = item.dashOffset;
+                }
+            }
+            if (op.fill === 'none' && op.stroke === 'none') return;
+            this.ops.push(op);
+            return;
+        }
+        const op = { op: 'group' };
+        if (!isIdentity(item.transform)) op.transform = cleanMatrix(item.transform);
+        if (item.opacity !== 1 || item.hidden) op.opacity = item.hidden ? 0 : Number(fmt(item.opacity));
+        let wrappers = 0;
+        const after = [];
+        if (item.clip) {
+            const shapes = item.clip.shapes;
+            if (item.clip.units === 'box' || shapes.length > 1) {
+                this.importer.compiledLimits.push(`the clip of ${item.id}, which has ${item.clip.units === 'box' ? 'objectBoundingBox units' : `${shapes.length} shapes`}`);
+            }
+            if (shapes.length === 0) {
+                op.opacity = 0;
+            } else if (isIdentity(shapes[0].transform)) {
+                op.clip = { d: serializePath(shapes[0].segments), rule: shapes[0].rule };
+            } else {
+                // A transformed clip shape: a group whose transform carries the
+                // clip, then its inverse for the content, which is exact.
+                const t = shapes[0].transform;
+                const determinant = t[0] * t[3] - t[1] * t[2];
+                if (determinant === 0) {
+                    op.opacity = 0;
+                } else {
+                    const inverse = [t[3] / determinant, -t[1] / determinant, -t[2] / determinant,
+                        t[0] / determinant, (t[2] * t[5] - t[3] * t[4]) / determinant,
+                        (t[1] * t[4] - t[0] * t[5]) / determinant];
+                    after.push({ op: 'group', transform: cleanMatrix(t),
+                        clip: { d: serializePath(shapes[0].segments), rule: shapes[0].rule } });
+                    after.push({ op: 'group', transform: inverse.map((value) => Number(value.toPrecision(12))) });
+                    wrappers = 2;
+                }
+            }
+        }
+        if (item.mask) this.importer.compiledLimits.push(`the mask of ${item.id}`);
+        this.ops.push(op, ...after);
+        for (const child of item.children) this.lower(child);
+        for (let index = 0; index <= wrappers; index += 1) this.ops.push({ op: 'end' });
+    }
+}
+
+function countTree(item) {
+    if (item.kind === 'raster-only') return { nodes: 0, bytes: 0 };
+    if (item.kind === 'shape') {
+        return { nodes: 1, bytes: utf8Length(serializePath(item.segments)) };
+    }
+    let nodes = 1;
+    let bytes = 0;
+    for (const child of [...item.children, ...(item.mask?.children ?? [])]) {
+        const count = countTree(child);
+        nodes += count.nodes;
+        bytes += count.bytes;
+    }
+    return { nodes, bytes };
+}
+
+// The box the drawable tree can paint in the asset's viewport coordinates,
+// strokes included; null when it paints nothing. Clips only shrink it, so it
+// ignores them.
+function paintBounds(item, matrix = IDENTITY) {
+    if (item.kind === 'raster-only') return null;
+    if (item.kind === 'shape') {
+        if (!item.bounds) return null;
+        const stroked = item.stroke.kind !== 'none';
+        const factor = Math.max(1, item.join === 'miter' ? item.miter : 1,
+            item.cap === 'butt' ? 1 : Math.SQRT2);
+        const outset = stroked ? item.strokeWidth * factor / 2 : 0;
+        const { x, y, width, height } = item.bounds;
+        const corners = [[x - outset, y - outset], [x + width + outset, y - outset],
+            [x - outset, y + height + outset], [x + width + outset, y + height + outset]]
+            .map(([px, py]) => apply(matrix, px, py));
+        return {
+            left: Math.min(...corners.map((corner) => corner[0])),
+            top: Math.min(...corners.map((corner) => corner[1])),
+            right: Math.max(...corners.map((corner) => corner[0])),
+            bottom: Math.max(...corners.map((corner) => corner[1])),
+        };
+    }
+    const inner = multiply(matrix, item.transform);
+    let box = null;
+    for (const child of item.children) {
+        const next = paintBounds(child, inner);
+        if (!next) continue;
+        box = box ? { left: Math.min(box.left, next.left), top: Math.min(box.top, next.top),
+            right: Math.max(box.right, next.right), bottom: Math.max(box.bottom, next.bottom) } : next;
+    }
+    return box;
+}
+
+function validateOptions(options) {
+    if (options === null || typeof options !== 'object' || Array.isArray(options)) {
+        throw new TypeError('SVG asset options must be an object');
+    }
+    const sourceId = options.sourceId ?? 'svg';
+    if (typeof sourceId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(sourceId)) {
+        throw new TypeError('sourceId must be 1 to 128 letters, digits, dots, colons, hyphens or underscores');
+    }
+    const nodeBudget = options.nodeBudget ?? DEFAULT_SVG_NODE_BUDGET;
+    const pathDataBudget = options.pathDataBudget ?? DEFAULT_SVG_PATH_DATA_BUDGET;
+    if (!Number.isSafeInteger(nodeBudget) || nodeBudget < 1 ||
+        !Number.isSafeInteger(pathDataBudget) || pathDataBudget < 1) {
+        throw new TypeError('SVG budgets must be positive integers');
+    }
+    for (const name of ['width', 'height']) {
+        if (options[name] !== undefined && !(Number.isFinite(options[name]) && options[name] > 0)) {
+            throw new TypeError(`${name} must be a positive finite number`);
+        }
+    }
+    if (options.rasterize !== undefined && typeof options.rasterize !== 'function') {
+        throw new TypeError('rasterize must be a function');
+    }
+    for (const [color, token] of Object.entries(options.colorTokens ?? {})) {
+        if (!/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(color) || typeof token !== 'string' ||
+            !/^[A-Za-z0-9_.-]+$/.test(token)) {
+            throw new TypeError('colorTokens maps #rrggbb colours to token names');
+        }
+    }
+    return { ...options, sourceId, nodeBudget, pathDataBudget };
+}
+
+/**
+ * Import an SVG asset as DesignIR source nodes.
+ *
+ * Returns `{ mode, root, diagnostics, assets }`: `mode` is `subtree`,
+ * `compiled` or `rasterized`; `root` is a source node for `normalizeImport`;
+ * `diagnostics` holds one entry per dropped or approximated feature, with the
+ * mode decision itself; `assets` holds the raster asset, if one was made.
+ * Hostile input throws `SvgAssetRefusal` before any lowering.
+ */
+export function importSvgAsset(svg, options = {}) {
+    const settings = validateOptions(options);
+    const importer = new Importer(svg, settings);
+    importer.compiledLimits = [];
+    const tree = importer.build();
+    const contentHash = sha256(svg);
+    const rootLayout = { width: Number(fmt(importer.width)), height: Number(fmt(importer.height)) };
+    const fill = { x: 0, y: 0, ...rootLayout };
+    // The viewport clips only when something reaches past it, so an asset
+    // drawn inside its box keeps a clip-free root that partial redraw can cut.
+    const reach = paintBounds(tree);
+    const spills = reach !== null && (reach.left < 0 || reach.top < 0 ||
+        reach.right > importer.width || reach.bottom > importer.height);
+    const root = (children) => ({ kind: 'view', sourceId: settings.sourceId,
+        properties: { layout: rootLayout, paint: spills ? { overflow: 'hidden' } : {} }, children });
+    const decision = (code, message, disposition = 'lowered', severity = 'info') =>
+        importer.report(code, settings.sourceId, message, disposition, severity);
+
+    const rasterReasons = [...new Set(importer.rasterOnly.map((item) => item.reason))];
+    const rasterize = () => {
+        const raster = settings.rasterize(svg, { width: importer.width, height: importer.height });
+        if (!raster || typeof raster.contentHash !== 'string') {
+            throw new TypeError('rasterize must return an asset with a contentHash');
+        }
+        importer.diagnostics.length = 0;
+        decision('svg-rasterized',
+            `the asset was rasterized at ${importer.width}x${importer.height} because ${reasonsText}; ` +
+            'its colours no longer follow tokens and it redraws as one image', 'rasterized', 'warning');
+        return {
+            mode: 'rasterized',
+            root: root([{ kind: 'image', sourceId: `${settings.sourceId}:raster`,
+                properties: { layout: fill, image: { source: raster.contentHash, fit: 'fill' } },
+                children: [] }]),
+            diagnostics: importer.diagnostics,
+            assets: [{ id: `${settings.sourceId}:raster`, contentHash: raster.contentHash,
+                ...(raster.mimeType ? { mimeType: raster.mimeType } : {}),
+                width: raster.width ?? importer.width, height: raster.height ?? importer.height }],
+        };
+    };
+    let reasonsText = rasterReasons.join(', ');
+    if (rasterReasons.length > 0) {
+        if (settings.rasterize) return rasterize();
+        for (const item of importer.rasterOnly) {
+            importer.report('svg-raster-feature-dropped', item.path,
+                `${item.reason}, and no rasterizer was supplied, so it was dropped`);
+        }
+    }
+
+    const counted = countTree(tree);
+    const overBudget = counted.nodes + 1 > settings.nodeBudget || counted.bytes > settings.pathDataBudget;
+    const subtree = new SubtreeLowering(importer);
+    let lowered = null;
+    if (!overBudget) {
+        lowered = subtree.lower(tree, importer.colorTokens);
+        if (subtree.nodes + 1 > settings.nodeBudget || subtree.pathBytes > settings.pathDataBudget) {
+            lowered = null;
+        }
+    }
+    if (lowered && subtree.blocked.length === 0) {
+        return { mode: 'subtree', root: root([lowered]), diagnostics: importer.diagnostics, assets: [] };
+    }
+
+    const compiled = new CompiledLowering(importer);
+    compiled.lower(tree);
+    if (importer.compiledLimits.length > 0 && settings.rasterize) {
+        reasonsText = `the compiled form cannot carry ${importer.compiledLimits.join(', ')}`;
+        return rasterize();
+    }
+    for (const limit of importer.compiledLimits) {
+        importer.report('svg-compiled-feature-dropped', settings.sourceId,
+            `the compiled form cannot carry ${limit}; it was drawn without it, as no rasterizer was supplied`);
+    }
+    importer.tokensBound.clear();
+    const bakedTokens = [...importer.tokenMatches].sort();
+    if (bakedTokens.length > 0) {
+        decision('svg-compiled-tokens-baked',
+            `the compiled resource bakes the colours bound to ${bakedTokens.join(', ')}; ` +
+            'changing those tokens does not recolour it', 'unsupported', 'warning');
+    }
+    const why = overBudget || !lowered
+        ? `it exceeds the declared budgets (${counted.nodes + 1} nodes of ${settings.nodeBudget}, ` +
+          `${counted.bytes} bytes of path data of ${settings.pathDataBudget})`
+        : `it uses ${[...new Set(subtree.blocked)].join(', ')}, which only the compiled form carries`;
+    decision('svg-compiled', `the asset became one compiled path resource because ${why}`);
+    const asset = { contentHash, viewBox: [0, 0, rootLayout.width, rootLayout.height], ops: compiled.ops };
+    return {
+        mode: 'compiled',
+        root: root([{ kind: 'vector', sourceId: `${settings.sourceId}:compiled`,
+            properties: { layout: fill, vector: { asset } }, children: [] }]),
+        diagnostics: importer.diagnostics,
+        assets: [],
+    };
+}
+
+/**
+ * Import an SVG asset and normalize it into a DesignIR document whose
+ * `lossReport` lists every dropped, approximated or rasterized feature.
+ * `source` and `tokens` are as for `normalizeImport`; the other options are
+ * those of `importSvgAsset`.
+ */
+export function svgAssetToDesignIR(svg, { source, tokens, ...options } = {}) {
+    const imported = importSvgAsset(svg, options);
+    const document = normalizeImport({
+        source, tokens, root: imported.root, diagnostics: imported.diagnostics,
+        assets: imported.assets,
+    });
+    return { mode: imported.mode, document };
+}
+
+export const svgAssetTesting = Object.freeze({
+    parsePathData, pathBounds, serializePath, parseColor, parseTransform, sha256,
+});

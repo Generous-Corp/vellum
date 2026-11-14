@@ -2,7 +2,9 @@
 
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/lowering_diagnostic.hpp>
+#include <vellum/graphics/path_geometry.hpp>
 #include <vellum/graphics/scene_acceptance.hpp>
+#include <vellum/graphics/vector_asset.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -334,10 +336,135 @@ bool gradient_reports_and_version_gate() {
     }
     return true;
 }
+
+std::shared_ptr<const vellum::graphics::PathGeometry> rectangle_path(float width = 10.0F) {
+    vellum::graphics::PathGeometry geometry;
+    if (!vellum::graphics::parse_svg_path_data("M0 0H10V10H0Z", geometry)) return nullptr;
+    geometry.stroke.width = width;
+    return std::make_shared<const vellum::graphics::PathGeometry>(std::move(geometry));
+}
+
+vellum::graphics::LinearGradient ramp(vellum::graphics::GradientKind kind) {
+    vellum::graphics::LinearGradient gradient;
+    gradient.kind = kind;
+    gradient.angle_degrees = 90.0F;
+    gradient.stops = {{.position = 0.0F, .color = vellum::graphics::Color::hex(0xFF0000)},
+                      {.position = 1.0F, .color = vellum::graphics::Color::hex(0x0000FF)}};
+    return gradient;
+}
+
+Scene vector_scene(std::vector<vellum::graphics::VectorOp> ops) {
+    Scene scene;
+    scene.width = 300.0F;
+    scene.height = 200.0F;
+    scene.root.id = "root";
+    auto asset = std::make_shared<vellum::graphics::VectorAsset>();
+    asset->content_hash = kHash;
+    asset->view_box = {0.0F, 0.0F, 100.0F, 50.0F};
+    asset->ops = std::move(ops);
+    SceneNode node{.id = "icon", .kind = SceneNode::Kind::vector,
+                   .bounds = {10.0F, 20.0F, 200.0F, 100.0F}};
+    node.vector = std::move(asset);
+    scene.root.children.push_back(std::move(node));
+    return scene;
+}
+
+bool contains(const std::string& text, std::string_view part) {
+    if (text.find(part) != std::string::npos) return true;
+    std::cerr << "the canvas plan lacks " << part << ": " << text << "\n";
+    return false;
+}
+
+// The canvas shell draws a compiled vector asset from a plan the shared core
+// writes, maps gradients exactly where canvas 2D can, and names each
+// approximation it makes.
+bool vector_plans() {
+    using vellum::graphics::Affine2D;
+    using vellum::graphics::Color;
+    using vellum::graphics::GradientKind;
+    using vellum::graphics::VectorOp;
+    const auto solid = [](std::uint32_t value) {
+        return vellum::graphics::VectorPaint{.color = Color::hex(value)};
+    };
+    auto repeating = ramp(GradientKind::linear);
+    repeating.spread = vellum::graphics::GradientSpread::repeat;
+    auto concentric = ramp(GradientKind::two_circle_radial);
+    const std::vector<VectorOp> lossy{
+        {.kind = VectorOp::Kind::push_group, .transform = Affine2D{.tx = 5.0F, .ty = 5.0F},
+         .opacity = 0.5F, .clip = rectangle_path(0.0F)},
+        {.kind = VectorOp::Kind::path, .path = rectangle_path(0.0F), .fill = solid(0xFF0000)},
+        {.kind = VectorOp::Kind::path, .path = rectangle_path(2.0F), .fill = solid(0x0000FF),
+         .stroke = solid(0x000000)},
+        {.kind = VectorOp::Kind::pop_group},
+        {.kind = VectorOp::Kind::path, .path = rectangle_path(0.0F),
+         .fill = {.gradient = ramp(GradientKind::linear),
+                  .gradient_transform = {.a = 30.0F, .d = 20.0F, .tx = 60.0F, .ty = 20.0F}}},
+        {.kind = VectorOp::Kind::path, .path = rectangle_path(0.0F),
+         .fill = {.gradient = concentric, .gradient_transform = {.a = 10.0F, .d = 10.0F}}},
+        {.kind = VectorOp::Kind::path, .path = rectangle_path(0.0F),
+         .fill = {.gradient = concentric, .gradient_transform = {.a = 30.0F, .d = 10.0F}}},
+        {.kind = VectorOp::Kind::path, .path = rectangle_path(1.0F),
+         .stroke = {.gradient = concentric, .gradient_transform = {.a = 30.0F, .d = 10.0F}}},
+        {.kind = VectorOp::Kind::path, .path = rectangle_path(0.0F),
+         .fill = {.gradient = repeating, .gradient_transform = {.a = 10.0F, .d = 10.0F}}},
+    };
+    const auto scene = vector_scene(lossy);
+    const auto lowering = vellum::web::lower_for_canvas_shell(scene);
+    if (!lowering.accepted || lowering.commands.size() != 1U ||
+        lowering.commands[0].kind != vellum::graphics::PaintCommand::Kind::vector) {
+        std::cerr << "the vector scene did not lower to one vector command: " << lowering.reason
+                  << "\n";
+        return false;
+    }
+    const auto plan = vellum::web::lower_vector_for_canvas(lowering.commands[0], 0.75F);
+    if (!contains(plan.json, "\"id\":\"icon\"") ||
+        !contains(plan.json, "\"matrix\":[2,0,0,2,10,20]") ||
+        !contains(plan.json, "\"alpha\":0.75") ||
+        !contains(plan.json, "{\"op\":\"save\",\"alpha\":0.5,\"transform\":[1,0,0,1,5,5]}") ||
+        !contains(plan.json, "{\"op\":\"clip\",\"d\":\"M0 0L10 0L10 10L0 10Z\",\"rule\":\"nonzero\"}") ||
+        !contains(plan.json, "\"paint\":{\"color\":[1,0,0,1]}") ||
+        !contains(plan.json, "\"linear\":[60,30,90,30]") ||
+        !contains(plan.json, "\"radial\":[5,5,0,5,5,5]") ||
+        !contains(plan.json, "\"space\":[30,0,0,10,0,0]") ||
+        !contains(plan.json, "{\"op\":\"stroke\",\"d\":\"M0 0L10 0L10 10L0 10Z\",\"width\":2,"
+                             "\"join\":\"miter\",\"cap\":\"butt\",\"miter\":4,")) {
+        return false;
+    }
+    if (plan.losses.size() != 3U || lowering.losses != 1) {
+        std::cerr << "expected three vector approximations counted as one loss, got "
+                  << plan.losses.size() << " and " << lowering.losses << "\n";
+        return false;
+    }
+    const auto vector_diagnostics = std::count_if(
+        lowering.diagnostics.begin(), lowering.diagnostics.end(), [](const LoweringDiagnostic& d) {
+            return d.code == vellum::web::kVectorApproximatedCode && d.node_id == "icon";
+        });
+    if (vector_diagnostics != 3) {
+        std::cerr << "expected three vector approximation diagnostics, got " << vector_diagnostics
+                  << "\n";
+        return false;
+    }
+    const auto exact = vellum::web::lower_for_canvas_shell(vector_scene({lossy[4], lossy[5],
+                                                                         lossy[6]}));
+    if (!exact.accepted || exact.losses != 0 || !exact.diagnostics.empty()) {
+        std::cerr << "an exactly drawn vector asset reported a loss\n";
+        return false;
+    }
+    auto older = vector_scene({lossy[4]});
+    older.scene_version = 8U;
+    const auto refused = vellum::web::lower_for_canvas_shell(older);
+    if (refused.accepted || !refused.commands.empty() || refused.diagnostics.size() != 1U ||
+        refused.diagnostics[0].code != vellum::graphics::kSceneVersionMismatchCode) {
+        std::cerr << "the shell drew a version 8 scene with a vector node\n";
+        return false;
+    }
+    return true;
+}
 }  // namespace
 
 int main() {
     if (!image_refusals()) return 1;
+    if (!vector_plans()) return 1;
     if (!mask_reports()) return 1;
     if (!gradient_reports_and_version_gate()) return 1;
     using vellum::graphics::Affine2D;

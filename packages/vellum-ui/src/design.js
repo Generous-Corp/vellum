@@ -1,4 +1,4 @@
-import { Button, Canvas, Image, Stack, Text, View, jsx } from './runtime.js';
+import { Button, Canvas, Image, Path, Stack, Text, Vector, View, jsx } from './runtime.js';
 
 const MAXIMUM_NODES = 100_000;
 const MAXIMUM_DEPTH = 256;
@@ -69,6 +69,12 @@ function retainedStyle(document, node, viewport, root) {
     if (typeof typography.fontSize === 'number' && Number.isFinite(typography.fontSize)) {
         style.fontSize = typography.fontSize;
     }
+    if (typeof paint.opacity === 'number' && Number.isFinite(paint.opacity)) {
+        style.opacity = paint.opacity;
+    }
+    for (const property of ['transform', 'clipPath', 'maskMode', 'isolation', 'overflow']) {
+        if (typeof paint[property] === 'string') style[property] = paint[property];
+    }
     if (root) {
         style.width = viewport.width;
         style.height = viewport.height;
@@ -77,11 +83,42 @@ function retainedStyle(document, node, viewport, root) {
     return style;
 }
 
+const PATH_PAINT_PROPERTIES = ['fillRule', 'strokeWidth', 'strokeLineJoin', 'strokeLineCap',
+    'strokeMiterLimit', 'strokeDasharray', 'strokeDashoffset'];
+
+// A path's paint resolves design tokens, so a token-bound colour follows the
+// token, in a solid paint and in each gradient stop.
+function pathProperties(node, context) {
+    const path = node.properties?.path;
+    if (!path || typeof path !== 'object' || typeof path.d !== 'string') {
+        throw new Error(`design path ${node.id} requires path data`);
+    }
+    const tokens = context.document.tokens ?? {};
+    const output = { d: path.d };
+    for (const name of ['fill', 'stroke']) {
+        const paint = path[name];
+        if (typeof paint === 'string') {
+            output[name] = paint === 'none' ? paint : tokenValue(tokens, paint);
+        } else if (paint && typeof paint === 'object' && Array.isArray(paint.stops)) {
+            output[name] = {
+                ...paint,
+                stops: paint.stops.map((stop) => ({ ...stop, color: tokenValue(tokens, stop.color) })),
+            };
+        }
+    }
+    for (const name of PATH_PAINT_PROPERTIES) {
+        if (path[name] !== undefined) output[name] = path[name];
+    }
+    return output;
+}
+
 function componentFor(node) {
     if (node.kind === 'button') return Button;
     if (node.kind === 'text') return Text;
     if (node.kind === 'image') return Image;
     if (node.kind === 'canvas') return Canvas;
+    if (node.kind === 'path') return Path;
+    if (node.kind === 'vector') return Vector;
     if (node.kind === 'view') {
         const display = node.properties?.layout?.display;
         return display === 'flex' || display === 'grid' ? Stack : View;
@@ -108,6 +145,18 @@ function materializeNode(node, context, depth, root = false) {
         children: node.children.map((child) => materializeNode(child, context, depth + 1)),
     };
     if (typeof node.text === 'string') properties.text = node.text;
+    if (node.kind === 'path') Object.assign(properties, pathProperties(node, context));
+    if (node.kind === 'vector') {
+        const vector = node.properties?.vector;
+        if (!vector || typeof vector !== 'object' || !vector.asset) {
+            throw new Error(`design vector ${node.id} requires a compiled asset`);
+        }
+        properties.asset = vector.asset;
+    }
+    if (node.kind === 'image' && typeof node.properties?.image?.source === 'string') {
+        properties.source = node.properties.image.source;
+        if (typeof node.properties.image.fit === 'string') properties.fit = node.properties.image.fit;
+    }
     const bindings = context.actions[node.id];
     if (bindings !== undefined) {
         context.visitedActions.add(node.id);

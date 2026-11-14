@@ -15,11 +15,11 @@ target_link_options(vellum-web-core PRIVATE
     "-sINITIAL_MEMORY=16777216"
     "-sFILESYSTEM=0"
     "-sASSERTIONS=1"
-    "-sEXPORTED_FUNCTIONS=['_vellum_web_start','_vellum_web_stop','_vellum_web_begin_frame','_vellum_web_add_rectangle','_vellum_web_add_text','_vellum_web_render','_vellum_web_command_count','_vellum_web_lowering_loss_count','_vellum_web_refused','_vellum_web_refusal_reason','_vellum_web_diagnostic_count','_vellum_web_diagnostic_code','_vellum_web_diagnostic_node_id','_vellum_web_diagnostic_message','_vellum_web_command_digest','_vellum_web_backend_name']"
+    "-sEXPORTED_FUNCTIONS=['_vellum_web_start','_vellum_web_stop','_vellum_web_begin_frame','_vellum_web_add_rectangle','_vellum_web_add_text','_vellum_web_begin_vector','_vellum_web_vector_group','_vellum_web_vector_end_group','_vellum_web_vector_path','_vellum_web_vector_dash','_vellum_web_vector_gradient','_vellum_web_vector_stop','_vellum_web_end_vector','_vellum_web_render','_vellum_web_command_count','_vellum_web_lowering_loss_count','_vellum_web_refused','_vellum_web_refusal_reason','_vellum_web_diagnostic_count','_vellum_web_diagnostic_code','_vellum_web_diagnostic_node_id','_vellum_web_diagnostic_message','_vellum_web_command_digest','_vellum_web_backend_name']"
     "-sEXPORTED_RUNTIME_METHODS=['cwrap']")
 
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/web-dist/vellum-ui")
-foreach(_vellum_web_asset index.html style.css demo.js)
+foreach(_vellum_web_asset index.html style.css demo.js vector-canvas.js)
     configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/shell/${_vellum_web_asset}"
         "${CMAKE_BINARY_DIR}/web-dist/${_vellum_web_asset}"

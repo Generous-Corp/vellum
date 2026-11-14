@@ -386,6 +386,61 @@ enum class MaskMode : std::uint8_t {
     luminance,
 };
 
+/// A paint of a compiled vector asset: `color`, or `gradient` when it is set.
+/// The gradient resolves against the unit box {0, 0, 1, 1} of its own
+/// gradient space, so every position and radius it holds is a coordinate of
+/// that space, and `gradient_transform` maps gradient space into the
+/// coordinates of the operation that paints with it. This is how SVG's
+/// `objectBoundingBox` and `userSpaceOnUse` units and `gradientTransform`
+/// are carried exactly.
+struct VectorPaint final {
+    Color color = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    std::optional<LinearGradient> gradient;
+    Affine2D gradient_transform{};
+};
+
+/// One operation of a compiled vector asset's display list.
+///
+/// A `path` operation fills and then strokes `path`, mapped by `transform`
+/// into the enclosing group's coordinates. Its geometry supplies the fill
+/// rule and the stroke's width, joins, caps, miter limit and dashes; the
+/// colours come from `fill` and `stroke`, so the geometry's own stroke colour
+/// must be transparent and carry no gradient.
+///
+/// A `push_group` opens a group whose contents `transform` maps into the
+/// enclosing coordinates, clipped to the area `clip` fills (in the group's
+/// coordinates, under its fill rule) when it is set, and composited as one
+/// layer at `opacity`. A `pop_group` closes the innermost open group.
+struct VectorOp final {
+    enum class Kind : std::uint8_t { path, push_group, pop_group };
+    Kind kind = Kind::path;
+    Affine2D transform{};
+    std::shared_ptr<const PathGeometry> path;
+    VectorPaint fill;
+    VectorPaint stroke;
+    float opacity = 1.0F;
+    std::shared_ptr<const PathGeometry> clip;
+};
+
+/// The most operations one compiled vector asset may hold.
+inline constexpr std::size_t kMaxVectorOps = 16384U;
+/// The deepest nesting of groups in a compiled vector asset.
+inline constexpr std::size_t kMaxVectorGroupDepth = 64U;
+
+/// A compiled vector asset: one display list drawn by a single `vector`
+/// node. `view_box` is the asset's coordinate box; it is stretched onto the
+/// node's box, so a producer that wants an aspect-preserving fit sizes the
+/// node to the view box's aspect. Operations outside the view box still draw
+/// unless a group clips them. `content_hash` names the source the asset was
+/// compiled from, in the `sha256:` form of `ImageAsset::content_hash`. Like a
+/// mesh, an asset must not be mutated once a scene references it; replace
+/// the pointer to change it.
+struct VectorAsset final {
+    std::string content_hash;
+    Rect view_box{};
+    std::vector<VectorOp> ops;
+};
+
 /// The scene schema version this build produces.
 ///
 /// The version is a single integer. Bump it when a change can alter rendered
@@ -417,13 +472,19 @@ enum class MaskMode : std::uint8_t {
 /// `LinearGradient`, and gradient strokes on paths. A plain linear fill
 /// gradient stays legal at every version.
 ///
+/// Version 9 adds the `vector` node kind and `SceneNode::vector`, a compiled
+/// vector asset drawn as one node. A scene of an earlier version is still
+/// accepted when it has no vector node; one that does fails
+/// `scene_fields_match_version` and is refused.
+///
 /// Claimed versions, in order:
 /// version 4: image nodes; version 5: clip, mask and isolation on groups;
 /// version 6: blend modes (reserved); version 7: token receipts (reserved);
-/// version 8: gradient vocabulary. This build gives versions 6 and 7 no
-/// fields of their own, and the branches that own them add their fields and
-/// damage support.
-inline constexpr std::uint32_t kSceneVersion = 8U;
+/// version 8: gradient vocabulary; version 9: compiled vector assets;
+/// version 10: effect graph (reserved). This build gives versions 6, 7 and 10
+/// no fields of their own, and the branches that own them add their fields
+/// and damage support.
+inline constexpr std::uint32_t kSceneVersion = 9U;
 
 /// The oldest scene schema version this build still consumes.
 inline constexpr std::uint32_t kMinSupportedSceneVersion = 1U;
@@ -452,6 +513,8 @@ struct SceneNode final {
         mesh,
         path,
         image,
+        /// Draws `SceneNode::vector`, a compiled vector asset, over its box.
+        vector,
     };
 
     std::string id;
@@ -509,6 +572,9 @@ struct SceneNode final {
     /// Composites the node and its subtree offscreen as one group even at
     /// full opacity, so the group meets what lies beneath it only once.
     bool isolate = false;
+    /// What a `vector` node draws. A vector node without it, with children,
+    /// or with an asset that fails `vector_asset_is_valid` is refused.
+    std::shared_ptr<const VectorAsset> vector;
 };
 
 /// The corner radii a node is drawn with: `corner_radii` when present,
@@ -692,6 +758,7 @@ struct SceneNode final {
     case SceneNode::Kind::mesh:
     case SceneNode::Kind::path:
     case SceneNode::Kind::image:
+    case SceneNode::Kind::vector:
         return true;
     }
     return false;
@@ -739,18 +806,35 @@ struct Scene final {
     return nullptr;
 }
 
+/// Whether a node uses what version 9 introduced: the `vector` kind or a
+/// compiled vector asset.
+[[nodiscard]] inline bool uses_version_9_fields(const SceneNode& node) noexcept {
+    return node.kind == SceneNode::Kind::vector || node.vector != nullptr;
+}
+
+/// The first node, in depth-first order, that `uses_version_9_fields`.
+[[nodiscard]] inline const SceneNode* find_version_9_fields(const SceneNode& node) noexcept {
+    if (uses_version_9_fields(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_9_fields(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
 /// Whether every field and kind the scene uses exists at its version: a
 /// version 1 scene sets no field that `uses_version_2_fields` reports, a
 /// version 1 or 2 scene has no node that `find_version_3_kinds` reports, a
 /// scene before version 4 has no node that `find_version_4_kinds` reports,
-/// and a scene before version 5 sets no field that `uses_version_5_fields`
-/// reports.
+/// a scene before version 5 sets no field that `uses_version_5_fields`
+/// reports, a scene before version 8 uses no gradient vocabulary, and a
+/// scene before version 9 has no node that `uses_version_9_fields`.
 [[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
     return (scene.scene_version >= 2U || find_version_2_fields(scene.root) == nullptr) &&
            (scene.scene_version >= 3U || find_version_3_kinds(scene.root) == nullptr) &&
            (scene.scene_version >= 4U || find_version_4_kinds(scene.root) == nullptr) &&
            (scene.scene_version >= 5U || find_version_5_fields(scene.root) == nullptr) &&
-           (scene.scene_version >= 8U || !node_uses_version_8_fields(scene.root));
+           (scene.scene_version >= 8U || !node_uses_version_8_fields(scene.root)) &&
+           (scene.scene_version >= 9U || find_version_9_fields(scene.root) == nullptr);
 }
 
 /// The first node, in depth-first order, that its scene's version cannot
@@ -773,6 +857,9 @@ struct Scene final {
     }
     if (scene.scene_version < 8U) {
         if (const auto* found = find_version_8_fields(scene.root); found != nullptr) return found;
+    }
+    if (scene.scene_version < 9U) {
+        if (const auto* found = find_version_9_fields(scene.root); found != nullptr) return found;
     }
     return nullptr;
 }

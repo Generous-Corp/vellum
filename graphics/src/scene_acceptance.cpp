@@ -3,6 +3,7 @@
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/path_geometry.hpp>
+#include <vellum/graphics/vector_asset.hpp>
 
 #include <cmath>
 #include <utility>
@@ -53,9 +54,32 @@ const SceneNode* find_undrawable_image(const SceneNode& node, std::string& reaso
     return nullptr;
 }
 
+// The first vector node, in depth-first order, that cannot be drawn: one
+// without an asset, with children, or with an invalid asset.
+const SceneNode* find_undrawable_vector(const SceneNode& node, std::string& reason) {
+    if (node.kind == SceneNode::Kind::vector) {
+        if (!node.vector) reason = "it has no compiled asset";
+        else if (!node.children.empty()) reason = "a vector node has no children";
+        if (!node.vector || !node.children.empty() ||
+            !vector_asset_is_valid(*node.vector, &reason)) {
+            return &node;
+        }
+    } else if (node.vector) {
+        reason = "only a vector node carries a compiled asset";
+        return &node;
+    }
+    for (const auto& child : node.children) {
+        if (const auto* found = find_undrawable_vector(child, reason); found != nullptr) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
 // Why `scene` is refused, or empty. `image_node` is set to the refused
 // image's id, and `image` to true, for an image or image-table refusal.
-std::string refusal(const Scene& scene, bool& image, std::string& image_node) {
+std::string refusal(const Scene& scene, bool& image, std::string& image_node,
+                    std::string& vector_node) {
     if (!scene_version_is_supported(scene.scene_version)) {
         return "scene version " + std::to_string(scene.scene_version) +
                " is not supported by this renderer";
@@ -87,6 +111,10 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node) {
         return path->path ? "path " + path->id + " cannot be drawn: " + reason
                           : "path " + path->id + " has no geometry";
     }
+    if (const auto* vector = find_undrawable_vector(scene.root, reason); vector != nullptr) {
+        vector_node = vector->id;
+        return "vector " + vector->id + " cannot be drawn: " + reason;
+    }
     if (const auto* undrawable = find_undrawable_image(scene.root, reason);
         undrawable != nullptr) {
         image = true;
@@ -107,7 +135,8 @@ SceneAcceptance accept_scene(const Scene& scene) {
     result.diagnostics = scene_loss_diagnostics(scene);
     bool image = false;
     std::string image_node;
-    result.reason = refusal(scene, image, image_node);
+    std::string vector_node;
+    result.reason = refusal(scene, image, image_node, vector_node);
     result.accepted = result.reason.empty();
     if (result.accepted) return result;
 
@@ -118,6 +147,16 @@ SceneAcceptance accept_scene(const Scene& scene) {
         return result;
     }
     result.diagnostics.clear();
+    if (!vector_node.empty()) {
+        result.diagnostics.push_back({
+            .severity = LoweringDiagnostic::Severity::error,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(kInvalidVectorAssetCode),
+            .node_id = std::move(vector_node),
+            .property = "vector",
+            .message = result.reason,
+        });
+    }
     if (image) {
         result.diagnostics.push_back({
             .severity = LoweringDiagnostic::Severity::error,

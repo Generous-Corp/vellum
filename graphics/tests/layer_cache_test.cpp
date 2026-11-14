@@ -147,6 +147,7 @@ void equality_covers_every_field() {
                                 .fit = ImageFit::cover,
                                 .sampling = ImageSampling::nearest},
         .image_asset = std::make_shared<ImageAsset>(),
+        .vector = std::make_shared<VectorAsset>(),
     };
     expect(paint_commands_equal(base, base), "a command equals itself");
     const std::vector<Mutation> mutations{
@@ -219,6 +220,7 @@ void equality_covers_every_field() {
         {"image fit", [](PaintCommand& c) { c.image->fit = ImageFit::none; }},
         {"image sampling", [](PaintCommand& c) { c.image->sampling = ImageSampling::linear; }},
         {"image asset", [](PaintCommand& c) { c.image_asset = std::make_shared<ImageAsset>(); }},
+        {"vector asset", [](PaintCommand& c) { c.vector = std::make_shared<VectorAsset>(); }},
         {"transform a", [](PaintCommand& c) { c.transform.a = 2.0F; }},
         {"transform b", [](PaintCommand& c) { c.transform.b = 2.0F; }},
         {"transform c", [](PaintCommand& c) { c.transform.c = 2.0F; }},

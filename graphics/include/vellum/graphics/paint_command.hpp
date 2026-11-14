@@ -57,6 +57,9 @@ struct PaintCommand final {
         /// Multiplies the enclosing group by the mask's coverage, taken by
         /// `mask_mode`.
         end_mask,
+        /// Draws the compiled vector asset `vector`, its view box stretched
+        /// onto `bounds`.
+        vector,
     };
 
     Kind kind = Kind::rectangle;
@@ -104,6 +107,8 @@ struct PaintCommand final {
     std::optional<ImageReference> image;
     /// The asset `Scene::images` holds for `image`, or null when it is missing.
     std::shared_ptr<const ImageAsset> image_asset;
+    /// What a `vector` command draws.
+    std::shared_ptr<const VectorAsset> vector;
 };
 
 [[nodiscard]] constexpr std::string_view to_string(PaintCommand::Kind kind) noexcept {
@@ -119,6 +124,7 @@ struct PaintCommand final {
     case PaintCommand::Kind::end_clip: return "end_clip";
     case PaintCommand::Kind::begin_mask: return "begin_mask";
     case PaintCommand::Kind::end_mask: return "end_mask";
+    case PaintCommand::Kind::vector: return "vector";
     }
     return "unknown";
 }
@@ -137,9 +143,9 @@ struct PaintCommand final {
 
 /// The area a command can paint, in its `bounds` coordinates before
 /// `transform`: the box grown by each shadow's offset, spread, and 1.5 times
-/// its blur radius, a mesh's clipped vertex extent, or a path's
-/// `path_paint_box`. Text may overflow its box, so its extent is the box
-/// with `bounded` false.
+/// its blur radius, a mesh's clipped vertex extent, a path's
+/// `path_paint_box`, or a vector asset's `vector_paint_bounds`. Text may
+/// overflow its box, so its extent is the box with `bounded` false.
 struct PaintExtent final {
     Rect rect{};
     bool bounded = true;
@@ -151,7 +157,7 @@ struct PaintExtent final {
 [[nodiscard]] constexpr bool draws_content(PaintCommand::Kind kind) noexcept {
     return kind == PaintCommand::Kind::rectangle || kind == PaintCommand::Kind::text ||
            kind == PaintCommand::Kind::mesh || kind == PaintCommand::Kind::path ||
-           kind == PaintCommand::Kind::image;
+           kind == PaintCommand::Kind::image || kind == PaintCommand::Kind::vector;
 }
 
 /// The axis-aligned box that contains `rect` once mapped by `transform`.

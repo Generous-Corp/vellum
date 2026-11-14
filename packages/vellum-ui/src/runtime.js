@@ -19,8 +19,10 @@ const MAXIMUM_PATH_DASHES = 64;
 const HEX_COLOR = /^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/;
 const INTRINSIC_TYPES = new Set([
     'view', 'stack', 'text', 'text-run', 'text-input', 'button', 'image', 'canvas', 'custom',
-    'path',
+    'path', 'vector',
 ]);
+const MAXIMUM_VECTOR_OPS = 16384;
+const MAXIMUM_VECTOR_GROUP_DEPTH = 64;
 
 let renderingRuntime = null;
 
@@ -158,6 +160,7 @@ export const Button = primitive('button');
 export const Image = primitive('image');
 export const Canvas = primitive('canvas');
 export const Path = primitive('path');
+export const Vector = primitive('vector');
 export function TextInput(properties = {}) {
     return jsx('text-input', { ...properties, primitiveVersion: TEXT_INPUT_PRIMITIVE_VERSION });
 }
@@ -278,7 +281,7 @@ function gradientKeyword(value, path, allowed) {
     }
 }
 
-function validateLinearGradient(value, path) {
+function validateLinearGradient(value, path, { coincidentStops = false } = {}) {
     const gradient = paintStyleObject(value, path, [
         'kind', 'angle', 'repeating', 'repeatLength', 'spread', 'interpolation', 'colorSpace',
         'centerX', 'centerY', 'radiusX', 'radiusY', 'focalX', 'focalY', 'startRadius',
@@ -315,7 +318,8 @@ function validateLinearGradient(value, path) {
         const stopPath = `${path}.stops[${index}]`;
         const stop = paintStyleObject(gradient.stops[index], stopPath, ['position', 'color']);
         finitePaintNumber(stop.position, `${stopPath}.position`);
-        if (stop.position < 0 || stop.position > 1 || stop.position <= previous ||
+        if (stop.position < 0 || stop.position > 1 ||
+            (coincidentStops ? stop.position < previous : stop.position <= previous) ||
             typeof stop.color !== 'string' ||
             !/^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/.test(stop.color)) {
             throw new TypeError(`${stopPath} requires an increasing position and hex color`);
@@ -407,6 +411,101 @@ function validatePath(properties, path) {
         output.strokeDasharray = [...dashes];
     }
     return output;
+}
+
+function vectorMatrix(value, path) {
+    if (value === undefined) return;
+    if (!Array.isArray(value) || value.length !== 6) {
+        throw new TypeError(`${path} must be six finite numbers`);
+    }
+    value.forEach((number, index) => finitePaintNumber(number, `${path}[${index}]`));
+}
+
+function vectorPathData(value, path) {
+    if (typeof value !== 'string' || value.length > MAXIMUM_PATH_DATA_LENGTH) {
+        throw new TypeError(
+            `${path} must be SVG path data of at most ${MAXIMUM_PATH_DATA_LENGTH} characters`);
+    }
+}
+
+function vectorPaint(value, path) {
+    if (value === undefined || value === 'none') return;
+    if (typeof value === 'string') {
+        if (!HEX_COLOR.test(value)) throw new TypeError(`${path} must be a hex color, none or a gradient paint`);
+        return;
+    }
+    const paint = paintStyleObject(value, path, ['gradient', 'transform']);
+    validateLinearGradient(paint.gradient, `${path}.gradient`, { coincidentStops: true });
+    vectorMatrix(paint.transform, `${path}.transform`);
+}
+
+// A compiled vector asset: the display list one vector node draws.
+function validateVector(properties, path) {
+    const asset = paintStyleObject(properties.asset, `${path}.Vector asset`,
+        ['contentHash', 'viewBox', 'ops']);
+    if (typeof asset.contentHash !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(asset.contentHash)) {
+        throw new TypeError(`${path}.Vector asset contentHash must be sha256: and 64 hex digits`);
+    }
+    if (!Array.isArray(asset.viewBox) || asset.viewBox.length !== 4) {
+        throw new TypeError(`${path}.Vector asset viewBox must be four numbers`);
+    }
+    asset.viewBox.forEach((number, index) => finitePaintNumber(
+        number, `${path}.Vector asset viewBox[${index}]`));
+    if (!(asset.viewBox[2] > 0) || !(asset.viewBox[3] > 0)) {
+        throw new TypeError(`${path}.Vector asset viewBox needs a positive width and height`);
+    }
+    if (!Array.isArray(asset.ops) || asset.ops.length > MAXIMUM_VECTOR_OPS) {
+        throw new TypeError(`${path}.Vector asset ops must hold at most ${MAXIMUM_VECTOR_OPS} operations`);
+    }
+    let depth = 0;
+    asset.ops.forEach((raw, index) => {
+        const where = `${path}.Vector asset ops[${index}]`;
+        if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+            throw new TypeError(`${where} must be an object`);
+        }
+        if (raw.op === 'group') {
+            const op = paintStyleObject(raw, where, ['op', 'transform', 'opacity', 'clip']);
+            vectorMatrix(op.transform, `${where}.transform`);
+            finitePaintNumber(op.opacity, `${where}.opacity`, { optional: true, nonNegative: true });
+            if (op.opacity !== undefined && op.opacity > 1) throw new TypeError(`${where}.opacity must be at most 1`);
+            if (op.clip !== undefined) {
+                const clip = paintStyleObject(op.clip, `${where}.clip`, ['d', 'rule']);
+                vectorPathData(clip.d, `${where}.clip.d`);
+                pathKeyword(clip.rule, `${where}.clip.rule`, ['nonzero', 'evenodd']);
+            }
+            if (++depth > MAXIMUM_VECTOR_GROUP_DEPTH) {
+                throw new TypeError(`${where} nests groups deeper than ${MAXIMUM_VECTOR_GROUP_DEPTH}`);
+            }
+        } else if (raw.op === 'end') {
+            paintStyleObject(raw, where, ['op']);
+            if (--depth < 0) throw new TypeError(`${where} closes a group that is not open`);
+        } else if (raw.op === 'path') {
+            const op = paintStyleObject(raw, where, ['op', 'd', 'fillRule', 'transform', 'fill',
+                'stroke', 'strokeWidth', 'strokeLineJoin', 'strokeLineCap', 'strokeMiterLimit',
+                'strokeDasharray', 'strokeDashoffset']);
+            vectorPathData(op.d, `${where}.d`);
+            pathKeyword(op.fillRule, `${where}.fillRule`, ['nonzero', 'evenodd']);
+            vectorMatrix(op.transform, `${where}.transform`);
+            vectorPaint(op.fill, `${where}.fill`);
+            vectorPaint(op.stroke, `${where}.stroke`);
+            finitePaintNumber(op.strokeWidth, `${where}.strokeWidth`, { optional: true, nonNegative: true });
+            finitePaintNumber(op.strokeMiterLimit, `${where}.strokeMiterLimit`, { optional: true });
+            finitePaintNumber(op.strokeDashoffset, `${where}.strokeDashoffset`, { optional: true });
+            pathKeyword(op.strokeLineJoin, `${where}.strokeLineJoin`, ['miter', 'round', 'bevel']);
+            pathKeyword(op.strokeLineCap, `${where}.strokeLineCap`, ['butt', 'round', 'square']);
+            if (op.strokeDasharray !== undefined) {
+                if (!Array.isArray(op.strokeDasharray) || op.strokeDasharray.length > MAXIMUM_PATH_DASHES) {
+                    throw new TypeError(`${where}.strokeDasharray must hold at most ${MAXIMUM_PATH_DASHES} numbers`);
+                }
+                op.strokeDasharray.forEach((dash, item) => finitePaintNumber(
+                    dash, `${where}.strokeDasharray[${item}]`, { nonNegative: true }));
+            }
+        } else {
+            throw new TypeError(`${where}.op must be group, end or path`);
+        }
+    });
+    if (depth !== 0) throw new TypeError(`${path}.Vector asset leaves a group open`);
+    return { asset: cloneJson(asset, `${path}.Vector asset`) };
 }
 
 function validateImage(properties, path) {
@@ -542,6 +641,9 @@ function materialize(value, runtime, path) {
     if (value.type === 'path' && childValues.length > 0) {
         throw new TypeError(`${path}.Path does not accept children`);
     }
+    if (value.type === 'vector' && childValues.length > 0) {
+        throw new TypeError(`${path}.Vector does not accept children`);
+    }
     if (value.type === 'image' && childValues.length > 0 &&
         typeof value.props.source === 'string' &&
         /^(?:sha256:)?[0-9a-f]{64}$/i.test(value.props.source.trim())) {
@@ -549,6 +651,7 @@ function materialize(value, runtime, path) {
     }
     const pathProperties = value.type === 'path' ? validatePath(value.props, path) : undefined;
     const imageProperties = value.type === 'image' ? validateImage(value.props, path) : undefined;
+    const vectorProperties = value.type === 'vector' ? validateVector(value.props, path) : undefined;
     let textRunText;
     if (value.type === 'text-run') {
         const unsupported = Object.keys(value.props).filter(
@@ -615,6 +718,7 @@ function materialize(value, runtime, path) {
     if (typeof value.props.source === 'string') node.source = value.props.source;
     if (pathProperties !== undefined) Object.assign(node, pathProperties);
     if (imageProperties !== undefined) Object.assign(node, imageProperties);
+    if (vectorProperties !== undefined) Object.assign(node, vectorProperties);
     if (value.type === 'custom') {
         if (typeof value.props.component !== 'string' ||
             !/^[a-z][a-z0-9-]{0,63}$/.test(value.props.component)) {

@@ -9,6 +9,7 @@ export {
     Text,
     TextRun,
     TextInput,
+    Vector,
     View,
     createApp,
     jsx,
