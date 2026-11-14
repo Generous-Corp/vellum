@@ -25,6 +25,13 @@ enabled = true
 # skill_sync_check.py; agents then use the normal Shipyard PR flow.
 pr_gates = false
 
+[release.canary]
+command = "VELLUM_CANARY_PULP_SOURCE=\"https://x-access-token:${SHIPYARD_CANARY_READ_TOKEN_GENEROUS_CORP_PULP}@github.com/Generous-Corp/pulp.git\" scripts/release_canary.sh {next_version}"
+timeout_secs = 2400
+inconclusive_exit_codes = [2]
+read_token = "ghread"
+read_repos = ["Generous-Corp/pulp"]
+
 [base_health]
 # Red-main fix-first (Shipyard PR 1279; docs/automated-draining.md in the
 # Shipyard repo): when one required check fails in consecutive merge groups and
@@ -33,3 +40,18 @@ pr_gates = false
 # already queued is removed.
 merge_group_hold = "on"
 auto_jump = "on"
+
+[project]
+name = "vellum"
+type = "python"
+platforms = ["macos"]
+
+# `shipyard pr` validates through a declared target. Vellum's local validation
+# is scripts/gates.sh: the required checks that need no GPU, run against the
+# committed range. The GPU and sterile-consumer lanes run only in CI.
+[validation.default]
+command = "scripts/gates.sh --full origin/main"
+
+[targets.mac]
+backend = "local"
+platform = "macos-arm64"

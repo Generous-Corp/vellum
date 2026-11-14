@@ -1,0 +1,120 @@
+#!/usr/bin/env python3
+"""gates.sh fails on a planted prose violation, passes a clean change, and refuses a dirty tree."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+
+SCRIPTS = Path(__file__).resolve().parent
+EM_DASH = "—"
+
+
+def git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+
+class GatesTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name)
+        git(self.repo, "init", "-q", "-b", "main")
+        git(self.repo, "config", "user.email", "test@example.com")
+        git(self.repo, "config", "user.name", "Test")
+        (self.repo / "scripts").mkdir()
+        for name in ("gates.sh", "prose_lint.py", "crisp_writing_check.py"):
+            shutil.copy(SCRIPTS / name, self.repo / "scripts" / name)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "base")
+        git(self.repo, "tag", "base")
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def commit(self, relative: str, text: str) -> None:
+        path = self.repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        git(self.repo, "add", relative)
+        git(self.repo, "commit", "-q", "-m", "change")
+
+    def gates(self) -> subprocess.CompletedProcess[str]:
+        worktrees = self.repo / ".worktrees"
+        env = {**os.environ, "GATES_ONLY": "prose-lint", "PULP_WORKTREES_ROOT": str(worktrees),
+               "VELLUM_GATES_CACHE": str(worktrees / ".cache-unused")}
+        return subprocess.run(["bash", "scripts/gates.sh", "base"], cwd=self.repo, env=env,
+                              capture_output=True, text=True, check=False)
+
+    def test_default_cache_uses_configured_worktree_root(self) -> None:
+        self.commit("docs/new.md", "A plain sentence with nothing to flag.\n")
+        worktrees = self.repo / ".worktrees"
+        env = {**os.environ, "GATES_ONLY": "prose-lint", "PULP_WORKTREES_ROOT": str(worktrees)}
+        result = subprocess.run(["bash", "scripts/gates.sh", "base"], cwd=self.repo, env=env,
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((worktrees / "vellum-gates-cache").is_dir())
+
+    def test_nothing_is_created_under_the_temp_dir_or_home_cache(self) -> None:
+        self.commit("docs/new.md", "A plain sentence with nothing to flag.\n")
+        fake = self.repo / ".fake"
+        for name in ("tmp", "home"):
+            (fake / name).mkdir(parents=True)
+        shim = fake / "bin"
+        shim.mkdir()
+        real = shutil.which("mktemp")
+        (shim / "mktemp").write_text(f'#!/bin/bash\necho "$*" >> "{fake}/mktemp.log"\nexec {real} "$@"\n')
+        (shim / "mktemp").chmod(0o755)
+        env = {**os.environ, "GATES_ONLY": "prose-lint", "PULP_WORKTREES_ROOT": str(self.repo / ".worktrees"),
+               "TMPDIR": str(fake / "tmp"), "HOME": str(fake / "home"), "PATH": f"{shim}:{os.environ['PATH']}"}
+        env.pop("VELLUM_GATES_CACHE", None)
+        result = subprocess.run(["bash", "scripts/gates.sh", "base"], cwd=self.repo, env=env,
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        lines = (fake / "mktemp.log").read_text().splitlines()
+        self.assertTrue(lines)
+        root = str(self.repo / ".worktrees")
+        for line in lines:
+            paths = [word for word in line.split() if not word.startswith("-")]
+            self.assertTrue(paths and all(path.startswith(root) for path in paths), line)
+        self.assertEqual(list((fake / "tmp").iterdir()), [])
+        self.assertFalse((fake / "home" / ".cache").exists())
+
+    def test_planted_prose_violation_fails(self) -> None:
+        self.commit("docs/new.md", f"A sentence {EM_DASH} with an em dash.\n")
+        result = self.gates()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("FAIL prose-lint", result.stdout)
+
+    def test_clean_change_passes(self) -> None:
+        self.commit("docs/new.md", "A plain sentence with nothing to flag.\n")
+        result = self.gates()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PASS prose-lint", result.stdout)
+
+    def test_uncommitted_tracked_change_fails(self) -> None:
+        self.commit("docs/new.md", "A plain sentence with nothing to flag.\n")
+        (self.repo / "docs/new.md").write_text(f"Edited {EM_DASH} but not committed.\n", encoding="utf-8")
+        result = self.gates()
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("uncommitted", result.stderr)
+
+    def test_upstream_refresh_failure_is_not_ignored(self) -> None:
+        source = (SCRIPTS / "gates.sh").read_text(encoding="utf-8")
+        refresh = 'git -C "$UPSTREAM_SRC" fetch -q --no-tags origin main >&2'
+        self.assertIn(refresh, source)
+        self.assertRegex(
+            source,
+            re.escape(refresh)
+            + r'; then\n\s+echo "gates: cannot refresh upstream main; refusing to use a stale clone"',
+        )
+        self.assertNotIn(refresh + " || true", source)
+
+
+if __name__ == "__main__":
+    unittest.main()
