@@ -158,12 +158,21 @@ struct PaintExtent final {
     const std::vector<PaintCommand>& commands);
 
 struct ResolvedLinearGradient final {
+    GradientKind kind = GradientKind::linear;
     float start_x = 0.0F;
     float start_y = 0.0F;
     float end_x = 0.0F;
     float end_y = 0.0F;
     bool repeating = false;
     float repeat_length = 0.0F;
+    GradientSpread spread = GradientSpread::pad;
+    GradientInterpolation interpolation = GradientInterpolation::srgb;
+    float center_x = 0.0F;
+    float center_y = 0.0F;
+    float radius_x = 0.0F;
+    float radius_y = 0.0F;
+    float focal_x = 0.0F;
+    float focal_y = 0.0F;
     std::vector<GradientStop> stops;
 };
 

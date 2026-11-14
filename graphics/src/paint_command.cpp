@@ -271,12 +271,21 @@ ResolvedLinearGradient resolve_linear_gradient(
     const float center_y = bounds.y + bounds.height * 0.5F;
 
     ResolvedLinearGradient resolved{
+        .kind = gradient.kind,
         .start_x = center_x - direction_x * half_length,
         .start_y = center_y - direction_y * half_length,
         .end_x = center_x + direction_x * half_length,
         .end_y = center_y + direction_y * half_length,
         .repeating = gradient.repeating,
         .repeat_length = std::max(0.0F, gradient.repeat_length),
+        .spread = gradient.spread,
+        .interpolation = gradient.interpolation,
+        .center_x = bounds.x + gradient.center_x * bounds.width,
+        .center_y = bounds.y + gradient.center_y * bounds.height,
+        .radius_x = gradient.radius_x > 0.0F ? gradient.radius_x : bounds.width * 0.5F,
+        .radius_y = gradient.radius_y > 0.0F ? gradient.radius_y : bounds.height * 0.5F,
+        .focal_x = bounds.x + gradient.focal_x * bounds.width,
+        .focal_y = bounds.y + gradient.focal_y * bounds.height,
         .stops = gradient.stops,
     };
     for (auto& stop : resolved.stops) {
@@ -469,6 +478,10 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
                            " cannot carry the clip, mask, or isolation at " + node->id,
             });
             return output;
+        }
+        if (!compositing && needs(8U) && node_uses_version_8_fields(*node)) {
+            return refuse(node->id, "scene version " + version +
+                                  " cannot carry gradient vocabulary at " + node->id);
         }
         output.push_back({
             .severity = LoweringDiagnostic::Severity::error,

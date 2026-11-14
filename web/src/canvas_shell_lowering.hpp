@@ -16,6 +16,7 @@ namespace vellum::web {
 /// A mask the canvas shell cannot composite; a warning. The shell draws the
 /// masked siblings unmasked and does not draw the mask's own commands.
 inline constexpr std::string_view kMaskNotCompositedCode = "VELLUM_WEB_MASK_NOT_COMPOSITED";
+inline constexpr std::string_view kGradientNotExpressibleCode = "VELLUM_WEB_GRADIENT_NOT_EXPRESSIBLE";
 
 /// Whether the canvas shell draws `command` with a loss it reports. The shell
 /// has no group compositing, so a `begin_layer` is flattened to per-command
@@ -36,7 +37,7 @@ inline constexpr std::string_view kMaskNotCompositedCode = "VELLUM_WEB_MASK_NOT_
         return true;
     }
     if (!vellum::graphics::draws_content(command.kind)) return false;
-    return !vellum::graphics::is_identity(command.transform) ||
+    return !command.fill_gradients.empty() || !vellum::graphics::is_identity(command.transform) ||
            !vellum::graphics::is_uniform(command.corner_radii);
 }
 
@@ -127,6 +128,17 @@ struct CanvasShellLowering final {
     lowering.losses = canvas_shell_loss_count(lowering.commands);
     for (auto& diagnostic : canvas_shell_mask_diagnostics(lowering.commands)) {
         lowering.diagnostics.push_back(std::move(diagnostic));
+    }
+    for (const auto& command : lowering.commands) {
+        if (command.fill_gradients.empty() || !vellum::graphics::draws_content(command.kind)) continue;
+        lowering.diagnostics.push_back({
+            .severity = vellum::graphics::LoweringDiagnostic::Severity::warning,
+            .disposition = vellum::graphics::LoweringDiagnostic::Disposition::lowered,
+            .code = std::string(kGradientNotExpressibleCode),
+            .node_id = command.node_id,
+            .property = "gradient",
+            .message = "canvas 2D shell cannot express retained gradient paint; the base colour was drawn",
+        });
     }
     return lowering;
 }

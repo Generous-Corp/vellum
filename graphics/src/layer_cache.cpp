@@ -20,8 +20,6 @@ static_assert(sizeof(PaintCommand) == 392,
 static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 80,
               "TextStyle or TextRun changed: update same_style, same_runs and hash_command");
 static_assert(sizeof(BoxShadow) == 32, "BoxShadow changed: update same_shadows and hash_command");
-static_assert(sizeof(LinearGradient) == 40 && sizeof(GradientStop) == 20,
-              "LinearGradient changed: update same_gradients and hash_command");
 static_assert(sizeof(Color) == 16 && sizeof(Affine2D) == 24 && sizeof(CornerRadii) == 16 &&
                   sizeof(Rect) == 16,
               "a PaintCommand value type changed: update the comparisons and hash_command");
@@ -68,9 +66,13 @@ bool same_gradients(const std::vector<LinearGradient>& a, const std::vector<Line
     for (std::size_t index = 0; index < a.size(); ++index) {
         const auto& left = a[index];
         const auto& right = b[index];
-        if (!same_float(left.angle_degrees, right.angle_degrees) ||
+        if (left.kind != right.kind || left.spread != right.spread || left.interpolation != right.interpolation || left.color_space != right.color_space ||
+            !same_float(left.angle_degrees, right.angle_degrees) ||
             left.repeating != right.repeating ||
             !same_float(left.repeat_length, right.repeat_length) ||
+            !same_float(left.center_x, right.center_x) || !same_float(left.center_y, right.center_y) ||
+            !same_float(left.radius_x, right.radius_x) || !same_float(left.radius_y, right.radius_y) ||
+            !same_float(left.focal_x, right.focal_x) || !same_float(left.focal_y, right.focal_y) ||
             left.stops.size() != right.stops.size()) {
             return false;
         }
@@ -134,7 +136,8 @@ bool same_path(const std::shared_ptr<const PathGeometry>& a,
            a->stroke.join == b->stroke.join && a->stroke.cap == b->stroke.cap &&
            same_float(a->stroke.miter_limit, b->stroke.miter_limit) &&
            same_floats(a->stroke.dash_array, b->stroke.dash_array) &&
-           same_float(a->stroke.dash_offset, b->stroke.dash_offset);
+           same_float(a->stroke.dash_offset, b->stroke.dash_offset) &&
+           a->stroke.gradient.has_value() == b->stroke.gradient.has_value();
 }
 
 // Everything except `bounds`, `transform`, `mesh` and `path`.
@@ -223,6 +226,13 @@ std::uint64_t hash_command(const PaintCommand& command) {
         hash.real(gradient.angle_degrees);
         hash.number(gradient.repeating ? 1U : 0U);
         hash.real(gradient.repeat_length);
+        hash.number(static_cast<std::uint64_t>(gradient.kind));
+        hash.number(static_cast<std::uint64_t>(gradient.spread));
+        hash.number(static_cast<std::uint64_t>(gradient.interpolation));
+        hash.text(gradient.color_space);
+        hash.real(gradient.center_x); hash.real(gradient.center_y);
+        hash.real(gradient.radius_x); hash.real(gradient.radius_y);
+        hash.real(gradient.focal_x); hash.real(gradient.focal_y);
         hash.number(gradient.stops.size());
         for (const auto& stop : gradient.stops) {
             hash.real(stop.position);

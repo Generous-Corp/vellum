@@ -25,12 +25,26 @@ struct GradientStop final {
     Color color{};
 };
 
+enum class GradientKind : std::uint8_t { linear, radial, two_circle_radial, conic };
+enum class GradientSpread : std::uint8_t { pad, repeat, reflect };
+enum class GradientInterpolation : std::uint8_t { srgb, linear_srgb, oklab };
+
 struct LinearGradient final {
+    GradientKind kind = GradientKind::linear;
     float angle_degrees = 180.0F;
     bool repeating = false;
     /// Length in logical pixels of one repeating cycle. Zero uses the full
     /// resolved paint-box line.
     float repeat_length = 0.0F;
+    GradientSpread spread = GradientSpread::pad;
+    GradientInterpolation interpolation = GradientInterpolation::srgb;
+    std::string color_space = "srgb";
+    float center_x = 0.5F;
+    float center_y = 0.5F;
+    float radius_x = 0.0F;
+    float radius_y = 0.0F;
+    float focal_x = 0.5F;
+    float focal_y = 0.5F;
     std::vector<GradientStop> stops;
 };
 
@@ -151,6 +165,7 @@ struct PathStroke final {
     /// Alternating dash and gap lengths; empty draws a solid stroke.
     std::vector<float> dash_array;
     float dash_offset = 0.0F;
+    std::optional<LinearGradient> gradient;
 };
 
 /// The geometry and stroke of a `path` node. Coordinates are absolute within
@@ -361,7 +376,7 @@ enum class MaskMode : std::uint8_t {
 ///
 /// Claimed versions, in order:
 /// version 4: image nodes; version 5: clip, mask and isolation on groups
-inline constexpr std::uint32_t kSceneVersion = 5U;
+inline constexpr std::uint32_t kSceneVersion = 8U;
 
 /// The oldest scene schema version this build still consumes.
 inline constexpr std::uint32_t kMinSupportedSceneVersion = 1U;
@@ -424,6 +439,9 @@ struct SceneNode final {
     /// Per-corner radii. When present they replace `corner_radius`, which
     /// remains the uniform shorthand.
     std::optional<CornerRadii> corner_radii;
+    /// Gradient paint on a path's stroke. The stroke colour remains the
+    /// fallback when this is absent.
+    std::optional<LinearGradient> stroke_gradient;
     /// The geometry of a `path` node. A path node without it is refused. Like
     /// a mesh, it must not be mutated once a scene references it; replace the
     /// pointer to change it.
@@ -510,6 +528,29 @@ struct SceneNode final {
     return nullptr;
 }
 
+[[nodiscard]] inline bool gradient_uses_version_8(const LinearGradient& gradient) noexcept {
+    return gradient.kind != GradientKind::linear || gradient.spread != GradientSpread::pad ||
+           gradient.interpolation != GradientInterpolation::srgb || gradient.color_space != "srgb" ||
+           gradient.center_x != 0.5F || gradient.center_y != 0.5F || gradient.radius_x != 0.0F ||
+           gradient.radius_y != 0.0F || gradient.focal_x != 0.5F || gradient.focal_y != 0.5F;
+}
+
+[[nodiscard]] inline bool node_uses_version_8_fields(const SceneNode& node) noexcept {
+    if (std::any_of(node.fill_gradients.begin(), node.fill_gradients.end(), gradient_uses_version_8)) return true;
+    if (node.stroke_gradient && gradient_uses_version_8(*node.stroke_gradient)) return true;
+    if (node.path && node.path->stroke.gradient && gradient_uses_version_8(*node.path->stroke.gradient)) return true;
+    for (const auto& child : node.children) if (node_uses_version_8_fields(child)) return true;
+    return false;
+}
+
+[[nodiscard]] inline const SceneNode* find_version_8_fields(const SceneNode& node) noexcept {
+    if (std::any_of(node.fill_gradients.begin(), node.fill_gradients.end(), gradient_uses_version_8) ||
+        (node.stroke_gradient && gradient_uses_version_8(*node.stroke_gradient)) ||
+        (node.path && node.path->stroke.gradient && gradient_uses_version_8(*node.path->stroke.gradient))) return &node;
+    for (const auto& child : node.children) if (const auto* found = find_version_8_fields(child)) return found;
+    return nullptr;
+}
+
 [[nodiscard]] constexpr bool is_known_kind(SceneNode::Kind kind) noexcept {
     switch (kind) {
     case SceneNode::Kind::group:
@@ -576,7 +617,8 @@ struct Scene final {
     return (scene.scene_version >= 2U || find_version_2_fields(scene.root) == nullptr) &&
            (scene.scene_version >= 3U || find_version_3_kinds(scene.root) == nullptr) &&
            (scene.scene_version >= 4U || find_version_4_kinds(scene.root) == nullptr) &&
-           (scene.scene_version >= 5U || find_version_5_fields(scene.root) == nullptr);
+           (scene.scene_version >= 5U || find_version_5_fields(scene.root) == nullptr) &&
+           (scene.scene_version >= 8U || !node_uses_version_8_fields(scene.root));
 }
 
 /// The first node, in depth-first order, that its scene's version cannot
@@ -596,6 +638,9 @@ struct Scene final {
     }
     if (scene.scene_version < 5U) {
         if (const auto* found = find_version_5_fields(scene.root); found != nullptr) return found;
+    }
+    if (scene.scene_version < 8U) {
+        if (const auto* found = find_version_8_fields(scene.root); found != nullptr) return found;
     }
     return nullptr;
 }

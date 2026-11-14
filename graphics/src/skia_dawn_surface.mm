@@ -249,8 +249,11 @@ sk_sp<SkShader> linear_gradient_shader(
          gradient.start_y + direction_y * cycle},
     };
     detail::GradientKey key{
-        .points = {points[0].fX, points[0].fY, points[1].fX, points[1].fY},
-        .repeating = gradient.repeating,
+        .points = {gradient.kind == GradientKind::linear ? points[0].fX : gradient.center_x,
+                   gradient.kind == GradientKind::linear ? points[0].fY : gradient.center_y,
+                   gradient.kind == GradientKind::linear ? points[1].fX : gradient.radius_x,
+                   gradient.kind == GradientKind::linear ? points[1].fY : gradient.radius_y},
+        .repeating = gradient.repeating || gradient.spread != GradientSpread::pad,
     };
     key.colors.reserve(gradient.stops.size());
     key.positions.reserve(gradient.stops.size());
@@ -270,13 +273,25 @@ sk_sp<SkShader> linear_gradient_shader(
         for (const auto& color : key.colors) {
             colors.push_back({color.red, color.green, color.blue, color.alpha});
         }
+        const auto tile_mode = gradient.spread == GradientSpread::repeat || gradient.repeating
+            ? SkTileMode::kRepeat : gradient.spread == GradientSpread::reflect
+            ? SkTileMode::kMirror : SkTileMode::kClamp;
         const SkGradient shader_gradient{
             SkGradient::Colors(
                 colors, key.positions,
-                gradient.repeating ? SkTileMode::kRepeat : SkTileMode::kClamp),
+                tile_mode),
             {},
         };
-        shader = SkShaders::LinearGradient(points, shader_gradient);
+        if (gradient.kind == GradientKind::radial || gradient.kind == GradientKind::two_circle_radial) {
+            const auto radius = std::max(gradient.radius_x, gradient.radius_y);
+            shader = SkShaders::RadialGradient({gradient.center_x, gradient.center_y}, radius,
+                                                shader_gradient);
+        } else if (gradient.kind == GradientKind::conic) {
+            shader = SkShaders::SweepGradient(gradient.center_x, gradient.center_y,
+                                              shader_gradient);
+        } else {
+            shader = SkShaders::LinearGradient(points, shader_gradient);
+        }
         if (!shader) {
             set_error(error, "Vellum could not create the linear-gradient shader");
             return nullptr;
@@ -829,6 +844,21 @@ bool draw_path(SkCanvas& canvas, const PaintCommand& command, float opacity,
             }
             paint.setPathEffect(std::move(dashes));
         }
+        canvas.drawPath(outline, paint);
+    }
+    if (stroke.width > 0.0F && stroke.gradient && path_gradient_box(command)) {
+        SkPaint paint;
+        paint.setAntiAlias(path.antialias);
+        auto shader = linear_gradient_shader(
+            resolve_linear_gradient(*path_gradient_box(command), *stroke.gradient), opacity,
+            resources, error);
+        if (!shader) return false;
+        paint.setShader(std::move(shader));
+        paint.setStyle(SkPaint::kStroke_Style);
+        paint.setStrokeWidth(stroke.width);
+        paint.setStrokeJoin(sk_join(stroke.join));
+        paint.setStrokeCap(sk_cap(stroke.cap));
+        paint.setStrokeMiter(stroke.miter_limit);
         canvas.drawPath(outline, paint);
     }
     return true;

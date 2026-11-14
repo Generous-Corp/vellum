@@ -100,9 +100,14 @@ bool same_color(const Color& a, const Color& b) noexcept {
 bool same_gradients(const std::vector<LinearGradient>& a, const std::vector<LinearGradient>& b) {
     return std::equal(a.begin(), a.end(), b.begin(), b.end(),
         [](const LinearGradient& left, const LinearGradient& right) {
-            return same_float(left.angle_degrees, right.angle_degrees) &&
+            return left.kind == right.kind && left.spread == right.spread &&
+                   left.interpolation == right.interpolation && left.color_space == right.color_space &&
+                   same_float(left.angle_degrees, right.angle_degrees) &&
                    left.repeating == right.repeating &&
                    same_float(left.repeat_length, right.repeat_length) &&
+                   same_float(left.center_x, right.center_x) && same_float(left.center_y, right.center_y) &&
+                   same_float(left.radius_x, right.radius_x) && same_float(left.radius_y, right.radius_y) &&
+                   same_float(left.focal_x, right.focal_x) && same_float(left.focal_y, right.focal_y) &&
                    std::equal(left.stops.begin(), left.stops.end(), right.stops.begin(),
                               right.stops.end(),
                               [](const GradientStop& l, const GradientStop& r) {
@@ -271,7 +276,9 @@ bool same_path(const std::shared_ptr<const PathGeometry>& left,
            same_float(a.stroke.width, b.stroke.width) && a.stroke.join == b.stroke.join &&
            a.stroke.cap == b.stroke.cap && same_float(a.stroke.miter_limit, b.stroke.miter_limit) &&
            same_floats(a.stroke.dash_array, b.stroke.dash_array) &&
-           same_float(a.stroke.dash_offset, b.stroke.dash_offset);
+           same_float(a.stroke.dash_offset, b.stroke.dash_offset) &&
+           a.stroke.gradient.has_value() == b.stroke.gradient.has_value() &&
+           (!a.stroke.gradient || same_gradients({*a.stroke.gradient}, {*b.stroke.gradient}));
 }
 
 bool same_image(const std::optional<ImageReference>& left,
