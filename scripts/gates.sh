@@ -203,7 +203,10 @@ upstream_at() {
   if [[ ! -d "$UPSTREAM_SRC/.git" ]]; then
     git clone -q --no-checkout "$UPSTREAM_URL" "$UPSTREAM_SRC" >&2 || { echo "cannot clone $UPSTREAM_URL" >&2; return 1; }
   fi
-  git -C "$UPSTREAM_SRC" fetch -q --no-tags origin main >&2 || true
+  if ! git -C "$UPSTREAM_SRC" fetch -q --no-tags origin main >&2; then
+    echo "gates: cannot refresh upstream main; refusing to use a stale clone" >&2
+    return 1
+  fi
   if ! git -C "$UPSTREAM_SRC" cat-file -e "$sha^{commit}" 2>/dev/null; then
     git -C "$UPSTREAM_SRC" fetch --no-tags origin "$sha" >&2
   fi

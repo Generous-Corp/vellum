@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -102,6 +103,17 @@ class GatesTest(unittest.TestCase):
         result = self.gates()
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("uncommitted", result.stderr)
+
+    def test_upstream_refresh_failure_is_not_ignored(self) -> None:
+        source = (SCRIPTS / "gates.sh").read_text(encoding="utf-8")
+        refresh = 'git -C "$UPSTREAM_SRC" fetch -q --no-tags origin main >&2'
+        self.assertIn(refresh, source)
+        self.assertRegex(
+            source,
+            re.escape(refresh)
+            + r'; then\n\s+echo "gates: cannot refresh upstream main; refusing to use a stale clone"',
+        )
+        self.assertNotIn(refresh + " || true", source)
 
 
 if __name__ == "__main__":
