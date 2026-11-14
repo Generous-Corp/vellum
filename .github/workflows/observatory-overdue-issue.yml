@@ -2,7 +2,8 @@
 # (Decision 0013), so ask for their classification here: one issue, its body
 # kept current with the overdue list, closed once none is overdue. It runs the
 # default branch's code with GITHUB_TOKEN, which can write issues and nothing
-# else in this workflow.
+# else in this workflow. It also warns, in a second issue, about events
+# within 24 hours of their deadline.
 name: Observatory overdue issue
 
 on:
@@ -73,3 +74,16 @@ jobs:
           else
             gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/overdue.md"
           fi
+
+      # An earlier, separate warning: one issue naming the events within 24
+      # hours of their deadline (urgent within 4), closed once none remains.
+      # The overdue handling above is unchanged.
+      - name: Warn before an event goes overdue
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -I tools/provenance/overdue_events.py --root . > "$RUNNER_TEMP/due-soon.json"
+          python3 -I tools/provenance/deadline_warning.py \
+            --summary "$RUNNER_TEMP/due-soon.json" --repo "$GITHUB_REPOSITORY"

@@ -196,9 +196,11 @@ class Tests(unittest.TestCase):
                 "head_commit": pull["head_commit"],
                 "paths": sorted(pull["paths"]),
                 "diff_path_count": pull.get("diff_path_count", len(pull["paths"])),
+                "landability": pull.get("landability", "landable"),
+                "landability_reason": pull.get("landability_reason", "in the merge queue"),
             })
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "kind": "github-open-pull-request-snapshot",
             "repositories": [
                 {"repository": repository, "pulls": sorted(rows, key=lambda row: row["number"])}
@@ -1638,6 +1640,42 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         )
         self.assertTrue(any("live overlap danielraffel/vellum#44 is absent" in error for error in errors))
 
+    def test_open_pr_snapshot_judges_only_landable_overlaps(self) -> None:
+        acceptance = self.pulp_exact_boundary_acceptance(self.exact_boundary_acknowledgement())
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        route = next(
+            row for row in verifier.exact_route_rows(matrix, amendment)
+            if row["repository"] == "Generous-Corp/pulp"
+        )
+        overlap = {"repository": "Generous-Corp/pulp", "number": 42, "head_commit": "8" * 40,
+                   "paths": [route["path"]]}
+
+        def check(**landability):
+            return verifier.validate_open_pr_snapshot(
+                self.open_pr_snapshot(overlap | landability), acceptance, matrix, amendment)
+
+        self.assertTrue(any("live overlap Generous-Corp/pulp#42 is absent" in error for error in check()))
+        self.assertEqual(check(landability="not_landable",
+                               landability_reason="not in the merge queue"), [])
+        for bad in ({"landability": "maybe"}, {"landability": True}, {"landability_reason": ""},
+                    {"landability_reason": None}):
+            with self.subTest(bad=bad):
+                self.assertTrue(any("expected landable or not_landable" in error
+                                    for error in check(**bad)))
+        snapshot = self.open_pr_snapshot(overlap)
+        del snapshot["repositories"][0]["pulls"][0]["landability"]
+        self.assertTrue(any(
+            "expected strict pull request object" in error
+            for error in verifier.validate_open_pr_snapshot(snapshot, acceptance, matrix, amendment)
+        ))
+        snapshot = self.open_pr_snapshot()
+        snapshot["schema_version"] = 2
+        self.assertIn(
+            "open PR snapshot: schema or kind differs",
+            verifier.validate_open_pr_snapshot(snapshot, acceptance, matrix, amendment),
+        )
+
     def release_bump_case(self):
         """The bot's bump of 0.1.10 to 0.1.11, judged while v0.1.10's release readiness runs."""
         acknowledgement = self.exact_boundary_acknowledgement()
@@ -2174,7 +2212,7 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
             workflow.count('for repository in "${open_pr_repositories[@]}"; do'), 2
         )
         self.assertEqual(
-            collector_source.count("for repository in OPEN_PR_REPOSITORIES:"), 3
+            collector_source.count("for repository in OPEN_PR_REPOSITORIES:"), 4
         )
         self.assertIn(
             "OPEN_PR_REPOSITORIES = tuple(sorted(RETIRED_OPEN_PR_REPOSITORIES))",
@@ -2225,6 +2263,14 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         self.assertIn('git/trees/$merge_base_tree?recursive=1', workflow)
         self.assertIn('git/trees/$head_tree?recursive=1', workflow)
         self.assertIn('get("truncated") is not False', collector_source)
+        # Landability: the merge-queue entry from GraphQL and the comments a
+        # counted APPROVE would be in, with each reviewer policy read from its
+        # repository's checkout. A failed read writes no file (fail closed).
+        self.assertIn("mergeQueueEntry { id }", workflow)
+        self.assertIn('"repos/$repository/issues/$pull_number/comments?per_page=100"', workflow)
+        self.assertEqual(workflow.count('.partial"; then'), 2)
+        self.assertIn('--vellum-checkout "$GITHUB_WORKSPACE"', workflow)
+        self.assertIn("--pulp-checkout .exact-boundary-pulp", workflow)
         self.assertIn('--open-pr-snapshot-json "$RUNNER_TEMP/open-pr-snapshot.json"', workflow)
         self.assertIn('${{ runner.temp }}/open-pr-snapshot.json', workflow)
         self.assertIn('write_live_open_pr_cursor "$RUNNER_TEMP/open-pr-cursor-before.json"', workflow)
