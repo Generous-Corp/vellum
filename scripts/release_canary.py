@@ -83,7 +83,8 @@ def run_pretag(root: Path, version: str, commit: str, check_runs_commit: str) ->
 def git(root: Path, *args: str, check: bool = True) -> str:
     result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=False)
     if check and result.returncode != 0:
-        raise CanaryError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+        source = os.environ.get("VELLUM_CANARY_PULP_SOURCE", PULP_DEFAULT)
+        raise CanaryError(redact_source(f"git {' '.join(args)} failed: {result.stderr.strip()}", source))
     return result.stdout.strip()
 
 
@@ -162,7 +163,8 @@ def main(argv: list[str]) -> int:
         return run(ROOT, version)
     except (CanaryError, version_at_land.VersionError, subprocess.CalledProcessError, OSError, KeyError) as error:
         # Exit 2 is reserved for the live audit that never held still; anything else is a failure to file.
-        print(f"release canary could not run: {error}", file=sys.stderr)
+        source = os.environ.get("VELLUM_CANARY_PULP_SOURCE", PULP_DEFAULT)
+        print(f"release canary could not run: {redact_source(str(error), source)}", file=sys.stderr)
         return 1
 
 

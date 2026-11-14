@@ -158,6 +158,32 @@ class Failures(unittest.TestCase):
             self.assertNotIn("fake-secret", stderr.getvalue())
             self.assertNotIn(source, stderr.getvalue())
 
+    def test_a_fetch_failure_does_not_print_source_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            make_repo(root)
+            source = "https://x-access-token:fake-secret@example.invalid/pulp.git"
+            original_run = subprocess.run
+
+            def fail_fetch(command: list[str], *args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+                if command[:2] == ["git", "clone"]:
+                    Path(command[-1]).mkdir()
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                if "fetch" in command:
+                    return subprocess.CompletedProcess(
+                        command, 128, "", f"fatal: unable to access '{source}': could not resolve host")
+                return original_run(command, *args, **kwargs)
+
+            stderr = io.StringIO()
+            with mock.patch.object(rc, "ROOT", root), \
+                 mock.patch.object(rc.subprocess, "run", side_effect=fail_fetch), \
+                 mock.patch.dict(rc.os.environ, {"VELLUM_CANARY_PULP_SOURCE": source}), \
+                 contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(rc.main(["0.2.1"]), 1)
+            self.assertIn("fetch", stderr.getvalue())
+            self.assertNotIn("fake-secret", stderr.getvalue())
+            self.assertNotIn(source, stderr.getvalue())
+
     def test_a_malformed_cmake_version_exits_one(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
