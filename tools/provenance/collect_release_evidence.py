@@ -10,6 +10,12 @@ here (`--check-runs-json`, `--open-pr-snapshot-json`), and the live open-PR
 cursor written here is compared byte-for-byte with `cmp` before and after the
 verifier runs. Output bytes are therefore part of the contract: JSON is written
 with sorted keys and a trailing newline.
+
+Each open pull request in the snapshot is marked `landable` or `not_landable`.
+Only a landable one (in the merge queue, or carrying a counted APPROVE of its
+exact head) can block a release; the verifier ignores the rest unless the
+acceptance names them. Counted reviewers are read from each repository's
+checkout through scripts/counted_verdicts.py, which has no transport either.
 """
 
 from __future__ import annotations
@@ -22,7 +28,11 @@ from pathlib import Path
 from typing import Any, Iterable
 
 sys.path.append(str(Path(__file__).resolve().parent))  # -I drops the script dir; append keeps the standard library first
-from verify_authority_expansion import RETIRED_OPEN_PR_REPOSITORIES
+sys.path.append(str(Path(__file__).resolve().parents[2] / "scripts"))
+from counted_verdicts import (  # noqa: E402
+    ReviewerPolicy, ReviewerPolicyError, counted_approval, load_reviewer_policy,
+)
+from verify_authority_expansion import RETIRED_OPEN_PR_REPOSITORIES  # noqa: E402
 
 # The verifier accepts exactly these repositories in the open-PR snapshot once
 # the temporary delivery repository is retired, so the snapshot and the live
@@ -133,8 +143,104 @@ def changed_paths(merge_base_tree: dict[str, Any], head_tree: dict[str, Any]) ->
     )
 
 
+LANDABLE = "landable"
+NOT_LANDABLE = "not_landable"
+
+
+class LandabilityUnknown(Exception):
+    """A read that decides whether a pull request can land is missing or malformed."""
+
+
+def merge_queue_entry(path: Path, number: int, head: str) -> bool:
+    """Whether the recorded GraphQL read puts pull request `number` at `head` in the merge queue.
+
+    REST `auto_merge` reads null for a queued pull request, so membership is
+    read only from GraphQL `pullRequest.mergeQueueEntry`."""
+    try:
+        response = read_json(path)
+    except (OSError, ValueError) as error:
+        raise LandabilityUnknown(f"merge-queue read is unreadable: {error}") from error
+    if not isinstance(response, dict) or response.get("errors"):
+        raise LandabilityUnknown("merge-queue read returned errors")
+    data = response.get("data")
+    repository = data.get("repository") if isinstance(data, dict) else None
+    pull = repository.get("pullRequest") if isinstance(repository, dict) else None
+    if (
+        not isinstance(pull, dict) or pull.get("number") != number
+        or pull.get("headRefOid") != head or "mergeQueueEntry" not in pull
+    ):
+        raise LandabilityUnknown("merge-queue read does not name this pull request at its head")
+    entry = pull["mergeQueueEntry"]
+    if entry is None:
+        return False
+    if isinstance(entry, dict):
+        return True
+    raise LandabilityUnknown("merge-queue entry is malformed")
+
+
+def issue_comments(path: Path) -> list[dict[str, Any]]:
+    """The comments of a `gh api --paginate --slurp` read, every page whole."""
+    try:
+        pages = read_json(path)
+    except (OSError, ValueError) as error:
+        raise LandabilityUnknown(f"comment read is unreadable: {error}") from error
+    if not isinstance(pages, list) or not all(
+        isinstance(page, list) and all(isinstance(row, dict) for row in page) for page in pages
+    ):
+        raise LandabilityUnknown("comment read is not a list of comment pages")
+    return [row for page in pages for row in page]
+
+
+def landability(
+    repository_root: Path, number: int, head: str, policy: ReviewerPolicy | str
+) -> tuple[str, str]:
+    """`(landable or not_landable, reason)` for an open pull request at `head`.
+
+    A pull request is landable before the tag when it is in its repository's
+    merge queue or carries a counted APPROVE naming its exact head
+    (counted_verdicts.py, the rule `release-path-review` counts by). Anything
+    that cannot be read makes it landable, so the audit fails closed. Nothing
+    else is consulted: a HOLD or any other comment cannot make a pull request
+    not landable, so no author can withdraw their own pull request from the
+    audit by commenting on it."""
+    reads = repository_root / "landability"
+    try:
+        if merge_queue_entry(reads / f"{number}-merge-queue.json", number, head):
+            return LANDABLE, "in the merge queue"
+    except LandabilityUnknown as error:
+        return LANDABLE, f"merge-queue membership unknown: {error}"
+    if isinstance(policy, str):
+        return LANDABLE, f"approval unknown: {policy}"
+    try:
+        comments = issue_comments(reads / f"{number}-comments.json")
+    except LandabilityUnknown as error:
+        return LANDABLE, f"approval unknown: {error}"
+    for comment in comments:
+        approval = counted_approval(comment, head, policy)
+        if approval is not None:
+            return LANDABLE, f"counted APPROVE of {head} by {approval.signer}"
+    return NOT_LANDABLE, f"not in the merge queue and no counted APPROVE names head {head}"
+
+
+def reviewer_policies(checkouts: dict[str, Path]) -> dict[str, ReviewerPolicy | str]:
+    """Each audited repository's counted reviewers, read from its default-branch
+    checkout, or why they cannot be read."""
+    policies: dict[str, ReviewerPolicy | str] = {}
+    for repository in OPEN_PR_REPOSITORIES:
+        checkout = checkouts.get(repository)
+        if checkout is None:
+            policies[repository] = "no reviewer policy checkout"
+            continue
+        try:
+            policies[repository] = load_reviewer_policy(checkout)
+        except ReviewerPolicyError as error:
+            policies[repository] = f"reviewer policy unreadable: {error}"
+    return policies
+
+
 def snapshot_pull(
-    repository: str, repository_root: Path, pull: dict[str, Any]
+    repository: str, repository_root: Path, pull: dict[str, Any],
+    policy: ReviewerPolicy | str,
 ) -> dict[str, Any]:
     number = pull["number"]
     detail = read_json(repository_root / "details" / f"{number}.json")
@@ -162,6 +268,7 @@ def snapshot_pull(
     if merge_base_tree.get("truncated") is not False or head_tree.get("truncated") is not False:
         raise SystemExit(f"{repository}#{number}: recursive tree is truncated")
     paths = changed_paths(merge_base_tree, head_tree)
+    state, reason = landability(repository_root, number, detail["head"]["sha"], policy)
     return {
         "number": number,
         "base_commit": detail["base"]["sha"],
@@ -169,6 +276,8 @@ def snapshot_pull(
         "head_commit": detail["head"]["sha"],
         "paths": paths,
         "diff_path_count": len(paths),
+        "landability": state,
+        "landability_reason": reason,
     }
 
 
@@ -217,18 +326,19 @@ def release_bump_evidence(snapshot_root: Path) -> dict[str, Any]:
     }
 
 
-def open_pr_snapshot(snapshot_root: Path) -> dict[str, Any]:
+def open_pr_snapshot(snapshot_root: Path, checkouts: dict[str, Path]) -> dict[str, Any]:
+    policies = reviewer_policies(checkouts)
     repositories = []
     for repository in OPEN_PR_REPOSITORIES:
         repository_root = snapshot_root / repository_slug(repository)
         pulls = [pull for page in read_json(repository_root / "pulls.json") for pull in page]
         rows = [
-            snapshot_pull(repository, repository_root, pull)
+            snapshot_pull(repository, repository_root, pull, policies[repository])
             for pull in sorted(pulls, key=lambda row: row["number"])
         ]
         repositories.append({"repository": repository, "pulls": rows})
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "kind": "github-open-pull-request-snapshot",
         "repositories": repositories,
     }
@@ -309,7 +419,10 @@ def command_commit_tree(args: argparse.Namespace) -> None:
 
 
 def command_open_pr_snapshot(args: argparse.Namespace) -> None:
-    snapshot = open_pr_snapshot(args.snapshot_root)
+    snapshot = open_pr_snapshot(args.snapshot_root, {
+        "Generous-Corp/pulp": args.pulp_checkout,
+        "Generous-Corp/vellum": args.vellum_checkout,
+    })
     write_json(args.output, snapshot)
     write_json(args.cursor_output, snapshot_cursor(snapshot))
 
@@ -386,6 +499,14 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--snapshot-root", type=Path, required=True)
     command.add_argument("--output", type=Path, required=True)
     command.add_argument("--cursor-output", type=Path, required=True)
+    command.add_argument(
+        "--vellum-checkout", type=Path, required=True,
+        help="Vellum checkout whose .shipyard/config.toml names the counted reviewers",
+    )
+    command.add_argument(
+        "--pulp-checkout", type=Path, required=True,
+        help="Pulp main checkout whose .shipyard/config.toml names the counted reviewers",
+    )
     command.set_defaults(handler=command_open_pr_snapshot)
 
     command = commands.add_parser(

@@ -36,14 +36,25 @@
 /// gesture. See vellum::state::ParameterEdit for the lower-level primitive
 /// used by bespoke (non-widget) controls.
 ///
+/// `bind_parameter(widget, model, handle)` binds the same widget to a
+/// `vellum::value::ParamModel` instead of a store. It keeps the same contract:
+/// widget gestures are the model's nested `begin()`/`end()`, widget values are
+/// `set_normalized()`, and every model change moves the widget without
+/// reporting an edit back. A model is polled for modulation, never watched, so
+/// a continuous control shows its modulated value when the editor calls
+/// `ParameterBinding::tick()` at its UI tick. A store binding needs no tick;
+/// calling it there does nothing.
+///
 /// UI-thread only.
 
+#include <functional>
 #include <optional>
 #include <vellum/state/parameter.hpp>
 #include <vellum/state/store.hpp>
 #include <vellum/view/design_frame_view.hpp> // DesignStepper
 #include <vellum/view/ui_components.hpp>     // ComboBox
 #include <vellum/view/widgets.hpp>
+#include <vellum/value/param_model.hpp>
 #include <utility>
 
 namespace vellum::view {
@@ -61,15 +72,29 @@ public:
                      state::StateStore::ModulationWatch second_watch)
         : token_(std::move(token)), watch_(std::move(watch)),
           second_watch_(std::move(second_watch)) {}
+    /// A binding to a `value::ParamModel`: the model subscription, and the
+    /// modulation poll `tick()` runs (empty for a control that shows none).
+    ParameterBinding(value::Subscription subscription, std::function<void()> poll)
+        : subscription_(std::move(subscription)), poll_(std::move(poll)) {}
     ParameterBinding(ParameterBinding&&) noexcept = default;
     ParameterBinding& operator=(ParameterBinding&&) noexcept = default;
     ParameterBinding(const ParameterBinding&) = delete;
     ParameterBinding& operator=(const ParameterBinding&) = delete;
 
+    /// Poll the bound model for modulation and update the control's modulated
+    /// value. Call once per UI tick, before the control paints. Does nothing
+    /// for a store binding, which the store's own pump services.
+    void tick() {
+        if (poll_)
+            poll_();
+    }
+
 private:
     state::ListenerToken token_;
     state::StateStore::ModulationWatch watch_;
     state::StateStore::ModulationWatch second_watch_;
+    value::Subscription subscription_;
+    std::function<void()> poll_;
 };
 
 namespace detail {
@@ -89,7 +114,38 @@ watch_modulated_display(Control& control, state::StateStore& store, state::Param
             control.clear_modulated_value();
     });
 }
+
+/// The modulated-value half of a model binding: reads
+/// `ParamModel::modulated_normalized()` and draws it on the control, or clears
+/// the indicator when nothing modulates the parameter.
+template <typename Control>
+std::function<void()> poll_modulated_display(Control& control, value::ParamModel& model,
+                                             value::ParamHandle param) {
+    if (!param.valid())
+        return {};
+    return [&control, &model, param] {
+        if (const auto played = model.modulated_normalized(param))
+            control.set_modulated_value(static_cast<float>(*played));
+        else
+            control.clear_modulated_value();
+    };
+}
 } // namespace detail
+
+/// Knob ↔ model parameter (normalized). A drag is one model gesture; a model
+/// change moves the knob silently.
+[[nodiscard]] inline ParameterBinding
+bind_parameter(Knob& knob, value::ParamModel& model, value::ParamHandle param) {
+    knob.set_value(static_cast<float>(model.normalized(param)));
+    knob.on_gesture_begin = [&model, param] { model.begin(param); };
+    knob.on_change = [&model, param](float v) { model.set_normalized(param, v); };
+    knob.on_gesture_end = [&model, param] { model.end(param); };
+    return ParameterBinding(value::watch(model, param,
+                                         [&knob](double normalized) {
+                                             knob.set_value(static_cast<float>(normalized));
+                                         }),
+                            detail::poll_modulated_display(knob, model, param));
+}
 
 /// Knob ↔ parameter (normalized).
 [[nodiscard]] inline ParameterBinding

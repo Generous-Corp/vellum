@@ -68,6 +68,12 @@ FRAMEWORK_TRANSFER_RECORD = "provenance/framework/transfer.json"
 # append-only list, which is how a third-party update lands.
 FRAMEWORK_EXTERNAL_UPDATES = "provenance/framework/external-updates.json"
 FRAMEWORK_EXTERNAL_UPDATE_KEYS = {"path", "from_blob", "to_blob", "reason", "dependency", "version"}
+# The file set of framework/ is the transfer record's paths, minus the removed
+# rows of this append-only ledger, plus its added rows. Each row names where
+# the file came from: a Pulp path and commits, proved against a Pulp checkout,
+# or `native` for a file Vellum wrote. tools/mirror/framework_ports.py reads
+# and replays it for this verifier and for the mirror build plan.
+FRAMEWORK_PORTS_TOOL = Path(__file__).resolve().parents[1] / "mirror" / "framework_ports.py"
 FRAMEWORK_VELLUM_DECLARATION = re.compile(r"namespace\s+vellum(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])vellum\s*::")
 # The rules the framework transfer is judged by. A change that introduces the
 # transfer record may touch none of them, so the rename tool and checks that
@@ -132,6 +138,81 @@ RENAMED_MIRROR_SCAN_ROOTS = EXPECTED_ACTIVE_ROOTS + ("components", "product", "t
 # Paths that must spell the forbidden names: the consumer built against the
 # installed mirror, and the policy, its installer copy and their tests.
 RENAMED_MIRROR_EXEMPT_PREFIXES: tuple[str, ...] = ()
+# The framework units' behavior tests include and call the units by their
+# names, so the renamed-mirror rule does not read them. A test only consumes:
+# it may hold flat files of the shapes below and may not open a `vellum`
+# namespace, so no framework source can be kept here under a test's name. The
+# native name rules, the normalized-copy quarantine and the collision census
+# still read this tree.
+FRAMEWORK_TEST_ROOT = "tools/framework-tests/"
+FRAMEWORK_TEST_FILE = re.compile(r"(?:[a-z0-9_]+_test\.(?:cpp|mm)|[a-z0-9_]+\.hpp|CMakeLists\.txt|README\.md)")
+FRAMEWORK_TEST_NAMESPACE = re.compile(r"\bnamespace\s+vellum\b")
+
+
+def _strip_cxx_comments(text: str) -> str:
+    """Blank C/C++ comments while preserving newlines and string literals."""
+    chars = list(text)
+    i = 0
+    state = "code"
+    while i < len(chars):
+        if state == "code":
+            if chars[i] == '"':
+                state = "string"
+                i += 1
+                continue
+            if chars[i] == "'":
+                state = "char"
+                i += 1
+                continue
+            if chars[i:i + 2] == ["/", "/"]:
+                chars[i:i + 2] = [" ", " "]
+                i += 2
+                while i < len(chars) and chars[i] != "\n":
+                    chars[i] = " "
+                    i += 1
+                continue
+            if chars[i:i + 2] == ["/", "*"]:
+                chars[i:i + 2] = [" ", " "]
+                i += 2
+                state = "block_comment"
+                continue
+            i += 1
+            continue
+        if state == "block_comment":
+            if chars[i:i + 2] == ["*", "/"]:
+                chars[i:i + 2] = [" ", " "]
+                i += 2
+                state = "code"
+                continue
+            if chars[i] != "\n":
+                chars[i] = " "
+            i += 1
+            continue
+        if chars[i] == "\\":
+            i += 2
+        elif (state == "string" and chars[i] == '"') or (state == "char" and chars[i] == "'"):
+            state = "code"
+            i += 1
+        else:
+            i += 1
+    return "".join(chars)
+
+
+# CMake commands the test directory may not invoke: a library could be linked
+# into something that ships, and the others reach code this check cannot read.
+FRAMEWORK_TEST_CMAKE_REFUSED = {
+    "add_library": "framework-test-library",
+    "cmake_language": "framework-test-cmake-indirection",
+    "include": "framework-test-cmake-indirection",
+    "add_subdirectory": "framework-test-cmake-indirection",
+    "export": "framework-test-cmake-indirection",
+}
+# A qualified out-of-line function definition (`void vellum::view::X::f() {`,
+# or the same through a namespace alias): a test defines its own functions
+# unqualified, so any qualified definition is refused.
+FRAMEWORK_TEST_QUALIFIED_DEFINITION = re.compile(
+    r"(?ms)^[ \t]*(?:[\w:<>,*&\t ]+[\s*&])?(?:::)?\w+(?:[ \t]*::[ \t]*~?\w+)+[ \t]*"
+    r"\([^;{}]*\)[^;{}]*\{")
 RENAMED_MIRROR_EXEMPT_PATHS = {
     # The consumer built against the installed mirror, file by file: a new
     # file under tools/mirror/consumer/ is scanned like any other.
@@ -320,6 +401,9 @@ def scan_renamed_mirror(root: Path, roots: Iterable[str] = RENAMED_MIRROR_SCAN_R
     findings: list[dict[str, object]] = []
     for path in active_files(root, roots):
         relative = path.relative_to(root).as_posix()
+        if relative.startswith(FRAMEWORK_TEST_ROOT):
+            findings.extend(framework_test_findings(relative, path))
+            continue
         if (relative.startswith(MIRROR_ROOT) or relative in RENAMED_MIRROR_EXEMPT_PATHS
                 or relative.startswith(RENAMED_MIRROR_EXEMPT_PREFIXES)
                 or not content_scan_policy.should_scan_content(relative, extensionless=True)):
@@ -332,6 +416,181 @@ def scan_renamed_mirror(root: Path, roots: Iterable[str] = RENAMED_MIRROR_SCAN_R
         for match in RENAMED_MIRROR_PATTERN.finditer(text):
             findings.append({"rule": RENAMED_MIRROR_RULE, "path": relative,
                              "line": text.count("\n", 0, match.start()) + 1, "match": match.group(0)[:120]})
+    return findings
+
+
+def framework_test_findings(relative: str, path: Path) -> list[dict[str, object]]:
+    """A framework test file that is not a flat test-shaped file, or that opens a vellum namespace."""
+    name = relative[len(FRAMEWORK_TEST_ROOT):]
+    if not FRAMEWORK_TEST_FILE.fullmatch(name):
+        return [{"rule": "framework-test-file-shape", "path": relative, "line": 0, "match": name[:120]}]
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return [{"rule": "undecodable-native-text", "path": relative, "line": 0, "match": ""}]
+    scan_text = _strip_cxx_comments(text)
+    # The native name rules apply too, so a Pulp file cannot land here unrenamed.
+    patterns = {"framework-test-defines-vellum": FRAMEWORK_TEST_NAMESPACE,
+                "framework-test-qualified-definition": FRAMEWORK_TEST_QUALIFIED_DEFINITION,
+                **FORBIDDEN_ACTIVE_PATTERNS}
+    findings = []
+    if name == "CMakeLists.txt":
+        findings += [{"rule": FRAMEWORK_TEST_CMAKE_REFUSED[command], "path": relative, "line": line,
+                      "match": f"{command}({' '.join(args.split())[:100]})"}
+                     for command, args, line in cmake_invocations(text) if command in FRAMEWORK_TEST_CMAKE_REFUSED]
+    for rule, pattern in patterns.items():
+        for match in pattern.finditer(scan_text):
+            if rule == "framework-test-defines-vellum":
+                line_start = scan_text.rfind("\n", 0, match.start()) + 1
+                if re.search(r"\busing\s*$", scan_text[line_start:match.start()]):
+                    continue
+            findings.append({"rule": rule, "path": relative,
+                             "line": text.count("\n", 0, match.start()) + 1,
+                             "match": match.group(0).strip()[:120]})
+    return findings
+
+
+def framework_test_blob_findings(root: Path, recorded: set[str],
+                                 pulp_root: Path | None) -> tuple[list[dict[str, str]], bool]:
+    """Framework test files whose exact bytes are a Pulp-origin blob.
+
+    The recorded set (the historical seed, the mirror's origin records and both
+    sides of the transfer record) is always read. With a Pulp checkout, every
+    blob of its checked-out tree is too, so a Pulp test pasted verbatim fails
+    even though no record names it. Returns the findings and whether the Pulp
+    tree was read.
+    """
+    blobs = set(recorded)
+    transfer = root / FRAMEWORK_TRANSFER_RECORD
+    if transfer.is_file():
+        for record in json.loads(transfer.read_text(encoding="utf-8")).get("records", []):
+            blobs.update(record.get(key, "") for key in ("pulp_git_blob_sha", "framework_git_blob_sha"))
+    pulp_tree_checked = False
+    if pulp_root is not None:
+        listing = subprocess.run(["git", "-C", str(pulp_root), "ls-tree", "-r", "HEAD"],
+                                 capture_output=True, text=True, check=False)
+        if listing.returncode == 0:
+            blobs.update(line.split()[2] for line in listing.stdout.splitlines() if " blob " in line)
+            pulp_tree_checked = True
+    blobs.discard(EMPTY_BLOB_SHA)
+    blobs.discard("")
+    findings = []
+    if pulp_root is not None and not pulp_tree_checked:
+        # Asked to compare against Pulp and unable to: refuse rather than pass unchecked.
+        findings.append({"path": f"{pulp_root} (unreadable Pulp tree)", "git_blob_sha": ""})
+    for path in active_files(root, (FRAMEWORK_TEST_ROOT.rstrip("/"),)):
+        blob = git_blob_sha(path.read_bytes())
+        if blob in blobs:
+            findings.append({"path": path.relative_to(root).as_posix(), "git_blob_sha": blob})
+    return findings, pulp_tree_checked
+
+
+# CMake source read as commands, not lines (CMake language reference): a
+# command is `identifier (args)`, case-insensitive, anywhere a line may hold
+# several and a block may nest them. Comments (`#...` and `#[[...]]`), quoted
+# arguments and bracket arguments are removed before commands are found, so a
+# command name inside them is not an invocation; their text is kept as the
+# argument it is.
+_CMAKE_BRACKET_OPEN = re.compile(r"\[(=*)\[")
+_CMAKE_COMMAND = re.compile(r"(?<![\w])([A-Za-z_][A-Za-z0-9_]*)[ \t\r\n]*\(")
+_CMAKE_LITERAL = re.compile(r"\x00(\d+)\x00")
+
+
+def _cmake_strip(text: str) -> tuple[str, list[str]]:
+    """Text with comments blanked and each quoted or bracket argument replaced by a numbered token."""
+    text = text.replace("\x00", " ")
+    out: list[str] = []
+    literals: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        bracket = _CMAKE_BRACKET_OPEN.match(text, i + 1 if c == "#" else i) if c in "#[" else None
+        if bracket:
+            close = "]" + bracket.group(1) + "]"
+            end = text.find(close, bracket.end())
+            stop = n if end < 0 else end + len(close)
+            body = text[bracket.end():n if end < 0 else end]
+            if c == "[":
+                literals.append(body)
+                out.append(f"\x00{len(literals) - 1}\x00")
+            out.append("\n" * text.count("\n", i, stop))
+            i = stop
+        elif c == "#":
+            end = text.find("\n", i)
+            i = n if end < 0 else end
+        elif c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            literals.append(text[i + 1:j])
+            out.append(f"\x00{len(literals) - 1}\x00" + "\n" * text.count("\n", i, j))
+            i = j + 1
+        elif c == "\\":
+            # An escaped character (`\(`) is an argument character, never syntax.
+            out.append(" ")
+            i += 2
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out), literals
+
+
+def cmake_invocations(text: str) -> list[tuple[str, str, int]]:
+    """Every `identifier(...)` in CMake source as (lowercase name, argument text, line)."""
+    stripped, literals = _cmake_strip(text)
+    invocations = []
+    for match in _CMAKE_COMMAND.finditer(stripped):
+        depth, j = 1, match.end()
+        while j < len(stripped) and depth:
+            depth += {"(": 1, ")": -1}.get(stripped[j], 0)
+            j += 1
+        args = stripped[match.end():j - 1 if depth == 0 else j]
+        args = _CMAKE_LITERAL.sub(lambda m: f" {literals[int(m.group(1))]} ", args)
+        invocations.append((match.group(1).lower(), args, stripped.count("\n", 0, match.start()) + 1))
+    return invocations
+
+
+def _cmake_installs(text: str) -> list[tuple[str, int]]:
+    """The install rules in CMake source, including `cmake_language(CALL install ...)` and EVAL code."""
+    found = []
+    for command, args, line in cmake_invocations(text):
+        words = args.split()
+        if command == "install":
+            found.append((args, line))
+        elif command == "cmake_language" and words[:2] and words[0].upper() == "CALL" and words[1].lower() == "install":
+            found.append((args, line))
+        elif command == "cmake_language" and words[:1] and words[0].upper() == "EVAL":
+            found += [(nested, line) for name, nested, _ in cmake_invocations(args) if name == "install"]
+    return found
+
+
+def framework_test_install_findings(root: Path) -> list[dict[str, object]]:
+    """Install rules that would ship framework test content into a package.
+
+    Any install() in the test directory is refused, and so is one anywhere
+    else whose arguments name the directory. A rule that reaches a test
+    target through a variable is not seen; the SDK builder also configures
+    with tests off, so the directory is never added there.
+    """
+    listed = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--", "*CMakeLists.txt", "*.cmake"],
+                            capture_output=True, check=False)
+    if listed.returncode == 0:
+        names = [name for name in listed.stdout.decode("utf-8", errors="surrogateescape").split("\0") if name]
+    else:
+        names = [path.relative_to(root).as_posix() for path in root.rglob("*")
+                 if path.is_file() and (path.name == "CMakeLists.txt" or path.suffix == ".cmake")]
+    findings: list[dict[str, object]] = []
+    for name in sorted(names):
+        if name.startswith(MIRROR_ROOT):
+            continue
+        path = root / name
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        inside = name.startswith(FRAMEWORK_TEST_ROOT)
+        for args, line in _cmake_installs(text):
+            if inside or "framework-tests" in args:
+                findings.append({"path": name, "line": line, "match": f"install({' '.join(args.split())[:110]})"})
     return findings
 
 
@@ -1096,8 +1355,211 @@ def derive_framework_transfer(root: Path, base: str, scratch: Path) -> dict:
     return {"files": files, "record": record, "framework": framework}
 
 
+def load_framework_ports():
+    spec = importlib.util.spec_from_file_location("framework_ports", FRAMEWORK_PORTS_TOOL)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+FRAMEWORK_PORTS = load_framework_ports().LEDGER
 # The files that only exist together with framework/.
-FRAMEWORK_DATA_FILES = (FRAMEWORK_TRANSFER_RECORD, FRAMEWORK_NAME_DEBT, FRAMEWORK_EXTERNAL_UPDATES)
+FRAMEWORK_DATA_FILES = (FRAMEWORK_TRANSFER_RECORD, FRAMEWORK_NAME_DEBT, FRAMEWORK_EXTERNAL_UPDATES, FRAMEWORK_PORTS)
+
+
+def framework_ports_history_errors(root: Path, ports) -> list[str]:
+    """Append-only: the ledger at the history base must be a prefix of this one."""
+    base, base_error = load_mirror_export_verifier().history_base(root)
+    if base_error:
+        return [f"{FRAMEWORK_PORTS}: {base_error}"]
+    if base is None:
+        return []
+    shown = subprocess.run(["git", "-C", str(root), "show", f"{base}:{FRAMEWORK_PORTS}"],
+                           capture_output=True, check=False)
+    if shown.returncode != 0:
+        return []  # the change that adds the ledger
+    if not (root / FRAMEWORK_PORTS).exists():
+        return [f"{FRAMEWORK_PORTS}: present at the merge base and removed; the ledger is append-only"]
+    landed, landed_errors = ports.parse(shown.stdout.decode("utf-8", errors="replace"))
+    if landed_errors:
+        return [f"{FRAMEWORK_PORTS}: unreadable at {base}: {landed_errors[0]}"]
+    try:
+        rows = json.loads((root / FRAMEWORK_PORTS).read_text(encoding="utf-8"))["rows"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []  # reported by the ledger's own reading
+    if not isinstance(rows, list) or rows[:len(landed)] != landed:
+        return [f"{FRAMEWORK_PORTS}: rows present at the merge base were removed, reordered or edited; "
+                "the ledger is append-only"]
+    return []
+
+
+def framework_ports_landed(root: Path, ports) -> int:
+    """How many ledger rows the history base already holds; 0 when there is no base or no ledger there."""
+    base, base_error = load_mirror_export_verifier().history_base(root)
+    if base_error or base is None:
+        return 0
+    shown = subprocess.run(["git", "-C", str(root), "show", f"{base}:{FRAMEWORK_PORTS}"],
+                           capture_output=True, check=False)
+    if shown.returncode != 0:
+        return 0
+    return len(ports.parse(shown.stdout.decode("utf-8", errors="replace"))[0])
+
+
+def framework_ports_joining_errors(root: Path, rows: list[dict], added: dict[str, dict], landed: int) -> list[str]:
+    """A file of Pulp origin joins framework/ with exactly the blob its row records.
+
+    Judged for the rows this change appends, and needing no Pulp checkout: the
+    Pulp proof ties the recorded blob to Pulp, and this ties the file to the
+    recorded blob. Once the row has landed the file is ordinary framework
+    source and its bytes may change by a reviewed edit.
+    """
+    errors: list[str] = []
+    for index, row in enumerate(rows):
+        path = row["framework_path"]
+        if index < landed or row["change"] != "added" or row["origin"] != "pulp" or added.get(path) != row:
+            continue
+        file = root / path
+        if not file.is_file() or file.is_symlink():
+            continue  # reported as a missing file
+        blob = git_blob_sha(file.read_bytes())
+        if blob != row["framework_blob"]:
+            errors.append(f"{FRAMEWORK_PORTS} rows[{index}]: {path} is blob {blob[:12]}, not the recorded "
+                          f"{row['framework_blob'][:12]}; a file of Pulp origin joins as Pulp's renamed bytes, "
+                          "and a port that differs from Pulp is a native row")
+    return errors
+
+
+def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[dict],
+                                rename: dict | None = None) -> list[str]:
+    """Prove every Pulp claim a row makes against the Pulp checkout, never from the row's text.
+
+    Each commit must be a commit object in the checkout and an ancestor of
+    `pulp_main_ref`. For an added row, pulp_path must be a regular file at the
+    last named commit; framework_path must be the path the transfer's rename
+    gives it; and framework_blob must be the blob of that file's bytes put
+    through the transfer's rename (verify_mirror_rename_identity.forward_bytes
+    with the transfer record's rename table, the transform the transfer proof
+    itself applies). A removed row's pulp_path is not looked up: the file may
+    be gone from every commit it names.
+    """
+    identity = load_rename_identity_verifier()
+    rename = rename or {}
+    table_ok = all(key in rename for key in ("from", "to", "include_units", "objc_classes", "objc_class_prefix",
+                                             "literal_exclusions", "edge_table"))
+    def pulp(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(pulp_root), *args], capture_output=True, check=False)
+
+    main = pulp("rev-parse", "--verify", "--quiet", f"{pulp_main_ref}^{{commit}}")
+    if main.returncode != 0:
+        return [f"{FRAMEWORK_PORTS}: Pulp checkout {pulp_root} has no {pulp_main_ref}"]
+    main_sha = main.stdout.decode().strip()
+    errors: list[str] = []
+    proved: dict[str, bool] = {}
+    for index, row in enumerate(rows):
+        if row["origin"] != "pulp":
+            continue
+        where = f"{FRAMEWORK_PORTS} rows[{index}]"
+        real = True
+        for commit in row["pulp_commits"]:
+            if commit not in proved:
+                resolved = pulp("rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}")
+                proved[commit] = (resolved.returncode == 0 and resolved.stdout.decode().strip() == commit
+                                  and pulp("merge-base", "--is-ancestor", commit, main_sha).returncode == 0)
+            if not proved[commit]:
+                real = False
+                errors.append(f"{where}: Pulp commit {commit} is not a commit on Pulp {pulp_main_ref}")
+        if not real or row["change"] != "added":
+            continue
+        commit, pulp_path = row["pulp_commits"][-1], row["pulp_path"]
+        listing = pulp("--literal-pathspecs", "ls-tree", "-z", commit, "--", pulp_path).stdout
+        entries = [entry for entry in listing.split(b"\0") if entry]
+        # A regular file: a symlink or a tree at the path is not the content.
+        meta = entries[0].split(b"\t", 1)[0].split() if len(entries) == 1 else []
+        if not meta or meta[0] not in (b"100644", b"100755"):
+            errors.append(f"{where}: the last named Pulp commit {commit[:12]} holds no file at {pulp_path}")
+            continue
+        if not table_ok:
+            errors.append(f"{where}: {FRAMEWORK_TRANSFER_RECORD} carries no rename table to put {pulp_path} through")
+            continue
+        expected_path = FRAMEWORK_ROOT + identity.renamed_path(pulp_path, rename["from"], rename["to"])
+        if row["framework_path"] != expected_path:
+            errors.append(f"{where}: Pulp {pulp_path} renames to {expected_path}, not {row['framework_path']}")
+            continue
+        content = pulp("cat-file", "blob", meta[2].decode())
+        if content.returncode != 0:
+            errors.append(f"{where}: cannot read Pulp {commit[:12]}:{pulp_path}")
+            continue
+        data = content.stdout
+        edge = rename["edge_table"]
+        if identity.is_text(pulp_path, data, {x.lower() for x in edge.get("suffixes", [])},
+                            {x.lower() for x in edge.get("binary_suffixes", [])}):
+            protected = [x["literal"].encode() for x in rename["literal_exclusions"] if x.get("path") == pulp_path]
+            data, _ = identity.forward_bytes(data, rename, protected)
+        renamed_blob = git_blob_sha(data)
+        if renamed_blob != row["framework_blob"]:
+            errors.append(f"{where}: framework_blob {row['framework_blob'][:12]} is not Pulp {commit[:12]}:{pulp_path} "
+                          f"put through the transfer's rename ({renamed_blob[:12]}); a port that differs from "
+                          "Pulp is a native row")
+    return errors
+
+
+def framework_ports_native_errors(root: Path, added: dict[str, dict], pulp_root: Path | None) -> list[str]:
+    """A `native` row may not carry Pulp's bytes past the Pulp proof.
+
+    The file a native row adds is refused when its blob is one the mirror's
+    origin records list, or, with a Pulp checkout, one Pulp's object store
+    holds. This is the native roots' exact-blob rule: it catches Pulp content
+    copied as it is, not content respelled on the way.
+    """
+    native = {}
+    for path, row in sorted(added.items()):
+        file = root / path
+        if row["origin"] == "native" and file.is_file() and not file.is_symlink():
+            native[path] = git_blob_sha(file.read_bytes())
+    if not native:
+        return []
+    records, _ = load_mirror_origin_records(root / MIRROR_ORIGIN_RECORDS)
+    known = {record["git_blob_sha"] for record in records}
+    if pulp_root is not None:
+        asked = sorted(set(native.values()))
+        batch = subprocess.run(["git", "-C", str(pulp_root), "cat-file", "--batch-check"],
+                               input="".join(f"{blob}\n" for blob in asked).encode(), capture_output=True, check=False)
+        lines = batch.stdout.decode("utf-8", errors="replace").splitlines()
+        if batch.returncode != 0 or len(lines) != len(asked):
+            return [f"{FRAMEWORK_PORTS}: Pulp checkout {pulp_root} could not be asked for the native rows' blobs"]
+        known |= {blob for blob, line in zip(asked, lines) if line.split()[1:2] == ["blob"]}
+    known.discard(EMPTY_BLOB_SHA)
+    return [f"{FRAMEWORK_PORTS}: {path} is added as native, but its bytes are a Pulp blob ({blob[:12]}); "
+            "a row for Pulp content names its Pulp path and commits"
+            for path, blob in native.items() if blob in known]
+
+
+def framework_ports_state(root: Path, transferred: set[str], pulp_root: Path | None, pulp_main_ref: str,
+                          defer_identity: bool, rename: dict | None = None
+                          ) -> tuple[set[str], list[str], dict[str, object]]:
+    """The file set framework/ must hold, and what is wrong with the ledger: (expected, errors, checks)."""
+    ports = load_framework_ports()
+    expected, added, removed, errors = ports.file_set(root, transferred)
+    errors = errors + framework_ports_history_errors(root, ports)
+    errors = errors + framework_ports_native_errors(root, added, pulp_root)
+    checks: dict[str, object] = {"framework_ports_added": sorted(added), "framework_ports_removed": sorted(removed)}
+    rows, row_errors = ports.load(root)
+    if not row_errors:
+        errors.extend(framework_ports_joining_errors(root, rows, added, framework_ports_landed(root, ports)))
+    pulp_rows = [row for row in rows if row["origin"] == "pulp"] if not row_errors else []
+    if not pulp_rows:
+        checks["framework_ports_proved"] = not row_errors
+    elif pulp_root is None:
+        # Fail closed, as the transfer proof does.
+        checks["framework_ports_proved"] = "deferred: no Pulp checkout"
+        if not defer_identity:
+            errors.append(f"{FRAMEWORK_PORTS}: no Pulp checkout proved the Pulp commits it names; pass --pulp-root")
+    else:
+        proof = framework_ports_pulp_errors(pulp_root, pulp_main_ref, rows, rename)
+        checks["framework_ports_proved"] = not proof
+        errors.extend(proof)
+    return expected, errors, checks
 
 
 def framework_transfer_state(root: Path) -> tuple[dict[str, object], list[str]]:
@@ -1267,11 +1729,16 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
                 errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: framework/ landed without its record")
             elif before.stdout != transfer_bytes:
                 errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: changed from the merge base; it is immutable")
-    # The file set is the transfer record's: a native edit may change a file's
-    # bytes but not add or remove one, because the build compiles the export's
-    # closures (mirror_package.verify_framework_identity holds the same set).
+    # The file set is the transfer record's paths, minus the ports ledger's
+    # removals, plus its additions (mirror_package.verify_framework_identity
+    # holds the same set). A file with neither a record nor a row is an
+    # extra, and a recorded or added file that is absent is missing.
     # framework/external/, which the ratchet skips, is reported on its own.
-    recorded = {r.get("framework_path") for r in transfer.get("records", [])}
+    recorded, ports_errors, ports_checks = framework_ports_state(
+        root, {r.get("framework_path") for r in transfer.get("records", [])},
+        pulp_root, pulp_main_ref, defer_identity, transfer.get("rename"))
+    errors.extend(ports_errors)
+    checks.update(ports_checks)
     # What git tracks (every entry, gitlinks included) and what the checkout
     # holds: a submodule or other non-file entry under framework/ is an extra.
     staged = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z", "--", FRAMEWORK_ROOT.rstrip("/")],
@@ -1287,9 +1754,11 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
         errors.append(f"framework/external/ holds {len(checks['framework_external_unrecorded'])} files "
                       "the transfer record does not list")
     if unrecorded:
-        errors.append(f"framework/ holds {len(unrecorded)} files the transfer record does not list: {unrecorded[:5]}")
+        errors.append(f"framework/ holds {len(unrecorded)} files its file set (the transfer record and the "
+                      f"ports ledger) does not list: {unrecorded[:5]}")
     if missing:
-        errors.append(f"framework/ is missing {len(missing)} files the transfer record lists: {missing[:5]}")
+        errors.append(f"framework/ is missing {len(missing)} files its file set (the transfer record and the "
+                      f"ports ledger) lists: {missing[:5]}")
     # The runtime collision census, permanent: framework/ now shares the
     # vellum namespace with native code, so a native declaration that collides
     # with a framework/ name fails here. A census that sees no declarations on
@@ -1576,6 +2045,15 @@ def verify(
         errors.append(
             f"native source contains {len(copied_findings)} unrecorded Pulp-origin blob copies"
         )
+    test_blob_findings, pulp_tree_checked = framework_test_blob_findings(root, pulp_origin_blobs, pulp_root)
+    checks["framework_test_pulp_blob_matches"] = test_blob_findings
+    checks["framework_test_pulp_tree_checked"] = pulp_tree_checked
+    if test_blob_findings:
+        errors.append(f"{FRAMEWORK_TEST_ROOT} holds {len(test_blob_findings)} Pulp-origin blob copies")
+    test_install_findings = framework_test_install_findings(root)
+    checks["framework_test_install_rules"] = test_install_findings
+    if test_install_findings:
+        errors.append(f"{len(test_install_findings)} install rules would ship {FRAMEWORK_TEST_ROOT} content")
 
     mirror_inventory = sorted(path.relative_to(root).as_posix() for path in mirror_files(root))
     checks["mirror_file_count"] = len(mirror_inventory)

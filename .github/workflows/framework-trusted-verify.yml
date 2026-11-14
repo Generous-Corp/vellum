@@ -39,6 +39,7 @@ on:
     branches: [main]
 
 permissions:
+  actions: read
   contents: read
   statuses: write
 
@@ -52,6 +53,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
+      actions: read
       contents: read
       statuses: write
     steps:
@@ -97,20 +99,63 @@ jobs:
           # `timeout`: a genuine timeout is an exit status, posted as failure.
           finished=0
           cancelled=0
+          # Nothing is posted until the newest-run guard below has cleared this
+          # run: a rerun of an older run must not overwrite the newest's status.
+          guard_cleared=0
           # shellcheck disable=SC2329  # invoked by the EXIT trap
           on_exit() {
-            if [ "$finished" != 1 ] && [ "$cancelled" != 1 ]; then
+            if [ "$guard_cleared" = 1 ] && [ "$finished" != 1 ] && [ "$cancelled" != 1 ]; then
               post_status failure "The trusted judge did not finish" || true
             fi
           }
           trap on_exit EXIT
           trap 'cancelled=1; exit 130' INT TERM
-          post_status pending "Judging with the base rules"
-
           safe_git=(git -c core.hooksPath=/dev/null -c core.fsmonitor=false
                     -c fetch.fsckObjects=true -c transfer.fsckObjects=true)
           timeout 6m "${safe_git[@]}" clone --quiet --no-checkout "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" trusted
           "${safe_git[@]}" -C trusted checkout --quiet --detach "$TRUSTED_SHA"
+
+          # Only the newest run for this head may post. A rerun of an older run
+          # keeps its run id, so it would re-post a status naming that older
+          # run and the admission steward would refuse the newer one's verdict.
+          # The rules come from TRUSTED_SHA, and on merge_group that is the
+          # queue's base: a base that predates the guard has no `newest-run`
+          # command, so the guard is skipped there rather than run with the
+          # judge's arguments missing. Once the guard is decided to apply, a
+          # failure to run it posts a failure status: a required status is
+          # never left absent, and a rerun posts the real verdict.
+          guard_cleared=1
+          if grep -q 'def newest_run_main' trusted/tools/provenance/framework_trusted_verify.py 2>/dev/null; then
+            guard_cleared=0
+            if printf 'Authorization: Bearer %s\n' "$status_token" |
+              curl --fail --silent --show-error --retry 3 --header @- \
+              --header "Accept: application/vnd.github+json" \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/framework-trusted-verify.yml/runs?head_sha=${HEAD_SHA}&per_page=100" \
+              > "$RUNNER_TEMP/framework-trusted-runs.json"; then
+              set +e
+              python3 -I trusted/tools/provenance/framework_trusted_verify.py newest-run \
+                --runs-file "$RUNNER_TEMP/framework-trusted-runs.json" --run-id "$GITHUB_RUN_ID"
+              guard=$?
+              set -e
+            else
+              guard=2
+            fi
+            case "$guard" in
+              0) guard_cleared=1 ;;
+              3) exit 0 ;;
+              *)
+                echo "framework-trusted-verify: could not tell whether run $GITHUB_RUN_ID is the newest" >&2
+                guard_cleared=1
+                post_status failure "The newest-run check failed; rerun this job"
+                finished=1
+                exit 2
+                ;;
+            esac
+          else
+            echo "framework-trusted-verify: the rules at $TRUSTED_SHA predate the newest-run guard, skipping it"
+          fi
+          post_status pending "Judging with the base rules"
+
           if [ "$EVENT_NAME" = pull_request_target ]; then
             timeout 3m "${safe_git[@]}" -C trusted fetch --no-tags --quiet origin "+refs/pull/${PR_NUMBER}/head:refs/framework-verify/head"
           else

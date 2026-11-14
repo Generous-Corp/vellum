@@ -19,6 +19,11 @@ verify_extraction.py. Nothing from the pull request is imported or executed.
 - A change to rule files alone is a rules change; its review judges it.
 
 Exit: 0 pass (or no-op), 1 refused, 2 the inputs could not be read.
+
+`newest-run` is the guard the workflow runs before it posts anything: a rerun
+of an older run for the same head must not overwrite the status the newest run
+owns. Exit: 0 this run is the newest and may post, 3 a newer run owns the
+status (post nothing), 2 the run list could not be read (post nothing).
 """
 
 from __future__ import annotations
@@ -156,7 +161,52 @@ def judge(root: Path, base: str) -> dict:
     return {"status": "fail" if errors else "pass", "mode": mode, "errors": errors, "rule_files": rules}
 
 
+def newest_run_decision(runs: object, own_run_id: object) -> tuple[bool, int]:
+    """Whether `own_run_id` may post the status, and which run owns it.
+
+    `runs` is the workflow's run list for one head commit (the `workflow_runs`
+    array of the Actions API). The newest run is the latest `created_at`, ties
+    broken by the higher run id. Raises InputError when the list cannot be
+    trusted: malformed, or not containing this run, so callers fail closed.
+    """
+    try:
+        own = int(own_run_id)
+        if not isinstance(runs, list) or not runs:
+            raise InputError("the run list is empty or not a list")
+        ranked = [(str(run["created_at"]), int(run["id"])) for run in runs]
+    except InputError:
+        raise
+    except (TypeError, ValueError, KeyError) as exc:
+        raise InputError(f"the run list is unreadable: {exc!r}") from exc
+    if own not in {run_id for _, run_id in ranked}:
+        raise InputError(f"run {own} is not in the run list")
+    owner = max(ranked)[1]
+    return owner == own, owner
+
+
+def newest_run_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="framework_trusted_verify.py newest-run")
+    parser.add_argument("--runs-file", type=Path, required=True, help="the Actions API run-list JSON for the head")
+    parser.add_argument("--run-id", required=True)
+    args = parser.parse_args(argv)
+    try:
+        document = json.loads(args.runs_file.read_text(encoding="utf-8"))
+        runs = document.get("workflow_runs") if isinstance(document, dict) else None
+        may_post, owner = newest_run_decision(runs, args.run_id)
+    except (InputError, ValueError, OSError) as exc:
+        print(f"framework-trusted-verify: cannot tell whether run {args.run_id} is the newest, posting nothing: {exc}",
+              file=sys.stderr)
+        return 2
+    if may_post:
+        return 0
+    print(f"framework-trusted-verify: run {owner} is newer than run {args.run_id} for this head and owns the "
+          f"status; run {args.run_id} posts nothing")
+    return 3
+
+
 def main(argv: list[str] | None = None) -> int:
+    if (argv if argv is not None else sys.argv[1:])[:1] == ["newest-run"]:
+        return newest_run_main((argv if argv is not None else sys.argv[1:])[1:])
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--repo", type=Path, required=True, help="the trusted checkout holding the PR's objects")
     parser.add_argument("--head", required=True, help="the pull request's head commit (40 hex)")

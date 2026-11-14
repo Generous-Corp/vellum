@@ -147,54 +147,54 @@ export interface TokenReceipt {
     value: string;
 }
 export interface TokenRefs {
-    backgroundColor?: TokenReceipt;
-    color?: TokenReceipt;
-    boxShadow?: TokenReceipt;
-    fill?: TokenReceipt;
-    stroke?: TokenReceipt;
+    backgroundColor?: TokenReceipt | undefined;
+    color?: TokenReceipt | undefined;
+    boxShadow?: TokenReceipt | undefined;
+    fill?: TokenReceipt | undefined;
+    stroke?: TokenReceipt | undefined;
     [stop: `backgroundLinearGradient.stops.${number}` | `fill.stops.${number}`]:
         TokenReceipt | undefined;
 }
 export interface TokenLayers {
-    semantic?: Record<string, string>;
-    theme?: Record<string, string>;
+    semantic?: Record<string, string> | undefined;
+    theme?: Record<string, string> | undefined;
 }
 export interface ElementProps {
-    id?: string;
-    style?: Style;
-    tokenRefs?: TokenRefs;
-    text?: string;
-    source?: string;
-    accessibilityLabel?: string;
-    accessibilityValue?: string;
-    accessibilityRole?: 'button' | 'group' | 'image' | 'list' | 'text' | 'text-field';
+    id?: string | undefined;
+    style?: Style | undefined;
+    tokenRefs?: TokenRefs | undefined;
+    text?: string | undefined;
+    source?: string | undefined;
+    accessibilityLabel?: string | undefined;
+    accessibilityValue?: string | undefined;
+    accessibilityRole?: 'button' | 'group' | 'image' | 'list' | 'text' | 'text-field' | undefined;
     accessibilityState?: {
-        disabled?: boolean;
-        selected?: boolean;
-        checked?: boolean | 'mixed';
-        expanded?: boolean;
-    };
-    scroll?: 'horizontal' | 'vertical';
-    onPress?: EventHandler;
-    onChange?: EventHandler;
-    onSubmit?: EventHandler;
-    onKeyDown?: EventHandler;
-    onSelectionChange?: EventHandler;
-    onCompositionStart?: EventHandler;
-    onCompositionUpdate?: EventHandler;
-    onCompositionEnd?: EventHandler;
-    children?: unknown;
-    key?: string | number;
+        disabled?: boolean | undefined;
+        selected?: boolean | undefined;
+        checked?: boolean | 'mixed' | undefined;
+        expanded?: boolean | undefined;
+    } | undefined;
+    scroll?: 'horizontal' | 'vertical' | undefined;
+    onPress?: EventHandler | undefined;
+    onChange?: EventHandler | undefined;
+    onSubmit?: EventHandler | undefined;
+    onKeyDown?: EventHandler | undefined;
+    onSelectionChange?: EventHandler | undefined;
+    onCompositionStart?: EventHandler | undefined;
+    onCompositionUpdate?: EventHandler | undefined;
+    onCompositionEnd?: EventHandler | undefined;
+    children?: unknown | undefined;
+    key?: string | number | undefined;
 }
 
 export interface TextInputProps extends Omit<ElementProps, 'children' | 'text' | 'source'> {
     id: string;
     value: string;
-    placeholder?: string;
+    placeholder?: string | undefined;
     /** Ordered offsets in UTF-16 code units, matching JS String and platform text APIs. */
-    selection?: { start: number; end: number };
+    selection?: { start: number; end: number } | undefined;
     onChange: EventHandler;
-    children?: never;
+    children?: never | undefined;
 }
 
 export interface VellumElement<Props = ElementProps> {
@@ -224,11 +224,11 @@ export declare const View: Component;
 export declare const Stack: Component;
 export declare const Text: Component;
 export interface TextRunProps {
-    style?: Style;
-    tokenRefs?: Pick<TokenRefs, 'color'>;
-    text?: string;
-    children?: string | number | readonly (string | number)[];
-    key?: string | number;
+    style?: Style | undefined;
+    tokenRefs?: Pick<TokenRefs, 'color'> | undefined;
+    text?: string | undefined;
+    children?: string | number | readonly (string | number)[] | undefined;
+    key?: string | number | undefined;
 }
 export declare const TextRun: Component<TextRunProps>;
 export declare const TextInput: Component<TextInputProps>;
@@ -299,7 +299,7 @@ export interface DesignProps {
     document: DesignDocument;
     actions?: Record<string, EventHandler>;
     bindings?: DesignBindingsDocument | null;
-    tokenLayers?: TokenLayers;
+    tokenLayers?: TokenLayers | undefined;
 }
 export declare function Design(properties: DesignProps): VellumElement;
 
@@ -364,7 +364,7 @@ export interface MaterializedDesignDocument {
     tokens?: Record<string, { $type?: string; $value: JsonValue }>;
 }
 export interface MaterializeDesignOptions {
-    tokenLayers?: TokenLayers;
+    tokenLayers?: TokenLayers | undefined;
     viewport?: { width?: number; height?: number; padding?: number };
     actions?: Record<string, Partial<Record<
         'press' | 'change' | 'submit' | 'keyDown',
@@ -384,7 +384,7 @@ declare global {
             children: {};
         }
         interface IntrinsicAttributes {
-            key?: string | number;
+            key?: string | number | undefined;
         }
         interface IntrinsicElements {
             view: ElementProps;
