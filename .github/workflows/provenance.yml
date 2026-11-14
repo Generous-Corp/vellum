@@ -551,7 +551,7 @@ jobs:
               for repository in "${open_pr_repositories[@]}"; do
                 slug="${repository//\//__}"
                 repository_root="$snapshot_root/$slug"
-                mkdir -p "$repository_root/details" "$repository_root/trees"
+                mkdir -p "$repository_root/details" "$repository_root/trees" "$repository_root/landability"
                 gh api --method GET --paginate --slurp \
                   "repos/$repository/pulls?state=open&per_page=100" \
                   > "$repository_root/pulls.json"
@@ -579,12 +579,36 @@ jobs:
                     > "$repository_root/trees/$pull_number-merge-base-tree.json"
                   gh api "repos/$repository/git/trees/$head_tree?recursive=1" \
                     > "$repository_root/trees/$pull_number-head-tree.json"
+                  # Whether the pull request can land before the tag: its
+                  # merge-queue entry (GraphQL only; REST auto_merge reads
+                  # null for a queued pull request) and its comments, where a
+                  # counted APPROVE of its head would be. A failed read leaves
+                  # no file, and the collector counts a pull request it cannot
+                  # judge as landable, so the audit fails closed.
+                  landability_read="$repository_root/landability/$pull_number"
+                  if gh api graphql \
+                    -F owner="${repository%%/*}" -F name="${repository#*/}" -F number="$pull_number" \
+                    -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { number headRefOid mergeQueueEntry { id } } } }' \
+                    > "$landability_read-merge-queue.partial"; then
+                    mv "$landability_read-merge-queue.partial" "$landability_read-merge-queue.json"
+                  else
+                    echo "::warning::$repository#$pull_number: the merge-queue read failed; it counts as landable"
+                  fi
+                  if gh api --method GET --paginate --slurp \
+                    "repos/$repository/issues/$pull_number/comments?per_page=100" \
+                    > "$landability_read-comments.partial"; then
+                    mv "$landability_read-comments.partial" "$landability_read-comments.json"
+                  else
+                    echo "::warning::$repository#$pull_number: the comment read failed; it counts as landable"
+                  fi
                 done < "$repository_root/numbers.txt"
               done
               python3 -I tools/provenance/collect_release_evidence.py open-pr-snapshot \
                 --snapshot-root "$snapshot_root" \
                 --output "$RUNNER_TEMP/open-pr-snapshot.json" \
-                --cursor-output "$RUNNER_TEMP/open-pr-cursor.json"
+                --cursor-output "$RUNNER_TEMP/open-pr-cursor.json" \
+                --vellum-checkout "$GITHUB_WORKSPACE" \
+                --pulp-checkout .exact-boundary-pulp
               # The same reads, as content: release readiness for vX accepts
               # an open Vellum overlap only when it is exactly vX's own bump.
               python3 -I tools/provenance/collect_release_evidence.py release-bump-evidence \
@@ -1030,6 +1054,7 @@ jobs:
             # more than the full budget still fails closed.
             observatory_pending_event_scope=introduced
           fi
+          python3 -I tools/provenance/test_deadline_warning.py
           python3 -I tools/provenance/test_observatory.py
           python3 -I tools/provenance/test_observatory_mirror_import.py
           python3 -I tools/provenance/test_receiver.py

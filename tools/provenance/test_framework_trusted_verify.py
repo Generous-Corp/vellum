@@ -1033,8 +1033,12 @@ class WorkflowFleetLintTests(unittest.TestCase):
             shutil.copytree(ROOT / "tools/provenance", tools / "provenance",
                             ignore=shutil.ignore_patterns("__pycache__"))
             shutil.copytree(ROOT / "tools/mirror", tools / "mirror", ignore=shutil.ignore_patterns("__pycache__"))
+            # collect_release_evidence.py also appends scripts/ for the counted-verdict parser.
+            (Path(temporary) / "scripts").mkdir()
+            shutil.copy2(ROOT / "scripts/counted_verdicts.py", Path(temporary) / "scripts/counted_verdicts.py")
             for name in ("argparse", "json"):
-                (tools / "provenance" / f"{name}.py").write_text("raise SystemExit('SHADOWED')\n", encoding="utf-8")
+                for directory in (tools / "provenance", Path(temporary) / "scripts"):
+                    (directory / f"{name}.py").write_text("raise SystemExit('SHADOWED')\n", encoding="utf-8")
             scripts = ("verify_extraction.py", "framework_trusted_verify.py", "observatory.py",
                        "collect_release_evidence.py", "receiver.py")
             for script in scripts:
