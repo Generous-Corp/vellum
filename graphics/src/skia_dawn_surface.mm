@@ -287,7 +287,7 @@ sk_sp<SkShader> linear_gradient_shader(
             shader = SkShaders::RadialGradient({gradient.center_x, gradient.center_y}, radius,
                                                 shader_gradient);
         } else if (gradient.kind == GradientKind::conic) {
-            shader = SkShaders::SweepGradient(gradient.center_x, gradient.center_y,
+            shader = SkShaders::SweepGradient({gradient.center_x, gradient.center_y},
                                               shader_gradient);
         } else {
             shader = SkShaders::LinearGradient(points, shader_gradient);
