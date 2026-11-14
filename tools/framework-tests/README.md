@@ -11,7 +11,9 @@ ctest --test-dir build-gpu -L framework --output-on-failure
 
 Add a test with `vellum_add_framework_test(<name> SOURCES <name>_test.cpp
 UNITS Vellum::Mirror<Unit>)` in `CMakeLists.txt`. It registers as
-`vellum.framework.<name>`. `framework_test.hpp` is the runner: `FRAMEWORK_TEST`
+`vellum.framework.<name>`. Configure fails when a `*_test.cpp` or `*_test.mm`
+file here is named by no `vellum_add_framework_test()`, so a dropped
+registration turns the lane red instead of silently running nothing. `framework_test.hpp` is the runner: `FRAMEWORK_TEST`
 declares a case, `CHECK` records a failure and continues.
 
 The provenance verifier lets these files name the units (`vellum::view`,
