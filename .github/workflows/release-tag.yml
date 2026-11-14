@@ -200,8 +200,19 @@ jobs:
               [ "$attempt" = 3 ] && exit 1
               sleep $((attempt * 20))
             done
+            # release-path-review and framework-trusted-verify are commit
+            # statuses, not check runs; main's rules accept either.
+            for attempt in 1 2 3; do
+              if gh api --method GET --paginate --slurp \
+                "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/statuses?per_page=100" \
+                > "$RUNNER_TEMP/statuses.json"; then
+                break
+              fi
+              [ "$attempt" = 3 ] && exit 1
+              sleep $((attempt * 20))
+            done
             running="$(python3 -I scripts/release_request.py pending --commit "$GITHUB_SHA" \
-              --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \
+              --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" --statuses "$RUNNER_TEMP/statuses.json" \
               --protection "$RUNNER_TEMP/required-checks.json")"
             [ -z "$running" ] && break
             if [ "$SECONDS" -ge "$deadline" ]; then
@@ -212,7 +223,7 @@ jobs:
             sleep 60
           done
           tag="$(python3 -I scripts/release_request.py check --commit "$GITHUB_SHA" --remote origin \
-            --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \
+            --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" --statuses "$RUNNER_TEMP/statuses.json" \
             --protection "$RUNNER_TEMP/required-checks.json" \
             --immutable-releases "$RUNNER_TEMP/immutable-releases.json" \
             --immutable-read-at "$(cat "$RUNNER_TEMP/immutable-releases-read-at.txt")")"

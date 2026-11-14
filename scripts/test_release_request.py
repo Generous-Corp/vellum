@@ -178,6 +178,111 @@ class RequiredChecksFromProtection(unittest.TestCase):
             self.check(runs)
 
 
+# The live incident: release-tag run 43565218883 on e50573af8. Main's ruleset
+# requires release-path-review and framework-trusted-verify bound to Actions;
+# both are commit statuses posted by github-actions[bot], not check runs.
+INCIDENT_COMMIT = "e50573af89b7dd193b2837e75af9c5d1bb565363"
+INCIDENT_RULES = [{"type": "required_status_checks", "parameters": {"required_status_checks": [
+    {"context": "release-policy", "integration_id": 15368},
+    {"context": "release-path-review", "integration_id": 15368},
+    {"context": "framework-trusted-verify", "integration_id": 15368}]}}]
+BOT = {"login": "github-actions[bot]", "type": "Bot", "id": 41898282}
+
+
+def status(context: str, state: str, ident: int, creator: dict | None = None, created: str | None = None) -> dict:
+    return {"id": ident, "context": context, "state": state, "creator": BOT if creator is None else creator,
+            "created_at": created}
+
+
+class StatusSatisfiedChecks(unittest.TestCase):
+    REQUIRED = [("framework-trusted-verify", 15368)]
+
+    def unmet(self, statuses: list, runs: list | None = None, required: list | None = None) -> list:
+        return rr.unmet(required or self.REQUIRED, runs or [], COMMIT, rr.commit_statuses([statuses]))
+
+    def test_a_bot_status_that_succeeded_meets_the_check(self) -> None:
+        self.assertEqual(self.unmet([status("framework-trusted-verify", "success", 5)]), [])
+
+    def test_a_status_from_another_creator_does_not(self) -> None:
+        for creator in ({"login": "mallory", "type": "User", "id": 7},
+                        {"login": "github-actions[bot]", "type": "User", "id": 41898282},
+                        {"login": "github-actions[bot]", "type": "Bot", "id": 99},
+                        {"login": "other[bot]", "type": "Bot", "id": 41898282}, {}):
+            with self.subTest(creator=creator):
+                self.assertEqual(self.unmet([status("framework-trusted-verify", "success", 5, creator)]),
+                                 [f"framework-trusted-verify: no run from app 15368 on {COMMIT}"])
+
+    def test_a_forged_newer_failure_from_another_creator_cannot_block_the_bots_success(self) -> None:
+        forged = status("framework-trusted-verify", "failure", 9, {"login": "mallory", "type": "User", "id": 7})
+        self.assertEqual(self.unmet([forged, status("framework-trusted-verify", "success", 5)]), [])
+
+    def test_pending_is_waited_for_and_not_met(self) -> None:
+        rows = rr.commit_statuses([[status("framework-trusted-verify", "pending", 5)]])
+        self.assertEqual(rr.pending(self.REQUIRED, [], COMMIT, rows), ["framework-trusted-verify"])
+        self.assertEqual(rr.unmet(self.REQUIRED, [], COMMIT, rows), ["framework-trusted-verify: status pending"])
+        later = rr.commit_statuses([[status("framework-trusted-verify", "pending", 5),
+                                     status("framework-trusted-verify", "success", 6)]])
+        self.assertEqual(rr.pending(self.REQUIRED, [], COMMIT, later), [])
+
+    def test_a_newer_failure_status_outranks_an_older_success(self) -> None:
+        for state in ("failure", "error"):
+            with self.subTest(state=state):
+                self.assertEqual(self.unmet([status("framework-trusted-verify", "success", 5),
+                                             status("framework-trusted-verify", state, 6)]),
+                                 [f"framework-trusted-verify: status {state}"])
+
+    def test_a_check_bound_to_another_app_is_not_met_by_a_status(self) -> None:
+        self.assertEqual(self.unmet([status("framework-trusted-verify", "success", 5)],
+                                    required=[("framework-trusted-verify", 999)]),
+                         [f"framework-trusted-verify: no run from app 999 on {COMMIT}"])
+        self.assertEqual(self.unmet([status("framework-trusted-verify", "success", 5)],
+                                    required=[("framework-trusted-verify", None)]),
+                         [f"framework-trusted-verify: no run on {COMMIT}"])
+
+    def test_a_malformed_statuses_file_refuses(self) -> None:
+        good = status("framework-trusted-verify", "success", 5)
+        nocreator = {key: value for key, value in good.items() if key != "creator"}
+        for pages in ({}, [{}], [[1]], [[nocreator]], [[{**good, "id": "5"}]], [[{**good, "state": None}]]):
+            with self.subTest(pages=pages), self.assertRaises(rr.ReleaseRequestError):
+                rr.commit_statuses(pages)
+
+    def test_a_run_and_a_status_order_by_time_and_the_worse_wins_a_tie(self) -> None:
+        old_ok = status("framework-trusted-verify", "success", 5, created="2026-11-13T01:00:00Z")
+        new_bad = status("framework-trusted-verify", "failure", 6, created="2026-11-13T03:00:00Z")
+        ok_run = {**app_run("framework-trusted-verify", 1), "head_sha": COMMIT, "started_at": "2026-11-13T02:00:00Z"}
+        self.assertEqual(self.unmet([old_ok], [ok_run]), [])
+        self.assertEqual(self.unmet([new_bad], [ok_run]), ["framework-trusted-verify: status failure"])
+        self.assertEqual(self.unmet([old_ok], [{**ok_run, "conclusion": "failure"}]),
+                         ["framework-trusted-verify: completed/failure"])
+        self.assertEqual(self.unmet([{**new_bad, "created_at": "2026-11-13T02:00:00Z"}], [ok_run]),
+                         ["framework-trusted-verify: status failure"])
+        self.assertEqual(self.unmet([{**new_bad, "created_at": None}], [ok_run]),
+                         ["framework-trusted-verify: status failure"])
+
+    def test_the_incident_commit(self) -> None:
+        runs = [{**app_run("release-policy", 1), "head_sha": INCIDENT_COMMIT}]
+        statuses = [[status("release-path-review", "success", 58906707846),
+                     status("framework-trusted-verify", "success", 58906704591),
+                     status("framework-trusted-verify", "pending", 58906704018)]]
+        required = rr.required_checks(INCIDENT_RULES, None)
+        self.assertEqual(rr.unmet(required, runs, INCIDENT_COMMIT),
+                         [f"framework-trusted-verify: no run from app 15368 on {INCIDENT_COMMIT}",
+                          f"release-path-review: no run from app 15368 on {INCIDENT_COMMIT}"])
+        self.assertEqual(rr.unmet(required, runs, INCIDENT_COMMIT, rr.commit_statuses(statuses)), [])
+        self.assertEqual(rr.pending(required, runs, INCIDENT_COMMIT, rr.commit_statuses(statuses)), [])
+
+    def test_check_takes_the_statuses_and_refuses_without_them_being_well_formed(self) -> None:
+        args = dict(cmakelists=CMAKE, retired_tags=RETIRED, commit=COMMIT, tag_exists=False,
+                    branch_rules=[{"type": "required_status_checks", "parameters": {"required_status_checks": [
+                        {"context": "framework-trusted-verify", "integration_id": 15368}]}}],
+                    pages=[{"check_runs": []}], immutable=ENABLED, now=NOW)
+        self.assertEqual(rr.check(**args, statuses=[[status("framework-trusted-verify", "success", 5)]]), "v0.1.10")
+        with self.assertRaisesRegex(rr.ReleaseRequestError, "no run"):
+            rr.check(**args)
+        with self.assertRaisesRegex(rr.ReleaseRequestError, "commit status"):
+            rr.check(**args, statuses=[["junk"]])
+
+
 class LiveImmutableReleases(unittest.TestCase):
     """The tag is made only when the live immutable-release answer says releases are immutable."""
 
@@ -205,7 +310,7 @@ class LiveImmutableReleases(unittest.TestCase):
 
     def test_the_cli_requires_the_live_answer(self) -> None:
         completed = subprocess.run([sys.executable, "-I", str(rr.ROOT / "scripts/release_request.py"), "check",
-                                    "--commit", COMMIT, "--branch-rules", "r", "--check-runs", "c",
+                                    "--commit", COMMIT, "--branch-rules", "r", "--check-runs", "c", "--statuses", "s",
                                     "--protection", "p"], capture_output=True, text=True, check=False)
         self.assertEqual(completed.returncode, 2)
         self.assertIn("--immutable-releases", completed.stderr)
@@ -871,7 +976,8 @@ class CheckCli(unittest.TestCase):
         history.git("checkout", "-q", "--detach", commit)
         missing = str(history.root / "not-read-yet.json")
         return subprocess.run([sys.executable, "-I", str(scripts / "release_request.py"), "check", "--commit", commit,
-                               "--branch-rules", missing, "--check-runs", missing, "--protection", missing,
+                               "--branch-rules", missing, "--check-runs", missing, "--statuses", missing,
+                               "--protection", missing,
                                "--immutable-releases", missing, "--immutable-read-at", "2026-11-01T00:00:00Z"],
                               capture_output=True, text=True, check=False)
 
