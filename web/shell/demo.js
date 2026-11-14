@@ -33,6 +33,31 @@ globalThis.VellumCanvasBackend = Object.freeze({
         context.fillStyle = cssColor(red, green, blue, alpha);
         context.fillText(text, x, baseline);
     },
+    filter(css) {
+        context.filter = css;
+    },
+    colorMatrix(id, values) {
+        const namespace = 'http://www.w3.org/2000/svg';
+        let definitions = document.getElementById('vellum-filters');
+        if (!definitions) {
+            definitions = document.createElementNS(namespace, 'svg');
+            definitions.id = 'vellum-filters';
+            definitions.setAttribute('width', '0');
+            definitions.setAttribute('height', '0');
+            definitions.style.position = 'absolute';
+            document.body.append(definitions);
+        }
+        let filter = document.getElementById(id);
+        if (!filter) {
+            filter = document.createElementNS(namespace, 'filter');
+            filter.id = id;
+            filter.setAttribute('color-interpolation-filters', 'sRGB');
+            filter.append(document.createElementNS(namespace, 'feColorMatrix'));
+            definitions.append(filter);
+        }
+        filter.firstElementChild.setAttribute('type', 'matrix');
+        filter.firstElementChild.setAttribute('values', values);
+    },
     finish() {},
 });
 

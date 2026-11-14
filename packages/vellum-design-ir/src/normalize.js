@@ -21,6 +21,7 @@ const KNOWN_NODE_FIELDS = new Set([
     'extensions',
     'kind',
     'losses',
+    'material',
     'name',
     'properties',
     'role',
@@ -118,6 +119,7 @@ function normalizeNode(rawNode, context) {
         if (rawNode[field] !== undefined) output[field] = String(rawNode[field]);
     }
     if (rawNode.extensions !== undefined) output.extensions = canonicalize(rawNode.extensions);
+    if (rawNode.material !== undefined) output.material = canonicalize(rawNode.material);
 
     const unrecognized = Object.create(null);
     for (const key of Object.keys(rawNode)) {

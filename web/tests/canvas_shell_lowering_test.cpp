@@ -243,9 +243,85 @@ bool mask_reports() {
 }
 }  // namespace
 
+bool effect_lowering() {
+    using vellum::graphics::EffectKind;
+    using vellum::graphics::NodeEffect;
+    using vellum::graphics::SceneNode;
+    vellum::graphics::Scene scene;
+    scene.width = 200.0F;
+    scene.height = 100.0F;
+    scene.root = {.id = "root", .kind = SceneNode::Kind::group,
+                  .bounds = {0.0F, 0.0F, 200.0F, 100.0F}};
+    NodeEffect swap{.kind = EffectKind::color_matrix};
+    swap.matrix[0] = 0.0F;
+    swap.matrix[2] = 1.0F;
+    SceneNode outer{.id = "outer", .kind = SceneNode::Kind::group,
+                    .bounds = {0.0F, 0.0F, 100.0F, 100.0F}};
+    outer.effects = {{.kind = EffectKind::blur, .sigma = 2.0F}, swap,
+                     {.kind = EffectKind::drop_shadow, .sigma = 1.0F, .offset_x = 2.0F}};
+    SceneNode inner{.id = "inner", .kind = SceneNode::Kind::group,
+                    .bounds = {10.0F, 10.0F, 40.0F, 40.0F}};
+    inner.effects = {{.kind = EffectKind::blur, .sigma = 3.0F}};
+    inner.children.push_back({.id = "inner/box", .kind = SceneNode::Kind::rectangle,
+                              .bounds = {0.0F, 0.0F, 10.0F, 10.0F},
+                              .fill = vellum::graphics::Color::hex(0xFF0000)});
+    outer.children.push_back(std::move(inner));
+    outer.children.push_back({.id = "outer/box", .kind = SceneNode::Kind::rectangle,
+                              .bounds = {60.0F, 60.0F, 10.0F, 10.0F},
+                              .fill = vellum::graphics::Color::hex(0x00FF00)});
+    SceneNode pane{.id = "pane", .kind = SceneNode::Kind::group,
+                   .bounds = {120.0F, 10.0F, 60.0F, 60.0F}};
+    pane.effects = {{.kind = EffectKind::material,
+                     .material = std::string(vellum::graphics::kFrostedGlassMaterial)}};
+    scene.root.children.push_back(std::move(outer));
+    scene.root.children.push_back(std::move(pane));
+    const auto lowering = vellum::web::lower_for_canvas_shell(scene);
+    if (!lowering.accepted || lowering.filters.size() != lowering.commands.size()) {
+        std::cerr << "an effect scene was not lowered: " << lowering.reason << '\n';
+        return false;
+    }
+    std::string inner_filter;
+    std::string outer_filter;
+    for (std::size_t index = 0; index < lowering.commands.size(); ++index) {
+        if (lowering.commands[index].node_id == "inner/box") inner_filter = lowering.filters[index];
+        if (lowering.commands[index].node_id == "outer/box") outer_filter = lowering.filters[index];
+    }
+    const std::string expected_outer = "blur(2.000000px) url(#vellum-color-matrix-0)";
+    if (outer_filter != expected_outer ||
+        inner_filter != "blur(3.000000px) " + expected_outer) {
+        std::cerr << "blur and colour matrix filters were not composed innermost first: '"
+                  << inner_filter << "' and '" << outer_filter << "'\n";
+        return false;
+    }
+    if (lowering.color_matrices.size() != 1U ||
+        lowering.color_matrices[0].id != "vellum-color-matrix-0" ||
+        lowering.color_matrices[0].values.rfind("0.000000 0.000000 1.000000", 0) != 0) {
+        std::cerr << "the colour matrix was not handed to the shell in SVG order\n";
+        return false;
+    }
+    int not_drawn = 0;
+    bool shadow = false;
+    bool material = false;
+    for (const auto& diagnostic : lowering.diagnostics) {
+        if (diagnostic.code != vellum::web::kEffectNotDrawnCode) continue;
+        ++not_drawn;
+        shadow = shadow || (diagnostic.node_id == "outer" &&
+                            diagnostic.message.find("drop shadow") != std::string::npos);
+        material = material ||
+                   (diagnostic.node_id == "pane" &&
+                    diagnostic.message.find("vellum.frosted-glass") != std::string::npos);
+    }
+    if (not_drawn != 2 || !shadow || !material) {
+        std::cerr << "the shell did not report the drop shadow and the material it skips\n";
+        return false;
+    }
+    return true;
+}
+
 int main() {
     if (!image_refusals()) return 1;
     if (!mask_reports()) return 1;
+    if (!effect_lowering()) return 1;
     using vellum::graphics::Affine2D;
     using vellum::graphics::CornerRadii;
     using vellum::graphics::SceneNode;

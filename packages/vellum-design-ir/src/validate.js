@@ -262,6 +262,7 @@ function validateNode(node, path, sourceKey, issues) {
         }
     }
     requireObject(node.properties, `${path}.properties`, issues);
+    if (node.material !== undefined) validateMaterialReference(node.material, `${path}.material`, issues);
     if (!Array.isArray(node.children)) {
         issues.push(issue(`${path}.children`, 'type', 'children must be an array'));
     } else {
@@ -269,6 +270,45 @@ function validateNode(node, path, sourceKey, issues) {
             validateNode(child, `${path}.children[${index}]`, sourceKey, issues),
         );
     }
+}
+
+// A material reference carries an id and values only: the uniforms' types,
+// ranges and defaults belong to the material's registration.
+function validateMaterialReference(material, path, issues) {
+    requireObject(material, path, issues);
+    if (!isObject(material)) return;
+    for (const key of Object.keys(material)) {
+        if (key !== 'id' && key !== 'values') {
+            issues.push(issue(`${path}.${key}`, 'unknown-field', 'a material reference carries only id and values'));
+        }
+    }
+    if (typeof material.id !== 'string' || !/^[a-z0-9][a-z0-9.-]*$/.test(material.id)) {
+        issues.push(issue(`${path}.id`, 'format', 'material id must be lowercase letters, digits, dots and hyphens'));
+    }
+    requireObject(material.values, `${path}.values`, issues);
+    if (!isObject(material.values)) return;
+    for (const [name, value] of Object.entries(material.values)) {
+        const valuePath = `${path}.values.${name}`;
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+            issues.push(issue(valuePath, 'format', 'uniform name must be an identifier'));
+        }
+        if (!isMaterialValue(value)) {
+            issues.push(issue(
+                valuePath,
+                'type',
+                'a material value is a number, two numbers, or a red, green, blue and alpha colour',
+            ));
+        }
+    }
+}
+
+function isMaterialValue(value) {
+    const finite = (number) => typeof number === 'number' && Number.isFinite(number);
+    if (finite(value)) return true;
+    if (Array.isArray(value)) return value.length === 2 && value.every(finite);
+    if (!isObject(value)) return false;
+    const keys = Object.keys(value).sort();
+    return keys.join(',') === 'alpha,blue,green,red' && keys.every((key) => finite(value[key]));
 }
 
 function validateDiagnostic(diagnostic, path, issues) {

@@ -97,6 +97,13 @@ if(VELLUM_BUILD_TESTS)
         PREFIX ""
         CXX_VISIBILITY_PRESET hidden)
 
+    add_library(vellum-sheen-component MODULE
+        tests/sheen_component.cpp)
+    target_link_libraries(vellum-sheen-component PRIVATE Vellum::ComponentAbi)
+    set_target_properties(vellum-sheen-component PROPERTIES
+        PREFIX ""
+        CXX_VISIBILITY_PRESET hidden)
+
     add_executable(vellum-component-registry-test
         component_registry.cpp
         tests/component_registry_test.cpp)
@@ -109,5 +116,6 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.component-registry-bounds
         COMMAND vellum-component-registry-test
             "$<TARGET_FILE:vellum-unterminated-component>"
-            "$<TARGET_FILE:vellum-unterminated-text-component>")
+            "$<TARGET_FILE:vellum-unterminated-text-component>"
+            "$<TARGET_FILE:vellum-sheen-component>")
 endif()

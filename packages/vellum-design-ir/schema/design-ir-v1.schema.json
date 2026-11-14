@@ -95,8 +95,40 @@
         "text": { "type": "string" },
         "properties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
         "extensions": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
+        "material": { "$ref": "#/$defs/materialReference" },
         "children": { "type": "array", "items": { "$ref": "#/$defs/node" } }
       }
+    },
+    "materialReference": {
+      "description": "A registered material named by id with values for its uniforms. The uniforms' types, ranges and defaults belong to the material's registration, not to the document.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "values"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*$" },
+        "values": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "additionalProperties": { "$ref": "#/$defs/materialValue" }
+        }
+      }
+    },
+    "materialValue": {
+      "oneOf": [
+        { "type": "number" },
+        { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["red", "green", "blue", "alpha"],
+          "properties": {
+            "red": { "type": "number" },
+            "green": { "type": "number" },
+            "blue": { "type": "number" },
+            "alpha": { "type": "number" }
+          }
+        }
+      ]
     },
     "token": {
       "type": "object",

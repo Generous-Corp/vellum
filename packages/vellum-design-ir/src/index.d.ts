@@ -52,7 +52,23 @@ export interface DesignNode {
     text?: string;
     properties: Record<string, JsonValue>;
     extensions?: Record<string, JsonValue>;
+    material?: MaterialReference;
     children: DesignNode[];
+}
+
+/** A material value: a number, two numbers, or a straight RGBA colour. */
+export type MaterialValue =
+    | number
+    | [number, number]
+    | { red: number; green: number; blue: number; alpha: number };
+
+/**
+ * A registered material named by id with values for its uniforms. The
+ * uniforms' types, ranges and defaults belong to the material's registration.
+ */
+export interface MaterialReference {
+    id: string;
+    values: Record<string, MaterialValue>;
 }
 
 export interface DesignSource {
@@ -111,6 +127,7 @@ export interface SourceNode {
     text?: string;
     properties?: Record<string, JsonValue>;
     extensions?: Record<string, JsonValue>;
+    material?: MaterialReference;
     losses?: Array<Partial<DesignDiagnostic> & Pick<DesignDiagnostic, 'code' | 'message'>>;
     children?: SourceNode[];
     [adapterField: string]: unknown;

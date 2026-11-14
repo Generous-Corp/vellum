@@ -39,6 +39,16 @@ EM_JS(void, canvas_text,
         UTF8ToString(text), x, baseline, size, red, green, blue, alpha);
 });
 
+EM_JS(void, canvas_filter, (const char* css), {
+    const backend = globalThis.VellumCanvasBackend;
+    if (backend.filter) backend.filter(UTF8ToString(css));
+});
+
+EM_JS(void, canvas_color_matrix, (const char* id, const char* values), {
+    const backend = globalThis.VellumCanvasBackend;
+    if (backend.colorMatrix) backend.colorMatrix(UTF8ToString(id), UTF8ToString(values));
+});
+
 EM_JS(void, canvas_finish, (), {
     globalThis.VellumCanvasBackend.finish();
 });
@@ -143,9 +153,17 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     const auto background = scene.background;
     canvas_begin(scene.width, scene.height, background.red, background.green,
                  background.blue, background.alpha);
+    for (const auto& matrix : lowering.color_matrices) {
+        canvas_color_matrix(matrix.id.c_str(), matrix.values.c_str());
+    }
+    std::string filter;
     for (std::size_t index = 0; index < commands.size(); ++index) {
         const auto& command = commands[index];
         if (masked[index]) continue;
+        if (vellum::graphics::draws_content(command.kind) && lowering.filters[index] != filter) {
+            filter = lowering.filters[index];
+            canvas_filter(filter.empty() ? "none" : filter.c_str());
+        }
         auto color = command.fill;
         color.alpha *= opacities[index];
         switch (command.kind) {
@@ -183,6 +201,7 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
             break;
         }
     }
+    if (!filter.empty()) canvas_filter("none");
     canvas_finish();
     return 1;
 }
