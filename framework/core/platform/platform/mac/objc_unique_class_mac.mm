@@ -12,7 +12,7 @@ namespace vellum::platform::mac {
 
 namespace {
 
-constexpr const char* kContextIvar = "pulp_instance_context";
+constexpr const char* kContextIvar = "vellum_instance_context";
 
 // Recursive: a configure callback may register another class.
 std::recursive_mutex& registry_mutex() {

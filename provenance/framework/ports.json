@@ -91,13 +91,11 @@
       "framework_path": "framework/core/platform/platform/mac/objc_unique_class_mac.mm",
       "change": "added",
       "target": "pulp-platform",
-      "origin": "pulp",
-      "pulp_path": "core/platform/platform/mac/objc_unique_class_mac.mm",
-      "pulp_commits": [
-        "8f2cbd68e1f84e3beda072761394548c277f00fd"
-      ],
-      "framework_blob": "a8d9c653525dd3c589488a3cd851c8bfe6497191",
-      "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Per-binary unique Objective-C class helper used by the asynchronous native services. Differs from Pulp only in the instance-context ivar name, which carries no Pulp spelling here."
     },
     {
       "framework_path": "framework/core/platform/src/alert.cpp",
