@@ -61,7 +61,10 @@ set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES wgsl_validate_
 target_include_directories(vellum-wgsl-validate PRIVATE
     "${PROJECT_SOURCE_DIR}/framework/core/render/src" "${PROJECT_SOURCE_DIR}/gpu-runtime/include"
     ${_vellum_framework_test_includes})
-target_compile_definitions(vellum-wgsl-validate PRIVATE PULP_GPU_RUNTIME=1 PULP_HAS_DAWN=1 PULP_HAS_WEBGPU=1)
+# The compile definitions the render unit's sources are built with, so the
+# helper sources compiled here see the same device layer.
+target_compile_definitions(vellum-wgsl-validate PRIVATE
+    "$<TARGET_PROPERTY:vellum-mirror-render-2d,INTERFACE_COMPILE_DEFINITIONS>")
 target_link_libraries(vellum-wgsl-validate PRIVATE VellumGpuRuntime::Device VellumGpuRuntime::Dawn)
 set_target_properties(vellum-wgsl-validate PROPERTIES
     CXX_STANDARD 20
