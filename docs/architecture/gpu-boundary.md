@@ -22,7 +22,8 @@ The public slice consists of:
   application builds, plus a headers-only `Vellum::DawnHeaders` target for an
   embedding host's authenticated bootstrap and compute code.
 
-The scene carries a single integer schema version, `kSceneVersion`, now 5.
+The scene carries a single integer schema version, `kSceneVersion`, now 11.
+Versions 6 to 10 are reserved and add no fields in this build.
 A change that can alter rendered output bumps it: a new node kind, a new field
 that changes how a scene is drawn, or a change in meaning. A change that only
 adds metadata keeps it. Consumers accept versions from
@@ -218,12 +219,26 @@ threshold fall back to a full repaint. Hosts pass `invalidate` reasons and node 
 rectangle counts, the commands re-recorded and why a frame repainted fully.
 What is cached and when it is discarded is renderer policy: the scene schema
 carries no cache hints. Partial redraw is enabled only for scene versions the
-damage model understands, up to `kDamageModelSceneVersion` (5), which covers
-transforms, group opacity, per-corner radii, paths, images, and clips, masks
-and isolation on groups. A version the renderer accepts but the damage model
+damage model understands, up to `kDamageModelSceneVersion` (11), which covers
+transforms, group opacity, per-corner radii, paths, images, clips, masks
+and isolation on groups, and animation tracks. A version the renderer accepts but the damage model
 does not yet understand repaints fully with reason `damage_model_version`. A version outside
 [`kMinSupportedSceneVersion`, `kSceneVersion`] is refused before anything is
 drawn.
+
+Animation tracks on a node drive its opacity, the channels of an animated
+transform (translate, rotate, scale), its fill, a path's stroke colour, and the
+colours of a shadow, a gradient stop or a text run. Keyframes ease linearly,
+by cubic bezier, by steps, or by a damped spring timed in seconds. Tracks are
+evaluated at `Scene::clock`, which the host passes for every frame; no renderer
+reads a clock of its own, so the same scene at the same clock draws the same
+frame byte for byte. Every consumer (lowering, acceptance, damage and the web
+canvas shell) works on the scene `evaluate_tracks` produces, so damage covers
+exactly the nodes whose evaluated values changed. A track holds its first value
+before its first keyframe and its last value after its last, and a spring is
+exactly at its target from its settle time on, so a track at rest damages
+nothing. A version 10 or older scene with a track is refused with
+`VELLUM_SCENE_VERSION_MISMATCH`.
 
 A path damages its control box outset by its stroke reach: half the width,
 times the miter limit for miter joins or sqrt(2) for square and round caps,

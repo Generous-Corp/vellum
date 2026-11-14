@@ -1,10 +1,12 @@
 #include <vellum/graphics/scene_acceptance.hpp>
 
+#include <vellum/graphics/animation.hpp>
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/path_geometry.hpp>
 
 #include <cmath>
+#include <optional>
 #include <utility>
 
 namespace vellum::graphics {
@@ -53,6 +55,8 @@ const SceneNode* find_undrawable_image(const SceneNode& node, std::string& reaso
     return nullptr;
 }
 
+std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_node);
+
 // Why `scene` is refused, or empty. `image_node` is set to the refused
 // image's id, and `image` to true, for an image or image-table refusal.
 std::string refusal(const Scene& scene, bool& image, std::string& image_node) {
@@ -68,6 +72,20 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node) {
         const auto loss = scene_loss_diagnostics(scene);
         return loss.empty() ? "scene fields do not match its version" : loss.front().message;
     }
+    std::string reason;
+    std::optional<Scene> evaluated;
+    if (scene_has_tracks(scene)) {
+        if (!std::isfinite(scene.clock)) return "the scene clock is not finite";
+        if (const auto* animated = find_invalid_tracks(scene.root, reason); animated != nullptr) {
+            return "tracks of " + animated->id + " cannot be evaluated: " + reason;
+        }
+        evaluated.emplace(evaluate_tracks(scene));
+    }
+    return drawn_refusal(evaluated ? *evaluated : scene, image, image_node);
+}
+
+// Why the scene as drawn, with its tracks evaluated, is refused, or empty.
+std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_node) {
     if (const auto* invalid = find_non_finite_compositing(scene.root); invalid != nullptr) {
         return "scene node " + invalid->id +
                " has a non-finite transform, opacity, or corner radius";

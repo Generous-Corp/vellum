@@ -52,7 +52,37 @@ export interface DesignNode {
     text?: string;
     properties: Record<string, JsonValue>;
     extensions?: Record<string, JsonValue>;
+    tracks?: AnimationTrack[];
     children: DesignNode[];
+}
+
+/** A property an animation track can drive. */
+export type AnimatedProperty =
+    | 'opacity' | 'translateX' | 'translateY' | 'scaleX' | 'scaleY' | 'rotation'
+    | 'fill' | 'strokeColor' | 'shadowColor' | 'gradientStopColor' | 'textRunColor';
+
+export type Easing =
+    | 'linear' | 'ease' | 'ease-in' | 'ease-out' | 'ease-in-out'
+    | { type: 'cubicBezier'; x1: number; y1: number; x2: number; y2: number }
+    | { type: 'steps'; steps: number; position?: 'start' | 'end' | 'none' | 'both' }
+    | { type: 'spring'; stiffness?: number; damping?: number; mass?: number; velocity?: number };
+
+/** One keyframe: seconds of the host clock, a number or a #rrggbb[aa] colour. */
+export interface AnimationKeyframe {
+    time: number;
+    value: number | string;
+    easing?: Easing;
+}
+
+/**
+ * A keyframed animation of one property of its node. `index` names the
+ * shadow, gradient or text run and `stop` the gradient stop it addresses.
+ */
+export interface AnimationTrack {
+    property: AnimatedProperty;
+    index?: number;
+    stop?: number;
+    keyframes: AnimationKeyframe[];
 }
 
 export interface DesignSource {
@@ -111,6 +141,7 @@ export interface SourceNode {
     text?: string;
     properties?: Record<string, JsonValue>;
     extensions?: Record<string, JsonValue>;
+    tracks?: AnimationTrack[];
     losses?: Array<Partial<DesignDiagnostic> & Pick<DesignDiagnostic, 'code' | 'message'>>;
     children?: SourceNode[];
     [adapterField: string]: unknown;

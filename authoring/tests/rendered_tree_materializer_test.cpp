@@ -792,6 +792,97 @@ bool grouping_keys() {
            refuses(R"("clipPath":"M0 0 L")", "node bad has an invalid clipPath: ", true);
 }
 
+// Tracks on a node become `SceneNode::tracks`, drawn at the scene clock; a
+// malformed or invalid track fails materialization with the node named.
+bool animation_tracks() {
+    using vellum::graphics::AnimatedProperty;
+    using vellum::graphics::EasingKind;
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    const auto tree = wrap_tree(R"JSON(
+      {"type":"view","id":"pulse","style":{"x":10,"y":10,"width":40,"height":40,
+         "backgroundColor":"#FFFFFF","boxShadow":{"color":"#000000","blurRadius":4}},
+       "tracks":[
+         {"property":"opacity","keyframes":[
+           {"time":0,"value":0,"easing":"ease"},
+           {"time":1,"value":1,"easing":{"type":"steps","steps":3,"position":"start"}},
+           {"time":2,"value":0.5}]},
+         {"property":"translateX","keyframes":[
+           {"time":0,"value":0,"easing":{"type":"spring","stiffness":170,"damping":26}},
+           {"time":4,"value":30}]},
+         {"property":"fill","keyframes":[{"time":0,"value":"#FF0000"},{"time":1,"value":"#0000FF80"}]},
+         {"property":"shadowColor","index":0,"keyframes":[{"time":0,"value":"#000000"}]}],
+       "children":[]}
+    )JSON");
+    if (!vellum::authoring::materialize_rendered_tree(tree, rendered, &error)) {
+        std::cerr << "tracks: " << error << '\n';
+        return false;
+    }
+    const auto* pulse = vellum::graphics::find_node(rendered.scene, "pulse");
+    if (pulse == nullptr || pulse->tracks.size() != 4U ||
+        pulse->tracks[0].property != AnimatedProperty::opacity ||
+        pulse->tracks[0].keyframes.size() != 3U ||
+        pulse->tracks[0].keyframes[0].easing.kind != EasingKind::cubic_bezier ||
+        !near(pulse->tracks[0].keyframes[0].easing.x1, 0.25F) ||
+        pulse->tracks[0].keyframes[1].easing.kind != EasingKind::steps ||
+        pulse->tracks[0].keyframes[1].easing.steps != 3U ||
+        pulse->tracks[0].keyframes[1].easing.step_position !=
+            vellum::graphics::StepPosition::jump_start ||
+        pulse->tracks[1].keyframes[0].easing.kind != EasingKind::spring ||
+        pulse->tracks[1].keyframes[0].easing.stiffness != 170.0F ||
+        pulse->tracks[2].keyframes[1].color.blue != 1.0F ||
+        !near(pulse->tracks[2].keyframes[1].color.alpha, 128.0F / 255.0F) ||
+        rendered.scene.scene_version != vellum::graphics::kSceneVersion) {
+        std::cerr << "tracks: the node's tracks were not materialized as written\n";
+        return false;
+    }
+    auto at = rendered.scene;
+    at.clock = 1.5;
+    const auto commands = vellum::graphics::make_paint_commands(at);
+    const auto drawn = std::find_if(commands.begin(), commands.end(),
+        [](const auto& command) { return command.node_id == "pulse"; });
+    if (drawn == commands.end() || !near(drawn->opacity, 2.0F / 3.0F)) {
+        std::cerr << "tracks: the materialized scene did not draw at its clock\n";
+        return false;
+    }
+    auto older = rendered.scene;
+    older.scene_version = 10U;
+    const auto refused = vellum::graphics::scene_loss_diagnostics(older);
+    if (refused.size() != 1U || refused[0].code != vellum::graphics::kSceneVersionMismatchCode ||
+        refused[0].property != "tracks" || refused[0].node_id != "pulse") {
+        std::cerr << "tracks: a version 10 copy was not refused for its tracks\n";
+        return false;
+    }
+
+    const auto failing = [&](std::string_view tracks, std::string_view expected) {
+        vellum::authoring::RenderedApplication kept;
+        std::string why;
+        const auto bad = wrap_tree(std::string(R"JSON({"type":"view","id":"bad",
+            "style":{"width":10,"height":10},"children":[],"tracks":)JSON") +
+            std::string(tracks) + "}");
+        const bool ok = !vellum::authoring::materialize_rendered_tree(bad, kept, &why) &&
+                        why == expected;
+        if (!ok) std::cerr << "tracks: expected \"" << expected << "\", got \"" << why << "\"\n";
+        return ok;
+    };
+    return failing(R"({"property":"opacity"})", "node bad tracks: must be an array") &&
+           failing(R"([{"property":"blur","keyframes":[]}])",
+                   "node bad tracks: a track has an unknown property") &&
+           failing(R"([{"property":"fill","keyframes":[{"time":0,"value":0.5}]}])",
+                   "node bad tracks: a colour keyframe value must be #rrggbb or #rrggbbaa") &&
+           failing(R"([{"property":"opacity","keyframes":[{"time":0,"value":0,"easing":"bounce"}]}])",
+                   "node bad tracks: easing bounce is not linear, ease, ease-in, ease-out or "
+                   "ease-in-out") &&
+           failing(R"([{"property":"opacity","keyframes":[{"time":1,"value":0},{"time":0,"value":1}]}])",
+                   "node bad tracks: keyframe 1 does not come after the one before it") &&
+           failing(R"([{"property":"shadowColor","index":2,"keyframes":[{"time":0,"value":"#000000"}]}])",
+                   "node bad tracks: a shadow colour track names shadow 2, which the node does "
+                   "not have") &&
+           failing(R"([{"property":"opacity","keyframes":[{"time":0,"value":0}]},
+                       {"property":"opacity","keyframes":[{"time":0,"value":1}]}])",
+                   "node bad tracks: two tracks animate the same property");
+}
+
 int main() {
     vellum::authoring::RenderedApplication rendered;
     std::string error;
@@ -1163,7 +1254,7 @@ int main() {
 
     return compositing_keys() && transform_pivots_once() && transform_ignores_locale() &&
            image_nodes() &&
-                   path_nodes() && grouping_keys()
+                   path_nodes() && grouping_keys() && animation_tracks()
                ? 0
                : 1;
 }

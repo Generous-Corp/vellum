@@ -262,12 +262,140 @@ function validateNode(node, path, sourceKey, issues) {
         }
     }
     requireObject(node.properties, `${path}.properties`, issues);
+    if (node.tracks !== undefined) validateTracks(node.tracks, `${path}.tracks`, issues);
     if (!Array.isArray(node.children)) {
         issues.push(issue(`${path}.children`, 'type', 'children must be an array'));
     } else {
         node.children.forEach((child, index) =>
             validateNode(child, `${path}.children[${index}]`, sourceKey, issues),
         );
+    }
+}
+
+const ANIMATED_PROPERTIES = new Set([
+    'opacity', 'translateX', 'translateY', 'scaleX', 'scaleY', 'rotation',
+    'fill', 'strokeColor', 'shadowColor', 'gradientStopColor', 'textRunColor',
+]);
+const COLOR_PROPERTIES = new Set([
+    'fill', 'strokeColor', 'shadowColor', 'gradientStopColor', 'textRunColor',
+]);
+const EASING_KEYWORDS = new Set(['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out']);
+const HEX_COLOR = /^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/;
+
+// Animation tracks carry keyframes only; the host clock that evaluates them
+// is passed per frame and never stored in the document.
+function validateTracks(tracks, path, issues) {
+    if (!Array.isArray(tracks)) {
+        issues.push(issue(path, 'type', 'tracks must be an array'));
+        return;
+    }
+    if (tracks.length > 32) issues.push(issue(path, 'range', 'a node has at most 32 tracks'));
+    const seen = new Set();
+    tracks.forEach((track, index) => {
+        const trackPath = `${path}[${index}]`;
+        requireObject(track, trackPath, issues);
+        if (!isObject(track)) return;
+        for (const key of Object.keys(track)) {
+            if (!['property', 'index', 'stop', 'keyframes'].includes(key)) {
+                issues.push(issue(`${trackPath}.${key}`, 'unknown-field', 'a track carries property, index, stop and keyframes'));
+            }
+        }
+        if (!ANIMATED_PROPERTIES.has(track.property)) {
+            issues.push(issue(`${trackPath}.property`, 'enum', 'track property is not an animatable property'));
+        }
+        for (const field of ['index', 'stop']) {
+            const value = track[field];
+            if (value !== undefined && (!Number.isInteger(value) || value < 0 || value > 65535)) {
+                issues.push(issue(`${trackPath}.${field}`, 'range', `${field} must be an integer from 0 to 65535`));
+            }
+        }
+        const address = `${track.property}/${track.index ?? 0}/${track.stop ?? 0}`;
+        if (seen.has(address)) {
+            issues.push(issue(trackPath, 'duplicate', 'two tracks animate the same property'));
+        }
+        seen.add(address);
+        if (!Array.isArray(track.keyframes) || track.keyframes.length === 0 || track.keyframes.length > 256) {
+            issues.push(issue(`${trackPath}.keyframes`, 'type', 'keyframes must be an array of 1 to 256 keyframes'));
+            return;
+        }
+        const color = COLOR_PROPERTIES.has(track.property);
+        let previous = -Infinity;
+        track.keyframes.forEach((keyframe, keyIndex) => {
+            const keyPath = `${trackPath}.keyframes[${keyIndex}]`;
+            requireObject(keyframe, keyPath, issues);
+            if (!isObject(keyframe)) return;
+            for (const key of Object.keys(keyframe)) {
+                if (!['time', 'value', 'easing'].includes(key)) {
+                    issues.push(issue(`${keyPath}.${key}`, 'unknown-field', 'a keyframe carries time, value and easing'));
+                }
+            }
+            if (typeof keyframe.time !== 'number' || !Number.isFinite(keyframe.time)) {
+                issues.push(issue(`${keyPath}.time`, 'type', 'keyframe time must be a finite number of seconds'));
+            } else if (!(keyframe.time > previous)) {
+                issues.push(issue(`${keyPath}.time`, 'order', 'keyframe times must strictly increase'));
+            }
+            if (typeof keyframe.time === 'number') previous = keyframe.time;
+            const valid = color
+                ? typeof keyframe.value === 'string' && HEX_COLOR.test(keyframe.value)
+                : typeof keyframe.value === 'number' && Number.isFinite(keyframe.value);
+            if (!valid) {
+                issues.push(issue(
+                    `${keyPath}.value`,
+                    'type',
+                    color ? 'a colour keyframe value is #rrggbb or #rrggbbaa' : 'a keyframe value is a finite number',
+                ));
+            }
+            if (keyframe.easing !== undefined) validateEasing(keyframe.easing, `${keyPath}.easing`, issues);
+        });
+    });
+}
+
+function validateEasing(easing, path, issues) {
+    if (typeof easing === 'string') {
+        if (!EASING_KEYWORDS.has(easing)) {
+            issues.push(issue(path, 'enum', 'easing keyword must be linear, ease, ease-in, ease-out or ease-in-out'));
+        }
+        return;
+    }
+    requireObject(easing, path, issues);
+    if (!isObject(easing)) return;
+    const finite = (value) => typeof value === 'number' && Number.isFinite(value);
+    const allowed = {
+        cubicBezier: ['type', 'x1', 'y1', 'x2', 'y2'],
+        steps: ['type', 'steps', 'position'],
+        spring: ['type', 'stiffness', 'damping', 'mass', 'velocity'],
+    }[easing.type];
+    if (allowed === undefined) {
+        issues.push(issue(`${path}.type`, 'enum', 'easing type must be cubicBezier, steps or spring'));
+        return;
+    }
+    for (const key of Object.keys(easing)) {
+        if (!allowed.includes(key)) {
+            issues.push(issue(`${path}.${key}`, 'unknown-field', `${easing.type} easing does not take ${key}`));
+        }
+    }
+    if (easing.type === 'cubicBezier') {
+        const unit = (value) => finite(value) && value >= 0 && value <= 1;
+        if (!unit(easing.x1) || !unit(easing.x2) || !finite(easing.y1) || !finite(easing.y2)) {
+            issues.push(issue(path, 'range', 'cubicBezier needs x1 and x2 in [0, 1] and finite y1 and y2'));
+        }
+    } else if (easing.type === 'steps') {
+        if (!Number.isInteger(easing.steps) || easing.steps < 1 || easing.steps > 65535 ||
+            (easing.position === 'none' && easing.steps < 2)) {
+            issues.push(issue(`${path}.steps`, 'range', 'steps must be an integer from 1, or 2 with position none, to 65535'));
+        }
+        if (easing.position !== undefined && !['start', 'end', 'none', 'both'].includes(easing.position)) {
+            issues.push(issue(`${path}.position`, 'enum', 'steps position must be start, end, none or both'));
+        }
+    } else {
+        for (const field of ['stiffness', 'damping', 'mass']) {
+            if (easing[field] !== undefined && !(finite(easing[field]) && easing[field] > 0)) {
+                issues.push(issue(`${path}.${field}`, 'range', `spring ${field} must be a positive number`));
+            }
+        }
+        if (easing.velocity !== undefined && !finite(easing.velocity)) {
+            issues.push(issue(`${path}.velocity`, 'type', 'spring velocity must be a finite number'));
+        }
     }
 }
 

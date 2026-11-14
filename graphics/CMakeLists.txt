@@ -1,4 +1,5 @@
 add_library(vellum-graphics
+    src/animation.cpp
     src/capture_stats.cpp
     src/damage.cpp
     src/image_asset.cpp

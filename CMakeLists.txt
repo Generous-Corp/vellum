@@ -230,6 +230,12 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.damage COMMAND vellum-damage-test)
 
+        add_executable(vellum-animation-test
+            graphics/tests/animation_test.cpp)
+        target_include_directories(vellum-animation-test PRIVATE graphics/src)
+        target_link_libraries(vellum-animation-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.animation COMMAND vellum-animation-test)
+
         add_executable(vellum-render-cache-test
             graphics/tests/render_cache_test.cpp)
         target_include_directories(vellum-render-cache-test PRIVATE graphics/src)

@@ -27,6 +27,7 @@ const KNOWN_NODE_FIELDS = new Set([
     'semanticId',
     'sourceId',
     'text',
+    'tracks',
 ]);
 
 /**
@@ -118,6 +119,7 @@ function normalizeNode(rawNode, context) {
         if (rawNode[field] !== undefined) output[field] = String(rawNode[field]);
     }
     if (rawNode.extensions !== undefined) output.extensions = canonicalize(rawNode.extensions);
+    if (rawNode.tracks !== undefined) output.tracks = canonicalize(rawNode.tracks);
 
     const unrecognized = Object.create(null);
     for (const key of Object.keys(rawNode)) {
