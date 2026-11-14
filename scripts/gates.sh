@@ -27,9 +27,9 @@
 # (downloads builder release assets), live open-PR audits (release tags only).
 #
 # The --full checks read Pulp from a clone this script owns: it clones over
-# HTTPS once into ${VELLUM_GATES_CACHE:-$HOME/.cache/vellum-gates}/pulp-src and
-# fetches there. It never touches any other checkout. VELLUM_GATES_UPSTREAM_CLONE
-# overrides the clone path (the script fetches into whatever it names).
+# HTTPS once into the approved worktree root's vellum-gates-cache/pulp-src and
+# fetches there. It never touches any other checkout. VELLUM_GATES_CACHE and
+# VELLUM_GATES_UPSTREAM_CLONE may select locations below that same root.
 #
 # When the diff touches release-path files and the planning directory variable is set, the tag
 # pipeline rehearsal also runs; without it that step is skipped with a notice.
@@ -72,9 +72,31 @@ fi
 
 GIT_BASE="$(git merge-base "$BASE" HEAD)" || { echo "gates: no merge base with $BASE" >&2; exit 2; }
 HEAD_SHA="$(git rev-parse HEAD)"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/vellum-gates.XXXXXX")" || exit 2
+
+# Keep every temporary file, worktree, and clone under the fleet-approved root.
+# A local checkout can set PULP_WORKTREES_ROOT explicitly; on this fleet the
+# default is /Volumes/Workshop/Code/agent-worktrees. Fall back only when that
+# root cannot be created or written, as required for hosts without that mount.
+WORKTREE_ROOT="${PULP_WORKTREES_ROOT:-/Volumes/Workshop/Code/agent-worktrees}"
+if ! mkdir -p "$WORKTREE_ROOT" 2>/dev/null || [[ ! -w "$WORKTREE_ROOT" ]]; then
+  WORKTREE_ROOT="$HOME/agent-worktrees"
+  mkdir -p "$WORKTREE_ROOT" || {
+    echo "gates: cannot create writable worktree root" >&2
+    exit 2
+  }
+fi
+
+path_under_root() {
+  [[ "$1" == "$WORKTREE_ROOT" || "$1" == "$WORKTREE_ROOT"/* ]]
+}
+
+WORK="$(mktemp -d "$WORKTREE_ROOT/vellum-gates.XXXXXX")" || exit 2
 export RUNNER_TEMP="$WORK"
-CACHE="${VELLUM_GATES_CACHE:-$HOME/.cache/vellum-gates}"
+CACHE="${VELLUM_GATES_CACHE:-$WORKTREE_ROOT/vellum-gates-cache}"
+if ! path_under_root "$CACHE"; then
+  echo "gates: VELLUM_GATES_CACHE must be under $WORKTREE_ROOT" >&2
+  exit 2
+fi
 mkdir -p "$CACHE"
 # Environment and JSON key names that carry the upstream project's name are
 # spelled in two halves: the native-source quarantine scan reads this file.
@@ -84,6 +106,10 @@ KEY_SHA="${NAME}_sha"
 KEY_COMMIT="${NAME}_commit"
 KEY_ACCEPTANCE="${NAME}_acceptance_merge_commit"
 UPSTREAM_SRC="${VELLUM_GATES_UPSTREAM_CLONE:-$CACHE/pulp-src}"
+if ! path_under_root "$UPSTREAM_SRC"; then
+  echo "gates: VELLUM_GATES_UPSTREAM_CLONE must be under $WORKTREE_ROOT" >&2
+  exit 2
+fi
 UPSTREAM_URL="${VELLUM_GATES_UPSTREAM_URL:-https://github.com/Generous-Corp/pulp.git}"
 POLICY_WORKTREE=""
 

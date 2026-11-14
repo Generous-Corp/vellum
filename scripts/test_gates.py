@@ -44,9 +44,20 @@ class GatesTest(unittest.TestCase):
         git(self.repo, "commit", "-q", "-m", "change")
 
     def gates(self) -> subprocess.CompletedProcess[str]:
-        env = {**os.environ, "GATES_ONLY": "prose-lint", "VELLUM_GATES_CACHE": str(self.repo / ".cache-unused")}
+        worktrees = self.repo / ".worktrees"
+        env = {**os.environ, "GATES_ONLY": "prose-lint", "PULP_WORKTREES_ROOT": str(worktrees),
+               "VELLUM_GATES_CACHE": str(worktrees / ".cache-unused")}
         return subprocess.run(["bash", "scripts/gates.sh", "base"], cwd=self.repo, env=env,
                               capture_output=True, text=True, check=False)
+
+    def test_default_cache_uses_configured_worktree_root(self) -> None:
+        self.commit("docs/new.md", "A plain sentence with nothing to flag.\n")
+        worktrees = self.repo / ".worktrees"
+        env = {**os.environ, "GATES_ONLY": "prose-lint", "PULP_WORKTREES_ROOT": str(worktrees)}
+        result = subprocess.run(["bash", "scripts/gates.sh", "base"], cwd=self.repo, env=env,
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((worktrees / "vellum-gates-cache").is_dir())
 
     def test_planted_prose_violation_fails(self) -> None:
         self.commit("docs/new.md", f"A sentence {EM_DASH} with an em dash.\n")
