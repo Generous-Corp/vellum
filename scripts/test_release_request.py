@@ -324,8 +324,9 @@ class Attestation(unittest.TestCase):
         root, head = self.fixture()
         data = rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.10")
         self.assertEqual(data["kind"], "vellum-mirror-promotion-attestation")
-        self.assertEqual(rr.attestation(root, head, "2026-10-31T12:00:00Z", "v0.1.11")["kind"],
-                         "vellum-mirror-promotion-attestation")
+        for tag in ("v0.1.11", "v0.2.0"):
+            self.assertEqual(rr.attestation(root, head, "2026-10-31T12:00:00Z", tag)["kind"],
+                             "vellum-mirror-promotion-attestation", tag)
         self.assertEqual(data["parity"], "not-proven-deferred-to-matrix-refreeze")
         self.assertEqual(data["mirror_receipt"], "provenance/mirror/receipts/20261025-b.json")
         self.assertEqual(data["mirror_receipt_sha256"], hashlib.sha256(
@@ -335,7 +336,8 @@ class Attestation(unittest.TestCase):
 
     def test_without_parity_a_later_tag_refuses_before_signing(self) -> None:
         root, head = self.fixture()
-        for tag in ("v0.1.9", "v0.1.12", "v0.2.0"):
+        # v0.2.0 is the last waived name; its neighbours are not.
+        for tag in ("v0.1.9", "v0.1.12", "v0.2.1", "v0.2.0.1", "v0.3.0", "v1.0.0"):
             with self.subTest(tag=tag), self.assertRaisesRegex(rr.ReleaseRequestError,
                                                                 "needs a parity completion record"):
                 rr.attestation(root, head, "2026-10-31T12:00:00Z", tag)

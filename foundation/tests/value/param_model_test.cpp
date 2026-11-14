@@ -1,8 +1,10 @@
 #include <vellum/value/in_memory_param_model.hpp>
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -308,9 +310,203 @@ void construction_rejects_bad_specs() {
     CHECK(m.normalized(m.resolve("y")) == 0.0);
 }
 
+bool near(double a, double b, double tol = 1e-9) { return std::fabs(a - b) <= tol; }
+
+InMemoryParamModel make_ranged_model() {
+    std::vector<ParamSpec> specs;
+    specs.push_back({.key = "freq", .name = "Frequency", .unit = "Hz", .plain_min = 20.0,
+                     .plain_max = 20000.0, .skew = 3.0, .default_normalized = 0.5});
+    specs.push_back({.key = "pan", .unit = "%", .plain_min = -50.0, .plain_max = 50.0});
+    specs.push_back({.key = "step", .plain_min = 0.0, .plain_max = 4.0, .value_count = 5});
+    specs.push_back({.key = "mode", .value_count = 3, .value_labels = {"low", "band", "high"}});
+    return InMemoryParamModel(std::move(specs));
+}
+
+void plain_mapping_round_trips() {
+    auto model = make_ranged_model();
+    ParamModel& m = model;
+    const auto freq = m.resolve("freq");
+    const auto pan = m.resolve("pan");
+    const auto step = m.resolve("step");
+
+    // Ends map exactly, for linear, skewed and stepped ranges.
+    CHECK(m.plain(pan, 0.0) == -50.0);
+    CHECK(m.plain(pan, 1.0) == 50.0);
+    CHECK(m.plain(freq, 0.0) == 20.0);
+    CHECK(m.plain(freq, 1.0) == 20000.0);
+    CHECK(m.plain(step, 0.0) == 0.0);
+    CHECK(m.plain(step, 1.0) == 4.0);
+    CHECK(m.normalized_from_plain(freq, 20.0) == 0.0);
+    CHECK(m.normalized_from_plain(freq, 20000.0) == 1.0);
+
+    // The curve is not linear: skew 3 puts the midpoint low.
+    CHECK(near(m.plain(freq, 0.5), 20.0 + 19980.0 * 0.125));
+    CHECK(near(m.plain(pan, 0.25), -25.0));
+
+    for (double n : {0.0, 0.01, 0.25, 0.5, 0.77, 1.0}) {
+        CHECK(near(m.normalized_from_plain(freq, m.plain(freq, n)), n));
+        CHECK(near(m.normalized_from_plain(pan, m.plain(pan, n)), n));
+    }
+    // A stepped parameter snaps: each index round-trips, an off-step value lands on one.
+    for (int i = 0; i < 5; ++i) {
+        const double n = vellum::value::value_index_to_normalized(i, 5);
+        CHECK(near(m.plain(step, n), static_cast<double>(i)));
+        CHECK(near(m.normalized_from_plain(step, static_cast<double>(i)), n));
+    }
+    CHECK(near(m.plain(step, 0.3), 1.0));
+    CHECK(near(m.normalized_from_plain(step, 2.4), 0.5));
+
+    // Out of range clamps; NaN and bad handles give 0.
+    CHECK(m.normalized_from_plain(pan, 500.0) == 1.0);
+    CHECK(m.normalized_from_plain(pan, -500.0) == 0.0);
+    CHECK(m.plain(pan, 4.0) == 50.0);
+    CHECK(m.plain(pan, std::numeric_limits<double>::quiet_NaN()) == 0.0);
+    CHECK(m.plain({}, 0.5) == 0.0);
+    CHECK(m.normalized_from_plain({}, 5.0) == 0.0);
+}
+
+void info_describes_parameters() {
+    auto model = make_ranged_model();
+    ParamModel& m = model;
+    const auto freq = m.info(m.resolve("freq"));
+    CHECK(freq.name == "Frequency");
+    CHECK(freq.unit == "Hz");
+    CHECK(freq.default_normalized == 0.5);
+    CHECK(freq.value_count == 0);
+    CHECK(m.info(m.resolve("pan")).name == "pan"); // key when no name
+    CHECK(m.info(m.resolve("mode")).value_count == 3);
+    CHECK(m.info({}).name.empty());
+}
+
+void text_parse_and_format_round_trip() {
+    auto model = make_ranged_model();
+    ParamModel& m = model;
+    const auto freq = m.resolve("freq");
+    const auto pan = m.resolve("pan");
+    const auto mode = m.resolve("mode");
+
+    CHECK(m.display_text(pan, 0.75) == "25.00 %");
+    for (double n : {0.0, 0.1, 0.5, 0.9, 1.0}) {
+        const auto back = m.parse_text(pan, m.display_text(pan, n));
+        CHECK(back.has_value() && near(*back, n, 1e-4));
+        const auto fback = m.parse_text(freq, m.display_text(freq, n));
+        CHECK(fback.has_value() && near(*fback, n, 1e-3));
+    }
+    // Labels round trip for a labelled parameter.
+    for (double n : {0.0, 0.5, 1.0}) {
+        const auto back = m.parse_text(mode, m.display_text(mode, n));
+        CHECK(back.has_value() && *back == n);
+    }
+    CHECK(m.parse_text(mode, "BAND") == std::optional<double>(0.5));
+
+    // Unit suffix optional, whitespace trimmed, out-of-range clamps.
+    CHECK(m.parse_text(pan, " 25 ") == std::optional<double>(0.75));
+    CHECK(m.parse_text(pan, "25%") == std::optional<double>(0.75));
+    CHECK(m.parse_text(pan, "999") == std::optional<double>(1.0));
+
+    // Bad input is rejected.
+    for (const char* bad : {"", "   ", "abc", "12abc", "25 Hz", "nan", "inf", "1 2", "0x1p3x"})
+        CHECK(!m.parse_text(pan, bad).has_value());
+    CHECK(!m.parse_text(mode, "medium").has_value());
+    CHECK(!m.parse_text({}, "1").has_value());
+
+    // A custom parser takes precedence.
+    InMemoryParamModel custom({{.key = "x", .parse = [](std::string_view t) -> std::optional<double> {
+        return t == "half" ? std::optional<double>(0.5) : std::nullopt;
+    }}});
+    CHECK(custom.parse_text(custom.resolve("x"), "half") == std::optional<double>(0.5));
+    CHECK(!custom.parse_text(custom.resolve("x"), "0.5").has_value());
+}
+
+void modulation_readout_is_base_plus_offset() {
+    auto model = make_ranged_model();
+    ParamModel& m = model;
+    const auto pan = m.resolve("pan");
+    CHECK(!m.modulated_normalized(pan).has_value());
+
+    m.set_normalized(pan, 0.4);
+    model.set_modulation_offset(pan, 0.25);
+    CHECK(near(*m.modulated_normalized(pan), 0.65));
+    CHECK(m.normalized(pan) == 0.4); // the base is untouched
+
+    m.set_normalized(pan, 0.5); // follows the base
+    CHECK(near(*m.modulated_normalized(pan), 0.75));
+    model.set_modulation_offset(pan, 0.9); // clamps
+    CHECK(*m.modulated_normalized(pan) == 1.0);
+    model.set_modulation_offset(pan, -0.9);
+    CHECK(*m.modulated_normalized(pan) == 0.0);
+
+    model.set_modulation_offset(pan, std::numeric_limits<double>::quiet_NaN()); // ignored
+    CHECK(*m.modulated_normalized(pan) == 0.0);
+    model.set_modulation_offset(pan, std::nullopt);
+    CHECK(!m.modulated_normalized(pan).has_value());
+    CHECK(!m.modulated_normalized({}).has_value());
+}
+
+void gesture_reports_one_grouped_change() {
+    auto model = make_ranged_model();
+    ParamModel& m = model;
+    const auto pan = m.resolve("pan");
+    int begins = 0;
+    int ends = 0;
+    int values = 0;
+    model.set_gesture_observer([&](ParamHandle, bool begun) { (begun ? begins : ends)++; });
+    Subscription sub = m.subscribe([&](ParamHandle, double) { ++values; });
+
+    m.begin(pan);
+    for (int i = 1; i <= 20; ++i)
+        m.set_normalized(pan, i / 20.0);
+    m.end(pan);
+    CHECK(begins == 1);
+    CHECK(ends == 1);
+    CHECK(values == 20);
+    CHECK(model.gesture_depth(pan) == 0);
+}
+
+void watch_filters_to_one_parameter() {
+    auto model = make_ranged_model();
+    ParamModel& m = model;
+    const auto pan = m.resolve("pan");
+    const auto freq = m.resolve("freq");
+    std::vector<double> heard;
+    Subscription w = vellum::value::watch(m, pan, [&](double n) { heard.push_back(n); });
+    CHECK(static_cast<bool>(w));
+    m.set_normalized(freq, 0.9);
+    m.set_normalized(pan, 0.3);
+    CHECK(heard.size() == 1 && heard[0] == 0.3);
+    w.reset();
+    m.set_normalized(pan, 0.6);
+    CHECK(heard.size() == 1);
+    CHECK(!vellum::value::watch(m, {}, [](double) {}));
+    CHECK(!vellum::value::watch(m, pan, {}));
+}
+
+void construction_rejects_bad_ranges() {
+    auto throws = [](ParamSpec spec) {
+        try {
+            InMemoryParamModel m({std::move(spec)});
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    CHECK(throws({.key = "a", .plain_min = 1.0, .plain_max = 0.0}));
+    CHECK(throws({.key = "a", .skew = 0.0}));
+    CHECK(throws({.key = "a", .skew = -1.0}));
+    CHECK(throws({.key = "a", .plain_max = std::numeric_limits<double>::infinity()}));
+    CHECK(!throws({.key = "a", .plain_min = 2.0, .plain_max = 2.0}));
+}
+
 }  // namespace
 
 int main() {
+    plain_mapping_round_trips();
+    info_describes_parameters();
+    text_parse_and_format_round_trip();
+    modulation_readout_is_base_plus_offset();
+    gesture_reports_one_grouped_change();
+    watch_filters_to_one_parameter();
+    construction_rejects_bad_ranges();
     resolve_finds_keys_verbatim();
     foreign_handles_are_ignored();
     normalized_round_trips();

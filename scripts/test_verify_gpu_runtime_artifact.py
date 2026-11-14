@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import stat
 import sys
 import tarfile
 import tempfile
@@ -31,6 +33,12 @@ import verify_gpu_runtime_artifact as verifier  # noqa: E402
 VERSION = builder.vellum_version(ROOT)
 EXPORTS = ROOT / "scripts/fixtures/gpu-runtime-package"
 NAME = builder.archive_name(VERSION, "darwin-arm64")
+PIN = verifier.pinned_cmake.read_lock(ROOT)["version"]
+VERSION_MEMBER = f"{verifier.PACKAGE_DIR}/VellumGpuRuntimeConfigVersion.cmake"
+# The version file two CMake releases write for one package: the pinned
+# release's, and a later release's, which rewords a comment and a message.
+PINNED_VERSION_FILE = (EXPORTS / "VellumGpuRuntimeConfigVersion.cmake").read_bytes()
+OTHER_CMAKE_VERSION_FILE = (EXPORTS / "VellumGpuRuntimeConfigVersion.other-cmake.cmake").read_bytes()
 
 
 class GpuRuntimeArtifactTest(unittest.TestCase):
@@ -80,6 +88,7 @@ class GpuRuntimeArtifactTest(unittest.TestCase):
             "source_tree_clean": True,
             "renderer_lock_sha256": sha256(self.lock_path),
             "renderer_milestone": json.loads((ROOT / builder.LOCK).read_text())["milestone"],
+            "toolchain": {"cmake": PIN},
         }
 
     def archive(self, name: str = NAME, metadata_edit=None) -> Path:
@@ -132,7 +141,7 @@ class GpuRuntimeArtifactTest(unittest.TestCase):
         archive = self.archive()
         verifier.verify(archive, None)  # self-consistent, which is why --repo exists
         with self.assertRaises(verifier.VerificationError) as caught:
-            verifier.verify(archive, ROOT, self.generated())
+            verifier.verify(archive, ROOT, (self.generated(), PIN))
         self.assertIn("differs from the source", str(caught.exception))
 
     def test_an_extra_library_is_refused(self) -> None:
@@ -217,27 +226,27 @@ class GpuRuntimeArtifactTest(unittest.TestCase):
 
     def source_record(self) -> dict:
         head = verifier.git_head(ROOT)
-        return {"source_commit": head, "version": VERSION}
+        return {"source_commit": head, "version": VERSION, "toolchain": {"cmake": PIN}}
 
     def test_source_comparison_accepts_the_source(self) -> None:
         verifier.verify_against_source(self.source_files(), self.source_record(), ROOT,
-                                       self.generated())
+                                       self.generated(), PIN)
 
     def test_a_record_from_another_commit_is_refused_against_the_source(self) -> None:
         record = dict(self.source_record(), source_commit="b" * 40)
         with self.assertRaisesRegex(verifier.VerificationError, "another source commit"):
-            verifier.verify_against_source(self.source_files(), record, ROOT, self.generated())
+            verifier.verify_against_source(self.source_files(), record, ROOT, self.generated(), PIN)
 
     def test_a_record_of_another_version_is_refused_against_the_source(self) -> None:
         record = dict(self.source_record(), version="9.9.9")
         with self.assertRaisesRegex(verifier.VerificationError, "another version"):
-            verifier.verify_against_source(self.source_files(), record, ROOT, self.generated())
+            verifier.verify_against_source(self.source_files(), record, ROOT, self.generated(), PIN)
 
     def test_a_notice_other_than_the_assembled_one_is_refused(self) -> None:
         files = self.source_files()
         files[verifier.NOTICE_MEMBER] += b"\n### Extra\n"
         with self.assertRaisesRegex(verifier.VerificationError, "notice differs"):
-            verifier.verify_against_source(files, self.source_record(), ROOT, self.generated())
+            verifier.verify_against_source(files, self.source_record(), ROOT, self.generated(), PIN)
 
     def test_every_generated_package_file_is_held_to_the_source(self) -> None:
         injected = b'execute_process(COMMAND /bin/sh -c "touch /tmp/pwned")\n'
@@ -250,7 +259,105 @@ class GpuRuntimeArtifactTest(unittest.TestCase):
                     with self.assertRaisesRegex(verifier.VerificationError,
                                                 "differs from what the source generates"):
                         verifier.verify_against_source(files, self.source_record(), ROOT,
-                                                       self.generated())
+                                                       self.generated(), PIN)
+
+    def held_to_source(self, shipped: bytes, regenerated: bytes) -> None:
+        """Hold a shipped version file to the one the source regenerates."""
+        files, generated = self.source_files(), self.generated()
+        files[VERSION_MEMBER], generated[VERSION_MEMBER] = shipped, regenerated
+        verifier.verify_against_source(files, self.source_record(), ROOT, generated, PIN)
+
+    def test_the_pinned_cmake_version_file_is_accepted(self) -> None:
+        self.held_to_source(PINNED_VERSION_FILE, PINNED_VERSION_FILE)
+
+    def test_a_version_file_from_another_cmake_is_refused(self) -> None:
+        # The two releases' files agree on every command that decides
+        # compatibility; an exact comparison must still tell them apart.
+        self.assertNotEqual(PINNED_VERSION_FILE, OTHER_CMAKE_VERSION_FILE)
+        with self.assertRaisesRegex(verifier.VerificationError,
+                                    "differs from what the source generates"):
+            self.held_to_source(OTHER_CMAKE_VERSION_FILE, PINNED_VERSION_FILE)
+
+    def test_a_version_file_accepting_another_version_is_refused(self) -> None:
+        shipped = PINNED_VERSION_FILE.replace(
+            b"if(REQUESTED_VERSION_NO_TWEAK STREQUAL CVF_VERSION_NO_TWEAK)", b"if(TRUE)")
+        self.assertNotEqual(shipped, PINNED_VERSION_FILE)
+        with self.assertRaisesRegex(verifier.VerificationError,
+                                    "differs from what the source generates"):
+            self.held_to_source(shipped, PINNED_VERSION_FILE)
+
+    def test_a_differing_generated_file_is_reported_as_a_unified_diff(self) -> None:
+        with self.assertRaises(verifier.VerificationError) as caught:
+            self.held_to_source(OTHER_CMAKE_VERSION_FILE, PINNED_VERSION_FILE)
+        report = str(caught.exception).splitlines()
+        self.assertIn(f"with its pinned CMake {PIN}:", report[0])
+        self.assertEqual(report[1:3], [f"--- shipped/{VERSION_MEMBER}",
+                                       f"+++ regenerated/{VERSION_MEMBER}"])
+        self.assertIn('-    "(SamePatchVersion) of the module `${PACKAGE_FIND_NAME}` is incompatible "',
+                      report)
+        self.assertIn('+    "(ExactVersion) of the module `${PACKAGE_FIND_NAME}` is incompatible "',
+                      report)
+
+    def test_a_long_diff_is_cut_and_a_byte_only_difference_is_still_reported(self) -> None:
+        shipped = "".join(f"shipped {index}\n" for index in range(500)).encode()
+        report = verifier.difference("m", shipped, b"", "regenerated").splitlines()
+        self.assertEqual(len(report), verifier.DIFF_LINES + 1)
+        self.assertRegex(report[-1], r"^\.\.\. [0-9]+ more diff lines$")
+        self.assertIn("differ only in bytes",
+                      verifier.difference("m", b"line\r\n", b"line\n", "regenerated"))
+
+    def test_a_record_built_with_another_cmake_is_refused(self) -> None:
+        for toolchain in ({"cmake": "4.4.5"}, {}, None):
+            with self.subTest(toolchain=toolchain):
+                record = dict(self.source_record(), toolchain=toolchain)
+                with self.assertRaisesRegex(verifier.VerificationError,
+                                            f"not the CMake {PIN} the source pins"):
+                    verifier.verify_against_source(self.source_files(), record, ROOT,
+                                                   self.generated(), PIN)
+
+    def fake_cmake(self, directory: Path, label: str) -> Path:
+        """A `cmake` that writes the four package files, each naming `label`."""
+        directory.mkdir(parents=True)
+        cmake = directory / "cmake"
+        cmake.write_text(
+            "#!/bin/sh\n"
+            'while [ $# -gt 0 ]; do [ "$1" = "-B" ] && build=$2; shift; done\n'
+            'mkdir -p "$build/CMakeFiles/Export/0"\n'
+            "for name in Config ConfigVersion; do\n"
+            f'  echo "# {label}" > "$build/VellumGpuRuntime$name.cmake"\n'
+            "done\n"
+            "for name in Targets Targets-release; do\n"
+            f'  echo "# {label}" > "$build/CMakeFiles/Export/0/VellumGpuRuntime$name.cmake"\n'
+            "done\n", encoding="utf-8")
+        cmake.chmod(cmake.stat().st_mode | stat.S_IXUSR)
+        return cmake
+
+    def test_regeneration_runs_the_pinned_cmake_not_the_one_on_path(self) -> None:
+        pinned = self.fake_cmake(self.root / "pinned", "pinned")
+        on_path = self.fake_cmake(self.root / "path", "path")
+        asked: list[Path] = []
+
+        def provide(repo: Path, directory: Path) -> tuple[Path, str]:
+            asked.append(repo)
+            return pinned, PIN
+
+        saved = os.environ["PATH"]
+        os.environ["PATH"] = f"{on_path.parent}{os.pathsep}{saved}"
+        self.addCleanup(os.environ.__setitem__, "PATH", saved)
+        generated, version = verifier.regenerate_package_files(
+            ROOT, self.root / "renderer.zip", provide)
+        self.assertEqual(asked, [ROOT])
+        self.assertEqual(version, PIN)
+        self.assertEqual(set(generated), set(verifier.GENERATED))
+        self.assertEqual(set(generated.values()), {b"# pinned\n"})
+
+    def test_regeneration_without_a_pinned_cmake_is_refused(self) -> None:
+        def provide(repo: Path, directory: Path) -> tuple[Path, str]:
+            raise verifier.pinned_cmake.PinnedCMakeError("the lock is missing")
+
+        with self.assertRaisesRegex(verifier.VerificationError,
+                                    "could not provide the pinned CMake: the lock is missing"):
+            verifier.regenerate_package_files(ROOT, self.root / "renderer.zip", provide)
 
     def test_holding_to_the_source_needs_regenerated_files(self) -> None:
         with self.assertRaisesRegex(verifier.VerificationError, "regenerated package files"):
@@ -260,7 +367,7 @@ class GpuRuntimeArtifactTest(unittest.TestCase):
         files = self.source_files()
         del files[sorted(name for name in files if name.startswith("include/"))[0]]
         with self.assertRaisesRegex(verifier.VerificationError, "differ from what the source installs"):
-            verifier.verify_against_source(files, self.source_record(), ROOT, self.generated())
+            verifier.verify_against_source(files, self.source_record(), ROOT, self.generated(), PIN)
 
     def edit_export(self, name: str, edit) -> Path:
         path = self.payload / builder.PACKAGE_DIR / name
@@ -377,7 +484,7 @@ class GpuRuntimeArtifactTest(unittest.TestCase):
 
     def test_a_lock_that_differs_from_the_source_is_refused(self) -> None:
         with self.assertRaises(verifier.VerificationError) as caught:
-            verifier.verify(self.archive(), ROOT, self.generated())
+            verifier.verify(self.archive(), ROOT, (self.generated(), PIN))
         self.assertIn("renderer-lock.json differs from the source", str(caught.exception))
 
     def test_a_dawn_library_the_lock_does_not_name_is_refused(self) -> None:

@@ -11,7 +11,10 @@ GPU plug-in fetches this archive alone.
 
 The archive is built from `cmake -S gpu-runtime` with the per-build temporary
 root remapped out of every object, and static-library member headers
-normalized, so two builds of one commit are byte-identical.
+normalized, so two builds of one commit are byte-identical. CMake writes four
+of the package files itself, and their text follows the CMake release, so the
+build runs the CMake gpu-runtime/cmake-lock.json pins (see pinned_cmake.py),
+never the one on PATH: another host can then regenerate those files exactly.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from typing import Iterable
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 
+import pinned_cmake  # noqa: E402
 from build_sdk_artifact import (  # noqa: E402
     ArtifactError,
     normalize_static_archive,
@@ -113,7 +117,8 @@ def toolchain_identity(build_dir: Path) -> dict[str, str]:
 def configure_command(repo: Path, renderer_archive: Path, build_dir: Path, prefix: Path,
                       flags: str = "") -> list[str]:
     """The one configure both the builder and the verifier's regeneration use,
-    so the generated package files they produce are comparable byte for byte."""
+    so the generated package files they produce are comparable byte for byte.
+    Both run it through pinned_cmake.use(), with the CMake the source pins."""
     command = [
         "cmake", "-S", str(repo / "gpu-runtime"), "-B", str(build_dir),
         "-G", GENERATOR,
@@ -249,11 +254,16 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             maps.append(f"-f{flag}-prefix-map={repo}={canonical_source}")
         flags = " ".join(maps)
         env = dict(os.environ, ZERO_AR_DATE="1")
+        cmake, cmake_version = pinned_cmake.provide(repo, temporary / "cmake")
         configure = configure_command(repo, renderer_archive, build_dir, payload, flags)
-        run(configure, env=env)
+        run(pinned_cmake.use(configure, cmake), env=env)
         jobs = str(max(1, min(args.jobs, os.cpu_count() or 1)))
-        run(["cmake", "--build", str(build_dir), "--parallel", jobs], env=env)
-        run(["cmake", "--install", str(build_dir)], env=env)
+        run([str(cmake), "--build", str(build_dir), "--parallel", jobs], env=env)
+        run([str(cmake), "--install", str(build_dir)], env=env)
+        toolchain = toolchain_identity(build_dir)
+        if toolchain["cmake"] != cmake_version:
+            raise ArtifactError(f"the build was configured by CMake {toolchain['cmake']}, "
+                                f"not the pinned {cmake_version}")
         for relative in LIBRARIES:
             normalize_library(payload / relative)
         for name, data in generated_package_files(build_dir).items():
@@ -280,7 +290,7 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             "source_tree_clean": clean,
             "renderer_lock_sha256": sha256(repo / LOCK),
             "renderer_milestone": json.loads(lock_bytes)["milestone"],
-            "toolchain": toolchain_identity(build_dir),
+            "toolchain": toolchain,
             "files": payload_files(payload),
         }
         (payload / METADATA_NAME).write_text(
@@ -322,7 +332,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = parser().parse_args(list(argv) if argv is not None else None)
     try:
         result = build(args)
-    except ArtifactError as error:
+    except (ArtifactError, pinned_cmake.PinnedCMakeError) as error:
         print(f"vellum-gpu-runtime-artifact: {error}", file=sys.stderr)
         return 1
     if args.json:

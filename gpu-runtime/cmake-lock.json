@@ -1,0 +1,11 @@
+{
+  "schema": "vellum.gpu-runtime-cmake-lock.v1",
+  "publisher": "https://github.com/Kitware/CMake",
+  "version": "4.3.3",
+  "platforms": {
+    "macos-arm64": {
+      "asset": "cmake-4.3.3-macos-universal.tar.gz",
+      "sha256": "5221a13450c7a0219a2a0d1b6c9085eb06489721fafd8488ccebc1584175d2fb"
+    }
+  }
+}
