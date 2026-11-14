@@ -1661,6 +1661,12 @@ def validate_open_pr_snapshot(
 ) -> list[str]:
     """Compare the accepted overlap audit with a fresh GitHub API snapshot.
 
+    Only a landable open pull request (one the collector found in its merge
+    queue or carrying a counted APPROVE of its exact head) is a live overlap
+    the acceptance must name; a `not_landable` one cannot land before the tag
+    and blocks nothing. An accepted row is still bound to its open pull
+    request whatever that pull request's landability.
+
     With a release tag, an overlap the Pulp acceptance lacks is still accepted
     when it is exactly the version bump away from that release (release_bump_problems),
     judged from release_bump_evidence.
@@ -1681,7 +1687,7 @@ def validate_open_pr_snapshot(
         "schema_version", "kind", "repositories"
     }:
         return ["open PR snapshot: expected strict snapshot object"]
-    if not exact_scalar(snapshot.get("schema_version"), 2) or not exact_scalar(
+    if not exact_scalar(snapshot.get("schema_version"), 3) or not exact_scalar(
         snapshot.get("kind"), "github-open-pull-request-snapshot"
     ):
         errors.append("open PR snapshot: schema or kind differs")
@@ -1692,7 +1698,7 @@ def validate_open_pr_snapshot(
         RETIRED_OPEN_PR_REPOSITORIES if delivery_retired else LIVE_OPEN_PR_REPOSITORIES
     )
     seen_repositories: set[str] = set()
-    live_overlaps: dict[tuple[str, int], tuple[str, str, list[str]]] = {}
+    open_overlaps: dict[tuple[str, int], tuple[str, str, list[str], bool]] = {}
     try:
         exact_routes = exact_route_rows(matrix, amendment)
     except ValueError as exc:
@@ -1733,7 +1739,7 @@ def validate_open_pr_snapshot(
             pull_where = f"{where}.pulls[{pull_index}]"
             if not isinstance(pull, dict) or set(pull) != {
                 "number", "base_commit", "merge_base_commit", "head_commit", "paths",
-                "diff_path_count",
+                "diff_path_count", "landability", "landability_reason",
             }:
                 errors.append(f"{pull_where}: expected strict pull request object")
                 continue
@@ -1778,6 +1784,13 @@ def validate_open_pr_snapshot(
             if diff_path_count != len(paths):
                 errors.append(f"{pull_where}: tree diff path count differs")
                 continue
+            landability = pull.get("landability")
+            reason = pull.get("landability_reason")
+            if landability not in ("landable", "not_landable") or not (
+                isinstance(reason, str) and reason.strip()
+            ):
+                errors.append(f"{pull_where}: expected landable or not_landable with a reason")
+                continue
             invalid_path = False
             for path_index, path in enumerate(paths):
                 before = len(errors)
@@ -1788,8 +1801,9 @@ def validate_open_pr_snapshot(
             snapshot_rows[(repository, number)] = (base_commit, paths)
             overlap_paths = sorted(set(paths) & routed_paths[repository])
             if overlap_paths:
-                live_overlaps[(repository, number)] = (
-                    merge_base_commit, head_commit, overlap_paths
+                open_overlaps[(repository, number)] = (
+                    merge_base_commit, head_commit, overlap_paths,
+                    landability == "landable",
                 )
     if seen_repositories != expected_repositories:
         errors.append(
@@ -1811,10 +1825,12 @@ def validate_open_pr_snapshot(
             )
         else:
             accepted_by_key[key] = row
-    for key, (merge_base_commit, head_commit, paths) in live_overlaps.items():
+    for key, (merge_base_commit, head_commit, paths, landable) in open_overlaps.items():
         row = accepted_by_key.get(key)
         label = f"{key[0]}#{key[1]}"
         if row is None:
+            if not landable:
+                continue
             if release_tag is not None and key[0] == RELEASE_BUMP_REPOSITORY:
                 base_commit, all_paths = snapshot_rows[key]
                 bump_problems = release_bump_problems(
@@ -1836,7 +1852,7 @@ def validate_open_pr_snapshot(
             errors.append(f"open PR snapshot: live overlap {label} head differs")
         if row.get("paths") != paths:
             errors.append(f"open PR snapshot: live overlap {label} paths differ")
-    for key in accepted_by_key.keys() - live_overlaps.keys():
+    for key in accepted_by_key.keys() - open_overlaps.keys():
         errors.append(
             f"open PR snapshot: accepted overlap {key[0]}#{key[1]} is not currently open"
         )
