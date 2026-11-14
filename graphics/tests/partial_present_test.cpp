@@ -1203,6 +1203,55 @@ struct SweepCase final {
     hooks::PartialRedrawRules off;
 };
 
+Scene gradient_kind_scene(GradientKind kind, GradientSpread spread) {
+    Scene scene = plain_scene(400.0F, 300.0F);
+    scene.scene_version = 8U;
+    LinearGradient gradient;
+    gradient.kind = kind;
+    gradient.spread = spread;
+    gradient.center_x = 0.5F;
+    gradient.center_y = 0.5F;
+    gradient.radius_x = 0.45F;
+    gradient.radius_y = 0.45F;
+    gradient.repeating = spread != GradientSpread::pad;
+    gradient.repeat_length = spread != GradientSpread::pad ? 30.0F : 0.0F;
+    gradient.stops = {{.position = 0.0F, .color = Color::hex(0xEF4444)},
+                      {.position = 0.5F, .color = Color::hex(0xFACC15)},
+                      {.position = 1.0F, .color = Color::hex(0x3B82F6)}};
+    scene.root.children.push_back({
+        .id = "gradient",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {60.0F, 50.0F, 220.0F, 160.0F},
+        .fill = Color::hex(0x111827),
+        .fill_gradients = {gradient},
+    });
+    return scene;
+}
+
+void gradient_kind_sweeps() {
+    const struct { GradientKind kind; GradientSpread spread; const char* name; } cases[] = {
+        {GradientKind::radial, GradientSpread::pad, "radial"},
+        {GradientKind::radial, GradientSpread::reflect, "radial reflect"},
+        {GradientKind::two_circle_radial, GradientSpread::pad, "two-circle radial"},
+        {GradientKind::conic, GradientSpread::pad, "conic"},
+        {GradientKind::conic, GradientSpread::repeat, "conic repeat"},
+    };
+    for (const auto& item : cases) {
+        for (const float scale : {1.0F, 2.0F}) {
+            for (const bool cache : {false, true}) {
+                const Scene scene = gradient_kind_scene(item.kind, item.spread);
+                const auto count = sweep_damage_edges(scene, scale, cache);
+                expect(count.differing == 0,
+                       std::string("a damage edge swept across a ") + item.name +
+                           " gradient leaves every frame byte-identical at " +
+                           (scale == 1.0F ? "1x" : "2x") + (cache ? " with the layer cache" : ""),
+                       std::to_string(count.differing) + " of " + std::to_string(count.edges) +
+                           " edges differ " + count.first);
+            }
+        }
+    }
+}
+
 void grouping_sweeps() {
     const std::vector<SweepCase> cases = {
         {"images", image_sweep_scene(400.0F, 300.0F),
@@ -2059,6 +2108,7 @@ int main() {
         empty_path_extent();
         self_layer_enclosure();
         interpolated_fill_sweep();
+        gradient_kind_sweeps();
         multisampling_cross_pass();
         large_path();
         transformed_blur_reach_sweep();
