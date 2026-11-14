@@ -385,14 +385,14 @@ class ReleaseTagWorkflowWiring(unittest.TestCase):
 
     def test_rules_and_protection_are_read_again_with_a_fresh_token_before_check(self) -> None:
         region = self.region()
-        mint = region.index("id: decision-token")
+        mint = region.index("id: push-token")
         reread = region.index("name: Read main's required checks again")
         decide = region.index("name: Decide whether the version may be tagged")
         self.assertLess(region.index("release_request.py pending"), mint)
         self.assertLess(mint, reread)
         self.assertLess(reread, decide)
         again = region[reread:decide]
-        self.assertIn("steps.decision-token.outputs.token", again)
+        self.assertIn("steps.push-token.outputs.token", again)
         for api in ("branches/main/protection/required_status_checks", "rules/branches/main",
                     "immutable-releases"):
             self.assertIn(api, again)
@@ -433,6 +433,19 @@ class StrictCheckRuns(unittest.TestCase):
                           "string id": {**good, "id": "1"}, "app not an object": {**good, "app": "15368"}}.items():
             with self.subTest(name), self.assertRaises(rr.ReleaseRequestError):
                 rr.check_runs(self.pages(good, row))
+
+    def test_an_app_with_a_bad_id_is_refused_and_a_large_real_id_is_accepted(self) -> None:
+        gate = {"id": 900, "name": "gate", "head_sha": COMMIT, "status": "completed", "conclusion": "success"}
+        for bad in (True, 0, -1, 1.0, "15368", None):
+            with self.subTest(app_id=bad), self.assertRaisesRegex(rr.ReleaseRequestError, "positive integer id"):
+                rr.check_runs(self.pages({**gate, "app": {"id": bad}}))
+        with self.assertRaises(rr.ReleaseRequestError):
+            rr.check_runs(self.pages({**gate, "app": {}}))
+        # Astra's case: a boolean app id must not satisfy a check bound to app 1
+        self.assertEqual(rr.unmet([("gate", 1)], [{**gate, "app": {"id": True}}], COMMIT),
+                         [f"gate: no run from app 1 on {COMMIT}"])
+        big = {**gate, "id": 5_000_000_000_000, "app": {"id": 15368}}
+        self.assertEqual(rr.unmet([("gate", 15368)], rr.check_runs(self.pages(big)), COMMIT), [])
 
     def test_a_null_app_and_a_null_conclusion_are_tolerated(self) -> None:
         running = {**app_run("release-policy", 2, status="in_progress", conclusion=None), "head_sha": COMMIT}
@@ -1295,8 +1308,14 @@ class ReleaseTagWorkflow(unittest.TestCase):
         self.assertNotIn("python", read)
 
     def test_the_push_uses_a_token_minted_after_the_wait(self) -> None:
-        self.assertLess(self.sign_job.index("- name: Decide whether the version may be tagged"),
+        self.assertLess(self.sign_job.index("release_request.py pending"),
                         self.sign_job.index("id: push-token"))
+        # the one mint also feeds the re-read, so it comes before the decision and the sign step
+        self.assertLess(self.sign_job.index("id: push-token"),
+                        self.sign_job.index("- name: Decide whether the version may be tagged"))
+        before_sign = self.sign_job[:self.sign_job.index("- name: Sign the tag")]
+        self.assertEqual(before_sign.count("id: push-token"), 1)
+        self.assertNotIn("decision-token", self.sign_job)
         push = self.step("Push the tag and freeze it")
         self.assertIn("GH_TOKEN: ${{ steps.push-token.outputs.token }}", push)
         self.assertNotIn("python", push)

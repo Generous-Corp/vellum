@@ -168,8 +168,9 @@ def check_runs(pages: Any) -> list[dict[str, Any]]:
         for run in page["check_runs"]:
             if not isinstance(run, dict) or not exact_int(run.get("id")) or run["id"] <= 0:
                 raise ReleaseRequestError("a check run is not an object with a positive integer id")
-            if run.get("app") is not None and not isinstance(run["app"], dict):
-                raise ReleaseRequestError("a check run's app is neither null nor an object")
+            app = run.get("app")
+            if app is not None and (not isinstance(app, dict) or not exact_int(app.get("id")) or app["id"] <= 0):
+                raise ReleaseRequestError("a check run's app is neither null nor an object with a positive integer id")
             runs.append(run)
     return runs
 
@@ -222,7 +223,8 @@ def newest_run(context: str, app_id: int | None, runs: list[dict[str, Any]],
     candidates = [run for run in runs
                   if run.get("head_sha") == commit and run.get("name") == context
                   and exact_int(run.get("id"))
-                  and (app_id is None or (run.get("app") or {}).get("id") == app_id)]
+                  and (app_id is None or (exact_int((run.get("app") or {}).get("id"))
+                                          and (run.get("app") or {}).get("id") == app_id))]
     return max(candidates, key=lambda row: row["id"]) if candidates else None
 
 

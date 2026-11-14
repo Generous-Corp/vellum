@@ -234,11 +234,12 @@ jobs:
             sleep 60
           done
 
-      # The wait can outlast the first App token's hour and the rules can change
-      # during it, so main's required checks and the immutable-release setting
-      # are read again with a token minted now; the decision judges only these.
-      - name: Mint a fresh release App token for the decision
-        id: decision-token
+      # An App token lives one hour and the wait above can take longer, so a
+      # token is minted now. It reads main's required checks and the
+      # immutable-release setting again (the rules can change during the wait),
+      # and the same token pushes the tag; the steps between take seconds.
+      - name: Mint a fresh release App token for the re-read and the push
+        id: push-token
         uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
         with:
           app-id: ${{ vars.RELEASE_APP_ID }}
@@ -246,7 +247,7 @@ jobs:
 
       - name: Read main's required checks again
         env:
-          GH_TOKEN: ${{ steps.decision-token.outputs.token }}
+          GH_TOKEN: ${{ steps.push-token.outputs.token }}
         run: |
           set -euo pipefail
           timeout 120 gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" \
@@ -313,15 +314,6 @@ jobs:
             --allowed-signers provenance/release-signers.allowed_signers \
             --expected-principal "$PRINCIPAL" --expected-fingerprint "$FINGERPRINT" \
             --output "$RUNNER_TEMP/release-trust.json"
-
-      # An App token lives one hour, and the wait for required checks above
-      # can take longer, so the push and the freeze use a token minted now.
-      - name: Mint a fresh release App token for the push
-        id: push-token
-        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
-        with:
-          app-id: ${{ vars.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
       - name: Push the tag and freeze it
         env:

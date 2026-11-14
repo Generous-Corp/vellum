@@ -89,16 +89,17 @@ A Vellum release tag is signed by CI, never by a person or an agent's host key.
 
    The push that lands the reconcile starts those checks on the same commit, so the job first waits, up to 100
    minutes, until none of them is still running, meaning a run not completed or a `pending` status
-   (`release_request.py pending`). It then mints a fresh release App token and reads main's required checks (classic protection and
+   (`release_request.py pending`). It then mints a fresh release App token (the same one the push and the freeze use later;
+   the steps between take seconds) and reads main's required checks (classic protection and
    rules) and the immutable-release setting again, then reads the check runs and statuses again, and
    `release_request.py check` judges only those fresh reads, so a required check added during the wait counts. Every
    `gh api` call in these steps runs under `timeout 120`, and a timeout takes the same retry and failure path as an
-   API error. Check run rows must be objects with positive integer ids (a null `app` and a null `conclusion` on a
-   running run are tolerated); anything else refuses.
+   API error. Check run rows must be objects with positive integer ids, and a non-null `app` must carry a positive
+   integer id (a null `app` and a null `conclusion` on a running run are tolerated); anything else refuses.
 5. The job signs an annotated tag on that commit with the key in the environment's `RELEASE_TAG_SIGNING_KEY` secret.
    It verifies the tag with `scripts/verify_release_tag.py` against `provenance/release-signers.allowed_signers`
    before pushing anything.
-6. It then mints a fresh release App token (the wait can outlast the first token's hour), pushes the tag and creates
+6. It then pushes the tag, with the token minted before the re-read, and creates
    the tag's freeze ruleset (`release_request.py freeze`), which `sdk-release.yml` requires before it finalizes the
    release. The freeze is retried; if every attempt fails, the job prints the exact ruleset for the owner to apply.
    The tag push starts `gpu-macos.yml`, then `sdk-release.yml`, which reads the signer file from the tagged commit,
