@@ -13,6 +13,7 @@ async function source() {
 function withTracks(design, tracks) {
     const copy = structuredClone(design);
     copy.root.tracks = tracks;
+    copy.schemaVersion = 4;
     return copy;
 }
 
@@ -86,10 +87,30 @@ test('a spring segment that lasts its settle time is accepted', async () => {
     assert.equal(validateDesignIR(withTracks(design, tracks)).valid, false);
 });
 
+test('tracks need schema version 4 while older documents stay valid', async () => {
+    const design = normalizeImport(await source());
+    assert.equal(design.schemaVersion, 1);
+    assert.deepEqual(validateDesignIR(design), { issues: [], valid: true });
+    const current = withTracks(design, pulse);
+    assert.deepEqual(validateDesignIR(current), { issues: [], valid: true });
+    for (const version of [1, 2, 3]) {
+        const older = { ...current, schemaVersion: version };
+        const result = validateDesignIR(older);
+        assert.equal(result.valid, false, `version ${version}`);
+        assert.ok(result.issues.some((entry) => entry.code === 'version'), JSON.stringify(result.issues));
+    }
+    assert.equal(validateDesignIR({ ...design, schemaVersion: 4 }).valid, true);
+    const definitions = JSON.parse(await readFile(schema, 'utf8'));
+    assert.equal(conforms(definitions, current, definitions.$defs), true);
+    assert.equal(conforms(definitions, { ...current, schemaVersion: 1 }, definitions.$defs), false);
+    assert.equal(conforms(definitions, design, definitions.$defs), true);
+});
+
 test('normalization keeps a source node tracks', async () => {
     const raw = await source();
     raw.root.tracks = structuredClone(pulse);
     const design = normalizeImport(raw);
+    assert.equal(design.schemaVersion, 4);
     assert.deepEqual(design.root.tracks[0].keyframes[1].easing, { position: 'start', steps: 3, type: 'steps' });
     assert.equal(design.root.tracks.length, pulse.length);
     assert.equal(design.root.extensions?.tracks, undefined);
@@ -107,6 +128,7 @@ test('the schema declares tracks with keyframes and easings', async () => {
 // A minimal evaluator for the JSON Schema keywords the animation definitions
 // use, so the schema and the validator can be checked against each other.
 function conforms(schema, value, definitions) {
+    if (typeof schema === 'boolean') return schema;
     if (schema.$ref) return conforms(definitions[schema.$ref.replace('#/$defs/', '')], value, definitions);
     const isObject = (item) => item !== null && typeof item === 'object' && !Array.isArray(item);
     if (schema.type === 'object' && !isObject(value)) return false;
@@ -130,7 +152,7 @@ function conforms(schema, value, definitions) {
     if (isObject(value)) {
         if (schema.required && !schema.required.every((key) => key in value)) return false;
         for (const [key, item] of Object.entries(value)) {
-            if (schema.properties?.[key]) {
+            if (schema.properties && key in schema.properties) {
                 if (!conforms(schema.properties[key], item, definitions)) return false;
             } else if (schema.additionalProperties === false) {
                 return false;

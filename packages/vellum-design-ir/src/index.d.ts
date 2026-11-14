@@ -2,6 +2,10 @@ export const DESIGN_IR_SCHEMA: 'https://vellum.dev/schemas/design-ir/v1';
 export const AUTHORED_OVERLAY_SCHEMA: 'https://vellum.dev/schemas/design-ir/authored-overlay/v1';
 export const REIMPORT_REPORT_SCHEMA: 'https://vellum.dev/schemas/design-ir/reimport-report/v1';
 export const DESIGN_IR_VERSION: 1;
+/** The DesignIR version that adds animation tracks on nodes. */
+export const DESIGN_IR_TRACKS_VERSION: 4;
+/** The DesignIR versions this build reads and writes; 2 and 3 are reserved. */
+export const SUPPORTED_DESIGN_IR_VERSIONS: readonly [1, 4];
 export const AUTHORED_OVERLAY_VERSION: 1;
 export const REIMPORT_REPORT_VERSION: 1;
 export const COMPILER_NAME: '@vellum/design-ir';
@@ -108,7 +112,8 @@ export interface DesignToken {
 
 export interface DesignIR {
     $schema: typeof DESIGN_IR_SCHEMA;
-    schemaVersion: 1;
+    /** 1, or 4 when a node carries animation tracks. */
+    schemaVersion: 1 | 4;
     compiler: { name: string; version: string };
     source: DesignSource;
     root: DesignNode;

@@ -2,6 +2,7 @@ import {
     COMPILER_NAME,
     COMPILER_VERSION,
     DESIGN_IR_SCHEMA,
+    DESIGN_IR_TRACKS_VERSION,
     DESIGN_IR_VERSION,
 } from './constants.js';
 import { buildLossReport, diagnosticSort, normalizeDiagnostic } from './diagnostics.js';
@@ -62,13 +63,19 @@ export function normalizeImport(input, options = {}) {
         },
         diagnostics: diagnostics.sort(diagnosticSort),
         root,
-        schemaVersion: DESIGN_IR_VERSION,
+        schemaVersion: hasTracks(root) ? DESIGN_IR_TRACKS_VERSION : DESIGN_IR_VERSION,
         source,
         tokens: normalizeTokens(input.tokens, source.key),
     });
     document.lossReport = buildLossReport(document.diagnostics);
     validateDesignIR(document, { throwOnError: true });
     return canonicalize(document);
+}
+
+// The lowest schema version that carries the document: version 4 when a node
+// has tracks, otherwise version 1.
+function hasTracks(node) {
+    return node.tracks !== undefined || node.children.some(hasTracks);
 }
 
 function normalizeSource(source) {

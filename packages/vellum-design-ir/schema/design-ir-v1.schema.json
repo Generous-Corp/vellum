@@ -16,9 +16,18 @@
     "diagnostics",
     "lossReport"
   ],
+  "allOf": [
+    {
+      "if": { "properties": { "schemaVersion": { "const": 1 } } },
+      "then": { "properties": { "root": { "$ref": "#/$defs/nodeWithoutTracks" } } }
+    }
+  ],
   "properties": {
     "$schema": { "const": "https://vellum.dev/schemas/design-ir/v1" },
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": {
+      "description": "1, or 4 when a node carries animation tracks. Versions 2 and 3 are reserved and not read by this schema.",
+      "enum": [1, 4]
+    },
     "compiler": {
       "type": "object",
       "additionalProperties": false,
@@ -97,6 +106,13 @@
         "extensions": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
         "tracks": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/animationTrack" } },
         "children": { "type": "array", "items": { "$ref": "#/$defs/node" } }
+      }
+    },
+    "nodeWithoutTracks": {
+      "description": "A node, and every node beneath it, without animation tracks; what schemaVersion 1 allows.",
+      "properties": {
+        "tracks": false,
+        "children": { "type": "array", "items": { "$ref": "#/$defs/nodeWithoutTracks" } }
       }
     },
     "animationTrack": {

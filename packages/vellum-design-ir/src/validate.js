@@ -2,7 +2,8 @@ import {
     AUTHORED_OVERLAY_SCHEMA,
     AUTHORED_OVERLAY_VERSION,
     DESIGN_IR_SCHEMA,
-    DESIGN_IR_VERSION,
+    DESIGN_IR_TRACKS_VERSION,
+    SUPPORTED_DESIGN_IR_VERSIONS,
     DISPOSITIONS,
     REIMPORT_REPORT_SCHEMA,
     REIMPORT_REPORT_VERSION,
@@ -19,7 +20,13 @@ export function validateDesignIR(value, options = {}) {
         return finish(issues, options, 'Invalid DesignIR');
     }
     exact(value.$schema, DESIGN_IR_SCHEMA, '$.$schema', issues);
-    exact(value.schemaVersion, DESIGN_IR_VERSION, '$.schemaVersion', issues);
+    if (!SUPPORTED_DESIGN_IR_VERSIONS.includes(value.schemaVersion)) {
+        issues.push(issue(
+            '$.schemaVersion',
+            'version',
+            `$.schemaVersion must be one of ${SUPPORTED_DESIGN_IR_VERSIONS.join(', ')}`,
+        ));
+    }
     requireObject(value.source, '$.source', issues);
     if (isObject(value.source)) {
         string(value.source.key, '$.source.key', issues);
@@ -90,7 +97,7 @@ export function validateDesignIR(value, options = {}) {
             validateDiagnostic(diagnostic, `$.diagnostics[${index}]`, issues),
         );
     }
-    validateNode(value.root, '$.root', value.source?.key, issues);
+    validateNode(value.root, '$.root', value.source?.key, issues, value.schemaVersion);
     requireObject(value.lossReport, '$.lossReport', issues);
     if (isObject(value.lossReport) && Array.isArray(value.diagnostics)) {
         const expectedLosses = value.diagnostics.filter((diagnostic) =>
@@ -230,7 +237,7 @@ export function parseReimportReport(text) {
     return value;
 }
 
-function validateNode(node, path, sourceKey, issues) {
+function validateNode(node, path, sourceKey, issues, schemaVersion) {
     requireObject(node, path, issues);
     if (!isObject(node)) return;
     string(node.id, `${path}.id`, issues);
@@ -262,12 +269,17 @@ function validateNode(node, path, sourceKey, issues) {
         }
     }
     requireObject(node.properties, `${path}.properties`, issues);
-    if (node.tracks !== undefined) validateTracks(node.tracks, `${path}.tracks`, issues);
+    if (node.tracks !== undefined) {
+        if (!(schemaVersion >= DESIGN_IR_TRACKS_VERSION)) {
+            issues.push(issue(`${path}.tracks`, 'version', `tracks need schemaVersion ${DESIGN_IR_TRACKS_VERSION}`));
+        }
+        validateTracks(node.tracks, `${path}.tracks`, issues);
+    }
     if (!Array.isArray(node.children)) {
         issues.push(issue(`${path}.children`, 'type', 'children must be an array'));
     } else {
         node.children.forEach((child, index) =>
-            validateNode(child, `${path}.children[${index}]`, sourceKey, issues),
+            validateNode(child, `${path}.children[${index}]`, sourceKey, issues, schemaVersion),
         );
     }
 }

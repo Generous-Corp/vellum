@@ -5,6 +5,11 @@ export const REIMPORT_REPORT_SCHEMA =
     'https://vellum.dev/schemas/design-ir/reimport-report/v1';
 
 export const DESIGN_IR_VERSION = 1;
+// The DesignIR schema versions this build reads and writes. Versions 2 and 3
+// are reserved and not read here; version 4 adds animation tracks on nodes. A
+// document without tracks stays version 1.
+export const DESIGN_IR_TRACKS_VERSION = 4;
+export const SUPPORTED_DESIGN_IR_VERSIONS = Object.freeze([1, 4]);
 export const AUTHORED_OVERLAY_VERSION = 1;
 export const REIMPORT_REPORT_VERSION = 1;
 export const COMPILER_NAME = '@vellum/design-ir';
