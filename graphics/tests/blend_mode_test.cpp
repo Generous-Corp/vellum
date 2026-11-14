@@ -298,6 +298,71 @@ void layer_cache() {
            "negative control: the same faded group caches once it does not blend");
 }
 
+// A mode that empties the backdrop outside its own paint has the whole
+// enclosing group as its backdrop scope: its layer is unbounded, and so is
+// every layer enclosing it, a mask group included. Any other mode keeps the
+// bounded layer, which is the negative control.
+void backdrop_scope() {
+    for (const auto mode : kAllBlendModes) {
+        if (mode == BlendMode::normal) continue;
+        auto fade = box("fade", {10.0F, 10.0F, 40.0F, 40.0F});
+        fade.opacity = 0.5F;
+        fade.children = {box("fade/under", {0.0F, 0.0F, 20.0F, 20.0F}),
+                         blended("fade/key", {5.0F, 5.0F, 10.0F, 10.0F}, mode)};
+        auto holder = box("holder", {50.0F, 50.0F, 40.0F, 40.0F});
+        auto mask = box("holder/mask", {0.0F, 0.0F, 30.0F, 30.0F});
+        mask.mask = MaskMode::alpha;
+        holder.children = {blended("holder/key", {2.0F, 2.0F, 8.0F, 8.0F}, mode), mask};
+        const auto commands = make_paint_commands(scene_with({fade, holder}));
+        const bool clears = blend_mode_clears_backdrop(mode);
+        const auto* key = layer_of(commands, "fade/key");
+        const auto* outer = layer_of(commands, "fade");
+        const auto* masked_key = layer_of(commands, "holder/key");
+        const auto* masked = layer_of(commands, "holder/masked");
+        const std::string name(to_string(mode));
+        expect(key != nullptr && outer != nullptr && masked_key != nullptr && masked != nullptr,
+               name + ": the scene draws the expected layers");
+        if (key == nullptr || outer == nullptr || masked_key == nullptr || masked == nullptr) {
+            continue;
+        }
+        expect(key->layer_unbounded == clears && masked_key->layer_unbounded == clears,
+               name + ": a blended layer is unbounded exactly when its mode clears the backdrop");
+        expect(outer->layer_unbounded == clears && masked->layer_unbounded == clears,
+               name + ": a layer enclosing a backdrop-clearing blend is unbounded too");
+        expect(key->bounds.width == 10.0F && key->bounds.height == 10.0F,
+               name + ": the layer bounds still give the group's own paint extent");
+    }
+    expect(blend_mode_clears_backdrop(BlendMode::source_out) &&
+               !blend_mode_clears_backdrop(BlendMode::destination_out) &&
+               !blend_mode_clears_backdrop(BlendMode::source_atop),
+           "source_out (Porter-Duff Fb = 0) clears the backdrop outside its source; "
+           "destination_out and source_atop (Fb = 1 - As) keep it");
+}
+
+// A mask contributes coverage, not paint, so a blend mode on a mask node has
+// no stage to apply in: the scene is refused, naming the mask. A mask with
+// the normal mode, and a blended sibling of a mask, are the controls.
+void masked_blend() {
+    auto parent = box("parent", {0.0F, 0.0F, 60.0F, 60.0F});
+    auto mask = box("parent/mask", {0.0F, 0.0F, 30.0F, 30.0F});
+    mask.mask = MaskMode::alpha;
+    parent.children = {blended("parent/content", {0.0F, 0.0F, 40.0F, 40.0F},
+                               BlendMode::multiply),
+                       mask};
+    expect(accept_scene(scene_with({parent})).accepted,
+           "a blended sibling of a mask with the normal mode is accepted");
+    for (const auto mode : {BlendMode::multiply, BlendMode::destination_in, BlendMode::hue}) {
+        auto refused = parent;
+        refused.children[1].blend_mode = mode;
+        const auto acceptance = accept_scene(scene_with({refused}));
+        expect(!acceptance.accepted &&
+                   acceptance.reason == "mask parent/mask cannot carry the blend mode " +
+                                            std::string(to_string(mode)),
+               "a mask with the blend mode " + std::string(to_string(mode)) +
+                   " is refused, got '" + acceptance.reason + "'");
+    }
+}
+
 void hashing() {
     auto first = blended("a", {0, 0, 10, 10}, BlendMode::multiply);
     first.opacity = 0.5F;
@@ -320,6 +385,8 @@ int main() {
     damage();
     layer_cache();
     hashing();
+    backdrop_scope();
+    masked_blend();
     if (failures != 0) {
         std::cerr << failures << " blend mode check(s) failed\n";
         return 1;

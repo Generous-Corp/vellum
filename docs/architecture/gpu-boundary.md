@@ -230,17 +230,29 @@ backend that lacks a Tier 2 mode draws the group as `normal` and reports a
 | Backend | Tier 1 | Tier 2 |
 | --- | --- | --- |
 | Skia Graphite | every mode, as the matching Skia blend mode on the layer | every mode |
-| Web canvas shell | `globalCompositeOperation`, per command | every mode except `clear` and `destination`, which fall back to `normal` with a warning |
+| Web canvas shell | the group drawn offscreen and composited once with `globalCompositeOperation` | none: drawn as `normal` with a warning |
 
-The shell has no group compositing, so it flattens a blended layer: each command
-inside takes the layer's canvas operation, and the innermost blended layer wins.
-`source` is `copy`, `plus` is `lighter` and `xor` is `xor`.
+The shell implements Tier 1 only. A Tier 1 blended group is drawn into an
+offscreen canvas through the backend's `blendBegin(operation, alpha)` and
+`blendEnd()`, then composited once with its canvas operation and its own
+opacity, so overlapping members meet each other normally and the group alpha is
+not multiplied into every child. A Tier 2 mode is drawn as `normal` with a
+`VELLUM_BLEND_MODE_FALLBACK` warning, and the flattened layer is counted in the
+loss count. `blendBegin` and `blendEnd` are new backend functions: a
+`VellumCanvasBackend` written before them still renders, because the shell
+checks for both before calling either and otherwise draws every blended group as
+`normal` with the same warning and a counted loss.
 
 A mode that leaves nothing of the backdrop where the group draws nothing
 (`clear`, `source`, `source_in`, `source_out`, `destination_in` and
 `destination_atop`, see `blend_mode_clears_backdrop`) empties the whole
 backdrop, as the canvas operators do, so a node using one damages the whole
-frame. Other modes touch only the pixels the group covers. The layer cache
+frame. Its layer, and every layer enclosing it, is unbounded, so its backdrop
+scope is the whole enclosing group (or frame) rather than its own paint extent.
+`source_out` belongs to this set: Porter-Duff source-out keeps none of the
+destination, so beyond its source the backdrop is emptied. A mask node draws
+coverage, not paint, so it takes no blend mode but `normal`; a scene with a
+blended mask is refused, and the authoring host fails such a tree. Other modes touch only the pixels the group covers. The layer cache
 never draws a blended group, or a plain group that holds one, from an image,
 because an image is drawn on a transparent surface and the blend would meet no
 backdrop; a faded or isolated group that holds a blend is its own backdrop and
@@ -251,8 +263,13 @@ on any node type and fails the tree for an unknown name.
 DesignIR schema version 2 adds the node `compositing` object (opacity, blend
 mode, isolation, a mask mode and a mask reference to a sibling mask) with the
 same names. A normalizer emits version 2 only when a node uses it, a version 1
-document that carries one is refused, and a mask reference must name a sibling
-that is a mask.
+document that carries one is refused (by the validator and, through a
+conditional, by the published JSON schema), and a mask reference must name a
+sibling that is a mask. `materializeDesign` lowers the object into the retained
+`opacity`, `mixBlendMode`, `isolation` and `maskMode` styles. Because the
+renderer applies a mask to every sibling, it accepts a mask reference only when
+the parent holds one mask and every other child names it, and refuses anything
+else rather than drawing it differently.
 
 The surface draws every frame into a retained offscreen Graphite surface the
 size of its target in device pixels, and presents by drawing that image into

@@ -875,7 +875,8 @@ bool materialize_image(
 // and its subtree and wins over `overflow`, `maskMode` marks the node as a
 // mask for its siblings, `isolation: isolate` forces a group, and
 // `mixBlendMode` blends the node's group with what lies beneath it, in any
-// spelling `parse_blend_mode` knows.
+// spelling `parse_blend_mode` knows. A mask is coverage, not paint, so a mask
+// node takes no blend mode other than `normal`.
 bool parse_grouping(
     NSDictionary* style, const std::string& identity, const StyleUse& use,
     MaterializeContext& context, vellum::graphics::SceneNode& output, std::string* error) {
@@ -962,6 +963,9 @@ bool parse_grouping(
             ? vellum::graphics::parse_blend_mode(cpp_string(blend))
             : std::nullopt;
         if (!mode) return reject("mixBlendMode", "must be a blend mode name");
+        if (output.mask && *mode != vellum::graphics::BlendMode::normal) {
+            return reject("mixBlendMode", "cannot apply to a mask");
+        }
         output.blend_mode = *mode;
     }
     return true;

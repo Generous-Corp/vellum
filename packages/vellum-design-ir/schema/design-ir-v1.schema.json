@@ -47,6 +47,13 @@
     },
     "lossReport": { "$ref": "#/$defs/lossReport" }
   },
+  "allOf": [
+    {
+      "description": "A version 1 document carries no compositing object on any node; compositing is version 2 vocabulary.",
+      "if": { "required": ["schemaVersion"], "properties": { "schemaVersion": { "const": 1 } } },
+      "then": { "properties": { "root": { "$ref": "#/$defs/nodeWithoutCompositing" } } }
+    }
+  ],
   "$defs": {
     "jsonValue": {
       "oneOf": [
@@ -102,6 +109,13 @@
         "children": { "type": "array", "items": { "$ref": "#/$defs/node" } }
       }
     },
+    "nodeWithoutCompositing": {
+      "description": "A node, and every node beneath it, without a compositing object.",
+      "not": { "required": ["compositing"] },
+      "properties": {
+        "children": { "type": "array", "items": { "$ref": "#/$defs/nodeWithoutCompositing" } }
+      }
+    },
     "blendMode": {
       "enum": [
         "normal", "multiply", "screen", "overlay", "darken", "lighten", "difference", "exclusion",
@@ -122,6 +136,11 @@
         "isolate": { "type": "boolean" },
         "mask": { "enum": ["alpha", "luminance"] },
         "maskRef": { "type": "string", "minLength": 1 }
+      },
+      "if": { "required": ["mask"] },
+      "then": {
+        "description": "A mask is coverage, not paint, so a mask node takes no blend mode but normal.",
+        "properties": { "blendMode": { "const": "normal" } }
       }
     },
     "token": {

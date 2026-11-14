@@ -222,3 +222,126 @@ test('compositing is part of what a reimport compares', () => {
     const unchanged = reimportDesign(next, next, emptyAuthoredOverlay('screen'));
     assert.deepEqual(unchanged.report.changes.changed, []);
 });
+
+// A small JSON Schema 2020-12 evaluator for the keywords the DesignIR schema
+// uses, so the published schema itself is exercised rather than only read.
+function schemaAccepts(root, value) {
+    const resolve = (reference) => reference.slice(2).split('/').reduce((node, key) => node[key], root);
+    const typeOf = (item) => {
+        if (item === null) return 'null';
+        if (Array.isArray(item)) return 'array';
+        if (Number.isInteger(item)) return 'integer';
+        return typeof item;
+    };
+    const typed = (item, type) =>
+        typeOf(item) === type || (type === 'number' && typeOf(item) === 'integer');
+    const object = (item) => typeOf(item) === 'object';
+    const check = (node, item) => {
+        if (node === true) return true;
+        if (node === false) return false;
+        if (node.$ref !== undefined && !check(resolve(node.$ref), item)) return false;
+        if (node.type !== undefined &&
+            ![node.type].flat().some((type) => typed(item, type))) return false;
+        if ('const' in node && JSON.stringify(node.const) !== JSON.stringify(item)) return false;
+        if (node.enum !== undefined &&
+            !node.enum.some((entry) => JSON.stringify(entry) === JSON.stringify(item))) return false;
+        if (typeof item === 'number') {
+            if (node.minimum !== undefined && item < node.minimum) return false;
+            if (node.maximum !== undefined && item > node.maximum) return false;
+        }
+        if (typeof item === 'string') {
+            if (node.minLength !== undefined && [...item].length < node.minLength) return false;
+            if (node.pattern !== undefined && !new RegExp(node.pattern, 'u').test(item)) return false;
+        }
+        if (object(item)) {
+            for (const key of node.required ?? []) if (!Object.hasOwn(item, key)) return false;
+            for (const [key, entry] of Object.entries(item)) {
+                if (node.properties && Object.hasOwn(node.properties, key)) {
+                    if (!check(node.properties[key], entry)) return false;
+                } else if (node.additionalProperties !== undefined &&
+                    !check(node.additionalProperties, entry)) {
+                    return false;
+                }
+            }
+        }
+        if (Array.isArray(item) && node.items !== undefined &&
+            !item.every((entry) => check(node.items, entry))) return false;
+        if (node.allOf && !node.allOf.every((entry) => check(entry, item))) return false;
+        if (node.anyOf && !node.anyOf.some((entry) => check(entry, item))) return false;
+        if (node.oneOf && node.oneOf.filter((entry) => check(entry, item)).length !== 1) return false;
+        if (node.not !== undefined && check(node.not, item)) return false;
+        if (node.if !== undefined) {
+            const branch = check(node.if, item) ? node.then : node.else;
+            if (branch !== undefined && !check(branch, item)) return false;
+        }
+        return true;
+    };
+    return check(root, value);
+}
+
+test('the published schema refuses compositing in a version 1 document', () => {
+    const nested = normalizeImport(sourceWith({}, [{
+        kind: 'view',
+        sourceId: 'outer',
+        children: [child('blended', { blendMode: 'multiply' })],
+    }]));
+    assert.equal(nested.schemaVersion, 2);
+    assert.equal(schemaAccepts(schema, nested), true, 'a version 2 document with compositing');
+    const plain = normalizeImport(sourceWith({}, [child('plain', undefined)]));
+    assert.equal(plain.schemaVersion, 1);
+    assert.equal(schemaAccepts(schema, plain), true, 'a version 1 document without compositing');
+    const promoted = structuredClone(plain);
+    promoted.schemaVersion = 2;
+    assert.equal(schemaAccepts(schema, promoted), true, 'version 2 does not require compositing');
+
+    const older = structuredClone(nested);
+    older.schemaVersion = 1;
+    assert.equal(schemaAccepts(schema, older), false, 'compositing two levels down at version 1');
+    const atRoot = structuredClone(plain);
+    atRoot.root.compositing = { opacity: 0.5 };
+    assert.equal(schemaAccepts(schema, atRoot), false, 'compositing on the root at version 1');
+    assert.equal(validateDesignIR(older).valid, false);
+    assert.equal(validateDesignIR(atRoot).valid, false);
+
+    // Negative control: without the conditional the same evaluator accepts
+    // the version 1 document, so the refusal comes from the conditional.
+    const unconditional = structuredClone(schema);
+    delete unconditional.allOf;
+    assert.equal(schemaAccepts(unconditional, older), true);
+    assert.equal(schemaAccepts(unconditional, atRoot), true);
+    const unknown = structuredClone(nested);
+    unknown.root.children[0].children[0].compositing.blendMode = 'spectral';
+    assert.equal(schemaAccepts(schema, unknown), false, 'the evaluator checks nested enums');
+});
+
+test('a mask node takes no blend mode, in the validator and the published schema', () => {
+    const masked = normalizeImport(sourceWith({}, [
+        child('content', { maskRef: 'screen/cutout', blendMode: 'multiply' }),
+        child('cutout', { mask: 'alpha' }),
+    ]));
+    assert.deepEqual(validateDesignIR(masked), { issues: [], valid: true });
+    assert.equal(schemaAccepts(schema, masked), true, 'a blended sibling of a mask');
+    for (const mode of ['multiply', 'destination_in', 'hue']) {
+        assert.match(
+            refusal(() => normalizeImport(sourceWith({}, [
+                child('content', { maskRef: 'screen/cutout' }),
+                child('cutout', { mask: 'alpha', blendMode: mode }),
+            ]))),
+            /compositing\.blendMode: a mask node takes no blend mode but normal/,
+            mode,
+        );
+        const document = structuredClone(masked);
+        document.root.children[1].compositing.blendMode = mode;
+        assert.deepEqual(
+            issuesOf(document).map(({ code, path }) => ({ code, path })),
+            [{ code: 'mask', path: '$.root.children[1].compositing.blendMode' }],
+            mode,
+        );
+        assert.equal(schemaAccepts(schema, document), false, mode);
+    }
+    const explicit = normalizeImport(sourceWith({}, [
+        child('content', { maskRef: 'screen/cutout' }),
+        child('cutout', { mask: 'alpha', blendMode: 'normal' }),
+    ]));
+    assert.deepEqual(explicit.root.children[1].compositing, { mask: 'alpha' });
+});

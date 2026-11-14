@@ -19,8 +19,9 @@ namespace vellum::web {
 inline constexpr std::string_view kMaskNotCompositedCode = "VELLUM_WEB_MASK_NOT_COMPOSITED";
 
 /// Whether the canvas shell draws `command` with a loss it reports. The shell
-/// has no group compositing, so a `begin_layer` is flattened to per-command
-/// alpha and counts once; it does not draw meshes or paths and counts each one
+/// composites only Tier 1 blended groups (see `canvas_shell_composites`, which
+/// `canvas_shell_loss_count` exempts); any other `begin_layer` is flattened to
+/// per-command alpha and counts once; it does not draw meshes or paths and counts each one
 /// as a loss; it draws an image as `kMissingImagePlaceholder` over its box and
 /// counts it as a loss; and it draws a transformed or per-corner command as
 /// its untransformed box with the uniform radius. It does not clip, so each
@@ -58,15 +59,7 @@ inline constexpr std::string_view kMaskNotCompositedCode = "VELLUM_WEB_MASK_NOT_
     return masked;
 }
 
-[[nodiscard]] inline int canvas_shell_loss_count(
-    const std::vector<vellum::graphics::PaintCommand>& commands) {
-    const auto masked = canvas_shell_masked(commands);
-    int losses = 0;
-    for (std::size_t index = 0; index < commands.size(); ++index) {
-        if (!masked[index] && canvas_shell_loses(commands[index])) ++losses;
-    }
-    return losses;
-}
+
 
 /// One warning for each mask the shell counts as a loss, naming the mask node
 /// and why it was not applied. A mask nested inside another mask is skipped
@@ -97,9 +90,10 @@ canvas_shell_mask_diagnostics(
 }
 
 /// The canvas `globalCompositeOperation` that draws `mode`, or nothing for a
-/// mode the canvas has no operation for (`clear` and `destination`). `normal`
-/// and `source_over` are `source-over`, `source` is `copy` and `plus` is
-/// `lighter`.
+/// mode the shell does not draw. The shell implements Tier 1 only: `normal`
+/// and `source_over` are `source-over`, and every Tier 2 mode, which the canvas
+/// may or may not offer, falls back to `normal` with a
+/// `kBlendModeFallbackCode` warning (see `canvas_shell_blend_diagnostics`).
 [[nodiscard]] constexpr std::optional<std::string_view> canvas_shell_blend_operation(
     vellum::graphics::BlendMode mode) noexcept {
     using vellum::graphics::BlendMode;
@@ -115,80 +109,131 @@ canvas_shell_mask_diagnostics(
     case BlendMode::exclusion: return "exclusion";
     case BlendMode::destination_in: return "destination-in";
     case BlendMode::destination_out: return "destination-out";
-    case BlendMode::hue: return "hue";
-    case BlendMode::saturation: return "saturation";
-    case BlendMode::color: return "color";
-    case BlendMode::luminosity: return "luminosity";
-    case BlendMode::color_dodge: return "color-dodge";
-    case BlendMode::color_burn: return "color-burn";
-    case BlendMode::hard_light: return "hard-light";
-    case BlendMode::soft_light: return "soft-light";
-    case BlendMode::source: return "copy";
-    case BlendMode::source_in: return "source-in";
-    case BlendMode::source_out: return "source-out";
-    case BlendMode::source_atop: return "source-atop";
-    case BlendMode::destination_over: return "destination-over";
-    case BlendMode::destination_atop: return "destination-atop";
-    case BlendMode::exclusive_or: return "xor";
-    case BlendMode::plus: return "lighter";
-    case BlendMode::clear:
-    case BlendMode::destination: break;
+    default: break;
     }
     return std::nullopt;
 }
 
-/// For each command, the canvas operation it is drawn with, or an empty view
-/// for plain source-over. The shell has no group compositing, so a blended
-/// layer is flattened: every command inside it is blended on its own, and the
-/// innermost blended layer wins. A mode the canvas has
-/// no operation for is drawn as `normal`; see `canvas_shell_blend_diagnostics`.
-[[nodiscard]] inline std::vector<std::string_view> canvas_shell_blend_operations(
-    const std::vector<vellum::graphics::PaintCommand>& commands) {
-    using Kind = vellum::graphics::PaintCommand::Kind;
-    std::vector<std::string_view> stack;
-    std::vector<std::string_view> output;
-    output.reserve(commands.size());
-    for (const auto& command : commands) {
-        if (command.kind == Kind::begin_layer) {
-            const auto operation = canvas_shell_blend_operation(command.blend_mode);
-            std::string_view effective = !stack.empty() ? stack.back() : std::string_view{};
-            if (command.blend_mode != vellum::graphics::BlendMode::normal && operation) {
-                effective = *operation;
-            }
-            stack.push_back(effective);
-        } else if (command.kind == Kind::end_layer && !stack.empty()) {
-            stack.pop_back();
-        }
-        output.push_back(stack.empty() ? std::string_view{} : stack.back());
-    }
-    return output;
+/// What the canvas backend can do beyond plain drawing.
+struct CanvasShellCapabilities final {
+    /// The backend has `blendBegin(operation, alpha)` and `blendEnd()`, which
+    /// draw a group offscreen and composite it once. A backend written before
+    /// them has neither; the shell then draws every blended group as `normal`
+    /// and reports each one.
+    bool group_compositing = true;
+};
+
+/// How the shell draws each command of a scene.
+struct CanvasShellPaintPlan final {
+    /// For a `begin_layer` the shell composites as a group, the canvas
+    /// operation it is blended with when its `end_layer` is reached; empty for
+    /// every other command.
+    std::vector<std::string_view> group_operations;
+    /// The alpha each command is drawn with. A drawing command takes its own
+    /// opacity times that of every layer between it and the nearest enclosing
+    /// composited group, whose own opacity is applied once, when the group is
+    /// composited; a composited `begin_layer` holds that group alpha. Without
+    /// a composited group this is `effective_opacities`.
+    std::vector<float> opacities;
+};
+
+/// Whether the shell composites the `begin_layer` `command` as a group: a
+/// Tier 1 mode other than `normal` on a backend with group compositing. Every
+/// other layer is flattened to per-command alpha.
+[[nodiscard]] inline bool canvas_shell_composites(
+    const vellum::graphics::PaintCommand& command,
+    const CanvasShellCapabilities& capabilities) noexcept {
+    return command.kind == vellum::graphics::PaintCommand::Kind::begin_layer &&
+           capabilities.group_compositing &&
+           command.blend_mode != vellum::graphics::BlendMode::normal &&
+           canvas_shell_blend_operation(command.blend_mode).has_value();
 }
 
-/// One warning for each blended layer whose mode the canvas has no operation
-/// for, naming the node and saying the group was drawn as `normal`.
-[[nodiscard]] inline std::vector<vellum::graphics::LoweringDiagnostic>
-canvas_shell_blend_diagnostics(const std::vector<vellum::graphics::PaintCommand>& commands) {
+[[nodiscard]] inline CanvasShellPaintPlan canvas_shell_paint_plan(
+    const std::vector<vellum::graphics::PaintCommand>& commands,
+    const CanvasShellCapabilities& capabilities = {}) {
     using Kind = vellum::graphics::PaintCommand::Kind;
-    std::vector<vellum::graphics::LoweringDiagnostic> output;
+    CanvasShellPaintPlan plan;
+    plan.group_operations.reserve(commands.size());
+    plan.opacities.reserve(commands.size());
+    std::vector<float> enclosing_before;
+    float enclosing = 1.0F;
     for (const auto& command : commands) {
-        if (command.kind != Kind::begin_layer ||
-            command.blend_mode == vellum::graphics::BlendMode::normal ||
-            canvas_shell_blend_operation(command.blend_mode)) {
+        if (command.kind == Kind::end_layer) {
+            if (!enclosing_before.empty()) {
+                enclosing = enclosing_before.back();
+                enclosing_before.pop_back();
+            }
+            plan.opacities.push_back(enclosing);
+            plan.group_operations.emplace_back();
             continue;
         }
+        plan.opacities.push_back(enclosing * command.opacity);
+        if (command.kind != Kind::begin_layer) {
+            plan.group_operations.emplace_back();
+            continue;
+        }
+        enclosing_before.push_back(enclosing);
+        if (canvas_shell_composites(command, capabilities)) {
+            plan.group_operations.push_back(*canvas_shell_blend_operation(command.blend_mode));
+            enclosing = 1.0F;
+        } else {
+            plan.group_operations.emplace_back();
+            enclosing *= command.opacity;
+        }
+    }
+    return plan;
+}
+
+/// One warning for each blended layer the shell draws as `normal`: a Tier 2
+/// mode, which the shell does not implement, or any mode on a backend without
+/// group compositing. Each names the node and why.
+[[nodiscard]] inline std::vector<vellum::graphics::LoweringDiagnostic>
+canvas_shell_blend_diagnostics(const std::vector<vellum::graphics::PaintCommand>& commands,
+                               const CanvasShellCapabilities& capabilities = {}) {
+    using Kind = vellum::graphics::PaintCommand::Kind;
+    const auto masked = canvas_shell_masked(commands);
+    std::vector<vellum::graphics::LoweringDiagnostic> output;
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        const auto& command = commands[index];
+        if (masked[index] || command.kind != Kind::begin_layer ||
+            command.blend_mode == vellum::graphics::BlendMode::normal ||
+            canvas_shell_composites(command, capabilities)) {
+            continue;
+        }
+        const std::string mode(vellum::graphics::to_string(command.blend_mode));
+        const bool tier_two = !canvas_shell_blend_operation(command.blend_mode).has_value();
         output.push_back({
             .severity = vellum::graphics::LoweringDiagnostic::Severity::warning,
             .disposition = vellum::graphics::LoweringDiagnostic::Disposition::lowered,
             .code = std::string(vellum::graphics::kBlendModeFallbackCode),
             .node_id = command.node_id,
             .property = "blendMode",
-            .message = std::string("blend mode ") +
-                       std::string(vellum::graphics::to_string(command.blend_mode)) + " of " +
-                       command.node_id +
-                       " has no canvas operation; the group was drawn as normal",
+            .message = tier_two
+                ? "blend mode " + mode + " of " + command.node_id +
+                      " is a Tier 2 mode the canvas shell does not draw; the group was drawn "
+                      "as normal"
+                : "blend mode " + mode + " of " + command.node_id +
+                      " needs group compositing, which the canvas backend lacks "
+                      "(no blendBegin and blendEnd); the group was drawn as normal",
         });
     }
     return output;
+}
+
+/// The commands the shell draws with a loss: each `canvas_shell_loses`
+/// outside a mask, except a layer the shell composites as a group, which it
+/// draws exactly. A blended layer drawn as `normal` instead is counted, once.
+[[nodiscard]] inline int canvas_shell_loss_count(
+    const std::vector<vellum::graphics::PaintCommand>& commands,
+    const CanvasShellCapabilities& capabilities = {}) {
+    const auto masked = canvas_shell_masked(commands);
+    int losses = 0;
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        if (masked[index] || canvas_shell_composites(commands[index], capabilities)) continue;
+        if (canvas_shell_loses(commands[index])) ++losses;
+    }
+    return losses;
 }
 
 /// What the canvas shell draws for a scene and what it reports. The shell
@@ -202,7 +247,7 @@ struct CanvasShellLowering final {
     /// `SceneAcceptance::diagnostics`: the refusal of a refused scene, or the
     /// warnings of an accepted one followed by one `kMaskNotCompositedCode`
     /// warning for each mask the shell skips and one `kBlendModeFallbackCode`
-    /// warning for each blend mode the canvas lacks.
+    /// warning for each blended group drawn as `normal`.
     std::vector<vellum::graphics::LoweringDiagnostic> diagnostics;
     /// The commands the shell draws; empty for a refused scene.
     std::vector<vellum::graphics::PaintCommand> commands;
@@ -212,7 +257,7 @@ struct CanvasShellLowering final {
 };
 
 [[nodiscard]] inline CanvasShellLowering lower_for_canvas_shell(
-    const vellum::graphics::Scene& scene) {
+    const vellum::graphics::Scene& scene, const CanvasShellCapabilities& capabilities = {}) {
     auto acceptance = vellum::graphics::accept_scene(scene);
     CanvasShellLowering lowering{
         .accepted = acceptance.accepted,
@@ -221,11 +266,11 @@ struct CanvasShellLowering final {
     };
     if (!lowering.accepted) return lowering;
     lowering.commands = vellum::graphics::make_paint_commands(scene);
-    lowering.losses = canvas_shell_loss_count(lowering.commands);
+    lowering.losses = canvas_shell_loss_count(lowering.commands, capabilities);
     for (auto& diagnostic : canvas_shell_mask_diagnostics(lowering.commands)) {
         lowering.diagnostics.push_back(std::move(diagnostic));
     }
-    for (auto& diagnostic : canvas_shell_blend_diagnostics(lowering.commands)) {
+    for (auto& diagnostic : canvas_shell_blend_diagnostics(lowering.commands, capabilities)) {
         lowering.diagnostics.push_back(std::move(diagnostic));
     }
     return lowering;

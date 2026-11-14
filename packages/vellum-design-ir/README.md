@@ -111,8 +111,10 @@ the tier.
 The object adds schema version 2. `normalizeImport` emits version 2 only when a
 node uses `compositing`, and only the values that differ from their defaults, so
 other documents stay at version 1. A version 1 document that carries the object
-is refused, as is an unknown field, an out-of-range opacity, an unknown blend
-mode, a root with a mask, or a mask reference that does not name a sibling mask.
+is refused, by the validator and by a conditional in the published schema, as
+is an unknown field, an out-of-range opacity, an unknown blend mode, a root with
+a mask, a mask node with a blend mode other than `normal` (a mask is coverage,
+not paint), or a mask reference that does not name a sibling mask.
 
 ## Audio/control import contract
 

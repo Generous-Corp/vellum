@@ -9,6 +9,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -422,6 +423,134 @@ bool blend_version_refusal() {
     return ok;
 }
 
+// A mode that empties the backdrop does so across its whole enclosing group,
+// not only within its own paint, and no further: inside a faded group the
+// key clears the group's own backdrop rectangle beyond the key, so the frame
+// shows through there, while a rectangle outside the group keeps its colour.
+// The key and every group enclosing it draw unbounded layers.
+bool clearing_blend_scope_is_the_enclosing_group() {
+    for (const auto mode : {BlendMode::destination_in, BlendMode::source_in, BlendMode::clear}) {
+        auto scene = frame(96.0F, 64.0F);
+        scene.root.children.push_back(rect("outside", {86.0F, 2.0F, 8.0F, 8.0F}, colour(kSource)));
+        SceneNode fade{.id = "fade", .kind = SceneNode::Kind::group,
+                       .bounds = {0.0F, 0.0F, 96.0F, 64.0F}, .opacity = 0.5F};
+        fade.children.push_back(rect("fade/backdrop", {8.0F, 8.0F, 40.0F, 48.0F}, colour(kBackdrop)));
+        auto key = rect("fade/key", {28.0F, 16.0F, 30.0F, 32.0F}, colour(kSource));
+        key.blend_mode = mode;
+        fade.children.push_back(std::move(key));
+        scene.root.children.push_back(std::move(fade));
+        const auto commands = make_paint_commands(scene);
+        const auto unbounded = [&](std::string_view id) {
+            return std::any_of(commands.begin(), commands.end(), [&](const PaintCommand& command) {
+                return command.kind == PaintCommand::Kind::begin_layer && command.node_id == id &&
+                       command.layer_unbounded;
+            });
+        };
+        const std::string name = "clearing scope " + std::string(to_string(mode));
+        if (!unbounded("fade/key") || !unbounded("fade")) {
+            std::cerr << name << ": the key or its enclosing group is a bounded layer\n";
+            return false;
+        }
+        Capture image;
+        if (!capture(scene, image)) return false;
+        const Rgba background{kBackground[0], kBackground[1], kBackground[2], 1.0F};
+        const Rgba outside{kSource[0], kSource[1], kSource[2], 1.0F};
+        const auto inside = expected(mode, kSource, kBackdrop);
+        const float behind = 1.0F - 0.5F * inside[3];
+        const Rgba under_key{kBackground[0] * behind + inside[0] * 0.5F,
+                             kBackground[1] * behind + inside[1] * 0.5F,
+                             kBackground[2] * behind + inside[2] * 0.5F, 1.0F};
+        if (!probes_hold(name, image,
+                         {{"the group's backdrop beyond the key", 16, 32, background},
+                          {"the key over the group's backdrop", 38, 32, under_key},
+                          {"the key beyond the group's backdrop", 54, 32, background},
+                          {"a rectangle outside the group", 90, 6, outside}})) {
+            return false;
+        }
+        // Negative control: the same probes reject a normal key, which leaves
+        // the group's backdrop beyond it.
+        auto plain = scene;
+        plain.root.children[1].children[1].blend_mode = BlendMode::normal;
+        Capture control;
+        if (!capture(plain, control)) return false;
+        if (probes_hold("control", control, {{"backdrop kept", 16, 32, background}}, 3)) {
+            std::cerr << name << ": a normal key also cleared the backdrop\n";
+            return false;
+        }
+    }
+    return true;
+}
+
+// Porter-Duff source-out keeps none of the destination (Fb = 0): beyond the
+// source the backdrop is emptied, as `blend_mode_clears_backdrop` says, while
+// destination-out (Fb = 1 - As) keeps it. A partial frame after leaving
+// source_out restores the far pixels only because its damage is the whole
+// frame.
+bool source_out_clears_beyond_its_source() {
+    const Rgba clear{0.0F, 0.0F, 0.0F, 0.0F};
+    const Rgba backdrop{kBackdrop[0], kBackdrop[1], kBackdrop[2], 1.0F};
+    const Rgba background{kBackground[0], kBackground[1], kBackground[2], 1.0F};
+    Capture out;
+    Capture keep;
+    if (!capture(blend_scene(BlendMode::source_out), out) ||
+        !capture(blend_scene(BlendMode::destination_out), keep)) {
+        return false;
+    }
+    if (!blend_mode_clears_backdrop(BlendMode::source_out) ||
+        blend_mode_clears_backdrop(BlendMode::destination_out)) {
+        std::cerr << "source_out must clear the backdrop and destination_out must keep it\n";
+        return false;
+    }
+    return probes_hold("source_out", out,
+                       {{"the backdrop beyond the source", 16, 32, clear},
+                        {"the background beyond the source", 90, 60, clear},
+                        {"the source over the backdrop", 38, 32, clear}}) &&
+           probes_hold("destination_out", keep,
+                       {{"the backdrop beyond the source", 16, 32, backdrop},
+                        {"the background beyond the source", 90, 60, background}});
+}
+
+// A mask with a blend mode is refused on the GPU path with the mask named and
+// the previous frame kept; the same mask with the normal mode draws.
+bool masked_blend_refusal() {
+    std::string error;
+    if (!vellum::app_host::register_native_dawn_bootstrap(&error)) {
+        std::cerr << error << '\n';
+        return false;
+    }
+    auto surface = SkiaDawnSurface::create({.width = 96, .height = 64}, &error);
+    if (!surface) {
+        std::cerr << error << '\n';
+        return false;
+    }
+    auto scene = frame(96.0F, 64.0F);
+    SceneNode parent{.id = "parent", .kind = SceneNode::Kind::group,
+                     .bounds = {0.0F, 0.0F, 96.0F, 64.0F}};
+    parent.children.push_back(rect("parent/content", {8.0F, 8.0F, 60.0F, 40.0F}, colour(kSource)));
+    auto mask = rect("parent/mask", {20.0F, 20.0F, 30.0F, 30.0F}, colour(kBackdrop));
+    mask.mask = MaskMode::alpha;
+    parent.children.push_back(std::move(mask));
+    scene.root.children.push_back(std::move(parent));
+    std::vector<std::uint8_t> first;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    if (!surface->render(scene, &error) || !surface->capture_rgba(first, width, height, &error)) {
+        std::cerr << "a normal mask did not draw: " << error << '\n';
+        return false;
+    }
+    auto refused = scene;
+    refused.root.children[0].children[1].blend_mode = BlendMode::multiply;
+    std::string why;
+    std::vector<std::uint8_t> after;
+    if (surface->render(refused, &why) || why != "mask parent/mask cannot carry the blend mode multiply" ||
+        !surface->capture_rgba(after, width, height, &error) || after != first) {
+        std::cerr << "a blended mask was not refused with the previous frame kept: '" << why
+                  << "'\n";
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -438,6 +567,13 @@ int main(int argc, char** argv) {
             return blend_layer_cache_matches_direct() ? 0 : 1;
         }
         if (fixture == "blend_version_refusal") return blend_version_refusal() ? 0 : 1;
+        if (fixture == "clearing_blend_scope_is_the_enclosing_group") {
+            return clearing_blend_scope_is_the_enclosing_group() ? 0 : 1;
+        }
+        if (fixture == "source_out_clears_beyond_its_source") {
+            return source_out_clears_beyond_its_source() ? 0 : 1;
+        }
+        if (fixture == "masked_blend_refusal") return masked_blend_refusal() ? 0 : 1;
     } catch (const std::exception& exception) {
         std::cerr << exception.what() << '\n';
         return 1;

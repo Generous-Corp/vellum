@@ -36,6 +36,11 @@ export function compositingProblems(value, path) {
     if (value.maskRef !== undefined && (typeof value.maskRef !== 'string' || !value.maskRef)) {
         problem('maskRef', 'type', 'maskRef must be a non-empty string');
     }
+    // A mask contributes coverage to its siblings, not paint, so there is no
+    // stage a blend mode on it could apply in; the renderer refuses one too.
+    if (value.mask !== undefined && value.blendMode !== undefined && value.blendMode !== 'normal') {
+        problem('blendMode', 'mask', 'a mask node takes no blend mode but normal');
+    }
     return problems;
 }
 

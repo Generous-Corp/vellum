@@ -253,7 +253,7 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
     layer.blend_mode = node.blend_mode;
     const auto group = group_extent(output, first, output.size());
     layer.bounds = group.bounds;
-    layer.layer_unbounded = !group.bounded;
+    layer.layer_unbounded = !group.bounded || blend_mode_clears_backdrop(node.blend_mode);
     output.push_back({.kind = PaintCommand::Kind::end_layer, .node_id = node.id});
     close_clip();
     if (ranges != nullptr) (*ranges)[range_index].end = output.size();

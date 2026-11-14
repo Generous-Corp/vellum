@@ -4,7 +4,11 @@ import { Button, Stack, Text, mount, useState } from './vellum-ui/runtime.js';
 const canvas = document.querySelector('#vellum-canvas');
 const status = document.querySelector('#status');
 const proof = document.querySelector('#proof');
-const context = canvas.getContext('2d');
+const surface = canvas.getContext('2d');
+// The context drawn into: the canvas, or the offscreen layer of the innermost
+// blended group.
+let context = surface;
+const groups = [];
 
 function cssColor(red, green, blue, alpha) {
     return `rgba(${Math.round(red * 255)},${Math.round(green * 255)},` +
@@ -17,6 +21,8 @@ globalThis.VellumCanvasBackend = Object.freeze({
         canvas.width = Math.round(width * scale);
         canvas.height = Math.round(height * scale);
         canvas.style.aspectRatio = `${width} / ${height}`;
+        context = surface;
+        groups.length = 0;
         context.setTransform(scale, 0, 0, scale, 0, 0);
         context.fillStyle = cssColor(red, green, blue, alpha);
         context.fillRect(0, 0, width, height);
@@ -33,11 +39,27 @@ globalThis.VellumCanvasBackend = Object.freeze({
         context.fillStyle = cssColor(red, green, blue, alpha);
         context.fillText(text, x, baseline);
     },
-    blendBegin(operation) {
-        context.save();
-        context.globalCompositeOperation = operation;
+    // A blended group draws offscreen and meets the canvas once, so its
+    // members blend with each other normally and the group alpha applies once.
+    blendBegin(operation, alpha) {
+        const layer = document.createElement('canvas');
+        layer.width = canvas.width;
+        layer.height = canvas.height;
+        const layerContext = layer.getContext('2d');
+        layerContext.setTransform(context.getTransform());
+        groups.push({ context, operation, alpha });
+        context = layerContext;
     },
     blendEnd() {
+        const group = groups.pop();
+        if (!group) return;
+        const layer = context.canvas;
+        context = group.context;
+        context.save();
+        context.setTransform(1, 0, 0, 1, 0, 0);
+        context.globalCompositeOperation = group.operation;
+        context.globalAlpha = group.alpha;
+        context.drawImage(layer, 0, 0);
         context.restore();
     },
     finish() {},

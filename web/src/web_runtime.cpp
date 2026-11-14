@@ -39,8 +39,17 @@ EM_JS(void, canvas_text,
         UTF8ToString(text), x, baseline, size, red, green, blue, alpha);
 });
 
-EM_JS(void, canvas_blend_begin, (const char* operation), {
-    globalThis.VellumCanvasBackend.blendBegin(UTF8ToString(operation));
+// A backend written before group compositing has no blendBegin or blendEnd;
+// the shell then draws blended groups as normal and reports each one rather
+// than calling a missing function.
+EM_JS(int, canvas_has_group_compositing, (), {
+    const backend = globalThis.VellumCanvasBackend;
+    return backend && typeof backend.blendBegin === "function" &&
+        typeof backend.blendEnd === "function" ? 1 : 0;
+});
+
+EM_JS(void, canvas_blend_begin, (const char* operation, float alpha), {
+    globalThis.VellumCanvasBackend.blendBegin(UTF8ToString(operation), alpha);
 });
 
 EM_JS(void, canvas_blend_end, (), {
@@ -142,13 +151,19 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_add_text(
 EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     if (!kernel || scene.width <= 0.0F || scene.height <= 0.0F) return 0;
     using Kind = vellum::graphics::PaintCommand::Kind;
+    const vellum::web::CanvasShellCapabilities capabilities{
+        .group_compositing = canvas_has_group_compositing() != 0,
+    };
     // A refused scene draws nothing and keeps the previous canvas, as the
     // native renderer keeps its previous frame.
-    lowering = vellum::web::lower_for_canvas_shell(scene);
+    lowering = vellum::web::lower_for_canvas_shell(scene, capabilities);
     if (!lowering.accepted) return 0;
-    const auto opacities = vellum::graphics::effective_opacities(commands);
+    const auto plan = vellum::web::canvas_shell_paint_plan(commands, capabilities);
+    const auto& opacities = plan.opacities;
     const auto masked = vellum::web::canvas_shell_masked(commands);
-    const auto blends = vellum::web::canvas_shell_blend_operations(commands);
+    // Whether each open layer was begun as a composited group, so its
+    // end_layer composites it.
+    std::vector<bool> open_groups;
     const auto background = scene.background;
     canvas_begin(scene.width, scene.height, background.red, background.green,
                  background.blue, background.alpha);
@@ -157,11 +172,21 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
         if (masked[index]) continue;
         auto color = command.fill;
         color.alpha *= opacities[index];
-        const bool blended = !blends[index].empty() &&
-                             vellum::graphics::draws_content(command.kind);
-        if (blended) {
-            const std::string operation(blends[index]);
-            canvas_blend_begin(operation.c_str());
+        if (command.kind == Kind::begin_layer) {
+            const bool group = !plan.group_operations[index].empty();
+            open_groups.push_back(group);
+            if (group) {
+                const std::string operation(plan.group_operations[index]);
+                canvas_blend_begin(operation.c_str(), opacities[index]);
+            }
+            continue;
+        }
+        if (command.kind == Kind::end_layer) {
+            if (!open_groups.empty()) {
+                if (open_groups.back()) canvas_blend_end();
+                open_groups.pop_back();
+            }
+            continue;
         }
         switch (command.kind) {
         case Kind::rectangle:
@@ -197,14 +222,13 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
         case Kind::end_mask:
             break;
         }
-        if (blended) canvas_blend_end();
     }
     canvas_finish();
     return 1;
 }
 
 /// The number of commands the last render drew with a loss; see
-/// `vellum::web::canvas_shell_loses`.
+/// `vellum::web::canvas_shell_loss_count`.
 EMSCRIPTEN_KEEPALIVE int vellum_web_lowering_loss_count() {
     return lowering.losses;
 }

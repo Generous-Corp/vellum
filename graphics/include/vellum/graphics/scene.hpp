@@ -602,7 +602,9 @@ struct SceneNode final {
     /// `normal` draws the node and its subtree as one offscreen group, faded
     /// by `opacity`, and then blends that group over the backdrop. The
     /// backdrop is whatever the enclosing group holds, so an ancestor that
-    /// fades or isolates contains the blend.
+    /// fades or isolates contains the blend. A mask node draws coverage, not
+    /// paint, so it keeps `normal`; `accept_scene` refuses a mask with any
+    /// other mode.
     BlendMode blend_mode = BlendMode::normal;
 };
 

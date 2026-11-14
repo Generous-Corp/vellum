@@ -1648,23 +1648,29 @@ void blend_damage_controls() {
         group.children.front().bounds = {0.0F, 0.0F, 60.0F, 40.0F};
         return scene;
     };
-    const Scene clearing = small(BlendMode::destination_in);
-    Scene restored = clearing;
-    node(restored, "blend").blend_mode = BlendMode::multiply;
-    const auto whole = compute_scene_damage(clearing, restored, scale);
     std::string message;
-    expect(whole.is_full_frame() || whole.area() >= frame_rect(clearing, scale).area(),
-           "leaving a backdrop-clearing mode damages the whole frame");
-    expect(redraws_identically(clearing, restored, whole, scale, message),
-           "leaving a backdrop-clearing mode redraws identically from its damage", message);
-    const auto& group = node(restored, "blend");
-    DamageRegion own_only(frame_rect(clearing, scale));
-    own_only.add(outset_pixels(group.bounds, scale, 2));
-    expect(own_only.area() < whole.area() &&
-               !redraws_identically(clearing, restored, own_only, scale, message),
-           "negative control: damage limited to the group's extent leaves the cleared backdrop "
-           "stale",
-           message);
+    // source_out is here as well as destination_in: Porter-Duff source-out
+    // keeps none of the destination, so it empties the backdrop beyond its
+    // source, and treating it as local damage would leave stale pixels.
+    for (const auto mode : {BlendMode::destination_in, BlendMode::source_out}) {
+        const std::string name(to_string(mode));
+        const Scene clearing = small(mode);
+        Scene restored = clearing;
+        node(restored, "blend").blend_mode = BlendMode::multiply;
+        const auto whole = compute_scene_damage(clearing, restored, scale);
+        expect(whole.is_full_frame() || whole.area() >= frame_rect(clearing, scale).area(),
+               "leaving " + name + " damages the whole frame");
+        expect(redraws_identically(clearing, restored, whole, scale, message),
+               "leaving " + name + " redraws identically from its damage", message);
+        const auto& group = node(restored, "blend");
+        DamageRegion own_only(frame_rect(clearing, scale));
+        own_only.add(outset_pixels(group.bounds, scale, 2));
+        expect(own_only.area() < whole.area() &&
+                   !redraws_identically(clearing, restored, own_only, scale, message),
+               "negative control: damage limited to the group's extent leaves the backdrop " +
+                   name + " cleared stale",
+               message);
+    }
 
     Scene plain = blend_scene(400.0F, 300.0F, BlendMode::multiply);
     Scene moved = plain;

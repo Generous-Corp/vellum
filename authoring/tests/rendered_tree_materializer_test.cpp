@@ -853,6 +853,22 @@ bool blend_mode_key() {
             return false;
         }
     }
+    const auto masked = [](std::string_view blend) {
+        return wrap_tree(std::string(R"JSON(
+          {"type":"view","id":"content","style":{"width":20,"height":20},"children":[]},
+          {"type":"view","id":"cutout","style":{"width":10,"height":10,"maskMode":"alpha",
+            "mixBlendMode":")JSON") + std::string(blend) + R"JSON("},"children":[]})JSON");
+    };
+    if (vellum::authoring::materialize_rendered_tree(masked("multiply"), rendered, &error) ||
+        error != "node cutout mixBlendMode cannot apply to a mask" ||
+        rendered.scene.width != width_before) {
+        std::cerr << "blend mode: a blended mask gave '" << error << "'\n";
+        return false;
+    }
+    if (!vellum::authoring::materialize_rendered_tree(masked("normal"), rendered, &error)) {
+        std::cerr << "blend mode: a mask with the normal mode was refused: " << error << '\n';
+        return false;
+    }
     return true;
 }
 

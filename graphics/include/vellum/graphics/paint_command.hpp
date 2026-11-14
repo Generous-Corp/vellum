@@ -90,7 +90,10 @@ struct PaintCommand final {
     /// The resolved per-corner radii; see `resolved_corner_radii`.
     CornerRadii corner_radii{};
     /// On a `begin_layer`, set when a member can paint outside `bounds`,
-    /// which text can, so the group needs the whole frame.
+    /// which text can, so the group needs the whole frame. Also set on a
+    /// group whose `blend_mode` empties the backdrop outside its own paint
+    /// (`blend_mode_clears_backdrop`), and so on every group enclosing one:
+    /// its backdrop scope is the whole enclosing group, not its extent.
     bool layer_unbounded = false;
     /// On a `begin_layer`, set when the group must stay offscreen whatever
     /// its opacity: an isolated node, or the siblings a mask applies to.
