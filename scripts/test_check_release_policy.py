@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -543,19 +544,133 @@ class Isolation(unittest.TestCase):
         self.assertEqual(policy.isolation_problems({policy.VERSION_WORKFLOW: text}, self.tmp), [])
         self.assertNotIn(policy.RELEASE_ENVIRONMENT, policy.environment_names(text))
 
+    MINT = ("      - name: mint\n        id: {id}\n"
+            "        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3\n")
+
+    def read(self, token: str = "${{ steps.app-token.outputs.token }}", run: str | None = None,
+             mint: str | None = None, name: str | None = "read") -> str:
+        """A job that mints an App token, then a step that reads with `token`."""
+        head = f"      - name: {name}\n        env:\n" if name else "      - env:\n"
+        run = run if run is not None else 'run: gh api "repos/$R/immutable-releases" > out.json\n'
+        return ("    steps:\n" + (self.MINT.format(id="app-token") if mint is None else mint)
+                + head + f"          GH_TOKEN: {token}\n        " + run)
+
+    def refused(self, workflow: str, reason: str = "Administration-only") -> None:
+        self.assertTrue(any(reason in problem for problem in self.found(workflow)), self.found(workflow))
+
     def test_admin_only_reads_need_the_app_token(self) -> None:
         for endpoint in ("rules/branches/main", "branches/main/protection/required_status_checks",
                          "immutable-releases"):
             with self.subTest(endpoint=endpoint):
-                actions = ("      - name: read\n        env:\n          GH_TOKEN: ${{ github.token }}\n"
-                           f"        run: gh api \"repos/$R/{endpoint}\" > out.json\n")
-                app = ("      - name: read\n        env:\n          GH_TOKEN: ${{ steps.app-token.outputs.token }}\n"
-                       f"        run: gh api \"repos/$R/{endpoint}\" > out.json\n")
-                self.assertTrue(any("Administration-only" in p for p in self.found("    steps:\n" + actions)))
-                self.assertEqual(self.found("    steps:\n" + app), [])
-                self.assertEqual(self.found("    steps:\n" + app.replace("app-token", "push-token")), [])
-                self.assertTrue(any("Administration-only" in p for p in self.found(
-                    "    steps:\n" + app.replace("app-token", "other-token"))))
+                run = f'run: gh api "repos/$R/{endpoint}" > out.json\n'
+                self.assertEqual(self.found(self.read(run=run)), [])
+                self.refused(self.read(token="${{ github.token }}", run=run))
+                self.refused(self.read(token="${{ steps.other-token.outputs.token }}", run=run))
+        push = self.read(token="${{ steps.push-token.outputs.token }}", mint=self.MINT.format(id="push-token"))
+        self.assertEqual(self.found(push), [])
+        # A read of another endpoint needs no App token.
+        self.assertEqual(self.found(self.read(token="${{ github.token }}",
+                                              run='run: gh api "repos/$R/actions/runs" > out.json\n')), [])
+
+    def test_a_comment_naming_the_app_token_does_not_satisfy_the_rule(self) -> None:
+        run = ("run: |\n          # GH_TOKEN: ${{ steps.app-token.outputs.token }}\n"
+               '          gh api "repos/$R/immutable-releases" > out.json\n')
+        self.refused(self.read(token="${{ github.token }}", run=run))
+        # Nor does the App token under another name, with GH_TOKEN the Actions token.
+        other = self.read(token="${{ github.token }}").replace(
+            "          GH_TOKEN:", "          OTHER: ${{ steps.app-token.outputs.token }}\n          GH_TOKEN:")
+        self.refused(other)
+        # A commented-out read is not a read.
+        quiet = 'run: |\n          # gh api "repos/$R/immutable-releases"\n          true\n'
+        self.assertEqual(self.found(self.read(token="${{ github.token }}", run=quiet)), [])
+
+    def test_the_token_must_come_from_the_pinned_app_token_action(self) -> None:
+        cases = {
+            "a run step": "      - name: mint\n        id: app-token\n        run: echo token=x >> \"$GITHUB_OUTPUT\"\n",
+            "another action": "      - name: mint\n        id: app-token\n        uses: someone/make-token@"
+                              + "a" * 40 + "\n",
+            "an unpinned action": "      - name: mint\n        id: app-token\n"
+                                  "        uses: actions/create-github-app-token@v2\n",
+            "no minting step": "",
+        }
+        for label, mint in cases.items():
+            with self.subTest(label):
+                self.refused(self.read(mint=mint))
+        # A token minted in another job, or after the read, is not this step's.
+        later = self.read(mint="") + self.MINT.format(id="app-token")
+        self.refused(later)
+        elsewhere = ("jobs:\n  mint:\n" + "    steps:\n" + self.MINT.format(id="app-token")
+                     + "  read:\n" + self.read(mint=""))
+        self.refused(elsewhere)
+
+    def test_a_gh_api_call_split_across_lines_is_read(self) -> None:
+        for label, run in {
+            "endpoint on the next line": 'run: |\n          gh api \\\n            "repos/$R/immutable-releases" > out.json\n',
+            "options first": 'run: |\n          timeout 120 gh api --method GET --paginate \\\n'
+                             '            "repos/$R/rulesets" > out.json\n',
+            "inside a substitution": 'run: |\n          test "$(gh api "repos/$R/rules/branches/main" --jq length)" = 1\n',
+            "after a field": 'run: gh api -f a=b -H "Accept: x" repos/$R/branches/main/protection\n',
+        }.items():
+            with self.subTest(label):
+                self.refused(self.read(token="${{ github.token }}", run=run))
+                self.assertEqual(self.found(self.read(run=run)), [])
+
+    def test_a_gh_api_call_whose_endpoint_cannot_be_read_fails_closed(self) -> None:
+        for label, run in {
+            "a variable": 'run: gh api "$endpoint" > out.json\n',
+            "a braced variable": "run: gh api ${ENDPOINT}\n",
+            "a substitution": 'run: gh api "$(cat endpoint.txt)"\n',
+            "no operand": "run: gh api --paginate\n",
+        }.items():
+            with self.subTest(label):
+                self.refused(self.read(run=run), "an endpoint this check cannot read")
+
+    def test_an_unnamed_step_is_scanned(self) -> None:
+        self.refused(self.read(token="${{ github.token }}", name=None))
+        self.assertEqual(self.found(self.read(name=None)), [])
+        bare = "    steps:\n" + self.MINT.format(id="app-token") + '      - run: gh api "repos/$R/immutable-releases"\n'
+        self.refused(bare)
+        # The Python isolation rule reads unnamed steps through the same reader.
+        self.assertTrue(any("without -I" in problem for problem in self.found(
+            "    steps:\n      - run: python3 scripts/x.py\n")))
+
+    def test_a_step_env_this_check_cannot_read_fails_closed(self) -> None:
+        flow = ("    steps:\n" + self.MINT.format(id="app-token")
+                + "      - name: read\n        env: {GH_TOKEN: \"${{ steps.app-token.outputs.token }}\"}\n"
+                '        run: gh api "repos/$R/immutable-releases"\n')
+        self.refused(flow, "cannot be read")
+
+    def test_the_step_reader_agrees_with_a_yaml_parser(self) -> None:
+        try:
+            import yaml  # noqa: PLC0415
+        except ImportError:
+            self.skipTest("PyYAML is not installed")
+        total = 0
+        for path in sorted((ROOT / policy.WORKFLOWS).glob("*.y*ml")):
+            text = path.read_text(encoding="utf-8")
+            expected = [step for body in yaml.safe_load(text)["jobs"].values() for step in body.get("steps") or []]
+            read = policy.workflow_steps(text)
+            self.assertEqual(len(read), len(expected), path.name)
+            for step, want in zip(read, expected):
+                total += 1
+                with self.subTest(workflow=path.name, step=want.get("name")):
+                    self.assertIsNone(step.unreadable)
+                    self.assertEqual((step.name, step.id, step.uses), (want.get("name"), want.get("id"), want.get("uses")))
+                    self.assertEqual((step.run or "").rstrip("\n"), (want.get("run") or "").rstrip("\n"))
+                    self.assertEqual(step.env or {}, {key: str(value) for key, value in (want.get("env") or {}).items()})
+        self.assertGreater(total, 100)
+
+    def test_the_signing_workflow_reads_admin_endpoints_only_with_its_app_tokens(self) -> None:
+        text = (ROOT / policy.WORKFLOWS / policy.SIGNING_WORKFLOW).read_text(encoding="utf-8")
+        self.assertEqual(policy.app_token_problems(policy.SIGNING_WORKFLOW, text), [])
+        reads = [step for step in policy.workflow_steps(text) if step.run and any(
+            target and policy.ADMIN_ENDPOINT.search(target) for target in policy.gh_api_targets(step.run))]
+        # The rule has something to judge: the reads exist and were found.
+        self.assertGreaterEqual(len(reads), 3)
+        # With the Actions token in place of an App token, each is refused.
+        swapped = re.sub(r"\$\{\{ steps\.(?:app-token|push-token)\.outputs\.token \}\}", "${{ github.token }}", text)
+        self.assertEqual(len([problem for problem in policy.app_token_problems(policy.SIGNING_WORKFLOW, swapped)
+                              if "Administration-only" in problem]), len(reads))
 
     def test_the_renderer_verifier_runs_isolated_in_every_workflow(self) -> None:
         step = "    steps:\n      - name: prove\n        run: python3 {flags}tools/provenance/verify_renderer_dependency.py\n"

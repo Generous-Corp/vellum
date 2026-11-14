@@ -23,6 +23,12 @@ fails when:
   version-at-land.yml that holds a secret runs Python in any step, or a repository
   Python file is named like a standard-library module, so checked-out code
   cannot run with the signing key or an App token;
+- a step of release-tag.yml reads an Administration-only endpoint with `gh
+  api` while its own `env.GH_TOKEN` is anything but the token an earlier step
+  of its job minted with the pinned create-github-app-token action, or calls
+  `gh api` with an endpoint this check cannot read. Steps are read from the
+  workflow's structure, named or not; comments and shell line continuations
+  do not change what is read;
 - the release-policy lane of scripts/ci_lanes.json stops running
   scripts/test_ci_lanes.py or this check, so a release test dropped from every
   lane still fails CI without the manifest being owner-owned;
@@ -59,6 +65,7 @@ import re
 import shlex
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -148,8 +155,16 @@ RELEASE_WORKFLOWS = (SIGNING_WORKFLOW, "release-policy.yml", VERSION_WORKFLOW)
 # Workflows whose secret-holding steps must run no Python at all.
 SECRET_ISOLATED = (SIGNING_WORKFLOW, VERSION_WORKFLOW)
 # Endpoints only an Administration-read token may call; the Actions token gets 403.
-ADMIN_READ = re.compile(r"gh api [^\n]*(?:branches/main/protection|rules/branches/|/rulesets|immutable-releases)")
-APP_TOKEN = re.compile(r"GH_TOKEN:\s*\$\{\{\s*steps\.(?:app-token|push-token)\.outputs\.token\s*\}\}")
+# Endpoints only the GitHub App token (Administration: read) can read.
+ADMIN_ENDPOINT = re.compile(r"branches/main/protection|rules/branches/|/rulesets|immutable-releases")
+GH_API = re.compile(r"(?<![A-Za-z0-9_./-])gh[ \t]+api\b(?P<rest>[^\n]*)")
+# `gh api` options that take a value, which is therefore not the endpoint.
+GH_API_VALUE_OPTIONS = frozenset({
+    "-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "--input", "-q", "--jq",
+    "-t", "--template", "--hostname", "--cache", "-p", "--preview",
+})
+STEP_TOKEN = re.compile(r"\$\{\{\s*steps\.(?P<id>[A-Za-z0-9_-]+)\.outputs\.token\s*\}\}")
+APP_TOKEN_ACTION = re.compile(r"actions/create-github-app-token@[0-9a-f]{40}")
 PYTHON_CALL = re.compile(r"\bpython3?\b(?P<flags>(?:\s+-[A-Za-z]+)*)")
 RENDERER_VERIFIER_CALL = re.compile(
     r"\bpython3?\b(?P<flags>(?:\s+-[A-Za-z]+)*)\s+(?:\S*/)?verify_renderer_dependency\.py")
@@ -522,9 +537,190 @@ def dynamic_load_problems(root: Path, path: str, source: Path, also_policy: froz
     return found
 
 
+@dataclass
+class Step:
+    """One step of a job, read from the workflow's lines."""
+    job: str
+    index: int
+    text: str
+    name: str | None = None
+    id: str | None = None
+    uses: str | None = None
+    run: str | None = None
+    env: dict[str, str] | None = None
+    # Why a key this check reads could not be read; such a step is refused.
+    unreadable: str | None = None
+
+    @property
+    def title(self) -> str:
+        return f"- name: {self.name}" if self.name else f"step {self.index} of job {self.job} (unnamed)"
+
+
+def _plain(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        return value[1:-1]
+    return re.sub(r"\s+#.*$", "", value).strip()
+
+
+def _read_step(job: str, index: int, lines: list[str], indent: int) -> Step:
+    """A step from its lines; `indent` is the column of its keys."""
+    step = Step(job, index, "\n".join(lines))
+    lines = [" " * indent + lines[0][indent:], *lines[1:]]
+    position = 0
+    while position < len(lines):
+        line = lines[position]
+        position += 1
+        match = re.match(rf" {{{indent}}}(?P<key>[A-Za-z0-9_-]+):(?P<value>.*)$", line)
+        if match is None:
+            if line.strip() and not line.lstrip().startswith("#") and len(line) - len(line.lstrip()) <= indent:
+                step.unreadable = f"unexpected line {line.strip()!r}"
+            continue
+        key, value = match["key"], match["value"].strip()
+        body = []
+        while position < len(lines) and (not lines[position].strip()
+                                         or len(lines[position]) - len(lines[position].lstrip()) > indent):
+            body.append(lines[position])
+            position += 1
+        if key == "run":
+            if re.fullmatch(r"[|>][-+0-9]*(?:\s+#.*)?", value):
+                kept = [text for text in body if text.strip()]
+                width = min((len(text) - len(text.lstrip()) for text in kept), default=0)
+                step.run = "\n".join(text[width:] for text in body)
+            else:
+                step.run = _plain(value)
+        elif key == "env":
+            step.env = {}
+            if value and not value.startswith("#"):
+                step.unreadable = "env is not a block mapping"
+            for text in body:
+                if not text.strip() or text.lstrip().startswith("#"):
+                    continue
+                pair = re.match(rf" {{{indent + 2}}}(?P<key>[A-Za-z_][A-Za-z0-9_]*):(?P<value>.*)$", text)
+                if pair is None or re.fullmatch(r"[|>][-+0-9]*", pair["value"].strip()):
+                    step.unreadable = f"env line {text.strip()!r} is not `NAME: value`"
+                    continue
+                step.env[pair["key"]] = _plain(pair["value"])
+        elif key in ("name", "id", "uses"):
+            setattr(step, key, _plain(value))
+    return step
+
+
+def job_steps(job: str, text: str) -> list[Step]:
+    """Every step of a job, named or not, in order."""
+    lines = text.splitlines()
+    found: list[Step] = []
+    for start, line in enumerate(lines):
+        if not re.fullmatch(r" +steps:[ \t]*(?:#.*)?", line):
+            continue
+        base = len(line) - len(line.lstrip())
+        items: list[list[str]] = []
+        dash = None
+        for text_line in lines[start + 1:]:
+            width = len(text_line) - len(text_line.lstrip())
+            if text_line.strip() and not text_line.lstrip().startswith("#") and width <= base \
+                    and not (width == base and text_line.lstrip().startswith("- ")):
+                break
+            if text_line.lstrip().startswith("- ") and (dash is None or width == dash):
+                dash = width
+                items.append([text_line])
+            elif items:
+                items[-1].append(text_line)
+        for item in items:
+            found.append(_read_step(job, len(found) + 1, item, dash + 2))
+    return found
+
+
+def workflow_steps(workflow: str) -> list[Step]:
+    # A text with no `jobs:` (a fragment) is read as one job.
+    return [step for job, text in (jobs(workflow) or {"": workflow}).items() for step in job_steps(job, text)]
+
+
 def steps(workflow: str) -> list[str]:
-    """The workflow's steps, as text blocks starting at `- name:`."""
-    return [block for block in re.split(r"\n(?=\s+- name:)", workflow)[1:] if block.strip()]
+    """The workflow's steps, as text blocks, whether or not they are named."""
+    return [step.text for step in workflow_steps(workflow)]
+
+
+def shell_commands(run: str) -> list[str]:
+    """A run block's command lines: continuations joined, comment lines dropped."""
+    joined = re.sub(r"\\\n[ \t]*", " ", run)
+    return [line for line in joined.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+
+
+def shell_words(text: str):
+    """The shell words of `text`, one at a time, quotes removed. The caller
+    stops at the word it wants, so a quote left open further along the line
+    (a `$(...)` closing, a multi-line argument) does not matter."""
+    word, quote, started = "", "", False
+    for character in text:
+        if quote:
+            if character == quote:
+                quote = ""
+            else:
+                word += character
+        elif character in "'\"":
+            quote, started = character, True
+        elif character in " \t":
+            if started:
+                yield word
+            word, started = "", False
+        elif character == "#" and not started:
+            return
+        else:
+            word, started = word + character, True
+    if started:
+        yield word
+
+
+def gh_api_targets(run: str) -> list[str | None]:
+    """The endpoint of each `gh api` call in a run block; None for a call whose
+    endpoint cannot be read (no operand, or one built by a substitution)."""
+    targets: list[str | None] = []
+    for line in shell_commands(run):
+        for call in GH_API.finditer(line):
+            target = None
+            skip = False
+            for word in shell_words(call["rest"]):
+                if skip:
+                    skip = False
+                elif word in SHELL_OPERATORS or word in {"then", "do", "fi", "done"}:
+                    break
+                elif word in GH_API_VALUE_OPTIONS:
+                    skip = True
+                elif not word.startswith("-"):
+                    target = word
+                    break
+            if target is not None and (re.fullmatch(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?", target)
+                                       or "$(" in target or "`" in target):
+                target = None
+            targets.append(target)
+    return targets
+
+
+def app_token_problems(name: str, workflow: str) -> list[str]:
+    """A step that reads an Administration-only endpoint must hold, as its own
+    GH_TOKEN, the token an earlier step of its job minted with the pinned
+    create-github-app-token action."""
+    found = []
+    for job, text in (jobs(workflow) or {"": workflow}).items():
+        minted: set[str] = set()
+        for step in job_steps(job, text):
+            if step.id and step.uses and APP_TOKEN_ACTION.fullmatch(step.uses):
+                minted.add(step.id)
+            if step.run is None:
+                continue
+            targets = gh_api_targets(step.run)
+            if step.unreadable and targets:
+                found.append(f"{name}: {step.title} calls gh api but cannot be read: {step.unreadable}")
+                continue
+            if None in targets:
+                found.append(f"{name}: {step.title} calls gh api with an endpoint this check cannot read")
+            if not any(target and ADMIN_ENDPOINT.search(target) for target in targets):
+                continue
+            token = STEP_TOKEN.fullmatch((step.env or {}).get("GH_TOKEN", ""))
+            if token is None or token["id"] not in minted:
+                found.append(f"{name}: {step.title} reads an Administration-only endpoint without the App token")
+    return found
 
 
 JOB_HEADER = re.compile(r"^  (?P<name>[A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
@@ -557,8 +753,8 @@ def isolation_problems(workflows: dict[str, str], root: Path) -> list[str]:
                     found.append(f"{name}: {title} runs `{call.group(0).strip()}` without -I")
             if name in SECRET_ISOLATED and SECRET.search(step) and PYTHON_CALL.search(step):
                 found.append(f"{name}: {title} holds a secret and runs Python")
-            if name == SIGNING_WORKFLOW and ADMIN_READ.search(step) and not APP_TOKEN.search(step):
-                found.append(f"{name}: {title} reads an Administration-only endpoint without the App token")
+    if SIGNING_WORKFLOW in workflows:
+        found.extend(app_token_problems(SIGNING_WORKFLOW, workflows[SIGNING_WORKFLOW]))
     # The renderer verifier decides release eligibility wherever a workflow
     # runs it, so every call must be isolated too.
     for name, text in sorted(workflows.items()):
