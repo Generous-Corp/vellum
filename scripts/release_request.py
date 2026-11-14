@@ -153,14 +153,24 @@ def required_checks(branch_rules: Any, protection: Any) -> list[tuple[str, int |
 
 
 def check_runs(pages: Any) -> list[dict[str, Any]]:
-    """Check runs from `gh api --paginate --slurp`, an array of pages."""
+    """Check runs from `gh api --paginate --slurp`, an array of pages.
+
+    Strict: a row that is not an object, or has a missing, boolean or non-positive
+    id, refuses. A null `app` (a real run can have one) and a null `conclusion`
+    on a running run are tolerated.
+    """
     if not isinstance(pages, list):
         raise ReleaseRequestError("check-run pages must be an array")
     runs = []
     for page in pages:
         if not isinstance(page, dict) or not isinstance(page.get("check_runs"), list):
             raise ReleaseRequestError("a check-run page has no `check_runs` list")
-        runs += [run for run in page["check_runs"] if isinstance(run, dict)]
+        for run in page["check_runs"]:
+            if not isinstance(run, dict) or not exact_int(run.get("id")) or run["id"] <= 0:
+                raise ReleaseRequestError("a check run is not an object with a positive integer id")
+            if run.get("app") is not None and not isinstance(run["app"], dict):
+                raise ReleaseRequestError("a check run's app is neither null nor an object")
+            runs.append(run)
     return runs
 
 
@@ -211,7 +221,7 @@ def newest_run(context: str, app_id: int | None, runs: list[dict[str, Any]],
     """
     candidates = [run for run in runs
                   if run.get("head_sha") == commit and run.get("name") == context
-                  and isinstance(run.get("id"), int)
+                  and exact_int(run.get("id"))
                   and (app_id is None or (run.get("app") or {}).get("id") == app_id)]
     return max(candidates, key=lambda row: row["id"]) if candidates else None
 

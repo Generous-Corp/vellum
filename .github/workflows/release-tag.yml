@@ -35,6 +35,7 @@ on:
 permissions:
   contents: read
   checks: read
+  statuses: read
 
 # One run at a time per group, select and sign together, as before dry runs
 # existed. Push runs (every release, and the dry runs a reconcile starts) share
@@ -165,14 +166,13 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" \
+          timeout 120 gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" \
             > "$RUNNER_TEMP/required-checks.json"
-          gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"
-          gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"
+          timeout 120 gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"
+          timeout 120 gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"
           date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNNER_TEMP/immutable-releases-read-at.txt"
 
-      - name: Decide whether the version may be tagged
-        id: decision
+      - name: Wait for the required checks to finish
         env:
           GH_TOKEN: ${{ github.token }}
           SELECTED_TAG: ${{ needs.select-release-commit.outputs.tag }}
@@ -189,10 +189,14 @@ jobs:
           # on this commit. While the newest run of any required check is still
           # running (gpu-macos takes about 45 minutes), wait rather than read it
           # as unmet. A transient API failure is retried, not fatal.
+          # Both reads share one function, kept in a file the later step sources.
+          # Each gh api call has its own timeout so one hung call cannot outlive
+          # the loop's deadline; a timeout takes the same retry and failure path.
+          cat > "$RUNNER_TEMP/fetch_results.sh" <<'FETCH'
           fetch_results() {
             local attempt
             for attempt in 1 2 3; do
-              if gh api --method GET --paginate --slurp \
+              if timeout 120 gh api --method GET --paginate --slurp \
                 "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
                 -f filter=all > "$RUNNER_TEMP/check-runs.json"; then
                 break
@@ -203,7 +207,7 @@ jobs:
             # release-path-review and framework-trusted-verify are commit
             # statuses, not check runs; main's rules accept either.
             for attempt in 1 2 3; do
-              if gh api --method GET --paginate --slurp \
+              if timeout 120 gh api --method GET --paginate --slurp \
                 "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/statuses?per_page=100" \
                 > "$RUNNER_TEMP/statuses.json"; then
                 break
@@ -212,6 +216,8 @@ jobs:
               sleep $((attempt * 20))
             done
           }
+          FETCH
+          . "$RUNNER_TEMP/fetch_results.sh"
           deadline=$((SECONDS + 6000))
           while :; do
             fetch_results
@@ -227,8 +233,38 @@ jobs:
             echo "waiting for: $(printf '%s' "$running" | paste -sd, -)"
             sleep 60
           done
-          # Read both again: the wait loop's snapshot can be minutes old, and
-          # the verdict must come from results read just before it.
+
+      # The wait can outlast the first App token's hour and the rules can change
+      # during it, so main's required checks and the immutable-release setting
+      # are read again with a token minted now; the decision judges only these.
+      - name: Mint a fresh release App token for the decision
+        id: decision-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Read main's required checks again
+        env:
+          GH_TOKEN: ${{ steps.decision-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          timeout 120 gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" \
+            > "$RUNNER_TEMP/required-checks.json"
+          timeout 120 gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"
+          timeout 120 gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"
+          date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNNER_TEMP/immutable-releases-read-at.txt"
+
+      - name: Decide whether the version may be tagged
+        id: decision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELECTED_TAG: ${{ needs.select-release-commit.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Read the check runs and statuses again: the wait loop's snapshot can be
+          # minutes old, and the verdict must come from results read just before it.
+          . "$RUNNER_TEMP/fetch_results.sh"
           fetch_results
           tag="$(python3 -I scripts/release_request.py check --commit "$GITHUB_SHA" --remote origin \
             --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \

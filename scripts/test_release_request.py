@@ -337,29 +337,109 @@ class AppBinding(unittest.TestCase):
 class ReleaseTagWorkflowWiring(unittest.TestCase):
     """The workflow must hand the statuses to the judge, freshly read, or the fix never runs."""
 
-    def step(self) -> str:
-        text = (rr.ROOT / ".github/workflows/release-tag.yml").read_text(encoding="utf-8")
-        start = text.index("name: Decide whether the version may be tagged")
+    def text(self) -> str:
+        return (rr.ROOT / ".github/workflows/release-tag.yml").read_text(encoding="utf-8")
+
+    def region(self) -> str:
+        """From the wait step through the decision step."""
+        text = self.text()
+        start = text.index("name: Wait for the required checks to finish")
         return text[start:text.index("name: Sign the tag", start)]
 
+    def decision(self) -> str:
+        region = self.region()
+        return region[region.index("name: Decide whether the version may be tagged"):]
+
     def command(self, step: str, sub: str) -> str:
-        found = [block for block in re.findall(r"release_request\.py " + sub + r"\b(?:[^\n]*\\\n)*[^\n]*", step)]
+        found = re.findall(r"release_request\.py " + sub + r"\b(?:[^\n]*\\\n)*[^\n]*", step)
         self.assertEqual(len(found), 1, sub)
         return found[0]
 
+    def test_the_workflow_may_read_commit_statuses(self) -> None:
+        text = self.text()
+        block = text[text.index("\npermissions:\n"):]
+        block = block[:block.index("\n\n")]
+        self.assertRegex(block, r"(?m)^  statuses: read$")
+
     def test_statuses_are_fetched_and_passed_to_pending_and_check(self) -> None:
-        step = self.step()
-        self.assertIn("commits/$GITHUB_SHA/statuses", step)
+        region = self.region()
+        self.assertIn("commits/$GITHUB_SHA/statuses", region)
         for sub in ("pending", "check"):
-            self.assertIn('--statuses "$RUNNER_TEMP/statuses.json"', self.command(step, sub), sub)
+            self.assertIn('--statuses "$RUNNER_TEMP/statuses.json"', self.command(region, sub), sub)
 
     def test_check_reads_both_sources_again_just_before_it_runs(self) -> None:
-        step = self.step()
-        before_check = step[:step.index("release_request.py check")]
-        tail = before_check[before_check.index("done\n", before_check.index("while :; do")):]
-        self.assertIn("fetch_results", tail)
-        self.assertIn("check-runs?per_page=100", step)
-        self.assertEqual(step.count("fetch_results"), 3)  # definition, wait loop, refetch before check
+        decision = self.decision()
+        self.assertIn("fetch_results", decision[:decision.index("release_request.py check")])
+        self.assertNotIn("while :; do", decision)  # one read, immediately before check
+        self.assertIn("check-runs?per_page=100", self.region())
+
+    def test_every_gh_api_call_in_the_decision_steps_has_a_timeout(self) -> None:
+        text = self.text()
+        start = text.index("name: Read main's required checks and the immutable-release setting")
+        region = text[start:text.index("name: Sign the tag", start)]
+        calls = [line for line in re.findall(r"^.*\bgh api\b.*$", region, flags=re.M)
+                 if not line.lstrip().startswith("#")]
+        self.assertGreaterEqual(len(calls), 8)
+        for line in calls:
+            self.assertIn("timeout 120 gh api", line)
+
+    def test_rules_and_protection_are_read_again_with_a_fresh_token_before_check(self) -> None:
+        region = self.region()
+        mint = region.index("id: decision-token")
+        reread = region.index("name: Read main's required checks again")
+        decide = region.index("name: Decide whether the version may be tagged")
+        self.assertLess(region.index("release_request.py pending"), mint)
+        self.assertLess(mint, reread)
+        self.assertLess(reread, decide)
+        again = region[reread:decide]
+        self.assertIn("steps.decision-token.outputs.token", again)
+        for api in ("branches/main/protection/required_status_checks", "rules/branches/main",
+                    "immutable-releases"):
+            self.assertIn(api, again)
+        check = self.command(region, "check")
+        for flag in ("--branch-rules", "--protection", "--immutable-releases"):
+            self.assertIn(flag, check)
+
+
+class FreshRulesDecide(unittest.TestCase):
+    def test_a_required_context_that_appears_in_the_fresh_rules_refuses(self) -> None:
+        fresh = [{"type": "required_status_checks", "parameters": {"required_status_checks": [
+            {"context": "macos"}, {"context": "provenance-verify"}, {"context": "brand-new-gate",
+                                                                      "integration_id": 15368}]}}]
+        args = dict(cmakelists=CMAKE, retired_tags=RETIRED, commit=COMMIT, tag_exists=False, pages=green(),
+                    immutable=ENABLED, now=NOW)
+        self.assertEqual(rr.check(branch_rules=RULES, **args), "v0.1.10")
+        with self.assertRaisesRegex(rr.ReleaseRequestError, "brand-new-gate: no run"):
+            rr.check(branch_rules=fresh, **args)
+
+
+class StrictCheckRuns(unittest.TestCase):
+    def pages(self, *rows) -> list:
+        return [{"check_runs": list(rows)}]
+
+    def test_astras_example_is_refused(self) -> None:
+        row = {"id": True, "name": "release-policy", "head_sha": COMMIT, "status": "completed",
+               "conclusion": "success", "app": {"id": 15368}}
+        with self.assertRaisesRegex(rr.ReleaseRequestError, "positive integer id"):
+            rr.check_runs(self.pages(row))
+        self.assertEqual(rr.unmet([("release-policy", 15368)], [row], COMMIT),
+                         [f"release-policy: no run from app 15368 on {COMMIT}"])
+
+    def test_malformed_rows_refuse(self) -> None:
+        good = {**app_run("release-policy", 1), "head_sha": COMMIT}
+        for name, row in {"not an object": "x", "none": None, "no id": {k: v for k, v in good.items() if k != "id"},
+                          "bool id": {**good, "id": True}, "float id": {**good, "id": 1.0},
+                          "zero id": {**good, "id": 0}, "negative id": {**good, "id": -4},
+                          "string id": {**good, "id": "1"}, "app not an object": {**good, "app": "15368"}}.items():
+            with self.subTest(name), self.assertRaises(rr.ReleaseRequestError):
+                rr.check_runs(self.pages(good, row))
+
+    def test_a_null_app_and_a_null_conclusion_are_tolerated(self) -> None:
+        running = {**app_run("release-policy", 2, status="in_progress", conclusion=None), "head_sha": COMMIT}
+        no_app = {**app_run("release-policy", 3), "head_sha": COMMIT, "app": None}
+        self.assertEqual(len(rr.check_runs(self.pages(running, no_app))), 2)
+        self.assertEqual(rr.pending([("release-policy", None)], rr.check_runs(self.pages(running)), COMMIT),
+                         ["release-policy"])
 
 
 class LiveImmutableReleases(unittest.TestCase):
@@ -1199,12 +1279,13 @@ class ReleaseTagWorkflow(unittest.TestCase):
         self.assertIn("needs: select-release-commit", self.sign_job)
         self.assertIn("if: needs.select-release-commit.outputs.tag != ''", self.sign_job)
         self.assertIn("environment: release", self.sign_job)
+        wait = self.step("Wait for the required checks to finish")
+        self.assertIn("release_request.py select --commit \"$GITHUB_SHA\"", wait)
+        self.assertIn('= "$SELECTED_TAG"', wait.split("release_request.py select", 1)[1].split("\n")[2])
         decide = self.step("Decide whether the version may be tagged")
-        self.assertIn("release_request.py select --commit \"$GITHUB_SHA\"", decide)
-        self.assertIn('= "$SELECTED_TAG"', decide.split("release_request.py select", 1)[1].split("\n")[2])
         self.assertIn('test "$tag" = "$SELECTED_TAG"', decide)
         self.assertIn('--immutable-releases "$RUNNER_TEMP/immutable-releases.json"', decide)
-        self.assertLess(decide.index("release_request.py pending"), decide.index("release_request.py check"))
+        self.assertLess(self.sign_job.index("release_request.py pending"), self.sign_job.index("release_request.py check"))
 
     def test_immutable_releases_are_read_live_with_the_app_token(self) -> None:
         read = self.step("Read main's required checks and the immutable-release setting")

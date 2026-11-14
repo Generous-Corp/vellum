@@ -89,8 +89,12 @@ A Vellum release tag is signed by CI, never by a person or an agent's host key.
 
    The push that lands the reconcile starts those checks on the same commit, so the job first waits, up to 100
    minutes, until none of them is still running, meaning a run not completed or a `pending` status
-   (`release_request.py pending`). It then reads the check runs and statuses again, with the same retry, and
-   `release_request.py check` judges only that fresh read.
+   (`release_request.py pending`). It then mints a fresh release App token and reads main's required checks (classic protection and
+   rules) and the immutable-release setting again, then reads the check runs and statuses again, and
+   `release_request.py check` judges only those fresh reads, so a required check added during the wait counts. Every
+   `gh api` call in these steps runs under `timeout 120`, and a timeout takes the same retry and failure path as an
+   API error. Check run rows must be objects with positive integer ids (a null `app` and a null `conclusion` on a
+   running run are tolerated); anything else refuses.
 5. The job signs an annotated tag on that commit with the key in the environment's `RELEASE_TAG_SIGNING_KEY` secret.
    It verifies the tag with `scripts/verify_release_tag.py` against `provenance/release-signers.allowed_signers`
    before pushing anything.
