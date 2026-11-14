@@ -1,0 +1,11 @@
+<rml>
+<head>
+<style>
+body { display: block; width: 256px; height: 200px; margin: 0;
+       background-color: #20242c; font-family: LatoLatin; font-size: 24dp;
+       color: #f4f1ea; }
+#label { position: absolute; left: 20px; top: 32px; }
+</style>
+</head>
+<body><div id="label">Atlas filter 2x</div></body>
+</rml>

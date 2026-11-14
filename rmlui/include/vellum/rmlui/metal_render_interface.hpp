@@ -78,6 +78,8 @@ struct MetalFrameTarget {
 
 class MetalRenderInterface final : public Rml::RenderInterface {
   public:
+    enum class AtlasFilter : std::uint8_t { linear, nearest };
+
     // Pipelines and resources are created on this device for the renderer's
     // lifetime; build a new renderer to change device.
     explicit MetalRenderInterface(id<MTLDevice> device);
@@ -88,6 +90,12 @@ class MetalRenderInterface final : public Rml::RenderInterface {
     // False when the device could not provide the pipelines (for example the
     // shader library failed to compile). begin_frame() then draws nothing.
     [[nodiscard]] bool valid() const noexcept;
+
+    // Selects the sampler used for RmlUi-generated atlases such as glyphs.
+    // Linear is the default and preserves existing output. The selection is
+    // used by the next frame; callers must make it before begin_frame().
+    void set_atlas_filter(AtlasFilter filter) noexcept;
+    [[nodiscard]] AtlasFilter atlas_filter() const noexcept;
 
     void begin_frame(const MetalFrameTarget& frame);
     void end_frame();

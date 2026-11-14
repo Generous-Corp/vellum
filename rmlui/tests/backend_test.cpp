@@ -4,8 +4,10 @@
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -340,6 +342,88 @@ void test_importer_adapter_quarantine() {
     VELLUM_RMLUI_CHECK(elements->retained("x") == HostStatus::not_active);
 }
 
+struct GlyphMetrics {
+    std::uint64_t atlas_area = 0; // the largest generated glyph texture, in texels
+    float text_height = 0.0f;     // the tallest text geometry, in target pixels
+};
+
+GlyphMetrics glyph_metrics(const HeadlessRecorder& headless) {
+    GlyphMetrics metrics;
+    for (const auto& c : headless.commands()) {
+        if (c.kind == DrawCommand::Kind::texture && c.texture_path.empty() && c.texture_bytes &&
+            !c.texture_bytes->empty())
+            metrics.atlas_area = std::max<std::uint64_t>(
+                metrics.atlas_area, std::uint64_t{c.texture_width} * c.texture_height);
+        if (c.kind == DrawCommand::Kind::text)
+            metrics.text_height = std::max(metrics.text_height, c.height);
+    }
+    return metrics;
+}
+
+#if defined(VELLUM_RMLUI_TEST_FONT)
+// Renders one line of Inter at `font_size` with the density ratio applied
+// before open() and returns what RmlUi rasterized for it.
+GlyphMetrics render_text(float ratio, const char* font_size) {
+    HeadlessRecorder headless;
+    Backend backend(headless, headless, headless);
+    VELLUM_RMLUI_CHECK(backend.set_density_ratio(ratio) == Status::ok);
+    VELLUM_RMLUI_CHECK(backend.open(640, 240) == Status::ok);
+    headless.add_asset("Inter-Regular.ttf", vellum::rmlui::test::read_binary(VELLUM_RMLUI_TEST_FONT));
+    VELLUM_RMLUI_CHECK(backend.load_font_face("Inter-Regular.ttf", "Inter") == Status::ok);
+    headless.add_asset("text.rml", std::string("<rml><body><div style='font-family:Inter;font-size:") +
+                                       font_size + ";'>Vellum</div></body></rml>");
+    VELLUM_RMLUI_CHECK(backend.load_document("text.rml") == Status::ok);
+    backend.render();
+    const auto metrics = glyph_metrics(headless);
+    backend.close();
+    return metrics;
+}
+#endif
+
+void test_density_ratio() {
+    HeadlessRecorder headless;
+    Backend backend(headless, headless, headless);
+    VELLUM_RMLUI_CHECK(backend.density_ratio() == 1.0f);
+    for (const float bad : {0.0f, -1.0f, std::numeric_limits<float>::infinity(),
+                            std::numeric_limits<float>::quiet_NaN()})
+        VELLUM_RMLUI_CHECK(backend.set_density_ratio(bad) == Status::rejected);
+    VELLUM_RMLUI_CHECK(backend.density_ratio() == 1.0f);
+    VELLUM_RMLUI_CHECK(backend.set_density_ratio(2.0f) == Status::ok);
+    VELLUM_RMLUI_CHECK(backend.density_ratio() == 2.0f);
+#if defined(VELLUM_RMLUI_TEST_FONT)
+    if (!Backend::fonts_enabled())
+        return;
+    // dp text at ratio 2 is rasterized at twice the size: glyph geometry twice
+    // as tall and an atlas with about four times the texels.
+    const auto one = render_text(1.0f, "24dp");
+    const auto two = render_text(2.0f, "24dp");
+    VELLUM_RMLUI_CHECK(one.atlas_area > 0 && one.text_height > 0.0f);
+    VELLUM_RMLUI_CHECK(two.text_height > one.text_height * 1.8f && two.text_height < one.text_height * 2.2f);
+    VELLUM_RMLUI_CHECK(two.atlas_area >= one.atlas_area * 3);
+    // Controls: the same ratio twice gives the same glyphs, and px text does
+    // not scale with the ratio.
+    const auto again = render_text(1.0f, "24dp");
+    VELLUM_RMLUI_CHECK(again.atlas_area == one.atlas_area && again.text_height == one.text_height);
+    const auto px_one = render_text(1.0f, "24px");
+    const auto px_two = render_text(2.0f, "24px");
+    VELLUM_RMLUI_CHECK(px_two.atlas_area == px_one.atlas_area && px_two.text_height == px_one.text_height);
+
+    // Set while open, the ratio applies from the next render.
+    HeadlessRecorder live;
+    Backend open_backend(live, live, live);
+    VELLUM_RMLUI_CHECK(open_backend.open(640, 240) == Status::ok);
+    live.add_asset("Inter-Regular.ttf", vellum::rmlui::test::read_binary(VELLUM_RMLUI_TEST_FONT));
+    VELLUM_RMLUI_CHECK(open_backend.load_font_face("Inter-Regular.ttf", "Inter") == Status::ok);
+    live.add_asset("text.rml",
+                   "<rml><body><div style='font-family:Inter;font-size:24dp;'>Vellum</div></body></rml>");
+    VELLUM_RMLUI_CHECK(open_backend.load_document("text.rml") == Status::ok);
+    VELLUM_RMLUI_CHECK(open_backend.set_density_ratio(2.0f) == Status::ok);
+    open_backend.render();
+    VELLUM_RMLUI_CHECK(glyph_metrics(live).text_height > one.text_height * 1.8f);
+    open_backend.close();
+#endif
+}
+
 } // namespace
 
 int main() {
@@ -348,6 +432,7 @@ int main() {
     test_document_lowering();
     test_model_binding();
     test_fonts_fail_closed();
+    test_density_ratio();
     test_manifest_textures();
     test_clip_and_transform_state();
     test_input_routing();

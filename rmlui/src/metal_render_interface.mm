@@ -84,6 +84,7 @@ struct MetalRenderInterface::State {
     id<MTLDevice> device = nil;
     id<MTLLibrary> library = nil;
     id<MTLSamplerState> sampler = nil;
+    AtlasFilter atlas_filter = AtlasFilter::linear;
     MTLVertexDescriptor* vertex_layout = nil;
     std::unordered_map<NSUInteger, Pipelines> pipelines; // by MTLPixelFormat
     MTLPixelFormat frame_format = MTLPixelFormatInvalid;
@@ -631,6 +632,25 @@ bool MetalRenderInterface::valid() const noexcept {
     const auto& s = *state_;
     return s.device && s.library && s.sampler && s.stencil_off && s.stencil_test && s.stencil_set &&
            s.stencil_incr;
+}
+
+void MetalRenderInterface::set_atlas_filter(AtlasFilter filter) noexcept {
+    auto& s = *state_;
+    s.atlas_filter = filter;
+    if (!s.device)
+        return;
+    MTLSamplerDescriptor* descriptor = [[MTLSamplerDescriptor alloc] init];
+    const auto mode = filter == AtlasFilter::nearest ? MTLSamplerMinMagFilterNearest
+                                                      : MTLSamplerMinMagFilterLinear;
+    descriptor.minFilter = mode;
+    descriptor.magFilter = mode;
+    descriptor.sAddressMode = MTLSamplerAddressModeClampToEdge;
+    descriptor.tAddressMode = MTLSamplerAddressModeClampToEdge;
+    s.sampler = [s.device newSamplerStateWithDescriptor:descriptor];
+}
+
+MetalRenderInterface::AtlasFilter MetalRenderInterface::atlas_filter() const noexcept {
+    return state_->atlas_filter;
 }
 
 std::size_t MetalRenderInterface::unsupported_calls() const noexcept {
