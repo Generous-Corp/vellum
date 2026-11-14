@@ -22,6 +22,7 @@ const KNOWN_NODE_FIELDS = new Set([
     'kind',
     'losses',
     'name',
+    'plot',
     'properties',
     'role',
     'semanticId',
@@ -118,6 +119,7 @@ function normalizeNode(rawNode, context) {
         if (rawNode[field] !== undefined) output[field] = String(rawNode[field]);
     }
     if (rawNode.extensions !== undefined) output.extensions = canonicalize(rawNode.extensions);
+    if (rawNode.plot !== undefined) output.plot = canonicalize(rawNode.plot);
 
     const unrecognized = Object.create(null);
     for (const key of Object.keys(rawNode)) {

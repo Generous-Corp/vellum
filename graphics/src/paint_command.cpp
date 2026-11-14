@@ -197,6 +197,15 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
             .image = node.image,
             .image_asset = node.image ? images.find(node.image->content_hash) : nullptr,
         });
+    } else if (node.kind == SceneNode::Kind::plot && node.plot) {
+        output.push_back({
+            .kind = PaintCommand::Kind::plot,
+            .node_id = node.id,
+            .bounds = absolute,
+            .fill = node.fill,
+            .transform = transform,
+            .plot = node.plot,
+        });
     } else if (node.kind == SceneNode::Kind::mesh && node.mesh) {
         output.push_back({
             .kind = PaintCommand::Kind::mesh,
@@ -470,6 +479,10 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
             });
             return output;
         }
+        if (!compositing && needs(12U) && node->kind == SceneNode::Kind::plot) {
+            return refuse(node->id, "scene version " + version +
+                                        " cannot carry the plot node " + node->id);
+        }
         output.push_back({
             .severity = LoweringDiagnostic::Severity::error,
             .disposition = LoweringDiagnostic::Disposition::unsupported,
@@ -522,7 +535,9 @@ PaintExtent paint_extent(const PaintCommand& command) {
         if (!finite) return {box, false};
         return {moved};
     }
-    if (command.kind == PaintCommand::Kind::image) return {box};
+    if (command.kind == PaintCommand::Kind::image || command.kind == PaintCommand::Kind::plot) {
+        return {box};
+    }
     if (!draws_content(command.kind)) return {box};
     Rect extent = box;
     for (const auto& shadow : command.box_shadows) {

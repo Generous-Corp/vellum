@@ -222,6 +222,7 @@ public:
 /// Images compare their fill, uniform radius and every `ImageReference`
 /// field; the scene diff also compares the `ImageAsset` each image resolves
 /// to by pointer, so replacing an asset damages the images that draw it.
+/// Plots compare their fill and every spec field, samples included.
 [[nodiscard]] bool paint_differs(const SceneNode& previous, const SceneNode& next);
 
 /// Whether two nodes with the same identity group their subtree differently:
@@ -242,6 +243,12 @@ public:
 /// radius damages the whole frame; `SkiaDawnSurface::render` refuses such a
 /// scene. A changed frame size, background or `scene_version` damages the
 /// whole frame.
+///
+/// A plot whose samples alone change, with its box, transform, clip,
+/// background and layout unchanged and no effect spreading its damage,
+/// damages only the spans `plot_sample_damage` reports, mapped through its
+/// composed transform and bounded by its clips; any other plot change damages
+/// its old and new areas.
 [[nodiscard]] DamageRegion compute_scene_damage(
     const Scene& previous, const Scene& next, float scale,
     DamagePolicy policy = {}, const DamagePropagation* propagation = nullptr);
@@ -250,7 +257,7 @@ public:
 /// damage model understands. Partial redraw is enabled only for scene
 /// versions the damage model understands; a newer scene repaints fully until
 /// the damage model learns its fields and this constant is raised.
-inline constexpr std::uint32_t kDamageModelSceneVersion = 5U;
+inline constexpr std::uint32_t kDamageModelSceneVersion = 12U;
 
 /// Whether a scene of `version` may be redrawn from its damage alone.
 [[nodiscard]] constexpr bool partial_redraw_supported(std::uint32_t version) noexcept {

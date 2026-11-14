@@ -1,6 +1,8 @@
 #include "rendered_tree_materializer.hpp"
 
 #include <vellum/graphics/paint_command.hpp>
+#include <vellum/graphics/plot.hpp>
+#include <vellum/graphics/scene_acceptance.hpp>
 
 #include <algorithm>
 #include <clocale>
@@ -649,6 +651,111 @@ bool image_nodes() {
                     "image bad does not accept children", "children");
 }
 
+// A plot node carries its channel binding and drawing fields into a plot spec
+// with no samples; its background is the box's backgroundColor. Bad values
+// fail atomically with an invalid-plot error, and a version 11 scene refuses
+// the plot.
+bool plot_nodes() {
+    using vellum::graphics::LoweringDiagnostic;
+    using vellum::graphics::PlotChannelShape;
+    using vellum::graphics::PlotStyle;
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    const auto tree = wrap_tree(R"JSON(
+        {"type":"plot","id":"scope","plot":"line","channel":"output","source":"scalar",
+         "slots":240,"history":"sweep","min":-1,"max":1,"lineWidth":2,"lineColor":"#F97316",
+         "style":{"width":120,"height":60,"backgroundColor":"#111827","borderRadius":4}},
+        {"type":"plot","id":"level","plot":"meter","channel":"meters","audioChannel":1,
+         "orientation":"horizontal","peakWidth":3,"fillColor":"#22C55E","peakColor":"#FFFFFF",
+         "loudness":"lufs","style":{"width":100,"height":12}})JSON");
+    if (!vellum::authoring::materialize_rendered_tree(tree, rendered, &error)) {
+        std::cerr << "plot: " << error << '\n';
+        return false;
+    }
+    const auto* scope = vellum::graphics::find_node(rendered.scene, "scope");
+    const auto* level = vellum::graphics::find_node(rendered.scene, "level");
+    if (scope == nullptr || level == nullptr || scope->kind != vellum::graphics::SceneNode::Kind::plot ||
+        !scope->plot || !level->plot || scope->plot->style != PlotStyle::line ||
+        scope->plot->channel != "output" || scope->plot->shape != PlotChannelShape::scalar ||
+        scope->plot->slot_count != 240U ||
+        scope->plot->history != vellum::graphics::PlotHistory::sweep ||
+        scope->plot->value_min != -1.0F || scope->plot->value_max != 1.0F ||
+        scope->plot->line_width != 2.0F || scope->plot->line_color.red8() != 0xF9U ||
+        !scope->plot->samples.empty() || scope->fill.red8() != 0x11U ||
+        level->plot->style != PlotStyle::level_meter ||
+        level->plot->shape != PlotChannelShape::meter || level->plot->audio_channel != 1U ||
+        level->plot->orientation != vellum::graphics::PlotOrientation::horizontal ||
+        level->plot->peak_width != 3.0F || level->plot->peak_color.blue8() != 0xFFU) {
+        std::cerr << "plot: the plot fields were not materialized\n";
+        return false;
+    }
+    const auto reported = [&](std::string_view node, std::string_view property) {
+        return std::any_of(rendered.diagnostics.begin(), rendered.diagnostics.end(),
+            [&](const LoweringDiagnostic& diagnostic) {
+                return diagnostic.node_id == node && diagnostic.property == property &&
+                       diagnostic.code == vellum::graphics::kStyleDroppedCode;
+            });
+    };
+    if (!reported("scope", "borderRadius") || !reported("level", "loudness") ||
+        reported("scope", "backgroundColor")) {
+        std::cerr << "plot: dropped keys were not reported as expected\n";
+        return false;
+    }
+    if (!vellum::graphics::accept_scene(rendered.scene).accepted) {
+        std::cerr << "plot: the materialized scene was refused\n";
+        return false;
+    }
+    auto older = rendered.scene;
+    older.scene_version = 11U;
+    const auto refused = vellum::graphics::accept_scene(older);
+    if (refused.accepted || refused.diagnostics.size() != 1U ||
+        refused.diagnostics[0].code != vellum::graphics::kSceneVersionMismatchCode ||
+        refused.diagnostics[0].node_id != "scope") {
+        std::cerr << "plot: a version 11 scene did not refuse the plot\n";
+        return false;
+    }
+    const auto rejected = [&](std::string_view attributes, std::string_view expected_error,
+                              std::string_view property) {
+        const auto bad = wrap_tree(std::string(R"JSON({"type":"plot","id":"bad")JSON") +
+                                   std::string(attributes) +
+                                   R"JSON(,"style":{"width":10,"height":10}})JSON");
+        vellum::authoring::RenderedApplication kept = rendered;
+        std::string why;
+        std::vector<LoweringDiagnostic> diagnostics;
+        const bool ok = !vellum::authoring::materialize_rendered_tree(
+                            bad, kept, &why, &diagnostics) &&
+                        why == expected_error && !diagnostics.empty() &&
+                        diagnostics.back().severity == LoweringDiagnostic::Severity::error &&
+                        diagnostics.back().code == vellum::graphics::kInvalidPlotCode &&
+                        diagnostics.back().node_id == "bad" &&
+                        diagnostics.back().property == property &&
+                        kept.scene.width == rendered.scene.width;
+        if (!ok) std::cerr << "plot was not rejected as expected: " << why << '\n';
+        return ok;
+    };
+    static_assert(vellum::graphics::kInvalidPlotCode == "VELLUM_INVALID_PLOT");
+    return rejected(R"(,"plot":"pie","channel":"c","slots":4)",
+                    "plot bad plot must be line, area, bar or meter", "plot") &&
+           rejected(R"(,"plot":"line","slots":4)",
+                    "plot bad requires the name of a value-feed channel in channel", "channel") &&
+           rejected(R"(,"plot":"line","channel":"c","slots":2.5)",
+                    "plot bad slots must be a whole number of at most 4194304", "slots") &&
+           rejected(R"(,"plot":"bar","channel":"c","source":"scalar","slots":4)",
+                    "plot bad cannot be drawn: a bar plot reads a vector channel", "plot") &&
+           rejected(R"(,"plot":"line","channel":"c")",
+                    "plot bad cannot be drawn: the slot count is not between 1 and kMaxPlotSlots",
+                    "plot") &&
+           rejected(R"(,"plot":"area","channel":"c","slots":4,"min":1,"max":1)",
+                    "plot bad cannot be drawn: the value range is not finite or is empty",
+                    "plot") &&
+           rejected(R"(,"plot":"line","channel":"c","slots":4,"min":"low")",
+                    "plot bad min must be a finite number", "min") &&
+           rejected(R"(,"plot":"line","channel":"c","slots":4,"lineColor":"red")",
+                    "plot bad lineColor must be a colour", "lineColor") &&
+           rejected(R"(,"plot":"line","channel":"c","slots":4,"children":[{"type":"view","id":"x"}])",
+                    "plot bad does not accept children", "children");
+}
+
 // overflow, clipPath, maskMode and isolation reach the scene; bad values fail
 // atomically, and keys that cannot apply are reported.
 bool grouping_keys() {
@@ -1163,7 +1270,7 @@ int main() {
 
     return compositing_keys() && transform_pivots_once() && transform_ignores_locale() &&
            image_nodes() &&
-                   path_nodes() && grouping_keys()
+                   path_nodes() && plot_nodes() && grouping_keys()
                ? 0
                : 1;
 }

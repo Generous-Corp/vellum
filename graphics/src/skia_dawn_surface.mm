@@ -5,6 +5,7 @@
 #include <vellum/graphics/layer_cache.hpp>
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
+#include <vellum/graphics/plot.hpp>
 #include <vellum/graphics/render_telemetry.hpp>
 #include <vellum/graphics/scene_acceptance.hpp>
 
@@ -220,6 +221,8 @@ struct FrameResources final {
     MeshTextureCache meshes;
     detail::SkiaResourceCaches* caches = nullptr;
     std::size_t layers = 0;
+    /// Device pixels per logical pixel, which plots lay their columns out in.
+    float scale = 1.0F;
     /// Textures this frame cached. Their uploads exist only in this frame's
     /// recording, so a frame that fails before it is submitted drops them.
     std::vector<detail::TextureKey> uploaded;
@@ -710,6 +713,34 @@ bool draw_mesh(SkCanvas& canvas, const PaintCommand& command,
     return true;
 }
 
+// A plot is device-pixel-aligned rectangles drawn without anti-aliasing, so
+// it reproduces exactly through any damage clip.
+bool draw_plot(SkCanvas& canvas, const PaintCommand& command, float opacity,
+               const FrameResources& resources, std::string* error) {
+    if (!command.plot) return true;
+    std::string reason;
+    if (!plot_is_valid(*command.plot, &reason)) {
+        set_error(error, "plot " + command.node_id + " cannot be drawn: " + reason);
+        return false;
+    }
+    const auto& plot = *command.plot;
+    const auto geometry = plot_geometry(plot, command.fill, command.bounds, resources.scale);
+    SkPaint paint;
+    paint.setAntiAlias(false);
+    for (const auto& piece : geometry.rects) {
+        Color color = command.fill;
+        if (piece.layer == PlotLayer::fill) color = plot.fill_color;
+        if (piece.layer == PlotLayer::line) color = plot.line_color;
+        if (piece.layer == PlotLayer::peak) color = plot.peak_color;
+        if (!(color.alpha > 0.0F)) continue;
+        paint.setColor4f(sk_color(color, opacity));
+        canvas.drawRect(
+            SkRect::MakeXYWH(piece.rect.x, piece.rect.y, piece.rect.width, piece.rect.height),
+            paint);
+    }
+    return true;
+}
+
 SkPath sk_path(const PaintCommand& command) {
     const auto& path = *command.path;
     SkPathBuilder builder(path.fill_rule == FillRule::evenodd ? SkPathFillType::kEvenOdd
@@ -1024,6 +1055,8 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
         drawn = draw_path(canvas, command, paint_opacity, resources, error);
     } else if (command.kind == PaintCommand::Kind::image) {
         drawn = draw_image(canvas, command, paint_opacity, resources, error);
+    } else if (command.kind == PaintCommand::Kind::plot) {
+        drawn = draw_plot(canvas, command, paint_opacity, resources, error);
     } else {
         drawn = draw_text(canvas, command, paint_opacity, layered ? opacity : 1.0F,
                           directory, resources, paragraph, error);
@@ -1079,6 +1112,10 @@ Extent command_extent(const PaintCommand& command, const Rect& frame, float scal
         case PaintCommand::Kind::image:
             painted.kind = SceneNode::Kind::image;
             painted.image = command.image;
+            break;
+        case PaintCommand::Kind::plot:
+            painted.kind = SceneNode::Kind::plot;
+            painted.plot = command.plot;
             break;
         case PaintCommand::Kind::begin_layer:
         case PaintCommand::Kind::end_layer:
@@ -1872,7 +1909,9 @@ private:
         // this one submits, so the per-frame cache counters must too.
         const auto last_submitted = caches_.frame_state();
         caches_.begin_frame();
-        FrameResources resources{.meshes = {.recorder = recorder_.get()}, .caches = &caches_};
+        FrameResources resources{.meshes = {.recorder = recorder_.get()},
+                                 .caches = &caches_,
+                                 .scale = config_.scale};
         // A frame that is never submitted leaves no trace in the per-frame
         // telemetry; its lookups stay in the cumulative totals. A texture it
         // cached was never written on the GPU, so drop it and a later frame

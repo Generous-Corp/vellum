@@ -245,11 +245,11 @@ void clip_validity() {
 
 // Every grouping field is refused before version 5 and accepted at 5.
 void versioning() {
-    static_assert(kSceneVersion == 5U);
+    static_assert(kSceneVersion == 12U);
     static_assert(scene_version_is_supported(5U));
-    static_assert(kDamageModelSceneVersion == 5U);
-    static_assert(partial_redraw_supported(5U));
-    static_assert(!partial_redraw_supported(6U));
+    static_assert(kDamageModelSceneVersion == 12U);
+    static_assert(partial_redraw_supported(12U));
+    static_assert(!partial_redraw_supported(13U));
 
     const auto variants = std::vector<std::pair<std::string, SceneNode>>{
         {"clip",

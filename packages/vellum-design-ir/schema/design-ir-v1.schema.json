@@ -95,9 +95,35 @@
         "text": { "type": "string" },
         "properties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
         "extensions": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
+        "plot": { "$ref": "#/$defs/plotBinding" },
         "children": { "type": "array", "items": { "$ref": "#/$defs/node" } }
       }
     },
+    "plotBinding": {
+      "description": "A plot of a value-feed channel. The document names the channel and how to draw it; samples arrive at run time, so the document carries none.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["style", "channel"],
+      "properties": {
+        "style": { "enum": ["line", "area", "bar", "meter"] },
+        "channel": { "type": "string", "minLength": 1 },
+        "source": { "enum": ["scalar", "meter", "vector"] },
+        "slots": { "type": "integer", "minimum": 1, "maximum": 4194304 },
+        "history": { "enum": ["scroll", "sweep"] },
+        "orientation": { "enum": ["vertical", "horizontal"] },
+        "audioChannel": { "type": "integer", "minimum": 0, "maximum": 1024 },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "baseline": { "type": "number" },
+        "lineWidth": { "type": "number", "minimum": 0 },
+        "barGap": { "type": "number", "minimum": 0 },
+        "peakWidth": { "type": "number", "minimum": 0 },
+        "lineColor": { "$ref": "#/$defs/plotColor" },
+        "fillColor": { "$ref": "#/$defs/plotColor" },
+        "peakColor": { "$ref": "#/$defs/plotColor" }
+      }
+    },
+    "plotColor": { "type": "string", "pattern": "^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$" },
     "token": {
       "type": "object",
       "additionalProperties": false,

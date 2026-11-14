@@ -52,7 +52,32 @@ export interface DesignNode {
     text?: string;
     properties: Record<string, JsonValue>;
     extensions?: Record<string, JsonValue>;
+    plot?: PlotBinding;
     children: DesignNode[];
+}
+
+/**
+ * A plot of a value-feed channel: the channel and how to draw it. Samples
+ * arrive at run time, so a document carries none. Colours are `#RRGGBB` or
+ * `#RRGGBBAA`.
+ */
+export interface PlotBinding {
+    style: 'line' | 'area' | 'bar' | 'meter';
+    channel: string;
+    source?: 'scalar' | 'meter' | 'vector';
+    slots?: number;
+    history?: 'scroll' | 'sweep';
+    orientation?: 'vertical' | 'horizontal';
+    audioChannel?: number;
+    min?: number;
+    max?: number;
+    baseline?: number;
+    lineWidth?: number;
+    barGap?: number;
+    peakWidth?: number;
+    lineColor?: string;
+    fillColor?: string;
+    peakColor?: string;
 }
 
 export interface DesignSource {

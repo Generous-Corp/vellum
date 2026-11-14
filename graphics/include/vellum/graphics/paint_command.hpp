@@ -57,6 +57,9 @@ struct PaintCommand final {
         /// Multiplies the enclosing group by the mask's coverage, taken by
         /// `mask_mode`.
         end_mask,
+        /// Draws `plot` over `bounds` on `fill`, as `plot_geometry` lays it
+        /// out at the renderer's scale.
+        plot,
     };
 
     Kind kind = Kind::rectangle;
@@ -104,6 +107,8 @@ struct PaintCommand final {
     std::optional<ImageReference> image;
     /// The asset `Scene::images` holds for `image`, or null when it is missing.
     std::shared_ptr<const ImageAsset> image_asset;
+    /// What a `plot` command draws.
+    std::shared_ptr<const PlotSpec> plot;
 };
 
 [[nodiscard]] constexpr std::string_view to_string(PaintCommand::Kind kind) noexcept {
@@ -119,6 +124,7 @@ struct PaintCommand final {
     case PaintCommand::Kind::end_clip: return "end_clip";
     case PaintCommand::Kind::begin_mask: return "begin_mask";
     case PaintCommand::Kind::end_mask: return "end_mask";
+    case PaintCommand::Kind::plot: return "plot";
     }
     return "unknown";
 }
@@ -145,7 +151,7 @@ struct PaintExtent final {
 [[nodiscard]] constexpr bool draws_content(PaintCommand::Kind kind) noexcept {
     return kind == PaintCommand::Kind::rectangle || kind == PaintCommand::Kind::text ||
            kind == PaintCommand::Kind::mesh || kind == PaintCommand::Kind::path ||
-           kind == PaintCommand::Kind::image;
+           kind == PaintCommand::Kind::image || kind == PaintCommand::Kind::plot;
 }
 
 /// The axis-aligned box that contains `rect` once mapped by `transform`.
@@ -183,6 +189,8 @@ struct ResolvedLinearGradient final {
 /// so the renderer refuses it rather than silently skipping it; a valid path
 /// with no commands emits nothing. An image node always emits its command,
 /// with the asset `find_image_asset` resolves, or none when it is missing.
+/// A plot node with a spec emits its command, and one without contributes
+/// nothing for itself.
 ///
 /// A node whose opacity is below one and whose subtree draws more than one
 /// command is wrapped in a `begin_layer`/`end_layer` pair; when it draws

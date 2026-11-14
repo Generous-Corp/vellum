@@ -180,6 +180,7 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
         case Kind::end_clip:
         case Kind::begin_mask:
         case Kind::end_mask:
+        case Kind::plot:
             break;
         }
     }

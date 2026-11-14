@@ -2,6 +2,7 @@
 
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/lowering_diagnostic.hpp>
+#include <vellum/graphics/plot.hpp>
 #include <vellum/graphics/scene_acceptance.hpp>
 
 #include <algorithm>
@@ -243,9 +244,70 @@ bool mask_reports() {
 }
 }  // namespace
 
+// An untransformed plot is drawn as the rectangles of its geometry with no
+// loss; a turned one is not drawn and is reported; a version 11 scene with a
+// plot is refused as the native renderer refuses it.
+bool plot_lowering() {
+    using vellum::graphics::Color;
+    using vellum::graphics::PaintCommand;
+    using vellum::graphics::PlotChannelShape;
+    using vellum::graphics::PlotSpec;
+    using vellum::graphics::PlotStyle;
+    Scene scene;
+    scene.width = 64.0F;
+    scene.height = 32.0F;
+    scene.root.id = "root";
+    auto spec = std::make_shared<PlotSpec>();
+    spec->style = PlotStyle::area;
+    spec->shape = PlotChannelShape::vector;
+    spec->slot_count = 4;
+    spec->samples = {0.25F, 0.5F, 0.75F, 1.0F};
+    spec->fill_color = Color::hex(0x22C55E);
+    SceneNode plot{.id = "spectrum", .kind = SceneNode::Kind::plot,
+                   .bounds = {8.0F, 4.0F, 8.0F, 20.0F}, .fill = Color::hex(0x111827),
+                   .opacity = 0.5F};
+    plot.plot = spec;
+    scene.root.children.push_back(plot);
+    const auto lowering = vellum::web::lower_for_canvas_shell(scene);
+    const auto geometry = vellum::graphics::plot_geometry(*spec, plot.fill, plot.bounds, 1.0F);
+    bool rectangles = lowering.accepted && lowering.losses == 0 &&
+                      lowering.diagnostics.empty() &&
+                      lowering.commands.size() == geometry.rects.size() &&
+                      geometry.rects.size() == 5U;
+    for (std::size_t index = 0; rectangles && index < lowering.commands.size(); ++index) {
+        const auto& command = lowering.commands[index];
+        const auto& piece = geometry.rects[index];
+        rectangles = command.kind == PaintCommand::Kind::rectangle &&
+                     command.node_id == "spectrum" && command.bounds.x == piece.rect.x &&
+                     command.bounds.y == piece.rect.y &&
+                     command.bounds.width == piece.rect.width &&
+                     command.bounds.height == piece.rect.height && command.opacity == 0.5F;
+    }
+    if (!rectangles || lowering.commands[0].fill.red != plot.fill.red ||
+        lowering.commands[1].fill.green != spec->fill_color.green) {
+        std::cerr << "an untransformed plot was not drawn as its geometry's rectangles\n";
+        return false;
+    }
+    scene.root.children[0].transform =
+        vellum::graphics::Affine2D{.a = 0.0F, .b = 1.0F, .c = -1.0F, .d = 0.0F};
+    const auto turned = vellum::web::lower_for_canvas_shell(scene);
+    if (!turned.accepted || turned.losses != 1 || turned.diagnostics.size() != 1U ||
+        turned.diagnostics[0].code != vellum::web::kPlotNotDrawnCode ||
+        turned.diagnostics[0].node_id != "spectrum" || turned.commands.size() != 1U ||
+        turned.commands[0].kind != PaintCommand::Kind::plot) {
+        std::cerr << "a turned plot was not reported as not drawn\n";
+        return false;
+    }
+    scene.root.children[0].transform.reset();
+    scene.scene_version = 11U;
+    return refused(scene, "scene version 11 cannot carry the plot node spectrum",
+                   vellum::graphics::kSceneVersionMismatchCode, "spectrum");
+}
+
 int main() {
     if (!image_refusals()) return 1;
     if (!mask_reports()) return 1;
+    if (!plot_lowering()) return 1;
     using vellum::graphics::Affine2D;
     using vellum::graphics::CornerRadii;
     using vellum::graphics::SceneNode;

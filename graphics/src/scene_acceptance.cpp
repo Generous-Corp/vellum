@@ -3,8 +3,10 @@
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/path_geometry.hpp>
+#include <vellum/graphics/plot.hpp>
 
 #include <cmath>
+#include <optional>
 #include <utility>
 
 namespace vellum::graphics {
@@ -54,8 +56,10 @@ const SceneNode* find_undrawable_image(const SceneNode& node, std::string& reaso
 }
 
 // Why `scene` is refused, or empty. `image_node` is set to the refused
-// image's id, and `image` to true, for an image or image-table refusal.
-std::string refusal(const Scene& scene, bool& image, std::string& image_node) {
+// image's id, and `image` to true, for an image or image-table refusal;
+// `plot_node` is set for a plot refusal.
+std::string refusal(const Scene& scene, bool& image, std::string& image_node,
+                    std::optional<std::string>& plot_node) {
     if (!scene_version_is_supported(scene.scene_version)) {
         return "scene version " + std::to_string(scene.scene_version) +
                " is not supported by this renderer";
@@ -91,6 +95,10 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node) {
         image = true;
         return reason;
     }
+    if (const auto* plot = find_invalid_plot(scene.root, reason); plot != nullptr) {
+        plot_node = plot->id;
+        return "plot " + plot->id + " cannot be drawn: " + reason;
+    }
     return {};
 }
 
@@ -101,7 +109,8 @@ SceneAcceptance accept_scene(const Scene& scene) {
     result.diagnostics = scene_loss_diagnostics(scene);
     bool image = false;
     std::string image_node;
-    result.reason = refusal(scene, image, image_node);
+    std::optional<std::string> plot_node;
+    result.reason = refusal(scene, image, image_node, plot_node);
     result.accepted = result.reason.empty();
     if (result.accepted) return result;
 
@@ -112,6 +121,16 @@ SceneAcceptance accept_scene(const Scene& scene) {
         return result;
     }
     result.diagnostics.clear();
+    if (plot_node) {
+        result.diagnostics.push_back({
+            .severity = LoweringDiagnostic::Severity::error,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(kInvalidPlotCode),
+            .node_id = std::move(*plot_node),
+            .property = "plot",
+            .message = result.reason,
+        });
+    }
     if (image) {
         result.diagnostics.push_back({
             .severity = LoweringDiagnostic::Severity::error,

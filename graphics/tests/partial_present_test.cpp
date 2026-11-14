@@ -460,12 +460,13 @@ void command_extents() {
 Scene grouping_scene(float width, float height);
 
 void damage_model_version_gate() {
-    expect(kDamageModelSceneVersion == 5U && partial_redraw_supported(3U) &&
+    expect(kDamageModelSceneVersion == 12U && partial_redraw_supported(3U) &&
                partial_redraw_supported(4U) && partial_redraw_supported(5U) &&
+               partial_redraw_supported(12U) &&
                partial_redraw_supported(kDamageModelSceneVersion) &&
                !partial_redraw_supported(kDamageModelSceneVersion + 1U) &&
-               !partial_redraw_supported(6U),
-           "partial redraw covers scene versions up to 5 and refuses version 6");
+               !partial_redraw_supported(13U),
+           "partial redraw covers scene versions up to 12 and refuses version 13");
     expect(to_string(FullRepaintReason::damage_model_version) == "damage_model_version",
            "the damage-model version fallback has a telemetry name");
     constexpr std::uint32_t width = 400;
@@ -482,9 +483,9 @@ void damage_model_version_gate() {
         const auto stats = partial->frame_stats();
         expect(!stats.full_repaint && stats.full_repaint_reason == FullRepaintReason::none &&
                    stats.paint_commands_recorded < stats.paint_commands_total,
-               "a default version 5 scene takes the partial path, step " + std::to_string(step),
+               "a default version 12 scene takes the partial path, step " + std::to_string(step),
                describe(stats));
-        compare("a default version 5 scene, step " + std::to_string(step), *full, *partial);
+        compare("a default version 12 scene, step " + std::to_string(step), *full, *partial);
     }
     Scene newer = scene;
     newer.scene_version = kSceneVersion + 1U;
@@ -505,9 +506,9 @@ void damage_model_version_gate() {
     const auto refused = older->frame_stats();
     expect(refused.full_repaint &&
                refused.full_repaint_reason == FullRepaintReason::damage_model_version,
-           "a version 5 scene past a version 4 damage model repaints fully",
+           "a version 12 scene past a version 4 damage model repaints fully",
            describe(refused));
-    compare("a version 5 scene past a version 4 damage model", *full, *older);
+    compare("a version 12 scene past a version 4 damage model", *full, *older);
 }
 
 Affine2D rotation_degrees(float degrees, float scale = 1.0F) {
@@ -1392,8 +1393,9 @@ void grouping_sequence(float scale, bool layer_cache) {
     auto partial = make_surface(width, height, scale, layer_cache);
     if (!full || !partial) return;
     Scene scene = grouping_scene(static_cast<float>(width), static_cast<float>(height));
-    expect(scene.scene_version == 5U && partial_redraw_supported(scene.scene_version),
-           size + "the grouping scene is a version 5 scene partial redraw serves");
+    expect(scene.scene_version == kDamageModelSceneVersion &&
+               partial_redraw_supported(scene.scene_version),
+           size + "the grouping scene is a scene partial redraw serves");
     if (!render_both(*full, *partial, scene)) return;
     compare(size + "the first grouping frame", *full, *partial);
     // Removing or restoring the viewport's clip changes enough of this dense

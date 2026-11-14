@@ -262,12 +262,78 @@ function validateNode(node, path, sourceKey, issues) {
         }
     }
     requireObject(node.properties, `${path}.properties`, issues);
+    if (node.plot !== undefined) validatePlotBinding(node.plot, `${path}.plot`, issues);
     if (!Array.isArray(node.children)) {
         issues.push(issue(`${path}.children`, 'type', 'children must be an array'));
     } else {
         node.children.forEach((child, index) =>
             validateNode(child, `${path}.children[${index}]`, sourceKey, issues),
         );
+    }
+}
+
+const PLOT_FIELDS = new Set([
+    'style', 'channel', 'source', 'slots', 'history', 'orientation', 'audioChannel', 'min', 'max',
+    'baseline', 'lineWidth', 'barGap', 'peakWidth', 'lineColor', 'fillColor', 'peakColor',
+]);
+const PLOT_SOURCES = { line: ['scalar', 'vector'], area: ['scalar', 'vector'], bar: ['vector'], meter: ['meter'] };
+const MAX_PLOT_SLOTS = 4194304;
+
+// A plot binding names a value-feed channel and how to draw it, under the
+// rules the renderer's `plot_is_valid` applies; samples arrive at run time.
+function validatePlotBinding(plot, path, issues) {
+    requireObject(plot, path, issues);
+    if (!isObject(plot)) return;
+    for (const key of Object.keys(plot)) {
+        if (!PLOT_FIELDS.has(key)) {
+            issues.push(issue(`${path}.${key}`, 'unknown-field', 'a plot binding carries no such field'));
+        }
+    }
+    const sources = PLOT_SOURCES[plot.style];
+    if (sources === undefined) {
+        issues.push(issue(`${path}.style`, 'enum', 'plot style must be line, area, bar or meter'));
+    }
+    if (typeof plot.channel !== 'string' || plot.channel.length === 0) {
+        issues.push(issue(`${path}.channel`, 'type', 'a plot names its channel'));
+    }
+    const source = plot.source ?? (plot.style === 'meter' ? 'meter' : 'vector');
+    if (sources !== undefined && !sources.includes(source)) {
+        issues.push(issue(`${path}.source`, 'enum', `a ${plot.style} plot reads a ${sources.join(' or ')} channel`));
+    }
+    const enumField = (key, values) => {
+        if (plot[key] !== undefined && !values.includes(plot[key])) {
+            issues.push(issue(`${path}.${key}`, 'enum', `${key} must be ${values.join(' or ')}`));
+        }
+    };
+    enumField('history', ['scroll', 'sweep']);
+    enumField('orientation', ['vertical', 'horizontal']);
+    const integer = (key, minimum, maximum) => {
+        const value = plot[key];
+        if (value !== undefined && (!Number.isInteger(value) || value < minimum || value > maximum)) {
+            issues.push(issue(`${path}.${key}`, 'range', `${key} must be a whole number from ${minimum} to ${maximum}`));
+        }
+    };
+    integer('slots', 1, MAX_PLOT_SLOTS);
+    integer('audioChannel', 0, 1024);
+    if (plot.style !== 'meter' && plot.slots === undefined) {
+        issues.push(issue(`${path}.slots`, 'type', 'a line, area or bar plot declares its slots'));
+    }
+    const finite = (value) => typeof value === 'number' && Number.isFinite(value);
+    for (const key of ['min', 'max', 'baseline', 'lineWidth', 'barGap', 'peakWidth']) {
+        if (plot[key] === undefined) continue;
+        if (!finite(plot[key])) {
+            issues.push(issue(`${path}.${key}`, 'type', `${key} must be a finite number`));
+        } else if (['lineWidth', 'barGap', 'peakWidth'].includes(key) && plot[key] < 0) {
+            issues.push(issue(`${path}.${key}`, 'range', `${key} must not be negative`));
+        }
+    }
+    if ((plot.min ?? 0) === (plot.max ?? 1)) {
+        issues.push(issue(`${path}.max`, 'range', 'a plot value range must not be empty'));
+    }
+    for (const key of ['lineColor', 'fillColor', 'peakColor']) {
+        if (plot[key] !== undefined && !/^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/.test(String(plot[key]))) {
+            issues.push(issue(`${path}.${key}`, 'format', `${key} must be #RRGGBB or #RRGGBBAA`));
+        }
     }
 }
 

@@ -147,6 +147,7 @@ void equality_covers_every_field() {
                                 .fit = ImageFit::cover,
                                 .sampling = ImageSampling::nearest},
         .image_asset = std::make_shared<ImageAsset>(),
+        .plot = std::make_shared<PlotSpec>(),
     };
     expect(paint_commands_equal(base, base), "a command equals itself");
     const std::vector<Mutation> mutations{
@@ -220,6 +221,7 @@ void equality_covers_every_field() {
         {"clip_rect width", [](PaintCommand& c) { c.clip_rect.width = 1.0F; }},
         {"clip_rect height", [](PaintCommand& c) { c.clip_rect.height = 1.0F; }},
         {"mask_mode", [](PaintCommand& c) { c.mask_mode = MaskMode::luminance; }},
+        {"plot", [](PaintCommand& c) { c.plot = std::make_shared<PlotSpec>(); }},
     };
     for (const auto& [name, mutate] : mutations) {
         PaintCommand changed = base;

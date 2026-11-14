@@ -7,6 +7,7 @@
 
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/path_geometry.hpp>
+#include <vellum/graphics/plot.hpp>
 
 #include <algorithm>
 #include <array>
@@ -38,9 +39,9 @@ constexpr float kDefaultButtonHeight = 44.0F;
 constexpr float kDefaultTextInputHeight = 44.0F;
 constexpr float kDefaultGenericHeight = 0.0F;
 constexpr float kTextLineHeightMultiplier = 1.4F;
-constexpr std::array<std::string_view, 10> kIntrinsicTypes{
+constexpr std::array<std::string_view, 11> kIntrinsicTypes{
     "view", "stack", "text", "text-run", "text-input", "button", "image", "canvas", "custom",
-    "path",
+    "path", "plot",
 };
 constexpr std::array<std::string_view, 6> kTextStyleKeys{
     "color", "fontFamily", "fontSize", "fontWeight", "letterSpacing", "textDecoration",
@@ -81,6 +82,7 @@ bool style_key_consumed(std::string_view type, std::string_view key, const Style
         return true;
     }
     if (type == "path") return false;
+    if (type == "plot") return key == "backgroundColor";
     if (use.draws_image) {
         return key == "backgroundColor" || key == "borderRadius" ||
                contains(kCornerRadiusKeys, key);
@@ -802,6 +804,131 @@ bool materialize_path(
     return true;
 }
 
+constexpr std::array<std::string_view, 25> kPlotAttributes{
+    "type", "id", "children", "style", "events", "accessibilityLabel", "accessibilityValue",
+    "accessibilityRole", "accessibilityState", "plot", "channel", "source", "slots", "history",
+    "orientation", "audioChannel", "min", "max", "baseline", "lineWidth", "barGap", "peakWidth",
+    "lineColor", "fillColor", "peakColor",
+};
+
+// A plot names a value-feed channel and how to draw it; the samples arrive at
+// run time through `PlotFeedSampler`, so a materialized plot starts empty.
+bool materialize_plot(
+    NSDictionary* source, const std::string& identity, MaterializeContext& context,
+    vellum::graphics::SceneNode& output, std::string* error) {
+    using vellum::graphics::PlotChannelShape;
+    using vellum::graphics::PlotStyle;
+    const auto reject = [&](std::string property, const std::string& problem) {
+        std::string message = "plot " + identity + " " + problem;
+        context.diagnostics->push_back({
+            .severity = LoweringDiagnostic::Severity::error,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(vellum::graphics::kInvalidPlotCode),
+            .node_id = identity,
+            .property = std::move(property),
+            .message = message,
+        });
+        set_error(error, std::move(message));
+        return false;
+    };
+    id children = source[@"children"];
+    if (children != nil && (![children isKindOfClass:NSArray.class] ||
+                            static_cast<NSArray*>(children).count != 0U)) {
+        return reject("children", "does not accept children");
+    }
+    vellum::graphics::PlotSpec spec;
+    const auto style = keyword(source[@"plot"],
+        std::array<std::string_view, 4>{"line", "area", "bar", "meter"});
+    if (!style) return reject("plot", "plot must be line, area, bar or meter");
+    spec.style = static_cast<PlotStyle>(*style);
+    if (![source[@"channel"] isKindOfClass:NSString.class] ||
+        static_cast<NSString*>(source[@"channel"]).length == 0U) {
+        return reject("channel", "requires the name of a value-feed channel in channel");
+    }
+    spec.channel = cpp_string(source[@"channel"]);
+    spec.shape = spec.style == PlotStyle::level_meter ? PlotChannelShape::meter
+                                                      : PlotChannelShape::vector;
+    if (source[@"source"] != nil) {
+        const auto shape = keyword(source[@"source"],
+            std::array<std::string_view, 3>{"scalar", "meter", "vector"});
+        if (!shape) return reject("source", "source must be scalar, meter or vector");
+        spec.shape = static_cast<PlotChannelShape>(*shape);
+    }
+    if (source[@"history"] != nil) {
+        const auto history = keyword(source[@"history"],
+            std::array<std::string_view, 2>{"scroll", "sweep"});
+        if (!history) return reject("history", "history must be scroll or sweep");
+        spec.history = static_cast<vellum::graphics::PlotHistory>(*history);
+    }
+    if (source[@"orientation"] != nil) {
+        const auto orientation = keyword(source[@"orientation"],
+            std::array<std::string_view, 2>{"vertical", "horizontal"});
+        if (!orientation) return reject("orientation", "orientation must be vertical or horizontal");
+        spec.orientation = static_cast<vellum::graphics::PlotOrientation>(*orientation);
+    }
+    const auto count = [&](NSString* key, std::uint32_t& value, std::uint32_t limit) {
+        id raw = source[key];
+        if (raw == nil) return true;
+        float number = 0.0F;
+        if (!finite_number(raw, number) || number < 0.0F || number != std::floor(number) ||
+            number > static_cast<float>(limit)) {
+            return false;
+        }
+        value = static_cast<std::uint32_t>(number);
+        return true;
+    };
+    if (!count(@"slots", spec.slot_count, vellum::graphics::kMaxPlotSlots)) {
+        return reject("slots", "slots must be a whole number of at most " +
+            std::to_string(vellum::graphics::kMaxPlotSlots));
+    }
+    if (!count(@"audioChannel", spec.audio_channel, 1024U)) {
+        return reject("audioChannel", "audioChannel must be a whole number of at most 1024");
+    }
+    const auto number = [&](NSString* key, float& value) {
+        id raw = source[key];
+        return raw == nil || finite_number(raw, value);
+    };
+    for (const auto& [key, field] : std::array<std::pair<NSString*, float*>, 6>{{
+             {@"min", &spec.value_min}, {@"max", &spec.value_max},
+             {@"baseline", &spec.baseline}, {@"lineWidth", &spec.line_width},
+             {@"barGap", &spec.bar_gap}, {@"peakWidth", &spec.peak_width}}}) {
+        if (!number(key, *field)) return reject(cpp_string(key), cpp_string(key) + " must be a finite number");
+    }
+    for (const auto& [key, field] : std::array<std::pair<NSString*, vellum::graphics::Color*>, 3>{{
+             {@"lineColor", &spec.line_color}, {@"fillColor", &spec.fill_color},
+             {@"peakColor", &spec.peak_color}}}) {
+        if (source[key] == nil) continue;
+        const auto color = parse_color(source[key]);
+        if (!color) return reject(cpp_string(key), cpp_string(key) + " must be a colour");
+        *field = *color;
+    }
+    std::string reason;
+    if (!vellum::graphics::plot_is_valid(spec, &reason)) {
+        return reject("plot", "cannot be drawn: " + reason);
+    }
+    NSArray* keys = [source.allKeys sortedArrayUsingSelector:@selector(compare:)];
+    for (id key in keys) {
+        if (![key isKindOfClass:NSString.class]) continue;
+        const std::string name = cpp_string(key);
+        if (contains(kPlotAttributes, name)) continue;
+        context.diagnostics->push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(vellum::graphics::kStyleDroppedCode),
+            .node_id = identity,
+            .property = name,
+            .message = "attribute " + name + " is not supported on plot nodes and was ignored",
+        });
+    }
+    output.kind = vellum::graphics::SceneNode::Kind::plot;
+    output.fill_gradients.clear();
+    output.box_shadows.clear();
+    output.corner_radius = 0.0F;
+    output.corner_radii.reset();
+    output.plot = std::make_shared<const vellum::graphics::PlotSpec>(std::move(spec));
+    return true;
+}
+
 bool reject_image(
     MaterializeContext& context, const std::string& node_id, std::string property,
     std::string message, std::string* error) {
@@ -926,7 +1053,7 @@ bool parse_grouping(
         using Kind = vellum::graphics::SceneNode::Kind;
         const bool content_is_own_paint =
             output.kind == Kind::text || output.kind == Kind::path ||
-            output.kind == Kind::image;
+            output.kind == Kind::image || output.kind == Kind::plot;
         output.clip = vellum::graphics::NodeClip{
             .rect = {0.0F, 0.0F, output.bounds.width, output.bounds.height},
             .radii = vellum::graphics::resolved_corner_radii(output),
@@ -1164,6 +1291,8 @@ bool materialize_node(
 
     if (type_name == "path") {
         if (!materialize_path(source, identity, context, output, error)) return false;
+    } else if (type_name == "plot") {
+        if (!materialize_plot(source, identity, context, output, error)) return false;
     } else if (image_hash) {
         if (!materialize_image(source, identity, *image_hash, context, output, error)) {
             return false;

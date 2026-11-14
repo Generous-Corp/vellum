@@ -65,6 +65,12 @@ inline constexpr std::string_view kImageAssetMissingCode = "VELLUM_IMAGE_ASSET_M
 /// its scene's `scene_version`; always an error. The consumer refuses the
 /// whole scene rather than drawing it with the node missing.
 inline constexpr std::string_view kSceneVersionMismatchCode = "VELLUM_SCENE_VERSION_MISMATCH";
+/// A plot node without a spec, with children, or with a spec that fails
+/// `plot_is_valid`; always an error.
+inline constexpr std::string_view kInvalidPlotCode = "VELLUM_INVALID_PLOT";
+/// A plot whose channel the feed it samples does not have with the plot's
+/// shape; a warning. The plot keeps the samples it had, if any.
+inline constexpr std::string_view kPlotChannelUnboundCode = "VELLUM_PLOT_CHANNEL_UNBOUND";
 
 [[nodiscard]] constexpr std::string_view to_string(
     LoweringDiagnostic::Severity severity) noexcept {
