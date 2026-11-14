@@ -87,6 +87,12 @@ def git(root: Path, *args: str, check: bool = True) -> str:
     return result.stdout.strip()
 
 
+def redact_source(text: str, source: str) -> str:
+    """Remove a clone source and any URL userinfo from a subprocess message."""
+    redacted = text.replace(source, "<source>")
+    return re.sub(r"(?<=://)[^/\s@]+@", "<credentials>@", redacted)
+
+
 def ensure_pulp(root: Path, name: str, ref: str, source: str) -> bool:
     """Make `root/name` a Pulp checkout at `ref` (a commit, or `main` for the live main); True when created."""
     path = root / name
@@ -95,7 +101,12 @@ def ensure_pulp(root: Path, name: str, ref: str, source: str) -> bool:
         return False
     created = not path.exists()
     if created:
-        subprocess.run(["git", "clone", "--quiet", "--no-checkout", source, str(path)], check=True)
+        command = ["git", "clone", "--quiet", "--no-checkout", source, str(path)]
+        try:
+            subprocess.run(command, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as error:
+            detail = error.stderr or error.stdout or "clone failed"
+            raise CanaryError(f"git clone failed: {redact_source(detail.strip(), source)}") from error
     if live or not git(path, "cat-file", "-t", ref, check=False):
         git(path, "fetch", "--quiet", "--no-tags", "origin", ref)
         ref = "FETCH_HEAD"

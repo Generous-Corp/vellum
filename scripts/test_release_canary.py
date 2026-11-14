@@ -133,6 +133,31 @@ class Failures(unittest.TestCase):
             with mock.patch.object(rc, "ensure_pulp", side_effect=error):
                 self.assertEqual(self.main_in(root, ["0.2.1"]), 1)
 
+    def test_a_clone_failure_does_not_print_source_credentials(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            make_repo(root)
+            source = "https://x-access-token:fake-secret@example.invalid/pulp.git"
+            original_run = subprocess.run
+
+            def fail_clone(command: list[str], *args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+                if command[:2] == ["git", "clone"]:
+                    raise subprocess.CalledProcessError(
+                        128,
+                        command,
+                        stderr=f"fatal: unable to access {source}: refused",
+                    )
+                return original_run(command, *args, **kwargs)
+
+            stderr = io.StringIO()
+            with mock.patch.object(rc, "ROOT", root), \
+                 mock.patch.object(rc.subprocess, "run", side_effect=fail_clone), \
+                 mock.patch.dict(rc.os.environ, {"VELLUM_CANARY_PULP_SOURCE": source}), \
+                 contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(rc.main(["0.2.1"]), 1)
+            self.assertNotIn("fake-secret", stderr.getvalue())
+            self.assertNotIn(source, stderr.getvalue())
+
     def test_a_malformed_cmake_version_exits_one(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
