@@ -582,6 +582,9 @@ void keys_see_every_input() {
                                      const std::function<void(LinearGradient&)>& mutate) {
             auto base = first;
             base.root.children[0].fill_gradients[0].kind = kind;
+            if (kind == GradientKind::radial || kind == GradientKind::two_circle_radial) {
+                base.root.children[0].fill_gradients[0].angle_degrees = 180.0F;
+            }
             auto changed = base;
             mutate(changed.root.children[0].fill_gradients[0]);
             expect_second_frame_exact("a " + name + " gradient input rebuilds the shader", base,
@@ -593,6 +596,7 @@ void keys_see_every_input() {
         };
         mutate_gradient("kind", [](LinearGradient& gradient) {
             gradient.kind = GradientKind::radial;
+            gradient.angle_degrees = 180.0F;
         });
         mutate_gradient("spread", [](LinearGradient& gradient) {
             gradient.spread = GradientSpread::reflect;
