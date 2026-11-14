@@ -1,6 +1,8 @@
 // Binds framework widgets to a vellum::value::ParamModel and checks the
 // binding contract headlessly: no window, no GPU, no audio.
 
+#include "framework_test.hpp"
+
 #include <vellum/value/in_memory_param_model.hpp>
 #include <vellum/view/parameter_binding.hpp>
 
@@ -13,18 +15,6 @@
 #include <vector>
 
 namespace {
-
-int failures = 0;
-int checks = 0;
-
-#define CHECK(cond)                                                                    \
-    do {                                                                               \
-        ++checks;                                                                      \
-        if (!(cond)) {                                                                 \
-            std::fprintf(stderr, "%s:%d: CHECK failed: %s\n", __FILE__, __LINE__, #cond); \
-            ++failures;                                                                \
-        }                                                                              \
-    } while (false)
 
 using vellum::value::InMemoryParamModel;
 using vellum::value::ParamHandle;
@@ -95,7 +85,7 @@ InMemoryParamModel make_host() {
 
 void place(vellum::view::Knob& knob) { knob.set_bounds({0.0f, 0.0f, 48.0f, 48.0f}); }
 
-void knob_starts_at_the_model_value() {
+FRAMEWORK_TEST(knob_starts_at_the_model_value) {
     auto host = make_host();
     RecordingModel model(host);
     vellum::view::Knob knob;
@@ -105,7 +95,7 @@ void knob_starts_at_the_model_value() {
     CHECK(model.host_begins == 0);
 }
 
-void a_drag_is_one_host_gesture() {
+FRAMEWORK_TEST(a_drag_is_one_host_gesture) {
     auto host = make_host();
     RecordingModel model(host);
     vellum::view::Knob knob;
@@ -125,7 +115,7 @@ void a_drag_is_one_host_gesture() {
     CHECK(host.gesture_depth(cutoff) == 0);
 }
 
-void a_host_change_moves_the_knob_without_an_edit() {
+FRAMEWORK_TEST(a_host_change_moves_the_knob_without_an_edit) {
     auto host = make_host();
     RecordingModel model(host);
     vellum::view::Knob knob;
@@ -141,7 +131,7 @@ void a_host_change_moves_the_knob_without_an_edit() {
     CHECK(model.host_begins == 0);
 }
 
-void modulation_is_shown_at_tick_and_cleared_when_gone() {
+FRAMEWORK_TEST(modulation_is_shown_at_tick_and_cleared_when_gone) {
     auto host = make_host();
     RecordingModel model(host);
     vellum::view::Knob knob;
@@ -163,7 +153,7 @@ void modulation_is_shown_at_tick_and_cleared_when_gone() {
     CHECK(model.editor_values == 0);
 }
 
-void destroying_the_binding_unbinds() {
+FRAMEWORK_TEST(destroying_the_binding_unbinds) {
     auto host = make_host();
     RecordingModel model(host);
     vellum::view::Knob knob;
@@ -177,7 +167,7 @@ void destroying_the_binding_unbinds() {
     CHECK(near(knob.value(), 0.6));
 }
 
-void a_moved_binding_keeps_working() {
+FRAMEWORK_TEST(a_moved_binding_keeps_working) {
     auto host = make_host();
     RecordingModel model(host);
     vellum::view::Knob knob;
@@ -193,7 +183,7 @@ void a_moved_binding_keeps_working() {
     CHECK(near(knob.modulated_display_value(), 0.6));
 }
 
-void an_unknown_key_binds_to_nothing() {
+FRAMEWORK_TEST(an_unknown_key_binds_to_nothing) {
     auto host = make_host();
     RecordingModel model(host);
     vellum::view::Knob knob;
@@ -208,7 +198,7 @@ void an_unknown_key_binds_to_nothing() {
     CHECK(near(host.normalized(model.resolve("cutoff")), 0.25));
 }
 
-void a_store_binding_keeps_its_behaviour_and_tick_does_nothing() {
+FRAMEWORK_TEST(a_store_binding_keeps_its_behaviour_and_tick_does_nothing) {
     vellum::state::StateStore store;
     store.add_parameter({.id = 7, .name = "Gain", .range = {0.0f, 10.0f, 2.5f}});
     vellum::view::Knob knob;
@@ -227,19 +217,4 @@ void a_store_binding_keeps_its_behaviour_and_tick_does_nothing() {
 
 }  // namespace
 
-int main() {
-    knob_starts_at_the_model_value();
-    a_drag_is_one_host_gesture();
-    a_host_change_moves_the_knob_without_an_edit();
-    modulation_is_shown_at_tick_and_cleared_when_gone();
-    destroying_the_binding_unbinds();
-    a_moved_binding_keeps_working();
-    an_unknown_key_binds_to_nothing();
-    a_store_binding_keeps_its_behaviour_and_tick_does_nothing();
-    if (failures != 0) {
-        std::fprintf(stderr, "%d of %d checks failed\n", failures, checks);
-        return 1;
-    }
-    std::printf("param model binding: %d checks passed\n", checks);
-    return 0;
-}
+int main() { return framework_test::run_all(); }
