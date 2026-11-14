@@ -74,14 +74,32 @@ A Vellum release tag is signed by CI, never by a person or an agent's host key.
    - the version is newer than every existing and retired `v*` tag;
    - the live `GET /repos/Generous-Corp/vellum/immutable-releases` answer, read with the release App token, says
      immutable releases are enabled (`scripts/verify_immutable_release_preflight.py` validates it);
-   - every status check the `main` rules require concluded `success` on the selected commit.
+   - every status check the `main` rules require concluded `success` on the selected commit. A required check bound
+     to GitHub Actions (app 15368) is met by a check run from that app or by a commit status from the
+     `github-actions[bot]` account (login, type `Bot` and id 41898282 must all match), the way main's rules accept
+     either; `release-path-review` and `framework-trusted-verify` are statuses. A status from any other creator is
+     ignored, and a check bound to any other app, or to none, is never met by a status. Each source contributes its
+     newest result by id. Check run ids and status ids are different id spaces on different clocks, so the two are
+     never ordered against each other: a context that has both is met only when the newest of each is `success` and
+     neither is still running, and the worse one decides. A `pending` status or an unfinished run is waited for;
+     `failure`, `error` and any other state is not success. A status list that is malformed refuses the release: ids
+     must be positive integers (not booleans or floats), the creator needs a string login, a string type and an
+     integer id, `created_at` must parse, and a repeated status id is refused. A required check's app binding must be
+     a positive integer or null (or absent); any other value refuses.
 
    The push that lands the reconcile starts those checks on the same commit, so the job first waits, up to 100
-   minutes, until none of them is still running (`release_request.py pending`).
+   minutes, until none of them is still running, meaning a run not completed or a `pending` status
+   (`release_request.py pending`). It then mints a fresh release App token (the same one the push and the freeze use later;
+   the steps between take seconds) and reads main's required checks (classic protection and
+   rules) and the immutable-release setting again, then reads the check runs and statuses again, and
+   `release_request.py check` judges only those fresh reads, so a required check added during the wait counts. Every
+   `gh api` call in these steps runs under `timeout 120`, and a timeout takes the same retry and failure path as an
+   API error. Check run rows must be objects with positive integer ids, and a non-null `app` must carry a positive
+   integer id (a null `app` and a null `conclusion` on a running run are tolerated); anything else refuses.
 5. The job signs an annotated tag on that commit with the key in the environment's `RELEASE_TAG_SIGNING_KEY` secret.
    It verifies the tag with `scripts/verify_release_tag.py` against `provenance/release-signers.allowed_signers`
    before pushing anything.
-6. It then mints a fresh release App token (the wait can outlast the first token's hour), pushes the tag and creates
+6. It then pushes the tag, with the token minted before the re-read, and creates
    the tag's freeze ruleset (`release_request.py freeze`), which `sdk-release.yml` requires before it finalizes the
    release. The freeze is retried; if every attempt fails, the job prints the exact ruleset for the owner to apply.
    The tag push starts `gpu-macos.yml`, then `sdk-release.yml`, which reads the signer file from the tagged commit,
