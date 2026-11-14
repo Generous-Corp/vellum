@@ -533,8 +533,8 @@ void versioned_fields_are_gated() {
 }  // namespace
 
 int main() {
-    static_assert(kSceneVersion == 7U);
-    static_assert(kDamageModelSceneVersion == 7U);
+    static_assert(kSceneVersion >= 7U);
+    static_assert(kDamageModelSceneVersion >= 7U);
     sound_scene_is_accepted();
     older_versions_refuse_the_table();
     negative_control_older_scene_without_tokens();

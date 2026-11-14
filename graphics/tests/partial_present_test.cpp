@@ -461,14 +461,14 @@ void command_extents() {
 Scene grouping_scene(float width, float height);
 
 void damage_model_version_gate() {
-    expect(kDamageModelSceneVersion == 7U && partial_redraw_supported(3U) &&
+    expect(kDamageModelSceneVersion >= 7U && partial_redraw_supported(3U) &&
                partial_redraw_supported(4U) && partial_redraw_supported(5U) &&
                partial_redraw_supported(6U) && partial_redraw_supported(7U) &&
                partial_redraw_supported(kDamageModelSceneVersion) &&
                !partial_redraw_supported(kDamageModelSceneVersion + 1U) &&
-               !partial_redraw_supported(8U) && !partial_redraw_supported(0U) &&
+               !partial_redraw_supported(0U) &&
                partial_redraw_supported(kMinSupportedSceneVersion),
-           "partial redraw covers scene versions 1 to 7 and refuses versions 0 and 8");
+           "partial redraw covers scene versions 1 to the damage model and refuses 0 and newer");
     expect(to_string(FullRepaintReason::damage_model_version) == "damage_model_version",
            "the damage-model version fallback has a telemetry name");
     constexpr std::uint32_t width = 400;

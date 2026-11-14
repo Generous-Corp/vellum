@@ -463,10 +463,15 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
                           : "cannot carry the image reference of " + node.id;
             break;
         case 5U: message = "cannot carry the clip, mask, or isolation at " + node.id; break;
-        default:
+        case 7U:
             message = mismatch->property == "tokens"
                 ? std::string("cannot carry a token table")
                 : "cannot carry token receipts, found at " + node.id;
+            break;
+        default:
+            message = "cannot carry the " + std::string(mismatch->property) + " of " + node.id +
+                      ", which version " + std::to_string(mismatch->introduced) +
+                      " introduced";
             break;
         }
         output.push_back({
