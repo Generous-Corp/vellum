@@ -620,6 +620,31 @@ class CliTests(unittest.TestCase):
             forwarded = json.loads(completed.stdout)["data"]["backend"]["data"]["argv"]
             self.assertEqual(forwarded[-3:], ["--no-build", "--self-test", "--no-window"])
 
+    def test_capture_forwards_a_web_interaction_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "app"
+            self.assertEqual(invoke("create", "Backend", "-d", str(project)).returncode, 0)
+            backend = root / "vellum-backend"
+            backend.write_text(
+                f"#!{sys.executable}\n"
+                "import json, sys\n"
+                "print(json.dumps({'schema':'vellum.backend.result.v1','ok':True,'status':'captured','message':'ok','data':{'argv':sys.argv[1:]},'diagnostics':[]}))\n",
+                encoding="utf-8",
+            )
+            backend.chmod(0o755)
+            completed = invoke(
+                "capture", "--target", "web", "--interaction-plan", "tests/plan.json",
+                "--output", "artifacts/home.png", "--json",
+                cwd=project, env={"VELLUM_BACKEND": str(backend)},
+            )
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            forwarded = json.loads(completed.stdout)["data"]["backend"]["data"]["argv"]
+            self.assertEqual(forwarded[0], "capture")
+            for option, value in (("--target", "web"), ("--interaction-plan", "tests/plan.json"),
+                                  ("--output", "artifacts/home.png")):
+                self.assertEqual(forwarded[forwarded.index(option) + 1], value)
+
     def test_invalid_lock_fails_before_backend_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             project = Path(temporary)

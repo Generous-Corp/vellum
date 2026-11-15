@@ -1468,6 +1468,7 @@ def parser() -> argparse.ArgumentParser:
         ],
         "capture": [
             ("--scenario", {}), ("--matrix", {}), ("--montage", {"action": "store_true"}),
+            ("--interaction-plan", {}),
             ("--output", {}), ("--target", {"default": "macos"}),
         ],
         "package": [("--target", {"default": "macos"}), ("--output", {})],

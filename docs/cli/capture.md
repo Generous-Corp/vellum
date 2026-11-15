@@ -153,6 +153,18 @@ and retains one bounded PNG screenshot in the capture root evidence. The
 result is suitable for validation with `lowerBrowserCaptureToDesignIR`. It does
 not expose public-network browsing or arbitrary JavaScript execution.
 
+To keep the settled page as an image file, capture the plan instead:
+
+```sh
+vellum capture --target web --interaction-plan tests/save-board-plan.json --output artifacts/saved.png
+```
+
+It runs the plan the same way and writes the browser's screenshot to the
+output as a PNG, by default `artifacts/<plan file name>.png`. The result names
+the file with its SHA-256, byte length and pixel size, the capture id, the
+viewport and the exact browser. A failed capture leaves an earlier file at
+that path untouched. `--scenario`, `--matrix` and `--montage` are macOS only.
+
 The live DOM snapshot is lowered into the envelope's semantic `root` tree. DOM
 attributes and bounded computed-style strings are scanned for `data:` assets;
 each asset is decoded, SHA-256 addressed as `assets/<digest>.<extension>`, and
