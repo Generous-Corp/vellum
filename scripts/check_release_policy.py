@@ -707,6 +707,15 @@ def app_token_problems(name: str, workflow: str) -> list[str]:
         for step in job_steps(job, text):
             if step.id and step.uses and APP_TOKEN_ACTION.fullmatch(step.uses):
                 minted.add(step.id)
+            # Fail closed: every `gh api` call in the step's raw text must be
+            # one the reader saw in its run value. A layout the reader cannot
+            # follow (a quoted or spaced `run` key, keys not two columns past
+            # the dash, a plain or quoted multi-line value) hides calls.
+            raw_calls = len(gh_api_targets(step.text))
+            read_calls = len(gh_api_targets(step.run)) if step.run is not None else 0
+            if raw_calls > read_calls:
+                found.append(f"{name}: {step.title} calls gh api in a layout this check cannot read")
+                continue
             if step.run is None:
                 continue
             targets = gh_api_targets(step.run)

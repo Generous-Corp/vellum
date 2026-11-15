@@ -640,6 +640,21 @@ class Isolation(unittest.TestCase):
                 '        run: gh api "repos/$R/immutable-releases"\n')
         self.refused(flow, "cannot be read")
 
+    def test_a_layout_the_reader_cannot_follow_fails_closed(self) -> None:
+        gh = '"repos/$R/rulesets"'
+        header = "    steps:\n" + self.MINT.format(id="app-token")
+        env = "        env:\n          GH_TOKEN: ${{ github.token }}\n"
+        cases = {
+            "a quoted run key": f'      - name: read\n        "run": gh api {gh}\n{env}',
+            "a space before the colon": f"      - name: read\n        run : gh api {gh}\n{env}",
+            "keys not two columns past the dash": f"      -   run: gh api {gh}\n          env:\n            GH_TOKEN: ${{{{ github.token }}}}\n",
+            "a plain multi-line value": f"      - name: read\n        run:\n          gh api {gh}\n{env}",
+            "a quoted multi-line value": f'      - name: read\n        run: "echo hi;\n          gh api {gh}"\n{env}',
+        }
+        for label, step in cases.items():
+            with self.subTest(label):
+                self.refused(header + step, "a layout this check cannot read")
+
     def test_the_step_reader_agrees_with_a_yaml_parser(self) -> None:
         try:
             import yaml  # noqa: PLC0415
