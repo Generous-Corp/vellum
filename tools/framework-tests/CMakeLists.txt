@@ -45,13 +45,14 @@ vellum_add_framework_test(param-model-binding
     UNITS Vellum::MirrorView_core Vellum::Value)
 
 # The scripted WebGPU binding against a headless Dawn device (the Null
-# adapter). It needs the GPU backend; the test exits 77 and is skipped when no
+# adapter). The provider keeps GpuSurface::create_dawn hidden, so the test links
+# the device library itself, which brings the one Dawn this executable uses. It needs the GPU backend; the test exits 77 and is skipped when no
 # adapter is available.
 if(TARGET vellum-dawn-headers)
     vellum_add_framework_test(webgpu-error-scopes
         SOURCES webgpu_error_scopes_test.cpp
         UNITS Vellum::MirrorView_script Vellum::MirrorRender_2d Vellum::DawnHeaders
-               vellum-skia-dawn-provider)
+               VellumGpuRuntime::Device)
     # The test builds a headless device through the surface's own header.
     target_include_directories(vellum-framework-webgpu-error-scopes-test PRIVATE
         "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
