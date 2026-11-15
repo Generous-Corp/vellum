@@ -27,6 +27,7 @@ function refused(document, pattern) {
 // check its version conditional without a validator dependency.
 function matches(value, rule, root = rule) {
     if (rule === true || rule === undefined) return true;
+    if (rule === false) return false;
     if (rule.$ref) {
         const target = rule.$ref.replace('#/', '').split('/').reduce((node, key) => node[key], root);
         if (!matches(value, target, root)) return false;

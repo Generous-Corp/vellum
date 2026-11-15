@@ -181,7 +181,7 @@ Scene legacy_scene(std::uint32_t version) {
 }
 
 void versioning() {
-    static_assert(kSceneVersion == 9U && kDamageModelSceneVersion == 9U);
+    static_assert(kSceneVersion >= 9U && kDamageModelSceneVersion >= 9U);
     const auto asset = std::make_shared<const VectorAsset>(sample());
     const auto current = accept_scene(vector_scene(9U, asset));
     expect(current.accepted, "a version 9 scene with a compiled vector asset is accepted",

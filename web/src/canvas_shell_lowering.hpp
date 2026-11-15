@@ -1,5 +1,6 @@
 #pragma once
 
+#include <vellum/graphics/effect.hpp>
 #include <vellum/graphics/lowering_diagnostic.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/scene.hpp>
@@ -350,10 +351,122 @@ struct CanvasVectorPlan final {
     return plan;
 }
 
+/// An effect the canvas shell does not draw; a warning. The shell draws blur
+/// and colour matrix effects through the canvas `filter`; a drop shadow, a
+/// backdrop blur and a material are drawn without.
+inline constexpr std::string_view kEffectNotDrawnCode = "VELLUM_WEB_EFFECT_NOT_DRAWN";
+
+/// A colour matrix the shell installs as an SVG `feColorMatrix` filter that
+/// its canvas filter names by `id`.
+struct CanvasShellColorMatrix final {
+    std::string id;
+    /// The matrix's twenty entries, space separated, in SVG order.
+    std::string values;
+};
+
+/// The CSS filter function for one effect the shell draws, or empty. A blur is
+/// `blur()` with its sigma as the standard deviation in CSS pixels; a colour
+/// matrix is a `url()` naming the matrix appended to `matrices`.
+[[nodiscard]] inline std::string canvas_shell_filter_function(
+    const vellum::graphics::NodeEffect& effect,
+    std::vector<CanvasShellColorMatrix>& matrices) {
+    using vellum::graphics::EffectKind;
+    if (effect.kind == EffectKind::blur) {
+        return "blur(" + std::to_string(effect.sigma) + "px)";
+    }
+    if (effect.kind != EffectKind::color_matrix) return {};
+    CanvasShellColorMatrix matrix{.id = "vellum-color-matrix-" + std::to_string(matrices.size())};
+    for (const float entry : effect.matrix) {
+        if (!matrix.values.empty()) matrix.values += ' ';
+        matrix.values += std::to_string(entry);
+    }
+    auto reference = "url(#" + matrix.id + ")";
+    matrices.push_back(std::move(matrix));
+    return reference;
+}
+
+/// For each command, the canvas filter the shell draws it with: the blur and
+/// colour matrix effects of every effect layer around it, innermost first,
+/// or empty for none. The shell has no group compositing, so it filters each
+/// member on its own rather than the group as a whole. Colour matrices are
+/// appended to `matrices`.
+[[nodiscard]] inline std::vector<std::string> canvas_shell_filters(
+    const std::vector<vellum::graphics::PaintCommand>& commands,
+    std::vector<CanvasShellColorMatrix>& matrices) {
+    using Kind = vellum::graphics::PaintCommand::Kind;
+    std::vector<std::string> filters;
+    filters.reserve(commands.size());
+    std::vector<std::string> open;
+    const auto current = [&] {
+        std::string css;
+        for (auto layer = open.rbegin(); layer != open.rend(); ++layer) {
+            if (layer->empty()) continue;
+            if (!css.empty()) css += ' ';
+            css += *layer;
+        }
+        return css;
+    };
+    for (const auto& command : commands) {
+        if (command.kind == Kind::begin_layer) {
+            std::string chain;
+            for (const auto& effect : command.effects) {
+                const auto function = canvas_shell_filter_function(effect, matrices);
+                if (function.empty()) continue;
+                if (!chain.empty()) chain += ' ';
+                chain += function;
+            }
+            open.push_back(std::move(chain));
+            filters.push_back({});
+            continue;
+        }
+        if (command.kind == Kind::end_layer) {
+            if (!open.empty()) open.pop_back();
+            filters.push_back({});
+            continue;
+        }
+        filters.push_back(vellum::graphics::draws_content(command.kind) ? current() : std::string{});
+    }
+    return filters;
+}
+
+/// One warning for each effect the shell does not draw, naming its node.
+[[nodiscard]] inline std::vector<vellum::graphics::LoweringDiagnostic>
+canvas_shell_effect_diagnostics(const std::vector<vellum::graphics::PaintCommand>& commands,
+                                const std::vector<bool>& masked) {
+    using Kind = vellum::graphics::PaintCommand::Kind;
+    using vellum::graphics::EffectKind;
+    std::vector<vellum::graphics::LoweringDiagnostic> output;
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        const auto& command = commands[index];
+        if (masked[index] || command.kind != Kind::begin_layer) continue;
+        for (const auto& effect : command.effects) {
+            const char* name = effect.kind == EffectKind::drop_shadow     ? "drop shadow"
+                               : effect.kind == EffectKind::backdrop_blur ? "backdrop blur"
+                               : effect.kind == EffectKind::material      ? "material"
+                                                                          : nullptr;
+            if (name == nullptr) continue;
+            std::string what = name;
+            if (effect.kind == EffectKind::material) what += " " + effect.material;
+            output.push_back({
+                .severity = vellum::graphics::LoweringDiagnostic::Severity::warning,
+                .disposition = vellum::graphics::LoweringDiagnostic::Disposition::lowered,
+                .code = std::string(kEffectNotDrawnCode),
+                .node_id = command.node_id,
+                .property = "effects",
+                .message = "the " + what + " of " + command.node_id +
+                           " was not drawn: the canvas shell draws only blur and colour "
+                           "matrix effects",
+            });
+        }
+    }
+    return output;
+}
+
 /// Whether the canvas shell draws `command` with a loss it reports. The shell
 /// composites only Tier 1 blended groups (see `canvas_shell_composites`, which
 /// `canvas_shell_loss_count` exempts); any other `begin_layer` is flattened to
-/// per-command alpha and counts once; it does not draw meshes or paths and counts each one
+/// per-command alpha, its blur and colour matrix effects to per-command
+/// filters, and counts once; it does not draw meshes or paths and counts each one
 /// as a loss; it draws an image as `kMissingImagePlaceholder` over its box and
 /// counts it as a loss; and it draws a transformed or per-corner command as
 /// its untransformed box with the uniform radius. It does not clip, so each
@@ -673,11 +786,17 @@ struct CanvasShellLowering final {
     std::string reason;
     /// `SceneAcceptance::diagnostics`: the refusal of a refused scene, or the
     /// warnings of an accepted one followed by one `kMaskNotCompositedCode`
-    /// warning for each mask the shell skips and one `kBlendModeFallbackCode`
-    /// warning for each blended group drawn as `normal`.
+    /// warning for each mask the shell skips, one `kBlendModeFallbackCode`
+    /// warning for each blended group drawn as `normal`, the gradient
+    /// warnings, and one `kEffectNotDrawnCode` warning for each effect it does
+    /// not draw.
     std::vector<vellum::graphics::LoweringDiagnostic> diagnostics;
     /// The commands the shell draws; empty for a refused scene.
     std::vector<vellum::graphics::PaintCommand> commands;
+    /// `canvas_shell_filters(commands)`, one per command.
+    std::vector<std::string> filters;
+    /// The colour matrices `filters` names.
+    std::vector<CanvasShellColorMatrix> color_matrices;
     /// `canvas_shell_loss_count(commands)`; zero for a refused scene, whose
     /// loss is its refusal.
     int losses = 0;
@@ -706,6 +825,11 @@ struct CanvasShellLowering final {
     for (auto& diagnostic : canvas_shell_vector_diagnostics(lowering.commands)) {
         lowering.diagnostics.push_back(std::move(diagnostic));
     }
+    for (auto& diagnostic : canvas_shell_effect_diagnostics(
+             lowering.commands, canvas_shell_masked(lowering.commands))) {
+        lowering.diagnostics.push_back(std::move(diagnostic));
+    }
+    lowering.filters = canvas_shell_filters(lowering.commands, lowering.color_matrices);
     return lowering;
 }
 

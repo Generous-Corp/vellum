@@ -20,7 +20,7 @@
     "$schema": { "const": "https://vellum.dev/schemas/design-ir/v1" },
     "schemaVersion": {
       "enum": [1, 2, 3, 4, 5, 6],
-      "description": "Version 2 adds the node compositing object and version 6 the vector asset fields. A document must not carry a field below the version that adds it; a normalizer emits the oldest version that carries every field it uses."
+      "description": "Version 2 adds the node compositing object, version 3 node material references and version 6 the vector asset fields; each version keeps every field of the ones before it, and versions 4 and 5 add none here. A document must not carry a field below the version that adds it; a normalizer emits the oldest version that carries every field it uses."
     },
     "compiler": {
       "type": "object",
@@ -54,6 +54,11 @@
       "then": { "properties": { "root": { "$ref": "#/$defs/nodeWithoutCompositing" } } }
     },
     {
+      "description": "A document before version 3 carries no material reference on any node; materials are version 3 vocabulary.",
+      "if": { "required": ["schemaVersion"], "properties": { "schemaVersion": { "enum": [1, 2] } } },
+      "then": { "properties": { "root": { "$ref": "#/$defs/nodeWithoutMaterial" } } }
+    },
+    {
       "description": "A document before version 6 carries no vector asset field on any node.",
       "if": { "required": ["schemaVersion"], "properties": { "schemaVersion": { "enum": [1, 2, 3, 4, 5] } } },
       "then": { "properties": { "root": { "$ref": "#/$defs/nodeBeforeVectorAssets" } } }
@@ -61,23 +66,15 @@
   ],
   "$defs": {
     "nodeBeforeVectorAssets": {
-      "description": "A node without the vector asset fields DesignIR version 6 adds.",
-      "allOf": [{ "$ref": "#/$defs/node" }],
+      "description": "A node, and every node beneath it, without the vector asset fields DesignIR version 6 adds.",
       "properties": {
         "kind": { "not": { "enum": ["path", "vector"] } },
         "properties": {
-          "not": { "anyOf": [{ "required": ["path"] }, { "required": ["vector"] }] },
           "properties": {
-            "image": { "not": { "type": "object", "required": ["source"] } },
-            "paint": {
-              "not": {
-                "type": "object",
-                "anyOf": [
-                  { "required": ["transform"] }, { "required": ["clipPath"] },
-                  { "required": ["overflow"] }
-                ]
-              }
-            }
+            "path": false,
+            "vector": false,
+            "image": { "properties": { "source": false } },
+            "paint": { "properties": { "transform": false, "clipPath": false, "overflow": false } }
           }
         },
         "children": { "type": "array", "items": { "$ref": "#/$defs/nodeBeforeVectorAssets" } }
@@ -133,9 +130,48 @@
         "text": { "type": "string" },
         "properties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
         "extensions": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
+        "material": { "$ref": "#/$defs/materialReference" },
         "compositing": { "$ref": "#/$defs/compositing" },
         "children": { "type": "array", "items": { "$ref": "#/$defs/node" } }
       }
+    },
+    "nodeWithoutMaterial": {
+      "description": "A node, and every node beneath it, without a material reference.",
+      "properties": {
+        "material": false,
+        "children": { "type": "array", "items": { "$ref": "#/$defs/nodeWithoutMaterial" } }
+      }
+    },
+    "materialReference": {
+      "description": "A registered material named by id with values for its uniforms. The uniforms' types, ranges and defaults belong to the material's registration, not to the document.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "values"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*$" },
+        "values": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "additionalProperties": { "$ref": "#/$defs/materialValue" }
+        }
+      }
+    },
+    "materialValue": {
+      "oneOf": [
+        { "type": "number" },
+        { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["red", "green", "blue", "alpha"],
+          "properties": {
+            "red": { "type": "number" },
+            "green": { "type": "number" },
+            "blue": { "type": "number" },
+            "alpha": { "type": "number" }
+          }
+        }
+      ]
     },
     "nodeWithoutCompositing": {
       "description": "A node, and every node beneath it, without a compositing object.",

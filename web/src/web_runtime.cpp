@@ -90,6 +90,16 @@ EM_JS(void, canvas_blend_end, (), {
     globalThis.VellumCanvasBackend.blendEnd();
 });
 
+EM_JS(void, canvas_filter, (const char* css), {
+    const backend = globalThis.VellumCanvasBackend;
+    if (backend.filter) backend.filter(UTF8ToString(css));
+});
+
+EM_JS(void, canvas_color_matrix, (const char* id, const char* values), {
+    const backend = globalThis.VellumCanvasBackend;
+    if (backend.colorMatrix) backend.colorMatrix(UTF8ToString(id), UTF8ToString(values));
+});
+
 EM_JS(void, canvas_finish, (), {
     globalThis.VellumCanvasBackend.finish();
 });
@@ -439,15 +449,27 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     const auto background = scene.background;
     canvas_begin(scene.width, scene.height, background.red, background.green,
                  background.blue, background.alpha);
+    for (const auto& matrix : lowering.color_matrices) {
+        canvas_color_matrix(matrix.id.c_str(), matrix.values.c_str());
+    }
+    std::string filter;
     for (std::size_t index = 0; index < commands.size(); ++index) {
         const auto& command = commands[index];
         if (masked[index]) continue;
+        if (vellum::graphics::draws_content(command.kind) && lowering.filters[index] != filter) {
+            filter = lowering.filters[index];
+            canvas_filter(filter.empty() ? "none" : filter.c_str());
+        }
         auto color = command.fill;
         color.alpha *= opacities[index];
         if (command.kind == Kind::begin_layer) {
             const bool group = !plan.group_operations[index].empty();
             open_groups.push_back(group);
             if (group) {
+                // A group draws on a fresh context; the filter is set again on
+                // whichever context the next member draws to.
+                if (!filter.empty()) canvas_filter("none");
+                filter.clear();
                 const std::string operation(plan.group_operations[index]);
                 canvas_blend_begin(operation.c_str(), opacities[index]);
             }
@@ -455,7 +477,11 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
         }
         if (command.kind == Kind::end_layer) {
             if (!open_groups.empty()) {
-                if (open_groups.back()) canvas_blend_end();
+                if (open_groups.back()) {
+                    if (!filter.empty()) canvas_filter("none");
+                    filter.clear();
+                    canvas_blend_end();
+                }
                 open_groups.pop_back();
             }
             continue;
@@ -500,6 +526,7 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
             break;
         }
     }
+    if (!filter.empty()) canvas_filter("none");
     canvas_finish();
     return 1;
 }

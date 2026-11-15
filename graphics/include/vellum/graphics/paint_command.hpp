@@ -1,5 +1,6 @@
 #pragma once
 
+#include <vellum/graphics/effect.hpp>
 #include <vellum/graphics/lowering_diagnostic.hpp>
 #include <vellum/graphics/path_geometry.hpp>
 #include <vellum/graphics/scene.hpp>
@@ -24,6 +25,10 @@ namespace vellum::graphics {
 /// matching `end_layer` bracket the commands of a subtree that is composited
 /// as one group and then drawn with the layer's `opacity`; layers nest.
 ///
+/// A `begin_layer` with `effects` opens the group of a node whose effects
+/// apply; the renderer draws its members offscreen and composites them through
+/// the effects (see `NodeEffect`).
+///
 /// A `begin_clip` and its `end_clip` bracket the commands a node's clip
 /// limits. A `begin_mask` and its `end_mask` bracket a mask node's subtree;
 /// they always sit at the end of a `begin_layer` group holding the masked
@@ -37,6 +42,9 @@ struct PaintCommand final {
         /// Starts an offscreen group for the node `node_id`. `bounds` is the
         /// frame-space union of its members' transformed paint extents, and
         /// the group may be clipped to it unless `layer_unbounded` is set.
+        /// With `effects`, `bounds` is instead the area the composited group
+        /// can paint: the members' extents grown by the chain's radius, and
+        /// the node's box under `transform` when a backdrop effect applies.
         begin_layer,
         /// Composites the innermost open group with its `begin_layer`'s opacity.
         end_layer,
@@ -116,6 +124,13 @@ struct PaintCommand final {
     std::shared_ptr<const ImageAsset> image_asset;
     /// What a `vector` command draws.
     std::shared_ptr<const VectorAsset> vector;
+    /// On a `begin_layer`, the node's effect chain when its effects apply.
+    std::vector<NodeEffect> effects;
+    /// On a `begin_layer` with `effects`, the node's box in absolute
+    /// coordinates before `transform`, which carries the node's composed
+    /// transform; `corner_radii` gives the box's corners. A backdrop effect
+    /// draws within it.
+    Rect effect_box{};
 };
 
 [[nodiscard]] constexpr std::string_view to_string(PaintCommand::Kind kind) noexcept {
@@ -236,6 +251,14 @@ struct ResolvedLinearGradient final {
 /// draws nothing still emits its pair, which hides the siblings entirely. A
 /// node whose clip fails `clip_is_valid` contributes nothing, and a scene whose
 /// root is a mask yields no commands.
+///
+/// A node whose effects apply (`effects_apply`) is always wrapped in a
+/// `layer_isolated` layer carrying those it draws natively
+/// (`effect_draws_natively`), even when it draws nothing, since a backdrop
+/// effect paints with no members; with none drawn natively it lowers as if it
+/// had no effects. A chain over budget is dropped
+/// and the node lowers as if it had none; a node with an effect that fails
+/// `effect_is_valid` contributes nothing.
 [[nodiscard]] std::vector<PaintCommand> make_paint_commands(const Scene& scene);
 
 /// Whether a clip can be applied as given: its rectangle and radii are
@@ -282,7 +305,8 @@ struct PaintCommandRange final {
 /// a `kSceneVersionMismatchCode` error for an unsupported scene version or
 /// the first node that `find_version_mismatch` reports (the scene is then
 /// refused, so nothing else is listed), otherwise a `kImageAssetMissingCode`
-/// warning for each image node whose asset `Scene::images` does not hold.
+/// warning for each image node whose asset `Scene::images` does not hold,
+/// followed by `effect_loss_diagnostics`.
 [[nodiscard]] std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene);
 
 }  // namespace vellum::graphics
