@@ -37,7 +37,9 @@ globalThis.probe = {
     CHECK(m.completed);
     CHECK(m.error.empty());
     if (!m.error.empty()) std::fprintf(stderr, "  module error: %s\n", m.error.c_str());
-    CHECK(v.js_string("probe.revision") == "183");
+    // The pinned revision is a commit after the 0.183.1 tag: package.json says
+    // 0.183.1, the build's REVISION says 184dev.
+    CHECK(v.js_string("probe.revision") == "184dev");
     CHECK(v.js_string("probe.renderer") == "function");
     CHECK(v.js_string("probe.render") == "function");
     CHECK(v.js_string("probe.init") == "function");
@@ -123,22 +125,27 @@ globalThis.state = { status: 'fetching' };
     std::filesystem::remove(glb);
 }
 
-FRAMEWORK_TEST(a_glb_outside_every_asset_root_is_refused) {
+FRAMEWORK_TEST(a_glb_outside_every_asset_root_is_refused_until_its_directory_is_one) {
     const auto glb = threejs_test::write_fixture("vellum-threejs-glb-refused", "scene.glb",
                                                  threejs_test::minimal_glb());
     ModuleOutcome m;
+    ModuleOutcome again;
     ScriptedView v(64, 64);
-    const auto code = threejs_test::substitute(R"JS(
+    const auto attempt = threejs_test::substitute(R"JS(
 globalThis.state = { status: 'fetching' };
-fetch('@URL@').then((r) => { state.ok = r.ok; state.httpStatus = r.status; state.status = 'done'; },
-                    (e) => { state.status = 'rejected'; });
+fetch('@URL@').then((r) => { state.ok = r.ok; state.status = 'fetched'; },
+                    (e) => { state.status = 'rejected'; state.message = String(e && e.message); });
 )JS", "@URL@", threejs_test::file_url(glb));
-    threejs_test::run_module(v, code, "state.status !== 'fetching'", m, 64);
-
+    threejs_test::run_module(v, attempt, "state.status !== 'fetching'", m, 64);
     CHECK(m.error.empty());
-    CHECK(v.js_string("state.status") == "done");
-    CHECK(v.js_string("state.ok") == "false");
-    CHECK(v.js_string("state.httpStatus") == "403");
+    CHECK(v.js_string("state.status") == "rejected");
+    CHECK(v.js_true("state.message.startsWith('Failed to fetch asset')"));
+
+    // The same file, once its directory is a reviewed root.
+    v.bridge.set_asset_roots({glb.parent_path()});
+    threejs_test::run_module(v, attempt, "state.status !== 'fetching'", again, 64);
+    CHECK(v.js_string("state.status") == "fetched");
+    CHECK(v.js_string("state.ok") == "true");
     std::filesystem::remove(glb);
 }
 

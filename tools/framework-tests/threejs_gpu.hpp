@@ -11,6 +11,7 @@
 #include <vellum/view/canvas_widget.hpp>
 
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
@@ -51,7 +52,10 @@ inline int open_surface(AdapterNeed need) {
         return 77;
     }
     using Backend = gpu_runtime::GpuSurface::AdapterBackendPreference;
-    auto real = try_surface(Backend::default_backend);
+    // VELLUM_THREEJS_TEST_ADAPTER=null runs as a host with no real adapter.
+    const char* forced = std::getenv("VELLUM_THREEJS_TEST_ADAPTER");
+    const bool null_only = forced != nullptr && std::string(forced) == "null";
+    auto real = null_only ? nullptr : try_surface(Backend::default_backend);
     if (real && real->adapter_info().null_backend) real.reset();
     if (real) {
         surface() = std::move(real);
@@ -59,7 +63,7 @@ inline int open_surface(AdapterNeed need) {
         surface() = try_surface(Backend::null_backend);
     }
     if (!surface()) {
-        std::printf("SKIP no %s Dawn adapter available\n", need == AdapterNeed::rendering ? "rendering" : "");
+        std::printf("SKIP no %sDawn adapter available\n", need == AdapterNeed::rendering ? "rendering " : "");
         return 77;
     }
     const auto& info = surface()->adapter_info();

@@ -64,7 +64,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x020617);
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
 camera.position.z = 2;
-const texture = new THREE.DataTexture(new Uint8Array([250, 30, 20, 255]), 1, 1, THREE.RGBAFormat);
+const texture = new THREE.DataTexture(new Uint8Array([255, 8, 4, 255]), 1, 1, THREE.RGBAFormat);
 texture.colorSpace = THREE.NoColorSpace;
 texture.magFilter = texture.minFilter = THREE.NearestFilter;
 texture.needsUpdate = true;
@@ -104,7 +104,7 @@ FRAMEWORK_TEST(a_cube_renders_in_a_canvas_laid_out_among_native_widgets) {
     v.engine.evaluate("globalThis.drawPayloads = [];"
                       "const forward = __gpuQueueDrawBufferedImpl;"
                       "__gpuQueueDrawBufferedImpl = function (payload) {"
-                      "  drawPayloads.push(String(payload)); return forward(payload); };");
+                      "  drawPayloads.push(typeof payload === \"string\" ? payload : JSON.stringify(payload)); return forward(payload); };");
 
     CHECK(run_scene(v, R"JS(
 document.body.style.backgroundColor = '#050816';
