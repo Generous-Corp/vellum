@@ -85,6 +85,8 @@ OWNER = "@danielraffel"
 # verifiers the observatory-verify job runs from the pull request's own checkout,
 # and the two framework rule files (the active-source boundary and
 # scripts/install_core.py) that the extraction judge passes on a single review.
+# The parity completion record and scripts/run_parity_proofs.py, which runs its
+# proofs for the receipt a release requires, are policy files too.
 POLICY_FILES = (
     "/.github/CODEOWNERS",
     "/.github/workflows/release-path-review-trigger.yml",
@@ -95,6 +97,7 @@ POLICY_FILES = (
     "/.shipyard/config.toml",
     "/provenance/active-source-boundary.json",
     "/provenance/authority-signers.allowed_signers",
+    "/provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json",
     "/provenance/framework-name-debt.json",
     "/provenance/framework/external-updates.json",
     "/provenance/framework/transfer.json",
@@ -112,6 +115,7 @@ POLICY_FILES = (
     "/scripts/release_request.py",
     "/scripts/retired_release_tags.py",
     "/scripts/run_ci_lane.py",
+    "/scripts/run_parity_proofs.py",
     "/scripts/verify_immutable_release_preflight.py",
     "/scripts/verify_release_attestation.py",
     "/scripts/verify_release_tag.py",
