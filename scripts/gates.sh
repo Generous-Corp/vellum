@@ -518,11 +518,10 @@ else
   # The verify reads Pulp and takes minutes, so run it only when the change can
   # need an observation event; the observatory's own mapping decides.
   if [[ -f tools/provenance/observatory.py && -f provenance/pulp-observatory/cursor.json ]]; then
-    prefilter_started=$SECONDS
     prefilter="$(python3 -I tools/provenance/observatory.py needs-verify --vellum-repo . \
       --git-base "$GIT_BASE" --vellum-target "$HEAD_SHA" 2>&1)" || prefilter="yes: pre-filter failed ($prefilter); verifying to be safe"
     if [[ "$prefilter" == no:* ]]; then
-      skip_check observatory-events "observatory: no mapped paths changed (decided in $((SECONDS - prefilter_started + 0))s)"
+      skip_check observatory-events "observatory: no mapped paths changed"
     else
       printf 'gates: observatory-events runs: %s\n' "${prefilter#yes: }"
       run_check observatory-events check_observatory_events
