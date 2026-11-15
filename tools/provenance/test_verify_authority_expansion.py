@@ -1686,7 +1686,13 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
                   if row["repository"] == "Generous-Corp/vellum"}
         route = "cli/tests/test_import_backend.py"
         self.assertIn(route, routes)
-        self.assertIn(route, verifier.RELEASE_BUMP_FILES)
+        # No version surface is an exact route any more (a bump must not move a
+        # frozen proof's sha256), so the case makes this route one to exercise
+        # the rule that still guards any future overlap.
+        self.assertNotIn(route, verifier.RELEASE_BUMP_FILES)
+        patcher = mock.patch.object(verifier, "RELEASE_BUMP_FILES", verifier.RELEASE_BUMP_FILES | {route})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         base, head = "d" * 40, "e6" * 20
         files = [
             {"filename": "CMakeLists.txt", "status": "modified",
@@ -1799,6 +1805,30 @@ def route(authority, *, source_repo, paths, intent, **kwargs):
         )
         self.assertEqual(verifier.RELEASE_BUMP_SUMS, version_at_land.INSTALLER_SUMS)
         self.assertEqual(verifier.RELEASE_BUMP_BOT["name"], "vellum-version-at-land")
+
+    def test_no_frozen_parity_proof_is_a_release_bump_file(self) -> None:
+        # The parity completion record pins each proof's sha256; a bump that
+        # rewrote a proof would break the record on the next push to main.
+        matrix = json.loads((ROOT / verifier.MATRIX_PATH).read_text())
+        amendment = json.loads((ROOT / verifier.BOUNDARY_AMENDMENT_PATH).read_text())
+        proofs = {row["path"] for row in verifier.exact_route_rows(matrix, amendment)
+                  if row["repository"] == "Generous-Corp/vellum"
+                  and any(role["role"] == "vellum_future_proof" for role in row["cell_roles"])}
+        self.assertIn("cli/tests/test_import_backend.py", proofs)
+        self.assertEqual(sorted(proofs & verifier.RELEASE_BUMP_FILES), [])
+        # Nor may a Python proof hold the version as a literal the next bump
+        # would leave stale; one that needs it reads CMakeLists.txt.
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import version_at_land
+        current = version_at_land.project_version((ROOT / "CMakeLists.txt").read_text())
+        token = re.compile(version_at_land.TOKEN.format(re.escape(current)))
+        checked = 0
+        for path in sorted(proofs):
+            if path.endswith(".py") and (ROOT / path).is_file():
+                checked += 1
+                with self.subTest(proof=path):
+                    self.assertIsNone(token.search((ROOT / path).read_text(encoding="utf-8")))
+        self.assertGreater(checked, 0)
 
     def retired_fixture(self) -> tuple[Path, str]:
         """A Git checkout whose history carries the retirement record's commits."""

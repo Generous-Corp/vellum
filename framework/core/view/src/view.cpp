@@ -62,7 +62,7 @@ View* root_for_gesture_relationship_cleanup(View* view) {
 // root's generation so unrelated editors remain isolated.
 std::atomic<std::uint64_t> g_view_structure_generation{1};
 
-// Process-global count of views with subtree caching enabled (FU-3). The vast
+// Process-global count of views with subtree scene caching enabled. The vast
 // majority of trees never cache, and invalidate_subtree_caches_up() runs on
 // EVERY request_repaint()/set_bounds()/child-mutation — a hot mutation path.
 // This counter lets that walk early-out with a single relaxed load when no
@@ -364,7 +364,7 @@ TracingBadgeLayout tracing_badge_layout(float root_width, float text_width,
     return layout;
 }
 
-// ── Subtree scene cache (FU-3) ───────────────────────────────────────────
+// ── Subtree scene cache ──────────────────────────────────────────────────
 void View::set_subtree_cached(bool v) {
     if (subtree_cached_ == v) return;
     subtree_cached_ = v;

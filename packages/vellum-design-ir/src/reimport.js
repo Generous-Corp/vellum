@@ -175,6 +175,7 @@ function nodeReceipt(entry) {
 
 function comparableNode(node) {
     return {
+        compositing: node.compositing,
         extensions: node.extensions,
         kind: node.kind,
         properties: node.properties,

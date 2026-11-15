@@ -1,5 +1,6 @@
 #pragma once
 
+#include <vellum/graphics/effect.hpp>
 #include <vellum/graphics/lowering_diagnostic.hpp>
 #include <vellum/graphics/path_geometry.hpp>
 #include <vellum/graphics/scene.hpp>
@@ -24,6 +25,10 @@ namespace vellum::graphics {
 /// matching `end_layer` bracket the commands of a subtree that is composited
 /// as one group and then drawn with the layer's `opacity`; layers nest.
 ///
+/// A `begin_layer` with `effects` opens the group of a node whose effects
+/// apply; the renderer draws its members offscreen and composites them through
+/// the effects (see `NodeEffect`).
+///
 /// A `begin_clip` and its `end_clip` bracket the commands a node's clip
 /// limits. A `begin_mask` and its `end_mask` bracket a mask node's subtree;
 /// they always sit at the end of a `begin_layer` group holding the masked
@@ -37,6 +42,9 @@ struct PaintCommand final {
         /// Starts an offscreen group for the node `node_id`. `bounds` is the
         /// frame-space union of its members' transformed paint extents, and
         /// the group may be clipped to it unless `layer_unbounded` is set.
+        /// With `effects`, `bounds` is instead the area the composited group
+        /// can paint: the members' extents grown by the chain's radius, and
+        /// the node's box under `transform` when a backdrop effect applies.
         begin_layer,
         /// Composites the innermost open group with its `begin_layer`'s opacity.
         end_layer,
@@ -90,11 +98,18 @@ struct PaintCommand final {
     /// The resolved per-corner radii; see `resolved_corner_radii`.
     CornerRadii corner_radii{};
     /// On a `begin_layer`, set when a member can paint outside `bounds`,
-    /// which text can, so the group needs the whole frame.
+    /// which text can, so the group needs the whole frame. Also set on a
+    /// group whose `blend_mode` empties the backdrop outside its own paint
+    /// (`blend_mode_clears_backdrop`), and so on every group enclosing one:
+    /// its backdrop scope is the whole enclosing group, not its extent.
     bool layer_unbounded = false;
     /// On a `begin_layer`, set when the group must stay offscreen whatever
     /// its opacity: an isolated node, or the siblings a mask applies to.
     bool layer_isolated = false;
+    /// On a `begin_layer`, how the composited group meets the backdrop beneath
+    /// it. A group blended by anything but `normal` is always a layer, so a
+    /// blend never folds into a single command's paint.
+    BlendMode blend_mode = BlendMode::normal;
     /// On a `begin_clip` without `path`, the clip rectangle in `bounds`
     /// coordinates; `corner_radii` gives its corners.
     Rect clip_rect{};
@@ -104,6 +119,13 @@ struct PaintCommand final {
     std::optional<ImageReference> image;
     /// The asset `Scene::images` holds for `image`, or null when it is missing.
     std::shared_ptr<const ImageAsset> image_asset;
+    /// On a `begin_layer`, the node's effect chain when its effects apply.
+    std::vector<NodeEffect> effects;
+    /// On a `begin_layer` with `effects`, the node's box in absolute
+    /// coordinates before `transform`, which carries the node's composed
+    /// transform; `corner_radii` gives the box's corners. A backdrop effect
+    /// draws within it.
+    Rect effect_box{};
 };
 
 [[nodiscard]] constexpr std::string_view to_string(PaintCommand::Kind kind) noexcept {
@@ -128,6 +150,12 @@ struct PaintCommand final {
 /// `path_control_bounds` moved to the command's origin. Empty when neither
 /// box has area, in which case gradients draw nothing.
 [[nodiscard]] std::optional<Rect> path_gradient_box(const PaintCommand& command);
+
+/// The absolute box a path command's stroke gradient resolves against:
+/// `path_gradient_box` when it has one, otherwise the control box with each
+/// side that has no extent, such as the height of a horizontal line, grown
+/// to one logical pixel about its centre. Empty only for an invalid path.
+[[nodiscard]] std::optional<Rect> path_stroke_gradient_box(const PaintCommand& command);
 
 /// The area a command can paint, in its `bounds` coordinates before
 /// `transform`: the box grown by each shadow's offset, spread, and 1.5 times
@@ -158,12 +186,26 @@ struct PaintExtent final {
     const std::vector<PaintCommand>& commands);
 
 struct ResolvedLinearGradient final {
+    GradientKind kind = GradientKind::linear;
     float start_x = 0.0F;
     float start_y = 0.0F;
     float end_x = 0.0F;
     float end_y = 0.0F;
     bool repeating = false;
     float repeat_length = 0.0F;
+    GradientSpread spread = GradientSpread::pad;
+    GradientInterpolation interpolation = GradientInterpolation::srgb;
+    float center_x = 0.0F;
+    float center_y = 0.0F;
+    float radius_x = 0.0F;
+    float radius_y = 0.0F;
+    float focal_x = 0.0F;
+    float focal_y = 0.0F;
+    float start_radius = 0.0F;
+    float end_radius = 0.0F;
+    float angle_degrees = 0.0F;
+    float end_angle_degrees = 360.0F;
+    std::string color_space = "srgb";
     std::vector<GradientStop> stops;
 };
 
@@ -189,6 +231,10 @@ struct ResolvedLinearGradient final {
 /// exactly one, its opacity is folded into that command's. A node whose
 /// opacity is zero or less contributes nothing.
 ///
+/// A node with a `blend_mode` other than `normal` is always wrapped in a
+/// layer, whose `blend_mode` it carries, and a node whose blend mode is outside
+/// `BlendMode` contributes nothing.
+///
 /// An isolated node is always wrapped in a layer, with `layer_isolated` set. A
 /// node whose clip `clips_own_paint` wraps its layer, paint and subtree in a
 /// `begin_clip`/`end_clip` pair; any other clip wraps only its subtree, after
@@ -199,6 +245,14 @@ struct ResolvedLinearGradient final {
 /// draws nothing still emits its pair, which hides the siblings entirely. A
 /// node whose clip fails `clip_is_valid` contributes nothing, and a scene whose
 /// root is a mask yields no commands.
+///
+/// A node whose effects apply (`effects_apply`) is always wrapped in a
+/// `layer_isolated` layer carrying those it draws natively
+/// (`effect_draws_natively`), even when it draws nothing, since a backdrop
+/// effect paints with no members; with none drawn natively it lowers as if it
+/// had no effects. A chain over budget is dropped
+/// and the node lowers as if it had none; a node with an effect that fails
+/// `effect_is_valid` contributes nothing.
 [[nodiscard]] std::vector<PaintCommand> make_paint_commands(const Scene& scene);
 
 /// Whether a clip can be applied as given: its rectangle and radii are
@@ -245,7 +299,8 @@ struct PaintCommandRange final {
 /// a `kSceneVersionMismatchCode` error for an unsupported scene version or
 /// the first node that `find_version_mismatch` reports (the scene is then
 /// refused, so nothing else is listed), otherwise a `kImageAssetMissingCode`
-/// warning for each image node whose asset `Scene::images` does not hold.
+/// warning for each image node whose asset `Scene::images` does not hold,
+/// followed by `effect_loss_diagnostics`.
 [[nodiscard]] std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene);
 
 }  // namespace vellum::graphics

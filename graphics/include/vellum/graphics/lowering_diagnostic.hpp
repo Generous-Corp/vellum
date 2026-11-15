@@ -65,6 +65,15 @@ inline constexpr std::string_view kImageAssetMissingCode = "VELLUM_IMAGE_ASSET_M
 /// its scene's `scene_version`; always an error. The consumer refuses the
 /// whole scene rather than drawing it with the node missing.
 inline constexpr std::string_view kSceneVersionMismatchCode = "VELLUM_SCENE_VERSION_MISMATCH";
+/// A gradient field cannot be represented by the native backend without a
+/// fidelity loss, so the scene is refused rather than approximated.
+inline constexpr std::string_view kGradientNotExpressibleCode =
+    "VELLUM_GRADIENT_NOT_EXPRESSIBLE";
+
+/// A blend mode the backend cannot draw; a warning. The group was drawn with
+/// the `normal` mode instead. Only Tier 2 modes, which a backend other than
+/// Skia Graphite may lack, are ever reported this way.
+inline constexpr std::string_view kBlendModeFallbackCode = "VELLUM_BLEND_MODE_FALLBACK";
 
 [[nodiscard]] constexpr std::string_view to_string(
     LoweringDiagnostic::Severity severity) noexcept {

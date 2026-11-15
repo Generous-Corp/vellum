@@ -908,7 +908,7 @@ public:
     /// backends may also perform the same retirement for context/scale changes.
     virtual void invalidate_layer(LayerHandle layer) { (void)layer; }
 
-    // ── Scene recording (subtree cache, FU-3) ─────────────────────────────
+    // ── Scene recording (subtree cache) ───────────────────────────────────
     /// Record `paint` into a replayable `SceneRecording`, capturing its draw
     /// commands ONCE so later frames can `draw_scene()` the result instead of
     /// re-running the (recursive, allocating) paint. `w`/`h` are the recorded
@@ -916,10 +916,15 @@ public:
     /// stores commands in logical coordinates), so a DPI change replays the
     /// same recording with no re-record and no image re-upload.
     ///
-    /// Distinct from the `begin_layer`/`draw_layer` texture cache above:
-    /// that snapshots a rasterised texture (Visage-style), this records the
-    /// command stream (a lighter, resolution-free cache). Both are opt-in
-    /// caches over the same "paint a subtree once, reuse it" need.
+    /// Distinct from the `begin_layer`/`draw_layer` texture cache above. A
+    /// layer rasterises the subtree once into a texture at the current scale:
+    /// replaying it is a single image draw, but it holds texture memory, is
+    /// resampled when drawn transformed, and must be re-rendered when the
+    /// scale or its contents change. A recording keeps the draw commands
+    /// themselves in logical coordinates: it holds no pixels and replays
+    /// sharp at any scale or transform, at the cost of executing those
+    /// commands on every replay. Both are opt-in caches for the same need,
+    /// painting a subtree once and reusing it.
     ///
     /// Returns nullptr when the backend cannot record (the base class, the
     /// CoreGraphics backend, and RecordingCanvas all do) — the caller MUST

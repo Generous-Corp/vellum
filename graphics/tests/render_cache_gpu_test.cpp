@@ -6,12 +6,16 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -169,6 +173,297 @@ Scene empty_scene(std::uint32_t version = kSceneVersion) {
     return scene;
 }
 
+struct ExpectedPixel final {
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+    std::array<float, 3> rgb{};
+    std::string where;
+};
+
+float encode_srgb(float linear) {
+    linear = std::clamp(linear, 0.0F, 1.0F);
+    return linear <= 0.0031308F ? linear * 12.92F
+                                : 1.055F * std::pow(linear, 1.0F / 2.4F) - 0.055F;
+}
+
+float decode_srgb(float encoded) {
+    return encoded <= 0.04045F ? encoded / 12.92F
+                               : std::pow((encoded + 0.055F) / 1.055F, 2.4F);
+}
+
+std::array<float, 3> to_oklab(const std::array<float, 3>& srgb) {
+    const float r = decode_srgb(srgb[0]);
+    const float g = decode_srgb(srgb[1]);
+    const float b = decode_srgb(srgb[2]);
+    const float l = std::cbrt(0.4122214708F * r + 0.5363325363F * g + 0.0514459929F * b);
+    const float m = std::cbrt(0.2119034982F * r + 0.6806995451F * g + 0.1073969566F * b);
+    const float s = std::cbrt(0.0883024619F * r + 0.2817188376F * g + 0.6299787005F * b);
+    return {0.2104542553F * l + 0.7936177850F * m - 0.0040720468F * s,
+            1.9779984951F * l - 2.4285922050F * m + 0.4505937099F * s,
+            0.0259040371F * l + 0.7827717662F * m - 0.8086757660F * s};
+}
+
+std::array<float, 3> from_oklab(const std::array<float, 3>& lab) {
+    const float l = std::pow(lab[0] + 0.3963377774F * lab[1] + 0.2158037573F * lab[2], 3.0F);
+    const float m = std::pow(lab[0] - 0.1055613458F * lab[1] - 0.0638541728F * lab[2], 3.0F);
+    const float s = std::pow(lab[0] - 0.0894841775F * lab[1] - 1.2914855480F * lab[2], 3.0F);
+    return {encode_srgb(4.0767416621F * l - 3.3077115913F * m + 0.2309699292F * s),
+            encode_srgb(-1.2684380046F * l + 2.6097574011F * m - 0.3413193965F * s),
+            encode_srgb(-0.0041960863F * l - 0.7034186147F * m + 1.7076147010F * s)};
+}
+
+std::array<float, 3> mix(const std::array<float, 3>& from, const std::array<float, 3>& to,
+                         float t) {
+    return {from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t,
+            from[2] + (to[2] - from[2]) * t};
+}
+
+constexpr std::array<float, 3> kRed{1.0F, 0.0F, 0.0F};
+constexpr std::array<float, 3> kBlue{0.0F, 0.0F, 1.0F};
+
+LinearGradient red_to_blue(GradientKind kind) {
+    LinearGradient gradient;
+    gradient.kind = kind;
+    gradient.stops = {{.position = 0.0F, .color = Color::hex(0xFF0000)},
+                      {.position = 1.0F, .color = Color::hex(0x0000FF)}};
+    return gradient;
+}
+
+void expect_pixels(const std::string& name, Scene scene, const std::vector<ExpectedPixel>& pixels,
+                   float tolerance = 6.0F) {
+    scene.background = Color::hex(0x000000);
+    auto surface = make_surface(false);
+    std::string error;
+    if (!surface->render(scene, &error)) {
+        expect(false, "gradient oracle " + name + " renders", error);
+        return;
+    }
+    const auto rgba = capture(*surface);
+    for (const auto& pixel : pixels) {
+        const auto offset = (static_cast<std::size_t>(pixel.y) * kWidth + pixel.x) * 4U;
+        float worst = 0.0F;
+        std::ostringstream detail;
+        detail << "at (" << pixel.x << ", " << pixel.y << ") rgb=";
+        for (std::size_t channel = 0; channel < 3U; ++channel) {
+            const float actual = rgba[offset + channel];
+            worst = std::max(worst, std::abs(actual - pixel.rgb[channel] * 255.0F));
+            detail << (channel ? "," : "") << actual;
+        }
+        detail << " expected=" << pixel.rgb[0] * 255.0F << "," << pixel.rgb[1] * 255.0F << ","
+               << pixel.rgb[2] * 255.0F;
+        expect(worst <= tolerance, "gradient oracle " + name + " " + pixel.where, detail.str());
+    }
+}
+
+Scene one_gradient_box(Rect bounds, LinearGradient gradient,
+                       std::uint32_t version = kSceneVersion) {
+    Scene scene = empty_scene(version);
+    scene.root.children.push_back({.id = "oracle",
+                                   .kind = SceneNode::Kind::rectangle,
+                                   .bounds = bounds,
+                                   .fill_gradients = {std::move(gradient)}});
+    return scene;
+}
+
+// Pixels along a left-to-right ramp, each expected at `colour(t)` for the
+// ramp position t of the pixel centre.
+std::vector<ExpectedPixel> along_ramp(
+    Rect bounds, const std::function<std::array<float, 3>(float)>& colour) {
+    std::vector<ExpectedPixel> pixels;
+    const auto y = static_cast<std::uint32_t>(bounds.y + bounds.height * 0.5F);
+    for (const auto& [t, where] : {std::pair{0.05F, "near the start"},
+                                   std::pair{0.5F, "at the middle"},
+                                   std::pair{0.95F, "near the end"}}) {
+        const auto x = static_cast<std::uint32_t>(bounds.x + bounds.width * t);
+        const float centre = (static_cast<float>(x) + 0.5F - bounds.x) / bounds.width;
+        pixels.push_back({x, y, colour(centre), where});
+    }
+    return pixels;
+}
+
+void gradient_pixel_oracle() {
+    const Rect ramp{20.0F, 20.0F, 200.0F, 40.0F};
+    const auto srgb_mix = [](float t) { return mix(kRed, kBlue, t); };
+    {
+        auto gradient = red_to_blue(GradientKind::linear);
+        gradient.angle_degrees = 90.0F;
+        expect_pixels("linear", one_gradient_box(ramp, gradient), along_ramp(ramp, srgb_mix));
+        gradient.repeat_length = 40.0F;
+        expect_pixels("linear that does not repeat ignores its repeat length",
+                      one_gradient_box(ramp, gradient, 5U), along_ramp(ramp, srgb_mix));
+        gradient.repeating = true;
+        expect_pixels("linear repeating every 40 pixels", one_gradient_box(ramp, gradient, 5U),
+                      along_ramp(ramp, [&](float t) {
+                          const float cycle = t * ramp.width / 40.0F;
+                          return mix(kRed, kBlue, cycle - std::floor(cycle));
+                      }));
+    }
+    {
+        // Before version 8 a gradient blends unpremultiplied colours, so the
+        // middle of red to transparent blue is half-transparent purple, drawn
+        // over black as a quarter of red and of blue.
+        auto gradient = red_to_blue(GradientKind::linear);
+        gradient.angle_degrees = 90.0F;
+        gradient.stops[1].color = Color::rgba(0.0F, 0.0F, 1.0F, 0.0F);
+        expect_pixels("legacy red to transparent blends unpremultiplied",
+                      one_gradient_box(ramp, gradient, 5U), along_ramp(ramp, [](float t) {
+                          return std::array<float, 3>{(1.0F - t) * (1.0F - t), 0.0F,
+                                                      t * (1.0F - t)};
+                      }));
+    }
+    {
+        auto gradient = red_to_blue(GradientKind::linear);
+        gradient.angle_degrees = 90.0F;
+        gradient.interpolation = GradientInterpolation::linear_srgb;
+        expect_pixels("linear-srgb interpolation", one_gradient_box(ramp, gradient),
+                      along_ramp(ramp, [](float t) {
+                          return std::array<float, 3>{encode_srgb(1.0F - t), 0.0F,
+                                                      encode_srgb(t)};
+                      }));
+        gradient.interpolation = GradientInterpolation::oklab;
+        expect_pixels("oklab interpolation", one_gradient_box(ramp, gradient),
+                      along_ramp(ramp, [](float t) {
+                          return from_oklab(mix(to_oklab(kRed), to_oklab(kBlue), t));
+                      }));
+        // Stops written in linear sRGB keep their meaning whatever the
+        // interpolation: linear grey 0.5 is sRGB 0.735.
+        gradient.color_space = "linear-srgb";
+        gradient.stops = {{.position = 0.0F, .color = Color::rgba(0.5F, 0.5F, 0.5F, 1.0F)},
+                          {.position = 1.0F, .color = Color::rgba(0.0F, 0.0F, 0.0F, 1.0F)}};
+        for (const auto interpolation :
+             {GradientInterpolation::srgb, GradientInterpolation::linear_srgb}) {
+            gradient.interpolation = interpolation;
+            const bool linear = interpolation == GradientInterpolation::linear_srgb;
+            expect_pixels(std::string("linear-srgb stops with ") +
+                              (linear ? "linear-srgb" : "srgb") + " interpolation",
+                          one_gradient_box(ramp, gradient), along_ramp(ramp, [&](float t) {
+                              const float grey = linear ? encode_srgb(0.5F * (1.0F - t))
+                                                        : encode_srgb(0.5F) * (1.0F - t);
+                              return std::array<float, 3>{grey, grey, grey};
+                          }));
+        }
+    }
+    {
+        const Rect box{20.0F, 20.0F, 160.0F, 160.0F};
+        const float cx = box.x + box.width * 0.5F;
+        const float cy = box.y + box.height * 0.5F;
+        constexpr float kPi = 3.14159265358979323846F;
+        for (const float start : {0.0F, 90.0F, 47.0F}) {
+            for (const auto spread :
+                 {GradientSpread::pad, GradientSpread::repeat, GradientSpread::reflect}) {
+                auto gradient = red_to_blue(GradientKind::conic);
+                gradient.angle_degrees = start;
+                gradient.spread = spread;
+                std::vector<ExpectedPixel> pixels;
+                for (const auto& [turn, where] : {std::pair{10.0F, "near the start"},
+                                                  std::pair{180.0F, "at the middle"},
+                                                  std::pair{350.0F, "near the end"}}) {
+                    const float radians = (start + turn) * kPi / 180.0F;
+                    const auto x = static_cast<std::uint32_t>(cx + 50.0F * std::sin(radians));
+                    const auto y = static_cast<std::uint32_t>(cy - 50.0F * std::cos(radians));
+                    const float dx = static_cast<float>(x) + 0.5F - cx;
+                    const float dy = static_cast<float>(y) + 0.5F - cy;
+                    float degrees = std::atan2(dx, -dy) * 180.0F / kPi - start;
+                    degrees = std::fmod(std::fmod(degrees, 360.0F) + 360.0F, 360.0F);
+                    pixels.push_back({x, y, mix(kRed, kBlue, degrees / 360.0F), where});
+                }
+                expect_pixels("conic from " + std::to_string(static_cast<int>(start)) +
+                                  " degrees, spread " +
+                                  std::to_string(static_cast<int>(spread)),
+                              one_gradient_box(box, gradient), pixels);
+            }
+        }
+    }
+    {
+        // A non-square box: the radii scale by its shorter side, 120.
+        const Rect box{20.0F, 40.0F, 240.0F, 120.0F};
+        for (const float start_radius : {0.0F, 0.1F}) {
+            auto gradient = red_to_blue(GradientKind::two_circle_radial);
+            gradient.focal_x = 0.4F;
+            gradient.focal_y = 0.5F;
+            gradient.start_radius = start_radius;
+            gradient.end_radius = 0.5F;
+            const float fx = box.x + box.width * gradient.focal_x;
+            const float fy = box.y + box.height * gradient.focal_y;
+            const float ex = box.x + box.width * 0.5F;
+            const float ey = box.y + box.height * 0.5F;
+            const float r0 = start_radius * 120.0F;
+            const float r1 = 60.0F;
+            const auto t_at = [&](float px, float py) {
+                const float dx = ex - fx;
+                const float dy = ey - fy;
+                const float dr = r1 - r0;
+                const float qx = px - fx;
+                const float qy = py - fy;
+                const float a = dx * dx + dy * dy - dr * dr;
+                const float b = -2.0F * (qx * dx + qy * dy + r0 * dr);
+                const float c = qx * qx + qy * qy - r0 * r0;
+                const float root = std::sqrt(std::max(0.0F, b * b - 4.0F * a * c));
+                const float t = std::max((-b + root) / (2.0F * a), (-b - root) / (2.0F * a));
+                return std::clamp(t, 0.0F, 1.0F);
+            };
+            std::vector<ExpectedPixel> pixels;
+            for (const auto& [x, where] :
+                 {std::pair{static_cast<std::uint32_t>(fx), "at the focal point"},
+                  std::pair{static_cast<std::uint32_t>(fx - 30.0F), "midway to the left edge"},
+                  std::pair{static_cast<std::uint32_t>(ex + 40.0F), "near the right edge"},
+                  std::pair{static_cast<std::uint32_t>(box.x + 6.0F), "near the left edge"}}) {
+                const auto y = static_cast<std::uint32_t>(fy);
+                pixels.push_back({x, y,
+                                  mix(kRed, kBlue,
+                                      t_at(static_cast<float>(x) + 0.5F,
+                                           static_cast<float>(y) + 0.5F)),
+                                  where});
+            }
+            expect_pixels("two-circle radial with start radius " +
+                              std::to_string(start_radius),
+                          one_gradient_box(box, gradient), pixels);
+        }
+    }
+    {
+        const Rect box{20.0F, 40.0F, 240.0F, 120.0F};
+        auto gradient = red_to_blue(GradientKind::radial);
+        gradient.center_x = 0.5F;
+        gradient.center_y = 0.5F;
+        gradient.radius_x = 0.5F;
+        gradient.radius_y = 0.5F;
+        const float cx = box.x + box.width * 0.5F;
+        const float cy = box.y + box.height * 0.5F;
+        std::vector<ExpectedPixel> pixels;
+        for (const auto& [dx, dy, where] :
+             {std::tuple{0.0F, 0.0F, "at the centre"}, std::tuple{60.0F, 0.0F, "half way along x"},
+              std::tuple{0.0F, 30.0F, "half way along y"},
+              std::tuple{110.0F, 0.0F, "near the x edge"}}) {
+            const auto x = static_cast<std::uint32_t>(cx + dx);
+            const auto y = static_cast<std::uint32_t>(cy + dy);
+            const float ux = (static_cast<float>(x) + 0.5F - cx) / 120.0F;
+            const float uy = (static_cast<float>(y) + 0.5F - cy) / 60.0F;
+            pixels.push_back({x, y,
+                              mix(kRed, kBlue, std::min(1.0F, std::hypot(ux, uy))), where});
+        }
+        expect_pixels("elliptical radial", one_gradient_box(box, gradient), pixels);
+    }
+    {
+        // A straight horizontal line has no box with area; its stroke
+        // gradient still runs along it.
+        auto line = std::make_shared<PathGeometry>();
+        line->verbs = {PathVerb::move, PathVerb::line};
+        line->values = {0.0F, 0.0F, 200.0F, 0.0F};
+        line->stroke.width = 6.0F;
+        line->stroke.color = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+        auto gradient = red_to_blue(GradientKind::linear);
+        gradient.angle_degrees = 90.0F;
+        line->stroke.gradient = gradient;
+        Scene scene = empty_scene();
+        scene.root.children.push_back({.id = "line",
+                                       .kind = SceneNode::Kind::path,
+                                       .bounds = {20.0F, 150.0F, 0.0F, 0.0F},
+                                       .path = line});
+        expect_pixels("gradient stroke on a horizontal line", scene,
+                      along_ramp({20.0F, 147.0F, 200.0F, 6.0F}, srgb_mix));
+    }
+}
+
 // Three texts, one gradient, one textured mesh, and a faded group of two
 // rectangles that opens one layer.
 Scene telemetry_scene(const std::shared_ptr<const MeshTexture>& texture, bool all = true) {
@@ -283,6 +578,63 @@ void keys_see_every_input() {
         repeating.root.children[0].fill_gradients[0].repeating = true;
         repeating.root.children[0].fill_gradients[0].repeat_length = 30.0F;
         expect_second_frame_exact("a repeating gradient rebuilds the shader", first, repeating);
+        const auto mutate_from = [&](const std::string& name, GradientKind kind,
+                                     const std::function<void(LinearGradient&)>& mutate) {
+            auto base = first;
+            base.root.children[0].fill_gradients[0].kind = kind;
+            if (kind == GradientKind::radial || kind == GradientKind::two_circle_radial) {
+                base.root.children[0].fill_gradients[0].angle_degrees = 180.0F;
+            }
+            auto changed = base;
+            mutate(changed.root.children[0].fill_gradients[0]);
+            expect_second_frame_exact("a " + name + " gradient input rebuilds the shader", base,
+                                      changed);
+        };
+        const auto mutate_gradient = [&](const std::string& name,
+                                         const std::function<void(LinearGradient&)>& mutate) {
+            mutate_from(name, GradientKind::linear, mutate);
+        };
+        mutate_gradient("kind", [](LinearGradient& gradient) {
+            gradient.kind = GradientKind::radial;
+            gradient.angle_degrees = 180.0F;
+        });
+        mutate_gradient("spread", [](LinearGradient& gradient) {
+            gradient.spread = GradientSpread::reflect;
+            gradient.repeating = false;
+        });
+        mutate_gradient("interpolation", [](LinearGradient& gradient) {
+            gradient.interpolation = GradientInterpolation::oklab;
+        });
+        mutate_gradient("colour space", [](LinearGradient& gradient) {
+            gradient.color_space = "display-p3";
+        });
+        mutate_from("radial centre", GradientKind::radial, [](LinearGradient& gradient) {
+            gradient.center_x = 0.22F;
+            gradient.center_y = 0.71F;
+        });
+        mutate_from("radial radii", GradientKind::radial, [](LinearGradient& gradient) {
+            gradient.radius_x = 0.2F;
+            gradient.radius_y = 0.7F;
+        });
+        mutate_from("two-circle focal point", GradientKind::two_circle_radial,
+                    [](LinearGradient& gradient) {
+                        gradient.focal_x = 0.17F;
+                        gradient.focal_y = 0.83F;
+                    });
+        mutate_from("two-circle radii", GradientKind::two_circle_radial,
+                    [](LinearGradient& gradient) {
+                        gradient.start_radius = 0.1F;
+                        gradient.end_radius = 0.6F;
+                    });
+        mutate_from("conic angle", GradientKind::conic, [](LinearGradient& gradient) {
+            gradient.angle_degrees = 135.0F;
+        });
+        mutate_gradient("stop colour", [](LinearGradient& gradient) {
+            gradient.stops[0].color = Color::hex(0x22C55E);
+        });
+        mutate_gradient("stop position", [](LinearGradient& gradient) {
+            gradient.stops[1].position = 0.6F;
+        });
     }
     {
         // A producer may rewrite texels in place behind the scene's const view.
@@ -689,6 +1041,7 @@ int main() {
             return 1;
         }
         fixtures_with_and_without_caches();
+        gradient_pixel_oracle();
         keys_see_every_input();
         partial_redraw_with_and_without_caches();
         budgets_are_enforced();

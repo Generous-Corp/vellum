@@ -225,8 +225,9 @@ public:
 [[nodiscard]] bool paint_differs(const SceneNode& previous, const SceneNode& next);
 
 /// Whether two nodes with the same identity group their subtree differently:
-/// a different clip (compared like paths in `paint_differs`), mask mode, or
-/// isolation. Such a change damages the node's whole subtree, and a changed
+/// a different clip (compared like paths in `paint_differs`), mask mode,
+/// isolation, or effect chain (every field, floats bitwise). Such a change
+/// damages the node's whole subtree, and a changed
 /// mask mode also damages its parent's subtree, as does a change to a mask's
 /// opacity or transform.
 [[nodiscard]] bool grouping_differs(const SceneNode& previous, const SceneNode& next);
@@ -235,13 +236,23 @@ public:
 /// repeated id are keyed by position). Added, removed, moved, resized,
 /// restyled, reparented and reordered nodes damage both their old and new
 /// areas. Areas are mapped through each node's composed transform, the way
-/// `make_paint_commands` composes it. A transform or opacity change damages
-/// the node's whole subtree, old and new, and so does a faded node switching
-/// between folding its opacity into one command and compositing a layer. A
+/// `make_paint_commands` composes it. A transform, opacity or blend mode
+/// change damages the node's whole subtree, old and new, and so does a faded
+/// node switching between folding its opacity into one command and
+/// compositing a layer. A
 /// subtree at zero opacity paints nothing. A non-finite transform, opacity or
 /// radius damages the whole frame; `SkiaDawnSurface::render` refuses such a
 /// scene. A changed frame size, background or `scene_version` damages the
 /// whole frame.
+///
+/// Inside a node with effects, every member's damage grows by the sum of the
+/// enclosing chains' radii (in frame space, unscaled by transforms) and is
+/// bounded only by the clips outside the outermost effect. A chain that
+/// fills its area (`effect_chain_fills_area`) makes the group's own damage the
+/// whole area around its members, so a change to that area damages the old
+/// and the new one. A node with a backdrop effect also damages its box, and once any damage reaches the
+/// area its backdrop samples (its box grown by the backdrop's reach) its box
+/// is damaged too, repeated until no further backdrop is reached.
 [[nodiscard]] DamageRegion compute_scene_damage(
     const Scene& previous, const Scene& next, float scale,
     DamagePolicy policy = {}, const DamagePropagation* propagation = nullptr);
@@ -250,7 +261,7 @@ public:
 /// damage model understands. Partial redraw is enabled only for scene
 /// versions the damage model understands; a newer scene repaints fully until
 /// the damage model learns its fields and this constant is raised.
-inline constexpr std::uint32_t kDamageModelSceneVersion = 5U;
+inline constexpr std::uint32_t kDamageModelSceneVersion = 10U;
 
 /// Whether a scene of `version` may be redrawn from its damage alone.
 [[nodiscard]] constexpr bool partial_redraw_supported(std::uint32_t version) noexcept {

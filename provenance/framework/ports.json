@@ -1,0 +1,302 @@
+{
+  "schema": "vellum.framework-ports.v1",
+  "rows": [
+    {
+      "framework_path": "framework/core/platform/include/vellum/platform/alert.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/platform/include/pulp/platform/alert.hpp",
+      "pulp_commits": [
+        "3da8e088da5daae6be8c297936c9b4a1320b8e8d",
+        "794bc186b7d61ea3279f7aeb08c7d6c7a593a3fd"
+      ],
+      "framework_blob": "cb3c0f55a4934bb8180ef3cd49ac02638d9b6c67",
+      "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+    },
+    {
+      "framework_path": "framework/core/platform/include/vellum/platform/dialog_session.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/platform/include/pulp/platform/dialog_session.hpp",
+      "pulp_commits": [
+        "3da8e088da5daae6be8c297936c9b4a1320b8e8d"
+      ],
+      "framework_blob": "444c8de03d002ecf01c66e918ac59152dae2ea38",
+      "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+    },
+    {
+      "framework_path": "framework/core/platform/include/vellum/platform/main_thread.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/platform/include/pulp/platform/main_thread.hpp",
+      "pulp_commits": [
+        "fc9d03229e474dd30edeb08e8af9a1abb340d2ab",
+        "3da8e088da5daae6be8c297936c9b4a1320b8e8d"
+      ],
+      "framework_blob": "d35036924f57213045eeb248f926d97133ef632d",
+      "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+    },
+    {
+      "framework_path": "framework/core/platform/include/vellum/platform/objc_unique_class.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/platform/include/pulp/platform/objc_unique_class.hpp",
+      "pulp_commits": [
+        "8f2cbd68e1f84e3beda072761394548c277f00fd"
+      ],
+      "framework_blob": "a723ea54ff33ed6aeb8825bd8ecced38bcea58e0",
+      "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+    },
+    {
+      "framework_path": "framework/core/platform/include/vellum/platform/open_url.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/platform/include/pulp/platform/open_url.hpp",
+      "pulp_commits": [
+        "3da8e088da5daae6be8c297936c9b4a1320b8e8d"
+      ],
+      "framework_blob": "f883f119ebe8f3542b3aaf55200a70a44464301f",
+      "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/mac/alert_mac.mm",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/mac/alert_mac.mm",
+      "pulp_commits": [
+        "3da8e088da5daae6be8c297936c9b4a1320b8e8d"
+      ],
+      "framework_blob": "8f0ee0d2f83869e7febf7f06b279a8bee96dc7a1",
+      "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/mac/file_dialog_async_mac.mm",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's asynchronous native dialog sources with three fixes the Pulp originals do not yet carry: a dialog that completes inside the opening call is not cancelled by scope teardown, the unsupported-platform stubs are not compiled on macOS, and a filter of only invalid extensions shows no panel. The bytes are Pulp's fixed files put through the transfer rename."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/mac/objc_unique_class_mac.mm",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Per-binary unique Objective-C class helper used by the asynchronous native services. Differs from Pulp only in the instance-context ivar name, which carries no Pulp spelling here."
+    },
+    {
+      "framework_path": "framework/core/platform/src/alert.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/src/alert.cpp",
+      "pulp_commits": [
+        "3da8e088da5daae6be8c297936c9b4a1320b8e8d"
+      ],
+      "framework_blob": "bfe25984932191bd160fb3bb4b6855c1ce73632a",
+      "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+    },
+    {
+      "framework_path": "framework/core/platform/src/dialog_internal.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's asynchronous native dialog sources with three fixes the Pulp originals do not yet carry: a dialog that completes inside the opening call is not cancelled by scope teardown, the unsupported-platform stubs are not compiled on macOS, and a filter of only invalid extensions shows no panel. The bytes are Pulp's fixed files put through the transfer rename."
+    },
+    {
+      "framework_path": "framework/core/platform/src/dialog_session.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/src/dialog_session.cpp",
+      "pulp_commits": [
+        "3da8e088da5daae6be8c297936c9b4a1320b8e8d"
+      ],
+      "framework_blob": "7209a607a27fdd2625910a364413a53d0f161447",
+      "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+    },
+    {
+      "framework_path": "framework/core/platform/src/file_dialog_async.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/src/file_dialog_async.cpp",
+      "pulp_commits": [
+        "3da8e088da5daae6be8c297936c9b4a1320b8e8d"
+      ],
+      "framework_blob": "0f5a51614c7a791eef111d3c34ed7e816a172d17",
+      "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+    },
+    {
+      "framework_path": "framework/core/platform/src/main_thread.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/src/main_thread.cpp",
+      "pulp_commits": [
+        "fc9d03229e474dd30edeb08e8af9a1abb340d2ab",
+        "3da8e088da5daae6be8c297936c9b4a1320b8e8d"
+      ],
+      "framework_blob": "0cda81b83b2912374f2f0afbb4a765ed3eaa1813",
+      "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+    },
+    {
+      "framework_path": "framework/core/platform/src/open_url.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/src/open_url.cpp",
+      "pulp_commits": [
+        "3da8e088da5daae6be8c297936c9b4a1320b8e8d"
+      ],
+      "framework_blob": "ba7ffe1293853d9145ae0f37b88c21c9c84054cd",
+      "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+    },
+    {
+      "framework_path": "framework/core/platform/src/platform_dialogs_stub.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's asynchronous native dialog sources with three fixes the Pulp originals do not yet carry: a dialog that completes inside the opening call is not cancelled by scope teardown, the unsupported-platform stubs are not compiled on macOS, and a filter of only invalid extensions shows no panel. The bytes are Pulp's fixed files put through the transfer rename."
+    },
+    {
+      "framework_path": "framework/core/platform/src/popup_menu_async.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/src/popup_menu_async.cpp",
+      "pulp_commits": [
+        "ce460ea966064f4496c3a35be28f23ac7845c94c"
+      ],
+      "framework_blob": "90b61eafc7a3f15c1729c06b16daf8629b8c6e23",
+      "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+    },
+    {
+      "framework_path": "framework/core/render/include/vellum/render/gpu_capabilities.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/render/include/pulp/render/gpu_capabilities.hpp",
+      "pulp_commits": [
+        "9afcaf948342b8705fa53caf9dfe38ea828c3e7c"
+      ],
+      "framework_blob": "8dda6c6eee6652ccabfbf24c167f17bca201dc18",
+      "reason": "Device capability table, tier selection and WGSL diagnostics for the typed custom GPU pass API (Generous-Corp/vellum#432, Generous-Corp/pulp#11713); the pass API itself follows."
+    },
+    {
+      "framework_path": "framework/core/render/src/gpu_capabilities.cpp",
+      "change": "added",
+      "target": "pulp-render",
+      "origin": "pulp",
+      "pulp_path": "core/render/src/gpu_capabilities.cpp",
+      "pulp_commits": [
+        "9afcaf948342b8705fa53caf9dfe38ea828c3e7c",
+        "31829c27eeafaface56831aa38c9a7b5c62892c9"
+      ],
+      "framework_blob": "2eaec95c379d907611d255d4c519efeea4fa8c4e",
+      "reason": "Device capability table, tier selection and WGSL diagnostics for the typed custom GPU pass API (Generous-Corp/vellum#432, Generous-Corp/pulp#11713); the pass API itself follows."
+    },
+    {
+      "framework_path": "framework/core/render/src/wgsl_diagnostics.cpp",
+      "change": "added",
+      "target": "pulp-render",
+      "origin": "pulp",
+      "pulp_path": "core/render/src/wgsl_diagnostics.cpp",
+      "pulp_commits": [
+        "9afcaf948342b8705fa53caf9dfe38ea828c3e7c"
+      ],
+      "framework_blob": "abc864e652a21de3e0d58e6c4b5ccdcc6651671a",
+      "reason": "Device capability table, tier selection and WGSL diagnostics for the typed custom GPU pass API (Generous-Corp/vellum#432, Generous-Corp/pulp#11713); the pass API itself follows."
+    },
+    {
+      "framework_path": "framework/core/render/src/wgsl_compile.cpp",
+      "change": "added",
+      "target": "pulp-render",
+      "origin": "pulp",
+      "pulp_path": "core/render/src/wgsl_compile.cpp",
+      "pulp_commits": [
+        "9afcaf948342b8705fa53caf9dfe38ea828c3e7c",
+        "31829c27eeafaface56831aa38c9a7b5c62892c9"
+      ],
+      "framework_blob": "8d60ebee1d14fbc45d7de2187f76b97b168bbd65",
+      "reason": "Device capability table, tier selection and WGSL diagnostics for the typed custom GPU pass API (Generous-Corp/vellum#432, Generous-Corp/pulp#11713); the pass API itself follows."
+    },
+    {
+      "framework_path": "framework/core/render/include/vellum/render/wgsl_diagnostics.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Port of Pulp's wgsl_diagnostics.hpp with the build helper's comment respelled to its Vellum name, so the framework name debt does not rise."
+    },
+    {
+      "framework_path": "framework/core/render/src/wgsl_compile.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Port of Pulp's wgsl_compile.hpp with the validator's path in its comment respelled to the Vellum tool, so the framework name debt does not rise."
+    },
+    {
+      "framework_path": "framework/tools/cmake/scripts/embed_wgsl.py",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Port of Pulp's embed_wgsl.py with the CMake function's name respelled to vellum_add_wgsl_shaders, so the framework name debt does not rise."
+    },
+    {
+      "framework_path": "framework/tools/cmake/VellumWgslShaders.cmake",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "vellum_add_wgsl_shaders(): embeds .wgsl files as string_view constants and validates them at build time; adapted from Pulp's pulp_add_wgsl_shaders under the Vellum names."
+    },
+    {
+      "framework_path": "framework/core/view/src/widget_bridge/gpu_error_scopes.cpp",
+      "change": "added",
+      "target": "pulp-view-script",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Script-visible WebGPU error scopes for the scripted binding: native device work runs in validation, out-of-memory and internal device scopes and routes what they catch to the script's own scope, so script sees its errors and the uncaptured-error callback stays quiet. Vellum wrote this; Pulp's binding runs no error scopes."
+    },
+    {
+      "framework_path": "framework/core/view/src/widget_bridge/gpu_error_scopes.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Script-visible WebGPU error scopes for the scripted binding: native device work runs in validation, out-of-memory and internal device scopes and routes what they catch to the script's own scope, so script sees its errors and the uncaptured-error callback stays quiet. Vellum wrote this; Pulp's binding runs no error scopes."
+    }
+  ]
+}

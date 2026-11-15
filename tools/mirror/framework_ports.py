@@ -17,6 +17,15 @@ also proves the rows append-only and the Pulp commits real, and
 tools/mirror/mirror_package.py, which compiles the added sources.
 
 A missing ledger is an empty one.
+
+A row's target is usually a mirrored target a closure describes. A port may
+also need a target no closure builds (the closures describe only what Pulp
+exported). Such a target is declared in `provenance/framework/units.json`:
+its name, whether it is a static library (in a new unit, which gets its own
+package library) or an executable, its sources, include directories, compile
+definitions and link targets. Each declared source must also have the ledger
+row that adds it to that target, so nothing is built that a row does not
+account for. A missing manifest declares nothing.
 """
 
 from __future__ import annotations
@@ -153,6 +162,159 @@ def replay(rows: list[dict[str, Any]], transferred: set[str]) -> tuple[dict[str,
         else:
             errors.append(f"{where}: {path} is not a file framework/ holds, so it cannot be removed")
     return added, removed, errors
+
+
+UNITS = "provenance/framework/units.json"
+UNITS_SCHEMA = "vellum.framework-units.v1"
+UNIT_TARGET_KEYS = {"name", "type", "unit", "sources", "include_dirs", "compile_definitions", "link_targets",
+                    "reason"}
+TARGET_TYPES = ("STATIC_LIBRARY", "EXECUTABLE")
+DEFINITION = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:=[A-Za-z0-9_.+-]*)?\Z")
+# Owned configuration: VELLUM_MIRROR_BUILD turns off the GPU-surface guard and
+# GPU_RUNTIME_* definitions are the in-tree ABI. Unowned manifest data sets neither.
+RESERVED_DEFINITION = re.compile(r"(?:VELLUM_MIRROR_BUILD|GPU_RUNTIME_[A-Za-z0-9_]*)(?:=|\Z)")
+
+
+def string_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value) and len(set(value)) == len(value)
+
+
+def unit_target_errors(target: Any, where: str) -> list[str]:
+    """What is wrong with one declared target's shape; empty when it is well formed.
+
+    A declared target is a mirrored target no closure describes: a static
+    library in a new unit, or an executable. Everything the build does with it
+    is written here; nothing is inferred from the sources.
+    """
+    if not isinstance(target, dict) or set(target) != UNIT_TARGET_KEYS:
+        return [f"{where}: must have exactly {sorted(UNIT_TARGET_KEYS)}"]
+    errors: list[str] = []
+    name, kind, unit = target["name"], target["type"], target["unit"]
+    if not isinstance(name, str) or not TARGET_NAME.match(name):
+        return [f"{where}: name {name!r} is not a target name"]
+    # New targets carry Vellum's spelling: the name debt may only fall.
+    if "pulp" in name.lower():
+        errors.append(f"{where}: {name} is a new target, so it may not carry a Pulp name")
+    if kind not in TARGET_TYPES:
+        errors.append(f"{where}: type must be one of {list(TARGET_TYPES)}")
+    if kind == "STATIC_LIBRARY":
+        if not isinstance(unit, str) or not TARGET_NAME.match(unit):
+            errors.append(f"{where}: a static library names the new unit whose library carries it")
+        elif "pulp" in unit.lower():
+            errors.append(f"{where}: unit {unit} is new, so it may not carry a Pulp name")
+    elif kind == "EXECUTABLE" and unit is not None:
+        errors.append(f"{where}: an executable belongs to no unit; unit is null")
+    sources = target["sources"]
+    if not string_list(sources) or not sources:
+        errors.append(f"{where}: sources must list one or more distinct framework/ paths")
+    else:
+        for source in sources:
+            if not safe_relative(source) or not source.startswith(FRAMEWORK_PREFIX) or not compiled(source):
+                errors.append(f"{where}: source {source!r} is not a compilable path inside {FRAMEWORK_PREFIX}")
+    includes = target["include_dirs"]
+    if not string_list(includes):
+        errors.append(f"{where}: include_dirs must be a list of distinct paths relative to {FRAMEWORK_PREFIX}")
+    else:
+        for include in includes:
+            if not safe_relative(include):
+                errors.append(f"{where}: include directory {include!r} is not a safe path relative to "
+                              f"{FRAMEWORK_PREFIX}")
+    definitions = target["compile_definitions"]
+    if not string_list(definitions) or not all(DEFINITION.match(item) for item in definitions):
+        errors.append(f"{where}: compile_definitions must be distinct NAME or NAME=value definitions")
+    else:
+        for item in definitions:
+            if RESERVED_DEFINITION.match(item):
+                errors.append(f"{where}: compile definition {item} is reserved for the mirror's own configuration")
+    links = target["link_targets"]
+    if not string_list(links) or not all(TARGET_NAME.match(link) for link in links):
+        errors.append(f"{where}: link_targets must be a list of distinct target names")
+    elif name in links:
+        errors.append(f"{where}: {name} links itself")
+    if not isinstance(target["reason"], str) or not target["reason"].strip():
+        errors.append(f"{where}: reason must be a non-empty string")
+    return errors
+
+
+def parse_units(text: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """(targets, errors) for the unit manifest's text. Targets are returned only when every one is well formed."""
+    try:
+        document = json.loads(text)
+    except ValueError as exc:
+        return [], [f"{UNITS}: unreadable: {exc}"]
+    if not isinstance(document, dict) or set(document) != {"schema", "targets"} \
+            or document["schema"] != UNITS_SCHEMA or not isinstance(document["targets"], list):
+        return [], [f"{UNITS}: must be an object with schema {UNITS_SCHEMA} and a targets list"]
+    errors = [error for index, target in enumerate(document["targets"])
+              for error in unit_target_errors(target, f"{UNITS} targets[{index}]")]
+    return ([] if errors else document["targets"]), errors
+
+
+def load_units(repo: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    """(targets, errors) for the checkout's unit manifest; a missing manifest declares nothing."""
+    path = repo / UNITS
+    if path.is_symlink():
+        return [], [f"{UNITS}: is a symlink"]
+    if not path.exists():
+        return [], []
+    try:
+        return parse_units(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as exc:
+        return [], [f"{UNITS}: unreadable: {exc}"]
+
+
+def units_errors(repo: Path, targets: list[dict[str, Any]], added: dict[str, dict[str, Any]]) -> list[str]:
+    """What is wrong with well-formed declared targets against the ledger and the checkout.
+
+    Each source is declared twice and the two must agree: the target lists it,
+    and its ledger row adds it with that target. A row naming a declared
+    target whose list leaves it out, and a listed source no row adds to the
+    target, are both refused. A declared link to another declared target must
+    name a static library declared earlier, so the units build in order and
+    form no cycle. Links to closure and recipe targets are judged by the build
+    plan, which reads the closures (tools/mirror/mirror_package.py).
+    """
+    errors: list[str] = []
+    seen: dict[str, str] = {}
+    for index, target in enumerate(targets):
+        where, name = f"{UNITS} targets[{index}]", target["name"]
+        if name in seen:
+            errors.append(f"{where}: {name} is declared twice")
+        for link in target["link_targets"]:
+            if seen.get(link) == "EXECUTABLE":
+                errors.append(f"{where}: {name} links the executable {link}")
+        later = {other["name"] for other in targets[index + 1:]}
+        for link in sorted(set(target["link_targets"]) & later - set(seen)):
+            errors.append(f"{where}: {name} links {link}, which is declared after it")
+        seen.setdefault(name, target["type"])
+        for source in target["sources"]:
+            row = added.get(source)
+            if row is None:
+                errors.append(f"{where}: source {source} has no ports ledger row adding it")
+            elif row["target"] != name:
+                errors.append(f"{where}: source {source} is added by its ledger row to {row['target']}, not {name}")
+        for include in target["include_dirs"]:
+            directory = repo / FRAMEWORK_PREFIX / include
+            if directory.is_symlink() or not directory.is_dir():
+                errors.append(f"{where}: include directory {FRAMEWORK_PREFIX}{include} is not a directory "
+                              "framework/ holds")
+    declared = {target["name"]: set(target["sources"]) for target in targets}
+    for path, row in sorted(added.items()):
+        if row["target"] in declared and path not in declared[row["target"]]:
+            errors.append(f"{LEDGER}: {path} is added to the declared target {row['target']}, "
+                          f"which does not list it in {UNITS}")
+    return errors
+
+
+def declared_units(repo: Path, added: dict[str, dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """(targets, errors) for the unit manifest, judged against the ledger's added rows.
+
+    With errors no target is returned, so a broken manifest never widens what is built.
+    """
+    targets, errors = load_units(repo)
+    if not errors:
+        errors = units_errors(repo, targets, added)
+    return ([] if errors else targets), errors
 
 
 def file_set(repo: Path, transferred: set[str]) -> tuple[set[str], dict[str, dict[str, Any]], set[str], list[str]]:

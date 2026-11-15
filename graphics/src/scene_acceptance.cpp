@@ -1,10 +1,13 @@
 #include <vellum/graphics/scene_acceptance.hpp>
 
+#include <vellum/graphics/effect.hpp>
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/path_geometry.hpp>
 
 #include <cmath>
+#include <optional>
+#include <string_view>
 #include <utility>
 
 namespace vellum::graphics {
@@ -53,9 +56,26 @@ const SceneNode* find_undrawable_image(const SceneNode& node, std::string& reaso
     return nullptr;
 }
 
+// The first mask node, in depth-first order, with a blend mode other than
+// `normal`. A mask contributes coverage to its siblings, not paint, so a blend
+// mode on it has no stage to apply in and refuses the scene.
+const SceneNode* find_blended_mask(const SceneNode& node) {
+    if (node.mask && node.blend_mode != BlendMode::normal) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_blended_mask(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+struct EffectRefusal final {
+    std::string node_id;
+    std::string_view code;
+};
+
 // Why `scene` is refused, or empty. `image_node` is set to the refused
-// image's id, and `image` to true, for an image or image-table refusal.
-std::string refusal(const Scene& scene, bool& image, std::string& image_node) {
+// image's id, and `image` to true, for an image or image-table refusal;
+// `effect` is set for an effect refusal.
+std::string refusal(const Scene& scene, bool& image, std::string& image_node,
+                    std::optional<EffectRefusal>& effect) {
     if (!scene_version_is_supported(scene.scene_version)) {
         return "scene version " + std::to_string(scene.scene_version) +
                " is not supported by this renderer";
@@ -64,18 +84,36 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node) {
         return "scene contains unsupported node kind " +
                std::to_string(static_cast<int>(unknown->kind)) + " at " + unknown->id;
     }
+    if (const auto* unknown = find_unknown_blend_mode(scene.root); unknown != nullptr) {
+        return "node " + unknown->id + " has a blend mode this build does not know";
+    }
     if (!scene_fields_match_version(scene)) {
         const auto loss = scene_loss_diagnostics(scene);
         return loss.empty() ? "scene fields do not match its version" : loss.front().message;
+    }
+    std::string gradient_reason;
+    if (const auto* unsupported = find_inexpressible_gradient(scene.root, &gradient_reason);
+        unsupported != nullptr) {
+        return "the gradient at " + unsupported->id + " cannot be drawn exactly: " +
+               gradient_reason;
     }
     if (const auto* invalid = find_non_finite_compositing(scene.root); invalid != nullptr) {
         return "scene node " + invalid->id +
                " has a non-finite transform, opacity, or corner radius";
     }
     if (scene.root.mask) return "scene root " + scene.root.id + " cannot be a mask";
+    if (const auto* mask = find_blended_mask(scene.root); mask != nullptr) {
+        return "mask " + mask->id + " cannot carry the blend mode " +
+               std::string(to_string(mask->blend_mode));
+    }
     std::string reason;
     if (const auto* clipped = find_invalid_clip(scene.root, reason); clipped != nullptr) {
         return "clip of " + clipped->id + " cannot be applied: " + reason;
+    }
+    std::string_view code;
+    if (const auto* effected = find_invalid_effect(scene.root, reason, code); effected != nullptr) {
+        effect = EffectRefusal{effected->id, code};
+        return "effects of " + effected->id + " cannot be drawn: " + reason;
     }
     if (const auto* path = find_undrawable_path(scene.root, reason); path != nullptr) {
         return path->path ? "path " + path->id + " cannot be drawn: " + reason
@@ -101,7 +139,8 @@ SceneAcceptance accept_scene(const Scene& scene) {
     result.diagnostics = scene_loss_diagnostics(scene);
     bool image = false;
     std::string image_node;
-    result.reason = refusal(scene, image, image_node);
+    std::optional<EffectRefusal> effect;
+    result.reason = refusal(scene, image, image_node, effect);
     result.accepted = result.reason.empty();
     if (result.accepted) return result;
 
@@ -112,6 +151,16 @@ SceneAcceptance accept_scene(const Scene& scene) {
         return result;
     }
     result.diagnostics.clear();
+    if (effect) {
+        result.diagnostics.push_back({
+            .severity = LoweringDiagnostic::Severity::error,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(effect->code),
+            .node_id = std::move(effect->node_id),
+            .property = "effects",
+            .message = result.reason,
+        });
+    }
     if (image) {
         result.diagnostics.push_back({
             .severity = LoweringDiagnostic::Severity::error,
