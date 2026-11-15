@@ -44,6 +44,12 @@ vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
 
+vellum_add_framework_test(threejs-payload
+    SOURCES threejs_payload_test.cpp
+    UNITS Vellum::MirrorView_script)
+target_compile_definitions(vellum-framework-threejs-payload-test PRIVATE
+    VELLUM_THREEJS_DIR="${VELLUM_THREEJS_DIR}")
+
 # Every test file here must be registered above. A test file that no
 # vellum_add_framework_test() names would build nothing and run nothing while
 # the lane stays green, so configure refuses it.

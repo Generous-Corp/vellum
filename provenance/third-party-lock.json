@@ -115,6 +115,16 @@
       "commit": "d14d46f6b44456eb88beac58cba833a4135d4c89",
       "sha256": "cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05",
       "surface": "optional rmlui/ module only; single header compiled into the VellumRmlUi::SoftRenderer PNG encoder"
+    },
+    {
+      "name": "Three.js",
+      "version": "0.183.1",
+      "revision": "077dd13c0e869d9f3dbe55875686f920367de457",
+      "license": "MIT",
+      "source": "https://github.com/mrdoob/three.js",
+      "path": "assets/threejs",
+      "payload_manifest_sha256": "1ed7c6f46541a8b803ba7c6386ae6b7751d4b30c1b82b3532db534481eba5b34",
+      "surface": "unmodified runtime payload (three.webgpu build, core and module companions, OrbitControls, GLTFLoader, BufferGeometryUtils, SkeletonUtils) that scripted views load as ES modules; each file is pinned by SHA-256 in assets/threejs/payload-manifest.json"
     }
   ],
   "runtime_toolchain_dependencies": {
