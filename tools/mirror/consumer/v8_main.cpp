@@ -23,15 +23,15 @@ int main(int argc, char** argv) {
         }
         auto engine = view::create_js_engine(view::JsEngineType::v8);
         const std::string answer = engine->evaluate("String([1, 2, 3].map(x => x * 7).join(','))").toString();
-        const std::string intl = engine->evaluate("new Intl.NumberFormat('de-DE').format(1234.5)").toString();
-        std::printf("engine=%s runtime=%s expected=%s kind=%s path=%s answer=%s intl=%s\n",
+        const std::string unicode = engine->evaluate("String(/\\p{Script=Greek}/u.test('\\u03b1'))").toString();
+        std::printf("engine=%s runtime=%s expected=%s kind=%s path=%s answer=%s unicode=%s\n",
                     std::string(view::engine_type_name(engine->type())).c_str(),
                     engine->runtime_version().c_str(), engine->expected_runtime_version().c_str(),
                     engine->provider_kind().c_str(), engine->provider_path().c_str(),
-                    answer.c_str(), intl.c_str());
+                    answer.c_str(), unicode.c_str());
         if (engine->type() != view::JsEngineType::v8 || engine->runtime_version().rfind(expected, 0) != 0 ||
             engine->expected_runtime_version() != expected || engine->provider_kind() != "v8builder" ||
-            answer != "7,14,21" || intl != "1.234,5") {
+            answer != "7,14,21" || unicode != "true") {
             std::fprintf(stderr, "v8 consumer: the installed engine is not the pinned V8\n");
             return 1;
         }

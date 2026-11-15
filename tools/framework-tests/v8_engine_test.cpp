@@ -2,7 +2,9 @@
 // engine is available, reports the runtime version libv8 itself returns and
 // the provider identity the build pinned, evaluates JavaScript that only a
 // real V8 accepts, and shares the process with the Skia/Dawn provider's own
-// ICU (V8's Intl and Skia's text shaping both work, in either order).
+// ICU (V8's Unicode handling and Skia's text shaping both work, in either
+// order). The pinned provider ships no ICU locale data, so Intl formatting
+// and collation are not exercised here.
 //
 // The same file is the control. A build without VELLUM_ENABLE_V8 registers
 // this test as expected to fail, so it proves the checks below fail when V8
@@ -75,10 +77,11 @@ FRAMEWORK_TEST(v8_evaluates_javascript) {
     CHECK(js_string(*engine, "(2n ** 64n).toString()") == "18446744073709551616");
     // WebAssembly is a V8 global that QuickJS does not have.
     CHECK(js_string(*engine, "typeof WebAssembly") == "object");
-    // Intl runs on the ICU and locale data sealed inside libv8.
-    CHECK(js_string(*engine, "new Intl.NumberFormat('de-DE').format(1234567.891)") == "1.234.567,891");
-    CHECK(js_string(*engine, "[...new Intl.Segmenter('en', {granularity: 'word'})"
-                             ".segment('hello sealed world')].filter(s => s.isWordLike).length") == "3");
+    // Unicode property escapes, case mapping and normalization run on the
+    // ICU code sealed inside libv8.
+    CHECK(js_string(*engine, "/\\p{Script=Greek}/u.test('\\u03b1')") == "true");
+    CHECK(js_string(*engine, "'\\u00df'.toUpperCase()") == "SS");
+    CHECK(js_string(*engine, "'A\\u030a'.normalize('NFC').length") == "1");
 }
 
 FRAMEWORK_TEST(quickjs_is_not_reported_as_v8) {
@@ -93,10 +96,9 @@ FRAMEWORK_TEST(v8_and_skia_icu_share_the_process) {
     const int before = wrapped_lines();
     CHECK(before >= 2);
     auto engine = view::create_js_engine(view::JsEngineType::v8);
-    CHECK(js_string(*engine, "'a'.localeCompare('b', 'sv')") == "-1");
-    CHECK(js_string(*engine, "new Intl.DateTimeFormat('ja-JP', {timeZone: 'UTC'}).format(0)") == "1970/1/1");
+    CHECK(js_string(*engine, "/\\p{Lu}/u.test('\\u00c5') && 'e\\u0301'.normalize('NFC') === '\\u00e9'") == "true");
     CHECK(wrapped_lines() == before);
-    CHECK(js_string(*engine, "'\\u00df'.toLocaleUpperCase('de')") == "SS");
+    CHECK(js_string(*engine, "'\\u0130'.toLowerCase().length") == "2");
 }
 
 } // namespace
