@@ -937,6 +937,53 @@ class VerifyExtractionTests(unittest.TestCase):
             _, checks = self.ports_verdict(root)
             self.assertEqual(checks["framework_external_unrecorded"], ["framework/external/x/first_party.cpp"])
 
+    def write_units(self, root: Path, targets: list[dict]) -> None:
+        path = root / verify_extraction.FRAMEWORK_UNITS
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"schema": "vellum.framework-units.v1", "targets": targets}), encoding="utf-8")
+
+    def test_a_target_no_closure_builds_is_declared_and_agrees_with_the_ledger(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n",
+                                          "framework/core/a/include/vellum/a/a.hpp": b"int a();\n"})
+            (root / self.PORTED).write_bytes(b"int n;\n")
+            row = dict(self.ports_row(self.PORTED), target="vellum-a-tool")
+            self.write_ports(root, [row])
+            target = {"name": "vellum-a-tool", "type": "EXECUTABLE", "unit": None, "sources": [self.PORTED],
+                      "include_dirs": ["core/a/include"], "compile_definitions": [], "link_targets": [],
+                      "reason": "a tool no closure builds"}
+
+            def unit_errors() -> tuple[list[str], dict]:
+                errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+                return [e for e in errors if verify_extraction.FRAMEWORK_UNITS in e
+                        or verify_extraction.FRAMEWORK_PORTS in e], checks
+
+            # Control: the declaration that agrees with the row passes.
+            self.write_units(root, [target])
+            errors, checks = unit_errors()
+            self.assertEqual(errors, [])
+            self.assertEqual(checks["framework_units_declared"], ["vellum-a-tool"])
+            for declared, fragment in (
+                ([dict(target, sources=["framework/core/a/src/other.cpp"])], "has no ports ledger row adding it"),
+                ([dict(target, name="vellum-other")], "is added by its ledger row to vellum-a-tool"),
+                ([dict(target, include_dirs=["core/b/include"])], "is not a directory framework/ holds"),
+                ([dict(target, name="pulp-a-tool")], "may not carry a Pulp name"),
+                ([dict(target, extra=1)], "must have exactly"),
+            ):
+                self.write_units(root, declared)
+                errors, checks = unit_errors()
+                self.assertTrue(any(fragment in e for e in errors), (declared, errors))
+                self.assertEqual(checks["framework_units_declared"], [])
+            # A row naming a declared target that does not list its source.
+            other = "framework/core/a/src/other.cpp"
+            (root / other).write_bytes(b"int o;\n")
+            self.write_ports(root, [row, dict(self.ports_row(other), target="vellum-a-tool")])
+            self.write_units(root, [target])
+            errors, _ = unit_errors()
+            self.assertTrue(any("which does not list it in" in e for e in errors), errors)
+
     def test_the_ports_ledger_is_append_only(self) -> None:
         self.hide_ci_git_base()
         with tempfile.TemporaryDirectory() as temporary:
