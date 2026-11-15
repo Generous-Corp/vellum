@@ -163,6 +163,28 @@ test('Design preserves imported root, text, and nested flex dimensions', () => {
     assert.deepEqual(materializedTree, tree);
 });
 
+test('renders lowered boxes and leaves display: none nodes out', () => {
+    const document = fixture();
+    document.root.children = [
+        {
+            id: 'main/placed', kind: 'view', name: 'Placed',
+            properties: { layout: { x: 288, y: 48.5, width: 704, height: 381.875 } },
+            children: [],
+        },
+        {
+            id: 'main/hidden', kind: 'text', text: ' ',
+            properties: { layout: { display: 'none' } },
+            children: [],
+        },
+    ];
+    const tree = JSON.parse(mount(createApp({
+        id: 'design-boxes', stateVersion: '1', initialState: {},
+        render: () => materializeDesign(document),
+    })).renderJSON()).tree;
+    assert.deepEqual(tree.children.map((child) => child.id), ['main/placed']);
+    assert.deepEqual(tree.children[0].style, { x: 288, y: 48.5, width: 704, height: 381.875 });
+});
+
 test('fails closed on unresolved tokens, duplicate ids, and unsupported kinds', () => {
     const unresolved = fixture();
     unresolved.root.properties.paint.backgroundColor = '{missing.token}';
