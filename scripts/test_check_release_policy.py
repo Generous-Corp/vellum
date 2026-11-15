@@ -652,6 +652,20 @@ class Isolation(unittest.TestCase):
         # The honest layout still passes.
         self.assertEqual(self.found("jobs:\n  sign:\n" + self.read()), [])
 
+    def test_a_steps_key_inside_a_job_block_scalar_is_rejected(self) -> None:
+        # A fake minting list in a job-level block scalar is text, not a
+        # runnable steps list. The layout audit must still report the hidden
+        # key instead of silently dropping it.
+        hidden = ("jobs:\n  sign:\n    env:\n      NOTE: |\n"
+                  "        steps:\n"
+                  "          - id: app-token\n"
+                  "            uses: actions/create-github-app-token@"
+                  "1b10c78c7865c340bc4f6099eb2f838309f1e8c3\n")
+        workflow = hidden + self.read(mint="")
+        problems = policy.step_layout_problems(policy.SIGNING_WORKFLOW, workflow)
+        self.assertTrue(any("steps: line that is not the job's own" in problem for problem in problems),
+                        problems)
+
     def test_a_column_zero_comment_does_not_hide_the_steps(self) -> None:
         # `# note: |` is a YAML comment, not a block-scalar opener. Read as
         # one, it hid the job's steps key, so an Actions-token Administration

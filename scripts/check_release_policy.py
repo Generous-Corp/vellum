@@ -684,9 +684,18 @@ def _steps_key_lines(text: str) -> tuple[list[int], list[int]]:
     block scalar is text, not steps."""
     lines = text.splitlines()
     key_indent = _job_key_indent(lines)
+    visible = set(_structural_indices(lines))
     own: list[int] = []
     other: list[int] = []
-    for number in _structural_indices(lines):
+    for number, line in enumerate(lines):
+        # A block-scalar body is not executable workflow structure. Still
+        # reject an exact `steps:` key hidden there: otherwise a fake minting
+        # list can disappear from the layout audit while its surrounding job
+        # remains otherwise readable.
+        if number not in visible:
+            if STEPS_KEY.fullmatch(line):
+                other.append(number)
+            continue
         line = lines[number]
         if not STEPS_KEY.fullmatch(line):
             continue
