@@ -384,6 +384,14 @@ export interface VellumBridge {
     pumpJSON(): string;
     isDirty(): boolean;
     hasCommand(command: string): boolean;
+    /**
+     * Runs the handler a mounted component bound to a defined command with
+     * `useCommand`, and renders. Returns the JSON envelope
+     * `{protocol, command, invocations, changed, tree}`, where `changed` says
+     * whether the rendered tree differs from the one before; throws when the command is
+     * not defined or has no handler.
+     */
+    invokeCommand(command: string, arguments_?: Record<string, JsonValue>): string;
 }
 export type WidenScalar<Value> = Value extends string ? string
     : Value extends number ? number
@@ -398,6 +406,15 @@ export declare function useState<Value extends JsonValue>(
     WidenScalar<Value>,
     (next: WidenScalar<Value> | ((previous: WidenScalar<Value>) => WidenScalar<Value>)) => void,
 ];
+/**
+ * Binds the handler a command defined with `services.commands.define` runs
+ * while this component is mounted. The host invokes it inside a dispatch, so
+ * state the handler sets is rendered.
+ */
+export declare function useCommand(
+    command: string,
+    handler: (arguments_: Record<string, JsonValue>) => void,
+): void;
 export declare function useMemo<Value>(
     factory: () => Value,
     dependencies: readonly unknown[],

@@ -8,7 +8,7 @@ import {
     View,
     mount,
     services,
-    useEffect,
+    useCommand, useEffect,
     useState,
 } from '@vellum/ui';
 import importedDesign from './imported-design.json';
@@ -53,6 +53,9 @@ function App() {
             (error) => setStatus(`url-${String(error.code)}`),
         );
     };
+
+    useCommand('item.add', addItem);
+    useCommand('item.noop', () => {});
 
     return (
         <View id="phase3-app" accessibilityLabel="Phase 3 board">
@@ -115,6 +118,14 @@ services.commands.define([{
     id: 'item.add',
     title: 'Add item',
     shortcut: 'Primary+N',
+}, {
+    // Described but never bound to a handler: a scenario cannot invoke it.
+    id: 'item.describe',
+    title: 'Describe item',
+}, {
+    // Bound to a handler that changes nothing rendered.
+    id: 'item.noop',
+    title: 'Do nothing',
 }]);
 
 mount(App);

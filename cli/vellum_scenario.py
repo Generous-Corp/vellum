@@ -34,6 +34,29 @@ def _bounded(value: object, maximum: int, *, allow_empty: bool = False) -> bool:
         return False
 
 
+def command_targets(scenario: dict[str, Any]) -> list[str]:
+    """The commands a scenario invokes, in step order."""
+    return [step["target"] for step in scenario.get("steps", [])
+            if isinstance(step, dict) and step.get("action") == "command"]
+
+
+def unproven_commands(scenario: dict[str, Any], proven: list[str]) -> list[str]:
+    """The scenario's command steps a host gave no proof for. `proven` names,
+    in order, each command whose handler the host ran and whose rendered tree
+    it saw change. A scenario passes only when the two lists are equal: a
+    command step that only found its command defined proves nothing."""
+    expected = command_targets(scenario)
+    if proven == expected:
+        return []
+    missing = list(expected)
+    for target in proven:
+        if target in missing:
+            missing.remove(target)
+    # Equal as sets but not as lists (reordered, repeated, or proof for a
+    # command the scenario never invokes): nothing is proven.
+    return missing or expected or [f"unexpected proof for {target}" for target in proven]
+
+
 def validate_scenario_document(scenario: dict[str, Any]) -> None:
     if scenario.get("schema") not in SCENARIO_SCHEMAS:
         raise ScenarioValidationError("Unsupported scenario schema")

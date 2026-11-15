@@ -282,6 +282,15 @@ def main() -> int:
             throws = evidence.get("throws")
             scroll = evidence.get("scrollContainers")
             touches = evidence.get("touches")
+            commands = evidence.get("commands")
+            # The command step ran its handler once and the rendered tree changed.
+            if not isinstance(commands, list) or len(commands) != 1 or \
+                    {key: commands[0].get(key) for key in ("target", "invoked", "invocations", "changed")} != {
+                        "target": "item.add", "invoked": True, "invocations": 1, "changed": True,
+                    } or not all(
+                        isinstance(commands[0].get(key), int) and not isinstance(commands[0].get(key), bool)
+                        for key in ("before", "after")):
+                raise SystemExit(f"command step did not prove invocation and effect: {evidence}")
             if assertions != [
                 {"action": "assert-text", "target": "item-list", "passed": True},
                 {"action": "command", "target": "item.add", "passed": True},
