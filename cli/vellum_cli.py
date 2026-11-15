@@ -1082,11 +1082,7 @@ def doctor(args: argparse.Namespace) -> dict[str, Any]:
     import_required = bool(command_capabilities.get("import") or command_capabilities.get("reimport"))
     required_target = args.require_target
     web_required = required_target == "web"
-    required_target_commands = (
-        ("build", "run", "test", "capture", "package")
-        if required_target == "macos"
-        else ("build", "run", "test", "package")
-    )
+    required_target_commands = ("build", "run", "test", "capture", "package")
     selected_target_commands = (
         sdk[1]["capabilities"].get("targets", {}).get(required_target, {}).get("commands", {})
         if sdk and required_target else {}

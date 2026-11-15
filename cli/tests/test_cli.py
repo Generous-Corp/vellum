@@ -387,10 +387,7 @@ class CliTests(unittest.TestCase):
                 name: True
                 for name in ("build", "run", "test", "capture", "package")
             }
-            web_commands = {
-                **native_commands,
-                "capture": False,
-            }
+            web_commands = dict(native_commands)
             all_commands = {
                 "import": True,
                 "reimport": True,
@@ -644,6 +641,48 @@ class CliTests(unittest.TestCase):
             for option, value in (("--target", "web"), ("--interaction-plan", "tests/plan.json"),
                                   ("--output", "artifacts/home.png")):
                 self.assertEqual(forwarded[forwarded.index(option) + 1], value)
+
+    def test_web_capture_is_gated_on_sdk_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "app"
+            self.assertEqual(invoke("create", "Gate", "-d", str(project)).returncode, 0)
+            for capture in (True, False):
+                metadata = {"capabilities": {
+                    "commands": {"capture": True},
+                    "targets": {"web": {"commands": {"capture": capture}}},
+                }}
+                args = cli_module.parser().parse_args([
+                    "capture", "--project", str(project), "--target", "web",
+                ])
+                calls: list[str] = []
+
+                def fake_backend(command, root, lock, forwarded):
+                    calls.append(command)
+                    return {"ok": True, "status": "captured", "diagnostics": []}, 0
+
+                with (
+                    mock.patch.object(cli_module, "load_sdk_metadata",
+                                      return_value=(Path(temporary), metadata)),
+                    mock.patch.object(cli_module, "validate_project_sdk"),
+                    mock.patch.object(cli_module, "invoke_backend", fake_backend),
+                ):
+                    if capture:
+                        cli_module.backend_command(args, [])
+                        self.assertEqual(calls, ["capture"])
+                    else:
+                        with self.assertRaises(cli_module.CliFailure) as raised:
+                            cli_module.backend_command(args, [])
+                        self.assertEqual(raised.exception.status, "capability_unavailable")
+                        self.assertEqual(calls, [])
+
+    def test_sdk_generators_advertise_web_capture(self) -> None:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+        try:
+            import build_sdk_artifact, install_core
+        finally:
+            sys.path.pop(0)
+        self.assertIn("capture", build_sdk_artifact.WEB_COMMANDS)
+        self.assertIn("capture", install_core.WEB_TARGET_COMMANDS)
 
     def test_invalid_lock_fails_before_backend_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
