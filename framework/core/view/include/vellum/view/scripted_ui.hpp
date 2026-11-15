@@ -311,6 +311,10 @@ class ScriptedUiSession : public ScriptedEditorSession {
     /// editor; the first load has nothing to protect and never probes, so an
     /// editor open evaluates its document exactly once. Exposed so tests and
     /// editor-open budgets can assert that by count rather than by wall time.
+    /// Writes a reload probe tried to make to a model-built session's model,
+    /// and dropped: values, plain values and gesture begins. Zero for a store
+    /// session, whose probe writes to its own copy of the store.
+    std::uint64_t probe_dropped_writes() const noexcept { return probe_dropped_writes_; }
     std::uint64_t probe_realm_evaluations() const noexcept {
         return probe_realm_evaluations_;
     }
@@ -429,6 +433,7 @@ private:
     bool accessibility_retirement_pending_ = false;
     ReloadMetrics last_reload_metrics_{};   // JS-axis reload timings (item 1.2)
     std::uint64_t probe_realm_evaluations_ = 0;
+    std::uint64_t probe_dropped_writes_ = 0;
     bool document_load_pending_ = false;
     int deferred_load_polls_ = 0;
     std::function<void(bool, const std::string&)> document_loaded_callback_;

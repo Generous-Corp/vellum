@@ -109,16 +109,17 @@ void load_script_before_deadline(WidgetBridge& bridge, ScriptEngine& engine,
 // A ParamModel that reads through to another and drops every write: values,
 // gestures and plain writes do nothing, and a subscription never fires. A
 // reload probe runs over it so the probe script cannot move a parameter or
-// open a host gesture.
+// open a host gesture. Each dropped write is counted in `dropped`, so a test
+// can see that a probe's write reached the wrapper and stopped there.
 class ReadOnlyParamModel final : public value::ParamModel, public value::ParamMetadata {
 public:
-    explicit ReadOnlyParamModel(value::ParamModel& source)
-        : source_(source), metadata_(value::metadata_of(source)) {}
+    ReadOnlyParamModel(value::ParamModel& source, std::uint64_t& dropped)
+        : source_(source), metadata_(value::metadata_of(source)), dropped_(dropped) {}
 
     value::ParamHandle resolve(std::string_view key) override { return source_.resolve(key); }
     double normalized(value::ParamHandle p) override { return source_.normalized(p); }
-    void set_normalized(value::ParamHandle, double) override {}
-    void begin(value::ParamHandle) override {}
+    void set_normalized(value::ParamHandle, double) override { ++dropped_; }
+    void begin(value::ParamHandle) override { ++dropped_; }
     void end(value::ParamHandle) override {}
     std::string display_text(value::ParamHandle p, double n) override { return source_.display_text(p, n); }
     int value_count(value::ParamHandle p) override { return source_.value_count(p); }
@@ -148,11 +149,12 @@ public:
     double plain_value(value::ParamHandle p) override {
         return metadata_ ? metadata_->plain_value(p) : source_.plain(p, source_.normalized(p));
     }
-    void set_plain_value(value::ParamHandle, double) override {}
+    void set_plain_value(value::ParamHandle, double) override { ++dropped_; }
 
 private:
     value::ParamModel& source_;
     value::ParamMetadata* metadata_;
+    std::uint64_t& dropped_;
 };
 
 } // namespace
@@ -853,7 +855,7 @@ bool ScriptedUiSession::rebuild_from_code(
             // the session's model through a view that drops every write.
             std::optional<ReadOnlyParamModel> probe_params;
             if (params_)
-                probe_params.emplace(*params_);
+                probe_params.emplace(*params_, probe_dropped_writes_);
             auto probe_bridge =
                 probe_params
                     ? std::make_unique<WidgetBridge>(*probe_engine, probe_root, *probe_params,

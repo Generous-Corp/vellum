@@ -104,10 +104,13 @@ FRAMEWORK_TEST(a_model_session_reload_probes_without_writing) {
     CHECK(model.writes == 1);
 
     const auto probes = session.probe_realm_evaluations();
+    CHECK(session.probe_dropped_writes() == 0);
     CHECK(session.reload(&error));
     CHECK(error.empty());
-    // The probe evaluated the script, and only the committed realm wrote.
+    // The probe evaluated the script and its setParam reached the read-only
+    // view, which dropped it; only the committed realm wrote.
     CHECK(session.probe_realm_evaluations() == probes + 1);
+    CHECK(session.probe_dropped_writes() == 1);
     CHECK(model.writes == 2);
     CHECK(&session.bridge()->params() == &model);
 }
@@ -123,6 +126,7 @@ FRAMEWORK_TEST(a_store_session_is_unchanged) {
     CHECK(std::abs(store.get_normalized(3) - 0.25f) < 1e-6f);
     CHECK(session.reload(&error));
     CHECK(std::abs(store.get_normalized(3) - 0.25f) < 1e-6f);
+    CHECK(session.probe_dropped_writes() == 0);
     CHECK(session.bridge() != nullptr);
     CHECK(value::metadata_of(session.bridge()->params()) != nullptr);
 }
