@@ -90,8 +90,11 @@ document.body.style.padding = '0px';
 const canvas = document.createElement('canvas');
 canvas.id = 'multi-draw'; canvas.width = 64; canvas.height = 32;
 document.body.appendChild(canvas);
-const dev = __createMockGPUDevice(__createGPUAdapter({nativeBridge: true}), {}, {nativeBridge: true});
+// getContext installs the native command path, so the device comes after it.
 const context = canvas.getContext('webgpu');
+const dev = __createMockGPUDevice(__createGPUAdapter({nativeBridge: true}), {}, {nativeBridge: true});
+globalThis.gpuErrors = [];
+dev.onuncapturederror = function (event) { gpuErrors.push(String(event.error && event.error.message)); };
 context.configure({device: dev, format: 'bgra8unorm'});
 function quad(x0, x1, z) {
     const v = new Float32Array([x0, -1, z, x1, -1, z, x1, 1, z, x0, -1, z, x1, 1, z, x0, 1, z]);
@@ -116,6 +119,22 @@ function pipeline(rgb, depth) {
 function colourAttachment() {
     return {view: context.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store',
             clearValue: {r: 0, g: 0, b: 1, a: 1}};
+}
+// One pass into `colour` with a fresh depth attachment of the given size and
+// sample count: near red over the left half, then far green over everything.
+function depthPass(colour, width, height, sampleCount) {
+    const depthTexture = dev.createTexture({size: {width, height}, format: 'depth24plus', sampleCount,
+                                            usage: GPUTextureUsage.RENDER_ATTACHMENT});
+    const encoder = dev.createCommandEncoder();
+    const pass = encoder.beginRenderPass({
+        colorAttachments: [colour],
+        depthStencilAttachment: {view: depthTexture.createView(), depthLoadOp: 'clear', depthClearValue: 1.0,
+                                 depthStoreOp: 'store'}
+    });
+    draw(pass, pipeline('1.0, 0.0, 0.0', true), quad(-1, 0, 0.2));
+    draw(pass, pipeline('0.0, 1.0, 0.0', true), quad(-1, 1, 0.8));
+    pass.end();
+    dev.queue.submit([encoder.finish()]);
 }
 function draw(pass, pipe, buffer) {
     pass.setPipeline(pipe);
@@ -186,6 +205,7 @@ pass.end();
 dev.queue.submit([encoder.finish()]);
 )JS");
     CHECK(draw_results(s) == "true,true");
+    CHECK(s.js_string("gpuErrors.join(' | ')").empty());
     const auto r = paint_canvas(s);
     report("two-quads", r);
     CHECK(r.ok());
@@ -199,22 +219,9 @@ dev.queue.submit([encoder.finish()]);
 
 FRAMEWORK_TEST(a_nearer_earlier_draw_is_not_overwritten_by_a_farther_later_one) {
     ScriptedCanvas s;
-    s.engine.evaluate(std::string(kSetup) + R"JS(
-const depthTexture = dev.createTexture({size: {width: 64, height: 32}, format: 'depth24plus',
-                                        usage: GPUTextureUsage.RENDER_ATTACHMENT});
-const encoder = dev.createCommandEncoder();
-const pass = encoder.beginRenderPass({
-    colorAttachments: [colourAttachment()],
-    depthStencilAttachment: {view: depthTexture.createView(), depthLoadOp: 'clear', depthClearValue: 1.0,
-                             depthStoreOp: 'store'}
-});
-// Near red over the left half first, then far green over the whole canvas.
-draw(pass, pipeline('1.0, 0.0, 0.0', true), quad(-1, 0, 0.2));
-draw(pass, pipeline('0.0, 1.0, 0.0', true), quad(-1, 1, 0.8));
-pass.end();
-dev.queue.submit([encoder.finish()]);
-)JS");
+    s.engine.evaluate(std::string(kSetup) + "depthPass(colourAttachment(), 64, 32, 1);");
     CHECK(draw_results(s) == "true,true");
+    CHECK(s.js_string("gpuErrors.join(' | ')").empty());
     const auto r = paint_canvas(s);
     report("depth", r);
     CHECK(r.ok());
@@ -240,6 +247,7 @@ pass.end();
 dev.queue.submit([encoder.finish()]);
 )JS");
     CHECK(draw_results(s) == "true,true");
+    CHECK(s.js_string("gpuErrors.join(' | ')").empty());
     const auto r = paint_canvas(s);
     report("second-pass", r);
     CHECK(r.ok());
@@ -247,6 +255,42 @@ dev.queue.submit([encoder.finish()]);
     const auto* left = r.at(8, kHeight / 2);
     CHECK(left[0] < 60 && left[1] < 60 && left[2] > 200);
     CHECK(is_green(r.at(56, kHeight / 2)));
+}
+
+FRAMEWORK_TEST(a_resized_target_gets_a_depth_texture_of_its_new_size) {
+    ScriptedCanvas s;
+    s.engine.evaluate(std::string(kSetup) + R"JS(
+depthPass(colourAttachment(), 64, 32, 1);
+canvas.width = 32; canvas.height = 16;
+context.configure({device: dev, format: 'bgra8unorm'});
+drawResults.length = 0;
+depthPass(colourAttachment(), 32, 16, 1);
+)JS");
+    CHECK(draw_results(s) == "true,true");
+    CHECK(s.js_string("gpuErrors.join(' | ')").empty());
+    std::fprintf(stderr, "  errors: %s\n", s.js_string("gpuErrors.join(' | ')").c_str());
+    const auto r = paint_canvas(s);
+    report("resized", r);
+    CHECK(r.ok());
+    if (!r.ok()) return;
+    CHECK(is_red(r.at(8, kHeight / 2)));
+    CHECK(is_green(r.at(56, kHeight / 2)));
+}
+
+FRAMEWORK_TEST(a_multisampled_target_gets_a_multisampled_depth_texture) {
+    // The buffered path does not resolve a multisampled target, so this case
+    // checks only that the pass is valid: the pipeline and the depth texture
+    // take the colour target's sample count.
+    ScriptedCanvas s;
+    s.engine.evaluate(std::string(kSetup) + R"JS(
+const msaa = dev.createTexture({size: {width: 64, height: 32}, format: 'bgra8unorm', sampleCount: 4,
+                                usage: GPUTextureUsage.RENDER_ATTACHMENT});
+depthPass({view: msaa.createView(), loadOp: 'clear', storeOp: 'store', clearValue: {r: 0, g: 0, b: 1, a: 1}},
+          64, 32, 4);
+)JS");
+    CHECK(draw_results(s) == "true,true");
+    std::fprintf(stderr, "  errors: %s\n", s.js_string("gpuErrors.join(' | ')").c_str());
+    CHECK(s.js_string("gpuErrors.join(' | ')").empty());
 }
 
 } // namespace

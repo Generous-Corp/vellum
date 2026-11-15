@@ -1688,7 +1688,11 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
         pipeline_desc.primitive.topology = primitive_topology_from_string(topology);
         pipeline_desc.primitive.frontFace = wgpu::FrontFace::CCW;
         pipeline_desc.primitive.cullMode = wgpu::CullMode::None;
-        pipeline_desc.multisample.count = 1;
+        // The pipeline draws at the target's sample count, which a multisampled
+        // texture target sets; a canvas is single-sampled.
+        const uint32_t target_sample_count = target_texture_state != nullptr
+            ? std::max<uint32_t>(1, target_texture_state->sample_count) : 1;
+        pipeline_desc.multisample.count = target_sample_count;
         pipeline_desc.multisample.mask = ~0u;
         pipeline_desc.multisample.alphaToCoverageEnabled = false;
 
@@ -1782,7 +1786,8 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
 
         // The target's depth texture outlives a single replayed draw, so later
         // draws of the same script pass test against the depth earlier ones
-        // wrote. It is recreated when the target's size changes.
+        // wrote. It is recreated when the target's size or sample count
+        // changes, so it always matches the colour attachment.
         wgpu::TextureView depth_view;
         wgpu::RenderPassDepthStencilAttachment depth_attachment{};
         if (has_depth) {
@@ -1791,9 +1796,11 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
             const uint32_t depth_w = target_canvas_state ? target_canvas_state->width : target_texture_state->width;
             const uint32_t depth_h = target_canvas_state ? target_canvas_state->height : target_texture_state->height;
             bool fresh_depth = false;
-            if (!depth_texture || depth_texture.GetWidth() != depth_w || depth_texture.GetHeight() != depth_h) {
+            if (!depth_texture || depth_texture.GetWidth() != depth_w || depth_texture.GetHeight() != depth_h ||
+                depth_texture.GetSampleCount() != target_sample_count) {
                 wgpu::TextureDescriptor depth_tex_desc{};
                 depth_tex_desc.size = {depth_w, depth_h, 1};
+                depth_tex_desc.sampleCount = target_sample_count;
                 depth_tex_desc.format = wgpu::TextureFormat::Depth24Plus;
                 depth_tex_desc.usage = wgpu::TextureUsage::RenderAttachment;
                 depth_texture = device_ptr->CreateTexture(&depth_tex_desc);

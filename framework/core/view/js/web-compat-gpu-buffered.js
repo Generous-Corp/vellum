@@ -352,12 +352,25 @@ function __installNativeGpuBufferedDrawAugmentation() {
     var originalCreateMockGPUDevice = __createMockGPUDevice;
 
     __createMockGPURenderPassEncoder = function(init) {
-        var encoder = originalCreateMockGPURenderPassEncoder(init || {});
+        init = init || {};
+        var emittedBufferedDraw = false;
+        // The wrapped encoder records a canvas clear that it hands over when
+        // the pass ends, after this pass's buffered draws. Those draws already
+        // apply the pass's load operation, so the late clear would erase them;
+        // it is kept only for a pass that drew nothing through this path.
+        var innerInit = {};
+        for (var key in init) innerInit[key] = init[key];
+        if (typeof init.onEnd === "function") {
+            innerInit.onEnd = function(command) {
+                if (emittedBufferedDraw && command && command.type === "native-clear-current-texture") return;
+                init.onEnd(command);
+            };
+        }
+        var encoder = originalCreateMockGPURenderPassEncoder(innerInit);
         var currentPipeline = null;
         var currentBindGroups = [];
         var currentVertexBuffers = [];
         var currentIndexBuffer = null;
-        var emittedBufferedDraw = false;
         // Draws this pass has handed the binding. The binding applies the
         // pass's load operations to the first one only, so later draws keep
         // what earlier draws rendered.
