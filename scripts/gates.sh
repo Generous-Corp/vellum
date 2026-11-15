@@ -204,7 +204,7 @@ upstream_at() {
   local name="$1" sha="$2" dir="$CACHE/$1"
   if [[ ! -d "$UPSTREAM_SRC/.git" ]]; then
     local clone_err
-    if ! clone_err="$(git clone -q --no-checkout "$UPSTREAM_URL" "$UPSTREAM_SRC" 2>&1)"; then
+    if ! clone_err="$(git clone -q --no-checkout --filter=blob:none "$UPSTREAM_URL" "$UPSTREAM_SRC" 2>&1)"; then
       # The URL may carry a token; never echo it or git's own copy of it.
       clone_err="${clone_err//"$UPSTREAM_URL"/<upstream>}"
       clone_err="$(printf '%s\n' "$clone_err" | sed -E 's#(://)[^/@[:space:]]+@#\1<credentials>@#g')"
@@ -515,10 +515,20 @@ if [[ $FULL -eq 1 ]]; then
 else
   run_check authority-tests check_authority_tests
   run_check observatory-tests check_observatory_tests
-  if [[ -f tools/provenance/observatory.py && -f provenance/pulp-observatory/cursor.json ]] && ! git diff --quiet "$GIT_BASE" HEAD --; then
-    run_check observatory-events check_observatory_events
+  # The verify reads Pulp and takes minutes, so run it only when the change can
+  # need an observation event; the observatory's own mapping decides.
+  if [[ -f tools/provenance/observatory.py && -f provenance/pulp-observatory/cursor.json ]]; then
+    prefilter_started=$SECONDS
+    prefilter="$(python3 -I tools/provenance/observatory.py needs-verify --vellum-repo . \
+      --git-base "$GIT_BASE" --vellum-target "$HEAD_SHA" 2>&1)" || prefilter="yes: pre-filter failed ($prefilter); verifying to be safe"
+    if [[ "$prefilter" == no:* ]]; then
+      skip_check observatory-events "observatory: no mapped paths changed (decided in $((SECONDS - prefilter_started + 0))s)"
+    else
+      printf 'gates: observatory-events runs: %s\n' "${prefilter#yes: }"
+      run_check observatory-events check_observatory_events
+    fi
   else
-    skip_check observatory-events "no change against the base, or no observatory in this tree"
+    skip_check observatory-events "no observatory in this tree"
   fi
   finish_checks
   PARALLEL=0

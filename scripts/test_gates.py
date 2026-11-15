@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -134,8 +135,23 @@ class GatesTest(unittest.TestCase):
     # observatory.py that exits as the real verify would.
     GAP_STUB = (
         "import sys\n"
+        "if sys.argv[1] == 'needs-verify':\n"
+        "    print('yes: abc touches a mapped path'); raise SystemExit(0)\n"
         "sys.stderr.write('observatory: observatory health budgets failed: cursor-event-coverage-gap\\n')\n"
         "raise SystemExit(1)\n"
+    )
+
+    PASS_STUB = (
+        "import sys\n"
+        "if sys.argv[1] == 'needs-verify':\n"
+        "    print('yes: abc touches a mapped path'); raise SystemExit(0)\n"
+    )
+    # A verify stub that fails the test if it runs: the pre-filter must skip it.
+    SKIP_STUB = (
+        "import sys\n"
+        "if sys.argv[1] == 'needs-verify':\n"
+        "    print('no: no mapped paths changed'); raise SystemExit(0)\n"
+        "raise SystemExit('verify must not run for a change with no mapped paths')\n"
     )
 
     def observatory_gates(self, stub: str, change_path: str = "graphics/mapped.cpp") -> subprocess.CompletedProcess[str]:
@@ -184,19 +200,25 @@ class GatesTest(unittest.TestCase):
                                         capture_output=True, text=True, check=True).stdout.strip(), "")
 
     def test_a_change_with_its_observation_event_passes(self) -> None:
-        result = self.observatory_gates("raise SystemExit(0)\n")
+        result = self.observatory_gates(self.PASS_STUB)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("gates: observatory-events runs: abc touches a mapped path", result.stdout)
         self.assertIn("gates: PASS observatory-events", result.stdout)
         self.assertNotIn("reconcile", result.stdout)
 
-    def test_a_non_mapped_change_passes_without_a_reconcile_hint(self) -> None:
-        # The real verify passes a change that touches no mapped path; the stub stands in for that.
-        result = self.observatory_gates("raise SystemExit(0)\n", change_path="docs/unmapped.md")
+    def test_a_non_mapped_change_skips_the_verify_quickly(self) -> None:
+        started = time.monotonic()
+        result = self.observatory_gates(self.SKIP_STUB, change_path="docs/unmapped.md")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("SKIP observatory-events (observatory: no mapped paths changed", result.stdout)
+        self.assertNotIn("RUN  observatory-events", result.stdout)
         self.assertNotIn("reconcile", result.stdout)
+        # No Pulp clone was made: the verify's cache was never created.
+        self.assertFalse((self.repo / ".worktrees" / "vellum-gates-cache" / "pulp-src").exists())
+        self.assertLess(time.monotonic() - started, 30)
 
     def test_another_observatory_failure_fails_without_a_reconcile_hint(self) -> None:
-        stub = "import sys\nsys.stderr.write('observatory: events are append-only\\n')\nraise SystemExit(1)\n"
+        stub = "import sys\nif sys.argv[1] == 'needs-verify':\n    print('yes: x'); raise SystemExit(0)\nsys.stderr.write('observatory: events are append-only\\n')\nraise SystemExit(1)\n"
         result = self.observatory_gates(stub)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("gates: FAIL observatory-events", result.stdout)
@@ -205,7 +227,7 @@ class GatesTest(unittest.TestCase):
     def test_an_unchanged_tree_skips_the_observatory_check(self) -> None:
         git(self.repo, "tag", "-f", "base")
         (self.repo / "tools" / "provenance").mkdir(parents=True)
-        (self.repo / "tools" / "provenance" / "observatory.py").write_text(self.GAP_STUB, encoding="utf-8")
+        (self.repo / "tools" / "provenance" / "observatory.py").write_text(self.SKIP_STUB, encoding="utf-8")
         (self.repo / "provenance" / "pulp-observatory").mkdir(parents=True)
         (self.repo / "provenance" / "pulp-observatory" / "cursor.json").write_text("{}", encoding="utf-8")
         git(self.repo, "add", "-A")

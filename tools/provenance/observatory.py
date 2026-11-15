@@ -1714,6 +1714,27 @@ def reconcile(
     return {"new_events": [event["event_id"] for event in new_events], "cursor": cursor, "report": report}
 
 
+def needs_verification(*, root: Path, vellum_repo: Path, git_base: str, vellum_target: str) -> tuple[bool, str]:
+    """Whether the change base..target can need an observation event: a commit
+    touches a path the legacy path map maps, or the observatory's own data. A
+    read-only pre-filter for local gates; verify stays the authority."""
+    mapping = load_json(root / MAP_PATH)
+    mappings = mapping["mappings"]
+    rules = mapping.get("transitive_path_rules", [])
+    for commit in commits_between(vellum_repo, git_base, vellum_target):
+        entries = parse_diff_entries(vellum_repo, commit)
+        for entry in entries:
+            for side in ("old_path", "path"):
+                if side in entry and (
+                    str(entry[side]).startswith(f"{OBSERVATORY}/")
+                    or str(entry[side]).startswith("tools/provenance/observatory")
+                ):
+                    return True, f"{commit[:12]} touches the observatory ({entry[side]})"
+        if mapped_change(entries, mappings, "vellum", rules) is not None:
+            return True, f"{commit[:12]} touches a mapped path"
+    return False, "no mapped paths changed"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=ROOT)
@@ -1765,6 +1786,13 @@ def main(argv: list[str] | None = None) -> int:
         "--no-git-base", action="store_true",
         help="local check only: verify without a git base, so the own-commit event rule cannot run",
     )
+    needs_parser = subparsers.add_parser(
+        "needs-verify",
+        help="read-only: print yes or no for whether a change touches mapped paths (a local pre-filter)",
+    )
+    needs_parser.add_argument("--vellum-repo", type=Path, required=True)
+    needs_parser.add_argument("--git-base", required=True)
+    needs_parser.add_argument("--vellum-target", required=True)
     reconcile_parser = subparsers.add_parser("reconcile")
     reconcile_parser.add_argument("--pulp-repo", type=Path, required=True)
     reconcile_parser.add_argument("--vellum-repo", type=Path, required=True)
@@ -1792,6 +1820,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         root = args.root.resolve()
+        if args.command == "needs-verify":
+            needed, reason = needs_verification(
+                root=root, vellum_repo=args.vellum_repo.resolve(),
+                git_base=args.git_base, vellum_target=args.vellum_target,
+            )
+            print(f"{'yes' if needed else 'no'}: {reason}")
+            return 0
         if args.command == "verify":
             if args.no_git_base and args.git_base:
                 raise ObservatoryError("--no-git-base and --git-base are exclusive")
