@@ -2,6 +2,7 @@
 
 #include <vellum/graphics/color.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cmath>
@@ -26,12 +27,63 @@ struct GradientStop final {
     Color color{};
 };
 
+enum class GradientKind : std::uint8_t { linear, radial, two_circle_radial, conic };
+enum class GradientSpread : std::uint8_t { pad, repeat, reflect };
+enum class GradientInterpolation : std::uint8_t { srgb, linear_srgb, oklab };
+
+/// A gradient paint. The name is historical: since scene version 8 it also
+/// carries radial, two-circle radial and conic gradients.
+///
+/// Colour: `color_space` names the space the stop colours are written in
+/// ("srgb", "linear-srgb" or "display-p3"), and `interpolation` names the
+/// space the ramp is blended in (sRGB, linear sRGB or OKLab). The two are
+/// independent, so any stop space combines with any interpolation. OKLab is
+/// an interpolation space only; a `color_space` of "oklab" or any other name
+/// is refused with `VELLUM_GRADIENT_NOT_EXPRESSIBLE`. With the defaults (sRGB
+/// stops, sRGB interpolation) the ramp blends unpremultiplied colours in the
+/// destination space, as every version before 8 did; any other combination
+/// blends premultiplied colours.
+///
+/// Geometry, with every position a fraction of the painted box:
+/// - linear: `angle_degrees` follows CSS, 0 pointing up and increasing
+///   clockwise.
+/// - radial: an ellipse centred on `center_x`, `center_y` with radii
+///   `radius_x` (of the box width) and `radius_y` (of the box height); zero
+///   means half the box.
+/// - two-circle radial: the ramp runs from the start circle, centred on
+///   `focal_x`, `focal_y` with radius `start_radius`, to the end circle,
+///   centred on `center_x`, `center_y` with radius `end_radius`. Both radii
+///   are fractions of the box's shorter side and zero means zero. Two
+///   identical circles are refused.
+/// - conic: the ramp turns once about `center_x`, `center_y`, starting at
+///   `angle_degrees` with the CSS convention: 0 points up and the ramp runs
+///   clockwise.
+///
+/// `radius_x` and `radius_y` belong to the radial kind and `start_radius` and
+/// `end_radius` to the two-circle kind; setting them on another kind is
+/// refused rather than ignored. `repeat_length` applies to linear gradients
+/// only and is refused on the other kinds.
 struct LinearGradient final {
+    GradientKind kind = GradientKind::linear;
     float angle_degrees = 180.0F;
+    /// Repeats the ramp. Kept for scenes before version 8; it means the same
+    /// as `spread` repeat, and a pad spread with `repeating` set repeats.
     bool repeating = false;
-    /// Length in logical pixels of one repeating cycle. Zero uses the full
-    /// resolved paint-box line.
+    /// Length in logical pixels of one cycle of a repeating or reflecting
+    /// linear gradient. Zero uses the full resolved paint-box line; a gradient
+    /// that neither repeats nor reflects ignores it, as before version 8.
     float repeat_length = 0.0F;
+    GradientSpread spread = GradientSpread::pad;
+    GradientInterpolation interpolation = GradientInterpolation::srgb;
+    std::string color_space = "srgb";
+    float center_x = 0.5F;
+    float center_y = 0.5F;
+    float radius_x = 0.0F;
+    float radius_y = 0.0F;
+    float focal_x = 0.5F;
+    float focal_y = 0.5F;
+    float start_radius = 0.0F;
+    float end_radius = 0.5F;
     std::vector<GradientStop> stops;
 };
 
@@ -152,6 +204,7 @@ struct PathStroke final {
     /// Alternating dash and gap lengths; empty draws a solid stroke.
     std::vector<float> dash_array;
     float dash_offset = 0.0F;
+    std::optional<LinearGradient> gradient;
 };
 
 /// The geometry and stroke of a `path` node. Coordinates are absolute within
@@ -511,11 +564,18 @@ inline constexpr std::array<BlendMode, 29> kAllBlendModes{
 /// still accepted when none of its nodes sets it; one that does fails
 /// `scene_fields_match_version` and is refused.
 ///
+/// Version 8 adds the gradient vocabulary: radial, two-circle radial and
+/// conic kinds, spread, interpolation, colour space and their geometry on
+/// `LinearGradient`, and gradient strokes on paths. A plain linear fill
+/// gradient stays legal at every version.
+///
 /// Claimed versions, in order:
 /// version 4: image nodes; version 5: clip, mask and isolation on groups;
 /// version 6: blend modes and DesignIR compositing fields; version 7: token
-/// table (reserved)
-inline constexpr std::uint32_t kSceneVersion = 6U;
+/// receipts (reserved); version 8: gradient vocabulary. This build gives
+/// version 7 no fields of its own; the branch that owns it adds its fields
+/// and damage support.
+inline constexpr std::uint32_t kSceneVersion = 8U;
 
 /// The oldest scene schema version this build still consumes.
 inline constexpr std::uint32_t kMinSupportedSceneVersion = 1U;
@@ -578,6 +638,9 @@ struct SceneNode final {
     /// Per-corner radii. When present they replace `corner_radius`, which
     /// remains the uniform shorthand.
     std::optional<CornerRadii> corner_radii;
+    /// Gradient paint on a path's stroke. The stroke colour remains the
+    /// fallback when this is absent.
+    std::optional<LinearGradient> stroke_gradient;
     /// The geometry of a `path` node. A path node without it is refused. Like
     /// a mesh, it must not be mutated once a scene references it; replace the
     /// pointer to change it.
@@ -687,6 +750,131 @@ struct SceneNode final {
     return nullptr;
 }
 
+[[nodiscard]] inline bool gradient_uses_version_8(const LinearGradient& gradient) noexcept {
+    return gradient.kind != GradientKind::linear || gradient.spread != GradientSpread::pad ||
+           gradient.interpolation != GradientInterpolation::srgb ||
+           (gradient.color_space != "srgb" && !gradient.color_space.empty()) ||
+           gradient.center_x != 0.5F || gradient.center_y != 0.5F || gradient.radius_x != 0.0F ||
+           gradient.radius_y != 0.0F || gradient.focal_x != 0.5F || gradient.focal_y != 0.5F ||
+           gradient.start_radius != 0.0F || gradient.end_radius != 0.5F;
+}
+
+/// Whether a gradient keeps the blending every version before 8 used:
+/// unpremultiplied sRGB stops blended in the destination space.
+[[nodiscard]] inline bool gradient_uses_legacy_interpolation(
+    const LinearGradient& gradient) noexcept {
+    return gradient.interpolation == GradientInterpolation::srgb &&
+           (gradient.color_space.empty() || gradient.color_space == "srgb");
+}
+
+/// Why the native lowering cannot draw `gradient` exactly, or empty when it
+/// can. A gradient with a reason is refused before drawing, never
+/// approximated.
+[[nodiscard]] inline std::string gradient_inexpressible_reason(const LinearGradient& gradient) {
+    const auto& space = gradient.color_space;
+    if (space == "oklab") {
+        return "colour space oklab is an interpolation space; set interpolation to oklab and "
+               "write the stops in srgb, linear-srgb or display-p3";
+    }
+    if (!space.empty() && space != "srgb" && space != "linear-srgb" && space != "display-p3") {
+        return "colour space " + space + " is not srgb, linear-srgb or display-p3";
+    }
+    if (gradient.interpolation != GradientInterpolation::srgb &&
+        gradient.interpolation != GradientInterpolation::linear_srgb &&
+        gradient.interpolation != GradientInterpolation::oklab) {
+        return "the interpolation is not srgb, linear-srgb or oklab";
+    }
+    if (gradient.kind != GradientKind::linear && gradient.repeat_length != 0.0F) {
+        return "repeat length applies only to linear gradients";
+    }
+    if (gradient.kind != GradientKind::radial &&
+        (gradient.radius_x != 0.0F || gradient.radius_y != 0.0F)) {
+        return "radius x and y apply only to radial gradients";
+    }
+    if (gradient.kind != GradientKind::two_circle_radial &&
+        (gradient.start_radius != 0.0F || gradient.end_radius != 0.5F)) {
+        return "start and end radius apply only to two-circle radial gradients";
+    }
+    // The renderer reads the angle only for linear and conic gradients, the
+    // centre only for radial, two-circle radial and conic ones, and the focal
+    // point only for two-circle radial ones; a field set on another kind
+    // would be ignored, so it is refused instead.
+    if ((gradient.kind == GradientKind::radial ||
+         gradient.kind == GradientKind::two_circle_radial) &&
+        gradient.angle_degrees != 180.0F) {
+        return "angle applies only to linear and conic gradients";
+    }
+    if (gradient.kind == GradientKind::linear &&
+        (gradient.center_x != 0.5F || gradient.center_y != 0.5F)) {
+        return "center x and y apply only to radial, two-circle radial and conic gradients";
+    }
+    if (gradient.kind != GradientKind::two_circle_radial &&
+        (gradient.focal_x != 0.5F || gradient.focal_y != 0.5F)) {
+        return "focal x and y apply only to two-circle radial gradients";
+    }
+    if (!(gradient.radius_x >= 0.0F) || !(gradient.radius_y >= 0.0F) ||
+        !(gradient.start_radius >= 0.0F) || !(gradient.end_radius >= 0.0F) ||
+        !std::isfinite(gradient.radius_x) || !std::isfinite(gradient.radius_y) ||
+        !std::isfinite(gradient.start_radius) || !std::isfinite(gradient.end_radius)) {
+        return "gradient radii must be finite and non-negative";
+    }
+    if (gradient.kind == GradientKind::two_circle_radial &&
+        gradient.start_radius == gradient.end_radius && gradient.focal_x == gradient.center_x &&
+        gradient.focal_y == gradient.center_y) {
+        return "the start and end circles of a two-circle radial gradient are identical";
+    }
+    return {};
+}
+
+/// The first node, in depth-first order, with a gradient the native lowering
+/// cannot draw exactly; `reason` receives why.
+[[nodiscard]] inline const SceneNode* find_inexpressible_gradient(const SceneNode& node,
+                                                                 std::string* reason = nullptr) {
+    const auto check = [&](const LinearGradient& gradient) {
+        auto why = gradient_inexpressible_reason(gradient);
+        if (why.empty()) return false;
+        if (reason != nullptr) *reason = std::move(why);
+        return true;
+    };
+    for (const auto& gradient : node.fill_gradients) {
+        if (check(gradient)) return &node;
+    }
+    if ((node.stroke_gradient && check(*node.stroke_gradient)) ||
+        (node.path && node.path->stroke.gradient && check(*node.path->stroke.gradient))) {
+        return &node;
+    }
+    for (const auto& child : node.children) {
+        if (const auto* found = find_inexpressible_gradient(child, reason); found != nullptr) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+[[nodiscard]] inline bool node_own_gradient_uses_version_8(const SceneNode& node) noexcept {
+    // A plain linear fill gradient has been legal since version 1 and stays
+    // legal.  Only the new vocabulary needs version 8: any fill gradient that
+    // uses a new kind, spread, interpolation, colour space or geometry, and any
+    // stroke gradient, whose presence alone is new.
+    for (const auto& gradient : node.fill_gradients) {
+        if (gradient_uses_version_8(gradient)) return true;
+    }
+    return node.stroke_gradient.has_value() ||
+           (node.path && node.path->stroke.gradient.has_value());
+}
+
+[[nodiscard]] inline bool node_uses_version_8_fields(const SceneNode& node) noexcept {
+    if (node_own_gradient_uses_version_8(node)) return true;
+    for (const auto& child : node.children) if (node_uses_version_8_fields(child)) return true;
+    return false;
+}
+
+[[nodiscard]] inline const SceneNode* find_version_8_fields(const SceneNode& node) noexcept {
+    if (node_own_gradient_uses_version_8(node)) return &node;
+    for (const auto& child : node.children) if (const auto* found = find_version_8_fields(child)) return found;
+    return nullptr;
+}
+
 [[nodiscard]] constexpr bool is_known_kind(SceneNode::Kind kind) noexcept {
     switch (kind) {
     case SceneNode::Kind::group:
@@ -758,14 +946,16 @@ struct Scene final {
 /// version 1 or 2 scene has no node that `find_version_3_kinds` reports, a
 /// scene before version 4 has no node that `find_version_4_kinds` reports,
 /// a scene before version 5 sets no field that `uses_version_5_fields`
-/// reports, and a scene before version 6 sets no field that
-/// `uses_version_6_fields` reports.
+/// reports, a scene before version 6 sets no field that
+/// `uses_version_6_fields` reports, and a scene before version 8 has no node
+/// that `node_uses_version_8_fields` reports.
 [[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
     return (scene.scene_version >= 2U || find_version_2_fields(scene.root) == nullptr) &&
            (scene.scene_version >= 3U || find_version_3_kinds(scene.root) == nullptr) &&
            (scene.scene_version >= 4U || find_version_4_kinds(scene.root) == nullptr) &&
            (scene.scene_version >= 5U || find_version_5_fields(scene.root) == nullptr) &&
-           (scene.scene_version >= 6U || find_version_6_fields(scene.root) == nullptr);
+           (scene.scene_version >= 6U || find_version_6_fields(scene.root) == nullptr) &&
+           (scene.scene_version >= 8U || !node_uses_version_8_fields(scene.root));
 }
 
 /// The first node, in depth-first order, that its scene's version cannot
@@ -791,6 +981,9 @@ struct Scene final {
     }
     if (scene.scene_version < 6U) {
         if (const auto* found = find_version_6_fields(scene.root); found != nullptr) return found;
+    }
+    if (scene.scene_version < 8U) {
+        if (const auto* found = find_version_8_fields(scene.root); found != nullptr) return found;
     }
     return nullptr;
 }
