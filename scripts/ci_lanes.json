@@ -219,6 +219,12 @@
         "script": "tools/parity/test_r10_delta.py"
       },
       {
+        "script": "tools/visual/tests/test_differ.py"
+      },
+      {
+        "script": "tools/visual/tests/test_runner.py"
+      },
+      {
         "script": "scripts/test_readme_exec.py"
       },
       {
