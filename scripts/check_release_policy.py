@@ -666,6 +666,13 @@ def step_layout_problems(name: str, workflow: str) -> list[str]:
         for step in job_steps(job, text):
             if step.folded_run:
                 found.append(f"{name}: {step.title} uses a folded run scalar this check cannot read; use run: |")
+            # An alias or merge key can materialize a run value or GH_TOKEN
+            # from an anchor elsewhere (`run: *read`, `- <<: *step`), which
+            # neither the raw step text nor the parsed run shows. Refuse it.
+            for text_line in structural_lines(step.text):
+                if YAML_INDIRECTION.search(text_line.split(" #", 1)[0]):
+                    found.append(f"{name}: {step.title} uses a YAML anchor, alias or merge key this check "
+                                 f"cannot read: {text_line.strip()!r}")
         lines = text.splitlines()
         for start, line in enumerate(lines):
             if not ANY_STEPS_KEY.fullmatch(line):

@@ -609,6 +609,28 @@ class Isolation(unittest.TestCase):
                 problems = policy.isolation_problems({"other.yml": workflow}, self.tmp)
                 self.assertTrue(any("folded run scalar" in problem for problem in problems), problems)
 
+    def test_yaml_aliases_in_a_step_fail_closed(self) -> None:
+        # An alias expands to an Administration-only read (or a GH_TOKEN) that
+        # neither the raw step text nor the parsed run value shows.
+        anchored = ("jobs:\n  sign:\n    env:\n      READ: &read gh api \"repos/$R/immutable-releases\"\n"
+                    "      STEP: &step {run: 'gh api repos/x/rulesets'}\n")
+        cases = {
+            "run alias": self.read(token="${{ github.token }}", run="run: *read\n"),
+            "token alias": self.read(token="*token"),
+            "merge key": self.read(token="${{ github.token }}", run="<<: *step\n"),
+            "anchored run": self.read(token="${{ github.token }}", run="run: &r echo ok\n"),
+        }
+        for label, steps in cases.items():
+            with self.subTest(label):
+                problems = policy.isolation_problems({policy.SIGNING_WORKFLOW: anchored + steps}, self.tmp)
+                self.assertTrue(any("YAML anchor, alias or merge key" in p for p in problems), problems)
+        whole = anchored + "    steps:\n      - *step\n"
+        problems = policy.isolation_problems({"other.yml": whole}, self.tmp)
+        self.assertTrue(any("YAML anchor, alias or merge key" in p for p in problems), problems)
+        # Shell globs inside a literal run block are not YAML indirection.
+        glob = self.read(run='run: |\n          ls *.json *out\n          gh api "repos/$R/immutable-releases"\n')
+        self.assertEqual(self.found(glob), [])
+
     def test_the_token_must_come_from_the_pinned_app_token_action(self) -> None:
         cases = {
             "a run step": "      - name: mint\n        id: app-token\n        run: echo token=x >> \"$GITHUB_OUTPUT\"\n",
