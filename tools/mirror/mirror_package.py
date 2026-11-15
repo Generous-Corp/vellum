@@ -1128,17 +1128,14 @@ def plan_declared_targets(repo: Path, declared: list[dict[str, Any]], units: lis
         internal, external, interfaces = [], [], []
         for link in target["link_targets"]:
             if link in planned:
+                # Executables are never linked: framework_ports.units_errors refuses it.
                 linked_unit, linked = planned[link]
-                if linked.get("type", "STATIC_LIBRARY") != "STATIC_LIBRARY":
-                    raise PlanError(f"{where}: {name} links {link}, which is not a library")
                 internal.append(link)
                 include_dirs += [d for d in linked["include_dirs"] if d not in include_dirs]
                 definitions.update(unit_definitions[linked_unit])
                 interfaces += [i for i in linked["in_tree_interfaces"] if i not in interfaces]
             elif link in provided and (provided[link] in closure_pinned or provided[link] in declared_deps):
-                if DEPENDENCIES[provided[link]]["kind"] != "cmake":
-                    raise PlanError(f"{where}: {name} links {link}, but a declared target links third-party "
-                                    "code only through a cmake recipe")
+                # declared_dependencies has refused every recipe that is not a cmake build.
                 external.append(link)
             else:
                 raise PlanError(f"{where}: {name} links {link}, which is neither a mirrored target, a target "

@@ -369,6 +369,12 @@ class MirrorPackagePlanTest(unittest.TestCase):
         self.fixture.write_receipt()
         self.assertRefused("neither mirrored nor a recipe target")
 
+    def test_recipe_link_target_no_closure_pins_is_refused(self) -> None:
+        # yaml-cpp has a recipe, but no closure pins it, so there is nothing to build it from.
+        self.fixture.closure["targets"][0]["link_targets"] = ["yaml-cpp"]
+        self.fixture.write_receipt()
+        self.assertRefused("links yaml-cpp, but no closure pins yaml-cpp")
+
     def test_unmapped_build_include_is_refused(self) -> None:
         self.fixture.closure["targets"][0]["include_dirs"].append("@build/somewhere")
         self.fixture.write_receipt()
