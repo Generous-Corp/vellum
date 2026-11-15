@@ -208,3 +208,36 @@ test('the schema and the validator agree on tracks', async () => {
         assert.equal(validateDesignIR(withTracks(design, [track])).valid, valid, `validator: ${JSON.stringify(track)}`);
     }
 });
+
+
+test('malformed easing type names return issues without throwing', async () => {
+    const design = normalizeImport(await source());
+    for (const type of ['constructor', 'toString', '__proto__']) {
+        const tracks = [{ property: 'opacity', keyframes: [{ time: 0, value: 0, easing: { type } }] }];
+        const result = validateDesignIR(withTracks(design, tracks), { throwOnError: false });
+        assert.equal(result.valid, false, type);
+        assert.ok(result.issues.some((entry) => entry.code === 'enum' && entry.path.endsWith('.type')));
+    }
+    assert.equal(validateDesignIR(withTracks(design, pulse), { throwOnError: false }).valid, true);
+});
+
+test('easing constants agree with native float bounds in validator and schema', async () => {
+    const design = normalizeImport(await source());
+    const definitions = JSON.parse(await readFile(schema, 'utf8')).$defs;
+    const maximum = 3.4028234663852886e38;
+    for (const field of ['x1', 'y1', 'x2', 'y2', 'stiffness', 'damping', 'mass', 'velocity']) {
+        for (const value of [maximum, -maximum, maximum * 2, -maximum * 2, 1e100, -1e100]) {
+            const bezier = ['x1', 'y1', 'x2', 'y2'].includes(field);
+            const easing = bezier
+                ? { type: 'cubicBezier', x1: 0.25, y1: 0, x2: 0.75, y2: 1, [field]: value }
+                : { type: 'spring', [field]: value };
+            const unit = field === 'x1' || field === 'x2';
+            const positive = ['stiffness', 'damping', 'mass'].includes(field);
+            const valid = !unit && Math.abs(value) <= maximum && (!positive || value > 0);
+            const track = { property: 'opacity', keyframes: [{ time: 0, value: 0, easing }] };
+            const description = `${field}=${value}`;
+            assert.equal(validateDesignIR(withTracks(design, [track])).valid, valid, `validator ${description}`);
+            assert.equal(conforms(definitions.animationTrack, track, definitions), valid, `schema ${description}`);
+        }
+    }
+});

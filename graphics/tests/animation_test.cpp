@@ -320,6 +320,29 @@ Scene busy_scene(double clock) {
     return scene_with({a}, clock);
 }
 
+void first_keyframe_steps() {
+    for (const auto position : {StepPosition::jump_start, StepPosition::jump_both,
+                                StepPosition::jump_end, StepPosition::jump_none}) {
+        auto node = box("step", {0, 0, 10, 10}, Color::hex(0xFFFFFF));
+        const Easing easing{.kind = EasingKind::steps, .steps = 4U, .step_position = position};
+        node.tracks.push_back(track(AnimatedProperty::opacity, {key(2.0, 0.0F, easing), key(3.0, 1.0F)}));
+        auto scene = scene_with({node}, 1.999);
+        check(evaluated_node(scene, "step").opacity == 0.0F, "steps hold before the first keyframe");
+        scene.clock = 2.0;
+        const double expected = position == StepPosition::jump_start ? 0.25 :
+                                position == StepPosition::jump_both ? 0.2 : 0.0;
+        check(near(evaluated_node(scene, "step").opacity, expected, 1e-7),
+              "steps apply the first segment easing at its first keyframe");
+        scene.clock = 3.0;
+        check(evaluated_node(scene, "step").opacity == 1.0F, "steps hold the last keyframe");
+        scene.root.children[0].tracks[0].keyframes.resize(1);
+        for (const double clock : {1.0, 2.0, 3.0}) {
+            scene.clock = clock;
+            check(evaluated_node(scene, "step").opacity == 0.0F, "singleton steps always hold their value");
+        }
+    }
+}
+
 void determinism() {
     bool replay = true;
     bool sensitive = false;
@@ -582,6 +605,7 @@ int main() {
     easing_oracles();
     spring_oracles();
     evaluation();
+    first_keyframe_steps();
     determinism();
     ranges_point_into_the_authored_scene();
     validation();

@@ -9,7 +9,7 @@ const EVENT_PROPERTIES = Object.freeze({
     keyDown: 'onKeyDown',
 });
 // DesignIR schema versions this materializer reads. Version 2 adds the node
-// `compositing` object, 3 reserves effects and materials, and 4 adds tracks;
+// `compositing` object, 3 adds material references, and 4 adds tracks;
 // a document without `schemaVersion` is version 1.
 const DESIGN_SCHEMA_VERSIONS = Object.freeze([1, 2, 3, 4]);
 const COMPOSITING_VERSION = 2;
@@ -259,10 +259,32 @@ function materializeNode(node, context, depth, root = false) {
     return jsx(componentFor(node), properties, node.id);
 }
 
+// Check even hidden descendants before lowering; an unsupported field must
+// never disappear silently when this consumer reads a newer document.
+function requireSupportedFields(root) {
+    let nodes = 0;
+    function visit(node, depth) {
+        if (depth > MAXIMUM_DEPTH || ++nodes > MAXIMUM_NODES) {
+            throw new Error('materialized design exceeds the node or depth limit');
+        }
+        plainObject(node, `design node at depth ${depth}`);
+        if (node.material !== undefined) {
+            throw new Error(`design node ${node.id} has unsupported material`);
+        }
+        if (node.tracks !== undefined && (!Array.isArray(node.tracks) || node.tracks.length > 0)) {
+            throw new Error(`design node ${node.id} has unsupported tracks`);
+        }
+        if (!Array.isArray(node.children)) throw new Error(`design node ${node.id} requires children`);
+        for (const child of node.children) visit(child, depth + 1);
+    }
+    visit(root, 0);
+}
+
 function materialize(document, options, missingActionTarget) {
     plainObject(document, 'design');
     const version = designVersion(document);
     const root = document.root;
+    requireSupportedFields(root);
     const rootLayout = root?.properties?.layout &&
         typeof root.properties.layout === 'object' &&
         !Array.isArray(root.properties.layout)

@@ -434,3 +434,35 @@ test('rendered nodes carry the design identity they came from as an anchor', asy
     for (const node of interactive) assert.equal(node.anchor, 'figma:1:2');
     for (const node of nodes) assert.match(node.anchor, /^figma:/);
 });
+
+
+test('refuses unsupported tracks and materials throughout the design tree', () => {
+    for (const version of [3, 4]) {
+        for (const location of ['root', 'child', 'hidden-descendant']) {
+            for (const field of ['tracks', 'material']) {
+                if (version === 3 && field === 'tracks') continue;
+                const document = fixture();
+                document.schemaVersion = version;
+                let node = document.root;
+                if (location !== 'root') node = node.children[0];
+                if (location === 'hidden-descendant') {
+                    node.properties.layout = { display: 'none' };
+                    node.children = [{ id: 'main/nested', kind: 'view', children: [] }];
+                    node = node.children[0];
+                }
+                node[field] = field === 'tracks'
+                    ? [{ property: 'opacity', keyframes: [{ time: 0, value: 0 }, { time: 1, value: 1 }] }]
+                    : { id: 'example.material', values: {} };
+                const expected = new RegExp(`design node ${node.id}.*unsupported ${field}`);
+                assert.throws(() => materializeDesign(document), expected, `${version} ${location} ${field}`);
+                assert.throws(() => Design({ document }), expected);
+                delete node[field];
+                assert.doesNotThrow(() => materializeDesign(document));
+            }
+        }
+    }
+    const empty = fixture();
+    empty.schemaVersion = 4;
+    empty.root.tracks = [];
+    assert.doesNotThrow(() => materializeDesign(empty));
+});

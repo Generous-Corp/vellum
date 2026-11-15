@@ -478,12 +478,13 @@ function validateEasing(easing, path, issues) {
     }
     requireObject(easing, path, issues);
     if (!isObject(easing)) return;
-    const finite = (value) => typeof value === 'number' && Number.isFinite(value);
-    const allowed = {
+    const finite = (value) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= FLOAT_MAX;
+    const fields = {
         cubicBezier: ['type', 'x1', 'y1', 'x2', 'y2'],
         steps: ['type', 'steps', 'position'],
         spring: ['type', 'stiffness', 'damping', 'mass', 'velocity'],
-    }[easing.type];
+    };
+    const allowed = Object.hasOwn(fields, easing.type) ? fields[easing.type] : undefined;
     if (allowed === undefined) {
         issues.push(issue(`${path}.type`, 'enum', 'easing type must be cubicBezier, steps or spring'));
         return;
@@ -496,7 +497,7 @@ function validateEasing(easing, path, issues) {
     if (easing.type === 'cubicBezier') {
         const unit = (value) => finite(value) && value >= 0 && value <= 1;
         if (!unit(easing.x1) || !unit(easing.x2) || !finite(easing.y1) || !finite(easing.y2)) {
-            issues.push(issue(path, 'range', 'cubicBezier needs x1 and x2 in [0, 1] and finite y1 and y2'));
+            issues.push(issue(path, 'range', 'cubicBezier needs x1 and x2 in [0, 1] and y1 and y2 within float range'));
         }
     } else if (easing.type === 'steps') {
         if (!Number.isInteger(easing.steps) || easing.steps < 1 || easing.steps > 65535 ||
@@ -509,11 +510,11 @@ function validateEasing(easing, path, issues) {
     } else {
         for (const field of ['stiffness', 'damping', 'mass']) {
             if (easing[field] !== undefined && !(finite(easing[field]) && easing[field] > 0)) {
-                issues.push(issue(`${path}.${field}`, 'range', `spring ${field} must be a positive number`));
+                issues.push(issue(`${path}.${field}`, 'range', `spring ${field} must be positive and within float range`));
             }
         }
         if (easing.velocity !== undefined && !finite(easing.velocity)) {
-            issues.push(issue(`${path}.velocity`, 'type', 'spring velocity must be a finite number'));
+            issues.push(issue(`${path}.velocity`, 'type', 'spring velocity must be finite and within float range'));
         }
     }
 }

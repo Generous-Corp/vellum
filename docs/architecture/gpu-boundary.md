@@ -23,7 +23,8 @@ The public slice consists of:
   embedding host's authenticated bootstrap and compute code.
 
 The scene carries a single integer schema version, `kSceneVersion`, now 11.
-Versions 7, 9 and 10 are reserved and add no fields in this build.
+Versions 7 and 9 are reserved and add no fields in this build.
+Version 10 adds node effects; version 11 adds animation tracks.
 A change that can alter rendered output bumps it: a new node kind, a new field
 that changes how a scene is drawn, or a change in meaning. A change that only
 adds metadata keeps it. Consumers accept versions from
@@ -265,17 +266,20 @@ on any node type and fails the tree for an unknown name.
 
 DesignIR schema version 2 adds the node `compositing` object (opacity, blend
 mode, isolation, a mask mode and a mask reference to a sibling mask) with the
-same names. Readers accept DesignIR versions 1 through 4. Version 3 reserves
-effects and materials but adds no fields in this build; version 4 adds node
-animation tracks. Normalization writes the lowest version that covers the
-document: 4 when a node has tracks, otherwise 2 when a node uses compositing,
-otherwise 1. Compositing requires version 2 or later, and tracks require
-version 4; the validator and published JSON schema enforce both gates. A mask
+same names. Readers accept DesignIR versions 1 through 4. Version 3 adds
+material references; version 4 adds node animation tracks. Normalization
+writes the lowest version that covers the
+document: 4 when a node has tracks, otherwise 3 when a node has a material
+reference, otherwise 2 when a node uses compositing, otherwise 1. Compositing
+requires version 2 or later, materials require version 3, and tracks require
+version 4; the validator and published JSON schema enforce all three gates. A mask
 reference must name a sibling that is a mask. `materializeDesign` lowers the object into the retained
 `opacity`, `mixBlendMode`, `isolation` and `maskMode` styles. Because the
 renderer applies a mask to every sibling, it accepts a mask reference only when
 the parent holds one mask and every other child names it, and refuses anything
-else rather than drawing it differently.
+else rather than drawing it differently. The retained materializer refuses
+populated tracks and material references, including those on hidden descendants,
+until it can preserve them.
 
 The surface draws every frame into a retained offscreen Graphite surface the
 size of its target in device pixels, and presents by drawing that image into

@@ -247,7 +247,7 @@ struct Sample final {
 
 Sample sample(const AnimationTrack& track, double clock) noexcept {
     const auto& keys = track.keyframes;
-    if (!(clock > keys.front().time)) return {};
+    if (keys.size() == 1U || !(clock >= keys.front().time)) return {};
     if (clock >= keys.back().time) return {.from = keys.size() - 1U, .to = keys.size() - 1U};
     const auto next = std::upper_bound(
         keys.begin(), keys.end(), clock,

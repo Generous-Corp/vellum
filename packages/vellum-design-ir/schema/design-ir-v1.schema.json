@@ -226,9 +226,9 @@
           "properties": {
             "type": { "const": "cubicBezier" },
             "x1": { "type": "number", "minimum": 0, "maximum": 1 },
-            "y1": { "type": "number" },
+            "y1": { "type": "number", "minimum": -3.4028234663852886e38, "maximum": 3.4028234663852886e38 },
             "x2": { "type": "number", "minimum": 0, "maximum": 1 },
-            "y2": { "type": "number" }
+            "y2": { "type": "number", "minimum": -3.4028234663852886e38, "maximum": 3.4028234663852886e38 }
           }
         },
         {
@@ -249,10 +249,10 @@
           "required": ["type"],
           "properties": {
             "type": { "const": "spring" },
-            "stiffness": { "type": "number", "exclusiveMinimum": 0 },
-            "damping": { "type": "number", "exclusiveMinimum": 0 },
-            "mass": { "type": "number", "exclusiveMinimum": 0 },
-            "velocity": { "type": "number" }
+            "stiffness": { "type": "number", "exclusiveMinimum": 0, "maximum": 3.4028234663852886e38 },
+            "damping": { "type": "number", "exclusiveMinimum": 0, "maximum": 3.4028234663852886e38 },
+            "mass": { "type": "number", "exclusiveMinimum": 0, "maximum": 3.4028234663852886e38 },
+            "velocity": { "type": "number", "minimum": -3.4028234663852886e38, "maximum": 3.4028234663852886e38 }
           }
         }
       ]
