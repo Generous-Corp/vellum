@@ -272,18 +272,8 @@ def load_workflows(root: Path) -> dict[str, str]:
 
 def structural_lines(workflow: str) -> list[str]:
     """The workflow's lines outside block scalars (`run: |` text and the like)."""
-    kept: list[str] = []
-    block_indent: int | None = None
-    for line in workflow.splitlines():
-        indent = len(line) - len(line.lstrip(" "))
-        if block_indent is not None:
-            if not line.strip() or indent > block_indent:
-                continue
-            block_indent = None
-        kept.append(line)
-        if BLOCK_SCALAR.search(line.split(" #", 1)[0].rstrip()):
-            block_indent = indent
-    return kept
+    lines = workflow.splitlines()
+    return [lines[number] for number in _structural_indices(lines)]
 
 
 def unreadable_environments(workflow: str) -> list[str]:
@@ -642,7 +632,9 @@ def _sequence_item(stripped: str) -> bool:
 
 
 def _structural_indices(lines: list[str]) -> list[int]:
-    """Indices of the lines structural_lines keeps (outside block scalars)."""
+    """Indices of the lines structural_lines keeps (outside block scalars).
+    A full-line comment (`# note: |`) is never a block-scalar opener: read as
+    one, it would hide every more-indented line after it, real steps included."""
     kept: list[int] = []
     block_indent: int | None = None
     for number, line in enumerate(lines):
@@ -652,6 +644,8 @@ def _structural_indices(lines: list[str]) -> list[int]:
                 continue
             block_indent = None
         kept.append(number)
+        if line.lstrip().startswith("#"):
+            continue
         if BLOCK_SCALAR.search(line.split(" #", 1)[0].rstrip()):
             block_indent = indent
     return kept

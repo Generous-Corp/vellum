@@ -652,6 +652,19 @@ class Isolation(unittest.TestCase):
         # The honest layout still passes.
         self.assertEqual(self.found("jobs:\n  sign:\n" + self.read()), [])
 
+    def test_a_column_zero_comment_does_not_hide_the_steps(self) -> None:
+        # `# note: |` is a YAML comment, not a block-scalar opener. Read as
+        # one, it hid the job's steps key, so an Actions-token Administration
+        # read and an unisolated Python step passed unseen.
+        for comment in ("# note: |", "# note: >-", "  # note: |"):
+            with self.subTest(comment=comment):
+                head = "jobs:\n  sign:\n" + comment + "\n"
+                self.refused(head + self.read(token="${{ github.token }}"))
+                self.assertTrue(any("without -I" in problem for problem in self.found(
+                    head + "    steps:\n      - name: py\n        run: python3 scripts/x.py\n")))
+                self.assertEqual(self.found(head + self.read()), [])
+                self.assertIn("    steps:", policy.structural_lines(head + self.read()))
+
     def test_the_token_must_come_from_the_pinned_app_token_action(self) -> None:
         cases = {
             "a run step": "      - name: mint\n        id: app-token\n        run: echo token=x >> \"$GITHUB_OUTPUT\"\n",
