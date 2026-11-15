@@ -251,7 +251,11 @@ def signer(root: Path, relative: Path = ALLOWED_SIGNERS) -> tuple[str, str]:
 # GitHub Actions runs both extensions.
 WORKFLOW_PATTERNS = ("*.yml", "*.yaml")
 SIMPLE_NAME = re.compile(r"['\"]?([A-Za-z0-9_-]+)['\"]?")
-BLOCK_SCALAR = re.compile(r":\s*[|>][-+0-9]*\s*(?:#.*)?$")
+# A block-scalar indicator needs whitespace after the colon: `name: a:>` is
+# a plain scalar, and reading it as an opener would hide the lines after it.
+BLOCK_SCALAR = re.compile(r":[ \t]+[|>][-+0-9]*[ \t]*(?:#.*)?$")
+# The `- ` openers of a (possibly nested, `- - key:`) compact sequence item.
+SEQUENCE_ITEM_PREFIX = re.compile(r"(?:-[ \t]+)+")
 # YAML anchors, aliases and merge keys can carry an `environment` into a job
 # where a line-based reader never sees it, so their use outside block text is
 # refused rather than read.
@@ -647,7 +651,11 @@ def _structural_indices(lines: list[str]) -> list[int]:
         if line.lstrip().startswith("#"):
             continue
         if BLOCK_SCALAR.search(line.split(" #", 1)[0].rstrip()):
-            block_indent = indent
+            # On a sequence item (`- name: >-`) the scalar belongs to the key,
+            # so its body is what is indented past the key, not past the dash;
+            # the item's later keys sit at the key's column and stay visible.
+            prefix = SEQUENCE_ITEM_PREFIX.match(line, indent)
+            block_indent = prefix.end() if prefix else indent
     return kept
 
 
@@ -708,6 +716,31 @@ def job_steps(job: str, text: str) -> list[Step]:
     return found
 
 
+def _indirection_lines(step_text: str) -> list[str]:
+    """Every line of a step the alias check reads: all of them except the body
+    of a literal `run:` block, which _read_step parses and the gh api count
+    checks. It does not depend on structural_lines, so a line that reader
+    wrongly takes for block-scalar text is still checked."""
+    lines = step_text.splitlines()
+    if not lines:
+        return []
+    prefix = SEQUENCE_ITEM_PREFIX.match(lines[0], len(lines[0]) - len(lines[0].lstrip(" ")))
+    indent = prefix.end() if prefix else len(lines[0]) - len(lines[0].lstrip(" "))
+    run_key = re.compile(rf"run:[ \t]*[|>][-+0-9]*[ \t]*(?:#.*)?")
+    kept: list[str] = []
+    in_run = False
+    for number, line in enumerate(lines):
+        if in_run:
+            if not line.strip() or len(line) - len(line.lstrip(" ")) > indent:
+                continue
+            in_run = False
+        kept.append(line)
+        column = indent if number == 0 else len(line) - len(line.lstrip(" "))
+        if column == indent and run_key.fullmatch(line[indent:].rstrip()):
+            in_run = True
+    return kept
+
+
 def step_layout_problems(name: str, workflow: str) -> list[str]:
     """Fail closed where job_steps would read nothing: a `steps` key written
     other than `steps:`, and a non-comment line under `steps:` that no `- `
@@ -722,7 +755,7 @@ def step_layout_problems(name: str, workflow: str) -> list[str]:
             # An alias or merge key can materialize a run value or GH_TOKEN
             # from an anchor elsewhere (`run: *read`, `- <<: *step`), which
             # neither the raw step text nor the parsed run shows. Refuse it.
-            for text_line in structural_lines(step.text):
+            for text_line in _indirection_lines(step.text):
                 if YAML_INDIRECTION.search(text_line.split(" #", 1)[0]):
                     found.append(f"{name}: {step.title} uses a YAML anchor, alias or merge key this check "
                                  f"cannot read: {text_line.strip()!r}")

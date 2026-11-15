@@ -665,6 +665,29 @@ class Isolation(unittest.TestCase):
                 self.assertEqual(self.found(head + self.read()), [])
                 self.assertIn("    steps:", policy.structural_lines(head + self.read()))
 
+    def test_a_block_scalar_on_a_step_dash_line_hides_no_later_key(self) -> None:
+        # `- name: >-` opens a scalar owned by `name` (column 8), not by the
+        # dash (column 6). Read from the dash, it hid the step's later keys,
+        # so `run: *read` escaped the alias check and an Actions-token
+        # Administration read passed.
+        anchored = ("jobs:\n  sign:\n    env:\n      READ: &read gh api \"repos/$R/immutable-releases\"\n")
+        for label, name in {"folded name": ">-\n          read", "literal name": "|\n          read",
+                            "no space before indicator": "a:>"}.items():
+            with self.subTest(label):
+                steps = self.read(token="${{ github.token }}", run="run: *read\n", name=name)
+                problems = policy.isolation_problems({policy.SIGNING_WORKFLOW: anchored + steps}, self.tmp)
+                self.assertTrue(any("YAML anchor, alias or merge key" in p and "*read" in p for p in problems),
+                                problems)
+                self.assertIn("        run: *read", policy.structural_lines(anchored + steps))
+        # The anchor itself under a `- n: |` matrix item is not hidden either.
+        matrix = ("jobs:\n  sign:\n    strategy:\n      matrix:\n        include:\n          - n: |\n"
+                  "              x\n            r: &read gh api \"repos/$R/immutable-releases\"\n")
+        self.assertTrue(any("YAML anchor" in p for p in policy.unreadable_environments(matrix)))
+        # The scalar's own body stays hidden, and an honest step still passes.
+        body = "jobs:\n  sign:\n" + self.read(name=">-\n          read text")
+        self.assertNotIn("          read text", policy.structural_lines(body))
+        self.assertEqual(self.found(body), [])
+
     def test_the_token_must_come_from_the_pinned_app_token_action(self) -> None:
         cases = {
             "a run step": "      - name: mint\n        id: app-token\n        run: echo token=x >> \"$GITHUB_OUTPUT\"\n",
