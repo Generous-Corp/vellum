@@ -118,6 +118,22 @@ add_test(NAME vellum.gpu.layer-cache
 set_tests_properties(vellum.gpu.layer-cache PROPERTIES
     SKIP_RETURN_CODE 77)
 
+add_executable(vellum-effect-gpu-test
+    effect_gpu_test.cpp)
+target_link_libraries(vellum-effect-gpu-test PRIVATE
+    vellum-scene-capture-harness)
+# The test reaches SkiaDawnSurfaceTestAccess, which is not installed.
+target_include_directories(vellum-effect-gpu-test PRIVATE
+    ${PROJECT_SOURCE_DIR}/graphics/src)
+set_target_properties(vellum-effect-gpu-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.effects
+    COMMAND vellum-effect-gpu-test)
+set_tests_properties(vellum.gpu.effects PROPERTIES
+    SKIP_RETURN_CODE 77)
+
 add_executable(vellum-layer-text-extent-test layer_text_extent_test.cpp)
 target_link_libraries(vellum-layer-text-extent-test PRIVATE Vellum::Gpu)
 target_include_directories(vellum-layer-text-extent-test PRIVATE

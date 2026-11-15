@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 
 namespace vellum::graphics {
@@ -25,6 +26,7 @@ Rect union_of(const Rect& left, const Rect& right) {
 struct GroupExtent final {
     Rect bounds{};
     bool bounded = true;
+    bool any = false;
 };
 
 GroupExtent group_extent(const std::vector<PaintCommand>& output, std::size_t first,
@@ -47,6 +49,7 @@ GroupExtent group_extent(const std::vector<PaintCommand>& output, std::size_t fi
         group.bounds = any ? union_of(group.bounds, extent) : extent;
         any = true;
     }
+    group.any = any;
     return group;
 }
 
@@ -95,6 +98,9 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
     if (!is_known_kind(node.kind) || !compositing_is_finite(node)) return;
     if (!is_known_blend_mode(node.blend_mode)) return;
     if (node.clip && !clip_is_valid(*node.clip)) return;
+    for (const auto& effect : node.effects) {
+        if (!effect_is_valid(effect)) return;
+    }
     const float opacity = std::clamp(node.opacity, 0.0F, 1.0F);
     if (opacity <= 0.0F) return;
     // Recorded before the children so the vector is in depth-first preorder.
@@ -131,8 +137,17 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
     const bool own_clip = node.clip && node.clip->clips_own_paint;
     const bool subtree_clip = node.clip && !node.clip->clips_own_paint;
     if (own_clip) open_clip();
+    // Only effects this renderer draws reach the layer; a chain of
+    // application materials alone lowers as if the node had none.
+    std::vector<NodeEffect> native;
+    if (effects_apply(node)) {
+        for (const auto& effect : node.effects) {
+            if (effect_draws_natively(effect)) native.push_back(effect);
+        }
+    }
+    const bool effected = !native.empty();
     const bool blended = node.blend_mode != BlendMode::normal;
-    const bool layered = opacity < 1.0F || node.isolate || blended;
+    const bool layered = opacity < 1.0F || node.isolate || blended || effected;
     const auto slot = output.size();
     if (layered) {
         output.push_back({.kind = PaintCommand::Kind::begin_layer, .node_id = node.id});
@@ -245,7 +260,7 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
     }
     // A mask's commands draw coverage, so folding opacity into one of them, or
     // into a sibling it masks, would change what the mask hides.
-    if (!node.isolate && !blended && !structured && drawn <= 1U) {
+    if (!node.isolate && !blended && !effected && !structured && drawn <= 1U) {
         if (drawn == 1U) output[last_drawn].opacity *= opacity;
         output.erase(output.begin() + static_cast<std::ptrdiff_t>(slot));
         close_clip();
@@ -261,11 +276,29 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
     }
     auto& layer = output[slot];
     layer.opacity = opacity;
-    layer.layer_isolated = node.isolate;
+    layer.layer_isolated = node.isolate || effected;
     layer.blend_mode = node.blend_mode;
     const auto group = group_extent(output, first, output.size());
     layer.bounds = group.bounds;
     layer.layer_unbounded = !group.bounded || blend_mode_clears_backdrop(node.blend_mode);
+    if (effected) {
+        const auto chain = effect_chain_cost(native);
+        const float radius = chain.total.radius;
+        std::optional<Rect> area;
+        if (group.any) {
+            area = Rect{group.bounds.x - radius, group.bounds.y - radius,
+                        group.bounds.width + 2.0F * radius, group.bounds.height + 2.0F * radius};
+        }
+        if (chain.total.backdrop) {
+            const auto box = transformed_bounds(transform, absolute);
+            area = area ? union_of(*area, box) : box;
+        }
+        layer.bounds = area.value_or(Rect{absolute.x, absolute.y, 0.0F, 0.0F});
+        layer.effects = std::move(native);
+        layer.effect_box = absolute;
+        layer.transform = transform;
+        layer.corner_radii = radii;
+    }
     output.push_back({.kind = PaintCommand::Kind::end_layer, .node_id = node.id});
     close_clip();
     if (ranges != nullptr) (*ranges)[range_index].end = output.size();
@@ -568,6 +601,17 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
             return refuse(node->id, "scene version " + version +
                                   " cannot carry gradient vocabulary at " + node->id);
         }
+        if (!compositing && needs(10U) && uses_version_10_fields(*node)) {
+            output.push_back({
+                .severity = LoweringDiagnostic::Severity::error,
+                .disposition = LoweringDiagnostic::Disposition::unsupported,
+                .code = std::string(kSceneVersionMismatchCode),
+                .node_id = node->id,
+                .property = "effects",
+                .message = "scene version " + version + " cannot carry the effects at " + node->id,
+            });
+            return output;
+        }
         if (!compositing && needs(11U) && uses_version_11_fields(*node)) {
             output.push_back({
                 .severity = LoweringDiagnostic::Severity::error,
@@ -607,6 +651,9 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
         return output;
     }
     report_missing_images(ImageAssetIndex(scene), scene.root, output);
+    for (auto& diagnostic : effect_loss_diagnostics(scene.root)) {
+        output.push_back(std::move(diagnostic));
+    }
     return output;
 }
 

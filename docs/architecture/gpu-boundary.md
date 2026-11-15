@@ -39,7 +39,7 @@ DesignIR document path. Versions are claimed in order: version 4: image nodes;
 version 5: clip, mask and isolation on groups; version 6: blend modes and
 DesignIR compositing fields; version 7: token table (reserved); version 8:
 gradient vocabulary; version 9: vector assets (reserved); version 10: effects
-and materials (reserved); version 11: animation tracks.
+and materials; version 11: animation tracks.
 
 Nodes carry an optional affine transform about their origin, a group opacity,
 and per-corner radii beside the uniform `corner_radius` shorthand. All three
@@ -365,6 +365,27 @@ inside it, a failed frame, a lost device, or a policy change;
 `layer_cache_stats` counts each reason. Images are capped at 32 and at twice
 the target's area, and a subtree the budget refuses, or whose image changed
 before it was ever drawn from, waits a few frames before it is tried again.
+
+Effects (scene version 10, `effect.hpp`) apply to a node and its subtree as
+one group: blur, colour matrix and drop shadow filter the group in chain order,
+and a backdrop blur or the frosted-glass material redraws what lies beneath the
+node's box first. Each effect declares a damage radius, a pass count and a
+texture count; a chain over eight passes or four textures, counting the group's
+own layer, is drawn without its effects and reported with
+`VELLUM_EFFECT_BUDGET_EXCEEDED`. The surface records the group's members into an
+offscreen image, the same image the layer cache keeps for the group, and
+composites it through the chain cropped to the area the group declares, so a
+change to an effect alone reuses the cached members. Damage inside a group
+grows by the chain's radius and is bounded only by clips outside the group; a
+colour matrix that lifts transparent pixels makes the group's whole area its
+damage; and damage reaching the area a backdrop samples damages the backdrop's
+box. A partial redraw encloses each effect group whole, together with the area
+its backdrop samples. Materials come from `MaterialRegistry`: a scene names one
+by id and carries values only, and the registry holds each material's typed
+uniforms, ranges, defaults and provenance. An application material registers
+through the custom component host, carries the `extension` disposition and is
+reported with `VELLUM_MATERIAL_EXTENSION`, and the native renderer draws the
+node without it until its component expands it.
 
 Two more triggers are opt-in through `LayerCachePolicy::allow_inexact`: a
 subtree of at least 32 commands once it repeats a frame, and any candidate once

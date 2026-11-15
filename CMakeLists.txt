@@ -168,6 +168,11 @@ if(VELLUM_BUILD_TESTS)
     target_link_libraries(vellum-value-param-model-test PRIVATE Vellum::Value)
     add_test(NAME vellum.value.param-model COMMAND vellum-value-param-model-test)
 
+    add_executable(vellum-value-param-metadata-test
+        foundation/tests/value/param_metadata_test.cpp)
+    target_link_libraries(vellum-value-param-metadata-test PRIVATE Vellum::Value)
+    add_test(NAME vellum.value.param-metadata COMMAND vellum-value-param-metadata-test)
+
     find_package(Threads REQUIRED)
     add_executable(vellum-value-feed-test
         foundation/tests/value/value_feed_test.cpp)
@@ -241,6 +246,11 @@ if(VELLUM_BUILD_TESTS)
         target_include_directories(vellum-animation-test PRIVATE graphics/src)
         target_link_libraries(vellum-animation-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.animation COMMAND vellum-animation-test)
+
+        add_executable(vellum-effect-test
+            graphics/tests/effect_test.cpp)
+        target_link_libraries(vellum-effect-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.effects COMMAND vellum-effect-test)
 
         add_executable(vellum-render-cache-test
             graphics/tests/render_cache_test.cpp)

@@ -3,6 +3,7 @@ export const AUTHORED_OVERLAY_SCHEMA: 'https://vellum.dev/schemas/design-ir/auth
 export const REIMPORT_REPORT_SCHEMA: 'https://vellum.dev/schemas/design-ir/reimport-report/v1';
 export const DESIGN_IR_VERSION: 1;
 export const DESIGN_IR_COMPOSITING_VERSION: 2;
+export const DESIGN_IR_MATERIALS_VERSION: 3;
 /** The DesignIR version that adds animation tracks on nodes. */
 export const DESIGN_IR_TRACKS_VERSION: 4;
 /** Every version this build reads. */
@@ -115,6 +116,7 @@ export interface DesignNode {
     tracks?: AnimationTrack[];
     /** Present in version 2 or later, and only for non-default values. */
     compositing?: NodeCompositing;
+    material?: MaterialReference;
     children: DesignNode[];
 }
 
@@ -147,6 +149,21 @@ export interface AnimationTrack {
     keyframes: AnimationKeyframe[];
 }
 
+/** A material value: a number, two numbers, or a straight RGBA colour. */
+export type MaterialValue =
+    | number
+    | [number, number]
+    | { red: number; green: number; blue: number; alpha: number };
+
+/**
+ * A registered material named by id with values for its uniforms. The
+ * uniforms' types, ranges and defaults belong to the material's registration.
+ */
+export interface MaterialReference {
+    id: string;
+    values: Record<string, MaterialValue>;
+}
+
 export interface DesignSource {
     key: string;
     namespace: string;
@@ -170,7 +187,10 @@ export interface DesignToken {
 
 export interface DesignIR {
     $schema: typeof DESIGN_IR_SCHEMA;
-    /** Any version up to 4; tracks need 4. */
+    /**
+     * 1, 2 when a node carries `compositing`, 3 when a node carries a
+     * material reference, or 4 when a node carries animation tracks.
+     */
     schemaVersion: 1 | 2 | 3 | 4;
     compiler: { name: string; version: string };
     source: DesignSource;
@@ -206,6 +226,7 @@ export interface SourceNode {
     extensions?: Record<string, JsonValue>;
     tracks?: AnimationTrack[];
     compositing?: NodeCompositing;
+    material?: MaterialReference;
     losses?: Array<Partial<DesignDiagnostic> & Pick<DesignDiagnostic, 'code' | 'message'>>;
     children?: SourceNode[];
     [adapterField: string]: unknown;
@@ -309,7 +330,10 @@ export function buildLossReport(diagnostics: DesignDiagnostic[]): DesignIR['loss
 export function normalizeTokens(rawTokens: unknown, sourceKey: string): Record<string, DesignToken>;
 export function resolveTokenLayers(document: DesignIR, overlay?: Partial<AuthoredOverlay>): TokenLayers;
 export function diffTokens(previous: DesignIR['tokens'], next: DesignIR['tokens']): unknown[];
-export function normalizeImport(input: ImportSourceModel, options?: { compilerVersion?: string }): DesignIR;
+export function normalizeImport(
+    input: ImportSourceModel,
+    options?: { compilerVersion?: string; schemaVersion?: 1 | 2 | 3 },
+): DesignIR;
 export function decodeFigmaPluginExport(
     input: unknown,
     options: { sourceKey: string; sourceHash: string; revision?: string },

@@ -162,7 +162,7 @@ test('unknown schema versions are rejected rather than best-effort parsed', asyn
     assert.throws(() => parseDesignIR(document), DesignIRValidationError);
 });
 
-test('schema version 3 remains readable while adding no fields in this build', async () => {
+test('schema version 3 remains readable without a material reference', async () => {
     const document = normalizeImport(await fixture('revision-a.source.json'));
     document.schemaVersion = 3;
     assert.doesNotThrow(() => parseDesignIR(document));

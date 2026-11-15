@@ -7,13 +7,24 @@ export const REIMPORT_REPORT_SCHEMA =
 export const DESIGN_IR_VERSION = 1;
 /**
  * The schema version that adds the node `compositing` object. A document
- * carries it when a node uses the object, unless tracks require version 4.
+ * carries it only when a node uses the object.
  */
 export const DESIGN_IR_COMPOSITING_VERSION = 2;
+/**
+ * The schema version that adds node material references. A document carries
+ * it only when a node uses one; a document needing neither stays at
+ * `DESIGN_IR_VERSION`. Each version keeps every field of the ones before it.
+ */
+export const DESIGN_IR_MATERIALS_VERSION = 3;
 /** The schema version that adds animation tracks on nodes. */
 export const DESIGN_IR_TRACKS_VERSION = 4;
 /** Every version this build can read. */
-export const DESIGN_IR_VERSIONS = Object.freeze([1, 2, 3, 4]);
+export const DESIGN_IR_VERSIONS = Object.freeze([
+    DESIGN_IR_VERSION,
+    DESIGN_IR_COMPOSITING_VERSION,
+    DESIGN_IR_MATERIALS_VERSION,
+    DESIGN_IR_TRACKS_VERSION,
+]);
 // Compatibility name for supported schema versions.
 export const SUPPORTED_DESIGN_IR_VERSIONS = DESIGN_IR_VERSIONS;
 export const AUTHORED_OVERLAY_VERSION = 1;
