@@ -140,8 +140,11 @@ public:
         if (metadata_)
             return metadata_->range(p);
         const auto info = source_.info(p);
-        return {source_.plain(p, 0.0), source_.plain(p, 1.0),
-                source_.plain(p, info.default_normalized), 0.0, 1.0, false};
+        value::ParamRange r;
+        r.plain_min = source_.plain(p, 0.0);
+        r.plain_max = source_.plain(p, 1.0);
+        r.plain_default = source_.plain(p, info.default_normalized);
+        return r;
     }
     std::vector<std::string> value_labels(value::ParamHandle p) override {
         return metadata_ ? metadata_->value_labels(p) : std::vector<std::string>{};
