@@ -419,3 +419,56 @@ if(_named EQUAL -1)
     message(FATAL_ERROR "the two-provider consumer failed for another reason:\n${_conflict_stderr}")
 endif()
 message(STATUS "two-provider consumer refused: ok")
+
+# With VELLUM_ENABLE_V8 the install carries the sealed libv8 beside the
+# provider. Prove the provider loads it from there, that neither image can
+# bind the other's ICU, Abseil or zlib, and that an installed consumer runs
+# the pinned V8.
+if(VELLUM_ENABLE_V8)
+    if(NOT DEFINED VELLUM_V8_VERSION OR VELLUM_V8_VERSION STREQUAL "")
+        message(FATAL_ERROR "mirror consumer test: VELLUM_V8_VERSION was not supplied")
+    endif()
+    set(_v8 "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libv8.dylib")
+    if(NOT EXISTS "${_v8}" OR NOT EXISTS "${_prefix}/share/vellum/v8/manifest.json")
+        message(FATAL_ERROR "the V8 install lacks lib/libv8.dylib or share/vellum/v8/manifest.json")
+    endif()
+    execute_process(COMMAND "${_otool}" -L "${_provider}"
+        RESULT_VARIABLE _provider_otool_result OUTPUT_VARIABLE _provider_otool)
+    if(NOT _provider_otool_result EQUAL 0 OR NOT _provider_otool MATCHES "@rpath/libv8\\.dylib")
+        message(FATAL_ERROR "the installed provider does not load @rpath/libv8.dylib:\n${_provider_otool}")
+    endif()
+    _run("V8 and provider symbol census" "${Python3_EXECUTABLE}"
+        "${VELLUM_SOURCE_DIR}/tools/mirror/v8_symbol_census.py"
+        --provider "${_provider}" --v8 "${_v8}")
+    message(STATUS "${_last_stdout}")
+    execute_process(COMMAND "${Python3_EXECUTABLE}"
+        "${VELLUM_SOURCE_DIR}/tools/mirror/v8_symbol_census.py"
+        --provider "${_provider}" --v8 "${_v8}" --plant
+        RESULT_VARIABLE _v8_planted OUTPUT_QUIET ERROR_QUIET)
+    if(NOT _v8_planted EQUAL 1)
+        message(FATAL_ERROR "V8 symbol census control: a planted Abseil export gave ${_v8_planted}, not 1")
+    endif()
+    message(STATUS "V8 symbol census control: ok")
+
+    file(MAKE_DIRECTORY "${_work}/v8-consumer")
+    file(WRITE "${_work}/v8-consumer/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.24)
+project(VellumV8Consumer LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(Vellum CONFIG REQUIRED)
+add_executable(vellum-v8-consumer v8_main.cpp)
+target_link_libraries(vellum-v8-consumer PRIVATE Vellum::MirrorView_script)
+]=])
+    file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/v8_main.cpp"
+        DESTINATION "${_work}/v8-consumer")
+    _run("V8 consumer configure" "${CMAKE_COMMAND}"
+        -S "${_work}/v8-consumer" -B "${_work}/v8-consumer-build"
+        ${_generator} -DCMAKE_BUILD_TYPE=Release
+        "-DCMAKE_PREFIX_PATH=${_prefix}"
+        -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+        -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
+    _run("V8 consumer build" "${CMAKE_COMMAND}" --build "${_work}/v8-consumer-build")
+    _run("V8 consumer run" "${_work}/v8-consumer-build/vellum-v8-consumer" "${VELLUM_V8_VERSION}")
+    message(STATUS "${_last_stdout}")
+endif()

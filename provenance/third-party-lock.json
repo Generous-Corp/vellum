@@ -115,6 +115,23 @@
       "commit": "d14d46f6b44456eb88beac58cba833a4135d4c89",
       "sha256": "cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05",
       "surface": "optional rmlui/ module only; single header compiled into the VellumRmlUi::SoftRenderer PNG encoder"
+    },
+    {
+      "name": "V8",
+      "version": "v8-m158-15.8.62.6-38351a002e2c",
+      "v8_version": "15.8.62.6",
+      "license": "BSD-3-Clause; bundles ICU (Unicode-3.0), zlib (Zlib) and Abseil (Apache-2.0)",
+      "source": "https://github.com/danielraffel/v8-builder",
+      "builder_ref": "bf4751122bf0c2c916336c73e7806e1d714536d6",
+      "built_revision": "38351a002e2c2890eca99d3abb6622728bfd7798",
+      "skia_release_tag": "chrome/m158",
+      "paired_skia": "be7d7c3e996e567eda7dc9774274f7a0103cdb8c",
+      "paired_dawn": "1716e88cc9e58398fab5d4473f7f2e858667b677",
+      "url": "https://github.com/danielraffel/v8-builder/releases/download/v8-m158-15.8.62.6-38351a002e2c/v8-mac-arm64-m158-15.8.62.6-38351a002e2c.zip",
+      "sha256": "828ec374aad252afd284da044743c2099ce3c9401d5e914df79aec4713517eff",
+      "release_metadata_url": "https://github.com/danielraffel/v8-builder/releases/download/v8-m158-15.8.62.6-38351a002e2c/release-metadata.json",
+      "release_metadata_sha256": "5393fe41d2b16e39bed2e5e526dab8e08bc1d4b865eb13ea5b3056c05b67e6b1",
+      "surface": "optional VELLUM_ENABLE_V8 only; the sealed shared libv8.dylib (exports only the v8:: and cppgc:: API; its ICU, zlib and Abseil stay internal) is linked by the installed Vellum::SkiaDawnProvider and installed beside it in lib/, with its manifest under share/vellum/v8/; the mirror's view-script unit compiles its V8 backend against the archive's headers and consumer_defines"
     }
   ],
   "runtime_toolchain_dependencies": {
