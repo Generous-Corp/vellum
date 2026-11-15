@@ -32,6 +32,8 @@ value::InMemoryParamModel make_model() {
                      .skew = 3.0, .default_normalized = 0.5});
     specs.push_back({.key = "mode", .default_normalized = 0.25, .value_count = 5,
                      .value_labels = {"a", "b", "c", "d", "e"}});
+    specs.push_back({.key = "curve", .plain_min = 0.0, .plain_max = 100.0, .skew = 2.0,
+                     .value_count = 3});
     return value::InMemoryParamModel(std::move(specs));
 }
 
@@ -116,6 +118,10 @@ FRAMEWORK_TEST(metadata_crosses_into_the_bridge_image) {
     CHECK(h.js("getParamMetadata('mode').labels.join(',')") == "a,b,c,d,e");
     CHECK(h.js("getParamMetadata('mode').valueCount") == "5");
     CHECK(h.js("getParamMetadata('missing')") == "undefined");
+    // An unevenly spaced discrete axis lists its values instead of a step.
+    CHECK(h.js("getParamMetadata('curve').step") == "0");
+    CHECK(h.js("getParamMetadata('curve').values.join(',')") == "0,25,100");
+    CHECK(h.js("getParamMetadata('cutoff').values") == "undefined");
 }
 
 FRAMEWORK_TEST(a_model_without_metadata_reports_what_it_can) {

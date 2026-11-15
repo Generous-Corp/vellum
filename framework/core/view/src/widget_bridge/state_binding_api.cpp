@@ -63,6 +63,13 @@ choc::value::Value model_param_metadata(value::ParamModel& model, value::ParamHa
         obj.addMember("step", choc::value::createFloat64(range.step));
         obj.addMember("skew", choc::value::createFloat64(range.skew));
         obj.addMember("symmetricSkew", choc::value::createBool(range.symmetric_skew));
+        // An unevenly spaced discrete axis lists its values; step is then 0.
+        if (!range.plain_values.empty()) {
+            auto values = choc::value::createEmptyArray();
+            for (const double v : range.plain_values)
+                values.addArrayElement(choc::value::createFloat64(v));
+            obj.addMember("values", values);
+        }
         for (const auto& label : metadata->value_labels(param))
             labels.addArrayElement(choc::value::createString(label));
     } else {
