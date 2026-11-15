@@ -39,6 +39,10 @@ InMemoryParamModel make_model() {
                      .value_count = 5, .value_labels = {"a", "b", "c", "d", "e"}});
     specs.push_back({.key = "depth", .plain_min = 0.0, .plain_max = 10.0, .default_normalized = 0.3});
     specs.push_back({.key = "half", .value_count = 3, .value_labels = {"x", "y"}});
+    specs.push_back({.key = "curved", .plain_min = 0.0, .plain_max = 100.0, .skew = 2.0,
+                     .value_count = 3});
+    specs.push_back({.key = "curved_pair", .plain_min = 0.0, .plain_max = 100.0, .skew = 2.0,
+                     .value_count = 2});
     return InMemoryParamModel(std::move(specs));
 }
 
@@ -89,12 +93,45 @@ void range_describes_the_plain_axis() {
     CHECK(!r.symmetric_skew);
     CHECK(near(r.plain_default, model.plain(cutoff, 0.5)));
 
+    CHECK(r.plain_values.empty());
+
     const auto mode = meta.range(model.resolve("mode"));
     CHECK(mode.step == 1.0);
     CHECK(mode.plain_default == 2.0);
+    CHECK(mode.plain_values.empty());
 
     const auto bad = meta.range(ParamHandle{});
     CHECK(bad.plain_min == 0.0 && bad.plain_max == 1.0 && bad.step == 0.0);
+}
+
+// A skewed discrete axis snaps before it curves, so its plain values are
+// 0, 25 and 100: no uniform step describes them, and the range must say so.
+void a_skewed_discrete_range_lists_its_uneven_values() {
+    auto model = make_model();
+    auto& meta = *metadata_of(model);
+    const auto curved = model.resolve("curved");
+    const auto r = meta.range(curved);
+    CHECK(r.step == 0.0);
+    CHECK(r.plain_values.size() == 3);
+    if (r.plain_values.size() == 3) {
+        CHECK(near(r.plain_values[0], 0.0));
+        CHECK(near(r.plain_values[1], 25.0));
+        CHECK(near(r.plain_values[2], 100.0));
+        for (int i = 0; i < 3; ++i)
+            CHECK(near(r.plain_values[static_cast<std::size_t>(i)],
+                       model.plain(curved, i / 2.0)));
+    }
+    // Every value the model can hold is one the range lists.
+    for (double n = 0.0; n <= 1.0; n += 0.05) {
+        model.set_normalized(curved, n);
+        const double v = meta.plain_value(curved);
+        CHECK(near(v, 0.0) || near(v, 25.0) || near(v, 100.0));
+    }
+
+    // Two values are evenly spaced whatever the curve.
+    const auto pair = meta.range(model.resolve("curved_pair"));
+    CHECK(pair.step == 100.0);
+    CHECK(pair.plain_values.empty());
 }
 
 void value_labels_need_one_per_value() {
@@ -152,6 +189,7 @@ void a_normalized_write_ends_the_exact_value() {
 int main() {
     metadata_is_found_only_where_a_model_has_it();
     range_describes_the_plain_axis();
+    a_skewed_discrete_range_lists_its_uneven_values();
     value_labels_need_one_per_value();
     a_plain_write_reads_back_exactly();
     a_stepped_plain_write_snaps_and_notifies();

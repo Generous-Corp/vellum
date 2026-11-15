@@ -589,6 +589,7 @@ FRAMEWORK_TEST(store_model_metadata_reports_the_param_info) {
     CHECK(r.step == info->range.step);
     CHECK(r.skew == info->range.skew);
     CHECK(r.symmetric_skew == info->range.symmetric_skew);
+    CHECK(r.plain_values.empty());
     CHECK(meta->range(model.handle(3)).step == 1.0);
     CHECK(meta->range(vellum::value::ParamHandle{}).plain_max == 1.0);
     CHECK(meta->value_labels(model.handle(3)) == info_labels(rs.store, 3));

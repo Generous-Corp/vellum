@@ -244,8 +244,16 @@ public:
         const auto* info = find(param);
         if (!info)
             return {};
-        return {info->range.min,  info->range.max,  info->range.default_value,
-                info->range.step, info->range.skew, info->range.symmetric_skew};
+        // The store quantizes in plain units after the curve, so its values
+        // are evenly spaced at `step` and `plain_values` stays empty.
+        value::ParamRange r;
+        r.plain_min = info->range.min;
+        r.plain_max = info->range.max;
+        r.plain_default = info->range.default_value;
+        r.step = info->range.step;
+        r.skew = info->range.skew;
+        r.symmetric_skew = info->range.symmetric_skew;
+        return r;
     }
 
     [[nodiscard]] std::vector<std::string> value_labels(value::ParamHandle param) override {

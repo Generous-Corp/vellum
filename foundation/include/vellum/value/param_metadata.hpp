@@ -10,7 +10,12 @@
 ///
 /// Contract:
 /// - `range()` describes the plain axis: its ends, its default, its step (0
-///   when continuous) and its curve. A model reports the curve it maps
+///   when continuous or when its values are not evenly spaced), the values
+///   themselves when they are not evenly spaced, and its curve. A discrete
+///   axis whose values are unevenly spaced in plain units (a model that snaps
+///   before it curves) reports `step` 0 and lists every value in
+///   `plain_values`; a caller never assumes a uniform grid it was not given.
+///   A model reports the curve it maps
 ///   through; a caller uses it to describe the axis, never to re-derive
 ///   `ParamModel::plain()`.
 /// - `value_labels()` is one label per value for a parameter with labelled
@@ -36,8 +41,13 @@ struct ParamRange {
     double plain_min = 0.0;
     double plain_max = 1.0;
     double plain_default = 0.0;
-    /// Distance between neighbouring values; 0 means continuous.
+    /// Distance between neighbouring values when they are evenly spaced; 0
+    /// when continuous or when they are not (see `plain_values`).
     double step = 0.0;
+    /// Every value, in increasing order, of a discrete axis whose values are
+    /// not evenly spaced in plain units; empty when the axis is continuous or
+    /// evenly spaced at `step`.
+    std::vector<double> plain_values;
     /// The model's curve exponent; 1 is linear.
     double skew = 1.0;
     /// True when the curve mirrors around the middle of the axis.

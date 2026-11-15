@@ -150,8 +150,22 @@ ParamRange InMemoryParamModel::range(ParamHandle param) {
     const double span = p->spec.plain_max - p->spec.plain_min;
     const double default_normalized =
         conform(std::isnan(p->spec.default_normalized) ? 0.0 : p->spec.default_normalized, count);
-    return {p->spec.plain_min, p->spec.plain_max, plain_of(p->spec, default_normalized),
-            count >= 2 ? span / static_cast<double>(count - 1) : 0.0, p->spec.skew, false};
+    ParamRange r;
+    r.plain_min = p->spec.plain_min;
+    r.plain_max = p->spec.plain_max;
+    r.plain_default = plain_of(p->spec, default_normalized);
+    r.skew = p->spec.skew;
+    // Values snap in normalized space and then pass through the curve, so a
+    // skewed axis with three or more values is not evenly spaced in plain
+    // units: list them instead of reporting a step the model does not keep.
+    if (count >= 3 && p->spec.skew != 1.0 && span > 0.0) {
+        r.plain_values.reserve(static_cast<std::size_t>(count));
+        for (int i = 0; i < count; ++i)
+            r.plain_values.push_back(plain_of(p->spec, value_index_to_normalized(i, count)));
+    } else if (count >= 2) {
+        r.step = span / static_cast<double>(count - 1);
+    }
+    return r;
 }
 
 std::vector<std::string> InMemoryParamModel::value_labels(ParamHandle param) {
