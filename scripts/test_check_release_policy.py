@@ -668,6 +668,16 @@ class Isolation(unittest.TestCase):
         problems = policy.isolation_problems({"other.yml": '  build:\n    "steps":\n' + body}, self.tmp)
         self.assertTrue(any("a steps key this check cannot read" in problem for problem in problems), problems)
 
+    def test_job_headers_are_read_or_fail_closed(self) -> None:
+        read = self.read(token="${{ github.token }}", run='run: gh api "repos/$R/rulesets"\n')
+        clean = "  clean:\n    steps:\n      - name: noop\n        run: true\n"
+        for header in ("  read:  # comment", '  "read":'):
+            with self.subTest(header=header):
+                self.refused("jobs:\n" + header + "\n" + read + clean)
+        unreadable = "jobs:\n  read :\n" + read + clean
+        problems = self.found(unreadable)
+        self.assertTrue(any("job header this check cannot read" in problem for problem in problems), problems)
+
     def test_a_line_under_steps_that_no_step_holds_fails_closed(self) -> None:
         gh = '"repos/$R/rulesets"'
         bare_first = ("    steps:\n      -\n        name: read\n"

@@ -773,16 +773,35 @@ def app_token_problems(name: str, workflow: str) -> list[str]:
     return found
 
 
-JOB_HEADER = re.compile(r"^  (?P<name>[A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
+# Job IDs may be plain or quoted YAML keys, and comments after the key are
+# valid YAML. Keep the supported forms explicit so an unreadable job header
+# can be rejected instead of silently dropping that job's steps.
+JOB_HEADER = re.compile(
+    r"^  (?P<name>(?:[A-Za-z0-9_-]+|\"[^\"\n]+\"|'[^'\n]+')):[ \t]*(?:#.*)?$", re.MULTILINE)
+JOB_KEY = re.compile(r"^  [^\n]+:", re.MULTILINE)
 
 
 def jobs(workflow: str) -> dict[str, str]:
     """The workflow's jobs, as text blocks keyed by job id."""
-    found = re.search(r"(?:^|\n)jobs:[ \t]*\n", workflow)
+    found = re.search(r"(?:^|\n)jobs:[ \t]*(?:#.*)?\n", workflow)
     body = workflow[found.end():] if found else ""
     marks = list(JOB_HEADER.finditer(body))
-    return {mark["name"]: body[mark.start():(marks[index + 1].start() if index + 1 < len(marks) else None)]
+    return {_plain(mark["name"]): body[mark.start():(marks[index + 1].start() if index + 1 < len(marks) else None)]
             for index, mark in enumerate(marks)}
+
+
+def job_layout_problems(name: str, workflow: str) -> list[str]:
+    """Fail closed when a job header is a YAML form this reader cannot follow."""
+    found = re.search(r"(?:^|\n)jobs:[ \t]*(?:#.*)?\n", workflow)
+    if found is None:
+        return []
+    problems = []
+    for line in workflow[found.end():].splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if len(line) - len(line.lstrip()) == 2 and JOB_KEY.match(line) and not JOB_HEADER.fullmatch(line):
+            problems.append(f"{name}: job header this check cannot read: {line.strip()!r}")
+    return problems
 
 
 def isolation_problems(workflows: dict[str, str], root: Path) -> list[str]:
@@ -806,6 +825,7 @@ def isolation_problems(workflows: dict[str, str], root: Path) -> list[str]:
     # Every step rule here reads steps through job_steps; refuse a layout it
     # would silently read as no steps.
     for name, text in sorted(workflows.items()):
+        found.extend(job_layout_problems(name, text))
         found.extend(step_layout_problems(name, text))
     if SIGNING_WORKFLOW in workflows:
         found.extend(app_token_problems(SIGNING_WORKFLOW, workflows[SIGNING_WORKFLOW]))
