@@ -434,6 +434,13 @@ function plotWhole(value, path, minimum, maximum) {
     }
 }
 
+const PLOT_SOURCES_BY_STYLE = Object.freeze({
+    line: Object.freeze(['scalar', 'vector']),
+    area: Object.freeze(['scalar', 'vector']),
+    bar: Object.freeze(['vector']),
+    meter: Object.freeze(['meter']),
+});
+
 // A plot names a value-feed channel and how to draw it; the samples arrive at
 // run time, so a plot carries none.
 function validatePlot(properties, path) {
@@ -450,6 +457,13 @@ function validatePlot(properties, path) {
     ]) {
         const value = pathKeyword(properties[name], `${path}.${name}`, values);
         if (value !== undefined) output[name] = value;
+    }
+    // The channel shape each style reads, matching native plot_is_valid: an
+    // omitted source defaults to vector, or meter for a meter plot.
+    const shapes = PLOT_SOURCES_BY_STYLE[style];
+    if (output.source !== undefined && !shapes.includes(output.source)) {
+        throw new TypeError(
+            `${path}.source must be ${shapes.join(' or ')} for a ${style} plot`);
     }
     plotWhole(properties.slots, `${path}.slots`, 1, MAXIMUM_PLOT_SLOTS);
     plotWhole(properties.audioChannel, `${path}.audioChannel`, 0, MAXIMUM_PLOT_AUDIO_CHANNEL);

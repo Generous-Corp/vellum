@@ -477,6 +477,23 @@ test('serializes a plot node bound to a value-feed channel', () => {
     rejects({ min: Number.NaN }, /min must be a finite number/);
     rejects({ lineColor: 'red' }, /lineColor must be a hex color/);
     rejects({ children: jsx(View, {}) }, /Plot does not accept children/);
+
+    // Each style reads only the channel shapes native materialization accepts.
+    rejects({ source: 'meter' }, /source must be scalar or vector for a line plot/);
+    rejects({ plot: 'area', source: 'meter' }, /source must be scalar or vector for a area plot/);
+    rejects({ plot: 'bar', source: 'scalar' }, /source must be vector for a bar plot/);
+    rejects({ plot: 'bar', source: 'meter' }, /source must be vector for a bar plot/);
+    rejects({ plot: 'meter', source: 'vector' }, /source must be meter for a meter plot/);
+    rejects({ plot: 'meter', source: 'scalar' }, /source must be meter for a meter plot/);
+    const accepts = (properties) => mount(() => jsx(Plot, {
+        id: 'ok', plot: 'line', channel: 'c', slots: 4, ...properties })).renderJSON();
+    for (const properties of [
+        { source: 'scalar' }, { source: 'vector' }, { plot: 'area', source: 'scalar' },
+        { plot: 'area', source: 'vector' }, { plot: 'bar', source: 'vector' },
+        { plot: 'meter', source: 'meter' }, { plot: 'bar' }, { plot: 'meter' },
+    ]) {
+        assert.doesNotThrow(() => accepts(properties), JSON.stringify(properties));
+    }
 });
 
 test('serializes an image node with fit, sampling and a source rectangle', () => {
