@@ -371,3 +371,18 @@ test('a user-space gradient stroke on a horizontal or vertical line still paints
     assert.equal(path(box.root).properties.path.stroke, 'none',
         'an objectBoundingBox gradient on a line still paints nothing');
 });
+
+test('an invisible root is never rasterized, even with a filter', () => {
+    for (const attributes of [' display="none" filter="url(#f)"', ' style="display: none; filter: url(#f)"']) {
+        let calls = 0;
+        const imported = importSvgAsset(wrap('<filter id="f"/><rect width="5" height="5" fill="red"/>', attributes),
+            { rasterize: () => { calls += 1; return { contentHash: `sha256:${'a'.repeat(64)}` }; } });
+        assert.equal(calls, 0, attributes);
+        assert.notEqual(imported.mode, 'rasterized', attributes);
+        assert.equal(imported.diagnostics.some((entry) => entry.code === 'svg-raster-feature-dropped'), false);
+    }
+    let calls = 0;
+    importSvgAsset(wrap('<filter id="f"/><rect width="5" height="5"/>', ' filter="url(#f)"'),
+        { rasterize: () => { calls += 1; return { contentHash: `sha256:${'a'.repeat(64)}` }; } });
+    assert.equal(calls, 1, 'a visible root with a filter is still rasterized');
+});

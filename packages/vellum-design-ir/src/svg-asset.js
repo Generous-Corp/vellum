@@ -1080,7 +1080,9 @@ class Importer {
                 this.report('svg-root-reference-dropped', this.rootId, `${name} on the root <svg> was dropped`);
             }
         }
-        if (values.filter !== undefined && values.filter !== 'none') {
+        // A root with display none draws nothing, so its filter needs no
+        // rasterizer.
+        if (values.filter !== undefined && values.filter !== 'none' && values.display !== 'none') {
             this.rasterOnly.push({ path: this.rootId, reason: 'filter needs rasterization' });
         }
         this.dropUnknownAttributes(svg, this.rootId);
