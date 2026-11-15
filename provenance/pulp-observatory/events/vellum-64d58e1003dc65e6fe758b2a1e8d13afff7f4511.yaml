@@ -1,0 +1,51 @@
+{
+  "class": "importer",
+  "contract_keys": [
+    "capture-primitives",
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-15T04:22:22Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-64d58e1003dc65e6fe758b2a1e8d13afff7f4511",
+  "include_dependency_deltas": [
+    "apps/app-host/CMakeLists.txt"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "capture-primitives",
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "apps/app-host/CMakeLists.txt",
+    "apps/app-host/test_html_import_geometry.py",
+    "packages/vellum-ui/src/design.js",
+    "packages/vellum-ui/test/design.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "84e6ea615a29e3a9960adb1d103c3892face7522",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "faf185fb1f66053654d4f4ec6bca849f325d63f2",
+    "to_commit": "88ccc8950c378266c5abc705b916ed6fe855ce28"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "64d58e1003dc65e6fe758b2a1e8d13afff7f4511",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
