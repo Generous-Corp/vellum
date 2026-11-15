@@ -1383,8 +1383,8 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 The library exports only the `v8::` and `cppgc::` API, and statically
 bundles libraries whose notices survive that sealing. V8 is built with `Intl`,
-so it carries ICU's code and locale data under the Unicode License V3 and the
-ICU license (the ICU section above). It also carries zlib under the zlib
+so it carries ICU's code under the Unicode License V3 and the ICU license (the
+ICU section above); the mac-arm64 archive ships no separate ICU data file. It also carries zlib under the zlib
 license and Abseil under the Apache License, Version 2.0 (the Chromium zlib,
 Abseil and Apache License sections above). Re-check these bundled notices
 against the V8 source tree's `third_party` licenses whenever the V8 pin moves.
