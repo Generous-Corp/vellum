@@ -715,10 +715,10 @@ def _lower_layout_boxes(
         value = round(value, 4)
         return int(value) if value.is_integer() else value
 
+    # The root carries no size: Chrome's window is not the project's viewport,
+    # and a root width/height would override the scenario viewport (800x600 by
+    # default). Children are placed by their parent-relative boxes alone.
     root_rect = boxes[root_index]
-    source_nodes[root_index]["properties"]["layout"] = {  # type: ignore[index]
-        "width": rounded(root_rect[2]), "height": rounded(root_rect[3]),
-    }
     pending = [(child, root_rect) for child in tree_children.get(root_index, [])]
     while pending:
         index, parent = pending.pop()

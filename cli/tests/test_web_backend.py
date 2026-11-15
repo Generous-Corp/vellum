@@ -201,7 +201,8 @@ class BrowserCaptureLoweringTests(unittest.TestCase):
         root, _assets, _evidence = lower_dom_snapshot(
             snapshot, settled_snapshot=snapshot, screenshot={},
         )
-        self.assertEqual(root["properties"]["layout"], {"width": 800, "height": 600})
+        # The root keeps no size, so the scenario viewport decides it.
+        self.assertNotIn("layout", root["properties"])
         body, head = root["children"]
         text, space, slot = body["children"]
         self.assertEqual(body["properties"]["layout"],
