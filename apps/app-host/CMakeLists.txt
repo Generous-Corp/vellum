@@ -45,6 +45,17 @@ if(VELLUM_BUILD_TESTS)
                 "${VELLUM_NODE_EXECUTABLE}")
         set_tests_properties(vellum.app-host-design-anchor-dump PROPERTIES
             ENVIRONMENT "MTL_DEBUG_LAYER=0")
+        # Chrome is resolved when the test runs, since CI installs its pinned
+        # browser after configuring. Without any browser the test reports a
+        # skip; a named browser that does not resolve fails.
+        add_test(NAME vellum.app-host-html-import-geometry
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/test_html_import_geometry.py"
+                "$<TARGET_FILE:vellum-app-host>"
+                "${VELLUM_NODE_EXECUTABLE}")
+        set_tests_properties(vellum.app-host-html-import-geometry PROPERTIES
+            ENVIRONMENT "MTL_DEBUG_LAYER=0"
+            SKIP_RETURN_CODE 77)
     endif()
 endif()
 

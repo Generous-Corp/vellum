@@ -162,6 +162,18 @@ DesignIR asset manifest, while the evidence receipt makes the capture
 self-contained for a later materializer. Malformed URLs, unsafe or oversized
 payloads, excessive nodes/assets, and an unlowerable snapshot fail closed.
 
+Each node keeps the box Chrome laid it out at, as `properties.layout`: the
+document root carries the page `width` and `height`, and every other laid-out
+node an `x`, `y`, `width` and `height` relative to its parent, which is how
+native layout places a child. A node Chrome rendered no box for (an element
+with `display: none`, collapsed whitespace) is lowered as `display: none` and
+is not rendered. A box-less node whose descendants have boxes, such as a
+`display: contents` element or a shadow root, spans its parent so that its
+descendants keep their positions. `apps/app-host/test_html_import_geometry.py`
+checks that every native box on `fixtures/html-import` matches Chrome's within
+1 px. Geometry is the only layout carried; paint, images and typography are
+not lowered by this step.
+
 Raw HTML sources use the same isolated browser path through
 `vellum import --source-type html FILE` (or `claude-design`). The source is
 fingerprinted and staged by `vellum_html_source.py`; the capture entrypoint is
