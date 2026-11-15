@@ -514,8 +514,9 @@ void Panel::paint(canvas::Canvas& canvas) {
         auto border = resolve_color(border_token_, canvas::Color::rgba8(80, 80, 100));
         canvas.set_stroke_color(border);
         canvas.set_line_width(border_width_);
-        // Inset stroke by half its width so the center lands on pixel boundaries
-        // (Visage-style half-pixel alignment for crisper edges)
+        // Inset by half the stroke width so the whole stroke stays inside the
+        // bounds instead of being clipped; with integer widths its edges then
+        // land on pixel boundaries, which keeps the border crisp.
         float inset = border_width_ * 0.5f;
         canvas.stroke_rounded_rect(inset, inset,
                                     b.width - border_width_, b.height - border_width_,
