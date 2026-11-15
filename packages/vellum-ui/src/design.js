@@ -89,6 +89,23 @@ function componentFor(node) {
     throw new Error(`unsupported materialized design node kind: ${node.kind}`);
 }
 
+// The identity the design tool gave the node, so a rendered node can be
+// traced back to it: `figma:<node id>` for a Figma provider id, the adapter or
+// `semantic` prefix for other sources, and the stable design id otherwise.
+function anchorFor(node, document) {
+    const identity = node.identity;
+    if (identity?.strategy === 'provider' && typeof identity.sourceId === 'string') {
+        const adapter = document.source?.adapter;
+        const prefix = typeof adapter === 'string' && adapter.startsWith('figma')
+            ? 'figma' : (typeof adapter === 'string' && adapter ? adapter : 'provider');
+        return `${prefix}:${identity.sourceId}`;
+    }
+    if (identity?.strategy === 'semantic' && typeof identity.semanticId === 'string') {
+        return `semantic:${identity.semanticId}`;
+    }
+    return node.id;
+}
+
 function materializeNode(node, context, depth, root = false) {
     if (depth > MAXIMUM_DEPTH || ++context.nodes > MAXIMUM_NODES) {
         throw new Error('materialized design exceeds the node or depth limit');
@@ -103,6 +120,7 @@ function materializeNode(node, context, depth, root = false) {
 
     const properties = {
         id: node.id,
+        anchor: anchorFor(node, context.document),
         style: retainedStyle(context.document, node, context.viewport, root),
         accessibilityLabel: typeof node.name === 'string' ? node.name : undefined,
         children: node.children.map((child) => materializeNode(child, context, depth + 1)),

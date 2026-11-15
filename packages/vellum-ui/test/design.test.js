@@ -219,3 +219,32 @@ test('materializes pinned Pulp emitter output into the capture-ready retained ho
     assert.equal(tree.id, 'main/1:2');
     assert.equal(JSON.parse(bridge.snapshotStateJSON()).state.model.presses, 1);
 });
+
+test('rendered nodes carry the design identity they came from as an anchor', async () => {
+    const sourceBytes = await readFile(join(fixtures, 'pulp-emitter-generic.export.json'));
+    const document = normalizeImport(decodeFigmaPluginExport(
+        JSON.parse(sourceBytes.toString('utf8')),
+        {
+            sourceHash: `sha256:${createHash('sha256').update(sourceBytes).digest('hex')}`,
+            sourceKey: 'main',
+        },
+    ));
+    const app = createApp({
+        id: 'anchor-proof',
+        stateVersion: '1',
+        initialState: {},
+        actions: { tap: () => ({}) },
+        render: () => materializeDesign(document, {
+            actions: { 'main/1:2': { press: 'tap' } },
+            viewport: { height: 240, padding: 20, width: 420 },
+        }),
+    });
+    const tree = JSON.parse(mount(app).renderJSON()).tree;
+    const nodes = [];
+    const walk = (node) => { nodes.push(node); node.children.forEach(walk); };
+    walk(tree);
+    const interactive = nodes.filter((node) => node.events !== undefined);
+    assert.ok(interactive.length > 0);
+    for (const node of interactive) assert.equal(node.anchor, 'figma:1:2');
+    for (const node of nodes) assert.match(node.anchor, /^figma:/);
+});

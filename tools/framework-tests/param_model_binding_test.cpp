@@ -80,6 +80,10 @@ private:
 InMemoryParamModel make_host() {
     std::vector<ParamSpec> specs;
     specs.push_back({.key = "cutoff", .default_normalized = 0.25});
+    specs.push_back({.key = "depth", .default_normalized = 0.5});
+    specs.push_back({.key = "mode", .default_normalized = 0.25, .value_count = 5});
+    specs.push_back({.key = "voices", .default_normalized = 0.0, .value_count = 3});
+    specs.push_back({.key = "flag", .default_normalized = 0.0, .value_count = 2});
     return InMemoryParamModel(std::move(specs));
 }
 
@@ -213,6 +217,181 @@ FRAMEWORK_TEST(a_store_binding_keeps_its_behaviour_and_tick_does_nothing) {
 
     vellum::view::ParameterBinding empty;
     empty.tick();
+}
+
+FRAMEWORK_TEST(a_fader_drag_is_one_host_gesture_and_follows_the_model) {
+    auto host = make_host();
+    RecordingModel model(host);
+    vellum::view::Fader fader;
+    fader.set_bounds({0.0f, 0.0f, 24.0f, 160.0f});
+    const auto cutoff = model.resolve("cutoff");
+    auto binding = vellum::view::bind_parameter(fader, model, cutoff);
+    CHECK(near(fader.value(), 0.25));
+
+    fader.simulate_drag({12.0f, 120.0f}, {12.0f, 20.0f}, 10);
+    CHECK(model.host_begins == 1);
+    CHECK(model.host_ends == 1);
+    CHECK(model.editor_values >= 2);
+    CHECK(near(host.normalized(cutoff), fader.value()));
+
+    const int edits = model.editor_values;
+    host.set_normalized(cutoff, 0.6);
+    CHECK(near(fader.value(), 0.6));
+    CHECK(model.editor_values == edits);
+
+    host.set_modulation_offset(cutoff, 0.1);
+    binding.tick();
+    CHECK(fader.has_modulated_value());
+    CHECK(near(fader.modulated_display_value(), 0.7));
+}
+
+FRAMEWORK_TEST(a_range_slider_follows_the_model_silently) {
+    auto host = make_host();
+    RecordingModel model(host);
+    vellum::view::RangeSlider slider;
+    slider.set_bounds({0.0f, 0.0f, 200.0f, 24.0f});
+    const auto depth = model.resolve("depth");
+    auto binding = vellum::view::bind_parameter(slider, model, depth);
+    CHECK(near(slider.value(), 0.5));
+
+    host.set_normalized(depth, 0.2);
+    CHECK(near(slider.value(), 0.2));
+    CHECK(model.editor_values == 0);
+
+    slider.simulate_drag({40.0f, 12.0f}, {160.0f, 12.0f}, 10);
+    CHECK(model.host_begins == 1);
+    CHECK(model.host_ends == 1);
+    CHECK(near(host.normalized(depth), slider.value()));
+
+    host.set_modulation_offset(depth, -0.1);
+    binding.tick();
+    CHECK(slider.has_modulated_value());
+    host.set_modulation_offset(depth, std::nullopt);
+    binding.tick();
+    CHECK(!slider.has_modulated_value());
+}
+
+FRAMEWORK_TEST(an_xy_drag_is_one_gesture_per_axis) {
+    auto host = make_host();
+    RecordingModel model(host);
+    vellum::view::XYPad pad;
+    pad.set_bounds({0.0f, 0.0f, 100.0f, 100.0f});
+    const auto x = model.resolve("cutoff");
+    const auto y = model.resolve("depth");
+    auto binding = vellum::view::bind_parameter(pad, model, x, y);
+    CHECK(near(pad.x_value(), 0.25));
+    CHECK(near(pad.y_value(), 0.5));
+
+    pad.simulate_drag({20.0f, 20.0f}, {80.0f, 70.0f}, 8);
+    CHECK(model.host_begins == 2);
+    CHECK(model.host_ends == 2);
+    CHECK(near(host.normalized(x), pad.x_value()));
+    CHECK(near(host.normalized(y), pad.y_value()));
+
+    const int edits = model.editor_values;
+    host.set_normalized(x, 0.9);
+    CHECK(near(pad.x_value(), 0.9));
+    host.set_normalized(y, 0.1);
+    CHECK(near(pad.y_value(), 0.1));
+    CHECK(model.editor_values == edits);
+
+    host.set_modulation_offset(x, -0.4);
+    binding.tick();
+    CHECK(pad.has_modulated_value());
+    CHECK(near(pad.modulated_display_x(), 0.5));
+    CHECK(near(pad.modulated_display_y(), 0.1));
+}
+
+FRAMEWORK_TEST(a_combo_selection_is_a_value_index_and_one_gesture) {
+    auto host = make_host();
+    RecordingModel model(host);
+    vellum::view::ComboBox combo;
+    combo.set_items({"a", "b", "c", "d", "e"});
+    const auto mode = model.resolve("mode");
+    auto binding = vellum::view::bind_parameter(combo, model, mode);
+    CHECK(combo.selected() == 1);
+
+    combo.set_selected(3);
+    CHECK(near(host.normalized(mode), 0.75));
+    CHECK(model.host_begins == 1);
+    CHECK(model.host_ends == 1);
+    CHECK(model.editor_values == 1);
+
+    host.set_normalized(mode, 0.5);
+    CHECK(combo.selected() == 2);
+    CHECK(model.editor_values == 1);
+    CHECK(model.host_begins == 1);
+}
+
+FRAMEWORK_TEST(a_combo_on_a_continuous_parameter_spreads_its_items) {
+    auto host = make_host();
+    RecordingModel model(host);
+    vellum::view::ComboBox combo;
+    combo.set_items({"a", "b", "c", "d"});
+    const auto depth = model.resolve("depth");
+    auto binding = vellum::view::bind_parameter(combo, model, depth);
+    CHECK(combo.selected() == 2);  // 0.5 of four items rounds to index 2
+
+    combo.set_selected(1);
+    CHECK(near(host.normalized(depth), 1.0 / 3.0));
+}
+
+FRAMEWORK_TEST(a_stepper_step_is_a_value_index_and_one_gesture) {
+    auto host = make_host();
+    RecordingModel model(host);
+    vellum::view::DesignStepper stepper({"one", "two", "three"}, 0);
+    const auto voices = model.resolve("voices");
+    auto binding = vellum::view::bind_parameter(stepper, model, voices);
+    CHECK(stepper.selected() == 0);
+
+    stepper.on_select(2);
+    CHECK(near(host.normalized(voices), 1.0));
+    CHECK(model.host_begins == 1);
+    CHECK(model.host_ends == 1);
+
+    host.set_normalized(voices, 0.5);
+    CHECK(stepper.selected() == 1);
+    CHECK(model.editor_values == 1);
+}
+
+template <typename Control, typename Flip, typename IsOn>
+void check_switch(Control& control, Flip flip, IsOn is_on) {
+    auto host = make_host();
+    RecordingModel model(host);
+    const auto flag = model.resolve("flag");
+    auto binding = vellum::view::bind_parameter(control, model, flag);
+    CHECK(!is_on());
+
+    flip(true);
+    CHECK(near(host.normalized(flag), 1.0));
+    CHECK(model.host_begins == 1);
+    CHECK(model.host_ends == 1);
+    flip(false);
+    CHECK(near(host.normalized(flag), 0.0));
+    CHECK(model.host_begins == 2);
+
+    const int edits = model.editor_values;
+    host.set_normalized(flag, 1.0);
+    CHECK(is_on());
+    host.set_normalized(flag, 0.0);
+    CHECK(!is_on());
+    CHECK(model.editor_values == edits);
+    binding.tick();  // a switch shows no modulation; tick has nothing to do
+}
+
+FRAMEWORK_TEST(switches_flip_as_one_shot_gestures) {
+    vellum::view::Toggle toggle;
+    check_switch(
+        toggle, [&](bool on) { toggle.set_on(on, vellum::view::Notify::sync); },
+        [&] { return toggle.is_on(); });
+    vellum::view::Checkbox box;
+    check_switch(
+        box, [&](bool on) { box.set_checked(on, vellum::view::Notify::sync); },
+        [&] { return box.is_checked(); });
+    vellum::view::ToggleButton button;
+    check_switch(
+        button, [&](bool on) { button.set_on(on, vellum::view::Notify::sync); },
+        [&] { return button.is_on(); });
 }
 
 }  // namespace
