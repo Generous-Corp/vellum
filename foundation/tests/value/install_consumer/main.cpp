@@ -2,6 +2,7 @@
 // interfaces only, the way a widget does.
 #include <vellum/value/in_memory_param_model.hpp>
 #include <vellum/value/in_memory_value_feed.hpp>
+#include <vellum/value/param_metadata.hpp>
 
 #include <array>
 #include <cstdio>
@@ -20,6 +21,19 @@ int main() {
     if (!mix.valid() || model.normalized(mix) != 0.25 || heard != 0.25 ||
         model.value_count(mix) != 0) {
         std::fprintf(stderr, "ParamModel round trip failed\n");
+        return 1;
+    }
+
+    // The in-memory model was built by the installed library; its metadata is
+    // found through the abstract model.
+    ParamMetadata* metadata = metadata_of(model);
+    if (metadata == nullptr) {
+        std::fprintf(stderr, "metadata_of found no ParamMetadata on InMemoryParamModel\n");
+        return 1;
+    }
+    metadata->set_plain_value(mix, 0.7);
+    if (metadata->plain_value(mix) != 0.7 || metadata->range(mix).plain_max != 1.0) {
+        std::fprintf(stderr, "ParamMetadata round trip failed\n");
         return 1;
     }
 
