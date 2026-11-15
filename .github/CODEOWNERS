@@ -9,8 +9,11 @@
 # and framework_trusted_verify.py against the transfer record, the name-debt
 # baseline and the external-updates log under provenance/; the record files
 # are owned before they exist so the change that adds them needs both reviews.
-# provenance/framework/ports.json is left out on purpose: the ledger is data
-# those judges check row by row, so a port lands by normal review.
+# provenance/framework/ports.json and units.json are left out on purpose: they
+# are data those judges check row by row, so a port lands by normal review.
+# The parity completion record (the owner's statement that every matrix cell
+# reached its target) and the runner that executes its proofs for the release
+# receipt are owned the same way, the record before it exists.
 /.github/CODEOWNERS @danielraffel
 /.github/workflows/release-path-review-trigger.yml @danielraffel
 /.github/workflows/release-path-review.yml @danielraffel
@@ -20,6 +23,7 @@
 /.shipyard/config.toml @danielraffel
 /provenance/active-source-boundary.json @danielraffel
 /provenance/authority-signers.allowed_signers @danielraffel
+/provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json @danielraffel
 /provenance/framework-name-debt.json @danielraffel
 /provenance/framework/external-updates.json @danielraffel
 /provenance/framework/transfer.json @danielraffel
@@ -36,6 +40,7 @@
 /scripts/release_request.py @danielraffel
 /scripts/retired_release_tags.py @danielraffel
 /scripts/run_ci_lane.py @danielraffel
+/scripts/run_parity_proofs.py @danielraffel
 /scripts/verify_immutable_release_preflight.py @danielraffel
 /scripts/verify_release_attestation.py @danielraffel
 /scripts/verify_release_tag.py @danielraffel

@@ -195,6 +195,62 @@ class BrowserCaptureLoweringTests(unittest.TestCase):
         self.assertEqual(computed[CAPTURE_STYLE_NAMES[0]], "block")
         self.assertEqual(computed[CAPTURE_STYLE_NAMES[1]], "")
 
+    def test_dom_snapshot_lowers_chrome_boxes_relative_to_parent(self) -> None:
+        """Each laid-out node keeps Chrome's box as a parent-relative frame."""
+        snapshot = {
+            "strings": ["#document", "BODY", "#text", "Hi", "  ", "HEAD", "SLOT", "SPAN"],
+            "documents": [{
+                "nodes": {
+                    # document > body > (text "Hi", whitespace, slot > span), document > head
+                    "nodeType": [9, 1, 3, 3, 1, 1, 1],
+                    "nodeName": [0, 1, 2, 2, 5, 6, 7],
+                    "nodeValue": [None, None, 3, 4, None, None, None],
+                    "parentIndex": [-1, 0, 1, 1, 0, 1, 5],
+                    "attributes": [[], [], [], [], [], [], []],
+                },
+                "layout": {
+                    "nodeIndex": [0, 1, 2, 3, 6],
+                    "styles": [[], [], [], [], []],
+                    "bounds": [[0, 0, 800, 600], [8, 48, 784, 120.5],
+                               [8, 48, 20.25, 18], [0, 0, 0, 0], [30, 70, 10, 12]],
+                },
+            }],
+        }
+        root, _assets, _evidence = lower_dom_snapshot(
+            snapshot, settled_snapshot=snapshot, screenshot={},
+        )
+        # The root keeps no size, so the scenario viewport decides it.
+        self.assertNotIn("layout", root["properties"])
+        body, head = root["children"]
+        text, space, slot = body["children"]
+        self.assertEqual(body["properties"]["layout"],
+                         {"x": 8, "y": 48, "width": 784, "height": 120.5})
+        self.assertEqual(text["properties"]["layout"],
+                         {"x": 0, "y": 0, "width": 20.25, "height": 18})
+        # Collapsed whitespace and display: none have no box and are hidden.
+        self.assertEqual(space["properties"]["layout"], {"display": "none"})
+        self.assertEqual(head["properties"]["layout"], {"display": "none"})
+        # A box-less node with laid-out descendants passes its parent's box
+        # through, so the span still lands at Chrome's absolute (30, 70).
+        self.assertEqual(slot["properties"]["layout"],
+                         {"x": 0, "y": 0, "width": 784, "height": 120.5})
+        self.assertEqual(slot["children"][0]["properties"]["layout"],
+                         {"x": 22, "y": 22, "width": 10, "height": 12})
+
+    def test_dom_snapshot_rejects_malformed_layout_bounds(self) -> None:
+        snapshot = {
+            "strings": ["#document"],
+            "documents": [{
+                "nodes": {
+                    "nodeType": [9], "nodeName": [0], "nodeValue": [None],
+                    "parentIndex": [-1], "attributes": [[]],
+                },
+                "layout": {"nodeIndex": [0], "styles": [[]], "bounds": [[0, 0, -1, 10]]},
+            }],
+        }
+        with self.assertRaisesRegex(BackendFailure, "layout bounds"):
+            lower_dom_snapshot(snapshot, settled_snapshot=snapshot, screenshot={})
+
     def test_dom_snapshot_lowers_nodes_and_localizes_data_url_assets(self) -> None:
         payload = b"capture-asset"
         encoded = base64.b64encode(payload).decode("ascii")

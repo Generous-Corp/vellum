@@ -586,6 +586,9 @@ jobs:
                   # no file, and the collector counts a pull request it cannot
                   # judge as landable, so the audit fails closed.
                   landability_read="$repository_root/landability/$pull_number"
+                  # $owner, $name and $number are GraphQL variables, sent as
+                  # written; the shell must not expand them.
+                  # shellcheck disable=SC2016
                   if gh api graphql \
                     -F owner="${repository%%/*}" -F name="${repository#*/}" -F number="$pull_number" \
                     -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { number headRefOid mergeQueueEntry { id } } } }' \

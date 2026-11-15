@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import re
@@ -84,6 +85,50 @@ class GatesTest(unittest.TestCase):
             self.assertTrue(paths and all(path.startswith(root) for path in paths), line)
         self.assertEqual(list((fake / "tmp").iterdir()), [])
         self.assertFalse((fake / "home" / ".cache").exists())
+
+    def rehearsal(self, stub: str) -> tuple[subprocess.CompletedProcess[str], Path]:
+        """Run only the release rehearsal on a release-path change, against a
+        stand-in for the planning repository's tool."""
+        planning = Path(self.tmp.name).parent / f"{Path(self.tmp.name).name}-planning"
+        tool = planning / "vellum-move" / "tools" / "rehearse_tag_pipeline.py"
+        tool.parent.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, planning, ignore_errors=True)
+        tool.write_text(stub, encoding="utf-8")
+        git(self.repo, "tag", "v0.4.1")
+        self.commit("scripts/release_request.py", "print('release')\n")
+        worktrees = self.repo / ".worktrees"
+        env = {**os.environ, "GATES_ONLY": "release-rehearsal", "PULP_WORKTREES_ROOT": str(worktrees),
+               "VELLUM_GATES_CACHE": str(worktrees / ".cache-unused"), "PULP_PLANNING_DIR": str(planning),
+               "REHEARSAL_ARGV": str(planning / "argv.json")}
+        return subprocess.run(["bash", "scripts/gates.sh", "base"], cwd=self.repo, env=env,
+                              capture_output=True, text=True, check=False), planning / "argv.json"
+
+    # The planning tool's interface, as far as this script uses it: --change
+    # is required, as it is in the real tool.
+    REHEARSAL_STUB = (
+        "import argparse, json, os, sys\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--change', required=True)\n"
+        "parser.add_argument('--tag', required=True)\n"
+        "parser.add_argument('--simulate', action='store_true')\n"
+        "args = parser.parse_args()\n"
+        "json.dump(sys.argv[1:], open(os.environ['REHEARSAL_ARGV'], 'w'))\n"
+    )
+
+    def test_the_release_rehearsal_names_this_checkout_as_the_change(self) -> None:
+        result, recorded = self.rehearsal(self.REHEARSAL_STUB)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("gates: PASS release-rehearsal", result.stdout)
+        arguments = json.loads(recorded.read_text())
+        self.assertIn("--simulate", arguments)
+        self.assertEqual(arguments[arguments.index("--tag") + 1], "v0.4.2")
+        change = Path(arguments[arguments.index("--change") + 1])
+        self.assertEqual(change.resolve(), self.repo.resolve())
+
+    def test_a_failing_release_rehearsal_fails_the_gates(self) -> None:
+        result, _ = self.rehearsal("raise SystemExit(3)\n")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("gates: FAIL release-rehearsal", result.stdout)
 
     def test_planted_prose_violation_fails(self) -> None:
         self.commit("docs/new.md", f"A sentence {EM_DASH} with an em dash.\n")

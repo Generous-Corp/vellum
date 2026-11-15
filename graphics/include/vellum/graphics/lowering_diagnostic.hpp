@@ -70,6 +70,11 @@ inline constexpr std::string_view kSceneVersionMismatchCode = "VELLUM_SCENE_VERS
 inline constexpr std::string_view kGradientNotExpressibleCode =
     "VELLUM_GRADIENT_NOT_EXPRESSIBLE";
 
+/// A blend mode the backend cannot draw; a warning. The group was drawn with
+/// the `normal` mode instead. Only Tier 2 modes, which a backend other than
+/// Skia Graphite may lack, are ever reported this way.
+inline constexpr std::string_view kBlendModeFallbackCode = "VELLUM_BLEND_MODE_FALLBACK";
+
 [[nodiscard]] constexpr std::string_view to_string(
     LoweringDiagnostic::Severity severity) noexcept {
     switch (severity) {
