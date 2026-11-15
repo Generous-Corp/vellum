@@ -32,6 +32,51 @@ std::optional<std::string> read_file(const std::string& relative) {
     return buffer.str();
 }
 
+
+// The QuickJS bundled with the framework predates class static initialization
+// blocks, which three.core.js uses to tag its classes (`static { X.prototype.isX
+// = true; }`). Lowering each block to an equivalent static field initializer is
+// the only change needed to load the module build; every other byte is
+// untouched. A module-capable engine needs no lowering.
+std::string lower_static_blocks(const std::string& source) {
+    std::string out;
+    std::size_t i = 0;
+    int lowered = 0;
+    while (i < source.size()) {
+        auto at = source.find("static {", i);
+        if (at == std::string::npos) {
+            out.append(source, i, std::string::npos);
+            break;
+        }
+        out.append(source, i, at - i);
+        std::size_t j = at + 8;
+        int depth = 1;
+        while (j < source.size() && depth > 0) {
+            char c = source[j];
+            if (c == '/' && j + 1 < source.size() && source[j + 1] == '*') {
+                j = source.find("*/", j + 2);
+                j = j == std::string::npos ? source.size() : j + 2;
+                continue;
+            }
+            if (c == '/' && j + 1 < source.size() && source[j + 1] == '/') {
+                j = source.find('\n', j);
+                j = j == std::string::npos ? source.size() : j;
+                continue;
+            }
+            if (c == '{') ++depth;
+            if (c == '}') --depth;
+            ++j;
+        }
+        out += "static __staticInit" + std::to_string(lowered++) + " = (() => {";
+        out.append(source, at + 8, j - 1 - (at + 8));
+        out += "})();";
+        i = j;
+    }
+    return out;
+}
+
+bool lowering_enabled = true;
+
 // Maps the import specifiers the payload and a script use to payload files,
 // the way a scripted view's resolver does, and records what was asked for.
 struct PayloadResolver {
@@ -56,7 +101,10 @@ struct PayloadResolver {
             found = files.find(base);
         if (found == files.end())
             return std::nullopt;
-        return read_file(found->second);
+        auto text = read_file(found->second);
+        if (text && lowering_enabled && found->second == "build/three.core.js")
+            return lower_static_blocks(*text);
+        return text;
     }
 };
 
@@ -149,6 +197,32 @@ FRAMEWORK_TEST(webgpu_build_loads_in_quickjs_to_define_its_renderer) {
         std::fprintf(stderr, "  module error: %s\n", result.error.c_str());
     CHECK(result.error.empty());
     CHECK(js_string(engine, "typeof THREE.WebGPURenderer") == "function");
+}
+
+FRAMEWORK_TEST(quickjs_refuses_static_blocks_and_the_lowering_is_what_makes_core_load) {
+    // Control: the engine rejects the syntax itself, and rejects the unmodified core.
+    {
+        view::ScriptEngine engine(view::JsEngineType::quickjs);
+        PayloadResolver resolver;
+        auto result = run(engine, "class A { static { A.flag = true; } } globalThis.A = A;", resolver);
+        CHECK(!result.error.empty());
+    }
+    {
+        view::ScriptEngine engine(view::JsEngineType::quickjs);
+        PayloadResolver resolver;
+        lowering_enabled = false;
+        auto result = run(engine, "import * as THREE from 'three'; globalThis.THREE = THREE;", resolver);
+        lowering_enabled = true;
+        CHECK(!result.error.empty());
+    }
+    // The lowered form of the same syntax runs.
+    CHECK(lower_static_blocks("class A { static { A.flag = true; } }") ==
+          "class A { static __staticInit0 = (() => { A.flag = true; })(); }");
+    view::ScriptEngine engine(view::JsEngineType::quickjs);
+    PayloadResolver resolver;
+    auto result = run(engine, lower_static_blocks("class A { static { A.flag = true; } } globalThis.A = A;"), resolver);
+    CHECK(result.error.empty());
+    CHECK(js_string(engine, "A.flag") == "true");
 }
 
 FRAMEWORK_TEST(an_unresolvable_import_reports_an_error) {
