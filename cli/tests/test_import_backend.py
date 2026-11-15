@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import socket
 import subprocess
@@ -13,13 +15,39 @@ import time
 import unittest
 import uuid
 
-from cli.vellum_backend import source_argument
-
 
 REPO = Path(__file__).resolve().parents[2]
 CLI = REPO / "cli" / "vellum_cli.py"
 BACKEND = REPO / "packages" / "vellum-design-ir" / "bin" / "vellum-backend.js"
 FIXTURES = REPO / "fixtures" / "design-ir"
+
+
+def current_version() -> str:
+    """The framework version CMakeLists.txt declares, which a release bump moves."""
+    text = (REPO / "CMakeLists.txt").read_text(encoding="utf-8")
+    found = re.findall(r"^project\(vellum\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)\b", text, re.MULTILINE | re.IGNORECASE)
+    if len(found) != 1:
+        raise RuntimeError("CMakeLists.txt must declare exactly one project(vellum VERSION ...)")
+    return found[0]
+
+
+VERSION = current_version()
+
+
+def load_backend_module():
+    # Loaded by path, like test_pulp_zip.py, so this file runs both as
+    # `python3 cli/tests/test_import_backend.py` and under unittest discovery.
+    spec = importlib.util.spec_from_file_location(
+        "vellum_backend_import_tests", REPO / "cli/vellum_backend.py"
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("could not load Vellum backend dispatcher")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+source_argument = load_backend_module().source_argument
 
 
 def invoke(*arguments: str, cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -50,7 +78,7 @@ class ImportBackendTests(unittest.TestCase):
     def test_archive_staging_parser_ignores_backend_handshake_and_capture_options(self) -> None:
         arguments = [
             "--project", "/tmp/project", "--json",
-            "--framework-version", "0.2.0", "--cli-api", "1",
+            "--framework-version", VERSION, "--cli-api", "1",
             "--capture-envelope", "/tmp/capture.json",
             "/tmp/index.html", "--source-type", "html", "--as", "main",
         ]
