@@ -70,16 +70,18 @@ M5 Studio with that label; each Vellum lane is capped at one VM and uses the
 `vm` lease class (priority 60), below Pulp's required `pulp-build-pr-head`
 (100) and `pulp-build-merge-group` (110) leases.
 
-Pull requests skip both jobs by a job-level condition and report them as
-`skipped`; the merge queue, pushes to `main` and release tags run them (see
-`decisions/0008-merge-commits-are-load-bearing.md`).
-
 The runner group must be restricted to this workflow and the repository must
 require approval for outside contributors before the selector is enabled. The
 workflow and TartCI admission checks reject fork head repositories. A Vellum
 VM does not preempt a running Pulp VM and the `vm` priority does not provide a
 cross-repository yield; it can occupy an otherwise free host slot until its
 job completes. That bounded exposure is recorded in the fleet evidence.
+
+When the proof job reports a reused or uncovered proof, `sterile-consumer`
+only prints a notice and runs on a hosted `ubuntu-24.04` runner. On
+`merge_group` runs, the hosted `cancel-destroyed-groups` job cancels the
+proofs of merge groups that the queue has destroyed (see
+`decisions/0008-merge-commits-are-load-bearing.md`).
 
 `VELLUM_MACOS_RUNS_ON_JSON` remains the hosted selector used by
 `readme-quick-start.yml` and the hosted portion of `sdk-release.yml`; it is not

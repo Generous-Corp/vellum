@@ -84,23 +84,6 @@ not a security boundary. The `vm` lane has no cross-repository yield and can
 occupy a free host slot until its job completes, so the evidence must include
 concurrent Pulp lease observations.
 
-## Pull requests skip the GPU proof
-
-Pull requests do not run `gpu-macos-arm64` or `sterile-consumer`. Both jobs
-carry the job-level condition `github.event_name != 'pull_request'`, so a pull
-request gets both check runs concluded `skipped`, which GitHub counts as a
-passing required check, and the pull request can still enter the merge queue.
-The workflow keeps its unfiltered `pull_request` trigger on purpose: a workflow
-skipped by a trigger or path filter reports no check run, and the required
-checks would stay pending. The merge queue, pushes to `main`, release tags and
-dispatches run the full proof, so nothing lands or releases without it. The
-owner chose this so each change pays for one GPU proof, in the queue, instead
-of two; the queue builds one combined group of up to five pull requests.
-
-A skipped pull-request run has no successful proof jobs, so the exact-tree
-reuse below never finds a proof to reuse, and the queue builds every proof
-itself.
-
 ## Exact-tree reuse of the GPU proof in the merge queue
 
 When no other change lands on `main` between a pull request's proof and its
@@ -148,3 +131,29 @@ workflow needs the proof by rule, as does an empty diff or a base without the
 classifier. A trailing guard re-derives the verdict and fails the job if the
 proof was skipped for anything else, or on any event other than a pull request
 or queue entry. Pushes to `main` and release tags always run the full proof.
+
+## Reporting a skipped proof without a Mac
+
+When `gpu-macos-arm64` reports a reused proof or a change the proof cannot see,
+every `sterile-consumer` step except one notice is skipped. The job then
+selects a hosted `ubuntu-24.04` runner instead of the scarce local Mac class,
+and still runs and reports as it did before. When the proof was built,
+`sterile-consumer` selects exactly the runner `gpu-macos-arm64` does,
+including the merge-group class on `merge_group` and push runs.
+
+## Cancelling proofs of destroyed merge groups
+
+A queue entry's merge group lives on
+`refs/heads/gh-readonly-queue/main/pr-<n>-<sha>`. When GitHub rebuilds an
+entry's group, the new group keeps `pr-<n>` with a new suffix and the old
+group is destroyed. GitHub Actions offers no event for a destroyed group, since
+`merge_group` has only the `checks_requested` activity type, so the old
+group's proof would keep its place in the Mac queue. The hosted
+`cancel-destroyed-groups` job runs on every `merge_group` run and cancels each
+older unfinished `merge_group` run of `gpu-macos.yml` from this repository
+whose ref names the same entry (`scripts/cancel_destroyed_queue_proofs.py`).
+A pull request is the last entry of at most one live group, so an older run
+for the same entry always belongs to a destroyed group. Neither proof job
+needs the helper: a job skipped because a job it needs failed reports a
+passing required check, so the helper must never be able to skip or satisfy a
+proof. A helper error cancels nothing more and is reported as a warning.
