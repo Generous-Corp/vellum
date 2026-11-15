@@ -192,7 +192,7 @@ test('a version 1 document refuses compositing, and unknown versions stay refuse
     assert.throws(() => parseDesignIR(older), DesignIRValidationError);
 
     const newer = structuredClone(document);
-    newer.schemaVersion = 3;
+    newer.schemaVersion = 4;
     assert.equal(issuesOf(newer)[0].path, '$.schemaVersion');
 
     const plain = normalizeImport(sourceWith());

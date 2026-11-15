@@ -83,6 +83,14 @@ only prints a notice and runs on a hosted `ubuntu-24.04` runner. On
 proofs of merge groups that the queue has destroyed (see
 `decisions/0008-merge-commits-are-load-bearing.md`).
 
+`VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON` is optional. When it is set,
+only `merge_group` runs of these two jobs select it; `push` and
+`pull_request` keep `VELLUM_LOCAL_MACOS_RUNS_ON_JSON`, so a push re-proof can
+never queue ahead of a merge-queue entry. The only reviewed value is
+`["self-hosted","macOS","ARM64","vellum-build-macos-merge-group"]`, the class
+label TartCI's Vellum lanes register for their merge-group tier. Unset it to
+roll back; every event then selects the generic class again.
+
 `VELLUM_MACOS_RUNS_ON_JSON` remains the hosted selector used by
 `readme-quick-start.yml` and the hosted portion of `sdk-release.yml`; it is not
 the selector for these two required GPU jobs.

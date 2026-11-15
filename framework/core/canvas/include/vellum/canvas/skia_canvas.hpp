@@ -190,7 +190,7 @@ public:
     bool layer_valid(LayerHandle layer) const override;
     void invalidate_layer(LayerHandle layer) override;
 
-    // ── Scene recording (subtree cache, FU-3) ─────────────────────────────
+    // ── Scene recording (subtree cache) ───────────────────────────────────
     // record_scene captures `paint` into an SkPicture via SkPictureRecorder;
     // draw_scene replays it with SkCanvas::drawPicture at the current CTM/clip.
     // Resolution-independent — no image shader is created, so the Graphite
@@ -233,7 +233,7 @@ public:
     // ── Capabilities ────────────────────────────────────────────────────
     // Skia renders every listed verb faithfully (SkImageFilters color ops,
     // SkSVGDOM, path-clip parser, real Gaussian box-shadow, SkSL runtime
-    // effects, and the FU-3 SkPicture-backed scene_cache record/replay).
+    // effects, and SkPicture-backed scene_cache record/replay).
     bool supports(CanvasCapability cap) const override {
         switch (cap) {
             case CanvasCapability::images:
@@ -247,7 +247,7 @@ public:
             case CanvasCapability::sksl_draw:
             case CanvasCapability::sksl_post_effect:
             case CanvasCapability::box_shadow_gaussian:
-            case CanvasCapability::scene_cache:  // record_scene/draw_scene (FU-3)
+            case CanvasCapability::scene_cache:  // record_scene/draw_scene via SkPicture
                 return true;
             case CanvasCapability::retained_layer_cache:
                 return retained_layer_cache_supported_;

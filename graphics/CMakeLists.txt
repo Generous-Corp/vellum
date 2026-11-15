@@ -1,6 +1,7 @@
 add_library(vellum-graphics
     src/capture_stats.cpp
     src/damage.cpp
+    src/effect.cpp
     src/image_asset.cpp
     src/image_decode_queue.cpp
     src/layer_cache.cpp

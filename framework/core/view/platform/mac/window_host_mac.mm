@@ -1752,7 +1752,7 @@ public:
             if (const char* env = std::getenv("PULP_PARTIAL_RENDERING_DEBUG")) {
                 partial_rendering_debug_ = (env[0] == '1');
             }
-            // FU-2 partial repaint (WI-17), default OFF: only when
+            // Partial repaint, default OFF: only when
             // PULP_PARTIAL_REPAINT=1 does the host clip the repaint to the
             // damaged rect and blit a retained scene target. Unset ⇒ the
             // unconditional full-repaint path below is untouched.
@@ -2358,7 +2358,7 @@ private:
     // clipped to" against the unconditional repaint that still ships.
     render::DirtyTracker tracker_;
     bool partial_rendering_debug_ = false;
-    // FU-2 (WI-17): when true (PULP_PARTIAL_REPAINT=1) the host clips the
+    // Partial repaint: when true (PULP_PARTIAL_REPAINT=1) the host clips the
     // repaint to the damaged rect and blits a retained persistent-scene target.
     // Default false ⇒ the unconditional full-repaint path is unchanged.
     bool partial_repaint_enabled_ = false;
@@ -2541,7 +2541,7 @@ private:
         startup_report_.graphite_ms = vellum::view::host_elapsed_ms(graphite_start);
         configured_scale_ = static_cast<float>(scale);
 
-        // FU-2: put the surface in persistent-scene mode when partial repaint is
+        // Put the surface in persistent-scene mode when partial repaint is
         // enabled, so a clipped repaint is correct on the non-preserving Dawn
         // swapchain. If the backend can't retain a scene, disable partial
         // repaint entirely — we must never clip a non-preserving surface.
@@ -2661,7 +2661,7 @@ private:
         // after layout, before the GPU submit/present in render_frame.
         PULP_TRACE_SCOPE_NAMED("canvas", "paint");
 
-        // FU-2 partial repaint: clip the ENTIRE body — background fill included —
+        // Partial repaint: clip the ENTIRE body — background fill included —
         // to the damaged rect. Everything outside stays as the retained scene's
         // previous-frame pixels. Only reached when compute_effective_damage
         // returned a bounded (pixel-identical) rect. The clip is in root logical
@@ -2701,7 +2701,7 @@ private:
 
         // Inspector overlay is painted automatically via View::paint_overlays()
 
-        if (clip) canvas.restore_to_count(clip_saved);  // close the FU-2 clip
+        if (clip) canvas.restore_to_count(clip_saved);  // close the partial-repaint clip
     }
 
     bool render_frame(std::vector<uint8_t>* capture_pixels = nullptr,
@@ -2779,7 +2779,7 @@ private:
                 width_, height_, gpu_surface_->width(), gpu_surface_->height(), scale);
         }
 
-        // FU-2: when partial repaint is enabled and this frame has a bounded
+        // When partial repaint is enabled and this frame has a bounded
         // (non-full) dirty region, ask the pure damage model whether the region
         // can be clipped pixel-identically. A hazard (blur / backdrop-filter /
         // mask / transformed view reaching the damage) escalates to full → no
@@ -2870,7 +2870,7 @@ private:
                                         std::memory_order_relaxed);
         if (reached_output) {
             tracker_.clear();  // next frame starts clean
-            if (partial_repaint_enabled_) clear_pending_dirty();  // FU-2: no paint_root here
+            if (partial_repaint_enabled_) clear_pending_dirty();  // partial: no paint_root here
         } else if (partial_repaint_enabled_) {
             mark_dirty();  // failed present → drawable undefined → repaint in full
         }

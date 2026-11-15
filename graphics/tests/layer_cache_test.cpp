@@ -147,6 +147,16 @@ void equality_covers_every_field() {
                                 .fit = ImageFit::cover,
                                 .sampling = ImageSampling::nearest},
         .image_asset = std::make_shared<ImageAsset>(),
+        .effects = {{.kind = EffectKind::drop_shadow,
+                     .sigma = 2.0F,
+                     .offset_x = 1.0F,
+                     .offset_y = 2.0F,
+                     .color = Color::hex(0x202020),
+                     .material = "m",
+                     .values = {{.name = "v",
+                                 .type = MaterialValueType::number,
+                                 .value = {1.0F, 0.0F, 0.0F, 0.0F}}}}},
+        .effect_box = {1.0F, 2.0F, 3.0F, 4.0F},
     };
     expect(paint_commands_equal(base, base), "a command equals itself");
     const std::vector<Mutation> mutations{
@@ -238,6 +248,23 @@ void equality_covers_every_field() {
         {"clip_rect height", [](PaintCommand& c) { c.clip_rect.height = 1.0F; }},
         {"mask_mode", [](PaintCommand& c) { c.mask_mode = MaskMode::luminance; }},
         {"blend_mode", [](PaintCommand& c) { c.blend_mode = BlendMode::multiply; }},
+        {"effect count", [](PaintCommand& c) { c.effects.push_back({}); }},
+        {"effect kind", [](PaintCommand& c) { c.effects[0].kind = EffectKind::blur; }},
+        {"effect sigma", [](PaintCommand& c) { c.effects[0].sigma = 3.0F; }},
+        {"effect offset x", [](PaintCommand& c) { c.effects[0].offset_x = 3.0F; }},
+        {"effect offset y", [](PaintCommand& c) { c.effects[0].offset_y = 3.0F; }},
+        {"effect colour", [](PaintCommand& c) { c.effects[0].color.red = 0.5F; }},
+        {"effect matrix", [](PaintCommand& c) { c.effects[0].matrix[19] = 0.5F; }},
+        {"effect material", [](PaintCommand& c) { c.effects[0].material = "n"; }},
+        {"effect value name", [](PaintCommand& c) { c.effects[0].values[0].name = "w"; }},
+        {"effect value type",
+         [](PaintCommand& c) { c.effects[0].values[0].type = MaterialValueType::color; }},
+        {"effect value", [](PaintCommand& c) { c.effects[0].values[0].value[3] = 1.0F; }},
+        {"effect value count", [](PaintCommand& c) { c.effects[0].values.clear(); }},
+        {"effect_box x", [](PaintCommand& c) { c.effect_box.x += 1.0F; }},
+        {"effect_box y", [](PaintCommand& c) { c.effect_box.y += 1.0F; }},
+        {"effect_box width", [](PaintCommand& c) { c.effect_box.width += 1.0F; }},
+        {"effect_box height", [](PaintCommand& c) { c.effect_box.height += 1.0F; }},
     };
     for (const auto& [name, mutate] : mutations) {
         PaintCommand changed = base;

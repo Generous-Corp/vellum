@@ -16,13 +16,15 @@ namespace {
 // PaintCommand field: a field they skip lets a cached image survive a change
 // to it. This size changes when a field is added; update both functions, and
 // the field-coverage test in layer_cache_test.cpp, then this number.
-static_assert(sizeof(PaintCommand) == 392,
+static_assert(sizeof(PaintCommand) == 432,
               "PaintCommand changed: update paint_commands_equal and hash_command");
 static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 88,
               "TextStyle or TextRun changed: update same_style, same_runs and hash_command");
 static_assert(sizeof(BoxShadow) == 32, "BoxShadow changed: update same_shadows and hash_command");
 static_assert(sizeof(LinearGradient) == 104 && sizeof(GradientStop) == 20,
               "LinearGradient changed: update same_gradients and hash_gradient");
+static_assert(sizeof(NodeEffect) == 160 && sizeof(MaterialValue) == 48,
+              "NodeEffect or MaterialValue changed: update same_effects and hash_command");
 static_assert(sizeof(Color) == 16 && sizeof(Affine2D) == 24 && sizeof(CornerRadii) == 16 &&
                   sizeof(Rect) == 16,
               "a PaintCommand value type changed: update the comparisons and hash_command");
@@ -148,6 +150,32 @@ bool same_path(const std::shared_ptr<const PathGeometry>& a,
            (!a->stroke.gradient || same_gradients({*a->stroke.gradient}, {*b->stroke.gradient}));
 }
 
+bool same_effects(const std::vector<NodeEffect>& a, const std::vector<NodeEffect>& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t index = 0; index < a.size(); ++index) {
+        const auto& left = a[index];
+        const auto& right = b[index];
+        if (left.kind != right.kind || !same_float(left.sigma, right.sigma) ||
+            !same_float(left.offset_x, right.offset_x) ||
+            !same_float(left.offset_y, right.offset_y) || !same_color(left.color, right.color) ||
+            left.material != right.material || left.values.size() != right.values.size()) {
+            return false;
+        }
+        for (std::size_t entry = 0; entry < left.matrix.size(); ++entry) {
+            if (!same_float(left.matrix[entry], right.matrix[entry])) return false;
+        }
+        for (std::size_t value = 0; value < left.values.size(); ++value) {
+            const auto& l = left.values[value];
+            const auto& r = right.values[value];
+            if (l.name != r.name || l.type != r.type) return false;
+            for (std::size_t component = 0; component < l.value.size(); ++component) {
+                if (!same_float(l.value[component], r.value[component])) return false;
+            }
+        }
+    }
+    return true;
+}
+
 // Everything except `bounds`, `transform`, `mesh` and `path`.
 bool same_image_reference(const std::optional<ImageReference>& a,
                           const std::optional<ImageReference>& b) {
@@ -178,7 +206,8 @@ bool same_paint(const PaintCommand& a, const PaintCommand& b) {
            a.layer_unbounded == b.layer_unbounded && a.layer_isolated == b.layer_isolated &&
            a.blend_mode == b.blend_mode &&
            same_rect(a.clip_rect, b.clip_rect) && a.mask_mode == b.mask_mode &&
-           same_image_reference(a.image, b.image) && a.image_asset == b.image_asset;
+           same_image_reference(a.image, b.image) && a.image_asset == b.image_asset &&
+           same_effects(a.effects, b.effects) && same_rect(a.effect_box, b.effect_box);
 }
 
 class Hasher final {
@@ -321,6 +350,26 @@ std::uint64_t hash_command(const PaintCommand& command) {
         hash.number(static_cast<std::uint64_t>(command.image->sampling));
     }
     hash.number(reinterpret_cast<std::uintptr_t>(command.image_asset.get()));
+    hash.number(command.effects.size());
+    for (const auto& effect : command.effects) {
+        hash.number(static_cast<std::uint64_t>(effect.kind));
+        hash.real(effect.sigma);
+        hash.real(effect.offset_x);
+        hash.real(effect.offset_y);
+        hash.color(effect.color);
+        for (const float entry : effect.matrix) hash.real(entry);
+        hash.text(effect.material);
+        hash.number(effect.values.size());
+        for (const auto& value : effect.values) {
+            hash.text(value.name);
+            hash.number(static_cast<std::uint64_t>(value.type));
+            for (const float component : value.value) hash.real(component);
+        }
+    }
+    hash.real(command.effect_box.x);
+    hash.real(command.effect_box.y);
+    hash.real(command.effect_box.width);
+    hash.real(command.effect_box.height);
     return hash.value();
 }
 

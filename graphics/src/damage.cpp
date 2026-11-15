@@ -1,6 +1,7 @@
 #include "damage_testing.hpp"
 
 #include <vellum/graphics/damage.hpp>
+#include <vellum/graphics/effect.hpp>
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/path_geometry.hpp>
@@ -29,6 +30,9 @@ constexpr float kBlurSigmaPerRadius = 0.5F;
 // This file builds without Skia, so it cannot ask the filter for its bound.
 constexpr float kDefaultTransformedBlurSigmas = 8.0F;
 std::atomic<float> blur_reach_sigmas{kDefaultTransformedBlurSigmas};
+std::atomic<bool> effect_grow_by_radius{true};
+std::atomic<bool> effect_fill_area{true};
+std::atomic<bool> effect_propagate_backdrops{true};
 constexpr float kLineHeightFactor = 1.4F;
 
 std::int32_t clamp_pixel(double value) noexcept {
@@ -336,7 +340,30 @@ SceneNode paint_fields(const SceneNode& node) {
     copy.mask = node.mask;
     copy.isolate = node.isolate;
     copy.blend_mode = node.blend_mode;
+    copy.effects = node.effects;
     return copy;
+}
+
+bool same_effects(const std::vector<NodeEffect>& a, const std::vector<NodeEffect>& b) {
+    return std::equal(a.begin(), a.end(), b.begin(), b.end(),
+        [](const NodeEffect& left, const NodeEffect& right) {
+            return left.kind == right.kind && same_float(left.sigma, right.sigma) &&
+                   same_float(left.offset_x, right.offset_x) &&
+                   same_float(left.offset_y, right.offset_y) &&
+                   same_color(left.color, right.color) &&
+                   std::equal(left.matrix.begin(), left.matrix.end(), right.matrix.begin(),
+                              [](float l, float r) { return same_float(l, r); }) &&
+                   left.material == right.material &&
+                   std::equal(left.values.begin(), left.values.end(), right.values.begin(),
+                              right.values.end(),
+                              [](const MaterialValue& l, const MaterialValue& r) {
+                                  return l.name == r.name && l.type == r.type &&
+                                         std::equal(l.value.begin(), l.value.end(),
+                                                    r.value.begin(), [](float x, float y) {
+                                                        return same_float(x, y);
+                                                    });
+                              });
+        });
 }
 
 bool same_clip(const std::optional<NodeClip>& a, const std::optional<NodeClip>& b) {
@@ -362,6 +389,9 @@ struct NodeRecord final {
     std::optional<Rect> damage;
     std::size_t subtree_end = 0;
     std::uint8_t composite = 0;
+    /// For a node with a backdrop effect, the frame-space area its backdrop
+    /// samples: its box grown by the backdrop's reach.
+    std::optional<Rect> backdrop_sample;
 };
 
 }  // namespace damage_detail
@@ -374,7 +404,7 @@ public:
         : width_(scene.width), height_(scene.height), scale_(scale), background_(scene.background),
           version_(scene.scene_version), frame_(frame_rect(scene, scale)) {
         walk(ImageAssetIndex(scene), propagation, scene.root, std::string{}, 0, 0.0F, 0.0F,
-             Affine2D{}, std::nullopt, false);
+             Affine2D{}, std::nullopt, false, {});
     }
 
     [[nodiscard]] const NodeRecord* find(const std::string& key) const {
@@ -404,10 +434,20 @@ public:
     }
 
 private:
+    // The effects enclosing a node: the sum of their filter radii, and the
+    // clip in force outside the outermost of them. A change inside an effect
+    // spreads by the radius, and only clips outside the effect bound it,
+    // since content clipped inside the group is blurred past its clip.
+    struct EnclosingEffects final {
+        bool any = false;
+        float radius = 0.0F;
+        std::optional<Rect> clip;
+    };
+
     std::size_t walk(const ImageAssetIndex& images, const DamagePropagation& propagation,
                      const SceneNode& node, const std::string& parent_key, std::size_t index,
                      float parent_x, float parent_y, const Affine2D& parent_transform,
-                     std::optional<Rect> clip, bool hidden) {
+                     std::optional<Rect> clip, bool hidden, EnclosingEffects enclosing) {
         std::string key = make_key(node, parent_key, index);
         const Rect absolute{parent_x + node.bounds.x, parent_y + node.bounds.y, node.bounds.width,
                             node.bounds.height};
@@ -443,6 +483,31 @@ private:
         const auto& paint_clip =
             node.clip && !node.clip->clips_own_paint ? parent_clip : clip;
 
+        // A node's own effects draw in frame space, so their radius is not
+        // scaled by the transform. An over-budget chain is drawn without its
+        // effects, but its declared radius still bounds the damage.
+        EnclosingEffects inner = enclosing;
+        std::optional<Rect> backdrop_sample;
+        bool backdrop = false;
+        bool fills = false;
+        if (!node.effects.empty() && !node.mask && finite) {
+            const auto chain = effect_chain_cost(node.effects);
+            if (!inner.any) {
+                inner.any = true;
+                inner.clip = paint_clip;
+            }
+            if (std::isfinite(chain.total.radius) && effect_grow_by_radius.load()) {
+                inner.radius += chain.total.radius;
+            }
+            if (chain.total.backdrop && !chain.over_budget) {
+                backdrop = true;
+                const Rect box = transformed_bounds(transform, absolute);
+                backdrop_sample = outset(box, chain.total.backdrop_reach);
+            }
+            fills = !chain.over_budget && effect_chain_fills_area(node.effects) &&
+                    effect_fill_area.load();
+        }
+
         const Rect logical_frame{0.0F, 0.0F, width_, height_};
         std::optional<Rect> damage;
         if (!finite) {
@@ -450,13 +515,18 @@ private:
             damage = Rect{nan, nan, nan, nan};
         } else if (!hidden) {
             damage = transformed_paint_bounds(node, absolute, transform, logical_frame, propagation);
+            if (backdrop && !rect_empty(absolute)) {
+                damage = unite(damage, transformed_bounds(transform, absolute));
+            }
             if (blend_mode_clears_backdrop(node.blend_mode)) damage = logical_frame;
             if (damage) {
                 const float radius = propagation.effect_radius(node);
                 if (std::isfinite(radius) && radius > 0.0F) {
                     damage = outset(*damage, radius * largest_scale(transform));
                 }
-                if (paint_clip) damage = clip_to(*damage, *paint_clip);
+                if (inner.any && inner.radius > 0.0F) damage = outset(*damage, inner.radius);
+                const auto& bounding = inner.any ? inner.clip : paint_clip;
+                if (bounding) damage = clip_to(*damage, *bounding);
             }
         }
 
@@ -468,14 +538,25 @@ private:
                             node.kind == SceneNode::Kind::image && node.image
                                 ? images.find(node.image->content_hash)
                                 : nullptr,
-                            absolute, damage, 0, 0});
+                            absolute, damage, 0, 0,
+                            !hidden && finite ? backdrop_sample : std::nullopt});
         const bool drawing = finite && !hidden;
         std::size_t drawn = drawing ? own_draws(node) : 0;
         for (std::size_t child = 0; child < node.children.size(); ++child) {
             drawn += walk(images, propagation, node.children[child], key, child, absolute.x,
-                          absolute.y, transform, clip, !drawing);
+                          absolute.y, transform, clip, !drawing, inner);
         }
         records_[position].subtree_end = records_.size();
+        // A chain that fills its area paints the whole box around its
+        // members, gaps included, so the group's own damage is that box and
+        // any change to it damages the old and the new box.
+        if (fills && drawing) {
+            std::optional<Rect> area = records_[position].damage;
+            for (auto member = position + 1U; member < records_.size(); ++member) {
+                area = unite(area, records_[member].damage);
+            }
+            records_[position].damage = area;
+        }
         if (drawing && node.blend_mode != BlendMode::normal) {
             records_[position].composite = 3;
         } else if (drawing && std::clamp(node.opacity, 0.0F, 1.0F) < 1.0F) {
@@ -552,6 +633,35 @@ void add_parent(DamageRegion& region, const Snapshot& snapshot, const NodeRecord
 
 void add_mask_parent(DamageRegion& region, const Snapshot& snapshot, const NodeRecord& record) {
     if (record.paint.mask) add_parent(region, snapshot, record);
+}
+
+// A backdrop effect redraws its box from what lies beneath it, so damage
+// reaching the area it samples damages the box too, which may in turn reach
+// another backdrop's sample.
+void propagate_backdrops(DamageRegion& region, const Snapshot& snapshot) {
+    if (!effect_propagate_backdrops.load() || region.empty() || region.is_full_frame()) return;
+    const float scale = snapshot.scale();
+    std::vector<char> added(snapshot.records().size(), 0);
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (std::size_t position = 0; position < snapshot.records().size(); ++position) {
+            const auto& record = snapshot.at(position);
+            if (added[position] != 0 || !record.backdrop_sample || !record.damage) continue;
+            const auto sample = to_pixel_rect(*record.backdrop_sample, scale);
+            if (!sample) {
+                region.add_full_frame();
+                return;
+            }
+            const std::int32_t margin = std::max<std::int32_t>(0, region.policy().antialias_margin);
+            const PixelRect grown{sample->left - margin, sample->top - margin,
+                                  sample->right + margin, sample->bottom + margin};
+            if (!region.intersects(grown)) continue;
+            added[position] = 1;
+            add_logical(region, record.damage, scale);
+            changed = true;
+            if (region.is_full_frame()) return;
+        }
+    }
 }
 
 void diff_snapshots(const Snapshot& before, const Snapshot& after, DamageRegion& region) {
@@ -862,7 +972,7 @@ std::optional<Rect> DamagePropagation::clip_bounds(const SceneNode&, const Rect&
 
 bool grouping_differs(const SceneNode& previous, const SceneNode& next) {
     return !same_clip(previous.clip, next.clip) || previous.mask != next.mask ||
-           previous.isolate != next.isolate;
+           previous.isolate != next.isolate || !same_effects(previous.effects, next.effects);
 }
 
 Rect DamagePropagation::text_extent(const SceneNode& node, const Rect& absolute_bounds,
@@ -1005,7 +1115,9 @@ DamageRegion compute_scene_damage(const Scene& previous, const Scene& next, floa
         region.add_full_frame();
         return region;
     }
-    diff_snapshots(Snapshot(previous, scale, effects), Snapshot(next, scale, effects), region);
+    const Snapshot after(next, scale, effects);
+    diff_snapshots(Snapshot(previous, scale, effects), after, region);
+    propagate_backdrops(region, after);
     return region;
 }
 
@@ -1068,6 +1180,7 @@ void DamageTracker::commit(const Scene& next, float scale) {
         pending_.add_full_frame();
     } else {
         diff_snapshots(*committed_, *snapshot, pending_);
+        propagate_backdrops(pending_, *snapshot);
     }
     committed_ = std::move(snapshot);
     last_stats_ = pending_.stats();
@@ -1080,6 +1193,7 @@ void DamageTracker::mark_dirty(std::string_view node_id) {
         pending_.add_full_frame();
     } else {
         for (const auto position : *positions) add_subtree(pending_, *committed_, position);
+        propagate_backdrops(pending_, *committed_);
     }
     last_stats_ = pending_.stats();
 }
@@ -1110,6 +1224,18 @@ namespace testing {
 void set_transformed_blur_sigmas(float sigmas) noexcept { blur_reach_sigmas.store(sigmas); }
 
 float transformed_blur_sigmas() noexcept { return blur_reach_sigmas.load(); }
+
+void set_effect_damage_rules(const EffectDamageRules& rules) noexcept {
+    effect_grow_by_radius.store(rules.grow_by_radius);
+    effect_fill_area.store(rules.fill_area);
+    effect_propagate_backdrops.store(rules.propagate_backdrops);
+}
+
+EffectDamageRules effect_damage_rules() noexcept {
+    return {.grow_by_radius = effect_grow_by_radius.load(),
+            .fill_area = effect_fill_area.load(),
+            .propagate_backdrops = effect_propagate_backdrops.load()};
+}
 
 }  // namespace testing
 
