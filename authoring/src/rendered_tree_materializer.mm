@@ -87,7 +87,7 @@ bool style_key_consumed(std::string_view type, std::string_view key, const Style
     }
     if (key == "padding" || key == "direction") return use.lays_out_children;
     if (key == "gap") return type == "stack" && use.lays_out_children;
-    if (key == "backgroundLinearGradient" || key == "boxShadow") return true;
+    if (key == "backgroundGradient" || key == "backgroundLinearGradient" || key == "boxShadow") return true;
     if (key == "backgroundColor") return !text;
     if (key == "borderRadius" || contains(kCornerRadiusKeys, key)) {
         return !text || use.paints_text_background;
@@ -211,15 +211,53 @@ bool parse_linear_gradient_value(
     }
     NSDictionary* source = raw;
     vellum::graphics::LinearGradient gradient;
+    if (id kind_value = source[@"kind"]; kind_value != nil) {
+        if (![kind_value isKindOfClass:NSString.class]) {
+            set_error(error, name + ".kind must be linear, radial, two-circle-radial or conic");
+            return false;
+        }
+        NSString* kind = kind_value;
+        if ([kind isEqualToString:@"radial"]) {
+            gradient.kind = vellum::graphics::GradientKind::radial;
+        } else if ([kind isEqualToString:@"two-circle-radial"]) {
+            gradient.kind = vellum::graphics::GradientKind::two_circle_radial;
+        } else if ([kind isEqualToString:@"conic"]) {
+            gradient.kind = vellum::graphics::GradientKind::conic;
+        } else if (![kind isEqualToString:@"linear"]) {
+            set_error(error, name + ".kind must be linear, radial, two-circle-radial or conic");
+            return false;
+        }
+    }
     if (!number_field(source, @"angle", 180.0F, gradient.angle_degrees,
             name + ".angle", error) ||
         !number_field(source, @"repeatLength", 0.0F, gradient.repeat_length,
             name + ".repeatLength", error)) {
         return false;
     }
-    if (gradient.repeat_length < 0.0F) {
-        set_error(error, name + ".repeatLength must be non-negative");
-        return false;
+    if (source[@"interpolation"] != nil) {
+        if (![source[@"interpolation"] isKindOfClass:NSString.class]) {
+            set_error(error, name + ".interpolation must be srgb, linear-srgb or oklab");
+            return false;
+        }
+        const std::string interpolation = cpp_string(source[@"interpolation"]);
+        if (interpolation == "srgb") {
+            gradient.interpolation = vellum::graphics::GradientInterpolation::srgb;
+        } else if (interpolation == "linear-srgb" || interpolation == "srgb-linear") {
+            gradient.interpolation = vellum::graphics::GradientInterpolation::linear_srgb;
+        } else if (interpolation == "oklab") {
+            gradient.interpolation = vellum::graphics::GradientInterpolation::oklab;
+        } else {
+            set_error(error, name + ".interpolation must be srgb, linear-srgb or oklab");
+            return false;
+        }
+    }
+    if (source[@"colorSpace"] != nil) {
+        if (![source[@"colorSpace"] isKindOfClass:NSString.class] ||
+            [source[@"colorSpace"] length] == 0U) {
+            set_error(error, name + ".colorSpace must be a non-empty string");
+            return false;
+        }
+        gradient.color_space = cpp_string(source[@"colorSpace"]);
     }
     if (source[@"repeating"] != nil &&
         CFGetTypeID((__bridge CFTypeRef)source[@"repeating"]) != CFBooleanGetTypeID()) {
@@ -227,6 +265,78 @@ bool parse_linear_gradient_value(
         return false;
     }
     gradient.repeating = [source[@"repeating"] boolValue];
+    if (id spread_value = source[@"spread"]; spread_value == nil) {
+        gradient.spread = gradient.repeating ? vellum::graphics::GradientSpread::repeat
+                                             : vellum::graphics::GradientSpread::pad;
+    } else {
+        if (![spread_value isKindOfClass:NSString.class]) {
+            set_error(error, name + ".spread must be pad, repeat or reflect");
+            return false;
+        }
+        NSString* spread = spread_value;
+        if ([spread isEqualToString:@"repeat"]) {
+            gradient.spread = vellum::graphics::GradientSpread::repeat;
+        } else if ([spread isEqualToString:@"reflect"]) {
+            gradient.spread = vellum::graphics::GradientSpread::reflect;
+        } else if ([spread isEqualToString:@"pad"]) {
+            gradient.spread = vellum::graphics::GradientSpread::pad;
+        } else {
+            set_error(error, name + ".spread must be pad, repeat or reflect");
+            return false;
+        }
+        if (source[@"repeating"] != nil &&
+            gradient.repeating != (gradient.spread != vellum::graphics::GradientSpread::pad)) {
+            set_error(error, name + ".repeating contradicts " + name +
+                                 ".spread; repeating is true exactly when spread is repeat or "
+                                 "reflect");
+            return false;
+        }
+    }
+    if (!number_field(source, @"centerX", 0.5F, gradient.center_x, name + ".centerX", error) ||
+        !number_field(source, @"centerY", 0.5F, gradient.center_y, name + ".centerY", error) ||
+        !number_field(source, @"radiusX", 0.0F, gradient.radius_x, name + ".radiusX", error) ||
+        !number_field(source, @"radiusY", 0.0F, gradient.radius_y, name + ".radiusY", error) ||
+        !number_field(source, @"focalX", 0.5F, gradient.focal_x, name + ".focalX", error) ||
+        !number_field(source, @"focalY", 0.5F, gradient.focal_y, name + ".focalY", error) ||
+        !number_field(source, @"startRadius", 0.0F, gradient.start_radius,
+                      name + ".startRadius", error) ||
+        !number_field(source, @"endRadius", 0.5F, gradient.end_radius, name + ".endRadius",
+                      error)) {
+        return false;
+    }
+    {
+        using vellum::graphics::GradientKind;
+        const auto kind = gradient.kind;
+        const bool angled = kind == GradientKind::linear || kind == GradientKind::conic;
+        const bool centred = kind != GradientKind::linear;
+        const bool focal = kind == GradientKind::two_circle_radial;
+        const std::pair<NSString*, bool> kind_fields[]{
+            {@"angle", angled},   {@"centerX", centred}, {@"centerY", centred},
+            {@"focalX", focal},   {@"focalY", focal},
+        };
+        for (const auto& [key, applies] : kind_fields) {
+            if (!applies && source[key] != nil) {
+                set_error(error, name + "." + cpp_string(key) + " does not apply to a " +
+                                     (kind == GradientKind::linear       ? "linear"
+                                      : kind == GradientKind::radial     ? "radial"
+                                      : kind == GradientKind::conic      ? "conic"
+                                                                         : "two-circle-radial") +
+                                     " gradient");
+                return false;
+            }
+        }
+    }
+    const std::pair<float, const char*> non_negative[]{
+        {gradient.repeat_length, ".repeatLength"}, {gradient.radius_x, ".radiusX"},
+        {gradient.radius_y, ".radiusY"},           {gradient.start_radius, ".startRadius"},
+        {gradient.end_radius, ".endRadius"},
+    };
+    for (const auto& [value, field] : non_negative) {
+        if (value < 0.0F) {
+            set_error(error, name + field + " must be non-negative");
+            return false;
+        }
+    }
     NSArray* stops = array_or_empty(source[@"stops"]);
     if (stops.count < 2U) {
         set_error(error, name + " requires at least two stops");
@@ -261,8 +371,9 @@ bool parse_linear_gradient(
     NSDictionary* style,
     std::vector<vellum::graphics::LinearGradient>& output,
     std::string* error) {
-    return parse_linear_gradient_value(
-        style[@"backgroundLinearGradient"], "backgroundLinearGradient", output, error);
+    id raw = style[@"backgroundGradient"] ?: style[@"backgroundLinearGradient"];
+    return parse_linear_gradient_value(raw, raw == style[@"backgroundGradient"] ?
+        "backgroundGradient" : "backgroundLinearGradient", output, error);
 }
 
 bool parse_box_shadow(
@@ -774,9 +885,18 @@ bool materialize_path(
     }
     auto& stroke = path.stroke;
     if (id paint = source[@"stroke"]; paint != nil && ![paint isEqual:@"none"]) {
-        const auto color = parse_color(paint);
-        if (!color) return reject("stroke", "stroke must be a colour or none");
-        stroke.color = *color;
+        if ([paint isKindOfClass:NSDictionary.class]) {
+            std::vector<vellum::graphics::LinearGradient> gradients;
+            std::string why;
+            if (!parse_linear_gradient_value(paint, "stroke", gradients, &why)) return reject("stroke", why);
+            if (gradients.size() != 1U) return reject("stroke", "requires one gradient");
+            stroke.gradient = gradients.front();
+            stroke.color = none;
+        } else {
+            const auto color = parse_color(paint);
+            if (!color) return reject("stroke", "stroke must be a colour or none");
+            stroke.color = *color;
+        }
     }
     stroke.width = 1.0F;
     const auto number = [&](NSString* key, float& value) {

@@ -82,10 +82,34 @@ export declare const services: Readonly<{
     }>;
 }>;
 
+/**
+ * A gradient paint. Positions and radii are fractions of the painted box.
+ * Linear and conic angles follow CSS: 0 points up and angles run clockwise.
+ * `radiusX` and `radiusY` shape a radial ellipse (0 means half the box);
+ * `startRadius` and `endRadius` size the two-circle form's circles as
+ * fractions of the box's shorter side (0 means 0), centred on the focal point
+ * and the centre. `colorSpace` is the space the stops are written in and
+ * `interpolation` the space they blend in. `repeatLength` applies to linear
+ * gradients only, `angle` to linear and conic ones, `centerX`/`centerY` to
+ * every kind but linear, and `focalX`/`focalY` to two-circle-radial ones; a
+ * field set on a kind it does not apply to is refused.
+ */
 export interface LinearGradientStyle {
-    angle: number;
+    kind?: 'linear' | 'radial' | 'two-circle-radial' | 'conic';
+    angle?: number;
     repeating?: boolean;
     repeatLength?: number;
+    spread?: 'pad' | 'repeat' | 'reflect';
+    interpolation?: 'srgb' | 'linear-srgb' | 'oklab';
+    colorSpace?: 'srgb' | 'linear-srgb' | 'display-p3';
+    centerX?: number;
+    centerY?: number;
+    radiusX?: number;
+    radiusY?: number;
+    focalX?: number;
+    focalY?: number;
+    startRadius?: number;
+    endRadius?: number;
     stops: Array<{ position: number; color: string }>;
 }
 export interface BoxShadowStyle {
@@ -135,6 +159,7 @@ export interface Style {
     letterSpacing?: number;
     textDecoration?: string;
     backgroundLinearGradient?: LinearGradientStyle;
+    backgroundGradient?: LinearGradientStyle;
     boxShadow?: BoxShadowStyle;
 }
 
@@ -236,7 +261,7 @@ export interface PathProps extends Omit<ElementProps, 'children' | 'text' | 'sou
     d: string;
     fillRule?: 'nonzero' | 'evenodd';
     fill?: string | LinearGradientStyle;
-    stroke?: string;
+    stroke?: string | LinearGradientStyle;
     strokeWidth?: number;
     strokeLineJoin?: 'miter' | 'round' | 'bevel';
     strokeLineCap?: 'butt' | 'round' | 'square';
