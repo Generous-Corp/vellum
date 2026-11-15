@@ -1552,11 +1552,10 @@ struct EffectStages final {
 
 // Composites an effect group: first its backdrop effect within the node's
 // box, then the group's image (when it has one) through its filter effects,
-// cropped to the area the layer declares, with the group's opacity over
-// both. The canvas holds the frame's scale; the filters work in device pixels.
+// cropped to the area the layer declares, with the group's opacity applied
+// once over both. The canvas holds the frame's scale; the filters work in device pixels.
 void composite_effects(SkCanvas& canvas, const PaintCommand& layer, const LayerImage* image,
                        float scale, FrameResources& resources, EffectStages stages = {}) {
-    const float opacity = std::clamp(layer.opacity, 0.0F, 1.0F);
     // The canvas holds a whole-pixel translation (an offscreen layer's
     // origin) times the frame's scale; device-pixel work happens under that
     // translation alone.
@@ -1564,6 +1563,21 @@ void composite_effects(SkCanvas& canvas, const PaintCommand& layer, const LayerI
     const SkM44 base = SkM44::Translate(frame.rc(0, 3), frame.rc(1, 3));
     const int saved = canvas.save();
     const auto backdrop = backdrop_paint(layer.effects, scale);
+    // Node opacity fades the group as a whole. With a backdrop effect the
+    // group is drawn at full opacity into a copy of what lies beneath it, and
+    // that copy is faded over the original once, so the tint cannot show
+    // through the group's own opaque content.
+    float opacity = std::clamp(layer.opacity, 0.0F, 1.0F);
+    if (stages.backdrop && backdrop.present && opacity < 1.0F) {
+        canvas.setMatrix(base);
+        SkPaint fade;
+        fade.setAlphaf(opacity);
+        canvas.saveLayer(SkCanvas::SaveLayerRec(nullptr, &fade, nullptr,
+                                                SkCanvas::kInitWithPrevious_SaveLayerFlag));
+        ++resources.layers;
+        canvas.setMatrix(frame);
+        opacity = 1.0F;
+    }
     if (stages.backdrop && backdrop.present) {
         const int clipped = canvas.save();
         canvas.setMatrix(base);
@@ -2111,7 +2125,8 @@ public:
             ~Restore() { caches.restore(state); }
         } restore{caches_, saved_caches};
         FrameResources resources{.meshes = {.recorder = recorder_.get()}, .caches = &caches_};
-        const auto extent = layer_extent(commands, begin + 1U, end - 1U, paragraphs);
+        const auto extent = layer_extent(commands, begin + 1U, end - 1U, paragraphs,
+                                         effect_input_rect(commands[begin]));
         if (!extent) {
             set_error(error, "the effect group's extent cannot be measured");
             return false;
@@ -2603,12 +2618,28 @@ private:
         return true;
     }
 
+    // The device pixels an effect group's filters can read to paint the
+    // target: the target grown by the chain's radius, so content just past
+    // the viewport still contributes the blur or shadow it casts into view.
+    PixelRect effect_input_rect(const PaintCommand& layer) const {
+        const auto target = target_rect();
+        const float reach = std::ceil(
+            std::max(0.0F, effect_chain_cost(layer.effects).total.radius) * config_.scale);
+        const auto grow = static_cast<std::int32_t>(
+            std::min(reach, static_cast<float>(std::numeric_limits<std::int32_t>::max() / 4))) +
+            kExtentMargin;
+        return {target.left - grow, target.top - grow, target.right + grow,
+                target.bottom + grow};
+    }
+
     // The device-pixel extent a layer's image must cover: every member's paint
-    // extent under its transform, with text measured, clipped to the target.
+    // extent under its transform, with text measured, clipped to `clip` (the
+    // target, unless the layer's effects read past it).
     // `std::nullopt` when an extent is not finite or text cannot be measured.
     std::optional<PixelRect> layer_extent(const std::vector<PaintCommand>& commands,
                                           std::size_t begin, std::size_t end,
-                                          std::vector<ParagraphSlot>& paragraphs) const {
+                                          std::vector<ParagraphSlot>& paragraphs,
+                                          std::optional<PixelRect> clip = std::nullopt) const {
         PixelRect extent{};
         for (auto index = begin; index < end; ++index) {
             const auto& command = commands[index];
@@ -2637,7 +2668,7 @@ private:
                                              pixels->right + kExtentMargin,
                                              pixels->bottom + kExtentMargin});
         }
-        return intersection(extent, target_rect());
+        return intersection(extent, clip ? *clip : target_rect());
     }
 
     ActiveLayer active_layer(const std::vector<PaintCommand>& commands, std::size_t begin,
@@ -2725,7 +2756,8 @@ private:
                            std::size_t begin, std::size_t end,
                            std::vector<ParagraphSlot>& paragraphs, FrameResources& resources,
                            std::string* error, std::size_t* recorded, std::vector<bool>* drawn) {
-        const auto extent = layer_extent(commands, begin + 1U, end - 1U, paragraphs);
+        const auto extent = layer_extent(commands, begin + 1U, end - 1U, paragraphs,
+                                         effect_input_rect(commands[begin]));
         if (!extent) {
             return paint_members(canvas, commands, begin + 1U, end - 1U, paragraphs, resources,
                                  error, recorded, drawn);
@@ -2769,7 +2801,13 @@ private:
                     active_layer(commands, layer.begin, layer.end, opacity, blend, &found->second));
                 continue;
             }
-            const auto extent = layer_extent(commands, content_begin, content_end, paragraphs);
+            // An effect group's image keeps what its filters read from past
+            // the target, as the direct path's does.
+            const auto clip = layer.opacity_layer && is_effect_layer(commands[layer.begin])
+                                  ? std::optional<PixelRect>(effect_input_rect(commands[layer.begin]))
+                                  : std::nullopt;
+            const auto extent =
+                layer_extent(commands, content_begin, content_end, paragraphs, clip);
             if (!extent || extent->empty()) {
                 (void)layer_cache_.admit(layer.node_id, 0);
                 continue;

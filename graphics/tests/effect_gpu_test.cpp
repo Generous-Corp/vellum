@@ -951,6 +951,100 @@ void cross_feature_effects() {
            sweep_detail(cut));
 }
 
+// A white scene holding one effect group at `x`: a black bar 8 wide and 40
+// tall, blurred.
+Scene edge_scene(float x, bool effect) {
+    Scene scene;
+    scene.scene_version = kDamageModelSceneVersion;
+    scene.width = kWidth;
+    scene.height = kHeight;
+    scene.background = Color::hex(0xFFFFFF);
+    scene.root = {.id = "root", .kind = SceneNode::Kind::group,
+                  .bounds = {0.0F, 0.0F, kWidth, kHeight}};
+    SceneNode group{.id = "fx", .kind = SceneNode::Kind::group, .bounds = {x, 60.0F, 8.0F, 40.0F}};
+    group.children.push_back(box("fx/bar", {0.0F, 0.0F, 8.0F, 40.0F}, Color::hex(0x000000)));
+    if (effect) group.effects = {blur(8.0F)};
+    scene.root.children.push_back(std::move(group));
+    return scene;
+}
+
+// An effect group whose members lie past the viewport still casts into it
+// what its filters spread, exactly as the same group drawn inside the view.
+void offscreen_filter_inputs() {
+    const float scale = 2.0F;
+    for (const bool cached : {false, true}) {
+        const std::string label = cached ? "cache on " : "cache off ";
+        const auto off = render_pixels(edge_scene(-20.0F, true), scale, cached);
+        const auto partly = render_pixels(edge_scene(-4.0F, true), scale, cached);
+        const auto inside = render_pixels(edge_scene(40.0F, true), scale, cached);
+        const auto bare = render_pixels(edge_scene(-20.0F, false), scale, cached);
+        if (off.empty() || partly.empty() || inside.empty() || bare.empty()) continue;
+        // The bar at -20 ends 12 logical pixels left of the view, within the
+        // blur's reach of 24; the bar at -4 straddles the edge. Each is
+        // compared with the bar at 40 at the same offset from the bar.
+        int worst = 0;
+        for (const float y : {62.0F, 80.0F, 98.0F}) {
+            for (const float x : {0.0F, 1.0F, 3.0F, 6.0F}) {
+                worst = std::max(worst, largest_delta(pixel_at(off, x, y, scale),
+                                                      pixel_at(inside, x + 60.0F, y, scale)));
+                worst = std::max(worst, largest_delta(pixel_at(partly, x + 4.0F, y, scale),
+                                                      pixel_at(inside, x + 48.0F, y, scale)));
+            }
+        }
+        expect(worst <= 2,
+               label + "a blur whose group lies past the viewport casts into it what the same "
+                       "group casts inside the view",
+               "largest channel delta " + std::to_string(worst));
+        expect(pixel_at(off, 1.0F, 80.0F, scale)[0] < 250,
+               label + "the blur of an offscreen bar darkens the view's edge");
+        expect(pixel_at(bare, 1.0F, 80.0F, scale)[0] == 255,
+               label + "control: the offscreen bar without its blur leaves the edge white");
+    }
+}
+
+// Node opacity fades a frosted-glass group once, as a whole: an opaque child
+// that covers the pane hides the tint before the group is faded.
+void material_group_opacity() {
+    const float scale = 2.0F;
+    const auto make = [](float opacity) {
+        Scene scene;
+        scene.scene_version = kDamageModelSceneVersion;
+        scene.width = kWidth;
+        scene.height = kHeight;
+        scene.background = Color::hex(0xFFFFFF);
+        scene.root = {.id = "root", .kind = SceneNode::Kind::group,
+                      .bounds = {0.0F, 0.0F, kWidth, kHeight}};
+        SceneNode pane{.id = "pane", .kind = SceneNode::Kind::group,
+                       .bounds = {60.0F, 40.0F, 100.0F, 80.0F}};
+        pane.opacity = opacity;
+        pane.children.push_back(box("pane/blue", {0.0F, 0.0F, 100.0F, 80.0F}, Color::hex(0x0000FF)));
+        pane.effects = {{.kind = EffectKind::material,
+                         .material = std::string(kFrostedGlassMaterial),
+                         .values = {{.name = "blur", .value = {0.0F}},
+                                    {.name = "saturation", .value = {1.0F}},
+                                    {.name = "tint", .type = MaterialValueType::color,
+                                     .value = {1.0F, 0.0F, 0.0F, 1.0F}}}}};
+        scene.root.children.push_back(std::move(pane));
+        return scene;
+    };
+    for (const bool cached : {false, true}) {
+        const std::string label = cached ? "cache on " : "cache off ";
+        const auto faded = render_pixels(make(0.5F), scale, cached);
+        const auto opaque = render_pixels(make(1.0F), scale, cached);
+        if (faded.empty() || opaque.empty()) continue;
+        // Blue at half opacity over white.
+        const std::array<int, 4> expected{128, 128, 255, 255};
+        const auto got = pixel_at(faded, 110.0F, 80.0F, scale);
+        expect(largest_delta(got, expected) <= 2,
+               label + "frosted glass with an opaque child at half opacity fades the blue group "
+                       "over white, with no tint beneath it",
+               "got " + std::to_string(got[0]) + "," + std::to_string(got[1]) + "," +
+                   std::to_string(got[2]) + "," + std::to_string(got[3]));
+        expect(largest_delta(pixel_at(opaque, 110.0F, 80.0F, scale), {0, 0, 255, 255}) <= 1,
+               label + "control: at full opacity the opaque child covers the tint");
+    }
+}
+
 void extension_material_renders_without_it() {
     MaterialDefinition app{
         .id = "com.example.sheen",
@@ -982,6 +1076,8 @@ int main() {
         budget_fallback();
         cached_layers();
         extension_material_renders_without_it();
+        offscreen_filter_inputs();
+        material_group_opacity();
         nested_effects();
         cross_feature_effects();
         damage_rule_controls();
