@@ -4,8 +4,10 @@
 # Usage: scripts/gates.sh [--full] [base]        default base: origin/main
 #
 # Default (fast, about 5 minutes): prose-lint, product-quality,
-# product-ui-packages, release-policy, release-policy-base, and the authority
-# and observatory unit tests. Run it before every push.
+# product-ui-packages, release-policy, release-policy-base, the authority
+# and observatory unit tests, and observatory-events (the observatory's own
+# verify, so a mapped commit with no observation event fails here and prints the
+# reconcile command; it reads Pulp from the cached clone and writes nothing). Run it before every push.
 # --full (what shipyard pr runs): everything, including the mirror-export
 # proofs (forbidden-deps, provenance-verify), the authority expansion verdict
 # and the full observatory verification, which read Pulp and take 25+ minutes.
@@ -399,11 +401,11 @@ PY
   python3 -I tools/provenance/test_verify_${NAME}_observation_scope.py
 }
 
-check_observatory() {
-  local cursor_sha upstream_root
-  cursor_sha="$(json_field provenance/pulp-observatory/cursor.json 'd["pulp"]["last_scanned_commit"]')"
-  upstream_root="$(upstream_at observatory "$cursor_sha")"
-  check_observatory_tests
+# observatory_verify <cursor_sha> <upstream_root>: the CI verify call. When it
+# fails on a coverage gap (a mapped commit with no observation event, the most
+# common provenance-verify failure), print the reconcile command that fixes it.
+observatory_verify() {
+  local cursor_sha="$1" upstream_root="$2" out="$WORK/observatory-verify.out" rc=0
   # A pull request run: time budgets are reported, pending events are judged by
   # what this change introduces, the Vellum tail by event coverage.
   python3 -I tools/provenance/observatory.py verify \
@@ -415,7 +417,48 @@ check_observatory() {
     --vellum-tail-policy coverage \
     --time-budgets report \
     --pending-event-scope introduced \
-    --output "$WORK/observatory-health-report.json"
+    --output "$WORK/observatory-health-report.json" >"$out" 2>&1 || rc=$?
+  cat "$out"
+  if [[ $rc -ne 0 ]] && grep -q 'cursor-event-coverage-gap' "$out"; then
+    local pulp_main now
+    pulp_main="$(git -C "$UPSTREAM_SRC" rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' || true)"
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    cat <<MSG
+
+gates: a mapped commit in this change has no observation event, so CI's
+provenance-verify (observatory-verify) would fail with cursor-event-coverage-gap.
+Record the events with this command, as the LAST change before the final push:
+merge origin/main first, then run it, commit provenance/pulp-observatory, push.
+It records events for the exact head, so any later commit needs it run again.
+
+  python3 -I tools/provenance/observatory.py reconcile \\
+    --pulp-repo ${UPSTREAM_SRC} \\
+    --vellum-repo . \\
+    --pulp-target ${pulp_main:-<pulp origin/main sha>} \\
+    --vellum-target ${HEAD_SHA} \\
+    --now ${now} --write --events-only
+
+This check only reads; it wrote nothing.
+MSG
+  fi
+  return "$rc"
+}
+
+# Fast-run check: only the observatory verification, so a missing observation
+# event fails before the push instead of after it.
+check_observatory_events() {
+  local cursor_sha upstream_root
+  cursor_sha="$(json_field provenance/pulp-observatory/cursor.json 'd["pulp"]["last_scanned_commit"]')"
+  upstream_root="$(upstream_at observatory "$cursor_sha")"
+  observatory_verify "$cursor_sha" "$upstream_root"
+}
+
+check_observatory() {
+  local cursor_sha upstream_root
+  cursor_sha="$(json_field provenance/pulp-observatory/cursor.json 'd["pulp"]["last_scanned_commit"]')"
+  upstream_root="$(upstream_at observatory "$cursor_sha")"
+  check_observatory_tests
+  observatory_verify "$cursor_sha" "$upstream_root"
   python3 -I tools/provenance/verify_${NAME}_observation_scope.py \
     --output "$WORK/pulp-observation-scope-report.json"
 }
@@ -472,6 +515,11 @@ if [[ $FULL -eq 1 ]]; then
 else
   run_check authority-tests check_authority_tests
   run_check observatory-tests check_observatory_tests
+  if [[ -f tools/provenance/observatory.py && -f provenance/pulp-observatory/cursor.json ]] && ! git diff --quiet "$GIT_BASE" HEAD --; then
+    run_check observatory-events check_observatory_events
+  else
+    skip_check observatory-events "no change against the base, or no observatory in this tree"
+  fi
   finish_checks
   PARALLEL=0
   printf 'gates: fast run; --full adds forbidden-deps, provenance-verify, authority-protocol and observatory-verify\n'

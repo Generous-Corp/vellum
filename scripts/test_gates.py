@@ -130,6 +130,94 @@ class GatesTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("gates: FAIL release-rehearsal", result.stdout)
 
+    # The observatory-events check runs the real gates.sh against a stand-in
+    # observatory.py that exits as the real verify would.
+    GAP_STUB = (
+        "import sys\n"
+        "sys.stderr.write('observatory: observatory health budgets failed: cursor-event-coverage-gap\\n')\n"
+        "raise SystemExit(1)\n"
+    )
+
+    def observatory_gates(self, stub: str, change_path: str = "graphics/mapped.cpp") -> subprocess.CompletedProcess[str]:
+        pulp = Path(self.tmp.name).parent / f"{Path(self.tmp.name).name}-pulp"
+        self.addCleanup(shutil.rmtree, pulp, ignore_errors=True)
+        pulp.mkdir()
+        git(pulp, "init", "-q", "-b", "main")
+        git(pulp, "config", "user.email", "test@example.com")
+        git(pulp, "config", "user.name", "Test")
+        (pulp / "a.txt").write_text("a\n")
+        git(pulp, "add", "-A")
+        git(pulp, "commit", "-q", "-m", "pulp")
+        pulp_sha = subprocess.run(["git", "-C", str(pulp), "rev-parse", "HEAD"], capture_output=True,
+                                  text=True, check=True).stdout.strip()
+        (self.repo / "tools" / "provenance").mkdir(parents=True)
+        (self.repo / "tools" / "provenance" / "observatory.py").write_text(stub, encoding="utf-8")
+        cursor = self.repo / "provenance" / "pulp-observatory" / "cursor.json"
+        cursor.parent.mkdir(parents=True)
+        cursor.write_text(json.dumps({"pulp": {"last_scanned_commit": pulp_sha}}), encoding="utf-8")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "observatory fixture")
+        git(self.repo, "tag", "-f", "base")
+        self.commit(change_path, "int x = 1;\n")
+        worktrees = self.repo / ".worktrees"
+        env = {**os.environ, "GATES_ONLY": "observatory-events", "PULP_WORKTREES_ROOT": str(worktrees),
+               "VELLUM_GATES_UPSTREAM_URL": str(pulp)}
+        env.pop("VELLUM_GATES_CACHE", None)
+        env.pop("VELLUM_GATES_UPSTREAM_CLONE", None)
+        return subprocess.run(["bash", "scripts/gates.sh", "base"], cwd=self.repo, env=env,
+                              capture_output=True, text=True, check=False)
+
+    def test_a_missing_observation_event_fails_and_prints_the_reconcile_command(self) -> None:
+        result = self.observatory_gates(self.GAP_STUB)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("gates: FAIL observatory-events", result.stdout)
+        head = subprocess.run(["git", "-C", str(self.repo), "rev-parse", "HEAD"], capture_output=True,
+                              text=True, check=True).stdout.strip()
+        self.assertIn("observatory.py reconcile", result.stdout)
+        self.assertIn(f"--vellum-target {head}", result.stdout)
+        self.assertIn("--write --events-only", result.stdout)
+        self.assertRegex(result.stdout, r"--pulp-target [0-9a-f]{40}")
+        self.assertIn("LAST change before the final push", result.stdout)
+        self.assertIn("merge origin/main first", result.stdout)
+        # Read-only: the check wrote no event and left the tree clean.
+        self.assertEqual(subprocess.run(["git", "-C", str(self.repo), "status", "--porcelain", "--untracked-files=no"],
+                                        capture_output=True, text=True, check=True).stdout.strip(), "")
+
+    def test_a_change_with_its_observation_event_passes(self) -> None:
+        result = self.observatory_gates("raise SystemExit(0)\n")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("gates: PASS observatory-events", result.stdout)
+        self.assertNotIn("reconcile", result.stdout)
+
+    def test_a_non_mapped_change_passes_without_a_reconcile_hint(self) -> None:
+        # The real verify passes a change that touches no mapped path; the stub stands in for that.
+        result = self.observatory_gates("raise SystemExit(0)\n", change_path="docs/unmapped.md")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("reconcile", result.stdout)
+
+    def test_another_observatory_failure_fails_without_a_reconcile_hint(self) -> None:
+        stub = "import sys\nsys.stderr.write('observatory: events are append-only\\n')\nraise SystemExit(1)\n"
+        result = self.observatory_gates(stub)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("gates: FAIL observatory-events", result.stdout)
+        self.assertNotIn("observatory.py reconcile", result.stdout)
+
+    def test_an_unchanged_tree_skips_the_observatory_check(self) -> None:
+        git(self.repo, "tag", "-f", "base")
+        (self.repo / "tools" / "provenance").mkdir(parents=True)
+        (self.repo / "tools" / "provenance" / "observatory.py").write_text(self.GAP_STUB, encoding="utf-8")
+        (self.repo / "provenance" / "pulp-observatory").mkdir(parents=True)
+        (self.repo / "provenance" / "pulp-observatory" / "cursor.json").write_text("{}", encoding="utf-8")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "fixture")
+        git(self.repo, "tag", "-f", "base2")
+        env = {**os.environ, "GATES_ONLY": "observatory-events", "PULP_WORKTREES_ROOT": str(self.repo / ".worktrees")}
+        result = subprocess.run(["bash", "scripts/gates.sh", "base2"], cwd=self.repo, env=env,
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("SKIP observatory-events", result.stdout)
+
+
     def test_planted_prose_violation_fails(self) -> None:
         self.commit("docs/new.md", f"A sentence {EM_DASH} with an em dash.\n")
         result = self.gates()
