@@ -136,8 +136,10 @@ function(vellum_v8_resolve_provider)
     _vellum_v8_json(_skia_release "${_row}" skia_release_tag)
     # Fail closed on anything but the builder's own release assets, so no lock
     # field can point the download elsewhere.
+    # CMake regular expressions have no {n} repetition; check the length apart.
+    string(LENGTH "${_sha256}" _sha256_length)
     if(NOT _url MATCHES "^https://github\\.com/danielraffel/v8-builder/releases/download/v8-m[0-9]+-[0-9.]+-[0-9a-f]+/v8-mac-arm64-[A-Za-z0-9._-]+\\.zip$"
-       OR NOT _sha256 MATCHES "^[0-9a-f]+$" OR NOT _sha256 MATCHES "^.{64}$"
+       OR NOT _sha256 MATCHES "^[0-9a-f]+$" OR NOT _sha256_length EQUAL 64
        OR NOT _version MATCHES "^[0-9]+(\\.[0-9]+)+$")
         message(FATAL_ERROR "Vellum V8: the lock's V8 row does not name a v8-builder mac-arm64 asset")
     endif()
