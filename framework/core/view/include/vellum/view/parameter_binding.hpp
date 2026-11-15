@@ -47,8 +47,15 @@
 ///
 /// UI-thread only.
 
+#include <algorithm>
+#include <cmath>
 #include <functional>
+#include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vellum/state/param_json.hpp>
 #include <vellum/state/parameter.hpp>
 #include <vellum/state/store.hpp>
 #include <vellum/view/design_frame_view.hpp> // DesignStepper
@@ -89,12 +96,163 @@ public:
             poll_();
     }
 
+    /// Turn a model binding made over `model` into a store binding: the
+    /// binding keeps `model` alive, and the store's modulation watches replace
+    /// the model poll, so the store's pump shows modulation and `tick()` does
+    /// nothing.
+    [[nodiscard]] ParameterBinding with_store_display(std::shared_ptr<value::ParamModel> model,
+                                                      state::StateStore::ModulationWatch watch,
+                                                      state::StateStore::ModulationWatch second_watch = {}) && {
+        model_ = std::move(model);
+        watch_ = std::move(watch);
+        second_watch_ = std::move(second_watch);
+        poll_ = {};
+        return std::move(*this);
+    }
+
 private:
     state::ListenerToken token_;
     state::StateStore::ModulationWatch watch_;
     state::StateStore::ModulationWatch second_watch_;
+    // Declared before the subscription, so the subscription is removed while
+    // the model it was registered with is still alive.
+    std::shared_ptr<value::ParamModel> model_;
     value::Subscription subscription_;
     std::function<void()> poll_;
+};
+
+/// A `value::ParamModel` over a `state::StateStore`, so a store binding takes
+/// the same path as a model binding. A parameter's key is its name, and
+/// `handle()` names one by id. Values map through the parameter's own
+/// `ParamRange`; gestures are the store's `begin_gesture()`/`end_gesture()`,
+/// with only the outermost of nested ones forwarded; listeners are registered
+/// to replay on a state restore (`ListenerRestoreBehavior::Reconcile`); and the
+/// modulated value is the store's `displayed_modulation()`. UI thread only.
+class StateStoreParamModel final : public value::ParamModel {
+public:
+    explicit StateStoreParamModel(state::StateStore& store) : store_(store) {}
+    StateStoreParamModel(const StateStoreParamModel&) = delete;
+    StateStoreParamModel& operator=(const StateStoreParamModel&) = delete;
+
+    /// The handle of parameter `id`, or an invalid handle when the store has
+    /// no such parameter.
+    [[nodiscard]] value::ParamHandle handle(state::ParamID id) const {
+        return store_.info(id) ? value::ParamHandle{static_cast<std::uint32_t>(id), this}
+                               : value::ParamHandle{};
+    }
+
+    [[nodiscard]] value::ParamHandle resolve(std::string_view key) override {
+        for (const auto& info : store_.all_params())
+            if (info.name == key)
+                return handle(info.id);
+        return {};
+    }
+
+    [[nodiscard]] double normalized(value::ParamHandle param) override {
+        const auto* info = find(param);
+        return info ? store_.get_normalized(info->id) : 0.0;
+    }
+
+    void set_normalized(value::ParamHandle param, double normalized) override {
+        const auto* info = find(param);
+        if (!info || std::isnan(normalized))
+            return;
+        store_.set_normalized(info->id, static_cast<float>(std::clamp(normalized, 0.0, 1.0)));
+    }
+
+    void begin(value::ParamHandle param) override {
+        const auto* info = find(param);
+        if (info && gesture_depth_[info->id]++ == 0)
+            store_.begin_gesture(info->id);
+    }
+
+    void end(value::ParamHandle param) override {
+        const auto* info = find(param);
+        if (!info)
+            return;
+        auto open = gesture_depth_.find(info->id);
+        if (open == gesture_depth_.end() || open->second == 0)
+            return;
+        if (--open->second == 0)
+            store_.end_gesture(info->id);
+    }
+
+    [[nodiscard]] std::string display_text(value::ParamHandle param, double normalized) override {
+        const auto* info = find(param);
+        return info ? state::param_display_text(*info, info->range.denormalize(clamped(normalized)))
+                    : std::string{};
+    }
+
+    [[nodiscard]] int value_count(value::ParamHandle param) override {
+        const auto* info = find(param);
+        return info ? count_of(*info) : 0;
+    }
+
+    [[nodiscard]] value::Subscription subscribe(Listener listener) override {
+        if (!listener)
+            return {};
+        auto token = std::make_shared<state::ListenerToken>(store_.add_listener(
+            [this, listener = std::move(listener)](state::ParamID changed, float) {
+                listener(handle(changed), store_.get_normalized(changed));
+            },
+            state::ListenerThread::Main, state::ListenerRestoreBehavior::Reconcile));
+        return value::Subscription([token] { token->reset(); });
+    }
+
+    [[nodiscard]] value::ParamInfo info(value::ParamHandle param) override {
+        const auto* info = find(param);
+        if (!info)
+            return {};
+        return {info->name, info->unit, info->range.normalize(info->range.default_value),
+                count_of(*info)};
+    }
+
+    [[nodiscard]] double plain(value::ParamHandle param, double normalized) override {
+        const auto* info = find(param);
+        return info && !std::isnan(normalized) ? info->range.denormalize(clamped(normalized)) : 0.0;
+    }
+
+    [[nodiscard]] double normalized_from_plain(value::ParamHandle param, double plain) override {
+        const auto* info = find(param);
+        return info && !std::isnan(plain) ? info->range.normalize(static_cast<float>(plain)) : 0.0;
+    }
+
+    [[nodiscard]] std::optional<double> parse_text(value::ParamHandle param,
+                                                   std::string_view text) override {
+        const auto* info = find(param);
+        float parsed = 0.0f;
+        if (!info || !state::param_parse_display_text(*info, std::string(text), parsed))
+            return std::nullopt;
+        return info->range.normalize(parsed);
+    }
+
+    [[nodiscard]] std::optional<double> modulated_normalized(value::ParamHandle param) override {
+        const auto* info = find(param);
+        if (!info)
+            return std::nullopt;
+        if (const auto played = store_.displayed_modulation(info->id))
+            return *played;
+        return std::nullopt;
+    }
+
+private:
+    const state::ParamInfo* find(value::ParamHandle param) const {
+        return param.valid() && param.owner == this
+                   ? store_.info(static_cast<state::ParamID>(param.id))
+                   : nullptr;
+    }
+    static float clamped(double normalized) {
+        return static_cast<float>(std::clamp(normalized, 0.0, 1.0));
+    }
+    static int count_of(const state::ParamInfo& info) {
+        const float span = info.range.max - info.range.min;
+        if (info.range.step <= 0.0f || span <= 0.0f)
+            return 0;
+        return static_cast<int>(std::lround(span / info.range.step)) + 1;
+    }
+
+    state::StateStore& store_;
+    std::unordered_map<state::ParamID, int> gesture_depth_;
 };
 
 namespace detail {
@@ -310,66 +468,29 @@ bind_parameter(ToggleButton& button, value::ParamModel& model, value::ParamHandl
                                [&button](bool on) { button.set_on(on); });
 }
 
-/// Knob ↔ parameter (normalized).
+/// Knob ↔ parameter (normalized), through a `StateStoreParamModel`. The
+/// store's pump shows modulation.
 [[nodiscard]] inline ParameterBinding
 bind_parameter(Knob& knob, state::StateStore& store, state::ParamID id) {
-    knob.set_value(store.get_normalized(id));
-    knob.on_gesture_begin = [&store, id] { store.begin_gesture(id); };
-    knob.on_change = [&store, id](float v) { store.set_normalized(id, v); };
-    knob.on_gesture_end = [&store, id] { store.end_gesture(id); };
-    return ParameterBinding(store.add_listener(
-                                [&knob, &store, id](state::ParamID changed, float) {
-                                    if (changed == id)
-                                        knob.set_value(store.get_normalized(id));
-                                },
-                                state::ListenerThread::Main,
-                                state::ListenerRestoreBehavior::Reconcile),
-                            detail::watch_modulated_display(knob, store, id));
+    auto model = std::make_shared<StateStoreParamModel>(store);
+    return bind_parameter(knob, *model, model->handle(id))
+        .with_store_display(model, detail::watch_modulated_display(knob, store, id));
 }
 
-/// Fader ↔ parameter (normalized).
+/// Fader ↔ parameter (normalized), as the knob.
 [[nodiscard]] inline ParameterBinding
 bind_parameter(Fader& fader, state::StateStore& store, state::ParamID id) {
-    fader.set_value(store.get_normalized(id));
-    fader.on_gesture_begin = [&store, id] { store.begin_gesture(id); };
-    fader.on_change = [&store, id](float v) { store.set_normalized(id, v); };
-    fader.on_gesture_end = [&store, id] { store.end_gesture(id); };
-    return ParameterBinding(store.add_listener(
-                                [&fader, &store, id](state::ParamID changed, float) {
-                                    if (changed == id)
-                                        fader.set_value(store.get_normalized(id));
-                                },
-                                state::ListenerThread::Main,
-                                state::ListenerRestoreBehavior::Reconcile),
-                            detail::watch_modulated_display(fader, store, id));
+    auto model = std::make_shared<StateStoreParamModel>(store);
+    return bind_parameter(fader, *model, model->handle(id))
+        .with_store_display(model, detail::watch_modulated_display(fader, store, id));
 }
 
 /// XY pad ↔ two parameters (normalized). A single drag drives both.
 [[nodiscard]] inline ParameterBinding
 bind_parameter(XYPad& pad, state::StateStore& store, state::ParamID x_id, state::ParamID y_id) {
-    pad.on_gesture_begin = [&store, x_id, y_id] {
-        store.begin_gesture(x_id);
-        store.begin_gesture(y_id);
-    };
-    pad.on_change = [&store, x_id, y_id](float x, float y) {
-        store.set_normalized(x_id, x);
-        store.set_normalized(y_id, y);
-    };
-    pad.on_gesture_end = [&store, x_id, y_id] {
-        store.end_gesture(x_id);
-        store.end_gesture(y_id);
-    };
-    pad.set_x(store.get_normalized(x_id));
-    pad.set_y(store.get_normalized(y_id));
-    return ParameterBinding(store.add_listener(
-                                [&pad, &store, x_id, y_id](state::ParamID changed, float) {
-                                    if (changed == x_id)
-                                        pad.set_x(store.get_normalized(x_id));
-                                    if (changed == y_id)
-                                        pad.set_y(store.get_normalized(y_id));
-                                },
-                                state::ListenerThread::Main,
-                                state::ListenerRestoreBehavior::Reconcile),
+    auto model = std::make_shared<StateStoreParamModel>(store);
+    return bind_parameter(pad, *model, model->handle(x_id), model->handle(y_id))
+        .with_store_display(model,
                             store.watch_modulation(x_id,
                                                    [&pad](std::optional<float> played) {
                                                        if (played)
@@ -385,23 +506,13 @@ bind_parameter(XYPad& pad, state::StateStore& store, state::ParamID x_id, state:
                             }));
 }
 
-/// Range slider ↔ parameter (normalized).
+/// Range slider ↔ parameter (normalized), as the knob. Synced from the
+/// parameter without notifying, so playback never echoes a write back.
 [[nodiscard]] inline ParameterBinding
 bind_parameter(RangeSlider& slider, state::StateStore& store, state::ParamID id) {
-    // Synced FROM the parameter without notifying, so playback never echoes
-    // a write back into the store.
-    slider.set_value(store.get_normalized(id), Notify::none);
-    slider.on_gesture_begin = [&store, id] { store.begin_gesture(id); };
-    slider.on_change = [&store, id](float v) { store.set_normalized(id, v); };
-    slider.on_gesture_end = [&store, id] { store.end_gesture(id); };
-    return ParameterBinding(store.add_listener(
-                                [&slider, &store, id](state::ParamID changed, float) {
-                                    if (changed == id)
-                                        slider.set_value(store.get_normalized(id), Notify::none);
-                                },
-                                state::ListenerThread::Main,
-                                state::ListenerRestoreBehavior::Reconcile),
-                            detail::watch_modulated_display(slider, store, id));
+    auto model = std::make_shared<StateStoreParamModel>(store);
+    return bind_parameter(slider, *model, model->handle(id))
+        .with_store_display(model, detail::watch_modulated_display(slider, store, id));
 }
 
 /// ComboBox ↔ stepped/index parameter. A selection is a one-shot gesture so

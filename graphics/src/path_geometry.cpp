@@ -650,7 +650,8 @@ double path_length_bound(const PathGeometry& path) {
 }
 
 float path_stroke_outset(const PathStroke& stroke) noexcept {
-    if (!std::isfinite(stroke.width) || !(stroke.width > 0.0F) || !(stroke.color.alpha > 0.0F)) {
+    const bool visible = stroke.color.alpha > 0.0F || stroke.gradient.has_value();
+    if (!std::isfinite(stroke.width) || !(stroke.width > 0.0F) || !visible) {
         return 0.0F;
     }
     float factor = 1.0F;
