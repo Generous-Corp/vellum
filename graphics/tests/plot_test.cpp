@@ -731,6 +731,24 @@ void review_fixes() {
     expect(plot_of(swapped)->samples[0] == 0.9F,
            "a different feed with the same publish count is read afresh");
 
+    InMemoryValueFeed silent({{.name = "scope", .shape = ChannelShape::vector, .capacity = 4},
+                              {.name = "other", .shape = ChannelShape::vector, .capacity = 4}});
+    const auto shown = plot_of(swapped);
+    const auto unpublished = switching.sample(silent, swapped);
+    expect(plot_of(swapped)->samples.empty() && unpublished.updated.size() == 1U &&
+               !compute_scene_damage(plot_scene(*shown), swapped, 1.0F).empty(),
+           "switching to a feed that has never published clears the old samples and damages them");
+    switching.sample(second, swapped);
+    expect(plot_of(swapped)->samples[0] == 0.9F, "switching back reads the published feed again");
+    auto rechanneled = std::make_shared<PlotSpec>(*plot_of(swapped));
+    rechanneled->channel = "other";
+    swapped.root.children[1].plot = rechanneled;
+    const auto quiet_channel = switching.sample(silent, swapped);
+    expect(plot_of(swapped)->samples.empty() && quiet_channel.updated.size() == 1U,
+           "rebinding to a channel that has never published clears the old samples");
+    switching.sample(silent, swapped);
+    expect(plot_of(swapped)->samples.empty(), "an unpublished channel keeps drawing nothing");
+
     InMemoryValueFeed level({{.name = "level", .shape = ChannelShape::scalar, .neutral = 0.0F}});
     auto history = line_spec(4, {});
     history.channel = "level";

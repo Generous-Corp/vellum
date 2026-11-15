@@ -223,6 +223,9 @@ PlotFeedReport PlotFeedSampler::sample(value::ValueFeed& feed, Scene& scene) {
             break;
         }
         }
+        // A plot bound afresh to a channel with nothing published draws
+        // nothing, rather than the samples of what it was bound to before.
+        if (rebound && !next && !read.available) next = std::vector<float>{};
         if (!next || same_samples(*next, spec.samples)) continue;
         auto replaced = std::make_shared<PlotSpec>(spec);
         replaced->samples = std::move(*next);

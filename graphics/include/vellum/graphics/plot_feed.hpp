@@ -43,7 +43,8 @@ struct PlotFeedOptions final {
 /// - A vector channel's latest block fills the slots from slot 0.
 /// - A meter channel's latest frame gives the level (RMS) and peak of
 ///   `PlotSpec::audio_channel`.
-/// - A channel never published draws nothing. A channel stale for
+/// - A channel never published draws nothing, so a plot bound afresh to one,
+///   by a new channel or a new feed, drops the samples it had. A channel stale for
 ///   `stale_after_ticks` ticks shows its neutral value: the level and peak
 ///   of a meter, every slot of a vector plot, and one neutral sample appended
 ///   to a scalar history, which then stops.

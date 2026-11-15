@@ -624,6 +624,49 @@ void feed_updates() {
     }
 }
 
+// A plot rebound to a feed, then a channel, that has never published drops
+// its old samples, and the incremental frame matches a full redraw.
+void rebind_to_unpublished() {
+    for (const float scale : {1.0F, 2.0F}) {
+        const std::string at = "@" + std::to_string(static_cast<int>(scale)) + " ";
+        InMemoryValueFeed live({{.name = "wave", .shape = ChannelShape::vector, .capacity = 512}});
+        InMemoryValueFeed silent({{.name = "wave", .shape = ChannelShape::vector, .capacity = 512},
+                                  {.name = "other", .shape = ChannelShape::vector,
+                                   .capacity = 512}});
+        Scene scene = feed_scene();
+        PlotFeedSampler sampler;
+        std::vector<float> block(512);
+        for (std::size_t i = 0; i < block.size(); ++i) block[i] = wave_value(3, i);
+        live.publish_vector(0, block);
+        sampler.sample(live, scene);
+        auto full = make_surface(scale);
+        auto partial = make_surface(scale, true);
+        if (!full || !partial || !render_both(*full, *partial, scene)) return;
+        const auto check = [&](const std::string& what) {
+            if (!render_both(*full, *partial, scene)) return;
+            const auto stats = partial->frame_stats();
+            const auto* wave = find_mutable(scene.root, "wave");
+            std::string message;
+            const bool same = identical(*full, *partial, message);
+            expect(wave->plot->samples.empty() && !stats.full_repaint &&
+                       stats.damage_area_pixels > 0 &&
+                       stats.damage_area_pixels <= box_pixels(kWaveBox, scale, 1) && same,
+                   at + what, describe(stats) + " " + message);
+        };
+        sampler.sample(silent, scene);
+        check("switching to an unpublished feed clears the plot byte-identically");
+        live.publish_vector(0, block);
+        sampler.sample(live, scene);
+        if (!render_both(*full, *partial, scene)) return;
+        auto* wave = find_mutable(scene.root, "wave");
+        auto rebound = std::make_shared<PlotSpec>(*wave->plot);
+        rebound->channel = "other";
+        wave->plot = rebound;
+        sampler.sample(silent, scene);
+        check("rebinding to an unpublished channel clears the plot byte-identically");
+    }
+}
+
 void large_feed() {
     constexpr std::size_t samples = 1U << 20U;
     InMemoryValueFeed feed({{.name = "dense", .shape = ChannelShape::vector,
@@ -713,6 +756,7 @@ int main() {
     sweeps();
     gradient_plot();
     feed_updates();
+    rebind_to_unpublished();
     large_feed();
     version_gate();
     if (failures != 0) {

@@ -25,11 +25,97 @@ inline constexpr std::string_view kGradientNotExpressibleCode = "VELLUM_WEB_GRAD
 /// the rectangles of its `plot_geometry`.
 inline constexpr std::string_view kPlotNotDrawnCode = "VELLUM_WEB_PLOT_NOT_DRAWN";
 
-/// Replaces each untransformed `plot` command with one rectangle command per
-/// rectangle of its `plot_geometry` at `scale`, carrying the plot's opacity,
-/// so the shell draws plots with the rectangles it already draws. A
-/// transformed plot keeps its command, which the shell skips and
-/// `canvas_shell_loses` counts.
+/// One piece of a flattened plot: a rectangle and the colour the plot's
+/// rectangles composite to inside it.
+struct CanvasShellPlotPiece final {
+    vellum::graphics::Rect rect{};
+    vellum::graphics::Color color{};
+};
+
+/// `top` drawn source-over onto `bottom`, both straight alpha.
+[[nodiscard]] inline vellum::graphics::Color canvas_shell_over(
+    const vellum::graphics::Color& top, const vellum::graphics::Color& bottom) noexcept {
+    const float alpha = top.alpha + bottom.alpha * (1.0F - top.alpha);
+    if (!(alpha > 0.0F)) return vellum::graphics::Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    const auto mix = [&](float t, float b) {
+        return (t * top.alpha + b * bottom.alpha * (1.0F - top.alpha)) / alpha;
+    };
+    return {mix(top.red, bottom.red), mix(top.green, bottom.green), mix(top.blue, bottom.blue),
+            alpha};
+}
+
+/// Flattens rectangles drawn in order into disjoint pieces, each carrying the
+/// colour its overlapping rectangles composite to, so drawing every piece once
+/// with the plot's opacity composites the plot as one group, as the native
+/// renderer does through its opacity layer.
+[[nodiscard]] inline std::vector<CanvasShellPlotPiece> canvas_shell_flatten(
+    const std::vector<CanvasShellPlotPiece>& drawn) {
+    using vellum::graphics::Rect;
+    const auto overlap = [](const Rect& a, const Rect& b) {
+        return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height &&
+               b.y < a.y + a.height;
+    };
+    // `from` without `cut`, as up to four disjoint rectangles.
+    const auto subtract = [](const Rect& from, const Rect& cut) {
+        std::vector<Rect> pieces;
+        const float left = std::max(from.x, cut.x);
+        const float right = std::min(from.x + from.width, cut.x + cut.width);
+        const float top = std::max(from.y, cut.y);
+        const float bottom = std::min(from.y + from.height, cut.y + cut.height);
+        if (top > from.y) pieces.push_back({from.x, from.y, from.width, top - from.y});
+        if (bottom < from.y + from.height) {
+            pieces.push_back({from.x, bottom, from.width, from.y + from.height - bottom});
+        }
+        if (left > from.x) pieces.push_back({from.x, top, left - from.x, bottom - top});
+        if (right < from.x + from.width) {
+            pieces.push_back({right, top, from.x + from.width - right, bottom - top});
+        }
+        return pieces;
+    };
+    std::vector<CanvasShellPlotPiece> pieces;
+    for (const auto& next : drawn) {
+        if (!(next.rect.width > 0.0F) || !(next.rect.height > 0.0F)) continue;
+        std::vector<CanvasShellPlotPiece> kept;
+        std::vector<Rect> uncovered{next.rect};
+        for (const auto& piece : pieces) {
+            if (!overlap(piece.rect, next.rect)) {
+                kept.push_back(piece);
+                continue;
+            }
+            for (const auto& rest : subtract(piece.rect, next.rect)) {
+                kept.push_back({rest, piece.color});
+            }
+            const float left = std::max(piece.rect.x, next.rect.x);
+            const float top = std::max(piece.rect.y, next.rect.y);
+            const Rect shared{left, top,
+                              std::min(piece.rect.x + piece.rect.width,
+                                       next.rect.x + next.rect.width) - left,
+                              std::min(piece.rect.y + piece.rect.height,
+                                       next.rect.y + next.rect.height) - top};
+            kept.push_back({shared, canvas_shell_over(next.color, piece.color)});
+            std::vector<Rect> remaining;
+            for (const auto& open : uncovered) {
+                if (!overlap(open, shared)) {
+                    remaining.push_back(open);
+                    continue;
+                }
+                for (const auto& rest : subtract(open, shared)) remaining.push_back(rest);
+            }
+            uncovered = std::move(remaining);
+        }
+        for (const auto& open : uncovered) kept.push_back({open, next.color});
+        pieces = std::move(kept);
+    }
+    return pieces;
+}
+
+/// Replaces each untransformed `plot` command with rectangle commands that
+/// draw its `plot_geometry` at `scale`, so the shell draws plots with the
+/// rectangles it already draws. The rectangles are flattened into disjoint
+/// pieces (`canvas_shell_flatten`) that each carry the plot's opacity, so an
+/// overlap such as a fill over the background, or a peak over a meter level,
+/// is blended once, as one group. A transformed plot keeps its command, which
+/// the shell skips and `canvas_shell_loses` counts.
 [[nodiscard]] inline std::vector<vellum::graphics::PaintCommand> canvas_shell_expand_plots(
     std::vector<vellum::graphics::PaintCommand> commands, float scale = 1.0F) {
     using vellum::graphics::PaintCommand;
@@ -45,16 +131,22 @@ inline constexpr std::string_view kPlotNotDrawnCode = "VELLUM_WEB_PLOT_NOT_DRAWN
         const auto& plot = *command.plot;
         const auto geometry = vellum::graphics::plot_geometry(plot, command.fill, command.bounds,
                                                               scale);
+        std::vector<CanvasShellPlotPiece> drawn;
+        drawn.reserve(geometry.rects.size());
         for (const auto& piece : geometry.rects) {
             auto color = command.fill;
             if (piece.layer == PlotLayer::fill) color = plot.fill_color;
             if (piece.layer == PlotLayer::line) color = plot.line_color;
             if (piece.layer == PlotLayer::peak) color = plot.peak_color;
+            if (!(color.alpha > 0.0F)) continue;
+            drawn.push_back({piece.rect, color});
+        }
+        for (const auto& piece : canvas_shell_flatten(drawn)) {
             output.push_back({
                 .kind = PaintCommand::Kind::rectangle,
                 .node_id = command.node_id,
                 .bounds = piece.rect,
-                .fill = color,
+                .fill = piece.color,
                 .opacity = command.opacity,
             });
         }

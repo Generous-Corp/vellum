@@ -6,6 +6,7 @@
 #include <vellum/graphics/scene_acceptance.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -366,9 +367,66 @@ bool gradient_reports_and_version_gate() {
 }
 }  // namespace
 
-// An untransformed plot is drawn as the rectangles of its geometry with no
-// loss; a turned one is not drawn and is reported; a version 11 scene with a
-// plot is refused as the native renderer refuses it.
+// Draws `commands` as the shell does, each rectangle with its colour times
+// its opacity source-over, and checks every pixel against the plot drawn as
+// one group: its rectangles composited at full opacity, then faded once by
+// `opacity`. It also checks that the shell's rectangles never overlap, so no
+// pixel is blended twice.
+bool composites_once(const std::vector<vellum::graphics::PaintCommand>& commands,
+                     const Scene& scene, const std::string& id, float opacity) {
+    using vellum::graphics::Color;
+    using vellum::graphics::PlotLayer;
+    const auto& node = *vellum::graphics::find_node(scene, id);
+    const auto& plot = *node.plot;
+    const auto geometry = vellum::graphics::plot_geometry(plot, node.fill, node.bounds, 1.0F);
+    const auto width = static_cast<int>(scene.width);
+    const auto height = static_cast<int>(scene.height);
+    const auto covers = [](const vellum::graphics::Rect& rect, int x, int y) {
+        const float cx = static_cast<float>(x) + 0.5F;
+        const float cy = static_cast<float>(y) + 0.5F;
+        return cx >= rect.x && cx < rect.x + rect.width && cy >= rect.y &&
+               cy < rect.y + rect.height;
+    };
+    const Color clear = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            Color group = clear;
+            for (const auto& piece : geometry.rects) {
+                if (!covers(piece.rect, x, y)) continue;
+                Color color = node.fill;
+                if (piece.layer == PlotLayer::fill) color = plot.fill_color;
+                if (piece.layer == PlotLayer::peak) color = plot.peak_color;
+                if (piece.layer == PlotLayer::line) color = plot.line_color;
+                group = vellum::web::canvas_shell_over(color, group);
+            }
+            group.alpha *= opacity;
+            Color shell = clear;
+            int hits = 0;
+            for (const auto& command : commands) {
+                if (command.node_id != id || !covers(command.bounds, x, y)) continue;
+                ++hits;
+                Color color = command.fill;
+                color.alpha *= command.opacity;
+                shell = vellum::web::canvas_shell_over(color, shell);
+            }
+            const auto near = [](float a, float b) { return std::abs(a - b) < 1e-4F; };
+            if (hits > 1 || !near(shell.alpha, group.alpha) ||
+                (group.alpha > 0.0F &&
+                 (!near(shell.red, group.red) || !near(shell.green, group.green) ||
+                  !near(shell.blue, group.blue)))) {
+                std::cerr << "pixel " << x << "," << y << " has " << hits
+                          << " shell rectangles and alpha " << shell.alpha << " against "
+                          << group.alpha << '\n';
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// An untransformed plot is drawn as disjoint rectangles that composite it as
+// one group with no loss; a turned one is not drawn and is reported; a
+// version 11 scene with a plot is refused as the native renderer refuses it.
 bool plot_lowering() {
     using vellum::graphics::Color;
     using vellum::graphics::PaintCommand;
@@ -391,23 +449,26 @@ bool plot_lowering() {
     plot.plot = spec;
     scene.root.children.push_back(plot);
     const auto lowering = vellum::web::lower_for_canvas_shell(scene);
-    const auto geometry = vellum::graphics::plot_geometry(*spec, plot.fill, plot.bounds, 1.0F);
-    bool rectangles = lowering.accepted && lowering.losses == 0 &&
-                      lowering.diagnostics.empty() &&
-                      lowering.commands.size() == geometry.rects.size() &&
-                      geometry.rects.size() == 5U;
-    for (std::size_t index = 0; rectangles && index < lowering.commands.size(); ++index) {
-        const auto& command = lowering.commands[index];
-        const auto& piece = geometry.rects[index];
-        rectangles = command.kind == PaintCommand::Kind::rectangle &&
-                     command.node_id == "spectrum" && command.bounds.x == piece.rect.x &&
-                     command.bounds.y == piece.rect.y &&
-                     command.bounds.width == piece.rect.width &&
-                     command.bounds.height == piece.rect.height && command.opacity == 0.5F;
+    if (!lowering.accepted || lowering.losses != 0 || !lowering.diagnostics.empty() ||
+        !composites_once(lowering.commands, scene, "spectrum", 0.5F)) {
+        std::cerr << "a faded area plot over its background was not composited once\n";
+        return false;
     }
-    if (!rectangles || lowering.commands[0].fill.red != plot.fill.red ||
-        lowering.commands[1].fill.green != spec->fill_color.green) {
-        std::cerr << "an untransformed plot was not drawn as its geometry's rectangles\n";
+    // A translucent peak tick over a meter's level: the overlap is one piece
+    // of the composited colour.
+    auto meter = std::make_shared<PlotSpec>();
+    meter->style = PlotStyle::level_meter;
+    meter->shape = PlotChannelShape::meter;
+    meter->samples = {0.5F, 0.45F};
+    meter->peak_width = 4.0F;
+    meter->fill_color = Color::hex(0x22C55E);
+    meter->peak_color = Color::hex(0xF8FAFC, 0.5F);
+    Scene metered = scene;
+    metered.root.children[0].plot = meter;
+    const auto level = vellum::web::lower_for_canvas_shell(metered);
+    if (!level.accepted || level.losses != 0 ||
+        !composites_once(level.commands, metered, "spectrum", 0.5F)) {
+        std::cerr << "a faded meter's peak over its level was not composited once\n";
         return false;
     }
     scene.root.children[0].transform =
