@@ -1,0 +1,59 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "capture-primitives",
+    "macos-shell",
+    "render-skia-dawn"
+  ],
+  "contract_tests": [
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-14T19:16:34Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-025ef0df017a4f4e2086ba55414343ff55f5d8b8",
+  "include_dependency_deltas": [
+    "apps/app-host/component_registry.hpp",
+    "graphics/include/vellum/graphics/effect.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "capture-primitives",
+    "macos-shell",
+    "render-skia-dawn"
+  ],
+  "mapped_paths": [
+    "apps/app-host/component_registry.cpp",
+    "apps/app-host/component_registry.hpp",
+    "apps/app-host/tests/component_registry_test.cpp",
+    "apps/app-host/tests/sheen_component.cpp",
+    "graphics/include/vellum/graphics/effect.hpp",
+    "graphics/src/effect.cpp",
+    "graphics/src/skia_dawn_surface.mm",
+    "graphics/tests/effect_gpu_test.cpp",
+    "graphics/tests/effect_test.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "9975ecda19ffcc4f058fd04f01bcb630e349075a",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "75f009fc9790e0722142539e93611d8d44d76346",
+    "to_commit": "025ef0df017a4f4e2086ba55414343ff55f5d8b8"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "025ef0df017a4f4e2086ba55414343ff55f5d8b8",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

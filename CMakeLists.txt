@@ -241,6 +241,11 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.damage COMMAND vellum-damage-test)
 
+        add_executable(vellum-effect-test
+            graphics/tests/effect_test.cpp)
+        target_link_libraries(vellum-effect-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.effects COMMAND vellum-effect-test)
+
         add_executable(vellum-render-cache-test
             graphics/tests/render_cache_test.cpp)
         target_include_directories(vellum-render-cache-test PRIVATE graphics/src)
