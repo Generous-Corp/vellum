@@ -24,10 +24,38 @@ function style(context, paint) {
     return gradient;
 }
 
+function layerFor(canvas) {
+    if (typeof OffscreenCanvas === 'function') return new OffscreenCanvas(canvas.width, canvas.height);
+    const layer = canvas.ownerDocument.createElement('canvas');
+    layer.width = canvas.width;
+    layer.height = canvas.height;
+    return layer;
+}
+
+// The node's opacity applies to the asset as one group: a translucent asset
+// draws offscreen at full alpha and meets the canvas once, so its
+// overlapping paths do not show through one another.
 export function drawVector(context, plan) {
+    const alpha = plan.alpha ?? 1;
+    if (alpha >= 1) {
+        drawSteps(context, plan);
+        return;
+    }
+    if (alpha <= 0) return;
+    const layer = layerFor(context.canvas);
+    const layerContext = layer.getContext('2d');
+    layerContext.setTransform(context.getTransform());
+    drawSteps(layerContext, plan);
+    context.save();
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.globalAlpha *= alpha;
+    context.drawImage(layer, 0, 0);
+    context.restore();
+}
+
+function drawSteps(context, plan) {
     context.save();
     context.transform(...plan.matrix);
-    context.globalAlpha *= plan.alpha ?? 1;
     for (const step of plan.steps) {
         if (step.op === 'save') {
             context.save();

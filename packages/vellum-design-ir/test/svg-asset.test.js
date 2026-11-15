@@ -312,3 +312,62 @@ test('user-space gradient percentages follow a nested svg or symbol viewport', (
         assert.equal(ops[0].fill.transform[0], 10, name);
     }
 });
+
+test('an animation that could point a reference outside the asset is refused before the rasterizer', () => {
+    const animations = {
+        'set to': '<set attributeName="href" to="https://example.invalid/x.png"/>',
+        'animate values': '<animate attributeName="fill" values="red;https://example.invalid/x.png"/>',
+        'animate from': '<animate attributeName="fill" from="//example.invalid/x.png" to="red"/>',
+        'xlink href target': '<set attributeName="xlink:href" to="#local"/>',
+        'url to': '<animate attributeName="fill" to="url(https://example.invalid/#g)"/>',
+    };
+    for (const [name, animation] of Object.entries(animations)) {
+        let handed = null;
+        const svg = wrap(`<image id="i" width="5" height="5" href="#local">${animation}</image>` +
+            '<rect id="local" width="1" height="1"/><text>raster</text>');
+        assert.throws(() => importSvgAsset(svg, { rasterize: (input) => { handed = input; } }),
+            SvgAssetRefusal, name);
+        assert.equal(handed, null, `${name} never reaches the rasterizer`);
+    }
+    const local = wrap('<rect width="5" height="5"><animate attributeName="fill" values="red;blue"/>' +
+        '<set attributeName="fill" to="url(#g)"/></rect><linearGradient id="g"/>');
+    assert.doesNotThrow(() => importSvgAsset(local), 'colour and local animations still import');
+});
+
+test('a symbol viewport clips in output units, before its viewBox transform', () => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <symbol id="s" viewBox="0 0 10 10"><rect x="-5" y="-5" width="30" height="30" fill="#ff0000"/></symbol>
+      <use id="u" href="#s" width="20" height="20"/></svg>`;
+    const subtree = importSvgAsset(svg, { sourceKey: 'assets' });
+    const clips = [];
+    const visit = (node) => {
+        if (node.properties?.paint?.clipPath) clips.push({ id: node.sourceId, clip: node.properties.paint.clipPath, transform: node.properties.paint.transform });
+        (node.children ?? []).forEach(visit);
+    };
+    visit(subtree.root);
+    assert.equal(subtree.mode, 'subtree');
+    assert.deepEqual(clips, [{ id: 'svg:u:s.viewport', clip: 'M0 0L20 0L20 20L0 20Z', transform: undefined }]);
+    const compiled = compiledOps(importSvgAsset(svg, { nodeBudget: 1 }));
+    const clipped = compiled.findIndex((op) => op.clip);
+    assert.equal(compiled[clipped].clip.d, 'M0 0L20 0L20 20L0 20Z');
+    assert.equal(compiled[clipped].transform, undefined, 'the clip group has no viewBox transform');
+    assert.deepEqual(compiled[clipped + 1].transform, [2, 0, 0, 2, 0, 0], 'the viewBox transform comes inside it');
+});
+
+test('a user-space gradient stroke on a horizontal or vertical line still paints', () => {
+    for (const [name, line] of [['horizontal', 'x1="0" y1="5" x2="10" y2="5"'], ['vertical', 'x1="5" y1="0" x2="5" y2="10"']]) {
+        const svg = wrap(`<linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="10" y2="10">
+            <stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>
+            <line ${line} stroke="url(#g)" stroke-width="2"/>`);
+        const imported = importSvgAsset(svg);
+        assert.equal(imported.mode, 'compiled', name);
+        const [op] = compiledOps(imported).filter((item) => item.op === 'path');
+        assert.equal(typeof op.stroke, 'object', `${name} keeps its gradient stroke`);
+        assert.equal(op.stroke.gradient.kind, 'linear', name);
+    }
+    const box = importSvgAsset(wrap(`<linearGradient id="g"><stop offset="0" stop-color="red"/>
+        <stop offset="1" stop-color="blue"/></linearGradient><line x1="0" y1="5" x2="10" y2="5" stroke="url(#g)"/>`));
+    const path = (node) => node.kind === 'path' ? node : node.children.map(path).find(Boolean);
+    assert.equal(path(box.root).properties.path.stroke, 'none',
+        'an objectBoundingBox gradient on a line still paints nothing');
+});

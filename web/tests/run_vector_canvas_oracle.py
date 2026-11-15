@@ -69,6 +69,21 @@ def two_circle_t(px: float, py: float, fx: float, fy: float, cx: float, cy: floa
     return max((-b + root) / (2 * a), (-b - root) / (2 * a))
 
 
+# A translucent asset of two overlapping squares, red then blue, at node
+# opacity 0.5 over white. Drawn as one group, the overlap is blue at half
+# strength; drawn paint by paint, red would show through it.
+OVERLAP_SCENE = {
+    "name": "overlap", "width": 40, "height": 20, "background": [1, 1, 1, 1],
+    "plans": [{
+        "id": "overlap", "matrix": [1, 0, 0, 1, 0, 0], "alpha": 0.5,
+        "steps": [
+            {"op": "fill", "d": "M0 0L20 0L20 20L0 20Z", "rule": "nonzero", "paint": {"color": [1, 0, 0, 1]}},
+            {"op": "fill", "d": "M10 0L30 0L30 20L10 20Z", "rule": "nonzero", "paint": {"color": [0, 0, 1, 1]}},
+        ],
+    }],
+}
+
+
 def expectations() -> dict[str, list[tuple[int, int, tuple[float, ...], float, str]]]:
     red, blue = hexrgb(0xFF0000), hexrgb(0x0000FF)
     background = hexrgb(0xF8FAFC)
@@ -93,7 +108,13 @@ def expectations() -> dict[str, list[tuple[int, int, tuple[float, ...], float, s
     grid = [(2, 2, background, 2, "background"), (8, 7, hexrgb(0xC81E1E), 2, "cell 0,0"),
             (15, 7, hexrgb(0x1E64C8), 2, "cell 0,1"), (11, 7, background, 2, "gap"),
             (183, 102, hexrgb(0xC81E1E), 2, "cell 19,25")]
-    return {"gradients-compiled": gradients, "compiled-only": compiled, "over-budget": grid}
+    white = (255, 255, 255)
+    overlap = [(5, 10, mix(white, red, 0.5), 2, "red alone at half opacity"),
+               (15, 10, mix(white, blue, 0.5), 2, "the overlap is blue at half opacity, no red"),
+               (25, 10, mix(white, blue, 0.5), 2, "blue alone at half opacity"),
+               (35, 10, white, 2, "the background")]
+    return {"gradients-compiled": gradients, "compiled-only": compiled, "over-budget": grid,
+            "overlap": overlap}
 
 
 def main() -> int:
@@ -110,6 +131,7 @@ def main() -> int:
         return 77
     printed = subprocess.run([str(args.plans), "--canvas-plans"], check=True, capture_output=True, text=True)
     scenes = [json.loads(line) for line in printed.stdout.splitlines() if line.strip()]
+    scenes.append(OVERLAP_SCENE)
     expected = expectations()
     if sorted(scene["name"] for scene in scenes) != sorted(expected):
         raise SystemExit(f"unexpected plan set: {[scene['name'] for scene in scenes]}")

@@ -230,6 +230,30 @@ function styleDeclarations(value, where) {
     return declarations;
 }
 
+// Animation elements that can change another attribute's value. They are
+// dropped from the lowered asset, but the rasterizer hook receives the source
+// as written, so one that could point a reference outside the asset, by
+// targeting href or by animating to a URL, is refused.
+const ANIMATING_ELEMENTS = new Set(['animate', 'animateColor', 'animateMotion',
+    'animateTransform', 'set', 'discard']);
+const URL_LIKE = /[a-z][a-z0-9+.-]*:|\/\/|url\(/i;
+
+function checkAnimation(node, where) {
+    const target = (node.attributes.attributeName ?? '').trim().toLowerCase();
+    if (target === 'href' || target.endsWith(':href') || target === 'src') {
+        refuse(`${where} animates the reference ${node.attributes.attributeName}`);
+    }
+    for (const name of ['to', 'from', 'by', 'values']) {
+        const value = node.attributes[name];
+        if (value === undefined) continue;
+        for (const item of value.split(';')) {
+            if (URL_LIKE.test(item) && !/^\s*url\(\s*(['"]?)#[^'")]+\1\s*\)\s*$/i.test(item)) {
+                refuse(`${where} ${name} animates to a reference outside the asset`);
+            }
+        }
+    }
+}
+
 function checkHostility(root) {
     const ids = new Map();
     const references = new Map();
@@ -241,6 +265,7 @@ function checkHostility(root) {
         if (node.name === 'style' && /@import|url\(|expression|javascript:|\\/i.test(node.text)) {
             refuse('a <style> element with an import, URL, expression or escape');
         }
+        if (ANIMATING_ELEMENTS.has(node.name)) checkAnimation(node, where);
         const own = [];
         for (const [name, value] of Object.entries(node.attributes)) {
             const lower = name.toLowerCase();
@@ -1207,13 +1232,19 @@ class Importer {
                 const height = parseLength(node.attributes.height) ?? parseLength(target.attributes.height);
                 if (box && box.length === 4 && box[2] > 0 && box[3] > 0) {
                     if (width > 0 && height > 0) {
-                        group.children.push({ kind: 'group', id: `${sourceId}:${escapeId(targetId)}`,
-                            transform: this.viewBoxTransform(box, width, height,
-                                target.attributes.preserveAspectRatio, path),
-                            opacity: 1,
+                        // The viewport clip is in the use element's output
+                        // units, so it applies before the viewBox transform,
+                        // as a nested <svg> clips. It has a group of its own
+                        // so a clip-path on the use element still applies.
+                        group.children.push({ kind: 'group', id: `${sourceId}:${escapeId(targetId)}.viewport`,
+                            transform: [...IDENTITY], opacity: 1,
                             clip: { units: 'user', shapes: [{ segments: [['M', 0, 0], ['L', width, 0], ['L', width, height], ['L', 0, height], ['Z']], rule: 'nonzero', transform: [...IDENTITY] }] },
-                            children: this.inViewport([box[2], box[3]], () => this.children(target,
-                                `${sourceId}:${escapeId(targetId)}`, this.inherit(inner, target), nextActive, true)) });
+                            children: [{ kind: 'group', id: `${sourceId}:${escapeId(targetId)}`,
+                                transform: this.viewBoxTransform(box, width, height,
+                                    target.attributes.preserveAspectRatio, path),
+                                opacity: 1,
+                                children: this.inViewport([box[2], box[3]], () => this.children(target,
+                                    `${sourceId}:${escapeId(targetId)}`, this.inherit(inner, target), nextActive, true)) }] });
                     } else {
                         this.report('svg-symbol-viewbox-dropped', path,
                             `<use> of a symbol with a viewBox needs a width and height; the viewBox was ignored`);
@@ -1638,7 +1669,13 @@ class SubtreeLowering {
             }
             return hexString(paint.color, paint.opacity);
         }
-        if (!bounds || !(bounds.width > 0) || !(bounds.height > 0)) return 'none';
+        // Only an objectBoundingBox gradient needs an extent; a user-space one
+        // on a horizontal or vertical line still paints, so it goes on to
+        // the compiled form, which carries user space.
+        if (paint.gradient.units === 'box' &&
+            (!bounds || !(bounds.width > 0) || !(bounds.height > 0))) {
+            return 'none';
+        }
         const resolved = subtreeGradient(paint.gradient, (reason) => this.why(reason));
         if (!resolved) return 'none';
         const stops = paint.gradient.stops.map((stop) => ({
