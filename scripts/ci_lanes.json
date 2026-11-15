@@ -267,6 +267,9 @@
         "script": "scripts/test_select_reusable_gpu_proof.py"
       },
       {
+        "script": "scripts/test_select_reusable_merge_group_proof.py"
+      },
+      {
         "script": "scripts/test_classify_gpu_proof.py"
       },
       {
