@@ -229,6 +229,11 @@ class UnitTargetShapeTest(unittest.TestCase):
         self.assertTargetRefused(unit_target(link_targets=["vellum-example"]), "links itself")
         self.assertTargetRefused(unit_target(reason=" "), "reason must be")
 
+    def test_reserved_definitions_are_refused(self) -> None:
+        for item in ("VELLUM_MIRROR_BUILD", "VELLUM_MIRROR_BUILD=1", "GPU_RUNTIME_BENCHMARK=1", "GPU_RUNTIME_X"):
+            self.assertTargetRefused(unit_target(compile_definitions=[item]), "is reserved")
+        self.assertEqual(fp.unit_target_errors(unit_target(compile_definitions=["VELLUM_MIRROR_BUILDER=1"]), "t"), [])
+
     def test_document_shape_and_one_bad_target_withholds_all(self) -> None:
         for text in ("[", json.dumps({"schema": "other", "targets": []}),
                      json.dumps({"schema": fp.UNITS_SCHEMA, "targets": {}}),

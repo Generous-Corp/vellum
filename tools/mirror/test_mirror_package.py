@@ -1437,6 +1437,11 @@ class DeclaredUnitPlanTest(unittest.TestCase):
         mp.write_cmake(plan, output)
         return output.read_text()
 
+    def test_reserved_definitions_never_reach_a_unit_interface(self) -> None:
+        for item in ("VELLUM_MIRROR_BUILD=1", "GPU_RUNTIME_BENCHMARK=1"):
+            self.declare([{**self.library, "compile_definitions": [item]}, self.tool])
+            self.assertRefused("is reserved")
+
     def test_undeclared_targets_are_refused_and_declared_ones_build(self) -> None:
         # The rows name targets no closure builds: refused while nothing declares them.
         self.assertRefused("adds sources to targets no closure builds")

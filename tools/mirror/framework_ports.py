@@ -170,6 +170,9 @@ UNIT_TARGET_KEYS = {"name", "type", "unit", "sources", "include_dirs", "compile_
                     "reason"}
 TARGET_TYPES = ("STATIC_LIBRARY", "EXECUTABLE")
 DEFINITION = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:=[A-Za-z0-9_.+-]*)?\Z")
+# Owned configuration: VELLUM_MIRROR_BUILD turns off the GPU-surface guard and
+# GPU_RUNTIME_* definitions are the in-tree ABI. Unowned manifest data sets neither.
+RESERVED_DEFINITION = re.compile(r"(?:VELLUM_MIRROR_BUILD|GPU_RUNTIME_[A-Za-z0-9_]*)(?:=|\Z)")
 
 
 def string_list(value: Any) -> bool:
@@ -219,6 +222,10 @@ def unit_target_errors(target: Any, where: str) -> list[str]:
     definitions = target["compile_definitions"]
     if not string_list(definitions) or not all(DEFINITION.match(item) for item in definitions):
         errors.append(f"{where}: compile_definitions must be distinct NAME or NAME=value definitions")
+    else:
+        for item in definitions:
+            if RESERVED_DEFINITION.match(item):
+                errors.append(f"{where}: compile definition {item} is reserved for the mirror's own configuration")
     links = target["link_targets"]
     if not string_list(links) or not all(TARGET_NAME.match(link) for link in links):
         errors.append(f"{where}: link_targets must be a list of distinct target names")
