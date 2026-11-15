@@ -1,0 +1,76 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-14T17:23:11Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-fb0c59666faaeae0eb003ade000904483172d110",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/paint_command.hpp",
+    "graphics/include/vellum/graphics/scene.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/src/rendered_tree_materializer.mm",
+    "authoring/tests/design_gpu_test.cpp",
+    "authoring/tests/design_gpu_tree.mjs",
+    "authoring/tests/rendered_tree_materializer_test.cpp",
+    "authoring/tests/run_design_gpu.py",
+    "graphics/include/vellum/graphics/paint_command.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/src/paint_command.cpp",
+    "graphics/src/scene_acceptance.cpp",
+    "graphics/tests/blend_mode_test.cpp",
+    "graphics/tests/gpu_blend_test.cpp",
+    "graphics/tests/layer_cache_test.cpp",
+    "graphics/tests/partial_present_test.cpp",
+    "packages/vellum-design-ir/README.md",
+    "packages/vellum-design-ir/schema/design-ir-v1.schema.json",
+    "packages/vellum-design-ir/src/compositing.js",
+    "packages/vellum-design-ir/test/compositing.test.js",
+    "packages/vellum-ui/src/design.js",
+    "packages/vellum-ui/test/design.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "268b50bfddb190d5386adbd8added881ac7cc7b3",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "75f009fc9790e0722142539e93611d8d44d76346",
+    "to_commit": "d421b956602b7b540395ca4ab2401b4d6a66e8ea"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-design-ir/README.md",
+    "packages/vellum-design-ir/schema/design-ir-v1.schema.json",
+    "packages/vellum-design-ir/src/compositing.js",
+    "packages/vellum-design-ir/test/compositing.test.js"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "fb0c59666faaeae0eb003ade000904483172d110",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
