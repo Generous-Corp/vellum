@@ -721,6 +721,27 @@ class Isolation(unittest.TestCase):
         self.assertEqual(self.found(self.read(token="${{ github.token }}",
                                               run='run: gh api >out.json "repos/$R/actions/runs"\n')), [])
 
+    def test_an_escaped_or_quoted_gh_spelling_is_still_gh_api(self) -> None:
+        # The shell runs each of these as `gh api`; the Administration-only
+        # read still needs the App token.
+        for label, run in {
+            "backslash in gh": 'run: g\\h api "repos/$R/immutable-releases"\n',
+            "single-quoted h": "run: g'h' api \"repos/$R/immutable-releases\"\n",
+            "double-quoted g": 'run: "g"h api "repos/$R/rulesets"\n',
+            "leading backslash": 'run: \\gh api "repos/$R/branches/main/protection"\n',
+            "quoted api": "run: gh 'a'pi \"repos/$R/rules/branches/main\"\n",
+            "backslash in api": 'run: gh a\\pi "repos/$R/immutable-releases"\n',
+            "after another call": 'run: gh api "repos/$R/actions/runs" ; g\\h api "repos/$R/immutable-releases"\n',
+        }.items():
+            with self.subTest(label):
+                self.refused(self.read(token="${{ github.token }}", run=run))
+                self.assertEqual(self.found(self.read(run=run)), [])
+        self.assertEqual(policy.gh_api_targets("g'h' 'a'pi a/b"), ["a/b"])
+        # A variable endpoint behind an escaped gh still cannot be read.
+        self.refused(self.read(run='run: g\\h api "$endpoint"\n'), "an endpoint this check cannot read")
+        # Another tool whose name ends in gh is still not gh.
+        self.assertEqual(policy.gh_api_targets("my-gh api a/b"), [])
+
     def test_a_gh_api_call_whose_endpoint_cannot_be_read_fails_closed(self) -> None:
         for label, run in {
             "a variable": 'run: gh api "$endpoint" > out.json\n',

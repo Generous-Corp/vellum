@@ -166,7 +166,12 @@ ADMIN_ENDPOINT = re.compile(r"branches/main/protection|rules/branches/|/rulesets
 # `-` (`my-gh`) is another tool. The rest of the line is captured in a
 # lookahead, so finditer still finds every later call on the same line
 # (`gh api a ; gh api b`, `gh api a | gh api b`).
-GH_API = re.compile(r"(?<![A-Za-z0-9_.-])gh[\"']?[ \t]+api\b(?=(?P<rest>[^\n]*))")
+# Quotes and backslashes may sit anywhere in either word without changing what
+# the shell runs: `g\h api`, `g'h' api` and `"g"h 'a'pi` are all
+# gh api, so the pattern allows them between every letter.
+GH_API = re.compile(
+    r"(?<![A-Za-z0-9_.-])[\"'\\]*g[\"'\\]*h[\"'\\]*[ \t]+[\"'\\]*a[\"'\\]*p[\"'\\]*i[\"'\\]*"
+    r"(?![A-Za-z0-9_-])(?=(?P<rest>[^\n]*))")
 # `gh api` options that take a value, which is therefore not the endpoint.
 GH_API_VALUE_OPTIONS = frozenset({
     "-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "--input", "-q", "--jq",
