@@ -187,6 +187,26 @@
       ],
       "framework_blob": "90b61eafc7a3f15c1729c06b16daf8629b8c6e23",
       "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+    },
+    {
+      "framework_path": "framework/tools/cmake/VellumV8ConsumerDefines.cmake",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "The sealed V8 provider's consumer_defines, applied to the imported target so every translation unit that includes V8 headers compiles with the library's ABI. Pulp's tools/cmake/PulpV8ConsumerDefines.cmake respelled under Vellum names; the Pulp spelling would raise the framework name debt."
+    },
+    {
+      "framework_path": "framework/tools/cmake/VellumV8Provider.cmake",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Resolves the sealed V8 provider for VELLUM_ENABLE_V8 from Vellum's dependency lock: the digest-checked v8-builder archive, its manifest paired with the renderer lock's Skia and Dawn, and a per-file receipt. Vellum's counterpart to Pulp's tools/cmake/FindV8.cmake for its one platform."
     }
   ]
 }
