@@ -345,6 +345,10 @@
           "--output",
           "$RUNNER_TEMP/provenance-report.json"
         ]
+      },
+      {
+        "script": "scripts/test_embed_wgsl.py",
+        "isolated": true
       }
     ]
   },
