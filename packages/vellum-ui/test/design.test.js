@@ -9,6 +9,7 @@ import {
     createApp, Design, jsx, materializeDesign, mount, Path, Text, TextRun, View,
 } from '../src/index.js';
 import {
+    BLEND_MODES,
     decodeFigmaPluginExport,
     normalizeImport,
     resolveTokenLayers,
@@ -516,4 +517,189 @@ test('the runtime refuses token slots an element does not have', () => {
         id: 'p', d: 'M0 0 L1 1', stroke: '#112233', tokenRefs: { stroke: receipt },
     }))).tree;
     assert.deepEqual(stroke.children[0].tokenRefs, { stroke: 0 });
+});
+
+function compositingDesign(children, rootCompositing) {
+    return normalizeImport({
+        source: {
+            key: 'screen',
+            adapter: 'fixture',
+            adapterVersion: '1',
+            formatVersion: '1',
+            revision: 'compositing',
+        },
+        root: {
+            kind: 'view',
+            sourceId: 'root',
+            properties: { layout: { width: 120, height: 80 } },
+            ...(rootCompositing ? { compositing: rootCompositing } : {}),
+            children,
+        },
+    });
+}
+
+function designNode(sourceId, compositing, children = []) {
+    return {
+        kind: 'view',
+        sourceId,
+        properties: { layout: { width: 20, height: 20 } },
+        ...(compositing ? { compositing } : {}),
+        children,
+    };
+}
+
+function renderedTree(document) {
+    const app = createApp({
+        id: 'compositing-design',
+        stateVersion: '1',
+        initialState: {},
+        actions: {},
+        render: () => materializeDesign(document),
+    });
+    return JSON.parse(mount(app).renderJSON()).tree;
+}
+
+test('DesignIR compositing lowers into the retained styles the renderer reads', () => {
+    const document = compositingDesign([
+        designNode('masked', undefined, [
+            designNode('content', {
+                blendMode: 'color_dodge', opacity: 0.25, isolate: true, maskRef: 'screen/cutout',
+            }),
+            designNode('cutout', { mask: 'luminance' }),
+        ]),
+        designNode('group', { blendMode: 'multiply' }, [designNode('inner', { opacity: 0.5 })]),
+    ]);
+    assert.equal(document.schemaVersion, 2);
+    const tree = renderedTree(document);
+    const [masked, group] = tree.children;
+    const [content, cutout] = masked.children;
+    assert.deepEqual([content.id, cutout.id, group.id],
+        ['screen/content', 'screen/cutout', 'screen/group']);
+    assert.deepEqual(
+        { ...content.style },
+        { height: 20, isolation: 'isolate', mixBlendMode: 'color_dodge', opacity: 0.25, width: 20 },
+    );
+    assert.equal(cutout.style.maskMode, 'luminance');
+    assert.equal(cutout.style.mixBlendMode, undefined);
+    assert.equal(group.style.mixBlendMode, 'multiply');
+    assert.equal(group.children[0].style.opacity, 0.5);
+
+    for (const mode of BLEND_MODES) {
+        const tree = renderedTree(compositingDesign([designNode('blended', { blendMode: mode })]));
+        assert.equal(tree.children[0].style.mixBlendMode, mode === 'normal' ? undefined : mode, mode);
+    }
+    // Negative control: the same document with its compositing stripped
+    // carries none of these styles.
+    const plain = structuredClone(document);
+    plain.schemaVersion = 1;
+    const strip = (node) => {
+        delete node.compositing;
+        node.children.forEach(strip);
+    };
+    strip(plain.root);
+    const visit = (node) => {
+        for (const key of ['mixBlendMode', 'opacity', 'isolation', 'maskMode']) {
+            assert.equal(node.style?.[key], undefined, `${node.id} ${key}`);
+        }
+        node.children.forEach(visit);
+    };
+    visit(renderedTree(plain));
+});
+
+test('DesignIR materialization validates the schema version of compositing', () => {
+    const document = compositingDesign([designNode('blended', { blendMode: 'multiply' })]);
+    const older = structuredClone(document);
+    older.schemaVersion = 1;
+    assert.throws(() => materializeDesign(older),
+        /design node screen\/blended compositing needs schemaVersion 2/);
+    const unversioned = structuredClone(document);
+    delete unversioned.schemaVersion;
+    assert.throws(() => materializeDesign(unversioned), /needs schemaVersion 2/);
+    const newer = structuredClone(document);
+    newer.schemaVersion = 3;
+    assert.throws(() => materializeDesign(newer), /unsupported DesignIR schemaVersion: 3/);
+    const plain = compositingDesign([designNode('plain')]);
+    assert.equal(plain.schemaVersion, 1);
+    assert.doesNotThrow(() => materializeDesign(plain));
+    assert.doesNotThrow(() => materializeDesign(fixture()), 'a document without a version');
+
+    const bad = (compositing, pattern) => {
+        const copy = structuredClone(document);
+        copy.root.children[0].compositing = compositing;
+        assert.throws(() => materializeDesign(copy), pattern);
+    };
+    bad({ blendMode: 'spectral' }, /blendMode must be a known blend mode/);
+    bad({ blendMode: 'color-dodge' }, /blendMode must be a known blend mode/);
+    bad({ opacity: 2 }, /opacity must be a number from 0 to 1/);
+    bad({ isolate: 'yes' }, /isolate must be a boolean/);
+    bad({ mask: 'inverted' }, /mask must be alpha or luminance/);
+    bad({ futureBlend: 'x' }, /unknown field 'futureBlend'/);
+});
+
+test('DesignIR mask references resolve to the one sibling mask or are refused', () => {
+    const refuses = (children, pattern, rootCompositing) => {
+        const document = normalizeImport({
+            source: {
+                key: 'screen', adapter: 'fixture', adapterVersion: '1', formatVersion: '1',
+                revision: 'masks',
+            },
+            root: { kind: 'view', sourceId: 'root', children },
+        });
+        if (rootCompositing) document.root.compositing = rootCompositing;
+        if (rootCompositing) document.schemaVersion = 2;
+        assert.throws(() => materializeDesign(document), pattern);
+    };
+    refuses([
+        designNode('content'),
+        designNode('cutout', { mask: 'alpha' }),
+    ], /screen\/content is not masked by screen\/cutout, but the renderer masks every sibling/);
+    refuses([
+        designNode('content', { maskRef: 'screen/cutout' }),
+        designNode('cutout', { mask: 'alpha' }),
+        designNode('second', { mask: 'luminance' }),
+    ], /has 2 mask children/);
+    refuses([designNode('alone')], /the root has no siblings/, { mask: 'alpha' });
+    refuses([designNode('alone')], /the root has no siblings/, { maskRef: 'screen/x' });
+
+    const document = compositingDesign([
+        designNode('content', { maskRef: 'screen/cutout' }),
+        designNode('cutout', { mask: 'alpha' }),
+    ]);
+    const dangling = structuredClone(document);
+    dangling.root.children[0].compositing.maskRef = 'screen/missing';
+    assert.throws(() => materializeDesign(dangling),
+        /maskRef 'screen\/missing' does not name a sibling mask/);
+    const blendedMask = structuredClone(document);
+    blendedMask.root.children[1].compositing.blendMode = 'multiply';
+    assert.throws(() => materializeDesign(blendedMask), /a mask node takes no blend mode but normal/);
+    assert.doesNotThrow(() => materializeDesign(document));
+});
+
+test('rendered nodes carry the design identity they came from as an anchor', async () => {
+    const sourceBytes = await readFile(join(fixtures, 'pulp-emitter-generic.export.json'));
+    const document = normalizeImport(decodeFigmaPluginExport(
+        JSON.parse(sourceBytes.toString('utf8')),
+        {
+            sourceHash: `sha256:${createHash('sha256').update(sourceBytes).digest('hex')}`,
+            sourceKey: 'main',
+        },
+    ));
+    const app = createApp({
+        id: 'anchor-proof',
+        stateVersion: '1',
+        initialState: {},
+        actions: { tap: () => ({}) },
+        render: () => materializeDesign(document, {
+            actions: { 'main/1:2': { press: 'tap' } },
+            viewport: { height: 240, padding: 20, width: 420 },
+        }),
+    });
+    const tree = JSON.parse(mount(app).renderJSON()).tree;
+    const nodes = [];
+    const walk = (node) => { nodes.push(node); node.children.forEach(walk); };
+    walk(tree);
+    const interactive = nodes.filter((node) => node.events !== undefined);
+    assert.ok(interactive.length > 0);
+    for (const node of interactive) assert.equal(node.anchor, 'figma:1:2');
+    for (const node of nodes) assert.match(node.anchor, /^figma:/);
 });

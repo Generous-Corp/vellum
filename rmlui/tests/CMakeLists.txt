@@ -311,7 +311,9 @@ if(VELLUM_RMLUI_INSTALL AND NOT CMAKE_CROSSCOMPILING)
             endif()
         endforeach()
     endif()
-    if(VELLUM_RMLUI_NATIVE)
+    # With VELLUM_RMLUI_NATIVE_PACKAGE, Native installs as its own package and
+    # install-consumer-native-package below covers it instead.
+    if(VELLUM_RMLUI_NATIVE AND NOT VELLUM_RMLUI_NATIVE_PACKAGE)
         add_test(NAME vellum.rmlui.install-consumer-native
             COMMAND "${CMAKE_COMMAND}"
                 "-DVELLUM_RMLUI_BUILD_DIR=${PROJECT_BINARY_DIR}"
@@ -321,5 +323,16 @@ if(VELLUM_RMLUI_INSTALL AND NOT CMAKE_CROSSCOMPILING)
                 "-DVELLUM_RMLUI_FONTS=${VELLUM_RMLUI_FONTS}"
                 "-DTEST_CONFIG=$<CONFIG>"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/RunInstallConsumer.cmake")
+    endif()
+    # The RmlUi SDK layout: VellumRmlUiNative in one prefix beside VellumRmlUi
+    # in another, consumed through both.
+    if(VELLUM_RMLUI_NATIVE_PACKAGE AND VELLUM_RMLUI_METAL)
+        add_test(NAME vellum.rmlui.install-consumer-native-package
+            COMMAND "${CMAKE_COMMAND}"
+                "-DVELLUM_RMLUI_BUILD_DIR=${PROJECT_BINARY_DIR}"
+                "-DVELLUM_RMLUI_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+                "-DVELLUM_RMLUI_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
+                "-DTEST_CONFIG=$<CONFIG>"
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/RunNativePackageConsumer.cmake")
     endif()
 endif()

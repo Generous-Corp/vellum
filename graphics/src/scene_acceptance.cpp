@@ -54,6 +54,17 @@ const SceneNode* find_undrawable_image(const SceneNode& node, std::string& reaso
     return nullptr;
 }
 
+// The first mask node, in depth-first order, with a blend mode other than
+// `normal`. A mask contributes coverage to its siblings, not paint, so a blend
+// mode on it has no stage to apply in and refuses the scene.
+const SceneNode* find_blended_mask(const SceneNode& node) {
+    if (node.mask && node.blend_mode != BlendMode::normal) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_blended_mask(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
 // Why `scene` is refused, or empty. `image_node` is set to the refused
 // image's id, and `image` to true, for an image or image-table refusal.
 std::string refusal(const Scene& scene, bool& image, std::string& image_node,
@@ -66,15 +77,28 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node,
         return "scene contains unsupported node kind " +
                std::to_string(static_cast<int>(unknown->kind)) + " at " + unknown->id;
     }
+    if (const auto* unknown = find_unknown_blend_mode(scene.root); unknown != nullptr) {
+        return "node " + unknown->id + " has a blend mode this build does not know";
+    }
     if (!scene_fields_match_version(scene)) {
         const auto loss = scene_loss_diagnostics(scene);
         return loss.empty() ? "scene fields do not match its version" : loss.front().message;
+    }
+    std::string gradient_reason;
+    if (const auto* unsupported = find_inexpressible_gradient(scene.root, &gradient_reason);
+        unsupported != nullptr) {
+        return "the gradient at " + unsupported->id + " cannot be drawn exactly: " +
+               gradient_reason;
     }
     if (const auto* invalid = find_non_finite_compositing(scene.root); invalid != nullptr) {
         return "scene node " + invalid->id +
                " has a non-finite transform, opacity, or corner radius";
     }
     if (scene.root.mask) return "scene root " + scene.root.id + " cannot be a mask";
+    if (const auto* mask = find_blended_mask(scene.root); mask != nullptr) {
+        return "mask " + mask->id + " cannot carry the blend mode " +
+               std::string(to_string(mask->blend_mode));
+    }
     if (auto token = find_invalid_token_reference(scene); token) {
         auto reason = token->reason;
         token_refusal = std::move(token);
@@ -115,7 +139,8 @@ SceneAcceptance accept_scene(const Scene& scene) {
 
     const bool version = !result.diagnostics.empty() &&
         result.diagnostics.front().severity == LoweringDiagnostic::Severity::error &&
-        result.diagnostics.front().code == kSceneVersionMismatchCode;
+        (result.diagnostics.front().code == kSceneVersionMismatchCode ||
+         result.diagnostics.front().code == kGradientNotExpressibleCode);
     if (version) {
         result.diagnostics.resize(1U);
         return result;

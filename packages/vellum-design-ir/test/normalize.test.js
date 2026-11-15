@@ -156,7 +156,7 @@ test('unknown adapter fields are preserved and diagnosed instead of dropped', ()
 
 test('unknown schema versions are rejected rather than best-effort parsed', async () => {
     const document = normalizeImport(await fixture('revision-a.source.json'));
-    document.schemaVersion = 2;
+    document.schemaVersion = 3;
     assert.throws(() => parseDesignIR(document), DesignIRValidationError);
 });
 

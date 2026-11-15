@@ -18,7 +18,10 @@
   ],
   "properties": {
     "$schema": { "const": "https://vellum.dev/schemas/design-ir/v1" },
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": {
+      "enum": [1, 2],
+      "description": "Version 2 adds the node compositing object. A version 1 document must not carry it; a normalizer emits version 2 only when a node uses it."
+    },
     "compiler": {
       "type": "object",
       "additionalProperties": false,
@@ -44,6 +47,13 @@
     },
     "lossReport": { "$ref": "#/$defs/lossReport" }
   },
+  "allOf": [
+    {
+      "description": "A version 1 document carries no compositing object on any node; compositing is version 2 vocabulary.",
+      "if": { "required": ["schemaVersion"], "properties": { "schemaVersion": { "const": 1 } } },
+      "then": { "properties": { "root": { "$ref": "#/$defs/nodeWithoutCompositing" } } }
+    }
+  ],
   "$defs": {
     "jsonValue": {
       "oneOf": [
@@ -95,7 +105,42 @@
         "text": { "type": "string" },
         "properties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
         "extensions": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
+        "compositing": { "$ref": "#/$defs/compositing" },
         "children": { "type": "array", "items": { "$ref": "#/$defs/node" } }
+      }
+    },
+    "nodeWithoutCompositing": {
+      "description": "A node, and every node beneath it, without a compositing object.",
+      "not": { "required": ["compositing"] },
+      "properties": {
+        "children": { "type": "array", "items": { "$ref": "#/$defs/nodeWithoutCompositing" } }
+      }
+    },
+    "blendMode": {
+      "enum": [
+        "normal", "multiply", "screen", "overlay", "darken", "lighten", "difference", "exclusion",
+        "source_over", "destination_in", "destination_out",
+        "hue", "saturation", "color", "luminosity", "color_dodge", "color_burn", "hard_light",
+        "soft_light", "clear", "source", "destination", "source_in", "source_out", "source_atop",
+        "destination_over", "destination_atop", "xor", "plus"
+      ],
+      "description": "The first eleven are Tier 1, required of every backend. The rest are Tier 2, required of Skia Graphite and optional elsewhere, where an unsupported mode is drawn as normal with a loss diagnostic."
+    },
+    "compositing": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Mirrors the renderer's scene node. Only values that differ from their defaults are emitted. maskRef names a sibling node whose compositing.mask is set; the root has neither mask nor maskRef.",
+      "properties": {
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "blendMode": { "$ref": "#/$defs/blendMode" },
+        "isolate": { "type": "boolean" },
+        "mask": { "enum": ["alpha", "luminance"] },
+        "maskRef": { "type": "string", "minLength": 1 }
+      },
+      "if": { "required": ["mask"] },
+      "then": {
+        "description": "A mask is coverage, not paint, so a mask node takes no blend mode but normal.",
+        "properties": { "blendMode": { "const": "normal" } }
       }
     },
     "token": {
