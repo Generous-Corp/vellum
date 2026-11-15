@@ -124,6 +124,14 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_check_threejs_payload.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/check_threejs_payload.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_verify_gpu_runtime_artifact.py",
         "isolated": true
       },
@@ -219,6 +227,12 @@
         "script": "tools/parity/test_r10_delta.py"
       },
       {
+        "script": "tools/visual/tests/test_differ.py"
+      },
+      {
+        "script": "tools/visual/tests/test_runner.py"
+      },
+      {
         "script": "scripts/test_readme_exec.py"
       },
       {
@@ -281,7 +295,19 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_check_threejs_payload.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/check_threejs_payload.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_verify_gpu_runtime_artifact.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_cancel_destroyed_queue_proofs.py",
         "isolated": true
       },
       {
@@ -359,6 +385,7 @@
     ".agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py": "workflow:provenance.yml",
     "apps/app-host/test_agent_workflow.py": "cmake:apps/app-host/CMakeLists.txt",
     "apps/app-host/test_design_anchor_dump.py": "cmake:apps/app-host/CMakeLists.txt",
+    "apps/app-host/test_html_import_geometry.py": "cmake:apps/app-host/CMakeLists.txt",
     "apps/app-host/test_manual_clock_capture.py": "cmake:apps/app-host/CMakeLists.txt",
     "apps/app-host/test_phase3_scenario.py": "cmake:apps/app-host/CMakeLists.txt",
     "apps/app-host/test_state_persistence.py": "cmake:apps/app-host/CMakeLists.txt",

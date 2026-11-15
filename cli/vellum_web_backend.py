@@ -10,6 +10,7 @@ import hashlib
 import html
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -654,6 +655,91 @@ def _snapshot_node_value(snapshot: dict[str, Any], nodes: dict[str, Any], key: s
     return _snapshot_string(snapshot, value, f"{key}[{index}]", allow_absent=True)
 
 
+def _snapshot_layout_boxes(layout: dict[str, Any], included: set[int]) -> dict[int, tuple[float, ...]]:
+    """Chrome's border-box rect for every node it laid out, in page CSS px."""
+    indices = layout.get("nodeIndex")
+    bounds = layout.get("bounds")
+    if bounds is None:
+        return {}
+    if not isinstance(indices, list) or not isinstance(bounds, list) or len(indices) != len(bounds):
+        raise BackendFailure("DOMSnapshot layout bounds are malformed", status="test_failed")
+    boxes: dict[int, tuple[float, ...]] = {}
+    for node_index, rect in zip(indices, bounds):
+        if not isinstance(node_index, int) or node_index not in included:
+            raise BackendFailure("DOMSnapshot layout references an invalid node", status="test_failed")
+        if (not isinstance(rect, list) or len(rect) != 4 or
+                not all(isinstance(value, (int, float)) and not isinstance(value, bool) and
+                        math.isfinite(value) for value in rect) or rect[2] < 0 or rect[3] < 0):
+            raise BackendFailure("DOMSnapshot layout bounds are malformed", status="test_failed")
+        boxes[node_index] = tuple(float(value) for value in rect)
+    return boxes
+
+
+def _lower_layout_boxes(
+    source_nodes: list[dict[str, Any] | None], tree_children: dict[int, list[int]],
+    root_index: int, boxes: dict[int, tuple[float, ...]],
+) -> None:
+    """Carry Chrome's layout into each node as a box relative to its parent.
+
+    Native layout places a child at its parent-relative ``x``/``y`` with the
+    given ``width``/``height``, so lowering Chrome's absolute boxes this way
+    reproduces them exactly. A text node Chrome gave no area to (collapsed
+    whitespace) and an element without a layout object (``display: none``)
+    lower to ``display: none`` and are not rendered. A node without a box whose
+    descendants have one (``display: contents``, a shadow root) passes its
+    parent's box through, so its descendants keep their positions.
+    """
+    if root_index not in boxes:
+        return
+
+    def boxed(index: int) -> bool:
+        rect = boxes.get(index)
+        if rect is None:
+            return False
+        if source_nodes[index]["kind"] == "text":  # type: ignore[index]
+            return rect[2] > 0 and rect[3] > 0
+        return True
+
+    contains_box: dict[int, bool] = {}
+    order: list[int] = []
+    stack = [root_index]
+    while stack:
+        index = stack.pop()
+        order.append(index)
+        stack.extend(tree_children.get(index, []))
+    for index in reversed(order):
+        contains_box[index] = boxed(index) or any(
+            contains_box[child] for child in tree_children.get(index, []))
+
+    def rounded(value: float) -> float | int:
+        value = round(value, 4)
+        return int(value) if value.is_integer() else value
+
+    # The root carries no size: Chrome's window is not the project's viewport,
+    # and a root width/height would override the scenario viewport (800x600 by
+    # default). Children are placed by their parent-relative boxes alone.
+    root_rect = boxes[root_index]
+    pending = [(child, root_rect) for child in tree_children.get(root_index, [])]
+    while pending:
+        index, parent = pending.pop()
+        properties = source_nodes[index]["properties"]  # type: ignore[index]
+        if boxed(index):
+            rect = boxes[index]
+            properties["layout"] = {
+                "x": rounded(rect[0] - parent[0]), "y": rounded(rect[1] - parent[1]),
+                "width": rounded(rect[2]), "height": rounded(rect[3]),
+            }
+        elif contains_box[index]:
+            rect = parent
+            properties["layout"] = {
+                "x": 0, "y": 0, "width": rounded(rect[2]), "height": rounded(rect[3]),
+            }
+        else:
+            properties["layout"] = {"display": "none"}
+            continue
+        pending.extend((child, rect) for child in tree_children.get(index, []))
+
+
 def lower_dom_snapshot(
     snapshot: dict[str, Any], *, settled_snapshot: dict[str, Any], screenshot: dict[str, Any],
     interaction_evidence: list[dict[str, Any]] | None = None,
@@ -752,9 +838,13 @@ def lower_dom_snapshot(
                 if refs:
                     existing = source_nodes[node_index]["properties"].get("assetRefs", [])  # type: ignore[index]
                     source_nodes[node_index]["properties"]["assetRefs"] = sorted(set(existing + refs))  # type: ignore[index]
+        boxes = _snapshot_layout_boxes(layout, included)
+    else:
+        boxes = {}
     if not included:
         raise BackendFailure("DOMSnapshot contained no lowerable nodes", status="test_failed")
     root_index = next((index for index in sorted(included) if node_types[index] == 9), min(included))
+    tree_children: dict[int, list[int]] = {}
     for index in sorted(included):
         if index == root_index:
             continue
@@ -764,6 +854,8 @@ def lower_dom_snapshot(
         if not isinstance(parent, int) or parent < 0 or parent == index:
             parent = root_index
         source_nodes[parent]["children"].append(source_nodes[index])  # type: ignore[index]
+        tree_children.setdefault(parent, []).append(index)
+    _lower_layout_boxes(source_nodes, tree_children, root_index, boxes)
     assets = [record["asset"] for record in records.values()]
     assets.sort(key=lambda item: item["id"])
     evidence = {
