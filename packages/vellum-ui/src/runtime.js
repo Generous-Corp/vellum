@@ -538,6 +538,7 @@ function internTokenRefs(value, type, style, pathProperties, state, path) {
         if (canonicalTokenColor(color) !== canonicalTokenColor(receipt.value)) {
             throw new Error(`${path}.tokenRefs.${slot} disagrees with ${property}`);
         }
+        const canonical = canonicalTokenColor(receipt.value);
         const known = state.tokens.get(receipt.path);
         if (known === undefined) {
             if (state.tokens.size >= MAXIMUM_TOKENS) {
@@ -545,11 +546,11 @@ function internTokenRefs(value, type, style, pathProperties, state, path) {
             }
             state.tokens.set(receipt.path, {
                 index: state.tokens.size,
-                receipt: { layer: receipt.layer, path: receipt.path, value: receipt.value },
+                receipt: { layer: receipt.layer, path: receipt.path, value: canonical },
             });
             result[slot] = state.tokens.size - 1;
         } else {
-            if (known.receipt.layer !== receipt.layer || known.receipt.value !== receipt.value) {
+            if (known.receipt.layer !== receipt.layer || known.receipt.value !== canonical) {
                 throw new Error(`token ${receipt.path} resolves to two different receipts`);
             }
             result[slot] = known.index;

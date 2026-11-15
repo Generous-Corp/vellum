@@ -350,6 +350,38 @@ test('a theme layer re-resolves receipts without moving any reference', () => {
     assert.deepEqual(refs(dark), refs(light));
 });
 
+test('an alias reports the layer that supplied its value', () => {
+    const document = normalizeImport(tokenSource());
+    const layers = resolveTokenLayers(document, {
+        themeOverrides: { 'main.color.accent': '#ff0000' },
+    });
+    const tree = renderTree(document, { tokenLayers: layers });
+    const title = flatten(tree).find((node) => node.id.endsWith('/title'));
+    assert.deepEqual(tree.tokens[title.tokenRefs.color], {
+        layer: 'theme', path: 'main.color.label', value: '#ff0000',
+    });
+});
+
+test('the runtime interns short receipts in long form', () => {
+    const render = (receipts) => {
+        const app = createApp({
+            id: 'token-short',
+            stateVersion: '1',
+            initialState: {},
+            render: () => jsx(View, { id: 'root', style: { width: 10, height: 10 }, children:
+                receipts.map((receipt, index) => jsx(View, {
+                    id: `n${index}`,
+                    style: { backgroundColor: '#ffffff' },
+                    tokenRefs: { backgroundColor: receipt },
+                })) }),
+        });
+        return JSON.parse(mount(app).renderJSON()).tree;
+    };
+    const short = { layer: 'primitive', path: 'a.b', value: '#fff' };
+    const tree = render([short, { ...short, value: '#ffffff' }]);
+    assert.deepEqual(tree.tokens, [{ layer: 'primitive', path: 'a.b', value: '#ffffff' }]);
+});
+
 test('the runtime refuses token references that disagree with the node', () => {
     const receipt = { layer: 'primitive', path: 'a.b', value: '#112233' };
     const render = (props, extra = []) => {

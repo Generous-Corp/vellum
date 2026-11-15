@@ -84,6 +84,20 @@ function tokenValue(tokens, value, stack = [], layers = undefined) {
     return resolved;
 }
 
+function tokenLayer(tokens, value, layers, stack = []) {
+    const match = typeof value === 'string' ? /^\{([^{}]+)\}$/.exec(value) : null;
+    if (!match) return undefined;
+    const name = match[1];
+    if (stack.includes(name)) return undefined;
+    const override = layerEntry(layers, tokens, name);
+    if (override !== undefined) {
+        return tokenLayer(tokens, override.value, layers, [...stack, name]) ?? override.layer;
+    }
+    const token = tokens[name];
+    if (!token || typeof token !== 'object' || !('$value' in token)) return undefined;
+    return tokenLayer(tokens, token.$value, layers, [...stack, name]);
+}
+
 function colorToken(context, value) {
     const resolved = canonicalColor(
         tokenValue(context.document.tokens ?? {}, value, [], context.tokenLayers));
@@ -93,11 +107,10 @@ function colorToken(context, value) {
     }
     const name = match[1];
     const tokens = context.document.tokens;
-    const override = layerEntry(context.tokenLayers, tokens, name);
     return {
         value: resolved,
         receipt: {
-            layer: override?.layer ?? 'primitive',
+            layer: tokenLayer(tokens, value, context.tokenLayers) ?? 'primitive',
             path: canonicalName(tokens, name),
             value: resolved,
         },
