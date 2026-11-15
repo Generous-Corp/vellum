@@ -331,12 +331,28 @@ int run_headless(const Options& options, std::string_view bundle) {
                         *application, rendered, step.node_id, step.value, &error);
                     break;
                 case AutomationStep::Kind::command: {
+                    // A command step passes only when the command is defined,
+                    // its handler ran, and the rendered tree changed.
                     bool present = false;
-                    succeeded = application->has_command(
-                        step.node_id, present, &error) && present;
-                    if (!succeeded && error.empty()) {
+                    bool changed = false;
+                    if (!application->has_command(step.node_id, present, &error)) break;
+                    if (!present) {
                         error = "scenario command is not defined: " + step.node_id;
+                        break;
                     }
+                    if (!application->invoke_command(
+                            step.node_id, rendered, changed, &error)) {
+                        if (error.empty()) {
+                            error = "scenario command did not run: " + step.node_id;
+                        }
+                        break;
+                    }
+                    if (!changed) {
+                        error = "scenario command had no rendered effect: " + step.node_id;
+                        break;
+                    }
+                    succeeded = true;
+                    std::cout << "command=" << step.node_id << " invoked=1 changed=1\n";
                     break;
                 }
                 case AutomationStep::Kind::service_result: {

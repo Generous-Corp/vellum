@@ -266,6 +266,51 @@ class WebScenarioEvidenceTests(unittest.TestCase):
     def test_static_boot_and_render_scenario_is_valid(self) -> None:
         validate_scenario_evidence(self.evidence(presses=[]))
 
+    COMMAND_SCENARIO = {
+        "schema": "vellum.scenario.v2", "name": "commands",
+        "steps": [{"action": "wait-for-idle"}, {"action": "command", "target": "item.add"},
+                  {"action": "command", "target": "item.rename"}],
+    }
+
+    def command_evidence(self, *commands: dict) -> dict:
+        evidence = self.evidence(presses=[])
+        evidence["commands"] = list(commands)
+        return evidence
+
+    @staticmethod
+    def ran(target: str, **changes: object) -> dict:
+        return {"target": target, "invoked": True, "invocations": 1, "changed": True,
+                "before": 1, "after": 2, **changes}
+
+    def test_command_steps_need_evidence_that_they_ran_and_had_an_effect(self) -> None:
+        validate_scenario_evidence(
+            self.command_evidence(self.ran("item.add"), self.ran("item.rename")),
+            scenario=self.COMMAND_SCENARIO)
+        refused = {
+            "no command evidence": self.evidence(presses=[]),
+            "one command unproven": self.command_evidence(self.ran("item.add")),
+            "out of order": self.command_evidence(self.ran("item.rename"), self.ran("item.add")),
+            "another command": self.command_evidence(self.ran("item.add"), self.ran("item.archive")),
+            "ran without an effect": self.command_evidence(
+                self.ran("item.add", changed=False), self.ran("item.rename")),
+            "not invoked": self.command_evidence(
+                self.ran("item.add", invoked=False), self.ran("item.rename")),
+            "no handler run counted": self.command_evidence(
+                self.ran("item.add", invocations=0), self.ran("item.rename")),
+            "an extra unproven entry": self.command_evidence(
+                self.ran("item.add"), self.ran("item.rename"), {"target": "item.add"}),
+            "evidence is not a list": {**self.evidence(presses=[]), "commands": {"item.add": True}},
+        }
+        for label, evidence in refused.items():
+            with self.subTest(label), self.assertRaises(BackendFailure) as raised:
+                validate_scenario_evidence(evidence, scenario=self.COMMAND_SCENARIO)
+            self.assertIn("did not prove its command steps", str(raised.exception))
+        # A scenario with no command step needs none, and accepts none.
+        plain = {"schema": "vellum.scenario.v2", "name": "plain", "steps": [{"action": "wait-for-idle"}]}
+        validate_scenario_evidence(self.evidence(presses=[]), scenario=plain)
+        with self.assertRaises(BackendFailure):
+            validate_scenario_evidence(self.command_evidence(self.ran("item.add")), scenario=plain)
+
     def test_every_semantic_press_must_change_rendered_state(self) -> None:
         with self.assertRaises(BackendFailure) as caught:
             validate_scenario_evidence(self.evidence(

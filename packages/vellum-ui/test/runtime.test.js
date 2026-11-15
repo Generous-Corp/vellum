@@ -15,6 +15,8 @@ import {
     createApp,
     jsx,
     mount,
+    services,
+    useCommand,
     useEffect,
     useMemo,
     useState,
@@ -1275,4 +1277,111 @@ test('fails closed when persisted application state versions do not match', () =
         () => second.restoreStateJSON(snapshot),
         /snapshot version 1 does not match application version 2/,
     );
+});
+
+test('a command bound with useCommand runs inside a dispatch and its state change is rendered', () => {
+    const seen = [];
+    function App() {
+        const [items, setItems] = useState(['one']);
+        useCommand('runtime.test.add-item', (arguments_) => {
+            seen.push(arguments_);
+            setItems((current) => [...current, arguments_.title ?? `item-${current.length + 1}`]);
+        });
+        return jsx(Text, { id: 'list', children: items.join(',') });
+    }
+    services.commands.define([{ id: 'runtime.test.add-item', title: 'Add item' }]);
+    const bridge = mount(App);
+    const before = JSON.parse(bridge.renderJSON()).tree;
+    assert.equal(before.children[0].text, 'one');
+    const first = JSON.parse(bridge.invokeCommand('runtime.test.add-item'));
+    assert.equal(first.protocol, protocol);
+    assert.equal(first.command, 'runtime.test.add-item');
+    assert.equal(first.invocations, 1);
+    assert.equal(first.changed, true);
+    assert.equal(first.tree.children[0].text, 'one,item-2');
+    const second = JSON.parse(bridge.invokeCommand('runtime.test.add-item', { title: 'GPU Notes' }));
+    assert.equal(second.invocations, 2);
+    assert.equal(second.tree.children[0].text, 'one,item-2,GPU Notes');
+    assert.deepEqual(seen, [{}, { title: 'GPU Notes' }]);
+    // The host's own dispatch reaches the same handler, like a press.
+    const third = JSON.parse(bridge.dispatchJSON(JSON.stringify({
+        protocol, action: 'command:runtime.test.add-item',
+    })));
+    assert.equal(third.tree.children[0].text, 'one,item-2,GPU Notes,item-4');
+});
+
+test('a command needs both its definition and a handler bound by a mounted component', () => {
+    services.commands.define([
+        { id: 'runtime.test.described-only', title: 'Described only' },
+        { id: 'runtime.test.toggled', title: 'Toggled' },
+    ]);
+    function Panel() {
+        useCommand('runtime.test.toggled', () => {});
+        useCommand('runtime.test.bound-but-undefined', () => {});
+        return jsx(Text, { id: 'panel', children: 'panel' });
+    }
+    function App() {
+        const [open, setOpen] = useState(true);
+        return jsx(View, {
+            id: 'app',
+            children: [
+                jsx(Button, { id: 'toggle', onPress: () => setOpen(!open), children: 'toggle' }),
+                open ? jsx(Panel, {}) : null,
+            ],
+        });
+    }
+    const bridge = mount(App);
+    const tree = JSON.parse(bridge.renderJSON()).tree;
+    assert.equal(bridge.hasCommand('runtime.test.described-only'), true);
+    assert.throws(() => bridge.invokeCommand('runtime.test.described-only'),
+        /command has no handler: runtime\.test\.described-only/);
+    assert.throws(() => bridge.invokeCommand('runtime.test.bound-but-undefined'),
+        /command is not defined: runtime\.test\.bound-but-undefined/);
+    assert.throws(() => bridge.invokeCommand('runtime.test.never-defined'),
+        /command is not defined: runtime\.test\.never-defined/);
+    assert.throws(() => bridge.invokeCommand(''), /requires a command id/);
+    assert.throws(() => bridge.invokeCommand('runtime.test.toggled', { bad: () => {} }));
+    assert.equal(JSON.parse(bridge.invokeCommand('runtime.test.toggled')).invocations, 1);
+    // Once the component that bound it unmounts, the command has no handler.
+    const press = tree.children.find((node) => node.id === 'toggle').events.press;
+    bridge.dispatchJSON(JSON.stringify({ protocol, action: press }));
+    assert.throws(() => bridge.invokeCommand('runtime.test.toggled'),
+        /command has no handler: runtime\.test\.toggled/);
+});
+
+test('useCommand is a render-time binding with one handler per command', () => {
+    assert.throws(() => useCommand('runtime.test.outside', () => {}), /while rendering a component/);
+    const broken = (render) => assert.throws(() => mount(render).renderJSON());
+    broken(() => { useCommand('', () => {}); return jsx(Text, { id: 'a', children: 'a' }); });
+    broken(() => { useCommand('runtime.test.x', 'no'); return jsx(Text, { id: 'a', children: 'a' }); });
+    assert.throws(() => mount(() => {
+        useCommand('runtime.test.twice', () => {});
+        useCommand('runtime.test.twice', () => {});
+        return jsx(Text, { id: 'a', children: 'a' });
+    }).renderJSON(), /already bound in this render: runtime\.test\.twice/);
+    assert.throws(() => services.commands.define([{
+        id: 'runtime.test.with-run', title: 'Run', shortcut: 7,
+    }]), /invalid command/);
+});
+
+test('a command that changes nothing renders the same tree, and one that throws commits nothing', () => {
+    function App() {
+        const [label, setLabel] = useState('ready');
+        useCommand('runtime.test.no-effect', () => {});
+        useCommand('runtime.test.throws', () => { setLabel('half done'); throw new Error('command failed'); });
+        return jsx(Text, { id: 'label', children: label });
+    }
+    services.commands.define([
+        { id: 'runtime.test.no-effect', title: 'No effect' },
+        { id: 'runtime.test.throws', title: 'Throws' },
+    ]);
+    const bridge = mount(App);
+    const before = JSON.parse(bridge.renderJSON()).tree;
+    const unchanged = JSON.parse(bridge.invokeCommand('runtime.test.no-effect'));
+    // The handler ran; a host that needs an effect reads `changed`.
+    assert.equal(unchanged.invocations, 1);
+    assert.equal(unchanged.changed, false);
+    assert.deepEqual(unchanged.tree, before);
+    assert.throws(() => bridge.invokeCommand('runtime.test.throws'), /command failed/);
+    assert.deepEqual(JSON.parse(bridge.renderJSON()).tree, before);
 });
