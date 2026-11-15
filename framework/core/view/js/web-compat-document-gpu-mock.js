@@ -540,6 +540,29 @@ function __pickDeviceFeatures(adapter, descriptor) {
     return picked;
 }
 
+var __gpuBridgeDevices = [];
+
+// Delivers queued unclaimed native errors to the bridged devices' handlers.
+function __gpuDispatchUncaptured() {
+    if (typeof __gpuTakeUncapturedErrorsImpl !== "function") return;
+    var errors = __gpuTakeUncapturedErrorsImpl();
+    if (!errors || !errors.length) return;
+    errors.forEach(function(raw) {
+        __gpuBridgeDevices.slice().forEach(function(d) { d._dispatchUncaptured(raw); });
+    });
+}
+
+// Native device work runs inside these host calls; drain after each.
+["__gpuQueueSubmitImpl", "__gpuQueueDrawImpl", "__gpuQueueDrawBufferedImpl",
+ "__gpuComputeDispatchImpl", "__gpuValidateShaderModuleImpl"].forEach(function(name) {
+    var original = globalThis[name];
+    if (typeof original !== "function") return;
+    globalThis[name] = function() {
+        try { return original.apply(this, arguments); }
+        finally { __gpuDispatchUncaptured(); }
+    };
+});
+
 function __createMockGPUDevice(adapter, descriptor, init) {
     // third `init` arg carries the bridge descriptor returned by
     // `__describeNativeDeviceImpl`. When `init.nativeBridge` is true, the
@@ -650,8 +673,31 @@ function __createMockGPUDevice(adapter, descriptor, init) {
         }
         return Promise.resolve(null);
     };
-    device.addEventListener = function() {};
-    device.removeEventListener = function() {};
+    // `uncapturederror`: errors from native device work that no script error
+    // scope claimed, delivered as a GPUUncapturedErrorEvent-shaped object to
+    // `onuncapturederror` and to listeners. Native work runs inside the host
+    // call, so the queue is drained right after each such call.
+    device._listeners = { uncapturederror: [] };
+    device.onuncapturederror = null;
+    device.addEventListener = function(type, listener) {
+        var list = device._listeners[type];
+        if (list && typeof listener === "function" && list.indexOf(listener) < 0) list.push(listener);
+    };
+    device.removeEventListener = function(type, listener) {
+        var list = device._listeners[type];
+        var at = list ? list.indexOf(listener) : -1;
+        if (at >= 0) list.splice(at, 1);
+    };
+    device._dispatchUncaptured = function(raw) {
+        var event = {
+            type: "uncapturederror",
+            target: device,
+            error: __createGPUError(raw.type, raw.message, raw.diagnostics)
+        };
+        if (typeof device.onuncapturederror === "function") device.onuncapturederror(event);
+        device._listeners.uncapturederror.slice().forEach(function(l) { l(event); });
+    };
+    if (device._nativeBridge) __gpuBridgeDevices.push(device);
     return device;
 }
 

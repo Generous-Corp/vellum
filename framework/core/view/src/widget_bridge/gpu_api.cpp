@@ -605,6 +605,14 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
         return result;
     });
 
+    // Errors no script scope claimed. Script dispatches them as the device's
+    // `uncapturederror` event; they never reach the surface's native callback.
+    register_bridge_function(api, "__gpuTakeUncapturedErrorsImpl", [&self](choc::javascript::ArgumentList) {
+        detail::ScriptErrorScopes none;
+        return detail::take_uncaptured_errors(
+            self.native_gpu_bridge_state_ ? self.native_gpu_bridge_state_->error_scopes : none);
+    });
+
     // Compiles WGSL on the native device so a shader error surfaces when script
     // creates the module (where Three.js scopes it) and carries line and column.
     // Compiles WGSL on the native device so a shader error surfaces when script

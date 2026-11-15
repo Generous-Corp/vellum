@@ -35,6 +35,19 @@ bool ScriptErrorScopes::capture(GpuScopedError error) {
     return false;
 }
 
+choc::value::Value take_uncaptured_errors(ScriptErrorScopes& scopes) {
+    auto list = choc::value::createEmptyArray();
+    for (const auto& error : scopes.uncaptured) {
+        auto entry = choc::value::createObject("");
+        entry.addMember("type", choc::value::createString(error.type));
+        entry.addMember("message", choc::value::createString(error.message));
+        entry.addMember("diagnostics", compilation_messages_to_value(error.diagnostics));
+        list.addArrayElement(entry);
+    }
+    scopes.uncaptured.clear();
+    return list;
+}
+
 choc::value::Value compilation_messages_to_value(const std::vector<GpuCompilationMessage>& messages) {
     auto list = choc::value::createEmptyArray();
     for (const auto& message : messages) {
@@ -185,7 +198,9 @@ void DeviceErrorScopeGuard::finish() {
         if (error.type == "validation") error.diagnostics = diagnostics_;
         const std::string text = error.message;
         const std::string type = error.type;
+        GpuScopedError unclaimed = error;
         if (!scopes_.capture(std::move(error))) {
+            scopes_.uncaptured.push_back(std::move(unclaimed));
             runtime::log_error("webgpu binding: {}: uncaptured {} error: {}", operation_, type, text);
         }
     }

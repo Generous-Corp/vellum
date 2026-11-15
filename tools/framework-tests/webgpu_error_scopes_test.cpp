@@ -196,6 +196,33 @@ FRAMEWORK_TEST(an_error_goes_to_the_innermost_scope_with_a_matching_filter) {
     CHECK(h.escaped_errors().empty());
 }
 
+FRAMEWORK_TEST(an_error_no_script_scope_claims_fires_uncapturederror_and_not_the_native_callback) {
+    Harness h;
+    h.run("globalThis.seen = []; globalThis.viaOn = 0;"
+          "dev.addEventListener('uncapturederror', function (e) { seen.push(e); });"
+          "dev.onuncapturederror = function () { viaOn++; };"
+          "dev.createShaderModule({code: " + Harness::js_literal(kBadWgsl) + "});");
+
+    CHECK(h.js_string("seen.length") == "1");
+    CHECK(h.js_string("viaOn") == "1");
+    CHECK(h.js_string("seen[0].type") == "uncapturederror");
+    CHECK(h.js_string("seen[0].error.name") == "GPUValidationError");
+    CHECK(h.js_string("seen[0].error.message.length > 0") == "true");
+    CHECK(h.js_string("seen[0].error.diagnostics[0].lineNum") == "3");
+    CHECK(h.js_string("seen[0].target === dev") == "true");
+    CHECK(h.escaped_errors().empty());
+}
+
+FRAMEWORK_TEST(a_claimed_error_does_not_fire_uncapturederror) {
+    Harness h;
+    h.run("globalThis.fired = 0; dev.addEventListener('uncapturederror', function () { fired++; });"
+          "dev.pushErrorScope('validation');"
+          "dev.createShaderModule({code: " + Harness::js_literal(kBadWgsl) + "});");
+    h.pop_into_popped();
+    CHECK(h.js_string("fired") == "0");
+    CHECK(h.escaped_errors().empty());
+}
+
 } // namespace
 
 int main() {

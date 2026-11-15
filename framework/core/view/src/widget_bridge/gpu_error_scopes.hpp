@@ -43,6 +43,9 @@ struct ScriptErrorScopes {
         std::optional<GpuScopedError> error;
     };
     std::vector<Scope> stack;
+    // Errors no script scope claimed, waiting for script to dispatch them as
+    // the device's `uncapturederror` event.
+    std::vector<GpuScopedError> uncaptured;
 
     void push(std::string filter) { stack.push_back({std::move(filter), std::nullopt}); }
     // Removes the innermost scope. Returns false when the stack is empty.
@@ -77,6 +80,9 @@ private:
     std::vector<GpuCompilationMessage> diagnostics_;
     bool active_ = false;
 };
+
+// Takes the queued unclaimed errors as an array of {type, message, diagnostics}.
+choc::value::Value take_uncaptured_errors(ScriptErrorScopes& scopes);
 
 choc::value::Value compilation_messages_to_value(const std::vector<GpuCompilationMessage>& messages);
 
