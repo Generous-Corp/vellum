@@ -641,12 +641,60 @@ def _sequence_item(stripped: str) -> bool:
     return stripped.startswith("- ") or BARE_DASH.fullmatch(stripped) is not None
 
 
+def _structural_indices(lines: list[str]) -> list[int]:
+    """Indices of the lines structural_lines keeps (outside block scalars)."""
+    kept: list[int] = []
+    block_indent: int | None = None
+    for number, line in enumerate(lines):
+        indent = len(line) - len(line.lstrip(" "))
+        if block_indent is not None:
+            if not line.strip() or indent > block_indent:
+                continue
+            block_indent = None
+        kept.append(number)
+        if BLOCK_SCALAR.search(line.split(" #", 1)[0].rstrip()):
+            block_indent = indent
+    return kept
+
+
+def _job_key_indent(lines: list[str]) -> int | None:
+    """The column of a job's own keys: the first content line under its
+    header. None for a fragment with no job header (read as one job)."""
+    if not lines or not JOB_HEADER.fullmatch(lines[0]):
+        return None
+    for line in lines[1:]:
+        if line.strip() and not line.lstrip().startswith("#"):
+            return len(line) - len(line.lstrip())
+    return None
+
+
+def _steps_key_lines(text: str) -> tuple[list[int], list[int]]:
+    """(the job's own `steps:` lines, every other `steps:` line outside a
+    block scalar). Only a `steps:` key at the job's own key column is its step
+    list; one nested in a job-level key (`env:`, `with:`) or held in a
+    block scalar is text, not steps."""
+    lines = text.splitlines()
+    key_indent = _job_key_indent(lines)
+    own: list[int] = []
+    other: list[int] = []
+    for number in _structural_indices(lines):
+        line = lines[number]
+        if not STEPS_KEY.fullmatch(line):
+            continue
+        if key_indent is None or len(line) - len(line.lstrip()) == key_indent:
+            own.append(number)
+        else:
+            other.append(number)
+    return own, other
+
+
 def job_steps(job: str, text: str) -> list[Step]:
     """Every step of a job, named or not, in order."""
     lines = text.splitlines()
     found: list[Step] = []
+    own, _ = _steps_key_lines(text)
     for start, line in enumerate(lines):
-        if not STEPS_KEY.fullmatch(line):
+        if start not in own:
             continue
         base = len(line) - len(line.lstrip())
         items: list[list[str]] = []
@@ -684,6 +732,15 @@ def step_layout_problems(name: str, workflow: str) -> list[str]:
                 if YAML_INDIRECTION.search(text_line.split(" #", 1)[0]):
                     found.append(f"{name}: {step.title} uses a YAML anchor, alias or merge key this check "
                                  f"cannot read: {text_line.strip()!r}")
+        # Only the job's own `steps:` key is read. A second one, or a
+        # `steps:` line nested under another job-level key, could hold a
+        # fake minting step (`id: app-token`) the runner never runs; refuse.
+        own, other = _steps_key_lines(text)
+        if len(own) > 1:
+            found.append(f"{name}: job {job or '(none)'} has more than one steps key")
+        for number in other:
+            found.append(f"{name}: job {job or '(none)'} has a steps: line that is not the job's own "
+                         f"steps key: {text.splitlines()[number].strip()!r}")
         lines = text.splitlines()
         for start, line in enumerate(lines):
             if not ANY_STEPS_KEY.fullmatch(line):

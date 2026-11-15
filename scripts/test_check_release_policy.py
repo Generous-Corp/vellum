@@ -631,6 +631,27 @@ class Isolation(unittest.TestCase):
         glob = self.read(run='run: |\n          ls *.json *out\n          gh api "repos/$R/immutable-releases"\n')
         self.assertEqual(self.found(glob), [])
 
+    def test_a_steps_line_outside_the_jobs_steps_key_mints_nothing(self) -> None:
+        # A `steps:` list written inside a job-level key (a block scalar under
+        # env:, or a nested mapping) is text the runner never runs. Its fake
+        # `id: app-token` mint must not satisfy the App-token rule.
+        fake = "    steps:\n" + self.MINT.format(id="app-token")
+        hidden = "".join("        " + line[4:] + "\n" if line.startswith("    ") else line + "\n"
+                         for line in fake.splitlines())
+        cases = {
+            "block scalar": "    env:\n      NOTE: |\n" + "".join("    " + line + "\n" for line in hidden.splitlines()),
+            "nested key": "    env:\n      X:\n" + "".join("  " + line + "\n" for line in hidden.splitlines()),
+        }
+        for label, before in cases.items():
+            with self.subTest(label):
+                workflow = "jobs:\n  sign:\n" + before + self.read(mint="")
+                self.refused(workflow)
+        # A second steps key at the job's column is refused too.
+        twice = "jobs:\n  sign:\n" + fake + self.read(mint="")
+        self.refused(twice, "more than one steps key")
+        # The honest layout still passes.
+        self.assertEqual(self.found("jobs:\n  sign:\n" + self.read()), [])
+
     def test_the_token_must_come_from_the_pinned_app_token_action(self) -> None:
         cases = {
             "a run step": "      - name: mint\n        id: app-token\n        run: echo token=x >> \"$GITHUB_OUTPUT\"\n",
