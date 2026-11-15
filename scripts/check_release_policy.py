@@ -614,6 +614,15 @@ STEPS_KEY = re.compile(r" +steps:[ \t]*(?:#.*)?")
 # Any spelling of a `steps` key: quoted, spaced before the colon, or with an
 # inline value (flow sequence, anchor, alias).
 ANY_STEPS_KEY = re.compile(r"[ \t]*(?:\"steps\"|'steps'|steps)[ \t]*:(?:[ \t].*)?")
+# A bare `-` opening a sequence item on its own line (optionally commented).
+BARE_DASH = re.compile(r"-(?:[ \t]+#.*)?")
+
+
+def _sequence_item(stripped: str) -> bool:
+    """A line (left-stripped) that opens a sequence item, inline or bare. At the
+    column of `steps:` it is an indentationless sequence item, not the end of
+    the step list."""
+    return stripped.startswith("- ") or BARE_DASH.fullmatch(stripped) is not None
 
 
 def job_steps(job: str, text: str) -> list[Step]:
@@ -629,7 +638,7 @@ def job_steps(job: str, text: str) -> list[Step]:
         for text_line in lines[start + 1:]:
             width = len(text_line) - len(text_line.lstrip())
             if text_line.strip() and not text_line.lstrip().startswith("#") and width <= base \
-                    and not (width == base and text_line.lstrip().startswith("- ")):
+                    and not (width == base and _sequence_item(text_line.lstrip())):
                 break
             if text_line.lstrip().startswith("- ") and (dash is None or width == dash):
                 dash = width
@@ -661,11 +670,11 @@ def step_layout_problems(name: str, workflow: str) -> list[str]:
                 if not stripped or stripped.startswith("#"):
                     continue
                 width = len(text_line) - len(stripped)
-                if width <= base and not (width == base and stripped.startswith("- ")):
+                if width <= base and not (width == base and _sequence_item(stripped)):
                     break
                 if stripped.startswith("- ") and (dash is None or width == dash):
                     dash = width
-                elif dash is None or (width == dash and re.fullmatch(r"-(?:[ \t]+#.*)?", stripped)):
+                elif dash is None or (width == dash and BARE_DASH.fullmatch(stripped)):
                     found.append(f"{name}: job {job or '(none)'} has a line under steps: that no step holds: "
                                  f"{stripped!r}")
                     break
@@ -802,9 +811,16 @@ def job_layout_problems(name: str, workflow: str) -> list[str]:
     found = re.search(r"(?:^|\n)jobs:[ \t]*(?:#.*)?\n", workflow)
     if found is None:
         return problems
+    first = True
     for line in workflow[found.end():].splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
+        width = len(line) - len(line.lstrip())
+        if first and width != 2:
+            # jobs() reads only job IDs two columns in; any other indentation
+            # would read as no jobs and merge every job's steps into one.
+            problems.append(f"{name}: jobs indented {width} spaces; this check reads only jobs indented 2")
+        first = False
         if len(line) - len(line.lstrip()) == 2 and JOB_KEY.match(line) and not JOB_HEADER.fullmatch(line):
             problems.append(f"{name}: job header this check cannot read: {line.strip()!r}")
     return problems

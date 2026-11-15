@@ -701,6 +701,28 @@ class Isolation(unittest.TestCase):
         self.refused(bare_later, "a line under steps: that no step holds")
         self.assertEqual(self.found("    steps:\n      # a comment\n\n      - name: a\n        run: true\n"), [])
 
+    def test_jobs_at_another_indentation_fail_closed(self) -> None:
+        # jobs() reads only job IDs two columns in; four-space jobs would be
+        # read as no jobs, and the whole-file fallback would let a token minted
+        # in one job satisfy a read in another.
+        mint = "  mint:\n    steps:\n" + self.MINT.format(id="app-token")
+        read = "  read:\n" + self.read(mint="")
+        workflow = "jobs:\n" + "".join("  " + line if line.strip() else line
+                                       for line in (mint + read).splitlines(keepends=True))
+        self.refused(workflow, "jobs indented")
+        self.assertEqual(self.found("jobs:\n  # note\n\n  clean:\n    steps:\n      - name: a\n        run: true\n"), [])
+
+    def test_a_bare_dash_at_the_steps_indentation_fails_closed(self) -> None:
+        # An indentationless sequence: a bare `-` item at the same column as
+        # `steps:` must not end the step list and hide the steps after it.
+        workflow = ("jobs:\n  sign:\n    steps:\n    - name: a\n      run: true\n    -\n      name: b\n"
+                    "      run: true\n    - name: c\n      run: python3 scripts/x.py\n")
+        problems = self.found(workflow)
+        self.assertTrue(any("a line under steps: that no step holds" in problem for problem in problems), problems)
+        self.assertTrue(any("without -I" in problem for problem in problems), problems)
+        indentless = "jobs:\n  sign:\n    steps:\n    - name: a\n      run: true\n    - name: c\n      run: true\n"
+        self.assertEqual(self.found(indentless), [])
+
     def test_the_step_reader_agrees_with_a_yaml_parser(self) -> None:
         try:
             import yaml  # noqa: PLC0415
