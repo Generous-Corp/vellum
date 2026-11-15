@@ -204,7 +204,7 @@ upstream_at() {
   local name="$1" sha="$2" dir="$CACHE/$1"
   if [[ ! -d "$UPSTREAM_SRC/.git" ]]; then
     local clone_err
-    if ! clone_err="$(git clone -q --no-checkout --filter=blob:none "$UPSTREAM_URL" "$UPSTREAM_SRC" 2>&1)"; then
+    if ! clone_err="$(git clone -q --no-checkout "$UPSTREAM_URL" "$UPSTREAM_SRC" 2>&1)"; then
       # The URL may carry a token; never echo it or git's own copy of it.
       clone_err="${clone_err//"$UPSTREAM_URL"/<upstream>}"
       clone_err="$(printf '%s\n' "$clone_err" | sed -E 's#(://)[^/@[:space:]]+@#\1<credentials>@#g')"
