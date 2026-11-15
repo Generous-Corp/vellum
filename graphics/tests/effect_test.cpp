@@ -74,7 +74,7 @@ SceneNode effect_group(std::vector<NodeEffect> effects) {
 }
 
 void version_matrix() {
-    for (std::uint32_t version = 1U; version <= 11U; ++version) {
+    for (std::uint32_t version = 1U; version <= kSceneVersion + 1U; ++version) {
         const auto scene = scene_with({effect_group({blur(4.0F)})}, version);
         const auto acceptance = accept_scene(scene);
         const std::string label = "a version " + std::to_string(version) + " scene with effects";
@@ -86,7 +86,7 @@ void version_matrix() {
                        acceptance.diagnostics[0].node_id == "fx" &&
                        make_paint_commands(scene).empty(),
                    label + " is refused and names the effects", acceptance.reason);
-        } else if (version == 10U) {
+        } else if (version <= kSceneVersion) {
             expect(scene_fields_match_version(scene) && acceptance.accepted &&
                        acceptance.diagnostics.empty(),
                    label + " is accepted", acceptance.reason);
