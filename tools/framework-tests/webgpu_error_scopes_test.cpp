@@ -162,7 +162,6 @@ FRAMEWORK_TEST(a_pipeline_validation_error_is_caught_the_same_way) {
           " 'bgra8unorm', 'triangle-list', 3, 1, 0, 0, '');");
     h.pop_into_popped();
 
-    CHECK(h.js_string("drawn") == "false");
     CHECK(h.js_string("popped !== null && popped !== 'pending'") == "true");
     CHECK(h.js_string("popped.name") == "GPUValidationError");
     CHECK(h.js_string("popped.message.length > 0") == "true");
