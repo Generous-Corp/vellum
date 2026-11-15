@@ -5,7 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-    DESIGN_IR_RESERVED_VERSIONS,
+    DESIGN_IR_VERSIONS,
     DESIGN_IR_VECTOR_ASSET_VERSION,
     DESIGN_IR_VERSION,
     normalizeImport,
@@ -72,7 +72,7 @@ test('a document without vector asset fields stays at version 1', () => {
 
 test('vector asset fields need version 6 in the validator and the published schema', () => {
     const { document } = svgAssetToDesignIR(svg, { source });
-    assert.equal(DESIGN_IR_VERSION, 6);
+    assert.equal(DESIGN_IR_VERSION, 1);
     assert.equal(document.schemaVersion, DESIGN_IR_VECTOR_ASSET_VERSION);
     assert.doesNotThrow(() => validateDesignIR(document, { throwOnError: true }));
     assert.ok(matches(document, schema), 'the published schema accepts version 6');
@@ -87,18 +87,60 @@ test('vector asset fields need version 6 in the validator and the published sche
     ]) {
         const legacy = normalizeImport({ source, root: { kind: 'view', sourceId: 'root', children: [] } });
         const tampered = { ...legacy, root: edit(legacy.root) };
-        assert.ok(refused(tampered, /needs schemaVersion 6/), field);
+        for (const below of [1, 2, 3, 4, 5]) {
+            assert.ok(refused({ ...tampered, schemaVersion: below }, /needs schemaVersion 6/), `${field} at ${below}`);
+            assert.equal(matches({ ...tampered, schemaVersion: below }, schema), false, `the schema refuses ${field} at ${below}`);
+        }
         assert.ok(validateDesignIR({ ...tampered, schemaVersion: 6 }).valid, `${field} is legal at version 6`);
         assert.equal(matches(tampered, schema), false, `the schema refuses ${field} at version 1`);
         assert.ok(matches({ ...tampered, schemaVersion: 6 }, schema), `the schema accepts ${field} at version 6`);
     }
 });
 
-test('reserved versions 2 to 5 are refused', () => {
+test('every version from 1 to 6 is read and others are refused', () => {
     const document = normalizeImport({ source, root: { kind: 'view', sourceId: 'root', children: [] } });
-    assert.deepEqual(Object.keys(DESIGN_IR_RESERVED_VERSIONS), ['2', '3', '4', '5']);
-    for (const version of [0, 2, 3, 4, 5, 7, 1.5]) {
-        assert.ok(refused({ ...document, schemaVersion: version }, /schemaVersion|reserved/), `version ${version}`);
+    assert.deepEqual([...DESIGN_IR_VERSIONS], [1, 2, 3, 4, 5, 6]);
+    for (const version of [1, 2, 3, 4, 5, 6]) {
+        assert.ok(validateDesignIR({ ...document, schemaVersion: version }).valid, `version ${version}`);
+        assert.ok(matches({ ...document, schemaVersion: version }, schema), `schema version ${version}`);
+    }
+    for (const version of [0, 7, 1.5]) {
+        assert.ok(refused({ ...document, schemaVersion: version }, /schemaVersion/), `version ${version}`);
         assert.equal(matches({ ...document, schemaVersion: version }, schema), false, `schema version ${version}`);
+    }
+});
+
+test('compositing stays version 2 vocabulary in every later version', () => {
+    const blended = normalizeImport({ source, root: { kind: 'view', sourceId: 'root', children: [
+        { kind: 'view', sourceId: 'a', compositing: { blendMode: 'multiply' }, children: [] }] } });
+    assert.equal(blended.schemaVersion, 2);
+    assert.ok(refused({ ...blended, schemaVersion: 1 }, /schemaVersion/) ||
+        !validateDesignIR({ ...blended, schemaVersion: 1 }).valid);
+    assert.equal(matches({ ...blended, schemaVersion: 1 }, schema), false);
+    for (const version of [2, 3, 4, 5, 6]) {
+        assert.ok(validateDesignIR({ ...blended, schemaVersion: version }).valid, `version ${version}`);
+        assert.ok(matches({ ...blended, schemaVersion: version }, schema), `schema version ${version}`);
+    }
+});
+
+test('SVG opacity and masks lower into compositing, not vector paint keys', () => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
+      <mask id="m"><rect width="10" height="20" fill="#ffffff"/></mask>
+      <g id="g" opacity="0.5" mask="url(#m)"><rect width="20" height="20" fill="#ff0000"/></g></svg>`;
+    const { document } = svgAssetToDesignIR(svg, { source });
+    assert.equal(document.schemaVersion, 6);
+    const nodes = [];
+    const visit = (node) => { nodes.push(node); node.children.forEach(visit); };
+    visit(document.root);
+    const group = nodes.find((node) => node.id === 'assets/svg:g');
+    assert.deepEqual(group.compositing, { opacity: 0.5 });
+    const mask = nodes.find((node) => node.id === 'assets/svg:g:mask');
+    assert.deepEqual(mask.compositing, { mask: 'luminance' });
+    const content = nodes.find((node) => node.id === 'assets/svg:g:content');
+    assert.deepEqual(content.compositing, { maskRef: 'assets/svg:g:mask' });
+    for (const node of nodes) {
+        for (const key of ['opacity', 'maskMode', 'isolation']) {
+            assert.equal(node.properties.paint?.[key], undefined, `${node.id} paint.${key}`);
+        }
     }
 });

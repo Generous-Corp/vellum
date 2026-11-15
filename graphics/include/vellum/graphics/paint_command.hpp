@@ -93,11 +93,18 @@ struct PaintCommand final {
     /// The resolved per-corner radii; see `resolved_corner_radii`.
     CornerRadii corner_radii{};
     /// On a `begin_layer`, set when a member can paint outside `bounds`,
-    /// which text can, so the group needs the whole frame.
+    /// which text can, so the group needs the whole frame. Also set on a
+    /// group whose `blend_mode` empties the backdrop outside its own paint
+    /// (`blend_mode_clears_backdrop`), and so on every group enclosing one:
+    /// its backdrop scope is the whole enclosing group, not its extent.
     bool layer_unbounded = false;
     /// On a `begin_layer`, set when the group must stay offscreen whatever
     /// its opacity: an isolated node, or the siblings a mask applies to.
     bool layer_isolated = false;
+    /// On a `begin_layer`, how the composited group meets the backdrop beneath
+    /// it. A group blended by anything but `normal` is always a layer, so a
+    /// blend never folds into a single command's paint.
+    BlendMode blend_mode = BlendMode::normal;
     /// On a `begin_clip` without `path`, the clip rectangle in `bounds`
     /// coordinates; `corner_radii` gives its corners.
     Rect clip_rect{};
@@ -214,6 +221,10 @@ struct ResolvedLinearGradient final {
 /// command is wrapped in a `begin_layer`/`end_layer` pair; when it draws
 /// exactly one, its opacity is folded into that command's. A node whose
 /// opacity is zero or less contributes nothing.
+///
+/// A node with a `blend_mode` other than `normal` is always wrapped in a
+/// layer, whose `blend_mode` it carries, and a node whose blend mode is outside
+/// `BlendMode` contributes nothing.
 ///
 /// An isolated node is always wrapped in a layer, with `layer_isolated` set. A
 /// node whose clip `clips_own_paint` wraps its layer, paint and subtree in a

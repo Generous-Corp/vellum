@@ -3,6 +3,7 @@ import {
     COMPILER_VERSION,
     DESIGN_IR_SCHEMA,
 } from './constants.js';
+import { canonicalCompositing, compositingProblems } from './compositing.js';
 import { buildLossReport, diagnosticSort, normalizeDiagnostic } from './diagnostics.js';
 import {
     assertSourceKey,
@@ -18,6 +19,7 @@ import { requiredDesignIRVersion } from './versions.js';
 
 const KNOWN_NODE_FIELDS = new Set([
     'children',
+    'compositing',
     'extensions',
     'kind',
     'losses',
@@ -118,6 +120,14 @@ function normalizeNode(rawNode, context) {
         if (rawNode[field] !== undefined) output[field] = String(rawNode[field]);
     }
     if (rawNode.extensions !== undefined) output.extensions = canonicalize(rawNode.extensions);
+    if (rawNode.compositing !== undefined) {
+        const problems = compositingProblems(rawNode.compositing, `${context.path}.compositing`);
+        if (problems.length > 0) {
+            throw new TypeError(`${problems[0].path}: ${problems[0].message}`);
+        }
+        const compositing = canonicalCompositing(rawNode.compositing);
+        if (compositing !== undefined) output.compositing = canonicalize(compositing);
+    }
 
     const unrecognized = Object.create(null);
     for (const key of Object.keys(rawNode)) {

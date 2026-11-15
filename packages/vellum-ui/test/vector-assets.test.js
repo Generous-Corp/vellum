@@ -98,3 +98,12 @@ test('the vector primitive refuses malformed compiled assets', () => {
     assert.throws(tree({ ...asset, ops: [{ op: 'path', d: 'M0 0', script: 1 }] }), /unsupported/);
     assert.throws(tree({ ...asset, viewBox: [0, 0, 0, 10] }), /positive/);
 });
+
+test('vector asset fields are not read below DesignIR version 6', async () => {
+    const { document } = await render(cases[0]);
+    assert.equal(document.schemaVersion, 6);
+    for (const version of [1, 2, 5]) {
+        assert.throws(() => materializeDesign({ ...document, schemaVersion: version },
+            { viewport: { width: 200, height: 120 } }), /needs schemaVersion 6/);
+    }
+});

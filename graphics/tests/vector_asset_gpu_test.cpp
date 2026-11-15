@@ -288,6 +288,48 @@ void pixel_oracles() {
     }
 }
 
+// A blend mode on a subtree path and on a compiled vector node, whose radial
+// and linear gradients multiply over a grey backdrop.
+void blended_vectors() {
+    const Rgb grey = hex(0x808080);
+    const auto times = [&](const Rgb& colour) {
+        return Rgb{colour[0] * grey[0], colour[1] * grey[1], colour[2] * grey[2]};
+    };
+    for (const char* name : {"gradients", "gradients-compiled"}) {
+        auto scene = fixture(name);
+        if (!scene) return;
+        SceneNode backdrop{.id = "backdrop", .kind = SceneNode::Kind::rectangle,
+                           .bounds = {0.0F, 0.0F, scene->width, scene->height},
+                           .fill = Color::hex(0x808080)};
+        scene->root.children.insert(scene->root.children.begin(), std::move(backdrop));
+        SceneNode& blended = scene->root.children[1];
+        if (std::string(name) == "gradients") {
+            SceneNode* swatch = nullptr;
+            for (auto& child : blended.children) {
+                if (child.id == "assets/svg:swatch") swatch = &child;
+            }
+            expect(swatch != nullptr, "the subtree swatch is found");
+            if (swatch == nullptr) return;
+            swatch->blend_mode = BlendMode::multiply;
+            for (auto& child : blended.children) {
+                if (child.id == "assets/svg:dot") child.blend_mode = BlendMode::multiply;
+            }
+        } else {
+            expect(blended.kind == SceneNode::Kind::vector, "the compiled fixture is a vector node");
+            blended.blend_mode = BlendMode::multiply;
+        }
+        const auto pixels = render_once(*scene);
+        if (!pixels) return;
+        const float distance = std::hypot(125.5F - 110.0F, 0.5F);
+        expect_pixels(std::string("multiplied ") + name, *pixels, {
+            {5, 5, grey, "the backdrop"},
+            {160, 70, times(hex(0xE11D48)), "the swatch multiplied over grey", 3.0F},
+            {125, 80, times(mix(hex(0xFFFFFF), hex(0x000000), distance / 30.0F)),
+             "the radial glow multiplied over grey", kGradientTolerance},
+        });
+    }
+}
+
 // The subtree and the compiled resource of one asset draw the same pixels.
 void forms_agree() {
     const auto subtree = fixture("gradients");
@@ -561,6 +603,7 @@ int main(int argc, char** argv) {
     }
     pixel_oracles();
     forms_agree();
+    blended_vectors();
     per_node_damage();
     version_refusal();
     damage_sweeps();

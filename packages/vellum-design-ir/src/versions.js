@@ -1,9 +1,9 @@
 import {
-    DESIGN_IR_MIN_VERSION,
-    DESIGN_IR_RESERVED_VERSIONS,
+    DESIGN_IR_COMPOSITING_VERSION,
     DESIGN_IR_VECTOR_ASSET_VERSION,
     DESIGN_IR_VECTOR_PAINT_KEYS,
     DESIGN_IR_VERSION,
+    DESIGN_IR_VERSIONS,
 } from './constants.js';
 
 function isObject(value) {
@@ -41,20 +41,26 @@ export function findVectorAssetField(root, path = '$.root') {
     return null;
 }
 
-/** The oldest DesignIR version that carries every field the tree uses. */
-export function requiredDesignIRVersion(root) {
-    return findVectorAssetField(root) ? DESIGN_IR_VECTOR_ASSET_VERSION : DESIGN_IR_MIN_VERSION;
+function usesCompositing(node) {
+    return isObject(node) && (node.compositing !== undefined ||
+        (Array.isArray(node.children) && node.children.some(usesCompositing)));
 }
 
-/** Why a document's version cannot be read, or null. */
+/** The oldest DesignIR version that carries every field the tree uses. */
+export function requiredDesignIRVersion(root) {
+    if (findVectorAssetField(root)) return DESIGN_IR_VECTOR_ASSET_VERSION;
+    return usesCompositing(root) ? DESIGN_IR_COMPOSITING_VERSION : DESIGN_IR_VERSION;
+}
+
+/**
+ * Why a document's version cannot be read, or null. Every version from 1 to
+ * 6 is read, and a field is legal only at or after the version that adds it.
+ * The `compositing` object's own check lives with its validation.
+ */
 export function designIRVersionProblem(document) {
     const version = document.schemaVersion;
-    if (!Number.isInteger(version) || version < DESIGN_IR_MIN_VERSION || version > DESIGN_IR_VERSION) {
-        return `schemaVersion must be an integer from ${DESIGN_IR_MIN_VERSION} to ${DESIGN_IR_VERSION}`;
-    }
-    if (Object.hasOwn(DESIGN_IR_RESERVED_VERSIONS, version)) {
-        return `schemaVersion ${version} is reserved for ${DESIGN_IR_RESERVED_VERSIONS[version]}, ` +
-            'which this build does not define';
+    if (!DESIGN_IR_VERSIONS.includes(version)) {
+        return `$.schemaVersion must be one of ${DESIGN_IR_VERSIONS.join(', ')}`;
     }
     const found = findVectorAssetField(document.root);
     if (found && version < DESIGN_IR_VECTOR_ASSET_VERSION) {

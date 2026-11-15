@@ -4,6 +4,7 @@
 // drawn by a single node, or, last, a raster image. Every feature that is
 // dropped or approximated is reported as a loss diagnostic, and hostile input
 // is refused before any lowering starts.
+import { namespacedIdentity } from './identity.js';
 import { normalizeImport } from './normalize.js';
 
 export const SVG_ASSET_LIMITS = Object.freeze({
@@ -994,6 +995,15 @@ class Importer {
             .map(([color, token]) => [color.toLowerCase(), token]));
     }
 
+    // The DesignIR identity a source id normalizes to, which a `maskRef`
+    // names; it needs the document's source key.
+    identityOf(sourceId) {
+        if (typeof this.options.sourceKey !== 'string') {
+            throw new TypeError('an SVG asset with a mask or a multi-shape clip needs the sourceKey option');
+        }
+        return namespacedIdentity(this.options.sourceKey, sourceId);
+    }
+
     report(code, path, message, disposition = 'unsupported', severity = 'warning') {
         this.diagnostics.push({ code, disposition, message, path, severity });
     }
@@ -1663,14 +1673,13 @@ class SubtreeLowering {
         this.nodes += 1;
         const paint = {};
         if (!isIdentity(group.transform)) paint.transform = `matrix(${cleanMatrix(group.transform).join(', ')})`;
-        if (group.opacity !== 1) paint.opacity = Number(fmt(group.opacity));
+        let opacity = group.hidden ? 0 : group.opacity;
         const node = {
             kind: 'view', sourceId: group.id,
             properties: { layout: { x: 0, y: 0, width: 0, height: 0 }, paint },
             children: [],
         };
         if (group.name) node.name = group.name;
-        if (group.hidden) paint.opacity = 0;
         const content = [];
         for (const child of group.children) {
             const lowered = this.lower(child, tokens);
@@ -1680,7 +1689,7 @@ class SubtreeLowering {
         if (group.clip) {
             const shapes = this.clipShapes(group.clip);
             if (shapes && shapes.length === 0) {
-                paint.opacity = 0;
+                opacity = 0;
             } else if (shapes && shapes.length === 1 && isIdentity(shapes[0].transform) &&
                 shapes[0].rule === 'nonzero') {
                 paint.clipPath = serializePath(shapes[0].segments);
@@ -1690,8 +1699,8 @@ class SubtreeLowering {
                 // shapes filled opaque.
                 this.nodes += 1;
                 const mask = { kind: 'view', sourceId: `${group.id}:clip`,
-                    properties: { layout: { x: 0, y: 0, width: 0, height: 0 }, paint: { maskMode: 'alpha' } },
-                    children: [] };
+                    properties: { layout: { x: 0, y: 0, width: 0, height: 0 } },
+                    compositing: { mask: 'alpha' }, children: [] };
                 shapes.forEach((shape, index) => {
                     this.nodes += 2;
                     const d = serializePath(shape.segments);
@@ -1712,26 +1721,28 @@ class SubtreeLowering {
             if (group.mask.region) this.why('a mask with an explicit region');
             this.nodes += 1;
             const mask = { kind: 'view', sourceId: group.mask.id,
-                properties: { layout: { x: 0, y: 0, width: 0, height: 0 }, paint: { maskMode: group.mask.mode } },
-                children: [] };
+                properties: { layout: { x: 0, y: 0, width: 0, height: 0 } },
+                compositing: { mask: group.mask.mode }, children: [] };
             for (const child of group.mask.children) {
                 const lowered = this.lower(child, tokens);
                 if (lowered) mask.children.push(lowered);
             }
             masks.push(mask);
         }
-        if (masks.length > 0) {
-            // A clip on the group must not clip its masks' own coordinates
-            // differently, and a mask applies to its siblings, so the masked
-            // content sits beside its masks inside the group.
+        // A mask applies to the siblings that name it, one mask to a parent,
+        // so each mask wraps what it masks in a holder beside it: the clip's
+        // coverage innermost, then the SVG mask's.
+        let level = content;
+        masks.forEach((mask, index) => {
             this.nodes += 1;
-            node.children.push({ kind: 'view', sourceId: `${group.id}:content`,
-                properties: { layout: { x: 0, y: 0, width: 0, height: 0 }, paint: {} },
-                children: content });
-            node.children.push(...masks);
-        } else {
-            node.children.push(...content);
-        }
+            const holder = { kind: 'view', sourceId: `${group.id}:${index === 0 ? 'content' : 'masked'}`,
+                properties: { layout: { x: 0, y: 0, width: 0, height: 0 } },
+                compositing: { maskRef: this.importer.identityOf(mask.sourceId) },
+                children: level };
+            level = [holder, mask];
+        });
+        node.children.push(...level);
+        if (opacity !== 1) node.compositing = { opacity: Number(fmt(opacity)) };
         return node;
     }
 
@@ -2062,7 +2073,7 @@ export function importSvgAsset(svg, options = {}) {
  * those of `importSvgAsset`.
  */
 export function svgAssetToDesignIR(svg, { source, tokens, ...options } = {}) {
-    const imported = importSvgAsset(svg, options);
+    const imported = importSvgAsset(svg, { ...options, sourceKey: source?.key });
     const document = normalizeImport({
         source, tokens, root: imported.root, diagnostics: imported.diagnostics,
         assets: imported.assets,

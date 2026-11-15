@@ -75,6 +75,7 @@ bool style_key_consumed(std::string_view type, std::string_view key, const Style
     if (key == "x" || key == "y") return !use.root;
     if (key == "opacity" || key == "transform") return true;
     if (key == "overflow" || key == "clipPath" || key == "isolation") return true;
+    if (key == "mixBlendMode") return true;
     // The root has no siblings to mask.
     if (key == "maskMode") return !use.root;
     if (use.clips_to_box && type != "path" && type != "vector" &&
@@ -661,7 +662,38 @@ struct MaterializeContext final {
     std::vector<TextInputControl>* text_inputs = nullptr;
     std::vector<AccessibilityNode>* accessibility_nodes = nullptr;
     std::vector<LoweringDiagnostic>* diagnostics = nullptr;
+    std::vector<NodeRecord>* node_records = nullptr;
 };
+
+constexpr std::size_t kMaximumSourceFileBytes = 4096U;
+constexpr std::size_t kMaximumAnchorBytes = 1024U;
+
+// Reads the optional `source` ({file, line, column}) and `anchor` fields of an
+// authored node. Malformed values are ignored: source is diagnostic metadata
+// and never changes what is drawn.
+NodeSource read_node_source(NSDictionary* source) {
+    NodeSource result;
+    if ([source[@"anchor"] isKindOfClass:NSString.class]) {
+        std::string anchor = cpp_string(source[@"anchor"]);
+        if (anchor.size() <= kMaximumAnchorBytes) result.anchor = std::move(anchor);
+    }
+    if (![source[@"sourceLocation"] isKindOfClass:NSDictionary.class]) return result;
+    NSDictionary* location = source[@"sourceLocation"];
+    if (![location[@"file"] isKindOfClass:NSString.class]) return result;
+    std::string file = cpp_string(location[@"file"]);
+    if (file.empty() || file.size() > kMaximumSourceFileBytes) return result;
+    result.file = std::move(file);
+    const auto position = [&](NSString* key) {
+        id raw = location[key];
+        if (![raw isKindOfClass:NSNumber.class] ||
+            CFGetTypeID((__bridge CFTypeRef)raw) == CFBooleanGetTypeID()) return 0;
+        const double value = [raw doubleValue];
+        return value >= 0.0 && value <= 1.0e9 ? static_cast<int>(value) : 0;
+    };
+    result.line = position(@"line");
+    result.column = position(@"column");
+    return result;
+}
 
 template <typename Consumed>
 void report_dropped_style(
@@ -783,10 +815,11 @@ std::optional<std::size_t> keyword(id value, const std::array<std::string_view, 
     return static_cast<std::size_t>(found - names.begin());
 }
 
-constexpr std::array<std::string_view, 19> kPathAttributes{
+constexpr std::array<std::string_view, 20> kPathAttributes{
     "type", "id", "children", "style", "events", "accessibilityLabel", "accessibilityValue",
     "accessibilityRole", "accessibilityState", "d", "fillRule", "fill", "stroke", "strokeWidth",
     "strokeLineJoin", "strokeLineCap", "strokeMiterLimit", "strokeDasharray", "strokeDashoffset",
+    "anchor",
 };
 
 void report_dropped_path_attributes(
@@ -942,9 +975,9 @@ bool reject_vector(
     return false;
 }
 
-constexpr std::array<std::string_view, 9> kVectorAttributes{
+constexpr std::array<std::string_view, 10> kVectorAttributes{
     "type", "id", "children", "style", "events", "accessibilityLabel", "accessibilityValue",
-    "accessibilityRole", "asset",
+    "accessibilityRole", "asset", "anchor",
 };
 
 bool parse_affine(id raw, vellum::graphics::Affine2D& output) {
@@ -1261,7 +1294,10 @@ bool materialize_image(
 // and image nodes draw their content as their own paint, so theirs is clipped.
 // `clipPath` is SVG path data in the box's coordinates that clips the node
 // and its subtree and wins over `overflow`, `maskMode` marks the node as a
-// mask for its siblings, and `isolation: isolate` forces a group.
+// mask for its siblings, `isolation: isolate` forces a group, and
+// `mixBlendMode` blends the node's group with what lies beneath it, in any
+// spelling `parse_blend_mode` knows. A mask is coverage, not paint, so a mask
+// node takes no blend mode other than `normal`.
 bool parse_grouping(
     NSDictionary* style, const std::string& identity, const StyleUse& use,
     MaterializeContext& context, vellum::graphics::SceneNode& output, std::string* error) {
@@ -1342,6 +1378,16 @@ bool parse_grouping(
         const auto value = keyword(isolation, std::array<std::string_view, 2>{"auto", "isolate"});
         if (!value) return reject("isolation", "must be auto or isolate");
         output.isolate = *value == 1U;
+    }
+    if (id blend = style[@"mixBlendMode"]; blend != nil) {
+        const auto mode = [blend isKindOfClass:NSString.class]
+            ? vellum::graphics::parse_blend_mode(cpp_string(blend))
+            : std::nullopt;
+        if (!mode) return reject("mixBlendMode", "must be a blend mode name");
+        if (output.mask && *mode != vellum::graphics::BlendMode::normal) {
+            return reject("mixBlendMode", "cannot apply to a mask");
+        }
+        output.blend_mode = *mode;
     }
     return true;
 }
@@ -1502,6 +1548,8 @@ bool materialize_node(
     }
     const vellum::graphics::Rect absolute_box{
         absolute_x + proposed.x, absolute_y + proposed.y, proposed.width, proposed.height};
+    context.node_records->push_back(
+        {identity, type_name, absolute_box, read_node_source(source)});
     vellum::graphics::Affine2D node_transform = parent_transform;
     if (output.transform) {
         node_transform = vellum::graphics::concat(parent_transform, vellum::graphics::concat(
@@ -1867,6 +1915,7 @@ bool materialize_rendered_tree(
         .text_inputs = &candidate.text_inputs,
         .accessibility_nodes = &candidate.accessibility_nodes,
         .diagnostics = &candidate.diagnostics,
+        .node_records = &candidate.nodes,
     };
     if (!materialize_node(
             tree, {0.0F, 0.0F, width, height}, 0.0F, 0.0F, vellum::graphics::Affine2D{}, 0U,
