@@ -170,7 +170,7 @@ ParamRange InMemoryParamModel::range(ParamHandle param) {
 
 std::vector<std::string> InMemoryParamModel::value_labels(ParamHandle param) {
     const Param* p = find(param);
-    if (!p || p->spec.value_count < 2 ||
+    if (!p || p->spec.value_count < 1 ||
         p->spec.value_labels.size() != static_cast<std::size_t>(p->spec.value_count))
         return {};
     return p->spec.value_labels;

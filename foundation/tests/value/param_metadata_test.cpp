@@ -43,6 +43,8 @@ InMemoryParamModel make_model() {
                      .value_count = 3});
     specs.push_back({.key = "curved_pair", .plain_min = 0.0, .plain_max = 100.0, .skew = 2.0,
                      .value_count = 2});
+    specs.push_back({.key = "single", .plain_min = 7.0, .plain_max = 7.0, .value_count = 1,
+                     .value_labels = {"only"}});
     return InMemoryParamModel(std::move(specs));
 }
 
@@ -140,6 +142,7 @@ void value_labels_need_one_per_value() {
     CHECK((meta.value_labels(model.resolve("mode")) == std::vector<std::string>{"a", "b", "c", "d", "e"}));
     CHECK(meta.value_labels(model.resolve("half")).empty());
     CHECK(meta.value_labels(model.resolve("depth")).empty());
+    CHECK((meta.value_labels(model.resolve("single")) == std::vector<std::string>{"only"}));
 }
 
 void a_plain_write_reads_back_exactly() {
