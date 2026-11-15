@@ -172,6 +172,10 @@ GH_API_VALUE_OPTIONS = frozenset({
     "-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "--input", "-q", "--jq",
     "-t", "--template", "--hostname", "--cache", "-p", "--preview",
 })
+# A shell redirection word, quotes already removed: an optional fd or `&`, the
+# operator, and its operand when attached (`>out.json`, `2>/dev/null`, `&>log`).
+# A detached operand is the next word. Neither is the endpoint.
+REDIRECTION = re.compile(r"(?:[0-9]+|&)?(?:>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)(?P<operand>.*)", re.DOTALL)
 STEP_TOKEN = re.compile(r"\$\{\{\s*steps\.(?P<id>[A-Za-z0-9_-]+)\.outputs\.token\s*\}\}")
 APP_TOKEN_ACTION = re.compile(r"actions/create-github-app-token@[0-9a-f]{40}")
 PYTHON_CALL = re.compile(r"\bpython3?\b(?P<flags>(?:\s+-[A-Za-z]+)*)")
@@ -752,6 +756,10 @@ def gh_api_targets(run: str) -> list[str | None]:
             for word in shell_words(call["rest"]):
                 if skip:
                     skip = False
+                elif (redirection := REDIRECTION.fullmatch(word)) is not None:
+                    # Before the operator check: `>` and `2>` are redirections
+                    # whose operand is the next word, not the end of the call.
+                    skip = not redirection["operand"]
                 elif word in SHELL_OPERATORS or word in {"then", "do", "fi", "done"}:
                     break
                 elif word in GH_API_VALUE_OPTIONS:
@@ -793,7 +801,12 @@ def app_token_problems(name: str, workflow: str) -> list[str]:
                 continue
             if None in targets:
                 found.append(f"{name}: {step.title} calls gh api with an endpoint this check cannot read")
-            if not any(target and ADMIN_ENDPOINT.search(target) for target in targets):
+            # Fail closed: an Administration-only path anywhere after a `gh api`
+            # on its line counts, so a word the endpoint parser misreads (a
+            # redirection, an option it does not know) cannot hide the read.
+            named = any(ADMIN_ENDPOINT.search(call["rest"])
+                        for line in shell_commands(step.run) for call in GH_API.finditer(line))
+            if not named and not any(target and ADMIN_ENDPOINT.search(target) for target in targets):
                 continue
             token = STEP_TOKEN.fullmatch((step.env or {}).get("GH_TOKEN", ""))
             if token is None or token["id"] not in minted:

@@ -696,6 +696,31 @@ class Isolation(unittest.TestCase):
         both = policy.gh_api_targets('gh api a/b ; gh api "c/d" && gh api e/f')
         self.assertEqual(both, ["a/b", "c/d", "e/f"])
 
+    def test_a_redirection_before_the_endpoint_is_not_the_endpoint(self) -> None:
+        # A redirection word, attached or detached, precedes the endpoint; the
+        # Administration-only read behind it still needs the App token.
+        for label, run in {
+            "attached >": 'run: gh api >out.json "repos/$R/immutable-releases"\n',
+            "quoted attached >": 'run: gh api >"out.json" repos/$R/rulesets\n',
+            "detached >": 'run: gh api > out.json "repos/$R/immutable-releases"\n',
+            "2>": 'run: gh api 2>/dev/null "repos/$R/branches/main/protection"\n',
+            "detached 2>": 'run: gh api 2> err.log "repos/$R/rules/branches/main"\n',
+            "&>": 'run: gh api &>log "repos/$R/immutable-releases"\n',
+            ">>": 'run: gh api >>out.json "repos/$R/immutable-releases"\n',
+            "<": 'run: gh api <in.json "repos/$R/rulesets"\n',
+            "2>&1": 'run: gh api 2>&1 "repos/$R/immutable-releases"\n',
+        }.items():
+            with self.subTest(label):
+                self.refused(self.read(token="${{ github.token }}", run=run))
+                self.assertEqual(self.found(self.read(run=run)), [])
+        self.assertEqual(policy.gh_api_targets('gh api >o.json 2> e.log a/b'), ["a/b"])
+        # An option this check does not know cannot hide the read either.
+        unknown = 'run: gh api --some-new-flag "repos/$R/immutable-releases"\n'
+        self.refused(self.read(token="${{ github.token }}", run=unknown))
+        # A read of another endpoint, redirected, still needs no App token.
+        self.assertEqual(self.found(self.read(token="${{ github.token }}",
+                                              run='run: gh api >out.json "repos/$R/actions/runs"\n')), [])
+
     def test_a_gh_api_call_whose_endpoint_cannot_be_read_fails_closed(self) -> None:
         for label, run in {
             "a variable": 'run: gh api "$endpoint" > out.json\n',
