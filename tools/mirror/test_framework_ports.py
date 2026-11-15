@@ -168,5 +168,135 @@ class ReplayTest(unittest.TestCase):
             self.assertEqual((expected, added, removed), (self.TRANSFERRED, {}, set()))
 
 
+LIB_SOURCE = "framework/core/example/src/example.cpp"
+TOOL_SOURCE = "framework/core/example/src/example_tool.cpp"
+
+
+def unit_target(name: str = "vellum-example", **overrides) -> dict:
+    base = {"name": name, "type": "STATIC_LIBRARY", "unit": "example", "sources": [LIB_SOURCE],
+            "include_dirs": ["core/example/include"], "compile_definitions": ["VELLUM_EXAMPLE=1"],
+            "link_targets": ["pulp-runtime"], "reason": "a unit no closure builds"}
+    return {**base, **overrides}
+
+
+def tool_target(**overrides) -> dict:
+    fields = {"type": "EXECUTABLE", "unit": None, "sources": [TOOL_SOURCE], "include_dirs": [],
+              "compile_definitions": [], "link_targets": ["vellum-example"], **overrides}
+    return unit_target("vellum-example-tool", **fields)
+
+
+def manifest(targets: list) -> str:
+    return json.dumps({"schema": fp.UNITS_SCHEMA, "targets": targets})
+
+
+class UnitTargetShapeTest(unittest.TestCase):
+    def assertTargetRefused(self, candidate, fragment: str) -> None:
+        errors = fp.unit_target_errors(candidate, "target")
+        self.assertTrue(any(fragment in error for error in errors), (candidate, errors))
+
+    def test_well_formed_targets_pass(self) -> None:
+        for candidate in (unit_target(), tool_target(), unit_target(compile_definitions=["A", "B=x.y"])):
+            self.assertEqual(fp.unit_target_errors(candidate, "target"), [], candidate)
+
+    def test_keys_are_exact(self) -> None:
+        self.assertTargetRefused({**unit_target(), "extra": 1}, "must have exactly")
+        missing = unit_target()
+        del missing["link_targets"]
+        self.assertTargetRefused(missing, "must have exactly")
+
+    def test_name_type_and_unit(self) -> None:
+        self.assertTargetRefused(unit_target("bad name"), "is not a target name")
+        self.assertTargetRefused(unit_target(type="SHARED_LIBRARY"), "type must be one of")
+        self.assertTargetRefused(unit_target(unit=None), "names the new unit")
+        self.assertTargetRefused(tool_target(unit="example"), "an executable belongs to no unit")
+
+    def test_a_new_target_carries_no_pulp_name(self) -> None:
+        self.assertTargetRefused(unit_target("pulp-example"), "may not carry a Pulp name")
+        self.assertTargetRefused(unit_target(unit="pulp-scene"), "may not carry a Pulp name")
+
+    def test_sources_are_compilable_framework_paths(self) -> None:
+        for sources in ([], [LIB_SOURCE, LIB_SOURCE], "x.cpp", None):
+            self.assertTargetRefused(unit_target(sources=sources), "sources must list")
+        for source in ("graphics/a.cpp", "framework/../a.cpp", "framework/core/example/include/e.hpp"):
+            self.assertTargetRefused(unit_target(sources=[source]), "is not a compilable path inside")
+
+    def test_include_dirs_definitions_links_and_reason(self) -> None:
+        self.assertTargetRefused(unit_target(include_dirs=["../graphics"]), "is not a safe path")
+        self.assertTargetRefused(unit_target(include_dirs="core"), "include_dirs must be a list")
+        self.assertTargetRefused(unit_target(compile_definitions=["-DX"]), "compile_definitions must be")
+        self.assertTargetRefused(unit_target(compile_definitions=["X=a b"]), "compile_definitions must be")
+        self.assertTargetRefused(unit_target(link_targets=["a", "a"]), "link_targets must be")
+        self.assertTargetRefused(unit_target(link_targets=["vellum-example"]), "links itself")
+        self.assertTargetRefused(unit_target(reason=" "), "reason must be")
+
+    def test_document_shape_and_one_bad_target_withholds_all(self) -> None:
+        for text in ("[", json.dumps({"schema": "other", "targets": []}),
+                     json.dumps({"schema": fp.UNITS_SCHEMA, "targets": {}}),
+                     json.dumps({"schema": fp.UNITS_SCHEMA, "targets": [], "note": ""})):
+            self.assertEqual(fp.parse_units(text)[0], [])
+            self.assertTrue(fp.parse_units(text)[1], text)
+        targets, errors = fp.parse_units(manifest([unit_target(), unit_target(type="X")]))
+        self.assertEqual(targets, [])
+        self.assertIn("targets[1]", errors[0])
+        self.assertEqual(fp.parse_units(manifest([unit_target()])), ([unit_target()], []))
+
+
+class DeclaredUnitsTest(unittest.TestCase):
+    """A declared target agrees with the ledger, source by source, and links only what is declared before it."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temporary.name)
+        (self.repo / "framework/core/example/include").mkdir(parents=True)
+        self.added = {LIB_SOURCE: row(LIB_SOURCE, target="vellum-example"),
+                      TOOL_SOURCE: row(TOOL_SOURCE, target="vellum-example-tool")}
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def write(self, targets: list) -> None:
+        (self.repo / fp.UNITS).parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / fp.UNITS).write_text(manifest(targets), encoding="utf-8")
+
+    def assertDeclaredRefused(self, targets: list, fragment: str) -> None:
+        self.write(targets)
+        declared, errors = fp.declared_units(self.repo, self.added)
+        self.assertEqual(declared, [])
+        self.assertTrue(any(fragment in error for error in errors), errors)
+
+    def test_a_missing_manifest_declares_nothing_and_a_symlink_is_refused(self) -> None:
+        self.assertEqual(fp.declared_units(self.repo, {}), ([], []))
+        (self.repo / fp.UNITS).parent.mkdir(parents=True)
+        (self.repo / "elsewhere.json").write_text(manifest([]), encoding="utf-8")
+        (self.repo / fp.UNITS).symlink_to(self.repo / "elsewhere.json")
+        self.assertEqual(fp.declared_units(self.repo, {}), ([], [f"{fp.UNITS}: is a symlink"]))
+
+    def test_matching_targets_are_declared(self) -> None:
+        self.write([unit_target(), tool_target()])
+        self.assertEqual(fp.declared_units(self.repo, self.added), ([unit_target(), tool_target()], []))
+
+    def test_a_source_needs_its_ledger_row_with_this_target(self) -> None:
+        del self.added[TOOL_SOURCE]
+        self.assertDeclaredRefused([unit_target(), tool_target()], "has no ports ledger row adding it")
+        self.added[TOOL_SOURCE] = row(TOOL_SOURCE, target="vellum-example")
+        self.assertDeclaredRefused([unit_target(), tool_target()], "is added by its ledger row to vellum-example")
+
+    def test_a_ledger_row_for_a_declared_target_must_be_listed(self) -> None:
+        self.assertDeclaredRefused([unit_target(), tool_target(sources=[LIB_SOURCE])],
+                                   "does not list it in")
+
+    def test_a_declared_link_names_an_earlier_library(self) -> None:
+        self.assertDeclaredRefused([tool_target(), unit_target()], "which is declared after it")
+        tool = tool_target()
+        self.assertDeclaredRefused([unit_target(), tool, unit_target("vellum-other", sources=[TOOL_SOURCE],
+                                                                     link_targets=["vellum-example-tool"])],
+                                   "links the executable")
+        self.assertDeclaredRefused([unit_target(), unit_target()], "is declared twice")
+
+    def test_an_include_directory_must_exist_under_framework(self) -> None:
+        self.assertDeclaredRefused([unit_target(include_dirs=["core/missing/include"]), tool_target()],
+                                   "is not a directory framework/ holds")
+
+
 if __name__ == "__main__":
     unittest.main()

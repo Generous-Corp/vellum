@@ -1385,5 +1385,182 @@ class FrameworkPortsPlanTest(unittest.TestCase):
                          ["web_compat_preludes_gen.cpp", "web_compat_preludes_gen.hpp"])
 
 
+class DeclaredUnitPlanTest(unittest.TestCase):
+    """A target no closure builds is compiled only as provenance/framework/units.json declares it."""
+
+    HEADER = "framework/core/example/include/vellum/example/example.hpp"
+    LIB = "framework/core/example/src/example.cpp"
+    TOOL = "framework/core/example/src/example_tool.cpp"
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = TransferredFixture(Path(self.temporary.name))
+        mp.BUILD_INFO_INPUTS[EXPORT_ID] = {"version": "1.2.3"}
+        self.fixture.write(self.HEADER, b"#pragma once\nint example();\n")
+        self.fixture.write(self.LIB, b'#include "vellum/example/example.hpp"\nint example() { return 3; }\n')
+        self.fixture.write(self.TOOL, b'#include "vellum/example/example.hpp"\nint main() { return example(); }\n')
+        self.rows = [self.fixture.row(self.HEADER), self.fixture.row(self.LIB, target="vellum-example"),
+                     self.fixture.row(self.TOOL, target="vellum-example-tool")]
+        self.fixture.write_ledger(self.rows)
+        self.library = {"name": "vellum-example", "type": "STATIC_LIBRARY", "unit": "example",
+                        "sources": [self.LIB], "include_dirs": ["core/example/include"],
+                        "compile_definitions": ["VELLUM_EXAMPLE=1"], "link_targets": ["pulp-runtime"],
+                        "reason": "a unit no closure builds"}
+        self.tool = {"name": "vellum-example-tool", "type": "EXECUTABLE", "unit": None, "sources": [self.TOOL],
+                     "include_dirs": [], "compile_definitions": [], "link_targets": ["vellum-example"],
+                     "reason": "a tool over the unit"}
+
+    def tearDown(self) -> None:
+        mp.BUILD_INFO_INPUTS.pop(EXPORT_ID, None)
+        self.temporary.cleanup()
+
+    def declare(self, targets: list[dict]) -> None:
+        self.fixture.write(mp.framework_ports.UNITS, json.dumps(
+            {"schema": mp.framework_ports.UNITS_SCHEMA, "targets": targets}).encode())
+
+    def assertRefused(self, fragment: str) -> None:
+        with self.assertRaises(mp.PlanError) as caught:
+            self.fixture.plan()
+        self.assertIn(fragment, str(caught.exception))
+
+    def planned(self, relative: str) -> str:
+        return str(self.fixture.repo.resolve() / relative)
+
+    def cmake(self, plan: dict) -> str:
+        output = Path(self.temporary.name) / "plan.cmake"
+        mp.write_cmake(plan, output)
+        return output.read_text()
+
+    def test_undeclared_targets_are_refused_and_declared_ones_build(self) -> None:
+        # The rows name targets no closure builds: refused while nothing declares them.
+        self.assertRefused("adds sources to targets no closure builds")
+        self.declare([self.library, self.tool])
+        plan = self.fixture.plan()
+        self.assertEqual(plan["framework_units"], ["vellum-example", "vellum-example-tool"])
+        closure_unit, unit = plan["units"]
+        self.assertEqual(closure_unit["name"], "foundation")  # the closure's unit comes first
+        self.assertEqual((unit["name"], [t["name"] for t in unit["targets"]]), ("example", ["vellum-example"]))
+        library = unit["targets"][0]
+        self.assertEqual(library["sources"], [self.planned(self.LIB)])
+        self.assertEqual(library["internal_links"], ["pulp-runtime"])
+        # Its own include directory first, then what the linked target compiles with.
+        runtime = closure_unit["targets"][0]
+        self.assertEqual(library["include_dirs"],
+                         [self.planned("framework/core/example/include")] + runtime["include_dirs"])
+        # Its definitions, plus the interface definitions of the unit it links.
+        self.assertEqual(library["compile_definitions"], ["VELLUM_EXAMPLE=1", "X=1"])
+        self.assertEqual(unit["compile_definitions"], ["VELLUM_EXAMPLE=1", "X=1"])
+        [tool] = plan["executables"]
+        self.assertEqual((tool["name"], tool["type"], tool["sources"], tool["internal_links"]),
+                         ("vellum-example-tool", "EXECUTABLE", [self.planned(self.TOOL)], ["vellum-example"]))
+        # The closure's own target is unchanged: it does not compile the declared sources.
+        self.assertNotIn(self.planned(self.LIB), runtime["sources"])
+        text = self.cmake(plan)
+        self.assertIn('set(VELLUM_MIRROR_UNITS\n    "foundation"\n    "example"\n)', text)
+        self.assertIn('set(VELLUM_MIRROR_EXECUTABLES\n    "vellum-example-tool"\n)', text)
+        self.assertIn('set(VELLUM_MIRROR_UNIT_EXAMPLE_TARGETS\n    "vellum-example"\n)', text)
+        self.assertIn(self.LIB, text.split("set(VELLUM_MIRROR_TARGET_VELLUM_EXAMPLE_SOURCES")[1].split(")")[0])
+        self.assertIn('set(VELLUM_MIRROR_TARGET_VELLUM_EXAMPLE_TOOL_TYPE "EXECUTABLE")', text)
+        self.assertIn("set(VELLUM_MIRROR_TARGET_VELLUM_EXAMPLE_DECLARED ON)", text)
+        self.assertIn("set(VELLUM_MIRROR_TARGET_PULP_RUNTIME_DECLARED OFF)", text)
+        self.assertIn('set(VELLUM_MIRROR_TARGET_PULP_RUNTIME_TYPE "STATIC_LIBRARY")', text)
+
+    def test_every_ledger_source_of_a_declared_target_is_listed_and_every_listed_source_has_its_row(self) -> None:
+        self.declare([self.library, dict(self.tool, sources=[self.LIB])])
+        self.assertRefused("is added by its ledger row to vellum-example, not vellum-example-tool")
+        self.declare([self.library, self.tool])
+        self.fixture.write_ledger(self.rows[:2] + [self.fixture.row(self.TOOL, target="vellum-example")])
+        self.assertRefused("is added by its ledger row to vellum-example, not vellum-example-tool")
+        # A source the ledger does not add is not in the file set at all.
+        self.fixture.write_ledger(self.rows[:2])
+        self.assertRefused("does not list")
+
+    def test_a_link_must_be_mirrored_declared_earlier_or_a_pinned_recipe(self) -> None:
+        self.declare([dict(self.library, link_targets=["pulp-runtime", "nowhere"]), self.tool])
+        self.assertRefused("links nowhere, which is neither a mirrored target")
+        self.declare([self.tool, self.library])
+        self.assertRefused("which is declared after it")
+        # yaml-cpp has a recipe, but no closure pins it and the recipe names no pin.
+        self.declare([dict(self.library, link_targets=["yaml-cpp"]), self.tool])
+        self.assertRefused("no closure pins yaml-cpp and its recipe names no pinned commit")
+        # A recipe that is not a cmake build cannot be linked by a declared target.
+        self.declare([dict(self.library, link_targets=["gpu-runtime-device"]), self.tool])
+        self.assertRefused("only through a cmake recipe")
+
+    def test_a_declared_target_may_not_take_an_existing_name_or_join_a_closure_unit(self) -> None:
+        for library, fragment in (
+            (dict(self.library, unit="foundation"), "which a closure describes"),
+            (dict(self.library, name="hwy"), "is a target the highway recipe provides"),
+        ):
+            rows = [self.rows[0], self.fixture.row(self.LIB, target=library["name"]), self.rows[2]]
+            self.fixture.write_ledger(rows)
+            self.declare([library, dict(self.tool, link_targets=[library["name"]])])
+            self.assertRefused(fragment)
+
+    def test_a_closure_target_name_is_refused(self) -> None:
+        # pulp-runtime is not a Vellum name either; the shape rule refuses it before the plan.
+        self.fixture.write_ledger([self.rows[0], self.fixture.row(self.LIB, target="pulp-runtime"), self.rows[2]])
+        self.declare([dict(self.library, name="pulp-runtime"), dict(self.tool, link_targets=["pulp-runtime"])])
+        self.assertRefused("may not carry a Pulp name")
+        # With the spelling rule out of the way, the plan still refuses the name.
+        with mock.patch.object(mp.framework_ports, "units_errors", return_value=[]), \
+                mock.patch.object(mp.framework_ports, "unit_target_errors", return_value=[]):
+            self.assertRefused("is already a mirrored target of unit foundation")
+
+    def test_the_targets_of_a_unit_are_declared_together(self) -> None:
+        other = "framework/core/example/src/other.cpp"
+        self.fixture.write(other, b"int other() { return 4; }\n")
+        second = "framework/core/example/src/second.cpp"
+        self.fixture.write(second, b"int second() { return 5; }\n")
+        self.fixture.write_ledger(self.rows + [self.fixture.row(other, target="vellum-example-other"),
+                                               self.fixture.row(second, target="vellum-second")])
+        second_unit = dict(self.library, name="vellum-second", unit="second", sources=[second])
+        other_target = dict(self.library, name="vellum-example-other", sources=[other])
+        self.declare([self.library, second_unit, other_target, self.tool])
+        self.assertRefused("the targets of unit example are not declared together")
+        # Control: declared together, the unit carries both; an executable between them splits nothing.
+        self.declare([self.library, self.tool, other_target, second_unit])
+        units = self.fixture.plan()["units"]
+        self.assertEqual([(u["name"], [t["name"] for t in u["targets"]]) for u in units[1:]],
+                         [("example", ["vellum-example", "vellum-example-other"]), ("second", ["vellum-second"])])
+
+    def test_a_broken_manifest_is_refused(self) -> None:
+        self.fixture.write(mp.framework_ports.UNITS, b"[]")
+        self.assertRefused("must be an object with schema")
+        self.declare([dict(self.library, include_dirs=["core/missing/include"]), self.tool])
+        self.assertRefused("is not a directory framework/ holds")
+
+    def test_a_recipe_with_its_own_pin_is_fetched_at_that_commit(self) -> None:
+        source = Path(self.temporary.name) / "upstream"
+        source.mkdir()
+        (source / "LICENSE").write_text("MIT\n")
+        (source / "CMakeLists.txt").write_text("add_library(fixture-dep STATIC dep.cpp)\n")
+        (source / "dep.cpp").write_text("int dep() { return 5; }\n")
+        def git(*args: str) -> str:
+            return subprocess.run(["git", "-C", str(source), *args], check=True, capture_output=True,
+                                  text=True).stdout.strip()
+        git("init", "-q")
+        git("add", "-A")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "dep")
+        pin = git("rev-parse", "HEAD")
+        recipe = {"kind": "cmake", "provides": ["fixture-dep"], "options": {"X": "OFF"}, "pin": pin,
+                  "source": source.as_uri()}
+        self.declare([dict(self.library, link_targets=["pulp-runtime", "fixture-dep"]), self.tool])
+        with mock.patch.dict(mp.DEPENDENCIES, {"fixture-dep": recipe}):
+            plan = self.fixture.plan()
+            self.assertEqual(plan["units"][1]["targets"][0]["external_links"], ["fixture-dep"])
+            self.assertEqual(plan["dependencies"]["fixture-dep"]["pin"], pin)
+            self.assertIn("fixture-dep", plan["cmake_dependencies"])
+            self.assertEqual([Path(p).name for p in plan["licenses"]["fixture-dep"]], ["LICENSE"])
+            # Its license travels with it: a pinned tree without one is refused.
+            git("rm", "-q", "LICENSE")
+            git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "drop license")
+            recipe["pin"] = git("rev-parse", "HEAD")
+            self.assertRefused("carries no license file")
+            # A recipe naming no commit is refused.
+            recipe["pin"] = "main"
+            self.assertRefused("its recipe names no pinned commit")
+
+
 if __name__ == "__main__":
     unittest.main()
