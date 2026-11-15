@@ -573,7 +573,7 @@ class Isolation(unittest.TestCase):
         self.assertEqual(self.found(push), [])
         # A read of another endpoint needs no App token.
         self.assertEqual(self.found(self.read(token="${{ github.token }}",
-                                              run='run: gh api "repos/$R/actions/runs" > out.json\n')), [])
+                                              run='run: gh api "repos/$GITHUB_REPOSITORY/actions/runs" > out.json\n')), [])
 
     def test_a_comment_naming_the_app_token_does_not_satisfy_the_rule(self) -> None:
         run = ("run: |\n          # GH_TOKEN: ${{ steps.app-token.outputs.token }}\n"
@@ -790,7 +790,7 @@ class Isolation(unittest.TestCase):
         self.refused(self.read(token="${{ github.token }}", run=unknown))
         # A read of another endpoint, redirected, still needs no App token.
         self.assertEqual(self.found(self.read(token="${{ github.token }}",
-                                              run='run: gh api >out.json "repos/$R/actions/runs"\n')), [])
+                                              run='run: gh api >out.json "repos/$GITHUB_REPOSITORY/actions/runs"\n')), [])
 
     def test_an_escaped_or_quoted_gh_spelling_is_still_gh_api(self) -> None:
         # The shell runs each of these as `gh api`; the Administration-only
@@ -907,6 +907,68 @@ class Isolation(unittest.TestCase):
         workflow = ("jobs:\n  sign:\n    steps:\n      - name: emit\n        run: |\n"
                     "          cat <<'YAML'\n          steps: []\n          YAML\n")
         self.assertEqual(self.found(workflow), [])
+
+    def test_a_heredoc_steps_key_with_yaml_content_is_shell_payload(self) -> None:
+        # A step's run script that writes YAML holding `steps:` (followed by
+        # content) is shell payload, not a hidden steps list.
+        for lead in ("      - name: emit\n        run: |\n", "      - run: |\n"):
+            with self.subTest(lead=lead):
+                workflow = ("jobs:\n  sign:\n    steps:\n" + lead
+                            + "          cat <<'YAML'\n          steps:\n            - run: true\n          YAML\n")
+                self.assertEqual(self.found(workflow), [])
+                self.assertEqual(policy.step_layout_problems(policy.SIGNING_WORKFLOW, workflow), [])
+        # The same text in a job-level block scalar, or in a step key other
+        # than run, is still reported.
+        for hidden in ("    env:\n      NOTE: |\n        steps:\n          - run: true\n",
+                       "    steps:\n      - name: emit\n        with:\n          text: |\n"
+                       "            steps:\n              - run: true\n"):
+            with self.subTest(hidden=hidden):
+                problems = policy.step_layout_problems(policy.SIGNING_WORKFLOW, "jobs:\n  sign:\n" + hidden)
+                self.assertTrue(any("steps: line that is not the job's own" in problem for problem in problems),
+                                problems)
+
+    def test_a_continuation_inside_a_word_is_removed_not_spaced(self) -> None:
+        # The shell removes backslash-newline, so these run the
+        # Administration-only read immutable-releases.
+        for label, script in {
+            "endpoint": 'gh api "repos/$R/immutable-\\\n          releases" > out.json\n'.replace(
+                "\n          releases", "\nreleases"),
+            "endpoint, unquoted": 'gh api repos/$R/immutable-\\\nreleases\n',
+            "executable": 'g\\\nh api "repos/$R/immutable-releases"\n',
+            "api word": 'gh a\\\npi "repos/$R/immutable-releases"\n',
+        }.items():
+            with self.subTest(label=label):
+                self.assertTrue(any("immutable-releases" in command
+                                    for command in policy.shell_commands(script)), policy.shell_commands(script))
+                run = "run: |\n" + "".join("          " + line + "\n" for line in script.splitlines())
+                self.refused(self.read(token="${{ github.token }}", run=run))
+                self.assertEqual(self.found(self.read(run=run)), [])
+        self.assertEqual(policy.shell_commands('gh api "repos/$R/immutable-\\\nreleases"'),
+                         ['gh api "repos/$R/immutable-releases"'])
+        # An escaped backslash at the end of a line is not a continuation.
+        self.assertEqual(policy.shell_commands("echo a\\\\\nb"), ["echo a\\\\", "b"])
+
+    def test_an_endpoint_built_from_an_expansion_needs_the_app_token(self) -> None:
+        for target in ('"repos/$R/$ENDPOINT"', '"repos/$GITHUB_REPOSITORY/$ENDPOINT"',
+                       '"repos/$GITHUB_REPOSITORY/${ENDPOINT}"', '"repos/$GITHUB_REPOSITORY/x$ENDPOINT"',
+                       '"repos/$R/actions/runs"', '"repos/$GITHUB_REPOSITORY/actions/runs/$ID"',
+                       '"repos/${{ github.repository }}/${{ inputs.endpoint }}"'):
+            with self.subTest(target=target):
+                run = f"run: gh api {target} > out.json\n"
+                self.refused(self.read(token="${{ github.token }}", run=run), "unresolved expansion")
+                self.assertEqual(self.found(self.read(run=run)), [])
+        # The bounded safe substitutions: the runner's repository in the repo
+        # slot and the runner's commit sha.
+        for target in ('"repos/$GITHUB_REPOSITORY/actions/runs"', '"repos/${GITHUB_REPOSITORY}/pulls"',
+                       '"repos/${{ github.repository }}/pulls"',
+                       '"repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100"'):
+            with self.subTest(target=target):
+                run = f"run: gh api {target} > out.json\n"
+                self.assertEqual(self.found(self.read(token="${{ github.token }}", run=run)), [])
+        # A step that sets GITHUB_REPOSITORY or GITHUB_SHA itself makes them arbitrary values.
+        overridden = self.read(token="${{ github.token }}\n          GITHUB_SHA: immutable-releases",
+                               run='run: gh api "repos/$GITHUB_REPOSITORY/$GITHUB_SHA"\n')
+        self.refused(overridden, "unresolved expansion")
 
     def test_a_steps_key_the_reader_cannot_follow_fails_closed(self) -> None:
         body = "      - name: a\n        run: python3 scripts/x.py\n"

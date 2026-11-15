@@ -646,15 +646,23 @@ def _structural_indices(lines: list[str]) -> list[int]:
     """Indices of the lines structural_lines keeps (outside block scalars).
     A full-line comment (`# note: |`) is never a block-scalar opener: read as
     one, it would hide every more-indented line after it, real steps included."""
-    kept: list[int] = []
+    hidden = _block_scalar_openers(lines)
+    return [number for number in range(len(lines)) if number not in hidden]
+
+
+def _block_scalar_openers(lines: list[str]) -> dict[int, int]:
+    """Each line inside a block scalar, mapped to the index of the line that
+    opened that scalar (`key: |`)."""
+    hidden: dict[int, int] = {}
     block_indent: int | None = None
+    opener = 0
     for number, line in enumerate(lines):
         indent = len(line) - len(line.lstrip(" "))
         if block_indent is not None:
             if not line.strip() or indent > block_indent:
+                hidden[number] = opener
                 continue
             block_indent = None
-        kept.append(number)
         if line.lstrip().startswith("#"):
             continue
         if BLOCK_SCALAR.search(line.split(" #", 1)[0].rstrip()):
@@ -663,7 +671,8 @@ def _structural_indices(lines: list[str]) -> list[int]:
             # the item's later keys sit at the key's column and stay visible.
             prefix = SEQUENCE_ITEM_PREFIX.match(line, indent)
             block_indent = prefix.end() if prefix else indent
-    return kept
+            opener = number
+    return hidden
 
 
 def _job_key_indent(lines: list[str]) -> int | None:
@@ -684,26 +693,48 @@ def _steps_key_lines(text: str) -> tuple[list[int], list[int]]:
     block scalar is text, not steps."""
     lines = text.splitlines()
     key_indent = _job_key_indent(lines)
-    visible = set(_structural_indices(lines))
+    hidden = _block_scalar_openers(lines)
     own: list[int] = []
     other: list[int] = []
     for number, line in enumerate(lines):
-        # A block-scalar body is not executable workflow structure. Still
-        # reject an exact `steps:` key hidden there: otherwise a fake minting
-        # list can disappear from the layout audit while its surrounding job
-        # remains otherwise readable.
-        if number not in visible:
-            if STEPS_KEY.fullmatch(line):
-                other.append(number)
-            continue
-        line = lines[number]
-        if not STEPS_KEY.fullmatch(line):
+        if number in hidden or not STEPS_KEY.fullmatch(line):
             continue
         if key_indent is None or len(line) - len(line.lstrip()) == key_indent:
             own.append(number)
         else:
             other.append(number)
-    return own, other
+    for number, opener in hidden.items():
+        # A block-scalar body is not executable workflow structure. Still
+        # reject an exact `steps:` key hidden there, unless the scalar is a
+        # step's own `run:` script (a heredoc writing YAML is shell payload):
+        # otherwise a fake minting list can disappear from the layout audit
+        # while its surrounding job remains otherwise readable.
+        if STEPS_KEY.fullmatch(lines[number]) and not _is_step_run_opener(lines, opener, own):
+            other.append(number)
+    return own, sorted(other)
+
+
+def _is_step_run_opener(lines: list[str], opener: int, own: list[int]) -> bool:
+    """Whether line `opener` opens a `run:` block scalar of a step under one of
+    the job's own `steps:` keys (listed in `own`)."""
+    line = lines[opener]
+    indent = len(line) - len(line.lstrip(" "))
+    prefix = SEQUENCE_ITEM_PREFIX.match(line, indent)
+    column = prefix.end() if prefix else indent
+    if not re.fullmatch(r"run:[ \t]+[|>][-+0-9]*[ \t]*(?:#.*)?", line[column:].rstrip()):
+        return False
+    for start in reversed([number for number in own if number < opener]):
+        base = len(lines[start]) - len(lines[start].lstrip())
+        # The run key must sit deeper than the steps key, with nothing at or
+        # left of that key's column in between (which would end the list).
+        between = [text for text in lines[start + 1:opener]
+                   if text.strip() and not text.lstrip().startswith("#")]
+        if column > base and all(len(text) - len(text.lstrip()) > base
+                                 or (len(text) - len(text.lstrip()) == base and _sequence_item(text.lstrip()))
+                                 for text in between):
+            return True
+        break
+    return False
 
 
 def job_steps(job: str, text: str) -> list[Step]:
@@ -824,12 +855,24 @@ def steps(workflow: str) -> list[str]:
 
 def shell_commands(run: str) -> list[str]:
     """A run block's command lines: continuations joined, comment lines dropped."""
-    # Shell comments end at their physical newline. Drop full-line comments
-    # before joining continuations so a comment ending in `\\` cannot swallow
-    # the command on the following line.
-    lines = [line for line in run.splitlines() if not line.lstrip().startswith("#")]
-    joined = re.sub(r"\\\n[ \t]*", " ", "\n".join(lines))
-    return [line for line in joined.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    # Shell comments end at their physical newline: a full-line comment ending
+    # in `\\` cannot swallow the command on the following line. The shell removes a backslash-newline pair outright, so a continuation
+    # inside a word (`immutable-\\` / `releases`) joins the word with no space;
+    # a line continued from the one before is never a full-line comment.
+    commands: list[str] = []
+    pending: str | None = None
+    for line in run.splitlines():
+        if pending is None and line.lstrip().startswith("#"):
+            continue
+        trailing = len(line) - len(line.rstrip("\\"))
+        continued = trailing % 2 == 1
+        pending = (pending or "") + (line[:-1] if continued else line)
+        if not continued:
+            commands.append(pending)
+            pending = None
+    if pending is not None:
+        commands.append(pending)
+    return [line for line in commands if line.strip() and not line.lstrip().startswith("#")]
 
 
 # Characters that end an unquoted shell word and start an operator or
@@ -924,6 +967,30 @@ def gh_api_targets(run: str) -> list[str | None]:
     return targets
 
 
+# Expansions an endpoint may hold without counting as dynamic: the runner's own
+# repository in the `repos/<owner>/<repo>` slot, and the runner's commit sha.
+# Neither value can hold `/`, `?` or `#` beyond the owner/repo separator, so
+# neither can turn the path into another endpoint. A step that sets either name
+# in its own env makes it an arbitrary value again.
+SAFE_REPOSITORY_SLOT = re.compile(
+    r"^(/?repos/)(?:\$GITHUB_REPOSITORY(?![A-Za-z0-9_])|\$\{GITHUB_REPOSITORY\}"
+    r"|\$\{\{\s*github\.repository\s*\}\})(?=/|$)")
+SAFE_SHA = re.compile(r"\$GITHUB_SHA(?![A-Za-z0-9_])|\$\{GITHUB_SHA\}|\$\{\{\s*github\.sha\s*\}\}")
+
+
+def dynamic_endpoint(target: str, env: dict[str, str] | None) -> bool:
+    """Whether an endpoint's path holds an expansion other than the bounded
+    safe ones, so its value (`repos/$R/$ENDPOINT`) could be any endpoint,
+    an Administration-only one included."""
+    path = target
+    overridden = set(env or {})
+    if "GITHUB_REPOSITORY" not in overridden:
+        path = SAFE_REPOSITORY_SLOT.sub(r"\1owner/repo", path)
+    if "GITHUB_SHA" not in overridden:
+        path = SAFE_SHA.sub("0" * 40, path)
+    return "$" in path or "`" in path
+
+
 def app_token_problems(name: str, workflow: str) -> list[str]:
     """A step that reads an Administration-only endpoint must hold, as its own
     GH_TOKEN, the token an earlier step of its job minted with the pinned
@@ -959,11 +1026,19 @@ def app_token_problems(name: str, workflow: str) -> list[str]:
             # redirection, an option it does not know) cannot hide the read.
             named = any(ADMIN_ENDPOINT.search(call["rest"])
                         for line in shell_commands(step.run) for call in GH_API.finditer(line))
-            if not named and not any(target and ADMIN_ENDPOINT.search(target) for target in targets):
+            # Fail closed: an endpoint built from an unresolved expansion
+            # (`repos/$R/$ENDPOINT`) may resolve to an Administration-only
+            # path, so it needs the App token as well.
+            dynamic = any(target and dynamic_endpoint(target, step.env) for target in targets)
+            if not named and not dynamic and not any(target and ADMIN_ENDPOINT.search(target) for target in targets):
                 continue
             token = STEP_TOKEN.fullmatch((step.env or {}).get("GH_TOKEN", ""))
             if token is None or token["id"] not in minted:
-                found.append(f"{name}: {step.title} reads an Administration-only endpoint without the App token")
+                found.append(f"{name}: {step.title} reads an Administration-only endpoint without the App token"
+                             if not dynamic or named or any(target and ADMIN_ENDPOINT.search(target)
+                                                            for target in targets)
+                             else f"{name}: {step.title} calls gh api on an endpoint built from an unresolved "
+                                  f"expansion without the App token")
     return found
 
 
