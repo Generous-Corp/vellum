@@ -11,13 +11,17 @@ export const DESIGN_IR_VERSION = 1;
  */
 export const DESIGN_IR_COMPOSITING_VERSION = 2;
 /**
- * The schema version that adds plot bindings on nodes. Versions 3 and 4
- * belong to node fields this build does not read (materials and animation
- * tracks), so a document at those versions is read with the fields of
- * version 2. Each version keeps every field of the ones before it: a document
- * is written at the oldest version that carries every field it uses, and a
- * field stays illegal below the version that introduced it. A document
- * without compositing or plots stays at `DESIGN_IR_VERSION`.
+ * The schema version that adds node material references. A document carries
+ * it only when a node uses one.
+ */
+export const DESIGN_IR_MATERIALS_VERSION = 3;
+/**
+ * The schema version that adds plot bindings on nodes. Version 4 belongs to
+ * node fields this build does not read (animation tracks), so a document at
+ * that version is read with the fields of version 3. Each version keeps
+ * every field of the ones before it: a document is written at the oldest
+ * version that carries every field it uses, and a field stays illegal below
+ * the version that introduced it.
  */
 export const DESIGN_IR_PLOTS_VERSION = 5;
 export const DESIGN_IR_VERSIONS = Object.freeze([1, 2, 3, 4, 5]);

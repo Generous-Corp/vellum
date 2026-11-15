@@ -17,6 +17,7 @@ std::atomic<std::uint8_t> decimation_mode{
 std::atomic<bool> join_columns{true};
 std::atomic<bool> previous_spans{true};
 std::atomic<bool> every_changed_column{true};
+std::atomic<bool> grow_by_effects{true};
 
 // Grid edges stay within +/-2^29, so any difference of two fits an int32_t.
 constexpr double kGridLimit = 1 << 29;
@@ -347,12 +348,14 @@ void set_plot_rules(const PlotRules& rules) noexcept {
     join_columns.store(rules.join_columns);
     previous_spans.store(rules.previous_spans);
     every_changed_column.store(rules.every_changed_column);
+    grow_by_effects.store(rules.grow_by_effects);
 }
 
 PlotRules plot_rules() noexcept {
     return {.join_columns = join_columns.load(),
             .previous_spans = previous_spans.load(),
-            .every_changed_column = every_changed_column.load()};
+            .every_changed_column = every_changed_column.load(),
+            .grow_by_effects = grow_by_effects.load()};
 }
 
 }  // namespace testing

@@ -252,6 +252,7 @@ void versioning() {
     static_assert(partial_redraw_supported(5U));
     static_assert(partial_redraw_supported(6U));
     static_assert(partial_redraw_supported(8U));
+    static_assert(partial_redraw_supported(10U));
     static_assert(partial_redraw_supported(12U));
     static_assert(!partial_redraw_supported(kDamageModelSceneVersion + 1U));
 

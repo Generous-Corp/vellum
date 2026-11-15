@@ -1,6 +1,7 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
 #include <vellum/graphics/capture_stats.hpp>
 #include <vellum/graphics/damage.hpp>
+#include <vellum/graphics/effect.hpp>
 #include <vellum/graphics/dawn_bootstrap.hpp>
 #include <vellum/graphics/layer_cache.hpp>
 #include <vellum/graphics/image_asset.hpp>
@@ -43,6 +44,8 @@
 #include "include/encode/SkPngEncoder.h"
 #include "include/effects/SkDashPathEffect.h"
 #include "include/effects/SkGradient.h"
+#include "include/effects/SkImageFilters.h"
+#include "include/core/SkImageFilter.h"
 #include "include/core/SkColorFilter.h"
 #include "include/effects/SkLumaColorFilter.h"
 #include "include/gpu/graphite/BackendTexture.h"
@@ -93,6 +96,8 @@ std::atomic<bool> enclose_interpolated_fills{true};
 std::atomic<bool> enclose_images{true};
 std::atomic<bool> enclose_clips{true};
 std::atomic<bool> enclose_group_layers{true};
+std::atomic<bool> enclose_effects{true};
+std::atomic<bool> enclose_backdrops{true};
 
 void set_error(std::string* destination, std::string message) {
     if (destination != nullptr) {
@@ -261,6 +266,10 @@ struct FrameResources final {
     /// Textures this frame cached. Their uploads exist only in this frame's
     /// recording, so a frame that fails before it is submitted drops them.
     std::vector<detail::TextureKey> uploaded;
+    /// Offscreen effect layers recorded this frame, kept alive until the
+    /// frame's recording is snapped so a layer drawn into another layer keeps
+    /// its pending work.
+    std::vector<sk_sp<SkSurface>> effect_layers;
 };
 
 sk_sp<SkShader> linear_gradient_shader(
@@ -1318,6 +1327,10 @@ PixelRect region_area(const std::vector<PaintCommand>& commands, const std::vect
     return area;
 }
 
+bool is_effect_layer(const PaintCommand& command);
+Extent effect_paint_extent(const PaintCommand& layer, float scale);
+Extent backdrop_sample_extent(const PaintCommand& layer, float scale);
+
 bool close_over_layers(const Scene& scene, const std::vector<PaintCommand>& commands, float scale,
                        const PixelRect& target, const std::vector<char>& composited,
                        std::vector<PixelRect>& rects) {
@@ -1325,6 +1338,23 @@ bool close_over_layers(const Scene& scene, const std::vector<PaintCommand>& comm
     std::vector<PixelRect> layers;
     std::vector<Extent> extents;
     for (std::size_t begin = 0; begin < commands.size(); ++begin) {
+        // An effect group's filters and backdrop do not reproduce through a
+        // partial clip, cached or not: its whole painted area, and the area
+        // its backdrop samples, are redrawn together.
+        if (is_effect_layer(commands[begin]) && (enclose_effects || enclose_backdrops)) {
+            PixelRect area{};
+            if (enclose_effects) {
+                const auto painted = effect_paint_extent(commands[begin], scale);
+                area = intersection(painted ? *painted : target, target);
+            }
+            const auto sample = backdrop_sample_extent(commands[begin], scale);
+            if (enclose_backdrops && (!sample || !sample->empty())) {
+                const auto painted = effect_paint_extent(commands[begin], scale);
+                area = bounding_union(area, intersection(sample ? *sample : target, target));
+                area = bounding_union(area, intersection(painted ? *painted : target, target));
+            }
+            if (!area.empty()) layers.push_back(area);
+        }
         if (composited[begin] != 0) continue;
         const auto& command = commands[begin];
         const bool transformed_blur =
@@ -1423,6 +1453,247 @@ struct LayerImage final {
     PixelRect extent{};
 };
 
+bool is_effect_layer(const PaintCommand& command) {
+    return command.kind == PaintCommand::Kind::begin_layer && !command.effects.empty();
+}
+
+// One past the `end_layer` that closes the layer opened at `begin`.
+std::size_t layer_end(const std::vector<PaintCommand>& commands, std::size_t begin) {
+    std::size_t depth = 0;
+    for (std::size_t index = begin + 1U; index < commands.size(); ++index) {
+        if (commands[index].kind == PaintCommand::Kind::begin_layer) {
+            ++depth;
+        } else if (commands[index].kind == PaintCommand::Kind::end_layer) {
+            if (depth == 0U) return index + 1U;
+            --depth;
+        }
+    }
+    return commands.size();
+}
+
+// The device pixels an effect layer can paint, or `std::nullopt` when it is
+// unbounded or its area is not finite.
+Extent effect_paint_extent(const PaintCommand& layer, float scale) {
+    if (layer.layer_unbounded || !sane_box(layer.bounds)) return std::nullopt;
+    return pixel_extent(layer.bounds, scale);
+}
+
+// The device pixels a backdrop effect samples: the node's box under its
+// transform grown by the chain's backdrop reach. Empty without a backdrop.
+Extent backdrop_sample_extent(const PaintCommand& layer, float scale) {
+    const auto chain = effect_chain_cost(layer.effects);
+    if (!chain.total.backdrop) return PixelRect{};
+    if (!sane_box(layer.effect_box)) return std::nullopt;
+    const Rect box = transformed_bounds(layer.transform, layer.effect_box);
+    const float reach = chain.total.backdrop_reach;
+    return pixel_extent(Rect{box.x - reach, box.y - reach, box.width + 2.0F * reach,
+                             box.height + 2.0F * reach},
+                        scale);
+}
+
+// The SVG `saturate` matrix, with Rec. 709 luminance.
+std::array<float, 20> saturation_matrix(float amount) {
+    const float s = amount;
+    return {
+        0.213F + 0.787F * s, 0.715F - 0.715F * s, 0.072F - 0.072F * s, 0.0F, 0.0F,
+        0.213F - 0.213F * s, 0.715F + 0.285F * s, 0.072F - 0.072F * s, 0.0F, 0.0F,
+        0.213F - 0.213F * s, 0.715F - 0.715F * s, 0.072F + 0.928F * s, 0.0F, 0.0F,
+        0.0F, 0.0F, 0.0F, 1.0F, 0.0F,
+    };
+}
+
+bool is_filter_effect(const NodeEffect& effect) {
+    return effect.kind == EffectKind::blur || effect.kind == EffectKind::color_matrix ||
+           effect.kind == EffectKind::drop_shadow;
+}
+
+// The image filter for the first `count` filter effects of a chain, in
+// device pixels. Null when the chain has no filter effect.
+sk_sp<SkImageFilter> filter_chain(const std::vector<NodeEffect>& effects, float scale,
+                                  std::size_t count = std::numeric_limits<std::size_t>::max()) {
+    sk_sp<SkImageFilter> filter;
+    std::size_t applied = 0;
+    for (const auto& effect : effects) {
+        if (!is_filter_effect(effect)) continue;
+        if (applied == count) break;
+        ++applied;
+        const float sigma = effect.sigma * scale;
+        switch (effect.kind) {
+        case EffectKind::blur:
+            if (sigma > 0.0F) {
+                filter = SkImageFilters::Blur(sigma, sigma, SkTileMode::kDecal, filter);
+            }
+            break;
+        case EffectKind::color_matrix:
+            filter = SkImageFilters::ColorFilter(SkColorFilters::Matrix(effect.matrix.data()),
+                                                 filter);
+            break;
+        case EffectKind::drop_shadow:
+            filter = SkImageFilters::DropShadow(effect.offset_x * scale, effect.offset_y * scale,
+                                                sigma, sigma, sk_color(effect.color), nullptr,
+                                                filter);
+            break;
+        case EffectKind::backdrop_blur:
+        case EffectKind::material:
+            break;
+        }
+    }
+    return filter;
+}
+
+// What a node's backdrop effect draws beneath its group: the filter applied
+// to the backdrop and the tint laid over it.
+struct BackdropPaint final {
+    sk_sp<SkImageFilter> filter;
+    Color tint = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    bool present = false;
+};
+
+BackdropPaint backdrop_paint(const std::vector<NodeEffect>& effects, float scale) {
+    BackdropPaint paint;
+    for (const auto& effect : effects) {
+        if (effect.kind == EffectKind::backdrop_blur) {
+            paint.present = true;
+            const float sigma = effect.sigma * scale;
+            if (sigma > 0.0F) {
+                paint.filter = SkImageFilters::Blur(sigma, sigma, SkTileMode::kClamp, nullptr);
+            }
+            return paint;
+        }
+        if (effect.kind != EffectKind::material) continue;
+        const auto material = MaterialRegistry::shared().find(effect.material);
+        if (!material || material->recipe != MaterialRecipe::frosted_glass) continue;
+        paint.present = true;
+        const float sigma = material_uniform_value(*material, effect.values, "blur")[0] * scale;
+        const float saturation = material_uniform_value(*material, effect.values, "saturation")[0];
+        const auto tint = material_uniform_value(*material, effect.values, "tint");
+        sk_sp<SkImageFilter> blurred;
+        if (sigma > 0.0F) {
+            blurred = SkImageFilters::Blur(sigma, sigma, SkTileMode::kClamp, nullptr);
+        }
+        const auto matrix = saturation_matrix(saturation);
+        paint.filter = SkImageFilters::ColorFilter(SkColorFilters::Matrix(matrix.data()),
+                                                   std::move(blurred));
+        paint.tint = Color::rgba(tint[0], tint[1], tint[2], tint[3]);
+        return paint;
+    }
+    return paint;
+}
+
+// Which parts of an effect group `composite_effects` draws.
+struct EffectStages final {
+    bool backdrop = true;
+    bool content = true;
+    std::size_t filters = std::numeric_limits<std::size_t>::max();
+};
+
+// Composites an effect group: first its backdrop effect within the node's
+// box, then the group's image (when it has one) through its filter effects,
+// cropped to the area the layer declares, with the group's opacity applied
+// once over both. The canvas holds the frame's scale; the filters work in device pixels.
+void composite_effects(SkCanvas& canvas, const PaintCommand& layer, const LayerImage* image,
+                       float scale, FrameResources& resources, EffectStages stages = {}) {
+    // The canvas holds a whole-pixel translation (an offscreen layer's
+    // origin) times the frame's scale; device-pixel work happens under that
+    // translation alone.
+    const SkM44 frame = canvas.getLocalToDevice();
+    const SkM44 base = SkM44::Translate(frame.rc(0, 3), frame.rc(1, 3));
+    const int saved = canvas.save();
+    const auto backdrop = backdrop_paint(layer.effects, scale);
+    // Node opacity fades the group as a whole. With a backdrop effect the
+    // group is drawn at full opacity into a copy of what lies beneath it, and
+    // that copy is faded over the original once, so the tint cannot show
+    // through the group's own opaque content.
+    float opacity = std::clamp(layer.opacity, 0.0F, 1.0F);
+    if (stages.backdrop && backdrop.present && opacity < 1.0F) {
+        canvas.setMatrix(base);
+        SkPaint fade;
+        fade.setAlphaf(opacity);
+        canvas.saveLayer(SkCanvas::SaveLayerRec(nullptr, &fade, nullptr,
+                                                SkCanvas::kInitWithPrevious_SaveLayerFlag));
+        ++resources.layers;
+        canvas.setMatrix(frame);
+        opacity = 1.0F;
+    }
+    if (stages.backdrop && backdrop.present) {
+        const int clipped = canvas.save();
+        canvas.setMatrix(base);
+        canvas.scale(scale, scale);
+        if (!is_identity(layer.transform)) canvas.concat(sk_matrix(layer.transform));
+        const auto& box = layer.effect_box;
+        const auto rect = SkRect::MakeXYWH(box.x, box.y, box.width, box.height);
+        if (is_rounded(layer.corner_radii)) {
+            canvas.clipRRect(rounded_rect(rect, layer.corner_radii), SkClipOp::kIntersect, true);
+        } else {
+            canvas.clipRect(rect, SkClipOp::kIntersect, true);
+        }
+        const SkM44 local = canvas.getLocalToDevice();
+        canvas.setMatrix(base);
+        if (backdrop.filter) {
+            SkPaint fade;
+            fade.setAlphaf(opacity);
+            const SkCanvas::SaveLayerRec record(nullptr, opacity < 1.0F ? &fade : nullptr,
+                                                backdrop.filter.get(), 0);
+            canvas.saveLayer(record);
+            canvas.restore();
+            ++resources.layers;
+        }
+        if (backdrop.tint.alpha > 0.0F) {
+            canvas.setMatrix(local);
+            SkPaint tint;
+            tint.setColor4f(sk_color(backdrop.tint, opacity));
+            canvas.drawPaint(tint);
+        }
+        canvas.restoreToCount(clipped);
+    }
+    if (stages.content && image != nullptr && image->image) {
+        canvas.setMatrix(base);
+        SkPaint paint;
+        paint.setAlphaf(opacity);
+        // The group meets the backdrop by its node's blend mode. A mode that
+        // empties the backdrop where the group draws nothing must reach the
+        // whole backdrop, not only the image's rectangle, so it composites
+        // through an unbounded layer as an uncached blended group does.
+        const bool clears = blend_mode_clears_backdrop(layer.blend_mode);
+        if (clears) {
+            SkPaint group;
+            group.setBlendMode(sk_blend_mode(layer.blend_mode));
+            canvas.saveLayer(nullptr, &group);
+            ++resources.layers;
+        } else {
+            paint.setBlendMode(sk_blend_mode(layer.blend_mode));
+        }
+        auto filter = filter_chain(layer.effects, scale, stages.filters);
+        if (filter) {
+            // The crop is the declared area rounded out, the pixels the damage
+            // model attributes to the group, so an effect that fills its area
+            // (a colour matrix that lifts alpha) stops where its damage does.
+            const auto area = layer.layer_unbounded || !sane_box(layer.bounds)
+                                  ? std::nullopt
+                                  : to_pixel_rect(layer.bounds, scale);
+            if (area) {
+                filter = SkImageFilters::Crop(
+                    SkRect::Make(SkIRect::MakeLTRB(area->left, area->top, area->right,
+                                                   area->bottom)),
+                    SkTileMode::kDecal, std::move(filter));
+            }
+            paint.setImageFilter(std::move(filter));
+        }
+        canvas.drawImage(image->image, static_cast<float>(image->extent.left),
+                         static_cast<float>(image->extent.top), SkSamplingOptions(), &paint);
+        if (clears) canvas.restore();
+    } else if (stages.content && blend_mode_clears_backdrop(layer.blend_mode)) {
+        // A clearing group with nothing to draw still empties the backdrop.
+        canvas.setMatrix(base);
+        SkPaint group;
+        group.setBlendMode(sk_blend_mode(layer.blend_mode));
+        canvas.saveLayer(nullptr, &group);
+        canvas.restore();
+        ++resources.layers;
+    }
+    canvas.restoreToCount(saved);
+}
+
 // A planned layer for one frame, resolved against its image.
 struct ActiveLayer final {
     std::size_t begin = 0;
@@ -1430,9 +1701,18 @@ struct ActiveLayer final {
     float opacity = 1.0F;
     BlendMode blend_mode = BlendMode::normal;
     const LayerImage* image = nullptr;
+    /// The layer's `begin_layer` when it carries effects.
+    const PaintCommand* effects = nullptr;
+    /// The device pixels the composite can paint.
+    PixelRect area{};
 };
 
-void composite_layer(SkCanvas& canvas, const ActiveLayer& layer) {
+void composite_layer(SkCanvas& canvas, const ActiveLayer& layer, float scale,
+                     FrameResources& resources) {
+    if (layer.effects != nullptr) {
+        composite_effects(canvas, *layer.effects, layer.image, scale, resources);
+        return;
+    }
     const int saved = canvas.save();
     canvas.resetMatrix();
     SkPaint paint;
@@ -1847,7 +2127,141 @@ public:
 
     const GpuEvidence& evidence() const noexcept { return evidence_; }
 
+    // Renders each stage of the effect group of `node_id` on its own
+    // target-sized surface and reads it back: the scene before the group,
+    // the group's members, each prefix of its filter chain, its backdrop over
+    // the scene before it, and the composited result.
+    bool capture_effect_passes(const Scene& scene, std::string_view node_id,
+                               std::vector<EffectPassCapture>& passes, std::string* error) {
+        passes.clear();
+        if (!context_ || !recorder_ || !retained_surface_) {
+            set_error(error, "Skia/Dawn surface is not initialized");
+            return false;
+        }
+        if (!accepts_with_diagnostics(scene, error)) return false;
+        std::vector<PaintCommandRange> ranges;
+        const auto commands = make_paint_commands(scene, &ranges);
+        std::size_t begin = commands.size();
+        for (std::size_t index = 0; index < commands.size(); ++index) {
+            if (is_effect_layer(commands[index]) && commands[index].node_id == node_id) {
+                begin = index;
+                break;
+            }
+        }
+        if (begin == commands.size()) {
+            set_error(error, "the scene has no effect group for " + std::string(node_id));
+            return false;
+        }
+        const auto end = layer_end(commands, begin);
+        std::vector<ParagraphSlot> paragraphs(commands.size());
+        const auto saved_caches = caches_.frame_state();
+        caches_.begin_frame();
+        struct Restore final {
+            detail::SkiaResourceCaches& caches;
+            detail::SkiaResourceCaches::FrameState state;
+            ~Restore() { caches.restore(state); }
+        } restore{caches_, saved_caches};
+        FrameResources resources{.meshes = {.recorder = recorder_.get()}, .caches = &caches_};
+        const auto extent = layer_extent(commands, begin + 1U, end - 1U, paragraphs,
+                                         effect_input_rect(commands[begin]));
+        if (!extent) {
+            set_error(error, "the effect group's extent cannot be measured");
+            return false;
+        }
+        LayerImage image;
+        if (!record_effect_content(commands, begin, end, *extent, paragraphs, resources, error,
+                                   nullptr, nullptr, image)) {
+            return false;
+        }
+        const auto& layer = commands[begin];
+        const auto read = [&](std::string name, const std::function<bool(SkCanvas&)>& draw) {
+            auto surface = SkSurfaces::RenderTarget(
+                recorder_.get(), retained_info(physical_width(), physical_height()));
+            if (!surface) {
+                set_error(error, "Skia Graphite could not allocate a pass capture");
+                return false;
+            }
+            auto* canvas = surface->getCanvas();
+            canvas->clear(SkColors::kTransparent);
+            canvas->scale(config_.scale, config_.scale);
+            const int saved = canvas->save();
+            if (!draw(*canvas)) return false;
+            canvas->restoreToCount(saved);
+            EffectPassCapture pass{.name = std::move(name)};
+            if (!read_offscreen(*surface, pass.rgba, error)) return false;
+            pass.width = static_cast<std::uint32_t>(physical_width());
+            pass.height = static_cast<std::uint32_t>(physical_height());
+            passes.push_back(std::move(pass));
+            return true;
+        };
+        const auto behind = [&](SkCanvas& canvas) {
+            const int saved = canvas.save();
+            canvas.resetMatrix();
+            canvas.clear(sk_color(scene.background));
+            canvas.restoreToCount(saved);
+            const int open = canvas.save();
+            const bool ok = paint_members(canvas, commands, 0, begin, paragraphs, resources, error,
+                                          nullptr, nullptr);
+            canvas.restoreToCount(open);
+            return ok;
+        };
+        const LayerImage* content = image.image ? &image : nullptr;
+        if (!read("behind", behind)) return false;
+        if (!read("content", [&](SkCanvas& canvas) {
+                composite_effects(canvas, layer, content, config_.scale, resources,
+                                  {.backdrop = false, .filters = 0});
+                return true;
+            })) {
+            return false;
+        }
+        std::size_t filters = 0;
+        for (const auto& effect : layer.effects) {
+            if (!is_filter_effect(effect)) continue;
+            ++filters;
+            const char* kind = effect.kind == EffectKind::blur           ? "blur"
+                               : effect.kind == EffectKind::color_matrix ? "color_matrix"
+                                                                         : "drop_shadow";
+            if (!read("filter " + std::to_string(filters) + " " + kind, [&](SkCanvas& canvas) {
+                    composite_effects(canvas, layer, content, config_.scale, resources,
+                                      {.backdrop = false, .filters = filters});
+                    return true;
+                })) {
+                return false;
+            }
+        }
+        if (backdrop_paint(layer.effects, config_.scale).present &&
+            !read("backdrop", [&](SkCanvas& canvas) {
+                if (!behind(canvas)) return false;
+                composite_effects(canvas, layer, content, config_.scale, resources,
+                                  {.content = false});
+                return true;
+            })) {
+            return false;
+        }
+        return read("composited", [&](SkCanvas& canvas) {
+            if (!behind(canvas)) return false;
+            composite_effects(canvas, layer, content, config_.scale, resources);
+            return true;
+        });
+    }
+
 private:
+    bool read_offscreen(SkSurface& surface, std::vector<std::uint8_t>& rgba, std::string* error) {
+        auto recording = recorder_->snap();
+        if (!recording) {
+            set_error(error, "Skia Graphite produced no recording");
+            return false;
+        }
+        skgpu::graphite::InsertRecordingInfo insertion{};
+        insertion.fRecording = recording.get();
+        if (!context_->insertRecording(insertion)) {
+            set_error(error, "Skia Graphite could not insert the capture recording");
+            return false;
+        }
+        context_->submit(skgpu::graphite::SyncToCpu::kNo);
+        return read_target_rgba(surface, rgba, error);
+    }
+
     int physical_width() const {
         return std::max(1, static_cast<int>(
             std::lround(static_cast<double>(config_.width) * config_.scale)));
@@ -2154,8 +2568,17 @@ private:
             std::size_t recorded = 0;
             for (std::size_t index = 0; index < commands.size(); ++index) {
                 if (const auto* layer = layer_at[index]; layer != nullptr) {
-                    composite_layer(*canvas, *layer);
+                    composite_layer(*canvas, *layer, config_.scale, resources);
                     index = layer->end - 1U;
+                    continue;
+                }
+                if (is_effect_layer(commands[index])) {
+                    const auto end = layer_end(commands, index);
+                    if (!draw_effect_group(*canvas, commands, index, end, paragraphs, resources,
+                                           error, &recorded, nullptr)) {
+                        return fail(saved);
+                    }
+                    index = end - 1U;
                     continue;
                 }
                 if (!paint_command(*canvas, commands[index], config_.font_directory,
@@ -2180,8 +2603,24 @@ private:
                 canvas->scale(config_.scale, config_.scale);
                 for (std::size_t index = 0; index < commands.size(); ++index) {
                     if (const auto* layer = layer_at[index]; layer != nullptr) {
-                        if (overlaps(layer->image->extent, rect)) composite_layer(*canvas, *layer);
+                        if (overlaps(layer->area, rect)) {
+                            composite_layer(*canvas, *layer, config_.scale, resources);
+                        }
                         index = layer->end - 1U;
+                        continue;
+                    }
+                    if (is_effect_layer(commands[index])) {
+                        const auto end = layer_end(commands, index);
+                        const auto painted = effect_paint_extent(commands[index], config_.scale);
+                        if (!painted || overlaps(*painted, rect)) {
+                            std::size_t members = 0;
+                            if (!draw_effect_group(*canvas, commands, index, end, paragraphs,
+                                                   resources, error, &members, &drawn)) {
+                                return fail(saved);
+                            }
+                            stats.paint_command_draws += members;
+                        }
+                        index = end - 1U;
                         continue;
                     }
                     if (extents[index] && !overlaps(*extents[index], rect)) continue;
@@ -2218,15 +2657,38 @@ private:
         return true;
     }
 
+    // The device pixels an effect group's filters can read to paint the
+    // target: the target grown by the chain's radius, so content just past
+    // the viewport still contributes the blur or shadow it casts into view.
+    PixelRect effect_input_rect(const PaintCommand& layer) const {
+        const auto target = target_rect();
+        const float reach = std::ceil(
+            std::max(0.0F, effect_chain_cost(layer.effects).total.radius) * config_.scale);
+        const auto grow = static_cast<std::int32_t>(
+            std::min(reach, static_cast<float>(std::numeric_limits<std::int32_t>::max() / 4))) +
+            kExtentMargin;
+        return {target.left - grow, target.top - grow, target.right + grow,
+                target.bottom + grow};
+    }
+
     // The device-pixel extent a layer's image must cover: every member's paint
-    // extent under its transform, with text measured, clipped to the target.
+    // extent under its transform, with text measured, clipped to `clip` (the
+    // target, unless the layer's effects read past it).
     // `std::nullopt` when an extent is not finite or text cannot be measured.
     std::optional<PixelRect> layer_extent(const std::vector<PaintCommand>& commands,
                                           std::size_t begin, std::size_t end,
-                                          std::vector<ParagraphSlot>& paragraphs) const {
+                                          std::vector<ParagraphSlot>& paragraphs,
+                                          std::optional<PixelRect> clip = std::nullopt) const {
         PixelRect extent{};
         for (auto index = begin; index < end; ++index) {
             const auto& command = commands[index];
+            if (is_effect_layer(command)) {
+                // A nested effect group paints its declared area, past its
+                // members by the chain's radius.
+                const auto painted = effect_paint_extent(command, config_.scale);
+                extent = bounding_union(extent, painted ? *painted : target_rect());
+                continue;
+            }
             if (!draws_content(command.kind)) continue;
             if (!sane_box(command.bounds)) return std::nullopt;
             Rect local = paint_extent(command).rect;
@@ -2245,7 +2707,108 @@ private:
                                              pixels->right + kExtentMargin,
                                              pixels->bottom + kExtentMargin});
         }
-        return intersection(extent, target_rect());
+        return intersection(extent, clip ? *clip : target_rect());
+    }
+
+    ActiveLayer active_layer(const std::vector<PaintCommand>& commands, std::size_t begin,
+                             std::size_t end, float opacity, BlendMode blend,
+                             const LayerImage* image) const {
+        ActiveLayer active{
+            .begin = begin, .end = end, .opacity = opacity, .blend_mode = blend, .image = image};
+        active.area = image->extent;
+        if (is_effect_layer(commands[begin])) {
+            active.effects = &commands[begin];
+            const auto painted = effect_paint_extent(commands[begin], config_.scale);
+            active.area = painted ? intersection(*painted, target_rect()) : target_rect();
+        }
+        return active;
+    }
+
+    // Draws [first, last), drawing each effect group through
+    // `draw_effect_group`. `recorded` counts the paint commands drawn and
+    // `drawn`, when set, marks them.
+    bool paint_members(SkCanvas& canvas, const std::vector<PaintCommand>& commands,
+                       std::size_t first, std::size_t last,
+                       std::vector<ParagraphSlot>& paragraphs, FrameResources& resources,
+                       std::string* error, std::size_t* recorded, std::vector<bool>* drawn) {
+        for (auto index = first; index < last; ++index) {
+            if (is_effect_layer(commands[index])) {
+                const auto end = std::min(layer_end(commands, index), last);
+                if (!draw_effect_group(canvas, commands, index, end, paragraphs, resources, error,
+                                       recorded, drawn)) {
+                    return false;
+                }
+                index = end - 1U;
+                continue;
+            }
+            if (!paint_command(canvas, commands[index], config_.font_directory, resources, error,
+                               &paragraphs[index])) {
+                return false;
+            }
+            if (recorded != nullptr) ++*recorded;
+            if (drawn != nullptr) (*drawn)[index] = true;
+        }
+        return true;
+    }
+
+    // Records the members of the effect group [begin, end) into an image
+    // covering their device-pixel extent. `image` stays empty when they paint
+    // nothing; false when the image cannot be recorded.
+    bool record_effect_content(const std::vector<PaintCommand>& commands, std::size_t begin,
+                               std::size_t end, const PixelRect& extent,
+                               std::vector<ParagraphSlot>& paragraphs, FrameResources& resources,
+                               std::string* error, std::size_t* recorded,
+                               std::vector<bool>* drawn, LayerImage& image) {
+        image = {};
+        if (extent.empty()) return true;
+        auto surface = SkSurfaces::RenderTarget(
+            recorder_.get(),
+            retained_info(static_cast<int>(extent.width()), static_cast<int>(extent.height())));
+        if (!surface) {
+            set_error(error, "Skia Graphite could not allocate an effect layer");
+            return false;
+        }
+        auto* offscreen = surface->getCanvas();
+        offscreen->clear(SkColors::kTransparent);
+        offscreen->translate(static_cast<float>(-extent.left), static_cast<float>(-extent.top));
+        offscreen->scale(config_.scale, config_.scale);
+        if (!paint_members(*offscreen, commands, begin + 1U, end - 1U, paragraphs, resources,
+                           error, recorded, drawn)) {
+            return false;
+        }
+        image = {SkSurfaces::AsImage(surface), extent};
+        if (!image.image) {
+            set_error(error, "Skia Graphite could not sample an effect layer");
+            return false;
+        }
+        resources.effect_layers.push_back(std::move(surface));
+        ++resources.layers;
+        return true;
+    }
+
+    // Draws the effect group [begin, end), whose `begin_layer` carries the
+    // effects: its members into an offscreen image, the same image the layer
+    // cache keeps, then the backdrop and the image through the chain. A group
+    // whose extent cannot be measured draws its members directly, without
+    // effects.
+    bool draw_effect_group(SkCanvas& canvas, const std::vector<PaintCommand>& commands,
+                           std::size_t begin, std::size_t end,
+                           std::vector<ParagraphSlot>& paragraphs, FrameResources& resources,
+                           std::string* error, std::size_t* recorded, std::vector<bool>* drawn) {
+        const auto extent = layer_extent(commands, begin + 1U, end - 1U, paragraphs,
+                                         effect_input_rect(commands[begin]));
+        if (!extent) {
+            return paint_members(canvas, commands, begin + 1U, end - 1U, paragraphs, resources,
+                                 error, recorded, drawn);
+        }
+        LayerImage image;
+        if (!record_effect_content(commands, begin, end, *extent, paragraphs, resources, error,
+                                   recorded, drawn, image)) {
+            return false;
+        }
+        composite_effects(canvas, commands[begin], image.image ? &image : nullptr, config_.scale,
+                          resources);
+        return true;
     }
 
     // Plans the frame's cached layers and records every image that must be
@@ -2273,10 +2836,17 @@ private:
                     continue;
                 }
                 layer_cache_.record_hit(layer.node_id);
-                layers.push_back({layer.begin, layer.end, opacity, blend, &found->second});
+                layers.push_back(
+                    active_layer(commands, layer.begin, layer.end, opacity, blend, &found->second));
                 continue;
             }
-            const auto extent = layer_extent(commands, content_begin, content_end, paragraphs);
+            // An effect group's image keeps what its filters read from past
+            // the target, as the direct path's does.
+            const auto clip = layer.opacity_layer && is_effect_layer(commands[layer.begin])
+                                  ? std::optional<PixelRect>(effect_input_rect(commands[layer.begin]))
+                                  : std::nullopt;
+            const auto extent =
+                layer_extent(commands, content_begin, content_end, paragraphs, clip);
             if (!extent || extent->empty()) {
                 (void)layer_cache_.admit(layer.node_id, 0);
                 continue;
@@ -2295,16 +2865,13 @@ private:
             canvas->translate(static_cast<float>(-extent->left),
                               static_cast<float>(-extent->top));
             canvas->scale(config_.scale, config_.scale);
-            for (auto index = content_begin; index < content_end; ++index) {
-                if (!paint_command(*canvas, commands[index], config_.font_directory,
-                                   resources, error, &paragraphs[index])) {
-                    return false;
-                }
-                ++recorded;
+            if (!paint_members(*canvas, commands, content_begin, content_end, paragraphs,
+                               resources, error, &recorded, nullptr)) {
+                return false;
             }
             auto& stored = layer_images_[layer.node_id];
             stored = {std::move(image), *extent};
-            layers.push_back({layer.begin, layer.end, opacity, blend, &stored});
+            layers.push_back(active_layer(commands, layer.begin, layer.end, opacity, blend, &stored));
         }
         return true;
     }
@@ -2595,6 +3162,14 @@ LayerCacheStats SkiaDawnSurface::layer_cache_stats() const {
     return impl_->layer_cache_stats();
 }
 
+bool SkiaDawnSurfaceTestAccess::capture_effect_passes(SkiaDawnSurface& surface,
+                                                      const Scene& scene,
+                                                      std::string_view node_id,
+                                                      std::vector<EffectPassCapture>& passes,
+                                                      std::string* error) {
+    return surface.impl_->capture_effect_passes(scene, node_id, passes, error);
+}
+
 void SkiaDawnSurfaceTestAccess::set_damage_model_version(SkiaDawnSurface& surface,
                                                          std::uint32_t version) noexcept {
     surface.impl_->set_damage_model_version(version);
@@ -2651,6 +3226,8 @@ void set_partial_redraw_rules(const PartialRedrawRules& rules) noexcept {
     enclose_images = rules.enclose_images;
     enclose_clips = rules.enclose_clips;
     enclose_group_layers = rules.enclose_group_layers;
+    enclose_effects = rules.enclose_effects;
+    enclose_backdrops = rules.enclose_backdrops;
 }
 
 PartialRedrawRules partial_redraw_rules() noexcept {
@@ -2659,7 +3236,9 @@ PartialRedrawRules partial_redraw_rules() noexcept {
             .enclose_interpolated_fills = enclose_interpolated_fills,
             .enclose_images = enclose_images,
             .enclose_clips = enclose_clips,
-            .enclose_group_layers = enclose_group_layers};
+            .enclose_group_layers = enclose_group_layers,
+            .enclose_effects = enclose_effects,
+            .enclose_backdrops = enclose_backdrops};
 }
 
 void set_internal_sample_count(std::uint32_t count) noexcept { internal_samples = count; }

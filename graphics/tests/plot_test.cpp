@@ -1,6 +1,7 @@
 #include "../src/plot_testing.hpp"
 
 #include <vellum/graphics/damage.hpp>
+#include <vellum/graphics/effect.hpp>
 #include <vellum/graphics/lowering_diagnostic.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/plot.hpp>
@@ -449,6 +450,61 @@ void plot_with_gradient_fill() {
            "a change to a plot's gradient background damages the whole plot", bounds_of(damage));
 }
 
+// A blended plot needs both features: accepted at 12, refused at 11 for the
+// plot and at 5 for the blend mode, and drawn through a blended layer.
+void plot_with_blend_mode() {
+    Scene scene = plot_scene(line_spec(4, {0.5F}));
+    scene.root.children[1].blend_mode = BlendMode::multiply;
+    expect(accept_scene(scene).accepted, "a multiplied plot is accepted at 12");
+    const auto commands = make_paint_commands(scene);
+    expect(commands.size() == 4U && commands[1].kind == PaintCommand::Kind::begin_layer &&
+               commands[1].blend_mode == BlendMode::multiply &&
+               commands[2].kind == PaintCommand::Kind::plot,
+           "a multiplied plot is drawn through a blended layer");
+    const auto refused_at = [&](std::uint32_t version, const std::string& why) {
+        Scene older = scene;
+        older.scene_version = version;
+        const auto result = accept_scene(older);
+        return !result.accepted && result.reason.find(why) != std::string::npos;
+    };
+    expect(refused_at(11U, "plot node"), "the multiplied plot at version 11 is refused for the plot");
+    expect(refused_at(5U, "blend mode"), "the multiplied plot at version 5 is refused for the blend");
+}
+
+// A plot inside a blurred group needs both features: accepted at 12, refused
+// at 11 for the plot and at 9 for the effect. Its sample damage grows by the
+// blur's radius, since the blur spreads every changed pixel.
+void plot_under_effects() {
+    Scene scene = plot_scene(line_spec(100, ramp(100)));
+    SceneNode group{.id = "fx", .kind = SceneNode::Kind::group,
+                    .bounds = {0.0F, 0.0F, kFrameWidth, kFrameHeight}};
+    group.effects = {{.kind = EffectKind::blur, .sigma = 3.0F}};
+    group.children.push_back(scene.root.children[1]);
+    scene.root.children[1] = group;
+    expect(accept_scene(scene).accepted, "a plot inside a blurred group is accepted at 12");
+    const auto refused_at = [&](std::uint32_t version, const std::string& why) {
+        Scene older = scene;
+        older.scene_version = version;
+        const auto result = accept_scene(older);
+        return !result.accepted && result.reason.find(why) != std::string::npos;
+    };
+    expect(refused_at(11U, "plot node"), "the blurred plot at version 11 is refused for the plot");
+    expect(refused_at(9U, "effects"), "the blurred plot at version 9 is refused for the effect");
+    Scene next = scene;
+    auto& plot = next.root.children[1].children[0];
+    auto spec = std::make_shared<PlotSpec>(*plot.plot);
+    spec->samples[50] = 1.0F;
+    plot.plot = spec;
+    const auto grown = compute_scene_damage(scene, next, 1.0F);
+    const float radius = effect_chain_cost(group.effects).total.radius;
+    expect(radius > 1.0F && grown.bounds().width() >= static_cast<std::int64_t>(2.0F * radius),
+           "sample damage under a blur grows by the blur's radius", bounds_of(grown));
+    Override off(hooks::PlotDecimation::min_max, {.grow_by_effects = false});
+    const auto narrow = compute_scene_damage(scene, next, 1.0F);
+    expect(narrow.bounds().width() < grown.bounds().width(),
+           "negative control: without the effect radius the damage is narrower", bounds_of(narrow));
+}
+
 void invalid_plots() {
     const auto refused = [](const std::string& name, PlotSpec spec, const std::string& why) {
         const auto result = accept_scene(plot_scene(std::move(spec)));
@@ -803,6 +859,8 @@ int main() {
     damage_per_update();
     versioning();
     plot_with_gradient_fill();
+    plot_with_blend_mode();
+    plot_under_effects();
     invalid_plots();
     sampler();
     producer_thread();

@@ -4,6 +4,7 @@
 #include "support/scene_capture_harness.hpp"
 
 #include <vellum/graphics/damage.hpp>
+#include <vellum/graphics/effect.hpp>
 #include <vellum/graphics/plot.hpp>
 #include <vellum/graphics/plot_feed.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
@@ -401,6 +402,44 @@ void gradient_plot() {
     expect(partial_frames > 0, "sample updates over a gradient background take the partial path");
 }
 
+// A plot inside a blurred group: each sample update redraws exactly on the
+// partial path. The renderer redraws a damaged effect group whole, so the
+// damage growth by the blur's radius is checked against the damage model in
+// plot_test.cpp rather than here.
+void plot_under_blur() {
+    const auto run = [](bool grow) {
+        PlotOverride rules(hooks::PlotDecimation::min_max, {.grow_by_effects = grow});
+        auto full = make_surface(2.0F);
+        auto partial = make_surface(2.0F);
+        if (!full || !partial) return std::pair<int, int>{-1, -1};
+        Scene scene = oracle_scene();
+        auto* scope = find_mutable(scene.root, "scope");
+        SceneNode group{.id = "fx", .kind = SceneNode::Kind::group,
+                        .bounds = {0.0F, 0.0F, kWidth, kHeight}};
+        group.effects = {{.kind = EffectKind::blur, .sigma = 3.0F}};
+        group.children.push_back(*scope);
+        std::erase_if(scene.root.children, [](const SceneNode& node) { return node.id == "scope"; });
+        scene.root.children.push_back(std::move(group));
+        if (!render_both(*full, *partial, scene)) return std::pair<int, int>{-1, -1};
+        int differing = 0;
+        int partial_frames = 0;
+        for (int step = 0; step < 6; ++step) {
+            std::vector<float> samples(2000, 0.25F);
+            samples[300U * static_cast<std::size_t>(step) + 50U] = 1.0F;
+            set_samples(scene, "scope", samples);
+            if (!render_both(*full, *partial, scene)) return std::pair<int, int>{-1, -1};
+            if (!partial->frame_stats().full_repaint) ++partial_frames;
+            std::string message;
+            if (!identical(*full, *partial, message)) ++differing;
+        }
+        return std::pair<int, int>{differing, partial_frames};
+    };
+    const auto [differing, partial_frames] = run(true);
+    expect(differing == 0 && partial_frames > 0,
+           "sample updates of a plot under a blur redraw byte-identically on the partial path",
+           std::to_string(differing) + " differ, " + std::to_string(partial_frames) + " partial");
+}
+
 void sweeps() {
     const Scene scene = sweep_scene();
     for (const float scale : {1.0F, 2.0F}) {
@@ -755,6 +794,7 @@ int main() {
     if (gpu_missing) return 77;
     sweeps();
     gradient_plot();
+    plot_under_blur();
     feed_updates();
     rebind_to_unpublished();
     large_feed();

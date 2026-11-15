@@ -226,8 +226,9 @@ public:
 [[nodiscard]] bool paint_differs(const SceneNode& previous, const SceneNode& next);
 
 /// Whether two nodes with the same identity group their subtree differently:
-/// a different clip (compared like paths in `paint_differs`), mask mode, or
-/// isolation. Such a change damages the node's whole subtree, and a changed
+/// a different clip (compared like paths in `paint_differs`), mask mode,
+/// isolation, or effect chain (every field, floats bitwise). Such a change
+/// damages the node's whole subtree, and a changed
 /// mask mode also damages its parent's subtree, as does a change to a mask's
 /// opacity or transform.
 [[nodiscard]] bool grouping_differs(const SceneNode& previous, const SceneNode& next);
@@ -245,11 +246,21 @@ public:
 /// scene. A changed frame size, background or `scene_version` damages the
 /// whole frame.
 ///
+/// Inside a node with effects, every member's damage grows by the sum of the
+/// enclosing chains' radii (in frame space, unscaled by transforms) and is
+/// bounded only by the clips outside the outermost effect. A chain that
+/// fills its area (`effect_chain_fills_area`) makes the group's own damage the
+/// whole area around its members, so a change to that area damages the old
+/// and the new one. A node with a backdrop effect also damages its box, and once any damage reaches the
+/// area its backdrop samples (its box grown by the backdrop's reach) its box
+/// is damaged too, repeated until no further backdrop is reached.
+///
 /// A plot whose samples alone change, with its box, transform, clip,
 /// background and layout unchanged and no effect spreading its damage,
 /// damages only the spans `plot_sample_damage` reports, mapped through its
-/// composed transform and bounded by its clips; any other plot change damages
-/// its old and new areas.
+/// composed transform, grown by the radius of the effects around it and
+/// bounded by its clips; any other plot change, and a plot whose blend mode
+/// clears the backdrop, damages its old and new areas.
 [[nodiscard]] DamageRegion compute_scene_damage(
     const Scene& previous, const Scene& next, float scale,
     DamagePolicy policy = {}, const DamagePropagation* propagation = nullptr);

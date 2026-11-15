@@ -3,6 +3,7 @@ export const AUTHORED_OVERLAY_SCHEMA: 'https://vellum.dev/schemas/design-ir/auth
 export const REIMPORT_REPORT_SCHEMA: 'https://vellum.dev/schemas/design-ir/reimport-report/v1';
 export const DESIGN_IR_VERSION: 1;
 export const DESIGN_IR_COMPOSITING_VERSION: 2;
+export const DESIGN_IR_MATERIALS_VERSION: 3;
 export const DESIGN_IR_PLOTS_VERSION: 5;
 export const DESIGN_IR_VERSIONS: readonly [1, 2, 3, 4, 5];
 export const AUTHORED_OVERLAY_VERSION: 1;
@@ -110,6 +111,7 @@ export interface DesignNode {
     extensions?: Record<string, JsonValue>;
     /** Present only in a version 2 or later document, and only for non-default values. */
     compositing?: NodeCompositing;
+    material?: MaterialReference;
     /** Present only in a version 5 or later document. */
     plot?: PlotBinding;
     children: DesignNode[];
@@ -139,6 +141,21 @@ export interface PlotBinding {
     peakColor?: string;
 }
 
+/** A material value: a number, two numbers, or a straight RGBA colour. */
+export type MaterialValue =
+    | number
+    | [number, number]
+    | { red: number; green: number; blue: number; alpha: number };
+
+/**
+ * A registered material named by id with values for its uniforms. The
+ * uniforms' types, ranges and defaults belong to the material's registration.
+ */
+export interface MaterialReference {
+    id: string;
+    values: Record<string, MaterialValue>;
+}
+
 export interface DesignSource {
     key: string;
     namespace: string;
@@ -164,7 +181,8 @@ export interface DesignIR {
     $schema: typeof DESIGN_IR_SCHEMA;
     /**
      * The oldest version carrying every field the document uses: 5 when a
-     * node carries `plot`, 2 when a node carries `compositing`, otherwise 1.
+     * node carries `plot`, 3 when a node carries `material`, 2 when a node
+     * carries `compositing`, otherwise 1.
      */
     schemaVersion: 1 | 2 | 3 | 4 | 5;
     compiler: { name: string; version: string };
@@ -200,6 +218,7 @@ export interface SourceNode {
     properties?: Record<string, JsonValue>;
     extensions?: Record<string, JsonValue>;
     compositing?: NodeCompositing;
+    material?: MaterialReference;
     losses?: Array<Partial<DesignDiagnostic> & Pick<DesignDiagnostic, 'code' | 'message'>>;
     children?: SourceNode[];
     [adapterField: string]: unknown;
@@ -303,10 +322,6 @@ export function buildLossReport(diagnostics: DesignDiagnostic[]): DesignIR['loss
 export function normalizeTokens(rawTokens: unknown, sourceKey: string): Record<string, DesignToken>;
 export function resolveTokenLayers(document: DesignIR, overlay?: Partial<AuthoredOverlay>): TokenLayers;
 export function diffTokens(previous: DesignIR['tokens'], next: DesignIR['tokens']): unknown[];
-/**
- * `schemaVersion` defaults to 5 when a node carries a plot binding and to 1
- * otherwise.
- */
 export function normalizeImport(
     input: ImportSourceModel,
     options?: { compilerVersion?: string; schemaVersion?: 1 | 2 | 3 | 4 | 5 },

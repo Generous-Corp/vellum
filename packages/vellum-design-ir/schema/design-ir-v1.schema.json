@@ -20,7 +20,7 @@
     "$schema": { "const": "https://vellum.dev/schemas/design-ir/v1" },
     "schemaVersion": {
       "enum": [1, 2, 3, 4, 5],
-      "description": "The oldest version carrying every field the document uses; each version keeps the fields of the ones before it. Version 2 adds the node compositing object and version 5 adds plot bindings; versions 3 and 4 add node fields this schema does not read. A field is illegal below the version that introduced it."
+      "description": "The oldest version carrying every field the document uses; each version keeps the fields of the ones before it. Version 2 adds the node compositing object, version 3 node material references and version 5 plot bindings; version 4 adds node fields this schema does not read. A field is illegal below the version that introduced it."
     },
     "compiler": {
       "type": "object",
@@ -52,6 +52,11 @@
       "description": "A version 1 document carries no compositing object on any node; compositing is version 2 and later vocabulary.",
       "if": { "required": ["schemaVersion"], "properties": { "schemaVersion": { "const": 1 } } },
       "then": { "properties": { "root": { "$ref": "#/$defs/nodeWithoutCompositing" } } }
+    },
+    {
+      "description": "A document before version 3 carries no material reference on any node; materials are version 3 vocabulary.",
+      "if": { "required": ["schemaVersion"], "properties": { "schemaVersion": { "enum": [1, 2] } } },
+      "then": { "properties": { "root": { "$ref": "#/$defs/nodeWithoutMaterial" } } }
     },
     {
       "description": "A document below version 5 carries no plot binding on any node; plots are version 5 vocabulary.",
@@ -110,10 +115,49 @@
         "text": { "type": "string" },
         "properties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
         "extensions": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
+        "material": { "$ref": "#/$defs/materialReference" },
         "compositing": { "$ref": "#/$defs/compositing" },
         "plot": { "$ref": "#/$defs/plotBinding" },
         "children": { "type": "array", "items": { "$ref": "#/$defs/node" } }
       }
+    },
+    "nodeWithoutMaterial": {
+      "description": "A node, and every node beneath it, without a material reference.",
+      "properties": {
+        "material": false,
+        "children": { "type": "array", "items": { "$ref": "#/$defs/nodeWithoutMaterial" } }
+      }
+    },
+    "materialReference": {
+      "description": "A registered material named by id with values for its uniforms. The uniforms' types, ranges and defaults belong to the material's registration, not to the document.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "values"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*$" },
+        "values": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "additionalProperties": { "$ref": "#/$defs/materialValue" }
+        }
+      }
+    },
+    "materialValue": {
+      "oneOf": [
+        { "type": "number" },
+        { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["red", "green", "blue", "alpha"],
+          "properties": {
+            "red": { "type": "number" },
+            "green": { "type": "number" },
+            "blue": { "type": "number" },
+            "alpha": { "type": "number" }
+          }
+        }
+      ]
     },
     "nodeWithoutCompositing": {
       "description": "A node, and every node beneath it, without a compositing object.",

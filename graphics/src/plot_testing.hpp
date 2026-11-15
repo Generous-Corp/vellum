@@ -25,6 +25,8 @@ struct PlotRules final {
     /// Sample damage covers every column whose span changed, rather than only
     /// the columns of the newest slot.
     bool every_changed_column = true;
+    /// Sample damage grows by the radius of the effects around the plot.
+    bool grow_by_effects = true;
 };
 
 /// Sets the decimation and rules for every plot in the process.

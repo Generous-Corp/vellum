@@ -137,6 +137,36 @@ test('versions are cumulative: a document with compositing and plots is version 
         entry.path === '$.root.plot' && entry.code === 'version'));
 });
 
+test('each field is legal from its own version: compositing 2, material 3, plot 5', async () => {
+    const source = JSON.parse(await readFile(new URL('revision-a.source.json', fixtures), 'utf8'));
+    source.root.children[0].compositing = { blendMode: 'multiply' };
+    source.root.children[0].material = { id: 'vellum.frosted-glass', values: { blur: 4 } };
+    source.root.plot = { style: 'meter', channel: 'meters' };
+    const design = normalizeImport(source);
+    assert.equal(design.schemaVersion, 5);
+    assert.deepEqual(validateDesignIR(design), { issues: [], valid: true });
+    const versionIssues = (document) => validateDesignIR(document).issues
+        .filter((entry) => entry.code === 'version')
+        .map((entry) => entry.path)
+        .sort();
+    const expected = {
+        1: ['$.root.children[0].compositing', '$.root.children[0].material', '$.root.plot'],
+        2: ['$.root.children[0].material', '$.root.plot'],
+        3: ['$.root.plot'],
+        4: ['$.root.plot'],
+        5: [],
+    };
+    for (const [version, paths] of Object.entries(expected)) {
+        const document = structuredClone(design);
+        document.schemaVersion = Number(version);
+        assert.deepEqual(versionIssues(document), paths, `version ${version}`);
+    }
+    const material = structuredClone(source);
+    delete material.root.plot;
+    delete material.root.children[0].compositing;
+    assert.equal(normalizeImport(material).schemaVersion, 3);
+});
+
 test('the schema declares plot bindings without samples', async () => {
     const definitions = JSON.parse(await readFile(schema, 'utf8')).$defs;
     const published = JSON.parse(await readFile(schema, 'utf8'));
