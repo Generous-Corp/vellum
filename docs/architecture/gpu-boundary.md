@@ -22,7 +22,9 @@ The public slice consists of:
   application builds, plus a headers-only `Vellum::DawnHeaders` target for an
   embedding host's authenticated bootstrap and compute code.
 
-The scene carries a single integer schema version, `kSceneVersion`, now 6.
+The scene carries a single integer schema version, `kSceneVersion`, now 11.
+Versions 7 and 9 are reserved and add no fields in this build.
+Version 10 adds node effects; version 11 adds animation tracks.
 A change that can alter rendered output bumps it: a new node kind, a new field
 that changes how a scene is drawn, or a change in meaning. A change that only
 adds metadata keeps it. Consumers accept versions from
@@ -36,7 +38,9 @@ diagnostic and reports authored style or content it drops as warnings on
 severity and disposition words but identify content by node ID, not by
 DesignIR document path. Versions are claimed in order: version 4: image nodes;
 version 5: clip, mask and isolation on groups; version 6: blend modes and
-DesignIR compositing fields; version 7: token table (reserved).
+DesignIR compositing fields; version 7: token table (reserved); version 8:
+gradient vocabulary; version 9: vector assets (reserved); version 10: effects
+and materials; version 11: animation tracks.
 
 Nodes carry an optional affine transform about their origin, a group opacity,
 and per-corner radii beside the uniform `corner_radius` shorthand. All three
@@ -262,14 +266,20 @@ on any node type and fails the tree for an unknown name.
 
 DesignIR schema version 2 adds the node `compositing` object (opacity, blend
 mode, isolation, a mask mode and a mask reference to a sibling mask) with the
-same names. A normalizer emits version 2 only when a node uses it, a version 1
-document that carries one is refused (by the validator and, through a
-conditional, by the published JSON schema), and a mask reference must name a
-sibling that is a mask. `materializeDesign` lowers the object into the retained
+same names. Readers accept DesignIR versions 1 through 4. Version 3 adds
+material references; version 4 adds node animation tracks. Normalization
+writes the lowest version that covers the
+document: 4 when a node has tracks, otherwise 3 when a node has a material
+reference, otherwise 2 when a node uses compositing, otherwise 1. Compositing
+requires version 2 or later, materials require version 3, and tracks require
+version 4; the validator and published JSON schema enforce all three gates. A mask
+reference must name a sibling that is a mask. `materializeDesign` lowers the object into the retained
 `opacity`, `mixBlendMode`, `isolation` and `maskMode` styles. Because the
 renderer applies a mask to every sibling, it accepts a mask reference only when
 the parent holds one mask and every other child names it, and refuses anything
-else rather than drawing it differently.
+else rather than drawing it differently. The retained materializer refuses
+populated tracks and material references, including those on hidden descendants,
+until it can preserve them.
 
 The surface draws every frame into a retained offscreen Graphite surface the
 size of its target in device pixels, and presents by drawing that image into
@@ -288,12 +298,27 @@ threshold fall back to a full repaint. Hosts pass `invalidate` reasons and node 
 rectangle counts, the commands re-recorded and why a frame repainted fully.
 What is cached and when it is discarded is renderer policy: the scene schema
 carries no cache hints. Partial redraw is enabled only for scene versions the
-damage model understands, up to `kDamageModelSceneVersion` (6), which covers
+damage model understands, up to `kDamageModelSceneVersion` (11), which covers
 transforms, group opacity, per-corner radii, paths, images, clips, masks and
-isolation on groups, and blend modes. A version the renderer accepts but the damage model
+isolation on groups, blend modes, gradient vocabulary and animation tracks.
+A version the renderer accepts but the damage model
 does not yet understand repaints fully with reason `damage_model_version`. A version outside
 [`kMinSupportedSceneVersion`, `kSceneVersion`] is refused before anything is
 drawn.
+
+Animation tracks on a node drive its opacity, the channels of an animated
+transform (translate, rotate, scale), its fill, a path's stroke colour, and the
+colours of a shadow, a gradient stop or a text run. Keyframes ease linearly,
+by cubic bezier, by steps, or by a damped spring timed in seconds. Tracks are
+evaluated at `Scene::clock`, which the host passes for every frame; no renderer
+reads a clock of its own, so the same scene at the same clock draws the same
+frame byte for byte. Every consumer (lowering, acceptance, damage and the web
+canvas shell) works on the scene `evaluate_tracks` produces, so damage covers
+exactly the nodes whose evaluated values changed. A track holds its first value
+before its first keyframe and its last value after its last, and a spring is
+exactly at its target from its settle time on, so a track at rest damages
+nothing. A version 10 or older scene with a track is refused with
+`VELLUM_SCENE_VERSION_MISMATCH`.
 
 A path damages its control box outset by its stroke reach: half the width,
 times the miter limit for miter joins or sqrt(2) for square and round caps,

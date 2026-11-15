@@ -1,0 +1,25 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-15T07:06:16Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-64fa8248da9f0de742e293e8fdbcd77874bfc4a6",
+  "kind": "resolution",
+  "linked_commits": [
+    "64fa8248da9f0de742e293e8fdbcd77874bfc4a6"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-native graphics change with no Pulp consumer; owner-approved agent classification 2026-11-10",
+  "resolves": "vellum-64fa8248da9f0de742e293e8fdbcd77874bfc4a6",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
