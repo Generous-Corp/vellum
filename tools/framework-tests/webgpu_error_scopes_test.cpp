@@ -107,7 +107,7 @@ struct Harness {
     // (null when none), running pending promise jobs before returning.
     void pop_into_popped() {
         run("globalThis.popped = 'pending'; dev.popErrorScope().then(function (e) { globalThis.popped = e; });");
-        for (int i = 0; i < 10 && js_string("popped") == "pending"; ++i) run("0");
+        for (int i = 0; i < 10 && js_string("popped") == "pending"; ++i) engine.pump_message_loop();
     }
 };
 
@@ -132,7 +132,7 @@ FRAMEWORK_TEST(bad_wgsl_reports_its_line_and_column_in_the_compilation_info) {
     h.run("dev.pushErrorScope('validation');"
           "globalThis.mod = dev.createShaderModule({code: " + Harness::js_literal(kBadWgsl) + "});"
           "mod.getCompilationInfo().then(function (info) { globalThis.info = info; });");
-    for (int i = 0; i < 10 && h.js_string("typeof info") != "object"; ++i) h.run("0");
+    for (int i = 0; i < 10 && h.js_string("typeof info") != "object"; ++i) h.engine.pump_message_loop();
     CHECK(h.js_string("info.messages.length > 0") == "true");
     CHECK(h.js_string("info.messages[0].lineNum") == "3");
     CHECK(h.js_string("info.messages[0].linePos > 0") == "true");
@@ -145,7 +145,7 @@ FRAMEWORK_TEST(valid_wgsl_reports_no_error) {
     h.run("dev.pushErrorScope('validation');"
           "globalThis.mod = dev.createShaderModule({code: WGSL});"
           "mod.getCompilationInfo().then(function (info) { globalThis.info = info; });");
-    for (int i = 0; i < 10 && h.js_string("typeof info") != "object"; ++i) h.run("0");
+    for (int i = 0; i < 10 && h.js_string("typeof info") != "object"; ++i) h.engine.pump_message_loop();
     CHECK(h.js_string("info.messages.length") == "0");
     h.pop_into_popped();
     CHECK(h.js_string("popped === null") == "true");
@@ -190,7 +190,7 @@ FRAMEWORK_TEST(an_error_goes_to_the_innermost_scope_with_a_matching_filter) {
           "globalThis.inner = 'pending'; globalThis.outer = 'pending';"
           "dev.popErrorScope().then(function (e) { globalThis.inner = e; });"
           "dev.popErrorScope().then(function (e) { globalThis.outer = e; });");
-    for (int i = 0; i < 10 && h.js_string("outer") == "pending"; ++i) h.run("0");
+    for (int i = 0; i < 10 && h.js_string("outer") == "pending"; ++i) h.engine.pump_message_loop();
 
     CHECK(h.js_string("inner === null") == "true");
     CHECK(h.js_string("outer !== null && outer.name") == "GPUValidationError");
