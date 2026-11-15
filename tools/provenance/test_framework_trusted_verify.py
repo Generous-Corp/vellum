@@ -194,7 +194,7 @@ class FrameworkTrustedVerifyTests(unittest.TestCase):
 
     def test_transfer_data_without_framework_is_refused(self):
         for path in (verifier.FRAMEWORK_TRANSFER_RECORD, verifier.FRAMEWORK_NAME_DEBT,
-                     verifier.FRAMEWORK_EXTERNAL_UPDATES):
+                     verifier.FRAMEWORK_EXTERNAL_UPDATES, verifier.FRAMEWORK_UNITS):
             with self.subTest(path=path):
                 repo = self.fresh()
                 repo.write(path, b"{}\n")
