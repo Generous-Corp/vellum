@@ -580,6 +580,20 @@ function materialize(value, runtime, path) {
     if (value.type === 'text-run') node.text = textRunText;
     else if (typeof value.props.text === 'string') node.text = value.props.text;
     if (typeof value.props.source === 'string') node.source = value.props.source;
+    if (typeof value.props.anchor === 'string' && value.props.anchor.length > 0 &&
+        value.props.anchor.length <= 1024) {
+        node.anchor = value.props.anchor;
+    }
+    const where = value.props.sourceLocation;
+    if (where !== null && typeof where === 'object' && typeof where.file === 'string' &&
+        where.file.length > 0 && where.file.length <= 4096) {
+        node.sourceLocation = { file: where.file };
+        for (const key of ['line', 'column']) {
+            if (Number.isInteger(where[key]) && where[key] >= 0) {
+                node.sourceLocation[key] = where[key];
+            }
+        }
+    }
     if (pathProperties !== undefined) Object.assign(node, pathProperties);
     if (imageProperties !== undefined) Object.assign(node, imageProperties);
     if (value.type === 'custom') {

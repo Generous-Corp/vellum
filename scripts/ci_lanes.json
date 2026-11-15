@@ -136,6 +136,10 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_verify_rmlui_sdk_artifact.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_verify_gpu_runtime_release.py",
         "isolated": true
       },
@@ -230,6 +234,12 @@
         "script": "scripts/readme_lint.py"
       },
       {
+        "script": "scripts/test_check_plugin_editor_async.py"
+      },
+      {
+        "script": "scripts/check_plugin_editor_async.py"
+      },
+      {
         "script": "scripts/test_prose_lint.py",
         "isolated": true
       },
@@ -277,6 +287,10 @@
       },
       {
         "script": "scripts/test_build_sdk_artifact.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_verify_rmlui_sdk_artifact.py",
         "isolated": true
       },
       {
@@ -340,6 +354,8 @@
   },
   "elsewhere": {
     ".agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py": "workflow:provenance.yml",
+    "apps/app-host/test_design_anchor_dump.py": "cmake:apps/app-host/CMakeLists.txt",
+    "apps/app-host/test_manual_clock_capture.py": "cmake:apps/app-host/CMakeLists.txt",
     "apps/app-host/test_phase3_scenario.py": "cmake:apps/app-host/CMakeLists.txt",
     "apps/app-host/test_state_persistence.py": "cmake:apps/app-host/CMakeLists.txt",
     "apps/app-host/test_text_semantics.py": "cmake:apps/app-host/CMakeLists.txt",

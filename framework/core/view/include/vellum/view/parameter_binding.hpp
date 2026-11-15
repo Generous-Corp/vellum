@@ -147,6 +147,169 @@ bind_parameter(Knob& knob, value::ParamModel& model, value::ParamHandle param) {
                             detail::poll_modulated_display(knob, model, param));
 }
 
+namespace detail {
+/// A continuous control bound to a model: a drag is one model gesture, the
+/// control's values are `set_normalized()`, and `show` moves the control
+/// silently for every model change.
+template <typename Control, typename Show>
+ParameterBinding bind_continuous(Control& control, value::ParamModel& model,
+                                 value::ParamHandle param, Show show) {
+    show(model.normalized(param));
+    control.on_gesture_begin = [&model, param] { model.begin(param); };
+    control.on_change = [&model, param](float v) { model.set_normalized(param, v); };
+    control.on_gesture_end = [&model, param] { model.end(param); };
+    return ParameterBinding(value::watch(model, param, std::move(show)),
+                            poll_modulated_display(control, model, param));
+}
+
+/// One discrete edit as a complete gesture, so the host records it.
+inline void write_one_shot(value::ParamModel& model, value::ParamHandle param,
+                           double normalized) {
+    model.begin(param);
+    model.set_normalized(param, normalized);
+    model.end(param);
+}
+
+/// The number of values an index control maps onto: the parameter's own
+/// value count, or the control's option count when the parameter is
+/// continuous or single-valued.
+inline int index_value_count(value::ParamModel& model, value::ParamHandle param,
+                             int option_count) {
+    const int count = model.value_count(param);
+    return count >= 2 ? count : option_count;
+}
+
+/// An index control (combo, stepper) bound to a model. A selection is a
+/// one-shot gesture; a model change selects silently through `show`.
+template <typename Show>
+ParameterBinding bind_index(std::function<void(int)>& on_select, value::ParamModel& model,
+                            value::ParamHandle param, int option_count, Show show) {
+    const int count = index_value_count(model, param, option_count);
+    show(value::normalized_to_value_index(model.normalized(param), count));
+    on_select = [&model, param, count](int index) {
+        write_one_shot(model, param, value::value_index_to_normalized(index, count));
+    };
+    return ParameterBinding(
+        value::watch(model, param,
+                     [show = std::move(show), count](double normalized) {
+                         show(value::normalized_to_value_index(normalized, count));
+                     }),
+        {});
+}
+
+/// An on/off control bound to a model: on is 1, off is 0, and a value at or
+/// above one half shows as on. A flip is a one-shot gesture.
+template <typename Show>
+ParameterBinding bind_switch(std::function<void(bool)>& on_flip, value::ParamModel& model,
+                             value::ParamHandle param, Show show) {
+    show(model.normalized(param) >= 0.5);
+    on_flip = [&model, param](bool on) { write_one_shot(model, param, on ? 1.0 : 0.0); };
+    return ParameterBinding(
+        value::watch(model, param,
+                     [show = std::move(show)](double normalized) { show(normalized >= 0.5); }),
+        {});
+}
+} // namespace detail
+
+/// Fader ↔ model parameter (normalized), as the knob.
+[[nodiscard]] inline ParameterBinding
+bind_parameter(Fader& fader, value::ParamModel& model, value::ParamHandle param) {
+    return detail::bind_continuous(fader, model, param, [&fader](double normalized) {
+        fader.set_value(static_cast<float>(normalized));
+    });
+}
+
+/// Range slider ↔ model parameter (normalized), as the knob. A model change
+/// moves the slider without notifying, so it never echoes back as an edit.
+[[nodiscard]] inline ParameterBinding
+bind_parameter(RangeSlider& slider, value::ParamModel& model, value::ParamHandle param) {
+    return detail::bind_continuous(slider, model, param, [&slider](double normalized) {
+        slider.set_value(static_cast<float>(normalized), Notify::none);
+    });
+}
+
+/// XY pad ↔ two model parameters (normalized). A drag is one gesture on each
+/// axis; each axis shows its own modulation at `tick()`.
+[[nodiscard]] inline ParameterBinding
+bind_parameter(XYPad& pad, value::ParamModel& model, value::ParamHandle x_param,
+               value::ParamHandle y_param) {
+    pad.set_x(static_cast<float>(model.normalized(x_param)));
+    pad.set_y(static_cast<float>(model.normalized(y_param)));
+    pad.on_gesture_begin = [&model, x_param, y_param] {
+        model.begin(x_param);
+        model.begin(y_param);
+    };
+    pad.on_change = [&model, x_param, y_param](float x, float y) {
+        model.set_normalized(x_param, x);
+        model.set_normalized(y_param, y);
+    };
+    pad.on_gesture_end = [&model, x_param, y_param] {
+        model.end(x_param);
+        model.end(y_param);
+    };
+    auto subscription = model.subscribe(
+        [&pad, x_param, y_param](value::ParamHandle changed, double normalized) {
+            if (x_param.valid() && changed == x_param)
+                pad.set_x(static_cast<float>(normalized));
+            if (y_param.valid() && changed == y_param)
+                pad.set_y(static_cast<float>(normalized));
+        });
+    auto poll = [&pad, &model, x_param, y_param] {
+        if (x_param.valid()) {
+            if (const auto played = model.modulated_normalized(x_param))
+                pad.set_modulated_x(static_cast<float>(*played));
+            else
+                pad.clear_modulated_x();
+        }
+        if (y_param.valid()) {
+            if (const auto played = model.modulated_normalized(y_param))
+                pad.set_modulated_y(static_cast<float>(*played));
+            else
+                pad.clear_modulated_y();
+        }
+    };
+    return ParameterBinding(std::move(subscription), std::move(poll));
+}
+
+/// ComboBox ↔ model parameter. Item `i` is value index `i` of the
+/// parameter's values (or of the combo's items when the parameter is
+/// continuous). A selection is a one-shot gesture; a model change selects
+/// silently.
+[[nodiscard]] inline ParameterBinding
+bind_parameter(ComboBox& combo, value::ParamModel& model, value::ParamHandle param) {
+    return detail::bind_index(combo.on_change, model, param,
+                              static_cast<int>(combo.items().size()),
+                              [&combo](int index) { combo.set_selected_silent(index); });
+}
+
+/// DesignStepper ↔ model parameter, as the combo.
+[[nodiscard]] inline ParameterBinding
+bind_parameter(DesignStepper& stepper, value::ParamModel& model, value::ParamHandle param) {
+    return detail::bind_index(stepper.on_select, model, param, stepper.option_count(),
+                              [&stepper](int index) { stepper.set_selected_silent(index); });
+}
+
+/// Toggle (switch) ↔ model parameter, as a one-shot gesture per flip.
+[[nodiscard]] inline ParameterBinding
+bind_parameter(Toggle& toggle, value::ParamModel& model, value::ParamHandle param) {
+    return detail::bind_switch(toggle.on_toggle, model, param,
+                               [&toggle](bool on) { toggle.set_on(on); });
+}
+
+/// Checkbox ↔ model parameter, as a one-shot gesture per flip.
+[[nodiscard]] inline ParameterBinding
+bind_parameter(Checkbox& box, value::ParamModel& model, value::ParamHandle param) {
+    return detail::bind_switch(box.on_change, model, param,
+                               [&box](bool on) { box.set_checked(on); });
+}
+
+/// Toggle button ↔ model parameter, as a one-shot gesture per press.
+[[nodiscard]] inline ParameterBinding
+bind_parameter(ToggleButton& button, value::ParamModel& model, value::ParamHandle param) {
+    return detail::bind_switch(button.on_toggle, model, param,
+                               [&button](bool on) { button.set_on(on); });
+}
+
 /// Knob ↔ parameter (normalized).
 [[nodiscard]] inline ParameterBinding
 bind_parameter(Knob& knob, state::StateStore& store, state::ParamID id) {
