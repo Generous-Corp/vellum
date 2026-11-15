@@ -99,11 +99,12 @@ BROWSER_JOBS = {
 }
 
 # Both gpu-macos.yml jobs select their runner with exactly this expression:
-# merge-group and push runs take the merge-group class variable when it is set,
-# and everything else is the reviewed local variable with a hosted fallback.
+# merge-group runs take the merge-group class variable when it is set, and
+# everything else (push included, so a main re-proof never queues ahead of a
+# merge-queue entry) is the reviewed local variable with a hosted fallback.
 GPU_RUNS_ON = (
-    "runs-on: ${{ fromJSON(((github.event_name == 'merge_group' || "
-    "github.event_name == 'push') && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) "
+    "runs-on: ${{ fromJSON((github.event_name == 'merge_group' && "
+    "vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) "
     "|| vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '[\"macos-15\"]') }}"
 )
 
@@ -1201,7 +1202,7 @@ class RunnerPolicyTests(unittest.TestCase):
                     self.assertEqual(evaluate_actions_expression(expression, context),
                                      evaluate_actions_expression(before, context))
                     context["vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON"] = merge
-                    expected = (merge if event in ("merge_group", "push")
+                    expected = (merge if event == "merge_group"
                                 else evaluate_actions_expression(before, context))
                     self.assertEqual(evaluate_actions_expression(expression, context), expected)
         # Control: the evaluator is not reading every selector as the fallback.

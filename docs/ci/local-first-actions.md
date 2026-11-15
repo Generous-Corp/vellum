@@ -77,6 +77,14 @@ VM does not preempt a running Pulp VM and the `vm` priority does not provide a
 cross-repository yield; it can occupy an otherwise free host slot until its
 job completes. That bounded exposure is recorded in the fleet evidence.
 
+`VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON` is optional. When it is set,
+only `merge_group` runs of these two jobs select it; `push` and
+`pull_request` keep `VELLUM_LOCAL_MACOS_RUNS_ON_JSON`, so a push re-proof can
+never queue ahead of a merge-queue entry. The only reviewed value is
+`["self-hosted","macOS","ARM64","vellum-build-macos-merge-group"]`, the class
+label TartCI's Vellum lanes register for their merge-group tier. Unset it to
+roll back; every event then selects the generic class again.
+
 `VELLUM_MACOS_RUNS_ON_JSON` remains the hosted selector used by
 `readme-quick-start.yml` and the hosted portion of `sdk-release.yml`; it is not
 the selector for these two required GPU jobs.
