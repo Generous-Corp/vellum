@@ -44,6 +44,10 @@ vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
 
+vellum_add_framework_test(widget-bridge-param-model
+    SOURCES widget_bridge_param_model_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::Value)
+
 # Every test file here must be registered above. A test file that no
 # vellum_add_framework_test() names would build nothing and run nothing while
 # the lane stays green, so configure refuses it.
