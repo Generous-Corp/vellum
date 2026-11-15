@@ -50,7 +50,8 @@ vellum_add_framework_test(param-model-binding
 if(TARGET vellum-dawn-headers)
     vellum_add_framework_test(webgpu-error-scopes
         SOURCES webgpu_error_scopes_test.cpp
-        UNITS Vellum::MirrorView_script Vellum::MirrorRender_2d Vellum::DawnHeaders)
+        UNITS Vellum::MirrorView_script Vellum::MirrorRender_2d Vellum::DawnHeaders
+               vellum-skia-dawn-provider)
     # The test builds a headless device through the surface's own header.
     target_include_directories(vellum-framework-webgpu-error-scopes-test PRIVATE
         "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
