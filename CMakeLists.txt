@@ -167,6 +167,11 @@ if(VELLUM_BUILD_TESTS)
     target_link_libraries(vellum-value-param-model-test PRIVATE Vellum::Value)
     add_test(NAME vellum.value.param-model COMMAND vellum-value-param-model-test)
 
+    add_executable(vellum-value-param-metadata-test
+        foundation/tests/value/param_metadata_test.cpp)
+    target_link_libraries(vellum-value-param-metadata-test PRIVATE Vellum::Value)
+    add_test(NAME vellum.value.param-metadata COMMAND vellum-value-param-metadata-test)
+
     find_package(Threads REQUIRED)
     add_executable(vellum-value-feed-test
         foundation/tests/value/value_feed_test.cpp)

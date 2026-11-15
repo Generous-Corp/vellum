@@ -8,6 +8,7 @@
 /// It keeps the whole `ParamModel` contract (see `param_model.hpp`). Like every
 /// `ParamModel`, it belongs to one UI thread and is not synchronized.
 
+#include <vellum/value/param_metadata.hpp>
 #include <vellum/value/param_model.hpp>
 
 #include <cstddef>
@@ -55,7 +56,7 @@ struct ParamSpec {
     std::function<std::optional<double>(std::string_view text)> parse;
 };
 
-class InMemoryParamModel final : public ParamModel {
+class InMemoryParamModel final : public ParamModel, public ParamMetadata {
 public:
     /// Hears the gestures a host would: `begun` is true at each outermost
     /// `begin()` and false at the `end()` that balances it.
@@ -85,6 +86,19 @@ public:
                                                    std::string_view text) override;
     [[nodiscard]] std::optional<double> modulated_normalized(ParamHandle param) override;
 
+    /// The spec's plain range. The step is the distance between neighbouring
+    /// values when `value_count` is two or more, and 0 otherwise.
+    [[nodiscard]] ParamRange range(ParamHandle param) override;
+    /// The spec's `value_labels` when it has exactly `value_count` of them.
+    [[nodiscard]] std::vector<std::string> value_labels(ParamHandle param) override;
+    /// The last plain value written with `set_plain_value()`, exactly, until a
+    /// normalized write moves the parameter; otherwise `plain(normalized())`.
+    [[nodiscard]] double plain_value(ParamHandle param) override;
+    /// Clamp `plain` into the range, set the normalized value it maps to, and
+    /// keep `plain` (or the nearest value of a stepped parameter) as the exact
+    /// plain value.
+    void set_plain_value(ParamHandle param, double plain) override;
+
     /// Set the modulation offset added to `param`'s value as seen by
     /// `modulated_normalized()`; `nullopt` clears it. An offset does not change
     /// `normalized()` and is not a value change. Ignored for a bad handle or NaN.
@@ -105,10 +119,12 @@ private:
         double value = 0.0;
         int gesture_depth = 0;
         std::optional<double> modulation_offset;
+        std::optional<double> exact_plain;
     };
     struct ListenerSet;
 
     Param* find(ParamHandle param) noexcept;
+    void deliver(ParamHandle param, double normalized);
     const Param* find(ParamHandle param) const noexcept;
 
     std::vector<Param> params_;

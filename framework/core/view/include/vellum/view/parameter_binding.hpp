@@ -55,12 +55,14 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 #include <vellum/state/param_json.hpp>
 #include <vellum/state/parameter.hpp>
 #include <vellum/state/store.hpp>
 #include <vellum/view/design_frame_view.hpp> // DesignStepper
 #include <vellum/view/ui_components.hpp>     // ComboBox
 #include <vellum/view/widgets.hpp>
+#include <vellum/value/param_metadata.hpp>
 #include <vellum/value/param_model.hpp>
 #include <utility>
 
@@ -127,8 +129,11 @@ private:
 /// `ParamRange`; gestures are the store's `begin_gesture()`/`end_gesture()`,
 /// with only the outermost of nested ones forwarded; listeners are registered
 /// to replay on a state restore (`ListenerRestoreBehavior::Reconcile`); and the
-/// modulated value is the store's `displayed_modulation()`. UI thread only.
-class StateStoreParamModel final : public value::ParamModel {
+/// modulated value is the store's `displayed_modulation()`. As
+/// `value::ParamMetadata` it reports each parameter's `ParamRange` and value
+/// labels, and its plain value is the store's own `get_value()`/`set_value()`.
+/// UI thread only.
+class StateStoreParamModel final : public value::ParamModel, public value::ParamMetadata {
 public:
     explicit StateStoreParamModel(state::StateStore& store) : store_(store) {}
     StateStoreParamModel(const StateStoreParamModel&) = delete;
@@ -233,6 +238,30 @@ public:
         if (const auto played = store_.displayed_modulation(info->id))
             return *played;
         return std::nullopt;
+    }
+
+    [[nodiscard]] value::ParamRange range(value::ParamHandle param) override {
+        const auto* info = find(param);
+        if (!info)
+            return {};
+        return {info->range.min,  info->range.max,  info->range.default_value,
+                info->range.step, info->range.skew, info->range.symmetric_skew};
+    }
+
+    [[nodiscard]] std::vector<std::string> value_labels(value::ParamHandle param) override {
+        const auto* info = find(param);
+        return info ? info->value_labels : std::vector<std::string>{};
+    }
+
+    [[nodiscard]] double plain_value(value::ParamHandle param) override {
+        const auto* info = find(param);
+        return info ? store_.get_value(info->id) : 0.0;
+    }
+
+    void set_plain_value(value::ParamHandle param, double plain) override {
+        const auto* info = find(param);
+        if (info && !std::isnan(plain))
+            store_.set_value(info->id, static_cast<float>(plain));
     }
 
 private:
