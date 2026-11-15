@@ -725,18 +725,49 @@ def shell_commands(run: str) -> list[str]:
     return [line for line in joined.splitlines() if line.strip() and not line.lstrip().startswith("#")]
 
 
+# Characters that end an unquoted shell word and start an operator or
+# redirection: `"$E";` is the word `$E` then `;`, and `x>out` is `x`, `>`, `out`.
+OPERATOR_CHARACTERS = frozenset(";&|()<>")
+
+
 def shell_words(text: str):
-    """The shell words of `text`, one at a time, quotes removed. The caller
+    """The shell words of `text`, one at a time, quotes removed. An unquoted
+    operator or redirection is a word of its own (`;`, `&&`, `2>&`, `>`), as the
+    shell splits it, and `$(...)` stays inside the word it starts. The caller
     stops at the word it wants, so a quote left open further along the line
     (a `$(...)` closing, a multi-line argument) does not matter."""
-    word, quote, started = "", "", False
+    word, quote, started, operator, depth = "", "", False, False, 0
     for character in text:
         if quote:
             if character == quote:
                 quote = ""
             else:
                 word += character
-        elif character in "'\"":
+            continue
+        if depth:
+            # Inside an unquoted `$(...)`: operators belong to the substitution.
+            depth += {"(": 1, ")": -1}.get(character, 0)
+            if character in " \t" and depth:
+                yield word
+                word = ""
+            else:
+                word += character
+            continue
+        if character == "(" and not operator and word.endswith("$"):
+            word, depth = word + character, 1
+            continue
+        if character in OPERATOR_CHARACTERS:
+            # A file descriptor (`2>`) or `&` (`&>`) before a redirection is
+            # part of it, not a word of its own.
+            if started and not operator and not (character in "<>" and word.isdigit()):
+                yield word
+                word = ""
+            word, started, operator = word + character, True, True
+            continue
+        if operator:
+            yield word
+            word, started, operator = "", False, False
+        if character in "'\"":
             quote, started = character, True
         elif character in " \t":
             if started:
@@ -765,7 +796,8 @@ def gh_api_targets(run: str) -> list[str | None]:
                     # Before the operator check: `>` and `2>` are redirections
                     # whose operand is the next word, not the end of the call.
                     skip = not redirection["operand"]
-                elif word in SHELL_OPERATORS or word in {"then", "do", "fi", "done"}:
+                elif (word in SHELL_OPERATORS or word in {"then", "do", "fi", "done"}
+                      or set(word) <= OPERATOR_CHARACTERS):
                     break
                 elif word in GH_API_VALUE_OPTIONS:
                     skip = True

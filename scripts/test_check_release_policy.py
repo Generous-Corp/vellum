@@ -752,6 +752,34 @@ class Isolation(unittest.TestCase):
             with self.subTest(label):
                 self.refused(self.read(run=run), "an endpoint this check cannot read")
 
+    def test_a_shell_operator_attached_to_the_endpoint_ends_the_word(self) -> None:
+        # The shell splits a word at an unquoted operator, so `"$ENDPOINT";`
+        # runs gh api with a variable endpoint. That endpoint cannot be read.
+        for label, run in {
+            "variable then ;": 'run: gh api "$ENDPOINT"; echo done\n',
+            "bare variable then ;": "run: gh api $ENDPOINT;\n",
+            "braced variable then &&": 'run: gh api "${ENDPOINT}"&& echo done\n',
+            "variable then |": 'run: gh api "$ENDPOINT"|jq .\n',
+            "variable then >": 'run: gh api "$ENDPOINT">out.json\n',
+            "variable then 2>": 'run: gh api "$ENDPOINT"2>/dev/null\n',
+            "variable then )": 'run: ( gh api "$ENDPOINT")\n',
+            "variable then &": 'run: gh api "$ENDPOINT"&\n',
+            "substitution then ;": 'run: gh api "$(cat endpoint)";\n',
+            "unquoted substitution then ;": "run: gh api $(cat endpoint);\n",
+            "backticks then ;": "run: gh api `cat endpoint`;\n",
+        }.items():
+            with self.subTest(label):
+                self.refused(self.read(token="${{ github.token }}", run=run),
+                             "an endpoint this check cannot read")
+        # A literal endpoint keeps its value, operator or not.
+        self.assertEqual(policy.gh_api_targets('gh api "repos/$R/actions/runs";echo'), ["repos/$R/actions/runs"])
+        self.assertEqual(policy.gh_api_targets("gh api repos/$R/pulls|jq ."), ["repos/$R/pulls"])
+        self.assertEqual(policy.gh_api_targets("gh api 2>/dev/null repos/$R/pulls"), ["repos/$R/pulls"])
+        self.assertEqual(policy.gh_api_targets("gh api >out.json 2>&1 repos/$R/pulls"), ["repos/$R/pulls"])
+        self.assertEqual(policy.gh_api_targets('gh api "repos/$R/pulls?a=1&b=2"'), ["repos/$R/pulls?a=1&b=2"])
+        # An Administration read behind an attached operator still needs the App token.
+        self.refused(self.read(token="${{ github.token }}", run='run: gh api "repos/$R/immutable-releases";\n'))
+
     def test_an_unnamed_step_is_scanned(self) -> None:
         self.refused(self.read(token="${{ github.token }}", name=None))
         self.assertEqual(self.found(self.read(name=None)), [])
