@@ -503,6 +503,50 @@ test('Design produces a receipt for every token slot', () => {
     assert.equal(tree.tokens.filter((receipt) => receipt.path === 'c.fill').length, 1);
 });
 
+test('Design keeps every supported gradient field and refuses unknown ones', () => {
+    const gradient = {
+        kind: 'two-circle-radial', spread: 'reflect', interpolation: 'oklab',
+        colorSpace: 'display-p3', centerX: 0.25, centerY: 0.75, radiusX: 0.4, radiusY: 0.6,
+        focalX: 0.3, focalY: 0.2, startRadius: 0.1, endRadius: 0.9,
+        stops: [{ position: 0, color: '{c.stopA}' }, { position: 1, color: '#000000' }],
+    };
+    const document = slotDocument();
+    const card = document.root.children.find((node) => node.id === 'card');
+    card.properties.paint.backgroundLinearGradient = gradient;
+    const zig = document.root.children.find((node) => node.id === 'zig');
+    zig.properties.paint.fill = { kind: 'conic', angle: 45, centerX: 0.5, centerY: 0.5,
+        stops: gradient.stops };
+    const nodes = flatten(renderTree(document));
+    const { stops, ...fields } = nodes.find((node) => node.id === 'card')
+        .style.backgroundLinearGradient;
+    const { stops: _ignored, ...expected } = gradient;
+    assert.deepEqual(fields, expected);
+    assert.equal(stops[0].color, '#6366f1');
+    const fill = nodes.find((node) => node.id === 'zig').fill;
+    assert.equal(fill.kind, 'conic');
+    assert.equal(fill.angle, 45);
+    assert.equal(fill.centerX, 0.5);
+    card.properties.paint.backgroundLinearGradient = { ...gradient, wobble: 1 };
+    assert.throws(() => renderTree(document), /backgroundLinearGradient\.wobble/);
+});
+
+test('Design forwards every Path stroke attribute', () => {
+    const document = slotDocument();
+    const zig = document.root.children.find((node) => node.id === 'zig');
+    Object.assign(zig.properties.paint, {
+        strokeLineJoin: 'round', strokeLineCap: 'square', strokeMiterLimit: 6,
+        strokeDasharray: [4, 2], strokeDashoffset: 1.5,
+    });
+    const path = flatten(renderTree(document)).find((node) => node.id === 'zig');
+    assert.equal(path.strokeWidth, 3);
+    assert.equal(path.strokeLineJoin, 'round');
+    assert.equal(path.strokeLineCap, 'square');
+    assert.equal(path.strokeMiterLimit, 6);
+    assert.deepEqual(path.strokeDasharray, [4, 2]);
+    assert.notEqual(path.strokeDasharray, zig.properties.paint.strokeDasharray);
+    assert.equal(path.strokeDashoffset, 1.5);
+});
+
 test('a short hex token colour gets a receipt in its canonical long form', () => {
     const tree = renderTree(slotDocument());
     const short = flatten(tree).find((node) => node.id === 'short');

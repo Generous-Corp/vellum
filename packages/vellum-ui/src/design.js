@@ -133,12 +133,33 @@ function colorSlot(context, refs, slot, value) {
     return color.value;
 }
 
+// Every gradient field the native materializer understands. Each is forwarded
+// verbatim so the materializer validates it; any other field is refused rather
+// than silently dropped.
+const GRADIENT_FIELDS = new Set([
+    'kind', 'angle', 'repeating', 'repeatLength', 'spread', 'interpolation', 'colorSpace',
+    'centerX', 'centerY', 'radiusX', 'radiusY', 'focalX', 'focalY', 'startRadius', 'endRadius',
+]);
+
+// The stroke attributes of the public Path contract, forwarded verbatim so the
+// native materializer validates them.
+const PATH_STROKE_FIELDS = Object.freeze([
+    'strokeWidth', 'strokeLineJoin', 'strokeLineCap', 'strokeMiterLimit',
+    'strokeDasharray', 'strokeDashoffset',
+]);
+
 function retainedGradient(context, refs, prefix, gradient) {
     if (!gradient || typeof gradient !== 'object' || !Array.isArray(gradient.stops)) {
         throw new TypeError(`${prefix} must hold a stops array`);
     }
-    const output = paintNumbers(gradient, ['angle', 'repeatLength']);
-    if (typeof gradient.repeating === 'boolean') output.repeating = gradient.repeating;
+    const output = {};
+    for (const [field, value] of Object.entries(gradient)) {
+        if (field === 'stops' || value === undefined) continue;
+        if (!GRADIENT_FIELDS.has(field)) {
+            throw new TypeError(`${prefix}.${field} is not a supported gradient field`);
+        }
+        output[field] = value;
+    }
     output.stops = gradient.stops.map((stop, index) => ({
         position: stop?.position,
         color: colorSlot(context, refs, `${prefix}.stops.${index}`, stop?.color),
@@ -161,7 +182,11 @@ function pathPaint(context, node, refs) {
             : colorSlot(context, refs, 'fill', paint.fill);
     }
     if (paint.stroke !== undefined) output.stroke = colorSlot(context, refs, 'stroke', paint.stroke);
-    Object.assign(output, paintNumbers(paint, ['strokeWidth']));
+    for (const field of PATH_STROKE_FIELDS) {
+        const value = paint[field];
+        if (value === undefined) continue;
+        output[field] = Array.isArray(value) ? [...value] : value;
+    }
     return output;
 }
 
