@@ -345,6 +345,7 @@
   "elsewhere": {
     ".agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py": "workflow:provenance.yml",
     "apps/app-host/test_design_anchor_dump.py": "cmake:apps/app-host/CMakeLists.txt",
+    "apps/app-host/test_html_import_geometry.py": "cmake:apps/app-host/CMakeLists.txt",
     "apps/app-host/test_manual_clock_capture.py": "cmake:apps/app-host/CMakeLists.txt",
     "apps/app-host/test_phase3_scenario.py": "cmake:apps/app-host/CMakeLists.txt",
     "apps/app-host/test_state_persistence.py": "cmake:apps/app-host/CMakeLists.txt",
