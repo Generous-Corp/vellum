@@ -4,6 +4,7 @@
 #include "framework_test.hpp"
 
 #include <vellum/value/in_memory_param_model.hpp>
+#include <vellum/value/param_metadata.hpp>
 #include <vellum/view/parameter_binding.hpp>
 
 #include <cmath>
@@ -413,6 +414,11 @@ struct RecordingStore {
     }
 };
 
+std::vector<std::string> info_labels(vellum::state::StateStore& store, vellum::state::ParamID id) {
+    const auto* info = store.info(id);
+    return info ? info->value_labels : std::vector<std::string>{};
+}
+
 FRAMEWORK_TEST(store_model_maps_through_the_parameter_range) {
     RecordingStore rs;
     vellum::view::StateStoreParamModel model(rs.store);
@@ -568,6 +574,41 @@ FRAMEWORK_TEST(a_store_binding_keeps_its_model_alive) {
     CHECK(near(slider.value(), 0.9));
     CHECK(near(pad.x_value(), 0.9));
     CHECK(near(pad.y_value(), 0.1));
+}
+
+FRAMEWORK_TEST(store_model_metadata_reports_the_param_info) {
+    RecordingStore rs;
+    vellum::view::StateStoreParamModel model(rs.store);
+    auto* meta = vellum::value::metadata_of(model);
+    CHECK(meta != nullptr);
+    const auto* info = rs.store.info(1);
+    const auto r = meta->range(model.handle(1));
+    CHECK(r.plain_min == info->range.min);
+    CHECK(r.plain_max == info->range.max);
+    CHECK(r.plain_default == info->range.default_value);
+    CHECK(r.step == info->range.step);
+    CHECK(r.skew == info->range.skew);
+    CHECK(r.symmetric_skew == info->range.symmetric_skew);
+    CHECK(r.plain_values.empty());
+    CHECK(meta->range(model.handle(3)).step == 1.0);
+    CHECK(meta->range(vellum::value::ParamHandle{}).plain_max == 1.0);
+    CHECK(meta->value_labels(model.handle(3)) == info_labels(rs.store, 3));
+}
+
+FRAMEWORK_TEST(store_model_plain_write_stores_what_set_value_stores) {
+    RecordingStore through_model;
+    RecordingStore direct;
+    vellum::view::StateStoreParamModel model(through_model.store);
+    auto& meta = *vellum::value::metadata_of(model);
+    for (const vellum::state::ParamID id : {3u, 4u}) {
+        for (int i = 0; i <= 100; ++i) {
+            const float plain = static_cast<float>(i) * 0.1f;
+            meta.set_plain_value(model.handle(id), plain);
+            direct.store.set_value(id, plain);
+            CHECK(through_model.store.get_value(id) == direct.store.get_value(id));
+            CHECK(meta.plain_value(model.handle(id)) == direct.store.get_value(id));
+        }
+    }
 }
 
 }  // namespace

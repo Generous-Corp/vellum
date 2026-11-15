@@ -7,10 +7,16 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
+#include <iomanip>
+#include <locale>
+#include <sstream>
 #include <map>
 #include <optional>
 #include <set>
+#include <string>
+#include <vector>
 #include <utility>
 
 namespace vellum::app_host {
@@ -120,11 +126,80 @@ int emit_command(void* user_data, const vellum_component_paint_command_v1* comma
     }
 }
 
+void append_json_string(std::string& output, std::string_view value) {
+    output += '"';
+    for (const char character : value) {
+        if (character == '"' || character == '\\') {
+            output += '\\';
+            output += character;
+        } else if (static_cast<unsigned char>(character) < 0x20U) {
+            char escaped[8];
+            std::snprintf(escaped, sizeof(escaped), "\\u%04x",
+                          static_cast<unsigned>(static_cast<unsigned char>(character)));
+            output += escaped;
+        } else {
+            output += character;
+        }
+    }
+    output += '"';
+}
+
+// Locale independent, so a comma-decimal locale cannot break the JSON.
+void append_json_number(std::string& output, float value) {
+    std::ostringstream number;
+    number.imbue(std::locale::classic());
+    number << std::setprecision(9) << static_cast<double>(value);
+    output += number.str();
+}
+
+// The properties a material's component receives: its id and every uniform
+// with its value or default.
+std::string material_properties(const vellum::graphics::MaterialDefinition& material,
+                                const std::vector<vellum::graphics::MaterialValue>& values) {
+    using vellum::graphics::MaterialValueType;
+    std::string output = "{\"material\":";
+    append_json_string(output, material.id);
+    output += ",\"values\":{";
+    bool first = true;
+    for (const auto& uniform : material.uniforms) {
+        if (!first) output += ',';
+        first = false;
+        append_json_string(output, uniform.name);
+        output += ':';
+        const auto value = vellum::graphics::material_uniform_value(material, values, uniform.name);
+        if (uniform.type == MaterialValueType::number) {
+            append_json_number(output, value[0]);
+        } else if (uniform.type == MaterialValueType::vector2) {
+            output += '[';
+            append_json_number(output, value[0]);
+            output += ',';
+            append_json_number(output, value[1]);
+            output += ']';
+        } else {
+            const char* names[] = {"red", "green", "blue", "alpha"};
+            output += '{';
+            for (std::size_t index = 0; index < 4U; ++index) {
+                if (index > 0U) output += ',';
+                append_json_string(output, names[index]);
+                output += ':';
+                append_json_number(output, value[index]);
+            }
+            output += '}';
+        }
+    }
+    output += "}}";
+    return output;
+}
+
 }  // namespace
 
 class ComponentRegistry::Impl final {
 public:
     ~Impl() {
+        for (const auto& material : materials_) {
+            (void)vellum::graphics::MaterialRegistry::shared().unregister_extension(
+                material->id, material.get());
+        }
         for (auto iterator = modules_.rbegin(); iterator != modules_.rend(); ++iterator) {
             if (iterator->handle != nullptr) dlclose(iterator->handle);
         }
@@ -183,8 +258,30 @@ public:
         return true;
     }
 
+    bool register_material(vellum::graphics::MaterialDefinition definition,
+                           std::string* error) {
+        const auto module = std::find_if(modules_.begin(), modules_.end(), [&](const Module& m) {
+            return m.descriptor != nullptr &&
+                   std::string_view(m.descriptor->component_id) == definition.component;
+        });
+        if (module == modules_.end()) {
+            set_error(error, "material " + definition.id + " names component '" +
+                                 definition.component + "', which is not loaded");
+            return false;
+        }
+        if (definition.provenance.source.empty()) {
+            definition.provenance.source = module->path.string();
+        }
+        auto id = definition.id;
+        auto& shared = vellum::graphics::MaterialRegistry::shared();
+        if (!shared.register_extension(std::move(definition), error)) return false;
+        materials_.push_back(shared.find(id));
+        return true;
+    }
+
     bool expand(vellum::graphics::Scene& scene, std::string* error) const {
-        return expand_node(scene.root, error);
+        // A scene too old to carry effects keeps them, so acceptance refuses it.
+        return expand_node(scene.root, scene.scene_version >= 10U, error);
     }
 
     std::size_t size() const noexcept { return modules_.size(); }
@@ -196,7 +293,84 @@ private:
         const vellum_component_descriptor_v1* descriptor = nullptr;
     };
 
-    bool expand_node(vellum::graphics::SceneNode& node, std::string* error) const {
+    // Renders `component` for `node_id` within `bounds` and returns the
+    // emitted paint as nodes, or false with `error` set.
+    bool render_component(const vellum_component_descriptor_v1& descriptor,
+                          const std::string& component, const std::string& node_id,
+                          const std::string& properties, const vellum::graphics::Rect& bounds,
+                          std::vector<vellum::graphics::SceneNode>& children,
+                          std::string* error) const {
+        EmitState emitted{.node_id = node_id};
+        const vellum_component_render_context_v1 context{
+            .struct_size = sizeof(vellum_component_render_context_v1),
+            .abi_version = VELLUM_COMPONENT_ABI_VERSION,
+            .component_id = component.c_str(),
+            .node_id = node_id.c_str(),
+            .properties_json = properties.c_str(),
+            .bounds = {0.0F, 0.0F, bounds.width, bounds.height},
+            .emit_user_data = &emitted,
+            .emit = emit_command,
+        };
+        int rendered = 0;
+        try {
+            rendered = descriptor.render(&context);
+        } catch (...) {
+            set_error(error, "custom component render callback threw an exception: " + component);
+            return false;
+        }
+        if (rendered != 1 || !emitted.error.empty() || emitted.children.empty()) {
+            set_error(error, emitted.error.empty()
+                ? "custom component returned failure or emitted no paint commands: " + component
+                : emitted.error);
+            return false;
+        }
+        children = std::move(emitted.children);
+        return true;
+    }
+
+    bool expand_materials(vellum::graphics::SceneNode& node, std::string* error) const {
+        using vellum::graphics::EffectKind;
+        using vellum::graphics::MaterialRecipe;
+        std::vector<vellum::graphics::SceneNode> layers;
+        for (auto effect = node.effects.begin(); effect != node.effects.end();) {
+            if (effect->kind != EffectKind::material) {
+                ++effect;
+                continue;
+            }
+            const auto material = vellum::graphics::MaterialRegistry::shared().find(effect->material);
+            const bool ours = material && material->recipe == MaterialRecipe::extension &&
+                              std::find(materials_.begin(), materials_.end(), material) !=
+                                  materials_.end();
+            // Invalid values stay for scene acceptance to refuse.
+            if (!ours || !vellum::graphics::material_values_are_valid(*material, effect->values)) {
+                ++effect;
+                continue;
+            }
+            const auto found = modules_by_id_.find(material->component);
+            if (found == modules_by_id_.end()) {
+                ++effect;
+                continue;
+            }
+            vellum::graphics::SceneNode layer{
+                .id = node.id + "/material/" + material->id,
+                .kind = vellum::graphics::SceneNode::Kind::group,
+                .bounds = {0.0F, 0.0F, node.bounds.width, node.bounds.height},
+            };
+            if (!render_component(*found->second, material->component, layer.id,
+                                  material_properties(*material, effect->values), node.bounds,
+                                  layer.children, error)) {
+                return false;
+            }
+            layers.push_back(std::move(layer));
+            effect = node.effects.erase(effect);
+        }
+        node.children.insert(node.children.begin(), std::make_move_iterator(layers.begin()),
+                             std::make_move_iterator(layers.end()));
+        return true;
+    }
+
+    bool expand_node(vellum::graphics::SceneNode& node, bool effects_allowed,
+                     std::string* error) const {
         if (node.kind == vellum::graphics::SceneNode::Kind::custom) {
             const auto found = modules_by_id_.find(node.custom_component);
             if (found == modules_by_id_.end()) {
@@ -235,14 +409,23 @@ private:
             node.custom_component.clear();
             node.custom_properties_json.clear();
         }
+        // A mask cannot carry effects and an image cannot hold the material's
+        // paint as a child; both keep the effect, so acceptance refuses the
+        // mask and the renderer draws the image without it.
+        if (effects_allowed && !node.effects.empty() && !node.mask &&
+            node.kind != vellum::graphics::SceneNode::Kind::image &&
+            !expand_materials(node, error)) {
+            return false;
+        }
         for (auto& child : node.children) {
-            if (!expand_node(child, error)) return false;
+            if (!expand_node(child, effects_allowed, error)) return false;
         }
         return true;
     }
 
     std::vector<Module> modules_;
     std::map<std::string, const vellum_component_descriptor_v1*> modules_by_id_;
+    std::vector<std::shared_ptr<const vellum::graphics::MaterialDefinition>> materials_;
 };
 
 ComponentRegistry::ComponentRegistry() : impl_(std::make_unique<Impl>()) {}
@@ -256,6 +439,11 @@ bool ComponentRegistry::load(const ComponentModuleSpec& spec, std::string* error
 
 bool ComponentRegistry::expand(vellum::graphics::Scene& scene, std::string* error) const {
     return impl_->expand(scene, error);
+}
+
+bool ComponentRegistry::register_material(vellum::graphics::MaterialDefinition definition,
+                                          std::string* error) {
+    return impl_->register_material(std::move(definition), error);
 }
 
 std::size_t ComponentRegistry::size() const noexcept { return impl_->size(); }

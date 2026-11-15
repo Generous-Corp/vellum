@@ -1,13 +1,16 @@
 import {
     AUTHORED_OVERLAY_SCHEMA,
     AUTHORED_OVERLAY_VERSION,
+    DESIGN_IR_COMPOSITING_VERSION,
     DESIGN_IR_SCHEMA,
-    DESIGN_IR_VERSION,
+    DESIGN_IR_MATERIALS_VERSION,
+    DESIGN_IR_VERSIONS,
     DISPOSITIONS,
     REIMPORT_REPORT_SCHEMA,
     REIMPORT_REPORT_VERSION,
     SEVERITIES,
 } from './constants.js';
+import { compositingProblems } from './compositing.js';
 import { DesignIRValidationError } from './errors.js';
 import { indexTree } from './identity.js';
 import { jsonEqual } from './stable-json.js';
@@ -19,7 +22,13 @@ export function validateDesignIR(value, options = {}) {
         return finish(issues, options, 'Invalid DesignIR');
     }
     exact(value.$schema, DESIGN_IR_SCHEMA, '$.$schema', issues);
-    exact(value.schemaVersion, DESIGN_IR_VERSION, '$.schemaVersion', issues);
+    if (!DESIGN_IR_VERSIONS.includes(value.schemaVersion)) {
+        issues.push(issue(
+            '$.schemaVersion',
+            'version',
+            `$.schemaVersion must be one of ${DESIGN_IR_VERSIONS.join(', ')}`,
+        ));
+    }
     requireObject(value.source, '$.source', issues);
     if (isObject(value.source)) {
         string(value.source.key, '$.source.key', issues);
@@ -90,7 +99,13 @@ export function validateDesignIR(value, options = {}) {
             validateDiagnostic(diagnostic, `$.diagnostics[${index}]`, issues),
         );
     }
-    validateNode(value.root, '$.root', value.source?.key, issues);
+    validateNode(value.root, '$.root', value.source?.key, issues, value.schemaVersion);
+    if (isObject(value.root) && value.root.compositing?.mask !== undefined) {
+        issues.push(issue('$.root.compositing.mask', 'mask', 'the root has no siblings to mask'));
+    }
+    if (isObject(value.root) && value.root.compositing?.maskRef !== undefined) {
+        issues.push(issue('$.root.compositing.maskRef', 'mask', 'the root has no siblings to be masked by'));
+    }
     requireObject(value.lossReport, '$.lossReport', issues);
     if (isObject(value.lossReport) && Array.isArray(value.diagnostics)) {
         const expectedLosses = value.diagnostics.filter((diagnostic) =>
@@ -230,7 +245,7 @@ export function parseReimportReport(text) {
     return value;
 }
 
-function validateNode(node, path, sourceKey, issues) {
+function validateNode(node, path, sourceKey, issues, version) {
     requireObject(node, path, issues);
     if (!isObject(node)) return;
     string(node.id, `${path}.id`, issues);
@@ -262,13 +277,98 @@ function validateNode(node, path, sourceKey, issues) {
         }
     }
     requireObject(node.properties, `${path}.properties`, issues);
+    if (node.material !== undefined) {
+        if (!(version >= DESIGN_IR_MATERIALS_VERSION)) {
+            issues.push(issue(
+                `${path}.material`,
+                'version',
+                `a material reference needs schemaVersion ${DESIGN_IR_MATERIALS_VERSION} or later`,
+            ));
+        }
+        validateMaterialReference(node.material, `${path}.material`, issues);
+    }
     if (!Array.isArray(node.children)) {
         issues.push(issue(`${path}.children`, 'type', 'children must be an array'));
     } else {
         node.children.forEach((child, index) =>
-            validateNode(child, `${path}.children[${index}]`, sourceKey, issues),
+            validateNode(child, `${path}.children[${index}]`, sourceKey, issues, version),
         );
+        validateMaskReferences(node, path, issues);
     }
+    if (node.compositing !== undefined) {
+        if (!(version >= DESIGN_IR_COMPOSITING_VERSION)) {
+            issues.push(issue(
+                `${path}.compositing`,
+                'version',
+                `compositing needs schemaVersion ${DESIGN_IR_COMPOSITING_VERSION} or later`,
+            ));
+        } else {
+            issues.push(...compositingProblems(node.compositing, `${path}.compositing`));
+        }
+    }
+}
+
+// A `maskRef` names the node that masks it: a sibling that is itself a mask,
+// never the node itself, and a mask does not reference another mask.
+function validateMaskReferences(parent, path, issues) {
+    const byId = new Map();
+    parent.children.forEach((child) => {
+        if (isObject(child) && typeof child.id === 'string') byId.set(child.id, child);
+    });
+    parent.children.forEach((child, index) => {
+        const reference = isObject(child) && isObject(child.compositing) ? child.compositing.maskRef : undefined;
+        if (typeof reference !== 'string' || !reference) return;
+        const where = `${path}.children[${index}].compositing.maskRef`;
+        const target = byId.get(reference);
+        if (reference === child.id) {
+            issues.push(issue(where, 'mask', 'a node cannot be its own mask'));
+        } else if (!target) {
+            issues.push(issue(where, 'mask', `maskRef '${reference}' is not a sibling of this node`));
+        } else if (!isObject(target.compositing) || target.compositing.mask === undefined) {
+            issues.push(issue(where, 'mask', `maskRef '${reference}' does not name a mask node`));
+        } else if (child.compositing.mask !== undefined) {
+            issues.push(issue(where, 'mask', 'a mask node cannot reference another mask'));
+        }
+    });
+}
+
+// A material reference carries an id and values only: the uniforms' types,
+// ranges and defaults belong to the material's registration.
+function validateMaterialReference(material, path, issues) {
+    requireObject(material, path, issues);
+    if (!isObject(material)) return;
+    for (const key of Object.keys(material)) {
+        if (key !== 'id' && key !== 'values') {
+            issues.push(issue(`${path}.${key}`, 'unknown-field', 'a material reference carries only id and values'));
+        }
+    }
+    if (typeof material.id !== 'string' || !/^[a-z0-9][a-z0-9.-]*$/.test(material.id)) {
+        issues.push(issue(`${path}.id`, 'format', 'material id must be lowercase letters, digits, dots and hyphens'));
+    }
+    requireObject(material.values, `${path}.values`, issues);
+    if (!isObject(material.values)) return;
+    for (const [name, value] of Object.entries(material.values)) {
+        const valuePath = `${path}.values.${name}`;
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+            issues.push(issue(valuePath, 'format', 'uniform name must be an identifier'));
+        }
+        if (!isMaterialValue(value)) {
+            issues.push(issue(
+                valuePath,
+                'type',
+                'a material value is a number, two numbers, or a red, green, blue and alpha colour',
+            ));
+        }
+    }
+}
+
+function isMaterialValue(value) {
+    const finite = (number) => typeof number === 'number' && Number.isFinite(number);
+    if (finite(value)) return true;
+    if (Array.isArray(value)) return value.length === 2 && value.every(finite);
+    if (!isObject(value)) return false;
+    const keys = Object.keys(value).sort();
+    return keys.join(',') === 'alpha,blue,green,red' && keys.every((key) => finite(value[key]));
 }
 
 function validateDiagnostic(diagnostic, path, issues) {

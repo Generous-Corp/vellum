@@ -9,8 +9,8 @@
 # and framework_trusted_verify.py against the transfer record, the name-debt
 # baseline and the external-updates log under provenance/; the record files
 # are owned before they exist so the change that adds them needs both reviews.
-# provenance/framework/ports.json is left out on purpose: the ledger is data
-# those judges check row by row, so a port lands by normal review.
+# provenance/framework/ports.json and units.json are left out on purpose: they
+# are data those judges check row by row, so a port lands by normal review.
 # The parity completion record (the owner's statement that every matrix cell
 # reached its target) and the runner that executes its proofs for the release
 # receipt are owned the same way, the record before it exists.

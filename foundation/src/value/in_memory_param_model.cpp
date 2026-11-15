@@ -127,15 +127,74 @@ void InMemoryParamModel::set_normalized(ParamHandle param, double normalized) {
     if (next == p->value)
         return;
     p->value = next;
+    p->exact_plain.reset();
+    deliver(param, next);
+}
 
+void InMemoryParamModel::deliver(ParamHandle param, double normalized) {
     // Deliver to a snapshot so a listener may subscribe or unsubscribe during
     // delivery; one removed mid-delivery is not called afterwards.
     const auto keep_alive = listeners_;
     const std::vector<ListenerSet::Entry> snapshot = keep_alive->entries;
     for (const auto& entry : snapshot) {
         if (keep_alive->contains(entry.id))
-            (*entry.listener)(param, next);
+            (*entry.listener)(param, normalized);
     }
+}
+
+ParamRange InMemoryParamModel::range(ParamHandle param) {
+    const Param* p = find(param);
+    if (!p)
+        return {};
+    const int count = p->spec.value_count;
+    const double span = p->spec.plain_max - p->spec.plain_min;
+    const double default_normalized =
+        conform(std::isnan(p->spec.default_normalized) ? 0.0 : p->spec.default_normalized, count);
+    ParamRange r;
+    r.plain_min = p->spec.plain_min;
+    r.plain_max = p->spec.plain_max;
+    r.plain_default = plain_of(p->spec, default_normalized);
+    r.skew = p->spec.skew;
+    // Values snap in normalized space and then pass through the curve, so a
+    // skewed axis with three or more values is not evenly spaced in plain
+    // units: list them instead of reporting a step the model does not keep.
+    if (count >= 3 && p->spec.skew != 1.0 && span > 0.0) {
+        r.plain_values.reserve(static_cast<std::size_t>(count));
+        for (int i = 0; i < count; ++i)
+            r.plain_values.push_back(plain_of(p->spec, value_index_to_normalized(i, count)));
+    } else if (count >= 2) {
+        r.step = span / static_cast<double>(count - 1);
+    }
+    return r;
+}
+
+std::vector<std::string> InMemoryParamModel::value_labels(ParamHandle param) {
+    const Param* p = find(param);
+    if (!p || p->spec.value_count < 1 ||
+        p->spec.value_labels.size() != static_cast<std::size_t>(p->spec.value_count))
+        return {};
+    return p->spec.value_labels;
+}
+
+double InMemoryParamModel::plain_value(ParamHandle param) {
+    const Param* p = find(param);
+    if (!p)
+        return 0.0;
+    return p->exact_plain ? *p->exact_plain : plain_of(p->spec, p->value);
+}
+
+void InMemoryParamModel::set_plain_value(ParamHandle param, double plain) {
+    Param* p = find(param);
+    if (!p || std::isnan(plain))
+        return;
+    const double next = normalized_of(p->spec, plain);
+    const double low = std::min(p->spec.plain_min, p->spec.plain_max);
+    const double high = std::max(p->spec.plain_min, p->spec.plain_max);
+    p->exact_plain = p->spec.value_count >= 2 ? plain_of(p->spec, next) : std::clamp(plain, low, high);
+    if (next == p->value)
+        return;
+    p->value = next;
+    deliver(param, next);
 }
 
 void InMemoryParamModel::begin(ParamHandle param) {

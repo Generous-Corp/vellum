@@ -37,11 +37,13 @@ jobs:
     # Only first-party PRs may use the private local fleet. Fork PRs are
     # intentionally skipped while the local selector is enabled.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''
-    # Merge-group and push (main, release tags) runs select their own runner
-    # class when VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a
-    # merge-queue proof is not handed to whichever PR-head job GitHub picks.
-    # Unset, every event selects exactly what it did before.
-    runs-on: ${{ fromJSON(((github.event_name == 'merge_group' || github.event_name == 'push') && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    # Merge-group runs select their own runner class when
+    # VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a merge-queue
+    # proof is not handed to whichever PR-head or push job GitHub picks. Push
+    # (main, release tags) stays on the generic class: a push re-proof must
+    # never queue ahead of a merge-queue entry. Unset, every event selects
+    # exactly what it did before.
+    runs-on: ${{ fromJSON((github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     # $GITHUB_ENV does not cross jobs; dependent jobs read the validated
     # release identity through these outputs.
     outputs:
@@ -976,11 +978,17 @@ jobs:
     needs: gpu-macos-arm64
     # Keep the dependent job on the same first-party-only policy.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''
-    # Merge-group and push (main, release tags) runs select their own runner
-    # class when VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a
-    # merge-queue proof is not handed to whichever PR-head job GitHub picks.
-    # Unset, every event selects exactly what it did before.
-    runs-on: ${{ fromJSON(((github.event_name == 'merge_group' || github.event_name == 'push') && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    # When gpu-macos-arm64 reported a reused proof or a change the proof does
+    # not cover, every step below but a notice is skipped, so the job runs on
+    # a hosted runner rather than waiting for a scarce Mac to print it. It
+    # still runs and reports exactly as before. Otherwise merge-group runs
+    # select their own runner class when
+    # VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a merge-queue
+    # proof is not handed to whichever PR-head or push job GitHub picks. Push
+    # (main, release tags) stays on the generic class: a push re-proof must
+    # never queue ahead of a merge-queue entry. Unset, every event selects
+    # exactly what it did before.
+    runs-on: ${{ fromJSON(((needs.gpu-macos-arm64.outputs.reused_run != '' || needs.gpu-macos-arm64.outputs.unaffected == 'true') && '["ubuntu-24.04"]') || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     env:
       VELLUM_RELEASE_ARCHIVE: ${{ needs.gpu-macos-arm64.outputs.release_archive }}
     steps:
@@ -1119,3 +1127,33 @@ jobs:
             ${{ runner.temp }}/sdk-installed-validation.stdout.json
           if-no-files-found: error
           retention-days: 90
+
+  cancel-destroyed-groups:
+    name: cancel-destroyed-groups
+    # A merge group GitHub rebuilt for the same entry destroys the old one,
+    # and Actions sends no event for that, so the old group's proof would keep
+    # its place in the Mac queue or keep building. The newer group cancels it.
+    # This job is independent of the proof jobs: nothing it concludes can
+    # skip or satisfy them.
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Check out the cancellation script without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/cancel_destroyed_queue_proofs.py
+          sparse-checkout-cone-mode: false
+
+      - name: Cancel older proofs of this queue entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I scripts/cancel_destroyed_queue_proofs.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --ref "$GITHUB_REF" \
+            --run-id "$GITHUB_RUN_ID"

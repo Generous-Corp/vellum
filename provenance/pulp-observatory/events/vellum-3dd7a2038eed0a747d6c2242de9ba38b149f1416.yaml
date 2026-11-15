@@ -1,0 +1,76 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-15T04:06:25Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-3dd7a2038eed0a747d6c2242de9ba38b149f1416",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/damage.hpp",
+    "graphics/include/vellum/graphics/lowering_diagnostic.hpp",
+    "graphics/include/vellum/graphics/paint_command.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/src/render_cache.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/src/rendered_tree_materializer.mm",
+    "authoring/tests/rendered_tree_materializer_test.cpp",
+    "graphics/include/vellum/graphics/damage.hpp",
+    "graphics/include/vellum/graphics/lowering_diagnostic.hpp",
+    "graphics/include/vellum/graphics/paint_command.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/src/damage.cpp",
+    "graphics/src/layer_cache.cpp",
+    "graphics/src/paint_command.cpp",
+    "graphics/src/path_geometry.cpp",
+    "graphics/src/render_cache.hpp",
+    "graphics/src/scene_acceptance.cpp",
+    "graphics/src/skia_dawn_surface.mm",
+    "graphics/tests/damage_test.cpp",
+    "graphics/tests/grouping_test.cpp",
+    "graphics/tests/layer_cache_test.cpp",
+    "graphics/tests/paint_command_test.cpp",
+    "graphics/tests/partial_present_test.cpp",
+    "graphics/tests/render_cache_gpu_test.cpp",
+    "graphics/tests/render_cache_test.cpp",
+    "packages/vellum-ui/src/index.d.ts",
+    "packages/vellum-ui/src/runtime.js",
+    "packages/vellum-ui/test/runtime.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "4ffae6322ece74653a358d6be8e8d5d58449cb95",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "faf185fb1f66053654d4f4ec6bca849f325d63f2",
+    "to_commit": "3dd7a2038eed0a747d6c2242de9ba38b149f1416"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-ui/src/index.d.ts"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "3dd7a2038eed0a747d6c2242de9ba38b149f1416",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

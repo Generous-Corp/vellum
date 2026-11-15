@@ -2932,7 +2932,7 @@ private:
     // EXCEPT push_effect_layers / pop_effect_layers, which own the imbalance by
     // contract — push returns the exact count/flag it opened and pop consumes
     // it, so the push/pop pair is auditable in isolation. Splitting the monolith
-    // this way also gives FU-3's subtree cache a clean "content" seam
+    // this way also gives the subtree scene cache a clean "content" seam
     // (paint_content) that excludes the effect/opacity layer wrappers.
     struct EffectLayerState {
         int  layers_pushed   = 0;      ///< compositing layers opened (an effect can open >1)
@@ -2941,12 +2941,12 @@ private:
     void apply_canvas_transforms(canvas::Canvas& canvas);
     EffectLayerState push_effect_layers(canvas::Canvas& canvas);
     void pop_effect_layers(canvas::Canvas& canvas, const EffectLayerState& layers);
-    // The FU-3 cache-capture unit: everything painted INSIDE the effect layers
+    // What the subtree scene cache records: everything painted INSIDE the effect layers
     // (shadows, clip, background/border, paint(), children, decorations).
     // children_ns receives the recursive child-paint time for self-time attrib.
     void paint_content(canvas::Canvas& canvas, const EffectLayerState& layers,
                        std::int64_t& children_ns);
-    // FU-3 wrapper around paint_content: replays the cached scene when caching
+    // Subtree-cache wrapper around paint_content: replays the cached scene when caching
     // is on, the backend supports it, and the cache is valid; otherwise records
     // (on a miss) or paints directly. Called from the paint_all orchestrator in
     // place of paint_content so the effect/opacity layers stay outside the cache.
@@ -3272,7 +3272,7 @@ private:
     float       text_shadow_dy_ = 0.0f;
     float       text_shadow_radius_ = 0.0f;
     bool needs_layer_ = false;
-    // FU-3 subtree scene cache. `subtree_cached_` is the opt-in flag;
+    // Subtree scene cache. `subtree_cached_` is the opt-in flag;
     // `scene_cache_` holds the recorded scene (shared_ptr so it survives across
     // frames until invalidated); `scene_cache_valid_` gates replay vs re-record.
     bool subtree_cached_ = false;

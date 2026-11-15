@@ -2,7 +2,6 @@
 
 /// @file text_editor.hpp
 /// Full-featured text editor widget with selection, clipboard, undo/redo.
-/// Inspired by Visage TextEditor patterns (see ~/Code/visage).
 
 #include <cstddef>
 #include <functional>
