@@ -129,21 +129,25 @@ jobs:
       # the same way: select_reusable_merge_group_proof.py names it only for a
       # successful merge_group run of this workflow on this exact commit, from
       # this repository, that built the proof or reported an identical-tree
-      # one. The jobs still run and report, because release-tag.yml reads the
-      # newest check run of each required context on that commit and a skipped
-      # job would read as unmet. Release tags, dry-run tags and dispatches
-      # always run the full proof.
+      # one, or that skipped it on the classifier's verdict when the push
+      # proves the same classification (tree, base, changed paths, classifier
+      # and requirements all identical). The jobs still run and report,
+      # because release-tag.yml reads the newest check run of each required
+      # context on that commit and a skipped job would read as unmet. Release
+      # tags, dry-run tags and dispatches always run the full proof.
       - name: Reuse an identical-tree proof
         id: reuse
         if: (github.event_name == 'merge_group' && steps.classify.outputs.unaffected != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_BEFORE: ${{ github.event.before }}
         run: |
           set -uo pipefail
           if [ "${GITHUB_EVENT_NAME:-}" = push ]; then
             selector=(python3 -I scripts/select_reusable_merge_group_proof.py
-              --repository "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA")
+              --repository "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA"
+              --before "${EVENT_BEFORE:-}" --summary "${GITHUB_STEP_SUMMARY:-/dev/null}")
             origin="merge-queue"
           else
             selector=(python3 -I scripts/select_reusable_gpu_proof.py
@@ -923,6 +927,67 @@ jobs:
             exit 1
           fi
           tr '\0' '\n' < "$RUNNER_TEMP/guard-paths"
+
+      # What a later push to main needs to prove it may report this skipped
+      # queue run instead of proving the same commit again. The push never
+      # trusts this file alone: it recomputes the tree, the base, the changed
+      # paths and the verdict itself and refuses on any difference. A missing
+      # receipt only means the push runs the full proof. The classifier's
+      # allowlist lives in the script, so its blob is the whole configuration.
+      - name: Record the classifier-skip equivalence receipt
+        if: steps.classify.outputs.unaffected == 'true' && github.event_name == 'merge_group'
+        shell: bash
+        env:
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/gpu-classifier-skip"
+          if python3 -I - "$RUNNER_TEMP/gpu-classifier-skip/gpu-classifier-skip.json" <<'PY'
+          import hashlib, json, os, subprocess, sys
+          def git(*args):
+              return subprocess.run(["git", *args], check=True, text=True,
+                                    capture_output=True).stdout.strip()
+          base, sha = os.environ["QUEUE_BASE"], os.environ["GITHUB_SHA"]
+          paths = open(os.path.join(os.environ["RUNNER_TEMP"], "guard-paths"), "rb").read()
+          receipt = {
+              "schema": "vellum.gpu-classifier-skip.v1",
+              "event": os.environ["GITHUB_EVENT_NAME"],
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "commit": sha,
+              "tree": git("rev-parse", sha + "^{tree}"),
+              "base_sha": base,
+              "classifier_blob": git("rev-parse", base + ":scripts/classify_gpu_proof.py"),
+              "classifier_config": "embedded-in-classifier",
+              "changed_paths_sha256": hashlib.sha256(paths).hexdigest(),
+              "verdict": "not-required",
+              "required_contexts": ["gpu-macos-arm64", "sterile-consumer"],
+          }
+          with open(sys.argv[1], "w", encoding="utf-8") as handle:
+              json.dump(receipt, handle, indent=2, sort_keys=True)
+              handle.write("\n")
+          PY
+          then
+            {
+              echo "Classifier-skip equivalence receipt for $GITHUB_SHA"
+              echo '```'
+              cat "$RUNNER_TEMP/gpu-classifier-skip/gpu-classifier-skip.json"
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          else
+            rm -f "$RUNNER_TEMP/gpu-classifier-skip/gpu-classifier-skip.json"
+            echo "::warning::no classifier-skip receipt; a push will run the full proof"
+          fi
+
+      - name: Upload the classifier-skip equivalence receipt
+        if: steps.classify.outputs.unaffected == 'true' && github.event_name == 'merge_group'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vellum-gpu-classifier-skip
+          path: ${{ runner.temp }}/gpu-classifier-skip/gpu-classifier-skip.json
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload retained GPU evidence
         if: always() && steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''

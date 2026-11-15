@@ -128,11 +128,35 @@ finds a `merge_group` run that:
   `gh-readonly-queue/main/` ref, from this repository;
 - succeeded, with both proof jobs `success` (not `skipped`) in its latest
   attempt, on that commit;
-- built the proof or itself reported an identical-tree pull-request proof,
-  never a run that skipped the proof on the classifier's verdict (those pushes
-  still run the full proof, because the classifier has never judged a
-  push);
+- built the proof or itself reported an identical-tree pull-request proof, or
+  skipped it on the classifier's verdict under proven equivalence (below);
 - started within the last twelve hours.
+
+### The classifier may authorize a push skip only under proven equivalence
+
+The classifier (`scripts/classify_gpu_proof.py`) judges pull requests and queue
+entries, never a push. A push may report a queue run that skipped the proof on
+the classifier's verdict only when the push proves it is that same
+classification. The queue run uploads a receipt (`vellum-gpu-classifier-skip`)
+and the push recomputes every fact from git and compares it to the receipt,
+field by field; a missing, mistyped or different field runs the full proof:
+
+- same inputs: the pushed commit's tree is the queue commit's tree, and the
+  push's previous main tip is the base the queue run classified against, so the
+  changed paths (compared by digest) are identical;
+- same classifier: the script's blob at that base is the receipt's blob (the
+  allowlist is part of the script, so there is no other configuration), and
+  running that copy over the changed paths says `not-required` again;
+- same requirements: the queue run's two required contexts both succeeded in
+  the current attempt, and the pushed tree needs nothing a queue run does not
+  produce. The only such item is the parity proof execution receipt, which
+  release readiness binds to the push run: if the parity completion record is
+  in the pushed tree the push always proves, for every kind of reuse;
+- the queue run is a success of this workflow in this repository, as above.
+
+The equivalence evidence is written to the push run's job summary. The owner
+approved this narrower rule on 2026-11-15; before it, a push never reused a
+classifier skip.
 
 Any doubt, including an API error, runs the full proof. Both jobs still run
 and report on the push, with only their steps skipped: `release-tag.yml` reads
