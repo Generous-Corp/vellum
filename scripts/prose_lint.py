@@ -27,8 +27,10 @@ CHECKER = HERE / "crisp_writing_check.py"
 CHECKER_SHA256 = "e649f8a05377de6035943e6201e310c074582ad97eea17f80314eca78b3d3200"
 
 # History-bearing records, the byte-identical Pulp export, generated data, and
-# this lint's own files, which quote the patterns they test.
-EXEMPT_PREFIXES = ("mirror/", "framework/", "provenance/", "decisions/")
+# this lint's own files, which quote the patterns they test. The Three.js
+# payload files are another project's unmodified bytes.
+EXEMPT_PREFIXES = ("mirror/", "framework/", "provenance/", "decisions/",
+                   "assets/threejs/build/", "assets/threejs/examples/")
 EXEMPT_FILES = {
     "NOTICE.md",
     "scripts/crisp_writing_check.py",

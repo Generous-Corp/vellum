@@ -124,6 +124,14 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_check_threejs_payload.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/check_threejs_payload.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_verify_gpu_runtime_artifact.py",
         "isolated": true
       },
@@ -284,6 +292,14 @@
       },
       {
         "script": "scripts/check_renderer_lock.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_check_threejs_payload.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/check_threejs_payload.py",
         "isolated": true
       },
       {
