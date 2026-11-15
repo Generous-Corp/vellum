@@ -112,10 +112,17 @@ inline Readback paint_canvas(ScriptedView& v, const std::string& element_id, uin
     return out;
 }
 
+// Prints the center pixel. With VELLUM_THREEJS_TEST_DUMP set to a directory,
+// also writes the readback there as <label>-<w>x<h>.rgba for inspection.
 inline void report(const char* label, const Readback& r) {
     if (!r.ok()) {
         std::fprintf(stderr, "  %s: no readback (painted=%d)\n", label, int(r.painted));
         return;
+    }
+    if (const char* dir = std::getenv("VELLUM_THREEJS_TEST_DUMP")) {
+        const auto name = std::string(label) + "-" + std::to_string(r.width) + "x" + std::to_string(r.height) + ".rgba";
+        std::ofstream(std::filesystem::path(dir) / name, std::ios::binary)
+            .write(reinterpret_cast<const char*>(r.rgba.data()), std::streamsize(r.rgba.size()));
     }
     const auto* c = r.center();
     std::fprintf(stderr, "  %s: %ux%u center rgb=%d,%d,%d\n", label, r.width, r.height, c[0], c[1], c[2]);

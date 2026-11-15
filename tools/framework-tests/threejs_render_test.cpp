@@ -2,9 +2,15 @@
 // adapter, then composited by CanvasWidget::paint through Skia and read back:
 // a sampled DataTexture, a cube in a layout of native widgets, and the four
 // visualizer scenes (bar spectrum, point cloud, indexed ribbon, line and point
-// room). A broken upload, bind group, buffer copy or topology leaves the
-// canvas black or the wrong colour, which these pixel checks see. Exits 77
-// (skipped) when the host has no rendering adapter.
+// room). A broken upload, bind group or buffer copy leaves the canvas black or
+// the wrong colour, which these pixel checks see. Exits 77 (skipped) when the
+// host has no rendering adapter.
+//
+// The binding replays each buffered draw as its own render pass with the
+// pass's load operation, so a draw that clears erases the draws before it:
+// today a frame shows only its last draw. The checks below look at the object
+// drawn last (the peak bar, the pulse core, the ribbon, the room's point
+// cloud), so they hold until that is fixed.
 
 #include "framework_test.hpp"
 #include "threejs_gpu.hpp"
