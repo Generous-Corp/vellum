@@ -387,6 +387,86 @@ enum class MaskMode : std::uint8_t {
     luminance,
 };
 
+/// What a node effect does. Every effect applies to the node and its subtree
+/// composited as one group.
+enum class EffectKind : std::uint8_t {
+    /// Blurs the group with a Gaussian of standard deviation `sigma`.
+    blur,
+    /// Maps each unpremultiplied colour of the group through `matrix`.
+    color_matrix,
+    /// Draws a blurred, offset copy of the group's alpha in `color` beneath
+    /// it.
+    drop_shadow,
+    /// Blurs what lies beneath the node's box before the group is drawn over
+    /// it.
+    backdrop_blur,
+    /// A registered material named by `material`, with `values` for its
+    /// uniforms; see `MaterialRegistry`.
+    material,
+};
+
+/// The type of a material uniform and of the value that sets it.
+enum class MaterialValueType : std::uint8_t {
+    /// One number in `value[0]`.
+    number,
+    /// Two numbers in `value[0]` and `value[1]`.
+    vector2,
+    /// A straight (unpremultiplied) RGBA colour in `value[0..3]`.
+    color,
+};
+
+/// A value for one uniform of a material. A scene carries values only; the
+/// uniform's type, range and default belong to the material's registration.
+struct MaterialValue final {
+    std::string name;
+    MaterialValueType type = MaterialValueType::number;
+    std::array<float, 4> value{};
+};
+
+/// The colour matrix that changes nothing.
+inline constexpr std::array<float, 20> kIdentityColorMatrix{
+    1.0F, 0.0F, 0.0F, 0.0F, 0.0F,
+    0.0F, 1.0F, 0.0F, 0.0F, 0.0F,
+    0.0F, 0.0F, 1.0F, 0.0F, 0.0F,
+    0.0F, 0.0F, 0.0F, 1.0F, 0.0F,
+};
+
+/// One effect in a node's effect chain.
+///
+/// Effects work in frame space: lengths are logical pixels of the frame, so
+/// a node's transform moves and turns the group but does not scale a blur or
+/// turn a shadow offset, as with box shadows. The group is the node's own
+/// paint and its subtree, after the clips inside it and before its own clip
+/// when that clip `clips_own_paint`.
+///
+/// The filter effects (`blur`, `color_matrix`, `drop_shadow`) apply in chain
+/// order to the group's rendering. The backdrop effects (`backdrop_blur` and
+/// a backdrop material) replace what lies beneath the node's box, its
+/// `bounds` with its resolved corner radii under its transform, before the
+/// group is drawn; a node carries at most one. A backdrop reads only what is
+/// drawn before it within the nearest enclosing group, so inside a faded or
+/// isolated ancestor it sees that ancestor's earlier content and not the
+/// scene beneath it.
+struct NodeEffect final {
+    EffectKind kind = EffectKind::blur;
+    /// The Gaussian standard deviation, in logical pixels, of `blur`,
+    /// `drop_shadow` and `backdrop_blur`. Zero blurs nothing.
+    float sigma = 0.0F;
+    /// The offset of a `drop_shadow`, in logical pixels.
+    float offset_x = 0.0F;
+    float offset_y = 0.0F;
+    /// The colour of a `drop_shadow`.
+    Color color = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    /// A `color_matrix` as four rows of five, as SVG `feColorMatrix`: each
+    /// output channel is the row's dot product with the unpremultiplied
+    /// input (red, green, blue, alpha, 1), with channels in [0, 1].
+    std::array<float, 20> matrix = kIdentityColorMatrix;
+    /// The registered id of a `material`.
+    std::string material;
+    /// The material's uniform values. A uniform without a value takes its
+    /// registered default.
+    std::vector<MaterialValue> values;
+};
 /// How a node's composited group meets what lies beneath it.
 ///
 /// `normal` is the default and draws no group of its own. Every other mode
@@ -569,13 +649,19 @@ inline constexpr std::array<BlendMode, 29> kAllBlendModes{
 /// `LinearGradient`, and gradient strokes on paths. A plain linear fill
 /// gradient stays legal at every version.
 ///
+/// Version 10 adds `SceneNode::effects`. A scene of an earlier version is
+/// still accepted when no node sets them; one that does fails
+/// `scene_fields_match_version` and is refused.
+///
 /// Claimed versions, in order:
 /// version 4: image nodes; version 5: clip, mask and isolation on groups;
 /// version 6: blend modes and DesignIR compositing fields; version 7: token
-/// receipts (reserved); version 8: gradient vocabulary. This build gives
-/// version 7 no fields of its own; the branch that owns it adds its fields
-/// and damage support.
-inline constexpr std::uint32_t kSceneVersion = 8U;
+/// receipts; version 8: gradient vocabulary; version 9: vector assets;
+/// version 10: effects and materials; version 11: animation tracks; version
+/// 12: plots. This build gives versions 7 and 9 no fields of their own and
+/// does not accept 11 or 12; the branches that own them add their fields and
+/// damage support.
+inline constexpr std::uint32_t kSceneVersion = 10U;
 
 /// The oldest scene schema version this build still consumes.
 inline constexpr std::uint32_t kMinSupportedSceneVersion = 1U;
@@ -669,6 +755,11 @@ struct SceneNode final {
     /// paint, so it keeps `normal`; `accept_scene` refuses a mask with any
     /// other mode.
     BlendMode blend_mode = BlendMode::normal;
+    /// The node's effect chain; see `NodeEffect`. A node with effects is
+    /// composited offscreen as one group, like an isolated node. A chain over
+    /// the effect budget (`effect_chain_cost`) is drawn without its effects
+    /// and reported as a loss. A mask node cannot carry effects.
+    std::vector<NodeEffect> effects;
 };
 
 /// The corner radii a node is drawn with: `corner_radii` when present,
@@ -731,6 +822,20 @@ struct SceneNode final {
     if (uses_version_5_fields(node)) return &node;
     for (const auto& child : node.children) {
         if (const auto* found = find_version_5_fields(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
+/// Whether a node sets a field version 10 introduced: an effect.
+[[nodiscard]] inline bool uses_version_10_fields(const SceneNode& node) noexcept {
+    return !node.effects.empty();
+}
+
+/// The first node, in depth-first order, that `uses_version_10_fields`.
+[[nodiscard]] inline const SceneNode* find_version_10_fields(const SceneNode& node) noexcept {
+    if (uses_version_10_fields(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_10_fields(child); found != nullptr) return found;
     }
     return nullptr;
 }
@@ -947,15 +1052,17 @@ struct Scene final {
 /// scene before version 4 has no node that `find_version_4_kinds` reports,
 /// a scene before version 5 sets no field that `uses_version_5_fields`
 /// reports, a scene before version 6 sets no field that
-/// `uses_version_6_fields` reports, and a scene before version 8 has no node
-/// that `node_uses_version_8_fields` reports.
+/// `uses_version_6_fields` reports, a scene before version 8 has no node
+/// that `node_uses_version_8_fields` reports, and a scene before version 10
+/// sets no field that `uses_version_10_fields` reports.
 [[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
     return (scene.scene_version >= 2U || find_version_2_fields(scene.root) == nullptr) &&
            (scene.scene_version >= 3U || find_version_3_kinds(scene.root) == nullptr) &&
            (scene.scene_version >= 4U || find_version_4_kinds(scene.root) == nullptr) &&
            (scene.scene_version >= 5U || find_version_5_fields(scene.root) == nullptr) &&
            (scene.scene_version >= 6U || find_version_6_fields(scene.root) == nullptr) &&
-           (scene.scene_version >= 8U || !node_uses_version_8_fields(scene.root));
+           (scene.scene_version >= 8U || !node_uses_version_8_fields(scene.root)) &&
+           (scene.scene_version >= 10U || find_version_10_fields(scene.root) == nullptr);
 }
 
 /// The first node, in depth-first order, that its scene's version cannot
@@ -984,6 +1091,9 @@ struct Scene final {
     }
     if (scene.scene_version < 8U) {
         if (const auto* found = find_version_8_fields(scene.root); found != nullptr) return found;
+    }
+    if (scene.scene_version < 10U) {
+        if (const auto* found = find_version_10_fields(scene.root); found != nullptr) return found;
     }
     return nullptr;
 }

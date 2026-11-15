@@ -3,7 +3,9 @@ import {
     COMPILER_VERSION,
     DESIGN_IR_COMPOSITING_VERSION,
     DESIGN_IR_SCHEMA,
+    DESIGN_IR_MATERIALS_VERSION,
     DESIGN_IR_VERSION,
+    DESIGN_IR_VERSIONS,
 } from './constants.js';
 import { canonicalCompositing, compositingProblems } from './compositing.js';
 import { buildLossReport, diagnosticSort, normalizeDiagnostic } from './diagnostics.js';
@@ -24,6 +26,7 @@ const KNOWN_NODE_FIELDS = new Set([
     'extensions',
     'kind',
     'losses',
+    'material',
     'name',
     'properties',
     'role',
@@ -39,6 +42,9 @@ const KNOWN_NODE_FIELDS = new Set([
 export function normalizeImport(input, options = {}) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) {
         throw new TypeError('import input must be an object');
+    }
+    if (options.schemaVersion !== undefined && !DESIGN_IR_VERSIONS.includes(options.schemaVersion)) {
+        throw new TypeError(`schemaVersion must be one of ${DESIGN_IR_VERSIONS.join(', ')}`);
     }
     const source = normalizeSource(input.source);
     const diagnostics = (input.diagnostics ?? []).map((diagnostic) =>
@@ -64,7 +70,10 @@ export function normalizeImport(input, options = {}) {
         },
         diagnostics: diagnostics.sort(diagnosticSort),
         root,
-        schemaVersion: usesCompositing(root) ? DESIGN_IR_COMPOSITING_VERSION : DESIGN_IR_VERSION,
+        // The lowest version that carries every field the document uses,
+        // unless the caller names one; validation refuses a version too old
+        // for a field.
+        schemaVersion: options.schemaVersion ?? requiredVersion(root),
         source,
         tokens: normalizeTokens(input.tokens, source.key),
     });
@@ -73,8 +82,12 @@ export function normalizeImport(input, options = {}) {
     return canonicalize(document);
 }
 
-function usesCompositing(node) {
-    return node.compositing !== undefined || node.children.some(usesCompositing);
+function requiredVersion(node) {
+    let version = DESIGN_IR_VERSION;
+    if (node.compositing !== undefined) version = DESIGN_IR_COMPOSITING_VERSION;
+    if (node.material !== undefined) version = DESIGN_IR_MATERIALS_VERSION;
+    for (const child of node.children) version = Math.max(version, requiredVersion(child));
+    return version;
 }
 
 function normalizeSource(source) {
@@ -133,6 +146,7 @@ function normalizeNode(rawNode, context) {
         const compositing = canonicalCompositing(rawNode.compositing);
         if (compositing !== undefined) output.compositing = canonicalize(compositing);
     }
+    if (rawNode.material !== undefined) output.material = canonicalize(rawNode.material);
 
     const unrecognized = Object.create(null);
     for (const key of Object.keys(rawNode)) {

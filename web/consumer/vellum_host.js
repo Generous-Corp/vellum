@@ -61,6 +61,31 @@ globalThis.VellumCanvasBackend = Object.freeze({
         context.drawImage(layer, 0, 0);
         context.restore();
     },
+    filter(css) {
+        context.filter = css;
+    },
+    colorMatrix(id, values) {
+        const namespace = 'http://www.w3.org/2000/svg';
+        let definitions = document.getElementById('vellum-filters');
+        if (!definitions) {
+            definitions = document.createElementNS(namespace, 'svg');
+            definitions.id = 'vellum-filters';
+            definitions.setAttribute('width', '0');
+            definitions.setAttribute('height', '0');
+            definitions.style.position = 'absolute';
+            document.body.append(definitions);
+        }
+        let filter = document.getElementById(id);
+        if (!filter) {
+            filter = document.createElementNS(namespace, 'filter');
+            filter.id = id;
+            filter.setAttribute('color-interpolation-filters', 'sRGB');
+            filter.append(document.createElementNS(namespace, 'feColorMatrix'));
+            definitions.append(filter);
+        }
+        filter.firstElementChild.setAttribute('type', 'matrix');
+        filter.firstElementChild.setAttribute('values', values);
+    },
     finish() {},
 });
 
@@ -366,6 +391,7 @@ async function runScenario(path) {
     const keys = [];
     const touches = [];
     const assertions = [];
+    const commands = [];
     const services = [];
     const throws = [];
     const compositions = [];
@@ -523,9 +549,27 @@ async function runScenario(path) {
             }
             assertions.push({action: step.action, target: step.target, passed: true});
         } else if (step.action === 'command') {
+            // A command step passes only when the command is defined, its
+            // handler ran, and the rendered tree changed.
             if (!bridge.hasCommand(step.target)) {
                 throw new Error(`scenario command is not defined: ${step.target}`);
             }
+            if (typeof bridge.invokeCommand !== 'function') {
+                throw new Error('application bridge cannot invoke commands');
+            }
+            const before = current.digest;
+            const invoked = JSON.parse(bridge.invokeCommand(step.target));
+            if (invoked.command !== step.target || !(invoked.invocations >= 1)) {
+                throw new Error(`scenario command did not run: ${step.target}`);
+            }
+            current = render();
+            if (invoked.changed !== true) {
+                throw new Error(`scenario command had no rendered effect: ${step.target}`);
+            }
+            commands.push({
+                target: step.target, invoked: true, invocations: invoked.invocations,
+                changed: true, before, after: current.digest,
+            });
             assertions.push({action: step.action, target: step.target, passed: true});
         } else if (step.action === 'service-result') {
             if (step.service?.ok === false && typeof step.service.error?.code === 'string') {
@@ -570,7 +614,7 @@ async function runScenario(path) {
     }
     return {schema: 'vellum.web-proof.v1', scenario: scenario.name, backend: api.backend(),
         authoringRuntime: 'browser JavaScript', initial, final: current,
-        captures, presses, inputs, keys, touches, assertions, services, throws,
+        captures, presses, inputs, keys, touches, assertions, commands, services, throws,
         compositions, accessibility,
         scrollContainers, components: [...componentEvidence.values()],
         canvasDataBytes: canvas.toDataURL('image/png').length};

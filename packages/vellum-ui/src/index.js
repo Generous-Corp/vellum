@@ -14,6 +14,7 @@ export {
     jsx,
     jsxs,
     mount,
+    useCommand,
     useEffect,
     useMemo,
     useState,

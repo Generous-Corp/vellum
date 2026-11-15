@@ -19,8 +19,8 @@
   "properties": {
     "$schema": { "const": "https://vellum.dev/schemas/design-ir/v1" },
     "schemaVersion": {
-      "enum": [1, 2],
-      "description": "Version 2 adds the node compositing object. A version 1 document must not carry it; a normalizer emits version 2 only when a node uses it."
+      "enum": [1, 2, 3],
+      "description": "Version 2 adds the node compositing object and version 3 node material references; each version keeps every field of the ones before it. A normalizer emits the lowest version that carries every field a document uses."
     },
     "compiler": {
       "type": "object",
@@ -52,6 +52,11 @@
       "description": "A version 1 document carries no compositing object on any node; compositing is version 2 vocabulary.",
       "if": { "required": ["schemaVersion"], "properties": { "schemaVersion": { "const": 1 } } },
       "then": { "properties": { "root": { "$ref": "#/$defs/nodeWithoutCompositing" } } }
+    },
+    {
+      "description": "A document before version 3 carries no material reference on any node; materials are version 3 vocabulary.",
+      "if": { "required": ["schemaVersion"], "properties": { "schemaVersion": { "enum": [1, 2] } } },
+      "then": { "properties": { "root": { "$ref": "#/$defs/nodeWithoutMaterial" } } }
     }
   ],
   "$defs": {
@@ -105,9 +110,48 @@
         "text": { "type": "string" },
         "properties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
         "extensions": { "type": "object", "additionalProperties": { "$ref": "#/$defs/jsonValue" } },
+        "material": { "$ref": "#/$defs/materialReference" },
         "compositing": { "$ref": "#/$defs/compositing" },
         "children": { "type": "array", "items": { "$ref": "#/$defs/node" } }
       }
+    },
+    "nodeWithoutMaterial": {
+      "description": "A node, and every node beneath it, without a material reference.",
+      "properties": {
+        "material": false,
+        "children": { "type": "array", "items": { "$ref": "#/$defs/nodeWithoutMaterial" } }
+      }
+    },
+    "materialReference": {
+      "description": "A registered material named by id with values for its uniforms. The uniforms' types, ranges and defaults belong to the material's registration, not to the document.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "values"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*$" },
+        "values": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "additionalProperties": { "$ref": "#/$defs/materialValue" }
+        }
+      }
+    },
+    "materialValue": {
+      "oneOf": [
+        { "type": "number" },
+        { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["red", "green", "blue", "alpha"],
+          "properties": {
+            "red": { "type": "number" },
+            "green": { "type": "number" },
+            "blue": { "type": "number" },
+            "alpha": { "type": "number" }
+          }
+        }
+      ]
     },
     "nodeWithoutCompositing": {
       "description": "A node, and every node beneath it, without a compositing object.",

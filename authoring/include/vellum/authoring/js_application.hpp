@@ -159,6 +159,15 @@ public:
         std::string_view command,
         bool& present,
         std::string* error = nullptr);
+    /// Runs a defined command's handler through the bridge and materializes
+    /// the tree it renders. `changed` reports whether that tree differs from
+    /// the one rendered before the handler ran. Fails when the command is not
+    /// defined, has no handler, or its handler throws.
+    [[nodiscard]] bool invoke_command(
+        std::string_view command,
+        RenderedApplication& output,
+        bool& changed,
+        std::string* error = nullptr);
     [[nodiscard]] bool snapshot_state(
         std::string& output_json, std::string* error = nullptr);
     [[nodiscard]] bool restore_state(

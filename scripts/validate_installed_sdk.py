@@ -581,7 +581,7 @@ def validate(
         )
         web_claimed = all(
             verification["claims"]["targets"]["web"]["commands"][command]
-            for command in ("build", "run", "test", "package")
+            for command in ("build", "run", "test", "capture", "package")
         )
         web_present = all((prefix / "lib/vellum" / path).is_file() for path in (
             "vellum_web_backend.py", "bin/vellum-web-backend",
