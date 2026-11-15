@@ -374,6 +374,8 @@ bool path_bounds_and_outset() {
     command.path = std::make_shared<const PathGeometry>(flat);
     ok &= expect(!vellum::graphics::path_gradient_box(command),
                  "a gradient has no box when neither box has area");
+    ok &= expect(is(vellum::graphics::path_stroke_gradient_box(command), 5, 5.5F, 10, 1),
+                 "a stroke gradient on a horizontal line resolves against a one-pixel band");
 
     using vellum::graphics::PathStroke;
     const auto black = vellum::graphics::Color::hex(0x000000);
@@ -867,7 +869,7 @@ bool legacy_scene_paths() {
 
 bool scene_versioning() {
     using vellum::graphics::SceneNode;
-    static_assert(vellum::graphics::kSceneVersion == 5U);
+    static_assert(vellum::graphics::kSceneVersion == 8U);
     static_assert(vellum::graphics::kMinSupportedSceneVersion == 1U);
     static_assert(vellum::graphics::scene_version_is_supported(vellum::graphics::kSceneVersion));
     static_assert(vellum::graphics::scene_version_is_supported(1U));
@@ -875,10 +877,9 @@ bool scene_versioning() {
     static_assert(!vellum::graphics::scene_version_is_supported(0U));
     static_assert(vellum::graphics::scene_version_is_supported(3U));
     static_assert(vellum::graphics::scene_version_is_supported(4U));
-    static_assert(!vellum::graphics::scene_version_is_supported(6U));
 
     vellum::graphics::Scene scene;
-    if (scene.scene_version != vellum::graphics::kSceneVersion || scene.scene_version != 5U) {
+    if (scene.scene_version != vellum::graphics::kSceneVersion) {
         return false;
     }
     scene.root.children.push_back({
