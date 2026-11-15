@@ -333,6 +333,8 @@ constexpr std::string_view kStyledTree = R"JSON({
           "borderRadius": 12,
           "backgroundLinearGradient": {
             "angle": 135,
+            "interpolation": "linear-srgb",
+            "colorSpace": "display-p3",
             "repeating": true,
             "repeatLength": 40,
             "stops": [
@@ -957,6 +959,9 @@ int main() {
         card->fill_gradients.size() != 1U ||
         !card->fill_gradients[0].repeating ||
         card->fill_gradients[0].repeat_length != 40.0F ||
+        card->fill_gradients[0].interpolation !=
+            vellum::graphics::GradientInterpolation::linear_srgb ||
+        card->fill_gradients[0].color_space != "display-p3" ||
         card->box_shadows.size() != 1U ||
         card->box_shadows[0].spread_radius != 3.0F || attributed == nullptr ||
         attributed->text_runs.size() != 2U ||
@@ -1049,6 +1054,78 @@ int main() {
         error != "backgroundLinearGradient exceeds the 64-stop limit" ||
         rendered.scene.width != styled_width) {
         std::cerr << "excessive gradient stops did not fail atomically\n";
+        return 1;
+    }
+
+    const auto gradient_tree = [](std::string_view fields) {
+        return std::string(R"JSON({
+      "protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
+        "type":"view","id":"gradient-fields",
+        "style":{"width":100,"height":60,"backgroundGradient":{)JSON") +
+               std::string(fields) + R"JSON(,"stops":[
+            {"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}
+          ]}},"children":[]}})JSON";
+    };
+    const std::pair<std::string_view, std::string_view> malformed_gradients[]{
+        {R"("kind":7)", "backgroundGradient.kind must be linear, radial, two-circle-radial or conic"},
+        {R"("kind":"spiral")",
+         "backgroundGradient.kind must be linear, radial, two-circle-radial or conic"},
+        {R"("spread":1)", "backgroundGradient.spread must be pad, repeat or reflect"},
+        {R"("spread":"wrap")", "backgroundGradient.spread must be pad, repeat or reflect"},
+        {R"("spread":"pad","repeating":true)",
+         "backgroundGradient.repeating contradicts backgroundGradient.spread; repeating is true "
+         "exactly when spread is repeat or reflect"},
+        {R"("spread":"reflect","repeating":false)",
+         "backgroundGradient.repeating contradicts backgroundGradient.spread; repeating is true "
+         "exactly when spread is repeat or reflect"},
+        {R"("kind":"radial","radiusX":-0.5)", "backgroundGradient.radiusX must be non-negative"},
+        {R"("kind":"radial","radiusY":-1)", "backgroundGradient.radiusY must be non-negative"},
+        {R"("kind":"two-circle-radial","startRadius":-0.1)",
+         "backgroundGradient.startRadius must be non-negative"},
+        {R"("kind":"two-circle-radial","endRadius":-0.1)",
+         "backgroundGradient.endRadius must be non-negative"},
+        {R"("kind":"radial","angle":30)",
+         "backgroundGradient.angle does not apply to a radial gradient"},
+        {R"("kind":"two-circle-radial","angle":30)",
+         "backgroundGradient.angle does not apply to a two-circle-radial gradient"},
+        {R"("angle":90,"centerX":0.2)",
+         "backgroundGradient.centerX does not apply to a linear gradient"},
+        {R"("kind":"conic","focalY":0.2)",
+         "backgroundGradient.focalY does not apply to a conic gradient"},
+        {R"("kind":"radial","focalX":0.2)",
+         "backgroundGradient.focalX does not apply to a radial gradient"},
+    };
+    for (const auto& [fields, expected] : malformed_gradients) {
+        if (vellum::authoring::materialize_rendered_tree(gradient_tree(fields), rendered,
+                                                         &error) ||
+            error != expected || rendered.scene.width != styled_width) {
+            std::cerr << "malformed gradient " << fields << " gave: " << error << "\n";
+            return 1;
+        }
+    }
+    if (!vellum::authoring::materialize_rendered_tree(
+            gradient_tree(R"("kind":"two-circle-radial","focalX":0.25,"focalY":0.5,)"
+                          R"("startRadius":0,"endRadius":0.75,"spread":"reflect","repeating":true)"),
+            rendered, &error)) {
+        std::cerr << "two-circle gradient did not materialize: " << error << "\n";
+        return 1;
+    }
+    {
+        const auto* node = vellum::graphics::find_node(rendered.scene, "gradient-fields");
+        if (node == nullptr || node->fill_gradients.size() != 1U ||
+            node->fill_gradients[0].kind != vellum::graphics::GradientKind::two_circle_radial ||
+            node->fill_gradients[0].start_radius != 0.0F ||
+            node->fill_gradients[0].end_radius != 0.75F ||
+            node->fill_gradients[0].focal_x != 0.25F ||
+            node->fill_gradients[0].spread != vellum::graphics::GradientSpread::reflect ||
+            node->fill_gradients[0].radius_x != 0.0F) {
+            std::cerr << "two-circle gradient fields were not carried\n";
+            return 1;
+        }
+    }
+    if (!vellum::authoring::materialize_rendered_tree(
+            kRenderedTree, rendered, &error)) {
+        std::cerr << "known-good tree did not rematerialize: " << error << "\n";
         return 1;
     }
 

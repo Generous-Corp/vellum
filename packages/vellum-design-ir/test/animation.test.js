@@ -87,6 +87,23 @@ test('a spring segment that lasts its settle time is accepted', async () => {
     assert.equal(validateDesignIR(withTracks(design, tracks)).valid, false);
 });
 
+test('every version up to 4 is read, and tracks need version 4', async () => {
+    const design = normalizeImport(await source());
+    const definitions = JSON.parse(await readFile(schema, 'utf8'));
+    for (const version of [1, 2, 3, 4]) {
+        const plain = { ...design, schemaVersion: version };
+        assert.deepEqual(validateDesignIR(plain), { issues: [], valid: true }, `version ${version}`);
+        assert.equal(conforms(definitions, plain, definitions.$defs), true, `schema version ${version}`);
+        const animated = { ...withTracks(design, pulse), schemaVersion: version };
+        assert.equal(validateDesignIR(animated).valid, version === 4, `tracks at ${version}`);
+        assert.equal(conforms(definitions, animated, definitions.$defs), version === 4, `schema tracks at ${version}`);
+    }
+    for (const version of [0, 5, 1.5]) {
+        assert.equal(validateDesignIR({ ...design, schemaVersion: version }).valid, false, `version ${version}`);
+        assert.equal(conforms(definitions, { ...design, schemaVersion: version }, definitions.$defs), false);
+    }
+});
+
 test('tracks need schema version 4 while older documents stay valid', async () => {
     const design = normalizeImport(await source());
     assert.equal(design.schemaVersion, 1);

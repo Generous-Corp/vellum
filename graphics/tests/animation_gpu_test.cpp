@@ -187,6 +187,17 @@ Scene animated_scene(double clock) {
                                 0U, 1U));
     children.push_back(ramp);
 
+    auto orb = box("orb", {100, 100, 24, 24}, Color::hex(0x000000));
+    orb.fill_gradients.push_back({.kind = GradientKind::radial,
+                                  .spread = GradientSpread::reflect,
+                                  .stops = {{0.0F, Color::hex(0xFDE68A)},
+                                            {1.0F, Color::hex(0x7C3AED)}}});
+    orb.tracks.push_back(track(AnimatedProperty::gradient_stop_color,
+                               {color_key(0.4, Color::hex(0x7C3AED)),
+                                color_key(1.6, Color::hex(0x10B981))},
+                               0U, 1U));
+    children.push_back(orb);
+
     auto geometry = std::make_shared<PathGeometry>();
     geometry->verbs = {PathVerb::move, PathVerb::line, PathVerb::line, PathVerb::line,
                        PathVerb::close};

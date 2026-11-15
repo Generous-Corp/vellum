@@ -461,8 +461,36 @@ void version_refusal() {
     check(!acceptance.accepted && acceptance.diagnostics.size() == 1U &&
               acceptance.diagnostics[0].property == "clip",
           "an older scene names the oldest field it lacks first");
-    check(kSceneVersion == 11U && kDamageModelSceneVersion == 11U &&
-              partial_redraw_supported(11U) && !partial_redraw_supported(12U),
+    {
+        auto orb = box("orb", {0, 0, 10, 10}, Color::hex(0x000000));
+        orb.fill_gradients.push_back({.kind = GradientKind::conic,
+                                      .stops = {{0.0F, Color::hex(0x000000)},
+                                                {1.0F, Color::hex(0xFFFFFF)}}});
+        orb.tracks.push_back(track(AnimatedProperty::gradient_stop_color,
+                                   {color_key(0.0, Color::hex(0x000000)),
+                                    color_key(1.0, Color::hex(0xFF0000))},
+                                   0U, 1U));
+        auto gradient_scene = scene_with({orb}, 0.5);
+        gradient_scene.scene_version = 11U;
+        accepted(gradient_scene, "a conic gradient with an animated stop is accepted at 11");
+        gradient_scene.scene_version = 10U;
+        const auto refusal = accept_scene(gradient_scene);
+        check(!refusal.accepted && refusal.diagnostics.size() == 1U &&
+                  refusal.diagnostics[0].property == "tracks",
+              "at version 10 the same node is refused for its tracks, not its gradient");
+        gradient_scene.scene_version = 7U;
+        const auto older_refusal = accept_scene(gradient_scene);
+        check(!older_refusal.accepted &&
+                  older_refusal.reason.find("gradient vocabulary") != std::string::npos,
+              "at version 7 it is refused for the gradient vocabulary first");
+        const auto stop = evaluate_tracks(scene_with({orb}, 0.5));
+        check(find_node(stop, "orb")->fill_gradients[0].kind == GradientKind::conic &&
+                  find_node(stop, "orb")->fill_gradients[0].stops[1].color.red == 0.5F,
+              "a stop track keeps the gradient's kind and writes its stop");
+    }
+    check(kSceneVersion >= 11U && kDamageModelSceneVersion >= 11U &&
+              partial_redraw_supported(8U) && partial_redraw_supported(11U) &&
+              !partial_redraw_supported(kDamageModelSceneVersion + 1U),
           "this build produces version 11 and redraws it from damage");
 }
 

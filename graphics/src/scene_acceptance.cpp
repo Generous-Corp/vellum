@@ -72,6 +72,12 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node) {
         const auto loss = scene_loss_diagnostics(scene);
         return loss.empty() ? "scene fields do not match its version" : loss.front().message;
     }
+    std::string gradient_reason;
+    if (const auto* unsupported = find_inexpressible_gradient(scene.root, &gradient_reason);
+        unsupported != nullptr) {
+        return "the gradient at " + unsupported->id + " cannot be drawn exactly: " +
+               gradient_reason;
+    }
     std::string reason;
     std::optional<Scene> evaluated;
     if (scene_has_tracks(scene)) {

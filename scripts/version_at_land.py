@@ -80,6 +80,9 @@ NOT_SHIPPED = ("**/tests/**", "**/test/**", "**/test_*.py")
 # Every file that states the current version. apply rewrites each one and
 # refuses when one of them no longer holds the current version, so a surface
 # that moves or stops naming the version is found at the next bump, not after.
+# A frozen parity proof is never a surface: the parity completion record pins
+# its sha256, so a bump that rewrote it would break the record. Those tests
+# read the version from CMakeLists.txt instead.
 VERSION_SURFACES = (
     "CMakeLists.txt",
     "README.md",
@@ -87,9 +90,7 @@ VERSION_SURFACES = (
     "cli/tests/test_cli.py",
     "cli/tests/test_contamination_scanner.py",
     "cli/tests/test_dev.py",
-    "cli/tests/test_import_backend.py",
     "cli/tests/test_installer.py",
-    "cli/tests/test_sdk_artifact.py",
     "cli/vellum_cli.py",
     "docs/cli/contract.md",
     "docs/cli/install-artifact.md",
