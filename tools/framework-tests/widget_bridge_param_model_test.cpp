@@ -229,10 +229,11 @@ FRAMEWORK_TEST(a_model_plain_value_comes_from_metadata_when_it_has_it) {
     view::WidgetBridge bridge(engine, root, plain);
     bridge.load_script("globalThis.seen = [];"
                        "onParamChanged('cutoff', function (p) { seen.push(p.value); });");
-    inner.set_normalized(inner.resolve("cutoff"), 0.5);
+    // 0.5 is the default, so move to another value to make a change.
+    inner.set_normalized(inner.resolve("cutoff"), 0.3);
     bridge.service_param_subscriptions();
     CHECK(std::abs(engine.evaluate("seen[0]").getWithDefault<double>(-1.0) -
-                   static_cast<float>(inner.plain(inner.resolve("cutoff"), 0.5))) < 1e-3);
+                   static_cast<float>(inner.plain(inner.resolve("cutoff"), 0.3))) < 1e-3);
 }
 
 FRAMEWORK_TEST(a_reload_ends_a_model_drag) {
