@@ -8,6 +8,7 @@
 #include <vellum/view/theme.hpp>
 #include <vellum/view/view.hpp>
 #include <vellum/view/widget_bridge.hpp>
+#include <vellum/value/param_model.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -128,6 +129,12 @@ class ScriptedUiSession : public ScriptedEditorSession {
         std::function<std::string(std::string_view envelope_json)>;
 
     ScriptedUiSession(View& root, state::StateStore& store, ScriptedUiOptions options);
+    /// A session whose scripts reach parameters through `params` instead of a
+    /// store: its WidgetBridge is built over the model (see WidgetBridge's
+    /// ParamModel constructor for what a model-built bridge reports). A reload
+    /// probe runs over a read-only view of the same model, so a probe script
+    /// reads current values but cannot write them or open a gesture.
+    ScriptedUiSession(View& root, value::ParamModel& params, ScriptedUiOptions options);
     ~ScriptedUiSession() override;
 
     /// Tear down everything that borrows the root -- the realm, its engine and
@@ -350,9 +357,16 @@ private:
         NativeMessageHandler handler;
     };
 
+    ScriptedUiSession(View& root, state::StateStore* store, value::ParamModel* params,
+                      ScriptedUiOptions options);
+
     const std::uint64_t identity_;
     View& root_;
+    // A model-built session owns an empty store for the store-only paths
+    // (deferred gesture releases), which then have nothing to do.
+    std::unique_ptr<state::StateStore> owned_store_;
     state::StateStore& store_;
+    value::ParamModel* params_ = nullptr;
     std::filesystem::path script_path_;
     std::filesystem::path theme_path_;
     std::string script_source_;

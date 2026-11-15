@@ -3,6 +3,8 @@
 #include <vellum/view/accessibility_provider.hpp>
 #include <vellum/view/value_channel_set.hpp>
 #include <vellum/runtime/log.hpp>
+#include <vellum/value/param_metadata.hpp>
+#include <optional>
 #include <vellum/runtime/trace.hpp>
 #include <atomic>
 #include <chrono>
@@ -104,12 +106,70 @@ void load_script_before_deadline(WidgetBridge& bridge, ScriptEngine& engine,
         std::rethrow_exception(load_error);
 }
 
+// A ParamModel that reads through to another and drops every write: values,
+// gestures and plain writes do nothing, and a subscription never fires. A
+// reload probe runs over it so the probe script cannot move a parameter or
+// open a host gesture.
+class ReadOnlyParamModel final : public value::ParamModel, public value::ParamMetadata {
+public:
+    explicit ReadOnlyParamModel(value::ParamModel& source)
+        : source_(source), metadata_(value::metadata_of(source)) {}
+
+    value::ParamHandle resolve(std::string_view key) override { return source_.resolve(key); }
+    double normalized(value::ParamHandle p) override { return source_.normalized(p); }
+    void set_normalized(value::ParamHandle, double) override {}
+    void begin(value::ParamHandle) override {}
+    void end(value::ParamHandle) override {}
+    std::string display_text(value::ParamHandle p, double n) override { return source_.display_text(p, n); }
+    int value_count(value::ParamHandle p) override { return source_.value_count(p); }
+    value::Subscription subscribe(Listener) override { return {}; }
+    value::ParamInfo info(value::ParamHandle p) override { return source_.info(p); }
+    double plain(value::ParamHandle p, double n) override { return source_.plain(p, n); }
+    double normalized_from_plain(value::ParamHandle p, double v) override {
+        return source_.normalized_from_plain(p, v);
+    }
+    std::optional<double> parse_text(value::ParamHandle p, std::string_view t) override {
+        return source_.parse_text(p, t);
+    }
+    std::optional<double> modulated_normalized(value::ParamHandle p) override {
+        return source_.modulated_normalized(p);
+    }
+
+    value::ParamRange range(value::ParamHandle p) override {
+        if (metadata_)
+            return metadata_->range(p);
+        const auto info = source_.info(p);
+        return {source_.plain(p, 0.0), source_.plain(p, 1.0),
+                source_.plain(p, info.default_normalized), 0.0, 1.0, false};
+    }
+    std::vector<std::string> value_labels(value::ParamHandle p) override {
+        return metadata_ ? metadata_->value_labels(p) : std::vector<std::string>{};
+    }
+    double plain_value(value::ParamHandle p) override {
+        return metadata_ ? metadata_->plain_value(p) : source_.plain(p, source_.normalized(p));
+    }
+    void set_plain_value(value::ParamHandle, double) override {}
+
+private:
+    value::ParamModel& source_;
+    value::ParamMetadata* metadata_;
+};
+
 } // namespace
 
 ScriptedUiSession::ScriptedUiSession(View& root, state::StateStore& store,
                                      ScriptedUiOptions options)
+    : ScriptedUiSession(root, &store, nullptr, std::move(options)) {}
+
+ScriptedUiSession::ScriptedUiSession(View& root, value::ParamModel& params,
+                                     ScriptedUiOptions options)
+    : ScriptedUiSession(root, nullptr, &params, std::move(options)) {}
+
+ScriptedUiSession::ScriptedUiSession(View& root, state::StateStore* store,
+                                     value::ParamModel* params, ScriptedUiOptions options)
     : identity_(next_scripted_ui_identity.fetch_add(1, std::memory_order_relaxed) + 1), root_(root),
-      store_(store), script_path_(options.script_source.empty() ? std::move(options.script_path)
+      owned_store_(store ? nullptr : std::make_unique<state::StateStore>()),
+      store_(store ? *store : *owned_store_), params_(params), script_path_(options.script_source.empty() ? std::move(options.script_path)
                                                                 : std::filesystem::path{})
       // An embedded source has no sibling directory to look in: a theme.json
       // relative to the process's working directory is not the plug-in's.
@@ -789,8 +849,17 @@ bool ScriptedUiSession::rebuild_from_code(
                 probe_store.set_value(param.id, store_.get_value(param.id));
             }
             check_deadline();
-            auto probe_bridge = std::make_unique<WidgetBridge>(
-                *probe_engine, probe_root, probe_store, nullptr, granted_capabilities_);
+            // A model cannot be copied the way a store is, so the probe reads
+            // the session's model through a view that drops every write.
+            std::optional<ReadOnlyParamModel> probe_params;
+            if (params_)
+                probe_params.emplace(*params_);
+            auto probe_bridge =
+                probe_params
+                    ? std::make_unique<WidgetBridge>(*probe_engine, probe_root, *probe_params,
+                                                     nullptr, granted_capabilities_)
+                    : std::make_unique<WidgetBridge>(*probe_engine, probe_root, probe_store,
+                                                     nullptr, granted_capabilities_);
             check_deadline();
             if (runtime_import_enabled_)
                 probe_bridge->install_runtime_import_handlers();
@@ -858,8 +927,10 @@ bool ScriptedUiSession::rebuild_from_code(
         next_engine = make_engine(js_memory_limit_bytes_, engine_log_callback());
         install_native_message_handlers(*next_engine, false);
         check_deadline();
-        next_bridge = std::make_unique<WidgetBridge>(
-            *next_engine, root_, store_, gpu_surface_, granted_capabilities_);
+        next_bridge = params_ ? std::make_unique<WidgetBridge>(*next_engine, root_, *params_,
+                                                               gpu_surface_, granted_capabilities_)
+                              : std::make_unique<WidgetBridge>(*next_engine, root_, store_,
+                                                               gpu_surface_, granted_capabilities_);
         check_deadline();
         if (runtime_import_enabled_)
             next_bridge->install_runtime_import_handlers();
