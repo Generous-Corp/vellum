@@ -1,0 +1,62 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "capture-primitives",
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-14T20:50:00Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-4496a37439da02a412def6eb5f852b5b60945880",
+  "include_dependency_deltas": [
+    "apps/app-host/CMakeLists.txt",
+    "apps/app-host/options.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "capture-primitives",
+    "macos-shell",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "apps/app-host/CMakeLists.txt",
+    "apps/app-host/main.mm",
+    "apps/app-host/options.cpp",
+    "apps/app-host/options.hpp",
+    "apps/app-host/test_manual_clock_capture.py",
+    "authoring/src/rendered_tree_materializer.mm",
+    "authoring/tests/clock_and_source_test.cpp",
+    "cli/vellum_native_backend.py",
+    "packages/vellum-ui/src/design.js",
+    "packages/vellum-ui/src/index.d.ts",
+    "packages/vellum-ui/src/runtime.js",
+    "packages/vellum-ui/test/design.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "a36f61bed56e9cca44d4f82f83e2c838e1e37642",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "d47d0d2c99dd9e3521becf0a3a98379ccaa2a583",
+    "to_commit": "726bb2c07e61f2651bd929586b35195ddefb0fc1"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-ui/src/index.d.ts"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "4496a37439da02a412def6eb5f852b5b60945880",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

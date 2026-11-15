@@ -152,11 +152,16 @@ Lua host is built, the static Lua archive is installed beside it for linking.
 The opt-in `VellumRmlUi::Native` component (`VELLUM_RMLUI_NATIVE=ON`) is the
 exception: it links RmlUi publicly, so its install component redistributes
 RmlUi's headers and archives, and FreeType's archive when fonts are on, with
-`rmlui/NOTICE-Native.md` and their licence files under `share/doc/VellumRmlUi/`.
+`rmlui/NOTICE-Native.md` and their licence files under `share/doc/VellumRmlUi/`
+(under `share/doc/VellumRmlUiNative/` when `VELLUM_RMLUI_NATIVE_PACKAGE=ON`
+installs it as its own `VellumRmlUiNative` package).
 The base `VellumRmlUi` package installs RmlUi's licence there too, because
 Core redistributes RmlUi. The native SDK artifact carries the base package
 (Core, SoftRenderer and VellumRenderer) and never the Native component.
-Nothing here enters the default Vellum build or the Vellum SDK artifact.
+Nothing here enters the default Vellum build or the Vellum SDK artifact. The
+optional RmlUi SDK artifact, `vellum-rmlui-sdk-<version>-darwin-arm64.tar.gz`,
+is the `VellumRmlUiNative` package alone (Native, Metal, RmlUi's headers and
+archives, and FreeType's archive), with the same notices.
 
 | Dependency | Pinned identity | License | Used by | Notes |
 |---|---|---|---|---|
@@ -171,6 +176,14 @@ CMake, a C++20 compiler, Python 3, Node.js, and npm are developer-supplied
 tools. The macOS proof additionally uses Xcode command-line tools and Apple
 system frameworks. These tools and frameworks are not bundled or redistributed
 by Vellum.
+
+One build does not use the developer's CMake: the published
+`vellum-gpu-runtime` archive. Its pinned build tool is fetched for that build
+and for the release check that follows, and is not redistributed.
+
+| Name | Version | License | Source | Why |
+|---|---|---|---|---|
+| CMake | `4.3.3`, `cmake-4.3.3-macos-universal.tar.gz` SHA-256 `5221a13450c7a0219a2a0d1b6c9085eb06489721fafd8488ccebc1584175d2fb` | BSD-3-Clause | Kitware's GitHub release `v4.3.3`, pinned in `gpu-runtime/cmake-lock.json` | CMake writes four of the archive's package files and their text differs between CMake releases. The archive is built on one host and held to its source on another, so both generate those files with this release. |
 
 ## Historical extraction material
 

@@ -227,6 +227,14 @@ events and events explicitly marked as a shared-contract release blocker; any
 health failure, an overdue event of any class included, still fails
 `provenance-verify` on the commit it judges.
 
+An hourly workflow keeps one issue, "Observatory events due for classification
+within 24 hours", listing pending events within 24 hours of their deadline with the owning
+lane (the author of the source commit's pull request). It carries the
+`shipyard:needs-agent` label, and the owner is mentioned only for events that
+need a ruling (schema, API, security, P0). Within four hours it is marked
+urgent and a comment names the lanes. It closes once nothing is near its deadline. It only warns:
+the overdue failure above is unchanged.
+
 `verify` judges health at a point in time. The committed report is rebuilt at
 the cursor's `reconciled_at`, the time it describes, to prove it is not stale;
 the health budgets are judged at `--now`, which defaults to the current time,

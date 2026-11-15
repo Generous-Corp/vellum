@@ -2,13 +2,18 @@
 # the deployment target the package records. Include it with
 # VELLUM_RMLUI_CHECK_PREFIX (the install prefix) and
 # VELLUM_RMLUI_CHECK_PACKAGE_DIR (its lib/cmake/VellumRmlUi) set, or run it with
-# -P and the same variables.
+# -P and the same variables. VELLUM_RMLUI_CHECK_CONFIG names the package config
+# that records the target (VellumRmlUiConfig.cmake unless set, for example
+# VellumRmlUiNativeConfig.cmake).
 if(NOT VELLUM_RMLUI_CHECK_PREFIX OR NOT VELLUM_RMLUI_CHECK_PACKAGE_DIR)
     message(FATAL_ERROR "VELLUM_RMLUI_CHECK_PREFIX and VELLUM_RMLUI_CHECK_PACKAGE_DIR are required")
 endif()
-file(READ "${VELLUM_RMLUI_CHECK_PACKAGE_DIR}/VellumRmlUiConfig.cmake" _config)
-string(REGEX MATCH "set\\(VellumRmlUi_OSX_DEPLOYMENT_TARGET \"([0-9.]+)\"\\)" _ "${_config}")
-set(_recorded "${CMAKE_MATCH_1}")
+if(NOT VELLUM_RMLUI_CHECK_CONFIG)
+    set(VELLUM_RMLUI_CHECK_CONFIG VellumRmlUiConfig.cmake)
+endif()
+file(READ "${VELLUM_RMLUI_CHECK_PACKAGE_DIR}/${VELLUM_RMLUI_CHECK_CONFIG}" _config)
+string(REGEX MATCH "set\\(VellumRmlUi(Native)?_OSX_DEPLOYMENT_TARGET \"([0-9.]+)\"\\)" _ "${_config}")
+set(_recorded "${CMAKE_MATCH_2}")
 if(NOT _recorded)
     message(FATAL_ERROR "the package records no macOS deployment target")
 endif()

@@ -1,0 +1,87 @@
+@PACKAGE_INIT@
+
+# find_package(VellumRmlUiNative [COMPONENTS Native Metal Cpu <VellumRmlUi components>])
+#
+# The open RmlUi entry points as a package of their own: VellumRmlUi::Native
+# and the render interfaces built with it (Metal, Cpu), with the pinned RmlUi
+# they expose under RmlUi's own target names (RmlUi::Core, RmlUi::Debugger).
+# It installs beside the VellumRmlUi package rather than inside it, so that
+# package's files are never replaced. Any other component asked for here
+# (Core, VellumRenderer, ...) is VellumRmlUi's and is found from that package.
+# Naming no components selects Native.
+
+set(_vellum_rmlui_native_supported @VELLUM_RMLUI_NATIVE_COMPONENTS@)
+if(NOT VellumRmlUiNative_FIND_COMPONENTS)
+    set(VellumRmlUiNative_FIND_COMPONENTS Native)
+endif()
+
+set(_vellum_rmlui_native_wanted)
+set(_vellum_rmlui_native_other)
+foreach(_component IN LISTS VellumRmlUiNative_FIND_COMPONENTS)
+    if(_component IN_LIST _vellum_rmlui_native_supported)
+        list(APPEND _vellum_rmlui_native_wanted ${_component})
+    else()
+        list(APPEND _vellum_rmlui_native_other ${_component})
+    endif()
+endforeach()
+
+include(CMakeFindDependencyMacro)
+if(_vellum_rmlui_native_wanted AND NOT TARGET RmlUi::Core)
+    include("${CMAKE_CURRENT_LIST_DIR}/VellumRmlUiRmlUiTargets.cmake")
+endif()
+foreach(_component IN LISTS _vellum_rmlui_native_wanted)
+    if(_component STREQUAL "Cpu")
+        # The static CPU renderer links the platform's threads library.
+        find_dependency(Threads)
+    endif()
+    if(NOT TARGET VellumRmlUi::${_component} AND
+       EXISTS "${CMAKE_CURRENT_LIST_DIR}/VellumRmlUi${_component}Targets.cmake")
+        include("${CMAKE_CURRENT_LIST_DIR}/VellumRmlUi${_component}Targets.cmake")
+    endif()
+endforeach()
+
+if(_vellum_rmlui_native_other)
+    find_dependency(VellumRmlUi COMPONENTS ${_vellum_rmlui_native_other})
+endif()
+
+# Core carries its own RmlUi, as Native does, so one program must not link
+# both. Native's targets name their copy in INTERFACE_VELLUM_RMLUI_RUNTIME,
+# and Core names its own in the VellumRmlUi package, whichever package is
+# found first. A Core exported without the mark (an older VellumRmlUi package
+# already loaded) is given it here, so CMake still refuses a target that links
+# both.
+if(TARGET VellumRmlUi::Core)
+    get_property(_vellum_rmlui_runtime TARGET VellumRmlUi::Core PROPERTY INTERFACE_VELLUM_RMLUI_RUNTIME)
+    if(NOT _vellum_rmlui_runtime)
+        set_property(TARGET VellumRmlUi::Core PROPERTY INTERFACE_VELLUM_RMLUI_RUNTIME core)
+        set_property(TARGET VellumRmlUi::Core APPEND PROPERTY
+            COMPATIBLE_INTERFACE_STRING VELLUM_RMLUI_RUNTIME)
+    endif()
+    unset(_vellum_rmlui_runtime)
+endif()
+
+foreach(_component IN LISTS VellumRmlUiNative_FIND_COMPONENTS)
+    if(TARGET VellumRmlUi::${_component})
+        set(VellumRmlUiNative_${_component}_FOUND TRUE)
+    else()
+        set(VellumRmlUiNative_${_component}_FOUND FALSE)
+    endif()
+endforeach()
+unset(_component)
+unset(_vellum_rmlui_native_wanted)
+unset(_vellum_rmlui_native_other)
+unset(_vellum_rmlui_native_supported)
+
+set(VellumRmlUiNative_FONTS_ENABLED @VELLUM_RMLUI_FONTS@)
+
+# The macOS deployment target the libraries were built with (empty elsewhere).
+# A consumer targeting older macOS would link objects that need newer macOS.
+set(VellumRmlUiNative_OSX_DEPLOYMENT_TARGET "@CMAKE_OSX_DEPLOYMENT_TARGET@")
+if(APPLE AND VellumRmlUiNative_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET AND
+   CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS VellumRmlUiNative_OSX_DEPLOYMENT_TARGET)
+    message(WARNING
+        "VellumRmlUiNative was built for macOS ${VellumRmlUiNative_OSX_DEPLOYMENT_TARGET}, newer "
+        "than this project's deployment target ${CMAKE_OSX_DEPLOYMENT_TARGET}")
+endif()
+
+check_required_components(VellumRmlUiNative)

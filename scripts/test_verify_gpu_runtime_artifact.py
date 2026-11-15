@@ -307,7 +307,10 @@ class GpuRuntimeArtifactTest(unittest.TestCase):
                       verifier.difference("m", b"line\r\n", b"line\n", "regenerated"))
 
     def test_a_record_built_with_another_cmake_is_refused(self) -> None:
-        for toolchain in ({"cmake": "4.4.5"}, {}, None):
+        # Control: the same record naming the pinned CMake is accepted.
+        verifier.verify_against_source(self.source_files(), self.source_record(), ROOT,
+                                       self.generated(), PIN)
+        for toolchain in ({"cmake": "4.4.5"}, {}, None, PIN, [PIN], 4):
             with self.subTest(toolchain=toolchain):
                 record = dict(self.source_record(), toolchain=toolchain)
                 with self.assertRaisesRegex(verifier.VerificationError,

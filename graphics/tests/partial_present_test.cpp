@@ -1882,6 +1882,153 @@ void transformed_blur_reach_sweep() {
     }
 }
 
+struct FadedShadowShape final {
+    const char* name;
+    float angle;
+    float turn_scale;
+};
+
+Scene faded_shadow_scene(const FadedShadowShape& shape, float blur, bool padded) {
+    Scene scene = plain_scene(220.0F, 170.0F);
+    SceneNode group{.id = "faded", .kind = SceneNode::Kind::group,
+                    .bounds = {70.0F, 40.0F, 120.0F, 100.0F}, .opacity = 0.55F};
+    group.children.push_back({.id = "faded/back", .kind = SceneNode::Kind::rectangle,
+                              .bounds = {0.0F, 0.0F, 30.0F, 24.0F},
+                              .fill = Color::hex(0x6366F1)});
+    if (padded) {
+        group.children.push_back({.id = "faded/pad", .kind = SceneNode::Kind::rectangle,
+                                  .bounds = {-70.0F, -40.0F, 220.0F, 170.0F},
+                                  .fill = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F)});
+    }
+    group.children.push_back({
+        .id = "faded/shadowed",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {20.0F, 14.0F, 56.0F, 40.0F},
+        .fill = Color::hex(0x38BDF8),
+        .box_shadows = {{.offset_x = 3.0F, .offset_y = 4.0F, .blur_radius = blur,
+                         .color = Color::rgba(1.0F, 1.0F, 1.0F, 0.9F)},
+                        {.offset_x = -2.0F, .offset_y = 2.0F, .blur_radius = blur * 0.6F,
+                         .color = Color::rgba(1.0F, 0.0F, 0.0F, 0.9F)}},
+        .corner_radius = 7.0F,
+        .transform = shape.angle == 0.0F && shape.turn_scale == 1.0F
+            ? Affine2D{} : rotation_degrees(shape.angle, shape.turn_scale),
+    });
+    scene.root.children.push_back(std::move(group));
+    return scene;
+}
+
+// Renders the group with room to spare and counts the painted pixels that fall
+// outside the layer the group would get from `layer_blur`'s paint extents.
+// Those are the pixels a layer sized that tightly cuts off.
+int faded_shadow_clipped_pixels(const FadedShadowShape& shape, float blur, float layer_blur,
+                                float device_scale, std::string& message) {
+    const auto commands = make_paint_commands(faded_shadow_scene(shape, layer_blur, false));
+    const auto layer = std::find_if(commands.begin(), commands.end(), [](const PaintCommand& command) {
+        return command.kind == PaintCommand::Kind::begin_layer && command.node_id == "faded";
+    });
+    if (layer == commands.end() || layer->layer_unbounded) {
+        message = "the faded group has no bounded layer";
+        return -1;
+    }
+    const auto layer_pixels = to_pixel_rect(
+        {layer->bounds.x - 1.0F, layer->bounds.y - 1.0F, layer->bounds.width + 2.0F,
+         layer->bounds.height + 2.0F},
+        device_scale);
+    auto surface = make_surface(220, 170, device_scale);
+    std::string error;
+    if (!layer_pixels || !surface ||
+        !surface->render(faded_shadow_scene(shape, blur, true), &error)) {
+        message = error;
+        return -1;
+    }
+    const auto result = capture(*surface);
+    if (!result.ok) {
+        message = result.error;
+        return -1;
+    }
+    const auto width = static_cast<std::int32_t>(result.result.pixel_width);
+    int clipped = 0;
+    for (std::size_t i = 0; i + 3 < result.result.rgba.size(); i += 4) {
+        const auto pixel = static_cast<std::int32_t>(i / 4);
+        const std::int32_t x = pixel % width;
+        const std::int32_t y = pixel / width;
+        const bool inside = x >= layer_pixels->left && x < layer_pixels->right &&
+                            y >= layer_pixels->top && y < layer_pixels->bottom;
+        const bool painted = result.result.rgba[i] != 0 || result.result.rgba[i + 1] != 0 ||
+                             result.result.rgba[i + 2] != 0;
+        if (!inside && painted && clipped++ == 0) {
+            message = "first at (" + std::to_string(x) + ", " + std::to_string(y) + ")";
+        }
+    }
+    return clipped;
+}
+
+int faded_shadow_clip_sweep(float device_scale, float layer_fraction, int& swept,
+                            std::string& first) {
+    const FadedShadowShape shapes[]{
+        {"untransformed", 0.0F, 1.0F}, {"rotated 9", 9.0F, 1.0F},
+        {"rotated 30", 30.0F, 1.0F},   {"rotated 45", 45.0F, 1.0F},
+        {"scaled", 0.0F, 1.7F},        {"rotated 20 and scaled", 20.0F, 1.4F},
+        {"rotated 45 and shrunk", 45.0F, 0.7F},
+    };
+    int clipped = 0;
+    for (const auto& shape : shapes) {
+        for (const float blur : {6.0F, 16.0F, 30.0F}) {
+            ++swept;
+            std::string message;
+            if (faded_shadow_clipped_pixels(shape, blur, blur * layer_fraction, device_scale,
+                                            message) != 0 &&
+                clipped++ == 0) {
+                first = std::string(shape.name) + " blur " +
+                        std::to_string(static_cast<int>(blur)) + ": " + message;
+            }
+        }
+    }
+    return clipped;
+}
+
+void faded_group_shadow_tails() {
+    const FadedShadowShape shapes[]{
+        {"untransformed", 0.0F, 1.0F},
+        {"rotated", 30.0F, 1.0F},
+        {"scaled", 0.0F, 1.7F},
+        {"rotated and scaled", 20.0F, 1.4F},
+    };
+    for (const float device_scale : {1.0F, 2.0F}) {
+        const std::string scale_label = "@" + std::to_string(static_cast<int>(device_scale)) + "x";
+        for (const bool cached : {false, true}) {
+            const std::string cache_label = std::string("cache ") + (cached ? "on " : "off ");
+            for (const auto& shape : shapes) {
+                const auto sweep = sweep_damage_edges(faded_shadow_scene(shape, 16.0F, false),
+                                                      device_scale, cached);
+                const bool stays_partial = shape.turn_scale != 1.7F && shape.turn_scale != 1.4F;
+                expect(sweep.differing == 0 && (!stays_partial || sweep.partial > 0),
+                       std::string(shape.name) + " blurred shadow in a faded group, " +
+                           cache_label + scale_label +
+                           ": damage cutting the tail stays byte-identical to a full redraw",
+                       sweep_detail(sweep));
+            }
+        }
+        int swept = 0;
+        std::string first;
+        const int clipped = faded_shadow_clip_sweep(device_scale, 1.0F, swept, first);
+        expect(clipped == 0,
+               "a faded group's layer holds every painted pixel of its blurred shadows " +
+                   scale_label,
+               std::to_string(clipped) + " of " + std::to_string(swept) +
+                   " shapes paint outside the layer; first " + first);
+        int control_swept = 0;
+        std::string control_first;
+        const int control = faded_shadow_clip_sweep(device_scale, 2.0F / 3.0F, control_swept,
+                                                    control_first);
+        expect(control > 0,
+               "negative control: a layer sized by two sigma leaves painted shadow outside it " +
+                   scale_label,
+               std::to_string(control) + " of " + std::to_string(control_swept) +
+                   " shapes paint outside it");
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -1916,6 +2063,7 @@ int main() {
         large_path();
         transformed_blur_reach_sweep();
         grouping_sweeps();
+        faded_group_shadow_tails();
         for (const bool cached : {false, true}) {
             grouping_sequence(1.0F, cached);
             grouping_sequence(2.0F, cached);
