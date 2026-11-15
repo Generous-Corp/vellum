@@ -110,11 +110,36 @@ hold, and any doubt or error runs the full proof:
 
 The proof steps that read state outside the tree, the Pulp ancestry check in
 `verify_extraction.py` and the attested view-audio archive fetch, run again in
-the reused queue run. Pushes to `main` and release tags always run the full
-proof, so every landed commit is still proven from scratch after it lands.
+the reused queue run. Release tags, release dry-run tags and manual dispatches
+always run the full proof.
 Reuse adds no trust beyond today's: a queue run already executes the pull
 request's own workflow definition, so the reviewed exact head is what decides
 both runs.
+
+## Reusing the queue's proof on the push to main
+
+The merge queue fast-forwards `main` to the commit its `merge_group` run
+proved, so the push that follows carries the same commit and tree. Rebuilding
+it proved nothing new and cost about as much as the queue run. The push run now
+reports the queue's proof when `scripts/select_reusable_merge_group_proof.py`
+finds a `merge_group` run that:
+
+- is a run of `gpu-macos.yml` on exactly the pushed commit, on a
+  `gh-readonly-queue/main/` ref, from this repository;
+- succeeded, with both proof jobs `success` (not `skipped`) in its latest
+  attempt, on that commit;
+- built the proof or itself reported an identical-tree pull-request proof,
+  never a run that skipped the proof on the classifier's verdict (those pushes
+  still run the full proof, because the classifier has never judged a
+  push);
+- started within the last twelve hours.
+
+Any doubt, including an API error, runs the full proof. Both jobs still run
+and report on the push, with only their steps skipped: `release-tag.yml` reads
+the newest check run of each required context on the landed commit, and a job
+skipped by its own condition would read there as unmet. The reused run's URL is
+written to the job summary. Release tags, dry-run tags and dispatches never
+reuse.
 
 ## Changes the GPU proof cannot see
 
