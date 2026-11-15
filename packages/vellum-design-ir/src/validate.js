@@ -292,7 +292,10 @@ const PLOT_FIELDS = new Set([
     'style', 'channel', 'source', 'slots', 'history', 'orientation', 'audioChannel', 'min', 'max',
     'baseline', 'lineWidth', 'barGap', 'peakWidth', 'lineColor', 'fillColor', 'peakColor',
 ]);
-const PLOT_SOURCES = { line: ['scalar', 'vector'], area: ['scalar', 'vector'], bar: ['vector'], meter: ['meter'] };
+// A Map, so a style such as 'constructor' or '__proto__' finds no inherited entry.
+const PLOT_SOURCES = new Map([
+    ['line', ['scalar', 'vector']], ['area', ['scalar', 'vector']], ['bar', ['vector']], ['meter', ['meter']],
+]);
 const MAX_PLOT_SLOTS = 4194304;
 
 // A plot binding names a value-feed channel and how to draw it, under the
@@ -305,7 +308,7 @@ function validatePlotBinding(plot, path, issues) {
             issues.push(issue(`${path}.${key}`, 'unknown-field', 'a plot binding carries no such field'));
         }
     }
-    const sources = PLOT_SOURCES[plot.style];
+    const sources = typeof plot.style === 'string' ? PLOT_SOURCES.get(plot.style) : undefined;
     if (sources === undefined) {
         issues.push(issue(`${path}.style`, 'enum', 'plot style must be line, area, bar or meter'));
     }

@@ -49,6 +49,14 @@ test('a plot binding refuses what the renderer cannot draw', async () => {
         [{ style: 'line', channel: 'c', slots: 4, barGap: 1e30 }, 'range'],
         [{ style: 'line', channel: 'c', slots: 4, lineColor: 'red' }, 'format'],
         [{ style: 'line', channel: 'c', slots: 4, samples: [1, 2] }, 'unknown-field'],
+        [{ style: 'line', channel: 'c', slots: 4, min: 1 }, 'range'],
+        [{ style: 'line', channel: 'c', slots: 4, lineWidth: 4097 }, 'range'],
+        // Inherited Object.prototype keys are not plot styles.
+        [{ style: 'constructor', channel: 'c', slots: 4 }, 'enum'],
+        [{ style: 'toString', channel: 'c', slots: 4 }, 'enum'],
+        [{ style: '__proto__', channel: 'c', slots: 4 }, 'enum'],
+        [{ style: 'hasOwnProperty', channel: 'c', slots: 4, source: 'vector' }, 'enum'],
+        [{ style: ['line'], channel: 'c', slots: 4 }, 'enum'],
     ];
     for (const [plot, code] of cases) {
         const result = validateDesignIR(withPlot(design, plot));

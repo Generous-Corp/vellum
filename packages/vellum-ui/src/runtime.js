@@ -23,6 +23,8 @@ const INTRINSIC_TYPES = new Set([
 ]);
 const MAXIMUM_PLOT_SLOTS = 4194304;
 const MAXIMUM_PLOT_AUDIO_CHANNEL = 1024;
+// Native kMaxPlotStroke: the widest line, bar gap or peak tick in logical pixels.
+const MAXIMUM_PLOT_STROKE = 4096;
 
 let renderingRuntime = null;
 
@@ -475,6 +477,13 @@ function validatePlot(properties, path) {
     }
     for (const name of ['lineWidth', 'barGap', 'peakWidth']) {
         finitePaintNumber(properties[name], `${path}.${name}`, { optional: true, nonNegative: true });
+        if (properties[name] > MAXIMUM_PLOT_STROKE) {
+            throw new TypeError(`${path}.${name} must be at most ${MAXIMUM_PLOT_STROKE}`);
+        }
+    }
+    // Native plot_is_valid refuses an empty range; min defaults to 0 and max to 1.
+    if ((properties.min ?? 0) === (properties.max ?? 1)) {
+        throw new TypeError(`${path}.Plot value range must not be empty (min equals max)`);
     }
     for (const name of ['lineColor', 'fillColor', 'peakColor']) {
         const color = properties[name];

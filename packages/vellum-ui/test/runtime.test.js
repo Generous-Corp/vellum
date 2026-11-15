@@ -485,12 +485,22 @@ test('serializes a plot node bound to a value-feed channel', () => {
     rejects({ plot: 'bar', source: 'meter' }, /source must be vector for a bar plot/);
     rejects({ plot: 'meter', source: 'vector' }, /source must be meter for a meter plot/);
     rejects({ plot: 'meter', source: 'scalar' }, /source must be meter for a meter plot/);
+    // Widths and gaps stop at native kMaxPlotStroke (4096), inclusive.
+    rejects({ lineWidth: 4097 }, /lineWidth must be at most 4096/);
+    rejects({ plot: 'bar', barGap: 4096.5 }, /barGap must be at most 4096/);
+    rejects({ plot: 'meter', peakWidth: 1e30 }, /peakWidth must be at most 4096/);
+    // The effective value range (min defaults to 0, max to 1) must not be empty.
+    rejects({ min: 1, max: 1 }, /value range must not be empty/);
+    rejects({ min: 1 }, /value range must not be empty/);
+    rejects({ max: 0 }, /value range must not be empty/);
     const accepts = (properties) => mount(() => jsx(Plot, {
         id: 'ok', plot: 'line', channel: 'c', slots: 4, ...properties })).renderJSON();
     for (const properties of [
         { source: 'scalar' }, { source: 'vector' }, { plot: 'area', source: 'scalar' },
         { plot: 'area', source: 'vector' }, { plot: 'bar', source: 'vector' },
         { plot: 'meter', source: 'meter' }, { plot: 'bar' }, { plot: 'meter' },
+        { lineWidth: 4096, barGap: 4096, peakWidth: 4096 }, { lineWidth: 0 },
+        { min: 1, max: 0 }, { min: -1 }, { max: 2 }, { min: 0.5, max: 0.25 },
     ]) {
         assert.doesNotThrow(() => accepts(properties), JSON.stringify(properties));
     }
