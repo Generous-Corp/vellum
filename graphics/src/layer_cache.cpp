@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <string_view>
 #include <unordered_map>
@@ -20,8 +21,8 @@ static_assert(sizeof(PaintCommand) == 432,
 static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 80,
               "TextStyle or TextRun changed: update same_style, same_runs and hash_command");
 static_assert(sizeof(BoxShadow) == 32, "BoxShadow changed: update same_shadows and hash_command");
-static_assert(sizeof(LinearGradient) == 40 && sizeof(GradientStop) == 20,
-              "LinearGradient changed: update same_gradients and hash_command");
+static_assert(sizeof(LinearGradient) == 104 && sizeof(GradientStop) == 20,
+              "LinearGradient changed: update same_gradients and hash_gradient");
 static_assert(sizeof(NodeEffect) == 160 && sizeof(MaterialValue) == 48,
               "NodeEffect or MaterialValue changed: update same_effects and hash_command");
 static_assert(sizeof(Color) == 16 && sizeof(Affine2D) == 24 && sizeof(CornerRadii) == 16 &&
@@ -70,9 +71,16 @@ bool same_gradients(const std::vector<LinearGradient>& a, const std::vector<Line
     for (std::size_t index = 0; index < a.size(); ++index) {
         const auto& left = a[index];
         const auto& right = b[index];
-        if (!same_float(left.angle_degrees, right.angle_degrees) ||
+        if (left.kind != right.kind || left.spread != right.spread ||
+            left.interpolation != right.interpolation || left.color_space != right.color_space ||
+            !same_float(left.angle_degrees, right.angle_degrees) ||
             left.repeating != right.repeating ||
             !same_float(left.repeat_length, right.repeat_length) ||
+            !same_float(left.center_x, right.center_x) || !same_float(left.center_y, right.center_y) ||
+            !same_float(left.radius_x, right.radius_x) || !same_float(left.radius_y, right.radius_y) ||
+            !same_float(left.focal_x, right.focal_x) || !same_float(left.focal_y, right.focal_y) ||
+            !same_float(left.start_radius, right.start_radius) ||
+            !same_float(left.end_radius, right.end_radius) ||
             left.stops.size() != right.stops.size()) {
             return false;
         }
@@ -136,7 +144,9 @@ bool same_path(const std::shared_ptr<const PathGeometry>& a,
            a->stroke.join == b->stroke.join && a->stroke.cap == b->stroke.cap &&
            same_float(a->stroke.miter_limit, b->stroke.miter_limit) &&
            same_floats(a->stroke.dash_array, b->stroke.dash_array) &&
-           same_float(a->stroke.dash_offset, b->stroke.dash_offset);
+           same_float(a->stroke.dash_offset, b->stroke.dash_offset) &&
+           a->stroke.gradient.has_value() == b->stroke.gradient.has_value() &&
+           (!a->stroke.gradient || same_gradients({*a->stroke.gradient}, {*b->stroke.gradient}));
 }
 
 bool same_effects(const std::vector<NodeEffect>& a, const std::vector<NodeEffect>& b) {
@@ -177,6 +187,11 @@ bool same_image_reference(const std::optional<ImageReference>& a,
     return !a->source_rect || same_rect(*a->source_rect, *b->source_rect);
 }
 
+bool reads_backdrop(const PaintCommand& command) noexcept {
+    return command.kind == PaintCommand::Kind::begin_layer &&
+           command.blend_mode != BlendMode::normal;
+}
+
 bool same_paint(const PaintCommand& a, const PaintCommand& b) {
     return a.kind == b.kind && a.node_id == b.node_id && same_color(a.fill, b.fill) &&
            same_gradients(a.fill_gradients, b.fill_gradients) &&
@@ -188,6 +203,7 @@ bool same_paint(const PaintCommand& a, const PaintCommand& b) {
            same_runs(a.text_runs, b.text_runs) && same_float(a.opacity, b.opacity) &&
            same_radii(a.corner_radii, b.corner_radii) &&
            a.layer_unbounded == b.layer_unbounded && a.layer_isolated == b.layer_isolated &&
+           a.blend_mode == b.blend_mode &&
            same_rect(a.clip_rect, b.clip_rect) && a.mask_mode == b.mask_mode &&
            same_image_reference(a.image, b.image) && a.image_asset == b.image_asset &&
            same_effects(a.effects, b.effects) && same_rect(a.effect_box, b.effect_box);
@@ -219,6 +235,26 @@ private:
     std::uint64_t value_ = 0xCBF29CE484222325ULL;
 };
 
+void hash_gradient(Hasher& hash, const LinearGradient& gradient) {
+    hash.number(static_cast<std::uint64_t>(gradient.kind));
+    hash.real(gradient.angle_degrees);
+    hash.number(gradient.repeating ? 1U : 0U);
+    hash.real(gradient.repeat_length);
+    hash.number(static_cast<std::uint64_t>(gradient.spread));
+    hash.number(static_cast<std::uint64_t>(gradient.interpolation));
+    hash.text(gradient.color_space);
+    for (const float value : {gradient.center_x, gradient.center_y, gradient.radius_x,
+                              gradient.radius_y, gradient.focal_x, gradient.focal_y,
+                              gradient.start_radius, gradient.end_radius}) {
+        hash.real(value);
+    }
+    hash.number(gradient.stops.size());
+    for (const auto& stop : gradient.stops) {
+        hash.real(stop.position);
+        hash.color(stop.color);
+    }
+}
+
 void path(Hasher& hash, const std::shared_ptr<const PathGeometry>& geometry) {
     hash.number(geometry ? 1U : 0U);
     if (!geometry) return;
@@ -236,6 +272,8 @@ void path(Hasher& hash, const std::shared_ptr<const PathGeometry>& geometry) {
     hash.number(geometry->stroke.dash_array.size());
     for (const float value : geometry->stroke.dash_array) hash.real(value);
     hash.real(geometry->stroke.dash_offset);
+    hash.number(geometry->stroke.gradient ? 1U : 0U);
+    if (geometry->stroke.gradient) hash_gradient(hash, *geometry->stroke.gradient);
 }
 
 std::uint64_t hash_command(const PaintCommand& command) {
@@ -248,16 +286,7 @@ std::uint64_t hash_command(const PaintCommand& command) {
     hash.real(command.bounds.height);
     hash.color(command.fill);
     hash.number(command.fill_gradients.size());
-    for (const auto& gradient : command.fill_gradients) {
-        hash.real(gradient.angle_degrees);
-        hash.number(gradient.repeating ? 1U : 0U);
-        hash.real(gradient.repeat_length);
-        hash.number(gradient.stops.size());
-        for (const auto& stop : gradient.stops) {
-            hash.real(stop.position);
-            hash.color(stop.color);
-        }
-    }
+    for (const auto& gradient : command.fill_gradients) hash_gradient(hash, gradient);
     hash.number(command.box_shadows.size());
     for (const auto& shadow : command.box_shadows) {
         hash.real(shadow.offset_x);
@@ -279,6 +308,7 @@ std::uint64_t hash_command(const PaintCommand& command) {
     hash.real(command.clip_rect.width);
     hash.real(command.clip_rect.height);
     hash.number(static_cast<std::uint64_t>(command.mask_mode));
+    hash.number(static_cast<std::uint64_t>(command.blend_mode));
     hash.number(command.text_runs.size());
     for (const auto& run : command.text_runs) {
         hash.text(run.text);
@@ -478,10 +508,13 @@ std::vector<LayerCache::Layer> LayerCache::plan(
     std::vector<std::uint64_t> hashes;
     hashes.reserve(commands.size());
     std::vector<std::size_t> draws_before(commands.size() + 1U, 0U);
+    std::vector<std::size_t> blends_before(commands.size() + 1U, 0U);
     for (std::size_t index = 0; index < commands.size(); ++index) {
         hashes.push_back(hash_command(commands[index]));
         draws_before[index + 1U] =
             draws_before[index] + (draws_content(commands[index].kind) ? 1U : 0U);
+        blends_before[index + 1U] =
+            blends_before[index] + (reads_backdrop(commands[index]) ? 1U : 0U);
     }
 
     std::size_t selected_end = 0;
@@ -501,6 +534,14 @@ std::vector<LayerCache::Layer> LayerCache::plan(
                                    commands[range.end - 1U].kind == PaintCommand::Kind::end_layer;
         const std::size_t content_begin = opacity_layer ? range.begin + 1U : range.begin;
         const std::size_t content_end = opacity_layer ? range.end - 1U : range.end;
+        // A blended group reads the pixels beneath it, and so does anything
+        // holding one that is not itself a group: an image drawn on a
+        // transparent surface would blend with nothing. A faded or isolated
+        // group is its own backdrop, so one nested inside it caches whole.
+        if ((opacity_layer && reads_backdrop(commands[range.begin])) ||
+            (!opacity_layer && blends_before[content_end] != blends_before[content_begin])) {
+            continue;
+        }
         ++stats_.candidates;
 
         Hasher hash;

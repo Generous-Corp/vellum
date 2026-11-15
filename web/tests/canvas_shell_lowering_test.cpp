@@ -241,6 +241,281 @@ bool mask_reports() {
     if (!ok) std::cerr << "a mask report did not follow the scene's own warnings\n";
     return ok;
 }
+
+// The shell implements Tier 1 only. A Tier 1 blended group is drawn offscreen
+// and composited once with its operation and its own opacity, so its members
+// are not each blended and the group alpha is not multiplied into every child.
+// A Tier 2 mode, or any mode on a backend without blendBegin and blendEnd, is
+// drawn as normal with one warning and one counted loss.
+bool blend_lowering() {
+    using vellum::graphics::BlendMode;
+    using vellum::graphics::kAllBlendModes;
+    using Kind = vellum::graphics::PaintCommand::Kind;
+    const auto box = [](std::string id, BlendMode mode) {
+        return SceneNode{
+            .id = std::move(id),
+            .kind = SceneNode::Kind::rectangle,
+            .bounds = {0.0F, 0.0F, 4.0F, 4.0F},
+            .fill = vellum::graphics::Color::hex(0xFFFFFF),
+            .blend_mode = mode,
+        };
+    };
+    int lacking = 0;
+    for (const auto mode : kAllBlendModes) {
+        const auto operation = vellum::web::canvas_shell_blend_operation(mode);
+        lacking += operation ? 0 : 1;
+        if (operation.has_value() != (vellum::graphics::blend_mode_tier(mode) == 1) ||
+            (operation && operation->empty())) {
+            std::cerr << "blend mode " << vellum::graphics::to_string(mode)
+                      << " has the wrong canvas operation for its tier\n";
+            return false;
+        }
+    }
+    if (lacking != 18 ||
+        vellum::web::canvas_shell_blend_operation(BlendMode::normal) != "source-over" ||
+        vellum::web::canvas_shell_blend_operation(BlendMode::multiply) != "multiply" ||
+        vellum::web::canvas_shell_blend_operation(BlendMode::destination_in) != "destination-in" ||
+        vellum::web::canvas_shell_blend_operation(BlendMode::color_dodge).has_value() ||
+        vellum::web::canvas_shell_blend_operation(BlendMode::plus).has_value()) {
+        std::cerr << "the canvas shell does not implement exactly Tier 1\n";
+        return false;
+    }
+
+    vellum::graphics::Scene scene;
+    scene.root.id = "root";
+    auto group = box("group", BlendMode::multiply);
+    group.opacity = 0.5F;
+    group.children.push_back(box("group/plain", BlendMode::normal));
+    group.children.push_back(box("group/inner", BlendMode::screen));
+    auto fade = box("group/fade", BlendMode::normal);
+    fade.opacity = 0.4F;
+    fade.children.push_back(box("group/fade/child", BlendMode::normal));
+    group.children.push_back(std::move(fade));
+    scene.root.children.push_back(box("before", BlendMode::normal));
+    scene.root.children.push_back(std::move(group));
+    scene.root.children.push_back(box("after", BlendMode::normal));
+    auto lowering = vellum::web::lower_for_canvas_shell(scene);
+    auto plan = vellum::web::canvas_shell_paint_plan(lowering.commands);
+    const auto flattened = vellum::graphics::effective_opacities(lowering.commands);
+    std::vector<std::string> drawn;
+    std::vector<std::string> groups;
+    bool draws_take_no_operation = true;
+    for (std::size_t index = 0; index < lowering.commands.size(); ++index) {
+        const auto& command = lowering.commands[index];
+        const std::string alpha = std::to_string(plan.opacities[index]).substr(0, 4);
+        if (command.kind == Kind::begin_layer) {
+            groups.push_back(command.node_id + "=" + std::string(plan.group_operations[index]) +
+                             "@" + alpha);
+        } else if (vellum::graphics::draws_content(command.kind)) {
+            drawn.push_back(command.node_id + "@" + alpha);
+            draws_take_no_operation = draws_take_no_operation &&
+                                      plan.group_operations[index].empty();
+        }
+    }
+    const std::vector<std::string> expected_drawn{
+        "before@1.00", "group@1.00", "group/plain@1.00", "group/inner@1.00",
+        "group/fade@0.40", "group/fade/child@0.40", "after@1.00"};
+    const std::vector<std::string> expected_groups{
+        "group=multiply@0.50", "group/inner=screen@1.00", "group/fade=@0.40"};
+    if (!lowering.accepted || !lowering.diagnostics.empty() || lowering.losses != 1 ||
+        drawn != expected_drawn || groups != expected_groups || !draws_take_no_operation) {
+        std::cerr << "a Tier 1 group was not composited once with its own alpha, losses "
+                  << lowering.losses << '\n';
+        for (const auto& entry : groups) std::cerr << "  group " << entry << '\n';
+        for (const auto& entry : drawn) std::cerr << "  drew " << entry << '\n';
+        return false;
+    }
+    // Negative control: flattening multiplies the group alpha into every
+    // child, which is what the composited plan avoids.
+    const auto plain_index = static_cast<std::size_t>(
+        std::find_if(lowering.commands.begin(), lowering.commands.end(),
+                     [](const auto& command) { return command.node_id == "group/plain"; }) -
+        lowering.commands.begin());
+    if (plain_index >= flattened.size() || flattened[plain_index] != 0.5F) {
+        std::cerr << "negative control: flattening did not fade the child by the group alpha\n";
+        return false;
+    }
+
+    const auto reported = [](const LoweringDiagnostic& diagnostic, std::string_view node,
+                             std::string_view mode, std::string_view why) {
+        return diagnostic.code == vellum::graphics::kBlendModeFallbackCode &&
+               diagnostic.node_id == node && diagnostic.property == "blendMode" &&
+               diagnostic.severity == LoweringDiagnostic::Severity::warning &&
+               diagnostic.disposition == LoweringDiagnostic::Disposition::lowered &&
+               diagnostic.message.find(std::string("blend mode ") + std::string(mode)) !=
+                   std::string::npos &&
+               diagnostic.message.find(why) != std::string::npos &&
+               diagnostic.message.find("drawn as normal") != std::string::npos;
+    };
+    scene.root.children[1].blend_mode = BlendMode::hue;
+    scene.root.children[1].children[1].blend_mode = BlendMode::exclusive_or;
+    lowering = vellum::web::lower_for_canvas_shell(scene);
+    plan = vellum::web::canvas_shell_paint_plan(lowering.commands);
+    const bool none = std::all_of(plan.group_operations.begin(), plan.group_operations.end(),
+                                  [](std::string_view operation) { return operation.empty(); });
+    if (!lowering.accepted || !none ||
+        plan.opacities != vellum::graphics::effective_opacities(lowering.commands) ||
+        lowering.diagnostics.size() != 2U || lowering.losses != 3 ||
+        !reported(lowering.diagnostics[0], "group", "hue", "Tier 2") ||
+        !reported(lowering.diagnostics[1], "group/inner", "xor", "Tier 2")) {
+        std::cerr << "a Tier 2 group was not drawn as normal with a warning and a loss each, got "
+                  << lowering.diagnostics.size() << " diagnostics and " << lowering.losses
+                  << " losses\n";
+        return false;
+    }
+
+    scene.root.children[1].blend_mode = BlendMode::multiply;
+    scene.root.children[1].children[1].blend_mode = BlendMode::screen;
+    const vellum::web::CanvasShellCapabilities older{.group_compositing = false};
+    lowering = vellum::web::lower_for_canvas_shell(scene, older);
+    plan = vellum::web::canvas_shell_paint_plan(lowering.commands, older);
+    const bool flat = std::all_of(plan.group_operations.begin(), plan.group_operations.end(),
+                                  [](std::string_view operation) { return operation.empty(); });
+    if (!lowering.accepted || !flat || lowering.diagnostics.size() != 2U ||
+        lowering.losses != 3 ||
+        plan.opacities != vellum::graphics::effective_opacities(lowering.commands) ||
+        !reported(lowering.diagnostics[0], "group", "multiply", "no blendBegin and blendEnd") ||
+        !reported(lowering.diagnostics[1], "group/inner", "screen", "no blendBegin and blendEnd")) {
+        std::cerr << "a backend without group hooks did not draw blends as normal with a "
+                     "warning and a loss each\n";
+        return false;
+    }
+
+    scene.scene_version = 5U;
+    const auto refused = vellum::web::lower_for_canvas_shell(scene);
+    const auto native = vellum::graphics::accept_scene(scene);
+    if (refused.accepted || !refused.commands.empty() || refused.diagnostics.size() != 1U ||
+        refused.diagnostics[0].code != vellum::graphics::kSceneVersionMismatchCode ||
+        refused.reason != native.reason ||
+        refused.reason != "scene version 5 cannot carry the blend mode at group") {
+        std::cerr << "a version 5 scene with a blend mode was not refused like the native "
+                     "renderer\n";
+        return false;
+    }
+    return true;
+}
+
+bool gradient_reports_and_version_gate() {
+    using vellum::graphics::Color;
+    using vellum::graphics::GradientKind;
+    using vellum::graphics::LinearGradient;
+    using vellum::graphics::PathGeometry;
+    using vellum::graphics::PathVerb;
+    auto gradient = [](GradientKind kind) {
+        LinearGradient value;
+        value.kind = kind;
+        value.stops = {{.position = 0.0F, .color = Color::hex(0xFF0000)},
+                       {.position = 1.0F, .color = Color::hex(0x0000FF)}};
+        return value;
+    };
+    auto radial = [&](float radius_x, float radius_y) {
+        auto value = gradient(GradientKind::radial);
+        value.radius_x = radius_x;
+        value.radius_y = radius_y;
+        return value;
+    };
+    Scene scene;
+    scene.root.id = "root";
+    scene.root.children.push_back({
+        .id = "ellipse", .kind = SceneNode::Kind::rectangle,
+        .bounds = {0, 0, 16, 16}, .fill_gradients = {radial(0.5F, 0.25F)}});
+    scene.root.children.push_back({
+        .id = "circle", .kind = SceneNode::Kind::rectangle,
+        .bounds = {48, 0, 16, 32}, .fill_gradients = {radial(0.5F, 0.25F)}});
+    scene.root.children.push_back({
+        .id = "two", .kind = SceneNode::Kind::rectangle,
+        .bounds = {16, 0, 16, 16}, .fill_gradients = {gradient(GradientKind::two_circle_radial)}});
+    scene.root.children.push_back({
+        .id = "conic", .kind = SceneNode::Kind::rectangle,
+        .bounds = {32, 0, 16, 16}, .fill_gradients = {gradient(GradientKind::conic)}});
+    auto path = std::make_shared<PathGeometry>();
+    path->verbs = {PathVerb::move, PathVerb::line};
+    path->values = {0, 0, 10, 0};
+    path->stroke.width = 2.0F;
+    path->stroke.gradient = gradient(GradientKind::linear);
+    scene.root.children.push_back({
+        .id = "stroke", .kind = SceneNode::Kind::path,
+        .bounds = {0, 16, 16, 16}, .path = path});
+    const auto lowering = vellum::web::lower_for_canvas_shell(scene);
+    std::string ellipse_message;
+    std::string circle_message;
+    bool saw_two = false;
+    bool saw_conic = false;
+    bool saw_stroke = false;
+    for (const auto& diagnostic : lowering.diagnostics) {
+        if (diagnostic.code != vellum::web::kGradientNotExpressibleCode) continue;
+        if (diagnostic.node_id == "ellipse") ellipse_message = diagnostic.message;
+        if (diagnostic.node_id == "circle") circle_message = diagnostic.message;
+        saw_two |= diagnostic.node_id == "two" &&
+                   diagnostic.message.find("two-circle") != std::string::npos;
+        saw_conic |= diagnostic.node_id == "conic" &&
+                     diagnostic.message.find("conic") != std::string::npos;
+        saw_stroke |= diagnostic.node_id == "stroke" && diagnostic.property == "strokeGradient";
+    }
+    if (!lowering.accepted || lowering.diagnostics.size() != 5U ||
+        ellipse_message.find("elliptical radial") == std::string::npos ||
+        circle_message.find("radial gradient") == std::string::npos ||
+        circle_message.find("elliptical") != std::string::npos || !saw_two || !saw_conic ||
+        !saw_stroke || lowering.losses != 5) {
+        std::cerr << "canvas shell did not report each gradient fidelity loss: "
+                  << lowering.diagnostics.size() << " diagnostics, " << lowering.losses
+                  << " losses\n";
+        return false;
+    }
+    {
+        // A mask's own commands are skipped, never drawn as a base colour, so
+        // a gradient on them is not reported; only the mask itself is.
+        Scene masked;
+        masked.root.id = "root";
+        SceneNode group{.id = "g", .kind = SceneNode::Kind::group};
+        group.children.push_back({
+            .id = "g/content", .kind = SceneNode::Kind::rectangle,
+            .bounds = {0, 0, 16, 16}, .fill = Color::hex(0xFFFFFF)});
+        SceneNode mask{
+            .id = "g/mask", .kind = SceneNode::Kind::rectangle,
+            .bounds = {0, 0, 16, 16}, .fill_gradients = {gradient(GradientKind::conic)}};
+        mask.mask = vellum::graphics::MaskMode::alpha;
+        group.children.push_back(std::move(mask));
+        masked.root.children.push_back(std::move(group));
+        const auto masked_lowering = vellum::web::lower_for_canvas_shell(masked);
+        const bool any_gradient = std::any_of(
+            masked_lowering.diagnostics.begin(), masked_lowering.diagnostics.end(),
+            [](const LoweringDiagnostic& diagnostic) {
+                return diagnostic.code == vellum::web::kGradientNotExpressibleCode;
+            });
+        if (!masked_lowering.accepted || any_gradient ||
+            masked_lowering.diagnostics.size() != 1U ||
+            masked_lowering.diagnostics[0].code != vellum::web::kMaskNotCompositedCode) {
+            std::cerr << "a gradient inside a skipped mask was reported as drawn: "
+                      << masked_lowering.diagnostics.size() << " diagnostics\n";
+            return false;
+        }
+    }
+    scene.scene_version = 5U;
+    const auto refused = vellum::web::lower_for_canvas_shell(scene);
+    if (refused.accepted || refused.diagnostics.size() != 1U ||
+        refused.diagnostics[0].code != vellum::graphics::kSceneVersionMismatchCode) {
+        std::cerr << "version 5 gradient scene was accepted\n";
+        return false;
+    }
+
+    Scene legacy;
+    legacy.scene_version = 5U;
+    legacy.root.id = "root";
+    auto plain = gradient(GradientKind::linear);
+    plain.repeating = true;
+    plain.repeat_length = 4.0F;
+    legacy.root.children.push_back({
+        .id = "plain", .kind = SceneNode::Kind::rectangle,
+        .bounds = {0, 0, 16, 16}, .fill_gradients = {plain}});
+    const auto plain_lowering = vellum::web::lower_for_canvas_shell(legacy);
+    if (!plain_lowering.accepted || !plain_lowering.diagnostics.empty() ||
+        plain_lowering.losses != 0) {
+        std::cerr << "a plain linear fill changed the legacy loss count or diagnostics\n";
+        return false;
+    }
+    return true;
+}
 }  // namespace
 
 bool effect_lowering() {
@@ -321,6 +596,8 @@ bool effect_lowering() {
 int main() {
     if (!image_refusals()) return 1;
     if (!mask_reports()) return 1;
+    if (!blend_lowering()) return 1;
+    if (!gradient_reports_and_version_gate()) return 1;
     if (!effect_lowering()) return 1;
     using vellum::graphics::Affine2D;
     using vellum::graphics::CornerRadii;

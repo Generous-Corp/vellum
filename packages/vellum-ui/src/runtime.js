@@ -267,15 +267,60 @@ function finitePaintNumber(value, path, { optional = false, nonNegative = false 
     }
 }
 
+const GRADIENT_KINDS = ['linear', 'radial', 'two-circle-radial', 'conic'];
+const GRADIENT_SPREADS = ['pad', 'repeat', 'reflect'];
+const GRADIENT_INTERPOLATIONS = ['srgb', 'linear-srgb', 'oklab'];
+const GRADIENT_COLOR_SPACES = ['srgb', 'linear-srgb', 'display-p3'];
+// The gradient kinds each geometry field applies to; the native renderer
+// refuses a field set on any other kind rather than ignore it.
+const GRADIENT_KIND_FIELDS = [
+    ['angle', ['linear', 'conic']],
+    ['centerX', ['radial', 'two-circle-radial', 'conic']],
+    ['centerY', ['radial', 'two-circle-radial', 'conic']],
+    ['focalX', ['two-circle-radial']],
+    ['focalY', ['two-circle-radial']],
+];
+
+function gradientKeyword(value, path, allowed) {
+    if (value !== undefined && !allowed.includes(value)) {
+        throw new TypeError(`${path} must be one of ${allowed.join(', ')}`);
+    }
+}
+
 function validateLinearGradient(value, path) {
-    const gradient = paintStyleObject(
-        value, path, ['angle', 'repeating', 'repeatLength', 'stops']);
-    finitePaintNumber(gradient.angle, `${path}.angle`);
+    const gradient = paintStyleObject(value, path, [
+        'kind', 'angle', 'repeating', 'repeatLength', 'spread', 'interpolation', 'colorSpace',
+        'centerX', 'centerY', 'radiusX', 'radiusY', 'focalX', 'focalY', 'startRadius',
+        'endRadius', 'stops',
+    ]);
+    gradientKeyword(gradient.kind, `${path}.kind`, GRADIENT_KINDS);
+    const kind = gradient.kind ?? 'linear';
+    for (const [field, kinds] of GRADIENT_KIND_FIELDS) {
+        if (gradient[field] !== undefined && !kinds.includes(kind)) {
+            throw new TypeError(`${path}.${field} does not apply to a ${kind} gradient`);
+        }
+    }
+    finitePaintNumber(gradient.angle, `${path}.angle`, {
+        optional: gradient.kind !== undefined && gradient.kind !== 'linear',
+    });
     if (gradient.repeating !== undefined && typeof gradient.repeating !== 'boolean') {
         throw new TypeError(`${path}.repeating must be boolean`);
     }
     finitePaintNumber(
         gradient.repeatLength, `${path}.repeatLength`, { optional: true, nonNegative: true });
+    gradientKeyword(gradient.spread, `${path}.spread`, GRADIENT_SPREADS);
+    if (gradient.spread !== undefined && gradient.repeating !== undefined &&
+        gradient.repeating !== (gradient.spread !== 'pad')) {
+        throw new TypeError(`${path}.repeating contradicts ${path}.spread`);
+    }
+    gradientKeyword(gradient.interpolation, `${path}.interpolation`, GRADIENT_INTERPOLATIONS);
+    gradientKeyword(gradient.colorSpace, `${path}.colorSpace`, GRADIENT_COLOR_SPACES);
+    for (const name of ['centerX', 'centerY', 'focalX', 'focalY']) {
+        finitePaintNumber(gradient[name], `${path}.${name}`, { optional: true });
+    }
+    for (const name of ['radiusX', 'radiusY', 'startRadius', 'endRadius']) {
+        finitePaintNumber(gradient[name], `${path}.${name}`, { optional: true, nonNegative: true });
+    }
     if (!Array.isArray(gradient.stops) ||
         gradient.stops.length < 2 || gradient.stops.length > 64) {
         throw new TypeError(`${path}.stops must contain between 2 and 64 stops`);
@@ -340,10 +385,13 @@ function validatePath(properties, path) {
         }
     }
     if (stroke !== undefined) {
-        if (stroke !== 'none' && !(typeof stroke === 'string' && HEX_COLOR.test(stroke))) {
-            throw new TypeError(`${path}.stroke must be a hex color or none`);
+        if (stroke !== null && typeof stroke === 'object') {
+            output.stroke = validateLinearGradient(stroke, `${path}.stroke`);
+        } else if (stroke === 'none' || (typeof stroke === 'string' && HEX_COLOR.test(stroke))) {
+            output.stroke = stroke;
+        } else {
+            throw new TypeError(`${path}.stroke must be a hex color or none, or a gradient`);
         }
-        output.stroke = stroke;
     }
     finitePaintNumber(
         properties.strokeWidth, `${path}.strokeWidth`, { optional: true, nonNegative: true });
@@ -413,7 +461,7 @@ function validateStyle(style, path) {
             throw new TypeError(`${path}.style.${name} has unsupported property semantics`);
         }
         const value = descriptor.value;
-        if (name === 'backgroundLinearGradient') {
+        if (name === 'backgroundLinearGradient' || name === 'backgroundGradient') {
             result[name] = validateLinearGradient(value, `${path}.style.${name}`);
             continue;
         }
@@ -580,6 +628,20 @@ function materialize(value, runtime, path) {
     if (value.type === 'text-run') node.text = textRunText;
     else if (typeof value.props.text === 'string') node.text = value.props.text;
     if (typeof value.props.source === 'string') node.source = value.props.source;
+    if (typeof value.props.anchor === 'string' && value.props.anchor.length > 0 &&
+        value.props.anchor.length <= 1024) {
+        node.anchor = value.props.anchor;
+    }
+    const where = value.props.sourceLocation;
+    if (where !== null && typeof where === 'object' && typeof where.file === 'string' &&
+        where.file.length > 0 && where.file.length <= 4096) {
+        node.sourceLocation = { file: where.file };
+        for (const key of ['line', 'column']) {
+            if (Number.isInteger(where[key]) && where[key] >= 0) {
+                node.sourceLocation[key] = where[key];
+            }
+        }
+    }
     if (pathProperties !== undefined) Object.assign(node, pathProperties);
     if (imageProperties !== undefined) Object.assign(node, imageProperties);
     if (value.type === 'custom') {

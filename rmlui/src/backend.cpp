@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <climits>
 #include <cstddef>
 #include <cstdint>
@@ -364,9 +365,21 @@ Status Backend::open(std::uint32_t width, std::uint32_t height) {
         close();
         return Status::rejected;
     }
+    runtime_->context->SetDensityIndependentPixelRatio(density_ratio_);
     width_ = width;
     height_ = height;
     open_ = true;
+    return Status::ok;
+}
+
+Status Backend::set_density_ratio(float ratio) {
+    if (!std::isfinite(ratio) || ratio <= 0.0f)
+        return Status::rejected;
+    density_ratio_ = ratio;
+    if (open_ && runtime_ && runtime_->context) {
+        detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
+        runtime_->context->SetDensityIndependentPixelRatio(ratio);
+    }
     return Status::ok;
 }
 

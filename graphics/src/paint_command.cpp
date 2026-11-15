@@ -94,6 +94,7 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
                  std::vector<PaintCommand>& output,
                  std::vector<PaintCommandRange>* ranges) {
     if (!is_known_kind(node.kind) || !compositing_is_finite(node)) return;
+    if (!is_known_blend_mode(node.blend_mode)) return;
     if (node.clip && !clip_is_valid(*node.clip)) return;
     for (const auto& effect : node.effects) {
         if (!effect_is_valid(effect)) return;
@@ -143,7 +144,8 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
         }
     }
     const bool effected = !native.empty();
-    const bool layered = opacity < 1.0F || node.isolate || effected;
+    const bool blended = node.blend_mode != BlendMode::normal;
+    const bool layered = opacity < 1.0F || node.isolate || blended || effected;
     const auto slot = output.size();
     if (layered) {
         output.push_back({.kind = PaintCommand::Kind::begin_layer, .node_id = node.id});
@@ -191,13 +193,23 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
             .transform = transform,
         });
     } else if (node.kind == SceneNode::Kind::path && (!node.path || !node.path->verbs.empty())) {
+        std::shared_ptr<const PathGeometry> path = node.path;
+        if (path && node.stroke_gradient) {
+            // Keep the legacy node-level field wired to the canonical path
+            // stroke.  Copying here preserves the caller's immutable path
+            // object while ensuring render, damage, and cache code see the
+            // same gradient payload.
+            auto merged = std::make_shared<PathGeometry>(*path);
+            merged->stroke.gradient = node.stroke_gradient;
+            path = std::move(merged);
+        }
         output.push_back({
             .kind = PaintCommand::Kind::path,
             .node_id = node.id,
             .bounds = absolute,
             .fill = node.fill,
             .fill_gradients = node.fill_gradients,
-            .path = node.path,
+            .path = std::move(path),
             .transform = transform,
         });
     } else if (node.kind == SceneNode::Kind::image) {
@@ -246,7 +258,7 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
     }
     // A mask's commands draw coverage, so folding opacity into one of them, or
     // into a sibling it masks, would change what the mask hides.
-    if (!node.isolate && !effected && !structured && drawn <= 1U) {
+    if (!node.isolate && !blended && !effected && !structured && drawn <= 1U) {
         if (drawn == 1U) output[last_drawn].opacity *= opacity;
         output.erase(output.begin() + static_cast<std::ptrdiff_t>(slot));
         close_clip();
@@ -263,9 +275,10 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
     auto& layer = output[slot];
     layer.opacity = opacity;
     layer.layer_isolated = node.isolate || effected;
+    layer.blend_mode = node.blend_mode;
     const auto group = group_extent(output, first, output.size());
     layer.bounds = group.bounds;
-    layer.layer_unbounded = !group.bounded;
+    layer.layer_unbounded = !group.bounded || blend_mode_clears_backdrop(node.blend_mode);
     if (effected) {
         const auto chain = effect_chain_cost(native);
         const float radius = chain.total.radius;
@@ -304,12 +317,27 @@ ResolvedLinearGradient resolve_linear_gradient(
     const float center_y = bounds.y + bounds.height * 0.5F;
 
     ResolvedLinearGradient resolved{
+        .kind = gradient.kind,
         .start_x = center_x - direction_x * half_length,
         .start_y = center_y - direction_y * half_length,
         .end_x = center_x + direction_x * half_length,
         .end_y = center_y + direction_y * half_length,
         .repeating = gradient.repeating,
         .repeat_length = std::max(0.0F, gradient.repeat_length),
+        .spread = gradient.spread,
+        .interpolation = gradient.interpolation,
+        .center_x = bounds.x + gradient.center_x * bounds.width,
+        .center_y = bounds.y + gradient.center_y * bounds.height,
+        .radius_x = (gradient.radius_x > 0.0F ? gradient.radius_x : 0.5F) * bounds.width,
+        .radius_y = (gradient.radius_y > 0.0F ? gradient.radius_y : 0.5F) * bounds.height,
+        .focal_x = bounds.x + gradient.focal_x * bounds.width,
+        .focal_y = bounds.y + gradient.focal_y * bounds.height,
+        .start_radius = std::max(0.0F, gradient.start_radius) *
+                        std::min(bounds.width, bounds.height),
+        .end_radius = std::max(0.0F, gradient.end_radius) * std::min(bounds.width, bounds.height),
+        .angle_degrees = gradient.angle_degrees,
+        .end_angle_degrees = gradient.angle_degrees + 360.0F,
+        .color_space = gradient.color_space,
         .stops = gradient.stops,
     };
     for (auto& stop : resolved.stops) {
@@ -368,6 +396,24 @@ std::optional<Rect> path_gradient_box(const PaintCommand& command) {
     if (!control || !has_area(*control)) return std::nullopt;
     return Rect{command.bounds.x + control->x, command.bounds.y + control->y, control->width,
                 control->height};
+}
+
+std::optional<Rect> path_stroke_gradient_box(const PaintCommand& command) {
+    if (auto box = path_gradient_box(command)) return box;
+    if (!command.path) return std::nullopt;
+    const auto control = path_control_bounds(*command.path);
+    if (!control) return std::nullopt;
+    Rect box{command.bounds.x + control->x, command.bounds.y + control->y, control->width,
+             control->height};
+    if (!(box.width > 0.0F)) {
+        box.x -= 0.5F;
+        box.width = 1.0F;
+    }
+    if (!(box.height > 0.0F)) {
+        box.y -= 0.5F;
+        box.height = 1.0F;
+    }
+    return box;
 }
 
 bool clip_is_valid(const NodeClip& clip, std::string* reason) {
@@ -476,6 +522,17 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
         if (!is_known_kind(node->kind)) {
             return refuse(node->id, "node " + node->id + " has a kind this build does not know");
         }
+        if (!is_known_blend_mode(node->blend_mode)) {
+            output.push_back({
+                .severity = LoweringDiagnostic::Severity::error,
+                .disposition = LoweringDiagnostic::Disposition::unsupported,
+                .code = std::string(kSceneVersionMismatchCode),
+                .node_id = node->id,
+                .property = "blendMode",
+                .message = "node " + node->id + " has a blend mode this build does not know",
+            });
+            return output;
+        }
         // Name the field or kind the scene's version is too old for; a node
         // can carry several, and only the oldest one its version lacks is
         // the one `find_version_mismatch` found it by.
@@ -491,20 +548,6 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
             return refuse(node->id, "scene version " + version +
                                         " cannot carry the path node " + node->id);
         }
-        if (!compositing && needs(10U) && uses_version_10_fields(*node) &&
-            !(needs(5U) && uses_version_5_fields(*node)) &&
-            !(needs(4U) && node->kind == SceneNode::Kind::image) &&
-            !(needs(3U) && node->kind == SceneNode::Kind::path)) {
-            output.push_back({
-                .severity = LoweringDiagnostic::Severity::error,
-                .disposition = LoweringDiagnostic::Disposition::unsupported,
-                .code = std::string(kSceneVersionMismatchCode),
-                .node_id = node->id,
-                .property = "effects",
-                .message = "scene version " + version + " cannot carry the effects at " + node->id,
-            });
-            return output;
-        }
         if (!compositing && needs(5U) && uses_version_5_fields(*node)) {
             output.push_back({
                 .severity = LoweringDiagnostic::Severity::error,
@@ -517,6 +560,33 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
             });
             return output;
         }
+        if (!compositing && needs(6U) && uses_version_6_fields(*node)) {
+            output.push_back({
+                .severity = LoweringDiagnostic::Severity::error,
+                .disposition = LoweringDiagnostic::Disposition::unsupported,
+                .code = std::string(kSceneVersionMismatchCode),
+                .node_id = node->id,
+                .property = "blendMode",
+                .message = "scene version " + version + " cannot carry the blend mode at " +
+                           node->id,
+            });
+            return output;
+        }
+        if (!compositing && needs(8U) && node_own_gradient_uses_version_8(*node)) {
+            return refuse(node->id, "scene version " + version +
+                                  " cannot carry gradient vocabulary at " + node->id);
+        }
+        if (!compositing && needs(10U) && uses_version_10_fields(*node)) {
+            output.push_back({
+                .severity = LoweringDiagnostic::Severity::error,
+                .disposition = LoweringDiagnostic::Disposition::unsupported,
+                .code = std::string(kSceneVersionMismatchCode),
+                .node_id = node->id,
+                .property = "effects",
+                .message = "scene version " + version + " cannot carry the effects at " + node->id,
+            });
+            return output;
+        }
         output.push_back({
             .severity = LoweringDiagnostic::Severity::error,
             .disposition = LoweringDiagnostic::Disposition::unsupported,
@@ -525,6 +595,21 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
             .property = "transform",
             .message = "scene version " + version +
                        " cannot carry the transform, opacity, or corner radii at " + node->id,
+        });
+        return output;
+    }
+    std::string gradient_reason;
+    if (const auto* node = find_inexpressible_gradient(scene.root, &gradient_reason);
+        node != nullptr) {
+        output.push_back({
+            .severity = LoweringDiagnostic::Severity::error,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(kGradientNotExpressibleCode),
+            .node_id = node->id,
+            .property = "gradient",
+            .message = "the gradient at " + node->id +
+                       " cannot be drawn exactly by the native Skia lowering: " +
+                       gradient_reason,
         });
         return output;
     }

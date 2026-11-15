@@ -102,11 +102,19 @@ bool same_color(const Color& a, const Color& b) noexcept {
 }
 
 bool same_gradients(const std::vector<LinearGradient>& a, const std::vector<LinearGradient>& b) {
+    if (a.size() != b.size()) return false;
     return std::equal(a.begin(), a.end(), b.begin(), b.end(),
         [](const LinearGradient& left, const LinearGradient& right) {
-            return same_float(left.angle_degrees, right.angle_degrees) &&
+            return left.kind == right.kind && left.spread == right.spread &&
+                   left.interpolation == right.interpolation && left.color_space == right.color_space &&
+                   same_float(left.angle_degrees, right.angle_degrees) &&
                    left.repeating == right.repeating &&
                    same_float(left.repeat_length, right.repeat_length) &&
+                   same_float(left.center_x, right.center_x) && same_float(left.center_y, right.center_y) &&
+                   same_float(left.radius_x, right.radius_x) && same_float(left.radius_y, right.radius_y) &&
+                   same_float(left.focal_x, right.focal_x) && same_float(left.focal_y, right.focal_y) &&
+                   same_float(left.start_radius, right.start_radius) &&
+                   same_float(left.end_radius, right.end_radius) &&
                    std::equal(left.stops.begin(), left.stops.end(), right.stops.begin(),
                               right.stops.end(),
                               [](const GradientStop& l, const GradientStop& r) {
@@ -153,7 +161,7 @@ bool same_radii(const CornerRadii& a, const CornerRadii& b) noexcept {
 
 bool compositing_differs(const SceneNode& previous, const SceneNode& next) noexcept {
     return !same_transform(previous.transform, next.transform) ||
-           !same_float(previous.opacity, next.opacity);
+           !same_float(previous.opacity, next.opacity) || previous.blend_mode != next.blend_mode;
 }
 
 bool same_runs(const std::vector<TextRun>& a, const std::vector<TextRun>& b) {
@@ -253,7 +261,14 @@ std::optional<Rect> mesh_paint_bounds(const TriangleMesh& mesh, const Rect& abso
 std::optional<Rect> path_paint_bounds(const SceneNode& node, const Rect& absolute,
                                       const Rect& frame) {
     if (!node.path || !path_is_valid(*node.path)) return frame;
-    const auto box = path_paint_box(*node.path);
+    std::optional<Rect> box;
+    if (node.stroke_gradient) {
+        auto merged = std::make_shared<PathGeometry>(*node.path);
+        merged->stroke.gradient = node.stroke_gradient;
+        box = path_paint_box(*merged);
+    } else {
+        box = path_paint_box(*node.path);
+    }
     if (!box) return std::nullopt;
     const Rect moved{absolute.x + box->x, absolute.y + box->y, box->width, box->height};
     return finite_rect(moved) ? moved : frame;
@@ -275,7 +290,9 @@ bool same_path(const std::shared_ptr<const PathGeometry>& left,
            same_float(a.stroke.width, b.stroke.width) && a.stroke.join == b.stroke.join &&
            a.stroke.cap == b.stroke.cap && same_float(a.stroke.miter_limit, b.stroke.miter_limit) &&
            same_floats(a.stroke.dash_array, b.stroke.dash_array) &&
-           same_float(a.stroke.dash_offset, b.stroke.dash_offset);
+           same_float(a.stroke.dash_offset, b.stroke.dash_offset) &&
+           a.stroke.gradient.has_value() == b.stroke.gradient.has_value() &&
+           (!a.stroke.gradient || same_gradients({*a.stroke.gradient}, {*b.stroke.gradient}));
 }
 
 bool same_image(const std::optional<ImageReference>& left,
@@ -316,11 +333,13 @@ SceneNode paint_fields(const SceneNode& node) {
     copy.transform = node.transform;
     copy.opacity = node.opacity;
     copy.corner_radii = node.corner_radii;
+    copy.stroke_gradient = node.stroke_gradient;
     copy.path = node.path;
     copy.image = node.image;
     copy.clip = node.clip;
     copy.mask = node.mask;
     copy.isolate = node.isolate;
+    copy.blend_mode = node.blend_mode;
     copy.effects = node.effects;
     return copy;
 }
@@ -499,6 +518,7 @@ private:
             if (backdrop && !rect_empty(absolute)) {
                 damage = unite(damage, transformed_bounds(transform, absolute));
             }
+            if (blend_mode_clears_backdrop(node.blend_mode)) damage = logical_frame;
             if (damage) {
                 const float radius = propagation.effect_radius(node);
                 if (std::isfinite(radius) && radius > 0.0F) {
@@ -537,7 +557,9 @@ private:
             }
             records_[position].damage = area;
         }
-        if (drawing && std::clamp(node.opacity, 0.0F, 1.0F) < 1.0F) {
+        if (drawing && node.blend_mode != BlendMode::normal) {
+            records_[position].composite = 3;
+        } else if (drawing && std::clamp(node.opacity, 0.0F, 1.0F) < 1.0F) {
             records_[position].composite = drawn > 1 ? 2 : 1;
         }
         return drawing ? drawn : 0;
@@ -1018,7 +1040,14 @@ std::optional<Rect> transformed_paint_bounds(const SceneNode& node, const Rect& 
     }
     case SceneNode::Kind::path: {
         if (!node.path || !path_is_valid(*node.path)) return frame;
-        const auto box = path_paint_box(*node.path);
+        std::optional<Rect> box;
+        if (node.stroke_gradient) {
+            auto merged = std::make_shared<PathGeometry>(*node.path);
+            merged->stroke.gradient = node.stroke_gradient;
+            box = path_paint_box(*merged);
+        } else {
+            box = path_paint_box(*node.path);
+        }
         if (!box) return std::nullopt;
         const Rect local{absolute_bounds.x + box->x, absolute_bounds.y + box->y, box->width,
                          box->height};
@@ -1061,6 +1090,9 @@ bool paint_differs(const SceneNode& previous, const SceneNode& next) {
     case SceneNode::Kind::path:
         return !same_color(previous.fill, next.fill) ||
                !same_gradients(previous.fill_gradients, next.fill_gradients) ||
+               previous.stroke_gradient.has_value() != next.stroke_gradient.has_value() ||
+               (previous.stroke_gradient &&
+                !same_gradients({*previous.stroke_gradient}, {*next.stroke_gradient})) ||
                !same_path(previous.path, next.path);
     case SceneNode::Kind::image:
         return !same_color(previous.fill, next.fill) ||

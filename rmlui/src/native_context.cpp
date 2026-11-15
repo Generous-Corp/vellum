@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <climits>
+#include <cmath>
 #include <new>
 #include <string>
 #include <utility>
@@ -95,6 +96,18 @@ Status NativeContext::open(std::uint32_t width, std::uint32_t height) {
     if (!context_) {
         close();
         return Status::rejected;
+    }
+    context_->SetDensityIndependentPixelRatio(density_ratio_);
+    return Status::ok;
+}
+
+Status NativeContext::set_density_ratio(float ratio) {
+    if (!std::isfinite(ratio) || ratio <= 0.0f)
+        return Status::rejected;
+    density_ratio_ = ratio;
+    if (context_) {
+        Scope scope(*this);
+        context_->SetDensityIndependentPixelRatio(ratio);
     }
     return Status::ok;
 }

@@ -333,6 +333,8 @@ constexpr std::string_view kStyledTree = R"JSON({
           "borderRadius": 12,
           "backgroundLinearGradient": {
             "angle": 135,
+            "interpolation": "linear-srgb",
+            "colorSpace": "display-p3",
             "repeating": true,
             "repeatLength": 40,
             "stops": [
@@ -792,6 +794,86 @@ bool grouping_keys() {
            refuses(R"("clipPath":"M0 0 L")", "node bad has an invalid clipPath: ", true);
 }
 
+// `mixBlendMode` reaches the scene in the canonical and CSS spellings on every
+// node type, and an unknown name fails the tree atomically.
+bool blend_mode_key() {
+    using vellum::graphics::BlendMode;
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    const auto tree = wrap_tree(R"JSON(
+      {"type":"view","id":"multiplied","style":{"width":20,"height":20,
+        "backgroundColor":"#FF0000","mixBlendMode":"multiply"},"children":[]},
+      {"type":"view","id":"dodged","style":{"width":20,"height":20,
+        "mixBlendMode":"color-dodge"},"children":[]},
+      {"type":"view","id":"keyed","style":{"width":20,"height":20,
+        "mixBlendMode":"destination_in"},"children":[]},
+      {"type":"text","id":"caption","text":"Hi","style":{"height":20,
+        "mixBlendMode":"difference"},"children":[]},
+      {"type":"path","id":"shape","d":"M0 0 L10 10","stroke":"#FF0000",
+        "style":{"width":20,"height":20,"mixBlendMode":"screen"}},
+      {"type":"view","id":"plain","style":{"width":20,"height":20},"children":[]}
+    )JSON");
+    if (!vellum::authoring::materialize_rendered_tree(tree, rendered, &error)) {
+        std::cerr << "blend mode: " << error << '\n';
+        return false;
+    }
+    const auto mode = [&](std::string_view id) {
+        const auto* node = vellum::graphics::find_node(rendered.scene, id);
+        return node == nullptr ? BlendMode::clear : node->blend_mode;
+    };
+    if (mode("multiplied") != BlendMode::multiply || mode("dodged") != BlendMode::color_dodge ||
+        mode("keyed") != BlendMode::destination_in || mode("caption") != BlendMode::difference ||
+        mode("shape") != BlendMode::screen || mode("plain") != BlendMode::normal) {
+        std::cerr << "blend mode: mixBlendMode did not reach the scene\n";
+        return false;
+    }
+    if (rendered.scene.scene_version != vellum::graphics::kSceneVersion ||
+        !vellum::graphics::scene_fields_match_version(rendered.scene) ||
+        !rendered.diagnostics.empty()) {
+        std::cerr << "blend mode: the scene is not a clean version " << vellum::graphics::kSceneVersion
+                  << " scene\n";
+        return false;
+    }
+    const auto commands = vellum::graphics::make_paint_commands(rendered.scene);
+    const auto layer = std::find_if(commands.begin(), commands.end(), [](const auto& command) {
+        return command.kind == vellum::graphics::PaintCommand::Kind::begin_layer &&
+               command.node_id == "multiplied";
+    });
+    if (layer == commands.end() || layer->blend_mode != BlendMode::multiply) {
+        std::cerr << "blend mode: the blend did not reach a paint-command layer\n";
+        return false;
+    }
+    const auto width_before = rendered.scene.width;
+    for (const char* bad : {R"("mixBlendMode":"plus-lighter")", R"("mixBlendMode":"Multiply")",
+                            R"("mixBlendMode":3)", R"("mixBlendMode":"")"}) {
+        const auto refused = wrap_tree(std::string(R"JSON({"type":"view","id":"bad","style":{)JSON") +
+                                       bad + R"JSON(},"children":[]})JSON");
+        if (vellum::authoring::materialize_rendered_tree(refused, rendered, &error) ||
+            error != "node bad mixBlendMode must be a blend mode name" ||
+            rendered.scene.width != width_before) {
+            std::cerr << "blend mode: '" << bad << "' gave '" << error << "'\n";
+            return false;
+        }
+    }
+    const auto masked = [](std::string_view blend) {
+        return wrap_tree(std::string(R"JSON(
+          {"type":"view","id":"content","style":{"width":20,"height":20},"children":[]},
+          {"type":"view","id":"cutout","style":{"width":10,"height":10,"maskMode":"alpha",
+            "mixBlendMode":")JSON") + std::string(blend) + R"JSON("},"children":[]})JSON");
+    };
+    if (vellum::authoring::materialize_rendered_tree(masked("multiply"), rendered, &error) ||
+        error != "node cutout mixBlendMode cannot apply to a mask" ||
+        rendered.scene.width != width_before) {
+        std::cerr << "blend mode: a blended mask gave '" << error << "'\n";
+        return false;
+    }
+    if (!vellum::authoring::materialize_rendered_tree(masked("normal"), rendered, &error)) {
+        std::cerr << "blend mode: a mask with the normal mode was refused: " << error << '\n';
+        return false;
+    }
+    return true;
+}
+
 int main() {
     vellum::authoring::RenderedApplication rendered;
     std::string error;
@@ -851,6 +933,9 @@ int main() {
         card->fill_gradients.size() != 1U ||
         !card->fill_gradients[0].repeating ||
         card->fill_gradients[0].repeat_length != 40.0F ||
+        card->fill_gradients[0].interpolation !=
+            vellum::graphics::GradientInterpolation::linear_srgb ||
+        card->fill_gradients[0].color_space != "display-p3" ||
         card->box_shadows.size() != 1U ||
         card->box_shadows[0].spread_radius != 3.0F || attributed == nullptr ||
         attributed->text_runs.size() != 2U ||
@@ -943,6 +1028,78 @@ int main() {
         error != "backgroundLinearGradient exceeds the 64-stop limit" ||
         rendered.scene.width != styled_width) {
         std::cerr << "excessive gradient stops did not fail atomically\n";
+        return 1;
+    }
+
+    const auto gradient_tree = [](std::string_view fields) {
+        return std::string(R"JSON({
+      "protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
+        "type":"view","id":"gradient-fields",
+        "style":{"width":100,"height":60,"backgroundGradient":{)JSON") +
+               std::string(fields) + R"JSON(,"stops":[
+            {"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}
+          ]}},"children":[]}})JSON";
+    };
+    const std::pair<std::string_view, std::string_view> malformed_gradients[]{
+        {R"("kind":7)", "backgroundGradient.kind must be linear, radial, two-circle-radial or conic"},
+        {R"("kind":"spiral")",
+         "backgroundGradient.kind must be linear, radial, two-circle-radial or conic"},
+        {R"("spread":1)", "backgroundGradient.spread must be pad, repeat or reflect"},
+        {R"("spread":"wrap")", "backgroundGradient.spread must be pad, repeat or reflect"},
+        {R"("spread":"pad","repeating":true)",
+         "backgroundGradient.repeating contradicts backgroundGradient.spread; repeating is true "
+         "exactly when spread is repeat or reflect"},
+        {R"("spread":"reflect","repeating":false)",
+         "backgroundGradient.repeating contradicts backgroundGradient.spread; repeating is true "
+         "exactly when spread is repeat or reflect"},
+        {R"("kind":"radial","radiusX":-0.5)", "backgroundGradient.radiusX must be non-negative"},
+        {R"("kind":"radial","radiusY":-1)", "backgroundGradient.radiusY must be non-negative"},
+        {R"("kind":"two-circle-radial","startRadius":-0.1)",
+         "backgroundGradient.startRadius must be non-negative"},
+        {R"("kind":"two-circle-radial","endRadius":-0.1)",
+         "backgroundGradient.endRadius must be non-negative"},
+        {R"("kind":"radial","angle":30)",
+         "backgroundGradient.angle does not apply to a radial gradient"},
+        {R"("kind":"two-circle-radial","angle":30)",
+         "backgroundGradient.angle does not apply to a two-circle-radial gradient"},
+        {R"("angle":90,"centerX":0.2)",
+         "backgroundGradient.centerX does not apply to a linear gradient"},
+        {R"("kind":"conic","focalY":0.2)",
+         "backgroundGradient.focalY does not apply to a conic gradient"},
+        {R"("kind":"radial","focalX":0.2)",
+         "backgroundGradient.focalX does not apply to a radial gradient"},
+    };
+    for (const auto& [fields, expected] : malformed_gradients) {
+        if (vellum::authoring::materialize_rendered_tree(gradient_tree(fields), rendered,
+                                                         &error) ||
+            error != expected || rendered.scene.width != styled_width) {
+            std::cerr << "malformed gradient " << fields << " gave: " << error << "\n";
+            return 1;
+        }
+    }
+    if (!vellum::authoring::materialize_rendered_tree(
+            gradient_tree(R"("kind":"two-circle-radial","focalX":0.25,"focalY":0.5,)"
+                          R"("startRadius":0,"endRadius":0.75,"spread":"reflect","repeating":true)"),
+            rendered, &error)) {
+        std::cerr << "two-circle gradient did not materialize: " << error << "\n";
+        return 1;
+    }
+    {
+        const auto* node = vellum::graphics::find_node(rendered.scene, "gradient-fields");
+        if (node == nullptr || node->fill_gradients.size() != 1U ||
+            node->fill_gradients[0].kind != vellum::graphics::GradientKind::two_circle_radial ||
+            node->fill_gradients[0].start_radius != 0.0F ||
+            node->fill_gradients[0].end_radius != 0.75F ||
+            node->fill_gradients[0].focal_x != 0.25F ||
+            node->fill_gradients[0].spread != vellum::graphics::GradientSpread::reflect ||
+            node->fill_gradients[0].radius_x != 0.0F) {
+            std::cerr << "two-circle gradient fields were not carried\n";
+            return 1;
+        }
+    }
+    if (!vellum::authoring::materialize_rendered_tree(
+            kRenderedTree, rendered, &error)) {
+        std::cerr << "known-good tree did not rematerialize: " << error << "\n";
         return 1;
     }
 
@@ -1163,7 +1320,7 @@ int main() {
 
     return compositing_keys() && transform_pivots_once() && transform_ignores_locale() &&
            image_nodes() &&
-                   path_nodes() && grouping_keys()
+                   path_nodes() && grouping_keys() && blend_mode_key()
                ? 0
                : 1;
 }

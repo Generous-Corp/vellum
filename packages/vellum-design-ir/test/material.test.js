@@ -70,6 +70,7 @@ function conforms(root, value, node = root) {
         }
     }
     if (node.allOf !== undefined && !node.allOf.every((part) => conforms(root, value, part))) return false;
+    if (node.not !== undefined && conforms(root, value, node.not)) return false;
     if (node.oneOf !== undefined && node.oneOf.filter((part) => conforms(root, value, part)).length !== 1) {
         return false;
     }
@@ -90,17 +91,48 @@ test('a schema version 1 document without materials stays legal', async () => {
 test('a material reference needs schema version 3', async () => {
     const design = normalizeImport(await source());
     const published = await schema();
-    for (const version of [1, 3]) {
+    for (const version of [1, 2, 3]) {
         const document = withMaterial(design, glass, version);
         const result = validateDesignIR(document);
         assert.equal(result.valid, version === 3, `validator at version ${version}`);
-        if (version === 1) assert.ok(result.issues.some((entry) => entry.code === 'version'));
+        if (version < 3) assert.ok(result.issues.some((entry) => entry.code === 'version'));
         assert.equal(conforms(published, document), version === 3, `schema at version ${version}`);
     }
-    const reserved = structuredClone(design);
-    reserved.schemaVersion = 2;
-    assert.equal(validateDesignIR(reserved).valid, false);
-    assert.equal(conforms(published, reserved), false);
+});
+
+test('versions 1 to 3 are read and 0, 4 and 1.5 are refused', async () => {
+    const design = normalizeImport(await source());
+    const published = await schema();
+    for (const version of [1, 2, 3]) {
+        const document = structuredClone(design);
+        document.schemaVersion = version;
+        assert.deepEqual(validateDesignIR(document), { issues: [], valid: true }, `${version}`);
+        assert.equal(conforms(published, document), true, `schema at ${version}`);
+        assert.equal(normalizeImport(await source(), { schemaVersion: version }).schemaVersion, version);
+    }
+    for (const version of [0, 4, 1.5]) {
+        const document = structuredClone(design);
+        document.schemaVersion = version;
+        const result = validateDesignIR(document);
+        assert.equal(result.valid, false, `${version}`);
+        assert.ok(result.issues.some((entry) => entry.path === '$.schemaVersion'));
+        assert.equal(conforms(published, document), false, `schema at ${version}`);
+        await assert.rejects(async () => normalizeImport(await source(), { schemaVersion: version }), TypeError);
+    }
+});
+
+test('compositing stays legal at version 3 and a document with both is version 3', async () => {
+    const input = await source();
+    input.root.children[0].compositing = { blendMode: 'multiply' };
+    assert.equal(normalizeImport(input).schemaVersion, 2);
+    const atThree = normalizeImport(input, { schemaVersion: 3 });
+    assert.deepEqual(validateDesignIR(atThree), { issues: [], valid: true });
+    assert.equal(conforms(await schema(), atThree), true);
+    input.root.children[0].material = { id: 'vellum.frosted-glass', values: { blur: 4 } };
+    const both = normalizeImport(input);
+    assert.equal(both.schemaVersion, 3);
+    assert.equal(conforms(await schema(), both), true);
+    assert.throws(() => normalizeImport(input, { schemaVersion: 2 }), DesignIRValidationError);
 });
 
 test('negative control: without the conditional the schema accepts a version 1 material', async () => {
@@ -115,8 +147,9 @@ test('negative control: without the conditional the schema accepts a version 1 m
 test('normalization refuses a material below version 3 and keeps it at 3', async () => {
     const input = await source();
     input.root.children[0].material = { values: { blur: 4 }, id: 'vellum.frosted-glass' };
-    assert.throws(() => normalizeImport(input), DesignIRValidationError);
-    assert.throws(() => normalizeImport(input, { schemaVersion: 2 }), TypeError);
+    assert.throws(() => normalizeImport(input, { schemaVersion: 1 }), DesignIRValidationError);
+    assert.throws(() => normalizeImport(input, { schemaVersion: 2 }), DesignIRValidationError);
+    assert.equal(normalizeImport(input).schemaVersion, 3);
     const design = normalizeImport(input, { schemaVersion: 3 });
     assert.equal(design.schemaVersion, 3);
     assert.deepEqual(design.root.children[0].material, { id: 'vellum.frosted-glass', values: { blur: 4 } });

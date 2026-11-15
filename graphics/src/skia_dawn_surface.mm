@@ -124,6 +124,41 @@ std::string string_view(wgpu::StringView value) {
     return {value.data, value.length};
 }
 
+SkBlendMode sk_blend_mode(BlendMode mode) {
+    switch (mode) {
+        case BlendMode::normal:
+        case BlendMode::source_over: return SkBlendMode::kSrcOver;
+        case BlendMode::multiply: return SkBlendMode::kMultiply;
+        case BlendMode::screen: return SkBlendMode::kScreen;
+        case BlendMode::overlay: return SkBlendMode::kOverlay;
+        case BlendMode::darken: return SkBlendMode::kDarken;
+        case BlendMode::lighten: return SkBlendMode::kLighten;
+        case BlendMode::difference: return SkBlendMode::kDifference;
+        case BlendMode::exclusion: return SkBlendMode::kExclusion;
+        case BlendMode::destination_in: return SkBlendMode::kDstIn;
+        case BlendMode::destination_out: return SkBlendMode::kDstOut;
+        case BlendMode::hue: return SkBlendMode::kHue;
+        case BlendMode::saturation: return SkBlendMode::kSaturation;
+        case BlendMode::color: return SkBlendMode::kColor;
+        case BlendMode::luminosity: return SkBlendMode::kLuminosity;
+        case BlendMode::color_dodge: return SkBlendMode::kColorDodge;
+        case BlendMode::color_burn: return SkBlendMode::kColorBurn;
+        case BlendMode::hard_light: return SkBlendMode::kHardLight;
+        case BlendMode::soft_light: return SkBlendMode::kSoftLight;
+        case BlendMode::clear: return SkBlendMode::kClear;
+        case BlendMode::source: return SkBlendMode::kSrc;
+        case BlendMode::destination: return SkBlendMode::kDst;
+        case BlendMode::source_in: return SkBlendMode::kSrcIn;
+        case BlendMode::source_out: return SkBlendMode::kSrcOut;
+        case BlendMode::source_atop: return SkBlendMode::kSrcATop;
+        case BlendMode::destination_over: return SkBlendMode::kDstOver;
+        case BlendMode::destination_atop: return SkBlendMode::kDstATop;
+        case BlendMode::exclusive_or: return SkBlendMode::kXor;
+        case BlendMode::plus: return SkBlendMode::kPlus;
+    }
+    return SkBlendMode::kSrcOver;
+}
+
 SkColor4f sk_color(Color color) {
     return {color.red, color.green, color.blue, color.alpha};
 }
@@ -250,16 +285,28 @@ sk_sp<SkShader> linear_gradient_shader(
     }
     const float direction_x = vector_x / length;
     const float direction_y = vector_y / length;
-    const float cycle = gradient.repeating && gradient.repeat_length > 0.0F
-        ? gradient.repeat_length : length;
+    const bool repeats = gradient.repeating || gradient.spread != GradientSpread::pad;
+    const float cycle = repeats && gradient.repeat_length > 0.0F ? gradient.repeat_length : length;
     const SkPoint points[]{
         {gradient.start_x, gradient.start_y},
         {gradient.start_x + direction_x * cycle,
          gradient.start_y + direction_y * cycle},
     };
+    const bool linear = gradient.kind == GradientKind::linear;
     detail::GradientKey key{
-        .points = {points[0].fX, points[0].fY, points[1].fX, points[1].fY},
-        .repeating = gradient.repeating,
+        .points = {linear ? points[0].fX : 0.0F, linear ? points[0].fY : 0.0F,
+                   linear ? points[1].fX : 0.0F, linear ? points[1].fY : 0.0F},
+        .kind = gradient.kind,
+        .spread = gradient.spread,
+        .interpolation = gradient.interpolation,
+        .color_space = gradient.color_space,
+        .repeat_length = gradient.repeat_length,
+        .geometry = {gradient.center_x, gradient.center_y, gradient.radius_x,
+                     gradient.radius_y, gradient.focal_x, gradient.focal_y,
+                     gradient.start_radius, gradient.end_radius},
+        .angle_degrees = gradient.angle_degrees,
+        .end_angle_degrees = gradient.end_angle_degrees,
+        .repeating = repeats,
     };
     key.colors.reserve(gradient.stops.size());
     key.positions.reserve(gradient.stops.size());
@@ -279,13 +326,69 @@ sk_sp<SkShader> linear_gradient_shader(
         for (const auto& color : key.colors) {
             colors.push_back({color.red, color.green, color.blue, color.alpha});
         }
+        const auto tile_mode = gradient.spread == GradientSpread::reflect ? SkTileMode::kMirror
+                               : repeats                                   ? SkTileMode::kRepeat
+                                                                           : SkTileMode::kClamp;
+        const bool legacy = gradient.interpolation == GradientInterpolation::srgb &&
+                            (gradient.color_space.empty() || gradient.color_space == "srgb");
+        SkGradient::Interpolation interpolation;
+        sk_sp<SkColorSpace> source_color_space;
+        if (!legacy) {
+            interpolation.fInPremul = SkGradient::Interpolation::InPremul::kYes;
+            switch (gradient.interpolation) {
+            case GradientInterpolation::srgb:
+                interpolation.fColorSpace = SkGradient::Interpolation::ColorSpace::kSRGB;
+                break;
+            case GradientInterpolation::linear_srgb:
+                interpolation.fColorSpace = SkGradient::Interpolation::ColorSpace::kSRGBLinear;
+                break;
+            case GradientInterpolation::oklab:
+                interpolation.fColorSpace = SkGradient::Interpolation::ColorSpace::kOKLab;
+                break;
+            }
+            if (gradient.color_space.empty() || gradient.color_space == "srgb") {
+                source_color_space = SkColorSpace::MakeSRGB();
+            } else if (gradient.color_space == "linear-srgb") {
+                source_color_space = SkColorSpace::MakeSRGBLinear();
+            } else if (gradient.color_space == "display-p3") {
+                source_color_space =
+                    SkColorSpace::MakeRGB(SkNamedTransferFn::kSRGB, SkNamedGamut::kDisplayP3);
+            } else {
+                set_error(error,
+                          "Vellum gradient colour space is unsupported: " + gradient.color_space);
+                return nullptr;
+            }
+            if (!source_color_space) {
+                set_error(error, "Vellum could not create gradient colour space: " +
+                                     gradient.color_space);
+                return nullptr;
+            }
+        }
         const SkGradient shader_gradient{
-            SkGradient::Colors(
-                colors, key.positions,
-                gradient.repeating ? SkTileMode::kRepeat : SkTileMode::kClamp),
-            {},
+            SkGradient::Colors(colors, key.positions, tile_mode, std::move(source_color_space)),
+            interpolation,
         };
-        shader = SkShaders::LinearGradient(points, shader_gradient);
+        if (gradient.kind == GradientKind::radial) {
+            const float rx = std::max(gradient.radius_x, 1.0e-6F);
+            const float ry = std::max(gradient.radius_y, 1.0e-6F);
+            const SkMatrix local = SkMatrix::MakeAll(
+                rx, 0.0F, gradient.center_x,
+                0.0F, ry, gradient.center_y,
+                0.0F, 0.0F, 1.0F);
+            shader = SkShaders::RadialGradient({0.0F, 0.0F}, 1.0F,
+                                                shader_gradient, &local);
+        } else if (gradient.kind == GradientKind::two_circle_radial) {
+            shader = SkShaders::TwoPointConicalGradient(
+                {gradient.focal_x, gradient.focal_y}, gradient.start_radius,
+                {gradient.center_x, gradient.center_y}, gradient.end_radius, shader_gradient);
+        } else if (gradient.kind == GradientKind::conic) {
+            const SkMatrix local = SkMatrix::RotateDeg(gradient.angle_degrees - 90.0F,
+                                                       {gradient.center_x, gradient.center_y});
+            shader = SkShaders::SweepGradient({gradient.center_x, gradient.center_y}, 0.0F,
+                                              360.0F, shader_gradient, &local);
+        } else {
+            shader = SkShaders::LinearGradient(points, shader_gradient);
+        }
         if (!shader) {
             set_error(error, "Vellum could not create the linear-gradient shader");
             return nullptr;
@@ -814,7 +917,8 @@ bool draw_path(SkCanvas& canvas, const PaintCommand& command, float opacity,
     }
 
     const auto& stroke = path.stroke;
-    if (stroke.width > 0.0F && stroke.color.alpha > 0.0F) {
+    const bool has_gradient_stroke = stroke.width > 0.0F && stroke.gradient.has_value();
+    if (stroke.width > 0.0F && stroke.color.alpha > 0.0F && !has_gradient_stroke) {
         SkPaint paint;
         paint.setAntiAlias(path.antialias);
         paint.setColor4f(sk_color(stroke.color, opacity));
@@ -825,6 +929,35 @@ bool draw_path(SkCanvas& canvas, const PaintCommand& command, float opacity,
         paint.setStrokeMiter(stroke.miter_limit);
         if (!stroke.dash_array.empty()) {
             // An odd-length dash array repeats once, as in SVG.
+            std::vector<SkScalar> intervals(stroke.dash_array.begin(), stroke.dash_array.end());
+            if (intervals.size() % 2U != 0U) {
+                intervals.insert(intervals.end(), stroke.dash_array.begin(),
+                                 stroke.dash_array.end());
+            }
+            auto dashes = SkDashPathEffect::Make(intervals, stroke.dash_offset);
+            if (!dashes) {
+                set_error(error,
+                          "Skia could not build the dash pattern of path " + command.node_id);
+                return false;
+            }
+            paint.setPathEffect(std::move(dashes));
+        }
+        canvas.drawPath(outline, paint);
+    }
+    if (const auto stroke_box = has_gradient_stroke ? path_stroke_gradient_box(command)
+                                                    : std::nullopt) {
+        SkPaint paint;
+        paint.setAntiAlias(path.antialias);
+        auto shader = linear_gradient_shader(resolve_linear_gradient(*stroke_box, *stroke.gradient),
+                                             opacity, resources, error);
+        if (!shader) return false;
+        paint.setShader(std::move(shader));
+        paint.setStyle(SkPaint::kStroke_Style);
+        paint.setStrokeWidth(stroke.width);
+        paint.setStrokeJoin(sk_join(stroke.join));
+        paint.setStrokeCap(sk_cap(stroke.cap));
+        paint.setStrokeMiter(stroke.miter_limit);
+        if (!stroke.dash_array.empty()) {
             std::vector<SkScalar> intervals(stroke.dash_array.begin(), stroke.dash_array.end());
             if (intervals.size() % 2U != 0U) {
                 intervals.insert(intervals.end(), stroke.dash_array.begin(),
@@ -900,7 +1033,8 @@ bool opacity_folds_into_paint(const PaintCommand& command) {
     if (command.kind == PaintCommand::Kind::path) {
         if (!command.path) return true;
         const auto& stroke = command.path->stroke;
-        const bool stroked = stroke.width > 0.0F && stroke.color.alpha > 0.0F;
+        const bool stroked = stroke.width > 0.0F &&
+            (stroke.color.alpha > 0.0F || stroke.gradient.has_value());
         const std::size_t operations = (command.fill.alpha > 0.0F ? 1U : 0U) +
                                        command.fill_gradients.size() + (stroked ? 1U : 0U);
         return operations <= 1U;
@@ -932,7 +1066,8 @@ bool path_paints(const PaintCommand& command) {
         return false;
     }
     const auto& path = *command.path;
-    const bool stroked = path.stroke.width > 0.0F && path.stroke.color.alpha > 0.0F;
+    const bool stroked = path.stroke.width > 0.0F &&
+        (path.stroke.color.alpha > 0.0F || path.stroke.gradient.has_value());
     return !path.verbs.empty() &&
            (command.fill.alpha > 0.0F || !command.fill_gradients.empty() || stroked);
 }
@@ -942,7 +1077,9 @@ bool interpolates_colour(const PaintCommand& command) {
     if (command.kind == PaintCommand::Kind::mesh) {
         return command.mesh && !command.mesh->indices.empty();
     }
-    return !command.fill_gradients.empty();
+    if (!command.fill_gradients.empty()) return true;
+    return command.kind == PaintCommand::Kind::path && command.path &&
+        command.path->stroke.width > 0.0F && command.path->stroke.gradient.has_value();
 }
 
 // The opacity a command's own paint carries: its opacity, unless it is drawn
@@ -956,12 +1093,14 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
                    std::string_view directory, FrameResources& resources,
                    std::string* error, ParagraphSlot* paragraph = nullptr) {
     if (command.kind == PaintCommand::Kind::begin_layer) {
-        const float alpha = std::clamp(command.opacity, 0.0F, 1.0F);
+        SkPaint group;
+        group.setAlphaf(std::clamp(command.opacity, 0.0F, 1.0F));
+        group.setBlendMode(sk_blend_mode(command.blend_mode));
         if (command.layer_unbounded) {
-            canvas.saveLayerAlphaf(nullptr, alpha);
+            canvas.saveLayer(nullptr, &group);
         } else {
             const auto bounds = layer_rect(command.bounds);
-            canvas.saveLayerAlphaf(&bounds, alpha);
+            canvas.saveLayer(&bounds, &group);
         }
         ++resources.layers;
         return true;
@@ -1460,6 +1599,19 @@ void composite_effects(SkCanvas& canvas, const PaintCommand& layer, const LayerI
         canvas.setMatrix(base);
         SkPaint paint;
         paint.setAlphaf(opacity);
+        // The group meets the backdrop by its node's blend mode. A mode that
+        // empties the backdrop where the group draws nothing must reach the
+        // whole backdrop, not only the image's rectangle, so it composites
+        // through an unbounded layer as an uncached blended group does.
+        const bool clears = blend_mode_clears_backdrop(layer.blend_mode);
+        if (clears) {
+            SkPaint group;
+            group.setBlendMode(sk_blend_mode(layer.blend_mode));
+            canvas.saveLayer(nullptr, &group);
+            ++resources.layers;
+        } else {
+            paint.setBlendMode(sk_blend_mode(layer.blend_mode));
+        }
         auto filter = filter_chain(layer.effects, scale, stages.filters);
         if (filter) {
             // The crop is the declared area rounded out, the pixels the damage
@@ -1478,6 +1630,15 @@ void composite_effects(SkCanvas& canvas, const PaintCommand& layer, const LayerI
         }
         canvas.drawImage(image->image, static_cast<float>(image->extent.left),
                          static_cast<float>(image->extent.top), SkSamplingOptions(), &paint);
+        if (clears) canvas.restore();
+    } else if (stages.content && blend_mode_clears_backdrop(layer.blend_mode)) {
+        // A clearing group with nothing to draw still empties the backdrop.
+        canvas.setMatrix(base);
+        SkPaint group;
+        group.setBlendMode(sk_blend_mode(layer.blend_mode));
+        canvas.saveLayer(nullptr, &group);
+        canvas.restore();
+        ++resources.layers;
     }
     canvas.restoreToCount(saved);
 }
@@ -1487,6 +1648,7 @@ struct ActiveLayer final {
     std::size_t begin = 0;
     std::size_t end = 0;
     float opacity = 1.0F;
+    BlendMode blend_mode = BlendMode::normal;
     const LayerImage* image = nullptr;
     /// The layer's `begin_layer` when it carries effects.
     const PaintCommand* effects = nullptr;
@@ -1504,6 +1666,7 @@ void composite_layer(SkCanvas& canvas, const ActiveLayer& layer, float scale,
     canvas.resetMatrix();
     SkPaint paint;
     paint.setAlphaf(std::clamp(layer.opacity, 0.0F, 1.0F));
+    paint.setBlendMode(sk_blend_mode(layer.blend_mode));
     canvas.drawImage(layer.image->image, static_cast<float>(layer.image->extent.left),
                      static_cast<float>(layer.image->extent.top), SkSamplingOptions(), &paint);
     canvas.restoreToCount(saved);
@@ -2478,8 +2641,10 @@ private:
     }
 
     ActiveLayer active_layer(const std::vector<PaintCommand>& commands, std::size_t begin,
-                             std::size_t end, float opacity, const LayerImage* image) const {
-        ActiveLayer active{begin, end, opacity, image};
+                             std::size_t end, float opacity, BlendMode blend,
+                             const LayerImage* image) const {
+        ActiveLayer active{
+            .begin = begin, .end = end, .opacity = opacity, .blend_mode = blend, .image = image};
         active.area = image->extent;
         if (is_effect_layer(commands[begin])) {
             active.effects = &commands[begin];
@@ -2589,6 +2754,8 @@ private:
         layers.reserve(planned.size());
         for (const auto& layer : planned) {
             const float opacity = layer.opacity_layer ? commands[layer.begin].opacity : 1.0F;
+            const auto blend =
+                layer.opacity_layer ? commands[layer.begin].blend_mode : BlendMode::normal;
             const std::size_t content_begin = layer.opacity_layer ? layer.begin + 1U : layer.begin;
             const std::size_t content_end = layer.opacity_layer ? layer.end - 1U : layer.end;
             if (!layer.build) {
@@ -2599,7 +2766,7 @@ private:
                 }
                 layer_cache_.record_hit(layer.node_id);
                 layers.push_back(
-                    active_layer(commands, layer.begin, layer.end, opacity, &found->second));
+                    active_layer(commands, layer.begin, layer.end, opacity, blend, &found->second));
                 continue;
             }
             const auto extent = layer_extent(commands, content_begin, content_end, paragraphs);
@@ -2627,7 +2794,7 @@ private:
             }
             auto& stored = layer_images_[layer.node_id];
             stored = {std::move(image), *extent};
-            layers.push_back(active_layer(commands, layer.begin, layer.end, opacity, &stored));
+            layers.push_back(active_layer(commands, layer.begin, layer.end, opacity, blend, &stored));
         }
         return true;
     }

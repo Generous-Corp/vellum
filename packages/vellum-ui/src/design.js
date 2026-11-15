@@ -8,6 +8,21 @@ const EVENT_PROPERTIES = Object.freeze({
     submit: 'onSubmit',
     keyDown: 'onKeyDown',
 });
+// DesignIR schema versions this materializer reads. Version 2 adds the node
+// `compositing` object; a document without `schemaVersion` is version 1.
+const DESIGN_SCHEMA_VERSIONS = Object.freeze([1, 2]);
+const COMPOSITING_VERSION = 2;
+// The DesignIR blend modes, spelled as the retained `mixBlendMode` style and
+// the renderer's scene spell them.
+const BLEND_MODES = Object.freeze([
+    'normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'difference', 'exclusion',
+    'source_over', 'destination_in', 'destination_out',
+    'hue', 'saturation', 'color', 'luminosity', 'color_dodge', 'color_burn', 'hard_light',
+    'soft_light', 'clear', 'source', 'destination', 'source_in', 'source_out', 'source_atop',
+    'destination_over', 'destination_atop', 'xor', 'plus',
+]);
+const MASK_MODES = Object.freeze(['alpha', 'luminance']);
+const COMPOSITING_KEYS = Object.freeze(['blendMode', 'isolate', 'mask', 'maskRef', 'opacity']);
 
 function plainObject(value, path) {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -77,6 +92,103 @@ function retainedStyle(document, node, viewport, root) {
     return style;
 }
 
+function designVersion(document) {
+    const version = document.schemaVersion ?? 1;
+    if (!DESIGN_SCHEMA_VERSIONS.includes(version)) {
+        throw new Error(`unsupported DesignIR schemaVersion: ${String(version)}`);
+    }
+    return version;
+}
+
+// The node's validated `compositing` object, or undefined. It is version 2
+// vocabulary, and a mask, which is coverage rather than paint, takes no blend
+// mode but normal.
+function compositingOf(node, version, root) {
+    if (node.compositing === undefined) return undefined;
+    const where = `design node ${node.id} compositing`;
+    if (version < COMPOSITING_VERSION) {
+        throw new Error(`${where} needs schemaVersion ${COMPOSITING_VERSION}`);
+    }
+    const compositing = plainObject(node.compositing, where);
+    for (const key of Object.keys(compositing)) {
+        if (!COMPOSITING_KEYS.includes(key)) throw new Error(`${where} has unknown field '${key}'`);
+    }
+    const { blendMode, isolate, mask, maskRef, opacity } = compositing;
+    if (opacity !== undefined &&
+        (typeof opacity !== 'number' || !Number.isFinite(opacity) || opacity < 0 || opacity > 1)) {
+        throw new TypeError(`${where}.opacity must be a number from 0 to 1`);
+    }
+    if (blendMode !== undefined && !BLEND_MODES.includes(blendMode)) {
+        throw new TypeError(`${where}.blendMode must be a known blend mode`);
+    }
+    if (isolate !== undefined && typeof isolate !== 'boolean') {
+        throw new TypeError(`${where}.isolate must be a boolean`);
+    }
+    if (mask !== undefined && !MASK_MODES.includes(mask)) {
+        throw new TypeError(`${where}.mask must be alpha or luminance`);
+    }
+    if (maskRef !== undefined && (typeof maskRef !== 'string' || maskRef.length === 0)) {
+        throw new TypeError(`${where}.maskRef must be a non-empty string`);
+    }
+    if (mask !== undefined && blendMode !== undefined && blendMode !== 'normal') {
+        throw new Error(`${where}: a mask node takes no blend mode but normal`);
+    }
+    if (root && (mask !== undefined || maskRef !== undefined)) {
+        throw new Error(`${where}: the root has no siblings to mask or be masked by`);
+    }
+    return compositing;
+}
+
+// Lowers compositing into the retained styles the renderer reads: `opacity`,
+// `mixBlendMode`, `isolation` and `maskMode`. `maskRef` has no style; it is
+// resolved against the siblings by `resolveMaskReferences`.
+function applyCompositing(style, compositing) {
+    if (compositing === undefined) return;
+    if (compositing.opacity !== undefined) style.opacity = compositing.opacity;
+    if (compositing.blendMode !== undefined && compositing.blendMode !== 'normal') {
+        style.mixBlendMode = compositing.blendMode;
+    }
+    if (compositing.isolate === true) style.isolation = 'isolate';
+    if (compositing.mask !== undefined) style.maskMode = compositing.mask;
+}
+
+// The renderer applies a mask to every sibling of the mask node, while
+// DesignIR names the mask each node is masked by. The two agree only when a
+// parent has at most one mask and every other child names it; anything else
+// cannot be drawn as written and is refused rather than drawn differently.
+function resolveMaskReferences(node, version) {
+    if (version < COMPOSITING_VERSION) return;
+    const children = node.children.filter((child) => child && typeof child === 'object');
+    const masks = children.filter((child) => child.compositing?.mask !== undefined);
+    for (const child of children) {
+        const reference = child.compositing?.maskRef;
+        if (reference === undefined) continue;
+        if (child.compositing.mask !== undefined) {
+            throw new Error(`design node ${child.id} is a mask and cannot reference another mask`);
+        }
+        if (!masks.some((mask) => mask.id === reference)) {
+            throw new Error(
+                `design node ${child.id} maskRef '${String(reference)}' does not name a sibling mask`,
+            );
+        }
+    }
+    if (masks.length === 0) return;
+    if (masks.length > 1) {
+        throw new Error(
+            `design node ${node.id} has ${masks.length} mask children; the renderer masks every ` +
+            'sibling with each mask, so one parent can hold only one',
+        );
+    }
+    const [mask] = masks;
+    for (const child of children) {
+        if (child === mask || child.compositing?.maskRef === mask.id) continue;
+        throw new Error(
+            `design node ${child.id} is not masked by ${mask.id}, but the renderer masks every ` +
+            `sibling of a mask; give it maskRef '${mask.id}' or move it under another parent`,
+        );
+    }
+}
+
 function componentFor(node) {
     if (node.kind === 'button') return Button;
     if (node.kind === 'text') return Text;
@@ -87,6 +199,23 @@ function componentFor(node) {
         return display === 'flex' || display === 'grid' ? Stack : View;
     }
     throw new Error(`unsupported materialized design node kind: ${node.kind}`);
+}
+
+// The identity the design tool gave the node, so a rendered node can be
+// traced back to it: `figma:<node id>` for a Figma provider id, the adapter or
+// `semantic` prefix for other sources, and the stable design id otherwise.
+function anchorFor(node, document) {
+    const identity = node.identity;
+    if (identity?.strategy === 'provider' && typeof identity.sourceId === 'string') {
+        const adapter = document.source?.adapter;
+        const prefix = typeof adapter === 'string' && adapter.startsWith('figma')
+            ? 'figma' : (typeof adapter === 'string' && adapter ? adapter : 'provider');
+        return `${prefix}:${identity.sourceId}`;
+    }
+    if (identity?.strategy === 'semantic' && typeof identity.semanticId === 'string') {
+        return `semantic:${identity.semanticId}`;
+    }
+    return node.id;
 }
 
 function materializeNode(node, context, depth, root = false) {
@@ -100,10 +229,14 @@ function materializeNode(node, context, depth, root = false) {
     if (context.ids.has(node.id)) throw new Error(`duplicate materialized design id: ${node.id}`);
     context.ids.add(node.id);
     if (!Array.isArray(node.children)) throw new Error(`design node ${node.id} requires children`);
+    const style = retainedStyle(context.document, node, context.viewport, root);
+    applyCompositing(style, compositingOf(node, context.version, root));
+    resolveMaskReferences(node, context.version);
 
     const properties = {
         id: node.id,
-        style: retainedStyle(context.document, node, context.viewport, root),
+        anchor: anchorFor(node, context.document),
+        style,
         accessibilityLabel: typeof node.name === 'string' ? node.name : undefined,
         children: node.children.map((child) => materializeNode(child, context, depth + 1)),
     };
@@ -123,6 +256,7 @@ function materializeNode(node, context, depth, root = false) {
 
 function materialize(document, options, missingActionTarget) {
     plainObject(document, 'design');
+    const version = designVersion(document);
     const root = document.root;
     const rootLayout = root?.properties?.layout &&
         typeof root.properties.layout === 'object' &&
@@ -146,6 +280,7 @@ function materialize(document, options, missingActionTarget) {
         document,
         ids: new Set(),
         nodes: 0,
+        version,
         visitedActions: new Set(),
         viewport,
     };

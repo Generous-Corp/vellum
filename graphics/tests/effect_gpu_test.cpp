@@ -8,6 +8,8 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cstdlib>
 #include <cstdlib>
 #include <cmath>
 #include <cstdint>
@@ -860,6 +862,95 @@ void nested_effects() {
     }
 }
 
+Scene blended_scene(BlendMode mode, std::vector<NodeEffect> effects) {
+    Scene scene = striped_scene();
+    SceneNode group{.id = "fx", .kind = SceneNode::Kind::group,
+                    .bounds = {50.5F, 40.25F, 120.0F, 90.0F}};
+    group.children.push_back(box("fx/wide", {10.0F, 10.0F, 80.0F, 60.0F}, Color::hex(0x60A5FA)));
+    group.children.push_back(box("fx/dot", {70.0F, 50.0F, 30.0F, 24.0F}, Color::hex(0xF97316), 6.0F));
+    group.blend_mode = mode;
+    group.effects = std::move(effects);
+    scene.root.children.push_back(std::move(group));
+    return scene;
+}
+
+std::array<int, 4> pixel_at(const std::vector<std::uint8_t>& rgba, float x, float y, float scale) {
+    const auto width = static_cast<std::size_t>(kWidth * scale);
+    const auto offset =
+        (static_cast<std::size_t>(y * scale) * width + static_cast<std::size_t>(x * scale)) * 4U;
+    return {rgba[offset], rgba[offset + 1U], rgba[offset + 2U], rgba[offset + 3U]};
+}
+
+int largest_delta(const std::array<int, 4>& a, const std::array<int, 4>& b) {
+    int delta = 0;
+    for (std::size_t channel = 0; channel < 4U; ++channel) {
+        delta = std::max(delta, std::abs(a[channel] - b[channel]));
+    }
+    return delta;
+}
+
+// An effect on a blended node keeps the node's blend mode, and an effect over
+// a gradient fill stays exact through partial redraws.
+void cross_feature_effects() {
+    const float scale = 2.0F;
+    // (90.5, 70.25) lies 30 logical pixels inside the wide member, well past
+    // the blur's reach of 9, where the blurred group is flat.
+    const float x = 90.5F;
+    const float y = 70.25F;
+    const auto multiply = render_pixels(blended_scene(BlendMode::multiply, {}), scale);
+    const auto blurred = render_pixels(blended_scene(BlendMode::multiply, {blur(3.0F)}), scale);
+    const auto normal = render_pixels(blended_scene(BlendMode::normal, {blur(3.0F)}), scale);
+    if (!multiply.empty() && !blurred.empty() && !normal.empty()) {
+        const auto expected = pixel_at(multiply, x, y, scale);
+        expect(largest_delta(pixel_at(blurred, x, y, scale), expected) <= 2,
+               "a blurred multiply group composites with multiply inside its flat interior");
+        expect(largest_delta(pixel_at(normal, x, y, scale), expected) > 2,
+               "negative control: the same blurred group composited normally differs there");
+    }
+    const auto isolated = render_pixels(blended_scene(BlendMode::destination_in, {}), scale);
+    const auto cleared =
+        render_pixels(blended_scene(BlendMode::destination_in, {blur(0.0F)}), scale);
+    if (!isolated.empty() && !cleared.empty()) {
+        expect(pixel_at(cleared, 10.0F, 160.0F, scale)[3] == 0 && cleared == isolated,
+               "an effect group under destination_in empties the backdrop outside its paint, "
+               "as the group without effects does");
+    }
+    for (const bool cached : {false, true}) {
+        const std::string label = cached ? "cache on " : "cache off ";
+        const auto sweep =
+            sweep_damage_edges(blended_scene(BlendMode::multiply, {blur(3.0F)}), scale, cached);
+        expect(sweep.differing == 0 && sweep.partial > 0,
+               label + "a damage edge swept across a blurred multiply group leaves every frame "
+                       "byte-identical",
+               sweep_detail(sweep));
+    }
+
+    LinearGradient radial{.kind = GradientKind::radial,
+                          .stops = {{.position = 0.0F, .color = Color::hex(0xEF4444)},
+                                    {.position = 1.0F, .color = Color::hex(0x2563EB)}}};
+    radial.center_x = 0.35F;
+    radial.center_y = 0.6F;
+    Scene gradient = filter_scene({blur(4.0F)});
+    node(gradient, "fx/a").fill_gradients = {radial};
+    Scene flat = filter_scene({blur(4.0F)});
+    expect(render_pixels(gradient, scale) != render_pixels(flat, scale),
+           "a blurred gradient fill draws its gradient");
+    for (const bool cached : {false, true}) {
+        const std::string label = cached ? "cache on " : "cache off ";
+        const auto sweep = sweep_damage_edges(gradient, scale, cached);
+        expect(sweep.differing == 0 && sweep.partial > 0,
+               label + "a damage edge swept across a blur over a radial gradient leaves every "
+                       "frame byte-identical",
+               sweep_detail(sweep));
+    }
+    RulesOverride off({.enclose_interpolated_fills = false, .enclose_group_layers = false,
+                       .enclose_effects = false, .enclose_backdrops = false});
+    const auto cut = sweep_damage_edges(gradient, scale, false);
+    expect(cut.differing > 0 && cut.partial > 0,
+           "negative control: without enclosure a swept edge cuts the blurred gradient visibly",
+           sweep_detail(cut));
+}
+
 void extension_material_renders_without_it() {
     MaterialDefinition app{
         .id = "com.example.sheen",
@@ -892,6 +983,7 @@ int main() {
         cached_layers();
         extension_material_renders_without_it();
         nested_effects();
+        cross_feature_effects();
         damage_rule_controls();
         edit_sequences();
         sweeps();
