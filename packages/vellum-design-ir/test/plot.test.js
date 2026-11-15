@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
     DESIGN_IR_PLOTS_VERSION,
-    SUPPORTED_DESIGN_IR_VERSIONS,
+    DESIGN_IR_VERSIONS,
     normalizeImport,
     validateDesignIR,
 } from '../src/index.js';
@@ -69,7 +69,7 @@ test('plot bindings need schema version 5 and documents without them stay versio
     const design = await document();
     assert.equal(design.schemaVersion, 1);
     assert.deepEqual(validateDesignIR(design), { issues: [], valid: true });
-    assert.deepEqual(SUPPORTED_DESIGN_IR_VERSIONS, [1, 2, 3, 4, 5]);
+    assert.deepEqual(DESIGN_IR_VERSIONS, [1, 2, 3, 4, 5]);
     const plot = { style: 'meter', channel: 'meters' };
     assert.deepEqual(validateDesignIR(withPlot(design, plot)), { issues: [], valid: true });
     const old = validateDesignIR(withPlot(design, plot, 1));
@@ -112,14 +112,40 @@ test('normalization keeps a source node plot binding', async () => {
     assert.deepEqual(validateDesignIR(design), { issues: [], valid: true });
 });
 
+test('versions are cumulative: a document with compositing and plots is version 5', async () => {
+    const source = JSON.parse(await readFile(new URL('revision-a.source.json', fixtures), 'utf8'));
+    source.root.plot = { slots: 8, channel: 'spectrum', style: 'bar' };
+    source.root.compositing = { blendMode: 'multiply', opacity: 0.5 };
+    const design = normalizeImport(source);
+    assert.equal(design.schemaVersion, DESIGN_IR_PLOTS_VERSION);
+    assert.deepEqual(design.root.compositing, { blendMode: 'multiply', opacity: 0.5 });
+    assert.deepEqual(validateDesignIR(design), { issues: [], valid: true });
+    // Compositing alone is valid at every version from 2, and refused at 1.
+    const composited = structuredClone(design);
+    delete composited.root.plot;
+    for (const version of [2, 3, 4, 5]) {
+        composited.schemaVersion = version;
+        assert.deepEqual(validateDesignIR(composited), { issues: [], valid: true }, `version ${version}`);
+    }
+    composited.schemaVersion = 1;
+    assert.ok(validateDesignIR(composited).issues.some((entry) =>
+        entry.path === '$.root.compositing' && entry.code === 'version'));
+    // Plots stay refused below 5 even beside compositing.
+    const early = structuredClone(design);
+    early.schemaVersion = 2;
+    assert.ok(validateDesignIR(early).issues.some((entry) =>
+        entry.path === '$.root.plot' && entry.code === 'version'));
+});
+
 test('the schema declares plot bindings without samples', async () => {
     const definitions = JSON.parse(await readFile(schema, 'utf8')).$defs;
     const published = JSON.parse(await readFile(schema, 'utf8'));
     assert.deepEqual(published.properties.schemaVersion.enum, [1, 2, 3, 4, 5]);
-    assert.deepEqual(published.allOf, [{
-        if: { properties: { schemaVersion: { enum: [1, 2, 3, 4] } } },
-        then: { properties: { root: { $ref: '#/$defs/nodeWithoutPlot' } } },
-    }]);
+    const plotRule = published.allOf.find((rule) =>
+        rule.then?.properties?.root?.$ref === '#/$defs/nodeWithoutPlot');
+    assert.deepEqual(plotRule.if, {
+        required: ['schemaVersion'], properties: { schemaVersion: { enum: [1, 2, 3, 4] } },
+    });
     assert.equal(definitions.nodeWithoutPlot.properties.plot, false);
     assert.deepEqual(definitions.nodeWithoutPlot.properties.children.items,
         { $ref: '#/$defs/nodeWithoutPlot' });

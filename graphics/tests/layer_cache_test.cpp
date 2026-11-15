@@ -239,6 +239,7 @@ void equality_covers_every_field() {
         {"clip_rect height", [](PaintCommand& c) { c.clip_rect.height = 1.0F; }},
         {"mask_mode", [](PaintCommand& c) { c.mask_mode = MaskMode::luminance; }},
         {"plot", [](PaintCommand& c) { c.plot = std::make_shared<PlotSpec>(); }},
+        {"blend_mode", [](PaintCommand& c) { c.blend_mode = BlendMode::multiply; }},
     };
     for (const auto& [name, mutate] : mutations) {
         PaintCommand changed = base;

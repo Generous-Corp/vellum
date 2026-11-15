@@ -225,7 +225,7 @@ public:
     /// reallocation.
     virtual void resize(uint32_t width, uint32_t height, float scale = 1.0f) = 0;
 
-    /// Enable/disable persistent-scene mode (partial-repaint support, FU-2).
+    /// Enable/disable persistent-scene mode, which partial repaint needs.
     /// Returns whether the mode is ACTIVE after the call.
     ///
     /// In this mode `begin_frame()` targets a persistent, window-sized Graphite

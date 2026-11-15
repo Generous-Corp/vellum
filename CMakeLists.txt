@@ -221,6 +221,11 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-grouping-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.grouping COMMAND vellum-grouping-test)
 
+        add_executable(vellum-blend-mode-test
+            graphics/tests/blend_mode_test.cpp)
+        target_link_libraries(vellum-blend-mode-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.blend-mode COMMAND vellum-blend-mode-test)
+
         add_executable(vellum-layer-cache-test
             graphics/tests/layer_cache_test.cpp)
         target_link_libraries(vellum-layer-cache-test PRIVATE Vellum::Graphics)
@@ -357,6 +362,44 @@ if(VELLUM_BUILD_TESTS)
             add_test(NAME "vellum.gpu.${_vellum_fixture}"
                 COMMAND vellum-gpu-grouping-test "${_vellum_fixture}")
         endforeach()
+
+        add_executable(vellum-gpu-blend-test
+            graphics/tests/gpu_blend_test.cpp)
+        target_link_libraries(vellum-gpu-blend-test PRIVATE Vellum::Gpu Vellum::DawnHeaders)
+        foreach(_vellum_fixture IN ITEMS
+                tier1_mode_captures
+                tier2_mode_captures
+                blend_with_opacity
+                blend_stays_inside_an_isolated_parent
+                blend_layer_cache_matches_direct
+                blend_version_refusal
+                clearing_blend_scope_is_the_enclosing_group
+                source_out_clears_beyond_its_source
+                masked_blend_refusal)
+            add_test(NAME "vellum.gpu.${_vellum_fixture}"
+                COMMAND vellum-gpu-blend-test "${_vellum_fixture}")
+        endforeach()
+
+        # DesignIR to GPU pixels: Node normalizes and materializes a DesignIR
+        # document into a retained tree, which the native materializer lowers
+        # and Skia Graphite draws.
+        if(TARGET vellum-authoring)
+            find_program(VELLUM_NODE_EXECUTABLE node)
+            add_executable(vellum-design-gpu-test authoring/tests/design_gpu_test.cpp)
+            target_include_directories(vellum-design-gpu-test PRIVATE authoring/src)
+            target_link_libraries(vellum-design-gpu-test PRIVATE
+                Vellum::Authoring Vellum::Gpu Vellum::DawnHeaders)
+            if(VELLUM_NODE_EXECUTABLE)
+                add_test(NAME vellum.gpu.design-ir-compositing
+                    COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/authoring/tests/run_design_gpu.py"
+                        "${VELLUM_NODE_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/authoring/tests/design_gpu_tree.mjs"
+                        "$<TARGET_FILE:vellum-design-gpu-test>")
+            else()
+                message(STATUS "Vellum: Node.js not found; skipping the DesignIR GPU test")
+            endif()
+        endif()
     endif()
 
     # This consumer proves that the native CMake package is relocatable. A
