@@ -25,6 +25,7 @@ finally:
     sys.path.pop(0)
 capture_matrix = BACKEND_MODULE["capture_matrix"]
 scenario_arguments = BACKEND_MODULE["scenario_arguments"]
+require_command_proof = BACKEND_MODULE["require_command_proof"]
 validate_component_source = BACKEND_MODULE["validate_component_source"]
 build_component_modules = BACKEND_MODULE["build_component_modules"]
 component_sdk_root = BACKEND_MODULE["component_sdk_root"]
@@ -277,6 +278,46 @@ class NativeBackendTests(unittest.TestCase):
                 "--assert-accessibility", "title-input",
                 '{"label":"Board title","role":"text-field","value":"GPU Notes日本語"}',
             ])
+
+    def command_scenario(self, root: Path, *targets: str) -> None:
+        (root / "tests/scenarios").mkdir(parents=True)
+        (root / "tests/scenarios/smoke.json").write_text(json.dumps({
+            "schema": "vellum.scenario.v2", "name": "commands",
+            "steps": [{"action": "command", "target": target} for target in targets]
+            or [{"action": "wait-for-idle"}],
+        }), encoding="utf-8")
+
+    def test_a_command_step_needs_the_hosts_proof_that_it_ran_and_had_an_effect(self) -> None:
+        proof = "command={} invoked=1 changed=1\n".format
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            self.command_scenario(root, "item.add", "item.rename")
+            context = {"root": root}
+            banner = "vellum-app-host: renderer=Skia Graphite backend=Metal fallback=false\n"
+            require_command_proof(context, None, proof("item.add") + proof("item.rename") + banner)
+            refused = {
+                "the host found the commands defined and said no more": banner,
+                "one command unproven": proof("item.add") + banner,
+                "the other command": proof("item.add") + proof("item.archive") + banner,
+                "out of order": proof("item.rename") + proof("item.add") + banner,
+                "ran without an effect": "command=item.add invoked=1 changed=0\n" + proof("item.rename"),
+                "not run": "command=item.add invoked=0 changed=1\n" + proof("item.rename"),
+                "proof inside another line": "note: " + proof("item.add") + proof("item.rename"),
+                "run twice": proof("item.add") * 2 + proof("item.rename"),
+            }
+            for label, output in refused.items():
+                with self.subTest(label), self.assertRaises(BackendFailure) as raised:
+                    require_command_proof(context, None, output)
+                self.assertEqual(raised.exception.status, "test_failed")
+                self.assertIn("did not prove its command steps", str(raised.exception))
+
+    def test_a_scenario_without_command_steps_needs_no_command_proof(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            self.command_scenario(root)
+            require_command_proof({"root": root}, None, "renderer=Skia Graphite\n")
+            with self.assertRaises(BackendFailure):
+                require_command_proof({"root": root}, None, "command=item.add invoked=1 changed=1\n")
 
     def test_phase3_v2_actions_lower_to_ordered_native_host_contract(self) -> None:
         scenario = REPO / "fixtures/authoring-phase3/scenarios/phase3.json"

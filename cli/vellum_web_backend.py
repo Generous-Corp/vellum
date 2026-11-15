@@ -32,6 +32,7 @@ from vellum_manifest import (
 )
 from vellum_scenario import (
     ScenarioValidationError,
+    unproven_commands,
     validate_scenario_document as validate_shared_scenario_document,
 )
 from vellum_cdp import CdpAdmission
@@ -464,8 +465,11 @@ def chrome_path() -> str:
 
 
 def validate_scenario_evidence(
-    evidence: dict[str, Any], *, expected_wasm_ids: list[str] | None = None
+    evidence: dict[str, Any], *, expected_wasm_ids: list[str] | None = None,
+    scenario: dict[str, Any] | None = None,
 ) -> None:
+    """`scenario`, when given, holds the evidence to its command steps: each
+    must be reported invoked, with a changed rendered tree, in step order."""
     def valid_frame(value: object) -> bool:
         if not isinstance(value, dict):
             return False
@@ -511,6 +515,21 @@ def validate_scenario_evidence(
             f"Browser scenario proof failed: {evidence}",
             status="test_failed",
         )
+    if scenario is not None:
+        commands = evidence.get("commands", [])
+        proven = [
+            item.get("target") for item in commands
+            if isinstance(item, dict) and item.get("invoked") is True and item.get("changed") is True
+            and isinstance(item.get("invocations"), int) and not isinstance(item.get("invocations"), bool)
+            and item["invocations"] >= 1
+        ] if isinstance(commands, list) else []
+        unproven = unproven_commands(scenario, proven)
+        if unproven or (isinstance(commands, list) and len(proven) != len(commands)):
+            raise BackendFailure(
+                "Browser scenario did not prove its command steps ran and changed the rendered tree: "
+                + ", ".join(unproven or ["malformed command evidence"]),
+                status="test_failed",
+            )
     expected = sorted(expected_wasm_ids or [])
     observed: list[str] = []
     for item in components:
@@ -1134,7 +1153,10 @@ def run_scenario(
     finally:
         server.shutdown(); thread.join(5)
         scenario_copy.unlink(missing_ok=True)
-    validate_scenario_evidence(evidence, expected_wasm_ids=expected_wasm_ids)
+    validate_scenario_evidence(
+        evidence, expected_wasm_ids=expected_wasm_ids,
+        scenario=json.loads(scenario.read_text(encoding="utf-8")),
+    )
     return evidence
 
 

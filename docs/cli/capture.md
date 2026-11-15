@@ -93,6 +93,31 @@ IDs, and 64 KiB UTF-8 input values. Unknown fields, unknown actions, malformed
 payloads, missing targets, and unavailable handlers fail rather than being
 ignored.
 
+A `vellum.scenario.v2` flow can also run an application command:
+
+```json
+{ "action": "command", "target": "item.add" }
+```
+
+The application describes the command with `services.commands.define` and a
+mounted component binds what it does:
+
+```tsx
+services.commands.define([{ id: 'item.add', title: 'Add item', shortcut: 'Primary+N' }]);
+
+function Board() {
+    const [items, setItems] = useState<string[]>([]);
+    useCommand('item.add', () => setItems((current) => [...current, 'New item']));
+    return <Text id="items">{items.join(', ')}</Text>;
+}
+```
+
+The host runs the bound handler the way it runs a press, so state the handler
+sets is rendered. The step passes only when the command is defined, a mounted
+component has bound a handler, the handler ran, and the rendered tree changed.
+A command that is only defined, whose component is not mounted, or whose
+handler changes nothing rendered fails the step, on macOS and on the web.
+
 This is semantic retained-tree automation, not browser automation. Pointer
 coordinates, accessibility queries, arbitrary key chords, arbitrary IME input,
 and richer synchronization are not supported.
