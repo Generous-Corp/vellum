@@ -10,6 +10,7 @@
 
 #include "framework_test.hpp"
 
+#include <gpu_runtime/dawn_native_bootstrap.hpp>
 #include <gpu_runtime/gpu_surface.hpp>
 #include <vellum/state/store.hpp>
 #include <vellum/view/script_engine.hpp>
@@ -199,6 +200,13 @@ FRAMEWORK_TEST(an_error_goes_to_the_innermost_scope_with_a_matching_filter) {
 } // namespace
 
 int main() {
+    // The device library leaves Dawn's proc table to the host; this executable
+    // is the host, so it registers the library's own native table.
+    std::string bootstrap_error;
+    if (!gpu_runtime::register_native_dawn_bootstrap("framework-test", &bootstrap_error)) {
+        std::printf("SKIP Dawn bootstrap unavailable: %s\n", bootstrap_error.c_str());
+        return 77;
+    }
     g_surface = gpu_runtime::GpuSurface::create_dawn();
     gpu_runtime::GpuSurface::Config config;
     config.width = 64;
