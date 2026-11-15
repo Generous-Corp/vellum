@@ -560,6 +560,9 @@ class Step:
     uses: str | None = None
     run: str | None = None
     folded_run: bool = False
+    # A plain or quoted run scalar with continuation text or escapes is YAML
+    # syntax this line reader cannot decode safely.
+    run_unreadable: str | None = None
     env: dict[str, str] | None = None
     # Why a key this check reads could not be read; such a step is refused.
     unreadable: str | None = None
@@ -603,6 +606,10 @@ def _read_step(job: str, index: int, lines: list[str], indent: int) -> Step:
                 step.run = "\n".join(text[width:] for text in body)
             else:
                 step.run = _plain(value)
+                if any(text.strip() and not text.lstrip().startswith("#") for text in body):
+                    step.run_unreadable = "run has continuation lines this check cannot fold"
+                elif value.startswith('"') and value.endswith('"') and "\\" in value:
+                    step.run_unreadable = "run has YAML escapes this check cannot decode"
         elif key == "env":
             step.env = {}
             if value and not value.startswith("#"):
@@ -752,6 +759,8 @@ def step_layout_problems(name: str, workflow: str) -> list[str]:
         for step in job_steps(job, text):
             if step.folded_run:
                 found.append(f"{name}: {step.title} uses a folded run scalar this check cannot read; use run: |")
+            if step.run_unreadable:
+                found.append(f"{name}: {step.title} uses a layout this check cannot read ({step.run_unreadable})")
             # An alias or merge key can materialize a run value or GH_TOKEN
             # from an anchor elsewhere (`run: *read`, `- <<: *step`), which
             # neither the raw step text nor the parsed run shows. Refuse it.
@@ -769,7 +778,8 @@ def step_layout_problems(name: str, workflow: str) -> list[str]:
             found.append(f"{name}: job {job or '(none)'} has a steps: line that is not the job's own "
                          f"steps key: {text.splitlines()[number].strip()!r}")
         lines = text.splitlines()
-        for start, line in enumerate(lines):
+        for start in _structural_indices(lines):
+            line = lines[start]
             if not ANY_STEPS_KEY.fullmatch(line):
                 continue
             if not STEPS_KEY.fullmatch(line):
@@ -805,7 +815,11 @@ def steps(workflow: str) -> list[str]:
 
 def shell_commands(run: str) -> list[str]:
     """A run block's command lines: continuations joined, comment lines dropped."""
-    joined = re.sub(r"\\\n[ \t]*", " ", run)
+    # Shell comments end at their physical newline. Drop full-line comments
+    # before joining continuations so a comment ending in `\\` cannot swallow
+    # the command on the following line.
+    lines = [line for line in run.splitlines() if not line.lstrip().startswith("#")]
+    joined = re.sub(r"\\\n[ \t]*", " ", "\n".join(lines))
     return [line for line in joined.splitlines() if line.strip() and not line.lstrip().startswith("#")]
 
 
@@ -820,8 +834,14 @@ def shell_words(text: str):
     shell splits it, and `$(...)` stays inside the word it starts. The caller
     stops at the word it wants, so a quote left open further along the line
     (a `$(...)` closing, a multi-line argument) does not matter."""
-    word, quote, started, operator, depth = "", "", False, False, 0
+    word, quote, started, operator, depth, escaped = "", "", False, False, 0, False
     for character in text:
+        if not quote and escaped:
+            word, started, escaped = word + character, True, False
+            continue
+        if not quote and character == "\\":
+            escaped = True
+            continue
         if quote:
             if character == quote:
                 quote = ""
@@ -911,6 +931,9 @@ def app_token_problems(name: str, workflow: str) -> list[str]:
             # the dash, a plain or quoted multi-line value) hides calls.
             raw_calls = len(gh_api_targets(step.text))
             read_calls = len(gh_api_targets(step.run)) if step.run is not None else 0
+            if step.run_unreadable:
+                found.append(f"{name}: {step.title} uses a layout this check cannot read ({step.run_unreadable})")
+                continue
             if raw_calls > read_calls:
                 found.append(f"{name}: {step.title} calls gh api in a layout this check cannot read")
                 continue
@@ -952,6 +975,18 @@ def jobs(workflow: str) -> dict[str, str]:
     """The workflow's jobs, as text blocks keyed by job id."""
     found = re.search(r"(?:^|\n)jobs:[ \t]*(?:#.*)?\n", workflow)
     body = workflow[found.end():] if found else ""
+    if body:
+        # The jobs mapping ends at the next non-comment, column-zero mapping.
+        # Without this boundary a later top-level `env:`/`permissions:` block
+        # can be mistaken for another job and overwrite a real job id.
+        lines = body.splitlines(keepends=True)
+        end = len(lines)
+        for index, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped and not line.lstrip().startswith("#") and len(line) == len(line.lstrip(" ")):
+                end = index
+                break
+        body = "".join(lines[:end])
     marks = list(JOB_HEADER.finditer(body))
     return {_plain(mark["name"]): body[mark.start():(marks[index + 1].start() if index + 1 < len(marks) else None)]
             for index, mark in enumerate(marks)}
@@ -964,8 +999,15 @@ def job_layout_problems(name: str, workflow: str) -> list[str]:
     found = re.search(r"(?:^|\n)jobs:[ \t]*(?:#.*)?\n", workflow)
     if found is None:
         return problems
+    job_text = workflow[found.end():]
+    lines = job_text.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped and not line.lstrip().startswith("#") and len(line) == len(line.lstrip(" ")):
+            lines = lines[:index]
+            break
     first = True
-    for line in workflow[found.end():].splitlines():
+    for line in lines:
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         width = len(line) - len(line.lstrip())

@@ -867,6 +867,33 @@ class Isolation(unittest.TestCase):
             with self.subTest(label):
                 self.refused(header + step, "a layout this check cannot read")
 
+    def test_jobs_stop_before_later_top_level_mappings(self) -> None:
+        # A top-level env mapping may contain a key that looks like a job id;
+        # it must not replace the real job in the jobs mapping.
+        workflow = ("jobs:\n  sign:\n" + self.read(token="${{ github.token }}")
+                    + "env:\n  sign:\n    harmless\n")
+        self.refused(workflow)
+
+    def test_shell_comments_are_removed_before_continuations_are_joined(self) -> None:
+        run = ('run: |\n          # this comment continues \\\n'
+               '          gh api "repos/$R/immutable-releases"\n')
+        self.refused(self.read(token="${{ github.token }}", run=run))
+
+    def test_plain_run_continuations_fail_closed(self) -> None:
+        run = ('run: gh\n          api "repos/$R/immutable-releases"\n'
+               '        env:\n          GH_TOKEN: ${{ github.token }}\n')
+        self.refused(self.read(token="${{ github.token }}", run=run),
+                     "layout this check cannot read")
+
+    def test_unquoted_shell_escapes_are_decoded_for_endpoints(self) -> None:
+        run = 'run: gh api repos/$R/immutable\\-releases\n'
+        self.refused(self.read(token="${{ github.token }}", run=run))
+
+    def test_steps_layout_scan_ignores_heredoc_payload(self) -> None:
+        workflow = ("jobs:\n  sign:\n    steps:\n      - name: emit\n        run: |\n"
+                    "          cat <<'YAML'\n          steps: []\n          YAML\n")
+        self.assertEqual(self.found(workflow), [])
+
     def test_a_steps_key_the_reader_cannot_follow_fails_closed(self) -> None:
         body = "      - name: a\n        run: python3 scripts/x.py\n"
         self.assertTrue(any("without -I" in problem for problem in self.found("    steps:\n" + body)))
