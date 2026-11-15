@@ -1385,3 +1385,27 @@ test('a command that changes nothing renders the same tree, and one that throws 
     assert.throws(() => bridge.invokeCommand('runtime.test.throws'), /command failed/);
     assert.deepEqual(JSON.parse(bridge.renderJSON()).tree, before);
 });
+
+test('a no-op command is not credited with a state update that was pending before it ran', () => {
+    let setLabelOutside = null;
+    function App() {
+        const [label, setLabel] = useState('ready');
+        setLabelOutside = setLabel;
+        useCommand('runtime.test.no-effect-after-pending', () => {});
+        return jsx(Text, { id: 'label', children: label });
+    }
+    services.commands.define([
+        { id: 'runtime.test.no-effect-after-pending', title: 'No effect after pending' },
+    ]);
+    const bridge = mount(App);
+    JSON.parse(bridge.renderJSON());
+    // A setter called outside any dispatch (a timer, an effect) leaves the
+    // runtime dirty with a state change the retained tree does not show yet.
+    setLabelOutside('updated elsewhere');
+    assert.equal(bridge.isDirty(), true);
+    const result = JSON.parse(bridge.invokeCommand('runtime.test.no-effect-after-pending'));
+    assert.equal(result.invocations, 1);
+    // The pending update is visible in the tree, but the command caused none of it.
+    assert.equal(result.tree.children[0].text, 'updated elsewhere');
+    assert.equal(result.changed, false);
+});

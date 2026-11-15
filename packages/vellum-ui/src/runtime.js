@@ -1129,8 +1129,10 @@ export function mount(application) {
                 throw new TypeError('invokeCommand requires a command id');
             }
             assertPlainJson(arguments_, 'arguments');
-            if (runtime.lastTree === null) runtime.render();
-            const before = stableStringify(runtime.lastTree);
+            // Materialize any state update that is already pending (a setter
+            // called outside a dispatch) so the baseline is the tree the
+            // command starts from, and only the command's own effect counts.
+            const before = stableStringify(runtime.renderIfDirty());
             const tree = runtime.dispatch(`command:${command}`, arguments_);
             return stableStringify({
                 protocol: PROTOCOL,
