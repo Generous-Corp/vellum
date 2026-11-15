@@ -587,6 +587,28 @@ class Isolation(unittest.TestCase):
         quiet = 'run: |\n          # gh api "repos/$R/immutable-releases"\n          true\n'
         self.assertEqual(self.found(self.read(token="${{ github.token }}", run=quiet)), [])
 
+    def test_folded_run_scalars_fail_closed(self) -> None:
+        # YAML folds these lines into an Administration-only read. The
+        # line-based shell reader must not accept them as separate commands.
+        for indicator in (">", ">-", ">+", ">2", ">2-", ">-2", ">- # folded"):
+            with self.subTest(indicator=indicator):
+                run = f'run: {indicator}\n          gh\n          api "repos/$R/immutable-releases"\n'
+                self.refused(self.read(token="${{ github.token }}", run=run), "folded run scalar")
+        # Literal blocks preserve the newline, and a supported App-token
+        # read remains accepted.
+        literal = 'run: |-\n          gh api "repos/$R/immutable-releases"\n'
+        self.assertEqual(self.found(self.read(run=literal)), [])
+        self.refused(self.read(token="${{ github.token }}", run=literal))
+
+    def test_folded_run_rejection_does_not_depend_on_visible_commands(self) -> None:
+        # Folding can join comments or arguments as well as command names;
+        # refuse the scalar itself for every workflow scanned by the policy.
+        for command in ('gh\n          api "repos/$R/rulesets"', "echo ok"):
+            with self.subTest(command=command):
+                workflow = f"jobs:\n  build:\n    steps:\n      - run: >-\n          {command}\n"
+                problems = policy.isolation_problems({"other.yml": workflow}, self.tmp)
+                self.assertTrue(any("folded run scalar" in problem for problem in problems), problems)
+
     def test_the_token_must_come_from_the_pinned_app_token_action(self) -> None:
         cases = {
             "a run step": "      - name: mint\n        id: app-token\n        run: echo token=x >> \"$GITHUB_OUTPUT\"\n",

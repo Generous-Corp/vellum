@@ -554,6 +554,7 @@ class Step:
     id: str | None = None
     uses: str | None = None
     run: str | None = None
+    folded_run: bool = False
     env: dict[str, str] | None = None
     # Why a key this check reads could not be read; such a step is refused.
     unreadable: str | None = None
@@ -591,6 +592,7 @@ def _read_step(job: str, index: int, lines: list[str], indent: int) -> Step:
             position += 1
         if key == "run":
             if re.fullmatch(r"[|>][-+0-9]*(?:\s+#.*)?", value):
+                step.folded_run = value.startswith(">")
                 kept = [text for text in body if text.strip()]
                 width = min((len(text) - len(text.lstrip()) for text in kept), default=0)
                 step.run = "\n".join(text[width:] for text in body)
@@ -659,6 +661,11 @@ def step_layout_problems(name: str, workflow: str) -> list[str]:
     item holds (a bare `-` opening a step on its own line)."""
     found = []
     for job, text in (jobs(workflow) or {"": workflow}).items():
+        # YAML folding changes command boundaries before the shell sees the
+        # script. Refuse it even when no command is visible in the raw lines.
+        for step in job_steps(job, text):
+            if step.folded_run:
+                found.append(f"{name}: {step.title} uses a folded run scalar this check cannot read; use run: |")
         lines = text.splitlines()
         for start, line in enumerate(lines):
             if not ANY_STEPS_KEY.fullmatch(line):
