@@ -70,6 +70,10 @@ M5 Studio with that label; each Vellum lane is capped at one VM and uses the
 `vm` lease class (priority 60), below Pulp's required `pulp-build-pr-head`
 (100) and `pulp-build-merge-group` (110) leases.
 
+Pull requests skip both jobs by a job-level condition and report them as
+`skipped`; the merge queue, pushes to `main` and release tags run them (see
+`decisions/0008-merge-commits-are-load-bearing.md`).
+
 The runner group must be restricted to this workflow and the repository must
 require approval for outside contributors before the selector is enabled. The
 workflow and TartCI admission checks reject fork head repositories. A Vellum

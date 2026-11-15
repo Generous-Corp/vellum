@@ -84,6 +84,23 @@ not a security boundary. The `vm` lane has no cross-repository yield and can
 occupy a free host slot until its job completes, so the evidence must include
 concurrent Pulp lease observations.
 
+## Pull requests skip the GPU proof
+
+Pull requests do not run `gpu-macos-arm64` or `sterile-consumer`. Both jobs
+carry the job-level condition `github.event_name != 'pull_request'`, so a pull
+request gets both check runs concluded `skipped`, which GitHub counts as a
+passing required check, and the pull request can still enter the merge queue.
+The workflow keeps its unfiltered `pull_request` trigger on purpose: a workflow
+skipped by a trigger or path filter reports no check run, and the required
+checks would stay pending. The merge queue, pushes to `main`, release tags and
+dispatches run the full proof, so nothing lands or releases without it. The
+owner chose this so each change pays for one GPU proof, in the queue, instead
+of two; the queue builds one combined group of up to five pull requests.
+
+A skipped pull-request run has no successful proof jobs, so the exact-tree
+reuse below never finds a proof to reuse, and the queue builds every proof
+itself.
+
 ## Exact-tree reuse of the GPU proof in the merge queue
 
 When no other change lands on `main` between a pull request's proof and its

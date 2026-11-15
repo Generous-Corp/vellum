@@ -111,12 +111,12 @@ GPU_RUNS_ON = (
 def evaluate_actions_expression(expression: str, context: dict[str, str]) -> str:
     """Evaluate the GitHub Actions expression subset a runs-on selector uses.
 
-    Strings, `github.event_name`, `vars.NAME` (unset reads as ''), `==`, `&&`,
-    `||` and parentheses, with the documented semantics: `a && b` is `a` when
-    `a` is falsy, else `b`; `a || b` is `a` when `a` is truthy, else `b`; the
-    empty string is falsy; `==` yields 'true' or ''.
+    Strings, `github.event_name`, `vars.NAME` (unset reads as ''), `==`, `!=`,
+    `&&`, `||` and parentheses, with the documented semantics: `a && b` is `a`
+    when `a` is falsy, else `b`; `a || b` is `a` when `a` is truthy, else `b`;
+    the empty string is falsy; `==` and `!=` yield 'true' or ''.
     """
-    tokens = re.findall(r"'(?:[^']|'')*'|==|&&|\|\||[()]|[A-Za-z_][A-Za-z0-9_.]*", expression)
+    tokens = re.findall(r"'(?:[^']|'')*'|==|!=|&&|\|\||[()]|[A-Za-z_][A-Za-z0-9_.]*", expression)
     if "".join(tokens) != re.sub(r"\s+", "", expression):
         raise ValueError(f"unsupported expression: {expression}")
     position = 0
@@ -146,9 +146,9 @@ def evaluate_actions_expression(expression: str, context: dict[str, str]) -> str
 
     def comparison() -> str:
         left = primary()
-        while peek() == "==":
-            take()
-            left = "true" if left == primary() else ""
+        while peek() in ("==", "!="):
+            equal = take() == "=="
+            left = "true" if (left == primary()) == equal else ""
         return left
 
     def conjunction() -> str:
@@ -174,11 +174,14 @@ def evaluate_actions_expression(expression: str, context: dict[str, str]) -> str
 
 
 JOB_HEADER = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
-GPU_GUARD = (
-    "    if: github.event_name != 'pull_request' || "
-    "github.event.pull_request.head.repo.full_name == github.repository || "
-    "vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''"
-)
+# Both gpu-macos.yml jobs carry exactly this job-level guard: pull requests
+# skip the GPU and SDK proof (owner decision: the merge queue proves every
+# change before it lands, so a pull request no longer pays for it twice), and
+# every other event runs it. It is a job condition, never a trigger filter, so
+# a pull request still gets a skipped check run, which satisfies the required
+# check, rather than no run at all, which would leave it pending forever.
+GPU_GUARD = "    if: github.event_name != 'pull_request'"
+GPU_PROOF_EVENTS = ("merge_group", "push", "workflow_dispatch")
 
 PULP_REPOSITORY = "Generous-Corp/pulp"
 STEP_OUTPUT_REF = re.compile(
@@ -1216,15 +1219,60 @@ class RunnerPolicyTests(unittest.TestCase):
         assert_gpu_local_runner_policy(gpu)
         mutations = {
             "truthy": gpu.replace(GPU_GUARD, GPU_GUARD + " || true"),
-            "missing event clause": gpu.replace(
-                "github.event_name != 'pull_request' || ", "", 2
+            "pull requests run": gpu.replace(GPU_GUARD, "    if: github.event_name != 'pull_request_target'"),
+            "fork-only skip restored": gpu.replace(
+                GPU_GUARD,
+                GPU_GUARD + " || github.event.pull_request.head.repo.full_name == github.repository",
             ),
             "commented guard": gpu.replace("    if: github.event_name", "    # if: github.event_name", 2),
+            "guard removed from one job": gpu.replace(GPU_GUARD + "\n", "", 1),
         }
         for name, mutated in mutations.items():
             with self.subTest(mutation=name):
                 with self.assertRaises(AssertionError):
                     assert_gpu_local_runner_policy(mutated)
+
+    def test_gpu_proof_skips_pull_requests_and_runs_on_every_other_event(self) -> None:
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        jobs = workflow_jobs(gpu)
+        prefix = "    if: "
+        for job in ("gpu-macos-arm64", "sterile-consumer"):
+            guards = [line for line in jobs[job].splitlines() if line.startswith(prefix)]
+            self.assertEqual(len(guards), 1, job)
+            expression = guards[0][len(prefix):]
+            with self.subTest(job=job, event="pull_request"):
+                self.assertEqual(
+                    evaluate_actions_expression(expression, {"event_name": "pull_request"}), "")
+            # A release tag is a push event, so it is covered here too.
+            for event in GPU_PROOF_EVENTS:
+                with self.subTest(job=job, event=event):
+                    self.assertTrue(evaluate_actions_expression(expression, {"event_name": event}))
+        # Control: the evaluator can return true for a pull request, so the
+        # skip above is the guard's doing.
+        self.assertTrue(evaluate_actions_expression(
+            "github.event_name == 'pull_request'", {"event_name": "pull_request"}))
+
+        # The skip must be a job condition. The workflow keeps an unfiltered
+        # pull_request trigger, so every pull request still gets the two check
+        # runs (as skipped, which satisfies a required check); a trigger filter
+        # would leave them pending and the pull request could never be queued.
+        head, _, _ = gpu.partition("\njobs:\n")
+        on_block = head.partition("\non:\n")[2].partition("\npermissions:")[0]
+        triggers: dict[str, list[str]] = {}
+        current = ""
+        for line in on_block.splitlines():
+            if re.match(r"^  [a-z_]+:", line):
+                current = line.strip().rstrip(":")
+                triggers[current] = []
+            elif line.startswith("    ") and current:
+                triggers[current].append(line.strip())
+        self.assertEqual(triggers.get("pull_request"), [])
+        self.assertEqual(triggers.get("merge_group"), ["branches: [main]"])
+        self.assertEqual(
+            triggers.get("push"),
+            ["branches: [main]", "tags: ['v[0-9]*', 'authority/**', 'dry-run/**']"],
+        )
+        self.assertIn("workflow_dispatch", triggers)
 
     def test_external_actions_are_pinned_to_reviewed_node24_releases(self) -> None:
         for path in sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")]):
