@@ -448,7 +448,7 @@ next_patch_tag() {
 check_release_rehearsal() {
   local tag
   tag="$(next_patch_tag)"
-  python3 "${!PLANNING_VAR}/vellum-move/tools/rehearse_tag_pipeline.py" --simulate --tag "$tag"
+  python3 "${!PLANNING_VAR}/vellum-move/tools/rehearse_tag_pipeline.py" --change "$ROOT" --simulate --tag "$tag"
 }
 
 # ---- run -------------------------------------------------------------------

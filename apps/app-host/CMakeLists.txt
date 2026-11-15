@@ -34,6 +34,15 @@ if(VELLUM_BUILD_TESTS)
             "$<TARGET_FILE:vellum-app-host>")
     set_tests_properties(vellum.app-host-manual-clock-capture PROPERTIES
         ENVIRONMENT "MTL_DEBUG_LAYER=0")
+    if(DEFINED ENV{VELLUM_CHROME_PATH} OR
+       EXISTS "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+        add_test(NAME vellum.app-host-agent-workflow
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/test_agent_workflow.py"
+                "$<TARGET_FILE:vellum-app-host>")
+        set_tests_properties(vellum.app-host-agent-workflow PROPERTIES
+            ENVIRONMENT "MTL_DEBUG_LAYER=0")
+    endif()
     find_program(VELLUM_NODE_EXECUTABLE NAMES node)
     if(VELLUM_NODE_EXECUTABLE AND
        EXISTS "${PROJECT_SOURCE_DIR}/packages/vellum-ui/node_modules/esbuild")
