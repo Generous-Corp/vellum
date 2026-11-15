@@ -420,8 +420,8 @@ observatory_verify() {
     --output "$WORK/observatory-health-report.json" >"$out" 2>&1 || rc=$?
   cat "$out"
   if [[ $rc -ne 0 ]] && grep -q 'cursor-event-coverage-gap' "$out"; then
-    local pulp_main now
-    pulp_main="$(git -C "$UPSTREAM_SRC" rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' || true)"
+    local upstream_main now
+    upstream_main="$(git -C "$UPSTREAM_SRC" rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' || true)"
     now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     cat <<MSG
 
@@ -434,7 +434,7 @@ It records events for the exact head, so any later commit needs it run again.
   python3 -I tools/provenance/observatory.py reconcile \\
     --pulp-repo ${UPSTREAM_SRC} \\
     --vellum-repo . \\
-    --pulp-target ${pulp_main:-<pulp origin/main sha>} \\
+    --pulp-target ${upstream_main:-<pulp origin/main sha>} \\
     --vellum-target ${HEAD_SHA} \\
     --now ${now} --write --events-only
 
