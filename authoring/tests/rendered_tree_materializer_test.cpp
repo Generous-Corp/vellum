@@ -700,6 +700,7 @@ bool token_receipts() {
     if (scene.tokens.size() != 2U || scene.tokens[0].path != "main.color.accent" ||
         scene.tokens[0].layer != "primitive" || scene.tokens[1].path != "main.color.canvas" ||
         scene.scene_version != vellum::graphics::kSceneVersion || fill_token("themed") != 1 ||
+        !scene.background_token || *scene.background_token != 1U ||
         fill_token("go") != 0 || fill_token("go/label") != 0 || fill_token("card") != 0 ||
         fill_token("title") != 1 || fill_token("literal") != -1 ||
         vellum::graphics::find_invalid_token_reference(scene).has_value() ||
@@ -716,7 +717,8 @@ bool token_receipts() {
     }
     auto switched = light.scene;
     const auto result = vellum::graphics::apply_token_values(switched, dark.scene.tokens);
-    bool same = result.applied && result.changed.size() == 2U && result.nodes_updated == 5U;
+    bool same = result.applied && result.changed.size() == 2U && result.nodes_updated == 5U &&
+                same_token_color(switched.background, dark.scene.background);
     for (const auto* id : {"themed", "go", "go/label", "card", "title", "literal"}) {
         const auto* left = find_node(switched, id);
         const auto* right = find_node(dark.scene, id);
@@ -725,6 +727,24 @@ bool token_receipts() {
     }
     if (!same) {
         std::cerr << "a theme switch did not equal materializing the new theme\n";
+        return false;
+    }
+
+    vellum::authoring::RenderedApplication equal_literal;
+    const auto literal_tree = token_tree(
+        "#14b8a6", "#0f172a",
+        R"(,{"type":"text","id":"equal","style":{"width":80,"height":20,"color":"#0f172a"},"children":[{"type":"text-run","id":"equal/run","text":"=","style":{"color":"#0f172a"}}]})");
+    if (!vellum::authoring::materialize_rendered_tree(literal_tree, equal_literal, &error)) {
+        std::cerr << "equal-colour literal tree was not materialized: " << error << '\n';
+        return false;
+    }
+    auto equal_switched = equal_literal.scene;
+    (void)vellum::graphics::apply_token_values(equal_switched, dark.scene.tokens);
+    const auto* equal_node = find_node(equal_switched, "equal");
+    if (equal_node == nullptr || equal_node->text_runs.size() != 1U ||
+        !same_token_color(equal_node->text_runs[0].style.color,
+                          vellum::graphics::Color::hex(0x0F172A))) {
+        std::cerr << "an explicit run equal to its parent colour was rewritten\n";
         return false;
     }
 

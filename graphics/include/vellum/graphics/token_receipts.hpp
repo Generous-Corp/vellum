@@ -23,7 +23,8 @@ namespace vellum::graphics {
 /// or the node has no such text run, shadow, gradient stop or path.
 [[nodiscard]] const Color* token_slot_color(const SceneNode& node, const TokenSlot& slot) noexcept;
 
-/// Why a scene's token table or references cannot be drawn.
+/// Why a scene's token table, background reference or node references cannot
+/// be drawn.
 struct TokenRefusal final {
     /// The node whose reference is refused, or the root for a problem in the
     /// table itself. It may be empty when that node has no id.
@@ -40,9 +41,10 @@ struct TokenRefusal final {
 /// path, a value that is not finite, a reference past the end of the table,
 /// a slot that is not canonical, names a colour the node does not have or
 /// names one colour twice, or a node whose `fill` or slot colour differs from
-/// the receipt it references. Empty when the table and every reference are
-/// sound. `accept_scene`, `make_paint_commands` and `scene_loss_diagnostics`
-/// all refuse a scene this reports.
+/// the receipt it references, or a scene background that differs from its
+/// receipt. Empty when the table and every reference are sound. `accept_scene`,
+/// `make_paint_commands` and `scene_loss_diagnostics` all refuse a scene this
+/// reports.
 [[nodiscard]] std::optional<TokenRefusal> find_invalid_token_reference(const Scene& scene);
 
 /// The `VELLUM_INVALID_TOKEN_REFERENCE` error that reports `refusal`.
@@ -76,8 +78,10 @@ struct TokenSwitch final {
 /// that references an entry whose value changed takes the new value as its
 /// `fill`, text run, shadow, gradient stop or stroke it names. A path whose
 /// stroke changes gets a fresh `PathGeometry`. A text run that carries the node's old colour inherited it and
-/// takes the new one too unless it has a slot of its own. Nodes that reference no changed entry are not
-/// touched, so a scene diff damages only the referencing nodes.
+/// takes the new one too unless it has a slot of its own. A scene clear colour
+/// with `Scene::background_token` follows its receipt as well. Nodes that
+/// reference no changed entry are not touched, so a scene diff damages only
+/// the referencing nodes.
 [[nodiscard]] TokenSwitch apply_token_values(
     Scene& scene, std::span<const TokenReceipt> resolved);
 

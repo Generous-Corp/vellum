@@ -18,7 +18,7 @@ namespace {
 // the field-coverage test in layer_cache_test.cpp, then this number.
 static_assert(sizeof(PaintCommand) == 392,
               "PaintCommand changed: update paint_commands_equal and hash_command");
-static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 80,
+static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 88,
               "TextStyle or TextRun changed: update same_style, same_runs and hash_command");
 static_assert(sizeof(BoxShadow) == 32, "BoxShadow changed: update same_shadows and hash_command");
 static_assert(sizeof(LinearGradient) == 104 && sizeof(GradientStop) == 20,
@@ -118,7 +118,8 @@ bool same_style(const TextStyle& a, const TextStyle& b) {
 bool same_runs(const std::vector<TextRun>& a, const std::vector<TextRun>& b) {
     if (a.size() != b.size()) return false;
     for (std::size_t index = 0; index < a.size(); ++index) {
-        if (a[index].text != b[index].text || !same_style(a[index].style, b[index].style)) {
+        if (a[index].text != b[index].text || a[index].inherits_color != b[index].inherits_color ||
+            !same_style(a[index].style, b[index].style)) {
             return false;
         }
     }
@@ -289,6 +290,7 @@ std::uint64_t hash_command(const PaintCommand& command) {
         hash.real(run.style.letter_spacing);
         hash.color(run.style.color);
         hash.number((run.style.underline ? 1U : 0U) | (run.style.strikethrough ? 2U : 0U));
+        hash.number(run.inherits_color ? 1U : 0U);
     }
     hash.number(reinterpret_cast<std::uintptr_t>(command.mesh.get()));
     hash.number(command.mesh ? reinterpret_cast<std::uintptr_t>(command.mesh->texture.get())

@@ -108,6 +108,9 @@ struct TextStyle final {
 struct TextRun final {
     std::string text;
     TextStyle style;
+    /// True when the run's colour came from its containing node. Explicit
+    /// literal colours stay fixed even when they happen to equal that colour.
+    bool inherits_color = true;
 };
 
 /// Premultiplied RGBA8 texels, row-major, top row first.
@@ -977,6 +980,9 @@ struct Scene final {
     float width = 0.0F;
     float height = 0.0F;
     Color background = Color::hex(0x111827);
+    /// The token receipt that resolved the scene clear colour, when one was
+    /// supplied by the authoring tree.
+    std::optional<std::uint32_t> background_token;
     SceneNode root;
     std::uint32_t scene_version = kSceneVersion;
     /// The decoded assets image nodes name by content hash. Each hash appears
@@ -1028,7 +1034,8 @@ struct SceneVersionMismatch final {
     std::uint32_t introduced = 0;
     /// The property that carries it: `kind`, `transform`, `path`, `image`,
     /// `images`, `clip`, `mask`, `isolate`, `blend_mode`, `fill_token`,
-    /// `color_tokens`, `tokens`, `fill_gradients` or `stroke_gradient`.
+    /// `color_tokens`, `background_token`, `tokens`, `fill_gradients` or
+    /// `stroke_gradient`.
     std::string_view property;
 };
 
@@ -1081,6 +1088,9 @@ template <typename Predicate>
         if (const auto* found = find_version_7_fields(scene.root)) {
             return SceneVersionMismatch{
                 found, 7U, found->fill_token ? "fill_token" : "color_tokens"};
+        }
+        if (scene.background_token) {
+            return SceneVersionMismatch{&scene.root, 7U, "background_token"};
         }
         if (!scene.tokens.empty()) return SceneVersionMismatch{&scene.root, 7U, "tokens"};
     }

@@ -1631,9 +1631,11 @@ bool materialize_node(
                     continue;
                 }
                 const auto run_index = static_cast<std::uint32_t>(output.text_runs.size());
+                const auto run_style = dictionary_or_empty(child[@"style"]);
                 output.text_runs.push_back({
                     .text = cpp_string(child[@"text"]),
-                    .style = text_style(dictionary_or_empty(child[@"style"]), base_style),
+                    .style = text_style(run_style, base_style),
+                    .inherits_color = !parse_color(run_style[@"color"]).has_value(),
                 });
                 if (!bind_run_token_refs(child, run_index, context, output, error)) return false;
             }
@@ -1950,6 +1952,10 @@ bool materialize_rendered_tree(
             *failure_diagnostics = std::move(candidate.diagnostics);
         }
         return false;
+    }
+    if (candidate.scene.root.fill_token &&
+        vellum::graphics::same_token_color(candidate.scene.root.fill, candidate.scene.background)) {
+        candidate.scene.background_token = candidate.scene.root.fill_token;
     }
     if (vellum::graphics::find_scene_version_mismatch(candidate.scene)) {
         auto loss = vellum::graphics::scene_loss_diagnostics(candidate.scene);

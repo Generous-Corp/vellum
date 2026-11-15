@@ -160,6 +160,11 @@ void theme_switch_rewrites_only_referencing_nodes() {
 
 void text_runs_follow_their_node() {
     Scene scene = themed_scene();
+    scene.root.children.back().text_runs.push_back({
+        .text = "=",
+        .style = {.color = kLabel},
+        .inherits_color = false,
+    });
     const Color next = Color::hex(0x111827);
     const auto result = apply_token_values(scene, receipts(kAccent, kCanvas, next));
     check(result.applied && result.nodes_updated == 1U, "the label is rewritten");
@@ -169,6 +174,20 @@ void text_runs_follow_their_node() {
           "a run that inherited the label colour follows");
     check(same_token_color(label->text_runs[1].style.color, kLiteral),
           "a run with its own colour keeps it");
+    check(same_token_color(label->text_runs[2].style.color, kLabel),
+          "an explicit run equal to the old parent colour keeps it");
+}
+
+void scene_background_follows_its_token() {
+    Scene scene = themed_scene();
+    scene.background = kCanvas;
+    scene.background_token = 1U;
+    const auto next = receipts(kAccent, Color::hex(0xFFFFFF), kLabel);
+    const auto result = apply_token_values(scene, next);
+    check(result.applied && same_token_color(scene.background, next[1].value),
+          "the scene clear colour follows its token");
+    check(!find_invalid_token_reference(scene).has_value(),
+          "the switched scene background remains sound");
 }
 
 void switch_failures_and_no_ops() {
@@ -541,6 +560,7 @@ int main() {
     unsound_tables_are_refused();
     theme_switch_rewrites_only_referencing_nodes();
     text_runs_follow_their_node();
+    scene_background_follows_its_token();
     switch_failures_and_no_ops();
     damage_covers_exactly_the_referencing_nodes();
     negative_control_stale_fill_would_not_damage();

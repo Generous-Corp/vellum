@@ -127,6 +127,7 @@ std::size_t rewrite_node(SceneNode& node, const std::unordered_map<std::uint32_t
             for (std::size_t run = 0; run < node.text_runs.size(); ++run) {
                 auto& color = node.text_runs[run].style.color;
                 if (!own_runs.contains(static_cast<std::uint32_t>(run)) &&
+                    node.text_runs[run].inherits_color &&
                     same_token_color(color, node.fill)) {
                     color = found->second;
                 }
@@ -199,6 +200,19 @@ std::optional<TokenRefusal> find_invalid_token_reference(const Scene& scene) {
                                 "token " + receipt.path + " has a value that is not finite"};
         }
     }
+    if (scene.background_token) {
+        if (*scene.background_token >= scene.tokens.size()) {
+            return TokenRefusal{scene.root.id, "background_token", std::nullopt,
+                                "scene background references token " +
+                                    std::to_string(*scene.background_token) +
+                                    ", which the scene's token table does not hold"};
+        }
+        if (!same_token_color(scene.background, scene.tokens[*scene.background_token].value)) {
+            return TokenRefusal{scene.root.id, "background_token", std::nullopt,
+                                "scene background differs from its token " +
+                                    scene.tokens[*scene.background_token].path};
+        }
+    }
     return check_node(scene, scene.root);
 }
 
@@ -250,6 +264,11 @@ TokenSwitch apply_token_values(Scene& scene, std::span<const TokenReceipt> resol
         }
         if (value_changed) moved.emplace(static_cast<std::uint32_t>(index), next.value);
         entry = next;
+    }
+    if (scene.background_token) {
+        if (const auto found = moved.find(*scene.background_token); found != moved.end()) {
+            scene.background = found->second;
+        }
     }
     result.nodes_updated = moved.empty() ? 0U : rewrite_node(scene.root, moved);
     result.applied = true;
