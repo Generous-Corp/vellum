@@ -1,0 +1,57 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-15T16:52:40Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-9a7945639dbeaa8aeb4a5f387beddc088c7f6556",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/include/vellum/graphics/token_receipts.hpp",
+    "graphics/src/render_cache.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/src/rendered_tree_materializer.mm",
+    "authoring/tests/rendered_tree_materializer_test.cpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/include/vellum/graphics/token_receipts.hpp",
+    "graphics/src/layer_cache.cpp",
+    "graphics/src/render_cache.hpp",
+    "graphics/src/token_receipts.cpp",
+    "graphics/tests/token_receipts_test.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "53d4a15455f8b46f621cd856d153424dc2f1cfee",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "d03161c066b388dbc5f3cdf8200de214429298d9",
+    "to_commit": "6f0d93fc52247bf160b3ac0862b39c80f42d8a86"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "9a7945639dbeaa8aeb4a5f387beddc088c7f6556",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
