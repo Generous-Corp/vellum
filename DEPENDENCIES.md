@@ -122,6 +122,18 @@ that inventory from the archive bytes before the renderer is release
 eligible. The manifest resolves each file to its nearest ancestor license file;
 it does not adjudicate license compatibility.
 
+## Three.js runtime payload
+
+`assets/threejs` carries Three.js 0.183.1 (MIT), the runtime a scripted view
+loads as ES modules: `build/three.webgpu.js`, `build/three.core.js`,
+`build/three.module.js`, the OrbitControls, GLTFLoader, BufferGeometryUtils and
+SkeletonUtils add-ons, `LICENSE` and `package.json`. The files are unmodified
+bytes of `mrdoob/three.js` at revision `077dd13c0e869d9f3dbe55875686f920367de457`.
+Each file is pinned by SHA-256 in `assets/threejs/payload-manifest.json`, and
+that manifest is pinned in `provenance/third-party-lock.json`.
+`scripts/check_threejs_payload.py` refuses a missing, extra or changed file,
+and the root `CMakeLists.txt` runs it at configure time.
+
 ## Compatibility observations, not attestations
 
 Representative Mach-O members report these `LC_BUILD_VERSION` tuples:

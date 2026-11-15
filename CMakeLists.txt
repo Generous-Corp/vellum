@@ -67,6 +67,7 @@ if(APPLE AND VELLUM_ENABLE_GPU AND
         "Minimum macOS version for the locked Vellum GPU artifact" FORCE)
 endif()
 
+include(cmake/VellumThreeJsPayload.cmake)
 add_subdirectory(foundation)
 add_subdirectory(runtime)
 add_subdirectory(components)
@@ -445,6 +446,12 @@ if(VELLUM_BUILD_TESTS)
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.renderer-lock-drift-unit
         COMMAND "${Python3_EXECUTABLE}" -I scripts/test_check_renderer_lock.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.threejs-payload
+        COMMAND "${Python3_EXECUTABLE}" -I scripts/check_threejs_payload.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.threejs-payload-unit
+        COMMAND "${Python3_EXECUTABLE}" -I scripts/test_check_threejs_payload.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.gpu-runtime-artifact-unit
         COMMAND "${Python3_EXECUTABLE}" -I scripts/test_verify_gpu_runtime_artifact.py
