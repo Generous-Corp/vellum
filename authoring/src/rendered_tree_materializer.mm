@@ -75,6 +75,7 @@ bool style_key_consumed(std::string_view type, std::string_view key, const Style
     if (key == "x" || key == "y") return !use.root;
     if (key == "opacity" || key == "transform") return true;
     if (key == "overflow" || key == "clipPath" || key == "isolation") return true;
+    if (key == "mixBlendMode") return true;
     // The root has no siblings to mask.
     if (key == "maskMode") return !use.root;
     if (use.clips_to_box && type != "path" &&
@@ -1025,7 +1026,10 @@ bool materialize_image(
 // and image nodes draw their content as their own paint, so theirs is clipped.
 // `clipPath` is SVG path data in the box's coordinates that clips the node
 // and its subtree and wins over `overflow`, `maskMode` marks the node as a
-// mask for its siblings, and `isolation: isolate` forces a group.
+// mask for its siblings, and `isolation: isolate` forces a group. `mixBlendMode`
+// blends the node's group with what lies beneath it, in any spelling
+// `parse_blend_mode` knows. A mask is coverage, not paint, so a mask node takes
+// no blend mode other than `normal`.
 // Animation tracks: `tracks` on a node is an array of
 // { property, index?, stop?, keyframes: [{ time, value, easing? }] }. A colour
 // property takes a "#rrggbb" or "#rrggbbaa" value; every other property takes
@@ -1323,6 +1327,16 @@ bool parse_grouping(
         const auto value = keyword(isolation, std::array<std::string_view, 2>{"auto", "isolate"});
         if (!value) return reject("isolation", "must be auto or isolate");
         output.isolate = *value == 1U;
+    }
+    if (id blend = style[@"mixBlendMode"]; blend != nil) {
+        const auto mode = [blend isKindOfClass:NSString.class]
+            ? vellum::graphics::parse_blend_mode(cpp_string(blend))
+            : std::nullopt;
+        if (!mode) return reject("mixBlendMode", "must be a blend mode name");
+        if (output.mask && *mode != vellum::graphics::BlendMode::normal) {
+            return reject("mixBlendMode", "cannot apply to a mask");
+        }
+        output.blend_mode = *mode;
     }
     return true;
 }

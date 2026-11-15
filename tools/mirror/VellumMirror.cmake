@@ -68,7 +68,15 @@ endif()
 message(STATUS "${_vellum_mirror_plan_output}")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${PROJECT_SOURCE_DIR}/tools/mirror/mirror_package.py"
-    "${PROJECT_SOURCE_DIR}/provenance/mirror/receipts/index.json")
+    "${PROJECT_SOURCE_DIR}/provenance/mirror/receipts/index.json"
+    "${PROJECT_SOURCE_DIR}/tools/mirror/framework_ports.py")
+# The ports ledger and the unit manifest decide what is compiled.
+foreach(_vellum_mirror_manifest IN ITEMS provenance/framework/ports.json provenance/framework/units.json)
+    if(EXISTS "${PROJECT_SOURCE_DIR}/${_vellum_mirror_manifest}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${PROJECT_SOURCE_DIR}/${_vellum_mirror_manifest}")
+    endif()
+endforeach()
 # The plan names this directory for the binary-data include root.
 set(VELLUM_MIRROR_BINARY_DATA_DIR "${CMAKE_CURRENT_BINARY_DIR}/vellum-mirror-binary-data")
 include("${_vellum_mirror_plan_cmake}")
@@ -182,7 +190,23 @@ foreach(_vellum_mirror_binary IN LISTS VELLUM_MIRROR_BINARY_DATA_TARGETS)
     _vellum_mirror_add_binary_data("${_vellum_mirror_binary}")
 endforeach()
 
-# Mirrored targets, exactly as the closures describe them.
+# A target declared in provenance/framework/units.json names third-party
+# recipe targets in its links but, unlike a closure target, has no recorded
+# include directories for them: it compiles with their usage requirements.
+function(_vellum_mirror_declared_recipe_usage target)
+    _vellum_mirror_key(_tkey "${target}")
+    if(NOT VELLUM_MIRROR_TARGET_${_tkey}_DECLARED)
+        return()
+    endif()
+    foreach(_link IN LISTS VELLUM_MIRROR_TARGET_${_tkey}_EXTERNAL_LINKS)
+        target_include_directories("${target}" PRIVATE
+            "$<TARGET_PROPERTY:${_link},INTERFACE_INCLUDE_DIRECTORIES>")
+        target_compile_definitions("${target}" PRIVATE
+            "$<TARGET_PROPERTY:${_link},INTERFACE_COMPILE_DEFINITIONS>")
+    endforeach()
+endfunction()
+
+# Mirrored targets, exactly as the closures and units.json describe them.
 foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     _vellum_mirror_key(_vellum_mirror_unit_key "${_vellum_mirror_unit}")
     foreach(_vellum_mirror_target IN LISTS VELLUM_MIRROR_UNIT_${_vellum_mirror_unit_key}_TARGETS)
@@ -244,6 +268,7 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         endif()
         target_compile_options("${_vellum_mirror_target}" PRIVATE
             ${_vellum_mirror_prefix_maps})
+        _vellum_mirror_declared_recipe_usage("${_vellum_mirror_target}")
         # Link edges are resolved once, by the unit libraries below: a static
         # target that carried them would copy another unit's objects in.
         add_dependencies("${_vellum_mirror_target}"
@@ -441,6 +466,56 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     # compile and link against Vellum's value model.
     target_link_libraries("${_library}" INTERFACE Vellum::Value)
     list(APPEND _vellum_mirror_unit_libraries "${_library}")
+endforeach()
+
+# Executables declared in provenance/framework/units.json. Each links the
+# unit libraries that carry the mirrored targets it names, so it holds one
+# copy of every mirrored symbol, as an installed consumer would. They are
+# built for tests and tools and are not installed.
+foreach(_vellum_mirror_executable IN LISTS VELLUM_MIRROR_EXECUTABLES)
+    _vellum_mirror_key(_tkey "${_vellum_mirror_executable}")
+    add_executable("${_vellum_mirror_executable}" ${VELLUM_MIRROR_TARGET_${_tkey}_SOURCES})
+    set_target_properties("${_vellum_mirror_executable}" PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+        OBJCXX_STANDARD 20
+        OSX_ARCHITECTURES arm64
+        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+        BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
+    target_include_directories("${_vellum_mirror_executable}" PRIVATE
+        ${VELLUM_MIRROR_TARGET_${_tkey}_INCLUDE_DIRS}
+        "$<TARGET_PROPERTY:vellum-value,INTERFACE_INCLUDE_DIRECTORIES>")
+    target_compile_definitions("${_vellum_mirror_executable}" PRIVATE
+        ${VELLUM_MIRROR_TARGET_${_tkey}_DEFINITIONS} VELLUM_MIRROR_BUILD=1)
+    target_compile_options("${_vellum_mirror_executable}" PRIVATE ${_vellum_mirror_prefix_maps})
+    if(VELLUM_MIRROR_TARGET_${_tkey}_OPTION_SOURCE_COUNT GREATER 0)
+        math(EXPR _vellum_option_last "${VELLUM_MIRROR_TARGET_${_tkey}_OPTION_SOURCE_COUNT} - 1")
+        foreach(_vellum_option_index RANGE ${_vellum_option_last})
+            set_source_files_properties(
+                "${VELLUM_MIRROR_TARGET_${_tkey}_OPTION_SOURCE_${_vellum_option_index}}"
+                PROPERTIES COMPILE_OPTIONS
+                "${VELLUM_MIRROR_TARGET_${_tkey}_OPTION_SOURCE_${_vellum_option_index}_OPTIONS}")
+        endforeach()
+    endif()
+    _vellum_mirror_declared_recipe_usage("${_vellum_mirror_executable}")
+    set(_vellum_executable_units)
+    foreach(_link IN LISTS VELLUM_MIRROR_TARGET_${_tkey}_INTERNAL_LINKS)
+        _vellum_mirror_key(_lkey "${_link}")
+        list(APPEND _vellum_executable_units "vellum-mirror-${VELLUM_MIRROR_TARGET_${_lkey}_UNIT}")
+    endforeach()
+    list(REMOVE_DUPLICATES _vellum_executable_units)
+    # Third-party archives a linked unit library already carries come through
+    # that library, never linked a second time.
+    set(_vellum_executable_third_party ${VELLUM_MIRROR_TARGET_${_tkey}_EXTERNAL_LINKS})
+    foreach(_library IN LISTS _vellum_executable_units)
+        get_target_property(_carried "${_library}" VELLUM_MIRROR_CARRIED_ARCHIVES)
+        if(_carried)
+            list(REMOVE_ITEM _vellum_executable_third_party ${_carried})
+        endif()
+    endforeach()
+    target_link_libraries("${_vellum_mirror_executable}" PRIVATE
+        ${_vellum_executable_units} ${_vellum_executable_third_party}
+        ${VELLUM_MIRROR_TARGET_${_tkey}_IN_TREE_INTERFACES})
 endforeach()
 
 # Headers: each mirrored unit's public include roots, the rendered build

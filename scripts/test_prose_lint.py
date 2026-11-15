@@ -101,6 +101,7 @@ class ProseLintTest(unittest.TestCase):
             "framework/core/a.md": line,
             "provenance/notes.md": line,
             "decisions/0099-x.md": line,
+            "assets/threejs/build/three.core.js": f"// Recorded {EM_DASH} upstream.\n",
             "NOTICE.md": line,
             "fixtures/data.json": f'{{"note": "{EM_DASH}"}}\n',
             "rmlui/cmake/patches/fix.patch": line,

@@ -73,6 +73,10 @@ origin joins as Pulp's bytes at the named commit put through the transfer's
 rename; a port that differs from Pulp is a `native` row. The provenance lane
 proves the rows append-only and the Pulp commits and bytes against a Pulp checkout,
 and the mirror build compiles each added source into the target its row names.
+A target no closure builds, a new library unit or an executable, is declared
+with its sources, include directories, definitions and links in
+`provenance/framework/units.json`, and
+each of its sources still needs the ledger row that adds it to that target.
 A file with neither a transfer record nor a ledger row fails both. The
 JavaScript preludes are generated from Vellum's own sources once any of them
 is edited; the build-info header and embedded data stay as Pulp produced them.

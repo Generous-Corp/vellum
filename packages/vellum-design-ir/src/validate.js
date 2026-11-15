@@ -1,14 +1,16 @@
 import {
     AUTHORED_OVERLAY_SCHEMA,
     AUTHORED_OVERLAY_VERSION,
+    DESIGN_IR_COMPOSITING_VERSION,
     DESIGN_IR_SCHEMA,
     DESIGN_IR_TRACKS_VERSION,
-    SUPPORTED_DESIGN_IR_VERSIONS,
+    DESIGN_IR_VERSIONS,
     DISPOSITIONS,
     REIMPORT_REPORT_SCHEMA,
     REIMPORT_REPORT_VERSION,
     SEVERITIES,
 } from './constants.js';
+import { compositingProblems } from './compositing.js';
 import { DesignIRValidationError } from './errors.js';
 import { indexTree } from './identity.js';
 import { jsonEqual } from './stable-json.js';
@@ -20,11 +22,11 @@ export function validateDesignIR(value, options = {}) {
         return finish(issues, options, 'Invalid DesignIR');
     }
     exact(value.$schema, DESIGN_IR_SCHEMA, '$.$schema', issues);
-    if (!SUPPORTED_DESIGN_IR_VERSIONS.includes(value.schemaVersion)) {
+    if (!DESIGN_IR_VERSIONS.includes(value.schemaVersion)) {
         issues.push(issue(
             '$.schemaVersion',
             'version',
-            `$.schemaVersion must be one of ${SUPPORTED_DESIGN_IR_VERSIONS.join(', ')}`,
+            `$.schemaVersion must be one of ${DESIGN_IR_VERSIONS.join(', ')}`,
         ));
     }
     requireObject(value.source, '$.source', issues);
@@ -98,6 +100,12 @@ export function validateDesignIR(value, options = {}) {
         );
     }
     validateNode(value.root, '$.root', value.source?.key, issues, value.schemaVersion);
+    if (isObject(value.root) && value.root.compositing?.mask !== undefined) {
+        issues.push(issue('$.root.compositing.mask', 'mask', 'the root has no siblings to mask'));
+    }
+    if (isObject(value.root) && value.root.compositing?.maskRef !== undefined) {
+        issues.push(issue('$.root.compositing.maskRef', 'mask', 'the root has no siblings to be masked by'));
+    }
     requireObject(value.lossReport, '$.lossReport', issues);
     if (isObject(value.lossReport) && Array.isArray(value.diagnostics)) {
         const expectedLosses = value.diagnostics.filter((diagnostic) =>
@@ -281,7 +289,43 @@ function validateNode(node, path, sourceKey, issues, schemaVersion) {
         node.children.forEach((child, index) =>
             validateNode(child, `${path}.children[${index}]`, sourceKey, issues, schemaVersion),
         );
+        validateMaskReferences(node, path, issues);
     }
+    if (node.compositing !== undefined) {
+        if (!(schemaVersion >= DESIGN_IR_COMPOSITING_VERSION)) {
+            issues.push(issue(
+                `${path}.compositing`,
+                'version',
+                `compositing needs schemaVersion ${DESIGN_IR_COMPOSITING_VERSION}`,
+            ));
+        } else {
+            issues.push(...compositingProblems(node.compositing, `${path}.compositing`));
+        }
+    }
+}
+
+// A `maskRef` names the node that masks it: a sibling that is itself a mask,
+// never the node itself, and a mask does not reference another mask.
+function validateMaskReferences(parent, path, issues) {
+    const byId = new Map();
+    parent.children.forEach((child) => {
+        if (isObject(child) && typeof child.id === 'string') byId.set(child.id, child);
+    });
+    parent.children.forEach((child, index) => {
+        const reference = isObject(child) && isObject(child.compositing) ? child.compositing.maskRef : undefined;
+        if (typeof reference !== 'string' || !reference) return;
+        const where = `${path}.children[${index}].compositing.maskRef`;
+        const target = byId.get(reference);
+        if (reference === child.id) {
+            issues.push(issue(where, 'mask', 'a node cannot be its own mask'));
+        } else if (!target) {
+            issues.push(issue(where, 'mask', `maskRef '${reference}' is not a sibling of this node`));
+        } else if (!isObject(target.compositing) || target.compositing.mask === undefined) {
+            issues.push(issue(where, 'mask', `maskRef '${reference}' does not name a mask node`));
+        } else if (child.compositing.mask !== undefined) {
+            issues.push(issue(where, 'mask', 'a mask node cannot reference another mask'));
+        }
+    });
 }
 
 const ANIMATED_PROPERTIES = new Set([

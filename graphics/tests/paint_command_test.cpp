@@ -883,7 +883,7 @@ bool scene_versioning() {
         vellum::graphics::kSceneVersion + 1U));
 
     vellum::graphics::Scene scene;
-    if (scene.scene_version != vellum::graphics::kSceneVersion) {
+    if (scene.scene_version != vellum::graphics::kSceneVersion || scene.scene_version < 8U) {
         return false;
     }
     scene.root.children.push_back({

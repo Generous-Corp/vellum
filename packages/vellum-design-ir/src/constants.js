@@ -5,13 +5,17 @@ export const REIMPORT_REPORT_SCHEMA =
     'https://vellum.dev/schemas/design-ir/reimport-report/v1';
 
 export const DESIGN_IR_VERSION = 1;
-// The DesignIR schema versions this build reads: every version up to 4.
-// Version 2 (blend modes) and version 3 (effects and materials) add no fields
-// in this build, so a document at either carries only version 1 fields.
-// Version 4 adds animation tracks on nodes. Normalization writes version 4 for
-// a document with tracks and version 1 otherwise.
+/**
+ * The schema version that adds the node `compositing` object. A document
+ * carries it when a node uses the object, unless tracks require version 4.
+ */
+export const DESIGN_IR_COMPOSITING_VERSION = 2;
+/** The schema version that adds animation tracks on nodes. */
 export const DESIGN_IR_TRACKS_VERSION = 4;
-export const SUPPORTED_DESIGN_IR_VERSIONS = Object.freeze([1, 2, 3, 4]);
+/** Every version this build can read. */
+export const DESIGN_IR_VERSIONS = Object.freeze([1, 2, 3, 4]);
+// Compatibility name for supported schema versions.
+export const SUPPORTED_DESIGN_IR_VERSIONS = DESIGN_IR_VERSIONS;
 export const AUTHORED_OVERLAY_VERSION = 1;
 export const REIMPORT_REPORT_VERSION = 1;
 export const COMPILER_NAME = '@vellum/design-ir';
@@ -27,3 +31,53 @@ export const DISPOSITIONS = Object.freeze([
 ]);
 
 export const SEVERITIES = Object.freeze(['info', 'warning', 'error']);
+
+/**
+ * Blend modes, named as the renderer's scene spells them. Tier 1 is required
+ * of every backend; Tier 2 is required of Skia Graphite and optional elsewhere,
+ * where an unsupported mode is drawn as `normal` with a loss diagnostic.
+ */
+export const BLEND_MODES_TIER_1 = Object.freeze([
+    'normal',
+    'multiply',
+    'screen',
+    'overlay',
+    'darken',
+    'lighten',
+    'difference',
+    'exclusion',
+    'source_over',
+    'destination_in',
+    'destination_out',
+]);
+
+export const BLEND_MODES_TIER_2 = Object.freeze([
+    'hue',
+    'saturation',
+    'color',
+    'luminosity',
+    'color_dodge',
+    'color_burn',
+    'hard_light',
+    'soft_light',
+    'clear',
+    'source',
+    'destination',
+    'source_in',
+    'source_out',
+    'source_atop',
+    'destination_over',
+    'destination_atop',
+    'xor',
+    'plus',
+]);
+
+export const BLEND_MODES = Object.freeze([...BLEND_MODES_TIER_1, ...BLEND_MODES_TIER_2]);
+
+export const MASK_MODES = Object.freeze(['alpha', 'luminance']);
+
+/** 1 or 2 for a known blend mode, otherwise 0. */
+export function blendModeTier(mode) {
+    if (BLEND_MODES_TIER_1.includes(mode)) return 1;
+    return BLEND_MODES_TIER_2.includes(mode) ? 2 : 0;
+}

@@ -255,7 +255,7 @@ static sk_sp<SkColorSpace> sk_color_space_from_webgpu_format(const std::string& 
     return SkColorSpace::MakeSRGB();
 }
 
-// ── Scene recording (subtree cache, FU-3) ────────────────────────────────
+// ── Scene recording (subtree cache) ──────────────────────────────────────
 namespace {
 // Backend-specific SceneRecording payload: the recorded SkPicture. draw_scene
 // downcasts to this to recognise its own recordings (a foreign or base

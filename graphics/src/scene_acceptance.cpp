@@ -57,6 +57,17 @@ const SceneNode* find_undrawable_image(const SceneNode& node, std::string& reaso
 
 std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_node);
 
+// The first mask node, in depth-first order, with a blend mode other than
+// `normal`. A mask contributes coverage to its siblings, not paint, so a blend
+// mode on it has no stage to apply in and refuses the scene.
+const SceneNode* find_blended_mask(const SceneNode& node) {
+    if (node.mask && node.blend_mode != BlendMode::normal) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_blended_mask(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
 // Why `scene` is refused, or empty. `image_node` is set to the refused
 // image's id, and `image` to true, for an image or image-table refusal.
 std::string refusal(const Scene& scene, bool& image, std::string& image_node) {
@@ -67,6 +78,9 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node) {
     if (const auto* unknown = find_unknown_kind(scene.root); unknown != nullptr) {
         return "scene contains unsupported node kind " +
                std::to_string(static_cast<int>(unknown->kind)) + " at " + unknown->id;
+    }
+    if (const auto* unknown = find_unknown_blend_mode(scene.root); unknown != nullptr) {
+        return "node " + unknown->id + " has a blend mode this build does not know";
     }
     if (!scene_fields_match_version(scene)) {
         const auto loss = scene_loss_diagnostics(scene);
@@ -97,6 +111,10 @@ std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_no
                " has a non-finite transform, opacity, or corner radius";
     }
     if (scene.root.mask) return "scene root " + scene.root.id + " cannot be a mask";
+    if (const auto* mask = find_blended_mask(scene.root); mask != nullptr) {
+        return "mask " + mask->id + " cannot carry the blend mode " +
+               std::string(to_string(mask->blend_mode));
+    }
     std::string reason;
     if (const auto* clipped = find_invalid_clip(scene.root, reason); clipped != nullptr) {
         return "clip of " + clipped->id + " cannot be applied: " + reason;

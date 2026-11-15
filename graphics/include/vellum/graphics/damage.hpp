@@ -235,9 +235,10 @@ public:
 /// repeated id are keyed by position). Added, removed, moved, resized,
 /// restyled, reparented and reordered nodes damage both their old and new
 /// areas. Areas are mapped through each node's composed transform, the way
-/// `make_paint_commands` composes it. A transform or opacity change damages
-/// the node's whole subtree, old and new, and so does a faded node switching
-/// between folding its opacity into one command and compositing a layer. A
+/// `make_paint_commands` composes it. A transform, opacity or blend mode
+/// change damages the node's whole subtree, old and new, and so does a faded
+/// node switching between folding its opacity into one command and
+/// compositing a layer. A
 /// subtree at zero opacity paints nothing. A non-finite transform, opacity or
 /// radius damages the whole frame; `SkiaDawnSurface::render` refuses such a
 /// scene. A changed frame size, background or `scene_version` damages the

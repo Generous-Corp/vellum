@@ -1,0 +1,9 @@
+{
+  "id": "regression/swatch",
+  "capture": {
+    "format": "png",
+    "driver": "file",
+    "path": "tools/parity/corpus/fixtures/assets/swatch.png"
+  },
+  "content_floor": true
+}
