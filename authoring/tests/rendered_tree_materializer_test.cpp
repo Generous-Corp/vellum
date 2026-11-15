@@ -748,6 +748,66 @@ bool token_receipts() {
         return false;
     }
 
+    const auto root_text_tree = [](std::string_view color) {
+        return std::string(R"JSON({"protocol":"vellum.authoring-host.v2","kind":"render-result",
+          "tree":{"type":"text","id":"root-text","style":{"width":80,"height":20,
+            "color":")JSON") + std::string(color) + R"JSON("},"tokenRefs":{"color":0},
+          "tokens":[{"path":"root.text","layer":"theme","value":")JSON" +
+            std::string(color) + R"JSON("}],"children":[]}})JSON";
+    };
+    vellum::authoring::RenderedApplication root_text;
+    if (!vellum::authoring::materialize_rendered_tree(root_text_tree("#f8fafc"), root_text,
+                                                      &error) ||
+        root_text.scene.background_token) {
+        std::cerr << "a root text token was mistaken for the scene background: " << error << '\n';
+        return false;
+    }
+    vellum::authoring::RenderedApplication root_text_dark;
+    if (!vellum::authoring::materialize_rendered_tree(root_text_tree("#2563eb"),
+                                                      root_text_dark, &error)) {
+        std::cerr << "the root text theme control was not materialized: " << error << '\n';
+        return false;
+    }
+    auto root_text_switched = root_text.scene;
+    (void)vellum::graphics::apply_token_values(root_text_switched, root_text_dark.scene.tokens);
+    if (!same_token_color(root_text_switched.background,
+                          vellum::graphics::Color::hex(0xF8FAFC)) ||
+        !same_token_color(root_text_switched.root.fill, root_text_dark.scene.root.fill)) {
+        std::cerr << "a root text token switch changed the clear colour incorrectly\n";
+        return false;
+    }
+
+    const auto placeholder_tree = [](std::string_view color) {
+        return std::string(R"JSON({"protocol":"vellum.authoring-host.v2","kind":"render-result",
+          "tree":{"type":"stack","id":"placeholder-root","style":{"width":120,"height":60},
+          "tokens":[{"path":"input.color","layer":"theme","value":")JSON") +
+            std::string(color) + R"JSON("}],"children":[{"type":"text-input","id":"input",
+            "primitiveVersion":1,"value":"","placeholder":"Hint","tokenRefs":{"color":0},
+            "events":{"change":"input:change"},"style":{"width":100,"height":30,"color":")JSON" +
+            std::string(color) + R"JSON("}}]}})JSON";
+    };
+    vellum::authoring::RenderedApplication placeholder_light;
+    vellum::authoring::RenderedApplication placeholder_dark;
+    if (!vellum::authoring::materialize_rendered_tree(
+            placeholder_tree("#94a3b8"), placeholder_light, &error) ||
+        !vellum::authoring::materialize_rendered_tree(
+            placeholder_tree("#2563eb"), placeholder_dark, &error)) {
+        std::cerr << "the tokenized placeholder control was not materialized: " << error << '\n';
+        return false;
+    }
+    const auto* placeholder = find_node(placeholder_light.scene, "input/value");
+    const auto* expected_placeholder = find_node(placeholder_dark.scene, "input/value");
+    auto placeholder_switched = placeholder_light.scene;
+    (void)vellum::graphics::apply_token_values(
+        placeholder_switched, placeholder_dark.scene.tokens);
+    const auto* switched_placeholder = find_node(placeholder_switched, "input/value");
+    if (placeholder == nullptr || expected_placeholder == nullptr || switched_placeholder == nullptr ||
+        !placeholder->fill_token || !same_token_color(switched_placeholder->fill,
+                                                        expected_placeholder->fill)) {
+        std::cerr << "an empty text-input placeholder did not follow its colour token\n";
+        return false;
+    }
+
     auto older = light.scene;
     older.scene_version = 6U;
     const auto refused = vellum::graphics::accept_scene(older);

@@ -447,7 +447,7 @@ export declare function useEffect(
 
 export interface MaterializedDesignNode {
     id: string;
-    kind: 'view' | 'text' | 'button' | 'image' | 'canvas';
+    kind: 'view' | 'text' | 'text-run' | 'button' | 'image' | 'canvas' | 'path';
     name?: string;
     text?: string;
     properties?: Record<string, JsonValue>;

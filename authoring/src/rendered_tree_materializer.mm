@@ -670,6 +670,7 @@ struct MaterializeContext final {
     std::vector<LoweringDiagnostic>* diagnostics = nullptr;
     const std::vector<vellum::graphics::TokenReceipt>* tokens = nullptr;
     std::vector<NodeRecord>* node_records = nullptr;
+    bool root_background_token = false;
 };
 
 constexpr std::size_t kMaximumSourceFileBytes = 4096U;
@@ -788,7 +789,8 @@ std::optional<std::uint32_t> stop_slot(std::string_view name, std::string_view p
 // is reported as dropped. A button or text input binds `color` on its label.
 bool bind_token_refs(
     NSDictionary* source, NSDictionary* style, std::string_view type_name, bool labelled,
-    MaterializeContext& context, vellum::graphics::SceneNode& output, std::string* error) {
+    bool root, MaterializeContext& context, vellum::graphics::SceneNode& output,
+    std::string* error) {
     using vellum::graphics::SceneNode;
     using vellum::graphics::TokenSlot;
     bool ok = true;
@@ -844,6 +846,7 @@ bool bind_token_refs(
             } else if (output.kind == SceneNode::Kind::rectangle ||
                        output.kind == SceneNode::Kind::image) {
                 bound = bind_fill(key);
+                if (bound && root) context.root_background_token = true;
             } else {
                 bound = dropped(name);
             }
@@ -1659,7 +1662,8 @@ bool materialize_node(
     }
 
     if (!bind_token_refs(source, style, type_name,
-            [type isEqualToString:@"button"] || is_text_input, context, output, error)) {
+            [type isEqualToString:@"button"] || is_text_input, style_use.root, context, output,
+            error)) {
         return false;
     }
 
@@ -1815,7 +1819,7 @@ bool materialize_node(
                             std::max(0.0F, proposed.width - 24.0F), font_size * 1.4F};
             label.fill = parse_color(style[@"color"]).value_or(
                 vellum::graphics::Color::hex(showing_placeholder ? 0x94A3B8 : 0x111827));
-            if (!showing_placeholder && !bind_token(source, @"color", context, label, error)) {
+            if (!bind_token(source, @"color", context, label, error)) {
                 return false;
             }
             label.font_size = font_size;
@@ -1953,8 +1957,7 @@ bool materialize_rendered_tree(
         }
         return false;
     }
-    if (candidate.scene.root.fill_token &&
-        vellum::graphics::same_token_color(candidate.scene.root.fill, candidate.scene.background)) {
+    if (context.root_background_token && candidate.scene.root.fill_token) {
         candidate.scene.background_token = candidate.scene.root.fill_token;
     }
     if (vellum::graphics::find_scene_version_mismatch(candidate.scene)) {
