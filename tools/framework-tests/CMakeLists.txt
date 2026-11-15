@@ -44,6 +44,19 @@ vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
 
+# The scripted WebGPU binding against a headless Dawn device (the Null
+# adapter). It needs the GPU backend; the test exits 77 and is skipped when no
+# adapter is available.
+if(TARGET vellum-dawn-headers)
+    vellum_add_framework_test(webgpu-error-scopes
+        SOURCES webgpu_error_scopes_test.cpp
+        UNITS Vellum::MirrorView_script Vellum::MirrorRender_2d Vellum::DawnHeaders)
+    set_tests_properties(vellum.framework.webgpu-error-scopes PROPERTIES SKIP_RETURN_CODE 77)
+else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "webgpu_error_scopes_test.cpp")
+endif()
+
 # Every test file here must be registered above. A test file that no
 # vellum_add_framework_test() names would build nothing and run nothing while
 # the lane stays green, so configure refuses it.

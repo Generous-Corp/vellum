@@ -18,6 +18,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -578,6 +579,70 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
         return choc::value::createBool(self.native_gpu_bridge_state_->textures.erase(texture_id) > 0);
     });
 
+    // Script-visible WebGPU error scopes. The stack lives natively so errors
+    // from native device work (see DeviceErrorScopeGuard) land in the scope
+    // script pushed, instead of reaching the device's uncaptured-error callback.
+    register_bridge_function(api, "__gpuPushErrorScopeImpl", [&self](choc::javascript::ArgumentList args) {
+        if (self.native_gpu_bridge_state_ == nullptr) {
+            return choc::value::createBool(false);
+        }
+        self.native_gpu_bridge_state_->error_scopes.push(args.get<std::string>(0, "validation"));
+        return choc::value::createBool(true);
+    });
+
+    register_bridge_function(api, "__gpuPopErrorScopeImpl", [&self](choc::javascript::ArgumentList) {
+        auto result = choc::value::createObject("");
+        std::optional<detail::GpuScopedError> error;
+        const bool popped = self.native_gpu_bridge_state_ != nullptr &&
+                            self.native_gpu_bridge_state_->error_scopes.pop(error);
+        result.addMember("ok", choc::value::createBool(popped));
+        result.addMember("hasError", choc::value::createBool(error.has_value()));
+        if (error) {
+            result.addMember("type", choc::value::createString(error->type));
+            result.addMember("message", choc::value::createString(error->message));
+            result.addMember("diagnostics", detail::compilation_messages_to_value(error->diagnostics));
+        }
+        return result;
+    });
+
+    // Compiles WGSL on the native device so a shader error surfaces when script
+    // creates the module (where Three.js scopes it) and carries line and column.
+    register_bridge_function(api, "__gpuValidateShaderModuleImpl", [&self](choc::javascript::ArgumentList args) {
+        auto result = choc::value::createObject("");
+        result.addMember("ok", choc::value::createBool(true));
+        result.addMember("messages", detail::compilation_messages_to_value({}));
+        auto code = args.get<std::string>(0, "");
+#ifdef PULP_HAS_SKIA
+        if (code.empty() || self.native_gpu_bridge_state_ == nullptr || self.gpu_surface_ == nullptr) {
+            return result;
+        }
+        auto* device_ptr = static_cast<wgpu::Device*>(self.gpu_surface_->dawn_device_handle());
+        if (device_ptr == nullptr || !(*device_ptr)) {
+            return result;
+        }
+        const auto* instance = static_cast<const wgpu::Instance*>(self.gpu_surface_->dawn_instance_handle());
+        detail::DeviceErrorScopeGuard error_scope_guard(
+            self.native_gpu_bridge_state_->error_scopes, *device_ptr, instance, "shader module");
+        wgpu::ShaderSourceWGSL wgsl{};
+        wgsl.code = code.c_str();
+        wgpu::ShaderModuleDescriptor module_desc{};
+        module_desc.nextInChain = &wgsl;
+        auto module = device_ptr->CreateShaderModule(&module_desc);
+        auto messages = detail::shader_compilation_messages(module, instance);
+        bool failed = false;
+        for (const auto& message : messages) {
+            failed = failed || message.type == "error";
+        }
+        result.setMember("ok", choc::value::createBool(!failed));
+        result.setMember("messages", detail::compilation_messages_to_value(messages));
+        error_scope_guard.attach_diagnostics(std::move(messages));
+#else
+        (void)code;
+        (void)self;
+#endif
+        return result;
+    });
+
     register_bridge_function(api, "__gpuQueueSubmitImpl", [&self](choc::javascript::ArgumentList args) {
         auto canvas_id = args.get<std::string>(0, "");
         auto r = static_cast<float>(args.get<double>(1, 0.0));
@@ -606,6 +671,11 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
         if (device_ptr == nullptr || queue_ptr == nullptr || !(*device_ptr) || !(*queue_ptr)) {
             return choc::value::createBool(false);
         }
+
+        detail::DeviceErrorScopeGuard error_scope_guard(
+            self.native_gpu_bridge_state_->error_scopes, *device_ptr,
+            static_cast<const wgpu::Instance*>(self.gpu_surface_->dawn_instance_handle()),
+            "queue submit");
 
         auto texture_view = it->second.texture.CreateView();
         if (!texture_view) {
@@ -681,6 +751,11 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
         if (device_ptr == nullptr || queue_ptr == nullptr || !(*device_ptr) || !(*queue_ptr)) {
             return choc::value::createBool(false);
         }
+
+        detail::DeviceErrorScopeGuard error_scope_guard(
+            self.native_gpu_bridge_state_->error_scopes, *device_ptr,
+            static_cast<const wgpu::Instance*>(self.gpu_surface_->dawn_instance_handle()),
+            "queue draw");
 
         wgpu::ShaderSourceWGSL vertex_wgsl{};
         vertex_wgsl.code = vertex_code.c_str();
@@ -1132,6 +1207,11 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
         if (device_ptr == nullptr || queue_ptr == nullptr || !(*device_ptr) || !(*queue_ptr)) {
             return choc::value::createBool(false);
         }
+
+        detail::DeviceErrorScopeGuard error_scope_guard(
+            self.native_gpu_bridge_state_->error_scopes, *device_ptr,
+            static_cast<const wgpu::Instance*>(self.gpu_surface_->dawn_instance_handle()),
+            "buffered draw");
 
         wgpu::ShaderSourceWGSL vertex_wgsl{};
         vertex_wgsl.code = vertex_code.c_str();
@@ -2075,6 +2155,13 @@ fn main(@location(0) uv : vec2<f32>) -> @location(0) vec4<f32> {
         auto* queue_ptr = static_cast<wgpu::Queue*>(self.gpu_surface_->dawn_queue_handle());
         if (!device_ptr || !queue_ptr || !(*device_ptr) || !(*queue_ptr))
             return choc::value::createBool(false);
+
+        detail::ScriptErrorScopes unscoped;
+        detail::DeviceErrorScopeGuard error_scope_guard(
+            self.native_gpu_bridge_state_ ? self.native_gpu_bridge_state_->error_scopes : unscoped,
+            *device_ptr,
+            static_cast<const wgpu::Instance*>(self.gpu_surface_->dawn_instance_handle()),
+            "compute dispatch");
 
         try {
             auto payload = choc::json::parse(payload_str);
