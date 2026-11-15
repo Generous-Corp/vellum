@@ -3,7 +3,7 @@ export const AUTHORED_OVERLAY_SCHEMA: 'https://vellum.dev/schemas/design-ir/auth
 export const REIMPORT_REPORT_SCHEMA: 'https://vellum.dev/schemas/design-ir/reimport-report/v1';
 export const DESIGN_IR_VERSION: 1;
 export const DESIGN_IR_PLOTS_VERSION: 5;
-export const SUPPORTED_DESIGN_IR_VERSIONS: readonly [1, 5];
+export const SUPPORTED_DESIGN_IR_VERSIONS: readonly [1, 2, 3, 4, 5];
 export const AUTHORED_OVERLAY_VERSION: 1;
 export const REIMPORT_REPORT_VERSION: 1;
 export const COMPILER_NAME: '@vellum/design-ir';
@@ -105,8 +105,8 @@ export interface DesignToken {
 
 export interface DesignIR {
     $schema: typeof DESIGN_IR_SCHEMA;
-    /** 1, or 5 when a node carries a plot binding. */
-    schemaVersion: 1 | 5;
+    /** 1 to 5; a plot binding needs 5. */
+    schemaVersion: 1 | 2 | 3 | 4 | 5;
     compiler: { name: string; version: string };
     source: DesignSource;
     root: DesignNode;
@@ -248,7 +248,7 @@ export function diffTokens(previous: DesignIR['tokens'], next: DesignIR['tokens'
  */
 export function normalizeImport(
     input: ImportSourceModel,
-    options?: { compilerVersion?: string; schemaVersion?: 1 | 5 },
+    options?: { compilerVersion?: string; schemaVersion?: 1 | 2 | 3 | 4 | 5 },
 ): DesignIR;
 export function decodeFigmaPluginExport(
     input: unknown,

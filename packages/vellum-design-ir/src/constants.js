@@ -6,10 +6,11 @@ export const REIMPORT_REPORT_SCHEMA =
 
 export const DESIGN_IR_VERSION = 1;
 // The DesignIR schema versions this build reads and writes. Versions 2 to 4
-// are reserved for other node fields and are not supported here; version 5
-// adds plot bindings on nodes. A document without plots stays version 1.
+// belong to other node fields and add nothing this build reads, so they are
+// accepted with the fields of version 1; version 5 adds plot bindings on
+// nodes. A document without plots stays version 1.
 export const DESIGN_IR_PLOTS_VERSION = 5;
-export const SUPPORTED_DESIGN_IR_VERSIONS = Object.freeze([1, 5]);
+export const SUPPORTED_DESIGN_IR_VERSIONS = Object.freeze([1, 2, 3, 4, 5]);
 export const AUTHORED_OVERLAY_VERSION = 1;
 export const REIMPORT_REPORT_VERSION = 1;
 export const COMPILER_NAME = '@vellum/design-ir';

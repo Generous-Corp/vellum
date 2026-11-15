@@ -361,6 +361,46 @@ Scene sweep_scene() {
     return scene;
 }
 
+bool render_both(SkiaDawnSurface& full, SkiaDawnSurface& partial, const Scene& scene);
+
+// A plot over a radial gradient background: the background is enclosed whole
+// as an interpolated fill, so sweeps and sample updates stay exact.
+Scene gradient_plot_scene() {
+    Scene scene = oracle_scene();
+    auto* scope = find_mutable(scene.root, "scope");
+    scope->fill_gradients = {{.kind = GradientKind::radial,
+                              .stops = {{.position = 0.0F, .color = Color::hex(0x1E293B)},
+                                        {.position = 1.0F, .color = Color::hex(0x020617)}}}};
+    return scene;
+}
+
+void gradient_plot() {
+    const auto count = sweep_damage_edges(gradient_plot_scene(), 2.0F, false);
+    expect(count.differing == 0 && count.partial > 0,
+           "a damage edge swept across a plot on a radial gradient leaves every frame "
+           "byte-identical",
+           sweep_detail(count));
+    auto full = make_surface(2.0F);
+    auto partial = make_surface(2.0F);
+    if (!full || !partial) return;
+    Scene scene = gradient_plot_scene();
+    if (!render_both(*full, *partial, scene)) return;
+    int partial_frames = 0;
+    for (int step = 0; step < 6; ++step) {
+        std::vector<float> samples(2000, 0.25F + 0.1F * static_cast<float>(step));
+        samples[100U * static_cast<std::size_t>(step)] = 1.0F;
+        set_samples(scene, "scope", samples);
+        if (!render_both(*full, *partial, scene)) return;
+        if (!partial->frame_stats().full_repaint) ++partial_frames;
+        std::string message;
+        expect(identical(*full, *partial, message),
+               "a sample update over a gradient background is byte-identical, step " +
+                   std::to_string(step),
+               message);
+    }
+    expect(partial_frames > 0, "sample updates over a gradient background take the partial path");
+}
+
 void sweeps() {
     const Scene scene = sweep_scene();
     for (const float scale : {1.0F, 2.0F}) {
@@ -671,6 +711,7 @@ int main() {
     pixel_oracles();
     if (gpu_missing) return 77;
     sweeps();
+    gradient_plot();
     feed_updates();
     large_feed();
     version_gate();

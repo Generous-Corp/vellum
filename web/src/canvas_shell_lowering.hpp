@@ -6,6 +6,7 @@
 #include <vellum/graphics/scene.hpp>
 #include <vellum/graphics/scene_acceptance.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -17,6 +18,7 @@ namespace vellum::web {
 /// A mask the canvas shell cannot composite; a warning. The shell draws the
 /// masked siblings unmasked and does not draw the mask's own commands.
 inline constexpr std::string_view kMaskNotCompositedCode = "VELLUM_WEB_MASK_NOT_COMPOSITED";
+inline constexpr std::string_view kGradientNotExpressibleCode = "VELLUM_WEB_GRADIENT_NOT_EXPRESSIBLE";
 
 /// A plot the canvas shell does not draw, because its composed transform is
 /// not the identity; a warning. An untransformed plot is drawn exactly, as
@@ -68,9 +70,13 @@ inline constexpr std::string_view kPlotNotDrawnCode = "VELLUM_WEB_PLOT_NOT_DRAWN
 /// its untransformed box with the uniform radius. It does not clip, so each
 /// `begin_clip` counts once; and it cannot mask, so it skips every command
 /// from a `begin_mask` to its `end_mask` and counts the mask once, drawing
-/// the masked siblings unmasked rather than drawing the mask as paint. A
+/// the masked siblings unmasked rather than drawing the mask as paint.
+/// Shadows and plain linear fill gradients, which the shell has never drawn,
+/// are not counted, so scenes without the version 8 gradient vocabulary keep
+/// their loss counts. A fill gradient that uses that vocabulary counts once
+/// for its command; a gradient stroke counts through its path, which is
+/// already a loss. `canvas_shell_gradient_diagnostics` names each of them. A
 /// plot left after `canvas_shell_expand_plots` is not drawn and counts once.
-/// Gradients and shadows, which the shell also does not draw, are not counted.
 [[nodiscard]] inline bool canvas_shell_loses(
     const vellum::graphics::PaintCommand& command) noexcept {
     using Kind = vellum::graphics::PaintCommand::Kind;
@@ -81,7 +87,9 @@ inline constexpr std::string_view kPlotNotDrawnCode = "VELLUM_WEB_PLOT_NOT_DRAWN
         return true;
     }
     if (!vellum::graphics::draws_content(command.kind)) return false;
-    return !vellum::graphics::is_identity(command.transform) ||
+    return std::any_of(command.fill_gradients.begin(), command.fill_gradients.end(),
+                       vellum::graphics::gradient_uses_version_8) ||
+           !vellum::graphics::is_identity(command.transform) ||
            !vellum::graphics::is_uniform(command.corner_radii);
 }
 
@@ -140,6 +148,64 @@ canvas_shell_mask_diagnostics(
     return output;
 }
 
+/// Reports each gradient paint in the version 8 vocabulary that the shell
+/// draws as its base colour: every fill gradient that uses it and every
+/// gradient stroke. Plain linear fill gradients are not reported, as before
+/// version 8. A path may carry both a fill and a stroke gradient, so each is
+/// reported though the path counts as one loss.
+[[nodiscard]] inline std::vector<vellum::graphics::LoweringDiagnostic>
+canvas_shell_gradient_diagnostics(
+    const std::vector<vellum::graphics::PaintCommand>& commands) {
+    using Kind = vellum::graphics::GradientKind;
+    std::vector<vellum::graphics::LoweringDiagnostic> output;
+    const auto report = [&](const vellum::graphics::PaintCommand& command,
+                            const vellum::graphics::LinearGradient& gradient,
+                            std::string property) {
+        std::string form = "gradient";
+        switch (gradient.kind) {
+        case Kind::linear: form = "linear gradient"; break;
+        case Kind::radial:
+            {
+                const float radius_x =
+                    (gradient.radius_x > 0.0F ? gradient.radius_x : 0.5F) * command.bounds.width;
+                const float radius_y =
+                    (gradient.radius_y > 0.0F ? gradient.radius_y : 0.5F) * command.bounds.height;
+                const bool elliptical = radius_x != radius_y;
+                form = elliptical ? "elliptical radial gradient" : "radial gradient";
+            }
+            break;
+        case Kind::two_circle_radial: form = "two-circle radial gradient"; break;
+        case Kind::conic: form = "conic gradient"; break;
+        }
+        output.push_back({
+            .severity = vellum::graphics::LoweringDiagnostic::Severity::warning,
+            .disposition = vellum::graphics::LoweringDiagnostic::Disposition::lowered,
+            .code = std::string(kGradientNotExpressibleCode),
+            .node_id = command.node_id,
+            .property = std::move(property),
+            .message = "canvas 2D shell cannot express " + form +
+                       "; the base colour was drawn",
+        });
+    };
+    // A command inside a mask is not drawn at all, so it has no base colour
+    // to report, matching `canvas_shell_loss_count`.
+    const auto masked = canvas_shell_masked(commands);
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        const auto& command = commands[index];
+        if (masked[index] || !vellum::graphics::draws_content(command.kind)) continue;
+        for (const auto& gradient : command.fill_gradients) {
+            if (vellum::graphics::gradient_uses_version_8(gradient)) {
+                report(command, gradient, "gradient");
+            }
+        }
+        if (command.kind == vellum::graphics::PaintCommand::Kind::path && command.path &&
+            command.path->stroke.gradient) {
+            report(command, *command.path->stroke.gradient, "strokeGradient");
+        }
+    }
+    return output;
+}
+
 /// What the canvas shell draws for a scene and what it reports. The shell
 /// accepts a scene through `accept_scene`, the decision the native renderer
 /// makes, so a scene the native renderer refuses draws nothing here and
@@ -172,6 +238,9 @@ struct CanvasShellLowering final {
     lowering.commands = canvas_shell_expand_plots(vellum::graphics::make_paint_commands(scene));
     lowering.losses = canvas_shell_loss_count(lowering.commands);
     for (auto& diagnostic : canvas_shell_mask_diagnostics(lowering.commands)) {
+        lowering.diagnostics.push_back(std::move(diagnostic));
+    }
+    for (auto& diagnostic : canvas_shell_gradient_diagnostics(lowering.commands)) {
         lowering.diagnostics.push_back(std::move(diagnostic));
     }
     const auto masked = canvas_shell_masked(lowering.commands);

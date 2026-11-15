@@ -18,15 +18,15 @@
   ],
   "allOf": [
     {
-      "if": { "properties": { "schemaVersion": { "const": 1 } } },
+      "if": { "properties": { "schemaVersion": { "enum": [1, 2, 3, 4] } } },
       "then": { "properties": { "root": { "$ref": "#/$defs/nodeWithoutPlot" } } }
     }
   ],
   "properties": {
     "$schema": { "const": "https://vellum.dev/schemas/design-ir/v1" },
     "schemaVersion": {
-      "description": "1, or 5 when a node carries a plot binding. Versions 2 to 4 are reserved and not read by this schema.",
-      "enum": [1, 5]
+      "description": "1 to 5. A plot binding needs 5; versions 2 to 4 add nothing this schema reads.",
+      "enum": [1, 2, 3, 4, 5]
     },
     "compiler": {
       "type": "object",
@@ -109,7 +109,7 @@
       }
     },
     "nodeWithoutPlot": {
-      "description": "A node, and every node beneath it, without a plot binding; what schemaVersion 1 allows.",
+      "description": "A node, and every node beneath it, without a plot binding; what schemaVersion 1 to 4 allows.",
       "properties": {
         "plot": false,
         "children": { "type": "array", "items": { "$ref": "#/$defs/nodeWithoutPlot" } }

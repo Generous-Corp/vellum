@@ -135,6 +135,12 @@ struct PaintCommand final {
 /// box has area, in which case gradients draw nothing.
 [[nodiscard]] std::optional<Rect> path_gradient_box(const PaintCommand& command);
 
+/// The absolute box a path command's stroke gradient resolves against:
+/// `path_gradient_box` when it has one, otherwise the control box with each
+/// side that has no extent, such as the height of a horizontal line, grown
+/// to one logical pixel about its centre. Empty only for an invalid path.
+[[nodiscard]] std::optional<Rect> path_stroke_gradient_box(const PaintCommand& command);
+
 /// The area a command can paint, in its `bounds` coordinates before
 /// `transform`: the box grown by each shadow's offset, spread, and 1.5 times
 /// its blur radius, a mesh's clipped vertex extent, or a path's
@@ -164,12 +170,26 @@ struct PaintExtent final {
     const std::vector<PaintCommand>& commands);
 
 struct ResolvedLinearGradient final {
+    GradientKind kind = GradientKind::linear;
     float start_x = 0.0F;
     float start_y = 0.0F;
     float end_x = 0.0F;
     float end_y = 0.0F;
     bool repeating = false;
     float repeat_length = 0.0F;
+    GradientSpread spread = GradientSpread::pad;
+    GradientInterpolation interpolation = GradientInterpolation::srgb;
+    float center_x = 0.0F;
+    float center_y = 0.0F;
+    float radius_x = 0.0F;
+    float radius_y = 0.0F;
+    float focal_x = 0.0F;
+    float focal_y = 0.0F;
+    float start_radius = 0.0F;
+    float end_radius = 0.0F;
+    float angle_degrees = 0.0F;
+    float end_angle_degrees = 360.0F;
+    std::string color_space = "srgb";
     std::vector<GradientStop> stops;
 };
 
@@ -189,8 +209,9 @@ struct ResolvedLinearGradient final {
 /// so the renderer refuses it rather than silently skipping it; a valid path
 /// with no commands emits nothing. An image node always emits its command,
 /// with the asset `find_image_asset` resolves, or none when it is missing.
-/// A plot node with a spec emits its command, and one without contributes
-/// nothing for itself.
+/// A plot node with a spec emits its command, preceded by a rectangle named
+/// `node_id + "/background"` when it has fill gradients; one without a spec
+/// contributes nothing for itself.
 ///
 /// A node whose opacity is below one and whose subtree draws more than one
 /// command is wrapped in a `begin_layer`/`end_layer` pair; when it draws

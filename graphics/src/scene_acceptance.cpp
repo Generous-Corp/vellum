@@ -72,6 +72,12 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node,
         const auto loss = scene_loss_diagnostics(scene);
         return loss.empty() ? "scene fields do not match its version" : loss.front().message;
     }
+    std::string gradient_reason;
+    if (const auto* unsupported = find_inexpressible_gradient(scene.root, &gradient_reason);
+        unsupported != nullptr) {
+        return "the gradient at " + unsupported->id + " cannot be drawn exactly: " +
+               gradient_reason;
+    }
     if (const auto* invalid = find_non_finite_compositing(scene.root); invalid != nullptr) {
         return "scene node " + invalid->id +
                " has a non-finite transform, opacity, or corner radius";

@@ -61,17 +61,29 @@ test('plot bindings need schema version 5 and documents without them stay versio
     const design = await document();
     assert.equal(design.schemaVersion, 1);
     assert.deepEqual(validateDesignIR(design), { issues: [], valid: true });
-    assert.deepEqual(SUPPORTED_DESIGN_IR_VERSIONS, [1, 5]);
+    assert.deepEqual(SUPPORTED_DESIGN_IR_VERSIONS, [1, 2, 3, 4, 5]);
     const plot = { style: 'meter', channel: 'meters' };
     assert.deepEqual(validateDesignIR(withPlot(design, plot)), { issues: [], valid: true });
     const old = validateDesignIR(withPlot(design, plot, 1));
     assert.equal(old.valid, false);
     assert.ok(old.issues.some((entry) => entry.path === '$.root.plot' && entry.code === 'version'),
         JSON.stringify(old.issues));
-    for (const reserved of [2, 3, 4]) {
-        const result = validateDesignIR(withPlot(design, plot, reserved));
+    for (const version of [1, 2, 3, 4, 5]) {
+        const plain = structuredClone(design);
+        plain.schemaVersion = version;
+        assert.deepEqual(validateDesignIR(plain), { issues: [], valid: true }, `version ${version}`);
+    }
+    for (const version of [0, 6, 1.5]) {
+        const plain = structuredClone(design);
+        plain.schemaVersion = version;
+        const result = validateDesignIR(plain);
         assert.ok(result.issues.some((entry) => entry.path === '$.schemaVersion' &&
-            entry.code === 'version'), `version ${reserved} is reserved`);
+            entry.code === 'version'), `version ${version} is refused`);
+    }
+    for (const version of [2, 3, 4]) {
+        const result = validateDesignIR(withPlot(design, plot, version));
+        assert.ok(result.issues.some((entry) => entry.path === '$.root.plot' &&
+            entry.code === 'version'), `a plot at version ${version} is refused`);
     }
     const nested = structuredClone(design);
     nested.schemaVersion = 1;
@@ -95,9 +107,9 @@ test('normalization keeps a source node plot binding', async () => {
 test('the schema declares plot bindings without samples', async () => {
     const definitions = JSON.parse(await readFile(schema, 'utf8')).$defs;
     const published = JSON.parse(await readFile(schema, 'utf8'));
-    assert.deepEqual(published.properties.schemaVersion.enum, [1, 5]);
+    assert.deepEqual(published.properties.schemaVersion.enum, [1, 2, 3, 4, 5]);
     assert.deepEqual(published.allOf, [{
-        if: { properties: { schemaVersion: { const: 1 } } },
+        if: { properties: { schemaVersion: { enum: [1, 2, 3, 4] } } },
         then: { properties: { root: { $ref: '#/$defs/nodeWithoutPlot' } } },
     }]);
     assert.equal(definitions.nodeWithoutPlot.properties.plot, false);

@@ -89,7 +89,7 @@
       "license": "FTL",
       "source": "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.gz",
       "sha256": "5c3a8e78f7b24c20b25b54ee575d6daa40007a5f4eea2845861c3409b3021747",
-      "surface": "optional rmlui/ module only (VELLUM_ENABLE_RMLUI or a standalone rmlui build); built from source as a static hidden-visibility archive linked privately into VellumRmlUi::Core when VELLUM_RMLUI_FONTS=ON, and redistributed as an archive in the opt-in VellumRmlUi::Native package under FTL; PNG, zlib, bzip2, Brotli and HarfBuzz disabled"
+      "surface": "optional rmlui/ module only (VELLUM_ENABLE_RMLUI or a standalone rmlui build); built from source as a static hidden-visibility archive linked privately into VellumRmlUi::Core when VELLUM_RMLUI_FONTS=ON, and redistributed as an archive in the opt-in VellumRmlUi::Native package and the optional vellum-rmlui-sdk release archive (VellumRmlUiNative) under FTL; PNG, zlib, bzip2, Brotli and HarfBuzz disabled"
     },
     {
       "name": "Lua",
@@ -105,7 +105,7 @@
       "license": "MIT",
       "source": "https://github.com/mikke89/RmlUi",
       "commit": "ba95ffe8bfb6370efb2cdcca927eaad4710c5413",
-      "surface": "optional rmlui/ module only (VELLUM_ENABLE_RMLUI or a standalone rmlui build); built from source as a static hidden-visibility archive linked privately into VellumRmlUi::Core; with VELLUM_RMLUI_NATIVE=ON its headers and archives are redistributed in the opt-in VellumRmlUi::Native package; built with one Vellum font-engine patch (rmlui/cmake/patches/rmlui-fractional-glyph-advances.patch)"
+      "surface": "optional rmlui/ module only (VELLUM_ENABLE_RMLUI or a standalone rmlui build); built from source as a static hidden-visibility archive linked privately into VellumRmlUi::Core; with VELLUM_RMLUI_NATIVE=ON its headers and archives are redistributed in the opt-in VellumRmlUi::Native package and the optional vellum-rmlui-sdk release archive (VellumRmlUiNative); built with one Vellum font-engine patch (rmlui/cmake/patches/rmlui-fractional-glyph-advances.patch)"
     },
     {
       "name": "stb_image_write",

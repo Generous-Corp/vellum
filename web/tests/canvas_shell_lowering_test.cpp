@@ -242,6 +242,128 @@ bool mask_reports() {
     if (!ok) std::cerr << "a mask report did not follow the scene's own warnings\n";
     return ok;
 }
+
+bool gradient_reports_and_version_gate() {
+    using vellum::graphics::Color;
+    using vellum::graphics::GradientKind;
+    using vellum::graphics::LinearGradient;
+    using vellum::graphics::PathGeometry;
+    using vellum::graphics::PathVerb;
+    auto gradient = [](GradientKind kind) {
+        LinearGradient value;
+        value.kind = kind;
+        value.stops = {{.position = 0.0F, .color = Color::hex(0xFF0000)},
+                       {.position = 1.0F, .color = Color::hex(0x0000FF)}};
+        return value;
+    };
+    auto radial = [&](float radius_x, float radius_y) {
+        auto value = gradient(GradientKind::radial);
+        value.radius_x = radius_x;
+        value.radius_y = radius_y;
+        return value;
+    };
+    Scene scene;
+    scene.root.id = "root";
+    scene.root.children.push_back({
+        .id = "ellipse", .kind = SceneNode::Kind::rectangle,
+        .bounds = {0, 0, 16, 16}, .fill_gradients = {radial(0.5F, 0.25F)}});
+    scene.root.children.push_back({
+        .id = "circle", .kind = SceneNode::Kind::rectangle,
+        .bounds = {48, 0, 16, 32}, .fill_gradients = {radial(0.5F, 0.25F)}});
+    scene.root.children.push_back({
+        .id = "two", .kind = SceneNode::Kind::rectangle,
+        .bounds = {16, 0, 16, 16}, .fill_gradients = {gradient(GradientKind::two_circle_radial)}});
+    scene.root.children.push_back({
+        .id = "conic", .kind = SceneNode::Kind::rectangle,
+        .bounds = {32, 0, 16, 16}, .fill_gradients = {gradient(GradientKind::conic)}});
+    auto path = std::make_shared<PathGeometry>();
+    path->verbs = {PathVerb::move, PathVerb::line};
+    path->values = {0, 0, 10, 0};
+    path->stroke.width = 2.0F;
+    path->stroke.gradient = gradient(GradientKind::linear);
+    scene.root.children.push_back({
+        .id = "stroke", .kind = SceneNode::Kind::path,
+        .bounds = {0, 16, 16, 16}, .path = path});
+    const auto lowering = vellum::web::lower_for_canvas_shell(scene);
+    std::string ellipse_message;
+    std::string circle_message;
+    bool saw_two = false;
+    bool saw_conic = false;
+    bool saw_stroke = false;
+    for (const auto& diagnostic : lowering.diagnostics) {
+        if (diagnostic.code != vellum::web::kGradientNotExpressibleCode) continue;
+        if (diagnostic.node_id == "ellipse") ellipse_message = diagnostic.message;
+        if (diagnostic.node_id == "circle") circle_message = diagnostic.message;
+        saw_two |= diagnostic.node_id == "two" &&
+                   diagnostic.message.find("two-circle") != std::string::npos;
+        saw_conic |= diagnostic.node_id == "conic" &&
+                     diagnostic.message.find("conic") != std::string::npos;
+        saw_stroke |= diagnostic.node_id == "stroke" && diagnostic.property == "strokeGradient";
+    }
+    if (!lowering.accepted || lowering.diagnostics.size() != 5U ||
+        ellipse_message.find("elliptical radial") == std::string::npos ||
+        circle_message.find("radial gradient") == std::string::npos ||
+        circle_message.find("elliptical") != std::string::npos || !saw_two || !saw_conic ||
+        !saw_stroke || lowering.losses != 5) {
+        std::cerr << "canvas shell did not report each gradient fidelity loss: "
+                  << lowering.diagnostics.size() << " diagnostics, " << lowering.losses
+                  << " losses\n";
+        return false;
+    }
+    {
+        // A mask's own commands are skipped, never drawn as a base colour, so
+        // a gradient on them is not reported; only the mask itself is.
+        Scene masked;
+        masked.root.id = "root";
+        SceneNode group{.id = "g", .kind = SceneNode::Kind::group};
+        group.children.push_back({
+            .id = "g/content", .kind = SceneNode::Kind::rectangle,
+            .bounds = {0, 0, 16, 16}, .fill = Color::hex(0xFFFFFF)});
+        SceneNode mask{
+            .id = "g/mask", .kind = SceneNode::Kind::rectangle,
+            .bounds = {0, 0, 16, 16}, .fill_gradients = {gradient(GradientKind::conic)}};
+        mask.mask = vellum::graphics::MaskMode::alpha;
+        group.children.push_back(std::move(mask));
+        masked.root.children.push_back(std::move(group));
+        const auto masked_lowering = vellum::web::lower_for_canvas_shell(masked);
+        const bool any_gradient = std::any_of(
+            masked_lowering.diagnostics.begin(), masked_lowering.diagnostics.end(),
+            [](const LoweringDiagnostic& diagnostic) {
+                return diagnostic.code == vellum::web::kGradientNotExpressibleCode;
+            });
+        if (!masked_lowering.accepted || any_gradient ||
+            masked_lowering.diagnostics.size() != 1U ||
+            masked_lowering.diagnostics[0].code != vellum::web::kMaskNotCompositedCode) {
+            std::cerr << "a gradient inside a skipped mask was reported as drawn: "
+                      << masked_lowering.diagnostics.size() << " diagnostics\n";
+            return false;
+        }
+    }
+    scene.scene_version = 5U;
+    const auto refused = vellum::web::lower_for_canvas_shell(scene);
+    if (refused.accepted || refused.diagnostics.size() != 1U ||
+        refused.diagnostics[0].code != vellum::graphics::kSceneVersionMismatchCode) {
+        std::cerr << "version 5 gradient scene was accepted\n";
+        return false;
+    }
+
+    Scene legacy;
+    legacy.scene_version = 5U;
+    legacy.root.id = "root";
+    auto plain = gradient(GradientKind::linear);
+    plain.repeating = true;
+    plain.repeat_length = 4.0F;
+    legacy.root.children.push_back({
+        .id = "plain", .kind = SceneNode::Kind::rectangle,
+        .bounds = {0, 0, 16, 16}, .fill_gradients = {plain}});
+    const auto plain_lowering = vellum::web::lower_for_canvas_shell(legacy);
+    if (!plain_lowering.accepted || !plain_lowering.diagnostics.empty() ||
+        plain_lowering.losses != 0) {
+        std::cerr << "a plain linear fill changed the legacy loss count or diagnostics\n";
+        return false;
+    }
+    return true;
+}
 }  // namespace
 
 // An untransformed plot is drawn as the rectangles of its geometry with no
@@ -307,6 +429,7 @@ bool plot_lowering() {
 int main() {
     if (!image_refusals()) return 1;
     if (!mask_reports()) return 1;
+    if (!gradient_reports_and_version_gate()) return 1;
     if (!plot_lowering()) return 1;
     using vellum::graphics::Affine2D;
     using vellum::graphics::CornerRadii;

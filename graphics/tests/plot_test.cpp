@@ -412,6 +412,43 @@ void versioning() {
     }
 }
 
+// A plot with a radial gradient background needs both features: it is
+// accepted at 12, refused at 11 for the plot and at 7 for the gradient, and
+// a plain linear gradient adds no requirement of its own.
+void plot_with_gradient_fill() {
+    Scene scene = plot_scene(line_spec(4, {0.5F}));
+    auto& plot = scene.root.children[1];
+    plot.fill_gradients = {{.kind = GradientKind::radial,
+                            .stops = {{.position = 0.0F, .color = Color::hex(0x111827)},
+                                      {.position = 1.0F, .color = Color::hex(0x334155)}}}};
+    expect(accept_scene(scene).accepted, "a plot with a radial gradient fill is accepted at 12");
+    const auto commands = make_paint_commands(scene);
+    expect(commands.size() == 3U && commands[1].kind == PaintCommand::Kind::rectangle &&
+               commands[1].node_id == "plot/background" && commands[1].fill_gradients.size() == 1U &&
+               commands[2].kind == PaintCommand::Kind::plot && commands[2].fill.alpha == 0.0F,
+           "a gradient plot background lowers to a rectangle behind the plot");
+    const auto refused_at = [&](std::uint32_t version, const std::string& why) {
+        Scene older = scene;
+        older.scene_version = version;
+        const auto result = accept_scene(older);
+        return !result.accepted && result.diagnostics.size() == 1U &&
+               result.diagnostics[0].code == kSceneVersionMismatchCode &&
+               result.reason.find(why) != std::string::npos;
+    };
+    expect(refused_at(11U, "plot node"), "the gradient plot at version 11 is refused for the plot");
+    expect(refused_at(7U, "gradient vocabulary"),
+           "the gradient plot at version 7 is refused for the gradient");
+    plot.fill_gradients[0].kind = GradientKind::linear;
+    expect(accept_scene(scene).accepted && refused_at(11U, "plot node") &&
+               refused_at(7U, "plot node"),
+           "a plain linear gradient fill adds no version requirement to a plot");
+    Scene recoloured = scene;
+    recoloured.root.children[1].fill_gradients[0].angle_degrees = 90.0F;
+    const auto damage = compute_scene_damage(scene, recoloured, 1.0F);
+    expect(damage.bounds().width() >= 100 && damage.bounds().height() >= 60,
+           "a change to a plot's gradient background damages the whole plot", bounds_of(damage));
+}
+
 void invalid_plots() {
     const auto refused = [](const std::string& name, PlotSpec spec, const std::string& why) {
         const auto result = accept_scene(plot_scene(std::move(spec)));
@@ -747,6 +784,7 @@ int main() {
     area_bar_and_meter_oracles();
     damage_per_update();
     versioning();
+    plot_with_gradient_fill();
     invalid_plots();
     sampler();
     producer_thread();

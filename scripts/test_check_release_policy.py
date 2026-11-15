@@ -208,9 +208,10 @@ class Policy(unittest.TestCase):
         self.assertTrue(any("verify_release_tag.py" in p for p in policy.problems(self.tmp)))
 
     def test_release_decision_inputs_missing_from_codeowners_fail(self) -> None:
-        # A dropped retired tag, a weakened immutable-release verifier, or a
-        # version-at-land workflow that does more with its App token must not
-        # land without the owner's review.
+        # A dropped retired tag, a weakened immutable-release verifier, a
+        # version-at-land workflow that does more with its App token, or a
+        # parity completion record or proof runner that decides a release must
+        # not land without the owner's review.
         for path in ("/scripts/verify_immutable_release_preflight.py",
                      "/scripts/verify_release_attestation.py",
                      "/provenance/retired-release-tags.json",
@@ -229,7 +230,9 @@ class Policy(unittest.TestCase):
                      "/tools/provenance/observatory_native.py",
                      "/tools/provenance/observatory_report.py",
                      "/tools/provenance/receiver.py",
-                     "/tools/provenance/verify_pulp_observation_scope.py"):
+                     "/tools/provenance/verify_pulp_observation_scope.py",
+                     "/provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json",
+                     "/scripts/run_parity_proofs.py"):
             with self.subTest(path=path):
                 shutil.copy(ROOT / policy.CODEOWNERS, self.tmp / policy.CODEOWNERS)
                 owners = self.tmp / policy.CODEOWNERS
