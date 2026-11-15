@@ -32,7 +32,7 @@ enum class CanvasCapability : uint8_t {
     sksl_draw,            ///< draw_with_sksl executes the shader
     sksl_post_effect,     ///< save_layer_with_sksl_post_effect executes
     box_shadow_gaussian,  ///< draw_box_shadow is a true Gaussian, not stacked rects
-    scene_cache,          ///< record_scene / draw_scene are functional (FU-3)
+    scene_cache,          ///< record_scene / draw_scene record and replay a subtree
     retained_layer_cache, ///< cacheable begin_layer handles survive across frames
 
     count,                ///< sentinel: number of real capabilities (keep LAST)
