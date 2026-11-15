@@ -779,6 +779,11 @@ def app_token_problems(name: str, workflow: str) -> list[str]:
 JOB_HEADER = re.compile(
     r"^  (?P<name>(?:[A-Za-z0-9_-]+|\"[^\"\n]+\"|'[^'\n]+')):[ \t]*(?:#.*)?$", re.MULTILINE)
 JOB_KEY = re.compile(r"^  [^\n]+:", re.MULTILINE)
+# The block `jobs:` line jobs() reads, and any other spelling of a top-level
+# `jobs` key: quoted, spaced before the colon, or with an inline value (flow
+# mapping, anchor, alias), which jobs() would read as no jobs at all.
+JOBS_KEY = re.compile(r"jobs:[ \t]*(?:#.*)?")
+ANY_JOBS_KEY = re.compile(r"(?:\"jobs\"|'jobs'|jobs)[ \t]*:.*")
 
 
 def jobs(workflow: str) -> dict[str, str]:
@@ -791,11 +796,12 @@ def jobs(workflow: str) -> dict[str, str]:
 
 
 def job_layout_problems(name: str, workflow: str) -> list[str]:
-    """Fail closed when a job header is a YAML form this reader cannot follow."""
+    """Fail closed when a jobs key or job header is a YAML form this reader cannot follow."""
+    problems = [f"{name}: a jobs key this check cannot read: {line.strip()!r}"
+                for line in workflow.splitlines() if ANY_JOBS_KEY.fullmatch(line) and not JOBS_KEY.fullmatch(line)]
     found = re.search(r"(?:^|\n)jobs:[ \t]*(?:#.*)?\n", workflow)
     if found is None:
-        return []
-    problems = []
+        return problems
     for line in workflow[found.end():].splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue

@@ -678,6 +678,20 @@ class Isolation(unittest.TestCase):
         problems = self.found(unreadable)
         self.assertTrue(any("job header this check cannot read" in problem for problem in problems), problems)
 
+    def test_a_jobs_key_the_reader_cannot_follow_fails_closed(self) -> None:
+        # jobs() reads only a block `jobs:` line; a flow mapping, anchor or
+        # differently spelled key would otherwise be read as no jobs at all.
+        flow = ('jobs: {sign: {steps: [{name: read, run: gh api "repos/$R/rulesets",'
+                ' env: {GH_TOKEN: "${{ github.token }}"}}]}}\n')
+        for workflow in (flow, "on: push\n" + flow, 'jobs: &all\n  sign:\n    steps: []\n',
+                         '"jobs":\n  sign:\n    steps: []\n', "jobs :\n  sign:\n    steps: []\n",
+                         "'jobs': {}\n"):
+            with self.subTest(workflow=workflow):
+                self.refused(workflow, "a jobs key this check cannot read")
+                problems = policy.isolation_problems({"other.yml": workflow}, self.tmp)
+                self.assertTrue(any("a jobs key this check cannot read" in problem for problem in problems), problems)
+        self.assertEqual(self.found("jobs:  # all jobs\n  clean:\n    steps:\n      - name: a\n        run: true\n"), [])
+
     def test_a_line_under_steps_that_no_step_holds_fails_closed(self) -> None:
         gh = '"repos/$R/rulesets"'
         bare_first = ("    steps:\n      -\n        name: read\n"
