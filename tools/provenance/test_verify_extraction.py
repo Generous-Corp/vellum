@@ -614,6 +614,7 @@ class VerifyExtractionTests(unittest.TestCase):
             "tools/mirror/consumer/direct_main.cpp",
             "tools/mirror/consumer/main.cpp",
             "tools/mirror/consumer/runtime_image_census_main.cpp",
+            "tools/mirror/consumer/v8_main.cpp",
             "tools/mirror/canvas_provider_anchor.cpp",
             "tools/mirror/gpu_surface_guard.py",
             "scripts/install_core.py",
