@@ -155,6 +155,8 @@ const hostile = {
     'an unclosed element': '<svg xmlns="http://www.w3.org/2000/svg"><g>',
     'two roots': wrap('') + wrap(''),
     'a CDATA section': wrap('<style><![CDATA[rect{}]]></style>'),
+    'a CSS-escaped style import': wrap('<style>@\\69mport "https://example.invalid/x.css";</style>' +
+        '<text>raster</text>'),
 };
 
 for (const [name, svg] of Object.entries(hostile)) {
@@ -274,4 +276,39 @@ test('rasterizing keeps the earlier losses and authored ids never collide with g
     const all = [...indexTree(ids.document.root).index.keys()];
     assert.equal(new Set(all).size, all.length);
     assert.ok(all.includes('assets/svg:a:shape') && all.includes('assets/svg:a::shape'));
+});
+
+test('an authored id="viewport" does not collide with the generated viewport', () => {
+    const imported = svgAssetToDesignIR(wrap('<rect id="viewport" width="1" height="1"/>'), { source });
+    const all = [...indexTree(imported.document.root).index.keys()];
+    assert.equal(new Set(all).size, all.length);
+    assert.ok(all.includes('assets/svg:viewport'));
+});
+
+test('a root with display none draws nothing, as an attribute or a style', () => {
+    for (const attributes of [' display="none"', ' style="display: none"']) {
+        const imported = importSvgAsset(wrap('<rect width="10" height="10" fill="red"/>', attributes));
+        const paths = [];
+        const visit = (node) => {
+            if (node.kind === 'path') paths.push(node);
+            (node.children ?? []).forEach(visit);
+        };
+        visit(imported.root);
+        assert.deepEqual(paths, [], attributes);
+    }
+});
+
+test('user-space gradient percentages follow a nested svg or symbol viewport', () => {
+    const gradient = `<linearGradient id="g" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>`;
+    const nested = `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="10">${gradient}
+      <svg width="20" height="10" viewBox="0 0 10 5"><rect width="10" height="5" fill="url(#g)"/></svg></svg>`;
+    const symbol = `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="10">${gradient}
+      <symbol id="s" viewBox="0 0 10 5"><rect width="10" height="5" fill="url(#g)"/></symbol>
+      <use href="#s" width="20" height="10"/></svg>`;
+    for (const [name, svg] of Object.entries({ nested, symbol })) {
+        const ops = compiledOps(importSvgAsset(svg)).filter((op) => op.op === 'path');
+        // The gradient ends at x=10, the inner viewport's width, not 100.
+        assert.equal(ops[0].fill.transform[0], 10, name);
+    }
 });

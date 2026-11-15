@@ -236,8 +236,10 @@ function checkHostility(root) {
     const visit = (node, holders) => {
         const where = `<${node.name}>`;
         if (FORBIDDEN_ELEMENTS.has(node.name)) refuse(`${where} is not allowed in an asset`);
-        if (node.name === 'style' && /@import|url\(|expression|javascript:/i.test(node.text)) {
-            refuse('a <style> element with an import, URL or expression');
+        // A CSS escape (\69 for "i") can spell any forbidden word, so a
+        // <style> element may not contain one at all.
+        if (node.name === 'style' && /@import|url\(|expression|javascript:|\\/i.test(node.text)) {
+            refuse('a <style> element with an import, URL, expression or escape');
         }
         const own = [];
         for (const [name, value] of Object.entries(node.attributes)) {
@@ -1057,8 +1059,12 @@ class Importer {
             this.rasterOnly.push({ path: this.rootId, reason: 'filter needs rasterization' });
         }
         this.dropUnknownAttributes(svg, this.rootId);
-        const children = this.children(svg, this.rootId, this.inherit(INITIAL, svg), new Set());
-        return { kind: 'group', id: `${this.rootId}:viewport`, transform: viewport, opacity,
+        // A root with display none draws nothing, whatever it contains.
+        const children = values.display === 'none' ? []
+            : this.children(svg, this.rootId, this.inherit(INITIAL, svg), new Set());
+        // ".viewport" has a single dot, which escapeId never leaves in an
+        // authored id, so no authored id="viewport" can collide with it.
+        return { kind: 'group', id: `${this.rootId}.viewport`, transform: viewport, opacity,
             children, name: this.title(svg) };
     }
 
@@ -1206,7 +1212,8 @@ class Importer {
                                 target.attributes.preserveAspectRatio, path),
                             opacity: 1,
                             clip: { units: 'user', shapes: [{ segments: [['M', 0, 0], ['L', width, 0], ['L', width, height], ['L', 0, height], ['Z']], rule: 'nonzero', transform: [...IDENTITY] }] },
-                            children: this.children(target, `${sourceId}:${escapeId(targetId)}`, this.inherit(inner, target), nextActive, true) });
+                            children: this.inViewport([box[2], box[3]], () => this.children(target,
+                                `${sourceId}:${escapeId(targetId)}`, this.inherit(inner, target), nextActive, true)) });
                     } else {
                         this.report('svg-symbol-viewbox-dropped', path,
                             `<use> of a symbol with a viewBox needs a width and height; the viewBox was ignored`);
@@ -1237,7 +1244,10 @@ class Importer {
                 const height = parseLength(node.attributes.height);
                 const box = node.attributes.viewBox?.trim().split(/[\s,]+/).map(Number);
                 group.transform = multiply(group.transform, [1, 0, 0, 1, x, y]);
-                const inside = this.children(node, scoped ? sourceId : path, inner, active, scoped);
+                const hasBox = box && box.length === 4 && box[2] > 0 && box[3] > 0;
+                const size = hasBox ? [box[2], box[3]] : width > 0 && height > 0 ? [width, height] : null;
+                const inside = this.inViewport(size,
+                    () => this.children(node, scoped ? sourceId : path, inner, active, scoped));
                 if (width > 0 && height > 0) {
                     group.clip = { units: 'user', shapes: [{ segments: [['M', 0, 0], ['L', width, 0], ['L', width, height], ['L', 0, height], ['Z']], rule: 'nonzero', transform: [...IDENTITY] }] };
                     if (box && box.length === 4 && box[2] > 0 && box[3] > 0) {
@@ -1273,6 +1283,19 @@ class Importer {
         }
         this.clipAndMask(group, values, path, inner, active);
         return group;
+    }
+
+    // User-space gradient percentages are of the nearest viewport, so a
+    // nested <svg> or a symbol instance sets it while its content lowers.
+    inViewport(size, lower) {
+        if (size === null) return lower();
+        const outer = this.viewportSize;
+        this.viewportSize = size;
+        try {
+            return lower();
+        } finally {
+            this.viewportSize = outer;
+        }
     }
 
     lengthOrZero(node, name, path) {
