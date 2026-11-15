@@ -219,6 +219,12 @@
         "script": "tools/parity/test_r10_delta.py"
       },
       {
+        "script": "tools/visual/tests/test_differ.py"
+      },
+      {
+        "script": "tools/visual/tests/test_runner.py"
+      },
+      {
         "script": "scripts/test_readme_exec.py"
       },
       {
@@ -282,6 +288,10 @@
       },
       {
         "script": "scripts/test_verify_gpu_runtime_artifact.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_cancel_destroyed_queue_proofs.py",
         "isolated": true
       },
       {
