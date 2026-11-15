@@ -1364,8 +1364,10 @@ def load_framework_ports():
 
 
 FRAMEWORK_PORTS = load_framework_ports().LEDGER
+FRAMEWORK_UNITS = load_framework_ports().UNITS
 # The files that only exist together with framework/.
-FRAMEWORK_DATA_FILES = (FRAMEWORK_TRANSFER_RECORD, FRAMEWORK_NAME_DEBT, FRAMEWORK_EXTERNAL_UPDATES, FRAMEWORK_PORTS)
+FRAMEWORK_DATA_FILES = (FRAMEWORK_TRANSFER_RECORD, FRAMEWORK_NAME_DEBT, FRAMEWORK_EXTERNAL_UPDATES, FRAMEWORK_PORTS,
+                        FRAMEWORK_UNITS)
 
 
 def framework_ports_history_errors(root: Path, ports) -> list[str]:
@@ -1544,6 +1546,11 @@ def framework_ports_state(root: Path, transferred: set[str], pulp_root: Path | N
     errors = errors + framework_ports_history_errors(root, ports)
     errors = errors + framework_ports_native_errors(root, added, pulp_root)
     checks: dict[str, object] = {"framework_ports_added": sorted(added), "framework_ports_removed": sorted(removed)}
+    # Targets no closure builds are declared in the unit manifest, each source
+    # also accounted for by its ledger row (framework_ports.units_errors).
+    declared, unit_errors = ports.declared_units(root, added)
+    errors = errors + unit_errors
+    checks["framework_units_declared"] = [target["name"] for target in declared]
     rows, row_errors = ports.load(root)
     if not row_errors:
         errors.extend(framework_ports_joining_errors(root, rows, added, framework_ports_landed(root, ports)))

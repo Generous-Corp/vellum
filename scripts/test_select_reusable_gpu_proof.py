@@ -437,11 +437,23 @@ class WorkflowWiringTests(unittest.TestCase):
 
     def test_the_proof_jobs_are_never_skipped_by_job_condition(self) -> None:
         # A job skipped by its own `if` reports a passing required check, so
-        # the reuse decision must stay at step level.
+        # the reuse decision must stay at step level. Other job keys (such as
+        # sterile-consumer's runner selection) may read the reuse outputs.
+        def job_conditions(text: str, job: str) -> str:
+            body = re.search(rf"^  {job}:\n(.*?)\n    steps:", text, re.M | re.S).group(1)
+            return "\n".join(line for line in body.splitlines() if line.startswith("    if:"))
+
         text = WORKFLOW.read_text(encoding="utf-8")
         for job in selector.PROOF_JOBS:
-            body = re.search(rf"^  {job}:\n(.*?)\n    steps:", text, re.M | re.S).group(1)
-            self.assertNotIn("reuse", body.split("outputs:")[0], job)
+            conditions = job_conditions(text, job)
+            self.assertTrue(conditions, job)  # control: the guard is found
+            for word in ("reuse", "unaffected", "classify"):
+                self.assertNotIn(word, conditions, job)
+        # Negative control: a reuse decision in sterile-consumer's guard is caught.
+        guard = "    needs: gpu-macos-arm64\n    # Keep the dependent job on the same first-party-only policy.\n    if: "
+        self.assertIn(guard, text)
+        mutated = text.replace(guard, guard + "needs.gpu-macos-arm64.outputs.reused_run == '' && ", 1)
+        self.assertIn("reuse", job_conditions(mutated, "sterile-consumer"))
 
 
 def reuse_step_script(text: str) -> str:
