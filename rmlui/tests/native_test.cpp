@@ -10,6 +10,7 @@
 #include <RmlUi/Core.h>
 
 #include <filesystem>
+#include <limits>
 #include <map>
 #include <set>
 #include <string>
@@ -290,6 +291,28 @@ void test_midi_learn_native_class_sink() {
     native.close();
 }
 
+void test_density_ratio_reaches_the_context() {
+    MapAssets assets;
+    CountingRenderer renderer;
+    NativeContext native(assets, renderer);
+    VELLUM_RMLUI_CHECK(native.density_ratio() == 1.0f);
+    for (const float bad : {0.0f, -2.0f, std::numeric_limits<float>::infinity(),
+                            std::numeric_limits<float>::quiet_NaN()})
+        VELLUM_RMLUI_CHECK(native.set_density_ratio(bad) == Status::rejected);
+    // Set before open(), it is applied when the context is created.
+    VELLUM_RMLUI_CHECK(native.set_density_ratio(2.0f) == Status::ok);
+    VELLUM_RMLUI_CHECK(native.open(64, 64) == Status::ok);
+    VELLUM_RMLUI_CHECK(native.context()->GetDensityIndependentPixelRatio() == 2.0f);
+    // Set while open, it applies at once.
+    VELLUM_RMLUI_CHECK(native.set_density_ratio(1.5f) == Status::ok);
+    VELLUM_RMLUI_CHECK(native.context()->GetDensityIndependentPixelRatio() == 1.5f);
+    native.close();
+    // And it carries over to the next open().
+    VELLUM_RMLUI_CHECK(native.open(64, 64) == Status::ok);
+    VELLUM_RMLUI_CHECK(native.context()->GetDensityIndependentPixelRatio() == 1.5f);
+    native.close();
+}
+
 int main() {
     test_every_render_call_reaches_the_callers_renderer();
     test_plain_document_uses_no_layer_features();
@@ -297,5 +320,6 @@ int main() {
     test_scope_routes_direct_rmlui_calls();
     test_debugger_attaches_and_detaches_with_its_context();
     test_midi_learn_native_class_sink();
+    test_density_ratio_reaches_the_context();
     return 0;
 }
