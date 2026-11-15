@@ -610,12 +610,18 @@ def _read_step(job: str, index: int, lines: list[str], indent: int) -> Step:
     return step
 
 
+STEPS_KEY = re.compile(r" +steps:[ \t]*(?:#.*)?")
+# Any spelling of a `steps` key: quoted, spaced before the colon, or with an
+# inline value (flow sequence, anchor, alias).
+ANY_STEPS_KEY = re.compile(r"[ \t]*(?:\"steps\"|'steps'|steps)[ \t]*:(?:[ \t].*)?")
+
+
 def job_steps(job: str, text: str) -> list[Step]:
     """Every step of a job, named or not, in order."""
     lines = text.splitlines()
     found: list[Step] = []
     for start, line in enumerate(lines):
-        if not re.fullmatch(r" +steps:[ \t]*(?:#.*)?", line):
+        if not STEPS_KEY.fullmatch(line):
             continue
         base = len(line) - len(line.lstrip())
         items: list[list[str]] = []
@@ -632,6 +638,37 @@ def job_steps(job: str, text: str) -> list[Step]:
                 items[-1].append(text_line)
         for item in items:
             found.append(_read_step(job, len(found) + 1, item, dash + 2))
+    return found
+
+
+def step_layout_problems(name: str, workflow: str) -> list[str]:
+    """Fail closed where job_steps would read nothing: a `steps` key written
+    other than `steps:`, and a non-comment line under `steps:` that no `- `
+    item holds (a bare `-` opening a step on its own line)."""
+    found = []
+    for job, text in (jobs(workflow) or {"": workflow}).items():
+        lines = text.splitlines()
+        for start, line in enumerate(lines):
+            if not ANY_STEPS_KEY.fullmatch(line):
+                continue
+            if not STEPS_KEY.fullmatch(line):
+                found.append(f"{name}: job {job or '(none)'} has a steps key this check cannot read: {line.strip()!r}")
+                continue
+            base = len(line) - len(line.lstrip())
+            dash = None
+            for text_line in lines[start + 1:]:
+                stripped = text_line.lstrip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                width = len(text_line) - len(stripped)
+                if width <= base and not (width == base and stripped.startswith("- ")):
+                    break
+                if stripped.startswith("- ") and (dash is None or width == dash):
+                    dash = width
+                elif dash is None or (width == dash and re.fullmatch(r"-(?:[ \t]+#.*)?", stripped)):
+                    found.append(f"{name}: job {job or '(none)'} has a line under steps: that no step holds: "
+                                 f"{stripped!r}")
+                    break
     return found
 
 
@@ -766,6 +803,10 @@ def isolation_problems(workflows: dict[str, str], root: Path) -> list[str]:
                     found.append(f"{name}: {title} runs `{call.group(0).strip()}` without -I")
             if name in SECRET_ISOLATED and SECRET.search(step) and PYTHON_CALL.search(step):
                 found.append(f"{name}: {title} holds a secret and runs Python")
+    # Every step rule here reads steps through job_steps; refuse a layout it
+    # would silently read as no steps.
+    for name, text in sorted(workflows.items()):
+        found.extend(step_layout_problems(name, text))
     if SIGNING_WORKFLOW in workflows:
         found.extend(app_token_problems(SIGNING_WORKFLOW, workflows[SIGNING_WORKFLOW]))
     # The renderer verifier decides release eligibility wherever a workflow

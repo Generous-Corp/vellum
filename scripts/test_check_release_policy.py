@@ -658,6 +658,25 @@ class Isolation(unittest.TestCase):
             with self.subTest(label):
                 self.refused(header + step, "a layout this check cannot read")
 
+    def test_a_steps_key_the_reader_cannot_follow_fails_closed(self) -> None:
+        body = "      - name: a\n        run: python3 scripts/x.py\n"
+        self.assertTrue(any("without -I" in problem for problem in self.found("    steps:\n" + body)))
+        for key in ('"steps":', "'steps':", "steps :", "steps: &s", "steps: [ ]"):
+            with self.subTest(key=key):
+                self.refused(f"jobs:\n  sign:\n    {key}\n" + body, "a steps key this check cannot read")
+        # The same layouts in any workflow, since the renderer-verifier rule reads every one.
+        problems = policy.isolation_problems({"other.yml": '  build:\n    "steps":\n' + body}, self.tmp)
+        self.assertTrue(any("a steps key this check cannot read" in problem for problem in problems), problems)
+
+    def test_a_line_under_steps_that_no_step_holds_fails_closed(self) -> None:
+        gh = '"repos/$R/rulesets"'
+        bare_first = ("    steps:\n      -\n        name: read\n"
+                      f"        run: gh api {gh}\n        env:\n          GH_TOKEN: ${{{{ github.token }}}}\n")
+        self.refused(bare_first, "a line under steps: that no step holds")
+        bare_later = "    steps:\n      - name: a\n        run: true\n      -\n        run: python3 scripts/x.py\n"
+        self.refused(bare_later, "a line under steps: that no step holds")
+        self.assertEqual(self.found("    steps:\n      # a comment\n\n      - name: a\n        run: true\n"), [])
+
     def test_the_step_reader_agrees_with_a_yaml_parser(self) -> None:
         try:
             import yaml  # noqa: PLC0415
