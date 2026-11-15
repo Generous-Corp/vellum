@@ -232,6 +232,30 @@ export function useMemo(factory, dependencies) {
     return record.value;
 }
 
+/**
+ * Binds the handler a defined command runs while this component is mounted.
+ * The host invokes it like a press: inside a dispatch, so state the handler
+ * sets is rendered. One component binds a given command per render.
+ */
+export function useCommand(command, handler) {
+    const runtime = renderingRuntime;
+    if (runtime === null || runtime.renderState === null ||
+        runtime.renderState.frameStack.length === 0) {
+        throw new Error('useCommand can only be called while rendering a component');
+    }
+    if (typeof command !== 'string' || command.length === 0) {
+        throw new TypeError('useCommand requires a command id');
+    }
+    if (typeof handler !== 'function') {
+        throw new TypeError('useCommand requires a handler function');
+    }
+    const action = `command:${command}`;
+    if (runtime.renderState.handlers.has(action)) {
+        throw new Error(`command is already bound in this render: ${command}`);
+    }
+    runtime.renderState.handlers.set(action, handler);
+}
+
 export function useEffect(effect, dependencies) {
     const { frameId, frame, index } = activeHook('useEffect');
     registerEffect(frame, frameId, index, effect, dependencies);
@@ -839,6 +863,7 @@ class Runtime {
         }
         this.frames = new Map();
         this.handlers = new Map();
+        this.commandInvocations = new Map();
         this.namedActions = new Map(Object.entries(options.actions ?? {}));
         for (const [name, action] of this.namedActions) {
             if (!name || typeof action !== 'function') {
@@ -986,6 +1011,21 @@ class Runtime {
                 if (!named) throw new Error(`unknown Vellum action: ${action}`);
                 const nextModel = named(workingModel, payload);
                 if (nextModel !== undefined) workingModel = durableValue(nextModel, 'model');
+            } else if (action.startsWith('command:')) {
+                // A command runs like any other action: inside this mutation
+                // frame, so the state it sets and the model it returns are
+                // committed by the render below.
+                const command = action.slice('command:'.length);
+                if (!services.commands.has(command)) {
+                    throw new Error(`command is not defined: ${command}`);
+                }
+                // The handler a mounted component bound with useCommand in
+                // the render this dispatch starts from.
+                const handler = this.handlers.get(action);
+                if (!handler) throw new Error(`command has no handler: ${command}`);
+                handler(payload ?? {});
+                this.commandInvocations.set(
+                    command, (this.commandInvocations.get(command) ?? 0) + 1);
             } else {
                 throw new Error(`invalid Vellum action namespace: ${action}`);
             }
@@ -1169,6 +1209,26 @@ export function mount(application) {
         },
         hasCommand(command) {
             return services.commands.has(command);
+        },
+        invokeCommand(command, arguments_ = {}) {
+            if (typeof command !== 'string' || command.length === 0) {
+                throw new TypeError('invokeCommand requires a command id');
+            }
+            assertPlainJson(arguments_, 'arguments');
+            // Materialize any state update that is already pending (a setter
+            // called outside a dispatch) so the baseline is the tree the
+            // command starts from, and only the command's own effect counts.
+            const before = stableStringify(runtime.renderIfDirty());
+            const tree = runtime.dispatch(`command:${command}`, arguments_);
+            return stableStringify({
+                protocol: PROTOCOL,
+                command,
+                invocations: runtime.commandInvocations.get(command) ?? 0,
+                // Whether the retained tree differs from the one rendered
+                // before the handler ran: the command's visible effect.
+                changed: stableStringify(tree) !== before,
+                tree,
+            });
         },
     });
     Object.defineProperty(globalThis, '__vellum', {
