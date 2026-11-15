@@ -618,6 +618,22 @@ class Isolation(unittest.TestCase):
                 self.refused(self.read(token="${{ github.token }}", run=run))
                 self.assertEqual(self.found(self.read(run=run)), [])
 
+    def test_a_path_qualified_or_quoted_gh_is_read(self) -> None:
+        for label, run in {
+            "an absolute path": 'run: /usr/bin/gh api "repos/$R/immutable-releases" > out.json\n',
+            "a relative path": 'run: ./gh api "repos/$R/rulesets" > out.json\n',
+            "a nested relative path": 'run: bin/gh api "repos/$R/rules/branches/main"\n',
+            "a quoted path": 'run: |\n          "/opt/homebrew/bin/gh" api "repos/$R/immutable-releases"\n',
+            "a quoted name": "run: |\n          'gh' api repos/$R/branches/main/protection\n",
+            "an escaped name": 'run: \\gh api "repos/$R/immutable-releases"\n',
+        }.items():
+            with self.subTest(label):
+                self.refused(self.read(token="${{ github.token }}", run=run))
+                self.assertEqual(self.found(self.read(run=run)), [])
+        # Another tool whose name ends in gh is not gh.
+        self.assertEqual(self.found(self.read(token="${{ github.token }}",
+                                              run='run: my-gh api "repos/$R/immutable-releases"\n')), [])
+
     def test_a_gh_api_call_whose_endpoint_cannot_be_read_fails_closed(self) -> None:
         for label, run in {
             "a variable": 'run: gh api "$endpoint" > out.json\n',

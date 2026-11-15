@@ -161,7 +161,10 @@ SECRET_ISOLATED = (SIGNING_WORKFLOW, VERSION_WORKFLOW)
 # Endpoints only an Administration-read token may call; the Actions token gets 403.
 # Endpoints only the GitHub App token (Administration: read) can read.
 ADMIN_ENDPOINT = re.compile(r"branches/main/protection|rules/branches/|/rulesets|immutable-releases")
-GH_API = re.compile(r"(?<![A-Za-z0-9_./-])gh[ \t]+api\b(?P<rest>[^\n]*)")
+# A `gh api` call: gh by its bare name, by any path (`/usr/bin/gh`, `./gh`), or
+# quoted (`"gh"`, `'gh'`). Only a name ending in another word character, `.` or
+# `-` (`my-gh`) is another tool.
+GH_API = re.compile(r"(?<![A-Za-z0-9_.-])gh[\"']?[ \t]+api\b(?P<rest>[^\n]*)")
 # `gh api` options that take a value, which is therefore not the endpoint.
 GH_API_VALUE_OPTIONS = frozenset({
     "-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "--input", "-q", "--jq",
