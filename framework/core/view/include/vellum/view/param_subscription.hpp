@@ -7,6 +7,7 @@
 #pragma once
 
 #include <vellum/state/parameter.hpp>
+#include <vellum/value/param_model.hpp>
 
 #include <cstdint>
 #include <string>
@@ -25,6 +26,7 @@ struct ParamSubscription {
     /// unsubscribed mid-dispatch; those compact at the end of the pass.
     std::uint32_t id = 0;
     state::ParamID param_id = 0;  ///< resolved once at subscribe time
+    value::ParamHandle param;     ///< the same parameter in the bridge's model
     std::string param_name;       ///< echoed in the payload
 
     /// Seeded from the store at subscribe time so subscribing is not itself

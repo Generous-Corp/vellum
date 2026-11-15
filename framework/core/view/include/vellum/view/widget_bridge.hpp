@@ -70,12 +70,16 @@ public:
                  render::GpuSurface* gpu_surface = nullptr,
                  CapabilitySet granted_capabilities = CapabilitySet::all());
     // A bridge over a value::ParamModel instead of a store. Scripts name
-    // parameters by key; getParam, setParam, formatParamValue,
-    // parseParamValue and getParamMetadata go through the model, and
-    // getParamMetadata reports the plain range when the model provides
-    // value::ParamMetadata. A store-built bridge goes through a model over its
-    // store for the same calls, and keeps the store's own formatting, parsing
-    // and metadata.
+    // parameters by key, and every parameter function reaches the model:
+    // getParam, setParam, formatParamValue, parseParamValue,
+    // getParamMetadata, bindWidgetToParam, bindMeter, onParamChanged and the
+    // bound controls' gestures. The plain value and range come from
+    // value::ParamMetadata when the model provides it. What a model cannot
+    // say is reported as absent rather than guessed: an onParamChanged
+    // payload has `hasModulated: false` and no host base-plus-offset
+    // `modulated` value, and no store `id`; a drag held across a reload ends
+    // at the reload instead of being deferred; unbound_params() is empty.
+    // A store-built bridge keeps every store behaviour unchanged.
     WidgetBridge(ScriptEngine& engine, View& root, value::ParamModel& params,
                  render::GpuSurface* gpu_surface = nullptr,
                  CapabilitySet granted_capabilities = CapabilitySet::all());
@@ -797,6 +801,7 @@ private:
         using Target = BindingTarget;
         std::string widget_id;
         state::ParamID param_id = 0;   ///< source param (resolved once at bind time)
+        value::ParamHandle param;       ///< the same parameter in params_
         /// Non-empty when bound to a named value channel instead of a param.
         /// Resolve it anew during every leased read so a hot swap cannot leave
         /// a source pointer from the retired processor generation cached here.
@@ -837,6 +842,7 @@ private:
     bool in_event_dispatch_ = false;
     struct ParamGestureRoute {
         state::ParamID active_param_id = 0;
+        value::ParamHandle active_param;
         bool active = false;
     };
     std::unordered_map<std::string, std::shared_ptr<ParamGestureRoute>>
@@ -860,6 +866,18 @@ private:
     // Resolve a param NAME to its id via the store. Returns false when the
     // store has no param with that name (the binding is then not registered).
     bool resolve_param_id(const std::string& name, state::ParamID& out) const;
+    // Resolve `name` to both spellings of a parameter: the store id a
+    // store-built bridge uses, and the model handle a model-built one uses.
+    bool resolve_param(const std::string& name, state::ParamID& id,
+                       value::ParamHandle& handle) const;
+    // Parameter reads and gestures for either kind of bridge. A store-built
+    // bridge makes exactly the store call it always made; a model-built bridge
+    // asks params_.
+    float param_normalized(state::ParamID id, value::ParamHandle handle) const;
+    float param_plain(state::ParamID id, value::ParamHandle handle) const;
+    std::optional<float> param_playing(state::ParamID id, value::ParamHandle handle) const;
+    void param_gesture_open(state::ParamID id, value::ParamHandle handle);
+    void param_gesture_close(state::ParamID id, value::ParamHandle handle);
     // Drop bindings whose widget id no longer resolves in widgets_ (after a
     // removeWidget subtree teardown) so a later widget reusing that id is not
     // silently re-bound.
