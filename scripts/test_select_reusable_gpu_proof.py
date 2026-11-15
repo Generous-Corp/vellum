@@ -310,6 +310,10 @@ def job_steps(text: str, job: str) -> list[tuple[str, str]]:
     return steps
 
 
+REUSE_IF = (
+    "(github.event_name == 'merge_group' && steps.classify.outputs.unaffected != 'true') "
+    "|| (github.event_name == 'push' && github.ref == 'refs/heads/main')"
+)
 GPU_GATE = "steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''"
 # test_ci_runner_policy.py holds this step to a byte-exact canonical text
 # shared with the release finalizer, so it carries no condition. It only
@@ -330,10 +334,10 @@ GUARD_STEP = "Prove a skipped proof was allowed"
 def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
     steps = job_steps(text, "gpu-macos-arm64")
     names = [name for name, _ in steps]
-    reuse = names.index("Reuse an identical-tree pull-request proof")
+    reuse = names.index("Reuse an identical-tree proof")
     test.assertEqual(
         dict(steps)[names[reuse]],
-        "github.event_name == 'merge_group' && steps.classify.outputs.unaffected != 'true'",
+        REUSE_IF,
     )
     # Checkout, the release identity and the classifier precede the decision.
     test.assertEqual(reuse, 3)
@@ -394,8 +398,12 @@ class WorkflowWiringTests(unittest.TestCase):
                 "      - name: Build the release GPU slice\n", 1,
             ),
             "reuse on pull requests": text.replace(
-                "        if: github.event_name == 'merge_group' && steps.classify.outputs.unaffected != 'true'\n",
+                f"        if: {REUSE_IF}\n",
                 "        if: github.event_name != 'push'\n", 1,
+            ),
+            "reuse on tags and dispatches": text.replace(
+                f"        if: {REUSE_IF}\n",
+                "        if: github.event_name != 'pull_request'\n", 1,
             ),
             "ungated sterile journey": text.replace(
                 "      - name: Run the complete installed journey without a framework checkout\n"
@@ -419,15 +427,27 @@ class WorkflowWiringTests(unittest.TestCase):
 
     def test_the_proof_jobs_are_never_skipped_by_job_condition(self) -> None:
         # A job skipped by its own `if` reports a passing required check, so
-        # the reuse decision must stay at step level.
+        # the reuse decision must stay at step level. Other job keys (such as
+        # sterile-consumer's runner selection) may read the reuse outputs.
+        def job_conditions(text: str, job: str) -> str:
+            body = re.search(rf"^  {job}:\n(.*?)\n    steps:", text, re.M | re.S).group(1)
+            return "\n".join(line for line in body.splitlines() if line.startswith("    if:"))
+
         text = WORKFLOW.read_text(encoding="utf-8")
         for job in selector.PROOF_JOBS:
-            body = re.search(rf"^  {job}:\n(.*?)\n    steps:", text, re.M | re.S).group(1)
-            self.assertNotIn("reuse", body.split("outputs:")[0], job)
+            conditions = job_conditions(text, job)
+            self.assertTrue(conditions, job)  # control: the guard is found
+            for word in ("reuse", "unaffected", "classify"):
+                self.assertNotIn(word, conditions, job)
+        # Negative control: a reuse decision in sterile-consumer's guard is caught.
+        guard = "    needs: gpu-macos-arm64\n    # Keep the dependent job on the same first-party-only policy.\n    if: "
+        self.assertIn(guard, text)
+        mutated = text.replace(guard, guard + "needs.gpu-macos-arm64.outputs.reused_run == '' && ", 1)
+        self.assertIn("reuse", job_conditions(mutated, "sterile-consumer"))
 
 
 def reuse_step_script(text: str) -> str:
-    block = text.split("      - name: Reuse an identical-tree pull-request proof\n", 1)[1]
+    block = text.split("      - name: Reuse an identical-tree proof\n", 1)[1]
     body = block.split("        run: |\n", 1)[1]
     lines = []
     for line in body.splitlines():
@@ -440,7 +460,10 @@ def reuse_step_script(text: str) -> str:
 class WrapperTests(unittest.TestCase):
     """The bash around the selector must turn anything but one ID into a full proof."""
 
-    def run_wrapper(self, stdout: str, status: int) -> str:
+    def run_wrapper(
+        self, stdout: str, status: int, event: str = "merge_group",
+        script: str = "select_reusable_gpu_proof.py",
+    ) -> str:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             subprocess.run(["git", "init", "-q", str(root)], check=True)
@@ -454,7 +477,7 @@ class WrapperTests(unittest.TestCase):
                 check=True, text=True, capture_output=True,
             ).stdout.strip()
             (root / "scripts").mkdir()
-            (root / "scripts" / "select_reusable_gpu_proof.py").write_text(
+            (root / "scripts" / script).write_text(
                 "import sys\n"
                 f"sys.stdout.write({stdout!r})\n"
                 f"sys.exit({status})\n"
@@ -463,7 +486,7 @@ class WrapperTests(unittest.TestCase):
             output.write_text("")
             environment = dict(
                 os.environ, GITHUB_OUTPUT=str(output), GITHUB_SHA=head,
-                GITHUB_REPOSITORY=REPO, GITHUB_SERVER_URL="https://github.com",
+                GITHUB_EVENT_NAME=event, GITHUB_REPOSITORY=REPO, GITHUB_SERVER_URL="https://github.com",
             )
             completed = subprocess.run(
                 ["bash", "-e", "-c", reuse_step_script(WORKFLOW.read_text(encoding="utf-8"))],
@@ -474,6 +497,16 @@ class WrapperTests(unittest.TestCase):
 
     def test_one_positive_id_is_the_only_reuse(self) -> None:
         self.assertEqual(self.run_wrapper("41000\n", 0), "run_id=41000\n")
+
+    def test_a_push_asks_the_merge_group_selector_and_never_the_pull_request_one(self) -> None:
+        pushed = dict(event="push", script="select_reusable_merge_group_proof.py")
+        self.assertEqual(self.run_wrapper("41000\n", 0, **pushed), "run_id=41000\n")
+        for stdout, status in (("", 0), ("41000\n", 3), ("garbage", 0), ("0\n", 0)):
+            with self.subTest(stdout=stdout, status=status):
+                self.assertEqual(self.run_wrapper(stdout, status, **pushed), "")
+        # The pull-request selector is not consulted for a push: with only it
+        # present, a push runs the full proof.
+        self.assertEqual(self.run_wrapper("41000\n", 0, event="push"), "")
 
     def test_anything_else_runs_the_full_proof(self) -> None:
         for stdout, status in (
