@@ -285,6 +285,10 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_cancel_destroyed_queue_proofs.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_pinned_cmake.py",
         "isolated": true
       },

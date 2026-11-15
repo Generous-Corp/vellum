@@ -77,6 +77,12 @@ VM does not preempt a running Pulp VM and the `vm` priority does not provide a
 cross-repository yield; it can occupy an otherwise free host slot until its
 job completes. That bounded exposure is recorded in the fleet evidence.
 
+When the proof job reports a reused or uncovered proof, `sterile-consumer`
+only prints a notice and runs on a hosted `ubuntu-24.04` runner. On
+`merge_group` runs, the hosted `cancel-destroyed-groups` job cancels the
+proofs of merge groups that the queue has destroyed (see
+`decisions/0008-merge-commits-are-load-bearing.md`).
+
 `VELLUM_MACOS_RUNS_ON_JSON` remains the hosted selector used by
 `readme-quick-start.yml` and the hosted portion of `sdk-release.yml`; it is not
 the selector for these two required GPU jobs.
