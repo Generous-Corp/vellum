@@ -678,6 +678,24 @@ class Isolation(unittest.TestCase):
         self.assertEqual(self.found(self.read(token="${{ github.token }}",
                                               run='run: my-gh api "repos/$R/immutable-releases"\n')), [])
 
+    def test_every_gh_api_call_on_one_line_is_read(self) -> None:
+        # A later call on the same shell line must not hide behind an earlier,
+        # harmless one: each command start is scanned on its own.
+        first = 'gh api "repos/$R/actions/runs"'
+        for label, run in {
+            "after a semicolon": f'run: {first} ; gh api "repos/$R/immutable-releases"\n',
+            "after a semicolon with no space": f'run: {first};gh api "repos/$R/rulesets"\n',
+            "after &&": f'run: {first} && gh api repos/$R/branches/main/protection\n',
+            "after ||": f'run: {first} || /usr/bin/gh api "repos/$R/rules/branches/main"\n',
+            "in a pipeline": f"run: |\n          {first} | gh api --input - \"repos/$R/rulesets\"\n",
+            "after &": f'run: {first} & gh api "repos/$R/immutable-releases"\n',
+        }.items():
+            with self.subTest(label):
+                self.refused(self.read(token="${{ github.token }}", run=run))
+                self.assertEqual(self.found(self.read(run=run)), [])
+        both = policy.gh_api_targets('gh api a/b ; gh api "c/d" && gh api e/f')
+        self.assertEqual(both, ["a/b", "c/d", "e/f"])
+
     def test_a_gh_api_call_whose_endpoint_cannot_be_read_fails_closed(self) -> None:
         for label, run in {
             "a variable": 'run: gh api "$endpoint" > out.json\n',
