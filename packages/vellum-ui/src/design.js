@@ -296,7 +296,11 @@ function materializeNode(node, context, depth, root = false) {
         anchor: anchorFor(node, context.document),
         style,
         accessibilityLabel: typeof node.name === 'string' ? node.name : undefined,
-        children: node.children.map((child) => materializeNode(child, context, depth + 1)),
+        // A source node that the design tool laid out as `display: none` has
+        // no box, so it is not rendered.
+        children: node.children
+            .filter((child) => child?.properties?.layout?.display !== 'none')
+            .map((child) => materializeNode(child, context, depth + 1)),
     };
     if (typeof node.text === 'string') properties.text = node.text;
     if (node.kind === 'path') Object.assign(properties, pathProperties(node, context));
