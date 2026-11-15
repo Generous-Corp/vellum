@@ -54,7 +54,6 @@ if(TARGET vellum-dawn-headers)
     # The test builds a headless device through the surface's own header.
     target_include_directories(vellum-framework-webgpu-error-scopes-test PRIVATE
         "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
-    target_compile_definitions(vellum-framework-webgpu-error-scopes-test PRIVATE PULP_GPU_RUNTIME=1)
     set_tests_properties(vellum.framework.webgpu-error-scopes PROPERTIES SKIP_RETURN_CODE 77)
 else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES

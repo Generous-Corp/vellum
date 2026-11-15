@@ -607,40 +607,13 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
 
     // Compiles WGSL on the native device so a shader error surfaces when script
     // creates the module (where Three.js scopes it) and carries line and column.
+    // Compiles WGSL on the native device so a shader error surfaces when script
+    // creates the module (where Three.js scopes it) and carries line and column.
     register_bridge_function(api, "__gpuValidateShaderModuleImpl", [&self](choc::javascript::ArgumentList args) {
-        auto result = choc::value::createObject("");
-        result.addMember("ok", choc::value::createBool(true));
-        result.addMember("messages", detail::compilation_messages_to_value({}));
-        auto code = args.get<std::string>(0, "");
-#ifdef PULP_HAS_SKIA
-        if (code.empty() || self.native_gpu_bridge_state_ == nullptr || self.gpu_surface_ == nullptr) {
-            return result;
-        }
-        auto* device_ptr = static_cast<wgpu::Device*>(self.gpu_surface_->dawn_device_handle());
-        if (device_ptr == nullptr || !(*device_ptr)) {
-            return result;
-        }
-        const auto* instance = static_cast<const wgpu::Instance*>(self.gpu_surface_->dawn_instance_handle());
-        detail::DeviceErrorScopeGuard error_scope_guard(
-            self.native_gpu_bridge_state_->error_scopes, *device_ptr, instance, "shader module");
-        wgpu::ShaderSourceWGSL wgsl{};
-        wgsl.code = code.c_str();
-        wgpu::ShaderModuleDescriptor module_desc{};
-        module_desc.nextInChain = &wgsl;
-        auto module = device_ptr->CreateShaderModule(&module_desc);
-        auto messages = detail::shader_compilation_messages(module, instance);
-        bool failed = false;
-        for (const auto& message : messages) {
-            failed = failed || message.type == "error";
-        }
-        result.setMember("ok", choc::value::createBool(!failed));
-        result.setMember("messages", detail::compilation_messages_to_value(messages));
-        error_scope_guard.attach_diagnostics(std::move(messages));
-#else
-        (void)code;
-        (void)self;
-#endif
-        return result;
+        detail::ScriptErrorScopes unscoped;
+        return detail::validate_shader_module(
+            self.native_gpu_bridge_state_ ? self.native_gpu_bridge_state_->error_scopes : unscoped,
+            self.gpu_surface_, args.get<std::string>(0, ""));
     });
 
     register_bridge_function(api, "__gpuQueueSubmitImpl", [&self](choc::javascript::ArgumentList args) {
@@ -673,9 +646,7 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
         }
 
         detail::DeviceErrorScopeGuard error_scope_guard(
-            self.native_gpu_bridge_state_->error_scopes, *device_ptr,
-            static_cast<const wgpu::Instance*>(self.gpu_surface_->dawn_instance_handle()),
-            "queue submit");
+            self.native_gpu_bridge_state_->error_scopes, self.gpu_surface_, "queue submit");
 
         auto texture_view = it->second.texture.CreateView();
         if (!texture_view) {
@@ -753,9 +724,7 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
         }
 
         detail::DeviceErrorScopeGuard error_scope_guard(
-            self.native_gpu_bridge_state_->error_scopes, *device_ptr,
-            static_cast<const wgpu::Instance*>(self.gpu_surface_->dawn_instance_handle()),
-            "queue draw");
+            self.native_gpu_bridge_state_->error_scopes, self.gpu_surface_, "queue draw");
 
         wgpu::ShaderSourceWGSL vertex_wgsl{};
         vertex_wgsl.code = vertex_code.c_str();
@@ -1209,9 +1178,7 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
         }
 
         detail::DeviceErrorScopeGuard error_scope_guard(
-            self.native_gpu_bridge_state_->error_scopes, *device_ptr,
-            static_cast<const wgpu::Instance*>(self.gpu_surface_->dawn_instance_handle()),
-            "buffered draw");
+            self.native_gpu_bridge_state_->error_scopes, self.gpu_surface_, "buffered draw");
 
         wgpu::ShaderSourceWGSL vertex_wgsl{};
         vertex_wgsl.code = vertex_code.c_str();
@@ -2159,9 +2126,7 @@ fn main(@location(0) uv : vec2<f32>) -> @location(0) vec4<f32> {
         detail::ScriptErrorScopes unscoped;
         detail::DeviceErrorScopeGuard error_scope_guard(
             self.native_gpu_bridge_state_ ? self.native_gpu_bridge_state_->error_scopes : unscoped,
-            *device_ptr,
-            static_cast<const wgpu::Instance*>(self.gpu_surface_->dawn_instance_handle()),
-            "compute dispatch");
+            self.gpu_surface_, "compute dispatch");
 
         try {
             auto payload = choc::json::parse(payload_str);

@@ -187,6 +187,26 @@
       ],
       "framework_blob": "90b61eafc7a3f15c1729c06b16daf8629b8c6e23",
       "reason": "Window-parented asynchronous alerts, file dialogs and menus for plugin editors, which must not run a blocking modal loop in a host process."
+    },
+    {
+      "framework_path": "framework/core/view/src/widget_bridge/gpu_error_scopes.cpp",
+      "change": "added",
+      "target": "pulp-view-script",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Script-visible WebGPU error scopes for the scripted binding: native device work runs in validation, out-of-memory and internal device scopes and routes what they catch to the script's own scope, so script sees its errors and the uncaptured-error callback stays quiet. Vellum wrote this; Pulp's binding runs no error scopes."
+    },
+    {
+      "framework_path": "framework/core/view/src/widget_bridge/gpu_error_scopes.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Script-visible WebGPU error scopes for the scripted binding: native device work runs in validation, out-of-memory and internal device scopes and routes what they catch to the script's own scope, so script sees its errors and the uncaptured-error callback stays quiet. Vellum wrote this; Pulp's binding runs no error scopes."
     }
   ]
 }

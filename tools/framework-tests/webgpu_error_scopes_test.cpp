@@ -10,7 +10,7 @@
 
 #include "framework_test.hpp"
 
-#include <vellum/render/gpu_surface.hpp>
+#include <gpu_runtime/gpu_surface.hpp>
 #include <vellum/state/store.hpp>
 #include <vellum/view/script_engine.hpp>
 #include <vellum/view/view.hpp>
@@ -27,7 +27,7 @@ namespace {
 
 namespace view = vellum::view;
 
-std::unique_ptr<vellum::render::GpuSurface> g_surface;
+std::unique_ptr<gpu_runtime::GpuSurface> g_surface;
 
 constexpr const char* kValidWgsl = R"WGSL(
 @vertex fn vs(@builtin(vertex_index) i : u32) -> @builtin(position) vec4f {
@@ -199,12 +199,12 @@ FRAMEWORK_TEST(an_error_goes_to_the_innermost_scope_with_a_matching_filter) {
 } // namespace
 
 int main() {
-    g_surface = vellum::render::GpuSurface::create_dawn();
-    vellum::render::GpuSurface::Config config;
+    g_surface = gpu_runtime::GpuSurface::create_dawn();
+    gpu_runtime::GpuSurface::Config config;
     config.width = 64;
     config.height = 64;
     config.vsync = false;
-    config.backend_preference = vellum::render::GpuSurface::AdapterBackendPreference::null_backend;
+    config.backend_preference = gpu_runtime::GpuSurface::AdapterBackendPreference::null_backend;
     if (!g_surface || !g_surface->initialize(config) || !g_surface->adapter_info().native_bridge) {
         std::printf("SKIP no Dawn adapter available\n");
         return 77;
