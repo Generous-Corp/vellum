@@ -43,6 +43,8 @@ struct WidgetBridge::NativeGpuBridgeState {
         std::string alpha_mode = "opaque";
 #ifdef PULP_HAS_SKIA
         wgpu::Texture texture;
+        // Depth the buffered draws of one script render pass share.
+        wgpu::Texture pass_depth;
 #endif
         bool configured = false;
     };
@@ -57,6 +59,8 @@ struct WidgetBridge::NativeGpuBridgeState {
         uint32_t sample_count = 1;
 #ifdef PULP_HAS_SKIA
         wgpu::Texture texture;
+        // Depth the buffered draws of one script render pass share.
+        wgpu::Texture pass_depth;
 #endif
         bool configured = false;
     };

@@ -275,6 +275,22 @@ function __installNativeGpuBufferedDrawAugmentation() {
             return null;
         }
 
+        var pipelineDepth = currentPipeline.depthStencil;
+        if (pipelineDepth) {
+            payload.pipelineDepthStencil = {
+                format: pipelineDepth.format || "depth24plus",
+                depthCompare: pipelineDepth.depthCompare || "always",
+                depthWriteEnabled: !!pipelineDepth.depthWriteEnabled
+            };
+        }
+        if (depthStencil) {
+            payload.depthStencil = {
+                depthLoadOp: depthStencil.depthLoadOp || "load",
+                depthStoreOp: depthStencil.depthStoreOp || "store",
+                depthClearValue: depthStencil.depthClearValue == null ? 1 : Number(depthStencil.depthClearValue)
+            };
+        }
+
         var bindGroups = serializeBindGroups(currentBindGroups, vertexModule.code || "", fragmentModule.code || "");
         if (bindGroups) {
             payload.bindGroups = bindGroups;
@@ -342,6 +358,10 @@ function __installNativeGpuBufferedDrawAugmentation() {
         var currentVertexBuffers = [];
         var currentIndexBuffer = null;
         var emittedBufferedDraw = false;
+        // Draws this pass has handed the binding. The binding applies the
+        // pass's load operations to the first one only, so later draws keep
+        // what earlier draws rendered.
+        var bufferedDrawCount = 0;
         var descriptor = init && init.descriptor ? init.descriptor : {};
         var attachments = descriptor.colorAttachments || [];
         var attachment = attachments.length > 0 ? attachments[0] : null;
@@ -409,6 +429,7 @@ function __installNativeGpuBufferedDrawAugmentation() {
                 firstVertex: firstVertex,
                 firstInstance: firstInstance
             }, depthStencil);
+            if (bufferedPayload) bufferedPayload.passDrawIndex = bufferedDrawCount++;
             if (bufferedPayload && typeof init.onEnd === "function") {
                 emittedBufferedDraw = true;
                 init.onEnd({
@@ -443,6 +464,7 @@ function __installNativeGpuBufferedDrawAugmentation() {
                 baseVertex: baseVertex,
                 firstInstance: firstInstance
             }, depthStencil);
+            if (bufferedPayload) bufferedPayload.passDrawIndex = bufferedDrawCount++;
             if (bufferedPayload && typeof init.onEnd === "function") {
                 emittedBufferedDraw = true;
                 init.onEnd({

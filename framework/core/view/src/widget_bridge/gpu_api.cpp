@@ -1637,19 +1637,29 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
         pipeline_desc.multisample.mask = ~0u;
         pipeline_desc.multisample.alphaToCoverageEnabled = false;
 
-        // Add depth/stencil to pipeline if JS payload requests it
+        // Depth: `pipelineDepthStencil` is the pipeline's depth state and
+        // `depthStencil` the pass's depth attachment. The binding owns the depth
+        // texture (one per target, Depth24Plus), so the pipeline and the
+        // attachment always agree on its format. A pipeline without depth state
+        // drawn into a pass with depth neither tests nor writes depth.
         wgpu::DepthStencilState depth_stencil_state{};
-        bool has_depth = payload.hasObjectMember("depthStencil") || payload.hasObjectMember("pipelineDepthStencil");
+        const bool pipeline_has_depth = payload.hasObjectMember("pipelineDepthStencil") && payload["pipelineDepthStencil"].isObject();
+        bool has_depth = pipeline_has_depth || payload.hasObjectMember("depthStencil");
         if (has_depth) {
             depth_stencil_state.format = wgpu::TextureFormat::Depth24Plus;
-            depth_stencil_state.depthWriteEnabled = true;
-            depth_stencil_state.depthCompare = wgpu::CompareFunction::Less;
-            if (payload.hasObjectMember("pipelineDepthStencil") && payload["pipelineDepthStencil"].isObject()) {
+            depth_stencil_state.depthWriteEnabled = false;
+            depth_stencil_state.depthCompare = wgpu::CompareFunction::Always;
+            if (pipeline_has_depth) {
                 auto ds = payload["pipelineDepthStencil"];
                 auto cmp = ds.hasObjectMember("depthCompare") ? ds["depthCompare"].getWithDefault<std::string>("less") : "less";
-                if (cmp == "less-equal") depth_stencil_state.depthCompare = wgpu::CompareFunction::LessEqual;
-                else if (cmp == "greater") depth_stencil_state.depthCompare = wgpu::CompareFunction::Greater;
-                else if (cmp == "always") depth_stencil_state.depthCompare = wgpu::CompareFunction::Always;
+                depth_stencil_state.depthCompare = cmp == "never"           ? wgpu::CompareFunction::Never
+                                                 : cmp == "equal"           ? wgpu::CompareFunction::Equal
+                                                 : cmp == "less-equal"      ? wgpu::CompareFunction::LessEqual
+                                                 : cmp == "greater"         ? wgpu::CompareFunction::Greater
+                                                 : cmp == "not-equal"       ? wgpu::CompareFunction::NotEqual
+                                                 : cmp == "greater-equal"   ? wgpu::CompareFunction::GreaterEqual
+                                                 : cmp == "always"          ? wgpu::CompareFunction::Always
+                                                                            : wgpu::CompareFunction::Less;
                 depth_stencil_state.depthWriteEnabled = ds.hasObjectMember("depthWriteEnabled") ? ds["depthWriteEnabled"].getWithDefault<bool>(true) : true;
             }
             pipeline_desc.depthStencil = &depth_stencil_state;
@@ -1679,6 +1689,14 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
             : target_texture_state->texture.CreateView();
         if (!texture_view) return choc::value::createBool(false);
 
+        // Script records each draw of a render pass as its own payload, and each
+        // payload replays as its own native pass. Only the first draw of the
+        // script pass (`passDrawIndex` 0) applies the pass's load operations;
+        // later draws load the colour and depth the earlier ones left, so a
+        // pass with several draws keeps all of them.
+        const bool first_draw_in_pass = !payload.hasObjectMember("passDrawIndex") ||
+                                        payload["passDrawIndex"].getWithDefault<int64_t>(0) <= 0;
+
         wgpu::RenderPassColorAttachment color_attachment{};
         color_attachment.view = texture_view;
         color_attachment.loadOp = load_op == "clear" ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load;
@@ -1703,27 +1721,52 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
             color_attachment.loadOp = wgpu::LoadOp::Clear;
             color_attachment.clearValue.a = 1.0f;
         }
+        if (!first_draw_in_pass) {
+            color_attachment.loadOp = wgpu::LoadOp::Load;
+        }
 
-        // Create depth texture if depth/stencil is requested
-        wgpu::Texture depth_texture;
+        // The target's depth texture outlives a single replayed draw, so later
+        // draws of the same script pass test against the depth earlier ones
+        // wrote. It is recreated when the target's size changes.
         wgpu::TextureView depth_view;
         wgpu::RenderPassDepthStencilAttachment depth_attachment{};
-        has_depth = payload.hasObjectMember("depthStencil") || payload.hasObjectMember("pipelineDepthStencil");
-
         if (has_depth) {
-            wgpu::TextureDescriptor depth_tex_desc{};
-            uint32_t depth_w = target_canvas_state ? target_canvas_state->width : (target_texture_state ? target_texture_state->width : 256);
-            uint32_t depth_h = target_canvas_state ? target_canvas_state->height : (target_texture_state ? target_texture_state->height : 256);
-            depth_tex_desc.size = {depth_w, depth_h, 1};
-            depth_tex_desc.format = wgpu::TextureFormat::Depth24Plus;
-            depth_tex_desc.usage = wgpu::TextureUsage::RenderAttachment;
-            depth_texture = device_ptr->CreateTexture(&depth_tex_desc);
+            auto& depth_texture = target_canvas_state != nullptr ? target_canvas_state->pass_depth
+                                                                 : target_texture_state->pass_depth;
+            const uint32_t depth_w = target_canvas_state ? target_canvas_state->width : target_texture_state->width;
+            const uint32_t depth_h = target_canvas_state ? target_canvas_state->height : target_texture_state->height;
+            bool fresh_depth = false;
+            if (!depth_texture || depth_texture.GetWidth() != depth_w || depth_texture.GetHeight() != depth_h) {
+                wgpu::TextureDescriptor depth_tex_desc{};
+                depth_tex_desc.size = {depth_w, depth_h, 1};
+                depth_tex_desc.format = wgpu::TextureFormat::Depth24Plus;
+                depth_tex_desc.usage = wgpu::TextureUsage::RenderAttachment;
+                depth_texture = device_ptr->CreateTexture(&depth_tex_desc);
+                fresh_depth = true;
+            }
             if (depth_texture) {
                 depth_view = depth_texture.CreateView();
                 depth_attachment.view = depth_view;
                 depth_attachment.depthLoadOp = wgpu::LoadOp::Clear;
                 depth_attachment.depthStoreOp = wgpu::StoreOp::Store;
                 depth_attachment.depthClearValue = 1.0f;
+                if (payload.hasObjectMember("depthStencil") && payload["depthStencil"].isObject()) {
+                    auto pass_depth = payload["depthStencil"];
+                    if (pass_depth.hasObjectMember("depthLoadOp") &&
+                        pass_depth["depthLoadOp"].getWithDefault<std::string>("clear") == "load") {
+                        depth_attachment.depthLoadOp = wgpu::LoadOp::Load;
+                    }
+                    if (pass_depth.hasObjectMember("depthClearValue")) {
+                        depth_attachment.depthClearValue = static_cast<float>(
+                            std::clamp(pass_depth["depthClearValue"].getWithDefault<double>(1.0), 0.0, 1.0));
+                    }
+                }
+                // A depth texture created just now holds nothing to load.
+                if (!first_draw_in_pass && !fresh_depth) {
+                    depth_attachment.depthLoadOp = wgpu::LoadOp::Load;
+                } else if (fresh_depth) {
+                    depth_attachment.depthLoadOp = wgpu::LoadOp::Clear;
+                }
             } else {
                 has_depth = false;
             }

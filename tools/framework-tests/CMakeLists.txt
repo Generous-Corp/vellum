@@ -48,6 +48,22 @@ vellum_add_framework_test(gpu-capabilities
     SOURCES gpu_capabilities_test.cpp
     UNITS Vellum::MirrorRender_2d)
 
+# Several draws in one scripted WebGPU render pass, read back through Skia on a
+# real Dawn adapter. The test links the device library for the headless
+# surface, as the other GPU tests here do, and exits 77 (skipped) without a
+# rendering adapter.
+if(TARGET vellum-dawn-headers AND TARGET VellumGpuRuntime::Device)
+    vellum_add_framework_test(webgpu-multi-draw
+        SOURCES webgpu_multi_draw_test.cpp
+        UNITS Vellum::MirrorView_script Vellum::MirrorRender_2d Vellum::DawnHeaders
+               VellumGpuRuntime::Device)
+    target_include_directories(vellum-framework-webgpu-multi-draw-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+    set_tests_properties(vellum.framework.webgpu-multi-draw PROPERTIES SKIP_RETURN_CODE 77)
+else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES webgpu_multi_draw_test.cpp)
+endif()
+
 # The WGSL validator behind vellum_add_wgsl_shaders(): it compiles each shader
 # on Dawn's Null adapter. It compiles the render unit's WGSL helper and
 # diagnostics itself and links the device layer directly, as the gpu-runtime
