@@ -159,6 +159,42 @@ FRAMEWORK_TEST(a_store_bridge_keeps_the_store_metadata_and_text) {
     CHECK(js("getParam('Gain')") == "0.5");
 }
 
+FRAMEWORK_TEST(a_model_bridge_refuses_store_only_bindings_loudly) {
+    ModelHarness h;
+    h.bridge.load_script("createKnob('k', 0, 0, 40, 40);");
+    // These paths still read a StateStore; on a model they refuse rather than
+    // bind nothing.
+    CHECK(h.js("bindWidgetToParam('k', 'cutoff')") == "false");
+    CHECK(h.js("bindMeter('k', 'cutoff')") == "false");
+    CHECK(h.js("__subscribeParam__('cutoff')") == "0");
+    CHECK(h.js("isWidgetParamBound('k')") == "false");
+}
+
+FRAMEWORK_TEST(a_store_bridge_ignores_a_nan_set_param) {
+    view::ScriptEngine engine;
+    view::View root;
+    vellum::state::StateStore store;
+    store.add_parameter({.id = 7, .name = "Gain", .unit = "dB", .range = {-60.0f, 12.0f, 0.0f}});
+    view::WidgetBridge bridge(engine, root, store);
+    store.set_normalized(7, 0.25f);
+    bridge.load_script("setParam('Gain', NaN);");
+    CHECK(std::abs(store.get_normalized(7) - 0.25f) < 1e-6f);
+}
+
+FRAMEWORK_TEST(a_store_bridge_model_is_found_from_this_image) {
+    // The store-built bridge creates its model inside the framework's image;
+    // this image's metadata_of() finds the interface on it.
+    view::ScriptEngine engine;
+    view::View root;
+    vellum::state::StateStore store;
+    store.add_parameter({.id = 7, .name = "Gain", .range = {-60.0f, 12.0f, 0.0f}});
+    view::WidgetBridge bridge(engine, root, store);
+    auto* metadata = value::metadata_of(bridge.params());
+    CHECK(metadata != nullptr);
+    if (metadata != nullptr)
+        CHECK(metadata->range(bridge.params().resolve("Gain")).plain_min == -60.0);
+}
+
 }  // namespace
 
 int main() { return framework_test::run_all(); }

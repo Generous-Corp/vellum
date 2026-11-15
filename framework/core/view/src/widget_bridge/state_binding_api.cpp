@@ -20,6 +20,7 @@
 #include "api_registry.hpp"
 #include "bridge_dispatch.hpp"
 
+#include <vellum/runtime/log.hpp>
 #include <vellum/state/param_json.hpp>
 #include <vellum/value/param_metadata.hpp>
 
@@ -250,6 +251,18 @@ std::string_view value_channel_name(std::string_view source) {
     if (source.size() <= kPrefix.size() || source.substr(0, kPrefix.size()) != kPrefix)
         return {};
     return source.substr(kPrefix.size());
+}
+
+/// A model-built bridge does not bind widgets to parameters or subscribe to
+/// them yet: those paths read a StateStore. Refuse loudly instead of binding
+/// nothing; a value-channel source is unaffected.
+bool refuse_param_binding_on_model(bool has_store, const char* function, std::string_view source) {
+    if (has_store || !value_channel_name(source).empty())
+        return false;
+    runtime::log_warn("WidgetBridge: {}('{}') is not supported on a bridge built over a "
+                      "ParamModel; nothing was bound",
+                      function, source);
+    return true;
 }
 } // namespace
 
@@ -796,6 +809,8 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
     register_bridge_function(api, "__subscribeParam__", [&self](choc::javascript::ArgumentList args) {
         const auto name = args.get<std::string>(0, "");
         if (name.empty()) return choc::value::createInt64(0);
+        if (refuse_param_binding_on_model(self.has_store_, "onParamChanged", name))
+            return choc::value::createInt64(0);
         state::ParamID param_id = 0;
         if (!self.resolve_param_id(name, param_id)) return choc::value::createInt64(0);
 
@@ -971,6 +986,8 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
     // without losing host automation touch/release or undo grouping. Returns
     // true if the param exists and the binding was set.
     register_bridge_function(api, "bindWidgetToParam", [&self](choc::javascript::ArgumentList args) {
+        if (refuse_param_binding_on_model(self.has_store_, "bindWidgetToParam", args.get<std::string>(1, "")))
+            return choc::value::createBool(false);
         return choc::value::createBool(
             self.add_param_binding(args.get<std::string>(0, ""),
                               args.get<std::string>(1, ""),
@@ -981,6 +998,8 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
     // bindMeter(widgetId, source, transform?) -> bind a Meter widget to a param
     // (the source drives both the rms and peak fill). Same native-push contract.
     register_bridge_function(api, "bindMeter", [&self](choc::javascript::ArgumentList args) {
+        if (refuse_param_binding_on_model(self.has_store_, "bindMeter", args.get<std::string>(1, "")))
+            return choc::value::createBool(false);
         return choc::value::createBool(
             self.add_param_binding(args.get<std::string>(0, ""),
                               args.get<std::string>(1, ""),
@@ -992,6 +1011,8 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
     // to a vector value channel. Scope sources are value channels only: there is
     // no parameter shape that carries a block of samples.
     register_bridge_function(api, "bindScope", [&self](choc::javascript::ArgumentList args) {
+        if (refuse_param_binding_on_model(self.has_store_, "bindScope", args.get<std::string>(1, "")))
+            return choc::value::createBool(false);
         return choc::value::createBool(
             self.add_param_binding(args.get<std::string>(0, ""),
                               args.get<std::string>(1, ""),

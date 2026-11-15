@@ -79,6 +79,10 @@ public:
     WidgetBridge(ScriptEngine& engine, View& root, value::ParamModel& params,
                  render::GpuSurface* gpu_surface = nullptr,
                  CapabilitySet granted_capabilities = CapabilitySet::all());
+
+    // The model the parameter functions reach: the one this bridge was built
+    // over, or the bridge's own model over its store.
+    value::ParamModel& params() noexcept { return params_; }
     ~WidgetBridge();
 
     // Attach (or replace) the GPU surface AFTER construction. Mirrors the
