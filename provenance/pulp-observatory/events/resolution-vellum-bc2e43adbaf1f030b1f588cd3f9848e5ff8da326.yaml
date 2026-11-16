@@ -1,0 +1,24 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-16T04:45:37Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-bc2e43adbaf1f030b1f588cd3f9848e5ff8da326",
+  "kind": "resolution",
+  "linked_commits": [
+    "bc2e43adbaf1f030b1f588cd3f9848e5ff8da326"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@claude-observatory-agent",
+  "rationale": "Merge carrying Vellum's design IR v3 material references and v4 animation tracks (vellum-design-ir package schema and normalizer) with the effect, layer cache and component registry code behind them. Pulp's own pulp-design-ir-v1 manifest tag in tools/scripts is a separate, unrelated schema name that this schema does not touch. Owner decision 2026-11-16 04:45Z, recorded in pulp-planning vellum-move/DECISIONS.md (framework-only for the 8 pending schema events, on the condition that each changes only API or schema Pulp consumers get from Vellum after the cutover), is the owner's sign-off for this schema-class observation; recorded here by an agent. Pulp search at origin/main ced536cbc56b (git grep -w over core tools test examples apple ship inspect) for vellum-design-ir, nodeWithoutMaterial, materialReference and LayerCache returns 0; control SkiaSurface on the same search returns 288 in 64 files. Any later resolution overrides this.",
+  "resolves": "vellum-bc2e43adbaf1f030b1f588cd3f9848e5ff8da326",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
