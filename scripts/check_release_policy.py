@@ -23,12 +23,20 @@ fails when:
   version-at-land.yml that holds a secret runs Python in any step, or a repository
   Python file is named like a standard-library module, so checked-out code
   cannot run with the signing key or an App token;
-- a step of release-tag.yml reads an Administration-only endpoint with `gh
-  api` while its own `env.GH_TOKEN` is anything but the token an earlier step
-  of its job minted with the pinned create-github-app-token action, or calls
-  `gh api` with an endpoint this check cannot read. Steps are read from the
-  workflow's structure, named or not; comments and shell line continuations
-  do not change what is read;
+- a job of a release workflow that can reach a GitHub credential runs a
+  step sequence that matches none of its variants in RUN_ALLOWLIST, key for
+  key and in order (an "unsupported run body"), has an expression in a run
+  body, uses an action not pinned to a commit, or runs elsewhere (container,
+  services, defaults). The check reads no shell: an exact, owner-reviewed
+  list replaces analysis of what a body might run. Because the base branch's
+  copy judges with the base's list, changing such a step takes two pull
+  requests: one adds the new sequence as a variant, the next changes the
+  workflow and drops the old variant;
+- an allowlisted step names an Administration-only endpoint while its own
+  `env.GH_TOKEN` is anything but the token an earlier step of its job minted
+  with the pinned create-github-app-token action, any step sets GITHUB_TOKEN
+  or a GH_TOKEN that is neither, or a step holding the signing key has a
+  GitHub credential in scope;
 - the release-policy lane of scripts/ci_lanes.json stops running
   scripts/test_ci_lanes.py or this check, so a release test dropped from every
   lane still fails CI without the manifest being owner-owned;
@@ -155,29 +163,11 @@ VERSION_WORKFLOW = "version-at-land.yml"
 RELEASE_WORKFLOWS = (SIGNING_WORKFLOW, "release-policy.yml", VERSION_WORKFLOW)
 # Workflows whose secret-holding steps must run no Python at all.
 SECRET_ISOLATED = (SIGNING_WORKFLOW, VERSION_WORKFLOW)
-# Endpoints only an Administration-read token may call; the Actions token gets 403.
-# Endpoints only the GitHub App token (Administration: read) can read.
-ADMIN_ENDPOINT = re.compile(r"branches/main/protection|rules/branches/|/rulesets|immutable-releases")
-# A `gh api` call: gh by its bare name, by any path (`/usr/bin/gh`, `./gh`), or
-# quoted (`"gh"`, `'gh'`). Only a name ending in another word character, `.` or
-# `-` (`my-gh`) is another tool. The rest of the line is captured in a
-# lookahead, so finditer still finds every later call on the same line
-# (`gh api a ; gh api b`, `gh api a | gh api b`).
-# Quotes and backslashes may sit anywhere in either word without changing what
-# the shell runs: `g\h api`, `g'h' api` and `"g"h 'a'pi` are all
-# gh api, so the pattern allows them between every letter.
-GH_API = re.compile(
-    r"(?<![A-Za-z0-9_.-])[\"'\\]*g[\"'\\]*h[\"'\\]*[ \t]+[\"'\\]*a[\"'\\]*p[\"'\\]*i[\"'\\]*"
-    r"(?![A-Za-z0-9_-])(?=(?P<rest>[^\n]*))")
-# `gh api` options that take a value, which is therefore not the endpoint.
-GH_API_VALUE_OPTIONS = frozenset({
-    "-X", "--method", "-H", "--header", "-f", "--raw-field", "-F", "--field", "--input", "-q", "--jq",
-    "-t", "--template", "--hostname", "--cache", "-p", "--preview",
-})
-# A shell redirection word, quotes already removed: an optional fd or `&`, the
-# operator, and its operand when attached (`>out.json`, `2>/dev/null`, `&>log`).
-# A detached operand is the next word. Neither is the endpoint.
-REDIRECTION = re.compile(r"(?:[0-9]+|&)?(?:>>|>\||>&|>|<<<|<<-|<<|<&|<>|<)(?P<operand>.*)", re.DOTALL)
+# Endpoints only the GitHub App token (Administration: read) can read; the
+# Actions token gets 403.
+# An allowlisted body names one as an API path (`repos/<owner>/<repo>/...`);
+# a file named after one (`immutable-releases.json`) is not a read.
+ADMIN_ENDPOINT = re.compile(r"repos/[^\s\"']*?/(?:branches/main/protection|rules/branches/|rulesets|immutable-releases)")
 STEP_TOKEN = re.compile(r"\$\{\{\s*steps\.(?P<id>[A-Za-z0-9_-]+)\.outputs\.token\s*\}\}")
 APP_TOKEN_ACTION = re.compile(r"actions/create-github-app-token@[0-9a-f]{40}")
 PYTHON_CALL = re.compile(r"\bpython3?\b(?P<flags>(?:\s+-[A-Za-z]+)*)")
@@ -264,6 +254,11 @@ class Step:
     run: str | None = None
     env: dict[str, str] | None = None
     shell: str = "bash"
+    # Every key but `name`, as written: `env` and `with` as string mappings,
+    # `run` without trailing whitespace. Compared against RUN_ALLOWLIST.
+    fields: dict | None = None
+    # The workflow and job env the step inherits.
+    inherited: dict[str, str] | None = None
 
     @property
     def title(self) -> str:
@@ -276,6 +271,10 @@ class Workflow:
     secrets: dict[str, bool]
     environments: list[str]
     reusable: list[str]
+    # Each job's text (every key and value) with the workflow env, its keys, and the root's keys.
+    job_text: dict[str, str] | None = None
+    job_keys: dict[str, frozenset[str]] | None = None
+    root_keys: frozenset[str] = frozenset()
 
 
 ROOT_KEYS = frozenset({"name", "run-name", "on", "permissions", "env", "defaults", "concurrency", "jobs"})
@@ -367,13 +366,15 @@ def parse_workflow(text: str) -> Workflow:
             refuse("workflow must have a jobs mapping")
         shell = default_shell(root, "bash", "workflow")
         workflow_env = strings(root["env"], "workflow.env") if "env" in root else {}
-        parsed = Workflow({}, {}, [], [])
+        parsed = Workflow({}, {}, [], [], {}, {}, frozenset(root))
         for job, body in mapping(root["jobs"], "jobs").items():
             fields = mapping(body, f"job {job}", JOB_KEYS)
             job_shell = default_shell(fields, shell, f"job {job}")
             job_env = strings(fields["env"], f"job {job}.env") if "env" in fields else {}
             parsed.secrets[job] = bool(SECRET.search(contents(body))
                                        or SECRET.search(str(workflow_env)))
+            parsed.job_text[job] = contents(body) + "\n" + "\n".join(f"{k}: {v}" for k, v in workflow_env.items())
+            parsed.job_keys[job] = frozenset(fields)
             if "environment" in fields:
                 environment = fields["environment"]
                 if isinstance(environment, yaml.MappingNode):
@@ -418,8 +419,15 @@ def parse_workflow(text: str) -> Workflow:
                                              or run.start_mark.line != next(k.start_mark.line for k, v in entry.value if v is run)):
                         refuse("multiline plain run scalar; use run: |")
                 step.env = strings(values["env"], "step.env") if "env" in values else {}
-                if "with" in values:
-                    strings(values["with"], "step.with", multiline=True)
+                step.inherited = {**workflow_env, **job_env}
+                step.fields = {}
+                for key, value in values.items():
+                    if key in ("env", "with"):
+                        step.fields[key] = strings(value, f"step.{key}", multiline=key == "with")
+                    elif key == "run":
+                        step.fields[key] = scalar(value, key).rstrip()
+                    elif key != "name":
+                        step.fields[key] = scalar(value, key)
                 # Inherited secrets reach a run even when its own env is empty.
                 if SECRET.search(str(workflow_env)) or SECRET.search(str(job_env)):
                     step.text += "\n" + str(workflow_env) + str(job_env)
@@ -635,191 +643,759 @@ def dynamic_load_problems(root: Path, path: str, source: Path, also_policy: froz
     return found
 
 
-def shell_commands(run: str) -> list[str]:
-    """A run block's command lines: continuations joined, comment lines dropped."""
-    # Shell comments end at their physical newline: a full-line comment ending
-    # in `\\` cannot swallow the command on the following line. The shell removes a backslash-newline pair outright, so a continuation
-    # inside a word (`immutable-\\` / `releases`) joins the word with no space;
-    # a line continued from the one before is never a full-line comment.
-    commands: list[str] = []
-    pending: str | None = None
-    for line in run.splitlines():
-        if pending is None and line.lstrip().startswith("#"):
-            continue
-        trailing = len(line) - len(line.rstrip("\\"))
-        continued = trailing % 2 == 1
-        pending = (pending or "") + (line[:-1] if continued else line)
-        if not continued:
-            commands.append(pending)
-            pending = None
-    if pending is not None:
-        commands.append(pending)
-    return [line for line in commands if line.strip() and not line.lstrip().startswith("#")]
+# A job of a release workflow that can reach a GitHub credential runs only
+# steps written, key for key, in RUN_ALLOWLIST. The check does not read shell:
+# whatever a run body does, it does it because the owner reviewed that exact
+# text here. A job reaches a credential when its text names GH_TOKEN,
+# GITHUB_TOKEN or the App-token action, or an expression in it names a secret
+# other than the signing key, a token, a step's outputs by index, or the
+# github context as a whole.
+CREDENTIAL_NAME = re.compile(r"(?i)\b(?:GH|GITHUB)_TOKEN\b|create-github-app-token")
+EXPRESSION = re.compile(r"\$\{\{(?P<body>.*?)\}\}", re.DOTALL)
+SIGNING_KEY = re.compile(r"(?i)\bsecrets\s*\.\s*RELEASE_TAG_SIGNING_KEY\b")
+CREDENTIAL_EXPRESSION = re.compile(
+    r"(?i)secrets|token|tojson|\[|\*|\bgithub\b(?!\s*\.\s*[a-z_][a-z0-9_]*)")
+# Actions a credential-holding job may use: pinned to a full commit, never a
+# local path or a container image, which could run unreviewed code in the job.
+PINNED_ACTION = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}")
+# Job keys that would run the reviewed steps somewhere else.
+UNSUPPORTED_CREDENTIAL_JOB_KEYS = frozenset({"container", "services", "defaults"})
+ACTIONS_TOKEN = "${{ github.token }}"
+ACTIONS_TOKEN_REFERENCE = re.compile(r"(?i)\bgithub\s*(?:\.\s*token\b|\[)")
 
 
-# Characters that end an unquoted shell word and start an operator or
-# redirection: `"$E";` is the word `$E` then `;`, and `x>out` is `x`, `>`, `out`.
-OPERATOR_CHARACTERS = frozenset(";&|()<>")
+def reaches_credential(text: str) -> bool:
+    if CREDENTIAL_NAME.search(text):
+        return True
+    return any(CREDENTIAL_EXPRESSION.search(SIGNING_KEY.sub("", expression["body"]))
+               for expression in EXPRESSION.finditer(text))
 
 
-def shell_words(text: str):
-    """The shell words of `text`, one at a time, quotes removed. An unquoted
-    operator or redirection is a word of its own (`;`, `&&`, `2>&`, `>`), as the
-    shell splits it, and `$(...)` stays inside the word it starts. The caller
-    stops at the word it wants, so a quote left open further along the line
-    (a `$(...)` closing, a multi-line argument) does not matter."""
-    word, quote, started, operator, depth, escaped = "", "", False, False, 0, False
-    for character in text:
-        if not quote and escaped:
-            word, started, escaped = word + character, True, False
-            continue
-        if not quote and character == "\\":
-            escaped = True
-            continue
-        if quote:
-            if character == quote:
-                quote = ""
-            else:
-                word += character
-            continue
-        if depth:
-            # Inside an unquoted `$(...)`: operators belong to the substitution.
-            depth += {"(": 1, ")": -1}.get(character, 0)
-            if character in " \t" and depth:
-                yield word
-                word = ""
-            else:
-                word += character
-            continue
-        if character == "(" and not operator and word.endswith("$"):
-            word, depth = word + character, 1
-            continue
-        if character in OPERATOR_CHARACTERS:
-            # A file descriptor (`2>`) or `&` (`&>`) before a redirection is
-            # part of it, not a word of its own.
-            if started and not operator and not (character in "<>" and word.isdigit()):
-                yield word
-                word = ""
-            word, started, operator = word + character, True, True
-            continue
-        if operator:
-            yield word
-            word, started, operator = "", False, False
-        if character in "'\"":
-            quote, started = character, True
-        elif character in " \t":
-            if started:
-                yield word
-            word, started = "", False
-        elif character == "#" and not started:
-            return
-        else:
-            word, started = word + character, True
-    if started:
-        yield word
+def allowlist_entries(name: str, workflow: str) -> dict[str, list[dict]]:
+    """Each credential-holding job's steps, in order: the variant RUN_ALLOWLIST would list for it."""
+    parsed = parse_workflow(workflow)
+    return {job: [step.fields for step in steps]
+            for job, steps in parsed.jobs.items() if reaches_credential(parsed.job_text[job])}
 
 
-def gh_api_targets(run: str) -> list[str | None]:
-    """The endpoint of each `gh api` call in a run block; None for a call whose
-    endpoint cannot be read (no operand, or one built by a substitution)."""
-    targets: list[str | None] = []
-    for line in shell_commands(run):
-        for call in GH_API.finditer(line):
-            target = None
-            skip = False
-            for word in shell_words(call["rest"]):
-                if skip:
-                    skip = False
-                elif (redirection := REDIRECTION.fullmatch(word)) is not None:
-                    # Before the operator check: `>` and `2>` are redirections
-                    # whose operand is the next word, not the end of the call.
-                    skip = not redirection["operand"]
-                elif (word in SHELL_OPERATORS or word in {"then", "do", "fi", "done"}
-                      or set(word) <= OPERATOR_CHARACTERS):
-                    break
-                elif word in GH_API_VALUE_OPTIONS:
-                    skip = True
-                elif not word.startswith("-"):
-                    target = word
-                    break
-            if target is not None and (re.fullmatch(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?", target)
-                                       or "$(" in target or "`" in target):
-                target = None
-            targets.append(target)
-    return targets
+def _body(text: str) -> str:
+    """A run body written on the lines after its opening quotes."""
+    return text[1:].rstrip()
 
 
-# Only GitHub context expressions are immutable before shell execution.
-# Shell variables can be reassigned by run scripts, regardless of step.env.
-# The repository is safe only in the owner/repo slot; the SHA is hexadecimal.
-SAFE_REPOSITORY_SLOT = re.compile(
-    r"^(/?repos/)\$\{\{\s*github\.repository\s*\}\}(?=/|$)")
-SAFE_SHA = re.compile(r"\$\{\{\s*github\.sha\s*\}\}")
+# Each credential-holding job of a release workflow, as one or more step
+# sequences it may run: every step in order, every key but `name` exactly as
+# the workflow writes it (a run body without its trailing whitespace). The
+# release-path review reads here the exact shell that will hold a token.
+#
+# release-policy.yml also runs the base branch's copy of this check, with the
+# base's list, so a step changes in two pull requests: the first adds the new
+# sequence as another variant of its job (no workflow changes, so the base's
+# check passes), and the second changes the workflow and removes the old one.
+RUN_ALLOWLIST: dict[tuple[str, str], list[list[dict]]] = {
+    ('release-tag.yml', 'select-release-commit'): [[
+        {
+            'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+            'with': {
+                'ref': '${{ github.sha }}',
+                'fetch-depth': '0',
+                'persist-credentials': 'false',
+            },
+        },
+        {
+            'id': 'select',
+            'run': _body(r'''
+set -euo pipefail
+test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
+test "$GITHUB_REF" = refs/heads/main
+if ! python3 -I scripts/release_request.py select --commit "$GITHUB_SHA" --remote origin \
+  > "$RUNNER_TEMP/selection.txt" 2> "$RUNNER_TEMP/selection-reason.txt"; then
+  echo "::error::$(cat "$RUNNER_TEMP/selection-reason.txt")"
+  exit 1
+fi
+cat "$RUNNER_TEMP/selection.txt" >> "$GITHUB_OUTPUT"
+reason="$(cat "$RUNNER_TEMP/selection-reason.txt")"
+echo "::notice::$reason"
+printf '%s\n' "$reason" >> "$GITHUB_STEP_SUMMARY"'''),
+        },
+        {
+            'if': "steps.select.outputs.tag != ''",
+            'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+            'with': {
+                'repository': 'Generous-Corp/pulp',
+                'ref': 'main',
+                'path': '.exact-boundary-pulp',
+                'fetch-depth': '0',
+                'persist-credentials': 'false',
+            },
+        },
+        {
+            'if': "steps.select.outputs.tag != ''",
+            'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+            'with': {
+                'repository': 'Generous-Corp/pulp',
+                'ref': '${{ steps.select.outputs.pulp-cursor }}',
+                'path': '.observatory-pulp',
+                'fetch-depth': '0',
+                'persist-credentials': 'false',
+            },
+        },
+        {
+            'if': "steps.select.outputs.tag != ''",
+            'env': {
+                'GH_TOKEN': '${{ github.token }}',
+                'TAG': '${{ steps.select.outputs.tag }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+python3 -I scripts/pretag_checks.py --tag "$TAG" --commit "$GITHUB_SHA"'''),
+        },
+        {
+            'id': 'release',
+            'if': "steps.select.outputs.tag != ''",
+            'env': {
+                'TAG': '${{ steps.select.outputs.tag }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"'''),
+        },
+    ]],
+    ('release-tag.yml', 'sign-release-tag'): [[
+        {
+            'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+            'with': {
+                'ref': '${{ github.sha }}',
+                'fetch-depth': '0',
+                'persist-credentials': 'false',
+            },
+        },
+        {
+            'run': _body(r'''
+python3 -I -m venv "$RUNNER_TEMP/release-policy-venv"
+. "$RUNNER_TEMP/release-policy-venv/bin/activate"
+python3 -I -m pip install --disable-pip-version-check --only-binary=:all: PyYAML==6.0.3
+echo "$RUNNER_TEMP/release-policy-venv/bin" >> "$GITHUB_PATH"'''),
+        },
+        {
+            'id': 'app-token',
+            'uses': 'actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3',
+            'with': {
+                'app-id': '${{ vars.RELEASE_APP_ID }}',
+                'private-key': '${{ secrets.RELEASE_APP_PRIVATE_KEY }}',
+            },
+        },
+        {
+            'env': {
+                'GH_TOKEN': '${{ steps.app-token.outputs.token }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+timeout 120 gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" \
+  > "$RUNNER_TEMP/required-checks.json"
+timeout 120 gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"
+timeout 120 gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"
+# gh api exits non-zero on any non-2xx answer; a 2xx body of the wrong
+# shape (another token, another endpoint) fails here, not in the decision.
+jq -e 'type == "object" and (.contexts | type == "array")' "$RUNNER_TEMP/required-checks.json" > /dev/null
+jq -e 'type == "array"' "$RUNNER_TEMP/branch-rules.json" > /dev/null
+jq -e 'type == "object" and (.enabled | type == "boolean")' "$RUNNER_TEMP/immutable-releases.json" > /dev/null
+date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNNER_TEMP/immutable-releases-read-at.txt"'''),
+        },
+        {
+            'env': {
+                'GH_TOKEN': '${{ github.token }}',
+                'SELECTED_TAG': '${{ needs.select-release-commit.outputs.tag }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
+test "$GITHUB_REF" = refs/heads/main
+# Decide again in this job, and require the same answer: the commit
+# must still be the version's reconcile and the tag must still be absent.
+python3 -I scripts/release_request.py select --commit "$GITHUB_SHA" --remote origin \
+  > "$RUNNER_TEMP/selection.txt"
+test "$(sed -n 's/^tag=//p' "$RUNNER_TEMP/selection.txt")" = "$SELECTED_TAG"
+# The push that landed the reconcile starts main's required checks again
+# on this commit. While the newest run of any required check is still
+# running (gpu-macos takes about 45 minutes), wait rather than read it
+# as unmet. A transient API failure is retried, not fatal.
+# Both reads share one function, kept in a file the later step sources.
+# Each gh api call has its own timeout so one hung call cannot outlive
+# the loop's deadline; a timeout takes the same retry and failure path.
+cat > "$RUNNER_TEMP/fetch_results.sh" <<'FETCH'
+fetch_results() {
+  local attempt
+  for attempt in 1 2 3; do
+    if timeout 120 gh api --method GET --paginate --slurp \
+      "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
+      -f filter=all > "$RUNNER_TEMP/check-runs.json"; then
+      break
+    fi
+    [ "$attempt" = 3 ] && exit 1
+    sleep $((attempt * 20))
+  done
+  # release-path-review and framework-trusted-verify are commit
+  # statuses, not check runs; main's rules accept either.
+  for attempt in 1 2 3; do
+    if timeout 120 gh api --method GET --paginate --slurp \
+      "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/statuses?per_page=100" \
+      > "$RUNNER_TEMP/statuses.json"; then
+      break
+    fi
+    [ "$attempt" = 3 ] && exit 1
+    sleep $((attempt * 20))
+  done
+}
+FETCH
+. "$RUNNER_TEMP/fetch_results.sh"
+deadline=$((SECONDS + 6000))
+while :; do
+  fetch_results
+  running="$(python3 -I scripts/release_request.py pending --commit "$GITHUB_SHA" \
+    --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \
+    --statuses "$RUNNER_TEMP/statuses.json" \
+    --protection "$RUNNER_TEMP/required-checks.json")"
+  [ -z "$running" ] && break
+  if [ "$SECONDS" -ge "$deadline" ]; then
+    echo "::error::required checks still running after 100 minutes: $running"
+    exit 1
+  fi
+  echo "waiting for: $(printf '%s' "$running" | paste -sd, -)"
+  sleep 60
+done'''),
+        },
+        {
+            'id': 'push-token',
+            'uses': 'actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3',
+            'with': {
+                'app-id': '${{ vars.RELEASE_APP_ID }}',
+                'private-key': '${{ secrets.RELEASE_APP_PRIVATE_KEY }}',
+            },
+        },
+        {
+            'env': {
+                'GH_TOKEN': '${{ steps.push-token.outputs.token }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+timeout 120 gh api "repos/$GITHUB_REPOSITORY/branches/main/protection/required_status_checks" \
+  > "$RUNNER_TEMP/required-checks.json"
+timeout 120 gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"
+timeout 120 gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"
+# gh api exits non-zero on any non-2xx answer; a 2xx body of the wrong
+# shape (another token, another endpoint) fails here, not in the decision.
+jq -e 'type == "object" and (.contexts | type == "array")' "$RUNNER_TEMP/required-checks.json" > /dev/null
+jq -e 'type == "array"' "$RUNNER_TEMP/branch-rules.json" > /dev/null
+jq -e 'type == "object" and (.enabled | type == "boolean")' "$RUNNER_TEMP/immutable-releases.json" > /dev/null
+date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNNER_TEMP/immutable-releases-read-at.txt"'''),
+        },
+        {
+            'id': 'decision',
+            'env': {
+                'GH_TOKEN': '${{ github.token }}',
+                'SELECTED_TAG': '${{ needs.select-release-commit.outputs.tag }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+# Read the check runs and statuses again: the wait loop's snapshot can be
+# minutes old, and the verdict must come from results read just before it.
+. "$RUNNER_TEMP/fetch_results.sh"
+fetch_results
+tag="$(python3 -I scripts/release_request.py check --commit "$GITHUB_SHA" --remote origin \
+  --branch-rules "$RUNNER_TEMP/branch-rules.json" --check-runs "$RUNNER_TEMP/check-runs.json" \
+  --statuses "$RUNNER_TEMP/statuses.json" \
+  --protection "$RUNNER_TEMP/required-checks.json" \
+  --immutable-releases "$RUNNER_TEMP/immutable-releases.json" \
+  --immutable-read-at "$(cat "$RUNNER_TEMP/immutable-releases-read-at.txt")")"
+test "$tag" = "$SELECTED_TAG"
+python3 -I scripts/check_release_policy.py check
+python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
+version="${tag#v}"
+python3 -I scripts/release_request.py freeze --tag "$tag" > "$RUNNER_TEMP/freeze.json"
+python3 -I scripts/release_request.py attestation --commit "$GITHUB_SHA" \
+  --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$tag" > "$RUNNER_TEMP/promotion-attestation.json"
+printf 'tag=%s\nversion=%s\n' "$tag" "$version" >> "$GITHUB_OUTPUT"'''),
+        },
+        {
+            'id': 'sign',
+            'env': {
+                'RELEASE_TAG_SIGNING_KEY': '${{ secrets.RELEASE_TAG_SIGNING_KEY }}',
+                'TAG': '${{ steps.decision.outputs.tag }}',
+                'PRINCIPAL': '${{ steps.decision.outputs.principal }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+test -n "$RELEASE_TAG_SIGNING_KEY"
+key="$RUNNER_TEMP/release-signing-key"
+trap 'rm -f "$key"' EXIT
+(umask 077 && printf '%s\n' "$RELEASE_TAG_SIGNING_KEY" > "$key")
+# The signed message is the promotion attestation: provenance.yml
+# parses it from the tag and the release-readiness gate verifies it.
+git -c gpg.format=ssh -c user.signingkey="$key" \
+  -c user.name="Vellum release" -c user.email="$PRINCIPAL" \
+  tag -s -F "$RUNNER_TEMP/promotion-attestation.json" "$TAG" "$GITHUB_SHA"
+printf 'object=%s\n' "$(git rev-parse "refs/tags/$TAG")" >> "$GITHUB_OUTPUT"'''),
+        },
+        {
+            'env': {
+                'TAG': '${{ steps.decision.outputs.tag }}',
+                'OBJECT': '${{ steps.sign.outputs.object }}',
+                'PRINCIPAL': '${{ steps.decision.outputs.principal }}',
+                'FINGERPRINT': '${{ steps.decision.outputs.fingerprint }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+python3 -I scripts/verify_release_tag.py --repo . --repository "$GITHUB_REPOSITORY" \
+  --tag-name "$TAG" --tag-object-sha "$OBJECT" --source-commit "$GITHUB_SHA" \
+  --allowed-signers provenance/release-signers.allowed_signers \
+  --expected-principal "$PRINCIPAL" --expected-fingerprint "$FINGERPRINT" \
+  --output "$RUNNER_TEMP/release-trust.json"'''),
+        },
+        {
+            'env': {
+                'GH_TOKEN': '${{ steps.push-token.outputs.token }}',
+                'TAG': '${{ steps.decision.outputs.tag }}',
+                'OBJECT': '${{ steps.sign.outputs.object }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+  push "https://github.com/$GITHUB_REPOSITORY" "refs/tags/$TAG:refs/tags/$TAG"
+test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)" = "$OBJECT"
+# The tag is already pushed, so a transient API failure here must not
+# leave it unfrozen: retry, and if every attempt fails, say exactly how
+# to apply the same ruleset by hand.
+for attempt in 1 2 3 4 5; do
+  if gh api --method POST "repos/$GITHUB_REPOSITORY/rulesets" --input "$RUNNER_TEMP/freeze.json" > /dev/null; then
+    break
+  fi
+  if [ "$attempt" = 5 ]; then
+    echo "::error::$TAG is pushed but not frozen. Apply this ruleset as the owner:"
+    cat "$RUNNER_TEMP/freeze.json"
+    exit 1
+  fi
+  sleep $((attempt * 20))
+done
+echo "signed, pushed and froze $TAG at $OBJECT" >> "$GITHUB_STEP_SUMMARY"'''),
+        },
+    ]],
+    ('release-tag.yml', 'dry-run-gate'): [[
+        {
+            'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+            'with': {
+                'ref': '${{ github.sha }}',
+                'fetch-depth': '0',
+                'persist-credentials': 'false',
+            },
+        },
+        {
+            'env': {
+                'GH_TOKEN': '${{ github.token }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+for status in queued in_progress waiting pending requested; do
+  gh api --method GET --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs" \
+    -f status="$status" -F per_page=100 > "$RUNNER_TEMP/runs-$status.json"
+done
+jq -s 'add' "$RUNNER_TEMP"/runs-*.json > "$RUNNER_TEMP/runs.json"'''),
+        },
+        {
+            'id': 'gate',
+            'env': {
+                'EVENT': '${{ github.event_name }}',
+                'BEFORE': '${{ github.event.before }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+test "$GITHUB_REF" = refs/heads/main
+python3 -I scripts/release_dry_run.py gate --event "$EVENT" --before "$BEFORE" --after "$GITHUB_SHA" \
+  --runs "$RUNNER_TEMP/runs.json" > "$RUNNER_TEMP/gate.txt" 2> "$RUNNER_TEMP/gate-reason.txt"
+run="$(sed -n 's/^run=//p' "$RUNNER_TEMP/gate.txt")"
+[[ "$run" == true || "$run" == false ]]
+printf 'run=%s\n' "$run" >> "$GITHUB_OUTPUT"
+echo "dry run: $run ($(head -n 1 "$RUNNER_TEMP/gate-reason.txt"))" >> "$GITHUB_STEP_SUMMARY"'''),
+        },
+    ]],
+    ('release-tag.yml', 'sign-dry-run-tag'): [[
+        {
+            'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+            'with': {
+                'ref': '${{ github.sha }}',
+                'fetch-depth': '0',
+                'persist-credentials': 'false',
+            },
+        },
+        {
+            'run': _body(r'''
+python3 -I -m venv "$RUNNER_TEMP/release-policy-venv"
+. "$RUNNER_TEMP/release-policy-venv/bin/activate"
+python3 -I -m pip install --disable-pip-version-check --only-binary=:all: PyYAML==6.0.3
+echo "$RUNNER_TEMP/release-policy-venv/bin" >> "$GITHUB_PATH"'''),
+        },
+        {
+            'id': 'dry-run',
+            'run': _body(r'''
+set -euo pipefail
+test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
+test "$GITHUB_REF" = refs/heads/main
+python3 -I scripts/release_dry_run.py plan --head "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+  --attempt "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/dry-run.txt"
+commit="$(sed -n 's/^commit=//p' "$RUNNER_TEMP/dry-run.txt")"
+tag="$(sed -n 's/^tag=//p' "$RUNNER_TEMP/dry-run.txt")"
+identity="$(sed -n 's/^identity=//p' "$RUNNER_TEMP/dry-run.txt")"
+[[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+[[ "$tag" =~ ^dry-run/(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))/[1-9][0-9]*-[1-9][0-9]*$ ]]
+test "$identity" = "${BASH_REMATCH[1]}"
+# The tagged commit's own release scripts decide, as on a release.
+git checkout --quiet --detach "$commit"
+python3 -I scripts/check_release_policy.py check
+python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
+# The signed message wraps v<version>'s attestation under its own
+# schema with the dry-run tag's name, so it can never pass for a release.
+python3 -I scripts/release_request.py attestation --commit "$commit" \
+  --attested-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --tag "$identity" --dry-run-tag "$tag" \
+  > "$RUNNER_TEMP/promotion-attestation.json"
+printf 'commit=%s\ntag=%s\n' "$commit" "$tag" >> "$GITHUB_OUTPUT"
+echo "dry run: $tag on $commit (release identity $identity)" >> "$GITHUB_STEP_SUMMARY"'''),
+        },
+        {
+            'id': 'sign',
+            'env': {
+                'RELEASE_TAG_SIGNING_KEY': '${{ secrets.RELEASE_TAG_SIGNING_KEY }}',
+                'TAG': '${{ steps.dry-run.outputs.tag }}',
+                'COMMIT': '${{ steps.dry-run.outputs.commit }}',
+                'PRINCIPAL': '${{ steps.dry-run.outputs.principal }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+test -n "$RELEASE_TAG_SIGNING_KEY"
+case "$TAG" in dry-run/v*) ;; *) exit 1 ;; esac
+key="$RUNNER_TEMP/release-signing-key"
+trap 'rm -f "$key"' EXIT
+(umask 077 && printf '%s\n' "$RELEASE_TAG_SIGNING_KEY" > "$key")
+git -c gpg.format=ssh -c user.signingkey="$key" \
+  -c user.name="Vellum release" -c user.email="$PRINCIPAL" \
+  tag -s -F "$RUNNER_TEMP/promotion-attestation.json" "$TAG" "$COMMIT"
+printf 'object=%s\n' "$(git rev-parse "refs/tags/$TAG")" >> "$GITHUB_OUTPUT"'''),
+        },
+        {
+            'env': {
+                'TAG': '${{ steps.dry-run.outputs.tag }}',
+                'COMMIT': '${{ steps.dry-run.outputs.commit }}',
+                'OBJECT': '${{ steps.sign.outputs.object }}',
+                'PRINCIPAL': '${{ steps.dry-run.outputs.principal }}',
+                'FINGERPRINT': '${{ steps.dry-run.outputs.fingerprint }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+python3 -I scripts/verify_release_tag.py --repo . --repository "$GITHUB_REPOSITORY" \
+  --tag-name "$TAG" --tag-object-sha "$OBJECT" --source-commit "$COMMIT" \
+  --allowed-signers provenance/release-signers.allowed_signers \
+  --expected-principal "$PRINCIPAL" --expected-fingerprint "$FINGERPRINT" \
+  --output "$RUNNER_TEMP/dry-run-trust.json"'''),
+        },
+        {
+            'id': 'push-token',
+            'uses': 'actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3',
+            'with': {
+                'app-id': '${{ vars.RELEASE_APP_ID }}',
+                'private-key': '${{ secrets.RELEASE_APP_PRIVATE_KEY }}',
+                'owner': 'Generous-Corp',
+                'repositories': 'vellum',
+                'permission-contents': 'write',
+            },
+        },
+        {
+            'env': {
+                'GH_TOKEN': '${{ steps.push-token.outputs.token }}',
+                'TAG': '${{ steps.dry-run.outputs.tag }}',
+                'OBJECT': '${{ steps.sign.outputs.object }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+case "$TAG" in dry-run/v*) ;; *) echo "::error::$TAG is not a dry-run tag"; exit 1 ;; esac
+git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+  push "https://github.com/$GITHUB_REPOSITORY" "refs/tags/$TAG:refs/tags/$TAG"
+test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)" = "$OBJECT"
+echo "pushed the dry-run tag $TAG at $OBJECT; sdk-release deletes it and its draft" >> "$GITHUB_STEP_SUMMARY"'''),
+        },
+    ]],
+    ('version-at-land.yml', 'plan'): [[
+        {
+            'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+            'with': {
+                'ref': 'main',
+                'fetch-depth': '0',
+                'persist-credentials': 'false',
+            },
+        },
+        {
+            'id': 'plan',
+            'run': _body(r'''
+set -euo pipefail
+test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
+main="$(git rev-parse HEAD)"
+if ! python3 -I scripts/version_at_land.py plan --commit "$main" --remote origin \
+  > "$RUNNER_TEMP/plan.txt" 2> "$RUNNER_TEMP/plan-reason.txt"; then
+  echo "::error::$(head -n 1 "$RUNNER_TEMP/plan-reason.txt")"
+  exit 1
+fi
+action="$(sed -n 's/^action=//p' "$RUNNER_TEMP/plan.txt")"
+version="$(sed -n 's/^version=//p' "$RUNNER_TEMP/plan.txt")"
+case "$action" in
+  bump) [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ;;
+  none|pending) test -z "$version" ;;
+  *) false ;;
+esac
+[[ "$main" =~ ^[0-9a-f]{40}$ ]]
+printf 'action=%s\nversion=%s\nmain=%s\n' "$action" "$version" "$main" >> "$GITHUB_OUTPUT"
+{ echo '### Version at land'; echo; cat "$RUNNER_TEMP/plan-reason.txt"; } >> "$GITHUB_STEP_SUMMARY"'''),
+        },
+        {
+            'if': "steps.plan.outputs.action == 'bump'",
+            'env': {
+                'VERSION': '${{ steps.plan.outputs.version }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+git switch -C "$BUMP_BRANCH"
+python3 -I scripts/version_at_land.py apply --to "$VERSION" > "$RUNNER_TEMP/surfaces.txt"
+xargs git add -- < "$RUNNER_TEMP/surfaces.txt"
+{
+  echo "chore(release): bump version to $VERSION"
+  echo
+  echo "Landing this pull request releases v$VERSION: release-tag.yml tags the"
+  echo "observatory reconcile that covers it."
+  echo
+  sed -n '1,$p' "$RUNNER_TEMP/plan-reason.txt"
+  echo
+  echo 'Version-Bump: skip reason="the version-at-land bump itself"'
+} > "$RUNNER_TEMP/message.txt"
+git -c user.name=vellum-version-at-land \
+  -c user.email=vellum-version-at-land@users.noreply.github.com \
+  commit --quiet --file "$RUNNER_TEMP/message.txt"
+mkdir -p "$RUNNER_TEMP/bump"
+git format-patch -1 --stdout HEAD > "$RUNNER_TEMP/bump/bump.patch"
+{
+  echo "Automated version bump from \`version-at-land.yml\`: **$VERSION**."
+  echo
+  echo "Landing it releases \`v$VERSION\`. release-tag.yml tags it only if this pull request is still exactly"
+  echo "the bump version-at-land derives. Lands by merge commit; never squash or rebase."
+  echo
+  echo '```'
+  cat "$RUNNER_TEMP/plan-reason.txt"
+  echo '```'
+} > "$RUNNER_TEMP/bump/body.md"'''),
+        },
+        {
+            'id': 'standing',
+            'if': "steps.plan.outputs.action == 'bump'",
+            'env': {
+                'GH_TOKEN': '${{ github.token }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+number="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" -f state=open \
+  -f head="$GITHUB_REPOSITORY_OWNER:$BUMP_BRANCH" -f per_page=100 --jq '.[0].number // ""')"
+[[ -z "$number" || "$number" =~ ^[0-9]+$ ]]
+current=false
+if [ -n "$number" ] && git fetch --quiet --no-tags origin "refs/heads/$BUMP_BRANCH"; then
+  ours="$(git -c core.hooksPath=/dev/null patch-id --stable < "$RUNNER_TEMP/bump/bump.patch" | cut -d' ' -f1)"
+  theirs="$(git -c core.hooksPath=/dev/null show FETCH_HEAD | git patch-id --stable | cut -d' ' -f1)"
+  bot="$(printf '%s\n%s\n%s\n%s' vellum-version-at-land vellum-version-at-land@users.noreply.github.com \
+    vellum-version-at-land vellum-version-at-land@users.noreply.github.com)"
+  if [ "$(git rev-list --count origin/main..FETCH_HEAD)" = 1 ] && [ -n "$ours" ] && [ "$ours" = "$theirs" ] \
+    && [ "$(git log -1 --format=%an%n%ae%n%cn%n%ce FETCH_HEAD)" = "$bot" ] \
+    && git log -1 --format=%B FETCH_HEAD \
+      | grep -qxF 'Version-Bump: skip reason="the version-at-land bump itself"'; then
+    current=true
+    echo "::notice::#$number already proposes this bump"
+  fi
+fi
+printf 'number=%s\ncurrent=%s\n' "$number" "$current" >> "$GITHUB_OUTPUT"'''),
+        },
+        {
+            'if': "steps.plan.outputs.action == 'bump' && steps.standing.outputs.current != 'true'",
+            'uses': 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a',
+            'with': {
+                'name': 'version-bump',
+                'path': '${{ runner.temp }}/bump/',
+                'retention-days': '3',
+                'if-no-files-found': 'error',
+            },
+        },
+    ]],
+    ('version-at-land.yml', 'push'): [[
+        {
+            'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+            'with': {
+                'ref': '${{ needs.plan.outputs.main }}',
+                'persist-credentials': 'false',
+            },
+        },
+        {
+            'uses': 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c',
+            'with': {
+                'name': 'version-bump',
+                'path': '${{ runner.temp }}/bump',
+            },
+        },
+        {
+            'env': {
+                'MAIN': '${{ needs.plan.outputs.main }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+[[ "$MAIN" =~ ^[0-9a-f]{40}$ ]]
+test "$(git rev-parse HEAD)" = "$MAIN"
+allowed=(
+  CMakeLists.txt
+  README.md
+  cli/tests/test_agent_instructions_artifact.py
+  cli/tests/test_cli.py
+  cli/tests/test_contamination_scanner.py
+  cli/tests/test_dev.py
+  cli/tests/test_installer.py
+  cli/vellum_cli.py
+  docs/cli/contract.md
+  docs/cli/install-artifact.md
+  scripts/build_sdk_artifact.py
+  scripts/install.ps1
+  scripts/install.sh
+  scripts/verify_sdk_artifact.py
+  scripts/INSTALLER_SHA256SUMS
+)
+patch="$RUNNER_TEMP/bump/bump.patch"
+while IFS= read -r path; do
+  ok=false
+  for entry in "${allowed[@]}"; do [ "$path" = "$entry" ] && ok=true; done
+  if [ "$ok" != true ]; then
+    echo "::error::the planned bump touches $path, which is not a version surface"
+    exit 1
+  fi
+done < <(git -c core.hooksPath=/dev/null apply --numstat "$patch" | cut -f3)
+git -c core.hooksPath=/dev/null -c user.name=vellum-version-at-land \
+  -c user.email=vellum-version-at-land@users.noreply.github.com am --quiet "$patch"
+test "$(git rev-parse HEAD^)" = "$MAIN"'''),
+        },
+        {
+            'id': 'bump-token',
+            'uses': 'actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3',
+            'with': {
+                'app-id': '${{ secrets.SHIPYARD_APP_ID }}',
+                'private-key': '${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}',
+                'owner': 'Generous-Corp',
+                'repositories': 'vellum',
+                'permission-contents': 'write',
+                'permission-pull-requests': 'write',
+            },
+        },
+        {
+            'env': {
+                'GH_TOKEN': '${{ steps.bump-token.outputs.token }}',
+                'MAIN': '${{ needs.plan.outputs.main }}',
+                'VERSION': '${{ needs.plan.outputs.version }}',
+                'NUMBER': '${{ needs.plan.outputs.number }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+[[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+[[ -z "$NUMBER" || "$NUMBER" =~ ^[0-9]+$ ]]
+clean() (
+  local record complete=false
+  local -a discard=()
+  while IFS= read -r -d '' record; do
+    if [[ -z "$record" ]]; then
+      complete=true
+      break
+    fi
+    case "${record%%=*}" in
+      GH_TOKEN) ;;
+      *) discard+=(-u "${record%%=*}") ;;
+    esac
+  done < <(/usr/bin/env -0 && builtin printf '\0')
+  [[ "$complete" == true ]] || return 1
+  /usr/bin/env "${discard[@]}" PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" GIT_CONFIG_NOSYSTEM=1 "$@"
+)
+auth="http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+remote="https://github.com/$GITHUB_REPOSITORY"
+live="$(clean git -c core.hooksPath=/dev/null -c "$auth" ls-remote "$remote" refs/heads/main | cut -f1)"
+if [ "$live" != "$MAIN" ]; then
+  echo "::notice::main moved from $MAIN to $live while the bump was planned; the next run proposes it"
+  exit 0
+fi
+lease="$(clean git -c core.hooksPath=/dev/null -c "$auth" ls-remote "$remote" "refs/heads/$BUMP_BRANCH" | cut -f1)"
+clean git -c core.hooksPath=/dev/null -c "$auth" push \
+  --force-with-lease="refs/heads/$BUMP_BRANCH:$lease" "$remote" "HEAD:refs/heads/$BUMP_BRANCH"
+title="chore(release): bump version to $VERSION"
+if [ -n "$NUMBER" ]; then
+  clean /usr/bin/gh api --method PATCH "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" -f title="$title" \
+    -F body=@"$RUNNER_TEMP/bump/body.md" > /dev/null
+  echo "updated #$NUMBER to propose $VERSION" >> "$GITHUB_STEP_SUMMARY"
+else
+  clean /usr/bin/gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BUMP_BRANCH" \
+    --title "$title" --body-file "$RUNNER_TEMP/bump/body.md" >> "$GITHUB_STEP_SUMMARY"
+fi'''),
+        },
+    ]],
+}
 
 
-def dynamic_endpoint(target: str) -> bool:
-    """Whether an endpoint contains an expansion whose value is unproved."""
-    path = SAFE_REPOSITORY_SLOT.sub(r"\1owner/repo", target)
-    path = SAFE_SHA.sub("0" * 40, path)
-    return "$" in path or "`" in path
-
-
-def app_token_problems(name: str, workflow: str) -> list[str]:
-    """A step that reads an Administration-only endpoint must hold, as its own
-    GH_TOKEN, the token an earlier step of its job minted with the pinned
-    create-github-app-token action."""
+def run_body_problems(name: str, workflow: str, allowlist: dict | None = None) -> list[str]:
+    """Credential-holding jobs of release workflows run only allowlisted steps,
+    and each such step holds the token its body needs."""
+    allowlist = RUN_ALLOWLIST if allowlist is None else allowlist
     try:
         parsed = parse_workflow(workflow)
     except PolicyError as error:
         return [f"{name}: {error}"]
     found = []
-    for job_steps in parsed.jobs.values():
+    for job, job_steps in parsed.jobs.items():
+        keyed = [step for step in job_steps if SIGNING_KEY.search(step.text)]
+        for step in keyed:
+            scope = {**(step.inherited or {}), **(step.env or {})}
+            if any(CREDENTIAL_NAME.fullmatch(key) for key in scope) or reaches_credential(
+                    SIGNING_KEY.sub("", step.text)):
+                found.append(f"{name}: {step.title} holds the signing key with a GitHub credential in scope")
+        if not reaches_credential(parsed.job_text[job]):
+            continue
+        if "defaults" in parsed.root_keys:
+            found.append(f"{name}: job {job} holds a credential, so the workflow may not set defaults")
+        for key in sorted(parsed.job_keys[job] & UNSUPPORTED_CREDENTIAL_JOB_KEYS):
+            found.append(f"{name}: job {job} holds a credential and sets {key}")
+        variants = allowlist.get((name, job), [])
+        fields = [step.fields for step in job_steps]
+        if fields not in variants:
+            # Name the first step that differs from the closest variant.
+            closest = max(variants, default=[], key=lambda variant: next(
+                (i for i, (a, b) in enumerate(zip(fields, variant)) if a != b), min(len(fields), len(variant))))
+            index = next((i for i, (a, b) in enumerate(zip(fields, closest)) if a != b), min(len(fields), len(closest)))
+            title = job_steps[index].title if index < len(job_steps) else f"the end of job {job}"
+            found.append(f"{name}: {title} of job {job} matches no step sequence RUN_ALLOWLIST lists for it "
+                         f"(unsupported run body): it differs at step {index + 1} of {len(job_steps)}")
         minted: set[str] = set()
         for step in job_steps:
+            if step.uses is not None and not PINNED_ACTION.fullmatch(step.uses):
+                found.append(f"{name}: {step.title} uses {step.uses!r}, not an action pinned to a commit")
+            if step.run is not None and "${{" in step.run:
+                found.append(f"{name}: {step.title} has an expression in its run body; pass it through env")
+            scope = {**(step.inherited or {}), **(step.env or {})}
+            if "GITHUB_TOKEN" in scope:
+                found.append(f"{name}: {step.title} sets GITHUB_TOKEN; pass a token as GH_TOKEN")
+            token = scope.get("GH_TOKEN")
+            app = STEP_TOKEN.fullmatch(token or "")
+            proven = app is not None and app["id"] in minted and "GH_TOKEN" in (step.env or {})
+            if step.run is not None and ADMIN_ENDPOINT.search(step.run):
+                if not proven or any(ACTIONS_TOKEN_REFERENCE.search(value) for value in scope.values()):
+                    found.append(f"{name}: {step.title} reads an Administration-only endpoint without the App token")
+            elif token is not None and not proven and token != ACTIONS_TOKEN:
+                found.append(f"{name}: {step.title} sets GH_TOKEN to neither the Actions token "
+                             f"nor a token minted earlier in its job")
             if step.id and step.uses and APP_TOKEN_ACTION.fullmatch(step.uses):
                 minted.add(step.id)
-            if step.run is None:
-                continue
-            if any("$'" in line for line in shell_commands(step.run)):
-                found.append(f"{name}: {step.title} uses unsupported ANSI-C shell quoting")
-                continue
-            targets = gh_api_targets(step.run)
-            if None in targets:
-                found.append(f"{name}: {step.title} calls gh api with an endpoint this check cannot read")
-            # Fail closed: an Administration-only path anywhere after a `gh api`
-            # on its line counts, so a word the endpoint parser misreads (a
-            # redirection, an option it does not know) cannot hide the read.
-            named = any(ADMIN_ENDPOINT.search(call["rest"])
-                        for line in shell_commands(step.run) for call in GH_API.finditer(line))
-            # Fail closed: an endpoint built from an unresolved expansion
-            # (`repos/$R/$ENDPOINT`) may resolve to an Administration-only
-            # path, so it needs the App token as well.
-            dynamic = any(target and dynamic_endpoint(target) for target in targets)
-            if not named and not dynamic and not any(target and ADMIN_ENDPOINT.search(target) for target in targets):
-                continue
-            token = STEP_TOKEN.fullmatch((step.env or {}).get("GH_TOKEN", ""))
-            if token is None or token["id"] not in minted:
-                found.append(f"{name}: {step.title} reads an Administration-only endpoint without the App token"
-                             if not dynamic or named or any(target and ADMIN_ENDPOINT.search(target)
-                                                            for target in targets)
-                             else f"{name}: {step.title} calls gh api on an endpoint built from an unresolved "
-                                  f"expansion without the App token")
     return found
-
-
-def token_mutation(run: str) -> bool:
-    """Credentials must come unchanged from the reviewed step environment."""
-    for line in shell_commands(run):
-        words = list(shell_words(line))
-        if any(re.search(r"(?<![A-Za-z0-9_])(?:GH_TOKEN|GITHUB_TOKEN)(?:\[[^]]*\])?\+?=", word)
-               for word in words):
-            return True
-        credential = any(re.fullmatch(r"(?:GH_TOKEN|GITHUB_TOKEN)(?:\[[^]]*\])?", word)
-                         for word in words)
-        writers = {"export", "declare", "typeset", "local", "readonly", "read", "unset", "mapfile", "readarray"}
-        if credential and (writers.intersection(words) or ("printf" in words and "-v" in words)):
-            return True
-    return False
 
 
 def isolation_problems(workflows: dict[str, str], root: Path) -> list[str]:
@@ -831,14 +1407,11 @@ def isolation_problems(workflows: dict[str, str], root: Path) -> list[str]:
             found.append(f"{name}: {error}")
             continue
         for job, job_steps in parsed.jobs.items():
-            sensitive = parsed.secrets[job] or any(gh_api_targets(step.run or "") for step in job_steps)
             if name == VERSION_WORKFLOW and parsed.secrets[job] and any(
                     PYTHON_CALL.search(step.run or "") for step in job_steps):
                 found.append(f"{name}: job {job} holds a secret and runs Python in one of its steps")
             for step in job_steps:
                 run = step.run or ""
-                if sensitive and token_mutation(run):
-                    found.append(f"{name}: {step.title} assigns or exports GH_TOKEN/GITHUB_TOKEN inside run")
                 if name in RELEASE_WORKFLOWS:
                     for call in PYTHON_CALL.finditer(run):
                         if "I" not in call["flags"].replace("-", ""):
@@ -848,8 +1421,8 @@ def isolation_problems(workflows: dict[str, str], root: Path) -> list[str]:
                 for call in RENDERER_VERIFIER_CALL.finditer(run):
                     if "I" not in call["flags"].replace("-", ""):
                         found.append(f"{name}: {step.title} runs the renderer verifier without -I")
-        if name == SIGNING_WORKFLOW:
-            found.extend(app_token_problems(name, text))
+        if name in RELEASE_WORKFLOWS:
+            found.extend(run_body_problems(name, text))
     stdlib = set(sys.stdlib_module_names)
     for directory in PYTHON_DIRS:
         for path in sorted((root / directory).iterdir()) if (root / directory).is_dir() else []:

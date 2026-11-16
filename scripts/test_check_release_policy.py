@@ -17,6 +17,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import check_release_policy as policy  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+# The general reason a credential-holding job's step is refused.
+UNSUPPORTED = "unsupported run body"
+
+
+def allowlist_for(workflows: dict[str, str]) -> dict:
+    """RUN_ALLOWLIST as it would read if every credential-holding job of these
+    workflows were reviewed exactly as written. A fixture the parser refuses
+    gets no entries."""
+    allowlist = {}
+    for name, text in workflows.items():
+        try:
+            entries = policy.allowlist_entries(name, text)
+        except policy.PolicyError:
+            continue
+        allowlist.update({(name, job): [steps] for job, steps in entries.items()})
+    return allowlist
+
+
+def isolation(workflows: dict[str, str], root: Path, allow: bool = False) -> list[str]:
+    """isolation_problems, with the fixtures' own steps allowlisted when `allow`."""
+    with mock.patch.object(policy, "RUN_ALLOWLIST", allowlist_for(workflows) if allow else {}):
+        return policy.isolation_problems(workflows, root)
 
 
 class Policy(unittest.TestCase):
@@ -474,15 +496,19 @@ class Isolation(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp)
 
-    def found(self, signing: str) -> list[str]:
+    def found(self, signing: str, allow: bool = False) -> list[str]:
         if not signing:
             signing = "jobs:\n  check:\n    steps:\n      - run: true\n"
         elif signing.lstrip().startswith("steps:"):
             signing = "jobs:\n  sign:\n" + signing
-        return policy.isolation_problems({policy.SIGNING_WORKFLOW: signing}, self.tmp)
+        return isolation({policy.SIGNING_WORKFLOW: signing}, self.tmp, allow)
+
+    def allowed(self, signing: str) -> list[str]:
+        """The problems left once the fixture's own steps are allowlisted."""
+        return self.found(signing, allow=True)
 
     def test_python_without_isolation_fails(self) -> None:
-        self.assertEqual(self.found("    steps:\n      - name: a\n        run: python3 -I scripts/x.py\n"), [])
+        self.assertEqual(self.allowed("    steps:\n      - name: a\n        run: python3 -I scripts/x.py\n"), [])
         self.assertTrue(self.found("    steps:\n      - name: a\n        run: python3 scripts/x.py\n"))
         self.assertTrue(self.found("    steps:\n      - name: a\n        run: python3 -c 'print(1)'\n"))
 
@@ -494,7 +520,7 @@ class Isolation(unittest.TestCase):
         clean = "      - name: sign\n        env:\n          K: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}\n        run: git tag -s v1\n"
         self.assertTrue(any("holds a secret" in p for p in self.found("    steps:\n" + key)))
         self.assertTrue(any("holds a secret" in p for p in self.found("    steps:\n" + token)))
-        self.assertEqual(self.found("    steps:\n" + clean), [])
+        self.assertEqual(self.allowed("    steps:\n" + clean), [])
         # Any minted token counts, whatever its step id: the push mints its own.
         for step_id in ("push-token", "other-token"):
             with self.subTest(step_id=step_id):
@@ -508,16 +534,17 @@ class Isolation(unittest.TestCase):
                 self.assertTrue(any("holds a secret" in p for p in self.found("    steps:\n" + held)))
         # A step output that is not a token is not a secret.
         output = token.replace("GH_TOKEN: ${{ steps.app-token.outputs.token }}", "T: ${{ steps.request.outputs.tag }}")
-        self.assertEqual(self.found("    steps:\n" + output), [])
+        self.assertEqual(self.allowed("    steps:\n" + output), [])
 
     def test_version_at_land_runs_no_python_where_it_holds_a_token(self) -> None:
         # Must-pass: the App token is minted and used in steps that run no
         # Python. Must-fail: repository Python in a token-holding step, or
         # Python without -I anywhere in the workflow.
-        def found(text: str) -> list[str]:
-            return policy.isolation_problems({policy.VERSION_WORKFLOW: text}, self.tmp)
+        def found(text: str, allow: bool = False) -> list[str]:
+            return isolation({policy.VERSION_WORKFLOW: text}, self.tmp, allow)
 
-        mint = ("      - name: mint\n        uses: actions/create-github-app-token@x\n        with:\n"
+        mint = ("      - name: mint\n        id: bump-token\n"
+                "        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3\n        with:\n"
                 "          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}\n")
         push = ("      - name: push\n        env:\n          GH_TOKEN: ${{ steps.bump-token.outputs.token }}\n"
                 "        run: git push origin HEAD\n")
@@ -525,7 +552,7 @@ class Isolation(unittest.TestCase):
         def workflow(plan_steps: str, push_steps: str) -> str:
             return "jobs:\n  plan:\n    steps:\n" + plan_steps + "  push:\n    steps:\n" + push_steps
 
-        self.assertEqual(found(workflow(plan, mint + push)), [])
+        self.assertEqual(found(workflow(plan, mint + push), allow=True), [])
         held = push.replace("git push origin HEAD", "python3 -I scripts/version_at_land.py apply")
         self.assertTrue(any("holds a secret and runs Python" in p for p in found(workflow(plan, mint + held))))
         keyed = mint.replace("        with:", "        run: python3 -I x.py\n        with:")
@@ -538,13 +565,14 @@ class Isolation(unittest.TestCase):
         # Must-pass: Python in a job that holds no token. Must-fail: the same
         # Python in an earlier step of the job that later mints the token,
         # which could plant a hook or a GITHUB_PATH entry the push then runs.
-        def found(text: str) -> list[str]:
-            return policy.isolation_problems({policy.VERSION_WORKFLOW: text}, self.tmp)
+        def found(text: str, allow: bool = False) -> list[str]:
+            return isolation({policy.VERSION_WORKFLOW: text}, self.tmp, allow)
 
         plan = "  plan:\n    steps:\n      - name: plan\n        run: python3 -I scripts/version_at_land.py plan\n"
-        push = ("  push:\n    steps:\n      - name: mint\n        uses: actions/create-github-app-token@x\n"
+        push = ("  push:\n    steps:\n      - name: mint\n"
+                "        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3\n"
                 "        with:\n          private-key: ${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}\n")
-        self.assertEqual(found("jobs:\n" + plan + push), [])
+        self.assertEqual(found("jobs:\n" + plan + push, allow=True), [])
         merged = push.replace("    steps:\n", "    steps:\n      - name: plan\n"
                               "        run: python3 -I scripts/version_at_land.py apply\n")
         self.assertTrue(any("job push holds a secret and runs Python" in p for p in found("jobs:\n" + plan + merged)))
@@ -566,21 +594,30 @@ class Isolation(unittest.TestCase):
                 + head + f"          GH_TOKEN: {token}\n        " + run)
 
     def refused(self, workflow: str, reason: str = "Administration-only") -> None:
-        self.assertTrue(any(reason in problem or "unsupported construct" in problem for problem in self.found(workflow)), self.found(workflow))
+        """Refused for the general reason: a structure the parser refuses, or a
+        credential-holding step that is not in the run allowlist. `reason`
+        names the rule for jobs that hold no credential."""
+        problems = self.found(workflow)
+        self.assertTrue(any(reason in problem or "unsupported construct" in problem or UNSUPPORTED in problem
+                            for problem in problems), problems)
 
     def test_admin_only_reads_need_the_app_token(self) -> None:
         for endpoint in ("rules/branches/main", "branches/main/protection/required_status_checks",
                          "immutable-releases"):
             with self.subTest(endpoint=endpoint):
                 run = f'run: gh api "repos/$R/{endpoint}" > out.json\n'
-                self.assertEqual(self.found(self.read(run=run)), [])
+                self.assertEqual(self.allowed(self.read(run=run)), [])
                 self.refused(self.read(token="${{ github.token }}", run=run))
                 self.refused(self.read(token="${{ steps.other-token.outputs.token }}", run=run))
+                # Allowlisting the body does not stand in for the token.
+                for token in ("${{ github.token }}", "${{ steps.other-token.outputs.token }}"):
+                    problems = self.allowed(self.read(token=token, run=run))
+                    self.assertTrue(any("Administration-only" in p for p in problems), problems)
         push = self.read(token="${{ steps.push-token.outputs.token }}", mint=self.MINT.format(id="push-token"))
-        self.assertEqual(self.found(push), [])
+        self.assertEqual(self.allowed(push), [])
         # A read of another endpoint needs no App token.
-        self.assertEqual(self.found(self.read(token="${{ github.token }}",
-                                              run='run: gh api "repos/${{ github.repository }}/actions/runs" > out.json\n')), [])
+        self.assertEqual(self.allowed(self.read(token="${{ github.token }}",
+                                                run='run: gh api "repos/$GITHUB_REPOSITORY/actions/runs" > out.json\n')), [])
 
     def test_a_comment_naming_the_app_token_does_not_satisfy_the_rule(self) -> None:
         run = ("run: |\n          # GH_TOKEN: ${{ steps.app-token.outputs.token }}\n"
@@ -590,9 +627,14 @@ class Isolation(unittest.TestCase):
         other = self.read(token="${{ github.token }}").replace(
             "          GH_TOKEN:", "          OTHER: ${{ steps.app-token.outputs.token }}\n          GH_TOKEN:")
         self.refused(other)
-        # A commented-out read is not a read.
+        # The allowlist is judged as text: a body that names an
+        # Administration-only endpoint, even in a comment, needs the App token.
         quiet = 'run: |\n          # gh api "repos/$R/immutable-releases"\n          true\n'
-        self.assertEqual(self.found(self.read(token="${{ github.token }}", run=quiet)), [])
+        self.assertTrue(any("Administration-only" in p for p in self.allowed(self.read(token="${{ github.token }}", run=quiet))))
+        self.assertEqual(self.allowed(self.read(run=quiet)), [])
+        # A commented App token does not satisfy the rule once allowlisted either.
+        problems = self.allowed(self.read(token="${{ github.token }}", run=run))
+        self.assertTrue(any("Administration-only" in p for p in problems), problems)
 
     def test_folded_run_scalars_fail_closed(self) -> None:
         # YAML folds these lines into an Administration-only read. The
@@ -604,7 +646,7 @@ class Isolation(unittest.TestCase):
         # Literal blocks preserve the newline, and a supported App-token
         # read remains accepted.
         literal = 'run: |-\n          gh api "repos/$R/immutable-releases"\n'
-        self.assertEqual(self.found(self.read(run=literal)), [])
+        self.assertEqual(self.allowed(self.read(run=literal)), [])
         self.refused(self.read(token="${{ github.token }}", run=literal))
 
     def test_folded_run_rejection_does_not_depend_on_visible_commands(self) -> None:
@@ -636,7 +678,7 @@ class Isolation(unittest.TestCase):
         self.assertTrue(any("YAML anchor, alias" in p for p in problems), problems)
         # Shell globs inside a literal run block are not YAML indirection.
         glob = self.read(run='run: |\n          ls *.json *out\n          gh api "repos/$R/immutable-releases"\n')
-        self.assertEqual(self.found(glob), [])
+        self.assertEqual(self.allowed(glob), [])
 
     def test_a_steps_line_outside_the_jobs_steps_key_mints_nothing(self) -> None:
         # A `steps:` list written inside a job-level key (a block scalar under
@@ -657,7 +699,7 @@ class Isolation(unittest.TestCase):
         twice = "jobs:\n  sign:\n" + fake + self.read(mint="")
         self.refused(twice, "more than one steps key")
         # The honest layout still passes.
-        self.assertEqual(self.found("jobs:\n  sign:\n" + self.read()), [])
+        self.assertEqual(self.allowed("jobs:\n  sign:\n" + self.read()), [])
 
     def test_a_steps_key_inside_a_job_block_scalar_is_rejected(self) -> None:
         # A fake minting list in a job-level block scalar is text, not a
@@ -683,7 +725,7 @@ class Isolation(unittest.TestCase):
                 self.refused(head + self.read(token="${{ github.token }}"))
                 self.assertTrue(any("without -I" in problem for problem in self.found(
                     head + "    steps:\n      - name: py\n        run: python3 scripts/x.py\n")))
-                self.assertEqual(self.found(head + self.read()), [])
+                self.assertEqual(self.allowed(head + self.read()), [])
                 self.assertEqual(len(policy.workflow_steps(head + self.read())), 2)
 
     def test_a_block_scalar_on_a_step_dash_line_hides_no_later_key(self) -> None:
@@ -708,7 +750,7 @@ class Isolation(unittest.TestCase):
         # The scalar's own body stays hidden, and an honest step still passes.
         body = "jobs:\n  sign:\n" + self.read(name=">-\n          read text")
         self.assertEqual(policy.workflow_steps(body)[1].name, "read text")
-        self.assertEqual(self.found(body), [])
+        self.assertEqual(self.allowed(body), [])
 
     def test_the_token_must_come_from_the_pinned_app_token_action(self) -> None:
         cases = {
@@ -739,7 +781,7 @@ class Isolation(unittest.TestCase):
         }.items():
             with self.subTest(label):
                 self.refused(self.read(token="${{ github.token }}", run=run))
-                self.assertEqual(self.found(self.read(run=run)), [])
+                self.assertEqual(self.allowed(self.read(run=run)), [])
 
     def test_a_path_qualified_or_quoted_gh_is_read(self) -> None:
         for label, run in {
@@ -752,10 +794,12 @@ class Isolation(unittest.TestCase):
         }.items():
             with self.subTest(label):
                 self.refused(self.read(token="${{ github.token }}", run=run))
-                self.assertEqual(self.found(self.read(run=run)), [])
-        # Another tool whose name ends in gh is not gh.
-        self.assertEqual(self.found(self.read(token="${{ github.token }}",
-                                              run='run: my-gh api "repos/$R/immutable-releases"\n')), [])
+                self.assertEqual(self.allowed(self.read(run=run)), [])
+        # Whatever tool a body runs, unreviewed it is refused, and reviewed it
+        # still needs the App token to name an Administration-only endpoint.
+        other = self.read(token="${{ github.token }}", run='run: my-gh api "repos/$R/immutable-releases"\n')
+        self.refused(other)
+        self.assertTrue(any("Administration-only" in p for p in self.allowed(other)))
 
     def test_every_gh_api_call_on_one_line_is_read(self) -> None:
         # A later call on the same shell line must not hide behind an earlier,
@@ -771,9 +815,7 @@ class Isolation(unittest.TestCase):
         }.items():
             with self.subTest(label):
                 self.refused(self.read(token="${{ github.token }}", run=run))
-                self.assertEqual(self.found(self.read(run=run)), [])
-        both = policy.gh_api_targets('gh api a/b ; gh api "c/d" && gh api e/f')
-        self.assertEqual(both, ["a/b", "c/d", "e/f"])
+                self.assertEqual(self.allowed(self.read(run=run)), [])
 
     def test_a_redirection_before_the_endpoint_is_not_the_endpoint(self) -> None:
         # A redirection word, attached or detached, precedes the endpoint; the
@@ -791,14 +833,13 @@ class Isolation(unittest.TestCase):
         }.items():
             with self.subTest(label):
                 self.refused(self.read(token="${{ github.token }}", run=run))
-                self.assertEqual(self.found(self.read(run=run)), [])
-        self.assertEqual(policy.gh_api_targets('gh api >o.json 2> e.log a/b'), ["a/b"])
+                self.assertEqual(self.allowed(self.read(run=run)), [])
         # An option this check does not know cannot hide the read either.
         unknown = 'run: gh api --some-new-flag "repos/$R/immutable-releases"\n'
         self.refused(self.read(token="${{ github.token }}", run=unknown))
         # A read of another endpoint, redirected, still needs no App token.
-        self.assertEqual(self.found(self.read(token="${{ github.token }}",
-                                              run='run: gh api >out.json "repos/${{ github.repository }}/actions/runs"\n')), [])
+        self.assertEqual(self.allowed(self.read(token="${{ github.token }}",
+                                              run='run: gh api >out.json "repos/$GITHUB_REPOSITORY/actions/runs"\n')), [])
 
     def test_an_escaped_or_quoted_gh_spelling_is_still_gh_api(self) -> None:
         # The shell runs each of these as `gh api`; the Administration-only
@@ -814,12 +855,9 @@ class Isolation(unittest.TestCase):
         }.items():
             with self.subTest(label):
                 self.refused(self.read(token="${{ github.token }}", run=run))
-                self.assertEqual(self.found(self.read(run=run)), [])
-        self.assertEqual(policy.gh_api_targets("g'h' 'a'pi a/b"), ["a/b"])
+                self.assertEqual(self.allowed(self.read(run=run)), [])
         # A variable endpoint behind an escaped gh still cannot be read.
         self.refused(self.read(run='run: g\\h api "$endpoint"\n'), "an endpoint this check cannot read")
-        # Another tool whose name ends in gh is still not gh.
-        self.assertEqual(policy.gh_api_targets("my-gh api a/b"), [])
 
     def test_a_gh_api_call_whose_endpoint_cannot_be_read_fails_closed(self) -> None:
         for label, run in {
@@ -850,18 +888,12 @@ class Isolation(unittest.TestCase):
             with self.subTest(label):
                 self.refused(self.read(token="${{ github.token }}", run=run),
                              "an endpoint this check cannot read")
-        # A literal endpoint keeps its value, operator or not.
-        self.assertEqual(policy.gh_api_targets('gh api "repos/$R/actions/runs";echo'), ["repos/$R/actions/runs"])
-        self.assertEqual(policy.gh_api_targets("gh api repos/$R/pulls|jq ."), ["repos/$R/pulls"])
-        self.assertEqual(policy.gh_api_targets("gh api 2>/dev/null repos/$R/pulls"), ["repos/$R/pulls"])
-        self.assertEqual(policy.gh_api_targets("gh api >out.json 2>&1 repos/$R/pulls"), ["repos/$R/pulls"])
-        self.assertEqual(policy.gh_api_targets('gh api "repos/$R/pulls?a=1&b=2"'), ["repos/$R/pulls?a=1&b=2"])
         # An Administration read behind an attached operator still needs the App token.
         self.refused(self.read(token="${{ github.token }}", run='run: gh api "repos/$R/immutable-releases";\n'))
 
     def test_an_unnamed_step_is_scanned(self) -> None:
         self.refused(self.read(token="${{ github.token }}", name=None))
-        self.assertEqual(self.found(self.read(name=None)), [])
+        self.assertEqual(self.allowed(self.read(name=None)), [])
         bare = "    steps:\n" + self.MINT.format(id="app-token") + '      - run: gh api "repos/$R/immutable-releases"\n'
         self.refused(bare)
         # The Python isolation rule reads unnamed steps through the same reader.
@@ -914,7 +946,7 @@ class Isolation(unittest.TestCase):
     def test_steps_layout_scan_ignores_heredoc_payload(self) -> None:
         workflow = ("jobs:\n  sign:\n    steps:\n      - name: emit\n        run: |\n"
                     "          cat <<'YAML'\n          steps: []\n          YAML\n")
-        self.assertEqual(self.found(workflow), [])
+        self.assertEqual(self.allowed(workflow), [])
 
     def test_a_heredoc_steps_key_with_yaml_content_is_shell_payload(self) -> None:
         # A step's run script that writes YAML holding `steps:` (followed by
@@ -923,7 +955,7 @@ class Isolation(unittest.TestCase):
             with self.subTest(lead=lead):
                 workflow = ("jobs:\n  sign:\n    steps:\n" + lead
                             + "          cat <<'YAML'\n          steps:\n            - run: true\n          YAML\n")
-                self.assertEqual(self.found(workflow), [])
+                self.assertEqual(self.allowed(workflow), [])
                 self.assertEqual(policy.step_layout_problems(policy.SIGNING_WORKFLOW, workflow), [])
         # The same text in a job-level block scalar, or in a step key other
         # than run, is still reported.
@@ -946,15 +978,9 @@ class Isolation(unittest.TestCase):
             "api word": 'gh a\\\npi "repos/$R/immutable-releases"\n',
         }.items():
             with self.subTest(label=label):
-                self.assertTrue(any("immutable-releases" in command
-                                    for command in policy.shell_commands(script)), policy.shell_commands(script))
                 run = "run: |\n" + "".join("          " + line + "\n" for line in script.splitlines())
                 self.refused(self.read(token="${{ github.token }}", run=run))
-                self.assertEqual(self.found(self.read(run=run)), [])
-        self.assertEqual(policy.shell_commands('gh api "repos/$R/immutable-\\\nreleases"'),
-                         ['gh api "repos/$R/immutable-releases"'])
-        # An escaped backslash at the end of a line is not a continuation.
-        self.assertEqual(policy.shell_commands("echo a\\\\\nb"), ["echo a\\\\", "b"])
+                self.assertEqual(self.allowed(self.read(run=run)), [])
 
     def test_mutable_shell_endpoint_values_need_the_app_token(self) -> None:
         for target in ('repos/$GITHUB_REPOSITORY/$GITHUB_SHA',
@@ -966,12 +992,15 @@ class Isolation(unittest.TestCase):
                        '          GITHUB_REPOSITORY=owner/repo\n'
                        f'          gh api "{target}"\n')
                 self.refused(self.read(token="${{ github.token }}", run=run), "unresolved expansion")
-                self.assertEqual(self.found(self.read(run=run)), [])
-        # Shell assignments cannot change GitHub's pre-shell context values.
+                self.assertEqual(self.allowed(self.read(run=run)), [] if "${{" not in run else [
+                    "release-tag.yml: - name: read has an expression in its run body; pass it through env"])
+        # A context expression is pasted into the script before the shell runs,
+        # so no run body of a credential-holding job may hold one, reviewed or not.
         run = ('run: |\n          GITHUB_SHA=immutable-releases\n'
                '          GITHUB_REPOSITORY=owner/repo\n'
                '          gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs"\n')
-        self.assertEqual(self.found(self.read(token="${{ github.token }}", run=run)), [])
+        problems = self.allowed(self.read(token="${{ github.token }}", run=run))
+        self.assertTrue(any("expression in its run body" in p for p in problems), problems)
 
     def test_ansi_c_shell_quoting_is_refused_before_call_detection(self) -> None:
         for command in ("g$'h' api", "$'gh' api", "gh a$'pi'", r"$'\x67h' api",
@@ -982,7 +1011,7 @@ class Isolation(unittest.TestCase):
                 self.refused(self.read(token="${{ github.token }}", run=run), "ANSI-C")
                 # This syntax is unsupported even with a valid App token.
                 self.refused(self.read(run=run), "ANSI-C")
-        self.assertEqual(self.found(self.read(run='run: gh api repos/owner/repo/immutable-releases\n')), [])
+        self.assertEqual(self.allowed(self.read(run='run: gh api repos/owner/repo/immutable-releases\n')), [])
 
     def test_an_endpoint_built_from_an_expansion_needs_the_app_token(self) -> None:
         for target in ('"repos/$R/$ENDPOINT"', '"repos/$GITHUB_REPOSITORY/$ENDPOINT"',
@@ -992,13 +1021,18 @@ class Isolation(unittest.TestCase):
             with self.subTest(target=target):
                 run = f"run: gh api {target} > out.json\n"
                 self.refused(self.read(token="${{ github.token }}", run=run), "unresolved expansion")
-                self.assertEqual(self.found(self.read(run=run)), [])
-        # Only immutable GitHub context substitutions are bounded safe values.
+                self.assertEqual(self.allowed(self.read(run=run)), [] if "${{" not in run else [
+                    "release-tag.yml: - name: read has an expression in its run body; pass it through env"])
+        # No context substitution is a safe value in a run body: inputs come
+        # through env, as the runner's own GITHUB_REPOSITORY and GITHUB_SHA do.
         for target in ('"repos/${{ github.repository }}/pulls"',
                        '"repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs?per_page=100"'):
             with self.subTest(target=target):
                 run = f"run: gh api {target} > out.json\n"
-                self.assertEqual(self.found(self.read(token="${{ github.token }}", run=run)), [])
+                problems = self.allowed(self.read(token="${{ github.token }}", run=run))
+                self.assertTrue(any("expression in its run body" in p for p in problems), problems)
+                plain = run.replace("${{ github.repository }}", "$GITHUB_REPOSITORY").replace("${{ github.sha }}", "$GITHUB_SHA")
+                self.assertEqual(self.allowed(self.read(token="${{ github.token }}", run=plain)), [])
         # A step that sets GITHUB_REPOSITORY or GITHUB_SHA itself makes them arbitrary values.
         overridden = self.read(token="${{ github.token }}\n          GITHUB_SHA: immutable-releases",
                                run='run: gh api "repos/$GITHUB_REPOSITORY/$GITHUB_SHA"\n')
@@ -1036,7 +1070,7 @@ class Isolation(unittest.TestCase):
                 self.refused(workflow, "a jobs key this check cannot read")
                 problems = policy.isolation_problems({"other.yml": workflow}, self.tmp)
                 self.assertTrue(any("unsupported construct" in problem for problem in problems), problems)
-        self.assertEqual(self.found("jobs:  # all jobs\n  clean:\n    steps:\n      - name: a\n        run: true\n"), [])
+        self.assertEqual(self.allowed("jobs:  # all jobs\n  clean:\n    steps:\n      - name: a\n        run: true\n"), [])
 
     def test_a_line_under_steps_that_no_step_holds_fails_closed(self) -> None:
         gh = '"repos/$R/rulesets"'
@@ -1045,7 +1079,7 @@ class Isolation(unittest.TestCase):
         self.refused(bare_first)
         bare_later = "    steps:\n      - name: a\n        run: true\n      -\n        run: python3 scripts/x.py\n"
         self.refused(bare_later, "without -I")
-        self.assertEqual(self.found("    steps:\n      # a comment\n\n      - name: a\n        run: true\n"), [])
+        self.assertEqual(self.allowed("    steps:\n      # a comment\n\n      - name: a\n        run: true\n"), [])
 
     def test_jobs_at_another_indentation_fail_closed(self) -> None:
         # jobs() reads only job IDs two columns in; four-space jobs would be
@@ -1056,7 +1090,7 @@ class Isolation(unittest.TestCase):
         workflow = "jobs:\n" + "".join("  " + line if line.strip() else line
                                        for line in (mint + read).splitlines(keepends=True))
         self.refused(workflow)
-        self.assertEqual(self.found("jobs:\n  # note\n\n  clean:\n    steps:\n      - name: a\n        run: true\n"), [])
+        self.assertEqual(self.allowed("jobs:\n  # note\n\n  clean:\n    steps:\n      - name: a\n        run: true\n"), [])
 
     def test_a_bare_dash_at_the_steps_indentation_fails_closed(self) -> None:
         # An indentationless sequence: a bare `-` item at the same column as
@@ -1066,7 +1100,7 @@ class Isolation(unittest.TestCase):
         problems = self.found(workflow)
         self.assertTrue(any("without -I" in problem for problem in problems), problems)
         indentless = "jobs:\n  sign:\n    steps:\n    - name: a\n      run: true\n    - name: c\n      run: true\n"
-        self.assertEqual(self.found(indentless), [])
+        self.assertEqual(self.allowed(indentless), [])
 
     def test_the_step_reader_agrees_with_a_yaml_parser(self) -> None:
         try:
@@ -1090,15 +1124,19 @@ class Isolation(unittest.TestCase):
 
     def test_the_signing_workflow_reads_admin_endpoints_only_with_its_app_tokens(self) -> None:
         text = (ROOT / policy.WORKFLOWS / policy.SIGNING_WORKFLOW).read_text(encoding="utf-8")
-        self.assertEqual(policy.app_token_problems(policy.SIGNING_WORKFLOW, text), [])
-        reads = [step for step in policy.workflow_steps(text) if step.run and any(
-            target and policy.ADMIN_ENDPOINT.search(target) for target in policy.gh_api_targets(step.run))]
-        # The rule has something to judge: the reads exist and were found.
+        self.assertEqual(policy.run_body_problems(policy.SIGNING_WORKFLOW, text), [])
+        reads = [step for step in policy.workflow_steps(text) if step.run and policy.ADMIN_ENDPOINT.search(step.run)]
+        # The rule has something to judge: the two reads and the freeze exist and were found.
         self.assertGreaterEqual(len(reads), 3)
-        # With the Actions token in place of an App token, each is refused.
+        # With the Actions token in place of an App token, each is refused, even
+        # with the swapped steps allowlisted.
         swapped = re.sub(r"\$\{\{ steps\.(?:app-token|push-token)\.outputs\.token \}\}", "${{ github.token }}", text)
-        self.assertEqual(len([problem for problem in policy.app_token_problems(policy.SIGNING_WORKFLOW, swapped)
-                              if "Administration-only" in problem]), len(reads))
+        problems = policy.run_body_problems(policy.SIGNING_WORKFLOW, swapped, allowlist_for({policy.SIGNING_WORKFLOW: swapped}))
+        self.assertEqual(len([problem for problem in problems if "Administration-only" in problem]), len(reads))
+        # And unallowlisted, each job holding a swapped step is refused for the general reason.
+        problems = policy.run_body_problems(policy.SIGNING_WORKFLOW, swapped)
+        for job in ("sign-release-tag", "sign-dry-run-tag"):
+            self.assertTrue(any(UNSUPPORTED in p and f"of job {job} " in p for p in problems), problems)
 
     def test_the_renderer_verifier_runs_isolated_in_every_workflow(self) -> None:
         step = "    steps:\n      - name: prove\n        run: python3 {flags}tools/provenance/verify_renderer_dependency.py\n"
@@ -1125,7 +1163,7 @@ class Isolation(unittest.TestCase):
                         text = base.replace("        run:", f"        shell: {shell}\n        run:")
                     self.assertTrue(any("shell must be bash" in p for p in self.found(text)), self.found(text))
                     # The same structure with bash is supported at all scopes.
-                    self.assertEqual(self.found(text.replace(f"shell: {shell}", "shell: bash").replace("import os", "true")), [])
+                    self.assertEqual(self.allowed(text.replace(f"shell: {shell}", "shell: bash").replace("import os", "true")), [])
 
     def test_parser_quoted_run_keys_fail_before_command_detection(self) -> None:
         for run in ('"run": >-\n          gh\n          api repos/owner/repo/immutable-releases\n',
@@ -1134,7 +1172,7 @@ class Isolation(unittest.TestCase):
             with self.subTest(run=run):
                 problems = self.found(self.read(run=run))
                 self.assertTrue(any("unsupported construct" in p for p in problems), problems)
-        self.assertEqual(self.found(self.read(run="run: gh api repos/owner/repo/immutable-releases\n")), [])
+        self.assertEqual(self.allowed(self.read(run="run: gh api repos/owner/repo/immutable-releases\n")), [])
 
     def test_parser_rejects_complete_flow_documents(self) -> None:
         text = ("{on: push, jobs: {build: {runs-on: ubuntu-latest, steps: "
@@ -1161,11 +1199,12 @@ class Isolation(unittest.TestCase):
                 with self.subTest(script=script):
                     run = "run: |\n" + "".join("          " + line + "\n" for line in script.splitlines())
                     problems = self.found(self.read(run=run))
-                    self.assertTrue(any("assigns or exports" in p for p in problems), problems)
-        self.assertEqual(self.found(self.read(run=f"run: {command}\n")), [])
+                    self.assertTrue(any(UNSUPPORTED in p for p in problems), problems)
+        self.assertEqual(self.allowed(self.read(run=f"run: {command}\n")), [])
 
     def test_token_assignment_is_rejected_in_every_sensitive_job_step(self) -> None:
-        for name in ("release-tag.yml", "version-at-land.yml", "other.yml"):
+        # Release workflows only: the run allowlist governs their credential-holding jobs.
+        for name in ("release-tag.yml", "version-at-land.yml"):
             for sensitive in ("env:\n      KEY: ${{ secrets.KEY }}\n",
                               "steps:\n      - run: gh api repos/owner/repo/actions/runs\n"):
                 for assignment in ('GH_TOKEN=bad', 'export GITHUB_TOKEN',
@@ -1176,10 +1215,10 @@ class Isolation(unittest.TestCase):
                         body = sensitive
                     workflow = "jobs:\n  check:\n    " + body + "      - run: " + assignment + "\n"
                     with self.subTest(name=name, sensitive=sensitive, assignment=assignment):
-                        problems = policy.isolation_problems({name: workflow}, self.tmp)
-                        self.assertTrue(any("assigns or exports" in p for p in problems), problems)
+                        problems = isolation({name: workflow}, self.tmp)
+                        self.assertTrue(any(UNSUPPORTED in p for p in problems), problems)
                         control = workflow.replace(assignment, "true")
-                        self.assertEqual(policy.isolation_problems({name: control}, self.tmp), [])
+                        self.assertEqual(isolation({name: control}, self.tmp, allow=True), [])
 
     def test_parser_missing_dependency_and_malformed_yaml_fail_closed(self) -> None:
         valid = "jobs:\n  check:\n    steps:\n      - run: true\n"
@@ -1193,13 +1232,13 @@ class Isolation(unittest.TestCase):
                                   "check"], text=True, capture_output=True, check=False)
         self.assertNotEqual(process.returncode, 0)
         self.assertIn("PyYAML is required", process.stderr)
-        self.assertEqual(self.found(valid), [])
+        self.assertEqual(self.allowed(valid), [])
 
     def test_a_package_or_compiled_module_shadowing_the_standard_library_fails(self) -> None:
         (self.tmp / "tools" / "provenance").mkdir(parents=True)
         package = self.tmp / "tools" / "provenance" / "subprocess"
         package.mkdir()
-        self.assertEqual(self.found(""), [])  # a plain directory imports nothing ahead of the stdlib
+        self.assertEqual(self.allowed(""), [])  # a plain directory imports nothing ahead of the stdlib
         (package / "__init__.py").write_text("")
         self.assertTrue(any("subprocess" in p for p in self.found("")))
         shutil.rmtree(package)
@@ -1215,6 +1254,202 @@ class Isolation(unittest.TestCase):
         (self.tmp / "scripts" / "json.py").unlink()
         (self.tmp / "re.py").write_text("")
         self.assertTrue(any("`re`" in p for p in self.found("")))
+
+
+class RunAllowlist(unittest.TestCase):
+    """Credential-holding jobs of the real release workflows run only reviewed steps."""
+
+    def setUp(self) -> None:
+        self.workflows = {name: (ROOT / policy.WORKFLOWS / name).read_text(encoding="utf-8")
+                          for name in policy.RELEASE_WORKFLOWS}
+
+    def judged(self, name: str, old: str, new: str) -> list[str]:
+        text = self.workflows[name]
+        self.assertEqual(text.count(old), 1, old)
+        return policy.run_body_problems(name, text.replace(old, new))
+
+    def assert_unsupported(self, problems: list[str]) -> None:
+        self.assertTrue(any(UNSUPPORTED in problem for problem in problems), problems)
+
+    def test_the_real_release_workflows_are_allowlisted(self) -> None:
+        for name, text in self.workflows.items():
+            with self.subTest(workflow=name):
+                self.assertEqual(policy.run_body_problems(name, text), [])
+        # The rule has something to judge: every job that holds a credential.
+        covered = sorted(key for name, text in self.workflows.items()
+                         for key in allowlist_for({name: text}))
+        self.assertEqual(covered, sorted([
+            ("release-tag.yml", "select-release-commit"), ("release-tag.yml", "sign-release-tag"),
+            ("release-tag.yml", "dry-run-gate"), ("release-tag.yml", "sign-dry-run-tag"),
+            ("version-at-land.yml", "plan"), ("version-at-land.yml", "push")]))
+        self.assertEqual(sorted(policy.RUN_ALLOWLIST), covered)
+        self.assertNotIn("${{", "".join(step.get("run", "") for variants in policy.RUN_ALLOWLIST.values()
+                                        for steps in variants for step in steps))
+
+    def test_a_job_runs_one_of_its_listed_variants(self) -> None:
+        # A step changes in two pull requests: the first lists the new sequence
+        # as a second variant, the second changes the workflow.
+        name = policy.SIGNING_WORKFLOW
+        text = self.workflows[name]
+        old = "          echo \"signed, pushed and froze $TAG at $OBJECT\" >> \"$GITHUB_STEP_SUMMARY\""
+        changed = text.replace(old, old.replace("signed, pushed", "signed, then pushed"))
+        self.assert_unsupported(policy.run_body_problems(name, changed))
+        new_variant = allowlist_for({name: changed})[(name, "sign-release-tag")][0]
+        allowlist = {**policy.RUN_ALLOWLIST,
+                     (name, "sign-release-tag"): [*policy.RUN_ALLOWLIST[(name, "sign-release-tag")], new_variant]}
+        # Pull request one: both sequences listed, the workflow unchanged; pull request two: the new one runs.
+        self.assertEqual(policy.run_body_problems(name, text, allowlist), [])
+        self.assertEqual(policy.run_body_problems(name, changed, allowlist), [])
+        # A sequence that matches no variant still fails, and names the step that differs.
+        neither = text.replace(old, old.replace("signed, pushed", "pushed"))
+        problems = policy.run_body_problems(name, neither, allowlist)
+        self.assertTrue(any(UNSUPPORTED in p and "Push the tag and freeze it" in p for p in problems), problems)
+        # A job with no listed variant fails too.
+        missing = {key: value for key, value in policy.RUN_ALLOWLIST.items() if key != (name, "sign-release-tag")}
+        self.assert_unsupported(policy.run_body_problems(name, text, missing))
+
+    def test_locale_quoted_gh_is_not_in_the_allowlist(self) -> None:
+        # The HOLD at 160897c17: `g$"h" api` and `gh a$"pi"` run gh api, and
+        # an Actions-token step could read an Administration-only endpoint.
+        wait = '          . "$RUNNER_TEMP/fetch_results.sh"\n          deadline='
+        for command in ('g$"h" api', 'gh a$"pi"', "g$'h' api", '"g"h api'):
+            with self.subTest(command=command):
+                self.assert_unsupported(self.judged(policy.SIGNING_WORKFLOW, wait, (
+                    f'          {command} "repos/$GITHUB_REPOSITORY/immutable-releases" > x.json\n' + wait)))
+        # The positive control: the same step as reviewed.
+        self.assertEqual(self.judged(policy.SIGNING_WORKFLOW, wait, wait), [])
+
+    def test_removing_the_app_token_with_env_is_not_in_the_allowlist(self) -> None:
+        # The HOLD at 160897c17: `env --unset=GH_TOKEN gh api` falls back to
+        # another credential while the step's env still shows the App token.
+        read = ('          timeout 120 gh api "repos/$GITHUB_REPOSITORY/rules/branches/main"'
+                ' > "$RUNNER_TEMP/branch-rules.json"\n          timeout 120 gh api "repos/$GITHUB_REPOSITORY/immutable-releases"')
+        text = self.workflows[policy.SIGNING_WORKFLOW]
+        self.assertEqual(text.count(read), 2)
+        for wrapper in ("env --unset=GH_TOKEN", "env -u GH_TOKEN", "env -i", "GH_TOKEN= "):
+            with self.subTest(wrapper=wrapper):
+                changed = text.replace(read, read.replace("timeout 120 gh api", f"timeout 120 {wrapper} gh api"), 1)
+                self.assert_unsupported(policy.run_body_problems(policy.SIGNING_WORKFLOW, changed))
+
+    def test_inherited_bash_functions_cannot_reach_the_bump_push(self) -> None:
+        # The HOLD at 160897c17: BASH_FUNC_read%% inherited into the push step
+        # empties clean()'s inventory. No step of the job can set it: a new env
+        # entry, or an earlier step writing GITHUB_ENV, is not reviewed.
+        push = "          MAIN: ${{ needs.plan.outputs.main }}\n          VERSION:"
+        self.assert_unsupported(self.judged(policy.VERSION_WORKFLOW, push, (
+            "          MAIN: ${{ needs.plan.outputs.main }}\n"
+            "          BASH_FUNC_read%%: '() { record=; return 0; }'\n          VERSION:")))
+        apply = '          test "$(git rev-parse HEAD^)" = "$MAIN"\n'
+        self.assert_unsupported(self.judged(policy.VERSION_WORKFLOW, apply, apply + (
+            "          printf 'BASH_FUNC_read%%%%=() { record=; return 0; }\\n' >> \"$GITHUB_ENV\"\n")))
+        for key in ("BASH_ENV", "ENV"):
+            with self.subTest(key=key):
+                self.assert_unsupported(self.judged(policy.VERSION_WORKFLOW, push, (
+                    f"          MAIN: ${{{{ needs.plan.outputs.main }}}}\n          {key}: /tmp/x\n          VERSION:")))
+
+    def test_a_reviewed_step_cannot_change_any_key(self) -> None:
+        # Every key but `name` is reviewed: the token, the checkout, a working
+        # directory or `continue-on-error` change what the token-holding step does.
+        sign = self.workflows[policy.SIGNING_WORKFLOW]
+        for old, new in {
+            "GH_TOKEN: ${{ steps.app-token.outputs.token }}": "GH_TOKEN: ${{ steps.push-token.outputs.token }}",
+            "      - name: Read main's required checks again\n":
+                "      - name: Read main's required checks again\n        continue-on-error: true\n",
+            "      - name: Decide whether the version may be tagged\n":
+                "      - name: Decide whether the version may be tagged\n        working-directory: .observatory-pulp\n",
+        }.items():
+            with self.subTest(new=new):
+                self.assert_unsupported(policy.run_body_problems(policy.SIGNING_WORKFLOW, sign.replace(old, new, 1)))
+        # Reviewed steps run in the reviewed order: verifying after the push is refused.
+        verify = sign[sign.index("      - name: Verify the tag against the policy\n"):sign.index("      - name: Push the tag and freeze it\n")]
+        push = sign[sign.index("      - name: Push the tag and freeze it\n"):sign.index("  # A release dry run.")]
+        self.assert_unsupported(policy.run_body_problems(policy.SIGNING_WORKFLOW, sign.replace(verify + push, push + verify)))
+        # A step's name is not reviewed: renaming one changes nothing that runs.
+        renamed = sign.replace("- name: Sign the tag\n", "- name: Sign the release tag\n")
+        self.assertEqual(policy.run_body_problems(policy.SIGNING_WORKFLOW, renamed), [])
+
+    def test_a_credential_job_runs_only_pinned_actions_in_place(self) -> None:
+        for old, new in {
+            "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1":
+                "uses: actions/checkout@v4",
+            "    environment: release\n    steps:": "    environment: release\n    container: ubuntu:latest\n    steps:",
+        }.items():
+            with self.subTest(new=new):
+                text = self.workflows[policy.SIGNING_WORKFLOW].replace(old, new, 1)
+                problems = policy.run_body_problems(policy.SIGNING_WORKFLOW, text, allowlist_for(
+                    {policy.SIGNING_WORKFLOW: text}))
+                self.assertTrue(problems, "allowlisted, still refused")
+        local = self.workflows[policy.SIGNING_WORKFLOW].replace(
+            "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "uses: ./.github/actions/local", 1)
+        problems = policy.run_body_problems(policy.SIGNING_WORKFLOW, local, allowlist_for({policy.SIGNING_WORKFLOW: local}))
+        self.assertTrue(any("not an action pinned" in p for p in problems), problems)
+
+    def test_the_signing_key_never_shares_a_step_with_a_github_credential(self) -> None:
+        key = "          RELEASE_TAG_SIGNING_KEY: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}\n          TAG: ${{ steps.decision"
+        for credential in ("GH_TOKEN: ${{ github.token }}", "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+                           "OTHER: ${{ steps.push-token.outputs.token }}"):
+            with self.subTest(credential=credential):
+                text = self.workflows[policy.SIGNING_WORKFLOW]
+                text = text.replace(key, key.replace("          TAG:", f"          {credential}\n          TAG:"), 1)
+                problems = policy.run_body_problems(policy.SIGNING_WORKFLOW, text, allowlist_for(
+                    {policy.SIGNING_WORKFLOW: text}))
+                self.assertTrue(any("signing key with a GitHub credential" in p for p in problems), problems)
+
+    def test_a_job_reaches_a_credential_however_it_names_one(self) -> None:
+        for text in ("${{ github.token }}", "${{ GitHub.Token }}", "${{ github['token'] }}", "${{ toJSON(github) }}",
+                     "${{ secrets.GITHUB_TOKEN }}", "${{ secrets[format('{0}', 'X')] }}", "${{ steps.x.outputs.token }}",
+                     "${{ steps.x.outputs[format('{0}', 'token')] }}", "${{ join(steps.*.outputs) }}", "GH_TOKEN",
+                     "github_token", "uses: actions/create-github-app-token@v2"):
+            with self.subTest(text=text):
+                self.assertTrue(policy.reaches_credential(text))
+        for text in ("${{ secrets.RELEASE_TAG_SIGNING_KEY }}", "${{ github.sha }}", "${{ steps.x.outputs.tag }}",
+                     "${{ needs.plan.outputs.main }}", "${{ runner.temp }}", "echo hi"):
+            with self.subTest(text=text):
+                self.assertFalse(policy.reaches_credential(text))
+
+
+class AdminReadRuntime(unittest.TestCase):
+    """The admin reads fail closed at run time on an answer of the wrong shape."""
+
+    GOOD = {"required_status_checks": '{"contexts": [], "checks": []}', "rules/branches/main": "[]",
+            "immutable-releases": '{"enabled": true, "enforced_by_owner": false}'}
+
+    def run_read(self, answers: dict[str, str], status: int = 0) -> subprocess.CompletedProcess:
+        if shutil.which("jq") is None or shutil.which("bash") is None:
+            self.fail("bash and jq are required, as on the runner")
+        text = (ROOT / policy.WORKFLOWS / policy.SIGNING_WORKFLOW).read_text(encoding="utf-8")
+        body = next(step.run for step in policy.workflow_steps(text)
+                    if step.name == "Read main's required checks and the immutable-release setting")
+        tmp = Path(tempfile.mkdtemp(prefix="admin-read-"))
+        self.addCleanup(shutil.rmtree, tmp)
+        bin_dir = tmp / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "timeout").write_text('#!/bin/sh\nshift\nexec "$@"\n')
+        cases = "".join(f'  *{endpoint}) printf %s {shlex_quote(answer)} ;;\n' for endpoint, answer in answers.items())
+        (bin_dir / "gh").write_text(f'#!/bin/sh\ncase "$2" in\n{cases}esac\nexit {status}\n')
+        for tool in ("timeout", "gh"):
+            (bin_dir / tool).chmod(0o755)
+        env = {"PATH": f"{bin_dir}:{Path(shutil.which('jq')).parent}:/usr/bin:/bin",
+               "RUNNER_TEMP": str(tmp), "GITHUB_REPOSITORY": "Generous-Corp/vellum"}
+        return subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", body], env=env,
+                              capture_output=True, text=True, check=False)
+
+    def test_well_formed_answers_pass(self) -> None:
+        self.assertEqual(self.run_read(self.GOOD).returncode, 0)
+
+    def test_an_answer_of_the_wrong_shape_fails(self) -> None:
+        for endpoint, answer in {"required_status_checks": '{"message": "Not Found"}',
+                                 "rules/branches/main": '{"message": "Resource not accessible by integration"}',
+                                 "immutable-releases": '{"message": "Must have admin rights"}'}.items():
+            with self.subTest(endpoint=endpoint):
+                self.assertNotEqual(self.run_read({**self.GOOD, endpoint: answer}).returncode, 0)
+
+    def test_a_failed_request_fails(self) -> None:
+        self.assertNotEqual(self.run_read(self.GOOD, status=1).returncode, 0)
+
+
+def shlex_quote(text: str) -> str:
+    return "'" + text.replace("'", "'\"'\"'") + "'"
 
 
 class Repository(unittest.TestCase):

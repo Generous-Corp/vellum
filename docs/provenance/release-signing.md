@@ -263,6 +263,18 @@ promotion attestation and prove full-matrix parity.
   Every release script runs as `python3 -I`, so no file in the checkout can shadow a standard-library module.
   `release-policy` enforces all of this, and it also refuses a repository Python file named like a
   standard-library module.
+- **A job that can reach a GitHub token runs only reviewed steps.** In the three release workflows, every job that
+  names `GH_TOKEN`, `GITHUB_TOKEN`, the App-token action, a token or a secret other than the signing key runs exactly
+  one of the step sequences `RUN_ALLOWLIST` in `scripts/check_release_policy.py` lists for it: every step in order,
+  every key but `name` as written. The check reads no shell, so a bypass spelled in shell is simply a body that is not
+  on the list. Run bodies in those jobs hold no `${{ }}` expressions; inputs come through the step's `env:` and are
+  read as `"$NAME"`. A step that names an Administration-only endpoint must hold the App token minted earlier in its
+  job, no step sets `GITHUB_TOKEN`, and the signing step has no GitHub token in scope. At run time each
+  Administration-only read fails on a non-2xx answer (`gh api` exits non-zero) and on a body of the wrong shape
+  (`jq -e`). Workflows outside the release path are not covered.
+- **Changing one of those steps takes two pull requests**, because `release-policy` also judges each pull request
+  with the base branch's list. The first adds the new step sequence as another variant of its job and changes no
+  workflow; the second changes the workflow and removes the old variant. Both are release-path changes.
 - **One key per tag namespace.** `v*` release tags are verified against `release-signers.allowed_signers` (the
   pipeline's key); `authority/*` tags against `authority-signers.allowed_signers` (the owner key that signed them).
   `verify_release_tag.py` picks the file from the tag name itself, refuses abbreviated or repeated flags, so a

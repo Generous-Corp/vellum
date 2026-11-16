@@ -177,6 +177,11 @@ jobs:
             > "$RUNNER_TEMP/required-checks.json"
           timeout 120 gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"
           timeout 120 gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"
+          # gh api exits non-zero on any non-2xx answer; a 2xx body of the wrong
+          # shape (another token, another endpoint) fails here, not in the decision.
+          jq -e 'type == "object" and (.contexts | type == "array")' "$RUNNER_TEMP/required-checks.json" > /dev/null
+          jq -e 'type == "array"' "$RUNNER_TEMP/branch-rules.json" > /dev/null
+          jq -e 'type == "object" and (.enabled | type == "boolean")' "$RUNNER_TEMP/immutable-releases.json" > /dev/null
           date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNNER_TEMP/immutable-releases-read-at.txt"
 
       - name: Wait for the required checks to finish
@@ -204,7 +209,7 @@ jobs:
             local attempt
             for attempt in 1 2 3; do
               if timeout 120 gh api --method GET --paginate --slurp \
-                "repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs?per_page=100" \
+                "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" \
                 -f filter=all > "$RUNNER_TEMP/check-runs.json"; then
                 break
               fi
@@ -215,7 +220,7 @@ jobs:
             # statuses, not check runs; main's rules accept either.
             for attempt in 1 2 3; do
               if timeout 120 gh api --method GET --paginate --slurp \
-                "repos/${{ github.repository }}/commits/${{ github.sha }}/statuses?per_page=100" \
+                "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/statuses?per_page=100" \
                 > "$RUNNER_TEMP/statuses.json"; then
                 break
               fi
@@ -261,6 +266,11 @@ jobs:
             > "$RUNNER_TEMP/required-checks.json"
           timeout 120 gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"
           timeout 120 gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"
+          # gh api exits non-zero on any non-2xx answer; a 2xx body of the wrong
+          # shape (another token, another endpoint) fails here, not in the decision.
+          jq -e 'type == "object" and (.contexts | type == "array")' "$RUNNER_TEMP/required-checks.json" > /dev/null
+          jq -e 'type == "array"' "$RUNNER_TEMP/branch-rules.json" > /dev/null
+          jq -e 'type == "object" and (.enabled | type == "boolean")' "$RUNNER_TEMP/immutable-releases.json" > /dev/null
           date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNNER_TEMP/immutable-releases-read-at.txt"
 
       - name: Decide whether the version may be tagged
@@ -375,7 +385,7 @@ jobs:
         run: |
           set -euo pipefail
           for status in queued in_progress waiting pending requested; do
-            gh api --method GET --paginate --slurp "repos/${{ github.repository }}/actions/runs" \
+            gh api --method GET --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs" \
               -f status="$status" -F per_page=100 > "$RUNNER_TEMP/runs-$status.json"
           done
           jq -s 'add' "$RUNNER_TEMP"/runs-*.json > "$RUNNER_TEMP/runs.json"
