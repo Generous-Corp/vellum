@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -709,6 +710,103 @@ bool vector_builder_helpers() {
 // one group: its rectangles composited at full opacity, then faded once by
 // `opacity`. It also checks that the shell's rectangles never overlap, so no
 // pixel is blended twice.
+bool digest_covers_fields() {
+    using namespace vellum::graphics;
+    using Command = PaintCommand;
+    const auto digest = [](const Command& command) {
+        return vellum::web::command_digest(std::vector<Command>{command});
+    };
+    const auto ramp_stops = std::vector<GradientStop>{{0.0F, Color::hex(0xFF0000)},
+                                                      {1.0F, Color::hex(0x0000FF)}};
+    const auto vector_digest = [&](bool repeating, float repeat_length) {
+        LinearGradient gradient;
+        gradient.stops = ramp_stops;
+        auto scene = vector_scene({{.kind = VectorOp::Kind::path, .path = rectangle_path(0.0F),
+                                    .fill = {.gradient = gradient}}});
+        auto commands = vellum::web::lower_for_canvas_shell(scene).commands;
+        auto asset = std::make_shared<VectorAsset>(*commands.at(0).vector);
+        asset->ops.at(0).fill.gradient->repeating = repeating;
+        asset->ops.at(0).fill.gradient->repeat_length = repeat_length;
+        commands.at(0).vector = asset;
+        return vellum::web::command_digest(commands);
+    };
+    if (vector_digest(true, 0.0F) == vector_digest(false, 0.0F)) {
+        std::cerr << "the digest does not carry a vector gradient's repeating flag\n";
+        return false;
+    }
+    if (vector_digest(false, 4.0F) == vector_digest(false, 0.0F)) {
+        std::cerr << "the digest does not carry a vector gradient's repeat length\n";
+        return false;
+    }
+    const Command base{.kind = Command::Kind::rectangle, .node_id = "n", .bounds = {0, 0, 10, 10}};
+    LinearGradient gradient;
+    gradient.stops = ramp_stops;
+    auto plot = std::make_shared<PlotSpec>();
+    plot->slot_count = 4;
+    plot->samples = {0.1F, 0.2F, 0.3F, 0.4F};
+    auto plot_changed = std::make_shared<PlotSpec>(*plot);
+    plot_changed->samples[2] = 0.9F;
+    auto mesh = std::make_shared<TriangleMesh>();
+    mesh->vertices = {{0, 0, 0, 0, 0xFFFFFFFFU}};
+    auto path = std::make_shared<PathGeometry>();
+    path->verbs = {PathVerb::move};
+    path->values = {1.0F, 2.0F};
+    NodeEffect effect;
+    effect.sigma = 2.0F;
+    const std::vector<std::pair<const char*, std::function<void(Command&)>>> changes{
+        {"transform", [](Command& c) { c.transform.tx = 3.0F; }},
+        {"fill gradient", [&](Command& c) { c.fill_gradients = {gradient}; }},
+        {"gradient repeating", [&](Command& c) {
+             auto g = gradient;
+             g.repeating = true;
+             c.fill_gradients = {g};
+         }},
+        {"box shadow", [](Command& c) { c.box_shadows = {BoxShadow{.blur_radius = 2.0F}}; }},
+        {"corner radii", [](Command& c) { c.corner_radii = {1.0F, 2.0F, 3.0F, 4.0F}; }},
+        {"font family", [](Command& c) { c.font_family = "Mono"; }},
+        {"font weight", [](Command& c) { c.font_weight = 700; }},
+        {"letter spacing", [](Command& c) { c.letter_spacing = 1.0F; }},
+        {"underline", [](Command& c) { c.underline = true; }},
+        {"strikethrough", [](Command& c) { c.strikethrough = true; }},
+        {"text run", [](Command& c) { c.text_runs = {TextRun{.text = "a"}}; }},
+        {"mesh", [&](Command& c) { c.mesh = mesh; }},
+        {"path", [&](Command& c) { c.path = path; }},
+        {"layer unbounded", [](Command& c) { c.layer_unbounded = true; }},
+        {"layer isolated", [](Command& c) { c.layer_isolated = true; }},
+        {"blend mode", [](Command& c) { c.blend_mode = BlendMode::multiply; }},
+        {"mask mode", [](Command& c) { c.mask_mode = MaskMode::luminance; }},
+        {"image", [](Command& c) { c.image = ImageReference{.content_hash = "sha256:x"}; }},
+        {"effects", [&](Command& c) { c.effects = {effect}; }},
+        {"plot", [&](Command& c) { c.plot = plot; }},
+        {"plot background", [](Command& c) { c.plot_background = true; }},
+    };
+    for (const auto& [name, change] : changes) {
+        Command changed = base;
+        change(changed);
+        if (digest(changed) == digest(base)) {
+            std::cerr << "the command digest ignores " << name << "\n";
+            return false;
+        }
+    }
+    Command first = base;
+    first.plot = plot;
+    Command second = base;
+    second.plot = plot_changed;
+    if (digest(first) == digest(second)) {
+        std::cerr << "the command digest ignores a plot's samples\n";
+        return false;
+    }
+    Command clipped = base;
+    clipped.kind = Command::Kind::begin_clip;
+    Command moved = clipped;
+    moved.clip_rect = {1, 1, 2, 2};
+    if (digest(clipped) == digest(moved)) {
+        std::cerr << "the command digest ignores a clip rectangle\n";
+        return false;
+    }
+    return true;
+}
+
 bool composites_once(const std::vector<vellum::graphics::PaintCommand>& commands,
                      const Scene& scene, const std::string& id, float opacity) {
     using vellum::graphics::Color;
@@ -1089,6 +1187,7 @@ int main() {
     if (!image_refusals()) return 1;
     if (!vector_plans()) return 1;
     if (!vector_builder_helpers()) return 1;
+    if (!digest_covers_fields()) return 1;
     if (!track_evaluation()) return 1;
     if (!mask_reports()) return 1;
     if (!blend_lowering()) return 1;

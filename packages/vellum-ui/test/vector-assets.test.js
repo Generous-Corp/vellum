@@ -123,3 +123,20 @@ test('a material-bearing node is refused at version 3 and 6, never dropped', () 
             /unsupported material/, `version ${version}`);
     }
 });
+
+test('hidden descendants are held to the vector version gate', () => {
+    const document = vectorDocument();
+    const hidden = (node) => {
+        node.properties.layout.display = 'none';
+        return node;
+    };
+    for (const index of [0, 1]) {
+        const copy = structuredClone(document);
+        copy.root.children = [hidden(copy.root.children[index])];
+        assert.doesNotThrow(() => materializeDesign(copy, { viewport: { width: 200, height: 120 } }));
+        for (const version of [1, 5]) {
+            assert.throws(() => materializeDesign({ ...copy, schemaVersion: version },
+                { viewport: { width: 200, height: 120 } }), /needs schemaVersion 6/, `version ${version}`);
+        }
+    }
+});

@@ -137,3 +137,17 @@ test('the required version counts material references, recursively', async () =>
     assert.equal(requiredDesignIRVersion(node({ compositing: { opacity: 0.5 } })), 2, 'compositing only');
     assert.equal(requiredDesignIRVersion(node()), 1, 'nothing');
 });
+
+test('the required version covers every versioned field, alone, nested and mixed', async () => {
+    const { requiredDesignIRVersion } = await import('../src/index.js');
+    const node = (extra = {}, children = []) => ({ kind: 'view', properties: {}, children, ...extra });
+    const plot = { style: 'meter', channel: 'meters' };
+    const glass = { id: 'vellum.frosted-glass', values: {} };
+    assert.equal(requiredDesignIRVersion(node({ plot })), 5, 'plot only');
+    assert.equal(requiredDesignIRVersion(node({}, [node({}, [node({ plot })])])), 5, 'nested plot');
+    assert.equal(requiredDesignIRVersion(node({ tracks: [] }, [node({ plot })])), 5, 'plot and tracks');
+    assert.equal(requiredDesignIRVersion(node({ material: glass }, [node({ plot })])), 5, 'plot and material');
+    assert.equal(requiredDesignIRVersion(node({ plot }, [node({ kind: 'vector' })])), 6, 'plot and vector');
+    assert.equal(requiredDesignIRVersion(node({ tracks: [] })), 4, 'tracks only');
+    assert.equal(requiredDesignIRVersion(node({ tracks: [] }, [node({ material: glass })])), 4, 'tracks and material');
+});

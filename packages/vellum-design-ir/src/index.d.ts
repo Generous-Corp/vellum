@@ -13,7 +13,7 @@ export const DESIGN_IR_LATEST_VERSION: 6;
 export const DESIGN_IR_VERSIONS: readonly [1, 2, 3, 4, 5, 6];
 export const SUPPORTED_DESIGN_IR_VERSIONS: typeof DESIGN_IR_VERSIONS;
 export function findVectorAssetField(root: unknown, path?: string): { path: string; field: string } | null;
-export function requiredDesignIRVersion(root: unknown): 1 | 2 | 3 | 4 | 6;
+export function requiredDesignIRVersion(root: unknown): 1 | 2 | 3 | 4 | 5 | 6;
 export function designIRVersionProblem(document: { schemaVersion: unknown; root: unknown }): string | null;
 export const AUTHORED_OVERLAY_VERSION: 1;
 export const REIMPORT_REPORT_VERSION: 1;
@@ -366,7 +366,7 @@ export function resolveTokenLayers(document: DesignIR, overlay?: Partial<Authore
 export function diffTokens(previous: DesignIR['tokens'], next: DesignIR['tokens']): unknown[];
 export function normalizeImport(
     input: ImportSourceModel,
-    options?: { compilerVersion?: string; schemaVersion?: 1 | 2 | 3 | 4 | 5 },
+    options?: { compilerVersion?: string; schemaVersion?: 1 | 2 | 3 | 4 | 5 | 6 },
 ): DesignIR;
 export function decodeFigmaPluginExport(
     input: unknown,

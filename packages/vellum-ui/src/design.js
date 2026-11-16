@@ -369,6 +369,11 @@ function requireSupportedFields(root, version) {
         if (node.plot !== undefined && version < PLOTS_VERSION) {
             throw new Error(`design node ${node.id} plot needs schemaVersion ${PLOTS_VERSION}`);
         }
+        const vectorField = vectorAssetField(node);
+        if (vectorField !== null && version < VECTOR_ASSET_VERSION) {
+            throw new Error(
+                `design node ${node.id} ${vectorField} needs schemaVersion ${VECTOR_ASSET_VERSION}`);
+        }
         if (node.tracks !== undefined && (!Array.isArray(node.tracks) || node.tracks.length > 0)) {
             throw new Error(`design node ${node.id} has unsupported tracks`);
         }
