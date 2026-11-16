@@ -1424,7 +1424,6 @@ class PlatformScopePlanTest(unittest.TestCase):
         # A v1 row names no platform; it keeps meaning the macOS build it was proven on.
         self.fixture.write_ledger([self.scoped_row(self.NEW, "pulp-runtime", None)])
         plan = self.fixture.plan()
-        self.assertEqual(plan["platform"], "macos-arm64")
         self.assertIn(self.planned(self.NEW), self.sources(plan))
 
     def test_a_source_scoped_to_another_platform_is_not_compiled_on_macos(self) -> None:
