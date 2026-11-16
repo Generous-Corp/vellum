@@ -5,6 +5,7 @@
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/path_geometry.hpp>
+#include <vellum/graphics/plot.hpp>
 #include <vellum/graphics/token_receipts.hpp>
 
 #include <cmath>
@@ -74,15 +75,17 @@ struct EffectRefusal final {
 };
 
 std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_node,
-                          std::optional<EffectRefusal>& effect);
+                          std::optional<EffectRefusal>& effect,
+                          std::optional<std::string>& plot_node);
 
 // Why `scene` is refused, or empty. `image_node` is set to the refused
 // image's id, and `image` to true, for an image or image-table refusal;
-// `token_refusal` is set for a token refusal and `effect` for an effect
-// refusal.
+// `token_refusal` is set for a token refusal, `effect` for an effect refusal
+// and `plot_node` for a plot refusal.
 std::string refusal(const Scene& scene, bool& image, std::string& image_node,
                     std::optional<TokenRefusal>& token_refusal,
-                    std::optional<EffectRefusal>& effect) {
+                    std::optional<EffectRefusal>& effect,
+                    std::optional<std::string>& plot_node) {
     if (!scene_version_is_supported(scene.scene_version)) {
         return "scene version " + std::to_string(scene.scene_version) +
                " is not supported by this renderer";
@@ -120,12 +123,13 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node,
         }
         evaluated.emplace(evaluate_tracks(scene));
     }
-    return drawn_refusal(evaluated ? *evaluated : scene, image, image_node, effect);
+    return drawn_refusal(evaluated ? *evaluated : scene, image, image_node, effect, plot_node);
 }
 
 // Why the scene as drawn, with its tracks evaluated, is refused, or empty.
 std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_node,
-                          std::optional<EffectRefusal>& effect) {
+                          std::optional<EffectRefusal>& effect,
+                          std::optional<std::string>& plot_node) {
     if (const auto* invalid = find_non_finite_compositing(scene.root); invalid != nullptr) {
         return "scene node " + invalid->id +
                " has a non-finite transform, opacity, or corner radius";
@@ -158,6 +162,10 @@ std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_no
         image = true;
         return reason;
     }
+    if (const auto* plot = find_invalid_plot(scene.root, reason); plot != nullptr) {
+        plot_node = plot->id;
+        return "plot " + plot->id + " cannot be drawn: " + reason;
+    }
     return {};
 }
 
@@ -170,7 +178,8 @@ SceneAcceptance accept_scene(const Scene& scene) {
     std::string image_node;
     std::optional<TokenRefusal> token;
     std::optional<EffectRefusal> effect;
-    result.reason = refusal(scene, image, image_node, token, effect);
+    std::optional<std::string> plot_node;
+    result.reason = refusal(scene, image, image_node, token, effect, plot_node);
     result.accepted = result.reason.empty();
     if (result.accepted) return result;
 
@@ -194,6 +203,16 @@ SceneAcceptance accept_scene(const Scene& scene) {
             .code = std::string(effect->code),
             .node_id = std::move(effect->node_id),
             .property = "effects",
+            .message = result.reason,
+        });
+    }
+    if (plot_node) {
+        result.diagnostics.push_back({
+            .severity = LoweringDiagnostic::Severity::error,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(kInvalidPlotCode),
+            .node_id = std::move(*plot_node),
+            .property = "plot",
             .message = result.reason,
         });
     }

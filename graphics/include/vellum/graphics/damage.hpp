@@ -222,6 +222,7 @@ public:
 /// Images compare their fill, uniform radius and every `ImageReference`
 /// field; the scene diff also compares the `ImageAsset` each image resolves
 /// to by pointer, so replacing an asset damages the images that draw it.
+/// Plots compare their fill and every spec field, samples included.
 [[nodiscard]] bool paint_differs(const SceneNode& previous, const SceneNode& next);
 
 /// Whether two nodes with the same identity group their subtree differently:
@@ -256,6 +257,13 @@ public:
 /// and the new one. A node with a backdrop effect also damages its box, and once any damage reaches the
 /// area its backdrop samples (its box grown by the backdrop's reach) its box
 /// is damaged too, repeated until no further backdrop is reached.
+///
+/// A plot whose samples alone change, with its box, transform, clip,
+/// background and layout unchanged and no effect spreading its damage,
+/// damages only the spans `plot_sample_damage` reports, mapped through its
+/// composed transform, grown by the radius of the effects around it and
+/// bounded by its clips; any other plot change, and a plot whose blend mode
+/// clears the backdrop, damages its old and new areas.
 [[nodiscard]] DamageRegion compute_scene_damage(
     const Scene& previous, const Scene& next, float scale,
     DamagePolicy policy = {}, const DamagePropagation* propagation = nullptr);
@@ -264,7 +272,7 @@ public:
 /// damage model understands. Partial redraw is enabled only for scene
 /// versions the damage model understands; a newer scene repaints fully until
 /// the damage model learns its fields and this constant is raised.
-inline constexpr std::uint32_t kDamageModelSceneVersion = 11U;
+inline constexpr std::uint32_t kDamageModelSceneVersion = 12U;
 
 /// Whether a scene of `version` may be redrawn from its damage alone: a
 /// version from `kMinSupportedSceneVersion` to `kDamageModelSceneVersion`.

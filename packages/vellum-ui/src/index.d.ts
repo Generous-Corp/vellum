@@ -341,6 +341,33 @@ export interface PathProps extends Omit<ElementProps, 'children' | 'text' | 'sou
 }
 export declare const Path: Component<PathProps>;
 
+/**
+ * A plot of a value-feed channel. The host feeds its samples at run time;
+ * colours are hex strings and the box's backgroundColor paints behind it.
+ */
+export interface PlotProps extends Omit<ElementProps, 'children' | 'text' | 'source'> {
+    plot: 'line' | 'area' | 'bar' | 'meter';
+    /** The verbatim name of the channel. */
+    channel: string;
+    source?: 'scalar' | 'meter' | 'vector';
+    /** Slots across the box; required unless the plot is a meter. */
+    slots?: number;
+    history?: 'scroll' | 'sweep';
+    orientation?: 'vertical' | 'horizontal';
+    audioChannel?: number;
+    min?: number;
+    max?: number;
+    baseline?: number;
+    lineWidth?: number;
+    barGap?: number;
+    peakWidth?: number;
+    lineColor?: string;
+    fillColor?: string;
+    peakColor?: string;
+    children?: never;
+}
+export declare const Plot: Component<PlotProps>;
+
 export interface CustomComponentProps extends ElementProps {
     component: string;
     properties?: Record<string, JsonValue>;

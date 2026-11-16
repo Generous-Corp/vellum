@@ -26,6 +26,13 @@ assert SPEC is not None and SPEC.loader is not None
 receiver = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(receiver)
 
+DESCRIBE = importlib.util.spec_from_file_location(
+    "vellum_coalesce_describe", Path(__file__).with_name("coalesce_describe.py")
+)
+assert DESCRIBE is not None and DESCRIBE.loader is not None
+coalesce_describe = importlib.util.module_from_spec(DESCRIBE)
+DESCRIBE.loader.exec_module(coalesce_describe)
+
 
 def git(repo: Path, *args: str) -> str:
     return subprocess.run(
@@ -389,6 +396,245 @@ class ReceiverTests(unittest.TestCase):
             payload=self.payload(commit, "activation", event),
         )
         self.assertEqual(result["status"], "reconcile")
+
+
+    # A push to main coalesces only when a release change or the lag bound calls for it.
+    EVENT = Path(__file__).resolve().parents[2] / (
+        "provenance/pulp-observatory/events/pulp-00f6a82ef8ff23bbcd06152c3ff5977372330310.yaml"
+    )
+
+    def write_pending_events(self, count: int) -> None:
+        source = json.loads(self.EVENT.read_text(encoding="utf-8"))
+        for index in range(count):
+            sha = f"{index:040x}"
+            event = dict(source, event_id=f"pulp-{sha}", source_commit=sha)
+            write_json(self.vellum / f"provenance/pulp-observatory/events/pulp-{sha}.yaml", event)
+
+    def land(self, path: str = "graphics/render.cpp", text: str = "int v = 2;\n") -> str:
+        target = self.vellum / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        git(self.vellum, "add", ".")
+        git(self.vellum, "commit", "-qm", "landing")
+        return git(self.vellum, "rev-parse", "HEAD")
+
+    def plan_on_demand(self, main: str, **overrides):
+        return receiver.plan(
+            root=self.vellum, pulp_repo=self.pulp, pulp_main=self.base, lower_bound=self.base,
+            payload=None, vellum_repo=self.vellum, vellum_main=main, on_demand=True,
+            **overrides,
+        )
+
+    def test_the_lag_bound_does_not_exceed_the_watchdog_sla(self) -> None:
+        policy = json.loads(
+            (Path(__file__).resolve().parents[2] / "provenance/pulp-observatory/receiver-policy.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertLessEqual(receiver.COALESCE_MAX_LAG_MINUTES, policy["cursor_lag_sla_minutes"])
+
+    def test_decision_for_a_release_change(self) -> None:
+        coalesce, reason = receiver.coalesce_decision(release=["scripts/release_request.py"], lag_minutes=0)
+        self.assertTrue(coalesce)
+        self.assertIn("release_request.py", reason)
+
+    def test_decision_for_a_lag_past_the_bound(self) -> None:
+        bound = receiver.COALESCE_MAX_LAG_MINUTES
+        self.assertFalse(receiver.coalesce_decision(release=[], lag_minutes=bound - 1)[0])
+        self.assertTrue(receiver.coalesce_decision(release=[], lag_minutes=bound)[0])
+
+    def test_disposition_pending_events_never_trigger_a_coalesce(self) -> None:
+        # Pending observations wait for a disposition; a coalesce clears none.
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        self.write_pending_events(25)  # above the limit of 20
+        main = self.land()
+        result = self.plan_on_demand(main)
+        self.assertEqual(result["status"], "deferred")
+        self.assertIn("deferred", result["coalesce_reason"])
+        self.assertNotIn("pending_on_main", result)
+
+    def with_mapping(self, gaps=None, error=None):
+        """Give the temp repo an observatory mapping and stub the ledger reads."""
+        import sys
+        from unittest import mock
+        sys.path.append(str(Path(__file__).resolve().parent))
+        import observatory
+        mapping = self.vellum / observatory.MAP_PATH
+        mapping.parent.mkdir(parents=True, exist_ok=True)
+        mapping.write_text("{}\n", encoding="utf-8")
+        patches = [
+            mock.patch.object(observatory, "load_events", return_value=[]),
+            mock.patch.object(
+                observatory, "validate_lock_map_cursor",
+                side_effect=error,
+                return_value=({}, {}, {"vellum": {"last_scanned_commit": "0" * 40}}, {}),
+            ),
+            mock.patch.object(observatory, "coverage_gaps", return_value=gaps or []),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_a_landing_missing_its_observation_coalesces_at_once(self) -> None:
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        main = self.land()
+        self.with_mapping(gaps=[{"source": "vellum", "commit": main, "reason": "missing-observation"}])
+        result = self.plan_on_demand(main)
+        self.assertEqual(result["status"], "reconcile")
+        self.assertIn("lack their required observation", result["coalesce_reason"])
+        self.assertIn(main[:9], result["coalesce_reason"])
+
+    def test_a_landing_with_its_observation_is_still_deferred(self) -> None:
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        main = self.land()
+        self.with_mapping(gaps=[])
+        self.assertEqual(self.plan_on_demand(main)["status"], "deferred")
+
+    def test_an_unreadable_ledger_is_never_deferred(self) -> None:
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        main = self.land()
+        self.with_mapping(error=RuntimeError("broken lock"))
+        result = self.plan_on_demand(main)
+        self.assertEqual(result["status"], "reconcile")
+        self.assertIn("unreadable observatory state", result["coalesce_reason"])
+
+    def test_pending_on_main_reads_the_committed_events(self) -> None:
+        self._vellum_history()
+        self.write_pending_events(16)
+        self.assertEqual(receiver.pending_on_main(self.vellum), 16)
+
+    def test_a_landing_older_than_the_lag_bound_coalesces(self) -> None:
+        import datetime
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        main = self.land()
+        started = datetime.datetime.fromisoformat(
+            receiver.vellum_lag_started_at(self.vellum, base, main).replace("Z", "+00:00")
+        )
+        late = started + datetime.timedelta(minutes=receiver.COALESCE_MAX_LAG_MINUTES)
+        early = started + datetime.timedelta(minutes=receiver.COALESCE_MAX_LAG_MINUTES - 1)
+        self.assertEqual(self.plan_on_demand(main, now=late)["status"], "reconcile")
+        self.assertEqual(self.plan_on_demand(main, now=early)["status"], "deferred")
+
+    def test_a_release_path_change_coalesces(self) -> None:
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        main = self.land("scripts/release_request.py", "# release\n")
+        result = self.plan_on_demand(main)
+        self.assertEqual(result["status"], "reconcile")
+        self.assertIn("release_request.py", result["coalesce_reason"])
+
+    def write_project(self, version: str) -> None:
+        (self.vellum / "CMakeLists.txt").write_text(
+            f"project(Vellum\n    VERSION {version}\n    LANGUAGES CXX)\n", encoding="utf-8"
+        )
+        write_json(
+            self.vellum / "provenance/retired-release-tags.json",
+            {"schema": "vellum.retired-release-tags.v1", "tags": []},
+        )
+
+    def test_an_untagged_version_coalesces_even_when_a_later_change_buries_the_bump(self) -> None:
+        # The queue landed an ordinary change after the bump, so the tail is not
+        # evidence only and release-tag.yml waits for a later reconcile: the
+        # receiver must not defer that reconcile.
+        base = self._vellum_history()
+        self.write_project("0.2.1")
+        git(self.vellum, "add", ".")
+        git(self.vellum, "commit", "-qm", "bump to 0.2.1")
+        self.set_vellum_cursor(git(self.vellum, "rev-parse", "HEAD"))
+        main = self.land()
+        result = self.plan_on_demand(main)
+        self.assertEqual(result["status"], "reconcile")
+        self.assertIn("v0.2.1 is untagged", result["coalesce_reason"])
+        self.assertNotEqual(base, main)
+
+    def test_a_tagged_version_does_not_hold_the_receiver(self) -> None:
+        self._vellum_history()
+        self.write_project("0.2.1")
+        git(self.vellum, "add", ".")
+        git(self.vellum, "commit", "-qm", "bump to 0.2.1")
+        git(self.vellum, "tag", "v0.2.1")
+        self.set_vellum_cursor(git(self.vellum, "rev-parse", "HEAD"))
+        main = self.land()
+        self.assertEqual(self.plan_on_demand(main)["status"], "deferred")
+
+    def test_a_version_older_than_the_newest_tag_is_not_a_release(self) -> None:
+        self._vellum_history()
+        self.write_project("0.2.0")
+        git(self.vellum, "add", ".")
+        git(self.vellum, "commit", "-qm", "project file")
+        git(self.vellum, "tag", "v0.3.0")
+        self.set_vellum_cursor(git(self.vellum, "rev-parse", "HEAD"))
+        main = self.land()
+        self.assertEqual(self.plan_on_demand(main)["status"], "deferred")
+
+    def test_an_unreadable_version_coalesces(self) -> None:
+        self._vellum_history()
+        (self.vellum / "CMakeLists.txt").write_text("project(Vellum LANGUAGES CXX)\n", encoding="utf-8")
+        git(self.vellum, "add", ".")
+        git(self.vellum, "commit", "-qm", "broken project file")
+        self.set_vellum_cursor(git(self.vellum, "rev-parse", "HEAD"))
+        main = self.land()
+        self.assertEqual(self.plan_on_demand(main)["status"], "reconcile")
+
+    def test_the_same_push_without_on_demand_still_reconciles(self) -> None:
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        main = self.land()
+        result = receiver.plan(
+            root=self.vellum, pulp_repo=self.pulp, pulp_main=self.base, lower_bound=self.base,
+            payload=None, vellum_repo=self.vellum, vellum_main=main,
+        )
+        self.assertEqual(result["status"], "reconcile")
+        self.assertNotIn("coalesce_reason", result)
+
+    def test_a_pulp_side_gap_is_never_deferred(self) -> None:
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        commit, _ = self.add_event("fresh")
+        main = self.land()
+        result = receiver.plan(
+            root=self.vellum, pulp_repo=self.pulp, pulp_main=commit, lower_bound=commit,
+            payload=None, vellum_repo=self.vellum, vellum_main=main, on_demand=True,
+        )
+        self.assertEqual(result["status"], "reconcile")
+        self.assertNotIn("coalesce_reason", result)
+
+    def test_description_lists_commits_the_pending_change_and_the_cursor(self) -> None:
+        base = self._vellum_history()
+        for number in range(1, 24):
+            self.land(text=f"int v = {number + 100};\n")
+        # A merge-queue landing names its pull request in the body, not the subject.
+        (self.vellum / "graphics/render.cpp").write_text("int v = 99;\n", encoding="utf-8")
+        git(self.vellum, "add", ".")
+        git(self.vellum, "commit", "-qm", "Merge pull request #7 from org/branch", "-m", "Add the thing")
+        main = git(self.vellum, "rev-parse", "HEAD")
+        title, body = coalesce_describe.describe(
+            repo=self.vellum, old=base, new=main, pending_before=17, pending_after=19,
+            pulp_old=self.base, pulp_new=self.base,
+        )
+        self.assertEqual(
+            title,
+            f"Record 24 Vellum commits ({base[:9]}..{main[:9]}) as observed; pending 17 to 19",
+        )
+        self.assertEqual(body.count("- `"), 20)
+        self.assertIn("and 4 more", body)
+        self.assertNotIn("Merge pull request", body)
+        self.assertIn("(change +2)", body)
+        self.assertIn("(unchanged)", body)
+        self.assertNotIn("\u2014", title + body)
+
+    def test_description_of_one_commit_is_singular(self) -> None:
+        base = self._vellum_history()
+        main = self.land()
+        title, _ = coalesce_describe.describe(
+            repo=self.vellum, old=base, new=main, pending_before=3, pending_after=3,
+            pulp_old=self.base, pulp_new=self.base,
+        )
+        self.assertTrue(title.startswith("Record 1 Vellum commit ("))
 
 
 if __name__ == "__main__":

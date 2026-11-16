@@ -19,8 +19,13 @@ const MAXIMUM_PATH_DASHES = 64;
 const HEX_COLOR = /^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/;
 const INTRINSIC_TYPES = new Set([
     'view', 'stack', 'text', 'text-run', 'text-input', 'button', 'image', 'canvas', 'custom',
-    'path',
+    'path', 'plot',
 ]);
+const MAXIMUM_PLOT_SLOTS = 4194304;
+const PLOT_FLOAT_MAX = 3.4028234663852886e38;
+const MAXIMUM_PLOT_AUDIO_CHANNEL = 1024;
+// Native kMaxPlotStroke: the widest line, bar gap or peak tick in logical pixels.
+const MAXIMUM_PLOT_STROKE = 4096;
 
 let renderingRuntime = null;
 
@@ -158,6 +163,7 @@ export const Button = primitive('button');
 export const Image = primitive('image');
 export const Canvas = primitive('canvas');
 export const Path = primitive('path');
+export const Plot = primitive('plot');
 export function TextInput(properties = {}) {
     return jsx('text-input', { ...properties, primitiveVersion: TEXT_INPUT_PRIMITIVE_VERSION });
 }
@@ -448,6 +454,89 @@ function validatePath(properties, path) {
     return output;
 }
 
+function plotWhole(value, path, minimum, maximum) {
+    if (value === undefined) return;
+    if (!Number.isInteger(value) || value < minimum || value > maximum) {
+        throw new TypeError(`${path} must be a whole number from ${minimum} to ${maximum}`);
+    }
+}
+
+const PLOT_SOURCES_BY_STYLE = Object.freeze({
+    line: Object.freeze(['scalar', 'vector']),
+    area: Object.freeze(['scalar', 'vector']),
+    bar: Object.freeze(['vector']),
+    meter: Object.freeze(['meter']),
+});
+
+// A plot names a value-feed channel and how to draw it; the samples arrive at
+// run time, so a plot carries none.
+function validatePlot(properties, path) {
+    const style = pathKeyword(properties.plot, `${path}.plot`, ['line', 'area', 'bar', 'meter']);
+    if (style === undefined) throw new TypeError(`${path}.Plot plot must be line, area, bar or meter`);
+    if (typeof properties.channel !== 'string' || properties.channel.length === 0) {
+        throw new TypeError(`${path}.Plot channel must name a value-feed channel`);
+    }
+    const output = { plot: style, channel: properties.channel };
+    for (const [name, values] of [
+        ['source', ['scalar', 'meter', 'vector']],
+        ['history', ['scroll', 'sweep']],
+        ['orientation', ['vertical', 'horizontal']],
+    ]) {
+        const value = pathKeyword(properties[name], `${path}.${name}`, values);
+        if (value !== undefined) output[name] = value;
+    }
+    // The channel shape each style reads, matching native plot_is_valid: an
+    // omitted source defaults to vector, or meter for a meter plot.
+    const shapes = PLOT_SOURCES_BY_STYLE[style];
+    if (output.source !== undefined && !shapes.includes(output.source)) {
+        throw new TypeError(
+            `${path}.source must be ${shapes.join(' or ')} for a ${style} plot`);
+    }
+    plotWhole(properties.slots, `${path}.slots`, 1, MAXIMUM_PLOT_SLOTS);
+    plotWhole(properties.audioChannel, `${path}.audioChannel`, 0, MAXIMUM_PLOT_AUDIO_CHANNEL);
+    if (style !== 'meter' && properties.slots === undefined) {
+        throw new TypeError(`${path}.Plot slots is required for a ${style} plot`);
+    }
+    // The renderer holds these as single-precision floats: a value must fit
+    // one, and the stroke limit and the range compare the rounded values.
+    for (const name of ['min', 'max', 'baseline', 'lineWidth', 'barGap', 'peakWidth']) {
+        const value = properties[name];
+        if (value === undefined) continue;
+        finitePaintNumber(value, `${path}.${name}`);
+        if (Math.abs(value) > PLOT_FLOAT_MAX) {
+            throw new TypeError(`${path}.${name} must be within float range`);
+        }
+    }
+    for (const name of ['lineWidth', 'barGap', 'peakWidth']) {
+        const value = properties[name];
+        if (value === undefined) continue;
+        if (Math.fround(value) < 0) {
+            throw new TypeError(`${path}.${name} must be a non-negative finite number`);
+        }
+        if (Math.fround(value) > MAXIMUM_PLOT_STROKE) {
+            throw new TypeError(`${path}.${name} must be at most ${MAXIMUM_PLOT_STROKE}`);
+        }
+    }
+    // Native plot_is_valid refuses an empty range of floats; min defaults to 0
+    // and max to 1.
+    const low = properties.min === undefined ? 0 : properties.min;
+    const high = properties.max === undefined ? 1 : properties.max;
+    if (Math.fround(low) === Math.fround(high)) {
+        throw new TypeError(`${path}.Plot value range must not be empty once rounded to float (min equals max)`);
+    }
+    for (const name of ['lineColor', 'fillColor', 'peakColor']) {
+        const color = properties[name];
+        if (color !== undefined && !(typeof color === 'string' && HEX_COLOR.test(color))) {
+            throw new TypeError(`${path}.${name} must be a hex color`);
+        }
+    }
+    for (const name of ['slots', 'audioChannel', 'min', 'max', 'baseline', 'lineWidth', 'barGap',
+        'peakWidth', 'lineColor', 'fillColor', 'peakColor']) {
+        if (properties[name] !== undefined) output[name] = properties[name];
+    }
+    return output;
+}
+
 function validateImage(properties, path) {
     const output = {};
     const fit = pathKeyword(properties.fit, `${path}.fit`, ['fill', 'contain', 'cover', 'none']);
@@ -660,6 +749,9 @@ function materialize(value, runtime, path) {
     if (value.type === 'path' && childValues.length > 0) {
         throw new TypeError(`${path}.Path does not accept children`);
     }
+    if (value.type === 'plot' && childValues.length > 0) {
+        throw new TypeError(`${path}.Plot does not accept children`);
+    }
     if (value.type === 'image' && childValues.length > 0 &&
         typeof value.props.source === 'string' &&
         /^(?:sha256:)?[0-9a-f]{64}$/i.test(value.props.source.trim())) {
@@ -667,6 +759,7 @@ function materialize(value, runtime, path) {
     }
     const pathProperties = value.type === 'path' ? validatePath(value.props, path) : undefined;
     const imageProperties = value.type === 'image' ? validateImage(value.props, path) : undefined;
+    const plotProperties = value.type === 'plot' ? validatePlot(value.props, path) : undefined;
     let textRunText;
     if (value.type === 'text-run') {
         const unsupported = Object.keys(value.props).filter(
@@ -750,6 +843,7 @@ function materialize(value, runtime, path) {
     }
     if (pathProperties !== undefined) Object.assign(node, pathProperties);
     if (imageProperties !== undefined) Object.assign(node, imageProperties);
+    if (plotProperties !== undefined) Object.assign(node, plotProperties);
     if (value.type === 'custom') {
         if (typeof value.props.component !== 'string' ||
             !/^[a-z][a-z0-9-]{0,63}$/.test(value.props.component)) {

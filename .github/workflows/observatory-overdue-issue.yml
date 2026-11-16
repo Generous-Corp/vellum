@@ -76,7 +76,8 @@ jobs:
           fi
 
       # An earlier, separate warning: one issue naming the events within 24
-      # hours of their deadline (urgent within 4), closed once none remains.
+      # hours of their deadline (urgent within 4), and every pending event while
+      # the pending count is at the warning level; closed once neither holds.
       # The overdue handling above is unchanged.
       - name: Warn before an event goes overdue
         if: ${{ !cancelled() }}
