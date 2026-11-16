@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -139,10 +140,14 @@ def step_script(text: str, name: str) -> str:
 
 CLASSIFY_STEP = "Classify the change against the base's rules"
 GUARD_STEP = "Prove a skipped proof was allowed"
+SKIP_GUARD_STEP = "Prove a skipped job was allowed"
 
 
 class StepHarness(unittest.TestCase):
     """Drive the workflow's own step text against real merge commits."""
+
+    workflow = WORKFLOW
+    guard_step = GUARD_STEP
 
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
@@ -156,7 +161,7 @@ class StepHarness(unittest.TestCase):
         self.write(SDK, "int x;\n")
         self.write(CURSOR, "{}\n")
         self.commit("base")
-        self.text = WORKFLOW.read_text(encoding="utf-8")
+        self.text = self.workflow.read_text(encoding="utf-8")
 
     def tearDown(self) -> None:
         self.directory.cleanup()
@@ -207,7 +212,7 @@ class WorkflowStepTests(StepHarness):
         sha = self.merge({CURSOR: '{"v": 2}\n', EVENT: "{}\n"})
         result, output = self.run_step(CLASSIFY_STEP, sha)
         self.assertEqual(output, "unaffected=true\n", result.stderr)
-        guard, _ = self.run_step(GUARD_STEP, sha)
+        guard, _ = self.run_step(self.guard_step, sha)
         self.assertEqual(guard.returncode, 0, guard.stderr)
 
     def test_a_pr_that_widens_the_allowlist_and_changes_sdk_code_still_needs_the_proof(self) -> None:
@@ -237,13 +242,13 @@ class WorkflowStepTests(StepHarness):
         # The negative control: a run that skipped the proof for an SDK change
         # (for example through a wiring mistake) must go red.
         sha = self.merge({SDK: "int z;\n"})
-        guard, _ = self.run_step(GUARD_STEP, sha)
+        guard, _ = self.run_step(self.guard_step, sha)
         self.assertNotEqual(guard.returncode, 0)
         self.assertIn("the base's classifier says: required", guard.stdout + guard.stderr)
         evidence = self.merge_again({CURSOR: '{"v": 4}\n'})
         for event in ("push", "workflow_dispatch"):
             with self.subTest(event=event):
-                guard, _ = self.run_step(GUARD_STEP, evidence, event=event)
+                guard, _ = self.run_step(self.guard_step, evidence, event=event)
                 self.assertNotEqual(guard.returncode, 0)
 
     def test_a_queue_batch_is_judged_against_main_not_the_entry_ahead(self) -> None:
@@ -262,12 +267,12 @@ class WorkflowStepTests(StepHarness):
         # The control: the same tip judged against its first parent only.
         _, control = self.run_step(CLASSIFY_STEP, tip, event="pull_request")
         self.assertEqual(control, "unaffected=true\n")
-        guard, _ = self.run_step(GUARD_STEP, tip, event="merge_group", queue_base=main)
+        guard, _ = self.run_step(self.guard_step, tip, event="merge_group", queue_base=main)
         self.assertNotEqual(guard.returncode, 0)
         # A queue run without its base never skips.
         _, missing = self.run_step(CLASSIFY_STEP, tip, event="merge_group")
         self.assertEqual(missing, "")
-        guard, _ = self.run_step(GUARD_STEP, tip, event="merge_group")
+        guard, _ = self.run_step(self.guard_step, tip, event="merge_group")
         self.assertNotEqual(guard.returncode, 0)
 
     def test_moving_sdk_code_into_the_allowlist_needs_the_proof(self) -> None:
@@ -471,6 +476,68 @@ class CheapLaneWorkflowTests(unittest.TestCase):
                     self.assertIn("outputs.cheap == 'true'", condition)
                 elif "reused" not in step["name"] and "does not cover" not in step["name"]:
                     self.assertIn("outputs.cheap != 'true'", condition, step["name"])
+
+
+class ForbiddenDepsStepTests(WorkflowStepTests):
+    """An evidence-only change skips forbidden-deps by the same classifier, and only then."""
+
+    workflow = ROOT / ".github" / "workflows" / "provenance.yml"
+    guard_step = SKIP_GUARD_STEP
+    # The GPU workflow's own step layout; the static tests below cover these jobs.
+    test_every_proof_step_waits_for_the_classifier = None
+    test_the_steps_run_only_where_the_workflow_says = None
+
+
+class CleanReleaseStepTests(WorkflowStepTests):
+    """The README clean-release job skips on evidence only, by the same classifier."""
+
+    workflow = ROOT / ".github" / "workflows" / "readme-quick-start.yml"
+    guard_step = SKIP_GUARD_STEP
+    # The GPU workflow's own step layout; the static tests below cover these jobs.
+    test_every_proof_step_waits_for_the_classifier = None
+    test_the_steps_run_only_where_the_workflow_says = None
+
+
+class SkippingJobsStillReportTests(unittest.TestCase):
+    """A skipped job must finish green, so no job is skipped as a whole and every step is gated."""
+
+    GATE = "steps.classify.outputs.unaffected != 'true'"
+
+    def job_steps(self, workflow: str, job: str) -> tuple[str, list[str]]:
+        text = (ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
+        block = text.split(f"\n  {job}:\n", 1)[1]
+        header, steps = block.split("    steps:\n", 1)
+        steps = steps.split("\n  provenance-verify:\n", 1)[0] if job == "forbidden-deps" else steps
+        return header, re.split(r"(?m)^(?=      - )", steps)[1:]
+
+    def test_the_job_has_no_job_level_condition(self) -> None:
+        for workflow, job in (("provenance.yml", "forbidden-deps"), ("readme-quick-start.yml", "clean-release")):
+            header, _ = self.job_steps(workflow, job)
+            with self.subTest(job=job):
+                self.assertNotIn("\n    if:", header)
+
+    def test_every_step_but_the_classifier_and_its_guard_is_gated_on_the_verdict(self) -> None:
+        for workflow, job in (("provenance.yml", "forbidden-deps"), ("readme-quick-start.yml", "clean-release")):
+            _, steps = self.job_steps(workflow, job)
+            for step in steps:
+                name = re.search(r"- name: (.*)", step)
+                label = name.group(1) if name else step.splitlines()[0]
+                if label in (CLASSIFY_STEP, SKIP_GUARD_STEP) or "uses: actions/checkout" in step:
+                    continue
+                with self.subTest(job=job, step=label):
+                    condition = re.search(r"(?m)^        if: (.*)$", step)
+                    self.assertIsNotNone(condition)
+                    gated = self.GATE in condition.group(1)
+                    # clean-release's other steps only run outside pull requests and queue builds.
+                    outside = "github.event_name != 'pull_request'" in condition.group(1)
+                    self.assertTrue(gated or outside, condition.group(1))
+
+    def test_the_skip_never_applies_to_pushes_tags_or_dispatches(self) -> None:
+        for workflow in ("provenance.yml", "readme-quick-start.yml"):
+            text = (ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
+            block = text.split(f"- name: {CLASSIFY_STEP}\n", 1)[1].split("shell:", 1)[0]
+            with self.subTest(workflow=workflow):
+                self.assertIn("if: github.event_name == 'pull_request' || github.event_name == 'merge_group'", block)
 
 
 if __name__ == "__main__":

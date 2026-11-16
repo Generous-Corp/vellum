@@ -244,6 +244,11 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-layer-cache-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.layer-cache COMMAND vellum-layer-cache-test)
 
+        add_executable(vellum-plot-test
+            graphics/tests/plot_test.cpp)
+        target_link_libraries(vellum-plot-test PRIVATE Vellum::Graphics Threads::Threads)
+        add_test(NAME vellum.plot COMMAND vellum-plot-test)
+
         add_executable(vellum-damage-test
             graphics/tests/damage_test.cpp)
         target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
