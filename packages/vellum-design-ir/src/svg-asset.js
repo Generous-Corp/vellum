@@ -1737,6 +1737,13 @@ class Importer {
             const y = this.lengthOrZero(node, 'y', path);
             group.transform = multiply(group.transform, [1, 0, 0, 1, x, y]);
             const nextActive = new Set(active).add(targetId);
+            // A use that sets a zero or negative width or height on an svg
+            // or symbol it names establishes an empty viewport, which draws
+            // nothing.
+            if ((target.name === 'svg' || target.name === 'symbol') &&
+                ['width', 'height'].some((name) => parseLength(node.attributes[name]) <= 0)) {
+                return null;
+            }
             if (target.name === 'symbol') {
                 const box = target.attributes.viewBox?.trim().split(/[\s,]+/).map(Number);
                 const width = parseLength(node.attributes.width) ?? parseLength(target.attributes.width);
@@ -1811,8 +1818,8 @@ class Importer {
                 const y = this.lengthOrZero(node, 'y', path);
                 // A use that names this svg sets its width and height.
                 const instance = this.useSize?.target === node ? this.useSize : {};
-                const width = instance.width > 0 ? instance.width : parseLength(node.attributes.width);
-                const height = instance.height > 0 ? instance.height : parseLength(node.attributes.height);
+                const width = typeof instance.width === 'number' ? instance.width : parseLength(node.attributes.width);
+                const height = typeof instance.height === 'number' ? instance.height : parseLength(node.attributes.height);
                 const box = node.attributes.viewBox?.trim().split(/[\s,]+/).map(Number);
                 group.transform = multiply(group.transform, [1, 0, 0, 1, x, y]);
                 const hasBox = box && box.length === 4 && box[2] > 0 && box[3] > 0;
@@ -2617,6 +2624,15 @@ function paintBounds(item, matrix = IDENTITY) {
     if (inner.some((value) => !Number.isFinite(value) || Math.abs(value) > SVG_ASSET_LIMITS.maxMatrixEntry)) {
         refuse(`nested transforms compose beyond ±${SVG_ASSET_LIMITS.maxMatrixEntry}`);
     }
+    // Clip shapes and mask content draw under the same transforms, so they
+    // are held to the same limit, though only the children add paint.
+    for (const shape of item.clip?.shapes ?? []) {
+        const clip = multiply(inner, shape.transform);
+        if (clip.some((value) => !Number.isFinite(value) || Math.abs(value) > SVG_ASSET_LIMITS.maxMatrixEntry)) {
+            refuse(`nested transforms compose beyond ±${SVG_ASSET_LIMITS.maxMatrixEntry}`);
+        }
+    }
+    for (const child of item.mask?.children ?? []) paintBounds(child, inner);
     let box = null;
     for (const child of item.children) {
         const next = paintBounds(child, inner);

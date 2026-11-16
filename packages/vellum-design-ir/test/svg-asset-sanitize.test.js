@@ -420,3 +420,33 @@ test('a two-circle gradient whose circles become identical once written paints i
     assert.equal(kept.fill.gradient.kind, 'two-circle-radial');
     assert.ok(!codes(distinct.diagnostics).includes('svg-gradient-degenerate'));
 });
+
+test('transforms inside mask content and clip shapes are held to the composed-matrix limit', () => {
+    const nested = (depth) => `${'<g transform="scale(1000000)">'.repeat(depth)}<rect width="1" height="1" fill="white"/>${'</g>'.repeat(depth)}`;
+    const masked = (depth) => wrap(`<mask id="m">${nested(depth)}</mask><rect width="10" height="10" mask="url(#m)"/>`);
+    for (const options of [{ sourceKey: 's' }, { sourceKey: 's', nodeBudget: 1 }]) {
+        assert.throws(() => importSvgAsset(masked(7), options), /compose beyond/);
+        assert.doesNotThrow(() => importSvgAsset(masked(1), options), 'one large scale stays within the limit');
+    }
+    const clipped = wrap('<g transform="scale(1000000)"><clipPath id="c" transform="scale(1000000)">' +
+        '<rect width="1" height="1" transform="scale(1000)"/></clipPath><rect width="1" height="1" clip-path="url(#c)"/></g>');
+    assert.throws(() => importSvgAsset(clipped), /compose beyond/);
+});
+
+test('a use with a zero width or height on an svg or symbol draws nothing', () => {
+    const defs = '<defs><svg id="s" width="10" height="10" viewBox="0 0 10 10"><rect width="10" height="10" fill="red"/></svg>' +
+        '<symbol id="y" viewBox="0 0 10 10"><rect width="10" height="10" fill="red"/></symbol>' +
+        '<symbol id="n"><rect width="10" height="10" fill="red"/></symbol></defs>';
+    for (const target of ['s', 'y', 'n']) {
+        for (const options of [{}, { nodeBudget: 1 }]) {
+            for (const size of ['width="0" height="20"', 'width="20" height="0"', 'width="0" height="0"', 'width="-1" height="20"']) {
+                const text = JSON.stringify(importSvgAsset(wrap(`${defs}<use href="#${target}" ${size}/>`, ''), options).root);
+                assert.doesNotMatch(text, /#ff0000/, `${target} ${size} ${JSON.stringify(options)}`);
+            }
+            const drawn = JSON.stringify(importSvgAsset(wrap(`${defs}<use href="#${target}" width="20" height="20"/>`), options).root);
+            assert.match(drawn, /#ff0000/, `${target} with a positive size draws`);
+        }
+    }
+    const own = JSON.stringify(importSvgAsset(wrap(`${defs}<use href="#s"/>`)).root);
+    assert.match(own, /#ff0000/, 'omitted dimensions keep the svg size');
+});
