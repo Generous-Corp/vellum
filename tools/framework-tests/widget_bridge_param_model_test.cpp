@@ -32,6 +32,9 @@ value::InMemoryParamModel make_model() {
                      .skew = 3.0, .default_normalized = 0.5});
     specs.push_back({.key = "mode", .default_normalized = 0.25, .value_count = 5,
                      .value_labels = {"a", "b", "c", "d", "e"}});
+    // 2^24 .. 2^24 + 2: float cannot tell the midpoint from the minimum.
+    specs.push_back({.key = "wide", .plain_min = 16777216.0, .plain_max = 16777218.0,
+                     .value_count = 3, .value_labels = {"lo", "mid", "hi"}});
     specs.push_back({.key = "curve", .plain_min = 0.0, .plain_max = 100.0, .skew = 2.0,
                      .value_count = 3});
     return value::InMemoryParamModel(std::move(specs));
@@ -104,6 +107,13 @@ FRAMEWORK_TEST(format_and_parse_use_the_model_text) {
     CHECK(h.js("parseParamValue('mode', 'banana').ok") == "false");
     CHECK(h.js("formatParamValue('missing', 1)") == "undefined");
     CHECK(h.js("parseParamValue('missing', '1')") == "undefined");
+}
+
+FRAMEWORK_TEST(format_keeps_double_precision_for_plain_values) {
+    ModelHarness h;
+    CHECK(h.js("formatParamValue('wide', 16777216)") == "lo");
+    CHECK(h.js("formatParamValue('wide', 16777217)") == "mid");
+    CHECK(h.js("formatParamValue('wide', 16777218)") == "hi");
 }
 
 FRAMEWORK_TEST(metadata_crosses_into_the_bridge_image) {
