@@ -406,7 +406,9 @@ function validatePlotBinding(plot, path, issues) {
         issues.push(issue(`${path}.max`, 'range', 'a plot value range must not be empty'));
     }
     for (const key of ['lineColor', 'fillColor', 'peakColor']) {
-        if (plot[key] !== undefined && !/^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/.test(String(plot[key]))) {
+        const color = plot[key];
+        if (color !== undefined &&
+            (typeof color !== 'string' || !/^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/.test(color))) {
             issues.push(issue(`${path}.${key}`, 'format', `${key} must be #RRGGBB or #RRGGBBAA`));
         }
     }

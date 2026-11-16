@@ -34,6 +34,23 @@ test('a node binds a plot to a value-feed channel without samples', async () => 
     assert.deepEqual(validateDesignIR(withPlot(design, meter)), { issues: [], valid: true });
 });
 
+test('plot colours must be strings: arrays and objects are refused, never thrown', async () => {
+    const design = await document();
+    const odd = [['#FFFFFF'], { toString: () => '#FFFFFF' }, { toString: 1 }, Object.create(null), 0xffffff];
+    for (const key of ['lineColor', 'fillColor', 'peakColor']) {
+        for (const value of odd) {
+            const plot = { style: 'line', channel: 'c', slots: 4, [key]: value };
+            let result;
+            assert.doesNotThrow(() => { result = validateDesignIR(withPlot(design, plot)); }, key);
+            assert.equal(result.valid, false, `${key} ${typeof value}`);
+            assert.ok(result.issues.some((entry) => entry.path === `$.root.plot.${key}` &&
+                entry.code === 'format'), JSON.stringify(result.issues));
+        }
+        const plot = { style: 'line', channel: 'c', slots: 4, [key]: '#FFFFFF80' };
+        assert.deepEqual(validateDesignIR(withPlot(design, plot)), { issues: [], valid: true });
+    }
+});
+
 test('a plot binding refuses what the renderer cannot draw', async () => {
     const design = await document();
     const cases = [

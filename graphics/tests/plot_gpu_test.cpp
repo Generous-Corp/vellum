@@ -290,6 +290,24 @@ void pixel_oracles() {
                at + "the peak tick is centred on the peak and two logical pixels thick",
                text(shot.at(meter_left + 3U, peak_edge)));
 
+        // The same scope over a reversed range: 0.25 now falls a quarter of
+        // the way down, and the spike to 1 reaches the bottom row.
+        Scene reversed = oracle_scene();
+        {
+            auto* node = find_mutable(reversed.root, "scope");
+            auto spec = std::make_shared<PlotSpec>(*node->plot);
+            spec->value_min = 1.0F;
+            spec->value_max = 0.0F;
+            node->plot = spec;
+        }
+        if (!surface->render(reversed, &error)) return;
+        const auto flipped = capture(*surface);
+        const std::uint32_t quarter = top + rows / 4U;
+        expect(flipped.ok && is(flipped.at(left + quiet, quarter), kLine) &&
+                   is(flipped.at(left + spike, top + rows - 1U), kLine) &&
+                   is(flipped.at(left + dip, top), kLine),
+               at + "a reversed range draws its line mirrored", text(flipped.at(left + quiet, quarter)));
+
         PlotOverride off(hooks::PlotDecimation::first_sample, {});
         if (!surface->render(oracle_scene(), &error)) return;
         const auto lossy = capture(*surface);

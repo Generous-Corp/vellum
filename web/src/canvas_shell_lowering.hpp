@@ -116,25 +116,55 @@ struct CanvasShellPlotPiece final {
 /// rectangles it already draws. The rectangles are flattened into disjoint
 /// pieces (`canvas_shell_flatten`) that each carry the plot's opacity, so an
 /// overlap such as a fill over the background, or a peak over a meter level,
-/// is blended once, as one group. A transformed plot keeps its command, which
-/// the shell skips and `canvas_shell_loses` counts.
+/// is blended once, as one group. A gradient background, which lowers to a
+/// `node_id + "/background"` rectangle just before the plot, is flattened
+/// with the plot's rectangles: its colour joins the pieces and the rectangle
+/// keeps only its gradients, which the shell does not draw. When that
+/// rectangle and the plot are all an opacity layer holds, the layer's
+/// opacity moves onto the pieces, which composite as the layer would. A
+/// transformed plot keeps its command, which the shell skips and
+/// `canvas_shell_loses` counts.
 [[nodiscard]] inline std::vector<vellum::graphics::PaintCommand> canvas_shell_expand_plots(
     std::vector<vellum::graphics::PaintCommand> commands, float scale = 1.0F) {
     using vellum::graphics::PaintCommand;
     using vellum::graphics::PlotLayer;
     std::vector<PaintCommand> output;
     output.reserve(commands.size());
-    for (auto& command : commands) {
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        auto& command = commands[index];
         if (command.kind != PaintCommand::Kind::plot || !command.plot ||
             !vellum::graphics::is_identity(command.transform)) {
             output.push_back(std::move(command));
             continue;
         }
         const auto& plot = *command.plot;
+        std::vector<CanvasShellPlotPiece> drawn;
+        float opacity = command.opacity;
+        if (!output.empty() && output.back().kind == PaintCommand::Kind::rectangle &&
+            output.back().node_id == command.node_id + "/background" &&
+            vellum::graphics::is_identity(output.back().transform)) {
+            auto& background = output.back();
+            if (background.fill.alpha > 0.0F) drawn.push_back({background.bounds, background.fill});
+            background.fill.alpha = 0.0F;
+            const std::size_t layer = output.size() - 2U;
+            const bool alone = output.size() >= 2U &&
+                               output[layer].kind == PaintCommand::Kind::begin_layer &&
+                               output[layer].node_id == command.node_id &&
+                               output[layer].blend_mode == vellum::graphics::BlendMode::normal &&
+                               output[layer].effects.empty() && !output[layer].layer_isolated &&
+                               index + 1U < commands.size() &&
+                               commands[index + 1U].kind == PaintCommand::Kind::end_layer &&
+                               commands[index + 1U].node_id == command.node_id;
+            if (alone) {
+                opacity *= output[layer].opacity;
+                background.opacity *= output[layer].opacity;
+                output.erase(output.begin() + static_cast<std::ptrdiff_t>(layer));
+                ++index;
+            }
+        }
         const auto geometry = vellum::graphics::plot_geometry(plot, command.fill, command.bounds,
                                                               scale);
-        std::vector<CanvasShellPlotPiece> drawn;
-        drawn.reserve(geometry.rects.size());
+        drawn.reserve(drawn.size() + geometry.rects.size());
         for (const auto& piece : geometry.rects) {
             auto color = command.fill;
             if (piece.layer == PlotLayer::fill) color = plot.fill_color;
@@ -149,7 +179,7 @@ struct CanvasShellPlotPiece final {
                 .node_id = command.node_id,
                 .bounds = piece.rect,
                 .fill = piece.color,
-                .opacity = command.opacity,
+                .opacity = opacity,
             });
         }
     }

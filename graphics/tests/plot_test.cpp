@@ -168,6 +168,43 @@ void decimated_peak_oracle() {
            "negative control: first-sample decimation drops the spike");
 }
 
+// A reversed value range (value_min above value_max) maps value_min to the
+// bottom edge and value_max to the top, so 0 lands on the top row and 1 on
+// the bottom; every column still draws its row.
+void reversed_range_oracle() {
+    const Rect box{0.0F, 0.0F, 4.0F, 8.0F};
+    auto spec = line_spec(4, {0.0F, 0.25F, 0.75F, 1.0F});
+    spec.value_min = 1.0F;
+    spec.value_max = 0.0F;
+    const auto geometry = plot_geometry(spec, Color::rgba(0, 0, 0, 0), box, 1.0F);
+    const auto rows = [&](int column) {
+        return column_rows(geometry, PlotLayer::line, static_cast<float>(column), box, 1.0F);
+    };
+    expect(first_row(rows(0)) == 0 && row_count(rows(0)) == 1,
+           "a reversed range draws value 0 on the top row", rects(geometry));
+    expect(first_row(rows(1)) == 0 && rows(1)[2] && row_count(rows(1)) == 3,
+           "a reversed range joins down from value 0 to 0.25");
+    expect(rows(3)[7], "a reversed range draws value 1 on the bottom row");
+    for (int column = 0; column < 4; ++column) {
+        expect(row_count(rows(column)) > 0,
+               "a reversed range draws column " + std::to_string(column));
+    }
+    // Two slots a column, so each column decimates a minimum and a maximum
+    // that a reversed range maps the other way up.
+    auto dense = line_spec(8, {0.0F, 1.0F, 0.25F, 0.75F, 1.0F, 0.0F, 0.5F, 0.5F});
+    dense.value_min = 1.0F;
+    dense.value_max = 0.0F;
+    const auto decimated = plot_geometry(dense, Color::rgba(0, 0, 0, 0), box, 1.0F);
+    for (int column = 0; column < 4; ++column) {
+        expect(row_count(column_rows(decimated, PlotLayer::line, static_cast<float>(column), box,
+                                     1.0F)) > 1,
+               "a reversed range keeps decimated column " + std::to_string(column),
+               rects(decimated));
+    }
+    const auto full = column_rows(decimated, PlotLayer::line, 0.0F, box, 1.0F);
+    expect(full.front() && full.back(), "a reversed column spanning 0 to 1 covers the whole box");
+}
+
 void area_bar_and_meter_oracles() {
     const Rect box{0.0F, 0.0F, 8.0F, 10.0F};
     PlotSpec area = line_spec(8, {0.5F, 0.5F, 0.0F, 1.0F, 0.2F, 0.2F, 0.2F, 0.2F});
@@ -855,6 +892,7 @@ void lowering() {
 int main() {
     line_oracle();
     decimated_peak_oracle();
+    reversed_range_oracle();
     area_bar_and_meter_oracles();
     damage_per_update();
     versioning();

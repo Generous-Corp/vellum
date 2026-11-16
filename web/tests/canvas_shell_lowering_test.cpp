@@ -541,6 +541,7 @@ bool composites_once(const std::vector<vellum::graphics::PaintCommand>& commands
                cy < rect.y + rect.height;
     };
     const Color clear = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    const auto opacities = vellum::graphics::effective_opacities(commands);
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
             Color group = clear;
@@ -555,11 +556,17 @@ bool composites_once(const std::vector<vellum::graphics::PaintCommand>& commands
             group.alpha *= opacity;
             Color shell = clear;
             int hits = 0;
-            for (const auto& command : commands) {
-                if (command.node_id != id || !covers(command.bounds, x, y)) continue;
-                ++hits;
+            for (std::size_t index = 0; index < commands.size(); ++index) {
+                const auto& command = commands[index];
+                if ((command.node_id != id && command.node_id != id + "/background") ||
+                    !vellum::graphics::draws_content(command.kind) ||
+                    !covers(command.bounds, x, y)) {
+                    continue;
+                }
                 Color color = command.fill;
-                color.alpha *= command.opacity;
+                color.alpha *= opacities[index];
+                if (!(color.alpha > 0.0F)) continue;
+                ++hits;
                 shell = vellum::web::canvas_shell_over(color, shell);
             }
             const auto near = [](float a, float b) { return std::abs(a - b) < 1e-4F; };
@@ -697,6 +704,31 @@ bool plot_lowering() {
     if (!level.accepted || level.losses != 0 ||
         !composites_once(level.commands, metered, "spectrum", 0.5F)) {
         std::cerr << "a faded meter's peak over its level was not composited once\n";
+        return false;
+    }
+    // A gradient background lowers to its own rectangle inside the plot's
+    // opacity layer; its colour is flattened with the plot, so the faded
+    // overlap is still blended once and the layer costs no loss. A gradient
+    // with the version 8 vocabulary is still reported, as one loss.
+    Scene shaded = scene;
+    shaded.root.children[0].fill_gradients = {
+        {.stops = {{.position = 0.0F, .color = Color::hex(0x111827)},
+                   {.position = 1.0F, .color = Color::hex(0x334155)}}}};
+    const auto linear = vellum::web::lower_for_canvas_shell(shaded);
+    const bool layered = std::any_of(linear.commands.begin(), linear.commands.end(),
+                                     [](const PaintCommand& command) {
+                                         return command.kind == PaintCommand::Kind::begin_layer;
+                                     });
+    if (!linear.accepted || linear.losses != 0 || layered ||
+        !composites_once(linear.commands, shaded, "spectrum", 0.5F)) {
+        std::cerr << "a faded plot over a gradient background was not composited once\n";
+        return false;
+    }
+    shaded.root.children[0].fill_gradients[0].kind = vellum::graphics::GradientKind::radial;
+    const auto radial = vellum::web::lower_for_canvas_shell(shaded);
+    if (!radial.accepted || radial.losses != 1 ||
+        !composites_once(radial.commands, shaded, "spectrum", 0.5F)) {
+        std::cerr << "a faded plot over a radial background was not composited once with one loss\n";
         return false;
     }
     // A blended plot lowers through the compositing group main wraps every

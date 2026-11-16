@@ -183,8 +183,10 @@ std::vector<Column> plot_columns(const PlotSpec& plot, const PlotGrid& grid, flo
             continue;
         }
         if (plot.style == PlotStyle::line) {
-            std::int32_t top = axis.cell(high);
-            std::int32_t bottom = axis.cell(low);
+            // A reversed value range maps the higher value lower down, so
+            // order the mapped rows rather than the values.
+            std::int32_t top = std::min(axis.cell(high), axis.cell(low));
+            std::int32_t bottom = std::max(axis.cell(high), axis.cell(low));
             if (join && previous) {
                 const std::int32_t joined = axis.cell(previous_last);
                 top = std::min(top, joined);
