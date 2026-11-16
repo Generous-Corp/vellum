@@ -6,8 +6,9 @@ export const DESIGN_IR_COMPOSITING_VERSION: 2;
 export const DESIGN_IR_MATERIALS_VERSION: 3;
 /** The DesignIR version that adds animation tracks on nodes. */
 export const DESIGN_IR_TRACKS_VERSION: 4;
+export const DESIGN_IR_PLOTS_VERSION: 5;
 /** Every version this build reads. */
-export const DESIGN_IR_VERSIONS: readonly [1, 2, 3, 4];
+export const DESIGN_IR_VERSIONS: readonly [1, 2, 3, 4, 5];
 export const SUPPORTED_DESIGN_IR_VERSIONS: typeof DESIGN_IR_VERSIONS;
 export const AUTHORED_OVERLAY_VERSION: 1;
 export const REIMPORT_REPORT_VERSION: 1;
@@ -112,12 +113,38 @@ export interface DesignNode {
     text?: string;
     properties: Record<string, JsonValue>;
     extensions?: Record<string, JsonValue>;
-    /** Present only in a version 4 document. */
+    /** Present only in a version 4 or later document. */
     tracks?: AnimationTrack[];
     /** Present in version 2 or later, and only for non-default values. */
     compositing?: NodeCompositing;
     material?: MaterialReference;
+    /** Present only in a version 5 or later document. */
+    plot?: PlotBinding;
     children: DesignNode[];
+}
+
+/**
+ * A plot of a value-feed channel: the channel and how to draw it. Samples
+ * arrive at run time, so a document carries none. Colours are `#RRGGBB` or
+ * `#RRGGBBAA`.
+ */
+export interface PlotBinding {
+    style: 'line' | 'area' | 'bar' | 'meter';
+    channel: string;
+    source?: 'scalar' | 'meter' | 'vector';
+    slots?: number;
+    history?: 'scroll' | 'sweep';
+    orientation?: 'vertical' | 'horizontal';
+    audioChannel?: number;
+    min?: number;
+    max?: number;
+    baseline?: number;
+    lineWidth?: number;
+    barGap?: number;
+    peakWidth?: number;
+    lineColor?: string;
+    fillColor?: string;
+    peakColor?: string;
 }
 
 /** A property an animation track can drive. */
@@ -188,10 +215,12 @@ export interface DesignToken {
 export interface DesignIR {
     $schema: typeof DESIGN_IR_SCHEMA;
     /**
-     * 1, 2 when a node carries `compositing`, 3 when a node carries a
-     * material reference, or 4 when a node carries animation tracks.
+     * The oldest version carrying every field the document uses: 5 when a
+     * node carries `plot`, 4 when a node carries animation tracks, 3 when a
+     * node carries `material`, 2 when a node carries `compositing`,
+     * otherwise 1.
      */
-    schemaVersion: 1 | 2 | 3 | 4;
+    schemaVersion: 1 | 2 | 3 | 4 | 5;
     compiler: { name: string; version: string };
     source: DesignSource;
     root: DesignNode;
@@ -332,7 +361,7 @@ export function resolveTokenLayers(document: DesignIR, overlay?: Partial<Authore
 export function diffTokens(previous: DesignIR['tokens'], next: DesignIR['tokens']): unknown[];
 export function normalizeImport(
     input: ImportSourceModel,
-    options?: { compilerVersion?: string; schemaVersion?: 1 | 2 | 3 },
+    options?: { compilerVersion?: string; schemaVersion?: 1 | 2 | 3 | 4 | 5 },
 ): DesignIR;
 export function decodeFigmaPluginExport(
     input: unknown,

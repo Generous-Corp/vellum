@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -834,6 +835,57 @@ class ChocFileWatcherPatchTest(unittest.TestCase):
     def test_choc_recipe_applies_the_patch(self) -> None:
         self.assertIn("file-watcher-lifetime", mp.DEPENDENCIES["choc"]["patches"])
         self.assertEqual(mp.PATCHED_PATHS["file-watcher-lifetime"], mp.CHOC_FILE_WATCHER_HEADER)
+
+
+class ChocV8ModuleResolutionPatchTest(unittest.TestCase):
+    def header(self, root: Path, edits) -> Path:
+        path = root / mp.CHOC_V8_HEADER
+        path.parent.mkdir(parents=True)
+        path.write_text("start\n" + "\nmiddle\n".join(edits) + "\nend\n", encoding="utf-8")
+        return path
+
+    def test_edits_apply_once(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = self.header(root, [before for before, _ in mp.CHOC_V8_MODULE_EDITS])
+            mp.apply_patch("choc", "v8-module-resolution", root)
+            patched = path.read_text(encoding="utf-8")
+            self.assertIn("Cannot find module '", patched)
+            self.assertIn("if (message.IsEmpty())", patched)
+            mp.apply_patch("choc", "v8-module-resolution", root)
+            self.assertEqual(path.read_text(encoding="utf-8"), patched)
+
+    def test_drifted_source_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.header(root, [mp.CHOC_V8_MODULE_EDITS[0][0]])
+            with self.assertRaises(mp.PlanError):
+                mp.apply_patch("choc", "v8-module-resolution", root)
+
+    def test_recipe_runs_it_after_the_closure_digest_check(self) -> None:
+        self.assertIn("v8-module-resolution", mp.DEPENDENCIES["choc"]["post_patches"])
+        self.assertNotIn("v8-module-resolution", mp.DEPENDENCIES["choc"]["patches"])
+        self.assertEqual(mp.PATCHED_PATHS["v8-module-resolution"], mp.CHOC_V8_HEADER)
+
+    def test_applies_to_the_pinned_choc_header(self) -> None:
+        # VELLUM_TEST_CHOC_ROOT names a checkout of the pinned choc; the
+        # pristine header is read from git so earlier patches do not matter.
+        source = os.environ.get("VELLUM_TEST_CHOC_ROOT")
+        if not source:
+            self.skipTest("VELLUM_TEST_CHOC_ROOT is not set")
+        shown = subprocess.run(["git", "show", f"HEAD:{mp.CHOC_V8_HEADER}"], cwd=source,
+                               capture_output=True, text=True, check=True)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / mp.CHOC_V8_HEADER
+            path.parent.mkdir(parents=True)
+            path.write_text(shown.stdout, encoding="utf-8")
+            mp.apply_choc_v8_patch(root)
+            mp.apply_patch("choc", "v8-module-resolution", root)
+            once = path.read_text(encoding="utf-8")
+            mp.apply_patch("choc", "v8-module-resolution", root)
+            self.assertEqual(path.read_text(encoding="utf-8"), once)
+            self.assertIn("Cannot find module '", once)
 
 
 class SourceCompileOptionsTest(unittest.TestCase):

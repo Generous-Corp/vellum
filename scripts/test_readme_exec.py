@@ -17,7 +17,8 @@ class Tests(unittest.TestCase):
         self.assertIn("  attestations: read\n",workflow)
         self.assertIn("  contents: read\n",workflow)
         self.assertIn(
-            "if: (github.event_name == 'pull_request' || github.event_name == 'merge_group')\n"
+            "if: (github.event_name == 'pull_request' || github.event_name == 'merge_group') && "
+            "steps.classify.outputs.unaffected != 'true'\n"
             "        run: |\n"
             "          python3 scripts/test_readme_exec.py\n"
             "          python3 scripts/readme_exec.py --lint",
