@@ -26,6 +26,48 @@ set_target_properties(vellum-app-host PROPERTIES
 install(TARGETS vellum-app-host
     RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
+if(VELLUM_BUILD_TESTS)
+    find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME vellum.app-host-manual-clock-capture
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_manual_clock_capture.py"
+            "$<TARGET_FILE:vellum-app-host>")
+    set_tests_properties(vellum.app-host-manual-clock-capture PROPERTIES
+        ENVIRONMENT "MTL_DEBUG_LAYER=0")
+    if(DEFINED ENV{VELLUM_CHROME_PATH} OR
+       EXISTS "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+        add_test(NAME vellum.app-host-agent-workflow
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/test_agent_workflow.py"
+                "$<TARGET_FILE:vellum-app-host>")
+        set_tests_properties(vellum.app-host-agent-workflow PROPERTIES
+            ENVIRONMENT "MTL_DEBUG_LAYER=0")
+    endif()
+    find_program(VELLUM_NODE_EXECUTABLE NAMES node)
+    if(VELLUM_NODE_EXECUTABLE AND
+       EXISTS "${PROJECT_SOURCE_DIR}/packages/vellum-ui/node_modules/esbuild")
+        add_test(NAME vellum.app-host-design-anchor-dump
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/test_design_anchor_dump.py"
+                "$<TARGET_FILE:vellum-app-host>"
+                "${PROJECT_SOURCE_DIR}"
+                "${VELLUM_NODE_EXECUTABLE}")
+        set_tests_properties(vellum.app-host-design-anchor-dump PROPERTIES
+            ENVIRONMENT "MTL_DEBUG_LAYER=0")
+        # Chrome is resolved when the test runs, since CI installs its pinned
+        # browser after configuring. Without any browser the test reports a
+        # skip; a named browser that does not resolve fails.
+        add_test(NAME vellum.app-host-html-import-geometry
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/test_html_import_geometry.py"
+                "$<TARGET_FILE:vellum-app-host>"
+                "${VELLUM_NODE_EXECUTABLE}")
+        set_tests_properties(vellum.app-host-html-import-geometry PROPERTIES
+            ENVIRONMENT "MTL_DEBUG_LAYER=0"
+            SKIP_RETURN_CODE 77)
+    endif()
+endif()
+
 if(VELLUM_BUILD_TESTS AND VELLUM_AUTHORING_TEST_BUNDLE)
     find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
     find_program(VELLUM_NODE_EXECUTABLE NAMES node)
@@ -97,6 +139,13 @@ if(VELLUM_BUILD_TESTS)
         PREFIX ""
         CXX_VISIBILITY_PRESET hidden)
 
+    add_library(vellum-sheen-component MODULE
+        tests/sheen_component.cpp)
+    target_link_libraries(vellum-sheen-component PRIVATE Vellum::ComponentAbi)
+    set_target_properties(vellum-sheen-component PROPERTIES
+        PREFIX ""
+        CXX_VISIBILITY_PRESET hidden)
+
     add_executable(vellum-component-registry-test
         component_registry.cpp
         tests/component_registry_test.cpp)
@@ -109,5 +158,6 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.component-registry-bounds
         COMMAND vellum-component-registry-test
             "$<TARGET_FILE:vellum-unterminated-component>"
-            "$<TARGET_FILE:vellum-unterminated-text-component>")
+            "$<TARGET_FILE:vellum-unterminated-text-component>"
+            "$<TARGET_FILE:vellum-sheen-component>")
 endif()

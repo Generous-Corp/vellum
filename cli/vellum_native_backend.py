@@ -23,6 +23,7 @@ from vellum_png import PngError, montage, read_png, write_png
 from vellum_scenario import (
     SCENARIO_SCHEMAS,
     ScenarioValidationError,
+    unproven_commands,
     validate_scenario_document,
 )
 
@@ -441,7 +442,29 @@ def ensure_app(context: dict[str, Any], sdk: Path, no_build: bool = False) -> di
     return build_app(context, sdk)
 
 
-def scenario_arguments(context: dict[str, Any], scenario_value: str | None) -> tuple[list[str], str]:
+COMMAND_PROOF = re.compile(r"^command=(?P<target>.+) invoked=1 changed=1$", re.MULTILINE)
+
+
+def require_command_proof(context: dict[str, Any], scenario_value: str | None, host_output: str) -> None:
+    """The host prints one line for each command step whose handler it ran
+    and whose rendered tree it saw change. A scenario passes only when those
+    lines are its command steps, in order."""
+    name = scenario_value or "smoke"
+    relative = name if name.endswith(".json") or "/" in name else f"tests/scenarios/{name}.json"
+    scenario = json.loads(safe_relative(context["root"], relative, "scenario").read_text(encoding="utf-8"))
+    proven = [match["target"] for match in COMMAND_PROOF.finditer(host_output)]
+    unproven = unproven_commands(scenario, proven)
+    if unproven:
+        raise BackendFailure(
+            "Native host did not prove its command steps ran and changed the rendered tree: "
+            + ", ".join(unproven), status="test_failed")
+
+
+def scenario_arguments(
+    context: dict[str, Any],
+    scenario_value: str | None,
+    frame_directory: Path | None = None,
+) -> tuple[list[str], str]:
     project: Path = context["root"]
     name = scenario_value or "smoke"
     relative = name if name.endswith(".json") or "/" in name else f"tests/scenarios/{name}.json"
@@ -484,8 +507,18 @@ def scenario_arguments(context: dict[str, Any], scenario_value: str | None) -> t
         arguments.extend(["--expect-width", str(viewport["width"])])
         arguments.extend(["--expect-height", str(viewport["height"])])
 
-    for step in scenario["steps"]:
+    if any(step["action"] == "advance" for step in scenario["steps"]):
+        arguments.append("--manual-clock")
+
+    if frame_directory is not None:
+        arguments.extend(["--capture-dir", str(frame_directory)])
+
+    for index, step in enumerate(scenario["steps"]):
         action = step["action"]
+        if action == "capture" and frame_directory is not None:
+            name = step.get("name") or step.get("value") or f"capture-{index}"
+            arguments.extend(["--capture-step", name])
+            continue
         if action in {"wait-for-idle", "capture"}:
             continue
         if action in {"press", "click"}:
@@ -539,6 +572,9 @@ def scenario_arguments(context: dict[str, Any], scenario_value: str | None) -> t
                     ensure_ascii=False,
                 ),
             ])
+            continue
+        if action == "advance":
+            arguments.extend(["--advance", str(step["ms"])])
             continue
         if action == "throw":
             arguments.extend([
@@ -646,6 +682,7 @@ def command_result(command: str, args: argparse.Namespace, context: dict[str, An
         app = ensure_app(context, sdk)
         scenario_args, scenario_name = scenario_arguments(context, args.scenario)
         completed = execute_host(app, scenario_args)
+        require_command_proof(context, args.scenario, completed.stdout)
         return result(command, ok=True, status="tests_passed", message=f"Scenario '{scenario_name}' passed", data={
             "target": SUPPORTED_TARGET, "scenario": scenario_name,
             "app": str(app["app"]), "host_output": completed.stdout.strip(),
@@ -710,10 +747,14 @@ def command_result(command: str, args: argparse.Namespace, context: dict[str, An
             })
         if args.montage:
             raise BackendFailure("--montage requires --matrix", status="invalid_arguments", exit_code=2)
-        scenario_args, scenario_name = scenario_arguments(context, args.scenario)
+        scenario_name = scenario_arguments(context, args.scenario)[1]
         output = output_path(context["root"], args.output, f"artifacts/{scenario_name}.png", "capture output")
         if output.suffix.lower() != ".png":
             raise BackendFailure("Capture output must end in .png", status="invalid_arguments", exit_code=2)
+        # Named capture steps write one frame each beside the final capture.
+        scenario_args, _ = scenario_arguments(
+            context, args.scenario, output.parent / f"{output.stem}-frames"
+        )
         completed = execute_host(app, [*scenario_args, "--capture", str(output)])
         if not output.is_file():
             raise BackendFailure("Native host did not produce the requested capture", status="capture_failed")

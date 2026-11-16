@@ -298,7 +298,8 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
 - **The build compiles the ledger.** The mirror build plan compiles each
   closure's sources, leaves out a source the ledger removed, and adds each
   ledger-added source to the target its row names. A row naming a target no
-  closure builds fails the plan. A ledger row cannot remove a file the plan
+  closure builds fails the plan unless `provenance/framework/units.json`
+  declares that target. A ledger row cannot remove a file the plan
   generates from: `core/canvas/CMakeLists.txt`,
   `core/runtime/include/vellum/runtime/build_info.hpp.in`,
   `core/view/cmake/PulpViewJsPreludes.cmake`, `core/view/js/embed_js.py`, the
@@ -307,6 +308,24 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
   on such a removal until the producer stops naming the file. Nor can a row
   remove the last file of an include directory a closure names: the directory
   is then gone from the checkout and the plan refuses it.
+- **Targets no closure builds.** The closures describe only what Pulp
+  exported, so a port that needs a new library or executable declares it in
+  `provenance/framework/units.json`. Each entry names the target, its type
+  (`STATIC_LIBRARY` in a new unit, which gets its own package library, or
+  `EXECUTABLE`, built and not installed), its sources, its include directories
+  under `framework/`, its compile definitions, its link targets and a reason.
+  Nothing is inferred from the sources. Every listed source must be a
+  ledger-added file whose row names the same target, and every row naming a
+  declared target must be listed, so a file compiles only where both say it
+  does. A target links mirrored library targets, declared libraries listed
+  before it, and the targets of a `cmake` dependency recipe; anything else is
+  refused. A recipe no closure pins must carry its own commit and source in
+  `DEPENDENCIES`, and its license file ships with the package. It compiles
+  with the include directories of each mirrored library it links and that
+  unit's interface definitions. A declared name may not take a closure target,
+  a recipe target or a closure unit, and carries no Pulp name, since the name
+  debt may only fall. `verify_extraction.py` holds the manifest against the
+  ledger and `mirror_package.py` holds it against the closures and recipes.
 - **Preludes are generated from Vellum's sources.** While the prelude producer,
   its embedder and every JavaScript source are still their transferred blobs,
   the generated preludes must match the closure digests as before. Every
@@ -319,8 +338,8 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
   the plan generates them twice and fails unless both runs give the same
   bytes, and it records their digests. The build-info header and the embedded
   binary data are still proved against the closure digests.
-- **Review.** The ledger is data, judged mechanically, and is not a
-  release-path file: a port lands by normal review. The rules that judge it
+- **Review.** The ledger and the unit manifest are data, judged mechanically,
+  and are not release-path files: a port lands by normal review. The rules that judge it
   (`tools/provenance/`, `tools/mirror/`) stay release-path files.
   `transfer.json` stays immutable.
 - **Observatory.** A porting agent may classify the observatory events of its

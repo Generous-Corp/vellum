@@ -37,11 +37,13 @@ jobs:
     # Only first-party PRs may use the private local fleet. Fork PRs are
     # intentionally skipped while the local selector is enabled.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''
-    # Merge-group and push (main, release tags) runs select their own runner
-    # class when VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a
-    # merge-queue proof is not handed to whichever PR-head job GitHub picks.
-    # Unset, every event selects exactly what it did before.
-    runs-on: ${{ fromJSON(((github.event_name == 'merge_group' || github.event_name == 'push') && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    # Merge-group runs select their own runner class when
+    # VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a merge-queue
+    # proof is not handed to whichever PR-head or push job GitHub picks. Push
+    # (main, release tags) stays on the generic class: a push re-proof must
+    # never queue ahead of a merge-queue entry. Unset, every event selects
+    # exactly what it did before.
+    runs-on: ${{ fromJSON((github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     # $GITHUB_ENV does not cross jobs; dependent jobs read the validated
     # release identity through these outputs.
     outputs:
@@ -88,8 +90,9 @@ jobs:
       # and its allowlist come from the merged tree's first parent, the base,
       # never from the change being judged, so a pull request cannot widen
       # them; any change to the classifier or a workflow needs the proof by
-      # rule. Pushes to main, release tags and dispatches always prove, and
-      # any doubt runs the full proof.
+      # rule. Pushes to main prove, or report their queue run's proof below;
+      # release tags and dispatches always prove, and any doubt runs the full
+      # proof.
       - name: Classify the change against the base's rules
         id: classify
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
@@ -122,22 +125,44 @@ jobs:
       # instead: the selector names it only when the earlier run is this
       # workflow, on this head, from this repository, succeeded in both proof
       # jobs, and recorded exactly this tree. Any doubt runs the full proof.
-      # Pushes to main and release tags always run the full proof.
-      - name: Reuse an identical-tree pull-request proof
+      #
+      # A push to main lands the very commit its merge-queue run just proved
+      # (the queue fast-forwards main to it), so the push reports that run in
+      # the same way: select_reusable_merge_group_proof.py names it only for a
+      # successful merge_group run of this workflow on this exact commit, from
+      # this repository, that built the proof or reported an identical-tree
+      # one, or that skipped it on the classifier's verdict when the push
+      # proves the same classification (tree, base, changed paths, classifier
+      # and requirements all identical). The jobs still run and report,
+      # because release-tag.yml reads the newest check run of each required
+      # context on that commit and a skipped job would read as unmet. Release
+      # tags, dry-run tags and dispatches always run the full proof.
+      - name: Reuse an identical-tree proof
         id: reuse
-        if: github.event_name == 'merge_group' && steps.classify.outputs.unaffected != 'true'
+        if: (github.event_name == 'merge_group' && steps.classify.outputs.unaffected != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_BEFORE: ${{ github.event.before }}
         run: |
           set -uo pipefail
-          if run_id="$(
-            python3 -I scripts/select_reusable_gpu_proof.py \
-              --repository "$GITHUB_REPOSITORY" \
-              --merge-group-sha "$GITHUB_SHA"
-          )" && [[ "$run_id" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::notice::Tree $(git rev-parse "$GITHUB_SHA^{tree}") was proven by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$run_id"
+          if [ "${GITHUB_EVENT_NAME:-}" = push ]; then
+            selector=(python3 -I scripts/select_reusable_merge_group_proof.py
+              --repository "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA"
+              --before "${EVENT_BEFORE:-}" --summary "${GITHUB_STEP_SUMMARY:-/dev/null}")
+            origin="merge-queue"
+          else
+            selector=(python3 -I scripts/select_reusable_gpu_proof.py
+              --repository "$GITHUB_REPOSITORY" --merge-group-sha "$GITHUB_SHA")
+            origin="pull-request"
+          fi
+          if run_id="$("${selector[@]}")" && [[ "$run_id" =~ ^[1-9][0-9]*$ ]]; then
+            url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$run_id"
+            echo "::notice::Tree $(git rev-parse "$GITHUB_SHA^{tree}") was proven by $url"
             echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+            if [ "${GITHUB_EVENT_NAME:-}" = push ]; then
+              echo "Reused the $origin proof of this exact commit: $url" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+            fi
           else
             echo "::notice::Running the full proof"
           fi
@@ -213,6 +238,41 @@ jobs:
           # One digest-checked fetch of the mirror's pinned dependencies serves
           # the GPU build and both reproducible SDK builds.
           printf 'VELLUM_MIRROR_DEPS_DIR=%s\n' "$RUNNER_TEMP/vellum-mirror-deps" >> "$GITHUB_ENV"
+
+      - name: Download and verify the locked V8 provider
+        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The V8 row of provenance/third-party-lock.json is the only place
+          # the pin is written; configure checks the same digest again.
+          reader="$RUNNER_TEMP/read_v8_lock.py"
+          cat > "$reader" <<'PY'
+          import json, re, sys
+          lock = json.load(open("provenance/third-party-lock.json", encoding="utf-8"))
+          rows = [row for row in lock["dependencies"] if row.get("name") == "V8"]
+          if len(rows) != 1:
+              sys.exit("the dependency lock has no single V8 row")
+          url, sha256 = rows[0]["url"], rows[0]["sha256"]
+          # Fail closed on anything but a v8-builder mac-arm64 release asset.
+          if (not re.fullmatch(r"https://github\.com/danielraffel/v8-builder/releases/download/"
+                               r"v8-m[0-9]+-[0-9.]+-[0-9a-f]+/v8-mac-arm64-[A-Za-z0-9._-]+\.zip", url)
+                  or not re.fullmatch(r"[0-9a-f]{64}", sha256)):
+              sys.exit("the V8 lock row names an unexpected asset")
+          print(url, url.rsplit("/", 1)[1], sha256)
+          PY
+          python3 -I "$reader" > "$RUNNER_TEMP/v8-lock-asset.txt"
+          read -r url asset sha256 < "$RUNNER_TEMP/v8-lock-asset.txt"
+          [[ "$url" =~ ^https://github\.com/danielraffel/v8-builder/releases/download/v8-m[0-9]+-[0-9.]+-[0-9a-f]+/v8-mac-arm64-[A-Za-z0-9._-]+\.zip$ ]]
+          [[ "$sha256" =~ ^[0-9a-f]{64}$ ]]
+          archive="$RUNNER_TEMP/$asset"
+          curl --fail --location --silent --show-error \
+            --retry 12 --retry-max-time 180 --retry-all-errors \
+            --continue-at - \
+            "$url" \
+            --output "$archive"
+          printf '%s  %s\n' "$sha256" "$archive" | shasum -a 256 -c -
+          printf 'VELLUM_V8_ARCHIVE=%s\n' "$archive" >> "$GITHUB_ENV"
 
       - name: Set up the authoring toolchain
         if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
@@ -293,6 +353,8 @@ jobs:
             -DVELLUM_ENABLE_MIRROR=ON \
             -DVELLUM_MIRROR_DEPS_DIR="$VELLUM_MIRROR_DEPS_DIR" \
             -DVELLUM_VIEW_AUDIO_ARCHIVE="$VELLUM_VIEW_AUDIO_ARCHIVE" \
+            -DVELLUM_ENABLE_V8=ON \
+            -DVELLUM_V8_ARCHIVE="$VELLUM_V8_ARCHIVE" \
             -DVELLUM_ENABLE_RMLUI=ON \
             -DVELLUM_RMLUI_VELLUM_RENDERER=ON
           cmake --build build-gpu --parallel "$VELLUM_BUILD_JOBS"
@@ -412,6 +474,7 @@ jobs:
         run: |
           python3 scripts/run_parity_proofs.py \
             --completion provenance/authority/expansions/full-design-import-render-v1/parity-completion-1.json \
+            --web-payload "$RUNNER_TEMP/web-payload" \
             --output "$RUNNER_TEMP/vellum-parity-proof-execution.json"
 
       - name: Upload parity proof execution receipt
@@ -947,6 +1010,67 @@ jobs:
           fi
           tr '\0' '\n' < "$RUNNER_TEMP/guard-paths"
 
+      # What a later push to main needs to prove it may report this skipped
+      # queue run instead of proving the same commit again. The push never
+      # trusts this file alone: it recomputes the tree, the base, the changed
+      # paths and the verdict itself and refuses on any difference. A missing
+      # receipt only means the push runs the full proof. The classifier's
+      # allowlist lives in the script, so its blob is the whole configuration.
+      - name: Record the classifier-skip equivalence receipt
+        if: steps.classify.outputs.unaffected == 'true' && github.event_name == 'merge_group'
+        shell: bash
+        env:
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/gpu-classifier-skip"
+          if python3 -I - "$RUNNER_TEMP/gpu-classifier-skip/gpu-classifier-skip.json" <<'PY'
+          import hashlib, json, os, subprocess, sys
+          def git(*args):
+              return subprocess.run(["git", *args], check=True, text=True,
+                                    capture_output=True).stdout.strip()
+          base, sha = os.environ["QUEUE_BASE"], os.environ["GITHUB_SHA"]
+          paths = open(os.path.join(os.environ["RUNNER_TEMP"], "guard-paths"), "rb").read()
+          receipt = {
+              "schema": "vellum.gpu-classifier-skip.v1",
+              "event": os.environ["GITHUB_EVENT_NAME"],
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "commit": sha,
+              "tree": git("rev-parse", sha + "^{tree}"),
+              "base_sha": base,
+              "classifier_blob": git("rev-parse", base + ":scripts/classify_gpu_proof.py"),
+              "classifier_config": "embedded-in-classifier",
+              "changed_paths_sha256": hashlib.sha256(paths).hexdigest(),
+              "verdict": "not-required",
+              "required_contexts": ["gpu-macos-arm64", "sterile-consumer"],
+          }
+          with open(sys.argv[1], "w", encoding="utf-8") as handle:
+              json.dump(receipt, handle, indent=2, sort_keys=True)
+              handle.write("\n")
+          PY
+          then
+            {
+              echo "Classifier-skip equivalence receipt for $GITHUB_SHA"
+              echo '```'
+              cat "$RUNNER_TEMP/gpu-classifier-skip/gpu-classifier-skip.json"
+              echo '```'
+            } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          else
+            rm -f "$RUNNER_TEMP/gpu-classifier-skip/gpu-classifier-skip.json"
+            echo "::warning::no classifier-skip receipt; a push will run the full proof"
+          fi
+
+      - name: Upload the classifier-skip equivalence receipt
+        if: steps.classify.outputs.unaffected == 'true' && github.event_name == 'merge_group'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vellum-gpu-classifier-skip
+          path: ${{ runner.temp }}/gpu-classifier-skip/gpu-classifier-skip.json
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload retained GPU evidence
         if: always() && steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -1003,11 +1127,17 @@ jobs:
     needs: gpu-macos-arm64
     # Keep the dependent job on the same first-party-only policy.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''
-    # Merge-group and push (main, release tags) runs select their own runner
-    # class when VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a
-    # merge-queue proof is not handed to whichever PR-head job GitHub picks.
-    # Unset, every event selects exactly what it did before.
-    runs-on: ${{ fromJSON(((github.event_name == 'merge_group' || github.event_name == 'push') && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    # When gpu-macos-arm64 reported a reused proof or a change the proof does
+    # not cover, every step below but a notice is skipped, so the job runs on
+    # a hosted runner rather than waiting for a scarce Mac to print it. It
+    # still runs and reports exactly as before. Otherwise merge-group runs
+    # select their own runner class when
+    # VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a merge-queue
+    # proof is not handed to whichever PR-head or push job GitHub picks. Push
+    # (main, release tags) stays on the generic class: a push re-proof must
+    # never queue ahead of a merge-queue entry. Unset, every event selects
+    # exactly what it did before.
+    runs-on: ${{ fromJSON(((needs.gpu-macos-arm64.outputs.reused_run != '' || needs.gpu-macos-arm64.outputs.unaffected == 'true') && '["ubuntu-24.04"]') || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     env:
       VELLUM_RELEASE_ARCHIVE: ${{ needs.gpu-macos-arm64.outputs.release_archive }}
     steps:
@@ -1146,3 +1276,33 @@ jobs:
             ${{ runner.temp }}/sdk-installed-validation.stdout.json
           if-no-files-found: error
           retention-days: 90
+
+  cancel-destroyed-groups:
+    name: cancel-destroyed-groups
+    # A merge group GitHub rebuilt for the same entry destroys the old one,
+    # and Actions sends no event for that, so the old group's proof would keep
+    # its place in the Mac queue or keep building. The newer group cancels it.
+    # This job is independent of the proof jobs: nothing it concludes can
+    # skip or satisfy them.
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Check out the cancellation script without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/cancel_destroyed_queue_proofs.py
+          sparse-checkout-cone-mode: false
+
+      - name: Cancel older proofs of this queue entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I scripts/cancel_destroyed_queue_proofs.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --ref "$GITHUB_REF" \
+            --run-id "$GITHUB_RUN_ID"

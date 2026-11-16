@@ -22,7 +22,9 @@ The public slice consists of:
   application builds, plus a headers-only `Vellum::DawnHeaders` target for an
   embedding host's authenticated bootstrap and compute code.
 
-The scene carries a single integer schema version, `kSceneVersion`, now 5.
+The scene carries a single integer schema version, `kSceneVersion`, now 11.
+Versions 7 and 9 are reserved and add no fields in this build.
+Version 10 adds node effects; version 11 adds animation tracks.
 A change that can alter rendered output bumps it: a new node kind, a new field
 that changes how a scene is drawn, or a change in meaning. A change that only
 adds metadata keeps it. Consumers accept versions from
@@ -35,7 +37,10 @@ diagnostic and reports authored style or content it drops as warnings on
 `RenderedApplication::diagnostics`. Those diagnostics share the DesignIR
 severity and disposition words but identify content by node ID, not by
 DesignIR document path. Versions are claimed in order: version 4: image nodes;
-version 5: clip, mask and isolation on groups (reserved).
+version 5: clip, mask and isolation on groups; version 6: blend modes and
+DesignIR compositing fields; version 7: token table (reserved); version 8:
+gradient vocabulary; version 9: vector assets (reserved); version 10: effects
+and materials; version 11: animation tracks.
 
 Nodes carry an optional affine transform about their origin, a group opacity,
 and per-corner radii beside the uniform `corner_radius` shorthand. All three
@@ -179,7 +184,7 @@ version 5 that uses any of the three fields is refused with a
 frame-space box around its clip's extent (the rectangle, or the path's control
 box) mapped through the node's composed transform; a clip that spares the
 node's own paint does not bound the node's own damage.
-A changed clip or isolation damages the node's subtree, and adding, removing
+A changed clip, isolation or blend mode damages the node's subtree, and adding, removing
 or changing a mask, including its opacity or transform, damages its parent's
 subtree. The web shell neither clips nor masks: it
 counts each clip once, skips each mask's commands so a mask is never drawn as
@@ -201,6 +206,81 @@ dropped with a warning, any other invalid value fails the tree, and invalid
 clip path data fails it with `VELLUM_INVALID_PATH`. Hit testing and
 accessibility boxes ignore clips and masks.
 
+## Blend modes
+
+`SceneNode::blend_mode` (scene version 6) combines a node and its subtree with
+what lies beneath it. `normal`, the default, draws no group. Any other mode
+draws the node's subtree offscreen as one group, faded by its opacity, and
+then blends that group over the backdrop, which is whatever the enclosing
+group holds or the frame. A blended node is always a `begin_layer`, so a blend
+never folds into a lone command's paint, and an ancestor that fades or
+isolates contains the blend: inside it the backdrop is the group's own pixels.
+Paint commands carry the mode on the layer's `blend_mode`; a scene before
+version 6 that sets one is refused with a `VELLUM_SCENE_VERSION_MISMATCH`
+diagnostic, as is a mode outside the enumeration.
+
+The vocabulary is `BlendMode` in `scene.hpp`, with the names DesignIR and the
+authoring `mixBlendMode` style use (`-` is accepted for `_`, as CSS writes
+it). Tier 1 is required of every backend: `normal`, `multiply`, `screen`,
+`overlay`, `darken`, `lighten`, `difference`, `exclusion`, `source_over`,
+`destination_in` and `destination_out`. Tier 2 is required of Skia Graphite and
+optional elsewhere: `hue`, `saturation`, `color`, `luminosity`, `color_dodge`,
+`color_burn`, `hard_light`, `soft_light` and the remaining Porter-Duff
+operators `clear`, `source`, `destination`, `source_in`, `source_out`,
+`source_atop`, `destination_over`, `destination_atop`, `xor` and `plus`. A
+backend that lacks a Tier 2 mode draws the group as `normal` and reports a
+`VELLUM_BLEND_MODE_FALLBACK` warning naming the node.
+
+| Backend | Tier 1 | Tier 2 |
+| --- | --- | --- |
+| Skia Graphite | every mode, as the matching Skia blend mode on the layer | every mode |
+| Web canvas shell | the group drawn offscreen and composited once with `globalCompositeOperation` | none: drawn as `normal` with a warning |
+
+The shell implements Tier 1 only. A Tier 1 blended group is drawn into an
+offscreen canvas through the backend's `blendBegin(operation, alpha)` and
+`blendEnd()`, then composited once with its canvas operation and its own
+opacity, so overlapping members meet each other normally and the group alpha is
+not multiplied into every child. A Tier 2 mode is drawn as `normal` with a
+`VELLUM_BLEND_MODE_FALLBACK` warning, and the flattened layer is counted in the
+loss count. `blendBegin` and `blendEnd` are new backend functions: a
+`VellumCanvasBackend` written before them still renders, because the shell
+checks for both before calling either and otherwise draws every blended group as
+`normal` with the same warning and a counted loss.
+
+A mode that leaves nothing of the backdrop where the group draws nothing
+(`clear`, `source`, `source_in`, `source_out`, `destination_in` and
+`destination_atop`, see `blend_mode_clears_backdrop`) empties the whole
+backdrop, as the canvas operators do, so a node using one damages the whole
+frame. Its layer, and every layer enclosing it, is unbounded, so its backdrop
+scope is the whole enclosing group (or frame) rather than its own paint extent.
+`source_out` belongs to this set: Porter-Duff source-out keeps none of the
+destination, so beyond its source the backdrop is emptied. A mask node draws
+coverage, not paint, so it takes no blend mode but `normal`; a scene with a
+blended mask is refused, and the authoring host fails such a tree. Other modes touch only the pixels the group covers. The layer cache
+never draws a blended group, or a plain group that holds one, from an image,
+because an image is drawn on a transparent surface and the blend would meet no
+backdrop; a faded or isolated group that holds a blend is its own backdrop and
+caches whole. A blended group is enclosed whole when damage cuts it, like any
+other group layer. The authoring host maps the `mixBlendMode` style to the mode
+on any node type and fails the tree for an unknown name.
+
+DesignIR schema version 2 adds the node `compositing` object (opacity, blend
+mode, isolation, a mask mode and a mask reference to a sibling mask) with the
+same names. Readers accept DesignIR versions 1 through 4. Version 3 adds
+material references; version 4 adds node animation tracks. Normalization
+writes the lowest version that covers the
+document: 4 when a node has tracks, otherwise 3 when a node has a material
+reference, otherwise 2 when a node uses compositing, otherwise 1. Compositing
+requires version 2 or later, materials require version 3, and tracks require
+version 4; the validator and published JSON schema enforce all three gates. A mask
+reference must name a sibling that is a mask. `materializeDesign` lowers the object into the retained
+`opacity`, `mixBlendMode`, `isolation` and `maskMode` styles. Because the
+renderer applies a mask to every sibling, it accepts a mask reference only when
+the parent holds one mask and every other child names it, and refuses anything
+else rather than drawing it differently. The retained materializer refuses
+populated tracks and material references, including those on hidden descendants,
+until it can preserve them.
+
 The surface draws every frame into a retained offscreen Graphite surface the
 size of its target in device pixels, and presents by drawing that image into
 the swapchain texture; captures read the retained surface back, through the
@@ -218,12 +298,27 @@ threshold fall back to a full repaint. Hosts pass `invalidate` reasons and node 
 rectangle counts, the commands re-recorded and why a frame repainted fully.
 What is cached and when it is discarded is renderer policy: the scene schema
 carries no cache hints. Partial redraw is enabled only for scene versions the
-damage model understands, up to `kDamageModelSceneVersion` (5), which covers
-transforms, group opacity, per-corner radii, paths, images, and clips, masks
-and isolation on groups. A version the renderer accepts but the damage model
+damage model understands, up to `kDamageModelSceneVersion` (11), which covers
+transforms, group opacity, per-corner radii, paths, images, clips, masks and
+isolation on groups, blend modes, gradient vocabulary and animation tracks.
+A version the renderer accepts but the damage model
 does not yet understand repaints fully with reason `damage_model_version`. A version outside
 [`kMinSupportedSceneVersion`, `kSceneVersion`] is refused before anything is
 drawn.
+
+Animation tracks on a node drive its opacity, the channels of an animated
+transform (translate, rotate, scale), its fill, a path's stroke colour, and the
+colours of a shadow, a gradient stop or a text run. Keyframes ease linearly,
+by cubic bezier, by steps, or by a damped spring timed in seconds. Tracks are
+evaluated at `Scene::clock`, which the host passes for every frame; no renderer
+reads a clock of its own, so the same scene at the same clock draws the same
+frame byte for byte. Every consumer (lowering, acceptance, damage and the web
+canvas shell) works on the scene `evaluate_tracks` produces, so damage covers
+exactly the nodes whose evaluated values changed. A track holds its first value
+before its first keyframe and its last value after its last, and a spring is
+exactly at its target from its settle time on, so a track at rest damages
+nothing. A version 10 or older scene with a track is refused with
+`VELLUM_SCENE_VERSION_MISMATCH`.
 
 A path damages its control box outset by its stroke reach: half the width,
 times the miter limit for miter joins or sqrt(2) for square and round caps,
@@ -274,6 +369,27 @@ inside it, a failed frame, a lost device, or a policy change;
 `layer_cache_stats` counts each reason. Images are capped at 32 and at twice
 the target's area, and a subtree the budget refuses, or whose image changed
 before it was ever drawn from, waits a few frames before it is tried again.
+
+Effects (scene version 10, `effect.hpp`) apply to a node and its subtree as
+one group: blur, colour matrix and drop shadow filter the group in chain order,
+and a backdrop blur or the frosted-glass material redraws what lies beneath the
+node's box first. Each effect declares a damage radius, a pass count and a
+texture count; a chain over eight passes or four textures, counting the group's
+own layer, is drawn without its effects and reported with
+`VELLUM_EFFECT_BUDGET_EXCEEDED`. The surface records the group's members into an
+offscreen image, the same image the layer cache keeps for the group, and
+composites it through the chain cropped to the area the group declares, so a
+change to an effect alone reuses the cached members. Damage inside a group
+grows by the chain's radius and is bounded only by clips outside the group; a
+colour matrix that lifts transparent pixels makes the group's whole area its
+damage; and damage reaching the area a backdrop samples damages the backdrop's
+box. A partial redraw encloses each effect group whole, together with the area
+its backdrop samples. Materials come from `MaterialRegistry`: a scene names one
+by id and carries values only, and the registry holds each material's typed
+uniforms, ranges, defaults and provenance. An application material registers
+through the custom component host, carries the `extension` disposition and is
+reported with `VELLUM_MATERIAL_EXTENSION`, and the native renderer draws the
+node without it until its component expands it.
 
 Two more triggers are opt-in through `LayerCachePolicy::allow_inexact`: a
 subtree of at least 32 commands once it repeats a frame, and any candidate once

@@ -22,6 +22,10 @@ option(VELLUM_ENABLE_AUTHORING "Build the native JavaScript/TypeScript applicati
 option(VELLUM_ENABLE_WEB "Build the experimental browser/Wasm proof" OFF)
 option(VELLUM_ENABLE_MIRROR
     "Package the landed mirror's units (needs the locked Skia/Dawn archive)" OFF)
+option(VELLUM_ENABLE_V8
+    "Compile the mirror's view-script unit with the sealed V8 provider and install libv8 (needs VELLUM_ENABLE_MIRROR)" OFF)
+set(VELLUM_V8_ARCHIVE "" CACHE FILEPATH
+    "Local copy of the pinned sealed V8 archive; digest-checked like a download")
 option(VELLUM_ENABLE_ADDRESS_SANITIZER
     "Instrument Vellum targets with AddressSanitizer" OFF)
 option(VELLUM_ENABLE_RMLUI
@@ -63,6 +67,7 @@ if(APPLE AND VELLUM_ENABLE_GPU AND
         "Minimum macOS version for the locked Vellum GPU artifact" FORCE)
 endif()
 
+include(cmake/VellumThreeJsPayload.cmake)
 add_subdirectory(foundation)
 add_subdirectory(runtime)
 add_subdirectory(components)
@@ -86,6 +91,10 @@ endif()
 add_subdirectory(gpu-runtime)
 
 set(VELLUM_PACKAGE_HAS_MIRROR OFF)
+if(VELLUM_ENABLE_V8 AND NOT VELLUM_ENABLE_MIRROR)
+    message(FATAL_ERROR "Vellum: VELLUM_ENABLE_V8 compiles the mirror's view-script unit; "
+        "it needs VELLUM_ENABLE_MIRROR=ON")
+endif()
 if(VELLUM_ENABLE_MIRROR)
     include(tools/mirror/VellumMirror.cmake)
 endif()
@@ -167,6 +176,11 @@ if(VELLUM_BUILD_TESTS)
     target_link_libraries(vellum-value-param-model-test PRIVATE Vellum::Value)
     add_test(NAME vellum.value.param-model COMMAND vellum-value-param-model-test)
 
+    add_executable(vellum-value-param-metadata-test
+        foundation/tests/value/param_metadata_test.cpp)
+    target_link_libraries(vellum-value-param-metadata-test PRIVATE Vellum::Value)
+    add_test(NAME vellum.value.param-metadata COMMAND vellum-value-param-metadata-test)
+
     find_package(Threads REQUIRED)
     add_executable(vellum-value-feed-test
         foundation/tests/value/value_feed_test.cpp)
@@ -220,6 +234,11 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-grouping-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.grouping COMMAND vellum-grouping-test)
 
+        add_executable(vellum-blend-mode-test
+            graphics/tests/blend_mode_test.cpp)
+        target_link_libraries(vellum-blend-mode-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.blend-mode COMMAND vellum-blend-mode-test)
+
         add_executable(vellum-layer-cache-test
             graphics/tests/layer_cache_test.cpp)
         target_link_libraries(vellum-layer-cache-test PRIVATE Vellum::Graphics)
@@ -229,6 +248,17 @@ if(VELLUM_BUILD_TESTS)
             graphics/tests/damage_test.cpp)
         target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.damage COMMAND vellum-damage-test)
+
+        add_executable(vellum-animation-test
+            graphics/tests/animation_test.cpp)
+        target_include_directories(vellum-animation-test PRIVATE graphics/src)
+        target_link_libraries(vellum-animation-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.animation COMMAND vellum-animation-test)
+
+        add_executable(vellum-effect-test
+            graphics/tests/effect_test.cpp)
+        target_link_libraries(vellum-effect-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.effects COMMAND vellum-effect-test)
 
         add_executable(vellum-render-cache-test
             graphics/tests/render_cache_test.cpp)
@@ -351,6 +381,44 @@ if(VELLUM_BUILD_TESTS)
             add_test(NAME "vellum.gpu.${_vellum_fixture}"
                 COMMAND vellum-gpu-grouping-test "${_vellum_fixture}")
         endforeach()
+
+        add_executable(vellum-gpu-blend-test
+            graphics/tests/gpu_blend_test.cpp)
+        target_link_libraries(vellum-gpu-blend-test PRIVATE Vellum::Gpu Vellum::DawnHeaders)
+        foreach(_vellum_fixture IN ITEMS
+                tier1_mode_captures
+                tier2_mode_captures
+                blend_with_opacity
+                blend_stays_inside_an_isolated_parent
+                blend_layer_cache_matches_direct
+                blend_version_refusal
+                clearing_blend_scope_is_the_enclosing_group
+                source_out_clears_beyond_its_source
+                masked_blend_refusal)
+            add_test(NAME "vellum.gpu.${_vellum_fixture}"
+                COMMAND vellum-gpu-blend-test "${_vellum_fixture}")
+        endforeach()
+
+        # DesignIR to GPU pixels: Node normalizes and materializes a DesignIR
+        # document into a retained tree, which the native materializer lowers
+        # and Skia Graphite draws.
+        if(TARGET vellum-authoring)
+            find_program(VELLUM_NODE_EXECUTABLE node)
+            add_executable(vellum-design-gpu-test authoring/tests/design_gpu_test.cpp)
+            target_include_directories(vellum-design-gpu-test PRIVATE authoring/src)
+            target_link_libraries(vellum-design-gpu-test PRIVATE
+                Vellum::Authoring Vellum::Gpu Vellum::DawnHeaders)
+            if(VELLUM_NODE_EXECUTABLE)
+                add_test(NAME vellum.gpu.design-ir-compositing
+                    COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/authoring/tests/run_design_gpu.py"
+                        "${VELLUM_NODE_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/authoring/tests/design_gpu_tree.mjs"
+                        "$<TARGET_FILE:vellum-design-gpu-test>")
+            else()
+                message(STATUS "Vellum: Node.js not found; skipping the DesignIR GPU test")
+            endif()
+        endif()
     endif()
 
     # This consumer proves that the native CMake package is relocatable. A
@@ -438,6 +506,12 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.renderer-lock-drift-unit
         COMMAND "${Python3_EXECUTABLE}" -I scripts/test_check_renderer_lock.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.threejs-payload
+        COMMAND "${Python3_EXECUTABLE}" -I scripts/check_threejs_payload.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.threejs-payload-unit
+        COMMAND "${Python3_EXECUTABLE}" -I scripts/test_check_threejs_payload.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.gpu-runtime-artifact-unit
         COMMAND "${Python3_EXECUTABLE}" -I scripts/test_verify_gpu_runtime_artifact.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -489,6 +563,8 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_MIRROR_DEPS_DIR=${VELLUM_MIRROR_DEPS_DIR}"
                 "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                 "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
+                "-DVELLUM_ENABLE_V8=${VELLUM_MIRROR_HAS_V8}"
+                "-DVELLUM_V8_VERSION=${VELLUM_V8_VERSION}"
                 ${_vellum_view_audio_archive_arg}
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
         # An installed consumer reaches Vellum's value model through the view

@@ -369,6 +369,12 @@ class MirrorPackagePlanTest(unittest.TestCase):
         self.fixture.write_receipt()
         self.assertRefused("neither mirrored nor a recipe target")
 
+    def test_recipe_link_target_no_closure_pins_is_refused(self) -> None:
+        # yaml-cpp has a recipe, but no closure pins it, so there is nothing to build it from.
+        self.fixture.closure["targets"][0]["link_targets"] = ["yaml-cpp"]
+        self.fixture.write_receipt()
+        self.assertRefused("links yaml-cpp, but no closure pins yaml-cpp")
+
     def test_unmapped_build_include_is_refused(self) -> None:
         self.fixture.closure["targets"][0]["include_dirs"].append("@build/somewhere")
         self.fixture.write_receipt()
@@ -1383,6 +1389,618 @@ class FrameworkPortsPlanTest(unittest.TestCase):
         self.fixture.write(f"{self.fixture.VIEW}/js/embed_js.py", (EMBEDDER + "# edited\n").encode())
         self.assertEqual(sorted(self.fixture.plan()["native_preludes"]),
                          ["web_compat_preludes_gen.cpp", "web_compat_preludes_gen.hpp"])
+
+
+class DeclaredUnitPlanTest(unittest.TestCase):
+    """A target no closure builds is compiled only as provenance/framework/units.json declares it."""
+
+    HEADER = "framework/core/example/include/vellum/example/example.hpp"
+    LIB = "framework/core/example/src/example.cpp"
+    TOOL = "framework/core/example/src/example_tool.cpp"
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = TransferredFixture(Path(self.temporary.name))
+        mp.BUILD_INFO_INPUTS[EXPORT_ID] = {"version": "1.2.3"}
+        self.fixture.write(self.HEADER, b"#pragma once\nint example();\n")
+        self.fixture.write(self.LIB, b'#include "vellum/example/example.hpp"\nint example() { return 3; }\n')
+        self.fixture.write(self.TOOL, b'#include "vellum/example/example.hpp"\nint main() { return example(); }\n')
+        self.rows = [self.fixture.row(self.HEADER), self.fixture.row(self.LIB, target="vellum-example"),
+                     self.fixture.row(self.TOOL, target="vellum-example-tool")]
+        self.fixture.write_ledger(self.rows)
+        self.library = {"name": "vellum-example", "type": "STATIC_LIBRARY", "unit": "example",
+                        "sources": [self.LIB], "include_dirs": ["core/example/include"],
+                        "compile_definitions": ["VELLUM_EXAMPLE=1"], "link_targets": ["pulp-runtime"],
+                        "reason": "a unit no closure builds"}
+        self.tool = {"name": "vellum-example-tool", "type": "EXECUTABLE", "unit": None, "sources": [self.TOOL],
+                     "include_dirs": [], "compile_definitions": [], "link_targets": ["vellum-example"],
+                     "reason": "a tool over the unit"}
+
+    def tearDown(self) -> None:
+        mp.BUILD_INFO_INPUTS.pop(EXPORT_ID, None)
+        self.temporary.cleanup()
+
+    def declare(self, targets: list[dict]) -> None:
+        self.fixture.write(mp.framework_ports.UNITS, json.dumps(
+            {"schema": mp.framework_ports.UNITS_SCHEMA, "targets": targets}).encode())
+
+    def assertRefused(self, fragment: str) -> None:
+        with self.assertRaises(mp.PlanError) as caught:
+            self.fixture.plan()
+        self.assertIn(fragment, str(caught.exception))
+
+    def planned(self, relative: str) -> str:
+        return str(self.fixture.repo.resolve() / relative)
+
+    def cmake(self, plan: dict) -> str:
+        output = Path(self.temporary.name) / "plan.cmake"
+        mp.write_cmake(plan, output)
+        return output.read_text()
+
+    def test_reserved_definitions_never_reach_a_unit_interface(self) -> None:
+        for item in ("VELLUM_MIRROR_BUILD=1", "GPU_RUNTIME_BENCHMARK=1"):
+            self.declare([{**self.library, "compile_definitions": [item]}, self.tool])
+            self.assertRefused("is reserved")
+
+    def test_undeclared_targets_are_refused_and_declared_ones_build(self) -> None:
+        # The rows name targets no closure builds: refused while nothing declares them.
+        self.assertRefused("adds sources to targets no closure builds")
+        self.declare([self.library, self.tool])
+        plan = self.fixture.plan()
+        self.assertEqual(plan["framework_units"], ["vellum-example", "vellum-example-tool"])
+        closure_unit, unit = plan["units"]
+        self.assertEqual(closure_unit["name"], "foundation")  # the closure's unit comes first
+        self.assertEqual((unit["name"], [t["name"] for t in unit["targets"]]), ("example", ["vellum-example"]))
+        library = unit["targets"][0]
+        self.assertEqual(library["sources"], [self.planned(self.LIB)])
+        self.assertEqual(library["internal_links"], ["pulp-runtime"])
+        # Its own include directory first, then what the linked target compiles with.
+        runtime = closure_unit["targets"][0]
+        self.assertEqual(library["include_dirs"],
+                         [self.planned("framework/core/example/include")] + runtime["include_dirs"])
+        # Its definitions, plus the interface definitions of the unit it links.
+        self.assertEqual(library["compile_definitions"], ["VELLUM_EXAMPLE=1", "X=1"])
+        self.assertEqual(unit["compile_definitions"], ["VELLUM_EXAMPLE=1", "X=1"])
+        [tool] = plan["executables"]
+        self.assertEqual((tool["name"], tool["type"], tool["sources"], tool["internal_links"]),
+                         ("vellum-example-tool", "EXECUTABLE", [self.planned(self.TOOL)], ["vellum-example"]))
+        # The closure's own target is unchanged: it does not compile the declared sources.
+        self.assertNotIn(self.planned(self.LIB), runtime["sources"])
+        text = self.cmake(plan)
+        self.assertIn('set(VELLUM_MIRROR_UNITS\n    "foundation"\n    "example"\n)', text)
+        self.assertIn('set(VELLUM_MIRROR_EXECUTABLES\n    "vellum-example-tool"\n)', text)
+        self.assertIn('set(VELLUM_MIRROR_UNIT_EXAMPLE_TARGETS\n    "vellum-example"\n)', text)
+        self.assertIn(self.LIB, text.split("set(VELLUM_MIRROR_TARGET_VELLUM_EXAMPLE_SOURCES")[1].split(")")[0])
+        self.assertIn('set(VELLUM_MIRROR_TARGET_VELLUM_EXAMPLE_TOOL_TYPE "EXECUTABLE")', text)
+        self.assertIn("set(VELLUM_MIRROR_TARGET_VELLUM_EXAMPLE_DECLARED ON)", text)
+        self.assertIn("set(VELLUM_MIRROR_TARGET_PULP_RUNTIME_DECLARED OFF)", text)
+        self.assertIn('set(VELLUM_MIRROR_TARGET_PULP_RUNTIME_TYPE "STATIC_LIBRARY")', text)
+
+    def test_every_ledger_source_of_a_declared_target_is_listed_and_every_listed_source_has_its_row(self) -> None:
+        self.declare([self.library, dict(self.tool, sources=[self.LIB])])
+        self.assertRefused("is added by its ledger row to vellum-example, not vellum-example-tool")
+        self.declare([self.library, self.tool])
+        self.fixture.write_ledger(self.rows[:2] + [self.fixture.row(self.TOOL, target="vellum-example")])
+        self.assertRefused("is added by its ledger row to vellum-example, not vellum-example-tool")
+        # A source the ledger does not add is not in the file set at all.
+        self.fixture.write_ledger(self.rows[:2])
+        self.assertRefused("does not list")
+
+    def test_a_link_must_be_mirrored_declared_earlier_or_a_pinned_recipe(self) -> None:
+        self.declare([dict(self.library, link_targets=["pulp-runtime", "nowhere"]), self.tool])
+        self.assertRefused("links nowhere, which is neither a mirrored target")
+        self.declare([self.tool, self.library])
+        self.assertRefused("which is declared after it")
+        # yaml-cpp has a recipe, but no closure pins it and the recipe names no pin.
+        self.declare([dict(self.library, link_targets=["yaml-cpp"]), self.tool])
+        self.assertRefused("no closure pins yaml-cpp and its recipe names no pinned commit")
+        # A recipe that is not a cmake build cannot be linked by a declared target.
+        self.declare([dict(self.library, link_targets=["gpu-runtime-device"]), self.tool])
+        self.assertRefused("only through a cmake recipe")
+
+    def test_a_declared_target_may_not_take_an_existing_name_or_join_a_closure_unit(self) -> None:
+        for library, fragment in (
+            (dict(self.library, unit="foundation"), "which a closure describes"),
+            (dict(self.library, name="hwy"), "is a target the highway recipe provides"),
+        ):
+            rows = [self.rows[0], self.fixture.row(self.LIB, target=library["name"]), self.rows[2]]
+            self.fixture.write_ledger(rows)
+            self.declare([library, dict(self.tool, link_targets=[library["name"]])])
+            self.assertRefused(fragment)
+
+    def test_a_closure_target_name_is_refused(self) -> None:
+        # pulp-runtime is not a Vellum name either; the shape rule refuses it before the plan.
+        self.fixture.write_ledger([self.rows[0], self.fixture.row(self.LIB, target="pulp-runtime"), self.rows[2]])
+        self.declare([dict(self.library, name="pulp-runtime"), dict(self.tool, link_targets=["pulp-runtime"])])
+        self.assertRefused("may not carry a Pulp name")
+        # With the spelling rule out of the way, the plan still refuses the name.
+        with mock.patch.object(mp.framework_ports, "units_errors", return_value=[]), \
+                mock.patch.object(mp.framework_ports, "unit_target_errors", return_value=[]):
+            self.assertRefused("is already a mirrored target of unit foundation")
+
+    def test_the_targets_of_a_unit_are_declared_together(self) -> None:
+        other = "framework/core/example/src/other.cpp"
+        self.fixture.write(other, b"int other() { return 4; }\n")
+        second = "framework/core/example/src/second.cpp"
+        self.fixture.write(second, b"int second() { return 5; }\n")
+        self.fixture.write_ledger(self.rows + [self.fixture.row(other, target="vellum-example-other"),
+                                               self.fixture.row(second, target="vellum-second")])
+        second_unit = dict(self.library, name="vellum-second", unit="second", sources=[second])
+        other_target = dict(self.library, name="vellum-example-other", sources=[other])
+        self.declare([self.library, second_unit, other_target, self.tool])
+        self.assertRefused("the targets of unit example are not declared together")
+        # Control: declared together, the unit carries both; an executable between them splits nothing.
+        self.declare([self.library, self.tool, other_target, second_unit])
+        units = self.fixture.plan()["units"]
+        self.assertEqual([(u["name"], [t["name"] for t in u["targets"]]) for u in units[1:]],
+                         [("example", ["vellum-example", "vellum-example-other"]), ("second", ["vellum-second"])])
+
+    def test_a_broken_manifest_is_refused(self) -> None:
+        self.fixture.write(mp.framework_ports.UNITS, b"[]")
+        self.assertRefused("must be an object with schema")
+        self.declare([dict(self.library, include_dirs=["core/missing/include"]), self.tool])
+        self.assertRefused("is not a directory framework/ holds")
+
+    def test_a_recipe_with_its_own_pin_is_fetched_at_that_commit(self) -> None:
+        source = Path(self.temporary.name) / "upstream"
+        source.mkdir()
+        (source / "LICENSE").write_text("MIT\n")
+        (source / "CMakeLists.txt").write_text("add_library(fixture-dep STATIC dep.cpp)\n")
+        (source / "dep.cpp").write_text("int dep() { return 5; }\n")
+        def git(*args: str) -> str:
+            return subprocess.run(["git", "-C", str(source), *args], check=True, capture_output=True,
+                                  text=True).stdout.strip()
+        git("init", "-q")
+        git("add", "-A")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "dep")
+        pin = git("rev-parse", "HEAD")
+        recipe = {"kind": "cmake", "provides": ["fixture-dep"], "options": {"X": "OFF"}, "pin": pin,
+                  "source": source.as_uri()}
+        self.declare([dict(self.library, link_targets=["pulp-runtime", "fixture-dep"]), self.tool])
+        with mock.patch.dict(mp.DEPENDENCIES, {"fixture-dep": recipe}):
+            plan = self.fixture.plan()
+            self.assertEqual(plan["units"][1]["targets"][0]["external_links"], ["fixture-dep"])
+            self.assertEqual(plan["dependencies"]["fixture-dep"]["pin"], pin)
+            self.assertIn("fixture-dep", plan["cmake_dependencies"])
+            self.assertEqual([Path(p).name for p in plan["licenses"]["fixture-dep"]], ["LICENSE"])
+            # Its license travels with it: a pinned tree without one is refused.
+            git("rm", "-q", "LICENSE")
+            git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "drop license")
+            recipe["pin"] = git("rev-parse", "HEAD")
+            self.assertRefused("carries no license file")
+            # A recipe naming no commit is refused.
+            recipe["pin"] = "main"
+            self.assertRefused("its recipe names no pinned commit")
+
+
+class MalformedReceiptRefusalTest(unittest.TestCase):
+    """Receipts, indexes and closures that are unreadable or malformed are each refused."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = Fixture(Path(self.temporary.name))
+        self.receipt_path = self.fixture.repo / f"provenance/mirror/receipts/{EXPORT_ID}.json"
+        mp.BUILD_INFO_INPUTS[EXPORT_ID] = {"version": "1.2.3"}
+
+    def tearDown(self) -> None:
+        mp.BUILD_INFO_INPUTS.pop(EXPORT_ID, None)
+        self.temporary.cleanup()
+
+    def assertRefused(self, fragment: str) -> None:
+        with self.assertRaises(mp.PlanError) as caught:
+            self.fixture.plan()
+        self.assertIn(fragment, str(caught.exception))
+
+    def edit_receipt(self, edit) -> None:
+        receipt = json.loads(self.receipt_path.read_text())
+        edit(receipt)
+        self.receipt_path.write_text(json.dumps(receipt))
+
+    def test_a_json_file_that_is_missing_or_malformed_is_refused(self) -> None:
+        base = Path(self.temporary.name)
+        (base / "broken.json").write_text("{")
+        for name in ("absent.json", "broken.json"):
+            with self.subTest(name=name), self.assertRaisesRegex(mp.PlanError, "cannot read"):
+                mp.load_json(base / name)
+
+    def test_an_index_of_another_schema_is_refused(self) -> None:
+        (self.fixture.repo / mp.INDEX_PATH).write_text(json.dumps({"schema": "other", "receipts": ["x"]}))
+        self.assertRefused("index")
+
+    def test_a_receipt_of_another_schema_is_refused(self) -> None:
+        self.edit_receipt(lambda receipt: receipt.update(schema="other"))
+        self.assertRefused(f"is not a {mp.RECEIPT_SCHEMA} receipt")
+
+    def test_a_receipt_id_that_is_not_a_full_sha_is_refused(self) -> None:
+        for key in ("pulp_sha", "mirror_sha", "mirror_tree"):
+            with self.subTest(key=key):
+                self.fixture.write_receipt()
+                self.edit_receipt(lambda receipt: receipt.update({key: "abc123"}))
+                self.assertRefused(f"{key} is not a full commit/tree SHA")
+
+    def test_a_receipt_with_another_rename_is_refused(self) -> None:
+        self.edit_receipt(lambda receipt: receipt.update(rename={"from_prefix": "core/", "to_prefix": "mirror/"}))
+        self.assertRefused("unsupported rename")
+
+    def test_a_receipt_file_row_outside_the_mirror_is_refused(self) -> None:
+        self.edit_receipt(lambda receipt: receipt["files"].append({"mirror_path": "elsewhere/x.cpp", "blob": "1" * 40}))
+        self.assertRefused("receipt file row is malformed")
+
+    def test_a_closure_manifest_that_is_absent_is_refused(self) -> None:
+        (self.fixture.repo / f"provenance/mirror/closures/{EXPORT_ID}/foundation.json").unlink()
+        self.assertRefused("closure manifest is missing")
+
+    def test_a_closure_of_another_schema_is_refused(self) -> None:
+        self.fixture.closure["schema"] = "other"
+        self.fixture.write_receipt()
+        self.assertRefused(f"is not a {mp.CLOSURE_SCHEMA} manifest")
+
+    def test_a_receipt_that_names_no_units_is_refused(self) -> None:
+        self.edit_receipt(lambda receipt: receipt.update(units=[]))
+        self.assertRefused("names no units")
+
+    def test_closures_exported_under_different_configures_are_refused(self) -> None:
+        import copy
+        second = copy.deepcopy(self.fixture.closure)
+        second["configure"]["options"]["CMAKE_BUILD_TYPE"] = "Debug"
+        relative = f"provenance/mirror/closures/{EXPORT_ID}/second.json"
+        (self.fixture.repo / relative).write_text(json.dumps(second))
+        digest = mp.sha256_file(self.fixture.repo / relative)
+        self.edit_receipt(lambda receipt: receipt["units"].append(
+            {**receipt["units"][0], "name": "second", "closure_manifest": relative, "closure_sha256": digest}))
+        self.assertRefused("exported under different configures")
+
+    def test_a_per_source_option_the_planner_cannot_decide_is_refused(self) -> None:
+        self.fixture.add_mirror_file("mirror/core/runtime/CMakeLists.txt", (
+            b'add_library(pulp-runtime STATIC src/a.cpp)\n'
+            b'if(TARGET undecidable)\n'
+            b'    set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-O1")\n'
+            b'endif()\n'))
+        self.fixture.write_receipt()
+        self.assertRefused("per-source compile options:")
+
+    def test_closures_that_record_no_configure_options_are_refused(self) -> None:
+        self.fixture.closure["configure"] = {"options": None}
+        self.fixture.write_receipt()
+        self.assertRefused("record no configure options")
+
+
+class ExternalDependencyRefusalTest(unittest.TestCase):
+    """external_dependencies refuses a pinned input that is malformed or that two closures disagree on."""
+
+    PIN = "b" * 40
+
+    def row(self, **overrides) -> dict:
+        row = {"path": f"@external/skia/{self.PIN}/include/a.h", "pin": self.PIN, "source": "https://example.invalid/skia.git",
+               "asset_sha256": "c" * 64, "sha256": "d" * 64}
+        row.update(overrides)
+        return row
+
+    def refused(self, *rows: dict) -> str:
+        with self.assertRaises(mp.PlanError) as caught:
+            mp.external_dependencies([("foundation", {"external_inputs": list(rows)})])
+        return str(caught.exception)
+
+    def test_a_row_that_plans_is_the_control(self) -> None:
+        deps = mp.external_dependencies([("foundation", {"external_inputs": [self.row()]})])
+        self.assertEqual(deps["skia"]["files"], {"include/a.h": "d" * 64})
+
+    def test_a_malformed_external_path_is_refused(self) -> None:
+        self.assertIn("external input path is malformed", self.refused(self.row(path="@external/skia")))
+
+    def test_an_input_pinned_to_a_short_id_is_refused(self) -> None:
+        self.assertIn("is not pinned to a full commit", self.refused(self.row(pin="abc123")))
+
+    def test_closures_that_disagree_on_a_pin_are_refused(self) -> None:
+        self.assertIn("closures disagree on the pin of skia",
+                      self.refused(self.row(), self.row(path=f"@external/skia/{self.PIN}/include/b.h",
+                                                        source="https://example.invalid/other.git")))
+
+    def test_an_input_with_no_digest_is_refused(self) -> None:
+        self.assertIn("has no recorded digest", self.refused(self.row(sha256=None)))
+
+    def test_closures_that_disagree_on_a_digest_are_refused(self) -> None:
+        self.assertIn("closures disagree on the digest of", self.refused(self.row(), self.row(sha256="e" * 64)))
+
+
+class DependencyPreparationRefusalTest(unittest.TestCase):
+    """Fetching, patching and preparing a dependency refuses what it cannot prove."""
+
+    def git(self, cwd: Path, *args: str) -> str:
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(cwd), *args],
+                              check=True, capture_output=True, text=True).stdout.strip()
+
+    def test_a_fetch_that_fails_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(mp.PlanError, "fetching fixture-dep failed"):
+                mp.fetch_git("fixture-dep", str(Path(tmp) / "no-such-repository"), "a" * 40,
+                             Path(tmp) / "checkout", submodules=False)
+
+    def test_a_checkout_that_is_not_the_pin_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source"
+            source.mkdir()
+            self.git(source, "init", "-q", "-b", "main")
+            (source / "a.txt").write_text("a\n")
+            self.git(source, "add", "-A")
+            self.git(source, "commit", "-q", "-m", "a")
+            # A branch name fetches, but what it checks out is a commit id, not the name pinned.
+            with self.assertRaisesRegex(mp.PlanError, "not the pinned main"):
+                mp.fetch_git("fixture-dep", str(source), "main", Path(tmp) / "checkout", submodules=False)
+            # Control: the commit id itself checks out.
+            mp.fetch_git("fixture-dep", str(source), self.git(source, "rev-parse", "HEAD"),
+                         Path(tmp) / "pinned", submodules=False)
+            self.assertTrue((Path(tmp) / "pinned" / "a.txt").is_file())
+
+    def test_an_unknown_patch_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(mp.PlanError, "unknown patch 'nope' for choc"):
+                mp.apply_patch("choc", "nope", Path(tmp))
+            with self.assertRaisesRegex(mp.PlanError, "unknown patch 'v8-compatibility' for yoga"):
+                mp.apply_patch("yoga", "v8-compatibility", Path(tmp))
+
+    def test_an_in_tree_dependency_with_no_repository_is_refused(self) -> None:
+        entry = {"pin": "a" * 40, "source": "s", "asset_sha256": None, "root": "a" * 40, "files": {}}
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(mp.PlanError, "is an in-tree dependency but no repository was given"):
+                mp.prepare_dependencies({"vellum-gpu-runtime": entry}, Path(tmp), None, None)
+
+    def test_the_skia_archive_must_be_given(self) -> None:
+        entry = {"pin": "a" * 40, "source": "s", "asset_sha256": "c" * 64, "root": "a" * 40, "files": {}}
+        with tempfile.TemporaryDirectory() as tmp:
+            for skia_dir, asset in ((None, "c" * 64), (Path(tmp), None)):
+                with self.subTest(skia_dir=skia_dir, asset=asset), \
+                        self.assertRaisesRegex(mp.PlanError, "no extracted Skia/Dawn archive was given"):
+                    mp.prepare_dependencies({"skia": entry}, Path(tmp), skia_dir, asset)
+
+    def test_a_closure_exported_against_another_skia_archive_is_refused_when_preparing(self) -> None:
+        entry = {"pin": "a" * 40, "source": "s", "asset_sha256": "c" * 64, "root": "a" * 40, "files": {}}
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(mp.PlanError, f"exported against skia archive {'c' * 64}, but Vellum locks {'d' * 64}"):
+                mp.prepare_dependencies({"skia": entry}, Path(tmp), Path(tmp), "d" * 64)
+
+    def test_a_recorded_file_the_dependency_lacks_is_refused(self) -> None:
+        entry = {"pin": "a" * 40, "source": "s", "asset_sha256": "c" * 64, "root": "a" * 40,
+                 "files": {"include/absent.h": "d" * 64}}
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(mp.PlanError, "has no include/absent.h"):
+                mp.prepare_dependencies({"skia": entry}, Path(tmp), Path(tmp), "c" * 64)
+
+    def test_a_template_naming_an_unknown_value_is_refused(self) -> None:
+        with self.assertRaisesRegex(mp.PlanError, "unknown value @NOT_A_VALUE@"):
+            mp.render_build_info("@NOT_A_VALUE@", {"pulp_sha": PULP_SHA}, "1.2.3", "Release", "t")
+
+
+class TransferredTreeRefusalTest(unittest.TestCase):
+    """A transferred checkout is refused when mirror/ lingers, framework/ holds a link, or a prelude cannot be made."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = TransferredFixture(Path(self.temporary.name))
+        mp.BUILD_INFO_INPUTS[EXPORT_ID] = {"version": "1.2.3"}
+
+    def tearDown(self) -> None:
+        mp.BUILD_INFO_INPUTS.pop(EXPORT_ID, None)
+        self.temporary.cleanup()
+
+    def assertRefused(self, fragment: str) -> None:
+        with self.assertRaises(mp.PlanError) as caught:
+            self.fixture.plan()
+        self.assertIn(fragment, str(caught.exception))
+
+    def test_a_mirror_directory_beside_framework_is_refused(self) -> None:
+        self.fixture.plan()  # control: the transferred tree alone plans
+        (self.fixture.repo / "mirror").mkdir()
+        self.assertRefused("both exist")
+
+    def test_a_symlink_in_framework_is_refused(self) -> None:
+        relative = "framework/core/runtime/src/a.cpp"
+        data = (self.fixture.repo / relative).read_bytes()
+        (self.fixture.repo / relative).unlink()
+        elsewhere = Path(self.temporary.name) / "elsewhere.cpp"
+        elsewhere.write_bytes(data)
+        (self.fixture.repo / relative).symlink_to(elsewhere)
+        self.assertRefused("framework/ holds symlinks")
+
+    def test_a_prelude_generator_that_fails_is_refused(self) -> None:
+        self.fixture.write(f"{self.fixture.VIEW}/js/embed_js.py", b"import sys\nsys.stderr.write('boom')\nsys.exit(3)\n")
+        self.assertRefused("prelude generator failed: boom")
+
+
+class GeneratedInputRefusalTest(unittest.TestCase):
+    """prepare_generated refuses a generated input it cannot reproduce from the mirrored producers."""
+
+    ENCODER = "mirror/tools/cmake/scripts/encode_binary_data.py"
+    FONT = "mirror/external/fonts/A.ttf"
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = Fixture(Path(self.temporary.name))
+        mp.BUILD_INFO_INPUTS[EXPORT_ID] = {"version": "1.2.3"}
+
+    def tearDown(self) -> None:
+        mp.BUILD_INFO_INPUTS.pop(EXPORT_ID, None)
+        self.temporary.cleanup()
+
+    def assertRefused(self, fragment: str) -> None:
+        with self.assertRaises(mp.PlanError) as caught:
+            self.fixture.plan()
+        self.assertIn(fragment, str(caught.exception))
+
+    def generated(self, path: str, digest: str | None = "f" * 64) -> None:
+        self.fixture.closure["generated_inputs"].append({"path": path, "sha256": digest, "producer_paths": []})
+        self.fixture.write_receipt()
+
+    def encoder(self, body: str = "") -> None:
+        """A mirrored encoder that writes `x` to --out, then runs `body`."""
+        self.fixture.add_mirror_file(self.ENCODER, (
+            "import sys\nout = sys.argv[sys.argv.index('--out') + 1]\n"
+            "open(out, 'wb').write(b'x')\n" + body).encode())
+        self.fixture.add_mirror_file(self.FONT, b"font")
+
+    def test_a_generated_input_with_no_digest_is_refused(self) -> None:
+        self.fixture.closure["generated_inputs"][0]["sha256"] = None
+        self.fixture.write_receipt()
+        self.assertRefused("generated input @build/core/runtime/generated/Release/pulp/runtime/build_info.hpp has no recorded digest")
+
+    def test_a_build_info_header_for_an_export_with_no_recorded_inputs_is_refused(self) -> None:
+        del mp.BUILD_INFO_INPUTS[EXPORT_ID]
+        self.assertRefused(f"no build-info inputs are recorded for export {EXPORT_ID}")
+
+    def test_a_build_info_header_that_is_not_timestamp_normalized_is_refused(self) -> None:
+        self.fixture.closure["generated_inputs"][0]["normalization"] = {}
+        self.fixture.write_receipt()
+        self.assertRefused("is not timestamp-normalized")
+
+    def test_a_binary_data_target_the_canvas_cmake_does_not_declare_is_refused(self) -> None:
+        self.generated("@build/core/canvas/unknown-fonts_data.hpp")
+        self.assertRefused("names binary-data target unknown-fonts")
+
+    def test_a_binary_data_source_the_target_does_not_declare_is_refused(self) -> None:
+        self.generated("@build/core/canvas/pulp-bundled-fonts_data_B_ttf.cpp")
+        self.assertRefused("has no matching binary-data source")
+
+    def test_an_encoder_that_fails_is_refused(self) -> None:
+        self.encoder("sys.stderr.write('bad font')\nsys.exit(2)\n")
+        self.generated("@build/core/canvas/pulp-bundled-fonts_data_A_ttf.cpp")
+        self.assertRefused("mirrored encoder failed for external/fonts/A.ttf: bad font")
+
+    def test_encoded_bytes_that_do_not_match_the_closure_digest_are_refused(self) -> None:
+        self.encoder()
+        self.generated("@build/core/canvas/pulp-bundled-fonts_data_A_ttf.cpp", "f" * 64)
+        self.assertRefused("encoded by the mirrored producer does not match the closure digest")
+
+    def test_a_binary_data_target_with_no_header_digest_is_refused(self) -> None:
+        self.encoder()
+        self.generated("@build/core/canvas/pulp-bundled-fonts_data_A_ttf.cpp", sha(b"x"))
+        self.assertRefused("binary-data target pulp-bundled-fonts has no recorded header digest")
+
+    def test_a_binary_data_target_whose_rows_miss_a_declared_source_is_refused(self) -> None:
+        self.encoder()
+        self.fixture.add_mirror_file("mirror/core/canvas/CMakeLists.txt", (
+            "pulp_add_binary_data(pulp-bundled-fonts\n    SOURCES\n"
+            "        ${PULP_ROOT_DIR}/external/fonts/A.ttf\n        ${PULP_ROOT_DIR}/external/fonts/B.ttf\n"
+            "    NAMESPACE pulp_bundled_fonts\n)\n").encode())
+        self.generated("@build/core/canvas/pulp-bundled-fonts_data_A_ttf.cpp", sha(b"x"))
+        self.generated("@build/core/canvas/pulp-bundled-fonts_data.hpp")
+        self.assertRefused("closure rows do not cover its declared sources")
+
+
+class IncludeDirectoryRefusalTest(unittest.TestCase):
+    """map_include maps a closure's include directory only to a place the plan can prove."""
+
+    PIN = "1" * 40
+    RECIPE_PATH = f"@external/vellum-gpu-runtime/{PIN}/gpu-runtime/include"
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.repo = Path(self.temporary.name)
+        (self.repo / "mirror/core/a/include").mkdir(parents=True)
+        self.deps = {"vellum-gpu-runtime": {"pin": self.PIN, "root": self.PIN, "files": {}},
+                     "highway": {"pin": self.PIN, "root": self.PIN, "files": {}}}
+        self.roots = {"vellum-gpu-runtime": self.repo, "highway": Path("/deps/highway")}
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def map(self, path: str, roots: dict | None = None, deps: dict | None = None) -> str:
+        return mp.map_include(path, self.repo, self.roots if roots is None else roots, {}, "B",
+                              self.deps if deps is None else deps)
+
+    def refused(self, path: str, **kwargs) -> str:
+        with self.assertRaises(mp.PlanError) as caught:
+            self.map(path, **kwargs)
+        return str(caught.exception)
+
+    def test_an_in_tree_include_maps_when_pinned_and_inside_the_interface_tree(self) -> None:
+        self.assertEqual(self.map(self.RECIPE_PATH), str(self.repo / "gpu-runtime/include"))
+        self.assertEqual(self.map("core/a/include"),
+                         str(self.repo / "mirror/core/a/include"))
+
+    def test_an_in_tree_include_no_closure_pins_is_refused(self) -> None:
+        self.assertIn("names vellum-gpu-runtime, but no closure pins it", self.refused(self.RECIPE_PATH, roots={}))
+        self.assertIn("names vellum-gpu-runtime, but no closure pins it", self.refused(self.RECIPE_PATH, deps={}))
+
+    def test_an_in_tree_include_at_another_root_is_refused(self) -> None:
+        self.assertIn("not its pin", self.refused(f"@external/vellum-gpu-runtime/{'2' * 40}/gpu-runtime/include"))
+
+    def test_an_in_tree_include_that_climbs_out_is_refused(self) -> None:
+        self.assertIn("is not confined to its dependency",
+                      self.refused(f"@external/vellum-gpu-runtime/{self.PIN}/gpu-runtime/include/../../x"))
+
+    def test_an_in_tree_include_outside_the_interface_tree_is_refused(self) -> None:
+        self.assertIn("is outside vellum-gpu-runtime's interface tree",
+                      self.refused(f"@external/vellum-gpu-runtime/{self.PIN}/gpu-runtime/src"))
+
+    def test_an_external_include_with_no_prepared_source_is_refused(self) -> None:
+        self.assertIn("names a dependency with no prepared source",
+                      self.refused(f"@external/lonely/{self.PIN}/include"))
+
+    def test_an_external_include_no_closure_names_is_refused(self) -> None:
+        self.assertIn("is not at the root the closures pin", self.refused(f"@external/highway/{self.PIN}/hwy", deps={}))
+
+    def test_a_path_that_is_not_mirror_relative_is_refused(self) -> None:
+        for path in ("@other/include", "/etc/include", "core/../../outside"):
+            with self.subTest(path=path):
+                self.assertIn("is not a mirror-relative path", self.refused(path))
+
+    def test_a_mirror_directory_the_mirror_does_not_hold_is_refused(self) -> None:
+        self.assertIn("is not in the landed mirror", self.refused("core/absent/include"))
+
+
+class PlanTargetRefusalTest(unittest.TestCase):
+    """plan refuses a closure target it cannot package or prove."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = Fixture(Path(self.temporary.name))
+        self.target = self.fixture.closure["targets"][0]
+        mp.BUILD_INFO_INPUTS[EXPORT_ID] = {"version": "1.2.3"}
+
+    def tearDown(self) -> None:
+        mp.BUILD_INFO_INPUTS.pop(EXPORT_ID, None)
+        self.temporary.cleanup()
+
+    def assertRefused(self, fragment: str) -> None:
+        self.fixture.write_receipt()
+        with self.assertRaises(mp.PlanError) as caught:
+            self.fixture.plan()
+        self.assertIn(fragment, str(caught.exception))
+
+    def test_a_target_that_is_not_a_static_library_is_refused(self) -> None:
+        self.target["type"] = "EXECUTABLE"
+        self.assertRefused("foundation/pulp-runtime: only static mirrored targets are packaged")
+
+    def test_an_external_link_input_with_no_recipe_is_refused(self) -> None:
+        self.target["external_link_inputs"].append({"dependency": "openssl", "pin": "b" * 40})
+        self.assertRefused("has external link inputs with no recipe")
+
+    def test_a_source_the_landed_mirror_lacks_is_refused(self) -> None:
+        self.target["sources"].append("core/runtime/src/missing.cpp")
+        self.assertRefused("source core/runtime/src/missing.cpp is not in the landed mirror")
+
+    def test_a_generated_source_that_was_not_produced_is_refused(self) -> None:
+        self.target["sources"].append("@build/core/view/web_compat_preludes_gen.cpp")
+        self.assertRefused("generated source @build/core/view/web_compat_preludes_gen.cpp was not produced")
+
+    def test_a_target_two_units_both_describe_is_refused(self) -> None:
+        import copy
+        second = copy.deepcopy(self.fixture.closure)
+        relative = f"provenance/mirror/closures/{EXPORT_ID}/second.json"
+        self.fixture.write_receipt()
+        (self.fixture.repo / relative).write_text(json.dumps(second))
+        receipt_path = self.fixture.repo / f"provenance/mirror/receipts/{EXPORT_ID}.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["units"].append({**receipt["units"][0], "name": "second", "closure_manifest": relative,
+                                 "closure_sha256": mp.sha256_file(self.fixture.repo / relative)})
+        receipt_path.write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(mp.PlanError, "target pulp-runtime appears in two units"):
+            self.fixture.plan()
+
+    def test_a_choke_header_the_guard_cannot_carry_is_refused(self) -> None:
+        self.fixture.add_mirror_file("mirror/core/runtime/include/pulp/runtime/gpu_fwd.hpp",
+                                     b"namespace gpu_runtime { class GpuSurface; }\n")
+        self.assertRefused("needs #pragma once to carry the guard")
 
 
 if __name__ == "__main__":

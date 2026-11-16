@@ -428,7 +428,8 @@ def verify_against_source(files: dict[str, bytes], metadata: dict, repo: Path,
     require(files[NOTICE_MEMBER].decode("utf-8") == builder.dawn_notice(repo),
             "shipped notice differs from the one the source assembles")
     require(set(generated) == set(GENERATED), "regenerated package files are incomplete")
-    built_with = (metadata.get("toolchain") or {}).get("cmake")
+    toolchain = metadata.get("toolchain")
+    built_with = toolchain.get("cmake") if isinstance(toolchain, dict) else None
     require(built_with == cmake_version,
             f"artifact record says CMake {built_with} generated the package files, "
             f"not the CMake {cmake_version} the source pins")

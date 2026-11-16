@@ -353,13 +353,28 @@ function __createMockGPUCommandEncoder(init) {
 
 function __createMockGPUShaderModule(init) {
     init = init || {};
-    return {
+    var module = {
         _objectName: "GPUShaderModule",
         label: init.label || "",
         code: init.code || "",
+        _compilationMessages: [],
         getCompilationInfo: function() {
-            return Promise.resolve({ messages: [] });
+            return Promise.resolve({ messages: module._compilationMessages.slice() });
         }
+    };
+    return module;
+}
+
+// A GPUError-shaped value: `message` as WebGPU defines it, plus `diagnostics`,
+// the shader compiler messages (lineNum, linePos, offset, length) behind it.
+function __createGPUError(type, message, diagnostics) {
+    var name = type === "out-of-memory" ? "GPUOutOfMemoryError"
+        : type === "internal" ? "GPUInternalError" : "GPUValidationError";
+    return {
+        _objectName: name,
+        name: name,
+        message: message || "",
+        diagnostics: diagnostics || []
     };
 }
 
@@ -525,6 +540,29 @@ function __pickDeviceFeatures(adapter, descriptor) {
     return picked;
 }
 
+var __gpuBridgeDevices = [];
+
+// Delivers queued unclaimed native errors to the bridged devices' handlers.
+function __gpuDispatchUncaptured() {
+    if (typeof __gpuTakeUncapturedErrorsImpl !== "function") return;
+    var errors = __gpuTakeUncapturedErrorsImpl();
+    if (!errors || !errors.length) return;
+    errors.forEach(function(raw) {
+        __gpuBridgeDevices.slice().forEach(function(d) { d._dispatchUncaptured(raw); });
+    });
+}
+
+// Native device work runs inside these host calls; drain after each.
+["__gpuQueueSubmitImpl", "__gpuQueueDrawImpl", "__gpuQueueDrawBufferedImpl",
+ "__gpuComputeDispatchImpl", "__gpuValidateShaderModuleImpl"].forEach(function(name) {
+    var original = globalThis[name];
+    if (typeof original !== "function") return;
+    globalThis[name] = function() {
+        try { return original.apply(this, arguments); }
+        finally { __gpuDispatchUncaptured(); }
+    };
+});
+
 function __createMockGPUDevice(adapter, descriptor, init) {
     // third `init` arg carries the bridge descriptor returned by
     // `__describeNativeDeviceImpl`. When `init.nativeBridge` is true, the
@@ -568,7 +606,15 @@ function __createMockGPUDevice(adapter, descriptor, init) {
         return t;
     };
     device.createSampler = function(samplerDescriptor) { return __createMockGPUSampler(samplerDescriptor || {}); };
-    device.createShaderModule = function(shaderDescriptor) { return __createMockGPUShaderModule(shaderDescriptor || {}); };
+    device.createShaderModule = function(shaderDescriptor) {
+        var module = __createMockGPUShaderModule(shaderDescriptor || {});
+        if (device._nativeBridge && typeof __gpuValidateShaderModuleImpl === "function" &&
+            typeof module.code === "string" && module.code.length > 0) {
+            var report = __gpuValidateShaderModuleImpl(module.code);
+            if (report && report.messages) module._compilationMessages = report.messages;
+        }
+        return module;
+    };
     device.createBindGroupLayout = function(layoutDescriptor) { return __createMockGPUBindGroupLayout(layoutDescriptor || {}); };
     device.createBindGroup = function(bindGroupDescriptor) { return __createMockGPUBindGroup(bindGroupDescriptor || {}); };
     device.createPipelineLayout = function(layoutDescriptor) { return __createMockGPUPipelineLayout(layoutDescriptor || {}); };
@@ -604,15 +650,54 @@ function __createMockGPUDevice(adapter, descriptor, init) {
     };
     device.createCommandEncoder = function(commandDescriptor) { return __createMockGPUCommandEncoder(commandDescriptor || {}); };
     device.destroy = function() { device._destroyed = true; };
-    // Three.js WebGPUPipelineUtils calls pushErrorScope/popErrorScope
-    // around every pipeline create. The async-executor pattern swallows throws
-    // when these are missing, so a `TypeError: device.pushErrorScope is not a
-    // function` becomes a silently-empty mock canvas. Provide no-op error scopes
-    // (we don't surface bridge errors back to JS yet).
-    device.pushErrorScope = function(filter) { device._errorScopes.push({ filter: filter }); };
-    device.popErrorScope = function() { device._errorScopes.pop(); return Promise.resolve(null); };
-    device.addEventListener = function() {};
-    device.removeEventListener = function() {};
+    // Three.js WebGPUPipelineUtils calls pushErrorScope/popErrorScope around
+    // every pipeline create. On a native-bridge device the scope stack lives in
+    // the host: native device work runs inside Dawn scopes and routes what they
+    // catch to the innermost matching scope here, so popErrorScope resolves to
+    // the GPUError script caused (null when there was none). Without a native
+    // bridge there is no device work to fail, so a popped scope resolves null.
+    device.pushErrorScope = function(filter) {
+        filter = String(filter || "validation");
+        device._errorScopes.push({ filter: filter });
+        if (device._nativeBridge && typeof __gpuPushErrorScopeImpl === "function") {
+            __gpuPushErrorScopeImpl(filter);
+        }
+    };
+    device.popErrorScope = function() {
+        device._errorScopes.pop();
+        if (device._nativeBridge && typeof __gpuPopErrorScopeImpl === "function") {
+            var popped = __gpuPopErrorScopeImpl();
+            if (popped && popped.hasError) {
+                return Promise.resolve(__createGPUError(popped.type, popped.message, popped.diagnostics));
+            }
+        }
+        return Promise.resolve(null);
+    };
+    // `uncapturederror`: errors from native device work that no script error
+    // scope claimed, delivered as a GPUUncapturedErrorEvent-shaped object to
+    // `onuncapturederror` and to listeners. Native work runs inside the host
+    // call, so the queue is drained right after each such call.
+    device._listeners = { uncapturederror: [] };
+    device.onuncapturederror = null;
+    device.addEventListener = function(type, listener) {
+        var list = device._listeners[type];
+        if (list && typeof listener === "function" && list.indexOf(listener) < 0) list.push(listener);
+    };
+    device.removeEventListener = function(type, listener) {
+        var list = device._listeners[type];
+        var at = list ? list.indexOf(listener) : -1;
+        if (at >= 0) list.splice(at, 1);
+    };
+    device._dispatchUncaptured = function(raw) {
+        var event = {
+            type: "uncapturederror",
+            target: device,
+            error: __createGPUError(raw.type, raw.message, raw.diagnostics)
+        };
+        if (typeof device.onuncapturederror === "function") device.onuncapturederror(event);
+        device._listeners.uncapturederror.slice().forEach(function(l) { l(event); });
+    };
+    if (device._nativeBridge) __gpuBridgeDevices.push(device);
     return device;
 }
 

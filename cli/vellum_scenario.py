@@ -9,9 +9,10 @@ SCENARIO_SCHEMAS = {"vellum.scenario.v1", "vellum.scenario.v2"}
 SCENARIO_V2_ACTIONS = frozenset({
     "wait-for-idle", "press", "touch", "focus", "input", "key", "compose",
     "command", "service-result", "assert-text", "assert-accessibility",
-    "capture", "throw",
+    "capture", "throw", "advance",
 })
 MAX_SCENARIO_STEPS = 1000
+MAX_SCENARIO_ADVANCE_MS = 24 * 60 * 60 * 1000
 MAX_SCENARIO_TARGET_BYTES = 1024
 MAX_SCENARIO_INPUT_BYTES = 64 * 1024
 SUPPORTED_SCENARIO_KEYS = {
@@ -31,6 +32,29 @@ def _bounded(value: object, maximum: int, *, allow_empty: bool = False) -> bool:
         return len(value.encode("utf-8")) <= maximum
     except UnicodeEncodeError:
         return False
+
+
+def command_targets(scenario: dict[str, Any]) -> list[str]:
+    """The commands a scenario invokes, in step order."""
+    return [step["target"] for step in scenario.get("steps", [])
+            if isinstance(step, dict) and step.get("action") == "command"]
+
+
+def unproven_commands(scenario: dict[str, Any], proven: list[str]) -> list[str]:
+    """The scenario's command steps a host gave no proof for. `proven` names,
+    in order, each command whose handler the host ran and whose rendered tree
+    it saw change. A scenario passes only when the two lists are equal: a
+    command step that only found its command defined proves nothing."""
+    expected = command_targets(scenario)
+    if proven == expected:
+        return []
+    missing = list(expected)
+    for target in proven:
+        if target in missing:
+            missing.remove(target)
+    # Equal as sets but not as lists (reordered, repeated, or proof for a
+    # command the scenario never invokes): nothing is proven.
+    return missing or expected or [f"unexpected proof for {target}" for target in proven]
 
 
 def validate_scenario_document(scenario: dict[str, Any]) -> None:
@@ -72,6 +96,14 @@ def validate_scenario_document(scenario: dict[str, Any]) -> None:
         valid = False
         if action == "wait-for-idle":
             valid = set(step) == {"action"}
+        elif action == "advance":
+            valid = (
+                scenario["schema"] == "vellum.scenario.v2"
+                and set(step) == {"action", "ms"}
+                and isinstance(step.get("ms"), int)
+                and not isinstance(step["ms"], bool)
+                and 0 <= step["ms"] <= MAX_SCENARIO_ADVANCE_MS
+            )
         elif action == "capture":
             valid = set(step) in (
                 {"action"}, {"action", "name"}, {"action", "value"}

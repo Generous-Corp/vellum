@@ -3,6 +3,7 @@
 #import <Foundation/Foundation.h>
 #include <xlocale.h>
 
+#include <vellum/graphics/animation.hpp>
 #include <vellum/graphics/paint_command.hpp>
 
 #include <vellum/graphics/image_asset.hpp>
@@ -74,6 +75,7 @@ bool style_key_consumed(std::string_view type, std::string_view key, const Style
     if (key == "x" || key == "y") return !use.root;
     if (key == "opacity" || key == "transform") return true;
     if (key == "overflow" || key == "clipPath" || key == "isolation") return true;
+    if (key == "mixBlendMode") return true;
     // The root has no siblings to mask.
     if (key == "maskMode") return !use.root;
     if (use.clips_to_box && type != "path" &&
@@ -87,7 +89,7 @@ bool style_key_consumed(std::string_view type, std::string_view key, const Style
     }
     if (key == "padding" || key == "direction") return use.lays_out_children;
     if (key == "gap") return type == "stack" && use.lays_out_children;
-    if (key == "backgroundLinearGradient" || key == "boxShadow") return true;
+    if (key == "backgroundGradient" || key == "backgroundLinearGradient" || key == "boxShadow") return true;
     if (key == "backgroundColor") return !text;
     if (key == "borderRadius" || contains(kCornerRadiusKeys, key)) {
         return !text || use.paints_text_background;
@@ -211,15 +213,53 @@ bool parse_linear_gradient_value(
     }
     NSDictionary* source = raw;
     vellum::graphics::LinearGradient gradient;
+    if (id kind_value = source[@"kind"]; kind_value != nil) {
+        if (![kind_value isKindOfClass:NSString.class]) {
+            set_error(error, name + ".kind must be linear, radial, two-circle-radial or conic");
+            return false;
+        }
+        NSString* kind = kind_value;
+        if ([kind isEqualToString:@"radial"]) {
+            gradient.kind = vellum::graphics::GradientKind::radial;
+        } else if ([kind isEqualToString:@"two-circle-radial"]) {
+            gradient.kind = vellum::graphics::GradientKind::two_circle_radial;
+        } else if ([kind isEqualToString:@"conic"]) {
+            gradient.kind = vellum::graphics::GradientKind::conic;
+        } else if (![kind isEqualToString:@"linear"]) {
+            set_error(error, name + ".kind must be linear, radial, two-circle-radial or conic");
+            return false;
+        }
+    }
     if (!number_field(source, @"angle", 180.0F, gradient.angle_degrees,
             name + ".angle", error) ||
         !number_field(source, @"repeatLength", 0.0F, gradient.repeat_length,
             name + ".repeatLength", error)) {
         return false;
     }
-    if (gradient.repeat_length < 0.0F) {
-        set_error(error, name + ".repeatLength must be non-negative");
-        return false;
+    if (source[@"interpolation"] != nil) {
+        if (![source[@"interpolation"] isKindOfClass:NSString.class]) {
+            set_error(error, name + ".interpolation must be srgb, linear-srgb or oklab");
+            return false;
+        }
+        const std::string interpolation = cpp_string(source[@"interpolation"]);
+        if (interpolation == "srgb") {
+            gradient.interpolation = vellum::graphics::GradientInterpolation::srgb;
+        } else if (interpolation == "linear-srgb" || interpolation == "srgb-linear") {
+            gradient.interpolation = vellum::graphics::GradientInterpolation::linear_srgb;
+        } else if (interpolation == "oklab") {
+            gradient.interpolation = vellum::graphics::GradientInterpolation::oklab;
+        } else {
+            set_error(error, name + ".interpolation must be srgb, linear-srgb or oklab");
+            return false;
+        }
+    }
+    if (source[@"colorSpace"] != nil) {
+        if (![source[@"colorSpace"] isKindOfClass:NSString.class] ||
+            [source[@"colorSpace"] length] == 0U) {
+            set_error(error, name + ".colorSpace must be a non-empty string");
+            return false;
+        }
+        gradient.color_space = cpp_string(source[@"colorSpace"]);
     }
     if (source[@"repeating"] != nil &&
         CFGetTypeID((__bridge CFTypeRef)source[@"repeating"]) != CFBooleanGetTypeID()) {
@@ -227,6 +267,78 @@ bool parse_linear_gradient_value(
         return false;
     }
     gradient.repeating = [source[@"repeating"] boolValue];
+    if (id spread_value = source[@"spread"]; spread_value == nil) {
+        gradient.spread = gradient.repeating ? vellum::graphics::GradientSpread::repeat
+                                             : vellum::graphics::GradientSpread::pad;
+    } else {
+        if (![spread_value isKindOfClass:NSString.class]) {
+            set_error(error, name + ".spread must be pad, repeat or reflect");
+            return false;
+        }
+        NSString* spread = spread_value;
+        if ([spread isEqualToString:@"repeat"]) {
+            gradient.spread = vellum::graphics::GradientSpread::repeat;
+        } else if ([spread isEqualToString:@"reflect"]) {
+            gradient.spread = vellum::graphics::GradientSpread::reflect;
+        } else if ([spread isEqualToString:@"pad"]) {
+            gradient.spread = vellum::graphics::GradientSpread::pad;
+        } else {
+            set_error(error, name + ".spread must be pad, repeat or reflect");
+            return false;
+        }
+        if (source[@"repeating"] != nil &&
+            gradient.repeating != (gradient.spread != vellum::graphics::GradientSpread::pad)) {
+            set_error(error, name + ".repeating contradicts " + name +
+                                 ".spread; repeating is true exactly when spread is repeat or "
+                                 "reflect");
+            return false;
+        }
+    }
+    if (!number_field(source, @"centerX", 0.5F, gradient.center_x, name + ".centerX", error) ||
+        !number_field(source, @"centerY", 0.5F, gradient.center_y, name + ".centerY", error) ||
+        !number_field(source, @"radiusX", 0.0F, gradient.radius_x, name + ".radiusX", error) ||
+        !number_field(source, @"radiusY", 0.0F, gradient.radius_y, name + ".radiusY", error) ||
+        !number_field(source, @"focalX", 0.5F, gradient.focal_x, name + ".focalX", error) ||
+        !number_field(source, @"focalY", 0.5F, gradient.focal_y, name + ".focalY", error) ||
+        !number_field(source, @"startRadius", 0.0F, gradient.start_radius,
+                      name + ".startRadius", error) ||
+        !number_field(source, @"endRadius", 0.5F, gradient.end_radius, name + ".endRadius",
+                      error)) {
+        return false;
+    }
+    {
+        using vellum::graphics::GradientKind;
+        const auto kind = gradient.kind;
+        const bool angled = kind == GradientKind::linear || kind == GradientKind::conic;
+        const bool centred = kind != GradientKind::linear;
+        const bool focal = kind == GradientKind::two_circle_radial;
+        const std::pair<NSString*, bool> kind_fields[]{
+            {@"angle", angled},   {@"centerX", centred}, {@"centerY", centred},
+            {@"focalX", focal},   {@"focalY", focal},
+        };
+        for (const auto& [key, applies] : kind_fields) {
+            if (!applies && source[key] != nil) {
+                set_error(error, name + "." + cpp_string(key) + " does not apply to a " +
+                                     (kind == GradientKind::linear       ? "linear"
+                                      : kind == GradientKind::radial     ? "radial"
+                                      : kind == GradientKind::conic      ? "conic"
+                                                                         : "two-circle-radial") +
+                                     " gradient");
+                return false;
+            }
+        }
+    }
+    const std::pair<float, const char*> non_negative[]{
+        {gradient.repeat_length, ".repeatLength"}, {gradient.radius_x, ".radiusX"},
+        {gradient.radius_y, ".radiusY"},           {gradient.start_radius, ".startRadius"},
+        {gradient.end_radius, ".endRadius"},
+    };
+    for (const auto& [value, field] : non_negative) {
+        if (value < 0.0F) {
+            set_error(error, name + field + " must be non-negative");
+            return false;
+        }
+    }
     NSArray* stops = array_or_empty(source[@"stops"]);
     if (stops.count < 2U) {
         set_error(error, name + " requires at least two stops");
@@ -261,8 +373,9 @@ bool parse_linear_gradient(
     NSDictionary* style,
     std::vector<vellum::graphics::LinearGradient>& output,
     std::string* error) {
-    return parse_linear_gradient_value(
-        style[@"backgroundLinearGradient"], "backgroundLinearGradient", output, error);
+    id raw = style[@"backgroundGradient"] ?: style[@"backgroundLinearGradient"];
+    return parse_linear_gradient_value(raw, raw == style[@"backgroundGradient"] ?
+        "backgroundGradient" : "backgroundLinearGradient", output, error);
 }
 
 bool parse_box_shadow(
@@ -545,7 +658,38 @@ struct MaterializeContext final {
     std::vector<TextInputControl>* text_inputs = nullptr;
     std::vector<AccessibilityNode>* accessibility_nodes = nullptr;
     std::vector<LoweringDiagnostic>* diagnostics = nullptr;
+    std::vector<NodeRecord>* node_records = nullptr;
 };
+
+constexpr std::size_t kMaximumSourceFileBytes = 4096U;
+constexpr std::size_t kMaximumAnchorBytes = 1024U;
+
+// Reads the optional `source` ({file, line, column}) and `anchor` fields of an
+// authored node. Malformed values are ignored: source is diagnostic metadata
+// and never changes what is drawn.
+NodeSource read_node_source(NSDictionary* source) {
+    NodeSource result;
+    if ([source[@"anchor"] isKindOfClass:NSString.class]) {
+        std::string anchor = cpp_string(source[@"anchor"]);
+        if (anchor.size() <= kMaximumAnchorBytes) result.anchor = std::move(anchor);
+    }
+    if (![source[@"sourceLocation"] isKindOfClass:NSDictionary.class]) return result;
+    NSDictionary* location = source[@"sourceLocation"];
+    if (![location[@"file"] isKindOfClass:NSString.class]) return result;
+    std::string file = cpp_string(location[@"file"]);
+    if (file.empty() || file.size() > kMaximumSourceFileBytes) return result;
+    result.file = std::move(file);
+    const auto position = [&](NSString* key) {
+        id raw = location[key];
+        if (![raw isKindOfClass:NSNumber.class] ||
+            CFGetTypeID((__bridge CFTypeRef)raw) == CFBooleanGetTypeID()) return 0;
+        const double value = [raw doubleValue];
+        return value >= 0.0 && value <= 1.0e9 ? static_cast<int>(value) : 0;
+    };
+    result.line = position(@"line");
+    result.column = position(@"column");
+    return result;
+}
 
 template <typename Consumed>
 void report_dropped_style(
@@ -667,8 +811,9 @@ std::optional<std::size_t> keyword(id value, const std::array<std::string_view, 
     return static_cast<std::size_t>(found - names.begin());
 }
 
-constexpr std::array<std::string_view, 19> kPathAttributes{
-    "type", "id", "children", "style", "events", "accessibilityLabel", "accessibilityValue",
+constexpr std::array<std::string_view, 20> kPathAttributes{
+    "type", "id", "children", "style", "events", "tracks", "accessibilityLabel",
+    "accessibilityValue",
     "accessibilityRole", "accessibilityState", "d", "fillRule", "fill", "stroke", "strokeWidth",
     "strokeLineJoin", "strokeLineCap", "strokeMiterLimit", "strokeDasharray", "strokeDashoffset",
 };
@@ -743,9 +888,18 @@ bool materialize_path(
     }
     auto& stroke = path.stroke;
     if (id paint = source[@"stroke"]; paint != nil && ![paint isEqual:@"none"]) {
-        const auto color = parse_color(paint);
-        if (!color) return reject("stroke", "stroke must be a colour or none");
-        stroke.color = *color;
+        if ([paint isKindOfClass:NSDictionary.class]) {
+            std::vector<vellum::graphics::LinearGradient> gradients;
+            std::string why;
+            if (!parse_linear_gradient_value(paint, "stroke", gradients, &why)) return reject("stroke", why);
+            if (gradients.size() != 1U) return reject("stroke", "requires one gradient");
+            stroke.gradient = gradients.front();
+            stroke.color = none;
+        } else {
+            const auto color = parse_color(paint);
+            if (!color) return reject("stroke", "stroke must be a colour or none");
+            stroke.color = *color;
+        }
     }
     stroke.width = 1.0F;
     const auto number = [&](NSString* key, float& value) {
@@ -872,7 +1026,227 @@ bool materialize_image(
 // and image nodes draw their content as their own paint, so theirs is clipped.
 // `clipPath` is SVG path data in the box's coordinates that clips the node
 // and its subtree and wins over `overflow`, `maskMode` marks the node as a
-// mask for its siblings, and `isolation: isolate` forces a group.
+// mask for its siblings, and `isolation: isolate` forces a group. `mixBlendMode`
+// blends the node's group with what lies beneath it, in any spelling
+// `parse_blend_mode` knows. A mask is coverage, not paint, so a mask node takes
+// no blend mode other than `normal`.
+// Animation tracks: `tracks` on a node is an array of
+// { property, index?, stop?, keyframes: [{ time, value, easing? }] }. A colour
+// property takes a "#rrggbb" or "#rrggbbaa" value; every other property takes
+// a number. Easing is "linear", a CSS keyword ("ease", "ease-in", "ease-out",
+// "ease-in-out"), or an object with `type` "cubicBezier" (x1, y1, x2, y2),
+// "steps" (steps, position "start", "end", "none" or "both") or "spring"
+// (stiffness, damping, mass, velocity).
+constexpr std::size_t kMaximumTracksPerNode = 32U;
+constexpr std::size_t kMaximumKeyframesPerTrack = 256U;
+
+std::optional<vellum::graphics::AnimatedProperty> animated_property(id value) {
+    using vellum::graphics::AnimatedProperty;
+    if (![value isKindOfClass:NSString.class]) return std::nullopt;
+    static const std::array<std::pair<std::string_view, AnimatedProperty>, 11> names{{
+        {"opacity", AnimatedProperty::opacity},
+        {"translateX", AnimatedProperty::translate_x},
+        {"translateY", AnimatedProperty::translate_y},
+        {"scaleX", AnimatedProperty::scale_x},
+        {"scaleY", AnimatedProperty::scale_y},
+        {"rotation", AnimatedProperty::rotation_degrees},
+        {"fill", AnimatedProperty::fill},
+        {"strokeColor", AnimatedProperty::stroke_color},
+        {"shadowColor", AnimatedProperty::shadow_color},
+        {"gradientStopColor", AnimatedProperty::gradient_stop_color},
+        {"textRunColor", AnimatedProperty::text_run_color},
+    }};
+    const std::string name = cpp_string(value);
+    for (const auto& [candidate, property] : names) {
+        if (candidate == name) return property;
+    }
+    return std::nullopt;
+}
+
+// The first key of `source` outside `allowed`, or empty.
+template <std::size_t Size>
+std::string unknown_key(NSDictionary* source, const std::array<std::string_view, Size>& allowed) {
+    NSArray* keys = [source.allKeys sortedArrayUsingSelector:@selector(compare:)];
+    for (id key in keys) {
+        const std::string name = [key isKindOfClass:NSString.class] ? cpp_string(key) : "?";
+        if (!contains(allowed, name)) return name;
+    }
+    return {};
+}
+
+bool index_field(NSDictionary* source, NSString* key, std::uint32_t& output) {
+    id raw = source[key];
+    output = 0U;
+    if (raw == nil) return true;
+    float value = 0.0F;
+    if (!finite_number(raw, value) || value < 0.0F || value > 65535.0F ||
+        value != std::floor(value)) {
+        return false;
+    }
+    output = static_cast<std::uint32_t>(value);
+    return true;
+}
+
+bool parse_easing(id raw, vellum::graphics::Easing& easing, std::string& reason) {
+    using vellum::graphics::EasingKind;
+    easing = {};
+    if (raw == nil) return true;
+    if ([raw isKindOfClass:NSString.class]) {
+        const std::string name = cpp_string(raw);
+        const auto bezier = [&](float x1, float y1, float x2, float y2) {
+            easing = {.kind = EasingKind::cubic_bezier, .x1 = x1, .y1 = y1, .x2 = x2, .y2 = y2};
+            return true;
+        };
+        if (name == "linear") return true;
+        if (name == "ease") return bezier(0.25F, 0.1F, 0.25F, 1.0F);
+        if (name == "ease-in") return bezier(0.42F, 0.0F, 1.0F, 1.0F);
+        if (name == "ease-out") return bezier(0.0F, 0.0F, 0.58F, 1.0F);
+        if (name == "ease-in-out") return bezier(0.42F, 0.0F, 0.58F, 1.0F);
+        reason = "easing " + name + " is not linear, ease, ease-in, ease-out or ease-in-out";
+        return false;
+    }
+    if (![raw isKindOfClass:NSDictionary.class]) {
+        reason = "easing must be a keyword or an object";
+        return false;
+    }
+    NSDictionary* source = raw;
+    const std::string type =
+        [source[@"type"] isKindOfClass:NSString.class] ? cpp_string(source[@"type"]) : "";
+    const std::string extra = type == "cubicBezier"
+        ? unknown_key(source, std::array<std::string_view, 5>{"type", "x1", "y1", "x2", "y2"})
+        : type == "steps"
+        ? unknown_key(source, std::array<std::string_view, 3>{"type", "steps", "position"})
+        : unknown_key(source, std::array<std::string_view, 5>{
+              "type", "stiffness", "damping", "mass", "velocity"});
+    if (!extra.empty() &&
+        (type == "cubicBezier" || type == "steps" || type == "spring")) {
+        reason = type + " easing does not take " + extra;
+        return false;
+    }
+    std::string* none = nullptr;
+    if (type == "cubicBezier") {
+        easing.kind = EasingKind::cubic_bezier;
+        if (!finite_number(source[@"x1"], easing.x1) || !finite_number(source[@"y1"], easing.y1) ||
+            !finite_number(source[@"x2"], easing.x2) || !finite_number(source[@"y2"], easing.y2)) {
+            reason = "cubicBezier easing needs finite x1, y1, x2 and y2";
+            return false;
+        }
+        return true;
+    }
+    if (type == "steps") {
+        easing.kind = EasingKind::steps;
+        float steps = 0.0F;
+        if (!finite_number(source[@"steps"], steps) || steps < 1.0F || steps > 65535.0F ||
+            steps != std::floor(steps)) {
+            reason = "steps easing needs a whole number of steps from 1 to 65535";
+            return false;
+        }
+        easing.steps = static_cast<std::uint32_t>(steps);
+        const auto position = source[@"position"] == nil
+            ? std::optional<std::size_t>{1U}
+            : keyword(source[@"position"],
+                      std::array<std::string_view, 4>{"start", "end", "none", "both"});
+        if (!position) {
+            reason = "steps position must be start, end, none or both";
+            return false;
+        }
+        easing.step_position = static_cast<vellum::graphics::StepPosition>(*position);
+        return true;
+    }
+    if (type == "spring") {
+        easing.kind = EasingKind::spring;
+        if (!number_field(source, @"stiffness", 100.0F, easing.stiffness, "spring.stiffness",
+                          none) ||
+            !number_field(source, @"damping", 10.0F, easing.damping, "spring.damping", none) ||
+            !number_field(source, @"mass", 1.0F, easing.mass, "spring.mass", none) ||
+            !number_field(source, @"velocity", 0.0F, easing.initial_velocity,
+                          "spring.velocity", none)) {
+            reason = "spring easing constants must be finite numbers";
+            return false;
+        }
+        return true;
+    }
+    reason = "easing type must be cubicBezier, steps or spring";
+    return false;
+}
+
+bool parse_tracks(id raw, const std::string& identity, vellum::graphics::SceneNode& output,
+                  std::string* error) {
+    if (raw == nil) return true;
+    const auto fail = [&](const std::string& message) {
+        set_error(error, "node " + identity + " tracks: " + message);
+        return false;
+    };
+    if (![raw isKindOfClass:NSArray.class]) return fail("must be an array");
+    NSArray* tracks = raw;
+    if (tracks.count > kMaximumTracksPerNode) return fail("a node has at most 32 tracks");
+    for (id track_value in tracks) {
+        if (![track_value isKindOfClass:NSDictionary.class]) return fail("a track must be an object");
+        NSDictionary* source = track_value;
+        vellum::graphics::AnimationTrack track;
+        const auto property = animated_property(source[@"property"]);
+        if (!property) return fail("a track has an unknown property");
+        track.property = *property;
+        using vellum::graphics::AnimatedProperty;
+        const bool indexed = track.property == AnimatedProperty::shadow_color ||
+                             track.property == AnimatedProperty::gradient_stop_color ||
+                             track.property == AnimatedProperty::text_run_color;
+        const bool stopped = track.property == AnimatedProperty::gradient_stop_color;
+        if (const auto extra = unknown_key(source, std::array<std::string_view, 4>{
+                "property", "index", "stop", "keyframes"});
+            !extra.empty() || (!indexed && source[@"index"] != nil) ||
+            (!stopped && source[@"stop"] != nil)) {
+            return fail("the " + cpp_string(source[@"property"]) + " track does not take " +
+                        (!extra.empty() ? extra : source[@"index"] != nil && !indexed
+                                                      ? std::string("index")
+                                                      : std::string("stop")));
+        }
+        if (!index_field(source, @"index", track.index) ||
+            !index_field(source, @"stop", track.stop)) {
+            return fail("index and stop must be whole numbers from 0 to 65535");
+        }
+        if (![source[@"keyframes"] isKindOfClass:NSArray.class]) {
+            return fail("a track needs a keyframes array");
+        }
+        NSArray* keyframes = source[@"keyframes"];
+        if (keyframes.count > kMaximumKeyframesPerTrack) {
+            return fail("a track has at most 256 keyframes");
+        }
+        const bool color = vellum::graphics::is_color_property(track.property);
+        for (id key_value in keyframes) {
+            if (![key_value isKindOfClass:NSDictionary.class]) {
+                return fail("a keyframe must be an object");
+            }
+            NSDictionary* key = key_value;
+            if (const auto extra = unknown_key(
+                    key, std::array<std::string_view, 3>{"time", "value", "easing"});
+                !extra.empty()) {
+                return fail("a keyframe does not take " + extra);
+            }
+            vellum::graphics::AnimationKeyframe keyframe;
+            float time = 0.0F;
+            if (!finite_number(key[@"time"], time)) return fail("a keyframe needs a finite time");
+            keyframe.time = [static_cast<NSNumber*>(key[@"time"]) doubleValue];
+            if (color) {
+                const auto parsed = parse_color(key[@"value"]);
+                if (!parsed) return fail("a colour keyframe value must be #rrggbb or #rrggbbaa");
+                keyframe.color = *parsed;
+            } else if (!finite_number(key[@"value"], keyframe.value)) {
+                return fail("a keyframe value must be a finite number");
+            }
+            std::string reason;
+            if (!parse_easing(key[@"easing"], keyframe.easing, reason)) return fail(reason);
+            track.keyframes.push_back(keyframe);
+        }
+        output.tracks.push_back(std::move(track));
+    }
+    vellum::graphics::SceneNode own = output;
+    own.children.clear();
+    std::string reason;
+    if (vellum::graphics::find_invalid_tracks(own, reason) != nullptr) return fail(reason);
+    return true;
+}
+
 bool parse_grouping(
     NSDictionary* style, const std::string& identity, const StyleUse& use,
     MaterializeContext& context, vellum::graphics::SceneNode& output, std::string* error) {
@@ -953,6 +1327,16 @@ bool parse_grouping(
         const auto value = keyword(isolation, std::array<std::string_view, 2>{"auto", "isolate"});
         if (!value) return reject("isolation", "must be auto or isolate");
         output.isolate = *value == 1U;
+    }
+    if (id blend = style[@"mixBlendMode"]; blend != nil) {
+        const auto mode = [blend isKindOfClass:NSString.class]
+            ? vellum::graphics::parse_blend_mode(cpp_string(blend))
+            : std::nullopt;
+        if (!mode) return reject("mixBlendMode", "must be a blend mode name");
+        if (output.mask && *mode != vellum::graphics::BlendMode::normal) {
+            return reject("mixBlendMode", "cannot apply to a mask");
+        }
+        output.blend_mode = *mode;
     }
     return true;
 }
@@ -1113,6 +1497,8 @@ bool materialize_node(
     }
     const vellum::graphics::Rect absolute_box{
         absolute_x + proposed.x, absolute_y + proposed.y, proposed.width, proposed.height};
+    context.node_records->push_back(
+        {identity, type_name, absolute_box, read_node_source(source)});
     vellum::graphics::Affine2D node_transform = parent_transform;
     if (output.transform) {
         node_transform = vellum::graphics::concat(parent_transform, vellum::graphics::concat(
@@ -1423,7 +1809,7 @@ bool materialize_node(
         output.children.push_back(std::move(child_output));
         if (is_stack) cursor += (horizontal ? width : height) + gap;
     }
-    return true;
+    return parse_tracks(source[@"tracks"], identity, output, error);
 }
 
 }  // namespace
@@ -1476,6 +1862,7 @@ bool materialize_rendered_tree(
         .text_inputs = &candidate.text_inputs,
         .accessibility_nodes = &candidate.accessibility_nodes,
         .diagnostics = &candidate.diagnostics,
+        .node_records = &candidate.nodes,
     };
     if (!materialize_node(
             tree, {0.0F, 0.0F, width, height}, 0.0F, 0.0F, vellum::graphics::Affine2D{}, 0U,

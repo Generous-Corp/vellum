@@ -28,6 +28,10 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_release_canary.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_sdk_release_draft_lookup.py",
         "isolated": true
       },
@@ -117,6 +121,14 @@
       },
       {
         "script": "scripts/check_renderer_lock.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_check_threejs_payload.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/check_threejs_payload.py",
         "isolated": true
       },
       {
@@ -215,6 +227,12 @@
         "script": "tools/parity/test_r10_delta.py"
       },
       {
+        "script": "tools/visual/tests/test_differ.py"
+      },
+      {
+        "script": "tools/visual/tests/test_runner.py"
+      },
+      {
         "script": "scripts/test_readme_exec.py"
       },
       {
@@ -230,7 +248,17 @@
         "script": "scripts/readme_lint.py"
       },
       {
+        "script": "scripts/test_check_plugin_editor_async.py"
+      },
+      {
+        "script": "scripts/check_plugin_editor_async.py"
+      },
+      {
         "script": "scripts/test_prose_lint.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_gates.py",
         "isolated": true
       },
       {
@@ -253,6 +281,9 @@
         "script": "scripts/test_select_reusable_gpu_proof.py"
       },
       {
+        "script": "scripts/test_select_reusable_merge_group_proof.py"
+      },
+      {
         "script": "scripts/test_classify_gpu_proof.py"
       },
       {
@@ -264,7 +295,19 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_check_threejs_payload.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/check_threejs_payload.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_verify_gpu_runtime_artifact.py",
+        "isolated": true
+      },
+      {
+        "script": "scripts/test_cancel_destroyed_queue_proofs.py",
         "isolated": true
       },
       {
@@ -331,11 +374,19 @@
           "--output",
           "$RUNNER_TEMP/provenance-report.json"
         ]
+      },
+      {
+        "script": "scripts/test_embed_wgsl.py",
+        "isolated": true
       }
     ]
   },
   "elsewhere": {
     ".agents/skills/pulp-vellum-change-routing/scripts/test_route_change.py": "workflow:provenance.yml",
+    "apps/app-host/test_agent_workflow.py": "cmake:apps/app-host/CMakeLists.txt",
+    "apps/app-host/test_design_anchor_dump.py": "cmake:apps/app-host/CMakeLists.txt",
+    "apps/app-host/test_html_import_geometry.py": "cmake:apps/app-host/CMakeLists.txt",
+    "apps/app-host/test_manual_clock_capture.py": "cmake:apps/app-host/CMakeLists.txt",
     "apps/app-host/test_phase3_scenario.py": "cmake:apps/app-host/CMakeLists.txt",
     "apps/app-host/test_state_persistence.py": "cmake:apps/app-host/CMakeLists.txt",
     "apps/app-host/test_text_semantics.py": "cmake:apps/app-host/CMakeLists.txt",

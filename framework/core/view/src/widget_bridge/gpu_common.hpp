@@ -2,6 +2,8 @@
 
 #include <vellum/view/widget_bridge.hpp>
 
+#include "gpu_error_scopes.hpp"
+
 #ifdef PULP_HAS_SKIA
 #include "webgpu/webgpu_cpp.h"
 #endif
@@ -64,6 +66,7 @@ struct WidgetBridge::NativeGpuBridgeState {
     std::unordered_map<std::string, CanvasContextState> canvases;
     std::unordered_map<std::string, TextureState> textures;
     uint64_t next_texture_id = 1;
+    detail::ScriptErrorScopes error_scopes;
 };
 
 } // namespace vellum::view

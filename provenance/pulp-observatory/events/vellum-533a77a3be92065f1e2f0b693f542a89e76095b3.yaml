@@ -1,0 +1,57 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-14T06:44:20Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-533a77a3be92065f1e2f0b693f542a89e76095b3",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/paint_command.hpp",
+    "graphics/include/vellum/graphics/scene.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/src/rendered_tree_materializer.mm",
+    "graphics/include/vellum/graphics/paint_command.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/src/damage.cpp",
+    "graphics/src/layer_cache.cpp",
+    "graphics/src/paint_command.cpp",
+    "graphics/src/skia_dawn_surface.mm",
+    "graphics/tests/grouping_test.cpp",
+    "graphics/tests/paint_command_test.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "2f41710c93e9d3b98b76ca91687e31536258b54b",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "75f009fc9790e0722142539e93611d8d44d76346",
+    "to_commit": "e251059af385fa381bdc6cb33d1a0a92752690e7"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "533a77a3be92065f1e2f0b693f542a89e76095b3",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
