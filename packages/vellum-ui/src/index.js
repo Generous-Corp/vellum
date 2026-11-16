@@ -5,6 +5,7 @@ export {
     Fragment,
     Image,
     Path,
+    Plot,
     Stack,
     Text,
     TextRun,

@@ -17,6 +17,8 @@
 #include <vellum/view/js_engine.hpp>
 
 #include <cstdio>
+#include <optional>
+#include <string_view>
 #include <memory>
 #include <string>
 
@@ -99,6 +101,51 @@ FRAMEWORK_TEST(v8_and_skia_icu_share_the_process) {
     CHECK(js_string(*engine, "/\\p{Lu}/u.test('\\u00c5') && 'e\\u0301'.normalize('NFC') === '\\u00e9'") == "true");
     CHECK(wrapped_lines() == before);
     CHECK(js_string(*engine, "'\\u0130'.toLowerCase().length") == "2");
+}
+
+// An import the resolver cannot satisfy reports a JS error through the
+// completion handler; the process keeps running.
+FRAMEWORK_TEST(v8_missing_import_reports_an_error_instead_of_crashing) {
+    auto engine = view::create_js_engine(view::JsEngineType::v8);
+    CHECK(engine != nullptr);
+    if (!engine)
+        return;
+    int completions = 0;
+    std::string error;
+    engine->run_module("import { value } from './missing.js';\nglobalThis.imported = value;",
+                       [](std::string_view) -> std::optional<std::string> { return std::nullopt; },
+                       [&](const std::string& message, const choc::value::Value&) {
+                           ++completions;
+                           error = message;
+                       });
+    CHECK(completions == 1);
+    CHECK(error.find("Cannot find module './missing.js'") != std::string::npos);
+    // The engine is still usable after the failed import.
+    CHECK(js_string(*engine, "1 + 1") == "2");
+}
+
+// Positive control: a resolvable relative import evaluates and its export
+// reaches the importing module.
+FRAMEWORK_TEST(v8_resolved_import_still_works) {
+    auto engine = view::create_js_engine(view::JsEngineType::v8);
+    CHECK(engine != nullptr);
+    if (!engine)
+        return;
+    int completions = 0;
+    std::string error = "unset";
+    engine->run_module("import { value } from './dep.js';\nglobalThis.imported = value * 2;",
+                       [](std::string_view path) -> std::optional<std::string> {
+                           if (path == "./dep.js")
+                               return std::string("export const value = 21;");
+                           return std::nullopt;
+                       },
+                       [&](const std::string& message, const choc::value::Value&) {
+                           ++completions;
+                           error = message;
+                       });
+    CHECK(completions == 1);
+    CHECK(error.empty());
+    CHECK(js_string(*engine, "globalThis.imported") == "42");
 }
 
 } // namespace

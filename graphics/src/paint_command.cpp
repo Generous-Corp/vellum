@@ -2,6 +2,7 @@
 
 #include <vellum/graphics/animation.hpp>
 #include <vellum/graphics/image_asset.hpp>
+#include <vellum/graphics/token_receipts.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -225,6 +226,29 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
             .corner_radii = radii,
             .image = node.image,
             .image_asset = node.image ? images.find(node.image->content_hash) : nullptr,
+        });
+    } else if (node.kind == SceneNode::Kind::plot && node.plot) {
+        // A gradient background is drawn as a rectangle behind the plot, which
+        // then paints only its samples.
+        const bool gradient = !node.fill_gradients.empty();
+        if (gradient) {
+            output.push_back({
+                .kind = PaintCommand::Kind::rectangle,
+                .node_id = node.id + "/background",
+                .bounds = absolute,
+                .fill = node.fill,
+                .fill_gradients = node.fill_gradients,
+                .transform = transform,
+                .plot_background = true,
+            });
+        }
+        output.push_back({
+            .kind = PaintCommand::Kind::plot,
+            .node_id = node.id,
+            .bounds = absolute,
+            .fill = gradient ? Color::rgba(0.0F, 0.0F, 0.0F, 0.0F) : node.fill,
+            .transform = transform,
+            .plot = node.plot,
         });
     } else if (node.kind == SceneNode::Kind::mesh && node.mesh) {
         output.push_back({
@@ -474,6 +498,7 @@ std::vector<PaintCommand> make_paint_commands(
     if (!scene_version_is_supported(scene.scene_version)) return output;
     if (!scene_fields_match_version(scene)) return output;
     if (scene.root.mask) return output;
+    if (find_invalid_token_reference(scene)) return output;
     if (scene_has_tracks(scene)) {
         const Scene evaluated = evaluate_tracks(scene);
         append_node(ImageAssetIndex(evaluated), evaluated.root, 0.0F, 0.0F, Affine2D{}, output,
@@ -486,6 +511,18 @@ std::vector<PaintCommand> make_paint_commands(
         return output;
     }
     append_node(ImageAssetIndex(scene), scene.root, 0.0F, 0.0F, Affine2D{}, output, ranges);
+    return output;
+}
+
+std::vector<PaintCommand> make_evaluated_paint_commands(
+    const Scene& evaluated, std::vector<PaintCommandRange>* ranges) {
+    std::vector<PaintCommand> output;
+    if (ranges != nullptr) ranges->clear();
+    if (!scene_version_is_supported(evaluated.scene_version)) return output;
+    if (!scene_fields_match_version(evaluated)) return output;
+    if (evaluated.root.mask) return output;
+    append_node(ImageAssetIndex(evaluated), evaluated.root, 0.0F, 0.0F, Affine2D{}, output,
+                ranges);
     return output;
 }
 
@@ -543,95 +580,62 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
     if (!scene_version_is_supported(scene.scene_version)) {
         return refuse(scene.root.id, "scene version " + version + " is not supported");
     }
-    if (const auto* node = find_version_mismatch(scene); node != nullptr) {
-        if (!is_known_kind(node->kind)) {
-            return refuse(node->id, "node " + node->id + " has a kind this build does not know");
-        }
-        if (!is_known_blend_mode(node->blend_mode)) {
+    if (const auto mismatch = find_scene_version_mismatch(scene); mismatch) {
+        const auto& node = *mismatch->node;
+        if (mismatch->introduced == 0U && mismatch->property == "blend_mode") {
             output.push_back({
                 .severity = LoweringDiagnostic::Severity::error,
                 .disposition = LoweringDiagnostic::Disposition::unsupported,
                 .code = std::string(kSceneVersionMismatchCode),
-                .node_id = node->id,
+                .node_id = node.id,
                 .property = "blendMode",
-                .message = "node " + node->id + " has a blend mode this build does not know",
+                .message = "node " + node.id + " has a blend mode this build does not know",
             });
             return output;
         }
-        // Name the field or kind the scene's version is too old for; a node
-        // can carry several, and only the oldest one its version lacks is
-        // the one `find_version_mismatch` found it by.
-        const auto needs = [&](std::uint32_t introduced) {
-            return scene.scene_version < introduced;
-        };
-        const bool compositing = needs(2U) && uses_version_2_fields(*node);
-        if (!compositing && needs(4U) && node->kind == SceneNode::Kind::image) {
-            return refuse(node->id, "scene version " + version +
-                                        " cannot carry the image node " + node->id);
+        if (mismatch->introduced == 0U) {
+            return refuse(node.id, "node " + node.id + " has a kind this build does not know");
         }
-        if (!compositing && needs(3U) && node->kind == SceneNode::Kind::path) {
-            return refuse(node->id, "scene version " + version +
-                                        " cannot carry the path node " + node->id);
-        }
-        if (!compositing && needs(5U) && uses_version_5_fields(*node)) {
-            output.push_back({
-                .severity = LoweringDiagnostic::Severity::error,
-                .disposition = LoweringDiagnostic::Disposition::unsupported,
-                .code = std::string(kSceneVersionMismatchCode),
-                .node_id = node->id,
-                .property = node->clip ? "clip" : node->mask ? "mask" : "isolate",
-                .message = "scene version " + version +
-                           " cannot carry the clip, mask, or isolation at " + node->id,
-            });
-            return output;
-        }
-        if (!compositing && needs(6U) && uses_version_6_fields(*node)) {
-            output.push_back({
-                .severity = LoweringDiagnostic::Severity::error,
-                .disposition = LoweringDiagnostic::Disposition::unsupported,
-                .code = std::string(kSceneVersionMismatchCode),
-                .node_id = node->id,
-                .property = "blendMode",
-                .message = "scene version " + version + " cannot carry the blend mode at " +
-                           node->id,
-            });
-            return output;
-        }
-        if (!compositing && needs(8U) && node_own_gradient_uses_version_8(*node)) {
-            return refuse(node->id, "scene version " + version +
-                                  " cannot carry gradient vocabulary at " + node->id);
-        }
-        if (!compositing && needs(10U) && uses_version_10_fields(*node)) {
-            output.push_back({
-                .severity = LoweringDiagnostic::Severity::error,
-                .disposition = LoweringDiagnostic::Disposition::unsupported,
-                .code = std::string(kSceneVersionMismatchCode),
-                .node_id = node->id,
-                .property = "effects",
-                .message = "scene version " + version + " cannot carry the effects at " + node->id,
-            });
-            return output;
-        }
-        if (!compositing && needs(11U) && uses_version_11_fields(*node)) {
-            output.push_back({
-                .severity = LoweringDiagnostic::Severity::error,
-                .disposition = LoweringDiagnostic::Disposition::unsupported,
-                .code = std::string(kSceneVersionMismatchCode),
-                .node_id = node->id,
-                .property = "tracks",
-                .message = "scene version " + version + " cannot carry the animation tracks at " +
-                           node->id,
-            });
-            return output;
+        std::string message;
+        switch (mismatch->introduced) {
+        case 2U:
+            message = "cannot carry the transform, opacity, or corner radii at " + node.id;
+            break;
+        case 3U:
+            message = node.kind == SceneNode::Kind::path
+                ? "cannot carry the path node " + node.id
+                : "cannot carry the path geometry of " + node.id;
+            break;
+        case 4U:
+            message = node.kind == SceneNode::Kind::image ? "cannot carry the image node " + node.id
+                      : mismatch->property == "images"
+                          ? std::string("cannot carry an image table")
+                          : "cannot carry the image reference of " + node.id;
+            break;
+        case 5U: message = "cannot carry the clip, mask, or isolation at " + node.id; break;
+        case 6U: message = "cannot carry the blend mode at " + node.id; break;
+        case 7U:
+            message = mismatch->property == "tokens"
+                ? std::string("cannot carry a token table")
+                : "cannot carry token receipts, found at " + node.id;
+            break;
+        case 8U: message = "cannot carry gradient vocabulary at " + node.id; break;
+        case 10U: message = "cannot carry the effects at " + node.id; break;
+        case 11U: message = "cannot carry the animation tracks at " + node.id; break;
+        case 12U: message = "cannot carry the plot node " + node.id; break;
+        default:
+            message = "cannot carry a field of version " + std::to_string(mismatch->introduced) +
+                      " at " + node.id;
+            break;
         }
         output.push_back({
             .severity = LoweringDiagnostic::Severity::error,
             .disposition = LoweringDiagnostic::Disposition::unsupported,
             .code = std::string(kSceneVersionMismatchCode),
-            .node_id = node->id,
-            .property = "transform",
-            .message = "scene version " + version +
-                       " cannot carry the transform, opacity, or corner radii at " + node->id,
+            .node_id = node.id,
+            .property = mismatch->property == "blend_mode" ? std::string("blendMode")
+                                                           : std::string(mismatch->property),
+            .message = "scene version " + version + " " + message,
         });
         return output;
     }
@@ -648,6 +652,10 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
                        " cannot be drawn exactly by the native Skia lowering: " +
                        gradient_reason,
         });
+        return output;
+    }
+    if (const auto token = find_invalid_token_reference(scene); token) {
+        output.push_back(token_refusal_diagnostic(*token));
         return output;
     }
     report_missing_images(ImageAssetIndex(scene), scene.root, output);
@@ -693,6 +701,11 @@ PaintExtent paint_extent(const PaintCommand& command) {
                             std::isfinite(moved.width) && std::isfinite(moved.height);
         if (!finite) return {box, false};
         return {moved};
+    }
+    if (command.kind == PaintCommand::Kind::plot) {
+        constexpr float snap_reach = 2.0F;
+        return {{box.x - snap_reach, box.y - snap_reach, box.width + 2.0F * snap_reach,
+                 box.height + 2.0F * snap_reach}};
     }
     if (command.kind == PaintCommand::Kind::image) return {box};
     if (!draws_content(command.kind)) return {box};
