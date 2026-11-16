@@ -48,8 +48,7 @@ std::string fixture_text(const std::string& name) {
     return text.str();
 }
 
-// A scene materialized from a rendered tree the authoring runtime produced
-// from one of the SVG fixtures; see packages/vellum-ui/test/vector-assets.test.js.
+// A scene materialized from one of the static rendered vector fixtures.
 std::optional<Scene> fixture(const std::string& name) {
     vellum::authoring::RenderedApplication rendered;
     std::string error;

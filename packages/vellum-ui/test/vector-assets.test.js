@@ -1,58 +1,41 @@
 import assert from 'node:assert/strict';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { createApp, materializeDesign, mount } from '../src/index.js';
-import { svgAssetToDesignIR } from '../../vellum-design-ir/src/index.js';
+import { normalizeImport } from '../../vellum-design-ir/src/index.js';
 
+// The rendered trees the native GPU tests materialize. They are static here;
+// the SVG importer that produced them is in its own follow-up change.
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'fixtures',
     'vector-assets');
-const update = process.env.VELLUM_UPDATE_VECTOR_FIXTURES === '1';
+const fixtureTree = async (name) =>
+    JSON.parse(await readFile(join(fixtures, `${name}.rendered.json`), 'utf8')).tree;
 
-const source = { key: 'assets', adapter: 'svg', adapterVersion: '1', formatVersion: '1.1',
-    revision: 'fixture' };
-const accent = (value) => ({ 'assets.brand.accent': { $type: 'color', $value: value } });
+// A version 6 document with one path node and one compiled vector node.
+const vectorDocument = () => normalizeImport({
+    source: { key: 'assets', adapter: 'svg', adapterVersion: '1', formatVersion: '1.1', revision: 'fixture' },
+    root: { kind: 'view', sourceId: 'svg', properties: { layout: { width: 200, height: 120 }, paint: {} }, children: [
+        { kind: 'path', sourceId: 'svg.0', properties: { layout: { x: 0, y: 0, width: 0, height: 0 },
+            path: { d: 'M0 0L10 0L10 10Z', fill: '#ff0000', stroke: 'none' } }, children: [] },
+        { kind: 'vector', sourceId: 'svg.1', properties: { layout: { x: 0, y: 0, width: 20, height: 20 },
+            vector: { asset: { contentHash: `sha256:${'a'.repeat(64)}`, viewBox: [0, 0, 20, 20],
+                ops: [{ op: 'path', d: 'M0 0H20V20Z', fill: '#0000ff' }] } } }, children: [] },
+    ] },
+});
 
-// The rendered trees the native GPU tests materialize, each generated from
-// an SVG fixture through DesignIR and the authoring runtime.
-const cases = [
-    { name: 'gradients', svg: 'gradients', mode: 'subtree', tokens: accent('#e11d48') },
-    { name: 'gradients-retheme', svg: 'gradients', mode: 'subtree', tokens: accent('#22c55e') },
-    { name: 'gradients-compiled', svg: 'gradients', mode: 'compiled', tokens: accent('#e11d48'),
-        options: { nodeBudget: 4 } },
-    { name: 'clip-mask', svg: 'clip-mask', mode: 'subtree' },
-    { name: 'use', svg: 'use', mode: 'subtree' },
-    { name: 'compiled-only', svg: 'compiled-only', mode: 'compiled' },
-    { name: 'over-budget', svg: 'over-budget', mode: 'compiled' },
-];
-
-async function render(entry) {
-    const svg = await readFile(join(fixtures, `${entry.svg}.svg`), 'utf8');
-    const { mode, document } = svgAssetToDesignIR(svg, {
-        source, tokens: entry.tokens,
-        colorTokens: entry.tokens ? { '#e11d48': 'assets.brand.accent' } : undefined,
-        ...entry.options,
-    });
-    const width = document.root.properties.layout.width;
-    const height = document.root.properties.layout.height;
+test('a vector document materializes into path and vector nodes', () => {
+    const document = vectorDocument();
+    assert.equal(document.schemaVersion, 6);
     const bridge = mount(createApp({
-        render: () => materializeDesign(document, { viewport: { width, height } }),
+        render: () => materializeDesign(document, { viewport: { width: 200, height: 120 } }),
     }));
-    return { mode, document, rendered: `${bridge.renderJSON()}\n` };
-}
-
-for (const entry of cases) {
-    test(`the ${entry.name} rendered tree is generated from its SVG fixture`, async () => {
-        const { mode, rendered } = await render(entry);
-        assert.equal(mode, entry.mode);
-        const path = join(fixtures, `${entry.name}.rendered.json`);
-        if (update) await writeFile(path, rendered);
-        assert.equal(await readFile(path, 'utf8'), rendered,
-            'run with VELLUM_UPDATE_VECTOR_FIXTURES=1 to regenerate');
-    });
-}
+    const tree = JSON.parse(bridge.renderJSON()).tree;
+    assert.deepEqual(tree.children.map((child) => child.type), ['path', 'vector']);
+    assert.equal(tree.children[1].asset.ops[0].fill, '#0000ff');
+});
 
 function nodes(tree, output = new Map()) {
     output.set(tree.id, tree);
@@ -60,9 +43,9 @@ function nodes(tree, output = new Map()) {
     return output;
 }
 
-test('a retheme changes only the token-bound node of an imported subtree', async () => {
-    const before = nodes(JSON.parse((await render(cases[0])).rendered).tree);
-    const after = nodes(JSON.parse((await render(cases[1])).rendered).tree);
+test('the retheme fixtures differ only in the token-bound node', async () => {
+    const before = nodes(await fixtureTree('gradients'));
+    const after = nodes(await fixtureTree('gradients-retheme'));
     assert.deepEqual([...before.keys()], [...after.keys()], 'stable identities survive the retheme');
     const changed = [...before.keys()].filter((id) => {
         const { children: left, ...own } = before.get(id);
@@ -76,8 +59,8 @@ test('a retheme changes only the token-bound node of an imported subtree', async
     assert.equal(after.get('assets/svg:6_swatch').fill, '#22c55e');
 });
 
-test('the compiled form of one asset is a single vector node', async () => {
-    const tree = JSON.parse((await render(cases[2])).rendered).tree;
+test('the compiled fixture is a single vector node', async () => {
+    const tree = await fixtureTree('gradients-compiled');
     assert.equal(tree.children.length, 1);
     assert.equal(tree.children[0].type, 'vector');
     assert.equal(tree.children[0].id, 'assets/svg:compiled');
@@ -117,8 +100,8 @@ test('the vector primitive refuses malformed compiled assets', () => {
     assert.doesNotThrow(dashed([]));
 });
 
-test('vector asset fields are not read below DesignIR version 6', async () => {
-    const { document } = await render(cases[0]);
+test('vector asset fields are not read below DesignIR version 6', () => {
+    const document = vectorDocument();
     assert.equal(document.schemaVersion, 6);
     for (const version of [1, 2, 5]) {
         assert.throws(() => materializeDesign({ ...document, schemaVersion: version },
@@ -126,8 +109,8 @@ test('vector asset fields are not read below DesignIR version 6', async () => {
     }
 });
 
-test('a material-bearing node is refused at version 3 and 6, never dropped', async () => {
-    const { document } = await render(cases[0]);
+test('a material-bearing node is refused at version 3 and 6, never dropped', () => {
+    const document = vectorDocument();
     for (const version of [3, 6]) {
         const material = structuredClone(document);
         material.schemaVersion = version;

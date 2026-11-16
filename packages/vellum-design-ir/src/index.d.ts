@@ -22,58 +22,6 @@ export const FIGMA_PLUGIN_FORMAT: '2026.05-figma-plugin-v1';
 export const FIGMA_PLUGIN_PARSER_VERSION: '0.1.0';
 export const FIGMA_PLUGIN_COMPAT_SCHEMA_VERSION: '0.3';
 export function normalizeSha256ContentHash(value: string, path?: string): string;
-export const SVG_ASSET_LIMITS: Readonly<{
-    maxBytes: number;
-    maxDepth: number;
-    maxElements: number;
-    maxAttributes: number;
-    maxExpandedNodes: number;
-    maxNumber: number;
-    maxPathDataBytes: number;
-    maxPathCommands: number;
-    maxPathValues: number;
-    maxCompiledOps: number;
-    maxCompiledDepth: number;
-    maxMatrixEntry: number;
-    maxExpandedDepth: number;
-    maxTotalPathDataBytes: number;
-    maxSubtreeDepth: number;
-    maxDashes: number;
-    maxGradientStops: number;
-    maxSourceIdBytes: number;
-    maxNodeBudget: number;
-}>;
-export const DEFAULT_SVG_NODE_BUDGET: number;
-export const DEFAULT_SVG_PATH_DATA_BUDGET: number;
-export class SvgAssetRefusal extends TypeError {
-    readonly reason: string;
-}
-export interface SvgAssetOptions {
-    /** The source identity of the asset's root; nodes take identities under it. */
-    sourceId?: string;
-    /** The DesignIR source key, which a mask reference needs; `svgAssetToDesignIR` supplies it. */
-    sourceKey?: string;
-    /** Nodes the canonical subtree may hold before the asset is compiled. */
-    nodeBudget?: number;
-    /** Bytes of path data the subtree may hold before the asset is compiled. */
-    pathDataBudget?: number;
-    width?: number;
-    height?: number;
-    /** Opaque `#rrggbb` colours to bind to design tokens in the subtree. */
-    colorTokens?: Record<string, string>;
-}
-export interface SvgAssetImport {
-    mode: 'subtree' | 'compiled';
-    root: SourceNode;
-    diagnostics: DesignDiagnostic[];
-    /** Always empty: the importer does not rasterize. */
-    assets: [];
-}
-export function importSvgAsset(svg: string, options?: SvgAssetOptions): SvgAssetImport;
-export function svgAssetToDesignIR(
-    svg: string,
-    options: SvgAssetOptions & { source: ImportSourceModel['source']; tokens?: ImportSourceModel['tokens'] },
-): { mode: SvgAssetImport['mode']; document: DesignIR };
 
 export type JsonPrimitive = null | boolean | number | string;
 export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };

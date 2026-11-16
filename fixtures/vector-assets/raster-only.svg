@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="120" height="60" viewBox="0 0 120 60">
-  <defs><filter id="soft"><feGaussianBlur stdDeviation="2"/></filter></defs>
-  <rect id="plate" width="120" height="60" fill="#334155"/>
-  <circle id="blurred" cx="30" cy="30" r="20" fill="#f59e0b" filter="url(#soft)"/>
-  <text id="caption" x="60" y="35" fill="#ffffff">Hi</text>
-</svg>

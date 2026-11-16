@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="120" viewBox="0 0 200 120">
-  <defs>
-    <symbol id="tile"><rect width="30" height="30" fill="#2040ff"/><rect x="10" y="10" width="10" height="10" fill="#ffd000"/></symbol>
-    <g id="pairing"><use href="#tile"/><use xlink:href="#tile" x="40"/></g>
-  </defs>
-  <use id="first" href="#tile" x="10" y="10"/>
-  <use id="second" href="#tile" x="150" y="10" opacity="0.5"/>
-  <use id="pairs" href="#pairing" x="60" y="70"/>
-</svg>

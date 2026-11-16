@@ -48,14 +48,6 @@ export {
 export { applyAuthoredOverlay, emptyAuthoredOverlay, resolveReference } from './overlay.js';
 export { reimportDesign } from './reimport.js';
 export { designIRVersionProblem, findVectorAssetField, requiredDesignIRVersion } from './versions.js';
-export {
-    DEFAULT_SVG_NODE_BUDGET,
-    DEFAULT_SVG_PATH_DATA_BUDGET,
-    importSvgAsset,
-    SVG_ASSET_LIMITS,
-    svgAssetToDesignIR,
-    SvgAssetRefusal,
-} from './svg-asset.js';
 export { canonicalize, deepClone, fnv1a32, jsonEqual, stableStringify } from './stable-json.js';
 export { diffTokens, normalizeTokens, resolveTokenLayers } from './tokens.js';
 export {

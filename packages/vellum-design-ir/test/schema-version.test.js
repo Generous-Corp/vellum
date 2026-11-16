@@ -9,14 +9,16 @@ import {
     DESIGN_IR_VECTOR_ASSET_VERSION,
     DESIGN_IR_VERSION,
     normalizeImport,
-    svgAssetToDesignIR,
     validateDesignIR,
 } from '../src/index.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const schema = JSON.parse(await readFile(join(here, '..', 'schema', 'design-ir-v1.schema.json'), 'utf8'));
 const source = { key: 'assets', adapter: 'svg', adapterVersion: '1', formatVersion: '1.1', revision: 'test' };
-const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="5" height="5" fill="#ff0000"/></svg>';
+// A document with one path node, as a vector source writes one.
+const pathRoot = () => ({ kind: 'view', sourceId: 'svg', properties: { layout: { width: 10, height: 10 }, paint: {} },
+    children: [{ kind: 'path', sourceId: 'svg.0', properties: { layout: { x: 0, y: 0, width: 0, height: 0 },
+        path: { d: 'M0 0L5 0L5 5L0 5Z', fill: '#ff0000', stroke: 'none' } }, children: [] }] });
 
 function refused(document, pattern) {
     const { valid, issues } = validateDesignIR(document);
@@ -72,7 +74,7 @@ test('a document without vector asset fields stays at version 1', () => {
 });
 
 test('vector asset fields need version 6 in the validator and the published schema', () => {
-    const { document } = svgAssetToDesignIR(svg, { source });
+    const document = normalizeImport({ source, root: pathRoot() });
     assert.equal(DESIGN_IR_VERSION, 1);
     assert.equal(document.schemaVersion, DESIGN_IR_VECTOR_ASSET_VERSION);
     assert.doesNotThrow(() => validateDesignIR(document, { throwOnError: true }));
@@ -121,28 +123,6 @@ test('compositing stays version 2 vocabulary in every later version', () => {
     for (const version of [2, 3, 4, 5, 6]) {
         assert.ok(validateDesignIR({ ...blended, schemaVersion: version }).valid, `version ${version}`);
         assert.ok(matches({ ...blended, schemaVersion: version }, schema), `schema version ${version}`);
-    }
-});
-
-test('SVG opacity and masks lower into compositing, not vector paint keys', () => {
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20">
-      <mask id="m"><rect width="10" height="20" fill="#ffffff"/></mask>
-      <g id="g" opacity="0.5" mask="url(#m)"><rect width="20" height="20" fill="#ff0000"/></g></svg>`;
-    const { document } = svgAssetToDesignIR(svg, { source });
-    assert.equal(document.schemaVersion, 6);
-    const nodes = [];
-    const visit = (node) => { nodes.push(node); node.children.forEach(visit); };
-    visit(document.root);
-    const group = nodes.find((node) => node.id === 'assets/svg:1_g');
-    assert.deepEqual(group.compositing, { opacity: 0.5 });
-    const mask = nodes.find((node) => node.id === 'assets/svg:1_g:mask');
-    assert.deepEqual(mask.compositing, { mask: 'luminance' });
-    const content = nodes.find((node) => node.id === 'assets/svg:1_g:content');
-    assert.deepEqual(content.compositing, { maskRef: 'assets/svg:1_g:mask' });
-    for (const node of nodes) {
-        for (const key of ['opacity', 'maskMode', 'isolation']) {
-            assert.equal(node.properties.paint?.[key], undefined, `${node.id} paint.${key}`);
-        }
     }
 });
 
