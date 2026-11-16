@@ -236,16 +236,25 @@ jobs:
             echo "receiver generated non-evidence paths: $unexpected" >&2
             exit 1
           }
-          python3 -I tools/provenance/coalesce_describe.py \
-            --repo . --base "$vellum_main" \
-            --title-file "$RUNNER_TEMP/coalesce-title.txt" \
-            --body-file "$RUNNER_TEMP/coalesce-body.md"
-          pr_title="$(cat "$RUNNER_TEMP/coalesce-title.txt")"
+          # The readable title and body are a convenience: when they cannot be
+          # built, the PR opens with the fixed text rather than not at all.
+          pr_title="chore(provenance): coalesce Pulp observatory evidence"
+          printf '%s\n' "Automated evidence-only reconciliation. Lands by merge commit once the required checks pass; never squash or rebase." \
+            > "$RUNNER_TEMP/coalesce-body.md"
+          if python3 -I tools/provenance/coalesce_describe.py \
+              --repo . --base "$vellum_main" \
+              --title-file "$RUNNER_TEMP/coalesce-title.txt" \
+              --body-file "$RUNNER_TEMP/coalesce-body.md.new"; then
+            pr_title="$(cat "$RUNNER_TEMP/coalesce-title.txt")"
+            mv "$RUNNER_TEMP/coalesce-body.md.new" "$RUNNER_TEMP/coalesce-body.md"
+          else
+            echo "::warning::could not describe the evidence PR; using the fixed title and body"
+          fi
           git config user.name vellum-observatory-receiver
           git config user.email vellum-observatory-receiver@users.noreply.github.com
           git switch -C "$EVIDENCE_BRANCH"
           git add provenance/pulp-observatory
-          git commit -m "$pr_title"
+          git commit -m "chore(provenance): coalesce Pulp observatory evidence"
           git fetch --no-tags origin main
           test "$(git rev-parse origin/main)" = "$vellum_main" || {
             echo "Vellum main advanced while evidence was prepared; retry required" >&2
@@ -286,7 +295,8 @@ jobs:
             # body describing what it now holds.
             gh pr edit "$EVIDENCE_BRANCH" \
               --title "$pr_title" \
-              --body-file "$RUNNER_TEMP/coalesce-body.md"
+              --body-file "$RUNNER_TEMP/coalesce-body.md" ||
+              echo "::warning::could not refresh the evidence PR title and body"
           fi
 
       - name: Enable live delivery only across a proved current barrier

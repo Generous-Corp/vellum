@@ -425,12 +425,13 @@ class ReceiverTests(unittest.TestCase):
             **overrides,
         )
 
-    def test_threshold_is_below_the_pending_limit(self) -> None:
+    def test_threshold_sits_at_the_watchdog_warning_below_the_limit(self) -> None:
         policy = json.loads(
             (Path(__file__).resolve().parents[2] / "provenance/pulp-observatory/receiver-policy.json")
             .read_text(encoding="utf-8")
         )
         self.assertLess(receiver.COALESCE_PENDING_THRESHOLD, policy["pending_limit"])
+        self.assertEqual(receiver.COALESCE_PENDING_THRESHOLD, policy["pending_warning"])
 
     def test_decision_below_at_and_above_the_threshold(self) -> None:
         threshold = receiver.COALESCE_PENDING_THRESHOLD
@@ -478,6 +479,59 @@ class ReceiverTests(unittest.TestCase):
         result = self.plan_on_demand(main)
         self.assertEqual(result["status"], "reconcile")
         self.assertIn("release_request.py", result["coalesce_reason"])
+
+    def write_project(self, version: str) -> None:
+        (self.vellum / "CMakeLists.txt").write_text(
+            f"project(Vellum\n    VERSION {version}\n    LANGUAGES CXX)\n", encoding="utf-8"
+        )
+        write_json(
+            self.vellum / "provenance/retired-release-tags.json",
+            {"schema": "vellum.retired-release-tags.v1", "tags": []},
+        )
+
+    def test_an_untagged_version_coalesces_even_when_a_later_change_buries_the_bump(self) -> None:
+        # The queue landed an ordinary change after the bump, so the tail is not
+        # evidence only and release-tag.yml waits for a later reconcile: the
+        # receiver must not defer that reconcile.
+        base = self._vellum_history()
+        self.write_project("0.2.1")
+        git(self.vellum, "add", ".")
+        git(self.vellum, "commit", "-qm", "bump to 0.2.1")
+        self.set_vellum_cursor(git(self.vellum, "rev-parse", "HEAD"))
+        main = self.land()
+        result = self.plan_on_demand(main)
+        self.assertEqual(result["status"], "reconcile")
+        self.assertIn("v0.2.1 is untagged", result["coalesce_reason"])
+        self.assertNotEqual(base, main)
+
+    def test_a_tagged_version_does_not_hold_the_receiver(self) -> None:
+        self._vellum_history()
+        self.write_project("0.2.1")
+        git(self.vellum, "add", ".")
+        git(self.vellum, "commit", "-qm", "bump to 0.2.1")
+        git(self.vellum, "tag", "v0.2.1")
+        self.set_vellum_cursor(git(self.vellum, "rev-parse", "HEAD"))
+        main = self.land()
+        self.assertEqual(self.plan_on_demand(main)["status"], "deferred")
+
+    def test_a_version_older_than_the_newest_tag_is_not_a_release(self) -> None:
+        self._vellum_history()
+        self.write_project("0.2.0")
+        git(self.vellum, "add", ".")
+        git(self.vellum, "commit", "-qm", "project file")
+        git(self.vellum, "tag", "v0.3.0")
+        self.set_vellum_cursor(git(self.vellum, "rev-parse", "HEAD"))
+        main = self.land()
+        self.assertEqual(self.plan_on_demand(main)["status"], "deferred")
+
+    def test_an_unreadable_version_coalesces(self) -> None:
+        self._vellum_history()
+        (self.vellum / "CMakeLists.txt").write_text("project(Vellum LANGUAGES CXX)\n", encoding="utf-8")
+        git(self.vellum, "add", ".")
+        git(self.vellum, "commit", "-qm", "broken project file")
+        self.set_vellum_cursor(git(self.vellum, "rev-parse", "HEAD"))
+        main = self.land()
+        self.assertEqual(self.plan_on_demand(main)["status"], "reconcile")
 
     def test_the_same_push_without_on_demand_still_reconciles(self) -> None:
         base = self._vellum_history()

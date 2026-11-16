@@ -12,12 +12,10 @@ sees which changes the evidence records.
 from __future__ import annotations
 
 import argparse
-import io
 import json
 from pathlib import Path
 import subprocess
 import sys
-import tarfile
 import tempfile
 
 MAX_LISTED = 20
@@ -63,13 +61,14 @@ def pending_count(repo: Path, revision: str | None) -> int:
 
     if revision is None:
         return observatory.pending_event_count(repo, None, observatory.load_events(repo), "all")
-    archive = subprocess.run(
-        ["git", "archive", "--format=tar", revision, "provenance/pulp-observatory/events"],
-        cwd=repo, check=True, capture_output=True,
-    ).stdout
     with tempfile.TemporaryDirectory() as scratch:
-        with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
-            tar.extractall(scratch, filter="data")
+        archive = subprocess.Popen(
+            ["git", "archive", "--format=tar", revision, "provenance/pulp-observatory/events"],
+            cwd=repo, stdout=subprocess.PIPE,
+        )
+        subprocess.run(["tar", "-x", "-C", scratch], stdin=archive.stdout, check=True)
+        if archive.wait() != 0:
+            raise RuntimeError(f"git archive {revision} failed")
         root = Path(scratch)
         return observatory.pending_event_count(root, None, observatory.load_events(root), "all")
 

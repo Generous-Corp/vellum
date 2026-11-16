@@ -332,11 +332,12 @@ def pending_on_main(root: Path) -> int:
 
 
 def release_changes(vellum_repo: Path, cursor: str, main: str) -> list[str]:
-    """Release-path files, or the project version, that changed past the cursor.
+    """Why a release needs the cursor to move: a release-path file changed, or a version waits.
 
-    release-tag.yml tags only an observatory reconcile whose cursor covers the
-    version bump, and starts a dry run only when a reconcile covers a
-    release-path file, so a tail holding either must be coalesced promptly.
+    release-tag.yml starts a dry run only when a reconcile covers a
+    release-path file, and tags only a reconcile commit whose cursor covers an
+    untagged version bump. A bump that landed behind other changes is tagged by
+    a later reconcile, so the version check reads main, not just the tail.
     """
     scripts = str(Path(__file__).resolve().parents[2] / "scripts")
     sys.path.append(scripts)
@@ -345,16 +346,24 @@ def release_changes(vellum_repo: Path, cursor: str, main: str) -> list[str]:
 
     changed = set(git(vellum_repo, "diff", "--name-only", "--no-renames", cursor, main).split())
     found = sorted(changed & set(release_dry_run.RELEASE_PATHS))
-    if release_request.CMAKELISTS in changed:
-        def version(commit: str) -> str | None:
-            try:
-                text = git(vellum_repo, "show", f"{commit}:{release_request.CMAKELISTS}")
-                return release_request.project_version(text)
-            except Exception:  # noqa: BLE001  (unreadable means no proven bump)
-                return None
-
-        if version(cursor) != version(main):
-            found.append("project version")
+    try:
+        cmakelists = git(vellum_repo, "show", f"{main}:{release_request.CMAKELISTS}")
+    except ReceiverError:
+        return found  # no project file to carry a version
+    try:
+        tag = f"v{release_request.project_version(cmakelists)}"
+        retired_tags = json.loads(git(vellum_repo, "show", f"{main}:{release_request.RETIRED_TAGS}"))
+        existing = git(vellum_repo, "tag", "--list", "v*").split()
+        newest = release_request.newest_known(retired_tags, existing)
+        waiting = (
+            tag not in existing
+            and tag not in release_request.retired(retired_tags)
+            and (newest is None or release_request.version_key(tag) > newest)
+        )
+    except (release_request.ReleaseRequestError, ReceiverError, ValueError):
+        return found + ["project version unreadable"]  # doubt coalesces
+    if waiting:
+        found.append(f"{tag} is untagged")
     return found
 
 
