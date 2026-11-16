@@ -245,14 +245,15 @@ void clip_validity() {
 
 // Every grouping field is refused before version 5 and accepted at 5.
 void versioning() {
-    static_assert(kSceneVersion >= 11U);
+    static_assert(kSceneVersion >= 12U);
     static_assert(scene_version_is_supported(5U));
     static_assert(scene_version_is_supported(8U));
-    static_assert(kDamageModelSceneVersion >= 11U);
+    static_assert(kDamageModelSceneVersion >= 12U);
     static_assert(partial_redraw_supported(5U));
     static_assert(partial_redraw_supported(6U));
     static_assert(partial_redraw_supported(8U));
     static_assert(partial_redraw_supported(10U));
+    static_assert(partial_redraw_supported(12U));
     static_assert(!partial_redraw_supported(kDamageModelSceneVersion + 1U));
 
     const auto variants = std::vector<std::pair<std::string, SceneNode>>{
@@ -402,6 +403,14 @@ void gradient_expressibility() {
                    loss[0].message.find(reason) != std::string::npos,
                what + " is refused as not expressible" +
                    (loss.empty() ? std::string() : ": " + loss[0].message));
+        auto node = box("g", {0.0F, 0.0F, 30.0F, 10.0F});
+        node.fill_gradients = {gradient};
+        auto scene = scene_with({node});
+        scene.scene_version = 8U;
+        const auto acceptance = accept_scene(scene);
+        expect(!acceptance.accepted && acceptance.diagnostics.size() == 1U &&
+                   acceptance.diagnostics[0].code == kGradientNotExpressibleCode,
+               what + " keeps its diagnostic through accept_scene");
     };
 
     for (const std::string space : {"srgb", "linear-srgb", "display-p3"}) {
