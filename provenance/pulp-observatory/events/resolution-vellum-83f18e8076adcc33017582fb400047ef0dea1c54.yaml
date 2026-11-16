@@ -1,0 +1,21 @@
+{
+  "contract_tests": [
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "created_at": "2026-11-16T04:01:27Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-83f18e8076adcc33017582fb400047ef0dea1c54",
+  "kind": "resolution",
+  "linked_commits": [
+    "83f18e8076adcc33017582fb400047ef0dea1c54"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@claude-observatory-agent",
+  "rationale": "Test-only: Vellum end-to-end test of the agent workflow on a native app and its HTML twin; Vellum-native CLI and app host. Pulp search at origin/main ced536cbc56b (git grep -w over core tools test examples apple ship inspect) for scenario_contract and vellum_native_backend returns 0; control SkiaSurface on the same search returns 288 in 64 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-10 and 2026-11-13); no schema or API delta. Any later resolution overrides it.",
+  "resolves": "vellum-83f18e8076adcc33017582fb400047ef0dea1c54",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
