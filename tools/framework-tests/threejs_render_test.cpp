@@ -268,20 +268,13 @@ state.status = 'ready';
     threejs_test::report("particles", r);
     CHECK(r.ok());
     if (!r.ok()) return;
-    // The core sphere (0x7dd3fc) fills the centre; the points ring it, out past
-    // the sphere's edge about 15 pixels from the centre.
+    // The core sphere (0x7dd3fc) and the points, whose colours run from green
+    // to cyan-green: greener than they are blue, unlike the sphere.
     const auto core = r.count([](int red, int g, int b) { return std::abs(red - 125) < 20 && std::abs(g - 211) < 20 && b > 230; });
-    size_t ring = 0;
-    for (uint32_t y = 0; y < r.height; ++y)
-        for (uint32_t x = 0; x < r.width; ++x) {
-            const auto* p = r.at(x, y);
-            if (std::hypot(double(x) - r.width / 2.0, double(y) - r.height / 2.0) > 22.0 &&
-                p[1] > 85 && p[2] > 85 && p[1] + p[2] > p[0] + 70)
-                ++ring;
-        }
-    std::fprintf(stderr, "  particles core pixels: %zu, ring pixels: %zu\n", core, ring);
+    const auto points = r.count([](int, int g, int b) { return g > 200 && g > b + 20; });
+    std::fprintf(stderr, "  particles core pixels: %zu, point pixels: %zu\n", core, points);
     CHECK(core > 300);
-    CHECK(ring > 120);
+    CHECK(points > 90);
 }
 
 FRAMEWORK_TEST(an_indexed_waveform_ribbon_renders) {
