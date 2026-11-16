@@ -57,6 +57,8 @@ enum class FullRepaintReason {
     /// A caller-supplied damage region was computed for a different frame
     /// size or scale than the surface's.
     damage_frame_mismatch,
+    /// The Dawn device was lost and the surface was rebuilt on a new one.
+    device_recovered,
 };
 
 [[nodiscard]] std::string_view to_string(FullRepaintReason reason) noexcept;
@@ -94,6 +96,55 @@ struct FrameStats final {
     /// and when the device supports timestamp queries.
     bool gpu_time_available = false;
     double gpu_milliseconds = 0.0;
+    /// Device losses this surface has seen since it was created, one per lost
+    /// device.
+    std::uint64_t device_losses = 0;
+    /// Times this surface has been rebuilt on a new device after a loss.
+    std::uint64_t device_recoveries = 0;
+};
+
+/// Counters for a `SkiaDawnDevice`.
+struct DeviceRecoveryStats final {
+    /// The current device: 1 for the first, one more for each replacement.
+    std::uint64_t generation = 0;
+    /// Devices lost, each counted once however many surfaces saw it.
+    std::uint64_t losses = 0;
+    /// Devices created to replace a lost one.
+    std::uint64_t recreations = 0;
+    /// Recreation attempts that could not create a device.
+    std::uint64_t failed_attempts = 0;
+    /// Recreation gave up: the device stays lost and every render on it fails.
+    bool terminal = false;
+};
+
+namespace detail {
+class DawnDeviceCore;
+}
+
+/// A Dawn device that several `SkiaDawnSurface`s draw with.
+///
+/// When the device is lost, the first surface to render afterwards creates a
+/// replacement and every other surface moves to it on its own next render, so
+/// one loss creates one device. A failed recreation is retried with a growing
+/// delay, at most once per render, and recovery stops after a fixed number of
+/// attempts in a row. Surfaces sharing a device must render on one thread;
+/// only a render on the thread that first rendered with the device recreates
+/// it, and the Dawn loss callback, which may run on any thread, only records
+/// the loss.
+class SkiaDawnDevice final {
+public:
+    static std::shared_ptr<SkiaDawnDevice> create(std::string* error = nullptr);
+
+    ~SkiaDawnDevice();
+    SkiaDawnDevice(const SkiaDawnDevice&) = delete;
+    SkiaDawnDevice& operator=(const SkiaDawnDevice&) = delete;
+
+    [[nodiscard]] DeviceRecoveryStats recovery_stats() const;
+
+private:
+    friend class SkiaDawnSurface;
+    explicit SkiaDawnDevice(std::shared_ptr<detail::DawnDeviceCore> core) noexcept;
+    std::shared_ptr<detail::DawnDeviceCore> core_;
 };
 
 struct TextMetrics final {
@@ -126,6 +177,12 @@ struct TextMetrics final {
 /// pixels, so output never depends on what is cached, given that mesh
 /// textures and image assets are not mutated once a scene references them. A resize that has settled drops the entries no frame has used
 /// since the resize, and a device loss drops everything.
+///
+/// A lost Dawn device is released as soon as the surface sees the loss. The
+/// next render recreates the device (see `SkiaDawnDevice`), rebuilds the
+/// Graphite context, the retained surface and the native surface's
+/// configuration, and repaints the whole frame; caches and layer images fill
+/// again as frames draw. Until a render recovers, captures and `finish` fail.
 class SkiaDawnSurface final {
 public:
     struct Config final {
@@ -142,6 +199,12 @@ public:
 
     static std::unique_ptr<SkiaDawnSurface> create(
         const Config& config, std::string* error = nullptr);
+    /// Creates a surface that draws with `device`, shared with every other
+    /// surface created with it. A null `device` gives the surface its own, as
+    /// `create(config)` does.
+    static std::unique_ptr<SkiaDawnSurface> create(
+        const Config& config, std::shared_ptr<SkiaDawnDevice> device,
+        std::string* error = nullptr);
     [[nodiscard]] static bool measure_text(
         const std::vector<TextRun>& runs,
         TextMetrics& metrics,
@@ -215,8 +278,9 @@ public:
     /// Waits until every frame submitted so far has finished on the GPU.
     [[nodiscard]] bool finish(std::string* error = nullptr);
 
-    /// Forces the Dawn device lost, for exercising the fail-closed paths in
-    /// tests. Every later render, capture and finish fails.
+    /// Forces the surface's Dawn device lost, for tests. Captures and `finish`
+    /// fail until a render recreates the device; a shared device is lost for
+    /// every surface on it.
     void simulate_device_loss();
     [[nodiscard]] bool resize(
         std::uint32_t width, std::uint32_t height, float scale,

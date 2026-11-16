@@ -97,6 +97,10 @@ struct RenderTelemetry final {
     bool resize_settled = false;
     std::uint64_t trims = 0;
     CacheTrimReason last_trim = CacheTrimReason::none;
+    /// Device losses the surface has seen and recoveries from them, since it
+    /// was created (see `FrameStats`).
+    std::uint64_t device_losses = 0;
+    std::uint64_t device_recoveries = 0;
 };
 
 /// A JSON object holding every `RenderTelemetry` field, for capture evidence.
