@@ -1317,22 +1317,7 @@ test "$(git rev-parse HEAD^)" = "$MAIN"'''),
 set -euo pipefail
 [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
 [[ -z "$NUMBER" || "$NUMBER" =~ ^[0-9]+$ ]]
-clean() (
-  local record complete=false
-  local -a discard=()
-  while IFS= read -r -d '' record; do
-    if [[ -z "$record" ]]; then
-      complete=true
-      break
-    fi
-    case "${record%%=*}" in
-      GH_TOKEN) ;;
-      *) discard+=(-u "${record%%=*}") ;;
-    esac
-  done < <(/usr/bin/env -0 && builtin printf '\0')
-  [[ "$complete" == true ]] || return 1
-  /usr/bin/env "${discard[@]}" PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" GIT_CONFIG_NOSYSTEM=1 "$@"
-)
+clean() { /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" GH_TOKEN="$GH_TOKEN" GIT_CONFIG_NOSYSTEM=1 "$@"; }
 auth="http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
 remote="https://github.com/$GITHUB_REPOSITORY"
 live="$(clean git -c core.hooksPath=/dev/null -c "$auth" ls-remote "$remote" refs/heads/main | cut -f1)"

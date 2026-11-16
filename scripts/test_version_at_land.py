@@ -372,7 +372,7 @@ class Workflow(unittest.TestCase):
         apply = self.step(self.push_job, "Apply the planned bump")
         self.assertIn("-c core.hooksPath=/dev/null", apply)
         push = self.step(self.push_job, "Push the bump branch and open its pull request")
-        self.assertIn('/usr/bin/env "${discard[@]}" PATH=/usr/bin:/bin', push)
+        self.assertIn('clean() { /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" GH_TOKEN="$GH_TOKEN" ', push)
         for command in push.split("\n"):
             if command.strip().startswith(("git ", "gh ")):
                 self.fail(f"a token-holding command runs outside the clean environment: {command.strip()}")
@@ -381,8 +381,8 @@ class Workflow(unittest.TestCase):
 
     def clean_function(self) -> str:
         push = self.step(self.push_job, "Push the bump branch and open its pull request")
-        start = push.index("          clean() (")
-        end = push.index("\n          )", start) + len("\n          )")
+        start = push.index("          clean() {")
+        end = push.index("\n", start)
         return textwrap.dedent(push[start:end])
 
     def test_clean_preserves_only_the_inherited_token_and_safe_settings(self) -> None:
@@ -402,14 +402,25 @@ class Workflow(unittest.TestCase):
             self.assertEqual(actual, {b"GH_TOKEN": token.encode(), b"PATH": b"/usr/bin:/bin",
                                       b"HOME": temporary.encode(), b"GIT_CONFIG_NOSYSTEM": b"1"})
 
-    def test_clean_refuses_an_incomplete_environment_inventory(self) -> None:
-        script = self.clean_function().replace("/usr/bin/env -0", "/usr/bin/false")
-        result = subprocess.run(["/bin/bash", "--noprofile", "--norc", "-c",
-                                 script + "\nclean /usr/bin/printf target-ran"],
-                                env={"GH_TOKEN": "dummy", "RUNNER_TEMP": "/unused"},
-                                capture_output=True, check=False)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, b"")
+    def test_clean_ignores_inherited_bash_functions(self) -> None:
+        # An exported function named like a builtin or a command must not
+        # change what clean passes: a shadowed read once emptied its inventory,
+        # so hostile Git settings reached token-holding commands.
+        hostile = {name: "() { builtin echo shadowed >&2; return 0; }" for name in (
+            "BASH_FUNC_read%%", "BASH_FUNC_env%%", "BASH_FUNC_builtin%%", "BASH_FUNC_local%%",
+            "BASH_FUNC_printf%%", "BASH_FUNC_command%%", "BASH_FUNC_exec%%", "BASH_FUNC_/usr/bin/env%%")}
+        settings = {"GIT_EXEC_PATH": "/untrusted", "GIT_SSH_COMMAND": "/untrusted/ssh", "GIT_CONFIG_GLOBAL": "/untrusted",
+                    "GITHUB_TOKEN": "wrong-token", "GH_CONFIG_DIR": "/untrusted/gh"}
+        for shell in sorted({"/bin/bash", shutil.which("bash") or "/bin/bash"}):
+            with self.subTest(shell=shell), tempfile.TemporaryDirectory() as temporary:
+                environment = {"GH_TOKEN": "dummy", "RUNNER_TEMP": temporary, **settings, **hostile}
+                result = subprocess.run([shell, "--noprofile", "--norc", "-c",
+                                         self.clean_function() + "\nclean /usr/bin/env -0"],
+                                        env=environment, capture_output=True, check=True)
+                actual = dict(entry.split(b"=", 1) for entry in result.stdout.split(b"\0") if entry)
+                self.assertEqual(actual, {b"GH_TOKEN": b"dummy", b"PATH": b"/usr/bin:/bin",
+                                          b"HOME": temporary.encode(), b"GIT_CONFIG_NOSYSTEM": b"1"})
+                self.assertNotIn(b"shadowed", result.stderr)
 
     def test_the_push_job_applies_only_version_surfaces(self) -> None:
         apply = self.step(self.push_job, "Apply the planned bump")
