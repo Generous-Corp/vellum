@@ -9,9 +9,9 @@ const EVENT_PROPERTIES = Object.freeze({
     keyDown: 'onKeyDown',
 });
 // DesignIR schema versions this materializer reads. Version 2 adds the node
-// `compositing` object and version 6 the vector asset fields; a document
-// without `schemaVersion` is version 1. A field is read only at or after the
-// version that adds it.
+// `compositing` object, 3 adds material references, 4 adds tracks and 6 the
+// vector asset fields; a document without `schemaVersion` is version 1. A
+// field is read only at or after the version that adds it.
 const DESIGN_SCHEMA_VERSIONS = Object.freeze([1, 2, 3, 4, 5, 6]);
 const COMPOSITING_VERSION = 2;
 const VECTOR_ASSET_VERSION = 6;
@@ -288,11 +288,6 @@ function materializeNode(node, context, depth, root = false) {
         throw new Error(
             `design node ${node.id} ${vectorField} needs schemaVersion ${VECTOR_ASSET_VERSION}`);
     }
-    // A material reference has no lowering in this materializer yet; refusing
-    // it is honest, where dropping it would silently change the paint.
-    if (node.material !== undefined) {
-        throw new Error(`design node ${node.id} carries a material, which this materializer does not draw`);
-    }
     applyCompositing(style, compositingOf(node, context.version, root));
     resolveMaskReferences(node, context.version);
 
@@ -333,10 +328,32 @@ function materializeNode(node, context, depth, root = false) {
     return jsx(componentFor(node), properties, node.id);
 }
 
+// Check even hidden descendants before lowering; an unsupported field must
+// never disappear silently when this consumer reads a newer document.
+function requireSupportedFields(root) {
+    let nodes = 0;
+    function visit(node, depth) {
+        if (depth > MAXIMUM_DEPTH || ++nodes > MAXIMUM_NODES) {
+            throw new Error('materialized design exceeds the node or depth limit');
+        }
+        plainObject(node, `design node at depth ${depth}`);
+        if (node.material !== undefined) {
+            throw new Error(`design node ${node.id} has unsupported material`);
+        }
+        if (node.tracks !== undefined && (!Array.isArray(node.tracks) || node.tracks.length > 0)) {
+            throw new Error(`design node ${node.id} has unsupported tracks`);
+        }
+        if (!Array.isArray(node.children)) throw new Error(`design node ${node.id} requires children`);
+        for (const child of node.children) visit(child, depth + 1);
+    }
+    visit(root, 0);
+}
+
 function materialize(document, options, missingActionTarget) {
     plainObject(document, 'design');
     const version = designVersion(document);
     const root = document.root;
+    requireSupportedFields(root);
     const rootLayout = root?.properties?.layout &&
         typeof root.properties.layout === 'object' &&
         !Array.isArray(root.properties.layout)

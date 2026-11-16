@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tarfile
@@ -31,6 +32,7 @@ from vellum_manifest import (
 )
 from vellum_scenario import (
     ScenarioValidationError,
+    unproven_commands,
     validate_scenario_document as validate_shared_scenario_document,
 )
 from vellum_cdp import CdpAdmission
@@ -41,7 +43,7 @@ from vellum_browser import browser_version, configured_provenance
 
 RESULT_SCHEMA = "vellum.backend.result.v1"
 SUPPORTED_TARGET = "web"
-WEB_COMMANDS = {"build", "run", "test", "package"}
+WEB_COMMANDS = {"build", "run", "test", "capture", "package"}
 PRIVATE_VELLUM_INCLUDE = re.compile(
     r'^\s*#\s*include\s*[<"](vellum/[^>"]+)[>"]', re.MULTILINE,
 )
@@ -463,8 +465,11 @@ def chrome_path() -> str:
 
 
 def validate_scenario_evidence(
-    evidence: dict[str, Any], *, expected_wasm_ids: list[str] | None = None
+    evidence: dict[str, Any], *, expected_wasm_ids: list[str] | None = None,
+    scenario: dict[str, Any] | None = None,
 ) -> None:
+    """`scenario`, when given, holds the evidence to its command steps: each
+    must be reported invoked, with a changed rendered tree, in step order."""
     def valid_frame(value: object) -> bool:
         if not isinstance(value, dict):
             return False
@@ -510,6 +515,21 @@ def validate_scenario_evidence(
             f"Browser scenario proof failed: {evidence}",
             status="test_failed",
         )
+    if scenario is not None:
+        commands = evidence.get("commands", [])
+        proven = [
+            item.get("target") for item in commands
+            if isinstance(item, dict) and item.get("invoked") is True and item.get("changed") is True
+            and isinstance(item.get("invocations"), int) and not isinstance(item.get("invocations"), bool)
+            and item["invocations"] >= 1
+        ] if isinstance(commands, list) else []
+        unproven = unproven_commands(scenario, proven)
+        if unproven or (isinstance(commands, list) and len(proven) != len(commands)):
+            raise BackendFailure(
+                "Browser scenario did not prove its command steps ran and changed the rendered tree: "
+                + ", ".join(unproven or ["malformed command evidence"]),
+                status="test_failed",
+            )
     expected = sorted(expected_wasm_ids or [])
     observed: list[str] = []
     for item in components:
@@ -1133,7 +1153,10 @@ def run_scenario(
     finally:
         server.shutdown(); thread.join(5)
         scenario_copy.unlink(missing_ok=True)
-    validate_scenario_evidence(evidence, expected_wasm_ids=expected_wasm_ids)
+    validate_scenario_evidence(
+        evidence, expected_wasm_ids=expected_wasm_ids,
+        scenario=json.loads(scenario.read_text(encoding="utf-8")),
+    )
     return evidence
 
 
@@ -1178,6 +1201,43 @@ def interaction_plan_path(context: dict[str, Any], value: str | None) -> dict[st
         raise BackendFailure(f"Cannot read interaction plan at {path}: {error}", status="invalid_interaction_plan") from error
 
 
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def write_capture_artifact(envelope: dict[str, Any], output: Path) -> dict[str, Any]:
+    """Write a browser capture's screenshot to `output` as a PNG file and
+    describe the file written. The envelope carries the screenshot the
+    browser returned; this is the only place it leaves the process."""
+    try:
+        screenshot = envelope["root"]["properties"]["captureEvidence"]["screenshot"]
+        if screenshot.get("mimeType") != "image/png":
+            raise ValueError("the capture is not a PNG")
+        data = base64.b64decode(screenshot["data"], validate=True)
+        if len(data) != screenshot.get("byteLength"):
+            raise ValueError("the capture length differs from its record")
+        if len(data) < 33 or not data.startswith(PNG_SIGNATURE) or data[12:16] != b"IHDR":
+            raise ValueError("the capture is not a PNG")
+        width, height = struct.unpack(">II", data[16:24])
+        if not width or not height:
+            raise ValueError("the capture has no pixels")
+    except (KeyError, TypeError, AttributeError, ValueError, struct.error) as error:
+        raise BackendFailure(f"Browser capture holds no usable screenshot: {error}",
+                             status="capture_failed") from error
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Written beside the destination and moved into place, so a reader never
+    # sees a partial file and a failed capture leaves any earlier one intact.
+    partial = output.with_name(f".{output.name}.partial")
+    try:
+        partial.write_bytes(data)
+        os.replace(partial, output)
+    finally:
+        partial.unlink(missing_ok=True)
+    return {
+        "output": str(output), "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+        "width": width, "height": height,
+    }
+
+
 def write_reproducible_archive(source: Path, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("wb") as raw:
@@ -1217,6 +1277,26 @@ def command_result(command: str, args: argparse.Namespace, context: dict[str, An
         )
         return result(command, ok=True, status="tests_passed", message="Web scenario passed in Chrome",
                       data={"target": "web", "build": str(built["root"]), "evidence": evidence})
+    if command == "capture":
+        if args.scenario or args.matrix or args.montage:
+            raise BackendFailure(
+                "The web backend captures an interaction plan; --scenario, --matrix and --montage are macOS only",
+                status="invalid_arguments", exit_code=2)
+        if not args.interaction_plan:
+            raise BackendFailure("Web capture requires --interaction-plan", status="invalid_arguments", exit_code=2)
+        plan = interaction_plan_path(context, args.interaction_plan)
+        default = f"artifacts/{Path(args.interaction_plan).stem}.png"
+        output = safe_relative(context["root"], args.output or default, "capture output")
+        if output == context["root"] or output.suffix.lower() != ".png":
+            raise BackendFailure("Capture output must end in .png", status="invalid_arguments", exit_code=2)
+        built = ensure_build(context, sdk)
+        envelope = run_chrome_interaction_capture(built["root"], plan)
+        artifact = write_capture_artifact(envelope, output)
+        return result(command, ok=True, status="captured", message=f"Captured {output}", data={
+            "target": "web", "plan": plan["name"], **artifact,
+            "captureId": envelope["captureId"], "viewport": envelope["viewport"],
+            "browser": envelope["source"]["browser"],
+        })
     if command == "run":
         built = ensure_build(context, sdk, args.no_build)
         serve = [sys.executable, "-m", "http.server", "8000", "--directory", str(built["root"])]
@@ -1244,6 +1324,11 @@ def parser(command: str) -> argparse.ArgumentParser:
     if command == "run":
         value.add_argument("--no-build", action="store_true"); value.add_argument("--no-window", action="store_true")
         value.add_argument("--self-test", action="store_true")
+    if command == "capture":
+        value.add_argument("--interaction-plan"); value.add_argument("--output")
+        # Accepted so the refusal names them, not argparse.
+        value.add_argument("--scenario"); value.add_argument("--matrix")
+        value.add_argument("--montage", action="store_true")
     if command == "package": value.add_argument("--output")
     return value
 

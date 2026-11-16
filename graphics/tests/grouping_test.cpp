@@ -245,9 +245,10 @@ void clip_validity() {
 
 // Every grouping field is refused before version 5 and accepted at 5.
 void versioning() {
-    static_assert(kSceneVersion >= 10U);
+    static_assert(kSceneVersion >= 11U);
     static_assert(scene_version_is_supported(5U));
-    static_assert(kDamageModelSceneVersion >= 10U);
+    static_assert(scene_version_is_supported(8U));
+    static_assert(kDamageModelSceneVersion >= 11U);
     static_assert(partial_redraw_supported(5U));
     static_assert(partial_redraw_supported(6U));
     static_assert(partial_redraw_supported(8U));
@@ -515,6 +516,38 @@ void gradient_expressibility() {
            "a version 5 scene with a two-circle start radius is refused");
 }
 
+void animated_compositing() {
+    auto node = box("animated-blend", {10.0F, 10.0F, 20.0F, 20.0F});
+    node.blend_mode = BlendMode::multiply;
+    node.tracks.push_back({
+        .property = AnimatedProperty::opacity,
+        .keyframes = {{.time = 0.0, .value = 0.0F}, {.time = 1.0, .value = 1.0F}},
+    });
+    auto scene = scene_with({node});
+    scene.clock = 0.5;
+    expect(accept_scene(scene).accepted, "a blended node can animate its opacity");
+    const auto commands = make_paint_commands(scene);
+    expect(commands.size() == 3U && commands[0].kind == Kind::begin_layer &&
+               commands[0].blend_mode == BlendMode::multiply && near(commands[0].opacity, 0.5F),
+           "an animated blend keeps its mode and uses evaluated opacity on its layer");
+
+    for (const std::uint32_t version : {5U, 6U, 10U}) {
+        scene.scene_version = version;
+        const auto acceptance = accept_scene(scene);
+        expect(!acceptance.accepted && acceptance.diagnostics.size() == 1U &&
+                   acceptance.diagnostics[0].property == (version < 6U ? "blendMode" : "tracks"),
+               "a scene with both fields names the oldest version requirement it lacks");
+    }
+    scene.scene_version = 11U;
+    scene.root.children[0].mask = MaskMode::alpha;
+    const auto refused = accept_scene(scene);
+    expect(!refused.accepted &&
+               refused.reason == "mask animated-blend cannot carry the blend mode multiply",
+           "evaluating tracks preserves the refusal of a blended mask");
+    scene.root.children[0].blend_mode = BlendMode::normal;
+    expect(accept_scene(scene).accepted, "an animated mask with normal blending is accepted");
+}
+
 void damage() {
     auto window = box("window", {10.0F, 10.0F, 20.0F, 20.0F});
     window.clip = NodeClip{.rect = {0.0F, 0.0F, 20.0F, 20.0F}};
@@ -634,6 +667,7 @@ int main() {
     clip_validity();
     versioning();
     gradient_expressibility();
+    animated_compositing();
     damage();
     if (failures != 0) {
         std::cerr << failures << " grouping check(s) failed\n";

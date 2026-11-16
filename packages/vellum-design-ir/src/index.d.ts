@@ -4,11 +4,15 @@ export const REIMPORT_REPORT_SCHEMA: 'https://vellum.dev/schemas/design-ir/reimp
 export const DESIGN_IR_VERSION: 1;
 export const DESIGN_IR_COMPOSITING_VERSION: 2;
 export const DESIGN_IR_MATERIALS_VERSION: 3;
+/** The DesignIR version that adds animation tracks on nodes. */
+export const DESIGN_IR_TRACKS_VERSION: 4;
 export const DESIGN_IR_VECTOR_ASSET_VERSION: 6;
 export const DESIGN_IR_LATEST_VERSION: 6;
+/** Every version this build reads. */
 export const DESIGN_IR_VERSIONS: readonly [1, 2, 3, 4, 5, 6];
+export const SUPPORTED_DESIGN_IR_VERSIONS: typeof DESIGN_IR_VERSIONS;
 export function findVectorAssetField(root: unknown, path?: string): { path: string; field: string } | null;
-export function requiredDesignIRVersion(root: unknown): 1 | 2 | 3 | 6;
+export function requiredDesignIRVersion(root: unknown): 1 | 2 | 3 | 4 | 6;
 export function designIRVersionProblem(document: { schemaVersion: unknown; root: unknown }): string | null;
 export const AUTHORED_OVERLAY_VERSION: 1;
 export const REIMPORT_REPORT_VERSION: 1;
@@ -164,10 +168,41 @@ export interface DesignNode {
     text?: string;
     properties: Record<string, JsonValue>;
     extensions?: Record<string, JsonValue>;
-    /** Present only in a version 2 document, and only for non-default values. */
+    /** Present only in a version 4 document. */
+    tracks?: AnimationTrack[];
+    /** Present in version 2 or later, and only for non-default values. */
     compositing?: NodeCompositing;
     material?: MaterialReference;
     children: DesignNode[];
+}
+
+/** A property an animation track can drive. */
+export type AnimatedProperty =
+    | 'opacity' | 'translateX' | 'translateY' | 'scaleX' | 'scaleY' | 'rotation'
+    | 'fill' | 'strokeColor' | 'shadowColor' | 'gradientStopColor' | 'textRunColor';
+
+export type Easing =
+    | 'linear' | 'ease' | 'ease-in' | 'ease-out' | 'ease-in-out'
+    | { type: 'cubicBezier'; x1: number; y1: number; x2: number; y2: number }
+    | { type: 'steps'; steps: number; position?: 'start' | 'end' | 'none' | 'both' }
+    | { type: 'spring'; stiffness?: number; damping?: number; mass?: number; velocity?: number };
+
+/** One keyframe: seconds of the host clock, a number or a #rrggbb[aa] colour. */
+export interface AnimationKeyframe {
+    time: number;
+    value: number | string;
+    easing?: Easing;
+}
+
+/**
+ * A keyframed animation of one property of its node. `index` names the
+ * shadow, gradient or text run and `stop` the gradient stop it addresses.
+ */
+export interface AnimationTrack {
+    property: AnimatedProperty;
+    index?: number;
+    stop?: number;
+    keyframes: AnimationKeyframe[];
 }
 
 /** A material value: a number, two numbers, or a straight RGBA colour. */
@@ -210,7 +245,8 @@ export interface DesignIR {
     $schema: typeof DESIGN_IR_SCHEMA;
     /**
      * 1, 2 when a node carries `compositing`, 3 when a node carries a
-     * material reference, or 6 when a node uses vector asset fields.
+     * material reference, 4 when a node carries animation tracks, or 6 when
+     * a node uses vector asset fields.
      */
     schemaVersion: 1 | 2 | 3 | 4 | 5 | 6;
     compiler: { name: string; version: string };
@@ -245,6 +281,7 @@ export interface SourceNode {
     text?: string;
     properties?: Record<string, JsonValue>;
     extensions?: Record<string, JsonValue>;
+    tracks?: AnimationTrack[];
     compositing?: NodeCompositing;
     material?: MaterialReference;
     losses?: Array<Partial<DesignDiagnostic> & Pick<DesignDiagnostic, 'code' | 'message'>>;

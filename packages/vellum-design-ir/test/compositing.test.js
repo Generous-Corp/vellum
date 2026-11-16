@@ -179,7 +179,7 @@ test('a mask reference to a cousin is not a sibling', () => {
     );
 });
 
-test('a version 1 document refuses compositing, and unknown versions stay refused', () => {
+test('a version 1 document refuses compositing, and version 3 remains readable', () => {
     const document = normalizeImport(sourceWith({}, [child('blended', { blendMode: 'multiply' })]));
     assert.equal(document.schemaVersion, 2);
     const older = structuredClone(document);
@@ -192,8 +192,8 @@ test('a version 1 document refuses compositing, and unknown versions stay refuse
     assert.throws(() => parseDesignIR(older), DesignIRValidationError);
 
     const newer = structuredClone(document);
-    newer.schemaVersion = 7;
-    assert.equal(issuesOf(newer)[0].path, '$.schemaVersion');
+    newer.schemaVersion = 3;
+    assert.deepEqual(validateDesignIR(newer), { issues: [], valid: true });
 
     const plain = normalizeImport(sourceWith());
     plain.schemaVersion = 2;

@@ -4,6 +4,7 @@ import {
     DESIGN_IR_COMPOSITING_VERSION,
     DESIGN_IR_MATERIALS_VERSION,
     DESIGN_IR_SCHEMA,
+    DESIGN_IR_TRACKS_VERSION,
     DESIGN_IR_VERSION,
     DESIGN_IR_VERSIONS,
 } from './constants.js';
@@ -34,6 +35,7 @@ const KNOWN_NODE_FIELDS = new Set([
     'semanticId',
     'sourceId',
     'text',
+    'tracks',
 ]);
 
 /**
@@ -84,10 +86,14 @@ export function normalizeImport(input, options = {}) {
     return canonicalize(document);
 }
 
+// The lowest schema version that carries the document: version 4 when a node
+// has tracks, 3 when a node carries a material reference, 2 when a node uses
+// compositing, and 1 otherwise.
 function requiredVersion(node) {
     let version = DESIGN_IR_VERSION;
     if (node.compositing !== undefined) version = DESIGN_IR_COMPOSITING_VERSION;
     if (node.material !== undefined) version = DESIGN_IR_MATERIALS_VERSION;
+    if (node.tracks !== undefined) version = DESIGN_IR_TRACKS_VERSION;
     for (const child of node.children) version = Math.max(version, requiredVersion(child));
     return version;
 }
@@ -140,6 +146,7 @@ function normalizeNode(rawNode, context) {
         if (rawNode[field] !== undefined) output[field] = String(rawNode[field]);
     }
     if (rawNode.extensions !== undefined) output.extensions = canonicalize(rawNode.extensions);
+    if (rawNode.tracks !== undefined) output.tracks = canonicalize(rawNode.tracks);
     if (rawNode.compositing !== undefined) {
         const problems = compositingProblems(rawNode.compositing, `${context.path}.compositing`);
         if (problems.length > 0) {

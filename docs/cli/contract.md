@@ -107,7 +107,7 @@ stable outer schema.
 | `design check` / `design diff` | no | deterministically regenerate the active source and authored overlay without writing; `check` fails on generated drift and `diff` reports it |
 | `build` / `run` | no | macOS builds/launches a real `.app`; web builds a static app and reports its local serve command; finite headless runs are available |
 | `test` | no | macOS executes bounded native scenarios; web executes the shared scenario contract in Chrome |
-| `capture` | no | macOS captures PNGs and composes bounded capture matrices/montages; the web backend does not claim capture |
+| `capture` | no | macOS captures PNGs and composes bounded capture matrices/montages; web runs a bounded interaction plan in Chrome and writes the settled page as a PNG |
 | `package` | no | macOS creates an ad-hoc-signed `.app`; web creates a reproducible static `.tar.gz` |
 
 Installed SDK metadata carries a boolean capability for every backend command.

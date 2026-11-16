@@ -1,6 +1,7 @@
 import {
     DESIGN_IR_COMPOSITING_VERSION,
     DESIGN_IR_MATERIALS_VERSION,
+    DESIGN_IR_TRACKS_VERSION,
     DESIGN_IR_VECTOR_ASSET_VERSION,
     DESIGN_IR_VECTOR_PAINT_KEYS,
     DESIGN_IR_VERSION,
@@ -49,11 +50,12 @@ function usesField(node, field) {
 
 /**
  * The oldest DesignIR version that carries every field the tree uses: 6 for
- * a vector asset field, 3 for a material reference, 2 for compositing,
+ * a vector asset field, 4 for tracks, 3 for a material reference, 2 for compositing,
  * otherwise 1.
  */
 export function requiredDesignIRVersion(root) {
     if (findVectorAssetField(root)) return DESIGN_IR_VECTOR_ASSET_VERSION;
+    if (usesField(root, 'tracks')) return DESIGN_IR_TRACKS_VERSION;
     if (usesField(root, 'material')) return DESIGN_IR_MATERIALS_VERSION;
     return usesField(root, 'compositing') ? DESIGN_IR_COMPOSITING_VERSION : DESIGN_IR_VERSION;
 }

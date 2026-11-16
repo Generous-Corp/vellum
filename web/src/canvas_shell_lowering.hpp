@@ -788,7 +788,9 @@ canvas_shell_vector_diagnostics(
 /// What the canvas shell draws for a scene and what it reports. The shell
 /// accepts a scene through `accept_scene`, the decision the native renderer
 /// makes, so a scene the native renderer refuses draws nothing here and
-/// carries the same reason and diagnostics.
+/// carries the same reason and diagnostics. A scene with tracks is drawn as
+/// `evaluate_tracks` evaluates it at `Scene::clock`, so animation costs the
+/// shell nothing it reports.
 struct CanvasShellLowering final {
     bool accepted = false;
     /// Why the scene is refused; empty when it is accepted.

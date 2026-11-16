@@ -15,6 +15,8 @@ export const DESIGN_IR_COMPOSITING_VERSION = 2;
  * it only when a node uses one.
  */
 export const DESIGN_IR_MATERIALS_VERSION = 3;
+/** The schema version that adds animation tracks on nodes. */
+export const DESIGN_IR_TRACKS_VERSION = 4;
 /**
  * The schema version that adds vector assets: path and vector nodes,
  * `properties.path`, `properties.vector`, `properties.image.source`, and the
@@ -22,12 +24,14 @@ export const DESIGN_IR_MATERIALS_VERSION = 3;
  */
 export const DESIGN_IR_VECTOR_ASSET_VERSION = 6;
 /**
- * Every version this compiler reads. A document is written at the oldest
+ * Every version this build reads. A document is written at the oldest
  * version that carries every field it uses, each version keeps every field of
  * the ones before it, and a field stays illegal below the version that adds
  * it, whatever the document's version.
  */
 export const DESIGN_IR_VERSIONS = Object.freeze([1, 2, 3, 4, 5, 6]);
+// Compatibility name for supported schema versions.
+export const SUPPORTED_DESIGN_IR_VERSIONS = DESIGN_IR_VERSIONS;
 export const DESIGN_IR_LATEST_VERSION = 6;
 export const DESIGN_IR_VECTOR_PAINT_KEYS = Object.freeze(['transform', 'clipPath', 'overflow']);
 export const AUTHORED_OVERLAY_VERSION = 1;

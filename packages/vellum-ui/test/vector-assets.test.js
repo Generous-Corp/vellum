@@ -119,6 +119,6 @@ test('a material-bearing node is refused at version 3 and 6, never dropped', asy
         }
         target.material = { id: 'vellum.frosted-glass', values: { blur: 12 } };
         assert.throws(() => materializeDesign(material, { viewport: { width: 200, height: 120 } }),
-            /carries a material, which this materializer does not draw/, `version ${version}`);
+            /unsupported material/, `version ${version}`);
     }
 });
