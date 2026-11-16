@@ -297,6 +297,26 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "Script-visible WebGPU error scopes for the scripted binding: native device work runs in validation, out-of-memory and internal device scopes and routes what they catch to the script's own scope, so script sees its errors and the uncaptured-error callback stays quiet. Vellum wrote this; Pulp's binding runs no error scopes."
+    },
+    {
+      "framework_path": "framework/tools/cmake/VellumV8ConsumerDefines.cmake",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "The sealed V8 provider's consumer_defines, applied to the imported target so every translation unit that includes V8 headers compiles with the library's ABI. Pulp's tools/cmake/PulpV8ConsumerDefines.cmake respelled under Vellum names; the Pulp spelling would raise the framework name debt."
+    },
+    {
+      "framework_path": "framework/tools/cmake/VellumV8Provider.cmake",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Resolves the sealed V8 provider for VELLUM_ENABLE_V8 from Vellum's dependency lock: the digest-checked v8-builder archive, its manifest paired with the renderer lock's Skia and Dawn, and a per-file receipt. Vellum's counterpart to Pulp's tools/cmake/FindV8.cmake for its one platform."
     }
   ]
 }
