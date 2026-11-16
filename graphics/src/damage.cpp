@@ -9,6 +9,7 @@
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/path_geometry.hpp>
 #include <vellum/graphics/plot.hpp>
+#include <vellum/graphics/vector_asset.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -238,6 +239,8 @@ std::size_t own_draws(const SceneNode& node) noexcept {
         return node.image ? 1 : 0;
     case SceneNode::Kind::path:
         return (!node.path || !node.path->verbs.empty()) ? 1 : 0;
+    case SceneNode::Kind::vector:
+        return 1;
     case SceneNode::Kind::plot:
         if (!node.plot) return 0;
         return node.fill_gradients.empty() ? 1 : 2;
@@ -279,6 +282,16 @@ std::optional<Rect> path_paint_bounds(const SceneNode& node, const Rect& absolut
     if (!box) return std::nullopt;
     const Rect moved{absolute.x + box->x, absolute.y + box->y, box->width, box->height};
     return finite_rect(moved) ? moved : frame;
+}
+
+std::optional<Rect> vector_node_bounds(const SceneNode& node, const Rect& absolute,
+                                       const Affine2D& transform, const Rect& frame) {
+    if (!node.vector || !vector_asset_is_valid(*node.vector)) return frame;
+    const auto local = vector_paint_bounds(*node.vector, absolute);
+    if (!local) return std::nullopt;
+    if (!finite_rect(*local)) return frame;
+    const Rect mapped = transformed_bounds(transform, *local);
+    return finite_rect(mapped) ? mapped : frame;
 }
 
 bool same_floats(const std::vector<float>& a, const std::vector<float>& b) {
@@ -346,6 +359,7 @@ SceneNode paint_fields(const SceneNode& node) {
     copy.clip = node.clip;
     copy.mask = node.mask;
     copy.isolate = node.isolate;
+    copy.vector = node.vector;
     copy.blend_mode = node.blend_mode;
     copy.plot = node.plot;
     copy.effects = node.effects;
@@ -1100,6 +1114,8 @@ std::optional<Rect> node_paint_bounds(const SceneNode& node, const Rect& absolut
         return path_paint_bounds(node, absolute_bounds, frame);
     case SceneNode::Kind::image:
         return rect_empty(absolute_bounds) ? std::nullopt : std::optional<Rect>(absolute_bounds);
+    case SceneNode::Kind::vector:
+        return vector_node_bounds(node, absolute_bounds, Affine2D{}, frame);
     case SceneNode::Kind::plot:
         if (!node.plot || rect_empty(absolute_bounds)) return std::nullopt;
         return absolute_bounds;
@@ -1149,6 +1165,8 @@ std::optional<Rect> transformed_paint_bounds(const SceneNode& node, const Rect& 
         const Rect mapped = transformed_bounds(transform, local);
         return finite_rect(mapped) ? mapped : frame;
     }
+    case SceneNode::Kind::vector:
+        return vector_node_bounds(node, absolute_bounds, transform, frame);
     }
     return std::nullopt;
 }
@@ -1195,6 +1213,8 @@ bool paint_differs(const SceneNode& previous, const SceneNode& next) {
     case SceneNode::Kind::custom:
         return previous.custom_component != next.custom_component ||
                previous.custom_properties_json != next.custom_properties_json;
+    case SceneNode::Kind::vector:
+        return previous.vector != next.vector;
     case SceneNode::Kind::plot:
         return !same_color(previous.fill, next.fill) ||
                !same_gradients(previous.fill_gradients, next.fill_gradients) ||

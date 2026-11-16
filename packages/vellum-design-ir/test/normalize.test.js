@@ -158,7 +158,7 @@ test('unknown adapter fields are preserved and diagnosed instead of dropped', ()
 
 test('unknown schema versions are rejected rather than best-effort parsed', async () => {
     const document = normalizeImport(await fixture('revision-a.source.json'));
-    document.schemaVersion = 6;
+    document.schemaVersion = 7;
     assert.throws(() => parseDesignIR(document), DesignIRValidationError);
 });
 
@@ -168,9 +168,9 @@ test('schema version 3 remains readable without a material reference', async () 
     assert.doesNotThrow(() => parseDesignIR(document));
 });
 
-test('schema version names remain aliases across the five-version reader', () => {
+test('schema version names remain aliases across the six-version reader', () => {
     assert.strictEqual(SUPPORTED_DESIGN_IR_VERSIONS, DESIGN_IR_VERSIONS);
-    assert.deepEqual([...DESIGN_IR_VERSIONS], [1, 2, 3, 4, 5]);
+    assert.deepEqual([...DESIGN_IR_VERSIONS], [1, 2, 3, 4, 5, 6]);
 });
 
 test('normalization chooses the lowest version covering tracks and compositing', async () => {
