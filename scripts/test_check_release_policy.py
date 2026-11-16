@@ -730,21 +730,25 @@ class Isolation(unittest.TestCase):
                   "1b10c78c7865c340bc4f6099eb2f838309f1e8c3\n")
         workflow = hidden + self.read(mint="")
         problems = policy.step_layout_problems(policy.SIGNING_WORKFLOW, workflow)
-        self.assertTrue(any("steps:` key inside a block scalar" in problem for problem in problems),
+        self.assertTrue(any("unsupported construct" in problem for problem in problems),
                         problems)
 
     def test_a_job_block_scalar_cannot_mint_an_app_token(self) -> None:
-        # The hidden list is text in `env.NOTE`; it is not a runnable step and
-        # must not satisfy the later Administration-only read's token reference.
-        hidden = ("jobs:\n  sign:\n    env:\n      NOTE: |\n"
+        # A block scalar is a string to the YAML parser, never a steps list, so
+        # a minting step written inside one mints nothing: the Administration
+        # read after it still lacks the App token, even with every step
+        # allowlisted. `outputs` takes multi-line values, unlike `env`.
+        hidden = ("jobs:\n  sign:\n    outputs:\n      NOTE: |\n"
                   "        steps:\n"
                   "          - id: app-token\n"
                   "            uses: actions/create-github-app-token@"
                   "1b10c78c7865c340bc4f6099eb2f838309f1e8c3\n")
         workflow = hidden + self.read(mint="")
-        problems = policy.run_body_problems(policy.SIGNING_WORKFLOW, workflow)
-        self.assertTrue(any("steps:` key inside a block scalar" in problem for problem in problems),
-                        problems)
+        self.assertEqual(len(policy.workflow_steps(workflow)), 1)
+        problems = self.allowed(workflow)
+        self.assertTrue(any("Administration-only" in problem for problem in problems), problems)
+        # The control: the same mint written as a real step is the App token.
+        self.assertEqual(self.allowed("jobs:\n  sign:\n" + self.read()), [])
 
     def test_a_column_zero_comment_does_not_hide_the_steps(self) -> None:
         # `# note: |` is a YAML comment, not a block-scalar opener. Read as

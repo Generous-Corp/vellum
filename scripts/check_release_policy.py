@@ -356,14 +356,6 @@ def parse_workflow(text: str) -> Workflow:
             return [plain(child) for child in node.value]
         return {scalar(key, "mapping key"): plain(value) for key, value in node.value}
 
-    def hidden_steps_key(node) -> bool:
-        """A job-level block scalar must not masquerade as its `steps` list."""
-        if isinstance(node, yaml.ScalarNode):
-            return node.style in ("|", ">") and re.search(r"(?m)^\s*steps\s*:", node.value) is not None
-        if isinstance(node, yaml.SequenceNode):
-            return any(hidden_steps_key(child) for child in node.value)
-        return any(hidden_steps_key(value) for _, value in node.value)
-
     def contents(node) -> str:
         if isinstance(node, yaml.ScalarNode):
             return node.value
@@ -401,9 +393,6 @@ def parse_workflow(text: str) -> Workflow:
                             if key not in ("name", "run-name", "jobs")}
         for job, body in mapping(root["jobs"], "jobs").items():
             fields = mapping(body, f"job {job}", JOB_KEYS)
-            for key, value in fields.items():
-                if key != "steps" and hidden_steps_key(value):
-                    refuse(f"job {job}.{key} contains a `steps:` key inside a block scalar")
             job_shell = default_shell(fields, shell, f"job {job}")
             job_env = strings(fields["env"], f"job {job}.env") if "env" in fields else {}
             parsed.secrets[job] = bool(SECRET.search(contents(body))
