@@ -19,7 +19,8 @@ struct SceneAcceptance final {
     /// only the refusal: its `kSceneVersionMismatchCode` error, or a
     /// `kInvalidImageCode` error for an undrawable image or image table, or
     /// the effect error (`kInvalidEffectCode`, `kUnknownMaterialCode` or
-    /// `kInvalidMaterialValueCode`) for an effect that cannot be drawn.
+    /// `kInvalidMaterialValueCode`) for an effect that cannot be drawn, or a
+    /// `kInvalidPlotCode` error for an undrawable plot.
     /// Other refusals (a non-finite transform, an undrawable path) leave it
     /// empty and report through `reason`.
     std::vector<LoweringDiagnostic> diagnostics;
@@ -29,9 +30,9 @@ struct SceneAcceptance final {
 /// version, an unknown kind, a field or kind newer than its version, a
 /// non-finite transform, opacity or corner radius, a root marked as a mask, a
 /// clip that fails `clip_is_valid`, an effect `find_invalid_effect` reports,
-/// an undrawable path, an
-/// image node without a valid reference or with children, or an image table
-/// that `scene_images_are_valid` rejects. A scene with tracks is also refused
+/// an undrawable path, an image node without a valid reference or with
+/// children, an image table that `scene_images_are_valid` rejects, or a plot
+/// that `find_invalid_plot` reports. A scene with tracks is also refused
 /// for a non-finite clock or a track `find_invalid_tracks` reports, and every
 /// rule after the version checks applies to the scene as `evaluate_tracks`
 /// draws it, so a track that drives a transform to infinity is refused.

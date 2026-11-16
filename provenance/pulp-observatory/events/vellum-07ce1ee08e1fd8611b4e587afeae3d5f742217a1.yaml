@@ -1,0 +1,56 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-16T09:17:07Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-07ce1ee08e1fd8611b4e587afeae3d5f742217a1",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "graphics/src/damage.cpp",
+    "graphics/tests/plot_test.cpp",
+    "packages/vellum-design-ir/schema/design-ir-v1.schema.json",
+    "packages/vellum-design-ir/test/plot.test.js",
+    "packages/vellum-ui/src/design.js",
+    "packages/vellum-ui/test/design.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "09dcb515381492f76549b7cf58c69a1b685fc138",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "3c3a8a04e4a9ae0a1a445d8417d252831e26db9f",
+    "to_commit": "07ce1ee08e1fd8611b4e587afeae3d5f742217a1"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-design-ir/schema/design-ir-v1.schema.json",
+    "packages/vellum-design-ir/test/plot.test.js"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "07ce1ee08e1fd8611b4e587afeae3d5f742217a1",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

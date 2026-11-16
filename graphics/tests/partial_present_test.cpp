@@ -460,13 +460,14 @@ void command_extents() {
 Scene grouping_scene(float width, float height);
 
 void damage_model_version_gate() {
-    expect(kDamageModelSceneVersion >= 11U && partial_redraw_supported(3U) &&
+    expect(kDamageModelSceneVersion >= 12U && partial_redraw_supported(3U) &&
                partial_redraw_supported(4U) && partial_redraw_supported(5U) &&
                partial_redraw_supported(6U) && partial_redraw_supported(8U) &&
                partial_redraw_supported(10U) && partial_redraw_supported(11U) &&
+               partial_redraw_supported(12U) &&
                partial_redraw_supported(kDamageModelSceneVersion) &&
                !partial_redraw_supported(kDamageModelSceneVersion + 1U),
-           "partial redraw covers scene versions up to the damage gate, 6, 8, 10 and 11 included");
+           "partial redraw covers scene versions up to the damage gate, 6, 8, 10, 11 and 12 included");
     expect(to_string(FullRepaintReason::damage_model_version) == "damage_model_version",
            "the damage-model version fallback has a telemetry name");
     constexpr std::uint32_t width = 400;
@@ -483,9 +484,9 @@ void damage_model_version_gate() {
         const auto stats = partial->frame_stats();
         expect(!stats.full_repaint && stats.full_repaint_reason == FullRepaintReason::none &&
                    stats.paint_commands_recorded < stats.paint_commands_total,
-               "a default version 11 scene takes the partial path, step " + std::to_string(step),
+               "a default scene at the damage gate takes the partial path, step " + std::to_string(step),
                describe(stats));
-        compare("a default version 11 scene, step " + std::to_string(step), *full, *partial);
+        compare("a default scene at the damage gate, step " + std::to_string(step), *full, *partial);
     }
     Scene newer = scene;
     newer.scene_version = kSceneVersion + 1U;

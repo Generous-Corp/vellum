@@ -7,6 +7,7 @@
 #include <vellum/graphics/layer_cache.hpp>
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
+#include <vellum/graphics/plot.hpp>
 #include <vellum/graphics/render_telemetry.hpp>
 #include <vellum/graphics/scene_acceptance.hpp>
 
@@ -262,6 +263,8 @@ struct FrameResources final {
     MeshTextureCache meshes;
     detail::SkiaResourceCaches* caches = nullptr;
     std::size_t layers = 0;
+    /// Device pixels per logical pixel, which plots lay their columns out in.
+    float scale = 1.0F;
     /// Textures this frame cached. Their uploads exist only in this frame's
     /// recording, so a frame that fails before it is submitted drops them.
     std::vector<detail::TextureKey> uploaded;
@@ -824,6 +827,34 @@ bool draw_mesh(SkCanvas& canvas, const PaintCommand& command,
     return true;
 }
 
+// A plot is device-pixel-aligned rectangles drawn without anti-aliasing, so
+// it reproduces exactly through any damage clip.
+bool draw_plot(SkCanvas& canvas, const PaintCommand& command, float opacity,
+               const FrameResources& resources, std::string* error) {
+    if (!command.plot) return true;
+    std::string reason;
+    if (!plot_is_valid(*command.plot, &reason)) {
+        set_error(error, "plot " + command.node_id + " cannot be drawn: " + reason);
+        return false;
+    }
+    const auto& plot = *command.plot;
+    const auto geometry = plot_geometry(plot, command.fill, command.bounds, resources.scale);
+    SkPaint paint;
+    paint.setAntiAlias(false);
+    for (const auto& piece : geometry.rects) {
+        Color color = command.fill;
+        if (piece.layer == PlotLayer::fill) color = plot.fill_color;
+        if (piece.layer == PlotLayer::line) color = plot.line_color;
+        if (piece.layer == PlotLayer::peak) color = plot.peak_color;
+        if (!(color.alpha > 0.0F)) continue;
+        paint.setColor4f(sk_color(color, opacity));
+        canvas.drawRect(
+            SkRect::MakeXYWH(piece.rect.x, piece.rect.y, piece.rect.width, piece.rect.height),
+            paint);
+    }
+    return true;
+}
+
 SkPath sk_path(const PaintCommand& command) {
     const auto& path = *command.path;
     SkPathBuilder builder(path.fill_rule == FillRule::evenodd ? SkPathFillType::kEvenOdd
@@ -1161,7 +1192,9 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
     const float paint_opacity = own_paint_opacity(command);
     const bool layered = paint_opacity != opacity;
     if (layered && command.kind != PaintCommand::Kind::text) {
-        const auto bounds = layer_rect(paint_extent(command).rect);
+        const auto bounds = layer_rect(command.kind == PaintCommand::Kind::plot
+                                           ? plot_grid_rect(command.bounds, resources.scale)
+                                           : paint_extent(command).rect);
         canvas.saveLayerAlphaf(&bounds, opacity);
         ++resources.layers;
     }
@@ -1174,6 +1207,8 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
         drawn = draw_path(canvas, command, paint_opacity, resources, error);
     } else if (command.kind == PaintCommand::Kind::image) {
         drawn = draw_image(canvas, command, paint_opacity, resources, error);
+    } else if (command.kind == PaintCommand::Kind::plot) {
+        drawn = draw_plot(canvas, command, paint_opacity, resources, error);
     } else {
         drawn = draw_text(canvas, command, paint_opacity, layered ? opacity : 1.0F,
                           directory, resources, paragraph, error);
@@ -1201,12 +1236,32 @@ bool sane_box(const Rect& rect) {
         rect.width >= 0.0F && rect.height >= 0.0F;
 }
 
+// Lowering bounds a plot by a margin that holds its snapped grid at scales of
+// 0.25 and above. Below that the grid can leave the margin, so a layer that
+// holds a plot is left unbounded.
+void unbound_plot_layers(std::vector<PaintCommand>& commands, float scale) {
+    if (!(scale < 0.25F)) return;
+    std::vector<std::size_t> open;
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        const auto kind = commands[index].kind;
+        if (kind == PaintCommand::Kind::begin_layer) {
+            open.push_back(index);
+        } else if (kind == PaintCommand::Kind::end_layer) {
+            if (!open.empty()) open.pop_back();
+        } else if (kind == PaintCommand::Kind::plot) {
+            for (const auto layer : open) commands[layer].layer_unbounded = true;
+        }
+    }
+}
+
 // A command whose box is not finite has no known extent and is always drawn.
 Extent command_extent(const PaintCommand& command, const Rect& frame, float scale) {
     static const DamagePropagation propagation;
     if (!sane_box(command.bounds) || !draws_content(command.kind)) return std::nullopt;
     SceneNode painted;
     painted.bounds = command.bounds;
+    Rect box = command.bounds;
+    if (command.kind == PaintCommand::Kind::plot) box = plot_grid_rect(command.bounds, scale);
     switch (command.kind) {
         case PaintCommand::Kind::rectangle:
             painted.kind = SceneNode::Kind::rectangle;
@@ -1230,6 +1285,10 @@ Extent command_extent(const PaintCommand& command, const Rect& frame, float scal
             painted.kind = SceneNode::Kind::image;
             painted.image = command.image;
             break;
+        case PaintCommand::Kind::plot:
+            painted.kind = SceneNode::Kind::plot;
+            painted.plot = command.plot;
+            break;
         case PaintCommand::Kind::begin_layer:
         case PaintCommand::Kind::end_layer:
         case PaintCommand::Kind::begin_clip:
@@ -1239,7 +1298,7 @@ Extent command_extent(const PaintCommand& command, const Rect& frame, float scal
             return std::nullopt;
     }
     return pixel_extent(
-        transformed_paint_bounds(painted, command.bounds, command.transform, frame, propagation),
+        transformed_paint_bounds(painted, box, command.transform, frame, propagation),
         scale);
 }
 
@@ -2033,7 +2092,12 @@ public:
     bool accepts_with_diagnostics(const Scene& scene, std::string* error) {
         auto acceptance = accept_scene(scene);
         diagnostics_ = std::move(acceptance.diagnostics);
-        if (acceptance.accepted) return true;
+        if (acceptance.accepted) {
+            for (auto& wide : plot_extent_diagnostics(scene, config_.scale)) {
+                diagnostics_.push_back(std::move(wide));
+            }
+            return true;
+        }
         set_error(error, std::move(acceptance.reason));
         return false;
     }
@@ -2119,7 +2183,8 @@ public:
         }
         if (!accepts_with_diagnostics(scene, error)) return false;
         std::vector<PaintCommandRange> ranges;
-        const auto commands = make_paint_commands(scene, &ranges);
+        auto commands = make_paint_commands(scene, &ranges);
+        unbound_plot_layers(commands, config_.scale);
         std::size_t begin = commands.size();
         for (std::size_t index = 0; index < commands.size(); ++index) {
             if (is_effect_layer(commands[index]) && commands[index].node_id == node_id) {
@@ -2437,13 +2502,16 @@ private:
         }
 
         std::vector<PaintCommandRange> ranges;
-        const auto commands = make_paint_commands(scene, &ranges);
+        auto commands = make_paint_commands(scene, &ranges);
+        unbound_plot_layers(commands, config_.scale);
         std::vector<ParagraphSlot> paragraphs(commands.size());
         // stats_ and layer_count_ describe the last submitted frame until
         // this one submits, so the per-frame cache counters must too.
         const auto last_submitted = caches_.frame_state();
         caches_.begin_frame();
-        FrameResources resources{.meshes = {.recorder = recorder_.get()}, .caches = &caches_};
+        FrameResources resources{.meshes = {.recorder = recorder_.get()},
+                                 .caches = &caches_,
+                                 .scale = config_.scale};
         // A frame that is never submitted leaves no trace in the per-frame
         // telemetry; its lookups stay in the cumulative totals. A texture it
         // cached was never written on the GPU, so drop it and a later frame
@@ -2668,7 +2736,9 @@ private:
             }
             if (!draws_content(command.kind)) continue;
             if (!sane_box(command.bounds)) return std::nullopt;
-            Rect local = paint_extent(command).rect;
+            Rect local = command.kind == PaintCommand::Kind::plot
+                             ? plot_grid_rect(command.bounds, config_.scale)
+                             : paint_extent(command).rect;
             if (command.kind == PaintCommand::Kind::text) {
                 const auto measured =
                     measured_text_extent(command, config_.font_directory, paragraphs[index], nullptr);
