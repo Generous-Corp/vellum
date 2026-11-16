@@ -7,9 +7,13 @@
 import { namespacedIdentity } from './identity.js';
 import { normalizeImport } from './normalize.js';
 
+// Every limit the importer holds an asset to. The path, dash, stop, group
+// and depth limits mirror what vellum-ui and the native materializer accept,
+// so the importer never emits an asset a consumer refuses.
 export const SVG_ASSET_LIMITS = Object.freeze({
     maxBytes: 1024 * 1024,
     maxDepth: 64,
+    maxExpandedDepth: 64,
     maxElements: 20000,
     maxAttributes: 64,
     maxExpandedNodes: 50000,
@@ -17,8 +21,14 @@ export const SVG_ASSET_LIMITS = Object.freeze({
     maxPathDataBytes: 64 * 1024,
     maxPathCommands: 4096,
     maxPathValues: 16384,
+    maxTotalPathDataBytes: 8 * 1024 * 1024,
     maxCompiledOps: 16384,
     maxCompiledDepth: 64,
+    maxSubtreeDepth: 192,
+    maxDashes: 64,
+    maxGradientStops: 64,
+    maxSourceIdBytes: 900,
+    maxNodeBudget: 100000,
     maxMatrixEntry: 1e9,
 });
 export const DEFAULT_SVG_NODE_BUDGET = 512;
@@ -91,6 +101,64 @@ function decodeText(value) {
 }
 
 const TEXT_ELEMENTS = new Set(['title', 'desc', 'text', 'tspan', 'textPath', 'style', 'metadata']);
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+const XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink';
+const XML_NAMESPACE = 'http://www.w3.org/XML/1998/namespace';
+// Editor metadata namespaces: their elements and attributes never draw, so
+// they are dropped. Anything else outside SVG, XLink and XML is refused.
+const METADATA_NAMESPACES = new Set([
+    'http://www.inkscape.org/namespaces/inkscape',
+    'http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd',
+    'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
+    'http://purl.org/dc/elements/1.1/',
+    'http://creativecommons.org/ns#',
+    'http://www.bohemiancoding.com/sketch/ns',
+    'http://www.serif.com/',
+]);
+
+function splitName(name) {
+    const colon = name.indexOf(':');
+    return colon === -1 ? ['', name] : [name.slice(0, colon), name.slice(colon + 1)];
+}
+
+// Resolves an element's namespace declarations and qualified names once.
+// The element keeps its local name when it is in the SVG namespace; an
+// attribute keeps its local name, or `xlink:` or `xml:` and its local name
+// for those namespaces, whatever prefix the document used.
+function resolveNames(qualified, raw, parentScope) {
+    const scope = new Map(parentScope);
+    for (const [name, value] of raw) {
+        if (name === 'xmlns') scope.set('', value.trim());
+        else if (name.startsWith('xmlns:')) {
+            const prefix = name.slice(6);
+            if (prefix === 'xml' || prefix === 'xmlns' || !prefix) refuse(`<${qualified}> rebinds ${name}`);
+            scope.set(prefix, value.trim());
+        }
+    }
+    const [prefix, local] = splitName(qualified);
+    if (prefix && !scope.has(prefix)) refuse(`<${qualified}> uses the unbound prefix ${prefix}`);
+    const namespace = scope.get(prefix);
+    const attributes = Object.create(null);
+    for (const [name, value] of raw) {
+        if (name === 'xmlns' || name.startsWith('xmlns:')) continue;
+        const [attributePrefix, attributeLocal] = splitName(name);
+        let key = attributeLocal;
+        if (attributePrefix === 'xml') {
+            key = `xml:${attributeLocal}`;
+        } else if (attributePrefix) {
+            if (!scope.has(attributePrefix)) refuse(`<${qualified}> ${name} uses the unbound prefix ${attributePrefix}`);
+            const attributeNamespace = scope.get(attributePrefix);
+            if (attributeNamespace === XLINK_NAMESPACE) key = `xlink:${attributeLocal}`;
+            else if (attributeNamespace === XML_NAMESPACE) key = `xml:${attributeLocal}`;
+            else if (attributeNamespace === SVG_NAMESPACE) key = attributeLocal;
+            else if (METADATA_NAMESPACES.has(attributeNamespace)) continue;
+            else refuse(`<${qualified}> ${name} is in the unsupported namespace ${attributeNamespace}`);
+        }
+        if (Object.hasOwn(attributes, key)) refuse(`duplicate attribute ${key} on <${qualified}>`);
+        attributes[key] = value;
+    }
+    return { namespace, local, attributes, scope };
+}
 
 // Removes XML comments with one linear scan. A comment holding "--" or one
 // left open is malformed.
@@ -123,7 +191,9 @@ function parseXml(svg) {
     text = stripComments(text);
     if (/<!/.test(text)) refuse('a markup declaration is not allowed');
 
-    const root = { name: '#document', attributes: Object.create(null), children: [], text: '' };
+    const root = { name: '#document', qualified: '#document', attributes: Object.create(null),
+        children: [], text: '', dropped: false,
+        scope: new Map([['', SVG_NAMESPACE], ['xml', XML_NAMESPACE]]) };
     const stack = [root];
     let elements = 0;
     let cursor = 0;
@@ -133,8 +203,12 @@ function parseXml(svg) {
         const content = text.slice(cursor, next === -1 ? text.length : next);
         if (content.trim()) {
             const parent = stack.at(-1);
-            if (!TEXT_ELEMENTS.has(parent.name)) refuse(`text content inside <${parent.name}>`);
-            parent.text += decodeText(content);
+            if (parent.dropped) {
+                decodeText(content);
+            } else {
+                if (!TEXT_ELEMENTS.has(parent.name)) refuse(`text content inside <${parent.name}>`);
+                parent.text += decodeText(content);
+            }
         }
         if (next === -1) break;
         tag.lastIndex = next;
@@ -144,7 +218,7 @@ function parseXml(svg) {
         const [, closing, name, attributeText, selfClosing] = match;
         if (closing) {
             if (attributeText || selfClosing) refuse(`malformed closing tag </${name}>`);
-            if (stack.length < 2 || stack.at(-1).name !== name) {
+            if (stack.length < 2 || stack.at(-1).qualified !== name) {
                 refuse(`mismatched closing tag </${name}>`);
             }
             stack.pop();
@@ -153,17 +227,25 @@ function parseXml(svg) {
         if (++elements > SVG_ASSET_LIMITS.maxElements) {
             refuse(`the asset has more than ${SVG_ASSET_LIMITS.maxElements} elements`);
         }
-        const attributes = Object.create(null);
-        let count = 0;
+        const raw = [];
+        const seen = new Set();
         for (const found of attributeText.matchAll(/([A-Za-z_:][\w.:-]*)\s*=\s*(?:"([^"<]*)"|'([^'<]*)')/g)) {
-            if (++count > SVG_ASSET_LIMITS.maxAttributes) {
+            if (raw.length >= SVG_ASSET_LIMITS.maxAttributes) {
                 refuse(`<${name}> has more than ${SVG_ASSET_LIMITS.maxAttributes} attributes`);
             }
-            if (Object.hasOwn(attributes, found[1])) refuse(`duplicate attribute ${found[1]} on <${name}>`);
-            attributes[found[1]] = decodeText(found[2] ?? found[3]);
+            if (seen.has(found[1])) refuse(`duplicate attribute ${found[1]} on <${name}>`);
+            seen.add(found[1]);
+            raw.push([found[1], decodeText(found[2] ?? found[3])]);
         }
-        const node = { name, attributes, children: [], text: '' };
-        stack.at(-1).children.push(node);
+        const parent = stack.at(-1);
+        const resolved = resolveNames(name, raw, parent.scope);
+        const dropped = parent.dropped || METADATA_NAMESPACES.has(resolved.namespace);
+        if (!dropped && resolved.namespace !== SVG_NAMESPACE) {
+            refuse(`<${name}> is outside the SVG namespace (${resolved.namespace || 'none'})`);
+        }
+        const node = { name: resolved.local, qualified: name, attributes: resolved.attributes,
+            children: [], text: '', dropped, scope: resolved.scope };
+        if (!dropped) parent.children.push(node);
         if (!selfClosing) {
             stack.push(node);
             if (stack.length - 1 > SVG_ASSET_LIMITS.maxDepth) {
@@ -267,33 +349,6 @@ function checkAnimation(node, where) {
     }
 }
 
-const XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink';
-
-// Reference checks read href and xlink:href by name, so a reference may not
-// reach the XLink namespace any other way: no other prefix may be bound to
-// it, xlink may not be bound to anything else, and no other prefix may carry
-// an href.
-function checkNamespace(name, value, where) {
-    const colon = name.indexOf(':');
-    if (name.startsWith('xmlns:')) {
-        const prefix = name.slice(6);
-        if (value.trim() === XLINK_NAMESPACE && prefix !== 'xlink') {
-            refuse(`${where} binds the prefix ${prefix} to the XLink namespace`);
-        }
-        if (prefix === 'xlink' && value.trim() !== XLINK_NAMESPACE) {
-            refuse(`${where} binds the xlink prefix to another namespace`);
-        }
-        return;
-    }
-    if (colon > 0) {
-        const prefix = name.slice(0, colon);
-        const local = name.slice(colon + 1).toLowerCase();
-        if (local === 'href' && prefix !== 'xlink') {
-            refuse(`${where} has the reference ${name} in a namespace other than XLink`);
-        }
-    }
-}
-
 function checkHostility(root) {
     const ids = new Map();
     const references = new Map();
@@ -309,7 +364,6 @@ function checkHostility(root) {
         const own = [];
         for (const [name, value] of Object.entries(node.attributes)) {
             const lower = name.toLowerCase();
-            checkNamespace(name, value, where);
             if (lower.startsWith('on')) refuse(`${where} has the event handler ${name}`);
             if (lower === 'xml:base') refuse(`${where} sets xml:base`);
             if (lower === 'href' || lower === 'xlink:href') {
@@ -349,33 +403,68 @@ function checkHostility(root) {
     visit(root, []);
     // A referenced element that, directly or through its descendants,
     // references itself would expand forever: refuse every reference cycle.
-    const state = new Map();
-    const walk = (id, trail) => {
-        if (state.get(id) === 'done') return;
-        if (state.get(id) === 'open') refuse(`the reference cycle ${[...trail, id].join(' -> ')}`);
-        state.set(id, 'open');
-        for (const next of references.get(id) ?? []) {
-            if (ids.has(next)) walk(next, [...trail, id]);
+    // A referenced element that, directly or through its descendants,
+    // references itself would expand forever. The search is iterative, so a
+    // long chain costs its length, not stack depth.
+    const colour = new Map();
+    const from = new Map();
+    for (const start of references.keys()) {
+        if (colour.has(start)) continue;
+        colour.set(start, 'open');
+        const stack = [[start, (references.get(start) ?? new Set()).values()]];
+        while (stack.length > 0) {
+            const [id, next] = stack.at(-1);
+            const step = next.next();
+            if (step.done) {
+                colour.set(id, 'done');
+                stack.pop();
+                continue;
+            }
+            const target = step.value;
+            if (!ids.has(target)) continue;
+            if (colour.get(target) === 'open') {
+                const trail = [target];
+                for (let at = id; at !== target && at !== undefined; at = from.get(at)) trail.unshift(at);
+                refuse(`the reference cycle ${[target, ...trail].slice(0, 16).join(' -> ')}`);
+            }
+            if (colour.has(target)) continue;
+            colour.set(target, 'open');
+            from.set(target, id);
+            stack.push([target, (references.get(target) ?? new Set()).values()]);
         }
-        state.set(id, 'done');
-    };
-    for (const id of references.keys()) walk(id, []);
-    // Bound the work `use` expansion can cause before doing any of it.
+    }
+    // Bound the work `use` expansion can cause before doing any of it: the
+    // nodes it expands to and how deep it nests, each element visited once.
     const sizes = new Map();
-    const size = (node) => {
-        if (sizes.has(node)) return sizes.get(node);
-        let total = 1;
-        for (const child of node.children) total += size(child);
-        if (node.name === 'use') {
-            const target = ids.get(localReference(node.attributes.href ?? node.attributes['xlink:href'] ?? '') ?? '');
-            if (target) total += size(target);
+    const depths = new Map();
+    const targetOf = (node) => (node.name === 'use'
+        ? ids.get(localReference(node.attributes.href ?? node.attributes['xlink:href'] ?? '') ?? '')
+        : undefined);
+    const pending = [[root, false]];
+    while (pending.length > 0) {
+        const [node, expanded] = pending.pop();
+        if (sizes.has(node)) continue;
+        const target = targetOf(node);
+        const next = target ? [...node.children, target] : node.children;
+        if (!expanded) {
+            pending.push([node, true]);
+            for (const child of next) if (!sizes.has(child)) pending.push([child, false]);
+            continue;
         }
-        total = Math.min(total, SVG_ASSET_LIMITS.maxExpandedNodes + 1);
-        sizes.set(node, total);
-        return total;
-    };
-    if (size(root) > SVG_ASSET_LIMITS.maxExpandedNodes) {
+        let total = 1;
+        let depth = 1;
+        for (const child of next) {
+            total += sizes.get(child) ?? 0;
+            depth = Math.max(depth, 1 + (depths.get(child) ?? 0));
+        }
+        sizes.set(node, Math.min(total, SVG_ASSET_LIMITS.maxExpandedNodes + 1));
+        depths.set(node, Math.min(depth, SVG_ASSET_LIMITS.maxExpandedDepth + 1));
+    }
+    if (sizes.get(root) > SVG_ASSET_LIMITS.maxExpandedNodes) {
         refuse(`use references expand to more than ${SVG_ASSET_LIMITS.maxExpandedNodes} nodes`);
+    }
+    if (depths.get(root) > SVG_ASSET_LIMITS.maxExpandedDepth) {
+        refuse(`use references nest deeper than ${SVG_ASSET_LIMITS.maxExpandedDepth}`);
     }
     return ids;
 }
@@ -1286,16 +1375,19 @@ class Importer {
                         // units, so it applies before the viewBox transform,
                         // as a nested <svg> clips. It has a group of its own
                         // so a clip-path on the use element still applies.
-                        const instance = this.symbolGroup(target, `${sourceId}:${escapeId(targetId)}.symbol`, [{
-                            kind: 'group', id: `${sourceId}:${escapeId(targetId)}`,
+                        // The symbol's own opacity, clip and mask are in its
+                        // user space, inside the viewBox transform; the
+                        // viewport clip is in output units, outside it.
+                        const content = this.inViewport([box[2], box[3]], () => this.children(target,
+                            `${sourceId}:${escapeId(targetId)}`, this.inherit(inner, target), nextActive, true));
+                        const scaled = { kind: 'group', id: `${sourceId}:${escapeId(targetId)}`,
                             transform: this.viewBoxTransform(box, width, height,
                                 target.attributes.preserveAspectRatio, path),
                             opacity: 1,
-                            children: this.inViewport([box[2], box[3]], () => this.children(target,
-                                `${sourceId}:${escapeId(targetId)}`, this.inherit(inner, target), nextActive, true)) }],
-                            path, inner, nextActive);
+                            children: [this.symbolGroup(target, `${sourceId}:${escapeId(targetId)}.symbol`,
+                                content, path, inner, nextActive)] };
                         group.children.push(this.viewportClip(`${sourceId}:${escapeId(targetId)}.viewport`,
-                            declared(target).overflow ?? 'hidden', width, height, [instance]));
+                            declared(target).overflow ?? 'hidden', width, height, [scaled]));
                     } else {
                         this.report('svg-symbol-viewbox-dropped', path,
                             `<use> of a symbol with a viewBox needs a width and height; the viewBox was ignored`);
@@ -1518,7 +1610,7 @@ class Importer {
                 opacity: Math.min(1, Math.max(0, opacityValue ?? 1)) });
         }
         if (stops.length === 0) return null;
-        if (stops.length > 64) {
+        if (stops.length > SVG_ASSET_LIMITS.maxGradientStops) {
             this.report('svg-gradient-stops-dropped', path, `${property} gradient has ${stops.length} stops; the stops after the 64th were dropped`);
             stops.length = 64;
         }
@@ -1594,6 +1686,8 @@ class Importer {
             const parsed = state['stroke-dasharray'].split(/[\s,]+/).filter(Boolean).map((part) => parseLength(part));
             if (parsed.some((part) => part === null || part === undefined || part < 0)) {
                 this.report('svg-dash-dropped', path, 'stroke-dasharray is malformed and was dropped');
+            } else if (parsed.length > SVG_ASSET_LIMITS.maxDashes) {
+                this.rasterOnly.push({ path, reason: `a stroke-dasharray of ${parsed.length} entries, beyond ${SVG_ASSET_LIMITS.maxDashes}, needs rasterization` });
             } else if (parsed.reduce((sum, part) => sum + part, 0) > 0) {
                 dashes = parsed;
             }
@@ -1644,6 +1738,7 @@ class Importer {
                         // SVG applies the use element's transform, then its
                         // x and y, then the referenced shape's transform.
                         const useValues = declared(child);
+                        if (useValues.display === 'none') continue;
                         if (useValues.transform !== undefined) {
                             const parsed = parseTransform(useValues.transform);
                             if (parsed === null) this.report('svg-transform-dropped', path, 'a clipPath <use> has a malformed transform, which was dropped');
@@ -1663,6 +1758,12 @@ class Importer {
                     }
                     const childValues = declared(shapeNode);
                     if (childValues.display === 'none') continue;
+                    // A hidden shape contributes no clip area; visibility
+                    // inherits along the clipPath, through a use to its target.
+                    const visibility = childValues.visibility !== undefined &&
+                        validProperty('visibility', childValues.visibility)
+                        ? childValues.visibility : this.stateOf(child).visibility;
+                    if (visibility === 'hidden' || visibility === 'collapse') continue;
                     if (childValues.transform) {
                         const parsed = parseTransform(childValues.transform);
                         if (parsed === null) this.report('svg-transform-dropped', path, 'a clipPath child has a malformed transform, which was dropped');
@@ -1722,7 +1823,9 @@ function subtreeGradient(gradient, why) {
     for (let index = 1; index < offsets.length; index += 1) {
         if (offsets[index] <= offsets[index - 1]) return why('coincident gradient stops');
     }
-    if (gradient.stops.length < 2 || gradient.stops.length > 64) return why('a gradient with fewer than two or more than 64 stops');
+    if (gradient.stops.length < 2 || gradient.stops.length > SVG_ASSET_LIMITS.maxGradientStops) {
+        return why(`a gradient with fewer than two or more than ${SVG_ASSET_LIMITS.maxGradientStops} stops`);
+    }
     const g = gradient.geometry;
     if (gradient.kind === 'linear') {
         if (gradient.spread !== 'pad') return why('a repeating or reflecting linear gradient');
@@ -1789,7 +1892,9 @@ class SubtreeLowering {
             color: stopColor(stop, paint.opacity, tokens, this.importer.tokensBound),
         }));
         for (let index = 1; index < stops.length; index += 1) {
-            if (stops[index].position <= stops[index - 1].position) return this.why('gradient stops that meet after remapping') ?? 'none';
+            if (Math.fround(stops[index].position) <= Math.fround(stops[index - 1].position)) {
+                return this.why('gradient stops that meet after remapping or float32 rounding') ?? 'none';
+            }
         }
         if (resolved.kind === 'linear') return { kind: 'linear', angle: resolved.angle, stops };
         return { kind: 'radial', spread: resolved.spread, centerX: resolved.centerX,
@@ -1948,7 +2053,9 @@ function compiledGradient(gradient, bounds, opacity) {
             focalX: Number(fmt(g.fx)), focalY: Number(fmt(g.fy)), startRadius: Number(fmt(Math.max(0, g.fr))),
             endRadius: Number(fmt(g.r)) };
     }
-    const determinant = space[0] * space[3] - space[1] * space[2];
+    // The renderer checks invertibility in float32; so does the importer.
+    const f = space.map((value) => Math.fround(Number(fmt(value))));
+    const determinant = Math.fround(Math.fround(f[0] * f[3]) - Math.fround(f[1] * f[2]));
     if (!Number.isFinite(determinant) || determinant === 0) return { solid: stops.at(-1).color };
     return {
         gradient: { ...shape, spread: gradient.spread,
@@ -2086,6 +2193,28 @@ function paintBounds(item, matrix = IDENTITY) {
     return box;
 }
 
+function sourceTreeDepth(root) {
+    let deepest = 0;
+    const pending = [[root, 1]];
+    while (pending.length > 0) {
+        const [node, depth] = pending.pop();
+        deepest = Math.max(deepest, depth);
+        for (const child of node.children ?? []) pending.push([child, depth + 1]);
+    }
+    return deepest;
+}
+
+function longestSourceId(root) {
+    let longest = 0;
+    const pending = [root];
+    while (pending.length > 0) {
+        const node = pending.pop();
+        if (typeof node.sourceId === 'string') longest = Math.max(longest, utf8Length(node.sourceId));
+        for (const child of node.children ?? []) pending.push(child);
+    }
+    return longest;
+}
+
 function validateOptions(options) {
     if (options === null || typeof options !== 'object' || Array.isArray(options)) {
         throw new TypeError('SVG asset options must be an object');
@@ -2096,7 +2225,7 @@ function validateOptions(options) {
     }
     const nodeBudget = options.nodeBudget ?? DEFAULT_SVG_NODE_BUDGET;
     const pathDataBudget = options.pathDataBudget ?? DEFAULT_SVG_PATH_DATA_BUDGET;
-    if (!Number.isSafeInteger(nodeBudget) || nodeBudget < 1 ||
+    if (!Number.isSafeInteger(nodeBudget) || nodeBudget < 1 || nodeBudget > SVG_ASSET_LIMITS.maxNodeBudget ||
         !Number.isSafeInteger(pathDataBudget) || pathDataBudget < 1) {
         throw new TypeError('SVG budgets must be positive integers');
     }
@@ -2179,6 +2308,12 @@ export function importSvgAsset(svg, options = {}) {
     let lowered = null;
     if (!overBudget) {
         lowered = subtree.lower(tree, importer.colorTokens);
+        if (lowered && sourceTreeDepth(lowered) + 1 > SVG_ASSET_LIMITS.maxSubtreeDepth) {
+            subtree.why(`a subtree deeper than ${SVG_ASSET_LIMITS.maxSubtreeDepth} levels`);
+        }
+        if (lowered && longestSourceId(lowered) > SVG_ASSET_LIMITS.maxSourceIdBytes) {
+            subtree.why(`identities longer than ${SVG_ASSET_LIMITS.maxSourceIdBytes} bytes`);
+        }
         if (subtree.nodes + 1 > settings.nodeBudget || subtree.pathBytes > settings.pathDataBudget) {
             lowered = null;
         }
@@ -2195,10 +2330,13 @@ export function importSvgAsset(svg, options = {}) {
         if (op.op === 'group') deepest = Math.max(deepest, ++depth);
         else if (op.op === 'end') depth -= 1;
     }
+    const compiledBytes = compiled.ops.reduce((sum, op) => sum + utf8Length(op.d ?? op.clip?.d ?? ''), 0);
     if (compiled.ops.length > SVG_ASSET_LIMITS.maxCompiledOps ||
-        deepest > SVG_ASSET_LIMITS.maxCompiledDepth) {
-        reasonsText = `its compiled form needs ${compiled.ops.length} operations nested ${deepest} deep, ` +
-            `beyond ${SVG_ASSET_LIMITS.maxCompiledOps} operations or ${SVG_ASSET_LIMITS.maxCompiledDepth} levels`;
+        deepest > SVG_ASSET_LIMITS.maxCompiledDepth ||
+        compiledBytes > SVG_ASSET_LIMITS.maxTotalPathDataBytes) {
+        reasonsText = `its compiled form needs ${compiled.ops.length} operations nested ${deepest} deep ` +
+            `with ${compiledBytes} bytes of path data, beyond ${SVG_ASSET_LIMITS.maxCompiledOps} operations, ` +
+            `${SVG_ASSET_LIMITS.maxCompiledDepth} levels or ${SVG_ASSET_LIMITS.maxTotalPathDataBytes} bytes`;
         if (settings.rasterize) return rasterize();
         refuse(reasonsText);
     }

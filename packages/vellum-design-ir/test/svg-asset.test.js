@@ -394,7 +394,8 @@ test('an href reaches the XLink namespace only under the xlink prefix', () => {
             '<image r:href="https://example.invalid/x.png" width="10" height="10"/><text>raster</text></svg>',
         'an href under an unknown prefix': '<svg xmlns="http://www.w3.org/2000/svg" xmlns:q="urn:other" width="10" height="10">' +
             '<image q:href="https://example.invalid/x.png" width="10" height="10"/><text>raster</text></svg>',
-        'xlink rebound': '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="urn:other" width="10" height="10"><text>raster</text></svg>',
+        'xlink rebound': '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="urn:other" width="10" height="10">' +
+            '<image xlink:href="https://example.invalid/x.png" width="10" height="10"/><text>raster</text></svg>',
         'an aliased animated href': '<svg xmlns="http://www.w3.org/2000/svg" xmlns:r="http://www.w3.org/1999/xlink" width="10" height="10">' +
             '<image width="10" height="10"><set attributeName="r:href" to="#x"/></image><text>raster</text></svg>',
     };
@@ -485,4 +486,180 @@ test('a symbol keeps its own opacity as one group on each instance', () => {
     assert.deepEqual(groups, [{ id: 'svg.1:s.symbol', opacity: 0.5, children: 2 }]);
     const compiled = compiledOps(importSvgAsset(svg, { nodeBudget: 1 }));
     assert.ok(compiled.some((op) => op.op === 'group' && op.opacity === 0.5), 'the compiled form groups it too');
+});
+
+const hookNever = (svg, name) => {
+    let handed = null;
+    assert.throws(() => importSvgAsset(svg, { rasterize: (input) => { handed = input; } }), SvgAssetRefusal, name);
+    assert.equal(handed, null, `${name} never reaches the rasterizer`);
+};
+
+test('every element and attribute name is resolved to its namespace before any check', () => {
+    const svg = (body, declarations = '') =>
+        `<svg xmlns="http://www.w3.org/2000/svg"${declarations} width="10" height="10">${body}<text>raster</text></svg>`;
+    hookNever(svg('<s:foreignObject width="5" height="5"><h:img src="https://example.invalid/x.png"/></s:foreignObject>',
+        ' xmlns:s="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml"'), 'a prefixed SVG foreignObject');
+    hookNever(svg('<h:img src="https://example.invalid/x.png"/>', ' xmlns:h="http://www.w3.org/1999/xhtml"'), 'an XHTML element');
+    hookNever(svg('<g xmlns="http://www.w3.org/1999/xhtml"><img src="https://example.invalid/x.png"/></g>'), 'a default-namespace switch');
+    hookNever(svg('<s:script>1</s:script>', ' xmlns:s="http://www.w3.org/2000/svg"'), 'a prefixed script');
+    hookNever(svg('<q:rect width="1" height="1"/>'), 'an unbound element prefix');
+    hookNever(svg('<rect q:x="1" width="1" height="1"/>'), 'an unbound attribute prefix');
+    hookNever(svg('<rect o:fill="red" width="1" height="1"/>', ' xmlns:o="urn:other"'), 'an attribute in an unknown namespace');
+    hookNever(svg('<image r:href="https://example.invalid/x.png" width="1" height="1"/>',
+        ' xmlns:r="http://www.w3.org/1999/xlink"'), 'an aliased XLink href');
+    const local = importSvgAsset(svg('<rect id="r" width="5" height="5" fill="#ff0000"/><use r:href="#r" x="5"/>',
+        ' xmlns:r="http://www.w3.org/1999/xlink"'), { rasterize: () => ({ contentHash: `sha256:${'a'.repeat(64)}` }) });
+    assert.equal(local.mode, 'rasterized', 'an aliased local href resolves as xlink:href');
+    const metadata = importSvgAsset('<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" ' +
+        'xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" xmlns:dc="http://purl.org/dc/elements/1.1/" ' +
+        'xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" width="10" height="10">' +
+        '<sodipodi:namedview inkscape:zoom="2"/><metadata><rdf:RDF><dc:title>Icon</dc:title></rdf:RDF></metadata>' +
+        '<rect inkscape:label="box" width="5" height="5" fill="#ff0000"/></svg>');
+    assert.equal(metadata.mode, 'subtree', 'editor metadata is dropped, not refused');
+    assert.deepEqual(metadata.diagnostics, []);
+});
+
+test('reference traversal is iterative and bounded: a 10,000-link use chain is refused in linear time', () => {
+    const chain = (length) => {
+        let body = '<defs>';
+        for (let index = 0; index < length; index += 1) body += `<use id="g${index}" href="#g${index + 1}"/>`;
+        body += `<rect id="g${length}" width="1" height="1"/></defs><use href="#g0"/>`;
+        return wrap(body);
+    };
+    const started = Date.now();
+    assert.throws(() => importSvgAsset(chain(10000)), /nest deeper than 64|expand to more than/);
+    assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`);
+    assert.doesNotThrow(() => importSvgAsset(chain(30)), 'a chain within the depth limit imports');
+    const cycle = (length) => {
+        let body = '';
+        for (let index = 0; index < length; index += 1) body += `<use id="c${index}" href="#c${(index + 1) % length}"/>`;
+        return wrap(body);
+    };
+    assert.throws(() => importSvgAsset(cycle(10000)), /reference cycle/);
+});
+
+test('the expanded nesting limit holds at the limit and refuses one past it', () => {
+    const nested = (levels) => {
+        let body = '<defs><rect id="u0" width="1" height="1"/>';
+        for (let index = 1; index <= levels; index += 1) body += `<use id="u${index}" href="#u${index - 1}"/>`;
+        return wrap(`${body}</defs><use href="#u${levels}"/>`);
+    };
+    // svg, the outer use, then two levels per use link: the deepest legal
+    // chain is found by the limit itself.
+    let legal = 0;
+    for (let levels = 1; levels < 80; levels += 1) {
+        try { importSvgAsset(nested(levels)); legal = levels; } catch { break; }
+    }
+    assert.ok(legal > 0);
+    assert.doesNotThrow(() => importSvgAsset(nested(legal)), 'at the limit');
+    assert.throws(() => importSvgAsset(nested(legal + 1)), /nest deeper than 64/, 'one past the limit');
+});
+
+test('every importer limit matches its consumer and holds at the limit and one past it', () => {
+    assert.equal(SVG_ASSET_LIMITS.maxDashes, 64);
+    assert.equal(SVG_ASSET_LIMITS.maxGradientStops, 64);
+    assert.equal(SVG_ASSET_LIMITS.maxPathCommands, 4096);
+    assert.equal(SVG_ASSET_LIMITS.maxCompiledOps, 16384);
+    assert.equal(SVG_ASSET_LIMITS.maxCompiledDepth, 64);
+    const dashed = (count, options = {}) => importSvgAsset(wrap(
+        `<path d="M0 0H10" stroke="#000000" stroke-dasharray="${Array(count).fill(1).join(' ')}"/>`), options);
+    for (const options of [{}, { nodeBudget: 1 }]) {
+        const atLimit = dashed(64, options);
+        const ops = atLimit.mode === 'compiled'
+            ? compiledOps(atLimit).filter((op) => op.op === 'path')[0].strokeDasharray
+            : firstPathOf(atLimit).properties.path.strokeDasharray;
+        assert.equal(ops.length, 64, `64 dashes are kept (${atLimit.mode})`);
+        const past = dashed(65, options);
+        assert.ok(past.diagnostics.some((entry) => entry.code === 'svg-raster-feature-dropped' &&
+            /65 entries/.test(entry.message)), `65 dashes are a recorded loss (${past.mode})`);
+        const shown = past.mode === 'compiled'
+            ? compiledOps(past).filter((op) => op.op === 'path')[0].strokeDasharray
+            : firstPathOf(past).properties.path.strokeDasharray;
+        assert.equal(shown, undefined, 'no asset carries more dashes than the consumers accept');
+        let rasterized = 0;
+        assert.equal(dashed(65, { ...options, rasterize: () => { rasterized += 1; return { contentHash: `sha256:${'b'.repeat(64)}` }; } }).mode,
+            'rasterized', 'with a rasterizer, 65 dashes rasterize');
+        assert.equal(rasterized, 1);
+    }
+    const stops = (count) => `<linearGradient id="g">${Array.from({ length: count },
+        (_, index) => `<stop offset="${index / (count - 1)}" stop-color="#${index % 2 ? 'ff0000' : '0000ff'}"/>`).join('')}</linearGradient>` +
+        '<rect width="5" height="5" fill="url(#g)"/>';
+    assert.equal(firstPathOf(importSvgAsset(wrap(stops(64)))).properties.path.fill.stops.length, 64);
+    const many = svgAssetToDesignIR(wrap(stops(65)), { source });
+    assert.ok(codes(many.document).includes('svg-gradient-stops-dropped'));
+    const long = (count) => `<path d="M0 0${'L1 1'.repeat(count - 1)}"/>`;
+    assert.doesNotThrow(() => importSvgAsset(wrap(long(SVG_ASSET_LIMITS.maxPathCommands))));
+    assert.throws(() => importSvgAsset(wrap(long(SVG_ASSET_LIMITS.maxPathCommands + 1))), /exceeds 4096 commands/);
+    assert.throws(() => importSvgAsset(wrap(''), { nodeBudget: SVG_ASSET_LIMITS.maxNodeBudget + 1 }), /budgets/);
+    assert.doesNotThrow(() => importSvgAsset(wrap(''), { nodeBudget: SVG_ASSET_LIMITS.maxNodeBudget }));
+});
+
+function firstPathOf(imported) {
+    const visit = (node) => node.kind === 'path' ? node : (node.children ?? []).map(visit).find(Boolean);
+    return visit(imported.root);
+}
+
+test('stop positions stay strictly increasing once the consumers read them as float32', () => {
+    const svg = wrap(`<linearGradient id="g"><stop offset="0.5" stop-color="#ff0000"/>
+        <stop offset="0.50000001" stop-color="#0000ff"/><stop offset="1" stop-color="#00ff00"/></linearGradient>
+        <rect width="5" height="5" fill="url(#g)"/>`);
+    const imported = importSvgAsset(svg);
+    assert.equal(imported.mode, 'compiled', 'the float32 collision routes to the compiled form');
+    const distinct = importSvgAsset(svg.replace('0.50000001', '0.5001'));
+    assert.equal(distinct.mode, 'subtree');
+});
+
+test('identities the consumers would truncate route the asset to the compiled form', () => {
+    const longId = 'a'.repeat(250);
+    let body = `<defs><rect id="${longId}" width="1" height="1"/>`;
+    for (let index = 1; index <= 4; index += 1) body += `<g id="${longId}${index}"><use href="#${index === 1 ? longId : longId + (index - 1)}"/></g>`;
+    body += '</defs>';
+    for (let index = 0; index < 2; index += 1) body += `<use id="${longId}x${index}" href="#${longId}4"/>`;
+    const imported = importSvgAsset(wrap(body));
+    assert.equal(imported.mode, 'compiled');
+    assert.match(imported.diagnostics.find((entry) => entry.code === 'svg-compiled').message, /identities longer than 900 bytes/);
+});
+
+test('a symbol clip and mask are in the symbol user space, inside its viewBox transform', () => {
+    const svg = wrap(`<defs><clipPath id="c"><rect width="5" height="10"/></clipPath>
+        <mask id="m"><rect width="5" height="10" fill="#ffffff"/></mask></defs>
+        <symbol id="s" viewBox="0 0 10 10" clip-path="url(#c)"><rect width="10" height="10" fill="#ff0000"/></symbol>
+        <symbol id="t" viewBox="0 0 10 10" mask="url(#m)"><rect width="10" height="10" fill="#0000ff"/></symbol>
+        <use href="#s" width="20" height="20"/><use href="#t" y="20" width="20" height="20"/>`)
+        .replace('width="10" height="10"', 'width="40" height="40"');
+    const compiled = compiledOps(importSvgAsset(svg, { nodeBudget: 1 }));
+    const scaled = compiled.findIndex((op) => op.op === 'group' && JSON.stringify(op.transform) === '[2,0,0,2,0,0]');
+    assert.ok(scaled >= 0);
+    const clip = compiled.slice(scaled + 1).find((op) => op.clip && op.clip.d === 'M0 0L5 0L5 10L0 10Z');
+    assert.ok(clip, 'the symbol clip sits inside the viewBox scale, so it covers 10 output units');
+    const subtree = importSvgAsset(svg, { sourceKey: 'assets' });
+    const chain = [];
+    const find = (node, trail) => {
+        if (node.properties?.paint?.clipPath === 'M0 0L5 0L5 10L0 10Z') chain.push(...trail);
+        for (const child of node.children ?? []) find(child, [...trail, node.properties?.paint?.transform]);
+    };
+    find(subtree.root, []);
+    assert.ok(chain.includes('matrix(2, 0, 0, 2, 0, 0)'), 'the subtree clip is under the viewBox scale');
+    const masked = [];
+    const findMask = (node, trail) => {
+        if (node.compositing?.mask) masked.push(...trail);
+        for (const child of node.children ?? []) findMask(child, [...trail, node.properties?.paint?.transform]);
+    };
+    findMask(subtree.root, []);
+    assert.ok(masked.includes('matrix(2, 0, 0, 2, 0, 0)'), 'the subtree mask is under the viewBox scale');
+});
+
+test('hidden clip children add no clip area, directly, inherited or through a use', () => {
+    const clipShapes = (clip) => {
+        const svg = wrap(`<defs><rect id="r" width="4" height="4"/>${clip}</defs>
+            <rect width="10" height="10" fill="#ff0000" clip-path="url(#c)"/>`);
+        const ops = compiledOps(importSvgAsset(svg, { nodeBudget: 1 }));
+        return ops.filter((op) => op.clip).length + ops.filter((op) => op.op === 'group' && op.opacity === 0).length * 100;
+    };
+    assert.equal(clipShapes('<clipPath id="c"><rect width="4" height="4"/></clipPath>'), 1, 'a visible child clips');
+    assert.equal(clipShapes('<clipPath id="c"><rect width="4" height="4" visibility="hidden"/></clipPath>'), 100, 'a hidden child leaves an empty clip');
+    assert.equal(clipShapes('<clipPath id="c" visibility="hidden"><rect width="4" height="4"/></clipPath>'), 100, 'inherited visibility');
+    assert.equal(clipShapes('<clipPath id="c"><use href="#r" display="none"/></clipPath>'), 100, 'a use with display none');
+    assert.equal(clipShapes('<clipPath id="c"><use href="#r" visibility="hidden"/></clipPath>'), 100, 'a hidden use');
+    assert.equal(clipShapes('<clipPath id="c" visibility="hidden"><rect width="4" height="4" visibility="visible"/></clipPath>'), 1, 'a child can override');
 });

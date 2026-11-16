@@ -35,6 +35,13 @@ export const SVG_ASSET_LIMITS: Readonly<{
     maxCompiledOps: number;
     maxCompiledDepth: number;
     maxMatrixEntry: number;
+    maxExpandedDepth: number;
+    maxTotalPathDataBytes: number;
+    maxSubtreeDepth: number;
+    maxDashes: number;
+    maxGradientStops: number;
+    maxSourceIdBytes: number;
+    maxNodeBudget: number;
 }>;
 export const DEFAULT_SVG_NODE_BUDGET: number;
 export const DEFAULT_SVG_PATH_DATA_BUDGET: number;
