@@ -70,14 +70,13 @@ def classify(paths: list[str]) -> tuple[bool, str]:
 
 # Paths whose change can only be caught by a GPU adapter: the Skia/Dawn
 # graphics backend and its tests, the pinned renderer runtime, the apps that
-# open a window or capture a frame, the RmlUi renderer, and the workflow that runs the proof. A pull request
+# open a window or capture a frame, and the workflow that runs the proof. A pull request
 # touching any of them runs the full proof now; anything else gets the cheap
 # lane and the merge group runs the full proof before main moves.
 GPU_RELEVANT = (
     re.compile(r"graphics/.*"),
     re.compile(r"gpu-runtime/.*"),
     re.compile(r"apps/.*"),
-    re.compile(r"rmlui/.*"),
     re.compile(r"packages/vellum-swift/.*"),
     re.compile(r".*\.(metal|wgsl)"),
     re.compile(r"provenance/third-party-lock\.json"),

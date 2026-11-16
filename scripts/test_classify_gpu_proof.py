@@ -59,6 +59,8 @@ class EarlyProofTests(unittest.TestCase):
             ["tools/provenance/observatory.py", ".github/workflows/provenance.yml"],
             ["packages/vellum-ui/src/design.js", "cli/vellum_web_backend.py"],
             ["CMakeLists.txt", "cmake/VellumTestClasses.cmake"],
+            # The Vellum lead's rule set leaves rmlui/ to the cheap lane and the merge group.
+            ["rmlui/src/soft_raster.hpp", "rmlui/tests/cpu_hash_test.cpp"],
         ):
             with self.subTest(paths=paths):
                 early, reason = classifier.early_proof(paths)
@@ -70,7 +72,7 @@ class EarlyProofTests(unittest.TestCase):
             ["scripts/classify_gpu_proof.py"], ["scripts/test_classify_gpu_proof.py"],
             [".github/workflows/gpu-macos.yml"],
             ["docs/a.md", "gpu-runtime/renderer-lock.json"],
-            ["rmlui/src/soft_raster.hpp"], ["provenance/third-party-lock.json"],
+            ["provenance/third-party-lock.json"],
             ["graphics/shaders/blur.wgsl"],
         ):
             with self.subTest(paths=paths):

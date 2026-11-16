@@ -111,7 +111,7 @@ A pull request runs the full proof now, as it did before, when any of these hold
 
 - the base's classifier (`scripts/classify_gpu_proof.py --early-proof`, read
   from the base, never from the change) says a changed path can only be proved
-  on a GPU: `graphics/`, `gpu-runtime/`, `apps/`, `rmlui/`, `packages/vellum-swift/`,
+  on a GPU: `graphics/`, `gpu-runtime/`, `apps/`, `packages/vellum-swift/`,
   shader sources, `provenance/third-party-lock.json`, the proof workflow and
   the classifier itself;
 - the pull request carries the `gpu-proof` label (the labels are read when the
