@@ -721,9 +721,12 @@ PaintExtent paint_extent(const PaintCommand& command) {
         if (!finite) return {box, false};
         return {moved};
     }
-    if (command.kind == PaintCommand::Kind::image || command.kind == PaintCommand::Kind::plot) {
-        return {box};
+    if (command.kind == PaintCommand::Kind::plot) {
+        constexpr float snap_reach = 1.0F;
+        return {{box.x - snap_reach, box.y - snap_reach, box.width + 2.0F * snap_reach,
+                 box.height + 2.0F * snap_reach}};
     }
+    if (command.kind == PaintCommand::Kind::image) return {box};
     if (!draws_content(command.kind)) return {box};
     Rect extent = box;
     for (const auto& shadow : command.box_shadows) {

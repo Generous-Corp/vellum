@@ -881,7 +881,9 @@ void lowering() {
     expect(commands.size() == 2U && commands[1].kind == PaintCommand::Kind::plot &&
                commands[1].plot == scene.root.children[1].plot &&
                commands[1].bounds.x == kPlotBox.x &&
-               paint_extent(commands[1]).rect.width == kPlotBox.width,
+               paint_extent(commands[1]).rect.width == kPlotBox.width + 2.0F &&
+               paint_extent(commands[1]).rect.x == kPlotBox.x - 1.0F &&
+               paint_extent(commands[1]).bounded,
            "a plot lowers to one command carrying its spec over its box");
     expect(to_string(PaintCommand::Kind::plot) == "plot" && draws_content(PaintCommand::Kind::plot),
            "a plot command draws content");

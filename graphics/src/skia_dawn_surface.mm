@@ -1192,7 +1192,9 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
     const float paint_opacity = own_paint_opacity(command);
     const bool layered = paint_opacity != opacity;
     if (layered && command.kind != PaintCommand::Kind::text) {
-        const auto bounds = layer_rect(paint_extent(command).rect);
+        const auto bounds = layer_rect(command.kind == PaintCommand::Kind::plot
+                                           ? plot_grid_rect(command.bounds, resources.scale)
+                                           : paint_extent(command).rect);
         canvas.saveLayerAlphaf(&bounds, opacity);
         ++resources.layers;
     }
@@ -2707,7 +2709,9 @@ private:
             }
             if (!draws_content(command.kind)) continue;
             if (!sane_box(command.bounds)) return std::nullopt;
-            Rect local = paint_extent(command).rect;
+            Rect local = command.kind == PaintCommand::Kind::plot
+                             ? plot_grid_rect(command.bounds, config_.scale)
+                             : paint_extent(command).rect;
             if (command.kind == PaintCommand::Kind::text) {
                 const auto measured =
                     measured_text_extent(command, config_.font_directory, paragraphs[index], nullptr);

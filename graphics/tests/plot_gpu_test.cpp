@@ -800,6 +800,71 @@ void version_gate() {
            message);
 }
 
+void snapped_plot_removal() {
+    struct Case final {
+        const char* name;
+        float scale;
+        Rect box;
+        float magnify;
+    };
+    const Case cases[] = {
+        {"fractional edge at 1x under a 100x transform", 1.0F, {0.49F, 0.49F, 1.0F, 1.0F}, 100.0F},
+        {"fractional edge at 2x under a 40x transform", 2.0F, {0.26F, 0.26F, 1.0F, 1.0F}, 40.0F},
+        {"fractional edge at 1x untransformed", 1.0F, {10.4F, 10.4F, 20.3F, 20.3F}, 1.0F},
+    };
+    for (const auto& item : cases) {
+        auto full = make_surface(item.scale);
+        auto partial = make_surface(item.scale, true);
+        if (!full || !partial) return;
+        Scene with = empty_scene();
+        auto node = plot_node("snapped", item.box,
+                              spec_of(PlotStyle::area, PlotChannelShape::vector, 1, {1.0F}));
+        node.transform = {.a = item.magnify, .d = item.magnify};
+        with.root.children.push_back(node);
+        const Scene without = empty_scene();
+        if (!render_both(*full, *partial, with)) return;
+        if (!render_both(*full, *partial, without)) return;
+        std::string message;
+        const auto stats = partial->frame_stats();
+        expect(!stats.full_repaint && identical(*full, *partial, message),
+               std::string("removing a plot with a ") + item.name + " leaves no stale pixels",
+               describe(stats) + " " + message);
+    }
+}
+
+void unresolved_binding() {
+    for (const float scale : {1.0F, 2.0F}) {
+        const std::string at = "@" + std::to_string(static_cast<int>(scale)) + " ";
+        InMemoryValueFeed live({{.name = "scope", .shape = ChannelShape::vector, .capacity = 64}});
+        Scene scene = empty_scene();
+        scene.root.children.push_back(
+            plot_node("scope", kWaveBox,
+                      spec_of(PlotStyle::area, PlotChannelShape::vector, 16, {}, "scope")));
+        PlotFeedSampler sampler;
+        std::vector<float> block(16, 0.75F);
+        live.publish_vector(0, block);
+        sampler.sample(live, scene);
+        auto full = make_surface(scale);
+        auto partial = make_surface(scale, true);
+        if (!full || !partial || !render_both(*full, *partial, scene)) return;
+        auto* node = find_mutable(scene.root, "scope");
+        expect(!node->plot->samples.empty(), at + "the bound plot holds samples first");
+        auto missing = std::make_shared<PlotSpec>(*node->plot);
+        missing->channel = "missing";
+        node->plot = missing;
+        const auto report = sampler.sample(live, scene);
+        expect(node->plot->samples.empty() && report.updated.size() == 1U &&
+                   report.diagnostics.size() == 1U,
+               at + "a binding that became unresolved clears its samples and reports the update");
+        if (!render_both(*full, *partial, scene)) return;
+        std::string message;
+        const auto stats = partial->frame_stats();
+        expect(!stats.full_repaint && stats.damage_area_pixels > 0 &&
+                   identical(*full, *partial, message),
+               at + "the cleared plot repaints byte-identically", describe(stats) + " " + message);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -816,6 +881,8 @@ int main() {
     feed_updates();
     rebind_to_unpublished();
     large_feed();
+    snapped_plot_removal();
+    unresolved_binding();
     version_gate();
     if (failures != 0) {
         std::cerr << failures << " plot GPU check(s) failed\n";

@@ -139,7 +139,17 @@ PlotFeedReport PlotFeedSampler::sample(value::ValueFeed& feed, Scene& scene) {
     }
 
     for (std::size_t at = 0; at < plots.size(); ++at) {
-        if (!channels[at]) continue;
+        if (!channels[at]) {
+            SceneNode* lost = plots[at];
+            if (lost->id.empty() || !fed(*lost->plot)) continue;
+            states_.erase(keys[at]);
+            if (lost->plot->samples.empty()) continue;
+            auto cleared = std::make_shared<PlotSpec>(*lost->plot);
+            cleared->samples.clear();
+            lost->plot = std::move(cleared);
+            report.updated.push_back(lost->id);
+            continue;
+        }
         SceneNode* node = plots[at];
         const PlotSpec& spec = *node->plot;
         auto& slot = states_[keys[at]];
