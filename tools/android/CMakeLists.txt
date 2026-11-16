@@ -51,9 +51,9 @@ foreach(_skip IN LISTS _excluded)
     list(REMOVE_ITEM _sources "${_core}/${_skip}")
 endforeach()
 
-# One source per line, the framework units plus the probe, so a lane can hold
+# One source per line, the framework units, so a lane can hold
 # the number of compiled objects to what this file selected.
-set(_selected ${_sources} "${CMAKE_CURRENT_SOURCE_DIR}/jni_probe.cpp")
+set(_selected ${_sources})
 list(JOIN _selected "\n" _selected_text)
 file(WRITE "${CMAKE_BINARY_DIR}/android-sources.txt" "${_selected_text}\n")
 
@@ -70,11 +70,3 @@ target_include_directories(vellum-android-framework PUBLIC
     "${VELLUM_CHOC_ROOT}")
 set_target_properties(vellum-android-framework PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(vellum-android-framework PUBLIC log android)
-
-# The JNI bridge headers are inert off Android, so a header that compiled to
-# nothing would pass a plain compile. The probe names symbols they declare, and
-# the CI lane reads them back from the object.
-add_library(vellum-android-jni-probe OBJECT jni_probe.cpp)
-target_link_libraries(vellum-android-jni-probe PRIVATE vellum-android-framework)
-# An object library: has_asset_manager() is defined by the host sources, which
-# are not part of this lane, so the probe is never linked.

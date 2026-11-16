@@ -96,17 +96,46 @@ jobs:
           set -euo pipefail
           cmake --build "$RUNNER_TEMP/android" --parallel "$(nproc)"
 
-      - name: Check the objects are AArch64 and the probe symbol is defined
+      - name: Check the framework objects are AArch64
+        shell: bash
+        run: |
+          set -euo pipefail
+          sources="$(wc -l < "$RUNNER_TEMP/android/android-sources.txt")"
+          python3 -I tools/android/check_android_objects.py \
+            --build-dir "$RUNNER_TEMP/android" --expect-sources "$sources"
+
+      # The bridge headers are inert off Android, so a header that compiled to
+      # nothing would pass a plain compile. This translation unit names what
+      # they declare and the object must define the probe's symbol. It is
+      # written here, not kept as a source file: tools/ is not allowed to
+      # include the framework by its own names.
+      - name: Compile the JNI bridge probe and check its symbol
         shell: bash
         run: |
           set -euo pipefail
           bin="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          sources="$(wc -l < "$RUNNER_TEMP/android/android-sources.txt")"
+          probe="$RUNNER_TEMP/probe"
+          mkdir -p "$probe/CMakeFiles/jni-probe.dir"
+          cat > "$probe/jni_probe.cpp" <<'CPP'
+          #include <vellum/platform/android/jni.hpp>
+          #include <vellum/platform/android/motion_bridge.h>
+          #include <type_traits>
+          #if !defined(__ANDROID__)
+          #error "the JNI probe must be built with the Android toolchain"
+          #endif
+          static_assert(std::is_same_v<decltype(vellum::android::g_vm), JavaVM*>);
+          static_assert(std::is_same_v<decltype(&vellum::android::get_env), JNIEnv* (*)()>);
+          extern "C" __attribute__((visibility("default"))) int vellum_android_probe_abi() {
+              bool (*tracing)() = &pulp_motion_tracing_enabled;
+              return tracing != nullptr && vellum::android::has_asset_manager() ? 1 : 0;
+          }
+          CPP
+          "$bin/aarch64-linux-android${ANDROID_API_FLOOR}-clang++" -std=c++20 -c \
+            -I framework/core/platform/include \
+            "$probe/jni_probe.cpp" -o "$probe/CMakeFiles/jni-probe.dir/jni_probe.o"
           python3 -I tools/android/check_android_objects.py \
-            --build-dir "$RUNNER_TEMP/android" \
-            --expect-sources "$sources" \
-            --nm "$bin/llvm-nm" \
-            --require-symbol vellum_android_probe_abi
+            --build-dir "$probe" --expect-sources 1 \
+            --nm "$bin/llvm-nm" --require-symbol vellum_android_probe_abi
 
       - name: Control, a host-compiled object must be refused
         shell: bash
