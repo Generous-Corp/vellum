@@ -62,8 +62,7 @@ class LiveBrowserGateTests(unittest.TestCase):
         with mock.patch.dict("os.environ", environ, clear=True), \
              mock.patch("subprocess.Popen") as popen, \
              mock.patch("subprocess.run") as run, \
-             mock.patch("shutil.which", return_value="/usr/bin/google-chrome"), \
-             mock.patch("pathlib.Path.is_file", return_value=True):
+             mock.patch("shutil.which", return_value="/usr/bin/google-chrome"):
             suite.run(result)
         launched = [call for call in popen.call_args_list + run.call_args_list
                     if system in repr(call) or "google-chrome" in repr(call)]
@@ -77,6 +76,24 @@ class LiveBrowserGateTests(unittest.TestCase):
         popen.assert_not_called()
         run.assert_not_called()
 
+    def test_a_set_but_unusable_pinned_browser_fails_instead_of_skipping(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = str(Path(directory) / "no-such-chrome")
+            plain = Path(directory) / "plain"
+            plain.write_text("x", encoding="utf-8")
+            plain.chmod(0o644)
+            for pin in (missing, str(plain)):
+                with self.subTest(pin=pin):
+                    self.assertIsNone(live_browser.live_browser_skip_reason({"VELLUM_CHROME_PATH": pin}))
+                    result, popen, run, launched = self.run_live_capture_test({"VELLUM_CHROME_PATH": pin})
+                    self.assertEqual(len(result.skipped), 0)
+                    self.assertEqual(len(result.failures) + len(result.errors), 1)
+                    self.assertIn("VELLUM_CHROME_PATH does not name an executable browser",
+                                  (result.failures + result.errors)[0][1])
+                    self.assertEqual(launched, [])
+                    popen.assert_not_called()
+                    run.assert_not_called()
+
     def test_escape_hatch_is_the_only_way_to_allow_the_system_browser(self) -> None:
         self.assertIsNone(live_browser.live_browser_skip_reason({"VELLUM_TEST_ALLOW_SYSTEM_CHROME": "1"}))
         self.assertIsNotNone(live_browser.live_browser_skip_reason({"VELLUM_TEST_ALLOW_SYSTEM_CHROME": "0"}))
@@ -89,8 +106,6 @@ class LiveBrowserGateTests(unittest.TestCase):
             browser.write_text("#!/bin/sh\n", encoding="utf-8")
             browser.chmod(0o755)
             self.assertIsNone(live_browser.live_browser_skip_reason({"VELLUM_CHROME_PATH": str(browser)}))
-            browser.chmod(0o644)
-            self.assertIn("executable", live_browser.live_browser_skip_reason({"VELLUM_CHROME_PATH": str(browser)}))
 
 
 class ChromeDiscoveryTests(unittest.TestCase):

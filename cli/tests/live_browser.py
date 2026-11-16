@@ -23,11 +23,10 @@ def live_browser_skip_reason(environ: Mapping[str, str] | None = None) -> str | 
     env = os.environ if environ is None else environ
     if env.get(ESCAPE_ENV) == "1":
         return None
-    pinned = env.get(PINNED_ENV)
-    if pinned and os.path.isfile(pinned) and os.access(pinned, os.X_OK):
+    if env.get(PINNED_ENV):
+        # A named browser is never skipped: chrome_path() rejects one that is
+        # missing or not executable, so a broken pin fails instead of hiding.
         return None
-    if pinned:
-        return f"{PINNED_ENV} does not name an executable browser: {pinned}"
     return (f"live-browser test skipped: {PINNED_ENV} is unset and the installed "
             f"Chrome is not used by default (set {ESCAPE_ENV}=1 to allow it)")
 
