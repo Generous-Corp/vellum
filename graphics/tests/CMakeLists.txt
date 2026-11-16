@@ -161,3 +161,18 @@ add_test(NAME vellum.gpu.plots
     COMMAND vellum-plot-gpu-test)
 set_tests_properties(vellum.gpu.plots PROPERTIES
     SKIP_RETURN_CODE 77)
+
+add_executable(vellum-frame-debug-test
+    frame_debug_test.mm)
+target_link_libraries(vellum-frame-debug-test PRIVATE
+    vellum-scene-capture-harness
+    "-framework QuartzCore")
+# The test reaches SkiaDawnSurfaceTestAccess, which is not installed.
+target_include_directories(vellum-frame-debug-test PRIVATE
+    ${PROJECT_SOURCE_DIR}/graphics/src)
+set_target_properties(vellum-frame-debug-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.frame-debug
+    COMMAND vellum-frame-debug-test)
