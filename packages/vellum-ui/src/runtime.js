@@ -564,6 +564,10 @@ function validateVector(properties, path) {
                 }
                 op.strokeDasharray.forEach((dash, item) => finitePaintNumber(
                     dash, `${where}.strokeDasharray[${item}]`, { nonNegative: true }));
+                const total = op.strokeDasharray.reduce((sum, dash) => sum + Math.fround(dash), 0);
+                if (op.strokeDasharray.length > 0 && !(total > 0)) {
+                    throw new TypeError(`${where}.strokeDasharray must not sum to zero`);
+                }
             }
         } else {
             throw new TypeError(`${where}.op must be group, end or path`);

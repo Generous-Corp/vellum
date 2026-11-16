@@ -345,14 +345,19 @@ function styleDeclarations(value, where) {
         refuse(`${where} has a style with an at-rule, comment, escape, expression or image function`);
     }
     const declarations = Object.create(null);
+    const important = new Set();
     for (const part of value.split(';')) {
         if (!part.trim()) continue;
         const colon = part.indexOf(':');
         if (colon <= 0) refuse(`${where} has a malformed style declaration`);
         const name = part.slice(0, colon).trim().toLowerCase();
-        const declared = part.slice(colon + 1).trim().replace(/\s*!important$/i, '');
+        const raw = part.slice(colon + 1).trim();
+        const isImportant = /\s*!important$/i.test(raw);
         if (!/^[a-z-]+$/.test(name)) refuse(`${where} has a malformed style property`);
-        declarations[name] = declared;
+        // A later normal declaration does not override an important one.
+        if (important.has(name) && !isImportant) continue;
+        if (isImportant) important.add(name);
+        declarations[name] = raw.replace(/\s*!important$/i, '');
     }
     return declarations;
 }
@@ -1114,7 +1119,16 @@ const INITIAL = Object.freeze({
     'color-interpolation': 'sRGB',
 });
 
+// Each element's declarations are resolved once, so an `inherit` that reads
+// its parent's costs one lookup however many attributes use it.
+const DECLARED = new WeakMap();
+
 function declared(node) {
+    if (!DECLARED.has(node)) DECLARED.set(node, resolveDeclared(node));
+    return Object.assign(Object.create(null), DECLARED.get(node));
+}
+
+function resolveDeclared(node) {
     const values = Object.create(null);
     for (const [name, value] of Object.entries(node.attributes)) values[name] = value.trim();
     if (node.attributes.style !== undefined) {
@@ -1519,8 +1533,15 @@ class Importer {
                         this.instanceChildren(target, sourceId, targetId, inner, nextActive), path, inner, nextActive));
                 }
             } else {
-                const lowered = this.element(target, `${sourceId}:${escapeId(targetId)}`, inner, nextActive, true);
-                if (lowered) group.children.push(lowered);
+                const outer = this.useSize;
+                this.useSize = target.name === 'svg' ? { target,
+                    width: parseLength(node.attributes.width), height: parseLength(node.attributes.height) } : undefined;
+                try {
+                    const lowered = this.element(target, `${sourceId}:${escapeId(targetId)}`, inner, nextActive, true);
+                    if (lowered) group.children.push(lowered);
+                } finally {
+                    this.useSize = outer;
+                }
             }
         } else if (CONTAINERS.has(node.name)) {
             if (node.name === 'a') {
@@ -1536,8 +1557,10 @@ class Importer {
             } else if (node.name === 'svg') {
                 const x = this.lengthOrZero(node, 'x', path);
                 const y = this.lengthOrZero(node, 'y', path);
-                const width = parseLength(node.attributes.width);
-                const height = parseLength(node.attributes.height);
+                // A use that names this svg sets its width and height.
+                const instance = this.useSize?.target === node ? this.useSize : {};
+                const width = instance.width > 0 ? instance.width : parseLength(node.attributes.width);
+                const height = instance.height > 0 ? instance.height : parseLength(node.attributes.height);
                 const box = node.attributes.viewBox?.trim().split(/[\s,]+/).map(Number);
                 group.transform = multiply(group.transform, [1, 0, 0, 1, x, y]);
                 const hasBox = box && box.length === 4 && box[2] > 0 && box[3] > 0;
@@ -1850,8 +1873,9 @@ class Importer {
             } else {
                 const units = definition.attributes.clipPathUnits === 'objectBoundingBox' ? 'box' : 'user';
                 let clipTransform = [...IDENTITY];
-                if (definition.attributes.transform) {
-                    const parsed = parseTransform(definition.attributes.transform);
+                const definitionTransform = declared(definition).transform;
+                if (definitionTransform) {
+                    const parsed = parseTransform(definitionTransform);
                     if (parsed === null) this.report('svg-transform-dropped', path, 'a clipPath has a malformed transform, which was dropped');
                     else clipTransform = parsed;
                 }

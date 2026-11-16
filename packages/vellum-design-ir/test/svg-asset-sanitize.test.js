@@ -256,3 +256,42 @@ test('a stylesheet is reported wherever it is, definitions included', () => {
     const imported = importSvgAsset(wrap('<defs><style>rect{fill:red}</style></defs><rect width="10" height="10"/>'));
     assert.deepEqual(codes(imported.diagnostics), ['svg-style-element-dropped']);
 });
+
+test('inherit resolves each element once, so nested inherits cost linear time', () => {
+    const level = '<g a="inherit" b="inherit" c="inherit" d="inherit" e="inherit" f="inherit" opacity="inherit">';
+    for (const depth of [12, 60]) {
+        const svg = wrap(`${level.repeat(depth)}<rect width="1" height="1"/>${'</g>'.repeat(depth)}`);
+        const start = performance.now();
+        importSvgAsset(svg);
+        const elapsed = performance.now() - start;
+        assert.ok(elapsed < 1000, `${depth} levels took ${elapsed} ms`);
+    }
+});
+
+test('a later normal style declaration does not override an important one', () => {
+    const hidden = importSvgAsset('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" ' +
+        'style="display:none!important;display:inline"><rect width="10" height="10" fill="red"/></svg>');
+    assert.doesNotMatch(JSON.stringify(hidden.root), /"kind":"path"/);
+    const red = importSvgAsset(wrap('<rect width="1" height="1" style="fill:red !important;fill:blue"/>'));
+    assert.match(JSON.stringify(red.root), /#ff0000/);
+    const blue = importSvgAsset(wrap('<rect width="1" height="1" style="fill:red;fill:blue"/>'));
+    assert.match(JSON.stringify(blue.root), /#0000ff/, 'without importance the later declaration wins');
+});
+
+test('a use sets the width and height of the svg it names', () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><svg id="s" width="10" ' +
+        'height="10" viewBox="0 0 10 10"><rect width="10" height="10"/></svg></defs><use href="#s" width="20" height="20"/></svg>';
+    const text = JSON.stringify(importSvgAsset(svg).root);
+    assert.match(text, /"clipPath":"M0 0L20 0L20 20L0 20Z"/);
+    assert.match(text, /matrix\(2, 0, 0, 2, 0, 0\)/);
+    const own = JSON.stringify(importSvgAsset(svg.replace(' width="20" height="20"', '')).root);
+    assert.match(own, /"clipPath":"M0 0L10 0L10 10L0 10Z"/, 'without them the svg keeps its own size');
+});
+
+test('a clipPath transform is read from its style as well as its attribute', () => {
+    for (const transform of ['style="transform:matrix(1,0,0,1,5,0)"', 'transform="translate(5 0)"']) {
+        const svg = wrap(`<defs><clipPath id="c" ${transform}><rect width="5" height="10"/></clipPath></defs>` +
+            '<rect width="10" height="10" clip-path="url(#c)"/>');
+        assert.match(JSON.stringify(importSvgAsset(svg, { sourceKey: 's' }).root), /matrix\(1, 0, 0, 1, 5, 0\)/, transform);
+    }
+});
