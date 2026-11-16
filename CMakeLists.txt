@@ -627,6 +627,10 @@ if(TARGET vellum-authoring)
     install(DIRECTORY authoring/include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 endif()
 
+# Every test carries one of the pr-fast, gpu or slow class labels.
+include(cmake/VellumTestClasses.cmake)
+vellum_apply_test_classes("${CMAKE_CURRENT_SOURCE_DIR}/scripts/ctest_classes.json")
+
 # The system and architectures the installed binaries are built for. The
 # package config reports "not found" to a consumer that targets others.
 set(VELLUM_PACKAGE_SYSTEM_NAME "${CMAKE_SYSTEM_NAME}")
