@@ -1236,12 +1236,32 @@ bool sane_box(const Rect& rect) {
         rect.width >= 0.0F && rect.height >= 0.0F;
 }
 
+// Lowering bounds a plot by a margin that holds its snapped grid at scales of
+// 0.25 and above. Below that the grid can leave the margin, so a layer that
+// holds a plot is left unbounded.
+void unbound_plot_layers(std::vector<PaintCommand>& commands, float scale) {
+    if (!(scale < 0.25F)) return;
+    std::vector<std::size_t> open;
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        const auto kind = commands[index].kind;
+        if (kind == PaintCommand::Kind::begin_layer) {
+            open.push_back(index);
+        } else if (kind == PaintCommand::Kind::end_layer) {
+            if (!open.empty()) open.pop_back();
+        } else if (kind == PaintCommand::Kind::plot) {
+            for (const auto layer : open) commands[layer].layer_unbounded = true;
+        }
+    }
+}
+
 // A command whose box is not finite has no known extent and is always drawn.
 Extent command_extent(const PaintCommand& command, const Rect& frame, float scale) {
     static const DamagePropagation propagation;
     if (!sane_box(command.bounds) || !draws_content(command.kind)) return std::nullopt;
     SceneNode painted;
     painted.bounds = command.bounds;
+    Rect box = command.bounds;
+    if (command.kind == PaintCommand::Kind::plot) box = plot_grid_rect(command.bounds, scale);
     switch (command.kind) {
         case PaintCommand::Kind::rectangle:
             painted.kind = SceneNode::Kind::rectangle;
@@ -1278,7 +1298,7 @@ Extent command_extent(const PaintCommand& command, const Rect& frame, float scal
             return std::nullopt;
     }
     return pixel_extent(
-        transformed_paint_bounds(painted, command.bounds, command.transform, frame, propagation),
+        transformed_paint_bounds(painted, box, command.transform, frame, propagation),
         scale);
 }
 
@@ -2163,7 +2183,8 @@ public:
         }
         if (!accepts_with_diagnostics(scene, error)) return false;
         std::vector<PaintCommandRange> ranges;
-        const auto commands = make_paint_commands(scene, &ranges);
+        auto commands = make_paint_commands(scene, &ranges);
+        unbound_plot_layers(commands, config_.scale);
         std::size_t begin = commands.size();
         for (std::size_t index = 0; index < commands.size(); ++index) {
             if (is_effect_layer(commands[index]) && commands[index].node_id == node_id) {
@@ -2481,7 +2502,8 @@ private:
         }
 
         std::vector<PaintCommandRange> ranges;
-        const auto commands = make_paint_commands(scene, &ranges);
+        auto commands = make_paint_commands(scene, &ranges);
+        unbound_plot_layers(commands, config_.scale);
         std::vector<ParagraphSlot> paragraphs(commands.size());
         // stats_ and layer_count_ describe the last submitted frame until
         // this one submits, so the per-frame cache counters must too.

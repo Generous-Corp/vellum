@@ -857,6 +857,45 @@ void wide_plot() {
            "control: a plot within the column limit reports nothing", error);
 }
 
+void snapped_plot_culling() {
+    struct Case final {
+        float scale;
+        Rect box;
+        float magnify;
+        Rect damaged;
+    };
+    const Case cases[] = {
+        {1.0F, {0.51F, 0.51F, 1.0F, 1.0F}, 100.0F, {120.0F, 120.0F, 10.0F, 10.0F}},
+        {0.125F, {4.4F, 4.4F, 8.0F, 8.0F}, 10.0F, {106.0F, 106.0F, 10.0F, 10.0F}},
+    };
+    for (const auto& item : cases) {
+        const std::string at = "@" + std::to_string(item.scale) + " ";
+        auto full = make_surface(item.scale);
+        auto partial = make_surface(item.scale, true);
+        if (!full || !partial) return;
+        Scene scene = empty_scene();
+        auto node = plot_node("snapped", item.box,
+                              spec_of(PlotStyle::area, PlotChannelShape::vector, 1, {1.0F}));
+        node.transform = Affine2D{.a = item.magnify, .d = item.magnify};
+        scene.root.children.push_back(node);
+        std::string error;
+        if (!full->render(scene, &error) || !partial->render(scene, &error)) {
+            expect(false, at + "snapped plot scene renders", error);
+            return;
+        }
+        const PixelRect frame = frame_rect(scene, item.scale);
+        const auto pixels = to_pixel_rect(item.damaged, item.scale);
+        DamageRegion damage(frame, {.full_repaint_fraction = 2.0});
+        if (pixels) damage.add(*pixels);
+        const bool drew = partial->render(scene, damage, &error);
+        std::string message;
+        const auto stats = partial->frame_stats();
+        expect(drew && pixels && !stats.full_repaint && identical(*full, *partial, message),
+               at + "damage inside a transformed plot's snapped grid repaints it byte-identically",
+               error + describe(stats) + " " + message);
+    }
+}
+
 void unresolved_binding() {
     for (const float scale : {1.0F, 2.0F}) {
         const std::string at = "@" + std::to_string(static_cast<int>(scale)) + " ";
@@ -909,6 +948,7 @@ int main() {
     snapped_plot_removal();
     unresolved_binding();
     wide_plot();
+    snapped_plot_culling();
     version_gate();
     if (failures != 0) {
         std::cerr << failures << " plot GPU check(s) failed\n";
