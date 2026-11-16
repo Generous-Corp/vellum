@@ -734,14 +734,14 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
         [surface](const vellum::graphics::Scene& scene, std::string* failure) {
             return surface->render_incremental(scene, failure);
         });
-    _driver->set_reduced_motion(
-        NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion);
     __weak VellumApplicationView* weakSelf = self;
     _driver->set_wake([weakSelf] {
         dispatch_async(dispatch_get_main_queue(), ^{
             [weakSelf startFrames];
         });
     });
+    _driver->set_reduced_motion(
+        NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion);
     _motionObserver = [NSWorkspace.sharedWorkspace.notificationCenter
         addObserverForName:NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification
                     object:nil
@@ -753,7 +753,7 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
         owner->_driver->set_reduced_motion(
             NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion);
     }];
-    _driver->request_frame();
+    [self startFrames];
 }
 
 - (void)mouseDown:(NSEvent*)event {

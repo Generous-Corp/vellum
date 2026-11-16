@@ -207,6 +207,17 @@ void request_renders_and_wakes() {
     check(wakes == 2, "a request after the frame ran wakes the host again");
 }
 
+void wake_installed_after_a_request() {
+    Recorder recorder;
+    auto driver = make_driver(recorder);
+    driver.set_reduced_motion(true);
+    int wakes = 0;
+    driver.set_wake([&wakes] { ++wakes; });
+    check(wakes == 1, "a wake function installed after a request is called for it");
+    driver.request_frame();
+    check(wakes == 1, "and that request is not woken a second time");
+}
+
 void feed_publish_is_one_sample_one_frame() {
     using namespace vellum::value;
     InMemoryValueFeed feed({{.name = "level", .shape = ChannelShape::scalar, .neutral = 0.0F},
@@ -297,6 +308,57 @@ void a_replaced_scene_takes_the_driver_clock() {
           "a scene the host replaced is stamped with the running clock, not zero");
 }
 
+void persistent_failure_stops_retrying() {
+    int calls = 0;
+    FrameDriver driver([&calls](const Scene&, std::string*) {
+        ++calls;
+        return false;
+    });
+    Scene scene = plot_scene();
+    double now = 1.0;
+    int ticks_asked = 0;
+    for (int i = 0; i < 20; ++i) {
+        if (!driver.frame(scene, now).needs_next_frame) break;
+        ++ticks_asked;
+        now += 0.016;
+    }
+    check(ticks_asked == 3 && calls == 4,
+          "a render that keeps failing is retried a bounded number of times (" +
+              std::to_string(ticks_asked) + " retries, " + std::to_string(calls) + " calls)");
+    driver.request_frame();
+    driver.frame(scene, now);
+    check(calls == 5, "a request after the retries ran out tries again");
+}
+
+void rebinding_a_plot_restarts_the_stale_count() {
+    using namespace vellum::value;
+    InMemoryValueFeed feed({{.name = "level", .shape = ChannelShape::scalar},
+                            {.name = "other", .shape = ChannelShape::scalar}});
+    Recorder recorder;
+    FrameDriverOptions options;
+    options.feed.stale_after_ticks = 3;
+    auto driver = make_driver(recorder, options);
+    driver.set_feed(&feed);
+    Scene scene = plot_scene();
+    feed.publish_scalar(0, 0.5F);
+    feed.publish_scalar(1, 0.5F);
+    double now = 1.0;
+    driver.frame(scene, now);
+    for (int i = 0; i < 4; ++i) {
+        now += 0.016;
+        driver.frame(scene, now);
+    }
+    check(!driver.frame(scene, now + 0.016).needs_next_frame, "the first binding has gone stale");
+    auto spec = std::make_shared<PlotSpec>(*scene.root.children.at(0).plot);
+    spec->channel = "other";
+    scene.root.children.at(0).plot = std::move(spec);
+    driver.request_frame();
+    now += 0.032;
+    const auto report = driver.frame(scene, now);
+    check(report.feed_active && report.needs_next_frame,
+          "a plot rebound to another published channel is watched until that channel can go stale");
+}
+
 void render_failure_is_reported() {
     int calls = 0;
     FrameDriver driver([&calls](const Scene&, std::string* error) {
@@ -320,9 +382,12 @@ int main() {
     idle_gap_is_not_animation_time();
     reduced_motion_jumps_to_the_end();
     request_renders_and_wakes();
+    wake_installed_after_a_request();
     feed_publish_is_one_sample_one_frame();
     a_replaced_scene_takes_the_driver_clock();
     render_failure_is_reported();
+    persistent_failure_stops_retrying();
+    rebinding_a_plot_restarts_the_stale_count();
     std::printf("%d failure(s)\n", failures);
     return failures == 0 ? 0 : 1;
 }

@@ -25,6 +25,10 @@ struct FrameDriverOptions final {
     /// ticks the driver keeps asking for after a feed's last publish, so a
     /// silent channel still gets the tick that draws its neutral value.
     PlotFeedOptions feed;
+    /// Consecutive failed renders the driver retries on its own before it stops
+    /// asking for frames, so a lost device does not spin the display link. A
+    /// request or a successful frame starts the count again.
+    std::uint32_t max_render_retries = 3;
 };
 
 /// What one `FrameDriver::frame` call did.
@@ -49,8 +53,8 @@ struct FrameReport final {
     /// A channel a plot is bound to published recently enough that it has not
     /// yet gone stale. Channels no plot reads do not count.
     bool feed_active = false;
-    /// The host should tick again, also after a failed render so the next tick
-    /// retries; when false it should stop its display link and call `suspend`,
+    /// The host should tick again, also after a failed render (up to
+    /// `max_render_retries` in a row) so the next tick retries; when false it should stop its display link and call `suspend`,
     /// and costs no frames until `request_frame`.
     bool needs_next_frame = false;
 };
@@ -108,7 +112,9 @@ public:
 
     /// Called from `request_frame`, on whatever thread requested; it must be
     /// thread safe and cheap, normally a hop to the thread that owns the
-    /// vsync source.
+    /// vsync source. Installing it while a request is already pending calls it
+    /// once, so the order of setup does not lose the first wake. Main thread,
+    /// before any other thread calls `request_frame`.
     void set_wake(WakeFunction wake);
 
     /// Asks for the next frame to render and wakes the host, once until that
@@ -141,6 +147,7 @@ private:
     bool have_last_ = false;
     bool rendered_once_ = false;
     double rendered_clock_ = 0.0;
+    std::uint32_t failed_renders_ = 0;
     std::atomic<bool> requested_{false};
 };
 

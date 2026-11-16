@@ -30,7 +30,10 @@ void add_bound_publishes(const SceneNode& node, const value::ValueFeed& feed,
                          std::uint32_t& signature) noexcept {
     if (node.kind == SceneNode::Kind::plot && node.plot != nullptr && !node.plot->channel.empty()) {
         const auto index = feed.find(node.plot->channel, channel_shape(plot_shape(*node.plot)));
-        if (index) signature = signature * 31U + feed.publish_count(*index);
+        if (index) {
+            signature = (signature * 31U + static_cast<std::uint32_t>(*index)) * 31U +
+                        feed.publish_count(*index);
+        }
     }
     for (const auto& child : node.children) add_bound_publishes(child, feed, signature);
 }
@@ -69,7 +72,10 @@ void FrameDriver::set_clock(double seconds) {
     request_frame();
 }
 
-void FrameDriver::set_wake(WakeFunction wake) { wake_ = std::move(wake); }
+void FrameDriver::set_wake(WakeFunction wake) {
+    wake_ = std::move(wake);
+    if (wake_ && requested_.load(std::memory_order_acquire)) wake_();
+}
 
 void FrameDriver::request_frame() {
     if (!requested_.exchange(true, std::memory_order_acq_rel) && wake_) wake_();
@@ -80,6 +86,7 @@ void FrameDriver::suspend() noexcept { have_last_ = false; }
 FrameReport FrameDriver::frame(Scene& scene, double now_seconds) {
     FrameReport report;
     const bool requested = requested_.exchange(false, std::memory_order_acq_rel);
+    bool exhausted = false;
 
     double dt = 0.0;
     if (!have_last_ || now_seconds - last_now_ > options_.wake_threshold) {
@@ -129,15 +136,19 @@ FrameReport FrameDriver::frame(Scene& scene, double now_seconds) {
         if (report.render_ok) {
             rendered_once_ = true;
             rendered_clock_ = clock_;
+            failed_renders_ = 0;
         } else {
             rendered_once_ = false;
+            if (failed_renders_ < options_.max_render_retries) ++failed_renders_;
+            else exhausted = true;
         }
     }
 
     report.tracks_running = end && clock_ < *end;
     report.feed_active = feed_live_;
     report.needs_next_frame =
-        report.tracks_running || feed_live_ || frame_requested() || !report.render_ok;
+        report.tracks_running || feed_live_ || frame_requested() ||
+        (!report.render_ok && !exhausted);
     return report;
 }
 
