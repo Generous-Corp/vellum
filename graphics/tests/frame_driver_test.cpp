@@ -196,15 +196,21 @@ void request_renders_and_wakes() {
     driver.frame(scene, 1.0);
     check(!driver.frame(scene, 1.016).rendered, "a settled scene renders nothing");
     driver.request_frame();
-    check(wakes == 1 && driver.frame_requested(), "a request wakes the host once");
+    driver.request_frame();
+    driver.request_frame();
+    check(wakes == 1 && driver.frame_requested(),
+          "requests made before the frame runs wake the host once");
     const auto report = driver.frame(scene, 1.032);
     check(report.rendered && !driver.frame_requested() && !report.needs_next_frame,
           "a request renders exactly one frame");
+    driver.request_frame();
+    check(wakes == 2, "a request after the frame ran wakes the host again");
 }
 
 void feed_publish_is_one_sample_one_frame() {
     using namespace vellum::value;
-    InMemoryValueFeed feed({{.name = "level", .shape = ChannelShape::scalar, .neutral = 0.0F}});
+    InMemoryValueFeed feed({{.name = "level", .shape = ChannelShape::scalar, .neutral = 0.0F},
+                            {.name = "other", .shape = ChannelShape::scalar, .neutral = 0.0F}});
     Recorder recorder;
     FrameDriverOptions options;
     options.feed.stale_after_ticks = 3;
@@ -255,6 +261,19 @@ void feed_publish_is_one_sample_one_frame() {
     report = driver.frame(scene, now);
     check(report.rendered && report.feed.updated.size() == 1, "a later publish wakes it again");
 
+    for (int i = 0; i < 8; ++i) {
+        feed.publish_scalar(1, static_cast<float>(i));
+        now += 0.016;
+        report = driver.frame(scene, now);
+        if (i >= 4) {
+            check(!report.feed_active, "a channel no plot reads does not keep the driver ticking");
+        }
+    }
+    check(!report.needs_next_frame, "a busy unrelated channel does not hold the display link open");
+    feed.publish_scalar(0, 0.5F);
+    now += 0.016;
+    driver.frame(scene, now);
+
     const std::size_t rendered = recorder.scenes.size();
     feed.publish_scalar(0, 0.6F);
     feed.publish_scalar(0, 0.7F);
@@ -285,10 +304,11 @@ void render_failure_is_reported() {
         if (error != nullptr) *error = "device lost";
         return false;
     });
-    Scene scene = track_scene();
+    Scene scene = plot_scene();
     const auto report = driver.frame(scene, 1.0);
     check(report.rendered && !report.render_ok && report.error == "device lost",
           "a failed render is reported with its error");
+    check(report.needs_next_frame, "a failed frame asks for another tick");
     check(driver.frame(scene, 1.016).rendered && calls == 2,
           "a failed frame is retried on the next tick, not forgotten");
 }

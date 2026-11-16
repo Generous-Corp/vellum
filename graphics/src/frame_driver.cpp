@@ -15,11 +15,29 @@ bool any_plot(const SceneNode& node) noexcept {
                        [](const SceneNode& child) { return any_plot(child); });
 }
 
-std::uint32_t feed_signature(const value::ValueFeed& feed) noexcept {
-    std::uint32_t signature = 0;
-    for (std::size_t index = 0, count = feed.channel_count(); index < count; ++index) {
-        signature += feed.publish_count(index);
+PlotChannelShape plot_shape(const PlotSpec& spec) noexcept { return spec.shape; }
+
+value::ChannelShape channel_shape(PlotChannelShape shape) noexcept {
+    switch (shape) {
+    case PlotChannelShape::scalar: return value::ChannelShape::scalar;
+    case PlotChannelShape::meter: return value::ChannelShape::meter;
+    case PlotChannelShape::vector: return value::ChannelShape::vector;
     }
+    return value::ChannelShape::scalar;
+}
+
+void add_bound_publishes(const SceneNode& node, const value::ValueFeed& feed,
+                         std::uint32_t& signature) noexcept {
+    if (node.kind == SceneNode::Kind::plot && node.plot != nullptr && !node.plot->channel.empty()) {
+        const auto index = feed.find(node.plot->channel, channel_shape(plot_shape(*node.plot)));
+        if (index) signature = signature * 31U + feed.publish_count(*index);
+    }
+    for (const auto& child : node.children) add_bound_publishes(child, feed, signature);
+}
+
+std::uint32_t feed_signature(const value::ValueFeed& feed, const Scene& scene) noexcept {
+    std::uint32_t signature = 0;
+    add_bound_publishes(scene.root, feed, signature);
     return signature;
 }
 
@@ -38,24 +56,23 @@ void FrameDriver::set_feed(value::ValueFeed* feed) {
     feed_signature_ = 0;
     feed_live_ = false;
     ticks_since_publish_ = 0;
-    requested_.store(true, std::memory_order_release);
+    request_frame();
 }
 
 void FrameDriver::set_reduced_motion(bool reduced) {
     reduced_motion_ = reduced;
-    requested_.store(true, std::memory_order_release);
+    request_frame();
 }
 
 void FrameDriver::set_clock(double seconds) {
     clock_ = seconds;
-    requested_.store(true, std::memory_order_release);
+    request_frame();
 }
 
 void FrameDriver::set_wake(WakeFunction wake) { wake_ = std::move(wake); }
 
 void FrameDriver::request_frame() {
-    requested_.store(true, std::memory_order_release);
-    if (wake_) wake_();
+    if (!requested_.exchange(true, std::memory_order_acq_rel) && wake_) wake_();
 }
 
 void FrameDriver::suspend() noexcept { have_last_ = false; }
@@ -87,7 +104,7 @@ FrameReport FrameDriver::frame(Scene& scene, double now_seconds) {
 
     bool plots_changed = false;
     if (feed_ != nullptr && any_plot(scene.root)) {
-        const std::uint32_t signature = feed_signature(*feed_);
+        const std::uint32_t signature = feed_signature(*feed_, scene);
         if (signature != feed_signature_) {
             feed_signature_ = signature;
             feed_live_ = true;
@@ -119,7 +136,8 @@ FrameReport FrameDriver::frame(Scene& scene, double now_seconds) {
 
     report.tracks_running = end && clock_ < *end;
     report.feed_active = feed_live_;
-    report.needs_next_frame = report.tracks_running || feed_live_ || frame_requested();
+    report.needs_next_frame =
+        report.tracks_running || feed_live_ || frame_requested() || !report.render_ok;
     return report;
 }
 

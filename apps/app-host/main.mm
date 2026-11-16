@@ -615,6 +615,7 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
 }
 
 - (void)stopFrames {
+    if (_driver != nullptr) _driver->suspend();
     if (@available(macOS 14.0, *)) {
         [(CADisplayLink*)_displayLink invalidate];
     }
@@ -751,7 +752,6 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
         if (owner == nil || owner->_driver == nullptr) return;
         owner->_driver->set_reduced_motion(
             NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion);
-        owner->_driver->request_frame();
     }];
     _driver->request_frame();
 }

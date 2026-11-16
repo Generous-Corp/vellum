@@ -46,11 +46,12 @@ struct FrameReport final {
     PlotFeedReport feed;
     /// A track of the scene has keyframes the clock has not reached.
     bool tracks_running = false;
-    /// The feed published recently enough that a silent channel has not yet
-    /// gone stale.
+    /// A channel a plot is bound to published recently enough that it has not
+    /// yet gone stale. Channels no plot reads do not count.
     bool feed_active = false;
-    /// The host should tick again; when false it should stop its display link
-    /// and call `suspend`, and costs no frames until `request_frame`.
+    /// The host should tick again, also after a failed render so the next tick
+    /// retries; when false it should stop its display link and call `suspend`,
+    /// and costs no frames until `request_frame`.
     bool needs_next_frame = false;
 };
 
@@ -110,7 +111,8 @@ public:
     /// vsync source.
     void set_wake(WakeFunction wake);
 
-    /// Asks for the next frame to render and wakes the host. Any thread.
+    /// Asks for the next frame to render and wakes the host, once until that
+    /// frame runs. Any thread.
     void request_frame();
     [[nodiscard]] bool frame_requested() const noexcept {
         return requested_.load(std::memory_order_acquire);
@@ -139,7 +141,7 @@ private:
     bool have_last_ = false;
     bool rendered_once_ = false;
     double rendered_clock_ = 0.0;
-    std::atomic<bool> requested_{true};
+    std::atomic<bool> requested_{false};
 };
 
 }  // namespace vellum::graphics
