@@ -41,10 +41,15 @@ def lane(row: dict[str, object], lookup=None) -> str:
 ACTION = "Classify with a resolution event (a disposition)"
 
 
+def cell_text(text: str) -> str:
+    """Text safe inside one Markdown table cell: no row or column break, no code span."""
+    return " ".join(text.split()).replace("\\", "\\\\").replace("|", "\\|").replace("`", "\\`")
+
+
 def commit_cell(row: dict[str, object], subject=None) -> str:
     sha = str(row.get("source_commit") or "")
     text = subject(str(row["source_repository"]), sha) if subject and sha else None
-    return f"`{sha[:9] or 'none'}`" + (f" {text}" if text else "")
+    return f"`{sha[:9] or 'none'}`" + (f" {cell_text(text)}" if text else "")
 
 
 def render(due_soon: list[dict[str, object]], lookup=None, subject=None,

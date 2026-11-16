@@ -185,6 +185,17 @@ class TrackingIssueTests(unittest.TestCase):
         self.assertIn("2026-11-20T12:00:00Z", body)
         self.assertIn("a disposition", body)
 
+    def test_a_subject_cannot_break_the_table(self) -> None:
+        soon = summary_at(23)["due_soon"]
+        for subject in ("Handle A | B", "Fix `code` here", "two\nlines | and `ticks`"):
+            body = deadline_warning.render(soon, LOOKUP, lambda repository, commit, s=subject: s)
+            row = [line for line in body.splitlines() if line.startswith("| " + EVENT_ID)]
+            with self.subTest(subject=subject):
+                self.assertEqual(len(row), 1)
+                cells = row[0].replace("\\|", "").split("|")
+                self.assertEqual(len(cells), 9)  # 7 columns between 8 bars, plus the empty ends
+        self.assertIn("Handle A \\| B", deadline_warning.render(soon, LOOKUP, lambda r, c: "Handle A | B"))
+
     def test_nothing_pending_closes_the_open_issue_and_otherwise_does_nothing(self) -> None:
         issue = {"number": 7, "title": deadline_warning.TITLE, "body": "old"}
         (close,) = deadline_warning.plan([], [issue], None, None, [], None)
