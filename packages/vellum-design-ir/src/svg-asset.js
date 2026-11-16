@@ -179,11 +179,18 @@ function leadingUrl(value) {
     return { id: localReference(url.inner), inner: url.inner, rest: text.slice(url.end).trim() };
 }
 
-// `!important` at the end of a declaration, and the value before it.
+// `!important` at the end of a declaration, and the value before it. CSS
+// reads it as the token "!", optional white space, then the keyword
+// "important" in any case. A comment between them never reaches here: a
+// style with a comment is refused.
 function splitImportant(raw) {
     const text = raw.trimEnd();
-    if (!text.toLowerCase().endsWith('!important')) return { value: text, important: false };
-    return { value: text.slice(0, -'!important'.length).trimEnd(), important: true };
+    const keyword = text.slice(-'important'.length);
+    if (keyword.toLowerCase() !== 'important') return { value: text, important: false };
+    let at = text.length - keyword.length;
+    while (at > 0 && isSpace(text[at - 1])) at -= 1;
+    if (text[at - 1] !== '!') return { value: text, important: false };
+    return { value: text.slice(0, at - 1).trimEnd(), important: true };
 }
 
 // ---------------------------------------------------------------------------

@@ -421,3 +421,22 @@ test('expansion is charged by the geometry each instance emits, so reusing a lar
     const reuse = importSvgAsset(wrap(`<defs>${path}</defs>${'<use href="#p"/>'.repeat(25)}`), { nodeBudget: 1 });
     assert.equal(reuse.mode, 'compiled', 'reuse within the geometry budget still imports');
 });
+
+test('!important is read with any white space before the keyword and in any case', () => {
+    const hidden = (declaration) => importSvgAsset('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" ' +
+        `style="display:none${declaration};display:inline"><rect width="10" height="10" fill="red"/></svg>`);
+    for (const declaration of ['!important', ' ! important', '!\timportant', '!&#10;important', ' !  \t important ', '!IMPORTANT', '! ImPoRtAnT']) {
+        assert.doesNotMatch(JSON.stringify(hidden(declaration).root), /"kind":"path"/, JSON.stringify(declaration));
+    }
+    for (const declaration of ['', ' important', '!importantx', '!impor tant']) {
+        let shown;
+        try { shown = JSON.stringify(hidden(declaration).root); } catch (error) {
+            if (!(error instanceof SvgAssetRefusal)) throw error;
+            continue;
+        }
+        assert.match(shown, /"kind":"path"/, `${JSON.stringify(declaration)} is not important, so display:inline wins`);
+    }
+    assert.throws(() => hidden('! /* x */ important'), SvgAssetRefusal, 'a comment in a style is refused');
+    assert.equal(svgAssetTesting.scanners.splitImportant('red ! important').value, 'red');
+    assert.deepEqual(svgAssetTesting.scanners.splitImportant('red ! importan'), { value: 'red ! importan', important: false });
+});
