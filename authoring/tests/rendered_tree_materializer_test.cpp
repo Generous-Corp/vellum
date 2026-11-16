@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <clocale>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -1394,6 +1396,139 @@ bool blend_mode_key() {
     return true;
 }
 
+// Protocol integers are checked as doubles before any integer conversion.
+bool protocol_numbers() {
+    bool ok = true;
+    std::uint64_t value = 7;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double infinity = std::numeric_limits<double>::infinity();
+    for (const double bad : {1.0e30, -1.0, 9007199254740992.0, nan, infinity, -infinity, 1.5,
+                             1.00000001, 4.0}) {
+        value = 7;
+        ok &= expect(!vellum::authoring::protocol_integer(bad, 4U, value) && value == 7U,
+                     "protocol integer " + std::to_string(bad) + " below 4 is refused");
+    }
+    ok &= expect(vellum::authoring::protocol_integer(3.0, 4U, value) && value == 3U &&
+                     vellum::authoring::protocol_integer(0.0, 1U, value) && value == 0U &&
+                     vellum::authoring::protocol_integer(4294967295.0, 4294967296ULL, value) &&
+                     value == 4294967295ULL,
+                 "control: integers below the limit are read exactly");
+
+    const auto token_index = [](std::string_view index) {
+        return std::string(R"JSON({"protocol":"vellum.authoring-host.v2","kind":"render-result",
+          "tree":{"type":"view","id":"root","style":{"width":40,"height":40},
+            "tokens":[{"path":"a","layer":"theme","value":"#112233"},
+                      {"path":"b","layer":"theme","value":"#445566"}],
+            "children":[{"type":"view","id":"box","tokenRefs":{"backgroundColor":)JSON") +
+               std::string(index) +
+               R"JSON(},"style":{"width":10,"height":10,"backgroundColor":"#445566"}}]}})JSON";
+    };
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    ok &= expect(vellum::authoring::materialize_rendered_tree(token_index("1"), rendered, &error) &&
+                     vellum::graphics::find_node(rendered.scene, "box")->fill_token == 1U,
+                 "control: a whole token index binds: " + error);
+    for (const auto* bad : {"1e30", "-1", "9007199254740992", "1.00000001", "1.5", "2"}) {
+        ok &= expect(!vellum::authoring::materialize_rendered_tree(token_index(bad), rendered,
+                                                                   &error) &&
+                         error.find("must name an entry of the token table") != std::string::npos,
+                     std::string("token index ") + bad + " is refused: " + error);
+    }
+
+    const auto versioned = [](std::string_view version) {
+        return std::string(R"JSON({"protocol":"vellum.authoring-host.v2","kind":"render-result",
+          "sceneVersion":)JSON") + std::string(version) +
+               R"JSON(,"tree":{"type":"view","id":"root","style":{"width":40,"height":40},
+            "children":[]}})JSON";
+    };
+    ok &= expect(vellum::authoring::materialize_rendered_tree(versioned("5"), rendered, &error) &&
+                     rendered.scene.scene_version == 5U,
+                 "control: a whole scene version is read: " + error);
+    for (const auto* bad : {"7.00000001", "4294967295", "4294967296", "1e30", "-1",
+                            "9007199254740992", "0"}) {
+        std::vector<vellum::graphics::LoweringDiagnostic> failure;
+        ok &= expect(!vellum::authoring::materialize_rendered_tree(versioned(bad), rendered,
+                                                                   &error, &failure) &&
+                         failure.size() == 1U && failure[0].property == "sceneVersion",
+                     std::string("scene version ") + bad + " is refused: " + error);
+    }
+
+    const auto input = [](std::string_view fields) {
+        return wrap_tree(std::string(R"JSON({"type":"text-input","id":"field","value":"abc",)JSON") +
+                         std::string(fields) +
+                         R"JSON(,"events":{"change":"field:change"},"style":{"width":80,"height":20}})JSON");
+    };
+    ok &= expect(vellum::authoring::materialize_rendered_tree(
+                     input(R"("primitiveVersion":1,"selection":{"start":1,"end":3})"), rendered,
+                     &error) &&
+                     rendered.text_inputs.size() == 1U &&
+                     rendered.text_inputs[0].selection_start == 1U &&
+                     rendered.text_inputs[0].selection_end == 3U,
+                 "control: a whole selection inside the value is read: " + error);
+    for (const auto* bad : {R"("primitiveVersion":1.5)", R"("primitiveVersion":true)",
+                            R"("primitiveVersion":1,"selection":{"start":1e30,"end":1e30})",
+                            R"("primitiveVersion":1,"selection":{"start":-1,"end":2})",
+                            R"("primitiveVersion":1,"selection":{"start":0.5,"end":2})",
+                            R"("primitiveVersion":1,"selection":{"start":0,"end":4})"}) {
+        ok &= expect(!vellum::authoring::materialize_rendered_tree(input(bad), rendered, &error),
+                     std::string("text input ") + bad + " is refused");
+    }
+
+    ok &= expect(vellum::authoring::materialize_rendered_tree(
+                     wrap_tree(R"({"type":"text","id":"heavy","text":"w",)"
+                               R"("style":{"width":40,"height":20,"fontWeight":1e30}})"),
+                     rendered, &error) &&
+                     vellum::graphics::find_node(rendered.scene, "heavy")->font_weight == 900,
+                 "a huge font weight clamps to 900 before rounding: " + error);
+    return ok;
+}
+
+// The root's backgroundColor is the scene's clear colour whatever the root's
+// kind, so its receipt follows a theme switch for every kind.
+bool root_background_receipts() {
+    bool ok = true;
+    const auto root = [](std::string_view type, std::string_view extra, std::string_view color) {
+        return std::string(R"JSON({"protocol":"vellum.authoring-host.v2","kind":"render-result",
+          "tree":{"type":")JSON") + std::string(type) + R"JSON(","id":"root",)JSON" +
+               std::string(extra) + R"JSON("style":{"width":80,"height":40,"backgroundColor":")JSON" +
+               std::string(color) + R"JSON("},"tokenRefs":{"backgroundColor":0},
+            "tokens":[{"path":"canvas","layer":"theme","value":")JSON" + std::string(color) +
+               R"JSON("}],"children":[]}})JSON";
+    };
+    struct Kind final {
+        const char* type;
+        const char* extra;
+    };
+    for (const Kind kind : {Kind{"text", R"("text":"hello",)"}, Kind{"view", ""},
+                            Kind{"custom", R"("component":"meter","properties":{},)"},
+                            Kind{"path", R"("d":"M0 0 L10 10",)"}}) {
+        vellum::authoring::RenderedApplication light;
+        vellum::authoring::RenderedApplication dark;
+        std::string error;
+        const bool built =
+            vellum::authoring::materialize_rendered_tree(root(kind.type, kind.extra, "#0f172a"),
+                                                         light, &error) &&
+            vellum::authoring::materialize_rendered_tree(root(kind.type, kind.extra, "#f8fafc"),
+                                                         dark, &error);
+        if (!expect(built, std::string(kind.type) + " root with a background token: " + error)) {
+            ok = false;
+            continue;
+        }
+        auto switched = light.scene;
+        const auto result = vellum::graphics::apply_token_values(switched, dark.scene.tokens);
+        ok &= expect(light.scene.background_token == 0U &&
+                         vellum::graphics::accept_scene(light.scene).accepted &&
+                         result.applied &&
+                         vellum::graphics::same_token_color(switched.background,
+                                                            dark.scene.background) &&
+                         !vellum::graphics::same_token_color(switched.background,
+                                                             light.scene.background),
+                     std::string("a ") + kind.type +
+                         " root keeps its background receipt through a theme switch");
+    }
+    return ok;
+}
+
 int main() {
     vellum::authoring::RenderedApplication rendered;
     std::string error;
@@ -1840,7 +1975,8 @@ int main() {
 
     return compositing_keys() && transform_pivots_once() && transform_ignores_locale() &&
            image_nodes() && path_nodes() && grouping_keys() && animation_tracks() &&
-           blend_mode_key() && token_receipts() && token_slots() && scene_version_protocol()
+           blend_mode_key() && token_receipts() && token_slots() && scene_version_protocol() &&
+           protocol_numbers() && root_background_receipts()
                ? 0
                : 1;
 }

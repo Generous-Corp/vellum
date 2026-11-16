@@ -549,6 +549,29 @@ void versioned_fields_are_gated() {
                   "a token table before version 7 is refused");
 }
 
+
+// Receipts name the authored colours, so a token-driven fill that a track
+// animates is still accepted and lowered; the refusal checks the authored
+// scene, not the evaluated one.
+void animated_token_fill_is_accepted() {
+    Scene scene = themed_scene();
+    scene.root.children[0].tracks.push_back({
+        .property = AnimatedProperty::fill,
+        .keyframes = {{.time = 0.0, .color = kAccent}, {.time = 1.0, .color = kCanvas}},
+    });
+    scene.clock = 0.5;
+    check(!find_invalid_token_reference(scene).has_value(),
+          "control: the authored fill still holds its receipt");
+    const auto verdict = accept_scene(scene);
+    check(verdict.accepted && verdict.diagnostics.empty(),
+          "a token-driven fill animated by a track is accepted");
+    check(!make_paint_commands(scene).empty(), "a token-driven animated fill lowers");
+    Scene stale = scene;
+    stale.root.children[0].fill = kLabel;
+    check(!accept_scene(stale).accepted && make_paint_commands(stale).empty(),
+          "a stale authored fill under a track is still refused");
+}
+
 }  // namespace
 
 int main() {
@@ -570,6 +593,7 @@ int main() {
     id_less_root_refusal_has_a_diagnostic();
     slots_are_canonical();
     versioned_fields_are_gated();
+    animated_token_fill_is_accepted();
     if (failures != 0) {
         std::fprintf(stderr, "%d token receipt checks failed\n", failures);
         return 1;

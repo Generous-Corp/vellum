@@ -25,6 +25,16 @@
 #include <utility>
 
 namespace vellum::authoring {
+
+bool protocol_integer(double number, std::uint64_t limit, std::uint64_t& output) {
+    if (!std::isfinite(number) || number < 0.0 || number != std::floor(number) ||
+        number >= static_cast<double>(limit)) {
+        return false;
+    }
+    output = static_cast<std::uint64_t>(number);
+    return true;
+}
+
 namespace {
 
 constexpr std::size_t kMaximumJsonBytes = 16U * 1024U * 1024U;
@@ -149,13 +159,7 @@ bool protocol_index(id value, std::uint64_t limit, std::uint64_t& output) {
         CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID()) {
         return false;
     }
-    const double number = [static_cast<NSNumber*>(value) doubleValue];
-    if (!std::isfinite(number) || number < 0.0 || number != std::floor(number) ||
-        number >= static_cast<double>(limit)) {
-        return false;
-    }
-    output = static_cast<std::uint64_t>(number);
-    return true;
+    return protocol_integer([static_cast<NSNumber*>(value) doubleValue], limit, output);
 }
 
 float number_or(NSDictionary* style, NSString* key, float fallback) {
