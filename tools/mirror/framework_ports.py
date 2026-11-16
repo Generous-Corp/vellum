@@ -60,8 +60,10 @@ CHANGES = ("added", "removed", "scoped")
 # when the platform also has a verified closure and a renderer lock entry.
 PLATFORMS = ("macos-arm64", "linux-x64", "linux-arm64", "windows-x64", "windows-arm64", "ios-device-arm64",
              "ios-simulator-arm64", "android-arm64-v8a", "android-x86_64", "wasm32")
-# The platform v1 rows were proven on, and the scope of a row that names none.
-DEFAULT_PLATFORMS = ("macos-arm64",)
+# The platform the landed closures describe; v1 rows were proven on it, and
+# it is the scope of a row that names none.
+RECEIPT_PLATFORM = "macos-arm64"
+DEFAULT_PLATFORMS = (RECEIPT_PLATFORM,)
 ORIGINS = ("pulp", "native")
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".m", ".mm"}
 SAFE_PATH = re.compile(r"(?:[A-Za-z0-9_.+@-]+/)*[A-Za-z0-9_.+@-]+\Z")
@@ -197,7 +199,11 @@ def replay_scoped(rows: list[dict[str, Any]], transferred: set[str]
     is compiled on: its adding row's scope, replaced by any later scoped row.
     `added` keeps the adding row itself, so checks keyed on that row (the
     joining blob) are never bypassed by a scope change. A scoped row must
-    name a source the ledger currently adds, with the target it was added to.
+    name a source the ledger currently adds, with the target, origin and Pulp
+    path it was added with, so it makes no provenance claim the adding row
+    did not. A scope change may not take a source out of the macOS build
+    while macOS compiles it: the macOS closure is the only one landed, and
+    leaving it would leave the source compiled nowhere a lane checks.
     """
     added: dict[str, dict[str, Any]] = {}
     removed: set[str] = set()
@@ -211,6 +217,12 @@ def replay_scoped(rows: list[dict[str, Any]], transferred: set[str]
             elif row["target"] != added[path]["target"]:
                 errors.append(f"{where}: {path} was added to {added[path]['target']}, so a scope change "
                               f"cannot move it to {row['target']}")
+            elif (row["origin"], row["pulp_path"]) != (added[path]["origin"], added[path]["pulp_path"]):
+                errors.append(f"{where}: {path} was added with origin {added[path]['origin']} and Pulp path "
+                              f"{added[path]['pulp_path']}; a scope change names the same")
+            elif RECEIPT_PLATFORM in scopes[path] and RECEIPT_PLATFORM not in platforms_of(row):
+                errors.append(f"{where}: {path} is compiled on {RECEIPT_PLATFORM}; a scope change cannot "
+                              f"take it out of the {RECEIPT_PLATFORM} build")
             else:
                 scopes[path] = platforms_of(row)
             continue
@@ -366,6 +378,12 @@ def units_errors(repo: Path, targets: list[dict[str, Any]], added: dict[str, dic
         for link in target["link_targets"]:
             if seen.get(link) == "EXECUTABLE":
                 errors.append(f"{where}: {name} links the executable {link}")
+            elif link in seen:
+                linked = next(other for other in targets[:index] if other["name"] == link)
+                missing = sorted(platforms_of(target) - platforms_of(linked))
+                if missing:
+                    errors.append(f"{where}: {name} is built on {missing}, where the target it links, "
+                                  f"{link}, is not")
         later = {other["name"] for other in targets[index + 1:]}
         for link in sorted(set(target["link_targets"]) & later - set(seen)):
             errors.append(f"{where}: {name} links {link}, which is declared after it")
@@ -412,12 +430,22 @@ def file_set(repo: Path, transferred: set[str]) -> tuple[set[str], dict[str, dic
     With errors the expected set is the transfer record's alone, so a broken
     ledger never widens what is accepted.
     """
+    expected, added, removed, _, errors = file_set_scoped(repo, transferred)
+    return expected, added, removed, errors
+
+
+def file_set_scoped(repo: Path, transferred: set[str]
+                    ) -> tuple[set[str], dict[str, dict[str, Any]], set[str], dict[str, frozenset[str]], list[str]]:
+    """file_set, plus the platforms each ledger-added source is compiled on.
+
+    With errors no source is added or scoped.
+    """
     rows, errors = load(repo)
-    added, removed, replay_errors = replay(rows, transferred)
+    added, removed, scoped, replay_errors = replay_scoped(rows, transferred)
     errors = errors + replay_errors
     if errors:
-        return set(transferred), {}, set(), errors
-    return (set(transferred) - removed) | set(added), added, removed, errors
+        return set(transferred), {}, set(), {}, errors
+    return (set(transferred) - removed) | set(added), added, removed, scoped, errors
 
 
 def scopes(repo: Path, transferred: set[str]) -> tuple[dict[str, frozenset[str]], list[str]]:
@@ -425,10 +453,8 @@ def scopes(repo: Path, transferred: set[str]) -> tuple[dict[str, frozenset[str]]
 
     With errors no source is scoped, so a broken ledger never widens what is built.
     """
-    rows, errors = load(repo)
-    _, _, scoped, replay_errors = replay_scoped(rows, transferred)
-    errors = errors + replay_errors
-    return ({} if errors else scoped), errors
+    _, _, _, scoped, errors = file_set_scoped(repo, transferred)
+    return scoped, errors
 
 
 def compiled_on(scope: dict[str, frozenset[str]], path: str, platform: str) -> bool:

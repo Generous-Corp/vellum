@@ -366,7 +366,7 @@ class PlatformScopeTest(unittest.TestCase):
         self.assertEqual(scopes[self.SRC], frozenset({"linux-x64"}))
 
     def test_a_scoped_row_replaces_the_scope_and_keeps_the_adding_row(self) -> None:
-        adding = row()
+        adding = row(platforms=["linux-x64"])
         added, _, scopes, errors = fp.replay_scoped([adding, self.scoped(["linux-x64", "windows-x64"])], set())
         self.assertEqual(errors, [])
         self.assertEqual(scopes[self.SRC], frozenset({"linux-x64", "windows-x64"}))
@@ -382,13 +382,52 @@ class PlatformScopeTest(unittest.TestCase):
         self.assertTrue(any("cannot move it" in error for error in errors), errors)
 
     def test_removing_and_re_adding_resets_the_scope(self) -> None:
-        rows = [row(), self.scoped(["linux-x64"]), row(change="removed"), row()]
+        rows = [row(platforms=["linux-x64"]), self.scoped(["windows-x64"]), row(change="removed"), row()]
         _, _, scopes, errors = fp.replay_scoped(rows, set())
         self.assertEqual(errors, [])
         self.assertEqual(scopes[self.SRC], frozenset({"macos-arm64"}))
         _, removed, scopes, _ = fp.replay_scoped(rows[:3], set())
         self.assertNotIn(self.SRC, scopes)
         self.assertIn(self.SRC, removed)
+
+    def test_a_scope_change_cannot_leave_the_macos_build(self) -> None:
+        # The macOS closure is the only one landed: leaving it would leave the
+        # source compiled nowhere a lane checks.
+        for adding in (row(), row(platforms=["macos-arm64", "linux-x64"])):
+            _, _, scopes, errors = fp.replay_scoped([adding, self.scoped(["linux-x64"])], set())
+            self.assertTrue(any("cannot take it out of the macos-arm64 build" in e for e in errors), errors)
+            # Control: a scope change that keeps macOS is accepted.
+            _, _, scopes, errors = fp.replay_scoped([adding, self.scoped(["macos-arm64", "wasm32"])], set())
+            self.assertEqual(errors, [])
+            self.assertEqual(scopes[self.SRC], frozenset({"macos-arm64", "wasm32"}))
+        # A source never compiled on macOS may gain it, then cannot lose it again.
+        rows = [row(platforms=["linux-x64"]), self.scoped(["linux-x64", "macos-arm64"])]
+        self.assertEqual(fp.replay_scoped(rows, set())[3], [])
+        errors = fp.replay_scoped(rows + [self.scoped(["linux-x64"])], set())[3]
+        self.assertTrue(any("cannot take it out" in e for e in errors), errors)
+
+    def test_a_scoped_row_makes_no_provenance_claim_of_its_own(self) -> None:
+        adding = row(platforms=["linux-x64"])
+        for other, fragment in (({"pulp_path": "core/unrelated/x.cpp"}, "a scope change names the same"),
+                                ({"origin": "native", "pulp_path": None, "pulp_commits": []},
+                                 "a scope change names the same")):
+            errors = fp.replay_scoped([adding, self.scoped(["windows-x64"], **other)], set())[3]
+            self.assertTrue(any(fragment in e for e in errors), (other, errors))
+        # Control: the adding row's origin and Pulp path, with its own commits.
+        self.assertEqual(fp.replay_scoped([adding, self.scoped(["windows-x64"], pulp_commits=["c" * 40])],
+                                          set())[3], [])
+
+    def test_the_landed_ledger_compiles_everything_on_macos_only(self) -> None:
+        # Today's ports.json names no scope, so every source it adds keeps
+        # compiling exactly where it did: on macOS.
+        repo = HERE.parents[1]
+        rows, errors = fp.load(repo)
+        self.assertEqual(errors, [])
+        compiled = [r["framework_path"] for r in rows if r["change"] == "added" and fp.compiled(r["framework_path"])]
+        self.assertTrue(compiled, "the landed ledger adds no compiled source; this check sees nothing")
+        _, _, scopes, replay_errors = fp.replay_scoped(rows, set())
+        self.assertEqual(replay_errors, [])
+        self.assertEqual({scopes[path] for path in compiled}, {frozenset({"macos-arm64"})})
 
     def test_scopes_reads_the_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -421,6 +460,15 @@ class PlatformScopeTest(unittest.TestCase):
             # A later scoped row widens the source, so the wider target is covered.
             widened = {self.SRC: frozenset({"linux-x64", "macos-arm64"})}
             self.assertEqual(fp.units_errors(repo, [wider], added, widened), [])
+        # A declared target links only declared targets that cover its platforms.
+        lib_b = {**target, "name": "vellum-b", "unit": "b", "sources": [], "link_targets": ["vellum-a"],
+                 "platforms": ["linux-x64", "macos-arm64"]}
+        with tempfile.TemporaryDirectory() as directory:
+            errors = fp.units_errors(Path(directory), [target, lib_b], added)
+            self.assertTrue(any("where the target it links, vellum-a, is not" in e for e in errors), errors)
+            lib_b["platforms"] = ["linux-x64"]
+            self.assertFalse(any("target it links" in e for e in fp.units_errors(Path(directory),
+                                                                                    [target, lib_b], added)))
         v1 = json.dumps({"schema": fp.UNITS_SCHEMA_V1, "targets": [target]})
         self.assertTrue(any("needs schema" in e for e in fp.parse_units(v1)[1]))
 

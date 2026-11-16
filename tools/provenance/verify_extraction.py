@@ -1472,8 +1472,9 @@ def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[
             if not proved[commit]:
                 real = False
                 errors.append(f"{where}: Pulp commit {commit} is not a commit on Pulp {pulp_main_ref}")
-        if not real or row["change"] != "added":
+        if not real or row["change"] == "removed":
             continue
+        # An added or scoped row claims Pulp holds the file at its last named commit.
         commit, pulp_path = row["pulp_commits"][-1], row["pulp_path"]
         listing = pulp("--literal-pathspecs", "ls-tree", "-z", commit, "--", pulp_path).stdout
         entries = [entry for entry in listing.split(b"\0") if entry]
@@ -1482,6 +1483,8 @@ def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[
         if not meta or meta[0] not in (b"100644", b"100755"):
             errors.append(f"{where}: the last named Pulp commit {commit[:12]} holds no file at {pulp_path}")
             continue
+        if row["change"] == "scoped":
+            continue  # its bytes are the adding row's, proved there
         if not table_ok:
             errors.append(f"{where}: {FRAMEWORK_TRANSFER_RECORD} carries no rename table to put {pulp_path} through")
             continue

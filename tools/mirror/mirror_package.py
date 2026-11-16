@@ -334,22 +334,23 @@ def framework_file_set(repo: Path) -> tuple[set[str], dict[str, dict[str, Any]],
     return expected, added, removed
 
 
-def framework_scopes(repo: Path) -> dict[str, frozenset[str]]:
-    """The platforms each ledger-added source is compiled on (framework_ports.replay_scoped).
+def framework_ledger(repo: Path) -> tuple[dict[str, dict[str, Any]], set[str], dict[str, frozenset[str]]]:
+    """The ports ledger, replayed once: (added rows by path, removed paths, platform scopes).
 
-    A ledger that does not replay is refused by framework_file_set, which
-    reads the same rows; it raises first, so this returns the scopes.
+    A ledger that is malformed or does not replay is refused.
     """
-    framework_file_set(repo)
     record = load_json(repo / FRAMEWORK_TRANSFER)
     transferred = {row["framework_path"] for row in record.get("records", [])}
-    return framework_ports.scopes(repo, transferred)[0]
+    _, added, removed, scopes, errors = framework_ports.file_set_scoped(repo, transferred)
+    if errors:
+        raise PlanError(errors[0])
+    return added, removed, scopes
 
 
 # The platform the landed receipt's closures describe: load_closures refuses
 # any closure not exported for the Darwin arm64 Skia build. A platform with no
 # verified closure is refused by plan().
-RECEIPT_PLATFORM = "macos-arm64"
+RECEIPT_PLATFORM = framework_ports.RECEIPT_PLATFORM
 
 
 def verify_framework_identity(repo: Path, receipt_path: str, receipt: dict[str, Any]) -> int:
@@ -475,9 +476,14 @@ def mirror_cmake_files(repo: Path) -> dict[str, str]:
 
 def source_compile_options_for(repo: Path, receipt: dict[str, Any],
                                units: list[tuple[str, dict[str, Any]]],
-                               platform: str = RECEIPT_PLATFORM) -> dict[str, list[str]]:
+                               platform: str = RECEIPT_PLATFORM,
+                               ledger: tuple[dict[str, dict[str, Any]], dict[str, frozenset[str]]] | None = None
+                               ) -> dict[str, list[str]]:
     """Exported source -> the per-source COMPILE_OPTIONS Pulp's CMake applies to it
-    under the closures' configure (tools/mirror/source_compile_options.py)."""
+    under the closures' configure (tools/mirror/source_compile_options.py).
+
+    `ledger` is the replayed (added rows, scopes) when the caller holds it.
+    """
     configures = {json.dumps((closure.get("configure") or {}).get("options"), sort_keys=True)
                   for _, closure in units}
     if len(configures) != 1:
@@ -491,8 +497,7 @@ def source_compile_options_for(repo: Path, receipt: dict[str, Any],
         # A ledger-added source is compiled like an exported one, so the
         # framework's CMake may set its per-source options the same way.
         # Only on the platforms its scope lists.
-        _, added, _ = framework_file_set(repo)
-        scopes = framework_scopes(repo)
+        added, _, scopes = framework_ledger(repo) if ledger is None else (ledger[0], None, ledger[1])
         exported |= {path.removeprefix(f"{FRAMEWORK_DIR}/") for path in added
                      if framework_ports.compiled(path) and framework_ports.compiled_on(scopes, path, platform)}
     try:
@@ -1200,28 +1205,38 @@ def plan_declared_targets(repo: Path, declared: list[dict[str, Any]], units: lis
 def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
          skia_asset_sha256: str | None = None,
          in_tree_definitions: dict[str, list[str]] | None = None,
-         platform: str = "macos-arm64") -> dict[str, Any]:
+         platform: str = RECEIPT_PLATFORM) -> dict[str, Any]:
     repo = repo.resolve()
     if platform not in framework_ports.PLATFORMS:
         raise PlanError(f"unknown platform {platform!r}; known: {list(framework_ports.PLATFORMS)}")
+    if platform != RECEIPT_PLATFORM:
+        raise PlanError(f"no verified closure for platform {platform}: the landed closures describe "
+                        f"{RECEIPT_PLATFORM}")
     receipt_path, receipt = newest_receipt(repo)
     file_count = (verify_framework_identity(repo, receipt_path, receipt) if transferred(repo)
                   else verify_mirror_identity(repo, receipt))
-    _, ports_added, ports_removed = framework_file_set(repo) if transferred(repo) else (set(), {}, set())
-    scopes = framework_scopes(repo) if transferred(repo) else {}
+    ports_added, ports_removed, scopes = framework_ledger(repo) if transferred(repo) else ({}, set(), {})
     declared, declared_errors = (framework_ports.declared_units(repo, ports_added, scopes) if transferred(repo)
                                  else ([], []))
     if declared_errors:
         raise PlanError(declared_errors[0])
     units = load_closures(repo, receipt)
-    if platform != RECEIPT_PLATFORM:
-        raise PlanError(f"no verified closure for platform {platform}: the landed closures describe "
-                        f"{RECEIPT_PLATFORM}")
+    # Every compiled row names a target some closure builds or units.json
+    # declares, whatever its scope: a row scoped away from this platform is
+    # still checked here, since no other lane builds it yet.
+    known_targets = ({target["name"] for _, closure in units for target in closure.get("targets", [])}
+                     | {target["name"] for target in declared})
+    unknown = sorted(f"{path} (target {row['target']})" for path, row in ports_added.items()
+                     if row["target"] is not None and row["target"] not in known_targets)
+    if unknown:
+        raise PlanError("the ports ledger adds sources to targets no closure builds and "
+                        f"{framework_ports.UNITS} does not declare: {unknown[:5]}")
+    ledger = (ports_added, scopes)
     # A ledger-added source or declared target is planned only on its platforms.
     ports_added = {path: row for path, row in ports_added.items()
                    if not framework_ports.compiled(path) or framework_ports.compiled_on(scopes, path, platform)}
     declared = [target for target in declared if platform in framework_ports.platforms_of(target)]
-    source_options = source_compile_options_for(repo, receipt, units, platform)
+    source_options = source_compile_options_for(repo, receipt, units, platform, ledger)
     attached: set[str] = set()
     ported_targets: set[str] = set()
     deps = external_dependencies(units)
@@ -1538,7 +1553,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skia-asset-sha256", help="digest of the Skia/Dawn archive Vellum locks")
     parser.add_argument("--cmake-output", type=Path, required=True)
     parser.add_argument("--json-output", type=Path)
-    parser.add_argument("--platform", default="macos-arm64",
+    parser.add_argument("--platform", default=RECEIPT_PLATFORM,
                         help="the platform key to plan for; it needs a verified closure")
     parser.add_argument(
         "--in-tree-definitions", action="append", default=[], metavar="NAME=DEF|DEF",
