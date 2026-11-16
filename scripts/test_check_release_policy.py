@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -61,6 +62,8 @@ class Policy(unittest.TestCase):
         shutil.rmtree(self.tmp)
 
     def workflow(self, name: str, text: str) -> None:
+        if text.startswith("run:"):
+            text = "jobs:\n  verify:\n    steps:\n      - " + text.replace("\n", "\n        ").rstrip() + "\n"
         (self.tmp / ".github/workflows" / name).write_text(text)
 
     def test_positive_control(self) -> None:
@@ -472,6 +475,10 @@ class Isolation(unittest.TestCase):
         shutil.rmtree(self.tmp)
 
     def found(self, signing: str) -> list[str]:
+        if not signing:
+            signing = "jobs:\n  check:\n    steps:\n      - run: true\n"
+        elif signing.lstrip().startswith("steps:"):
+            signing = "jobs:\n  sign:\n" + signing
         return policy.isolation_problems({policy.SIGNING_WORKFLOW: signing}, self.tmp)
 
     def test_python_without_isolation_fails(self) -> None:
@@ -522,10 +529,10 @@ class Isolation(unittest.TestCase):
         held = push.replace("git push origin HEAD", "python3 -I scripts/version_at_land.py apply")
         self.assertTrue(any("holds a secret and runs Python" in p for p in found(workflow(plan, mint + held))))
         keyed = mint.replace("        with:", "        run: python3 -I x.py\n        with:")
-        self.assertTrue(any("holds a secret and runs Python" in p for p in found(workflow(plan, keyed + push))))
+        self.assertTrue(any("unsupported construct" in p for p in found(workflow(plan, keyed + push))))
         loose = plan.replace("python3 -I", "python3")
         self.assertTrue(any("without -I" in p for p in found(workflow(loose, mint + push))))
-        self.assertIn("version-at-land.yml: no jobs could be read", found("    steps:\n" + plan))
+        self.assertTrue(any("unsupported construct" in p for p in found("    steps:\n" + plan)))
 
     def test_a_token_job_runs_no_repository_python_in_any_step(self) -> None:
         # Must-pass: Python in a job that holds no token. Must-fail: the same
@@ -559,7 +566,7 @@ class Isolation(unittest.TestCase):
                 + head + f"          GH_TOKEN: {token}\n        " + run)
 
     def refused(self, workflow: str, reason: str = "Administration-only") -> None:
-        self.assertTrue(any(reason in problem for problem in self.found(workflow)), self.found(workflow))
+        self.assertTrue(any(reason in problem or "unsupported construct" in problem for problem in self.found(workflow)), self.found(workflow))
 
     def test_admin_only_reads_need_the_app_token(self) -> None:
         for endpoint in ("rules/branches/main", "branches/main/protection/required_status_checks",
@@ -623,10 +630,10 @@ class Isolation(unittest.TestCase):
         for label, steps in cases.items():
             with self.subTest(label):
                 problems = policy.isolation_problems({policy.SIGNING_WORKFLOW: anchored + steps}, self.tmp)
-                self.assertTrue(any("YAML anchor, alias or merge key" in p for p in problems), problems)
+                self.assertTrue(any("YAML anchor, alias" in p for p in problems), problems)
         whole = anchored + "    steps:\n      - *step\n"
         problems = policy.isolation_problems({"other.yml": whole}, self.tmp)
-        self.assertTrue(any("YAML anchor, alias or merge key" in p for p in problems), problems)
+        self.assertTrue(any("YAML anchor, alias" in p for p in problems), problems)
         # Shell globs inside a literal run block are not YAML indirection.
         glob = self.read(run='run: |\n          ls *.json *out\n          gh api "repos/$R/immutable-releases"\n')
         self.assertEqual(self.found(glob), [])
@@ -663,7 +670,7 @@ class Isolation(unittest.TestCase):
                   "1b10c78c7865c340bc4f6099eb2f838309f1e8c3\n")
         workflow = hidden + self.read(mint="")
         problems = policy.step_layout_problems(policy.SIGNING_WORKFLOW, workflow)
-        self.assertTrue(any("steps: line that is not the job's own" in problem for problem in problems),
+        self.assertTrue(any("unsupported construct" in problem for problem in problems),
                         problems)
 
     def test_a_column_zero_comment_does_not_hide_the_steps(self) -> None:
@@ -677,7 +684,7 @@ class Isolation(unittest.TestCase):
                 self.assertTrue(any("without -I" in problem for problem in self.found(
                     head + "    steps:\n      - name: py\n        run: python3 scripts/x.py\n")))
                 self.assertEqual(self.found(head + self.read()), [])
-                self.assertIn("    steps:", policy.structural_lines(head + self.read()))
+                self.assertEqual(len(policy.workflow_steps(head + self.read())), 2)
 
     def test_a_block_scalar_on_a_step_dash_line_hides_no_later_key(self) -> None:
         # `- name: >-` opens a scalar owned by `name` (column 8), not by the
@@ -690,16 +697,17 @@ class Isolation(unittest.TestCase):
             with self.subTest(label):
                 steps = self.read(token="${{ github.token }}", run="run: *read\n", name=name)
                 problems = policy.isolation_problems({policy.SIGNING_WORKFLOW: anchored + steps}, self.tmp)
-                self.assertTrue(any("YAML anchor, alias or merge key" in p and "*read" in p for p in problems),
+                self.assertTrue(any("YAML anchor, alias" in p for p in problems),
                                 problems)
-                self.assertIn("        run: *read", policy.structural_lines(anchored + steps))
+                with self.assertRaisesRegex(policy.PolicyError, "YAML anchor, alias"):
+                    policy.parse_workflow(anchored + steps)
         # The anchor itself under a `- n: |` matrix item is not hidden either.
         matrix = ("jobs:\n  sign:\n    strategy:\n      matrix:\n        include:\n          - n: |\n"
                   "              x\n            r: &read gh api \"repos/$R/immutable-releases\"\n")
-        self.assertTrue(any("YAML anchor" in p for p in policy.unreadable_environments(matrix)))
+        self.assertTrue(any("YAML anchor" in p for p in policy.step_layout_problems("matrix.yml", matrix)))
         # The scalar's own body stays hidden, and an honest step still passes.
         body = "jobs:\n  sign:\n" + self.read(name=">-\n          read text")
-        self.assertNotIn("          read text", policy.structural_lines(body))
+        self.assertEqual(policy.workflow_steps(body)[1].name, "read text")
         self.assertEqual(self.found(body), [])
 
     def test_the_token_must_come_from_the_pinned_app_token_action(self) -> None:
@@ -727,7 +735,7 @@ class Isolation(unittest.TestCase):
             "options first": 'run: |\n          timeout 120 gh api --method GET --paginate \\\n'
                              '            "repos/$R/rulesets" > out.json\n',
             "inside a substitution": 'run: |\n          test "$(gh api "repos/$R/rules/branches/main" --jq length)" = 1\n',
-            "after a field": 'run: gh api -f a=b -H "Accept: x" repos/$R/branches/main/protection\n',
+            "after a field": 'run: |\n          gh api -f a=b -H "Accept: x" repos/$R/branches/main/protection\n',
         }.items():
             with self.subTest(label):
                 self.refused(self.read(token="${{ github.token }}", run=run))
@@ -798,7 +806,7 @@ class Isolation(unittest.TestCase):
         for label, run in {
             "backslash in gh": 'run: g\\h api "repos/$R/immutable-releases"\n',
             "single-quoted h": "run: g'h' api \"repos/$R/immutable-releases\"\n",
-            "double-quoted g": 'run: "g"h api "repos/$R/rulesets"\n',
+            "double-quoted g": 'run: |\n          "g"h api "repos/$R/rulesets"\n',
             "leading backslash": 'run: \\gh api "repos/$R/branches/main/protection"\n',
             "quoted api": "run: gh 'a'pi \"repos/$R/rules/branches/main\"\n",
             "backslash in api": 'run: gh a\\pi "repos/$R/immutable-releases"\n',
@@ -879,7 +887,7 @@ class Isolation(unittest.TestCase):
         }
         for label, step in cases.items():
             with self.subTest(label):
-                self.refused(header + step, "a layout this check cannot read")
+                self.refused(header + step)
 
     def test_jobs_stop_before_later_top_level_mappings(self) -> None:
         # A top-level env mapping may contain a key that looks like a job id;
@@ -924,7 +932,7 @@ class Isolation(unittest.TestCase):
                        "            steps:\n              - run: true\n"):
             with self.subTest(hidden=hidden):
                 problems = policy.step_layout_problems(policy.SIGNING_WORKFLOW, "jobs:\n  sign:\n" + hidden)
-                self.assertTrue(any("steps: line that is not the job's own" in problem for problem in problems),
+                self.assertTrue(any("unsupported construct" in problem for problem in problems),
                                 problems)
 
     def test_a_continuation_inside_a_word_is_removed_not_spaced(self) -> None:
@@ -1004,7 +1012,7 @@ class Isolation(unittest.TestCase):
                 self.refused(f"jobs:\n  sign:\n    {key}\n" + body, "a steps key this check cannot read")
         # The same layouts in any workflow, since the renderer-verifier rule reads every one.
         problems = policy.isolation_problems({"other.yml": '  build:\n    "steps":\n' + body}, self.tmp)
-        self.assertTrue(any("a steps key this check cannot read" in problem for problem in problems), problems)
+        self.assertTrue(any("unsupported construct" in problem for problem in problems), problems)
 
     def test_job_headers_are_read_or_fail_closed(self) -> None:
         read = self.read(token="${{ github.token }}", run='run: gh api "repos/$R/rulesets"\n')
@@ -1014,7 +1022,7 @@ class Isolation(unittest.TestCase):
                 self.refused("jobs:\n" + header + "\n" + read + clean)
         unreadable = "jobs:\n  read :\n" + read + clean
         problems = self.found(unreadable)
-        self.assertTrue(any("job header this check cannot read" in problem for problem in problems), problems)
+        self.assertTrue(any("unsupported construct" in problem for problem in problems), problems)
 
     def test_a_jobs_key_the_reader_cannot_follow_fails_closed(self) -> None:
         # jobs() reads only a block `jobs:` line; a flow mapping, anchor or
@@ -1027,16 +1035,16 @@ class Isolation(unittest.TestCase):
             with self.subTest(workflow=workflow):
                 self.refused(workflow, "a jobs key this check cannot read")
                 problems = policy.isolation_problems({"other.yml": workflow}, self.tmp)
-                self.assertTrue(any("a jobs key this check cannot read" in problem for problem in problems), problems)
+                self.assertTrue(any("unsupported construct" in problem for problem in problems), problems)
         self.assertEqual(self.found("jobs:  # all jobs\n  clean:\n    steps:\n      - name: a\n        run: true\n"), [])
 
     def test_a_line_under_steps_that_no_step_holds_fails_closed(self) -> None:
         gh = '"repos/$R/rulesets"'
         bare_first = ("    steps:\n      -\n        name: read\n"
                       f"        run: gh api {gh}\n        env:\n          GH_TOKEN: ${{{{ github.token }}}}\n")
-        self.refused(bare_first, "a line under steps: that no step holds")
+        self.refused(bare_first)
         bare_later = "    steps:\n      - name: a\n        run: true\n      -\n        run: python3 scripts/x.py\n"
-        self.refused(bare_later, "a line under steps: that no step holds")
+        self.refused(bare_later, "without -I")
         self.assertEqual(self.found("    steps:\n      # a comment\n\n      - name: a\n        run: true\n"), [])
 
     def test_jobs_at_another_indentation_fail_closed(self) -> None:
@@ -1047,7 +1055,7 @@ class Isolation(unittest.TestCase):
         read = "  read:\n" + self.read(mint="")
         workflow = "jobs:\n" + "".join("  " + line if line.strip() else line
                                        for line in (mint + read).splitlines(keepends=True))
-        self.refused(workflow, "jobs indented")
+        self.refused(workflow)
         self.assertEqual(self.found("jobs:\n  # note\n\n  clean:\n    steps:\n      - name: a\n        run: true\n"), [])
 
     def test_a_bare_dash_at_the_steps_indentation_fails_closed(self) -> None:
@@ -1056,7 +1064,6 @@ class Isolation(unittest.TestCase):
         workflow = ("jobs:\n  sign:\n    steps:\n    - name: a\n      run: true\n    -\n      name: b\n"
                     "      run: true\n    - name: c\n      run: python3 scripts/x.py\n")
         problems = self.found(workflow)
-        self.assertTrue(any("a line under steps: that no step holds" in problem for problem in problems), problems)
         self.assertTrue(any("without -I" in problem for problem in problems), problems)
         indentless = "jobs:\n  sign:\n    steps:\n    - name: a\n      run: true\n    - name: c\n      run: true\n"
         self.assertEqual(self.found(indentless), [])
@@ -1065,17 +1072,17 @@ class Isolation(unittest.TestCase):
         try:
             import yaml  # noqa: PLC0415
         except ImportError:
-            self.skipTest("PyYAML is not installed")
+            self.fail("PyYAML is required by the policy checker")
         total = 0
         for path in sorted((ROOT / policy.WORKFLOWS).glob("*.y*ml")):
             text = path.read_text(encoding="utf-8")
-            expected = [step for body in yaml.safe_load(text)["jobs"].values() for step in body.get("steps") or []]
+            expected = [step for body in yaml.load(text, Loader=yaml.BaseLoader)["jobs"].values()
+                        for step in body.get("steps") or []]
             read = policy.workflow_steps(text)
             self.assertEqual(len(read), len(expected), path.name)
             for step, want in zip(read, expected):
                 total += 1
                 with self.subTest(workflow=path.name, step=want.get("name")):
-                    self.assertIsNone(step.unreadable)
                     self.assertEqual((step.name, step.id, step.uses), (want.get("name"), want.get("id"), want.get("uses")))
                     self.assertEqual((step.run or "").rstrip("\n"), (want.get("run") or "").rstrip("\n"))
                     self.assertEqual(step.env or {}, {key: str(value) for key, value in (want.get("env") or {}).items()})
@@ -1097,12 +1104,96 @@ class Isolation(unittest.TestCase):
         step = "    steps:\n      - name: prove\n        run: python3 {flags}tools/provenance/verify_renderer_dependency.py\n"
         for name in ("sdk-release.yml", "provenance.yml", "gpu-macos.yml"):
             with self.subTest(workflow=name):
-                found = policy.isolation_problems({name: step.format(flags="")}, self.tmp)
+                found = policy.isolation_problems({name: "jobs:\n  check:\n" + step.format(flags="")}, self.tmp)
                 self.assertIn(f"{name}: - name: prove runs the renderer verifier without -I", found)
-                self.assertEqual(policy.isolation_problems({name: step.format(flags="-I ")}, self.tmp), [])
+                self.assertEqual(policy.isolation_problems({name: "jobs:\n  check:\n" + step.format(flags="-I ")}, self.tmp), [])
         # Its tests may run unisolated; they never decide eligibility.
         tests = "    steps:\n      - name: t\n        run: python3 tools/provenance/test_verify_renderer_dependency.py\n"
-        self.assertEqual(policy.isolation_problems({"provenance.yml": tests}, self.tmp), [])
+        self.assertEqual(policy.isolation_problems({"provenance.yml": "jobs:\n  check:\n" + tests}, self.tmp), [])
+
+    def test_parser_effective_shell_is_bash_at_every_scope(self) -> None:
+        base = ("jobs:\n  sign:\n    steps:\n      - env:\n"
+                "          K: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}\n        run: import os\n")
+        for shell in ("python", "python -I {0}", "sh", "pwsh", "${{ inputs.shell }}"):
+            for location in ("workflow", "job", "step"):
+                with self.subTest(shell=shell, location=location):
+                    if location == "workflow":
+                        text = f"defaults:\n  run:\n    shell: {shell}\n" + base
+                    elif location == "job":
+                        text = base.replace("    steps:", f"    defaults:\n      run:\n        shell: {shell}\n    steps:")
+                    else:
+                        text = base.replace("        run:", f"        shell: {shell}\n        run:")
+                    self.assertTrue(any("shell must be bash" in p for p in self.found(text)), self.found(text))
+                    # The same structure with bash is supported at all scopes.
+                    self.assertEqual(self.found(text.replace(f"shell: {shell}", "shell: bash").replace("import os", "true")), [])
+
+    def test_parser_quoted_run_keys_fail_before_command_detection(self) -> None:
+        for run in ('"run": >-\n          gh\n          api repos/owner/repo/immutable-releases\n',
+                    '"run": g$\'h\' api repos/owner/repo/immutable-releases\n',
+                    '"run": echo ok\n'):
+            with self.subTest(run=run):
+                problems = self.found(self.read(run=run))
+                self.assertTrue(any("unsupported construct" in p for p in problems), problems)
+        self.assertEqual(self.found(self.read(run="run: gh api repos/owner/repo/immutable-releases\n")), [])
+
+    def test_parser_rejects_complete_flow_documents(self) -> None:
+        text = ("{on: push, jobs: {build: {runs-on: ubuntu-latest, steps: "
+                "[{run: python3 tools/provenance/verify_renderer_dependency.py}]}}}\n")
+        problems = policy.isolation_problems({"other.yml": text}, self.tmp)
+        self.assertTrue(any("unsupported construct" in p for p in problems), problems)
+        block = ("on: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n"
+                 "      - run: python3 -I tools/provenance/verify_renderer_dependency.py\n")
+        self.assertEqual(policy.isolation_problems({"other.yml": block}, self.tmp), [])
+
+    def test_parser_requires_an_unchanged_run_credential(self) -> None:
+        command = "gh api repos/owner/repo/immutable-releases"
+        for token in ("GH_TOKEN", "GITHUB_TOKEN"):
+            for script in (f"{token}=${{{{ github.token }}}} {command}",
+                           f"export {token}=${{{{ github.token }}}}\n{command}",
+                           f"export {token}\n{command}",
+                           f'G"{token[1:]}"=bad {command}',
+                           f'{token}[0]=bad; {command}',
+                           f'declare -x {token}; {command}',
+                           f'typeset -x {token}; {command}',
+                           f'read -r {token}; {command}',
+                           f'printf -v {token} bad; {command}',
+                           f'unset {token}; {command}'):
+                with self.subTest(script=script):
+                    run = "run: |\n" + "".join("          " + line + "\n" for line in script.splitlines())
+                    problems = self.found(self.read(run=run))
+                    self.assertTrue(any("assigns or exports" in p for p in problems), problems)
+        self.assertEqual(self.found(self.read(run=f"run: {command}\n")), [])
+
+    def test_token_assignment_is_rejected_in_every_sensitive_job_step(self) -> None:
+        for name in ("release-tag.yml", "version-at-land.yml", "other.yml"):
+            for sensitive in ("env:\n      KEY: ${{ secrets.KEY }}\n",
+                              "steps:\n      - run: gh api repos/owner/repo/actions/runs\n"):
+                for assignment in ('GH_TOKEN=bad', 'export GITHUB_TOKEN',
+                                   'env -i GH_TOKEN="$GH_TOKEN" /usr/bin/gh api repos/o/r/actions/runs'):
+                    if sensitive.startswith("env:"):
+                        body = sensitive + "    steps:\n"
+                    else:
+                        body = sensitive
+                    workflow = "jobs:\n  check:\n    " + body + "      - run: " + assignment + "\n"
+                    with self.subTest(name=name, sensitive=sensitive, assignment=assignment):
+                        problems = policy.isolation_problems({name: workflow}, self.tmp)
+                        self.assertTrue(any("assigns or exports" in p for p in problems), problems)
+                        control = workflow.replace(assignment, "true")
+                        self.assertEqual(policy.isolation_problems({name: control}, self.tmp), [])
+
+    def test_parser_missing_dependency_and_malformed_yaml_fail_closed(self) -> None:
+        valid = "jobs:\n  check:\n    steps:\n      - run: true\n"
+        with mock.patch.object(policy, "yaml", None):
+            self.assertTrue(any("PyYAML is required" in p for p in self.found(valid)))
+        for text in ("jobs: [", valid + "jobs: {}\n", valid.replace("run: true", "run: true\n        run: false"),
+                     valid.replace("run: true", "run: !!python/object:builtins.str true")):
+            with self.subTest(text=text):
+                self.assertTrue(any("unsupported construct" in p for p in self.found(text)), self.found(text))
+        process = subprocess.run([sys.executable, "-I", "-S", str(ROOT / "scripts/check_release_policy.py"),
+                                  "check"], text=True, capture_output=True, check=False)
+        self.assertNotEqual(process.returncode, 0)
+        self.assertIn("PyYAML is required", process.stderr)
+        self.assertEqual(self.found(valid), [])
 
     def test_a_package_or_compiled_module_shadowing_the_standard_library_fails(self) -> None:
         (self.tmp / "tools" / "provenance").mkdir(parents=True)

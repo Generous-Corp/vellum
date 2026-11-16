@@ -149,6 +149,13 @@ jobs:
       # script's own directory and the working directory off sys.path, so no
       # file in the checkout can shadow a standard-library module. Each secret
       # lives only in a step that runs no repository Python.
+      - name: Install the release policy parser
+        run: |
+          python3 -I -m venv "$RUNNER_TEMP/release-policy-venv"
+          . "$RUNNER_TEMP/release-policy-venv/bin/activate"
+          python3 -I -m pip install --disable-pip-version-check --only-binary=:all: PyYAML==6.0.3
+          echo "$RUNNER_TEMP/release-policy-venv/bin" >> "$GITHUB_PATH"
+
       - name: Mint the release App token
         id: app-token
         uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
@@ -401,6 +408,13 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Install the release policy parser
+        run: |
+          python3 -I -m venv "$RUNNER_TEMP/release-policy-venv"
+          . "$RUNNER_TEMP/release-policy-venv/bin/activate"
+          python3 -I -m pip install --disable-pip-version-check --only-binary=:all: PyYAML==6.0.3
+          echo "$RUNNER_TEMP/release-policy-venv/bin" >> "$GITHUB_PATH"
 
       - name: Choose the dry-run commit and build its attestation
         id: dry-run

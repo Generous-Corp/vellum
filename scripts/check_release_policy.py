@@ -68,6 +68,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = Path(".github/workflows")
 ALLOWED_SIGNERS = Path("provenance/release-signers.allowed_signers")
@@ -146,14 +151,6 @@ POLICY_FILES = (
     "/tools/provenance/verify_renderer_dependency.py",
     "/tools/provenance/verify_pulp_observation_scope.py",
 )
-# GitHub Actions accepts quoted YAML keys and optional whitespace before the
-# colon. Keep both spellings in the structural scanner so a release
-# environment cannot hide behind valid YAML formatting.
-ENVIRONMENT_KEY = re.compile(
-    r"^(?P<indent>[ \t]*)(?:environment|['\"]environment['\"])[ \t]*:[ \t]*(?P<value>.*)$",
-    re.MULTILINE,
-)
-ENVIRONMENT_NAME = re.compile(r"\bname:\s*['\"]?(?P<name>[A-Za-z0-9_-]+)")
 VERSION_WORKFLOW = "version-at-land.yml"
 RELEASE_WORKFLOWS = (SIGNING_WORKFLOW, "release-policy.yml", VERSION_WORKFLOW)
 # Workflows whose secret-holding steps must run no Python at all.
@@ -224,8 +221,6 @@ REQUIRED_VERIFIER_CALLS = {
     "release-tag.yml": 2,
     "sdk-release.yml": 2,
 }
-# Any `uses:` key, block or flow, quoted or not, in any case, and its value.
-USES = re.compile(r"""(?i)(?:^|[\s{,\-])['"]?uses['"]?[ \t]*:[ \t]*(?P<value>[^,}\n]*)""")
 
 
 class PolicyError(RuntimeError):
@@ -250,23 +245,6 @@ def signer(root: Path, relative: Path = ALLOWED_SIGNERS) -> tuple[str, str]:
 
 # GitHub Actions runs both extensions.
 WORKFLOW_PATTERNS = ("*.yml", "*.yaml")
-SIMPLE_NAME = re.compile(r"['\"]?([A-Za-z0-9_-]+)['\"]?")
-# A block-scalar indicator needs whitespace after the colon: `name: a:>` is
-# a plain scalar, and reading it as an opener would hide the lines after it.
-BLOCK_SCALAR = re.compile(r":[ \t]+[|>][-+0-9]*[ \t]*(?:#.*)?$")
-# The `- ` openers of a (possibly nested, `- - key:`) compact sequence item.
-SEQUENCE_ITEM_PREFIX = re.compile(r"(?:-[ \t]+)+")
-# YAML anchors, aliases and merge keys can carry an `environment` into a job
-# where a line-based reader never sees it, so their use outside block text is
-# refused rather than read.
-YAML_INDIRECTION = re.compile(r"(?:^|[\s\[{,])(?:&[A-Za-z0-9_-]+|\*[A-Za-z0-9_-]+)(?=[\s,\]}]|$)|^\s*<<\s*:")
-
-
-# Key spellings the scanner cannot decode to a plain name: explicit `?` keys,
-# tagged keys, and double-quoted keys holding escapes ("\x65nvironment").
-UNDECODABLE_KEY = re.compile(r"^[ \t]*(?:-[ \t]+)?(?:\?(?:[ \t]|$)|!)|\"[^\"\n]*\\[^\"\n]*\"[ \t]*:")
-# Any environment-shaped key, in any case, quoted or not, block or flow.
-ANY_ENVIRONMENT_KEY = re.compile(r"(?i)(?:^|[\s{,\-])['\"]?environment['\"]?[ \t]*:")
 
 
 def load_workflows(root: Path) -> dict[str, str]:
@@ -274,100 +252,213 @@ def load_workflows(root: Path) -> dict[str, str]:
             for pattern in WORKFLOW_PATTERNS for path in sorted((root / WORKFLOWS).glob(pattern))}
 
 
-def structural_lines(workflow: str) -> list[str]:
-    """The workflow's lines outside block scalars (`run: |` text and the like)."""
-    lines = workflow.splitlines()
-    return [lines[number] for number in _structural_indices(lines)]
+@dataclass
+class Step:
+    """A step from a parsed job, with decoded values for secret detection."""
+    job: str
+    index: int
+    text: str
+    name: str | None = None
+    id: str | None = None
+    uses: str | None = None
+    run: str | None = None
+    env: dict[str, str] | None = None
+    shell: str = "bash"
+
+    @property
+    def title(self) -> str:
+        return f"- name: {self.name}" if self.name else f"step {self.index} of job {self.job} (unnamed)"
 
 
-def unreadable_environments(workflow: str) -> list[str]:
-    """Environment settings this reader cannot resolve exactly; each is a violation."""
-    found = []
-    lines = structural_lines(workflow)
-    for number, line in enumerate(lines):
-        if YAML_INDIRECTION.search(line.split(" #", 1)[0]):
-            found.append(f"uses a YAML anchor, alias or merge key: `{line.strip()}`")
-        code = line.split(" #", 1)[0]
-        if UNDECODABLE_KEY.search(code):
-            found.append(f"has a YAML key it cannot decode: `{line.strip()}`")
-        match = ENVIRONMENT_KEY.match(line)
-        if not match:
-            if ANY_ENVIRONMENT_KEY.search(code):
-                found.append(f"has an environment key it cannot read: `{line.strip()}`")
-            continue
-        value = match.group("value").split(" #", 1)[0].strip()
-        if value.startswith("{"):
-            if not ENVIRONMENT_NAME.search(value) or "${{" in value:
-                found.append(f"has an environment it cannot read: `{line.strip()}`")
-        elif value:
-            if not SIMPLE_NAME.fullmatch(value):
-                found.append(f"has an environment it cannot read: `{line.strip()}`")
-        else:
-            indent = len(match.group("indent"))
-            name = None
-            for following in lines[number + 1:]:
-                if not following.strip() or following.lstrip().startswith("#"):
-                    continue
-                if len(following) - len(following.lstrip(" \t")) <= indent:
-                    break
-                named = re.match(r"[ \t]+name:\s*(.*)$", following)
-                if named:
-                    name = named.group(1).split(" #", 1)[0].strip()
-                    break
-            if name is None or not SIMPLE_NAME.fullmatch(name):
-                found.append(f"has an environment mapping without a plain name: `{line.strip()}`")
-    return found
+@dataclass
+class Workflow:
+    jobs: dict[str, list[Step]]
+    secrets: dict[str, bool]
+    environments: list[str]
+    reusable: list[str]
+
+
+ROOT_KEYS = frozenset({"name", "run-name", "on", "permissions", "env", "defaults", "concurrency", "jobs"})
+JOB_KEYS = frozenset({"name", "needs", "if", "runs-on", "permissions", "environment", "concurrency",
+                      "outputs", "env", "defaults", "steps", "strategy", "timeout-minutes",
+                      "continue-on-error", "container", "services", "uses", "with", "secrets"})
+STEP_KEYS = frozenset({"name", "id", "if", "uses", "run", "shell", "working-directory", "with", "env",
+                       "continue-on-error", "timeout-minutes"})
+
+
+def parse_workflow(text: str) -> Workflow:
+    """Read a conservative Actions subset using YAML tokens and composed nodes.
+
+    BaseLoader keeps Actions' `on` and environment scalars as strings. No YAML
+    constructors run. Reject indirection before composition, and duplicates
+    before building dictionaries, so neither can replace a checked value.
+    """
+    if yaml is None:
+        raise PolicyError("PyYAML is required; install PyYAML==6.0.3 in the Python environment (including -I)")
+
+    def refuse(reason: str) -> None:
+        raise PolicyError(f"unsupported construct: {reason}")
+
+    def scalar(node, label: str) -> str:
+        if not isinstance(node, yaml.ScalarNode):
+            refuse(f"{label} must be a scalar")
+        return node.value
+
+    def mapping(node, label: str, allowed=None, block: bool = True) -> dict:
+        if not isinstance(node, yaml.MappingNode) or (block and node.flow_style):
+            refuse(f"{label} must be a block mapping")
+        result = {}
+        for key, value in node.value:
+            key_name = scalar(key, f"{label} key")
+            if key.style is not None or text[key.end_mark.index:key.end_mark.index + 1] != ":":
+                refuse(f"{label} keys must be plain and immediately followed by a colon")
+            if allowed is not None and key_name not in allowed:
+                refuse(f"{label} has unknown key {key_name!r}")
+            result[key_name] = value
+        return result
+
+    def strings(node, label: str, multiline: bool = False) -> dict[str, str]:
+        result = {}
+        for key, value in mapping(node, label).items():
+            result[key] = scalar(value, f"{label}.{key}")
+            if not multiline and (value.style in ("|", ">") or "\n" in value.value):
+                refuse(f"{label}.{key} must be a single-line scalar")
+        return result
+
+    def default_shell(fields: dict, inherited: str, label: str) -> str:
+        if "defaults" not in fields:
+            return inherited
+        defaults = mapping(fields["defaults"], f"{label}.defaults", {"run"})
+        run = mapping(defaults["run"], f"{label}.defaults.run", {"shell", "working-directory"}) if "run" in defaults else {}
+        shell = scalar(run["shell"], f"{label}.defaults.run.shell") if "shell" in run else inherited
+        if shell != "bash":
+            refuse(f"{label}.defaults.run.shell must be bash")
+        return shell
+
+    def contents(node) -> str:
+        if isinstance(node, yaml.ScalarNode):
+            return node.value
+        children = (child for pair in node.value for child in pair) if isinstance(node, yaml.MappingNode) else node.value
+        return "\n".join(contents(child) for child in children)
+
+    def unique(node) -> None:
+        if isinstance(node, yaml.MappingNode):
+            seen = set()
+            for key, value in node.value:
+                name = scalar(key, "mapping key")
+                if name in seen:
+                    refuse(f"duplicate {name!r} key")
+                seen.add(name)
+                unique(value)
+        elif isinstance(node, yaml.SequenceNode):
+            for value in node.value:
+                unique(value)
+
+    try:
+        for token in yaml.scan(text, Loader=yaml.BaseLoader):
+            if isinstance(token, (yaml.tokens.AnchorToken, yaml.tokens.AliasToken, yaml.tokens.TagToken)):
+                refuse("YAML anchor, alias or explicit tag")
+            if isinstance(token, yaml.tokens.KeyToken) and text[token.start_mark.index:token.end_mark.index] == "?":
+                refuse("explicit YAML key")
+        node = yaml.compose(text, Loader=yaml.BaseLoader)
+        unique(node)
+        root = mapping(node, "workflow", ROOT_KEYS)
+        if "jobs" not in root:
+            refuse("workflow must have a jobs mapping")
+        shell = default_shell(root, "bash", "workflow")
+        workflow_env = strings(root["env"], "workflow.env") if "env" in root else {}
+        parsed = Workflow({}, {}, [], [])
+        for job, body in mapping(root["jobs"], "jobs").items():
+            fields = mapping(body, f"job {job}", JOB_KEYS)
+            job_shell = default_shell(fields, shell, f"job {job}")
+            job_env = strings(fields["env"], f"job {job}.env") if "env" in fields else {}
+            parsed.secrets[job] = bool(SECRET.search(contents(body))
+                                       or SECRET.search(str(workflow_env)))
+            if "environment" in fields:
+                environment = fields["environment"]
+                if isinstance(environment, yaml.MappingNode):
+                    values = mapping(environment, "environment", {"name", "url"}, block=False)
+                    if "name" not in values:
+                        refuse("environment mapping must have a name")
+                    environment = values["name"]
+                value = scalar(environment, "environment")
+                if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
+                    refuse("environment must have a literal name")
+                parsed.environments.append(value)
+            if "uses" in fields:
+                parsed.reusable.append(scalar(fields["uses"], "job uses"))
+                if "steps" in fields:
+                    refuse("a reusable job cannot have steps")
+            parsed.jobs[job] = []
+            if "steps" not in fields:
+                continue
+            sequence = fields["steps"]
+            if not isinstance(sequence, yaml.SequenceNode) or sequence.flow_style:
+                refuse("steps must be a block sequence")
+            ids = set()
+            for index, entry in enumerate(sequence.value, 1):
+                values = mapping(entry, f"job {job} step {index}", STEP_KEYS)
+                step = Step(job, index, contents(entry), shell=job_shell)
+                for key in ("name", "id", "uses", "run", "shell"):
+                    if key in values:
+                        setattr(step, key, scalar(values[key], key))
+                if step.id:
+                    if step.id in ids:
+                        refuse(f"duplicate step id {step.id!r}")
+                    ids.add(step.id)
+                if step.shell != "bash":
+                    refuse("step shell must be bash")
+                if (step.run is None) == (step.uses is None):
+                    refuse("each step must have exactly one run or uses key")
+                if "run" in values:
+                    run = values["run"]
+                    if run.style not in (None, "|"):
+                        refuse("quoted or folded run scalar; use a plain scalar or run: |")
+                    if run.style is None and (run.start_mark.line != run.end_mark.line
+                                             or run.start_mark.line != next(k.start_mark.line for k, v in entry.value if v is run)):
+                        refuse("multiline plain run scalar; use run: |")
+                step.env = strings(values["env"], "step.env") if "env" in values else {}
+                if "with" in values:
+                    strings(values["with"], "step.with", multiline=True)
+                # Inherited secrets reach a run even when its own env is empty.
+                if SECRET.search(str(workflow_env)) or SECRET.search(str(job_env)):
+                    step.text += "\n" + str(workflow_env) + str(job_env)
+                parsed.jobs[job].append(step)
+        return parsed
+    except (yaml.YAMLError, RecursionError) as error:
+        raise PolicyError(f"unsupported construct: YAML parse failed: {error}") from error
 
 
 def environment_problems(workflows: dict[str, str]) -> list[str]:
-    found = [f"{name} names the `{RELEASE_ENVIRONMENT}` environment; only {SIGNING_WORKFLOW} may"
-             for name, text in sorted(workflows.items())
-             if name != SIGNING_WORKFLOW and RELEASE_ENVIRONMENT in environment_names(text)]
-    found += [f"{name} {problem}" for name, text in sorted(workflows.items())
-              for problem in unreadable_environments(text)]
+    found = []
+    for name, text in sorted(workflows.items()):
+        try:
+            environments = parse_workflow(text).environments
+        except PolicyError as error:
+            found.append(f"{name}: {error}")
+            continue
+        if name != SIGNING_WORKFLOW and RELEASE_ENVIRONMENT in environments:
+            found.append(f"{name} names the `{RELEASE_ENVIRONMENT}` environment; only {SIGNING_WORKFLOW} may")
     return found
 
 
 def environment_names(workflow: str) -> list[str]:
-    """Return scalar and mapping-form environment names from a workflow.
+    try:
+        return parse_workflow(workflow).environments
+    except PolicyError:
+        return []  # The diagnostic is returned by environment_problems.
 
-    GitHub Actions accepts both ``environment: release`` and a mapping such as
-    ``environment:\n  name: release`` (with optional keys before ``name``).
-    Keep this small parser fail-closed: an indented ``name`` under an
-    environment mapping is treated as its name, while a dedented key ends the
-    mapping.
-    """
-    lines = workflow.splitlines()
-    names: list[str] = []
-    for match in ENVIRONMENT_KEY.finditer(workflow):
-        value = match.group("value").split("#", 1)[0].strip()
-        if value:
-            if value.startswith("{"):
-                inline = ENVIRONMENT_NAME.search(value)
-                if inline:
-                    names.append(inline.group("name"))
-            else:
-                scalar = re.fullmatch(r"['\"]?([A-Za-z0-9_-]+)['\"]?", value)
-                if scalar:
-                    names.append(scalar.group(1))
-            continue
 
-        line_number = workflow.count("\n", 0, match.start())
-        environment_indent = len(match.group("indent").expandtabs(8))
-        for line in lines[line_number + 1:]:
-            if not line.strip() or line.lstrip().startswith("#"):
-                continue
-            indent = len(line) - len(line.lstrip(" \t"))
-            if indent <= environment_indent:
-                break
-            mapping_name = re.match(r"[ \t]+name:\s*(.*)$", line)
-            if mapping_name:
-                candidate = mapping_name.group(1).split("#", 1)[0].strip()
-                scalar = re.fullmatch(r"['\"]?([A-Za-z0-9_-]+)['\"]?", candidate)
-                if scalar:
-                    names.append(scalar.group(1))
-                break
-    return names
+def step_layout_problems(name: str, workflow: str) -> list[str]:
+    try:
+        parse_workflow(workflow)
+        return []
+    except PolicyError as error:
+        return [f"{name}: {error}"]
+
+
+def workflow_steps(workflow: str) -> list[Step]:
+    return [step for steps in parse_workflow(workflow).jobs.values() for step in steps]
 
 
 def verifier_calls(workflow: str) -> tuple[list[tuple[dict[str, list[str]], list[str]]], int]:
@@ -455,22 +546,17 @@ def pin_problems(workflows: dict[str, str], root: Path) -> list[str]:
 
 
 def reusable_problems(workflows: dict[str, str]) -> list[str]:
-    """A job may call only this repository's own workflows.
-
-    A called workflow can name the `release` environment where this check
-    cannot read it. A `uses:` value this reader cannot see whole (a block
-    scalar, a value continued on the next line, an escaped string) is refused.
-    """
+    """A job may call only this repository's own reusable workflows."""
     found = []
     for name, text in sorted(workflows.items()):
-        for line in structural_lines(text):
-            for match in USES.finditer(line.split(" #", 1)[0]):
-                value = match.group("value").strip()
-                plain = value.strip("'\"")
-                if not plain or plain[0] in "|>" or "\\" in value:
-                    found.append(f"{name} has a `uses:` value it cannot read: `{line.strip()}`")
-                elif ".github/workflows/" in plain and not plain.startswith("./"):
-                    found.append(f"{name} calls a reusable workflow from another repository: `{line.strip()}`")
+        try:
+            parsed = parse_workflow(text)
+        except PolicyError as error:
+            found.append(f"{name}: {error}")
+            continue
+        for value in parsed.reusable:
+            if not value.startswith("./.github/workflows/") or "\n" in value:
+                found.append(f"{name} calls a reusable workflow from another repository: {value!r}")
     return found
 
 
@@ -547,310 +633,6 @@ def dynamic_load_problems(root: Path, path: str, source: Path, also_policy: froz
                 break
             directory = directory.parent
     return found
-
-
-@dataclass
-class Step:
-    """One step of a job, read from the workflow's lines."""
-    job: str
-    index: int
-    text: str
-    name: str | None = None
-    id: str | None = None
-    uses: str | None = None
-    run: str | None = None
-    folded_run: bool = False
-    # A plain or quoted run scalar with continuation text or escapes is YAML
-    # syntax this line reader cannot decode safely.
-    run_unreadable: str | None = None
-    env: dict[str, str] | None = None
-    # Why a key this check reads could not be read; such a step is refused.
-    unreadable: str | None = None
-
-    @property
-    def title(self) -> str:
-        return f"- name: {self.name}" if self.name else f"step {self.index} of job {self.job} (unnamed)"
-
-
-def _plain(value: str) -> str:
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-        return value[1:-1]
-    return re.sub(r"\s+#.*$", "", value).strip()
-
-
-def _read_step(job: str, index: int, lines: list[str], indent: int) -> Step:
-    """A step from its lines; `indent` is the column of its keys."""
-    step = Step(job, index, "\n".join(lines))
-    lines = [" " * indent + lines[0][indent:], *lines[1:]]
-    position = 0
-    while position < len(lines):
-        line = lines[position]
-        position += 1
-        match = re.match(rf" {{{indent}}}(?P<key>[A-Za-z0-9_-]+):(?P<value>.*)$", line)
-        if match is None:
-            if line.strip() and not line.lstrip().startswith("#") and len(line) - len(line.lstrip()) <= indent:
-                step.unreadable = f"unexpected line {line.strip()!r}"
-            continue
-        key, value = match["key"], match["value"].strip()
-        body = []
-        while position < len(lines) and (not lines[position].strip()
-                                         or len(lines[position]) - len(lines[position].lstrip()) > indent):
-            body.append(lines[position])
-            position += 1
-        if key == "run":
-            if re.fullmatch(r"[|>][-+0-9]*(?:\s+#.*)?", value):
-                step.folded_run = value.startswith(">")
-                kept = [text for text in body if text.strip()]
-                width = min((len(text) - len(text.lstrip()) for text in kept), default=0)
-                step.run = "\n".join(text[width:] for text in body)
-            else:
-                step.run = _plain(value)
-                if any(text.strip() and not text.lstrip().startswith("#") for text in body):
-                    step.run_unreadable = "run has continuation lines this check cannot fold"
-                elif value.startswith('"') and value.endswith('"') and "\\" in value:
-                    step.run_unreadable = "run has YAML escapes this check cannot decode"
-        elif key == "env":
-            step.env = {}
-            if value and not value.startswith("#"):
-                step.unreadable = "env is not a block mapping"
-            for text in body:
-                if not text.strip() or text.lstrip().startswith("#"):
-                    continue
-                pair = re.match(rf" {{{indent + 2}}}(?P<key>[A-Za-z_][A-Za-z0-9_]*):(?P<value>.*)$", text)
-                if pair is None or re.fullmatch(r"[|>][-+0-9]*", pair["value"].strip()):
-                    step.unreadable = f"env line {text.strip()!r} is not `NAME: value`"
-                    continue
-                step.env[pair["key"]] = _plain(pair["value"])
-        elif key in ("name", "id", "uses"):
-            setattr(step, key, _plain(value))
-    return step
-
-
-STEPS_KEY = re.compile(r" +steps:[ \t]*(?:#.*)?")
-# Any spelling of a `steps` key: quoted, spaced before the colon, or with an
-# inline value (flow sequence, anchor, alias).
-ANY_STEPS_KEY = re.compile(r"[ \t]*(?:\"steps\"|'steps'|steps)[ \t]*:(?:[ \t].*)?")
-# A bare `-` opening a sequence item on its own line (optionally commented).
-BARE_DASH = re.compile(r"-(?:[ \t]+#.*)?")
-
-
-def _sequence_item(stripped: str) -> bool:
-    """A line (left-stripped) that opens a sequence item, inline or bare. At the
-    column of `steps:` it is an indentationless sequence item, not the end of
-    the step list."""
-    return stripped.startswith("- ") or BARE_DASH.fullmatch(stripped) is not None
-
-
-def _structural_indices(lines: list[str]) -> list[int]:
-    """Indices of the lines structural_lines keeps (outside block scalars).
-    A full-line comment (`# note: |`) is never a block-scalar opener: read as
-    one, it would hide every more-indented line after it, real steps included."""
-    hidden = _block_scalar_openers(lines)
-    return [number for number in range(len(lines)) if number not in hidden]
-
-
-def _block_scalar_openers(lines: list[str]) -> dict[int, int]:
-    """Each line inside a block scalar, mapped to the index of the line that
-    opened that scalar (`key: |`)."""
-    hidden: dict[int, int] = {}
-    block_indent: int | None = None
-    opener = 0
-    for number, line in enumerate(lines):
-        indent = len(line) - len(line.lstrip(" "))
-        if block_indent is not None:
-            if not line.strip() or indent > block_indent:
-                hidden[number] = opener
-                continue
-            block_indent = None
-        if line.lstrip().startswith("#"):
-            continue
-        if BLOCK_SCALAR.search(line.split(" #", 1)[0].rstrip()):
-            # On a sequence item (`- name: >-`) the scalar belongs to the key,
-            # so its body is what is indented past the key, not past the dash;
-            # the item's later keys sit at the key's column and stay visible.
-            prefix = SEQUENCE_ITEM_PREFIX.match(line, indent)
-            block_indent = prefix.end() if prefix else indent
-            opener = number
-    return hidden
-
-
-def _job_key_indent(lines: list[str]) -> int | None:
-    """The column of a job's own keys: the first content line under its
-    header. None for a fragment with no job header (read as one job)."""
-    if not lines or not JOB_HEADER.fullmatch(lines[0]):
-        return None
-    for line in lines[1:]:
-        if line.strip() and not line.lstrip().startswith("#"):
-            return len(line) - len(line.lstrip())
-    return None
-
-
-def _steps_key_lines(text: str) -> tuple[list[int], list[int]]:
-    """(the job's own `steps:` lines, every other `steps:` line outside a
-    block scalar). Only a `steps:` key at the job's own key column is its step
-    list; one nested in a job-level key (`env:`, `with:`) or held in a
-    block scalar is text, not steps."""
-    lines = text.splitlines()
-    key_indent = _job_key_indent(lines)
-    hidden = _block_scalar_openers(lines)
-    own: list[int] = []
-    other: list[int] = []
-    for number, line in enumerate(lines):
-        if number in hidden or not STEPS_KEY.fullmatch(line):
-            continue
-        if key_indent is None or len(line) - len(line.lstrip()) == key_indent:
-            own.append(number)
-        else:
-            other.append(number)
-    for number, opener in hidden.items():
-        # A block-scalar body is not executable workflow structure. Still
-        # reject an exact `steps:` key hidden there, unless the scalar is a
-        # step's own `run:` script (a heredoc writing YAML is shell payload):
-        # otherwise a fake minting list can disappear from the layout audit
-        # while its surrounding job remains otherwise readable.
-        if STEPS_KEY.fullmatch(lines[number]) and not _is_step_run_opener(lines, opener, own):
-            other.append(number)
-    return own, sorted(other)
-
-
-def _is_step_run_opener(lines: list[str], opener: int, own: list[int]) -> bool:
-    """Whether line `opener` opens a `run:` block scalar of a step under one of
-    the job's own `steps:` keys (listed in `own`)."""
-    line = lines[opener]
-    indent = len(line) - len(line.lstrip(" "))
-    prefix = SEQUENCE_ITEM_PREFIX.match(line, indent)
-    column = prefix.end() if prefix else indent
-    if not re.fullmatch(r"run:[ \t]+[|>][-+0-9]*[ \t]*(?:#.*)?", line[column:].rstrip()):
-        return False
-    for start in reversed([number for number in own if number < opener]):
-        base = len(lines[start]) - len(lines[start].lstrip())
-        # The run key must sit deeper than the steps key, with nothing at or
-        # left of that key's column in between (which would end the list).
-        between = [text for text in lines[start + 1:opener]
-                   if text.strip() and not text.lstrip().startswith("#")]
-        if column > base and all(len(text) - len(text.lstrip()) > base
-                                 or (len(text) - len(text.lstrip()) == base and _sequence_item(text.lstrip()))
-                                 for text in between):
-            return True
-        break
-    return False
-
-
-def job_steps(job: str, text: str) -> list[Step]:
-    """Every step of a job, named or not, in order."""
-    lines = text.splitlines()
-    found: list[Step] = []
-    own, _ = _steps_key_lines(text)
-    for start, line in enumerate(lines):
-        if start not in own:
-            continue
-        base = len(line) - len(line.lstrip())
-        items: list[list[str]] = []
-        dash = None
-        for text_line in lines[start + 1:]:
-            width = len(text_line) - len(text_line.lstrip())
-            if text_line.strip() and not text_line.lstrip().startswith("#") and width <= base \
-                    and not (width == base and _sequence_item(text_line.lstrip())):
-                break
-            if text_line.lstrip().startswith("- ") and (dash is None or width == dash):
-                dash = width
-                items.append([text_line])
-            elif items:
-                items[-1].append(text_line)
-        for item in items:
-            found.append(_read_step(job, len(found) + 1, item, dash + 2))
-    return found
-
-
-def _indirection_lines(step_text: str) -> list[str]:
-    """Every line of a step the alias check reads: all of them except the body
-    of a literal `run:` block, which _read_step parses and the gh api count
-    checks. It does not depend on structural_lines, so a line that reader
-    wrongly takes for block-scalar text is still checked."""
-    lines = step_text.splitlines()
-    if not lines:
-        return []
-    prefix = SEQUENCE_ITEM_PREFIX.match(lines[0], len(lines[0]) - len(lines[0].lstrip(" ")))
-    indent = prefix.end() if prefix else len(lines[0]) - len(lines[0].lstrip(" "))
-    run_key = re.compile(rf"run:[ \t]*[|>][-+0-9]*[ \t]*(?:#.*)?")
-    kept: list[str] = []
-    in_run = False
-    for number, line in enumerate(lines):
-        if in_run:
-            if not line.strip() or len(line) - len(line.lstrip(" ")) > indent:
-                continue
-            in_run = False
-        kept.append(line)
-        column = indent if number == 0 else len(line) - len(line.lstrip(" "))
-        if column == indent and run_key.fullmatch(line[indent:].rstrip()):
-            in_run = True
-    return kept
-
-
-def step_layout_problems(name: str, workflow: str) -> list[str]:
-    """Fail closed where job_steps would read nothing: a `steps` key written
-    other than `steps:`, and a non-comment line under `steps:` that no `- `
-    item holds (a bare `-` opening a step on its own line)."""
-    found = []
-    for job, text in (jobs(workflow) or {"": workflow}).items():
-        # YAML folding changes command boundaries before the shell sees the
-        # script. Refuse it even when no command is visible in the raw lines.
-        for step in job_steps(job, text):
-            if step.folded_run:
-                found.append(f"{name}: {step.title} uses a folded run scalar this check cannot read; use run: |")
-            if step.run_unreadable:
-                found.append(f"{name}: {step.title} uses a layout this check cannot read ({step.run_unreadable})")
-            # An alias or merge key can materialize a run value or GH_TOKEN
-            # from an anchor elsewhere (`run: *read`, `- <<: *step`), which
-            # neither the raw step text nor the parsed run shows. Refuse it.
-            for text_line in _indirection_lines(step.text):
-                if YAML_INDIRECTION.search(text_line.split(" #", 1)[0]):
-                    found.append(f"{name}: {step.title} uses a YAML anchor, alias or merge key this check "
-                                 f"cannot read: {text_line.strip()!r}")
-        # Only the job's own `steps:` key is read. A second one, or a
-        # `steps:` line nested under another job-level key, could hold a
-        # fake minting step (`id: app-token`) the runner never runs; refuse.
-        own, other = _steps_key_lines(text)
-        if len(own) > 1:
-            found.append(f"{name}: job {job or '(none)'} has more than one steps key")
-        for number in other:
-            found.append(f"{name}: job {job or '(none)'} has a steps: line that is not the job's own "
-                         f"steps key: {text.splitlines()[number].strip()!r}")
-        lines = text.splitlines()
-        for start in _structural_indices(lines):
-            line = lines[start]
-            if not ANY_STEPS_KEY.fullmatch(line):
-                continue
-            if not STEPS_KEY.fullmatch(line):
-                found.append(f"{name}: job {job or '(none)'} has a steps key this check cannot read: {line.strip()!r}")
-                continue
-            base = len(line) - len(line.lstrip())
-            dash = None
-            for text_line in lines[start + 1:]:
-                stripped = text_line.lstrip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-                width = len(text_line) - len(stripped)
-                if width <= base and not (width == base and _sequence_item(stripped)):
-                    break
-                if stripped.startswith("- ") and (dash is None or width == dash):
-                    dash = width
-                elif dash is None or (width == dash and BARE_DASH.fullmatch(stripped)):
-                    found.append(f"{name}: job {job or '(none)'} has a line under steps: that no step holds: "
-                                 f"{stripped!r}")
-                    break
-    return found
-
-
-def workflow_steps(workflow: str) -> list[Step]:
-    # A text with no `jobs:` (a fragment) is read as one job.
-    return [step for job, text in (jobs(workflow) or {"": workflow}).items() for step in job_steps(job, text)]
-
-
-def steps(workflow: str) -> list[str]:
-    """The workflow's steps, as text blocks, whether or not they are named."""
-    return [step.text for step in workflow_steps(workflow)]
 
 
 def shell_commands(run: str) -> list[str]:
@@ -986,36 +768,22 @@ def app_token_problems(name: str, workflow: str) -> list[str]:
     """A step that reads an Administration-only endpoint must hold, as its own
     GH_TOKEN, the token an earlier step of its job minted with the pinned
     create-github-app-token action."""
+    try:
+        parsed = parse_workflow(workflow)
+    except PolicyError as error:
+        return [f"{name}: {error}"]
     found = []
-    for job, text in (jobs(workflow) or {"": workflow}).items():
+    for job_steps in parsed.jobs.values():
         minted: set[str] = set()
-        for step in job_steps(job, text):
+        for step in job_steps:
             if step.id and step.uses and APP_TOKEN_ACTION.fullmatch(step.uses):
                 minted.add(step.id)
-            # Fail closed: every `gh api` call in the step's raw text must be
-            # one the reader saw in its run value. A layout the reader cannot
-            # follow (a quoted or spaced `run` key, keys not two columns past
-            # the dash, a plain or quoted multi-line value) hides calls.
-            raw_calls = len(gh_api_targets(step.text))
-            read_calls = len(gh_api_targets(step.run)) if step.run is not None else 0
-            if step.run_unreadable:
-                found.append(f"{name}: {step.title} uses a layout this check cannot read ({step.run_unreadable})")
-                continue
-            if raw_calls > read_calls:
-                found.append(f"{name}: {step.title} calls gh api in a layout this check cannot read")
-                continue
             if step.run is None:
                 continue
-            # ANSI-C quotes can construct command names and endpoints using
-            # escapes. The word reader does not decode them, so reject this
-            # unsupported syntax before deciding whether a gh api call exists.
             if any("$'" in line for line in shell_commands(step.run)):
                 found.append(f"{name}: {step.title} uses unsupported ANSI-C shell quoting")
                 continue
             targets = gh_api_targets(step.run)
-            if step.unreadable and targets:
-                found.append(f"{name}: {step.title} calls gh api but cannot be read: {step.unreadable}")
-                continue
             if None in targets:
                 found.append(f"{name}: {step.title} calls gh api with an endpoint this check cannot read")
             # Fail closed: an Administration-only path anywhere after a `gh api`
@@ -1039,102 +807,49 @@ def app_token_problems(name: str, workflow: str) -> list[str]:
     return found
 
 
-# Job IDs may be plain or quoted YAML keys, and comments after the key are
-# valid YAML. Keep the supported forms explicit so an unreadable job header
-# can be rejected instead of silently dropping that job's steps.
-JOB_HEADER = re.compile(
-    r"^  (?P<name>(?:[A-Za-z0-9_-]+|\"[^\"\n]+\"|'[^'\n]+')):[ \t]*(?:#.*)?$", re.MULTILINE)
-JOB_KEY = re.compile(r"^  [^\n]+:", re.MULTILINE)
-# The block `jobs:` line jobs() reads, and any other spelling of a top-level
-# `jobs` key: quoted, spaced before the colon, or with an inline value (flow
-# mapping, anchor, alias), which jobs() would read as no jobs at all.
-JOBS_KEY = re.compile(r"jobs:[ \t]*(?:#.*)?")
-ANY_JOBS_KEY = re.compile(r"(?:\"jobs\"|'jobs'|jobs)[ \t]*:.*")
-
-
-def jobs(workflow: str) -> dict[str, str]:
-    """The workflow's jobs, as text blocks keyed by job id."""
-    found = re.search(r"(?:^|\n)jobs:[ \t]*(?:#.*)?\n", workflow)
-    body = workflow[found.end():] if found else ""
-    if body:
-        # The jobs mapping ends at the next non-comment, column-zero mapping.
-        # Without this boundary a later top-level `env:`/`permissions:` block
-        # can be mistaken for another job and overwrite a real job id.
-        lines = body.splitlines(keepends=True)
-        end = len(lines)
-        for index, line in enumerate(lines):
-            stripped = line.strip()
-            if stripped and not line.lstrip().startswith("#") and len(line) == len(line.lstrip(" ")):
-                end = index
-                break
-        body = "".join(lines[:end])
-    marks = list(JOB_HEADER.finditer(body))
-    return {_plain(mark["name"]): body[mark.start():(marks[index + 1].start() if index + 1 < len(marks) else None)]
-            for index, mark in enumerate(marks)}
-
-
-def job_layout_problems(name: str, workflow: str) -> list[str]:
-    """Fail closed when a jobs key or job header is a YAML form this reader cannot follow."""
-    problems = [f"{name}: a jobs key this check cannot read: {line.strip()!r}"
-                for line in workflow.splitlines() if ANY_JOBS_KEY.fullmatch(line) and not JOBS_KEY.fullmatch(line)]
-    found = re.search(r"(?:^|\n)jobs:[ \t]*(?:#.*)?\n", workflow)
-    if found is None:
-        return problems
-    job_text = workflow[found.end():]
-    lines = job_text.splitlines()
-    for index, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped and not line.lstrip().startswith("#") and len(line) == len(line.lstrip(" ")):
-            lines = lines[:index]
-            break
-    first = True
-    for line in lines:
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        width = len(line) - len(line.lstrip())
-        if first and width != 2:
-            # jobs() reads only job IDs two columns in; any other indentation
-            # would read as no jobs and merge every job's steps into one.
-            problems.append(f"{name}: jobs indented {width} spaces; this check reads only jobs indented 2")
-        first = False
-        if len(line) - len(line.lstrip()) == 2 and JOB_KEY.match(line) and not JOB_HEADER.fullmatch(line):
-            problems.append(f"{name}: job header this check cannot read: {line.strip()!r}")
-    return problems
+def token_mutation(run: str) -> bool:
+    """Credentials must come unchanged from the reviewed step environment."""
+    for line in shell_commands(run):
+        words = list(shell_words(line))
+        if any(re.search(r"(?<![A-Za-z0-9_])(?:GH_TOKEN|GITHUB_TOKEN)(?:\[[^]]*\])?\+?=", word)
+               for word in words):
+            return True
+        credential = any(re.fullmatch(r"(?:GH_TOKEN|GITHUB_TOKEN)(?:\[[^]]*\])?", word)
+                         for word in words)
+        writers = {"export", "declare", "typeset", "local", "readonly", "read", "unset", "mapfile", "readarray"}
+        if credential and (writers.intersection(words) or ("printf" in words and "-v" in words)):
+            return True
+    return False
 
 
 def isolation_problems(workflows: dict[str, str], root: Path) -> list[str]:
     found = []
-    # A job that holds a token runs no repository Python in any step: an
-    # earlier step could otherwise plant code (a hook, GITHUB_PATH, GITHUB_ENV)
-    # that a later token-holding step runs.
-    if VERSION_WORKFLOW in workflows and not jobs(workflows[VERSION_WORKFLOW]):
-        found.append(f"{VERSION_WORKFLOW}: no jobs could be read")
-    for job, text in jobs(workflows.get(VERSION_WORKFLOW, "")).items():
-        if SECRET.search(text) and PYTHON_CALL.search(text):
-            found.append(f"{VERSION_WORKFLOW}: job {job} holds a secret and runs Python in one of its steps")
-    for name in RELEASE_WORKFLOWS:
-        for step in steps(workflows.get(name, "")):
-            title = step.strip().splitlines()[0]
-            for call in PYTHON_CALL.finditer(step):
-                if "I" not in call["flags"].replace("-", ""):
-                    found.append(f"{name}: {title} runs `{call.group(0).strip()}` without -I")
-            if name in SECRET_ISOLATED and SECRET.search(step) and PYTHON_CALL.search(step):
-                found.append(f"{name}: {title} holds a secret and runs Python")
-    # Every step rule here reads steps through job_steps; refuse a layout it
-    # would silently read as no steps.
     for name, text in sorted(workflows.items()):
-        found.extend(job_layout_problems(name, text))
-        found.extend(step_layout_problems(name, text))
-    if SIGNING_WORKFLOW in workflows:
-        found.extend(app_token_problems(SIGNING_WORKFLOW, workflows[SIGNING_WORKFLOW]))
-    # The renderer verifier decides release eligibility wherever a workflow
-    # runs it, so every call must be isolated too.
-    for name, text in sorted(workflows.items()):
-        for step in steps(text):
-            title = step.strip().splitlines()[0]
-            for call in RENDERER_VERIFIER_CALL.finditer(step):
-                if "I" not in call["flags"].replace("-", ""):
-                    found.append(f"{name}: {title} runs the renderer verifier without -I")
+        try:
+            parsed = parse_workflow(text)
+        except PolicyError as error:
+            found.append(f"{name}: {error}")
+            continue
+        for job, job_steps in parsed.jobs.items():
+            sensitive = parsed.secrets[job] or any(gh_api_targets(step.run or "") for step in job_steps)
+            if name == VERSION_WORKFLOW and parsed.secrets[job] and any(
+                    PYTHON_CALL.search(step.run or "") for step in job_steps):
+                found.append(f"{name}: job {job} holds a secret and runs Python in one of its steps")
+            for step in job_steps:
+                run = step.run or ""
+                if sensitive and token_mutation(run):
+                    found.append(f"{name}: {step.title} assigns or exports GH_TOKEN/GITHUB_TOKEN inside run")
+                if name in RELEASE_WORKFLOWS:
+                    for call in PYTHON_CALL.finditer(run):
+                        if "I" not in call["flags"].replace("-", ""):
+                            found.append(f"{name}: {step.title} runs `{call.group(0).strip()}` without -I")
+                    if name in SECRET_ISOLATED and SECRET.search(step.text) and PYTHON_CALL.search(run):
+                        found.append(f"{name}: {step.title} holds a secret and runs Python")
+                for call in RENDERER_VERIFIER_CALL.finditer(run):
+                    if "I" not in call["flags"].replace("-", ""):
+                        found.append(f"{name}: {step.title} runs the renderer verifier without -I")
+        if name == SIGNING_WORKFLOW:
+            found.extend(app_token_problems(name, text))
     stdlib = set(sys.stdlib_module_names)
     for directory in PYTHON_DIRS:
         for path in sorted((root / directory).iterdir()) if (root / directory).is_dir() else []:

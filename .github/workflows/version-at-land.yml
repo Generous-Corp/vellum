@@ -221,7 +221,9 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      # git and gh run from the system paths with an empty environment, so
+      # Keep the inherited token and remove every other environment entry.
+      # A NUL sentinel proves the complete inventory was read before execution.
+      # git and gh run from system paths with only the explicit safe settings, so
       # nothing an earlier step wrote to GITHUB_PATH, GITHUB_ENV or the git
       # config can run while the token is held.
       - name: Push the bump branch and open its pull request
@@ -234,7 +236,22 @@ jobs:
           set -euo pipefail
           [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           [[ -z "$NUMBER" || "$NUMBER" =~ ^[0-9]+$ ]]
-          clean() { env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" GH_TOKEN="$GH_TOKEN" GIT_CONFIG_NOSYSTEM=1 "$@"; }
+          clean() (
+            local record complete=false
+            local -a discard=()
+            while IFS= read -r -d '' record; do
+              if [[ -z "$record" ]]; then
+                complete=true
+                break
+              fi
+              case "${record%%=*}" in
+                GH_TOKEN) ;;
+                *) discard+=(-u "${record%%=*}") ;;
+              esac
+            done < <(/usr/bin/env -0 && builtin printf '\0')
+            [[ "$complete" == true ]] || return 1
+            /usr/bin/env "${discard[@]}" PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" GIT_CONFIG_NOSYSTEM=1 "$@"
+          )
           auth="http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           remote="https://github.com/$GITHUB_REPOSITORY"
           live="$(clean git -c core.hooksPath=/dev/null -c "$auth" ls-remote "$remote" refs/heads/main | cut -f1)"
