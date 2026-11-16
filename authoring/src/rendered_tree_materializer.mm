@@ -835,6 +835,18 @@ bool bind_token_refs(
             "tokenRefs." + name + " of " + output.id + " names a colour the node does not have",
             error);
     };
+    const auto check_index = [&](NSString* key) {
+        const std::size_t count = context.tokens != nullptr ? context.tokens->size() : 0U;
+        std::uint64_t index = 0;
+        if (protocol_index(references[key], count, index)) return true;
+        const std::string property = "tokenRefs." + cpp_string(key);
+        return refuse_token(context, output.id, property,
+            property + " of " + output.id + " must name an entry of the token table", error);
+    };
+    const auto check_color = [&](NSString* key, const vellum::graphics::Color& color) {
+        std::uint32_t entry = 0;
+        return token_entry(references, key, context, output.id, color, entry, error);
+    };
     const auto bind_slot = [&](NSString* key, TokenSlot slot) {
         const auto* color = vellum::graphics::token_slot_color(output, slot);
         if (color == nullptr) return missing(cpp_string(key));
@@ -879,20 +891,25 @@ bool bind_token_refs(
                 if (bound && fills) {
                     bound = bind_fill(key);
                 } else if (bound && !root) {
-                    bound = dropped(name);
+                    bound = check_color(key, *background) && dropped(name);
                 }
             }
         } else if (name == "color" && !path) {
             if (output.kind == SceneNode::Kind::text) {
                 bound = bind_fill(key);
-            } else if (!labelled) {
-                bound = parse_color(style[@"color"]) ? dropped(name) : missing(name);
+            } else {
+                const auto color = parse_color(style[@"color"]);
+                if (!labelled) {
+                    bound = color ? check_color(key, *color) && dropped(name) : missing(name);
+                } else {
+                    bound = color ? check_color(key, *color) : check_index(key);
+                }
             }
         } else if (name == "boxShadow" && !path) {
             if (style[@"boxShadow"] == nil) {
                 bound = missing(name);
             } else if (output.box_shadows.empty()) {
-                bound = dropped(name);
+                bound = check_index(key) && dropped(name);
             } else {
                 bound = bind_slot(key, {TokenSlot::Kind::box_shadow, 0U, 0U, 0U});
             }
@@ -900,7 +917,7 @@ bool bind_token_refs(
             if (style[@"backgroundLinearGradient"] == nil) {
                 bound = missing(name);
             } else if (output.fill_gradients.empty()) {
-                bound = dropped(name);
+                bound = check_index(key) && dropped(name);
             } else {
                 bound = bind_slot(key, {TokenSlot::Kind::gradient_stop, 0U, *stop, 0U});
             }

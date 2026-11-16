@@ -491,6 +491,18 @@ std::vector<PaintCommand> make_paint_commands(
     return output;
 }
 
+std::vector<PaintCommand> make_evaluated_paint_commands(
+    const Scene& evaluated, std::vector<PaintCommandRange>* ranges) {
+    std::vector<PaintCommand> output;
+    if (ranges != nullptr) ranges->clear();
+    if (!scene_version_is_supported(evaluated.scene_version)) return output;
+    if (!scene_fields_match_version(evaluated)) return output;
+    if (evaluated.root.mask) return output;
+    append_node(ImageAssetIndex(evaluated), evaluated.root, 0.0F, 0.0F, Affine2D{}, output,
+                ranges);
+    return output;
+}
+
 namespace {
 
 void report_missing_images(const ImageAssetIndex& images, const SceneNode& node,

@@ -1,3 +1,4 @@
+#include <vellum/graphics/animation.hpp>
 #include <vellum/graphics/damage.hpp>
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
@@ -572,6 +573,48 @@ void animated_token_fill_is_accepted() {
           "a stale authored fill under a track is still refused");
 }
 
+void duplicate_resolved_paths_are_refused() {
+    Scene scene = themed_scene();
+    const Scene original = scene;
+    auto doubled = receipts(kAccent, kCanvas, kLabel);
+    doubled.push_back({"main.color.accent", "primitive", Color::hex(0xEF4444)});
+    const auto result = apply_token_values(scene, doubled);
+    check(!result.applied && result.duplicate_path == "main.color.accent",
+          "a theme holding one path twice is not applied");
+    check(result.changed.empty() && result.nodes_updated == 0U &&
+              changed_token_entries(original, scene).empty() &&
+              same_token_color(find(scene, "a0")->fill, kAccent),
+          "a refused switch leaves the scene unchanged");
+    auto unrelated = receipts(kAccent, kCanvas, kLabel);
+    unrelated.push_back({"main.color.extra", "primitive", kLabel});
+    unrelated.push_back({"main.color.extra", "primitive", kCanvas});
+    check(!apply_token_values(scene, unrelated).applied,
+          "a duplicated path the table does not hold is refused too");
+    check(apply_token_values(scene, receipts(kAccent, kCanvas, kLabel)).applied,
+          "control: the same table without duplicates is applied");
+}
+
+void evaluated_lowering_does_not_recheck_receipts() {
+    Scene scene = themed_scene();
+    scene.root.children[0].tracks.push_back({
+        .property = AnimatedProperty::fill,
+        .keyframes = {{.time = 0.0, .color = kAccent}, {.time = 1.0, .color = kCanvas}},
+    });
+    scene.clock = 0.5;
+    const Scene evaluated = evaluate_tracks(scene);
+    check(find_invalid_token_reference(evaluated).has_value(),
+          "control: the evaluated fill no longer matches its receipt");
+    check(make_paint_commands(evaluated).empty(),
+          "control: lowering an evaluated scene as authored refuses it");
+    const auto commands = make_evaluated_paint_commands(evaluated, nullptr);
+    check(!commands.empty(), "an evaluated scene lowers without rechecking its receipts");
+    bool animated = false;
+    for (const auto& command : commands) {
+        if (command.node_id == "a0" && !same_token_color(command.fill, kAccent)) animated = true;
+    }
+    check(animated, "the lowered fill is the evaluated colour");
+}
+
 }  // namespace
 
 int main() {
@@ -594,6 +637,8 @@ int main() {
     slots_are_canonical();
     versioned_fields_are_gated();
     animated_token_fill_is_accepted();
+    duplicate_resolved_paths_are_refused();
+    evaluated_lowering_does_not_recheck_receipts();
     if (failures != 0) {
         std::fprintf(stderr, "%d token receipt checks failed\n", failures);
         return 1;

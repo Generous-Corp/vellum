@@ -62,10 +62,12 @@ struct TokenRefusal final {
 
 /// The outcome of `apply_token_values`.
 struct TokenSwitch final {
-    /// False when `resolved` lacks a path the scene's table holds; the scene
-    /// is then left unchanged and `missing_path` names the path.
+    /// False when `resolved` lacks a path the scene's table holds, or holds
+    /// one path twice; the scene is then left unchanged and `missing_path` or
+    /// `duplicate_path` names the path.
     bool applied = false;
     std::string missing_path;
+    std::string duplicate_path;
     /// Entries whose layer or value changed.
     std::vector<std::uint32_t> changed;
     /// Nodes with at least one colour rewritten because its receipt's value

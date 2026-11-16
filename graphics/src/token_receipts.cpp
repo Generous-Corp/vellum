@@ -247,7 +247,12 @@ std::size_t count_token_references(const Scene& scene, std::span<const std::uint
 TokenSwitch apply_token_values(Scene& scene, std::span<const TokenReceipt> resolved) {
     TokenSwitch result;
     std::unordered_map<std::string, const TokenReceipt*> by_path;
-    for (const auto& receipt : resolved) by_path.emplace(receipt.path, &receipt);
+    for (const auto& receipt : resolved) {
+        if (!by_path.emplace(receipt.path, &receipt).second) {
+            result.duplicate_path = receipt.path;
+            return result;
+        }
+    }
     for (const auto& entry : scene.tokens) {
         if (!by_path.contains(entry.path)) {
             result.missing_path = entry.path;

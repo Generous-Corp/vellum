@@ -58,8 +58,10 @@ names are `backgroundColor`, `color` (a text node or an attributed text run),
 `fill.stops.<n>` and `stroke`. A name that is not a slot of the element, or
 that names a colour the element lacks, is refused with
 `VELLUM_INVALID_TOKEN_REFERENCE`; a colour the node type does not draw is
-reported as dropped. A short hex colour (`#fff`, `#ffff`) is the same colour
-as its long form everywhere and its receipt carries the long form. A theme
+reported as dropped. A short hex colour (`#fff`, `#ffff`) that `Design`
+resolves is the same colour as its long form and its receipt carries the long
+form; a gradient stop, box shadow or Path colour written directly in JSX takes
+only the six- and eight-digit forms. A theme
 switch calls `apply_token_values`, which re-resolves the table and rewrites
 only the fills, text runs, shadows, stops and strokes whose receipt changed, so
 the scene diff damages those nodes and no others. A text run without a slot of its own that

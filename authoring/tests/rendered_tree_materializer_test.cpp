@@ -838,6 +838,35 @@ bool token_receipts() {
         "style":{"width":4,"height":4,"backgroundColor":"#14b8a6"}})JSON";
     constexpr std::string_view kShape = R"JSON(,{"type":"view","id":"shape","tokenRefs":[0],
         "style":{"width":4,"height":4,"backgroundColor":"#14b8a6"}})JSON";
+    constexpr std::string_view kEmptyInput = R"JSON(,{"type":"text-input","id":"empty-input",
+        "primitiveVersion":1,"value":"","tokenRefs":{"color":1e30},"events":{"change":"input:change"},
+        "style":{"width":100,"height":30,"color":"#112233"}})JSON";
+    constexpr std::string_view kEmptyInputStale = R"JSON(,{"type":"text-input","id":"empty-input",
+        "primitiveVersion":1,"value":"","tokenRefs":{"color":0},"events":{"change":"input:change"},
+        "style":{"width":100,"height":30,"color":"#112233"}})JSON";
+    constexpr std::string_view kEmptyButton = R"JSON(,{"type":"button","id":"empty-button",
+        "tokenRefs":{"color":0},"events":{"press":"go"},
+        "style":{"width":40,"height":20,"color":"#112233"}})JSON";
+    constexpr std::string_view kEmptyButtonPast = R"JSON(,{"type":"button","id":"empty-button",
+        "tokenRefs":{"color":9},"events":{"press":"go"},
+        "style":{"width":40,"height":20,"color":"#14b8a6"}})JSON";
+    constexpr std::string_view kEmptyButtonOk = R"JSON(,{"type":"button","id":"empty-button",
+        "tokenRefs":{"color":0},"events":{"press":"go"},
+        "style":{"width":40,"height":20,"color":"#14b8a6"}})JSON";
+    constexpr std::string_view kDroppedColor = R"JSON(,{"type":"view","id":"dropped",
+        "tokenRefs":{"color":7},"style":{"width":4,"height":4,"color":"#14b8a6"}})JSON";
+    constexpr std::string_view kDroppedStale = R"JSON(,{"type":"view","id":"dropped",
+        "tokenRefs":{"color":1},"style":{"width":4,"height":4,"color":"#14b8a6"}})JSON";
+    {
+        vellum::authoring::RenderedApplication control;
+        std::string control_error;
+        if (!vellum::authoring::materialize_rendered_tree(
+                token_tree("#14b8a6", "#0f172a", kEmptyButtonOk), control, &control_error)) {
+            std::cerr << "control: an empty button with a matching colour token was refused: "
+                      << control_error << '\n';
+            return false;
+        }
+    }
     const std::string repeated =
         R"({"path":"a","layer":"primitive","value":"#14b8a6"},)"
         R"({"path":"a","layer":"primitive","value":"#0f172a"})";
@@ -848,6 +877,18 @@ bool token_receipts() {
            rejected(token_tree("#14b8a6", "#0f172a", kPast), "must name an entry of the token table") &&
            rejected(token_tree("#14b8a6", "#0f172a", kFraction), "must name an entry of the token table") &&
            rejected(token_tree("#14b8a6", "#0f172a", kShape), "tokenRefs of shape must be an object") &&
+           rejected(token_tree("#14b8a6", "#0f172a", kEmptyInput),
+                    "must name an entry of the token table") &&
+           rejected(token_tree("#14b8a6", "#0f172a", kEmptyInputStale),
+                    "disagrees with its resolved colour") &&
+           rejected(token_tree("#14b8a6", "#0f172a", kEmptyButton),
+                    "disagrees with its resolved colour") &&
+           rejected(token_tree("#14b8a6", "#0f172a", kEmptyButtonPast),
+                    "must name an entry of the token table") &&
+           rejected(token_tree("#14b8a6", "#0f172a", kDroppedColor),
+                    "must name an entry of the token table") &&
+           rejected(token_tree("#14b8a6", "#0f172a", kDroppedStale),
+                    "disagrees with its resolved colour") &&
            rejected(token_tree("#14b8a6", "#0f172a", {}, repeated), "repeats a path") &&
            rejected(token_tree("#14b8a6", "#0f172a", {}, not_a_colour), "has no colour value");
 }

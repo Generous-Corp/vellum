@@ -2441,7 +2441,7 @@ private:
         }
 
         std::vector<PaintCommandRange> ranges;
-        const auto commands = make_paint_commands(scene, &ranges);
+        const auto commands = make_evaluated_paint_commands(scene, &ranges);
         std::vector<ParagraphSlot> paragraphs(commands.size());
         // stats_ and layer_count_ describe the last submitted frame until
         // this one submits, so the per-frame cache counters must too.
