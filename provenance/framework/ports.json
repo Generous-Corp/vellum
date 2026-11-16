@@ -1,5 +1,5 @@
 {
-  "schema": "vellum.framework-ports.v1",
+  "schema": "vellum.framework-ports.v2",
   "rows": [
     {
       "framework_path": "framework/core/platform/include/vellum/platform/alert.hpp",
@@ -383,9 +383,6 @@
         "18d9d4cf26128f3853b415645a8549f5706bfe02"
       ],
       "framework_blob": "597efd643ebb01731fcd3134c79d0263ab11b93a",
-      "platforms": [
-        "linux-x64"
-      ],
       "reason": "XDND message and URI-list parsing shared by the X11 host and drag source."
     },
     {
@@ -398,9 +395,6 @@
         "815869c11cf2693b638faac3bf965b82ceebeae9"
       ],
       "framework_blob": "0d8bb1fecb9da19ada03cdac6ecef56c05744a3d",
-      "platforms": [
-        "linux-x64"
-      ],
       "reason": "XDND drag-source state machine for outbound file drags."
     },
     {
@@ -419,9 +413,6 @@
         "f5c94010569725c790d66c856aadf9d1d9396811"
       ],
       "framework_blob": "f1ebbfb20b15fe3d373fc602cd2e4229a28cf2aa",
-      "platforms": [
-        "linux-x64"
-      ],
       "reason": "AT-SPI2 role, state and interface constants the Linux accessibility provider maps onto."
     }
   ]
