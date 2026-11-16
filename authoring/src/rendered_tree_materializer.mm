@@ -880,7 +880,8 @@ bool bind_token_refs(
             // whatever the root's kind, so its receipt is kept for that too.
             const auto background = parse_color(style[@"backgroundColor"]);
             const bool fills = !path && (output.kind == SceneNode::Kind::rectangle ||
-                                         output.kind == SceneNode::Kind::image);
+                                         output.kind == SceneNode::Kind::image ||
+                                         output.kind == SceneNode::Kind::plot);
             if (!background) {
                 bound = missing(name);
             } else {
@@ -911,7 +912,9 @@ bool bind_token_refs(
             if (style[@"boxShadow"] == nil) {
                 bound = missing(name);
             } else if (output.box_shadows.empty()) {
-                bound = check_index(key) && dropped(name);
+                NSDictionary* shadow = dictionary_or_empty(style[@"boxShadow"]);
+                const auto color = parse_color(shadow[@"color"]);
+                bound = color ? check_color(key, *color) && dropped(name) : missing(name);
             } else {
                 bound = bind_slot(key, {TokenSlot::Kind::box_shadow, 0U, 0U, 0U});
             }
@@ -919,7 +922,12 @@ bool bind_token_refs(
             if (style[@"backgroundLinearGradient"] == nil) {
                 bound = missing(name);
             } else if (output.fill_gradients.empty()) {
-                bound = check_index(key) && dropped(name);
+                NSArray* stops = array_or_empty(
+                    dictionary_or_empty(style[@"backgroundLinearGradient"])[@"stops"]);
+                const auto color = *stop < stops.count
+                    ? parse_color(dictionary_or_empty(stops[*stop])[@"color"])
+                    : std::nullopt;
+                bound = color ? check_color(key, *color) && dropped(name) : missing(name);
             } else {
                 bound = bind_slot(key, {TokenSlot::Kind::gradient_stop, 0U, *stop, 0U});
             }
@@ -939,6 +947,46 @@ bool bind_token_refs(
         }
         if (!bound) return false;
     }
+    return true;
+}
+
+// Validates the `tokenRefs` of an attributed run that is flattened into its
+// parent's generated label, so its colour is never bound: the reference must
+// still name a table entry that holds the colour the run resolves to.
+bool check_dropped_run_token_refs(
+    NSDictionary* run, const std::optional<vellum::graphics::Color>& inherited,
+    MaterializeContext& context, const std::string& fallback_id, std::string* error) {
+    const std::string run_id =
+        [run[@"id"] isKindOfClass:NSString.class] ? cpp_string(run[@"id"]) : fallback_id;
+    bool ok = true;
+    NSDictionary* references = token_references(run, context, run_id, ok, error);
+    if (references == nil) return ok;
+    for (id key in references) {
+        if (![key isEqual:@"color"]) {
+            return refuse_token(context, run_id, "tokenRefs",
+                "tokenRefs of text-run " + run_id + " may only name color", error);
+        }
+    }
+    if (references[@"color"] == nil) return true;
+    const auto color = parse_color(dictionary_or_empty(run[@"style"])[@"color"]);
+    const auto resolved = color ? color : inherited;
+    if (!resolved) {
+        return refuse_token(context, run_id, "tokenRefs.color",
+            "tokenRefs.color of " + run_id + " names a colour the run does not have", error);
+    }
+    std::uint32_t entry = 0;
+    if (!token_entry(references, @"color", context, run_id, *resolved, entry, error)) {
+        return false;
+    }
+    context.diagnostics->push_back({
+        .severity = LoweringDiagnostic::Severity::warning,
+        .disposition = LoweringDiagnostic::Disposition::lowered,
+        .code = std::string(vellum::graphics::kStyleDroppedCode),
+        .node_id = run_id,
+        .property = "tokenRefs.color",
+        .message = "a button label does not keep the colour of its text-run " + run_id +
+                   ", so its token reference was dropped",
+    });
     return true;
 }
 
@@ -2253,6 +2301,13 @@ bool materialize_node(
         NSDictionary* child = static_cast<NSDictionary*>(child_value);
         if (skipped_text_run(type, child)) {
             if (!validate_attributed_run(child, identity, depth, context, error)) return false;
+            if ([type isEqualToString:@"button"] &&
+                !check_dropped_run_token_refs(
+                    child,
+                    parse_color(style[@"color"]).value_or(vellum::graphics::Color::hex(0x041412)),
+                    context, output.id, error)) {
+                return false;
+            }
             report_dropped_style(dictionary_or_empty(child[@"style"]), cpp_string(child[@"id"]),
                 "text-run",
                 [&](std::string_view key) { return text_run_style_key_consumed(type_name, key); },

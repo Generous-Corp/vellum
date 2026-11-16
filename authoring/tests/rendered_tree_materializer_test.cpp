@@ -1698,6 +1698,146 @@ bool root_background_receipts() {
     return ok;
 }
 
+// Every node kind that draws or drops a fill, shadow, gradient stop or text
+// colour validates its receipt the same way: a reference that disagrees with
+// its authored colour is refused whether the kind keeps the paint or drops it.
+bool token_kind_audit() {
+    using vellum::graphics::find_node;
+    using vellum::graphics::same_token_color;
+    bool ok = true;
+    const std::string hash = "sha256:" + std::string(64, 'a');
+    const auto plot_extra = std::string(
+        R"("plot":"line","channel":"c","source":"scalar","slots":8,)");
+    struct Kind final {
+        std::string type;
+        std::string extra;
+    };
+    const std::vector<Kind> kinds = {
+        {"view", ""},
+        {"stack", ""},
+        {"text", R"("text":"hi",)"},
+        {"button", R"("text":"Go","events":{"press":"go"},)"},
+        {"text-input", R"("primitiveVersion":1,"value":"x","events":{"change":"input:change"},)"},
+        {"image", std::string(R"("source":")") + hash + R"(",)"},
+        {"plot", plot_extra},
+        {"canvas", ""},
+        {"custom", R"("component":"meter","properties":{},)"},
+    };
+    const auto tree = [](const Kind& kind, std::string_view slot, std::string_view color,
+                         std::string_view receipt, bool root) {
+        const std::string style = std::string(R"("style":{"width":40,"height":20,)") +
+            R"("color":")" + std::string(color) + R"(","backgroundColor":")" + std::string(color) +
+            R"(","boxShadow":{"color":")" + std::string(color) +
+            R"("},"backgroundLinearGradient":{"angle":90,"stops":[{"position":0,"color":")" +
+            std::string(color) + R"("},{"position":1,"color":"#ffffff"}]}})";
+        const std::string body = std::string(R"({"type":")") + kind.type + R"(","id":"n",)" +
+            kind.extra + R"("tokenRefs":{")" + std::string(slot) + R"(":0},)" + style;
+        const std::string node = body + "}";
+        const std::string table = std::string(R"("tokens":[{"path":"t","layer":"theme","value":")") +
+            std::string(receipt) + R"("}])";
+        if (root) {
+            return std::string(R"({"protocol":"vellum.authoring-host.v2","kind":"render-result",
+              "tree":)") + body + "," + table + R"(,"children":[]}})";
+        }
+        return std::string(R"({"protocol":"vellum.authoring-host.v2","kind":"render-result",
+          "tree":{"type":"stack","id":"r","style":{"width":100,"height":100},)") + table +
+            R"(,"children":[)" + node + "]}}";
+    };
+    for (const auto& kind : kinds) {
+        for (const char* slot :
+             {"backgroundColor", "boxShadow", "backgroundLinearGradient.stops.0", "color"}) {
+            if (kind.type == "text" && std::string_view(slot) != "color" &&
+                std::string_view(slot) != "backgroundColor") {
+                continue;
+            }
+            vellum::authoring::RenderedApplication good;
+            vellum::authoring::RenderedApplication stale;
+            std::string error;
+            const std::string label = kind.type + " " + slot;
+            const bool accepted = vellum::authoring::materialize_rendered_tree(
+                tree(kind, slot, "#445566", "#445566", false), good, &error);
+            ok &= expect(accepted, "control: " + label + " with a matching receipt: " + error);
+            const bool refused = !vellum::authoring::materialize_rendered_tree(
+                tree(kind, slot, "#112233", "#445566", false), stale, &error);
+            ok &= expect(refused, label + " with a stale receipt is refused");
+        }
+    }
+    for (const auto& kind : kinds) {
+        if (kind.type != "image" && kind.type != "plot") continue;
+        vellum::authoring::RenderedApplication missing;
+        std::string error;
+        ok &= expect(!vellum::authoring::materialize_rendered_tree(
+                         tree(kind, "backgroundLinearGradient.stops.7", "#445566", "#445566",
+                              false),
+                         missing, &error),
+                     kind.type + " dropped gradient reference to a missing stop is refused");
+    }
+    for (const char* type : {"plot"}) {
+        for (const bool root : {false, true}) {
+            const Kind kind{type, plot_extra};
+            const auto build = [&](std::string_view color) {
+                vellum::authoring::RenderedApplication app;
+                std::string error;
+                const bool built = vellum::authoring::materialize_rendered_tree(
+                    tree(kind, "backgroundColor", color, color, root), app, &error);
+                return std::make_pair(built, std::move(app));
+            };
+            auto light = build("#445566");
+            auto dark = build("#aabbcc");
+            if (!expect(light.first && dark.first,
+                        std::string(root ? "root" : "non-root") + " plot with a background token")) {
+                ok = false;
+                continue;
+            }
+            const auto* before = find_node(light.second.scene, "n");
+            auto switched = light.second.scene;
+            const auto result =
+                vellum::graphics::apply_token_values(switched, dark.second.scene.tokens);
+            const auto* after = find_node(switched, "n");
+            const auto* expected = find_node(dark.second.scene, "n");
+            ok &= expect(before != nullptr && before->fill_token && result.applied &&
+                             after != nullptr && expected != nullptr &&
+                             same_token_color(after->fill, expected->fill) &&
+                             !same_token_color(after->fill, before->fill),
+                         std::string(root ? "a root" : "a non-root") +
+                             " plot background follows its token through a theme switch");
+        }
+    }
+    const auto with_run = [](std::string_view run_attributes, std::string_view button_color) {
+        return std::string(R"({"protocol":"vellum.authoring-host.v2","kind":"render-result",
+          "tree":{"type":"stack","id":"r","style":{"width":100,"height":100},
+          "tokens":[{"path":"t","layer":"theme","value":"#445566"}],"children":[
+          {"type":"button","id":"b","events":{"press":"go"},"style":{"width":60,"height":20)") +
+            std::string(button_color) + R"(},"children":[{"type":"text-run","id":"b/run","text":"Go",)" +
+            std::string(run_attributes) + "}]}]}}";
+    };
+    const auto try_run = [&](std::string_view attributes, std::string_view color) {
+        vellum::authoring::RenderedApplication app;
+        std::string error;
+        const bool built = vellum::authoring::materialize_rendered_tree(
+            with_run(attributes, color), app, &error);
+        return std::make_pair(built, std::move(app));
+    };
+    const auto control = try_run(R"("tokenRefs":{"color":0},"style":{"color":"#445566"})", "");
+    ok &= expect(control.first && std::any_of(control.second.diagnostics.begin(),
+                                              control.second.diagnostics.end(), [](const auto& item) {
+                     return item.node_id == "b/run" && item.property == "tokenRefs.color" &&
+                            item.code == vellum::graphics::kStyleDroppedCode;
+                 }),
+                 "control: a button text-run with a matching colour token is dropped with a diagnostic");
+    ok &= expect(!try_run(R"("tokenRefs":{"color":1e30},"style":{"color":"#445566"})", "").first,
+                 "a button text-run reference past the table is refused");
+    ok &= expect(!try_run(R"("tokenRefs":{"color":0},"style":{"color":"#112233"})", "").first,
+                 "a button text-run with a stale receipt is refused");
+    ok &= expect(!try_run(R"("tokenRefs":{"bogus":0},"style":{"color":"#445566"})", "").first,
+                 "a button text-run slot other than color is refused");
+    ok &= expect(try_run(R"("tokenRefs":{"color":0})", R"(,"color":"#445566")").first,
+                 "control: a button text-run inherits the button colour for its receipt");
+    ok &= expect(!try_run(R"("tokenRefs":{"color":0})", R"(,"color":"#112233")").first,
+                 "a button text-run inheriting a different colour is refused");
+    return ok;
+}
+
 int main() {
     vellum::authoring::RenderedApplication rendered;
     std::string error;
@@ -2145,7 +2285,8 @@ int main() {
     return compositing_keys() && transform_pivots_once() && transform_ignores_locale() &&
            image_nodes() && path_nodes() && plot_nodes() && grouping_keys() &&
            animation_tracks() && blend_mode_key() && token_receipts() && token_slots() &&
-           scene_version_protocol() && protocol_numbers() && root_background_receipts()
+           scene_version_protocol() && protocol_numbers() && root_background_receipts() &&
+           token_kind_audit()
                ? 0
                : 1;
 }
