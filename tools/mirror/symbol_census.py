@@ -99,8 +99,11 @@ def run_demangle(names: list[str]) -> dict[str, str]:
     ordered = sorted(set(names))
     if not ordered:
         return {}
-    out = subprocess.run(["c++filt", "-_"], input="\n".join(ordered), capture_output=True, text=True,
-                         errors="replace", check=False).stdout.splitlines()
+    done = subprocess.run(["c++filt", "-_"], input="\n".join(ordered), capture_output=True, text=True,
+                          errors="replace", check=False)
+    out = done.stdout.splitlines()
+    if done.returncode or len(out) != len(ordered):
+        raise RuntimeError(f"c++filt failed or returned {len(out)} names for {len(ordered)}: {done.stderr.strip()}")
     return dict(zip(ordered, out))
 
 
@@ -115,9 +118,14 @@ def distinct_images(images: Iterable[Path]) -> list[Path]:
     return result
 
 
-def census(images: list[Path], allow: frozenset[str] = frozenset(), nm: Nm = run_nm, otool: Otool = run_otool,
-           demangle: Demangle = run_demangle) -> tuple[dict, list[str]]:
-    """(report, findings). `images` may repeat an image to plant a duplicate."""
+def census(images: list[Path], allow: frozenset[str] = frozenset(), nm: Nm | None = None, otool: Otool | None = None,
+           demangle: Demangle | None = None) -> tuple[dict, list[str]]:
+    """(report, findings). `images` may repeat an image to plant a duplicate.
+
+    The readers are looked up here, not bound at definition, so a caller or test
+    that replaces run_nm, run_otool or run_demangle is honoured.
+    """
+    nm, otool, demangle = nm or run_nm, otool or run_otool, demangle or run_demangle
     pulp_defs: list[str] = []
     vellum_count = 0
     symbol_owners: dict[str, list[str]] = {}

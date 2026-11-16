@@ -91,15 +91,59 @@ class SymbolCensusTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "otool failed for a.dylib: truncated file"):
                 sc.run_otool(Path("a.dylib"))
 
-    def test_main_is_blind_when_otool_fails(self) -> None:
+    def _fake_run(self, otool_rc: int = 0, filt_rc: int = 0, filt_lines: int | None = None, calls: list | None = None):
+        nm_out = listing(sym(FN))
+
+        def fake(cmd, **kw):
+            if calls is not None:
+                calls.append(cmd[0])
+            if cmd[0] == "nm":
+                return mock.Mock(returncode=0, stdout=nm_out, stderr="")
+            if cmd[0] == "otool":
+                return mock.Mock(returncode=otool_rc, stdout="", stderr="otool: bad file")
+            names = kw["input"].splitlines()
+            keep = names if filt_lines is None else names[:filt_lines]
+            return mock.Mock(returncode=filt_rc, stdout="\n".join("vellum::" + n for n in keep), stderr="c++filt: bad")
+        return fake
+
+    def _main(self, fake) -> int:
         with tempfile.TemporaryDirectory() as tmp:
             image = Path(tmp) / "a.dylib"
             image.write_bytes(b"x")
-            with mock.patch.object(sc, "run_nm", return_value=listing(sym(FN))), \
-                    mock.patch.object(sc, "run_demangle", demangle), \
-                    mock.patch.object(sc, "run_otool", side_effect=RuntimeError("otool failed for a.dylib: bad")), \
-                    contextlib.redirect_stderr(io.StringIO()):
-                self.assertEqual(sc.main([str(image)]), 3)
+            with mock.patch.object(sc.subprocess, "run", fake), contextlib.redirect_stderr(io.StringIO()):
+                return sc.main([str(image)])
+
+    def test_main_succeeds_when_every_tool_succeeds(self) -> None:
+        calls: list = []
+        self.assertEqual(self._main(self._fake_run(calls=calls)), 0)
+        self.assertIn("otool", calls)
+
+    def test_main_is_blind_when_otool_fails(self) -> None:
+        calls: list = []
+        self.assertEqual(self._main(self._fake_run(otool_rc=1, calls=calls)), 3)
+        self.assertIn("otool", calls)
+
+    def test_main_is_blind_when_demangler_fails(self) -> None:
+        self.assertEqual(self._main(self._fake_run(filt_rc=1)), 3)
+
+    def test_truncated_demangler_output_is_rejected(self) -> None:
+        # Two names in, one out: zip would silently leave one mangled and unsearched.
+        fake = self._fake_run(filt_lines=1)
+        with mock.patch.object(sc.subprocess, "run", fake):
+            with self.assertRaises(RuntimeError):
+                sc.run_demangle([FN, PULP_FN])
+
+    def test_failed_demangler_on_pulp_image_cannot_hide_it_behind_a_good_image(self) -> None:
+        good, bad = Path("good.dylib"), Path("bad.dylib")
+        nm = {str(good): listing(sym(FN)), str(bad): listing(sym(PULP_FN))}
+
+        def flaky(names):
+            if PULP_FN in names:
+                raise RuntimeError("c++filt failed")
+            return demangle(names)
+
+        with self.assertRaises(RuntimeError):
+            sc.census([good, bad], nm=lambda p: nm[str(p)], otool=lambda p: "", demangle=flaky)
 
     def test_same_export_in_two_images_fails(self) -> None:
         _, findings = run({"a.dylib": listing(sym(FN)), "b.dylib": listing(sym(FN))})
