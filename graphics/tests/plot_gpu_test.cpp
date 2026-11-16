@@ -896,6 +896,37 @@ void snapped_plot_culling() {
     }
 }
 
+void blurred_snapped_plot() {
+    auto full = make_surface(0.125F);
+    auto partial = make_surface(0.125F, true);
+    if (!full || !partial) return;
+    Scene scene = empty_scene();
+    auto node = plot_node("snapped", {4.4F, 4.4F, 40.0F, 40.0F},
+                          spec_of(PlotStyle::area, PlotChannelShape::vector, 4,
+                                  {1.0F, 1.0F, 1.0F, 1.0F}));
+    node.transform = Affine2D{.a = 10.0F, .d = 10.0F};
+    SceneNode group{.id = "fx", .kind = SceneNode::Kind::group,
+                    .bounds = {0.0F, 0.0F, kWidth, kHeight}};
+    group.effects = {{.kind = EffectKind::blur, .sigma = 1.0F}};
+    group.children.push_back(node);
+    scene.root.children.push_back(std::move(group));
+    if (!render_both(*full, *partial, scene)) return;
+    int differing = 0;
+    int partial_frames = 0;
+    for (int step = 0; step < 3; ++step) {
+        set_samples(scene, "snapped",
+                    {0.2F + 0.2F * static_cast<float>(step), 1.0F, 0.5F, 1.0F});
+        if (!render_both(*full, *partial, scene)) return;
+        if (!partial->frame_stats().full_repaint) ++partial_frames;
+        std::string message;
+        if (!identical(*full, *partial, message)) ++differing;
+    }
+    expect(differing == 0 && partial_frames > 0,
+           "control: a blurred plot whose snapped edge is past the margin at scale 0.125 stays "
+           "byte-identical on the partial path",
+           std::to_string(differing) + " differ, " + std::to_string(partial_frames) + " partial");
+}
+
 void unresolved_binding() {
     for (const float scale : {1.0F, 2.0F}) {
         const std::string at = "@" + std::to_string(static_cast<int>(scale)) + " ";
@@ -949,6 +980,7 @@ int main() {
     unresolved_binding();
     wide_plot();
     snapped_plot_culling();
+    blurred_snapped_plot();
     version_gate();
     if (failures != 0) {
         std::cerr << failures << " plot GPU check(s) failed\n";
