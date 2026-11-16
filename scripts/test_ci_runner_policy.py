@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 EXPECTED_RUNNERS = {
+    "android.yml": ("__hosted__", "ubuntu-24.04"),
     "authority-activation.yml": ("__hosted__", "ubuntu-latest"),
     "authority-release.yml": ("__hosted__", "ubuntu-latest"),
     "framework-trusted-verify.yml": ("__hosted__", "ubuntu-24.04"),
