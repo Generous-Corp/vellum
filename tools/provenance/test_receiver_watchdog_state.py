@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import datetime
 import importlib.util
 import json
 from pathlib import Path
@@ -125,6 +126,33 @@ class WatchdogStateTests(unittest.TestCase):
         commit(self.vellum, "landing", "2026-08-09T11:00:00Z")
         state = state_module.build_state(root=self.vellum, pulp_repo=self.pulp)
         self.assertFalse(state["vellum_cursor_covers_main"])
+
+    def test_pending_comes_from_the_live_ledger_not_the_last_report(self) -> None:
+        # current.json (written at the last reconcile) says 14; 16 are committed.
+        (self.vellum / "provenance/pulp-observatory/reports/current.json").write_text(
+            json.dumps({"pending": 14}) + "\n", encoding="utf-8")
+        source = json.loads((Path(__file__).resolve().parents[2] / "provenance/pulp-observatory/events/"
+                             "pulp-00f6a82ef8ff23bbcd06152c3ff5977372330310.yaml").read_text())
+        events = self.vellum / "provenance/pulp-observatory/events"
+        events.mkdir(parents=True, exist_ok=True)
+        for index in range(16):
+            sha = f"{index:040x}"
+            (events / f"pulp-{sha}.yaml").write_text(
+                json.dumps(dict(source, event_id=f"pulp-{sha}", source_commit=sha)) + "\n")
+        state = state_module.build_state(root=self.vellum, pulp_repo=self.pulp)
+        self.assertEqual(state["pending_count"], 16)
+        import receiver_watchdog
+        policy = json.loads((Path(__file__).resolve().parents[2]
+                             / "provenance/pulp-observatory/receiver-policy.json").read_text())
+        self.assertLess(14, policy["pending_warning"])
+        result = receiver_watchdog.evaluate(
+            policy=policy, now=datetime.datetime.now(datetime.timezone.utc),
+            cursor_covers_latest=True, latest_event_created_at=datetime.datetime.now(datetime.timezone.utc),
+            pending_count=state["pending_count"], evidence_pr_open=False,
+            runs=[{"status": "completed", "conclusion": "success",
+                   "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}],
+        )
+        self.assertIn("pending-near-budget", result["violations"])
 
     def test_cli_writes_the_state_file(self) -> None:
         out = Path(self.temporary.name) / "state.json"

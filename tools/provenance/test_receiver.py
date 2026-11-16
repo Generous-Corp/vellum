@@ -453,6 +453,58 @@ class ReceiverTests(unittest.TestCase):
         self.assertIn("deferred", result["coalesce_reason"])
         self.assertNotIn("pending_on_main", result)
 
+    def with_mapping(self, gaps=None, error=None):
+        """Give the temp repo an observatory mapping and stub the ledger reads."""
+        import sys
+        from unittest import mock
+        sys.path.append(str(Path(__file__).resolve().parent))
+        import observatory
+        mapping = self.vellum / observatory.MAP_PATH
+        mapping.parent.mkdir(parents=True, exist_ok=True)
+        mapping.write_text("{}\n", encoding="utf-8")
+        patches = [
+            mock.patch.object(observatory, "load_events", return_value=[]),
+            mock.patch.object(
+                observatory, "validate_lock_map_cursor",
+                side_effect=error, return_value=({}, {}, {}, {}),
+            ),
+            mock.patch.object(observatory, "coverage_gaps", return_value=gaps or []),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_a_landing_missing_its_observation_coalesces_at_once(self) -> None:
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        main = self.land()
+        self.with_mapping(gaps=[{"source": "vellum", "commit": main, "reason": "missing-observation"}])
+        result = self.plan_on_demand(main)
+        self.assertEqual(result["status"], "reconcile")
+        self.assertIn("lack their required observation", result["coalesce_reason"])
+        self.assertIn(main[:9], result["coalesce_reason"])
+
+    def test_a_landing_with_its_observation_is_still_deferred(self) -> None:
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        main = self.land()
+        self.with_mapping(gaps=[])
+        self.assertEqual(self.plan_on_demand(main)["status"], "deferred")
+
+    def test_an_unreadable_ledger_is_never_deferred(self) -> None:
+        base = self._vellum_history()
+        self.set_vellum_cursor(base)
+        main = self.land()
+        self.with_mapping(error=RuntimeError("broken lock"))
+        result = self.plan_on_demand(main)
+        self.assertEqual(result["status"], "reconcile")
+        self.assertIn("unreadable observatory state", result["coalesce_reason"])
+
+    def test_pending_on_main_reads_the_committed_events(self) -> None:
+        self._vellum_history()
+        self.write_pending_events(16)
+        self.assertEqual(receiver.pending_on_main(self.vellum), 16)
+
     def test_a_landing_older_than_the_lag_bound_coalesces(self) -> None:
         import datetime
         base = self._vellum_history()

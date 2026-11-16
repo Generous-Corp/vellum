@@ -37,10 +37,15 @@ def build_state(*, root: Path, pulp_repo: Path) -> dict[str, object]:
         coalesce, _ = receiver.vellum_coalesce_decision(root, root, vellum_main)
         vellum_covered = not coalesce
     vellum_lag_started_at = receiver.vellum_lag_started_at(root, vellum_cursor, vellum_main)
-    report = json.loads(
-        (root / "provenance/pulp-observatory/reports/current.json").read_text(encoding="utf-8")
-    )
-    pending = report.get("pending")
+    # The committed report only describes the last reconcile; with deferral the
+    # events committed since then count against the budget too, so read the ledger.
+    if (root / "provenance/pulp-observatory/events").is_dir():
+        pending = receiver.pending_on_main(root)
+    else:
+        report = json.loads(
+            (root / "provenance/pulp-observatory/reports/current.json").read_text(encoding="utf-8")
+        )
+        pending = report.get("pending")
     if not isinstance(pending, int) or isinstance(pending, bool) or pending < 0:
         raise receiver.ReceiverError("committed observatory pending count is invalid")
     return {

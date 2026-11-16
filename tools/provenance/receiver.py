@@ -319,6 +319,14 @@ def vellum_lag_started_at(vellum_repo: Path, cursor: str, vellum_main: str) -> s
     return None
 
 
+def pending_on_main(root: Path) -> int:
+    """Pending observations in the committed events, including those newer than the report."""
+    sys.path.append(str(Path(__file__).resolve().parent))
+    import observatory  # noqa: E402
+
+    return observatory.pending_event_count(root, None, observatory.load_events(root), "all")
+
+
 def release_changes(vellum_repo: Path, cursor: str, main: str) -> list[str]:
     """Why a release needs the cursor to move: a release-path file changed, or a version waits.
 
@@ -368,11 +376,44 @@ def coalesce_decision(
     )
 
 
+def missing_observations(root: Path, vellum_repo: Path, vellum_main: str) -> list[str]:
+    """Mapped Vellum landings after the cursor whose required observation is absent.
+
+    Deferral is safe only for landings whose events are already committed;
+    anything else needs the reconcile that writes them. A repository without
+    an observatory mapping has nothing to check. Doubt counts as a gap.
+    """
+    sys.path.append(str(Path(__file__).resolve().parent))
+    import observatory  # noqa: E402
+
+    if not (root / observatory.MAP_PATH).is_file():
+        return []
+    try:
+        _, mapping, cursor, _ = observatory.validate_lock_map_cursor(root)
+        gaps = observatory.coverage_gaps(
+            root=root, mapping=mapping, cursor=cursor, events=observatory.load_events(root),
+            pulp_repo=None, vellum_repo=vellum_repo, vellum_target=vellum_main,
+            vellum_tail_policy="coverage",
+            # Only the tail past the cursor: the reconciled range is verified by
+            # provenance-verify, and replaying it here would walk all of history.
+            incremental_from={"vellum": str(cursor["vellum"]["last_scanned_commit"])},
+        )
+    except Exception as error:  # noqa: BLE001  (an unreadable ledger must not defer)
+        return [f"unreadable observatory state: {error}"]
+    return [gap["commit"] for gap in gaps if gap["source"] == "vellum"]
+
+
 def vellum_coalesce_decision(
     root: Path, vellum_repo: Path, vellum_main: str, *, now: datetime | None = None
 ) -> tuple[bool, str]:
     """The coalesce decision for a lagging Vellum cursor."""
     cursor = load_vellum_cursor(root)
+    missing = missing_observations(root, vellum_repo, vellum_main)
+    if missing and missing[0].startswith("unreadable"):
+        return True, missing[0]
+    if missing:
+        shown = ", ".join(commit[:9] for commit in missing[:5])
+        return True, f"{len(missing)} landing(s) lack their required observation: {shown}"
     started = vellum_lag_started_at(vellum_repo, cursor, vellum_main)
     clock = now or datetime.now(timezone.utc)
     lag = 0.0
