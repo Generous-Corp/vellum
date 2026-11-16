@@ -466,7 +466,8 @@ class ReceiverTests(unittest.TestCase):
             mock.patch.object(observatory, "load_events", return_value=[]),
             mock.patch.object(
                 observatory, "validate_lock_map_cursor",
-                side_effect=error, return_value=({}, {}, {}, {}),
+                side_effect=error,
+                return_value=({}, {}, {"vellum": {"last_scanned_commit": "0" * 40}}, {}),
             ),
             mock.patch.object(observatory, "coverage_gaps", return_value=gaps or []),
         ]
