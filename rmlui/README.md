@@ -39,6 +39,49 @@ target_link_libraries(editor PRIVATE VellumRmlUi::Native VellumRmlUi::Metal)
 Any VellumRmlUi component named in the same call (`Core`, `SoftRenderer`,
 `VellumRenderer`) is found from the Vellum SDK's VellumRmlUi package.
 
+## Detecting the API
+
+`vellum/rmlui/native.hpp` defines `VELLUM_RMLUI_NATIVE_API_VERSION` and a set
+of feature bits, so a consumer that builds against several releases tests a
+macro instead of compiling a probe for each method:
+
+```cpp
+#if defined(VELLUM_RMLUI_NATIVE_API_VERSION) && \
+    (VELLUM_RMLUI_NATIVE_FEATURES & VELLUM_RMLUI_NATIVE_FEATURE_WARM)
+    native.warm();
+#endif
+```
+
+The version is 1 for the first release with the macros and grows by one when a
+release adds an interface or changes one a consumer can detect. The bits are
+`VELLUM_RMLUI_NATIVE_FEATURE_DENSITY_RATIO` (`set_density_ratio`),
+`VELLUM_RMLUI_NATIVE_FEATURE_WARM` (`warm`) and
+`VELLUM_RMLUI_NATIVE_FEATURE_RENDERER_TRIM` (`trim` on the Metal and CPU
+renderers). A release older than the macros defines none of them.
+
+## Giving GPU memory back
+
+The Metal renderer keeps render targets between frames: a texture for each
+layer, a stencil, the filter targets and the mask image, all sized to the
+frame target. `MetalRenderInterface::trim()` releases them and returns the
+bytes they held; `cached_target_bytes()` reports what is held. The next frame
+allocates again what it uses and draws the same pixels, so the first frame
+after a trim pays the allocation. A host that hides an editor calls it to hand
+the memory back.
+
+Call it between frames. During a frame (between `begin_frame()` and
+`end_frame()`) it releases nothing and returns 0. It never waits for the GPU:
+the previous frame's command buffer may still be running, which is safe
+because a command buffer made with `-[MTLCommandQueue commandBuffer]` retains
+the resources it uses. A caller whose buffers use unretained references waits
+for the last one first.
+
+`trim()` leaves RmlUi's own state alone. Compiled geometry, textures, filters
+and shaders are RmlUi's handles, released through `Rml::ReleaseCompiledGeometry()`
+and `Rml::ReleaseTextures()`; pipelines and samplers belong to the device and
+stay. `CpuRenderInterface::trim()` does the same for the CPU renderer's layer
+buffers, clip mask and command storage.
+
 ## One RmlUi per program
 
 `VellumRmlUi::Core` and `VellumRmlUiNative` (Native, and Metal, which links
