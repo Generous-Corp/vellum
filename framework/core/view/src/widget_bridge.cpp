@@ -1,4 +1,5 @@
 #include <vellum/view/widget_bridge.hpp>
+#include <vellum/view/parameter_binding.hpp>
 #include <vellum/canvas/bundled_fonts.hpp>
 #include <vellum/view/data_display.hpp>
 #include <vellum/view/widgets.hpp>
@@ -315,7 +316,21 @@ std::unordered_map<View*, WidgetBridge*>& document_navigation_owners() {
 WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore& store,
                            render::GpuSurface* gpu_surface,
                            CapabilitySet granted_capabilities)
-    : engine_(engine), root_(root), store_(store),
+    : WidgetBridge(engine, root, &store, nullptr, gpu_surface, granted_capabilities) {}
+
+WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, value::ParamModel& params,
+                           render::GpuSurface* gpu_surface,
+                           CapabilitySet granted_capabilities)
+    : WidgetBridge(engine, root, nullptr, &params, gpu_surface, granted_capabilities) {}
+
+WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore* store,
+                           value::ParamModel* params, render::GpuSurface* gpu_surface,
+                           CapabilitySet granted_capabilities)
+    : engine_(engine), root_(root),
+      owned_store_(store ? nullptr : std::make_unique<state::StateStore>()),
+      store_(store ? *store : *owned_store_),
+      owned_params_(params ? nullptr : std::make_unique<StateStoreParamModel>(store_)),
+      params_(params ? *params : *owned_params_), has_store_(store != nullptr),
       granted_capabilities_(granted_capabilities), gpu_surface_(gpu_surface),
       widgets_(owned_widgets_),
       callback_alive_(std::make_shared<BridgeCallbackState>(&root_)) {
@@ -916,35 +931,20 @@ View* WidgetBridge::widget(const std::string& id) {
 }
 
 void WidgetBridge::sync_from_store() {
+    // Convention: a knob, fader or toggle whose id is a parameter's name shows
+    // that parameter.
     for (auto& [id, state] : widgets_) {
         View* view = state.view;
-        if (auto* knob = dynamic_cast<Knob*>(view)) {
-            // Try to find a parameter matching this widget's id
-            // Convention: widget id matches parameter name
-            for (size_t i = 0; i < store_.param_count(); ++i) {
-                auto* info = &store_.all_params()[i];
-                if (info && info->name == id) {
-                    knob->set_value(store_.get_normalized(info->id));
-                    break;
-                }
-            }
-        } else if (auto* fader = dynamic_cast<Fader*>(view)) {
-            for (size_t i = 0; i < store_.param_count(); ++i) {
-                auto* info = &store_.all_params()[i];
-                if (info && info->name == id) {
-                    fader->set_value(store_.get_normalized(info->id));
-                    break;
-                }
-            }
-        } else if (auto* toggle = dynamic_cast<Toggle*>(view)) {
-            for (size_t i = 0; i < store_.param_count(); ++i) {
-                auto* info = &store_.all_params()[i];
-                if (info && info->name == id) {
-                    toggle->set_on(store_.get_normalized(info->id) > 0.5f);
-                    break;
-                }
-            }
-        }
+        const auto param = params_.resolve(id);
+        if (!param.valid())
+            continue;
+        const auto normalized = static_cast<float>(params_.normalized(param));
+        if (auto* knob = dynamic_cast<Knob*>(view))
+            knob->set_value(normalized);
+        else if (auto* fader = dynamic_cast<Fader*>(view))
+            fader->set_value(normalized);
+        else if (auto* toggle = dynamic_cast<Toggle*>(view))
+            toggle->set_on(normalized > 0.5f);
     }
 }
 
