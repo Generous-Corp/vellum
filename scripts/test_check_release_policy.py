@@ -1381,6 +1381,11 @@ class RunAllowlist(unittest.TestCase):
             "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1":
                 "uses: actions/checkout@v4",
             "    environment: release\n    steps:": "    environment: release\n    container: ubuntu:latest\n    steps:",
+            "    environment: release\n    steps:\n      - name: Check out the reconciled":
+                "    environment: release\n    defaults:\n      run:\n        working-directory: .observatory-pulp\n"
+                "    steps:\n      - name: Check out the reconciled",
+            "permissions:\n  contents: read\n  checks: read":
+                "defaults:\n  run:\n    working-directory: .exact-boundary-pulp\npermissions:\n  contents: read\n  checks: read",
         }.items():
             with self.subTest(new=new):
                 text = self.workflows[policy.SIGNING_WORKFLOW].replace(old, new, 1)
@@ -1404,6 +1409,26 @@ class RunAllowlist(unittest.TestCase):
                 problems = policy.run_body_problems(policy.SIGNING_WORKFLOW, text,
                                                     allowlist_for({policy.SIGNING_WORKFLOW: text}))
                 self.assertTrue(any("neither the Actions token" in p for p in problems), problems)
+
+    def test_python_spelled_any_way_beside_the_signing_key_is_not_reviewed(self) -> None:
+        # The HOLD at 8488ac5be: `p'y'thon3` runs python3, but no spelling-based
+        # Python rule sees it. A job holding only the signing key is reviewed
+        # text too, so the spelling does not matter.
+        key = ("jobs:\n  sign:\n    steps:\n      - name: sign\n        env:\n"
+               "          K: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}\n        run: {run}\n")
+        for run in ("p'y'thon3 scripts/x.py", "py\\thon3 scripts/x.py", 'env python3 scripts/x.py',
+                    "python$'3' scripts/x.py", 'p$"y"thon3 -I scripts/x.py'):
+            with self.subTest(run=run):
+                text = key.replace("{run}", run)
+                self.assertTrue(any(UNSUPPORTED in p for p in policy.run_body_problems(policy.SIGNING_WORKFLOW, text)),
+                                policy.run_body_problems(policy.SIGNING_WORKFLOW, text))
+        # Controls: the reviewed signing step passes; with no secret the job is not listed at all.
+        clean = key.replace("{run}", "git tag -s v1")
+        self.assertEqual(policy.run_body_problems(policy.SIGNING_WORKFLOW, clean,
+                                                  allowlist_for({policy.SIGNING_WORKFLOW: clean})), [])
+        plain = key.replace("          K: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}\n", "          K: x\n").replace(
+            "{run}", "p'y'thon3 scripts/x.py")
+        self.assertEqual(policy.run_body_problems(policy.SIGNING_WORKFLOW, plain), [])
 
     def test_the_signing_key_never_shares_a_step_with_a_github_credential(self) -> None:
         key = "          RELEASE_TAG_SIGNING_KEY: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}\n          TAG: ${{ steps.decision"

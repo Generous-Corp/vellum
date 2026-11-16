@@ -23,11 +23,11 @@ fails when:
   version-at-land.yml that holds a secret runs Python in any step, or a repository
   Python file is named like a standard-library module, so checked-out code
   cannot run with the signing key or an App token;
-- a job of a release workflow that can reach a GitHub credential runs a
-  step sequence that matches none of its variants in RUN_ALLOWLIST, key for
+- a job of a release workflow that can reach a GitHub credential or holds
+  the signing key runs a step sequence that matches none of its variants in RUN_ALLOWLIST, key for
   key and in order (an "unsupported run body"), has an expression in a run
   body, uses an action not pinned to a commit, or runs elsewhere (container,
-  services, defaults). The check reads no shell: an exact, owner-reviewed
+  services, a default working-directory). The check reads no shell: an exact, owner-reviewed
   list replaces analysis of what a body might run. Because the base branch's
   copy judges with the base's list, changing such a step takes two pull
   requests: one adds the new sequence as a variant, the next changes the
@@ -275,6 +275,8 @@ class Workflow:
     job_text: dict[str, str] | None = None
     job_keys: dict[str, frozenset[str]] | None = None
     root_keys: frozenset[str] = frozenset()
+    # "workflow" and the jobs whose defaults set a working directory for every run step.
+    directory_defaults: frozenset[str] = frozenset()
 
 
 ROOT_KEYS = frozenset({"name", "run-name", "on", "permissions", "env", "defaults", "concurrency", "jobs"})
@@ -324,12 +326,16 @@ def parse_workflow(text: str) -> Workflow:
                 refuse(f"{label}.{key} must be a single-line scalar")
         return result
 
+    directories: set[str] = set()
+
     def default_shell(fields: dict, inherited: str, label: str) -> str:
         if "defaults" not in fields:
             return inherited
         defaults = mapping(fields["defaults"], f"{label}.defaults", {"run"})
         run = mapping(defaults["run"], f"{label}.defaults.run", {"shell", "working-directory"}) if "run" in defaults else {}
         shell = scalar(run["shell"], f"{label}.defaults.run.shell") if "shell" in run else inherited
+        if "working-directory" in run:
+            directories.add(label)
         if shell != "bash":
             refuse(f"{label}.defaults.run.shell must be bash")
         return shell
@@ -432,6 +438,7 @@ def parse_workflow(text: str) -> Workflow:
                 if SECRET.search(str(workflow_env)) or SECRET.search(str(job_env)):
                     step.text += "\n" + str(workflow_env) + str(job_env)
                 parsed.jobs[job].append(step)
+        parsed.directory_defaults = frozenset(directories)
         return parsed
     except (yaml.YAMLError, RecursionError) as error:
         raise PolicyError(f"unsupported construct: YAML parse failed: {error}") from error
@@ -643,8 +650,8 @@ def dynamic_load_problems(root: Path, path: str, source: Path, also_policy: froz
     return found
 
 
-# A job of a release workflow that can reach a GitHub credential runs only
-# steps written, key for key, in RUN_ALLOWLIST. The check does not read shell:
+# A job of a release workflow that can reach a GitHub credential or holds the
+# signing key runs only steps written, key for key, in RUN_ALLOWLIST. The check does not read shell:
 # whatever a run body does, it does it because the owner reviewed that exact
 # text here. A job reaches a credential when its text names GH_TOKEN,
 # GITHUB_TOKEN or the App-token action, or an expression in it names a secret
@@ -659,7 +666,7 @@ CREDENTIAL_EXPRESSION = re.compile(
 # local path or a container image, which could run unreviewed code in the job.
 PINNED_ACTION = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}")
 # Job keys that would run the reviewed steps somewhere else.
-UNSUPPORTED_CREDENTIAL_JOB_KEYS = frozenset({"container", "services", "defaults"})
+UNSUPPORTED_CREDENTIAL_JOB_KEYS = frozenset({"container", "services"})
 ACTIONS_TOKEN = "${{ github.token }}"
 ACTIONS_TOKEN_REFERENCE = re.compile(r"(?i)\bgithub\s*(?:\.\s*token\b|\[)")
 
@@ -671,11 +678,18 @@ def reaches_credential(text: str) -> bool:
                for expression in EXPRESSION.finditer(text))
 
 
+def reviewed_job(text: str) -> bool:
+    """A job RUN_ALLOWLIST must list: one that reaches a GitHub credential or
+    holds the signing key. Python run beside a secret is otherwise found only
+    by spelling (`p'y'thon3` runs python3), so those jobs are reviewed text too."""
+    return reaches_credential(text) or SIGNING_KEY.search(text) is not None
+
+
 def allowlist_entries(name: str, workflow: str) -> dict[str, list[dict]]:
     """Each credential-holding job's steps, in order: the variant RUN_ALLOWLIST would list for it."""
     parsed = parse_workflow(workflow)
     return {job: [step.fields for step in steps]
-            for job, steps in parsed.jobs.items() if reaches_credential(parsed.job_text[job])}
+            for job, steps in parsed.jobs.items() if reviewed_job(parsed.job_text[job])}
 
 
 def _body(text: str) -> str:
@@ -1359,10 +1373,11 @@ def run_body_problems(name: str, workflow: str, allowlist: dict | None = None) -
             if any(CREDENTIAL_NAME.fullmatch(key) for key in scope) or reaches_credential(
                     SIGNING_KEY.sub("", step.text)):
                 found.append(f"{name}: {step.title} holds the signing key with a GitHub credential in scope")
-        if not reaches_credential(parsed.job_text[job]):
+        if not reviewed_job(parsed.job_text[job]):
             continue
-        if "defaults" in parsed.root_keys:
-            found.append(f"{name}: job {job} holds a credential, so the workflow may not set defaults")
+        if parsed.directory_defaults & {"workflow", f"job {job}"}:
+            found.append(f"{name}: job {job} is reviewed, so neither it nor the workflow may set a default "
+                         f"working-directory")
         for key in sorted(parsed.job_keys[job] & UNSUPPORTED_CREDENTIAL_JOB_KEYS):
             found.append(f"{name}: job {job} holds a credential and sets {key}")
         variants = allowlist.get((name, job), [])
