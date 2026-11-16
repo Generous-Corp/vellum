@@ -61,22 +61,13 @@ export interface SvgAssetOptions {
     height?: number;
     /** Opaque `#rrggbb` colours to bind to design tokens in the subtree. */
     colorTokens?: Record<string, string>;
-    /**
-     * The last fallback, for features neither form carries. It is given the
-     * sanitized asset written out again from an allowlist, never the source.
-     */
-    rasterize?: (svg: string, size: { width: number; height: number }) => {
-        contentHash: string;
-        mimeType?: string;
-        width?: number;
-        height?: number;
-    };
 }
 export interface SvgAssetImport {
-    mode: 'subtree' | 'compiled' | 'rasterized';
+    mode: 'subtree' | 'compiled';
     root: SourceNode;
     diagnostics: DesignDiagnostic[];
-    assets: Array<{ id: string; contentHash: string; mimeType?: string; width: number; height: number }>;
+    /** Always empty: the importer does not rasterize. */
+    assets: [];
 }
 export function importSvgAsset(svg: string, options?: SvgAssetOptions): SvgAssetImport;
 export function svgAssetToDesignIR(

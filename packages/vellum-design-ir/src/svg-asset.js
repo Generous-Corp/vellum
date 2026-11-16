@@ -17,6 +17,7 @@ export const SVG_ASSET_LIMITS = Object.freeze({
     maxElements: 20000,
     maxAttributes: 64,
     maxExpandedNodes: 50000,
+    maxExpandedGeometry: 262144,
     maxNumber: 1e6,
     maxPathDataBytes: 64 * 1024,
     maxPathCommands: 4096,
@@ -31,8 +32,6 @@ export const SVG_ASSET_LIMITS = Object.freeze({
     maxSourceIdBytes: 900,
     maxNodeBudget: 100000,
     maxMatrixEntry: 1e9,
-    maxRasterSide: 8192,
-    maxRasterPixels: 16 * 1024 * 1024,
 });
 export const DEFAULT_SVG_NODE_BUDGET = 512;
 export const DEFAULT_SVG_PATH_DATA_BUDGET = 64 * 1024;
@@ -212,8 +211,6 @@ function decodeText(value) {
 }
 
 const TEXT_ELEMENTS = new Set(['title', 'desc', 'text', 'tspan', 'textPath', 'style', 'metadata']);
-// Whitespace between the runs of a text element draws, so it is kept.
-const SPACED_TEXT = new Set(['text', 'tspan', 'textPath']);
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink';
 const XML_NAMESPACE = 'http://www.w3.org/XML/1998/namespace';
@@ -354,7 +351,7 @@ function parseXml(svg) {
     if (/<!/.test(text)) refuse('a markup declaration is not allowed');
 
     const root = { name: '#document', qualified: '#document', attributes: Object.create(null),
-        children: [], parts: [], text: '', dropped: false,
+        children: [], text: '', dropped: false,
         scope: new Map([['', SVG_NAMESPACE], ['xml', XML_NAMESPACE]]) };
     const stack = [root];
     let elements = 0;
@@ -368,12 +365,8 @@ function parseXml(svg) {
                 decodeText(content);
             } else {
                 if (!TEXT_ELEMENTS.has(parent.name)) refuse(`text content inside <${parent.name}>`);
-                const decoded = decodeText(content);
-                parent.text += decoded;
-                parent.parts.push(decoded);
+                parent.text += decodeText(content);
             }
-        } else if (content && SPACED_TEXT.has(stack.at(-1).name) && !stack.at(-1).dropped) {
-            stack.at(-1).parts.push(content);
         }
         if (next === -1) break;
         const scanned = scanTag(text, next);
@@ -408,12 +401,9 @@ function parseXml(svg) {
             refuse(`<${name}> is outside the SVG namespace (${resolved.namespace || 'none'})`);
         }
         const node = { name: resolved.local, qualified: name, attributes: resolved.attributes,
-            children: [], parts: [], text: '', dropped, scope: resolved.scope };
+            children: [], text: '', dropped, scope: resolved.scope };
         Object.defineProperty(node, 'parent', { value: parent });
-        if (!dropped) {
-            parent.children.push(node);
-            parent.parts.push(node);
-        }
+        if (!dropped) parent.children.push(node);
         if (!selfClosing) {
             stack.push(node);
             if (stack.length - 1 > SVG_ASSET_LIMITS.maxDepth) {
@@ -521,9 +511,8 @@ function styleDeclarations(value, where) {
 }
 
 // Animation elements that can change another attribute's value. They are
-// dropped from the lowered asset, but the rasterizer hook receives the source
-// as written, so one that could point a reference outside the asset, by
-// targeting href or by animating to a URL, is refused.
+// dropped from the lowered asset, but one that could point a reference
+// outside the asset, by targeting href or by animating to a URL, is refused.
 const ANIMATING_ELEMENTS = new Set(['animate', 'animateColor', 'animateMotion',
     'animateTransform', 'set', 'discard']);
 // A scheme, a protocol-relative path or a url(), as anything an animation
@@ -584,8 +573,32 @@ function referencesOf(node, ids) {
 // reference cycle and bounds what expansion can cost before any is done: the
 // nodes every reference kind copies in and how deep they nest, each element
 // costed once.
+// The geometry an element emits each time it is drawn: a path's commands
+// and coordinate pairs, or a polyline's points, counted in one pass without
+// parsing.
+function geometryWeight(node) {
+    const data = node.name === 'path' ? node.attributes.d
+        : node.name === 'polyline' || node.name === 'polygon' ? node.attributes.points : undefined;
+    if (typeof data !== 'string') return 0;
+    let commands = 0;
+    let numbers = 0;
+    let at = 0;
+    while (at < data.length) {
+        const end = numberEnd(data, at);
+        if (end !== -1) {
+            numbers += 1;
+            at = end;
+            continue;
+        }
+        if (/[A-Za-z]/.test(data[at])) commands += 1;
+        at += 1;
+    }
+    return commands + Math.ceil(numbers / 2);
+}
+
 function checkExpansion(root, ids) {
     const sizes = new Map();
+    const geometry = new Map();
     const depths = new Map();
     const open = new Set();
     const edgesOf = (node) => [...node.children.map((child) => [child, true]),
@@ -609,19 +622,25 @@ function checkExpansion(root, ids) {
             continue;
         }
         let total = 1;
+        let weight = geometryWeight(node);
         let depth = 1;
         for (const [target, expands] of edges) {
             if (!expands) continue;
             total += sizes.get(target);
+            weight += geometry.get(target);
             depth = Math.max(depth, 1 + depths.get(target));
         }
         sizes.set(node, Math.min(total, SVG_ASSET_LIMITS.maxExpandedNodes + 1));
+        geometry.set(node, Math.min(weight, SVG_ASSET_LIMITS.maxExpandedGeometry + 1));
         depths.set(node, Math.min(depth, SVG_ASSET_LIMITS.maxExpandedDepth + 1));
         open.delete(node);
         frames.pop();
     }
     if (sizes.get(root) > SVG_ASSET_LIMITS.maxExpandedNodes) {
         refuse(`references expand to more than ${SVG_ASSET_LIMITS.maxExpandedNodes} nodes`);
+    }
+    if (geometry.get(root) > SVG_ASSET_LIMITS.maxExpandedGeometry) {
+        refuse(`references expand to more than ${SVG_ASSET_LIMITS.maxExpandedGeometry} path commands and points`);
     }
     if (depths.get(root) > SVG_ASSET_LIMITS.maxExpandedDepth) {
         refuse(`references nest deeper than ${SVG_ASSET_LIMITS.maxExpandedDepth}`);
@@ -1179,7 +1198,22 @@ function hasCurves(segments) {
 // ---------------------------------------------------------------------------
 // Shapes.
 
+// Each element's geometry is parsed once, however many uses draw it; the
+// losses its parse found are reported again for each instance.
+const PARSED = new WeakMap();
+
 function shapeSegments(node, report) {
+    if (!PARSED.has(node)) {
+        const found = [];
+        const segments = parseShapeSegments(node, (code, message) => found.push([code, message]));
+        PARSED.set(node, { segments, found });
+    }
+    const { segments, found } = PARSED.get(node);
+    for (const [code, message] of found) report(code, message);
+    return segments;
+}
+
+function parseShapeSegments(node, report) {
     const a = node.attributes;
     const length = (name, fallback = 0) => {
         const value = parseLength(a[name]);
@@ -1262,8 +1296,10 @@ function shapeSegments(node, report) {
 
 const SHAPES = new Set(['path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon']);
 const CONTAINERS = new Set(['svg', 'g', 'a', 'switch']);
+// Elements that never draw where they are written; a pattern, filter or
+// marker draws only through a reference, which is reported where it is made.
 const DEFINITIONS = new Set(['defs', 'symbol', 'clipPath', 'mask', 'linearGradient',
-    'radialGradient', 'stop']);
+    'radialGradient', 'stop', 'pattern', 'filter', 'marker']);
 const SILENT = new Set(['title', 'desc', 'metadata']);
 const RASTER_ELEMENTS = new Set(['text', 'image', 'pattern', 'filter', 'marker']);
 const ANIMATION = new Set(['animate', 'animateTransform', 'animateMotion', 'set', 'animateColor']);
@@ -1271,35 +1307,33 @@ const INHERITED = ['fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-opacit
     'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'stroke-miterlimit',
     'stroke-dasharray', 'stroke-dashoffset', 'color', 'visibility', 'clip-rule',
     'color-interpolation'];
-// Every attribute and property the importer knows, in one table that both
-// lowering and the rasterizer's input read. `lowered` says what lowering does
+// Every attribute and property the importer knows, and what lowering does
 // with it: 'cascade' reads it from the attribute or a style, 'attribute' only
-// from the attribute (a style value is a loss, and CSS geometry needs
-// rasterization), 'raster' means only elements that are rasterized draw it,
-// 'unsupported' is a loss, and 'quiet' never changes what is drawn. `written`
-// is the value grammar the rasterizer's input keeps it under; one without a
-// grammar is never written.
+// from the attribute (a style value is a loss, and CSS geometry would need a
+// rasterizer), 'raster' means only features this importer drops draw it,
+// 'unsupported' is a loss, and 'quiet' never changes what is drawn. Nothing
+// outside the table counts as handled.
 const PROPERTIES = new Map();
-const declare = (lowered, written, names) => {
-    for (const name of names) PROPERTIES.set(name, { lowered, written });
+const declare = (lowered, names) => {
+    for (const name of names) PROPERTIES.set(name, { lowered });
 };
-declare('cascade', 'paint', ['fill', 'stroke']);
-declare('cascade', 'color', ['color', 'stop-color']);
-declare('cascade', 'reference', ['clip-path', 'mask', 'filter', 'marker-start', 'marker-mid',
+declare('cascade', ['fill', 'stroke']);
+declare('cascade', ['color', 'stop-color']);
+declare('cascade', ['clip-path', 'mask', 'filter', 'marker-start', 'marker-mid',
     'marker-end']);
-declare('cascade', 'transform', ['transform']);
-declare('cascade', 'plain', ['fill-opacity', 'fill-rule', 'stroke-opacity', 'stroke-width',
+declare('cascade', ['transform']);
+declare('cascade', ['fill-opacity', 'fill-rule', 'stroke-opacity', 'stroke-width',
     'stroke-linecap', 'stroke-linejoin', 'stroke-miterlimit', 'stroke-dasharray',
     'stroke-dashoffset', 'visibility', 'clip-rule', 'color-interpolation', 'opacity', 'display',
     'overflow', 'stop-opacity', 'offset', 'mask-type']);
-declare('attribute', 'plain', ['x', 'y', 'width', 'height', 'cx', 'cy', 'r', 'rx', 'ry', 'x1',
+declare('attribute', ['x', 'y', 'width', 'height', 'cx', 'cy', 'r', 'rx', 'ry', 'x1',
     'y1', 'x2', 'y2', 'fx', 'fy', 'fr', 'd', 'points', 'viewBox', 'preserveAspectRatio',
     'gradientUnits', 'spreadMethod', 'clipPathUnits', 'maskUnits', 'maskContentUnits']);
-declare('attribute', 'transform', ['gradientTransform']);
-declare('raster', 'transform', ['patternTransform']);
-declare('raster', 'color', ['flood-color', 'lighting-color']);
-declare('raster', 'font', ['font-family']);
-declare('raster', 'plain', ['patternUnits', 'patternContentUnits', 'filterUnits',
+declare('attribute', ['gradientTransform']);
+declare('raster', ['patternTransform']);
+declare('raster', ['flood-color', 'lighting-color']);
+declare('raster', ['font-family']);
+declare('raster', ['patternUnits', 'patternContentUnits', 'filterUnits',
     'primitiveUnits', 'markerUnits', 'markerWidth', 'markerHeight', 'refX', 'refY', 'orient',
     'color-interpolation-filters', 'flood-opacity', 'xml:space',
     'font-size', 'font-weight', 'font-style', 'font-variant', 'font-stretch', 'text-anchor',
@@ -1314,16 +1348,16 @@ declare('raster', 'plain', ['patternUnits', 'patternContentUnits', 'filterUnits'
     'preserveAlpha', 'surfaceScale', 'specularConstant', 'specularExponent', 'diffuseConstant',
     'kernelUnitLength', 'azimuth', 'elevation', 'z', 'pointsAtX', 'pointsAtY', 'pointsAtZ',
     'limitingConeAngle']);
-declare('unsupported', 'plain', ['pathLength', 'paint-order', 'vector-effect', 'shape-rendering',
+declare('unsupported', ['pathLength', 'paint-order', 'vector-effect', 'shape-rendering',
     'mix-blend-mode', 'isolation']);
-declare('quiet', null, ['id', 'style', 'class', 'role', 'lang', 'xml:lang', 'version',
+declare('quiet', ['id', 'style', 'class', 'role', 'lang', 'xml:lang', 'version',
     'baseProfile', 'cursor', 'pointer-events', 'tabindex', 'focusable', 'requiredFeatures',
     'requiredExtensions', 'systemLanguage', 'href', 'xlink:href']);
 // Geometry CSS can set, which shapes read only from attributes.
 const CSS_GEOMETRY = new Set(['x', 'y', 'width', 'height', 'cx', 'cy', 'r', 'rx', 'ry', 'd']);
 
 function propertyOf(name) {
-    if (name.startsWith('aria-') || name.startsWith('data-')) return { lowered: 'quiet', written: null };
+    if (name.startsWith('aria-') || name.startsWith('data-')) return { lowered: 'quiet' };
     return PROPERTIES.get(name);
 }
 
@@ -1647,7 +1681,7 @@ class Importer {
 
     // Only what the property table says lowering reads counts as handled;
     // anything else is a loss, and CSS geometry, which shapes read only from
-    // attributes, sends the asset to the rasterizer.
+    // attributes, is a feature only a rasterizer draws.
     dropUnknownAttributes(node, path) {
         const styled = node.attributes.style === undefined ? {}
             : styleDeclarations(node.attributes.style, `<${node.name}>`);
@@ -1656,9 +1690,8 @@ class Importer {
             if (!property || property.lowered === 'unsupported') {
                 this.report('svg-attribute-dropped', path, `<${node.name}> ${name} is not supported and was dropped`);
             } else if (property.lowered === 'attribute' && Object.hasOwn(styled, name)) {
-                // The root's size comes from its attributes or the caller, and
-                // a raster is made at that size, so rasterizing would not
-                // honour a CSS size on it either.
+                // The root's size comes from its attributes or the caller, so
+                // a CSS size on it is an ordinary loss.
                 if (CSS_GEOMETRY.has(name) && node !== this.root) {
                     this.rasterOnly.push({ path, reason: `<${node.name}> ${name} set in a style needs rasterization` });
                 } else {
@@ -2684,8 +2717,8 @@ function validateOptions(options) {
             throw new TypeError(`${name} must be a positive finite number`);
         }
     }
-    if (options.rasterize !== undefined && typeof options.rasterize !== 'function') {
-        throw new TypeError('rasterize must be a function');
+    if (options.rasterize !== undefined) {
+        throw new TypeError('rasterize is not supported: features only a rasterizer draws are dropped as losses');
     }
     for (const [color, token] of Object.entries(options.colorTokens ?? {})) {
         if (!/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/i.test(color) || typeof token !== 'string' ||
@@ -2696,98 +2729,13 @@ function validateOptions(options) {
     return { ...options, sourceId, nodeBudget, pathDataBudget };
 }
 
-// ---------------------------------------------------------------------------
-// The rasterizer's input: the sanitized tree written out again from an
-// allowlist, never the source text. An element, attribute or value outside
-// the allowlist is left out, and the asset reports what was left out.
-
-const RASTER_INPUT_ELEMENTS = new Set(['svg', 'g', 'defs', 'symbol', 'use', 'switch', 'path',
-    'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'clipPath', 'mask',
-    'linearGradient', 'radialGradient', 'stop', 'pattern', 'marker', 'text', 'tspan', 'textPath',
-    'filter', 'feBlend', 'feColorMatrix', 'feComponentTransfer', 'feComposite',
-    'feConvolveMatrix', 'feDiffuseLighting', 'feDisplacementMap', 'feDistantLight',
-    'feDropShadow', 'feFlood', 'feFuncA', 'feFuncB', 'feFuncG', 'feFuncR', 'feGaussianBlur',
-    'feMerge', 'feMergeNode', 'feMorphology', 'feOffset', 'fePointLight', 'feSpecularLighting',
-    'feSpotLight', 'feTile', 'feTurbulence']);
-function rasterColor(value, paint) {
-    if (paint && ['none', 'context-fill', 'context-stroke'].includes(value)) return value;
-    if (value === 'currentColor') return value;
-    const color = parseColor(value);
-    if (color === null) return null;
-    if (color[3] === 1) return hexString(color);
-    return `rgba(${color.slice(0, 3).map((part) => Math.round(part)).join(',')},${plain(color[3])})`;
-}
-
-// The attribute as the rasterizer is given it: [name, value], null when it
-// is outside the allowlist, or undefined when it is left out quietly.
-function rasterAttribute(name, value) {
-    const property = propertyOf(name);
-    if (!property) return null;
-    const written = property.written;
-    if (written === null) return undefined;
-    if (written === 'plain') {
-        return /^[A-Za-z0-9_\s,.+\-%]*$/.test(value) ? [name, value] : null;
-    }
-    if (written === 'font') return /^[A-Za-z0-9_\s,.\-'"]*$/.test(value) ? [name, value] : null;
-    if (written === 'color') {
-        const color = rasterColor(value, false);
-        return color === null ? null : [name, color];
-    }
-    if (written === 'paint') {
-        const url = leadingUrl(value);
-        if (!url) {
-            const color = rasterColor(value, true);
-            return color === null ? null : [name, color];
-        }
-        if (url.id === null) return null;
-        if (!url.rest) return [name, `url(#${url.id})`];
-        const fallback = rasterColor(url.rest, true);
-        return fallback === null ? null : [name, `url(#${url.id}) ${fallback}`];
-    }
-    if (written === 'reference') {
-        if (value === 'none') return [name, value];
-        const url = leadingUrl(value);
-        return url && url.id !== null && !url.rest ? [name, `url(#${url.id})`] : null;
-    }
-    const matrix = parseTransform(value);
-    return matrix === null ? null : [name, `matrix(${matrix.map(plain).join(' ')})`];
-}
-
-const escapeXml = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
-function rasterInput(root) {
-    const left = new Set();
-    const write = (node, top) => {
-        const name = node.name === 'a' ? 'g' : node.name;
-        if (!RASTER_INPUT_ELEMENTS.has(name)) {
-            if (!SILENT.has(name)) left.add(`<${node.name}>`);
-            return '';
-        }
-        const attributes = top ? [['xmlns', SVG_NAMESPACE], ['xmlns:xlink', XLINK_NAMESPACE]] : [];
-        if (typeof node.attributes.id === 'string') attributes.push(['id', node.attributes.id]);
-        const href = node.attributes.href ?? node.attributes['xlink:href'];
-        if (href !== undefined && node.name !== 'a') attributes.push(['xlink:href', `#${localReference(href)}`]);
-        for (const [key, value] of Object.entries(declared(node))) {
-            const written = rasterAttribute(key, value);
-            if (written === null) left.add(`${key} on <${node.name}>`);
-            else if (written !== undefined) attributes.push(written);
-        }
-        const open = attributes.map(([key, value]) => ` ${key}="${escapeXml(value)}"`).join('');
-        const content = node.parts.map((part) => (typeof part === 'string'
-            ? (SPACED_TEXT.has(name) ? escapeXml(part) : '') : write(part, false))).join('');
-        return content ? `<${name}${open}>${content}</${name}>` : `<${name}${open}/>`;
-    };
-    return { svg: write(root, true), left: [...left].sort() };
-}
-
 /**
  * Import an SVG asset as DesignIR source nodes.
  *
- * Returns `{ mode, root, diagnostics, assets }`: `mode` is `subtree`,
- * `compiled` or `rasterized`; `root` is a source node for `normalizeImport`;
- * `diagnostics` holds one entry per dropped or approximated feature, with the
- * mode decision itself; `assets` holds the raster asset, if one was made.
+ * Returns `{ mode, root, diagnostics, assets }`: `mode` is `subtree` or
+ * `compiled`; `root` is a source node for `normalizeImport`; `diagnostics`
+ * holds one entry per dropped or approximated feature, with the mode
+ * decision itself; `assets` is empty, as nothing is rasterized.
  * Hostile input throws `SvgAssetRefusal` before any lowering.
  */
 export function importSvgAsset(svg, options = {}) {
@@ -2808,44 +2756,11 @@ export function importSvgAsset(svg, options = {}) {
     const decision = (code, message, disposition = 'lowered', severity = 'info') =>
         importer.report(code, settings.sourceId, message, disposition, severity);
 
-    const rasterReasons = [...new Set(importer.rasterOnly.map((item) => item.reason))];
-    const rasterize = () => {
-        const side = Math.max(Math.ceil(importer.width), Math.ceil(importer.height));
-        if (side > SVG_ASSET_LIMITS.maxRasterSide ||
-            Math.ceil(importer.width) * Math.ceil(importer.height) > SVG_ASSET_LIMITS.maxRasterPixels) {
-            refuse(`rasterizing at ${importer.width}x${importer.height} is beyond ` +
-                `${SVG_ASSET_LIMITS.maxRasterSide} pixels a side or ${SVG_ASSET_LIMITS.maxRasterPixels} pixels`);
-        }
-        const input = rasterInput(importer.root);
-        if (input.left.length > 0) {
-            importer.report('svg-raster-input-sanitized', settings.sourceId,
-                `the rasterizer was given the asset without ${input.left.join(', ')}`);
-        }
-        const raster = settings.rasterize(input.svg, { width: importer.width, height: importer.height });
-        if (!raster || typeof raster.contentHash !== 'string') {
-            throw new TypeError('rasterize must return an asset with a contentHash');
-        }
-        decision('svg-rasterized',
-            `the asset was rasterized at ${importer.width}x${importer.height} because ${reasonsText}; ` +
-            'its colours no longer follow tokens and it redraws as one image', 'rasterized', 'warning');
-        return {
-            mode: 'rasterized',
-            root: root([{ kind: 'image', sourceId: `${settings.sourceId}:raster`,
-                properties: { layout: fill, image: { source: raster.contentHash, fit: 'fill' } },
-                children: [] }]),
-            diagnostics: importer.diagnostics,
-            assets: [{ id: `${settings.sourceId}:raster`, contentHash: raster.contentHash,
-                ...(raster.mimeType ? { mimeType: raster.mimeType } : {}),
-                width: raster.width ?? importer.width, height: raster.height ?? importer.height }],
-        };
-    };
-    let reasonsText = rasterReasons.join(', ');
-    if (rasterReasons.length > 0) {
-        if (settings.rasterize) return rasterize();
-        for (const item of importer.rasterOnly) {
-            importer.report('svg-raster-feature-dropped', item.path,
-                `${item.reason}, and no rasterizer was supplied, so it was dropped`);
-        }
+    // Nothing is rasterized: what only a rasterizer could draw is dropped,
+    // and each feature dropped is a loss.
+    for (const item of importer.rasterOnly) {
+        importer.report('svg-raster-feature-dropped', item.path,
+            `${item.reason}; this importer does not rasterize, so it was dropped`);
     }
 
     const counted = countTree(tree);
@@ -2880,19 +2795,13 @@ export function importSvgAsset(svg, options = {}) {
     if (compiled.ops.length > SVG_ASSET_LIMITS.maxCompiledOps ||
         deepest > SVG_ASSET_LIMITS.maxCompiledDepth ||
         compiledBytes > SVG_ASSET_LIMITS.maxTotalPathDataBytes) {
-        reasonsText = `its compiled form needs ${compiled.ops.length} operations nested ${deepest} deep ` +
+        refuse(`its compiled form needs ${compiled.ops.length} operations nested ${deepest} deep ` +
             `with ${compiledBytes} bytes of path data, beyond ${SVG_ASSET_LIMITS.maxCompiledOps} operations, ` +
-            `${SVG_ASSET_LIMITS.maxCompiledDepth} levels or ${SVG_ASSET_LIMITS.maxTotalPathDataBytes} bytes`;
-        if (settings.rasterize) return rasterize();
-        refuse(reasonsText);
-    }
-    if (importer.compiledLimits.length > 0 && settings.rasterize) {
-        reasonsText = `the compiled form cannot carry ${importer.compiledLimits.join(', ')}`;
-        return rasterize();
+            `${SVG_ASSET_LIMITS.maxCompiledDepth} levels or ${SVG_ASSET_LIMITS.maxTotalPathDataBytes} bytes`);
     }
     for (const limit of importer.compiledLimits) {
         importer.report('svg-compiled-feature-dropped', settings.sourceId,
-            `the compiled form cannot carry ${limit}; it was drawn without it, as no rasterizer was supplied`);
+            `the compiled form cannot carry ${limit}; it was drawn without it`);
     }
     importer.tokensBound.clear();
     const bakedTokens = [...importer.tokenMatches].sort();
@@ -2918,7 +2827,7 @@ export function importSvgAsset(svg, options = {}) {
 
 /**
  * Import an SVG asset and normalize it into a DesignIR document whose
- * `lossReport` lists every dropped, approximated or rasterized feature.
+ * `lossReport` lists every dropped or approximated feature.
  * `source` and `tokens` are as for `normalizeImport`; the other options are
  * those of `importSvgAsset`.
  */

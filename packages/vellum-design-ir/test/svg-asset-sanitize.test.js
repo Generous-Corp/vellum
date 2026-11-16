@@ -6,46 +6,13 @@ import { svgAssetTesting } from '../src/svg-asset.js';
 
 const wrap = (body, attributes = '') =>
     `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"${attributes}>${body}</svg>`;
-const raster = { contentHash: `sha256:${'c'.repeat(64)}` };
 const codes = (diagnostics) => diagnostics.map((item) => item.code).sort();
 
-// What the rasterizer hook is given, or null when the asset is refused first.
-function handed(svg) {
-    let input = null;
-    try {
-        importSvgAsset(svg, { sourceKey: 's', rasterize: (text) => { input = text; return raster; } });
-    } catch (error) {
-        if (!(error instanceof SvgAssetRefusal)) throw error;
-        assert.equal(input, null, 'a refused asset never reaches the rasterizer');
-        return null;
-    }
-    return input;
-}
-
-const ALLOWED_TAGS = new Set(['svg', 'g', 'defs', 'symbol', 'use', 'switch', 'path', 'rect',
-    'circle', 'ellipse', 'line', 'polyline', 'polygon', 'clipPath', 'mask', 'linearGradient',
-    'radialGradient', 'stop', 'pattern', 'marker', 'text', 'tspan', 'textPath', 'filter']);
-
-// Checks the rasterizer's input without the importer's own code: known tags,
-// no handlers or styles, every reference local, nothing that can name a
-// resource outside the asset.
-function assertContained(bytes, name) {
-    const body = bytes.replace(' xmlns="http://www.w3.org/2000/svg"', '')
-        .replace(' xmlns:xlink="http://www.w3.org/1999/xlink"', '');
-    assert.doesNotMatch(body, /\\|\/\/|javascript|data:|@|image-set|image\(|expression|<!|<\?/i, name);
-    for (const [, tag] of body.matchAll(/<\/?([A-Za-z][\w:-]*)/g)) {
-        assert.ok(ALLOWED_TAGS.has(tag) || /^fe[A-Z]\w+$/.test(tag), `${name}: <${tag}>`);
-        assert.notEqual(tag, 'feImage', name);
-    }
-    for (const [, attribute, value] of body.matchAll(/\s([A-Za-z][\w:-]*)="([^"]*)"/g)) {
-        assert.ok(!/^on/i.test(attribute) && attribute !== 'style' && !attribute.startsWith('xmlns'),
-            `${name}: ${attribute}`);
-        if (/href$/.test(attribute)) assert.match(value, /^#[\p{L}\p{N}_.:-]+$/u, `${name}: ${attribute}`);
-        for (const [url] of value.matchAll(/url\([^)]*\)?/g)) {
-            assert.match(url, /^url\(#[\p{L}\p{N}_.:-]+\)$/u, `${name}: ${url}`);
-        }
-    }
-    assert.equal(handed(bytes), bytes, `${name}: the rasterizer's input imports to itself`);
+// Content the importer drops must not survive anywhere in what it emits.
+function assertContained(imported, name) {
+    const emitted = JSON.stringify(imported.root);
+    assert.doesNotMatch(emitted, /\/\/|javascript|data:|script|image-set|image\(|example\.invalid|&lt;|<|>/i, name);
+    assert.deepEqual(imported.assets, [], name);
 }
 
 const reported = {
@@ -65,25 +32,26 @@ const reported = {
         '<filter id="f"><feImage href="#q"/><feGaussianBlur stdDeviation="1"/></filter>' +
         '<rect width="5" height="5" filter="url(#f)"><set attributeName="fill" to="url(#g)"/></rect>'),
     'text that looks like markup': wrap('<text>&lt;script&gt;&amp;<tspan>b</tspan> c</text>'),
+    'an expensive filter': wrap('<filter id="f"><feTurbulence numOctaves="1000000"/></filter>' +
+        '<rect width="10" height="10" filter="url(#f)"/>'),
+    'a huge filter region': wrap('<filter id="f" filterUnits="userSpaceOnUse" x="-1000000" y="-1000000" ' +
+        'width="1000000" height="1000000"><feGaussianBlur stdDeviation="1"/></filter><rect width="10" height="10" filter="url(#f)"/>'),
+    'a huge pattern': wrap('<pattern id="p" width="1000000" height="1000000" patternUnits="userSpaceOnUse">' +
+        '<rect width="1000000" height="1000000"/></pattern><rect width="10" height="10" fill="url(#p)"/>'),
 };
 
 for (const [name, svg] of Object.entries(reported)) {
-    test(`the rasterizer gets only allowlisted content: ${name}`, () => {
-        const bytes = handed(svg);
-        assert.notEqual(bytes, null, name);
-        assertContained(bytes, name);
-        assert.notEqual(bytes, svg);
+    test(`content only a rasterizer would draw is dropped as a loss: ${name}`, () => {
+        const imported = importSvgAsset(svg, { sourceKey: 's' });
+        assertContained(imported, name);
+        assert.ok(imported.diagnostics.length > 0, `${name} reports what was dropped`);
     });
 }
 
-test('what the rasterizer was not given is reported', () => {
-    const imported = importSvgAsset(reported['an image function in a presentation attribute'],
-        { rasterize: () => raster });
-    const loss = imported.diagnostics.find((item) => item.code === 'svg-raster-input-sanitized');
-    assert.match(loss.message, /stroke on <rect>/);
-    assert.equal(loss.disposition, 'unsupported');
-    const text = handed(reported['text that looks like markup']);
-    assert.match(text, /<text>&lt;script&gt;&amp;<tspan>b<\/tspan> c<\/text>/);
+test('the rasterize option is refused, so no caller expects a raster', () => {
+    for (const rasterize of [() => ({ contentHash: `sha256:${'c'.repeat(64)}` }), null, 'yes']) {
+        assert.throws(() => importSvgAsset(wrap('<text>x</text>'), { rasterize }), /rasterize is not supported/);
+    }
 });
 
 const refused = {
@@ -103,14 +71,14 @@ const refused = {
 };
 
 for (const [name, svg] of Object.entries(refused)) {
-    test(`refuses ${name} before the rasterizer`, () => {
-        assert.equal(handed(svg), null, name);
+    test(`refuses ${name}`, () => {
+        assert.throws(() => importSvgAsset(svg, { sourceKey: 's' }), SvgAssetRefusal, name);
     });
 }
 
 function timed(svg, pattern) {
     const start = performance.now();
-    assert.throws(() => importSvgAsset(svg, { sourceKey: 's', rasterize: () => raster }), pattern);
+    assert.throws(() => importSvgAsset(svg, { sourceKey: 's' }), pattern);
     return performance.now() - start;
 }
 
@@ -146,7 +114,7 @@ test('every reference kind shares one expansion budget and is refused quickly', 
     assert.throws(() => importSvgAsset(wrap('<mask id="m"><g style="mask:url(#m)"/></mask>')), /reference cycle/);
 });
 
-test('a clip-path inside a clipPath is rasterized or reported, never silently dropped', () => {
+test('a clip-path inside a clipPath is a reported loss, never silently dropped', () => {
     const inner = '<clipPath id="i"><rect width="5" height="10"/></clipPath>';
     const cases = {
         'on a clip shape': `${inner}<clipPath id="o"><rect width="10" height="10" clip-path="url(#i)"/></clipPath>`,
@@ -157,10 +125,6 @@ test('a clip-path inside a clipPath is rasterized or reported, never silently dr
     };
     for (const [name, defs] of Object.entries(cases)) {
         const svg = wrap(`${defs}<rect width="10" height="10" fill="red" clip-path="url(#o)"/>`);
-        let calls = 0;
-        const rasterized = importSvgAsset(svg, { rasterize: () => { calls += 1; return raster; } });
-        assert.equal(rasterized.mode, 'rasterized', name);
-        assert.equal(calls, 1, name);
         const dropped = importSvgAsset(svg);
         const loss = dropped.diagnostics.find((item) => item.code === 'svg-raster-feature-dropped');
         assert.match(loss?.message ?? '', /clip-path inside a clipPath/, name);
@@ -179,7 +143,7 @@ test('mask content inherits presentation from the mask element ancestors', () =>
     assert.deepEqual(fills.sort(), ['#ff0000', '#ffffff']);
 });
 
-test('a dash pattern denser than the native limit is rasterized or dropped, in both forms', () => {
+test('a dash pattern denser than the native limit is dropped with a loss, in both forms', () => {
     const dense = wrap('<path d="M0 5H10" fill="none" stroke="red" stroke-dasharray=".00001 .00001"/>');
     const denseArc = wrap('<circle cx="5" cy="5" r="4" fill="none" stroke="red" stroke-dasharray=".0001"/>');
     for (const svg of [dense, denseArc]) {
@@ -188,7 +152,6 @@ test('a dash pattern denser than the native limit is rasterized or dropped, in b
             assert.doesNotMatch(JSON.stringify(imported.root), /strokeDasharray/, JSON.stringify(options));
             const loss = imported.diagnostics.find((item) => item.code === 'svg-raster-feature-dropped');
             assert.match(loss?.message ?? '', /dashes, beyond 90000/);
-            assert.equal(importSvgAsset(svg, { ...options, rasterize: () => raster }).mode, 'rasterized');
         }
     }
     for (const options of [{}, { nodeBudget: 1 }]) {
@@ -221,16 +184,13 @@ test('a paint fallback is a colour or none, so a chain of references cannot recu
     assert.match(JSON.stringify(fallback.root), /"fill":"#ff0000"/, 'a colour fallback still paints');
 });
 
-test('the rasterizer is never asked for more pixels than the raster budget', () => {
-    const sized = (width, height) => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><text>x</text></svg>`;
-    let calls = 0;
-    const rasterize = () => { calls += 1; return raster; };
-    assert.equal(importSvgAsset(sized(8192, 2048), { rasterize }).mode, 'rasterized', 'at the pixel limit');
-    for (const [width, height] of [[1000000, 1000000], [8193, 1], [8192, 2049]]) {
-        assert.throws(() => importSvgAsset(sized(width, height), { rasterize }), /rasterizing at/);
-    }
-    assert.equal(calls, 1);
-    assert.equal(importSvgAsset(sized(1000000, 1000000)).mode, 'subtree', 'without a rasterizer the text is a loss');
+test('a huge asset with text is a loss, never a raster request', () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1000000" height="1000000"><text>x</text></svg>';
+    const imported = importSvgAsset(svg);
+    assert.equal(imported.mode, 'subtree');
+    assert.deepEqual(codes(imported.diagnostics), ['svg-raster-feature-dropped']);
+    const unused = importSvgAsset(wrap('<filter id="f"/><pattern id="p"/><marker id="m"/><rect width="1" height="1"/>'));
+    assert.deepEqual(codes(unused.diagnostics), [], 'an unreferenced filter, pattern or marker draws nothing and loses nothing');
 });
 
 test('inherit takes the parent value for a property that does not inherit', () => {
@@ -243,11 +203,10 @@ test('inherit takes the parent value for a property that does not inherit', () =
     assert.equal((JSON.stringify(faded.root).match(/"opacity":0.5/g) ?? []).length, 2);
 });
 
-test('a clip-path on a clipPath, as an attribute or a style, is rasterized or reported', () => {
+test('a clip-path on a clipPath, as an attribute or a style, is a reported loss', () => {
     for (const clip of ['clip-path="url(#i)"', 'style="clip-path:url(#i)"']) {
         const svg = wrap(`<defs><clipPath id="i"><rect width="5" height="10"/></clipPath><clipPath id="o" ${clip}>` +
             '<rect width="10" height="10"/></clipPath></defs><rect width="10" height="10" clip-path="url(#o)"/>');
-        assert.equal(importSvgAsset(svg, { rasterize: () => raster }).mode, 'rasterized', clip);
         const loss = importSvgAsset(svg).diagnostics.find((item) => item.code === 'svg-raster-feature-dropped');
         assert.match(loss?.message ?? '', /clip-path on a clipPath/, clip);
     }
@@ -358,9 +317,9 @@ test('a whole import of pathological attribute values stays fast', () => {
     }
     const source = { key: 's', adapter: 'svg', adapterVersion: '1', formatVersion: '1.1', revision: 't' };
     for (const [name, svg] of Object.entries(svgs)) {
-        const imported = fastest(() => importSvgAsset(svg, { sourceKey: 's', rasterize: () => raster }));
+        const imported = fastest(() => importSvgAsset(svg, { sourceKey: 's' }));
         assert.ok(imported < 200, `${name} took ${imported.toFixed(1)} ms`);
-        const normalized = fastest(() => svgAssetToDesignIR(svg, { source, rasterize: () => raster }));
+        const normalized = fastest(() => svgAssetToDesignIR(svg, { source }));
         assert.ok(normalized < 200, `${name} through DesignIR took ${normalized.toFixed(1)} ms`);
     }
 });
@@ -390,21 +349,20 @@ test('a symbol without a viewBox sets the viewport its instance clips to and its
     assert.ok(!visible.root.children[0].properties.vector.asset.ops.some((op) => op.clip), 'overflow visible does not clip');
 });
 
-test('geometry set in a style is rasterized or a loss, never silently dropped', () => {
+test('geometry set in a style is a loss, never silently dropped', () => {
     const svg = wrap('<rect style="width:10px;height:10px;fill:red"/>');
     const dropped = importSvgAsset(svg);
     const loss = dropped.diagnostics.filter((item) => item.code === 'svg-raster-feature-dropped');
     assert.ok(loss.some((item) => /width set in a style/.test(item.message)), JSON.stringify(dropped.diagnostics));
-    const bytes = handed(svg);
-    assert.match(bytes, /<rect width="10px" height="10px" fill="#ff0000"\/>/);
     const clip = wrap('<clipPath id="c"><rect style="width:5px" height="10"/></clipPath><rect width="10" height="10" clip-path="url(#c)"/>');
-    assert.equal(importSvgAsset(clip, { rasterize: () => raster }).mode, 'rasterized');
+    assert.ok(importSvgAsset(clip).diagnostics.some((item) => item.code === 'svg-raster-feature-dropped' &&
+        /width set in a style/.test(item.message)));
     const unread = importSvgAsset(wrap('<polyline style="points:0 0 5 5" points="0 0 10 10" stroke="red"/><rect width="1" height="1" bogus="1"/>'));
     assert.deepEqual(codes(unread.diagnostics), ['svg-attribute-dropped', 'svg-attribute-dropped']);
     const read = importSvgAsset(wrap('<rect width="1" height="1" style="fill:red;opacity:.5" font-size="3"/>'));
     assert.deepEqual(codes(read.diagnostics), [], 'what lowering reads, or only text uses, is no loss');
-    const sized = importSvgAsset(wrap('<rect width="1" height="1"/>', ' style="width:24px"'), { rasterize: () => raster });
-    assert.equal(sized.mode, 'subtree', 'a CSS size on the root is a loss, not a reason to rasterize');
+    const sized = importSvgAsset(wrap('<rect width="1" height="1"/>', ' style="width:24px"'));
+    assert.equal(sized.mode, 'subtree', 'a CSS size on the root is an ordinary loss');
     assert.deepEqual(codes(sized.diagnostics), ['svg-attribute-dropped']);
 });
 
@@ -449,4 +407,17 @@ test('a use with a zero width or height on an svg or symbol draws nothing', () =
     }
     const own = JSON.stringify(importSvgAsset(wrap(`${defs}<use href="#s"/>`)).root);
     assert.match(own, /#ff0000/, 'omitted dimensions keep the svg size');
+});
+
+test('expansion is charged by the geometry each instance emits, so reusing a large path is refused quickly', () => {
+    const path = `<path id="p" d="M0 0${' L1 1'.repeat(4095)}"/>`;
+    const svg = wrap(`<defs>${path}</defs>${'<use href="#p"/>'.repeat(19997)}`);
+    const start = performance.now();
+    assert.throws(() => importSvgAsset(svg), /path commands and points/);
+    const elapsed = performance.now() - start;
+    assert.ok(elapsed < 200, `the fan-out was refused in ${elapsed.toFixed(1)} ms`);
+    const points = `<polyline id="p" points="${'1 1 '.repeat(4000)}"/>`;
+    assert.throws(() => importSvgAsset(wrap(`<defs>${points}</defs>${'<use href="#p"/>'.repeat(200)}`)), /path commands and points/);
+    const reuse = importSvgAsset(wrap(`<defs>${path}</defs>${'<use href="#p"/>'.repeat(25)}`), { nodeBudget: 1 });
+    assert.equal(reuse.mode, 'compiled', 'reuse within the geometry budget still imports');
 });

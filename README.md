@@ -56,12 +56,13 @@ An asset over its node or path-data budget, or one using what only the
 compiled form carries (user-space or transformed gradients, focal radial
 gradients, diagonal linear gradients, coincident stops), becomes one
 `vector` node holding a compiled display list that the Skia renderer and
-the Canvas2D shell both draw. Rasterization is the last fallback, through a
-caller's `rasterize` hook, and is always a `rasterized` loss. Every dropped
-or approximated feature is a loss in the DesignIR `lossReport`. Document
-types, entities, scripts, event handlers, external or data references,
-reference cycles, `use` expansion past 50,000 nodes and numbers beyond one
-million are refused before any lowering.
+the Canvas2D shell both draw. Nothing is rasterized: what only a rasterizer
+draws (text, images, patterns, filters, markers) is dropped as a loss. Every
+dropped or approximated feature is a loss in the DesignIR `lossReport`.
+Document types, entities, scripts, event handlers, external or data
+references, reference cycles, expansion past 50,000 nodes or 262,144 path
+commands and points, and numbers beyond one million are refused before any
+lowering.
 
 A DesignIR document that uses these fields (path and vector nodes, their
 property buckets, image sources and the opacity, transform, clip, mask,

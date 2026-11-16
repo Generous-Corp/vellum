@@ -88,35 +88,19 @@ test('token-bound colours and stable identities survive a subtree import', async
     assert.ok(useIds.includes('assets/svg:5_pairs:7_pairing.1:4_tile.1'));
 });
 
-test('rasterization is the last fallback and is always a recorded loss', async () => {
+test('nothing is rasterized: what only a rasterizer draws is a recorded loss', async () => {
     const svg = await fixture('raster-only');
     const dropped = svgAssetToDesignIR(svg, { source });
     assert.equal(dropped.mode, 'subtree');
     assert.deepEqual(codes(dropped.document),
         ['svg-raster-feature-dropped', 'svg-raster-feature-dropped']);
-    let calls = 0;
-    const rasterize = (input, size) => {
-        calls += 1;
-        assert.equal(input, '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ' +
-            'width="120" height="60" viewBox="0 0 120 60"><defs><filter id="soft"><feGaussianBlur stdDeviation="2"/>' +
-            '</filter></defs><rect id="plate" width="120" height="60" fill="#334155"/>' +
-            '<circle id="blurred" cx="30" cy="30" r="20" fill="#f59e0b" filter="url(#soft)"/>' +
-            '<text id="caption" x="60" y="35" fill="#ffffff">Hi</text></svg>');
-        assert.deepEqual(size, { width: 120, height: 60 });
-        return { contentHash: `sha256:${'b'.repeat(64)}`, mimeType: 'image/png' };
-    };
-    const raster = svgAssetToDesignIR(svg, { source, rasterize });
-    assert.equal(calls, 1);
-    assert.equal(raster.mode, 'rasterized');
-    assert.deepEqual(codes(raster.document), ['svg-rasterized']);
-    assert.equal(raster.document.lossReport.byDisposition.rasterized, 1);
-    assert.match(raster.document.lossReport.losses[0].message, /filter needs rasterization/);
-    assert.equal(raster.document.assets[0].contentHash, `sha256:${'b'.repeat(64)}`);
-    const image = raster.document.root.children[0];
-    assert.equal(image.kind, 'image');
-    assert.equal(image.properties.image.source, `sha256:${'b'.repeat(64)}`);
-    assert.equal(importSvgAsset(await fixture('gradients'), { rasterize }).mode, 'subtree');
-    assert.equal(calls, 1, 'an asset the primitives express is never rasterized');
+    assert.match(dropped.document.lossReport.losses.map((loss) => loss.message).join(' '), /filter needs rasterization/);
+    assert.deepEqual(dropped.document.assets ?? [], []);
+    const drawn = JSON.stringify(dropped.document.root);
+    assert.match(drawn, /#334155/, 'the plate still draws');
+    assert.match(drawn, /#f59e0b/, 'the filtered circle draws without its filter');
+    assert.throws(() => importSvgAsset(svg, { rasterize: () => ({ contentHash: `sha256:${'b'.repeat(64)}` }) }),
+        /rasterize is not supported/);
 });
 
 test('every dropped or approximated feature is a loss entry', () => {
@@ -165,10 +149,7 @@ const hostile = {
 
 for (const [name, svg] of Object.entries(hostile)) {
     test(`refuses ${name} before any work`, () => {
-        let rasterized = false;
-        assert.throws(() => importSvgAsset(svg, { rasterize: () => { rasterized = true; } }),
-            SvgAssetRefusal);
-        assert.equal(rasterized, false);
+        assert.throws(() => importSvgAsset(svg), SvgAssetRefusal);
     });
 }
 
@@ -228,9 +209,6 @@ test('paths and compiled assets stay within the renderer budgets', () => {
     assert.throws(() => importSvgAsset(wrap(`<path d="${long}"/>`)), /exceeds 4096 commands/);
     const many = '<rect width="1" height="1"/>'.repeat(SVG_ASSET_LIMITS.maxCompiledOps);
     assert.throws(() => importSvgAsset(wrap(many), { nodeBudget: 1 }), /16384 operations/);
-    const raster = importSvgAsset(wrap(many), {
-        nodeBudget: 1, rasterize: () => ({ contentHash: `sha256:${'e'.repeat(64)}` }) });
-    assert.equal(raster.mode, 'rasterized');
 });
 
 test('colours, fallbacks and gradient chains resolve as SVG defines them', () => {
@@ -268,13 +246,11 @@ test('oversized transforms are dropped or refused and unit offsets are losses', 
     assert.deepEqual(codes(unit.document), ['svg-length-unit-dropped']);
 });
 
-test('rasterizing keeps the earlier losses and authored ids never collide with generated ones', () => {
-    const raster = svgAssetToDesignIR(wrap(
+test('a dropped raster feature keeps the other losses and authored ids never collide with generated ones', () => {
+    const dropped = svgAssetToDesignIR(wrap(
         '<rect width="5" height="5" filter="url(#f)"><animate attributeName="x" to="1"/></rect><filter id="f"/>'),
-        { source, rasterize: () => ({ contentHash: `sha256:${'f'.repeat(64)}` }) });
-    assert.equal(raster.mode, 'rasterized');
-    assert.deepEqual(codes(raster.document),
-        ['svg-animation-dropped', 'svg-raster-input-sanitized', 'svg-rasterized']);
+        { source });
+    assert.deepEqual(codes(dropped.document), ['svg-animation-dropped', 'svg-raster-feature-dropped']);
     const ids = svgAssetToDesignIR(wrap(
         '<rect id="a" transform="translate(1 1)" width="1" height="1"/><rect id="a:shape" width="1" height="1"/>' +
         '<rect id="a.0" width="1" height="1"/>'), { source });
@@ -318,7 +294,7 @@ test('user-space gradient percentages follow a nested svg or symbol viewport', (
     }
 });
 
-test('an animation that could point a reference outside the asset is refused before the rasterizer', () => {
+test('an animation that could point a reference outside the asset is refused', () => {
     const animations = {
         'set to': '<set attributeName="href" to="https://example.invalid/x.png"/>',
         'animate values': '<animate attributeName="fill" values="red;https://example.invalid/x.png"/>',
@@ -327,12 +303,9 @@ test('an animation that could point a reference outside the asset is refused bef
         'url to': '<animate attributeName="fill" to="url(https://example.invalid/#g)"/>',
     };
     for (const [name, animation] of Object.entries(animations)) {
-        let handed = null;
         const svg = wrap(`<image id="i" width="5" height="5" href="#local">${animation}</image>` +
             '<rect id="local" width="1" height="1"/><text>raster</text>');
-        assert.throws(() => importSvgAsset(svg, { rasterize: (input) => { handed = input; } }),
-            SvgAssetRefusal, name);
-        assert.equal(handed, null, `${name} never reaches the rasterizer`);
+        assert.throws(() => importSvgAsset(svg), SvgAssetRefusal, name);
     }
     const local = wrap('<rect width="5" height="5"><animate attributeName="fill" values="red;blue"/>' +
         '<set attributeName="fill" to="url(#g)"/></rect><linearGradient id="g"/>');
@@ -378,19 +351,14 @@ test('a user-space gradient stroke on a horizontal or vertical line still paints
         'an objectBoundingBox gradient on a line still paints nothing');
 });
 
-test('an invisible root is never rasterized, even with a filter', () => {
+test('an invisible root reports no loss for its filter', () => {
     for (const attributes of [' display="none" filter="url(#f)"', ' style="display: none; filter: url(#f)"']) {
-        let calls = 0;
-        const imported = importSvgAsset(wrap('<filter id="f"/><rect width="5" height="5" fill="red"/>', attributes),
-            { rasterize: () => { calls += 1; return { contentHash: `sha256:${'a'.repeat(64)}` }; } });
-        assert.equal(calls, 0, attributes);
-        assert.notEqual(imported.mode, 'rasterized', attributes);
-        assert.equal(imported.diagnostics.some((entry) => entry.code === 'svg-raster-feature-dropped'), false);
+        const imported = importSvgAsset(wrap('<filter id="f"/><rect width="5" height="5" fill="red"/>', attributes));
+        assert.equal(imported.diagnostics.some((entry) => entry.code === 'svg-raster-feature-dropped'), false, attributes);
     }
-    let calls = 0;
-    importSvgAsset(wrap('<filter id="f"/><rect width="5" height="5"/>', ' filter="url(#f)"'),
-        { rasterize: () => { calls += 1; return { contentHash: `sha256:${'a'.repeat(64)}` }; } });
-    assert.equal(calls, 1, 'a visible root with a filter is still rasterized');
+    const visible = importSvgAsset(wrap('<filter id="f"/><rect width="5" height="5"/>', ' filter="url(#f)"'));
+    assert.ok(visible.diagnostics.some((entry) => entry.code === 'svg-raster-feature-dropped'),
+        'a visible root filter is a loss');
 });
 
 test('an href reaches the XLink namespace only under the xlink prefix', () => {
@@ -405,9 +373,7 @@ test('an href reaches the XLink namespace only under the xlink prefix', () => {
             '<image width="10" height="10"><set attributeName="r:href" to="#x"/></image><text>raster</text></svg>',
     };
     for (const [name, svg] of Object.entries(cases)) {
-        let handed = null;
-        assert.throws(() => importSvgAsset(svg, { rasterize: (input) => { handed = input; } }), SvgAssetRefusal, name);
-        assert.equal(handed, null, `${name} never reaches the rasterizer`);
+        assert.throws(() => importSvgAsset(svg), SvgAssetRefusal, name);
     }
     assert.doesNotThrow(() => importSvgAsset('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ' +
         'xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="10" height="10">' +
@@ -494,9 +460,7 @@ test('a symbol keeps its own opacity as one group on each instance', () => {
 });
 
 const hookNever = (svg, name) => {
-    let handed = null;
-    assert.throws(() => importSvgAsset(svg, { rasterize: (input) => { handed = input; } }), SvgAssetRefusal, name);
-    assert.equal(handed, null, `${name} never reaches the rasterizer`);
+    assert.throws(() => importSvgAsset(svg), SvgAssetRefusal, name);
 };
 
 test('every element and attribute name is resolved to its namespace before any check', () => {
@@ -513,8 +477,10 @@ test('every element and attribute name is resolved to its namespace before any c
     hookNever(svg('<image r:href="https://example.invalid/x.png" width="1" height="1"/>',
         ' xmlns:r="http://www.w3.org/1999/xlink"'), 'an aliased XLink href');
     const local = importSvgAsset(svg('<rect id="r" width="5" height="5" fill="#ff0000"/><use r:href="#r" x="5"/>',
-        ' xmlns:r="http://www.w3.org/1999/xlink"'), { rasterize: () => ({ contentHash: `sha256:${'a'.repeat(64)}` }) });
-    assert.equal(local.mode, 'rasterized', 'an aliased local href resolves as xlink:href');
+        ' xmlns:r="http://www.w3.org/1999/xlink"'));
+    assert.ok(!local.diagnostics.some((entry) => entry.code === 'svg-use-unresolved'),
+        'an aliased local href resolves as xlink:href');
+    assert.equal((JSON.stringify(local.root).match(/#ff0000/g) ?? []).length, 2, 'the use draws the rect');
     const metadata = importSvgAsset('<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" ' +
         'xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd" xmlns:dc="http://purl.org/dc/elements/1.1/" ' +
         'xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" width="10" height="10">' +
@@ -577,10 +543,6 @@ test('every importer limit matches its consumer and holds at the limit and one p
             ? compiledOps(past).filter((op) => op.op === 'path')[0].strokeDasharray
             : firstPathOf(past).properties.path.strokeDasharray;
         assert.equal(shown, undefined, 'no asset carries more dashes than the consumers accept');
-        let rasterized = 0;
-        assert.equal(dashed(65, { ...options, rasterize: () => { rasterized += 1; return { contentHash: `sha256:${'b'.repeat(64)}` }; } }).mode,
-            'rasterized', 'with a rasterizer, 65 dashes rasterize');
-        assert.equal(rasterized, 1);
     }
     const stops = (count) => `<linearGradient id="g">${Array.from({ length: count },
         (_, index) => `<stop offset="${index / (count - 1)}" stop-color="#${index % 2 ? 'ff0000' : '0000ff'}"/>`).join('')}</linearGradient>` +
