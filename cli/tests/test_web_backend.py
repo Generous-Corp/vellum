@@ -49,13 +49,6 @@ finally:
     sys.path.pop(0)
 
 
-def browser_for_capture() -> str | None:
-    try:
-        return chrome_path()
-    except BackendFailure:
-        return None
-
-
 class LiveBrowserGateTests(unittest.TestCase):
     """Live-browser tests never reach for the installed Chrome by default."""
 
@@ -478,7 +471,6 @@ class WebCaptureArtifactTests(unittest.TestCase):
             self.assertEqual(output.read_bytes(), b"earlier capture")
             self.assertEqual([path.name for path in output.parent.iterdir()], ["hero.png"])
 
-    @unittest.skipUnless(browser_for_capture(), "a Chrome browser is required for the live capture proof")
     @live_browser.requires_pinned_chrome
     def test_a_live_browser_capture_is_a_png_of_the_page(self) -> None:
         site = self.project / "site"
