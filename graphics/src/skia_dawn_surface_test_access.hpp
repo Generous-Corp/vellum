@@ -44,6 +44,10 @@ struct SkiaDawnSurfaceTestAccess final {
     // exact images.
     static void set_damage_model_version(SkiaDawnSurface& surface,
                                          std::uint32_t version) noexcept;
+
+    // Whether the surface would redraw a scene of `version` from its damage.
+    static bool serves_partial_redraw(const SkiaDawnSurface& surface,
+                                      std::uint32_t version) noexcept;
 };
 
 }  // namespace vellum::graphics

@@ -2007,6 +2007,10 @@ public:
         damage_model_version_ = version;
     }
 
+    bool test_serves_partial_redraw(std::uint32_t version) const noexcept {
+        return serves_partial_redraw(version);
+    }
+
     void simulate_device_loss() {
         if (!device_) return;
         device_.ForceLoss(wgpu::DeviceLostReason::Unknown, "Vellum simulated device loss");
@@ -2390,7 +2394,7 @@ private:
     }
 
     bool serves_partial_redraw(std::uint32_t version) const noexcept {
-        return version <= damage_model_version_;
+        return version >= kMinSupportedSceneVersion && version <= damage_model_version_;
     }
 
     bool fail_device_lost(std::string* error, std::string message) {
@@ -2502,7 +2506,7 @@ private:
         }
 
         std::vector<PaintCommandRange> ranges;
-        auto commands = make_paint_commands(scene, &ranges);
+        auto commands = make_evaluated_paint_commands(scene, &ranges);
         unbound_plot_layers(commands, config_.scale);
         std::vector<ParagraphSlot> paragraphs(commands.size());
         // stats_ and layer_count_ describe the last submitted frame until
@@ -3220,6 +3224,11 @@ bool SkiaDawnSurfaceTestAccess::capture_effect_passes(SkiaDawnSurface& surface,
 void SkiaDawnSurfaceTestAccess::set_damage_model_version(SkiaDawnSurface& surface,
                                                          std::uint32_t version) noexcept {
     surface.impl_->set_damage_model_version(version);
+}
+
+bool SkiaDawnSurfaceTestAccess::serves_partial_redraw(const SkiaDawnSurface& surface,
+                                                      std::uint32_t version) noexcept {
+    return surface.impl_->test_serves_partial_redraw(version);
 }
 
 void SkiaDawnSurface::set_cache_budgets(const RenderCacheBudgets& budgets) {
