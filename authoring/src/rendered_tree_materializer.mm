@@ -140,6 +140,23 @@ bool finite_number(id value, float& output) {
     return true;
 }
 
+// A non-negative integer protocol field below `limit`, read from the JSON
+// number's double before any integer conversion, so a value that is fractional,
+// negative, not finite or out of range is refused instead of converted.
+bool protocol_index(id value, std::uint64_t limit, std::uint64_t& output) {
+    if (![value isKindOfClass:NSNumber.class] ||
+        CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID()) {
+        return false;
+    }
+    const double number = [static_cast<NSNumber*>(value) doubleValue];
+    if (!std::isfinite(number) || number < 0.0 || number != std::floor(number) ||
+        number >= static_cast<double>(limit)) {
+        return false;
+    }
+    output = static_cast<std::uint64_t>(number);
+    return true;
+}
+
 float number_or(NSDictionary* style, NSString* key, float fallback) {
     float value = 0.0F;
     return finite_number(style[key], value) ? value : fallback;
@@ -200,7 +217,7 @@ vellum::graphics::TextStyle text_style(
         style, @"letterSpacing", fallback.letter_spacing);
     float weight = 0.0F;
     if (finite_number(style[@"fontWeight"], weight)) {
-        fallback.font_weight = std::clamp(static_cast<int>(std::lround(weight)), 100, 900);
+        fallback.font_weight = static_cast<int>(std::lround(std::clamp(weight, 100.0F, 900.0F)));
     }
     if (const auto color = parse_color(style[@"color"])) fallback.color = *color;
     if ([style[@"textDecoration"] isKindOfClass:NSString.class]) {
@@ -670,7 +687,7 @@ struct MaterializeContext final {
     std::vector<LoweringDiagnostic>* diagnostics = nullptr;
     const std::vector<vellum::graphics::TokenReceipt>* tokens = nullptr;
     std::vector<NodeRecord>* node_records = nullptr;
-    bool root_background_token = false;
+    std::optional<std::uint32_t> root_background_token;
 };
 
 constexpr std::size_t kMaximumSourceFileBytes = 4096U;
@@ -741,9 +758,8 @@ bool token_entry(
     std::string* error) {
     const std::string property = "tokenRefs." + cpp_string(key);
     const std::size_t count = context.tokens != nullptr ? context.tokens->size() : 0U;
-    float index = 0.0F;
-    if (!finite_number(references[key], index) || index < 0.0F ||
-        index != std::floor(index) || static_cast<std::size_t>(index) >= count) {
+    std::uint64_t index = 0;
+    if (!protocol_index(references[key], count, index)) {
         return refuse_token(context, node_id, property,
             property + " of " + node_id + " must name an entry of the token table", error);
     }
@@ -840,15 +856,26 @@ bool bind_token_refs(
         NSString* key = raw_key;
         const std::string name = cpp_string(key);
         bool bound = true;
-        if (name == "backgroundColor" && !path) {
-            if (!parse_color(style[@"backgroundColor"])) {
+        if (name == "backgroundColor" && (root || !path)) {
+            // The root's backgroundColor is also the scene's clear colour,
+            // whatever the root's kind, so its receipt is kept for that too.
+            const auto background = parse_color(style[@"backgroundColor"]);
+            const bool fills = !path && (output.kind == SceneNode::Kind::rectangle ||
+                                         output.kind == SceneNode::Kind::image);
+            if (!background) {
                 bound = missing(name);
-            } else if (output.kind == SceneNode::Kind::rectangle ||
-                       output.kind == SceneNode::Kind::image) {
-                bound = bind_fill(key);
-                if (bound && root) context.root_background_token = true;
             } else {
-                bound = dropped(name);
+                if (root) {
+                    std::uint32_t entry = 0;
+                    bound = token_entry(references, key, context, output.id, *background, entry,
+                                        error);
+                    if (bound) context.root_background_token = entry;
+                }
+                if (bound && fills) {
+                    bound = bind_fill(key);
+                } else if (bound && !root) {
+                    bound = dropped(name);
+                }
             }
         } else if (name == "color" && !path) {
             if (output.kind == SceneNode::Kind::text) {
@@ -1467,7 +1494,9 @@ bool materialize_node(
             ? source[@"value"] : nil;
         input_placeholder = [source[@"placeholder"] isKindOfClass:NSString.class]
             ? source[@"placeholder"] : nil;
-        if (primitive_version == nil || primitive_version.integerValue != 1 ||
+        if (primitive_version == nil ||
+            CFGetTypeID((__bridge CFTypeRef)primitive_version) == CFBooleanGetTypeID() ||
+            primitive_version.doubleValue != 1.0 ||
             input_value == nil ||
             [input_value lengthOfBytesUsingEncoding:NSUTF8StringEncoding] >
                 kMaximumTextInputBytes ||
@@ -1496,16 +1525,17 @@ bool materialize_node(
                 ? selection[@"start"] : nil;
             NSNumber* end = [selection[@"end"] isKindOfClass:NSNumber.class]
                 ? selection[@"end"] : nil;
-            if (start == nil || end == nil || start.doubleValue != start.unsignedLongLongValue ||
-                end.doubleValue != end.unsignedLongLongValue ||
-                start.unsignedLongLongValue > end.unsignedLongLongValue ||
-                end.unsignedLongLongValue > input_value.length) {
+            std::uint64_t first = 0;
+            std::uint64_t last = 0;
+            const std::uint64_t limit = static_cast<std::uint64_t>(input_value.length) + 1U;
+            if (!protocol_index(start, limit, first) || !protocol_index(end, limit, last) ||
+                first > last) {
                 set_error(error,
                     "text-input selection must be an ordered UTF-16 range within value");
                 return false;
             }
-            selection_start = start.unsignedIntegerValue;
-            selection_end = end.unsignedIntegerValue;
+            selection_start = static_cast<NSUInteger>(first);
+            selection_end = static_cast<NSUInteger>(last);
         }
     }
     output.id = identity;
@@ -1912,9 +1942,10 @@ bool materialize_rendered_tree(
     // that names none is written for the current version. The scene is built at
     // that version and refused when it carries a field the version lacks.
     if (id raw_version = envelope[@"sceneVersion"]; raw_version != nil) {
-        float version = 0.0F;
-        if (!finite_number(raw_version, version) || version != std::floor(version) ||
-            version < 0.0F || version > 4294967295.0F ||
+        std::uint64_t version = 0;
+        if (!protocol_index(raw_version,
+                            static_cast<std::uint64_t>(vellum::graphics::kSceneVersion) + 1U,
+                            version) ||
             !vellum::graphics::scene_version_is_supported(static_cast<std::uint32_t>(version))) {
             const std::string message =
                 "sceneVersion must name a scene version this renderer supports, from " +
@@ -1957,9 +1988,7 @@ bool materialize_rendered_tree(
         }
         return false;
     }
-    if (context.root_background_token && candidate.scene.root.fill_token) {
-        candidate.scene.background_token = candidate.scene.root.fill_token;
-    }
+    candidate.scene.background_token = context.root_background_token;
     if (vellum::graphics::find_scene_version_mismatch(candidate.scene)) {
         auto loss = vellum::graphics::scene_loss_diagnostics(candidate.scene);
         loss.resize(std::min<std::size_t>(loss.size(), 1U));
