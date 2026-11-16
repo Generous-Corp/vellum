@@ -1,5 +1,6 @@
 #include <vellum/graphics/paint_command.hpp>
 
+#include <vellum/graphics/animation.hpp>
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/token_receipts.hpp>
 
@@ -8,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <unordered_map>
 
 namespace vellum::graphics {
 namespace {
@@ -454,6 +456,18 @@ std::vector<PaintCommand> make_paint_commands(const Scene& scene) {
     return make_paint_commands(scene, nullptr);
 }
 
+namespace {
+
+void pair_nodes(const SceneNode& authored, const SceneNode& evaluated,
+                std::unordered_map<const SceneNode*, const SceneNode*>& pairs) {
+    pairs.emplace(&evaluated, &authored);
+    for (std::size_t index = 0; index < authored.children.size(); ++index) {
+        pair_nodes(authored.children[index], evaluated.children[index], pairs);
+    }
+}
+
+}  // namespace
+
 std::vector<PaintCommand> make_paint_commands(
     const Scene& scene, std::vector<PaintCommandRange>* ranges) {
     std::vector<PaintCommand> output;
@@ -462,6 +476,17 @@ std::vector<PaintCommand> make_paint_commands(
     if (!scene_fields_match_version(scene)) return output;
     if (scene.root.mask) return output;
     if (find_invalid_token_reference(scene)) return output;
+    if (scene_has_tracks(scene)) {
+        const Scene evaluated = evaluate_tracks(scene);
+        append_node(ImageAssetIndex(evaluated), evaluated.root, 0.0F, 0.0F, Affine2D{}, output,
+                    ranges);
+        if (ranges != nullptr) {
+            std::unordered_map<const SceneNode*, const SceneNode*> pairs;
+            pair_nodes(scene.root, evaluated.root, pairs);
+            for (auto& range : *ranges) range.node = pairs.at(range.node);
+        }
+        return output;
+    }
     append_node(ImageAssetIndex(scene), scene.root, 0.0F, 0.0F, Affine2D{}, output, ranges);
     return output;
 }
@@ -561,6 +586,7 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
             break;
         case 8U: message = "cannot carry gradient vocabulary at " + node.id; break;
         case 10U: message = "cannot carry the effects at " + node.id; break;
+        case 11U: message = "cannot carry the animation tracks at " + node.id; break;
         default:
             message = "cannot carry a field of version " + std::to_string(mismatch->introduced) +
                       " at " + node.id;

@@ -245,6 +245,11 @@ if(VELLUM_BUILD_TESTS)
             graphics/tests/token_receipts_test.cpp)
         target_link_libraries(vellum-token-receipts-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.token-receipts COMMAND vellum-token-receipts-test)
+        add_executable(vellum-animation-test
+            graphics/tests/animation_test.cpp)
+        target_include_directories(vellum-animation-test PRIVATE graphics/src)
+        target_link_libraries(vellum-animation-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.animation COMMAND vellum-animation-test)
 
         add_executable(vellum-effect-test
             graphics/tests/effect_test.cpp)

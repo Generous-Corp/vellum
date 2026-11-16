@@ -1,0 +1,58 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-15T21:14:29Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-30ed0039554934581412b575eefbbbcc9392fd31",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "graphics/src/animation.cpp",
+    "graphics/tests/animation_test.cpp",
+    "packages/vellum-design-ir/schema/design-ir-v1.schema.json",
+    "packages/vellum-design-ir/src/validate.js",
+    "packages/vellum-design-ir/test/animation.test.js",
+    "packages/vellum-ui/src/design.js",
+    "packages/vellum-ui/test/design.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "ad2e757b0a975c28a0f0bfc9d22496684b9a48c0",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "6268d03ee430bcab5eb075ddaa4cca46465ccb44",
+    "to_commit": "30ed0039554934581412b575eefbbbcc9392fd31"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-design-ir/schema/design-ir-v1.schema.json",
+    "packages/vellum-design-ir/src/validate.js",
+    "packages/vellum-design-ir/test/animation.test.js"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "30ed0039554934581412b575eefbbbcc9392fd31",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

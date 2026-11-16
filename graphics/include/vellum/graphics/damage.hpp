@@ -243,7 +243,10 @@ public:
 /// subtree at zero opacity paints nothing. A non-finite transform, opacity or
 /// radius damages the whole frame; `SkiaDawnSurface::render` refuses such a
 /// scene. A changed frame size, background or `scene_version` damages the
-/// whole frame.
+/// whole frame. Each scene's tracks are evaluated at its clock first (see
+/// `evaluate_tracks`), so the diff sees the values drawn: a node whose
+/// evaluated values are unchanged, such as one whose tracks are at rest,
+/// damages nothing, and a clock change alone damages nothing else.
 ///
 /// Inside a node with effects, every member's damage grows by the sum of the
 /// enclosing chains' radii (in frame space, unscaled by transforms) and is
@@ -261,7 +264,7 @@ public:
 /// damage model understands. Partial redraw is enabled only for scene
 /// versions the damage model understands; a newer scene repaints fully until
 /// the damage model learns its fields and this constant is raised.
-inline constexpr std::uint32_t kDamageModelSceneVersion = 10U;
+inline constexpr std::uint32_t kDamageModelSceneVersion = 11U;
 
 /// Whether a scene of `version` may be redrawn from its damage alone: a
 /// version from `kMinSupportedSceneVersion` to `kDamageModelSceneVersion`.
