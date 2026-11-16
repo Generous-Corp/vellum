@@ -146,3 +146,22 @@ test('hidden descendants are held to the vector version gate', () => {
         }
     }
 });
+
+test('a vector node binds no token receipt to a background colour the native renderer drops', () => {
+    const document = (paint) => ({
+        schemaVersion: 6,
+        tokens: { 'c.fill': { $type: 'color', $value: '#14b8a6' } },
+        root: { id: 'root', kind: 'view', properties: { layout: { width: 40, height: 40 } }, children: [
+            { id: 'v', kind: 'vector', children: [], properties: { layout: { x: 0, y: 0, width: 20, height: 20 },
+                paint, vector: { asset: { contentHash: `sha256:${'a'.repeat(64)}`, viewBox: [0, 0, 20, 20],
+                    ops: [{ op: 'path', d: 'M0 0H20V20Z', fill: '#00ff00' }] } } } }] },
+    });
+    const render = (paint) => JSON.parse(mount(createApp({
+        render: () => materializeDesign(document(paint), { viewport: { width: 40, height: 40 } }),
+    })).renderJSON()).tree.children[0];
+    for (const backgroundColor of ['{c.fill}', '#14b8a6']) {
+        const node = render({ backgroundColor });
+        assert.equal(node.style.backgroundColor, '#14b8a6');
+        assert.equal(node.tokenRefs, undefined, backgroundColor);
+    }
+});
