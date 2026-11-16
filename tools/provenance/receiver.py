@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
@@ -18,6 +19,14 @@ EVENT_PATH_RE = re.compile(
     r"\.github/vellum-change-events/[A-Za-z0-9][A-Za-z0-9._-]{1,160}\.json"
 )
 EVENT_PREFIX = ".github/vellum-change-events/"
+
+# A push to main opens a coalescing evidence PR only when one of these holds.
+# The pending threshold sits below receiver-policy.json's pending_limit (20),
+# the budget a push to main is judged against, so a coalesce lands before the
+# ledger can exhaust it. The lag bound keeps an idle ledger from drifting for
+# days when neither trigger fires. A dispatched replay always coalesces.
+COALESCE_PENDING_THRESHOLD = 15
+COALESCE_MAX_LAG_MINUTES = 720
 
 
 class ReceiverError(RuntimeError):
@@ -310,9 +319,84 @@ def vellum_lag_started_at(vellum_repo: Path, cursor: str, vellum_main: str) -> s
     return None
 
 
+def pending_on_main(root: Path) -> int:
+    """Pending observations committed on main, whether or not a report counts them yet.
+
+    Pull requests land their own events and the report only moves with the
+    cursor, so the report undercounts between coalescing PRs.
+    """
+    sys.path.append(str(Path(__file__).resolve().parent))
+    import observatory  # noqa: E402
+
+    return observatory.pending_event_count(root, None, observatory.load_events(root), "all")
+
+
+def release_changes(vellum_repo: Path, cursor: str, main: str) -> list[str]:
+    """Release-path files, or the project version, that changed past the cursor.
+
+    release-tag.yml tags only an observatory reconcile whose cursor covers the
+    version bump, and starts a dry run only when a reconcile covers a
+    release-path file, so a tail holding either must be coalesced promptly.
+    """
+    scripts = str(Path(__file__).resolve().parents[2] / "scripts")
+    sys.path.append(scripts)
+    import release_dry_run  # noqa: E402
+    import release_request  # noqa: E402
+
+    changed = set(git(vellum_repo, "diff", "--name-only", "--no-renames", cursor, main).split())
+    found = sorted(changed & set(release_dry_run.RELEASE_PATHS))
+    if release_request.CMAKELISTS in changed:
+        def version(commit: str) -> str | None:
+            try:
+                text = git(vellum_repo, "show", f"{commit}:{release_request.CMAKELISTS}")
+                return release_request.project_version(text)
+            except Exception:  # noqa: BLE001  (unreadable means no proven bump)
+                return None
+
+        if version(cursor) != version(main):
+            found.append("project version")
+    return found
+
+
+def coalesce_decision(
+    *, pending: int, release: list[str], lag_minutes: float,
+    threshold: int = COALESCE_PENDING_THRESHOLD,
+    max_lag_minutes: int = COALESCE_MAX_LAG_MINUTES,
+) -> tuple[bool, str]:
+    """Whether a push to main that left the Vellum cursor behind opens a coalescing PR."""
+    if release:
+        return True, "release change past the cursor: " + ", ".join(release)
+    if pending >= threshold:
+        return True, f"pending {pending} is at or above the threshold {threshold}"
+    if lag_minutes >= max_lag_minutes:
+        return True, f"cursor lag {lag_minutes:.0f} min reached the bound {max_lag_minutes} min"
+    return False, (
+        f"deferred: pending {pending} is below {threshold}, no release change, "
+        f"cursor lag {lag_minutes:.0f} min is under {max_lag_minutes} min"
+    )
+
+
+def vellum_coalesce_decision(
+    root: Path, vellum_repo: Path, vellum_main: str, *, now: datetime | None = None
+) -> tuple[bool, str, int]:
+    """The coalesce decision for a lagging Vellum cursor, with the pending count it used."""
+    cursor = load_vellum_cursor(root)
+    started = vellum_lag_started_at(vellum_repo, cursor, vellum_main)
+    clock = now or datetime.now(timezone.utc)
+    lag = 0.0
+    if started is not None:
+        lag = (clock - datetime.fromisoformat(started.replace("Z", "+00:00"))).total_seconds() / 60
+    pending = pending_on_main(root)
+    coalesce, reason = coalesce_decision(
+        pending=pending, release=release_changes(vellum_repo, cursor, vellum_main), lag_minutes=lag
+    )
+    return coalesce, reason, pending
+
+
 def plan(
     *, root: Path, pulp_repo: Path, pulp_main: str, lower_bound: str,
     payload: object | None, vellum_repo: Path | None = None, vellum_main: str | None = None,
+    on_demand: bool = False, now: datetime | None = None,
 ) -> dict[str, object]:
     cursor = require_commit(pulp_repo, load_cursor(root), "committed cursor")
     main = require_commit(pulp_repo, pulp_main, "fresh Pulp main")
@@ -342,6 +426,17 @@ def plan(
     if vellum_repo is not None and vellum_main is not None:
         vellum_lagging = vellum_needs_reconcile(root, vellum_repo, vellum_main)
     status = "noop" if covered_lower and covered_latest and not vellum_lagging else "reconcile"
+    extra: dict[str, object] = {}
+    # Only a push that Pulp coverage does not need is deferrable: a dispatch,
+    # a replay and any Pulp-side gap still reconcile at once.
+    if on_demand and status == "reconcile" and covered_lower and covered_latest:
+        assert vellum_repo is not None and vellum_main is not None
+        coalesce, reason, pending = vellum_coalesce_decision(
+            root, vellum_repo, vellum_main, now=now
+        )
+        extra = {"pending_on_main": pending, "coalesce_reason": reason}
+        if not coalesce:
+            status = "deferred"
     return {
         "schema_version": 1,
         "status": status,
@@ -352,6 +447,7 @@ def plan(
         "oldest_uncovered_durable_event_commit": oldest_event,
         "reconcile_target": latest,
         "vellum_cursor_lagging": vellum_lagging,
+        **extra,
     }
 
 
@@ -364,10 +460,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--payload", type=Path)
     parser.add_argument("--vellum-repo", type=Path)
     parser.add_argument("--vellum-main")
+    parser.add_argument(
+        "--on-demand", action="store_true",
+        help="defer a push-triggered coalesce unless pending, a release change or lag calls for it",
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     if (args.vellum_repo is None) != (args.vellum_main is None):
         parser.error("--vellum-repo and --vellum-main are required together")
+    if args.on_demand and args.vellum_repo is None:
+        parser.error("--on-demand needs --vellum-repo and --vellum-main")
     try:
         payload = None
         if args.payload:
@@ -380,6 +482,7 @@ def main(argv: list[str] | None = None) -> int:
             payload=payload,
             vellum_repo=args.vellum_repo.resolve() if args.vellum_repo else None,
             vellum_main=args.vellum_main,
+            on_demand=args.on_demand,
         )
         rendered = json.dumps(result, indent=2, sort_keys=True) + "\n"
         if args.output:

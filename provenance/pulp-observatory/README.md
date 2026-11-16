@@ -196,8 +196,14 @@ report is compared without those not-yet-reconciled events. Tags keep the
 exact `reconciled` policy. After a landing the receiver
 (`pulp-observatory-receiver.yml`, `push: main`) reconciles `main`, advances the
 cursor and report, and opens the evidence PR on
-`automation/pulp-observatory-coalesced`; the watchdog bounds the lag with
-`cursor_lag_sla_minutes`. A pull request that still ends with its own
+`automation/pulp-observatory-coalesced`. A push opens that PR only when main
+carries at least `COALESCE_PENDING_THRESHOLD` pending observations, the tail
+changes a release-path file or the project version, or the oldest uncovered
+landing is `COALESCE_MAX_LAG_MINUTES` old (all in `tools/provenance/receiver.py`);
+otherwise the run logs the count and defers. A dispatched replay and any Pulp-side
+gap still reconcile at once, and the watchdog treats a deferred landing as
+covered, so it neither retries nor flags it. The PR title and body name the
+commits recorded, the cursor movement and the pending change. A pull request that still ends with its own
 reconcile commit remains valid: an exactly reconciled evidence tail passes
 under either policy.
 
