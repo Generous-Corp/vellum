@@ -69,6 +69,7 @@ SAFE_INSTALL_ID = re.compile(r"[0-9A-Za-z][0-9A-Za-z._-]{0,255}")
 MANAGED_LAUNCHER_MARKER = "# managed-by: vellum-install-core-v1"
 COMMANDS = {"import", "reimport", "build", "run", "test", "capture", "package"}
 NATIVE_COMMANDS = {"build", "run", "test", "capture", "package"}
+WEB_TARGET_COMMANDS = {"build", "run", "test", "capture", "package"}
 NODE_PROVENANCE_SCHEMA = "vellum.node-runtime-provenance.v1"
 AGENT_INSTRUCTION_FILES = {
     ".agents/skills/vellum-app-authoring/SKILL.md",
@@ -692,7 +693,7 @@ def derived_capabilities(
     commands["reimport"] = import_backend
     for name in NATIVE_COMMANDS:
         commands[name] = native_ready
-    for name in {"build", "run", "test", "package"}:
+    for name in WEB_TARGET_COMMANDS:
         commands[name] = commands[name] or web_ready
     return {
         "cmake_sdk": cmake_sdk,
@@ -752,7 +753,7 @@ def derived_capabilities(
                 "commands": {
                     name: (
                         web_ready
-                        if name in {"build", "run", "test", "package"}
+                        if name in WEB_TARGET_COMMANDS
                         else False
                     )
                     for name in NATIVE_COMMANDS

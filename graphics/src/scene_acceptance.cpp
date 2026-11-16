@@ -1,5 +1,6 @@
 #include <vellum/graphics/scene_acceptance.hpp>
 
+#include <vellum/graphics/animation.hpp>
 #include <vellum/graphics/effect.hpp>
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
@@ -71,6 +72,9 @@ struct EffectRefusal final {
     std::string_view code;
 };
 
+std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_node,
+                          std::optional<EffectRefusal>& effect);
+
 // Why `scene` is refused, or empty. `image_node` is set to the refused
 // image's id, and `image` to true, for an image or image-table refusal;
 // `effect` is set for an effect refusal.
@@ -97,6 +101,21 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node,
         return "the gradient at " + unsupported->id + " cannot be drawn exactly: " +
                gradient_reason;
     }
+    std::string reason;
+    std::optional<Scene> evaluated;
+    if (scene_has_tracks(scene)) {
+        if (!std::isfinite(scene.clock)) return "the scene clock is not finite";
+        if (const auto* animated = find_invalid_tracks(scene.root, reason); animated != nullptr) {
+            return "tracks of " + animated->id + " cannot be evaluated: " + reason;
+        }
+        evaluated.emplace(evaluate_tracks(scene));
+    }
+    return drawn_refusal(evaluated ? *evaluated : scene, image, image_node, effect);
+}
+
+// Why the scene as drawn, with its tracks evaluated, is refused, or empty.
+std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_node,
+                          std::optional<EffectRefusal>& effect) {
     if (const auto* invalid = find_non_finite_compositing(scene.root); invalid != nullptr) {
         return "scene node " + invalid->id +
                " has a non-finite transform, opacity, or corner radius";

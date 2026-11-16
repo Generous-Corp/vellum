@@ -45,6 +45,8 @@ def main() -> int:
         completed.returncode
         or "renderer=Skia Graphite backend=Metal fallback=false" not in completed.stdout
         or "text_inputs=1" not in completed.stdout
+        # The command step ran its handler and changed the rendered tree.
+        or completed.stdout.count("command=item.add invoked=1 changed=1\n") != 1
     ):
         raise SystemExit(
             "native unchanged Phase 3 scenario failed:\n"
@@ -72,6 +74,15 @@ def main() -> int:
         "wrong-throw": [
             "--expected-throw", "mapped-error", "vellum://wrong.tsx",
         ],
+        "command-without-handler": ["--command", "item.describe"],
+        "command-without-effect": ["--command", "item.noop"],
+    }
+    # Why each command control must be refused, so a host that fails for
+    # another reason does not pass for one of these.
+    expected_reasons = {
+        "unknown-command": "scenario command is not defined: missing.command",
+        "command-without-handler": "command has no handler: item.describe",
+        "command-without-effect": "scenario command had no rendered effect: item.noop",
     }
     for label, action in negative_controls.items():
         rejected = subprocess.run(
@@ -86,6 +97,14 @@ def main() -> int:
         if rejected.returncode == 0:
             raise SystemExit(
                 f"native Phase 3 negative control unexpectedly passed: {label}"
+            )
+        reason = expected_reasons.get(label)
+        if reason is not None and (
+            reason not in rejected.stderr or "invoked=1" in rejected.stdout
+        ):
+            raise SystemExit(
+                f"native Phase 3 negative control {label} failed for another reason:\n"
+                f"{rejected.stdout}\n{rejected.stderr}"
             )
     print(json.dumps({
         "schema": "vellum.native-scenario-proof.v1",

@@ -91,26 +91,26 @@ test('a schema version 1 document without materials stays legal', async () => {
 test('a material reference needs schema version 3', async () => {
     const design = normalizeImport(await source());
     const published = await schema();
-    for (const version of [1, 2, 3]) {
+    for (const version of [1, 2, 3, 4]) {
         const document = withMaterial(design, glass, version);
         const result = validateDesignIR(document);
-        assert.equal(result.valid, version === 3, `validator at version ${version}`);
+        assert.equal(result.valid, version >= 3, `validator at version ${version}`);
         if (version < 3) assert.ok(result.issues.some((entry) => entry.code === 'version'));
-        assert.equal(conforms(published, document), version === 3, `schema at version ${version}`);
+        assert.equal(conforms(published, document), version >= 3, `schema at version ${version}`);
     }
 });
 
-test('versions 1 to 3 are read and 0, 4 and 1.5 are refused', async () => {
+test('versions 1 to 4 are read and 0, 5 and 1.5 are refused', async () => {
     const design = normalizeImport(await source());
     const published = await schema();
-    for (const version of [1, 2, 3]) {
+    for (const version of [1, 2, 3, 4]) {
         const document = structuredClone(design);
         document.schemaVersion = version;
         assert.deepEqual(validateDesignIR(document), { issues: [], valid: true }, `${version}`);
         assert.equal(conforms(published, document), true, `schema at ${version}`);
         assert.equal(normalizeImport(await source(), { schemaVersion: version }).schemaVersion, version);
     }
-    for (const version of [0, 4, 1.5]) {
+    for (const version of [0, 5, 1.5]) {
         const document = structuredClone(design);
         document.schemaVersion = version;
         const result = validateDesignIR(document);

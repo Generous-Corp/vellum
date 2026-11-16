@@ -257,6 +257,48 @@ public:
         return true;
     }
 
+    bool invoke_command(std::string_view command, RenderedApplication& output,
+                        bool& changed, std::string* error) {
+        changed = false;
+        NSString* value = ns_string(command);
+        if (value == nil || value.length == 0U) {
+            set_error(error, "command must be non-empty valid UTF-8");
+            return false;
+        }
+        context_.exception = nil;
+        JSValue* method = [context_[@"__vellum"] valueForProperty:@"invokeCommand"];
+        if (method == nil || method.isUndefined || !method.isObject) {
+            set_error(error, "application bridge cannot invoke commands");
+            return false;
+        }
+        NSString* result = call_string(@"invokeCommand", @[value], error);
+        if (result == nil) return false;
+        NSError* parse_error = nil;
+        id envelope = [NSJSONSerialization
+            JSONObjectWithData:[result dataUsingEncoding:NSUTF8StringEncoding]
+                       options:0
+                         error:&parse_error];
+        if (parse_error != nil || ![envelope isKindOfClass:NSDictionary.class]) {
+            set_error(error, "command result is not a JSON object");
+            return false;
+        }
+        // The bridge names the command it ran and counts its handler's runs.
+        // A result that does neither did not run this command's handler.
+        id ran = envelope[@"command"];
+        id invocations = envelope[@"invocations"];
+        id changed_value = envelope[@"changed"];
+        if (![ran isKindOfClass:NSString.class] || ![ran isEqualToString:value] ||
+            ![invocations isKindOfClass:NSNumber.class] ||
+            [invocations integerValue] < 1 ||
+            ![changed_value isKindOfClass:NSNumber.class]) {
+            set_error(error, "command result does not record its handler running");
+            return false;
+        }
+        if (!materialize_rendered_tree(cpp_string(result), output, error)) return false;
+        changed = [changed_value boolValue];
+        return true;
+    }
+
     bool snapshot(std::string& output, std::string* error) {
         NSString* result = call_string(@"snapshotStateJSON", @[], error);
         if (result == nil) return false;
@@ -572,6 +614,12 @@ bool JsApplication::service_response_queue_empty(
 bool JsApplication::has_command(
     std::string_view command, bool& present, std::string* error) {
     @autoreleasepool { return impl_->has_command(command, present, error); }
+}
+
+bool JsApplication::invoke_command(
+    std::string_view command, RenderedApplication& output, bool& changed,
+    std::string* error) {
+    @autoreleasepool { return impl_->invoke_command(command, output, changed, error); }
 }
 
 bool JsApplication::snapshot_state(std::string& output_json, std::string* error) {
