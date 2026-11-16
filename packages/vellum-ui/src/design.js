@@ -168,6 +168,17 @@ function retainedGradient(context, refs, prefix, gradient) {
     return output;
 }
 
+const PATH_PAINT_FIELDS = new Set(['fill', 'stroke', 'borderRadius', ...PATH_STROKE_FIELDS]);
+const PATH_GEOMETRY_FIELDS = new Set(['d', 'fillRule']);
+
+function requirePathFields(node, name, value, allowed) {
+    for (const field of Object.keys(value)) {
+        if (!allowed.has(field) && value[field] !== undefined) {
+            throw new TypeError(`design path ${node.id} ${name}.${field} is not supported`);
+        }
+    }
+}
+
 function pathPaint(context, node, refs) {
     const properties = node.properties && typeof node.properties === 'object'
         ? node.properties : {};
@@ -175,6 +186,8 @@ function pathPaint(context, node, refs) {
         ? properties.paint : {};
     const geometry = properties.path && typeof properties.path === 'object'
         ? properties.path : {};
+    requirePathFields(node, 'paint', paint, PATH_PAINT_FIELDS);
+    requirePathFields(node, 'path', geometry, PATH_GEOMETRY_FIELDS);
     const output = { d: geometry.d };
     if (typeof geometry.fillRule === 'string') output.fillRule = geometry.fillRule;
     if (paint.fill !== undefined) {

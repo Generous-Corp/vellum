@@ -477,6 +477,25 @@ function receiptOf(tree, node, slot) {
     return tree.tokens[node.tokenRefs[slot]];
 }
 
+test('Design refuses path fields it would otherwise drop', () => {
+    const document = (paint, path = { d: 'M0 0 L20 10 L0 20 Z' }) => ({
+        tokens: { 'c.fill': { $type: 'color', $value: '#14b8a6' } },
+        root: {
+            id: 'root', kind: 'view', properties: { layout: { width: 40, height: 40 } },
+            children: [{
+                id: 'zig', kind: 'path', children: [],
+                properties: { path, paint: { fill: '{c.fill}', ...paint } },
+            }],
+        },
+    });
+    assert.doesNotThrow(() => materializeDesign(document({ strokeWidth: 2 })),
+        'control: a supported path paint field is accepted');
+    assert.throws(() => materializeDesign(document({ strokeOpacity: 0.5 })),
+        /design path zig paint\.strokeOpacity is not supported/);
+    assert.throws(() => materializeDesign(document({}, { d: 'M0 0', winding: 'x' })),
+        /design path zig path\.winding is not supported/);
+});
+
 test('Design produces a receipt for every token slot', () => {
     const tree = renderTree(slotDocument());
     const nodes = flatten(tree);

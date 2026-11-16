@@ -592,6 +592,15 @@ void duplicate_resolved_paths_are_refused() {
           "a duplicated path the table does not hold is refused too");
     check(apply_token_values(scene, receipts(kAccent, kCanvas, kLabel)).applied,
           "control: the same table without duplicates is applied");
+    auto non_finite = receipts(kAccent, kCanvas, kLabel);
+    non_finite[0].value.red = std::numeric_limits<float>::quiet_NaN();
+    const auto refused = apply_token_values(scene, non_finite);
+    check(!refused.applied && refused.non_finite_path == "main.color.accent" &&
+              changed_token_entries(original, scene).empty() &&
+              same_token_color(find(scene, "a0")->fill, kAccent),
+          "a non-finite resolved colour is refused and leaves the scene unchanged");
+    check(!find_invalid_token_reference(scene).has_value(),
+          "the scene stays sound after a refused non-finite switch");
 }
 
 void evaluated_lowering_does_not_recheck_receipts() {

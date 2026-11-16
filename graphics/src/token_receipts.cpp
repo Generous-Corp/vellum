@@ -252,6 +252,10 @@ TokenSwitch apply_token_values(Scene& scene, std::span<const TokenReceipt> resol
             result.duplicate_path = receipt.path;
             return result;
         }
+        if (!finite_color(receipt.value)) {
+            result.non_finite_path = receipt.path;
+            return result;
+        }
     }
     for (const auto& entry : scene.tokens) {
         if (!by_path.contains(entry.path)) {

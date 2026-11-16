@@ -853,6 +853,8 @@ bool token_receipts() {
     constexpr std::string_view kEmptyButtonOk = R"JSON(,{"type":"button","id":"empty-button",
         "tokenRefs":{"color":0},"events":{"press":"go"},
         "style":{"width":40,"height":20,"color":"#14b8a6"}})JSON";
+    constexpr std::string_view kEmptyButtonNoColor = R"JSON(,{"type":"button","id":"empty-button",
+        "tokenRefs":{"color":0},"events":{"press":"go"},"style":{"width":40,"height":20}})JSON";
     constexpr std::string_view kDroppedColor = R"JSON(,{"type":"view","id":"dropped",
         "tokenRefs":{"color":7},"style":{"width":4,"height":4,"color":"#14b8a6"}})JSON";
     constexpr std::string_view kDroppedStale = R"JSON(,{"type":"view","id":"dropped",
@@ -864,6 +866,15 @@ bool token_receipts() {
                 token_tree("#14b8a6", "#0f172a", kEmptyButtonOk), control, &control_error)) {
             std::cerr << "control: an empty button with a matching colour token was refused: "
                       << control_error << '\n';
+            return false;
+        }
+        const bool reported = std::any_of(
+            control.diagnostics.begin(), control.diagnostics.end(), [](const auto& item) {
+                return item.code == vellum::graphics::kStyleDroppedCode &&
+                       item.node_id == "empty-button" && item.property == "tokenRefs.color";
+            });
+        if (!reported) {
+            std::cerr << "an empty button's colour reference was dropped without a diagnostic\n";
             return false;
         }
     }
@@ -885,6 +896,8 @@ bool token_receipts() {
                     "disagrees with its resolved colour") &&
            rejected(token_tree("#14b8a6", "#0f172a", kEmptyButtonPast),
                     "must name an entry of the token table") &&
+           rejected(token_tree("#14b8a6", "#0f172a", kEmptyButtonNoColor),
+                    "names a colour the node does not have") &&
            rejected(token_tree("#14b8a6", "#0f172a", kDroppedColor),
                     "must name an entry of the token table") &&
            rejected(token_tree("#14b8a6", "#0f172a", kDroppedStale),

@@ -1931,9 +1931,11 @@ bool materialize_node(
         output.kind = vellum::graphics::SceneNode::Kind::group;
     }
 
-    if (!bind_token_refs(source, style, type_name,
-            [type isEqualToString:@"button"] || is_text_input, style_use.root, context, output,
-            error)) {
+    const bool generates_label =
+        ([type isEqualToString:@"button"] && !direct_text(source).empty()) ||
+        (is_text_input && (input_value.length > 0U || input_placeholder.length > 0U));
+    if (!bind_token_refs(source, style, type_name, generates_label, style_use.root, context,
+            output, error)) {
         return false;
     }
 
