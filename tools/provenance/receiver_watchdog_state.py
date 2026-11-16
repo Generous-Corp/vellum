@@ -33,9 +33,8 @@ def build_state(*, root: Path, pulp_repo: Path) -> dict[str, object]:
     vellum_covered = not receiver.vellum_needs_reconcile(root, root, vellum_main)
     if not vellum_covered:
         # A landing the receiver deliberately left uncoalesced is not a lag to
-        # retry: the receiver's own decision (pending, a release change, or the
-        # lag bound) says when the cursor must move.
-        coalesce, _, _ = receiver.vellum_coalesce_decision(root, root, vellum_main)
+        # retry: the receiver's own decision (a release change, or the lag bound) says when the cursor must move.
+        coalesce, _ = receiver.vellum_coalesce_decision(root, root, vellum_main)
         vellum_covered = not coalesce
     vellum_lag_started_at = receiver.vellum_lag_started_at(root, vellum_cursor, vellum_main)
     report = json.loads(

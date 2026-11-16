@@ -20,13 +20,13 @@ EVENT_PATH_RE = re.compile(
 )
 EVENT_PREFIX = ".github/vellum-change-events/"
 
-# A push to main opens a coalescing evidence PR only when one of these holds.
-# The pending threshold sits below receiver-policy.json's pending_limit (20),
-# the budget a push to main is judged against, so a coalesce lands before the
-# ledger can exhaust it. The lag bound keeps an idle ledger from drifting for
-# days when neither trigger fires. A dispatched replay always coalesces.
-COALESCE_PENDING_THRESHOLD = 15
-COALESCE_MAX_LAG_MINUTES = 720
+# A push to main opens a coalescing evidence PR only when the tail changes a
+# release path or an untagged version waits, or the oldest uncovered landing is
+# this old. Pending observations are deliberately not a trigger: a coalesce adds
+# events and clears none, and a pending one waits for a disposition, which the
+# deadline tracking issue asks for. A dispatched replay always coalesces. The
+# bound matches receiver-policy.json's cursor_lag_sla_minutes.
+COALESCE_MAX_LAG_MINUTES = 360
 
 
 class ReceiverError(RuntimeError):
@@ -319,18 +319,6 @@ def vellum_lag_started_at(vellum_repo: Path, cursor: str, vellum_main: str) -> s
     return None
 
 
-def pending_on_main(root: Path) -> int:
-    """Pending observations committed on main, whether or not a report counts them yet.
-
-    Pull requests land their own events and the report only moves with the
-    cursor, so the report undercounts between coalescing PRs.
-    """
-    sys.path.append(str(Path(__file__).resolve().parent))
-    import observatory  # noqa: E402
-
-    return observatory.pending_event_count(root, None, observatory.load_events(root), "all")
-
-
 def release_changes(vellum_repo: Path, cursor: str, main: str) -> list[str]:
     """Why a release needs the cursor to move: a release-path file changed, or a version waits.
 
@@ -368,38 +356,31 @@ def release_changes(vellum_repo: Path, cursor: str, main: str) -> list[str]:
 
 
 def coalesce_decision(
-    *, pending: int, release: list[str], lag_minutes: float,
-    threshold: int = COALESCE_PENDING_THRESHOLD,
-    max_lag_minutes: int = COALESCE_MAX_LAG_MINUTES,
+    *, release: list[str], lag_minutes: float, max_lag_minutes: int = COALESCE_MAX_LAG_MINUTES,
 ) -> tuple[bool, str]:
     """Whether a push to main that left the Vellum cursor behind opens a coalescing PR."""
     if release:
         return True, "release change past the cursor: " + ", ".join(release)
-    if pending >= threshold:
-        return True, f"pending {pending} is at or above the threshold {threshold}"
     if lag_minutes >= max_lag_minutes:
         return True, f"cursor lag {lag_minutes:.0f} min reached the bound {max_lag_minutes} min"
     return False, (
-        f"deferred: pending {pending} is below {threshold}, no release change, "
-        f"cursor lag {lag_minutes:.0f} min is under {max_lag_minutes} min"
+        f"deferred: no release change and cursor lag {lag_minutes:.0f} min is under {max_lag_minutes} min"
     )
 
 
 def vellum_coalesce_decision(
     root: Path, vellum_repo: Path, vellum_main: str, *, now: datetime | None = None
-) -> tuple[bool, str, int]:
-    """The coalesce decision for a lagging Vellum cursor, with the pending count it used."""
+) -> tuple[bool, str]:
+    """The coalesce decision for a lagging Vellum cursor."""
     cursor = load_vellum_cursor(root)
     started = vellum_lag_started_at(vellum_repo, cursor, vellum_main)
     clock = now or datetime.now(timezone.utc)
     lag = 0.0
     if started is not None:
         lag = (clock - datetime.fromisoformat(started.replace("Z", "+00:00"))).total_seconds() / 60
-    pending = pending_on_main(root)
-    coalesce, reason = coalesce_decision(
-        pending=pending, release=release_changes(vellum_repo, cursor, vellum_main), lag_minutes=lag
+    return coalesce_decision(
+        release=release_changes(vellum_repo, cursor, vellum_main), lag_minutes=lag
     )
-    return coalesce, reason, pending
 
 
 def plan(
@@ -440,10 +421,8 @@ def plan(
     # a replay and any Pulp-side gap still reconcile at once.
     if on_demand and status == "reconcile" and covered_lower and covered_latest:
         assert vellum_repo is not None and vellum_main is not None
-        coalesce, reason, pending = vellum_coalesce_decision(
-            root, vellum_repo, vellum_main, now=now
-        )
-        extra = {"pending_on_main": pending, "coalesce_reason": reason}
+        coalesce, reason = vellum_coalesce_decision(root, vellum_repo, vellum_main, now=now)
+        extra = {"coalesce_reason": reason}
         if not coalesce:
             status = "deferred"
     return {
@@ -471,7 +450,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--vellum-main")
     parser.add_argument(
         "--on-demand", action="store_true",
-        help="defer a push-triggered coalesce unless pending, a release change or lag calls for it",
+        help="defer a push-triggered coalesce unless a release change or the lag bound calls for it",
     )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)

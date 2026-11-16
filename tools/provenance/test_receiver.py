@@ -398,7 +398,7 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual(result["status"], "reconcile")
 
 
-    # A push to main coalesces only when pending, a release change or lag calls for it.
+    # A push to main coalesces only when a release change or the lag bound calls for it.
     EVENT = Path(__file__).resolve().parents[2] / (
         "provenance/pulp-observatory/events/pulp-00f6a82ef8ff23bbcd06152c3ff5977372330310.yaml"
     )
@@ -425,54 +425,41 @@ class ReceiverTests(unittest.TestCase):
             **overrides,
         )
 
-    def test_threshold_sits_at_the_watchdog_warning_below_the_limit(self) -> None:
-        policy = json.loads(
-            (Path(__file__).resolve().parents[2] / "provenance/pulp-observatory/receiver-policy.json")
-            .read_text(encoding="utf-8")
-        )
-        self.assertLess(receiver.COALESCE_PENDING_THRESHOLD, policy["pending_limit"])
-        self.assertEqual(receiver.COALESCE_PENDING_THRESHOLD, policy["pending_warning"])
-
-    def test_decision_below_at_and_above_the_threshold(self) -> None:
-        threshold = receiver.COALESCE_PENDING_THRESHOLD
-        below, _ = receiver.coalesce_decision(pending=threshold - 1, release=[], lag_minutes=0)
-        at, reason = receiver.coalesce_decision(pending=threshold, release=[], lag_minutes=0)
-        self.assertFalse(below)
-        self.assertTrue(at)
-        self.assertIn("threshold", reason)
-
-    def test_decision_for_a_release_change_ignores_the_count(self) -> None:
-        coalesce, reason = receiver.coalesce_decision(
-            pending=0, release=["scripts/release_request.py"], lag_minutes=0
-        )
+    def test_decision_for_a_release_change(self) -> None:
+        coalesce, reason = receiver.coalesce_decision(release=["scripts/release_request.py"], lag_minutes=0)
         self.assertTrue(coalesce)
         self.assertIn("release_request.py", reason)
 
     def test_decision_for_a_lag_past_the_bound(self) -> None:
         bound = receiver.COALESCE_MAX_LAG_MINUTES
-        self.assertFalse(receiver.coalesce_decision(pending=0, release=[], lag_minutes=bound - 1)[0])
-        self.assertTrue(receiver.coalesce_decision(pending=0, release=[], lag_minutes=bound)[0])
+        self.assertFalse(receiver.coalesce_decision(release=[], lag_minutes=bound - 1)[0])
+        self.assertTrue(receiver.coalesce_decision(release=[], lag_minutes=bound)[0])
 
-    def test_below_the_threshold_a_push_is_deferred_and_says_why(self) -> None:
+    def test_disposition_pending_events_never_trigger_a_coalesce(self) -> None:
+        # Pending observations wait for a disposition; a coalesce clears none.
         base = self._vellum_history()
         self.set_vellum_cursor(base)
-        self.write_pending_events(receiver.COALESCE_PENDING_THRESHOLD - 1)
+        self.write_pending_events(25)  # above the limit of 20
         main = self.land()
         result = self.plan_on_demand(main)
         self.assertEqual(result["status"], "deferred")
-        self.assertEqual(result["pending_on_main"], receiver.COALESCE_PENDING_THRESHOLD - 1)
         self.assertIn("deferred", result["coalesce_reason"])
+        self.assertNotIn("pending_on_main", result)
 
-    def test_main_own_pending_events_trigger_a_coalesce_at_the_threshold(self) -> None:
+    def test_a_landing_older_than_the_lag_bound_coalesces(self) -> None:
+        import datetime
         base = self._vellum_history()
         self.set_vellum_cursor(base)
-        self.write_pending_events(receiver.COALESCE_PENDING_THRESHOLD)
         main = self.land()
-        result = self.plan_on_demand(main)
-        self.assertEqual(result["status"], "reconcile")
-        self.assertEqual(result["pending_on_main"], receiver.COALESCE_PENDING_THRESHOLD)
+        started = datetime.datetime.fromisoformat(
+            receiver.vellum_lag_started_at(self.vellum, base, main).replace("Z", "+00:00")
+        )
+        late = started + datetime.timedelta(minutes=receiver.COALESCE_MAX_LAG_MINUTES)
+        early = started + datetime.timedelta(minutes=receiver.COALESCE_MAX_LAG_MINUTES - 1)
+        self.assertEqual(self.plan_on_demand(main, now=late)["status"], "reconcile")
+        self.assertEqual(self.plan_on_demand(main, now=early)["status"], "deferred")
 
-    def test_a_release_path_change_coalesces_with_no_pending(self) -> None:
+    def test_a_release_path_change_coalesces(self) -> None:
         base = self._vellum_history()
         self.set_vellum_cursor(base)
         main = self.land("scripts/release_request.py", "# release\n")

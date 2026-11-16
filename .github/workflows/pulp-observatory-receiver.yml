@@ -169,8 +169,7 @@ jobs:
             payload_args=(--payload "$PAYLOAD_PATH")
           fi
           # A landing on main alone does not open an evidence PR: it waits for
-          # pending observations to near the budget, a release-path change, or
-          # a bounded lag (tools/provenance/receiver.py). A dispatch, a replay
+          # a release-path change or a bounded lag (tools/provenance/receiver.py). A dispatch, a replay
           # and any Pulp-side gap still reconcile at once.
           if test "$GITHUB_EVENT_NAME" = push; then
             payload_args+=(--on-demand)
@@ -185,8 +184,7 @@ jobs:
             "${payload_args[@]}" \
             --output "$RUNNER_TEMP/receiver-plan.json"
           jq -r '"status=" + .status, "target=" + .reconcile_target,
-            "reason=" + (.coalesce_reason // ""),
-            "pending=" + ((.pending_on_main // "") | tostring)' \
+            "reason=" + (.coalesce_reason // "")' \
             "$RUNNER_TEMP/receiver-plan.json" >> "$GITHUB_OUTPUT"
 
       - name: Reconcile through the latest verified durable event head
@@ -352,7 +350,6 @@ jobs:
           SUMMARY_STATUS: ${{ steps.plan.outputs.status }}
           SUMMARY_LIVE: ${{ steps.coordinates.outputs.live }}
           SUMMARY_REASON: ${{ steps.plan.outputs.reason }}
-          SUMMARY_PENDING: ${{ steps.plan.outputs.pending }}
         run: |
           {
             echo '### Pulp observatory receiver'
@@ -361,6 +358,5 @@ jobs:
             echo "- supplied lower bound: ${SUMMARY_LOWER_BOUND:-unresolved}"
             echo "- coalesced target: ${SUMMARY_TARGET:-unresolved}"
             echo "- live control: ${SUMMARY_LIVE:-false}"
-            echo "- pending on main: ${SUMMARY_PENDING:-not counted}"
             echo "- coalesce decision: ${SUMMARY_REASON:-not applicable}"
           } >> "$GITHUB_STEP_SUMMARY"
