@@ -53,6 +53,13 @@ class Policy(unittest.TestCase):
                   f"          python3 -I {policy.BASE_JUDGE}\n")
 
     def setUp(self) -> None:
+        # Every job of the signing workflow is reviewed text; these tests judge
+        # the other rules, so each fixture's own steps count as reviewed.
+        reviewed = policy.run_body_problems
+        patcher = mock.patch.object(policy, "run_body_problems", lambda name, text, allowlist=None: reviewed(
+            name, text, allowlist_for({name: text}) if allowlist is None else allowlist))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.tmp = Path(tempfile.mkdtemp(prefix="release-policy-"))
         (self.tmp / ".github/workflows").mkdir(parents=True)
         (self.tmp / "provenance").mkdir()
@@ -1300,6 +1307,7 @@ class RunAllowlist(unittest.TestCase):
         self.assertEqual(covered, sorted([
             ("release-tag.yml", "select-release-commit"), ("release-tag.yml", "sign-release-tag"),
             ("release-tag.yml", "dry-run-gate"), ("release-tag.yml", "sign-dry-run-tag"),
+            ("release-tag.yml", "release-policy-check"), ("release-tag.yml", "dry-run-policy-check"),
             ("version-at-land.yml", "plan"), ("version-at-land.yml", "push")]))
         self.assertEqual(sorted(policy.RUN_ALLOWLIST), covered)
         self.assertNotIn("${{", "".join(step.get("run", "") for variants in policy.RUN_ALLOWLIST.values()
@@ -1467,6 +1475,81 @@ class RunAllowlist(unittest.TestCase):
                 self.assertEqual(policy.run_body_problems(policy.SIGNING_WORKFLOW, text,
                                                           allowlist_for({policy.SIGNING_WORKFLOW: text})), [])
 
+    def test_a_reviewed_job_never_changes_path_or_environment(self) -> None:
+        # The HOLD at d6b1e9d82: a venv appended to GITHUB_PATH before the mint
+        # and the signing step let any file it held shadow git, gh or ssh-keygen.
+        # Refused even with the changed step allowlisted.
+        sign = self.workflows[policy.SIGNING_WORKFLOW]
+        anchor = '          test "$tag" = "$SELECTED_TAG"\n'
+        for line in ('          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"\n',
+                     '          echo "BASH_ENV=$RUNNER_TEMP/x" >> "$GITHUB_ENV"\n',
+                     '          echo "::add-path::$RUNNER_TEMP/bin"\n',
+                     '          echo "::set-env name=PATH::$RUNNER_TEMP/bin"\n'):
+            with self.subTest(line=line):
+                text = sign.replace(anchor, anchor + line, 1)
+                problems = policy.run_body_problems(policy.SIGNING_WORKFLOW, text,
+                                                    allowlist_for({policy.SIGNING_WORKFLOW: text}))
+                self.assertTrue(any("never changes the PATH or environment" in p for p in problems), problems)
+        key = "          SELECTED_TAG: ${{ needs.select-release-commit.outputs.tag }}\n        run: |\n          set -euo pipefail\n          # Read the check"
+        text = sign.replace(key, "          ACTIONS_ALLOW_UNSECURE_COMMANDS: 'true'\n" + key, 1)
+        self.assertNotEqual(text, sign)
+        problems = policy.run_body_problems(policy.SIGNING_WORKFLOW, text, allowlist_for({policy.SIGNING_WORKFLOW: text}))
+        self.assertTrue(any("ACTIONS_ALLOW_UNSECURE_COMMANDS" in p for p in problems), problems)
+        # The positive control: no reviewed job of the real workflows names any of them.
+        for name, text in self.workflows.items():
+            self.assertEqual(policy.run_body_problems(name, text), [])
+
+    def test_the_policy_parser_never_shares_a_job_with_a_secret(self) -> None:
+        # The third-party YAML parser runs only in jobs that hold no secret and
+        # reach no credential, is installed by hash into a venv called by path,
+        # and the signing jobs wait for the jobs that run it.
+        parser_jobs = []
+        for name, text in self.workflows.items():
+            parsed = policy.parse_workflow(text)
+            for job, steps in parsed.jobs.items():
+                runs = "\n".join(step.run or "" for step in steps)
+                with self.subTest(workflow=name, job=job):
+                    self.assertNotIn("GITHUB_PATH", runs)
+                    for line in runs.splitlines():
+                        if "pip install" in line or "pip\" install" in line:
+                            self.assertIn("--require-hashes -r scripts/release_policy_requirements.txt",
+                                          runs[runs.index(line):runs.index(line) + len(line) + 120])
+                    if "release_policy_requirements.txt" in runs or "check_release_policy.py check" in runs \
+                            or "--from-base check" in runs:
+                        parser_jobs.append((name, job))
+                        self.assertFalse(policy.reaches_credential(parsed.job_text[job]))
+                        self.assertIsNone(policy.SIGNING_KEY.search(parsed.job_text[job]))
+                        self.assertNotIn("PyYAML==", runs)
+        self.assertEqual(sorted(parser_jobs), [("release-policy.yml", "release-policy"),
+                                               ("release-tag.yml", "dry-run-policy-check"),
+                                               ("release-tag.yml", "release-policy-check")])
+        parsed = policy.parse_workflow(self.workflows[policy.SIGNING_WORKFLOW])
+        self.assertEqual(parsed.job_context["sign-release-tag"]["job"]["needs"],
+                         ["select-release-commit", "release-policy-check"])
+        self.assertEqual(parsed.job_context["sign-dry-run-tag"]["job"]["needs"],
+                         ["dry-run-gate", "dry-run-policy-check"])
+        requirements = (ROOT / "scripts/release_policy_requirements.txt").read_text().replace("\\\n", " ")
+        packages = [line.split() for line in requirements.splitlines() if line.strip() and not line.startswith("#")]
+        self.assertEqual([words[0] for words in packages], ["PyYAML==6.0.3"])
+        hashes = packages[0][1:]
+        self.assertGreater(len(hashes), 1)
+        for word in hashes:
+            self.assertRegex(word, r"^--hash=sha256:[0-9a-f]{64}$")
+
+    def test_the_moved_policy_check_cannot_be_dropped(self) -> None:
+        # Every job of the signing workflow is reviewed, so the checks that now
+        # run apart from the key cannot be removed or weakened unseen.
+        sign = self.workflows[policy.SIGNING_WORKFLOW]
+        for old, new in {
+            '"$RUNNER_TEMP"/release-policy-venv/bin/python3 -I scripts/check_release_policy.py check\n\n  sign-release-tag:':
+                'true\n\n  sign-release-tag:',
+            "    needs: [select-release-commit, release-policy-check]": "    needs: select-release-commit",
+            '          test "$commit" = "$POLICY_COMMIT"\n': "",
+        }.items():
+            with self.subTest(new=new):
+                self.assertEqual(sign.count(old), 1, old)
+                self.assert_unsupported(policy.run_body_problems(policy.SIGNING_WORKFLOW, sign.replace(old, new)))
+
     def test_a_credential_job_runs_only_pinned_actions_in_place(self) -> None:
         for old, new in {
             "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1":
@@ -1517,9 +1600,12 @@ class RunAllowlist(unittest.TestCase):
         clean = key.replace("{run}", "git tag -s v1")
         self.assertEqual(policy.run_body_problems(policy.SIGNING_WORKFLOW, clean,
                                                   allowlist_for({policy.SIGNING_WORKFLOW: clean})), [])
+        # Every job of the signing workflow is reviewed, so the no-secret
+        # control is version-at-land's: there a job without one is not listed.
         plain = key.replace("          K: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}\n", "          K: x\n").replace(
             "{run}", "p'y'thon3 scripts/x.py")
-        self.assertEqual(policy.run_body_problems(policy.SIGNING_WORKFLOW, plain), [])
+        self.assertEqual(policy.run_body_problems(policy.VERSION_WORKFLOW, plain), [])
+        self.assert_unsupported(policy.run_body_problems(policy.SIGNING_WORKFLOW, plain))
 
     def test_the_signing_key_never_shares_a_step_with_a_github_credential(self) -> None:
         key = "          RELEASE_TAG_SIGNING_KEY: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}\n          TAG: ${{ steps.decision"

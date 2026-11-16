@@ -263,8 +263,16 @@ promotion attestation and prove full-matrix parity.
   Every release script runs as `python3 -I`, so no file in the checkout can shadow a standard-library module.
   `release-policy` enforces all of this, and it also refuses a repository Python file named like a
   standard-library module.
+- **The policy check's YAML parser never shares a job with a secret.** `check_release_policy.py` reads workflows with
+  PyYAML, so `release-tag.yml` runs it in `release-policy-check` and `dry-run-policy-check`, jobs that hold no secret
+  and mint no token; the signing jobs wait for them and never load the parser. Wherever PyYAML is installed (those
+  two jobs and `release-policy.yml`), it comes from `scripts/release_policy_requirements.txt` with
+  `pip --require-hashes` into a venv whose `python3` is called by path. Nothing goes on `GITHUB_PATH`, and no
+  reviewed job may name `GITHUB_PATH` or `GITHUB_ENV`, so no earlier step can change which `git`, `gh` or
+  `ssh-keygen` a later step runs.
 - **A job that can reach a GitHub token or the signing key runs only reviewed steps.** In the three release workflows, every job that
-  names `GH_TOKEN`, `GITHUB_TOKEN`, the App-token action, a token or any secret, the signing key included, runs exactly
+  names `GH_TOKEN`, `GITHUB_TOKEN`, the App-token action, a token or any secret, the signing key included, and every
+  job of `release-tag.yml`, runs exactly
   one of the step sequences `RUN_ALLOWLIST` in `scripts/check_release_policy.py` lists for it: every step in order,
   every key but `name` as written, preceded by the settings every step inherits (the workflow's and the job's `env`,
   `runs-on`, `permissions`, `environment` and every other key but `name`, `run-name`, `jobs` and `steps`), so an

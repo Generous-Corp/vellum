@@ -24,11 +24,12 @@ fails when:
   Python file is named like a standard-library module, so checked-out code
   cannot run with the signing key or an App token;
 - a job of a release workflow that can reach a GitHub credential or holds
-  the signing key runs a step sequence that matches none of its variants in RUN_ALLOWLIST, key for
+  the signing key, or any job of release-tag.yml, runs a step sequence that matches none of its variants in RUN_ALLOWLIST, key for
   key and in order, with the job's and workflow's settings (env, runs-on,
   permissions and every key but name and steps) as its first entry (an
   "unsupported run body"), has an expression in a run
-  body, uses an action not pinned to a commit, or runs elsewhere (container,
+  body, names GITHUB_PATH or GITHUB_ENV (which change what its later steps
+  run), uses an action not pinned to a commit, or runs elsewhere (container,
   services, a default working-directory). The check reads no shell: an exact, owner-reviewed
   list replaces analysis of what a body might run. Because the base branch's
   copy judges with the base's list, changing such a step takes two pull
@@ -134,6 +135,7 @@ POLICY_FILES = (
     "/scripts/release_cadence.py",
     "/scripts/release_dry_run.py",
     "/scripts/release_path_review.py",
+    "/scripts/release_policy_requirements.txt",
     "/scripts/release_request.py",
     "/scripts/retired_release_tags.py",
     "/scripts/run_ci_lane.py",
@@ -692,6 +694,10 @@ PINNED_ACTION = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}")
 # Job keys that would run the reviewed steps somewhere else.
 UNSUPPORTED_CREDENTIAL_JOB_KEYS = frozenset({"container", "services"})
 ACTIONS_TOKEN = "${{ github.token }}"
+# A step that writes these changes what every later step of its job runs: a
+# directory put on PATH can shadow git, gh or ssh-keygen while the key or a
+# token is held. No reviewed job names them, in a run body or as an env key.
+PATH_OR_ENV_WRITES = ("GITHUB_PATH", "GITHUB_ENV", "::add-path", "::set-env", "ACTIONS_ALLOW_UNSECURE_COMMANDS")
 ACTIONS_TOKEN_REFERENCE = re.compile(r"(?i)\bgithub\s*(?:\.\s*token\b|\[)")
 
 
@@ -702,18 +708,23 @@ def reaches_credential(text: str) -> bool:
                for expression in EXPRESSION.finditer(text))
 
 
-def reviewed_job(text: str) -> bool:
+def reviewed_job(text: str, workflow: str | None = None) -> bool:
     """A job RUN_ALLOWLIST must list: one that reaches a GitHub credential or
-    holds the signing key. Python run beside a secret is otherwise found only
-    by spelling (`p'y'thon3` runs python3), so those jobs are reviewed text too."""
-    return reaches_credential(text) or SIGNING_KEY.search(text) is not None
+    holds the signing key, and every job of the signing workflow. Python run
+    beside a secret is otherwise found only by spelling (`p'y'thon3` runs
+    python3), so those jobs are reviewed text too. The signing workflow's jobs
+    without a secret include the ones that run this check with its third-party
+    parser, kept out of the jobs that hold the key; they stay reviewed so the
+    check cannot be dropped from them unseen."""
+    return (workflow == SIGNING_WORKFLOW or reaches_credential(text)
+            or SIGNING_KEY.search(text) is not None)
 
 
 def allowlist_entries(name: str, workflow: str) -> dict[str, list[dict]]:
     """Each credential-holding job's context and steps, in order: the variant RUN_ALLOWLIST would list for it."""
     parsed = parse_workflow(workflow)
     return {job: [parsed.job_context[job], *(step.fields for step in steps)]
-            for job, steps in parsed.jobs.items() if reviewed_job(parsed.job_text[job])}
+            for job, steps in parsed.jobs.items() if reviewed_job(parsed.job_text[job], name)}
 
 
 def _body(text: str) -> str:
@@ -843,7 +854,7 @@ set -euo pipefail
 printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"'''),
         },
     ]],
-    ('release-tag.yml', 'sign-release-tag'): [[
+    ('release-tag.yml', 'release-policy-check'): [[
         {
             'workflow': {
                 'on': {
@@ -876,6 +887,67 @@ printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"'''),
                 'needs': 'select-release-commit',
                 'if': "needs.select-release-commit.outputs.tag != ''",
                 'runs-on': 'ubuntu-latest',
+                'permissions': {
+                    'contents': 'read',
+                },
+            },
+        },
+        {
+            'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+            'with': {
+                'ref': '${{ github.sha }}',
+                'persist-credentials': 'false',
+            },
+        },
+        {
+            'run': _body(r'''
+set -euo pipefail
+python3 -I -m venv "$RUNNER_TEMP/release-policy-venv"
+"$RUNNER_TEMP"/release-policy-venv/bin/python3 -I -m pip install --disable-pip-version-check \
+  --only-binary=:all: --require-hashes -r scripts/release_policy_requirements.txt'''),
+        },
+        {
+            'run': _body(r'''
+set -euo pipefail
+"$RUNNER_TEMP"/release-policy-venv/bin/python3 -I scripts/check_release_policy.py check'''),
+        },
+    ]],
+    ('release-tag.yml', 'sign-release-tag'): [[
+        {
+            'workflow': {
+                'on': {
+                    'push': {
+                        'branches': [
+                            'main',
+                        ],
+                        'paths': [
+                            'provenance/pulp-observatory/cursor.json',
+                        ],
+                    },
+                    'schedule': [
+                        {
+                            'cron': '17 9 * * 1',
+                        },
+                    ],
+                    'workflow_dispatch': '',
+                },
+                'permissions': {
+                    'contents': 'read',
+                    'checks': 'read',
+                    'statuses': 'read',
+                },
+                'concurrency': {
+                    'group': "${{ github.event_name == 'push' && 'release-tag' || 'release-dry-run' }}",
+                    'cancel-in-progress': 'false',
+                },
+            },
+            'job': {
+                'needs': [
+                    'select-release-commit',
+                    'release-policy-check',
+                ],
+                'if': "needs.select-release-commit.outputs.tag != ''",
+                'runs-on': 'ubuntu-latest',
                 'environment': 'release',
             },
         },
@@ -886,13 +958,6 @@ printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"'''),
                 'fetch-depth': '0',
                 'persist-credentials': 'false',
             },
-        },
-        {
-            'run': _body(r'''
-python3 -I -m venv "$RUNNER_TEMP/release-policy-venv"
-. "$RUNNER_TEMP/release-policy-venv/bin/activate"
-python3 -I -m pip install --disable-pip-version-check --only-binary=:all: PyYAML==6.0.3
-echo "$RUNNER_TEMP/release-policy-venv/bin" >> "$GITHUB_PATH"'''),
         },
         {
             'id': 'app-token',
@@ -1026,7 +1091,6 @@ tag="$(python3 -I scripts/release_request.py check --commit "$GITHUB_SHA" --remo
   --immutable-releases "$RUNNER_TEMP/immutable-releases.json" \
   --immutable-read-at "$(cat "$RUNNER_TEMP/immutable-releases-read-at.txt")")"
 test "$tag" = "$SELECTED_TAG"
-python3 -I scripts/check_release_policy.py check
 python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
 version="${tag#v}"
 python3 -I scripts/release_request.py freeze --tag "$tag" > "$RUNNER_TEMP/freeze.json"
@@ -1174,7 +1238,7 @@ printf 'run=%s\n' "$run" >> "$GITHUB_OUTPUT"
 echo "dry run: $run ($(head -n 1 "$RUNNER_TEMP/gate-reason.txt"))" >> "$GITHUB_STEP_SUMMARY"'''),
         },
     ]],
-    ('release-tag.yml', 'sign-dry-run-tag'): [[
+    ('release-tag.yml', 'dry-run-policy-check'): [[
         {
             'workflow': {
                 'on': {
@@ -1207,7 +1271,12 @@ echo "dry run: $run ($(head -n 1 "$RUNNER_TEMP/gate-reason.txt"))" >> "$GITHUB_S
                 'needs': 'dry-run-gate',
                 'if': "needs.dry-run-gate.outputs.run == 'true'",
                 'runs-on': 'ubuntu-latest',
-                'environment': 'release',
+                'permissions': {
+                    'contents': 'read',
+                },
+                'outputs': {
+                    'commit': '${{ steps.check.outputs.commit }}',
+                },
             },
         },
         {
@@ -1220,13 +1289,77 @@ echo "dry run: $run ($(head -n 1 "$RUNNER_TEMP/gate-reason.txt"))" >> "$GITHUB_S
         },
         {
             'run': _body(r'''
+set -euo pipefail
 python3 -I -m venv "$RUNNER_TEMP/release-policy-venv"
-. "$RUNNER_TEMP/release-policy-venv/bin/activate"
-python3 -I -m pip install --disable-pip-version-check --only-binary=:all: PyYAML==6.0.3
-echo "$RUNNER_TEMP/release-policy-venv/bin" >> "$GITHUB_PATH"'''),
+"$RUNNER_TEMP"/release-policy-venv/bin/python3 -I -m pip install --disable-pip-version-check \
+  --only-binary=:all: --require-hashes -r scripts/release_policy_requirements.txt'''),
+        },
+        {
+            'id': 'check',
+            'run': _body(r'''
+set -euo pipefail
+test "$GITHUB_REF" = refs/heads/main
+python3 -I scripts/release_dry_run.py plan --head "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+  --attempt "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/dry-run.txt"
+commit="$(sed -n 's/^commit=//p' "$RUNNER_TEMP/dry-run.txt")"
+[[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+git checkout --quiet --detach "$commit"
+"$RUNNER_TEMP"/release-policy-venv/bin/python3 -I scripts/check_release_policy.py check
+printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"'''),
+        },
+    ]],
+    ('release-tag.yml', 'sign-dry-run-tag'): [[
+        {
+            'workflow': {
+                'on': {
+                    'push': {
+                        'branches': [
+                            'main',
+                        ],
+                        'paths': [
+                            'provenance/pulp-observatory/cursor.json',
+                        ],
+                    },
+                    'schedule': [
+                        {
+                            'cron': '17 9 * * 1',
+                        },
+                    ],
+                    'workflow_dispatch': '',
+                },
+                'permissions': {
+                    'contents': 'read',
+                    'checks': 'read',
+                    'statuses': 'read',
+                },
+                'concurrency': {
+                    'group': "${{ github.event_name == 'push' && 'release-tag' || 'release-dry-run' }}",
+                    'cancel-in-progress': 'false',
+                },
+            },
+            'job': {
+                'needs': [
+                    'dry-run-gate',
+                    'dry-run-policy-check',
+                ],
+                'if': "needs.dry-run-gate.outputs.run == 'true'",
+                'runs-on': 'ubuntu-latest',
+                'environment': 'release',
+            },
+        },
+        {
+            'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+            'with': {
+                'ref': '${{ github.sha }}',
+                'fetch-depth': '0',
+                'persist-credentials': 'false',
+            },
         },
         {
             'id': 'dry-run',
+            'env': {
+                'POLICY_COMMIT': '${{ needs.dry-run-policy-check.outputs.commit }}',
+            },
             'run': _body(r'''
 set -euo pipefail
 test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
@@ -1240,8 +1373,10 @@ identity="$(sed -n 's/^identity=//p' "$RUNNER_TEMP/dry-run.txt")"
 [[ "$tag" =~ ^dry-run/(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))/[1-9][0-9]*-[1-9][0-9]*$ ]]
 test "$identity" = "${BASH_REMATCH[1]}"
 # The tagged commit's own release scripts decide, as on a release.
+# release-policy-check judged this commit with the YAML parser; it must
+# be the commit this job plans.
+test "$commit" = "$POLICY_COMMIT"
 git checkout --quiet --detach "$commit"
-python3 -I scripts/check_release_policy.py check
 python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
 # The signed message wraps v<version>'s attestation under its own
 # schema with the dry-run tag's name, so it can never pass for a release.
@@ -1608,7 +1743,7 @@ def run_body_problems(name: str, workflow: str, allowlist: dict | None = None) -
             if any(CREDENTIAL_NAME.fullmatch(key) for key in scope) or reaches_credential(
                     SIGNING_KEY.sub("", step.text)):
                 found.append(f"{name}: {step.title} holds the signing key with a GitHub credential in scope")
-        if not reviewed_job(parsed.job_text[job]):
+        if not reviewed_job(parsed.job_text[job], name):
             continue
         if parsed.directory_defaults & {"workflow", f"job {job}"}:
             found.append(f"{name}: job {job} is reviewed, so neither it nor the workflow may set a default "
@@ -1639,6 +1774,10 @@ def run_body_problems(name: str, workflow: str, allowlist: dict | None = None) -
                 found.append(f"{name}: {step.title} uses {step.uses!r}, not an action pinned to a commit")
             if step.run is not None and "${{" in step.run:
                 found.append(f"{name}: {step.title} has an expression in its run body; pass it through env")
+            for word in PATH_OR_ENV_WRITES:
+                if word in (step.run or "") or word in "\n".join([*(step.env or {}), *(step.inherited or {})]):
+                    found.append(f"{name}: {step.title} names {word}; a reviewed job never changes the PATH or "
+                                 f"environment of its later steps")
             scope = {**(step.inherited or {}), **(step.env or {})}
             if "GITHUB_TOKEN" in scope:
                 found.append(f"{name}: {step.title} sets GITHUB_TOKEN; pass a token as GH_TOKEN")
