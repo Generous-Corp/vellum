@@ -614,6 +614,104 @@ inline constexpr std::array<BlendMode, 29> kAllBlendModes{
     return std::nullopt;
 }
 
+/// How a keyframe eases toward the next one.
+enum class EasingKind : std::uint8_t {
+    /// Progress equals elapsed time.
+    linear,
+    /// CSS `cubic-bezier(x1, y1, x2, y2)`; both x values lie in [0, 1].
+    cubic_bezier,
+    /// CSS `steps(steps, step_position)`.
+    steps,
+    /// A damped spring released from rest at the keyframe's value toward the
+    /// next keyframe's value, run in seconds of the host clock rather than
+    /// stretched over the segment. It is exactly at the next value from
+    /// `spring_settle_time` on, and the next keyframe must come no sooner.
+    spring,
+};
+
+/// Where `steps` easing jumps, as CSS `jump-start`, `jump-end`, `jump-none`
+/// and `jump-both`.
+enum class StepPosition : std::uint8_t {
+    jump_start,
+    jump_end,
+    jump_none,
+    jump_both,
+};
+
+struct Easing final {
+    EasingKind kind = EasingKind::linear;
+    float x1 = 0.0F;
+    float y1 = 0.0F;
+    float x2 = 1.0F;
+    float y2 = 1.0F;
+    /// At least 1, or at least 2 for `jump_none`.
+    std::uint32_t steps = 1U;
+    StepPosition step_position = StepPosition::jump_end;
+    /// Spring constants: stiffness, damping and mass are positive, and
+    /// `initial_velocity` is in progress per second, so 1 is the whole
+    /// distance per second.
+    float stiffness = 100.0F;
+    float damping = 10.0F;
+    float mass = 1.0F;
+    float initial_velocity = 0.0F;
+};
+
+/// What a track animates on its node.
+enum class AnimatedProperty : std::uint8_t {
+    /// `SceneNode::opacity`.
+    opacity,
+    /// The animated transform's channels. Together they form translate,
+    /// then rotate (degrees, clockwise on screen), then scale, applied about
+    /// the node's origin before the node's own `transform`. A channel without
+    /// a track keeps its identity value.
+    translate_x,
+    translate_y,
+    scale_x,
+    scale_y,
+    rotation_degrees,
+    /// `SceneNode::fill`.
+    fill,
+    /// The stroke colour of a `path` node.
+    stroke_color,
+    /// The colour of `box_shadows[index]`.
+    shadow_color,
+    /// The colour of `fill_gradients[index].stops[stop]`.
+    gradient_stop_color,
+    /// The colour of `text_runs[index]`.
+    text_run_color,
+};
+
+[[nodiscard]] constexpr bool is_color_property(AnimatedProperty property) noexcept {
+    return property == AnimatedProperty::fill || property == AnimatedProperty::stroke_color ||
+           property == AnimatedProperty::shadow_color ||
+           property == AnimatedProperty::gradient_stop_color ||
+           property == AnimatedProperty::text_run_color;
+}
+
+/// One keyframe of a track. `time` is in seconds of the host clock the caller
+/// passes as `Scene::clock`. A scalar property reads `value`, a colour
+/// property reads `color` (straight alpha). `easing` shapes the segment from
+/// this keyframe to the next; the last keyframe's easing is unused.
+struct AnimationKeyframe final {
+    double time = 0.0;
+    float value = 0.0F;
+    Color color{};
+    Easing easing{};
+};
+
+/// A keyframed animation of one property of its node. Keyframe times are
+/// finite and strictly increasing. Before the first keyframe the track holds
+/// the first value and after the last it holds the last, so a track at rest
+/// leaves its node unchanged from frame to frame. Colours interpolate
+/// premultiplied, as CSS does, and the result is clamped to [0, 1].
+struct AnimationTrack final {
+    AnimatedProperty property = AnimatedProperty::opacity;
+    /// The shadow, gradient or text run a colour track addresses.
+    std::uint32_t index = 0U;
+    /// The gradient stop a `gradient_stop_color` track addresses.
+    std::uint32_t stop = 0U;
+    std::vector<AnimationKeyframe> keyframes;
+};
 /// What a plot node draws.
 enum class PlotStyle : std::uint8_t {
     /// A line through the samples, `line_width` thick.
@@ -757,9 +855,10 @@ inline constexpr float kMaxPlotStroke = 4096.0F;
 /// `LinearGradient`, and gradient strokes on paths. A plain linear fill
 /// gradient stays legal at every version.
 ///
-/// Version 10 adds `SceneNode::effects`. A scene of an earlier version is
-/// still accepted when no node sets them; one that does fails
-/// `scene_fields_match_version` and is refused.
+/// Version 10 adds `SceneNode::effects`, and version 11 adds
+/// `SceneNode::tracks`, evaluated at `Scene::clock`. A scene of an earlier
+/// version is still accepted when no node sets the newer fields; one that
+/// does fails `scene_fields_match_version` and is refused.
 ///
 /// Version 12 adds the `plot` node kind. A scene of an earlier version is
 /// still accepted when it has no plot node; one that does fails
@@ -770,7 +869,7 @@ inline constexpr float kMaxPlotStroke = 4096.0F;
 /// version 6: blend modes and DesignIR compositing fields; version 7: token
 /// receipts; version 8: gradient vocabulary; version 9: vector assets;
 /// version 10: effects and materials; version 11: animation tracks; version
-/// 12: plot nodes. This build gives versions 7, 9 and 11 no fields of their
+/// 12: plot nodes. This build gives versions 7 and 9 no fields of their
 /// own; the branches that own them add their fields and damage support.
 inline constexpr std::uint32_t kSceneVersion = 12U;
 
@@ -872,6 +971,11 @@ struct SceneNode final {
     /// the effect budget (`effect_chain_cost`) is drawn without its effects
     /// and reported as a loss. A mask node cannot carry effects.
     std::vector<NodeEffect> effects;
+    /// Animations of the node's own properties, evaluated at `Scene::clock`
+    /// (see `evaluate_tracks`). Every consumer draws and diffs the evaluated
+    /// values, never these fields' static values alone. At most one track per
+    /// property and address.
+    std::vector<AnimationTrack> tracks;
     /// What a `plot` node draws. A plot node without it, or with children,
     /// is refused.
     std::shared_ptr<const PlotSpec> plot;
@@ -966,6 +1070,20 @@ struct SceneNode final {
     if (uses_version_6_fields(node)) return &node;
     for (const auto& child : node.children) {
         if (const auto* found = find_version_6_fields(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
+/// Whether a node sets a field version 11 introduced: an animation track.
+[[nodiscard]] inline bool uses_version_11_fields(const SceneNode& node) noexcept {
+    return !node.tracks.empty();
+}
+
+/// The first node, in depth-first order, that `uses_version_11_fields`.
+[[nodiscard]] inline const SceneNode* find_version_11_fields(const SceneNode& node) noexcept {
+    if (uses_version_11_fields(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_11_fields(child); found != nullptr) return found;
     }
     return nullptr;
 }
@@ -1140,6 +1258,11 @@ struct Scene final {
     /// The decoded assets image nodes name by content hash. Each hash appears
     /// at most once.
     std::vector<std::shared_ptr<const ImageAsset>> images;
+    /// The host clock, in seconds, at which tracks are evaluated. The caller
+    /// passes it for every frame; no renderer reads a clock of its own, so the
+    /// same scene at the same clock draws the same frame. Without tracks it
+    /// changes nothing.
+    double clock = 0.0;
 };
 
 /// The first node, in depth-first order, of a kind version 3 introduced: a
@@ -1181,7 +1304,8 @@ struct Scene final {
 /// `uses_version_6_fields` reports, a scene before version 8 has no node
 /// that `node_uses_version_8_fields` reports, a scene before version 10
 /// sets no field that `uses_version_10_fields` reports, and a scene before
-/// version 12 has no node that `find_version_12_kinds` reports.
+/// version 11 has no track, and a scene before version 12 has no node that
+/// `find_version_12_kinds` reports.
 [[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
     return (scene.scene_version >= 2U || find_version_2_fields(scene.root) == nullptr) &&
            (scene.scene_version >= 3U || find_version_3_kinds(scene.root) == nullptr) &&
@@ -1190,6 +1314,7 @@ struct Scene final {
            (scene.scene_version >= 6U || find_version_6_fields(scene.root) == nullptr) &&
            (scene.scene_version >= 8U || !node_uses_version_8_fields(scene.root)) &&
            (scene.scene_version >= 10U || find_version_10_fields(scene.root) == nullptr) &&
+           (scene.scene_version >= 11U || find_version_11_fields(scene.root) == nullptr) &&
            (scene.scene_version >= 12U || find_version_12_kinds(scene.root) == nullptr);
 }
 
@@ -1222,6 +1347,9 @@ struct Scene final {
     }
     if (scene.scene_version < 10U) {
         if (const auto* found = find_version_10_fields(scene.root); found != nullptr) return found;
+    }
+    if (scene.scene_version < 11U) {
+        if (const auto* found = find_version_11_fields(scene.root); found != nullptr) return found;
     }
     if (scene.scene_version < 12U) {
         if (const auto* found = find_version_12_kinds(scene.root); found != nullptr) return found;

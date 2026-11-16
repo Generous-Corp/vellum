@@ -15,16 +15,25 @@ export const DESIGN_IR_COMPOSITING_VERSION = 2;
  * it only when a node uses one.
  */
 export const DESIGN_IR_MATERIALS_VERSION = 3;
+/** The schema version that adds animation tracks on nodes. */
+export const DESIGN_IR_TRACKS_VERSION = 4;
 /**
- * The schema version that adds plot bindings on nodes. Version 4 belongs to
- * node fields this build does not read (animation tracks), so a document at
- * that version is read with the fields of version 3. Each version keeps
+ * The schema version that adds plot bindings on nodes. Each version keeps
  * every field of the ones before it: a document is written at the oldest
  * version that carries every field it uses, and a field stays illegal below
  * the version that introduced it.
  */
 export const DESIGN_IR_PLOTS_VERSION = 5;
-export const DESIGN_IR_VERSIONS = Object.freeze([1, 2, 3, 4, 5]);
+/** Every version this build can read. */
+export const DESIGN_IR_VERSIONS = Object.freeze([
+    DESIGN_IR_VERSION,
+    DESIGN_IR_COMPOSITING_VERSION,
+    DESIGN_IR_MATERIALS_VERSION,
+    DESIGN_IR_TRACKS_VERSION,
+    DESIGN_IR_PLOTS_VERSION,
+]);
+// Compatibility name for supported schema versions.
+export const SUPPORTED_DESIGN_IR_VERSIONS = DESIGN_IR_VERSIONS;
 export const AUTHORED_OVERLAY_VERSION = 1;
 export const REIMPORT_REPORT_VERSION = 1;
 export const COMPILER_NAME = '@vellum/design-ir';

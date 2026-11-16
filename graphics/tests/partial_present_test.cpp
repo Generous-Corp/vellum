@@ -463,10 +463,11 @@ void damage_model_version_gate() {
     expect(kDamageModelSceneVersion >= 12U && partial_redraw_supported(3U) &&
                partial_redraw_supported(4U) && partial_redraw_supported(5U) &&
                partial_redraw_supported(6U) && partial_redraw_supported(8U) &&
-               partial_redraw_supported(10U) && partial_redraw_supported(12U) &&
+               partial_redraw_supported(10U) && partial_redraw_supported(11U) &&
+               partial_redraw_supported(12U) &&
                partial_redraw_supported(kDamageModelSceneVersion) &&
                !partial_redraw_supported(kDamageModelSceneVersion + 1U),
-           "partial redraw covers scene versions up to the damage gate, 6, 8, 10 and 12 included");
+           "partial redraw covers scene versions up to the damage gate, 6, 8, 10, 11 and 12 included");
     expect(to_string(FullRepaintReason::damage_model_version) == "damage_model_version",
            "the damage-model version fallback has a telemetry name");
     constexpr std::uint32_t width = 400;
@@ -506,9 +507,9 @@ void damage_model_version_gate() {
     const auto refused = older->frame_stats();
     expect(refused.full_repaint &&
                refused.full_repaint_reason == FullRepaintReason::damage_model_version,
-           "a scene at the damage gate past a version 4 damage model repaints fully",
+           "a grouping scene past a version 4 damage model repaints fully",
            describe(refused));
-    compare("a scene at the damage gate past a version 4 damage model", *full, *older);
+    compare("a grouping scene past a version 4 damage model", *full, *older);
 }
 
 Affine2D rotation_degrees(float degrees, float scale = 1.0F) {

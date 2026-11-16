@@ -91,12 +91,12 @@ test('a schema version 1 document without materials stays legal', async () => {
 test('a material reference needs schema version 3', async () => {
     const design = normalizeImport(await source());
     const published = await schema();
-    for (const version of [1, 2, 3]) {
+    for (const version of [1, 2, 3, 4]) {
         const document = withMaterial(design, glass, version);
         const result = validateDesignIR(document);
-        assert.equal(result.valid, version === 3, `validator at version ${version}`);
+        assert.equal(result.valid, version >= 3, `validator at version ${version}`);
         if (version < 3) assert.ok(result.issues.some((entry) => entry.code === 'version'));
-        assert.equal(conforms(published, document), version === 3, `schema at version ${version}`);
+        assert.equal(conforms(published, document), version >= 3, `schema at version ${version}`);
     }
 });
 

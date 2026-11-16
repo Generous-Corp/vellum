@@ -329,6 +329,13 @@ STERILE_GATE = (
 )
 # The classifier's own trailing guard (scripts/test_classify_gpu_proof.py).
 GUARD_STEP = "Prove a skipped proof was allowed"
+# Run only when the classifier skipped the proof (so never in a reused run) to
+# record what a later push needs to prove it may report that skip.
+SKIP_RECEIPT_STEPS = {
+    "Record the classifier-skip equivalence receipt",
+    "Upload the classifier-skip equivalence receipt",
+}
+SKIP_RECEIPT_IF = "steps.classify.outputs.unaffected == 'true' && github.event_name == 'merge_group'"
 
 
 def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
@@ -348,6 +355,9 @@ def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
             continue
         if name == RECHECK_STEP:
             test.assertEqual(condition, "steps.reuse.outputs.run_id != ''", name)
+            continue
+        if name in SKIP_RECEIPT_STEPS:
+            test.assertEqual(condition, SKIP_RECEIPT_IF, name)
             continue
         if name == GUARD_STEP:
             test.assertEqual(condition, "always() && steps.classify.outputs.unaffected == 'true'", name)

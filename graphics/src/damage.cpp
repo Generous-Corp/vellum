@@ -1,6 +1,8 @@
+#include "animation_testing.hpp"
 #include "damage_testing.hpp"
 #include "plot_testing.hpp"
 
+#include <vellum/graphics/animation.hpp>
 #include <vellum/graphics/damage.hpp>
 #include <vellum/graphics/effect.hpp>
 #include <vellum/graphics/image_asset.hpp>
@@ -424,6 +426,12 @@ public:
     Snapshot(const Scene& scene, float scale, const DamagePropagation& propagation)
         : width_(scene.width), height_(scene.height), scale_(scale), background_(scene.background),
           version_(scene.scene_version), frame_(frame_rect(scene, scale)) {
+        if (scene_has_tracks(scene) && testing::animation_rules().evaluate_for_damage) {
+            const Scene evaluated = evaluate_tracks(scene);
+            walk(ImageAssetIndex(evaluated), propagation, evaluated.root, std::string{}, 0, 0.0F,
+                 0.0F, Affine2D{}, std::nullopt, false, {});
+            return;
+        }
         walk(ImageAssetIndex(scene), propagation, scene.root, std::string{}, 0, 0.0F, 0.0F,
              Affine2D{}, std::nullopt, false, {});
     }
