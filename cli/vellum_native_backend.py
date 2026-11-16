@@ -23,6 +23,7 @@ from vellum_png import PngError, montage, read_png, write_png
 from vellum_scenario import (
     SCENARIO_SCHEMAS,
     ScenarioValidationError,
+    unproven_commands,
     validate_scenario_document,
 )
 
@@ -441,6 +442,24 @@ def ensure_app(context: dict[str, Any], sdk: Path, no_build: bool = False) -> di
     return build_app(context, sdk)
 
 
+COMMAND_PROOF = re.compile(r"^command=(?P<target>.+) invoked=1 changed=1$", re.MULTILINE)
+
+
+def require_command_proof(context: dict[str, Any], scenario_value: str | None, host_output: str) -> None:
+    """The host prints one line for each command step whose handler it ran
+    and whose rendered tree it saw change. A scenario passes only when those
+    lines are its command steps, in order."""
+    name = scenario_value or "smoke"
+    relative = name if name.endswith(".json") or "/" in name else f"tests/scenarios/{name}.json"
+    scenario = json.loads(safe_relative(context["root"], relative, "scenario").read_text(encoding="utf-8"))
+    proven = [match["target"] for match in COMMAND_PROOF.finditer(host_output)]
+    unproven = unproven_commands(scenario, proven)
+    if unproven:
+        raise BackendFailure(
+            "Native host did not prove its command steps ran and changed the rendered tree: "
+            + ", ".join(unproven), status="test_failed")
+
+
 def scenario_arguments(
     context: dict[str, Any],
     scenario_value: str | None,
@@ -663,6 +682,7 @@ def command_result(command: str, args: argparse.Namespace, context: dict[str, An
         app = ensure_app(context, sdk)
         scenario_args, scenario_name = scenario_arguments(context, args.scenario)
         completed = execute_host(app, scenario_args)
+        require_command_proof(context, args.scenario, completed.stdout)
         return result(command, ok=True, status="tests_passed", message=f"Scenario '{scenario_name}' passed", data={
             "target": SUPPORTED_TARGET, "scenario": scenario_name,
             "app": str(app["app"]), "host_output": completed.stdout.strip(),

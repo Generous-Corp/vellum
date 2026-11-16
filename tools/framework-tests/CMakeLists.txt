@@ -44,6 +44,21 @@ vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
 
+# The view-script unit runs the sealed V8 provider (VELLUM_ENABLE_V8). Without
+# V8 the same test is the control: it must still run to completion and fail
+# exactly its five V8 cases while its QuickJS case passes, which proves the
+# checks see a build that does not link V8.
+vellum_add_framework_test(v8-engine
+    SOURCES v8_engine_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::MirrorCanvas)
+if(VELLUM_ENABLE_V8)
+    target_compile_definitions(vellum-framework-v8-engine-test PRIVATE
+        VELLUM_TEST_EXPECTED_V8_VERSION="${VELLUM_V8_VERSION}")
+else()
+    set_tests_properties(vellum.framework.v8-engine PROPERTIES
+        PASS_REGULAR_EXPRESSION "PASS quickjs_is_not_reported_as_v8\n.*6 cases, 5 failed")
+endif()
+
 # The scripted WebGPU binding against a headless Dawn device (the Null
 # adapter). The provider keeps GpuSurface::create_dawn hidden, so the test links
 # the device library itself, which brings the one Dawn this executable uses. It
@@ -61,6 +76,40 @@ if(TARGET vellum-dawn-headers AND TARGET VellumGpuRuntime::Device)
 else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
         "webgpu_error_scopes_test.cpp")
+endif()
+
+# The Three.js bridge tests run the pinned payload (VELLUM_THREEJS_DIR) on V8,
+# which they need: QuickJS cannot parse the builds. Module loading needs no
+# device. The scene test checks behaviour on any adapter, falling back to
+# Dawn's Null adapter; the render test reads pixels back and exits 77 (skipped)
+# without a rendering adapter.
+set(_vellum_threejs_tests threejs_modules_test.cpp threejs_scene_test.cpp threejs_render_test.cpp)
+if(VELLUM_ENABLE_V8)
+    vellum_add_framework_test(threejs-modules
+        SOURCES threejs_modules_test.cpp
+        UNITS Vellum::MirrorView_script)
+    target_compile_definitions(vellum-framework-threejs-modules-test PRIVATE
+        VELLUM_TEST_THREEJS_DIR="${VELLUM_THREEJS_DIR}")
+    if(TARGET vellum-dawn-headers AND TARGET VellumGpuRuntime::Device)
+        foreach(_vellum_threejs_name IN ITEMS scene render)
+            set(_vellum_threejs_target "vellum-framework-threejs-${_vellum_threejs_name}-test")
+            vellum_add_framework_test(threejs-${_vellum_threejs_name}
+                SOURCES threejs_${_vellum_threejs_name}_test.cpp
+                UNITS Vellum::MirrorView_script Vellum::MirrorRender_2d Vellum::DawnHeaders
+                       VellumGpuRuntime::Device)
+            target_include_directories("${_vellum_threejs_target}" PRIVATE
+                "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+            target_compile_definitions("${_vellum_threejs_target}" PRIVATE
+                VELLUM_TEST_THREEJS_DIR="${VELLUM_THREEJS_DIR}")
+            set_tests_properties(vellum.framework.threejs-${_vellum_threejs_name} PROPERTIES
+                SKIP_RETURN_CODE 77)
+        endforeach()
+    else()
+        set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+            threejs_scene_test.cpp threejs_render_test.cpp)
+    endif()
+else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES ${_vellum_threejs_tests})
 endif()
 
 vellum_add_framework_test(gpu-capabilities

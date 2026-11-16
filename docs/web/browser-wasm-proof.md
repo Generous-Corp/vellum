@@ -108,7 +108,9 @@ What this does not prove:
 - There is no arbitrary DOM, CSS, React DOM, HTML import, accessibility tree,
   browser navigation, persistence, deployment automation, or screenshot-driver
   parity in this milestone.
-- Static build/test/package is supported, but web capture is not advertised.
+- Static build/test/package is supported. `capture` writes one PNG of the
+  settled page after an interaction plan; scenario captures, capture matrices
+  and montages are macOS only.
 - The 16 MiB fixed Wasm memory is adequate for this bounded proof, not a final
   application memory policy.
 
