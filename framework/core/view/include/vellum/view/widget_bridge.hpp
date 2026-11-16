@@ -77,8 +77,11 @@ public:
     // value::ParamMetadata when the model provides it. What a model cannot
     // say is reported as absent rather than guessed: an onParamChanged
     // payload has `hasModulated: false` and no host base-plus-offset
-    // `modulated` value, and no store `id`; a drag held across a reload ends
-    // at the reload instead of being deferred; unbound_params() is empty.
+    // `modulated` value, and no store `id`; unbound_params() is empty. A drag
+    // held across a realm replacement is deferred as a store's is: the
+    // replacement never calls the model, and the end is delivered later by
+    // the owning ScriptedUiSession's next poll, or by this bridge's teardown
+    // when no session takes it.
     // A store-built bridge keeps every store behaviour unchanged.
     WidgetBridge(ScriptEngine& engine, View& root, value::ParamModel& params,
                  render::GpuSurface* gpu_surface = nullptr,
@@ -87,6 +90,13 @@ public:
     // The model the parameter functions reach: the one this bridge was built
     // over, or the bridge's own model over its store.
     value::ParamModel& params() noexcept { return params_; }
+
+    // Model gesture ends a realm replacement deferred instead of delivering
+    // (see the ParamModel constructor). take_ hands them to an owner that
+    // delivers them later; deliver_ ends each one now, every one attempted
+    // even if an end throws, and is safe to re-enter.
+    std::vector<value::ParamHandle> take_deferred_model_gesture_ends();
+    void deliver_deferred_model_gesture_ends() noexcept;
     ~WidgetBridge();
 
     // Attach (or replace) the GPU surface AFTER construction. Mirrors the
@@ -875,6 +885,9 @@ private:
     // asks params_.
     float param_normalized(state::ParamID id, value::ParamHandle handle) const;
     float param_plain(state::ParamID id, value::ParamHandle handle) const;
+    // A model-built bridge's plain value in the model's double precision: the
+    // exact plain value from ParamMetadata when present, else plain().
+    double model_plain(value::ParamHandle handle) const;
     std::optional<float> param_playing(state::ParamID id, value::ParamHandle handle) const;
     void param_gesture_open(state::ParamID id, value::ParamHandle handle);
     void param_gesture_close(state::ParamID id, value::ParamHandle handle);
@@ -897,6 +910,7 @@ private:
     void release_param_gesture_route(const std::string& widget_id) noexcept;
     void release_all_param_gesture_routes() noexcept;
     void defer_all_param_gesture_routes();
+    std::vector<value::ParamHandle> deferred_model_gesture_ends_;
     // Forget every native bridge reference to the removed subtree. This is
     // stronger than erasing widgets_: native event-registration guards are also
     // keyed by id and must be cleared before recycled ids can be rewired.

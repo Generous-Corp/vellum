@@ -371,6 +371,10 @@ private:
     std::unique_ptr<state::StateStore> owned_store_;
     state::StateStore& store_;
     value::ParamModel* params_ = nullptr;
+    // Gesture ends a realm replacement deferred on a model-built bridge,
+    // delivered to params_ beside the store's deferred releases.
+    std::vector<value::ParamHandle> pending_model_gesture_ends_;
+    void deliver_pending_model_gesture_ends() noexcept;
     std::filesystem::path script_path_;
     std::filesystem::path theme_path_;
     std::string script_source_;

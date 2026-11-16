@@ -14,6 +14,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace vellum::view {
 
@@ -111,10 +113,10 @@ void load_script_before_deadline(WidgetBridge& bridge, ScriptEngine& engine,
 // reload probe runs over it so the probe script cannot move a parameter or
 // open a host gesture. Each dropped write is counted in `dropped`, so a test
 // can see that a probe's write reached the wrapper and stopped there.
-class ReadOnlyParamModel final : public value::ParamModel, public value::ParamMetadata {
+class ReadOnlyParamModel : public value::ParamModel {
 public:
     ReadOnlyParamModel(value::ParamModel& source, std::uint64_t& dropped)
-        : source_(source), metadata_(value::metadata_of(source)), dropped_(dropped) {}
+        : source_(source), dropped_(dropped) {}
 
     value::ParamHandle resolve(std::string_view key) override { return source_.resolve(key); }
     double normalized(value::ParamHandle p) override { return source_.normalized(p); }
@@ -136,29 +138,44 @@ public:
         return source_.modulated_normalized(p);
     }
 
-    value::ParamRange range(value::ParamHandle p) override {
-        if (metadata_)
-            return metadata_->range(p);
-        const auto info = source_.info(p);
-        value::ParamRange r;
-        r.plain_min = source_.plain(p, 0.0);
-        r.plain_max = source_.plain(p, 1.0);
-        r.plain_default = source_.plain(p, info.default_normalized);
-        return r;
-    }
-    std::vector<std::string> value_labels(value::ParamHandle p) override {
-        return metadata_ ? metadata_->value_labels(p) : std::vector<std::string>{};
-    }
-    double plain_value(value::ParamHandle p) override {
-        return metadata_ ? metadata_->plain_value(p) : source_.plain(p, source_.normalized(p));
-    }
-    void set_plain_value(value::ParamHandle, double) override { ++dropped_; }
+protected:
+    std::uint64_t& dropped() noexcept { return dropped_; }
 
 private:
     value::ParamModel& source_;
-    value::ParamMetadata* metadata_;
     std::uint64_t& dropped_;
 };
+
+// The read-only view of a source that provides value::ParamMetadata. It
+// provides it too, reading through, so a probe sees exactly the metadata the
+// live realm sees; a source without metadata gets the plain wrapper above, so
+// the probe sees none either.
+class ReadOnlyParamModelWithMetadata final : public ReadOnlyParamModel,
+                                             public value::ParamMetadata {
+public:
+    ReadOnlyParamModelWithMetadata(value::ParamModel& source, value::ParamMetadata& metadata,
+                                   std::uint64_t& dropped)
+        : ReadOnlyParamModel(source, dropped), metadata_(metadata) {}
+
+    value::ParamRange range(value::ParamHandle p) override { return metadata_.range(p); }
+    std::vector<std::string> value_labels(value::ParamHandle p) override {
+        return metadata_.value_labels(p);
+    }
+    double plain_value(value::ParamHandle p) override { return metadata_.plain_value(p); }
+    void set_plain_value(value::ParamHandle, double) override { ++dropped(); }
+
+private:
+    value::ParamMetadata& metadata_;
+};
+
+// The read-only view a probe runs over: with metadata exactly when the source
+// has it.
+std::unique_ptr<value::ParamModel> read_only_view(value::ParamModel& source,
+                                                  std::uint64_t& dropped) {
+    if (auto* metadata = value::metadata_of(source))
+        return std::make_unique<ReadOnlyParamModelWithMetadata>(source, *metadata, dropped);
+    return std::make_unique<ReadOnlyParamModel>(source, dropped);
+}
 
 } // namespace
 
@@ -257,6 +274,21 @@ LogCallback ScriptedUiSession::engine_log_callback() {
 ScriptedUiSession::~ScriptedUiSession() {
     release_root();
     store_.flush_deferred_gesture_releases();
+    deliver_pending_model_gesture_ends();
+}
+
+void ScriptedUiSession::deliver_pending_model_gesture_ends() noexcept {
+    if (params_ == nullptr)
+        return;
+    // Moved out first, so an end that re-enters this delivers nothing twice.
+    const auto ends = std::exchange(pending_model_gesture_ends_, {});
+    for (const auto& handle : ends) {
+        try {
+            params_->end(handle);
+        } catch (...) {
+            // Every deferred end is attempted; teardown stays noexcept.
+        }
+    }
 }
 
 void ScriptedUiSession::release_root() noexcept {
@@ -596,6 +628,7 @@ bool ScriptedUiSession::poll(std::string* error) {
     // outside the Runtime.evaluate response fence (even if the realm stayed
     // quarantined).
     store_.flush_deferred_gesture_releases();
+    deliver_pending_model_gesture_ends();
     // Reported here rather than from evaluate(), which now returns before the
     // reset has been attempted. The fail-closed path is unchanged: the reset
     // already quarantined the partial realm and detached the engine.
@@ -856,9 +889,9 @@ bool ScriptedUiSession::rebuild_from_code(
             check_deadline();
             // A model cannot be copied the way a store is, so the probe reads
             // the session's model through a view that drops every write.
-            std::optional<ReadOnlyParamModel> probe_params;
+            std::unique_ptr<value::ParamModel> probe_params;
             if (params_)
-                probe_params.emplace(*params_, probe_dropped_writes_);
+                probe_params = read_only_view(*params_, probe_dropped_writes_);
             auto probe_bridge =
                 probe_params
                     ? std::make_unique<WidgetBridge>(*probe_engine, probe_root, *probe_params,
@@ -920,6 +953,11 @@ bool ScriptedUiSession::rebuild_from_code(
                 retired_runtime_realms_.pop_back();
                 throw;
             }
+            // A model drag the replacement deferred is delivered at the next
+            // poll, as the store's deferred releases are; taking the handles
+            // calls nothing.
+            for (const auto& handle : bridge_->take_deferred_model_gesture_ends())
+                pending_model_gesture_ends_.push_back(handle);
             auto& retired = retired_runtime_realms_.back();
             retired.engine = std::move(engine_);
             retired.bridge = std::move(bridge_);

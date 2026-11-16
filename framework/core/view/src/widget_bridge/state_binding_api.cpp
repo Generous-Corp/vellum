@@ -92,7 +92,7 @@ choc::value::Value model_param_metadata(value::ParamModel& model, value::ParamHa
 // number; a store's payload carries it. The model has no store id, so there
 // is no `id`.
 choc::value::Value model_param_snapshot(value::ParamModel& model, value::ParamHandle param,
-                                        float plain_value) {
+                                        double plain_value) {
     const auto info = model.info(param);
     const double normalized = model.normalized(param);
     auto obj = choc::value::createObject("");
@@ -225,12 +225,13 @@ void WidgetBridge::defer_all_param_gesture_routes() {
     for (auto& [widget_id, route] : param_gesture_routes_) {
         (void)widget_id;
         if (!route->active) continue;
-        // A store keeps the drag open across the reload and ends it later; a
-        // model has no deferral, so the drag ends here.
+        // The drag stays open across the replacement and ends later, outside
+        // the replacement's deadline fence: the store queues its release, and
+        // a model's end is recorded here without calling the model.
         if (has_store_)
             store_.defer_gesture_release(route->active_param_id);
         else
-            params_.end(route->active_param);
+            deferred_model_gesture_ends_.push_back(route->active_param);
         route->active = false;
     }
     param_gesture_routes_.clear();
@@ -327,9 +328,14 @@ float WidgetBridge::param_normalized(state::ParamID id, value::ParamHandle handl
 float WidgetBridge::param_plain(state::ParamID id, value::ParamHandle handle) const {
     if (has_store_)
         return store_.get_value(id);
+    // A widget's value is a float; this is the one narrowing, at that boundary.
+    return static_cast<float>(model_plain(handle));
+}
+
+double WidgetBridge::model_plain(value::ParamHandle handle) const {
     if (auto* metadata = value::metadata_of(params_))
-        return static_cast<float>(metadata->plain_value(handle));
-    return static_cast<float>(params_.plain(handle, params_.normalized(handle)));
+        return metadata->plain_value(handle);
+    return params_.plain(handle, params_.normalized(handle));
 }
 
 std::optional<float> WidgetBridge::param_playing(state::ParamID id,
@@ -339,6 +345,23 @@ std::optional<float> WidgetBridge::param_playing(state::ParamID id,
     if (const auto played = params_.modulated_normalized(handle))
         return static_cast<float>(*played);
     return std::nullopt;
+}
+
+std::vector<value::ParamHandle> WidgetBridge::take_deferred_model_gesture_ends() {
+    return std::exchange(deferred_model_gesture_ends_, {});
+}
+
+void WidgetBridge::deliver_deferred_model_gesture_ends() noexcept {
+    // Moved out first, so an end that re-enters this delivers nothing twice.
+    const auto ends = std::exchange(deferred_model_gesture_ends_, {});
+    for (const auto& handle : ends) {
+        try {
+            params_.end(handle);
+        } catch (...) {
+            // Every deferred end is attempted; one that throws does not keep
+            // the rest open, and teardown stays noexcept.
+        }
+    }
 }
 
 void WidgetBridge::param_gesture_open(state::ParamID id, value::ParamHandle handle) {
@@ -574,10 +597,35 @@ void WidgetBridge::service_param_subscriptions() {
         if (id == 0) continue;  // cancelled by an earlier handler this pass
         const auto param_id = param_subscriptions_[i].param_id;
         const auto param = param_subscriptions_[i].param;
-        const float value = param_plain(param_id, param);
-        // A model reports no host base-plus-offset modulation (see
-        // model_param_snapshot), so its change signal leaves that field out.
-        const float modulated = has_store_ ? store_.get_modulated(param_id) : 0.0f;
+        if (!has_store_) {
+            // A model's change signal and payload stay in its double
+            // precision; two values a float cannot tell apart still change.
+            auto& sub = param_subscriptions_[i];
+            const double plain = model_plain(param);
+            const double normalized = params_.normalized(param);
+            if (std::isnan(plain) || std::isnan(normalized)) continue;
+            const auto playing = params_.modulated_normalized(param);
+            if (plain == sub.model_plain && normalized == sub.model_normalized &&
+                playing.has_value() == sub.model_has_playing &&
+                (!playing || *playing == sub.model_playing))
+                continue;
+            sub.model_plain = plain;
+            sub.model_normalized = normalized;
+            sub.model_has_playing = playing.has_value();
+            sub.model_playing = playing.value_or(0.0);
+            auto snapshot = model_param_snapshot(params_, param, plain);
+            snapshot.addMember("playing", playing ? choc::value::createFloat64(*playing)
+                                                  : choc::value::Value());
+            const auto payload = choc::json::toString(snapshot);
+            safe_dispatch_eval(callback_alive_, &engine_,
+                               "__dispatch__(" + js_string_literal(param_subscription_key(id)) +
+                                   ", 'paramchange', " + payload + ")",
+                               "param change subscription");
+            // `sub` may have been reallocated or tombstoned by the handler.
+            continue;
+        }
+        const float value = store_.get_value(param_id);
+        const float modulated = store_.get_modulated(param_id);
         // A NaN value never compares equal, so without this it would dispatch
         // every frame forever. service_param_bindings() refuses NaN for the
         // same reason.
@@ -585,7 +633,7 @@ void WidgetBridge::service_param_subscriptions() {
         // The value a modulator is playing -- a host's CLAP modulation or the
         // plugin's own published one -- as one field a UI draws its single
         // indicator from (`playing`, normalized, null when nothing modulates).
-        const auto playing = param_playing(param_id, param);
+        const auto playing = store_.displayed_modulation(param_id);
         // Modulation is part of the change signal, not just the payload: a CLAP
         // host can move the modulated value while the base is static, and a UI
         // drawing the modulated position has to see that.
@@ -604,16 +652,11 @@ void WidgetBridge::service_param_subscriptions() {
         param_subscriptions_[i].has_playing = playing.has_value();
         param_subscriptions_[i].last_playing = playing.value_or(0.0f);
 
-        choc::value::Value snapshot;
-        if (has_store_) {
-            const auto* info = store_.info(param_id);
-            if (info == nullptr) continue;
-            // Same serializer as getParamMetadata and the inspector, so a
-            // subscriber and a poller cannot disagree about a param's shape.
-            snapshot = state::param_snapshot_to_value(store_, *info);
-        } else {
-            snapshot = model_param_snapshot(params_, param, value);
-        }
+        const auto* info = store_.info(param_id);
+        if (info == nullptr) continue;
+        // Same serializer as getParamMetadata and the inspector, so a
+        // subscriber and a poller cannot disagree about a param's shape.
+        auto snapshot = state::param_snapshot_to_value(store_, *info);
         snapshot.addMember("playing",
                            playing ? choc::value::createFloat64(*playing) : choc::value::Value());
         const auto payload = choc::json::toString(snapshot);
@@ -916,6 +959,13 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
         sub.param = param;
         sub.param_name = name;
         // Seed from the parameter so the first frame is not reported as a change.
+        if (!self.has_store_) {
+            sub.model_plain = self.model_plain(param);
+            sub.model_normalized = self.params_.normalized(param);
+            const auto model_playing = self.params_.modulated_normalized(param);
+            sub.model_has_playing = model_playing.has_value();
+            sub.model_playing = model_playing.value_or(0.0);
+        }
         sub.last_value = self.param_plain(param_id, param);
         sub.last_modulated = self.has_store_ ? self.store_.get_modulated(param_id) : 0.0f;
         const auto playing = self.param_playing(param_id, param);

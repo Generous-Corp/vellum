@@ -62,6 +62,8 @@ private:
 value::InMemoryParamModel make_model() {
     std::vector<value::ParamSpec> specs;
     specs.push_back({.key = "cutoff", .default_normalized = 0.5});
+    specs.push_back({.key = "wave", .plain_min = 0.0, .plain_max = 3.0, .default_normalized = 0.0,
+                     .value_count = 4, .value_labels = {"sine", "tri", "saw", "square"}});
     return value::InMemoryParamModel(std::move(specs));
 }
 
@@ -129,6 +131,46 @@ FRAMEWORK_TEST(a_store_session_is_unchanged) {
     CHECK(session.probe_dropped_writes() == 0);
     CHECK(session.bridge() != nullptr);
     CHECK(value::metadata_of(session.bridge()->params()) != nullptr);
+}
+
+// A script that refuses to run unless getParamMetadata reports what the live
+// realm reports for a model with (`with`) or without ParamMetadata. A reload
+// runs it first in the probe, so a probe that saw different metadata would
+// throw there and fail the reload.
+std::string metadata_check_script(bool with_metadata) {
+    std::string script =
+        "const m = getParamMetadata('wave');"
+        "if (m.labels.join(',') !== 'sine,tri,saw,square') throw new Error('labels ' + m.labels);";
+    script += with_metadata
+                  ? "if (m.skew !== 1 || m.step !== 1) throw new Error('metadata missing');"
+                  : "if (m.skew !== undefined || m.step !== undefined) throw new Error('invented metadata');";
+    return script;
+}
+
+FRAMEWORK_TEST(the_probe_sees_the_live_metadata_of_a_model_without_it) {
+    auto inner = make_model();
+    CountingModel model(inner);  // forwards, and provides no ParamMetadata
+    CHECK(value::metadata_of(model) == nullptr);
+    view::View root;
+    root.set_bounds({0, 0, 300, 200});
+    view::ScriptedUiSession session(root, model, options_for(metadata_check_script(false)));
+    std::string error;
+    CHECK(session.load(&error));
+    CHECK(error.empty());
+    CHECK(session.reload(&error));
+    CHECK(error.empty());
+}
+
+FRAMEWORK_TEST(the_probe_sees_the_live_metadata_of_a_model_with_it) {
+    auto model = make_model();
+    view::View root;
+    root.set_bounds({0, 0, 300, 200});
+    view::ScriptedUiSession session(root, model, options_for(metadata_check_script(true)));
+    std::string error;
+    CHECK(session.load(&error));
+    CHECK(error.empty());
+    CHECK(session.reload(&error));
+    CHECK(error.empty());
 }
 
 }  // namespace
