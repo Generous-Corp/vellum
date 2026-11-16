@@ -335,13 +335,15 @@ def framework_file_set(repo: Path) -> tuple[set[str], dict[str, dict[str, Any]],
 
 
 def framework_scopes(repo: Path) -> dict[str, frozenset[str]]:
-    """The platforms each ledger-added source is compiled on (framework_ports.replay_scoped)."""
+    """The platforms each ledger-added source is compiled on (framework_ports.replay_scoped).
+
+    A ledger that does not replay is refused by framework_file_set, which
+    reads the same rows; it raises first, so this returns the scopes.
+    """
+    framework_file_set(repo)
     record = load_json(repo / FRAMEWORK_TRANSFER)
     transferred = {row["framework_path"] for row in record.get("records", [])}
-    scopes, errors = framework_ports.scopes(repo, transferred)
-    if errors:
-        raise PlanError(errors[0])
-    return scopes
+    return framework_ports.scopes(repo, transferred)[0]
 
 
 # The platform the landed receipt's closures describe: load_closures refuses
