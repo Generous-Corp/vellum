@@ -1,4 +1,4 @@
-import { Button, Canvas, Image, Stack, Text, View, jsx } from './runtime.js';
+import { Button, Canvas, Image, Plot, Stack, Text, View, jsx } from './runtime.js';
 
 const MAXIMUM_NODES = 100_000;
 const MAXIMUM_DEPTH = 256;
@@ -9,10 +9,15 @@ const EVENT_PROPERTIES = Object.freeze({
     keyDown: 'onKeyDown',
 });
 // DesignIR schema versions this materializer reads. Version 2 adds the node
-// `compositing` object, 3 adds material references, and 4 adds tracks;
-// a document without `schemaVersion` is version 1.
-const DESIGN_SCHEMA_VERSIONS = Object.freeze([1, 2, 3, 4]);
+// `compositing` object, 3 adds material references, 4 adds tracks, and 5
+// adds plot bindings; a document without `schemaVersion` is version 1.
+const DESIGN_SCHEMA_VERSIONS = Object.freeze([1, 2, 3, 4, 5]);
 const COMPOSITING_VERSION = 2;
+const PLOTS_VERSION = 5;
+const PLOT_BINDING_KEYS = Object.freeze([
+    'channel', 'source', 'slots', 'history', 'orientation', 'audioChannel', 'min', 'max',
+    'baseline', 'lineWidth', 'barGap', 'peakWidth', 'lineColor', 'fillColor', 'peakColor',
+]);
 // The DesignIR blend modes, spelled as the retained `mixBlendMode` style and
 // the renderer's scene spell them.
 const BLEND_MODES = Object.freeze([
@@ -191,6 +196,7 @@ function resolveMaskReferences(node, version) {
 }
 
 function componentFor(node) {
+    if (node.plot !== undefined) return Plot;
     if (node.kind === 'button') return Button;
     if (node.kind === 'text') return Text;
     if (node.kind === 'image') return Image;
@@ -217,6 +223,18 @@ function anchorFor(node, document) {
         return `semantic:${identity.semanticId}`;
     }
     return node.id;
+}
+
+// The node's plot binding, which is version 5 and draws no children.
+function plotBindingOf(node, version) {
+    if (version < PLOTS_VERSION) {
+        throw new Error(`design node ${node.id} plot needs schemaVersion ${PLOTS_VERSION}`);
+    }
+    plainObject(node.plot, `design node ${node.id} plot`);
+    if (node.children.length > 0) {
+        throw new Error(`design node ${node.id} binds a plot and cannot have children`);
+    }
+    return node.plot;
 }
 
 function materializeNode(node, context, depth, root = false) {
@@ -246,6 +264,13 @@ function materializeNode(node, context, depth, root = false) {
             .map((child) => materializeNode(child, context, depth + 1)),
     };
     if (typeof node.text === 'string') properties.text = node.text;
+    if (node.plot !== undefined) {
+        const plot = plotBindingOf(node, context.version);
+        properties.plot = plot.style;
+        for (const key of PLOT_BINDING_KEYS) {
+            if (plot[key] !== undefined) properties[key] = plot[key];
+        }
+    }
     const bindings = context.actions[node.id];
     if (bindings !== undefined) {
         context.visitedActions.add(node.id);
@@ -261,7 +286,7 @@ function materializeNode(node, context, depth, root = false) {
 
 // Check even hidden descendants before lowering; an unsupported field must
 // never disappear silently when this consumer reads a newer document.
-function requireSupportedFields(root) {
+function requireSupportedFields(root, version) {
     let nodes = 0;
     function visit(node, depth) {
         if (depth > MAXIMUM_DEPTH || ++nodes > MAXIMUM_NODES) {
@@ -270,6 +295,9 @@ function requireSupportedFields(root) {
         plainObject(node, `design node at depth ${depth}`);
         if (node.material !== undefined) {
             throw new Error(`design node ${node.id} has unsupported material`);
+        }
+        if (node.plot !== undefined && version < PLOTS_VERSION) {
+            throw new Error(`design node ${node.id} plot needs schemaVersion ${PLOTS_VERSION}`);
         }
         if (node.tracks !== undefined && (!Array.isArray(node.tracks) || node.tracks.length > 0)) {
             throw new Error(`design node ${node.id} has unsupported tracks`);
@@ -284,7 +312,7 @@ function materialize(document, options, missingActionTarget) {
     plainObject(document, 'design');
     const version = designVersion(document);
     const root = document.root;
-    requireSupportedFields(root);
+    requireSupportedFields(root, version);
     const rootLayout = root?.properties?.layout &&
         typeof root.properties.layout === 'object' &&
         !Array.isArray(root.properties.layout)

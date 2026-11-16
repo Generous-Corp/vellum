@@ -16,7 +16,7 @@ namespace {
 // PaintCommand field: a field they skip lets a cached image survive a change
 // to it. This size changes when a field is added; update both functions, and
 // the field-coverage test in layer_cache_test.cpp, then this number.
-static_assert(sizeof(PaintCommand) == 432,
+static_assert(sizeof(PaintCommand) == 456,
               "PaintCommand changed: update paint_commands_equal and hash_command");
 static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 80,
               "TextStyle or TextRun changed: update same_style, same_runs and hash_command");
@@ -175,7 +175,7 @@ bool same_effects(const std::vector<NodeEffect>& a, const std::vector<NodeEffect
     return true;
 }
 
-// Everything except `bounds`, `transform`, `mesh` and `path`.
+// Everything except `bounds`, `transform`, `mesh`, `path` and `plot`.
 bool same_image_reference(const std::optional<ImageReference>& a,
                           const std::optional<ImageReference>& b) {
     if (a.has_value() != b.has_value()) return false;
@@ -206,7 +206,8 @@ bool same_paint(const PaintCommand& a, const PaintCommand& b) {
            a.blend_mode == b.blend_mode &&
            same_rect(a.clip_rect, b.clip_rect) && a.mask_mode == b.mask_mode &&
            same_image_reference(a.image, b.image) && a.image_asset == b.image_asset &&
-           same_effects(a.effects, b.effects) && same_rect(a.effect_box, b.effect_box);
+           same_effects(a.effects, b.effects) && same_rect(a.effect_box, b.effect_box) &&
+           a.plot_background == b.plot_background;
 }
 
 class Hasher final {
@@ -348,6 +349,8 @@ std::uint64_t hash_command(const PaintCommand& command) {
         hash.number(static_cast<std::uint64_t>(command.image->sampling));
     }
     hash.number(reinterpret_cast<std::uintptr_t>(command.image_asset.get()));
+    hash.number(reinterpret_cast<std::uintptr_t>(command.plot.get()));
+    hash.number(command.plot_background ? 1U : 0U);
     hash.number(command.effects.size());
     for (const auto& effect : command.effects) {
         hash.number(static_cast<std::uint64_t>(effect.kind));
@@ -414,7 +417,7 @@ std::string_view to_string(LayerCacheTrigger trigger) noexcept {
 bool paint_commands_equal(const PaintCommand& a, const PaintCommand& b) {
     return same_paint(a, b) && same_rect(a.bounds, b.bounds) &&
            same_transform(a.transform, b.transform) && a.mesh == b.mesh &&
-           same_path(a.path, b.path);
+           same_path(a.path, b.path) && a.plot == b.plot;
 }
 
 LayerInvalidation classify_change(
@@ -426,7 +429,7 @@ LayerInvalidation classify_change(
         const auto& after = next[index];
         if (before.kind != after.kind) return LayerInvalidation::structure;
         if (before.mesh != after.mesh || !same_path(before.path, after.path) ||
-            before.image_asset != after.image_asset) {
+            before.image_asset != after.image_asset || before.plot != after.plot) {
             return LayerInvalidation::resource;
         }
     }
