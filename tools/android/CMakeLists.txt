@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.24)
 
+# A temporary compile canary, not a build path (see README.md): it builds no
+# artifact anyone consumes and is replaced by the Android closure lane.
+#
 # Cross-compiles the platform-neutral framework units for Android. It is a
 # standalone project, not part of the root build: the root build's framework
 # path is the Darwin mirror, which refuses any other host. Configure it with

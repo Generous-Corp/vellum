@@ -1,5 +1,10 @@
 name: Android NDK
 
+# A temporary compile canary, not a build path: tools/android compiles a
+# hand-picked list of framework sources outside the mirror and builds no artifact
+# anyone consumes. The Android closure lane replaces it once the mirror's
+# multi-platform rule enables android-arm64.
+#
 # Cross-compiles the platform-neutral framework units for arm64-v8a with the
 # pinned NDK and proves the result is Android code: every object is a 64-bit
 # AArch64 ELF, the object count equals the sources CMake selected, and the JNI
