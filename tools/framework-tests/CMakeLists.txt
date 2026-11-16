@@ -67,6 +67,12 @@ vellum_add_framework_test(gpu-capabilities
     SOURCES gpu_capabilities_test.cpp
     UNITS Vellum::MirrorRender_2d)
 
+# The frame-level render pass manager is header-only; any render unit gives the
+# test the include root.
+vellum_add_framework_test(render-pass
+    SOURCES render_pass_test.cpp
+    UNITS Vellum::MirrorRender_2d)
+
 # The WGSL validator behind vellum_add_wgsl_shaders(): it compiles each shader
 # on Dawn's Null adapter. It compiles the render unit's WGSL helper and
 # diagnostics itself and links the device layer directly, as the gpu-runtime

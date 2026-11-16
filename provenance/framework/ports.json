@@ -297,6 +297,18 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "Script-visible WebGPU error scopes for the scripted binding: native device work runs in validation, out-of-memory and internal device scopes and routes what they catch to the script's own scope, so script sees its errors and the uncaptured-error callback stays quiet. Vellum wrote this; Pulp's binding runs no error scopes."
+    },
+    {
+      "framework_path": "framework/core/render/include/vellum/render/render_pass.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/render/include/pulp/render/render_pass.hpp",
+      "pulp_commits": [
+        "8847d9e44b85928d87da567b77141efe0cab60d7"
+      ],
+      "framework_blob": "93dd98aff033f69337e0cb665595ea5f0fa65aac",
+      "reason": "Frame-level render pass manager: ordered background, content, effects, overlay and post-effect passes with a per-frame time budget and the whole-recording GPU render time, read by the inspector, the motion cost view and the UI preview. Distinct from the custom GPU pass API of Generous-Corp/vellum#432."
     }
   ]
 }
