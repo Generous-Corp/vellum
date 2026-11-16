@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "created_at": "2026-11-16T04:01:27Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-8b0152968efa44a8dee8091899dfe933f7ad3796",
+  "kind": "resolution",
+  "linked_commits": [
+    "8b0152968efa44a8dee8091899dfe933f7ad3796"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@claude-observatory-agent",
+  "rationale": "Merge of main into the effect-graph branch; its mapped paths are the Chrome layout box carry-through of the HTML import (see the resolution of 64d58e100), already classified framework-only. Pulp has no counterpart of vellum_web_backend. Pulp search at origin/main ced536cbc56b (git grep -w over core tools test examples apple ship inspect) for vellum_web_backend, html_import and layout_boxes returns 0; control SkiaSurface on the same search returns 288 in 64 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-10 and 2026-11-13); no schema or API delta. Any later resolution overrides it.",
+  "resolves": "vellum-8b0152968efa44a8dee8091899dfe933f7ad3796",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
