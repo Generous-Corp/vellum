@@ -1,6 +1,6 @@
 import createVellumCore from './vellum_web_core.js';
 import { Button, Stack, Text, mount, useState } from './vellum-ui/runtime.js';
-import { addVectorAsset, drawVector } from './vector-canvas.js';
+import { addVectorNode, drawVector } from './vector-canvas.js';
 
 const canvas = document.querySelector('#vellum-canvas');
 const status = document.querySelector('#status');
@@ -171,8 +171,7 @@ function lowerNode(node, proposed, parentX, parentY) {
         api.text(node.id, directText(node), absoluteX, absoluteY, proposed.width,
             proposed.height, Math.max(1, number(style, 'fontSize', 14)), ...foreground);
     } else if (node.type === 'vector') {
-        addVectorAsset(module, node.id, absoluteX, absoluteY, proposed.width, proposed.height,
-            node.asset);
+        addVectorNode(module, node, absoluteX, absoluteY, proposed.width, proposed.height);
     } else if (node.type === 'button' || style.backgroundColor) {
         const background = node.type === 'button' && !style.backgroundColor
             ? color('#14b8a6', '#14b8a6') : fill;

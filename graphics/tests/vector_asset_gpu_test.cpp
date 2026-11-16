@@ -568,11 +568,58 @@ void version_refusal() {
 
 // Prints the canvas shell's plan for each compiled fixture, one JSON object
 // per line, for the browser oracle in web/tests/run_vector_canvas_oracle.py.
+std::shared_ptr<const PathGeometry> builder_path(const char* data) {
+    PathGeometry geometry;
+    if (!parse_svg_path_data(data, geometry)) return nullptr;
+    return std::make_shared<const PathGeometry>(std::move(geometry));
+}
+
+// A one-node scene whose vector node and groups come from the helpers the
+// web shell's builder entry points call, as a rendered Vector node reaches it.
+Scene builder_scene(const std::string& id, float width, float opacity, std::vector<VectorOp> ops) {
+    Scene scene;
+    scene.width = width;
+    scene.height = 20.0F;
+    scene.background = Color::hex(0xFFFFFF);
+    scene.root.id = "root";
+    auto asset = std::make_shared<VectorAsset>();
+    asset->content_hash = "sha256:" + std::string(64, 'a');
+    asset->view_box = {0.0F, 0.0F, width, 20.0F};
+    asset->ops = std::move(ops);
+    auto node = vellum::web::vector_node(id, {0.0F, 0.0F, width, 20.0F}, opacity);
+    node.vector = std::move(asset);
+    scene.root.children.push_back(std::move(node));
+    return scene;
+}
+
+std::vector<std::pair<std::string, Scene>> builder_scenes() {
+    const auto fill = [](const char* data, std::uint32_t color) {
+        return VectorOp{.kind = VectorOp::Kind::path, .path = builder_path(data),
+                        .fill = {.color = Color::hex(color)}};
+    };
+    const VectorOp end{.kind = VectorOp::Kind::pop_group};
+    return {
+        {"overlap", builder_scene("overlap", 40.0F, 0.5F,
+                                  {fill("M0 0H20V20H0Z", 0xFF0000), fill("M10 0H30V20H10Z", 0x0000FF)})},
+        {"empty-clip", builder_scene("empty-clip", 20.0F, 1.0F,
+                                     {*vellum::web::vector_group_op({}, 1.0F, true, "", false),
+                                      fill("M0 0H10V20H0Z", 0xFF0000), end,
+                                      *vellum::web::vector_group_op({}, 1.0F, false, "", false),
+                                      fill("M10 0H20V20H10Z", 0xFF0000), end})},
+    };
+}
+
 int print_canvas_plans() {
     quiet = true;
+    std::vector<std::pair<std::string, Scene>> scenes;
     for (const char* name : {"gradients-compiled", "compiled-only", "over-budget"}) {
-        const auto scene = fixture(name);
+        auto scene = fixture(name);
         if (!scene) return 1;
+        scenes.emplace_back(name, std::move(*scene));
+    }
+    for (auto& entry : builder_scenes()) scenes.push_back(std::move(entry));
+    for (const auto& [name, scene_value] : scenes) {
+        const auto* scene = &scene_value;
         const auto lowering = vellum::web::lower_for_canvas_shell(*scene);
         if (!lowering.accepted) return 1;
         const auto opacities = effective_opacities(lowering.commands);

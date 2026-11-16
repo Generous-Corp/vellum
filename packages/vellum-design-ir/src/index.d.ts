@@ -61,7 +61,10 @@ export interface SvgAssetOptions {
     height?: number;
     /** Opaque `#rrggbb` colours to bind to design tokens in the subtree. */
     colorTokens?: Record<string, string>;
-    /** The last fallback, for features neither form carries. */
+    /**
+     * The last fallback, for features neither form carries. It is given the
+     * sanitized asset written out again from an allowlist, never the source.
+     */
     rasterize?: (svg: string, size: { width: number; height: number }) => {
         contentHash: string;
         mimeType?: string;

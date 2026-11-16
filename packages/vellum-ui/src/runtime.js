@@ -529,6 +529,9 @@ function validateVector(properties, path) {
             vectorPaint(op.stroke, `${where}.stroke`);
             finitePaintNumber(op.strokeWidth, `${where}.strokeWidth`, { optional: true, nonNegative: true });
             finitePaintNumber(op.strokeMiterLimit, `${where}.strokeMiterLimit`, { optional: true });
+            if (op.strokeMiterLimit !== undefined && op.strokeMiterLimit < 1) {
+                throw new TypeError(`${where}.strokeMiterLimit must be at least 1`);
+            }
             finitePaintNumber(op.strokeDashoffset, `${where}.strokeDashoffset`, { optional: true });
             pathKeyword(op.strokeLineJoin, `${where}.strokeLineJoin`, ['miter', 'round', 'bevel']);
             pathKeyword(op.strokeLineCap, `${where}.strokeLineCap`, ['butt', 'round', 'square']);

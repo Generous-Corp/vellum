@@ -653,6 +653,37 @@ bool vector_plans() {
     }
     return true;
 }
+
+// The builder's entry points keep a rendered Vector node's opacity and tell
+// an empty clip, which hides its group, from no clip at all.
+bool vector_builder_helpers() {
+    using vellum::graphics::VectorOp;
+    const auto empty = vellum::web::vector_group_op({}, 1.0F, true, "", false);
+    const auto none = vellum::web::vector_group_op({}, 1.0F, false, "", false);
+    if (!empty || !empty->clip || !empty->clip->verbs.empty() || !none || none->clip) {
+        std::cerr << "an empty clip and no clip were not told apart\n";
+        return false;
+    }
+    if (vellum::web::vector_group_op({}, 1.0F, true, "Q", false)) {
+        std::cerr << "malformed clip path data was accepted\n";
+        return false;
+    }
+    const auto red = VectorOp{.kind = VectorOp::Kind::path, .path = rectangle_path(0.0F),
+                              .fill = {.color = vellum::graphics::Color::hex(0xFF0000)}};
+    auto scene = vector_scene({*empty, red, {.kind = VectorOp::Kind::pop_group}});
+    auto node = vellum::web::vector_node("icon", {10.0F, 20.0F, 200.0F, 100.0F}, 0.5F);
+    node.vector = scene.root.children[0].vector;
+    scene.root.children[0] = std::move(node);
+    const auto lowering = vellum::web::lower_for_canvas_shell(scene);
+    if (!lowering.accepted || lowering.commands.size() != 1U) {
+        std::cerr << "the builder's vector node did not lower: " << lowering.reason << "\n";
+        return false;
+    }
+    const auto opacities = vellum::graphics::effective_opacities(lowering.commands);
+    const auto plan = vellum::web::lower_vector_for_canvas(lowering.commands[0], opacities[0]);
+    return contains(plan.json, "\"alpha\":0.5,") &&
+           contains(plan.json, "{\"op\":\"clip\",\"d\":\"\",\"rule\":\"nonzero\"}");
+}
 }  // namespace
 
 // The shell draws a scene with tracks at its clock, as the native renderer
@@ -769,6 +800,7 @@ bool effect_lowering() {
 int main() {
     if (!image_refusals()) return 1;
     if (!vector_plans()) return 1;
+    if (!vector_builder_helpers()) return 1;
     if (!track_evaluation()) return 1;
     if (!mask_reports()) return 1;
     if (!blend_lowering()) return 1;

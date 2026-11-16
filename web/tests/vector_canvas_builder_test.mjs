@@ -6,16 +6,18 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { addVectorAsset } from '../shell/vector-canvas.js';
+import { addVectorAsset, addVectorNode } from '../shell/vector-canvas.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const rendered = JSON.parse(await readFile(
     join(root, 'fixtures', 'vector-assets', 'compiled-only.rendered.json'), 'utf8'));
 const node = rendered.tree.children[0];
 const calls = [];
+const arities = new Map();
 const module = {
     cwrap(symbol, returns, args) {
         assert.equal(returns, 'number');
+        arities.set(symbol, args.length);
         return (...values) => {
             assert.equal(values.length, args.length, `${symbol} takes ${args.length} arguments`);
             values.forEach((value, index) => assert.equal(typeof value, args[index],
@@ -26,7 +28,7 @@ const module = {
     },
 };
 addVectorAsset(module, node.id, 1, 2, 200, 120, node.asset);
-assert.deepEqual(calls[0], ['vellum_web_begin_vector', node.id, 1, 2, 200, 120, 0, 0, 200, 120,
+assert.deepEqual(calls[0], ['vellum_web_begin_vector', node.id, 1, 2, 200, 120, 1, 0, 0, 200, 120,
     node.asset.contentHash]);
 assert.equal(calls.at(-1)[0], 'vellum_web_end_vector');
 const paths = calls.filter((call) => call[0] === 'vellum_web_vector_path');
@@ -50,4 +52,30 @@ const encoded = calls.find((call) => call[0] === 'vellum_web_vector_gradient');
 assert.deepEqual(encoded.slice(2, 6), [3, 0, 2, 2], 'conic, pad, oklab, display-p3');
 assert.throws(() => addVectorAsset(module, 'bad', 0, 0, 1, 1, { ...conic, ops: [{ ...conic.ops[0],
     fill: { gradient: { ...conic.ops[0].fill.gradient, kind: 'spiral' } } }] }), /cannot carry/);
+
+// The demo adds a rendered Vector node with its opacity, and a group's clip
+// presence travels apart from its path data, so an empty clip stays a clip.
+const square = { op: 'path', d: 'M0 0H10V10H0Z', fill: '#ff0000', stroke: 'none' };
+const clipped = { contentHash: node.asset.contentHash, viewBox: [0, 0, 10, 10],
+    ops: [{ op: 'group', clip: { d: '' } }, square, { op: 'end' }, { op: 'group' }, square, { op: 'end' }] };
+calls.length = 0;
+addVectorNode(module, { type: 'vector', id: 'faded', asset: clipped,
+    style: { width: 10, height: 10, opacity: 0.5 } }, 0, 0, 10, 10);
+assert.deepEqual(calls[0].slice(0, 7), ['vellum_web_begin_vector', 'faded', 0, 0, 10, 10, 0.5]);
+const groups = calls.filter((call) => call[0] === 'vellum_web_vector_group');
+assert.deepEqual(groups.map((call) => call.slice(8)), [[1, '', 0], [0, '', 0]],
+    'an empty clip is present, an absent clip is not');
+calls.length = 0;
+addVectorNode(module, { type: 'vector', id: 'plain', asset: clipped, style: { width: 10, height: 10 } },
+    0, 0, 10, 10);
+assert.equal(calls[0][6], 1, 'a node without opacity draws opaque');
+
+// Each wrapped symbol takes as many arguments as its C definition declares.
+const runtime = await readFile(join(root, 'web', 'src', 'web_runtime.cpp'), 'utf8');
+for (const [symbol, count] of arities) {
+    const definition = new RegExp(`EMSCRIPTEN_KEEPALIVE int ${symbol}\\(([^)]*)\\)`).exec(runtime);
+    assert.ok(definition, `${symbol} is defined`);
+    const parameters = definition[1].trim() ? definition[1].split(',').length : 0;
+    assert.equal(parameters, count, `${symbol} takes ${parameters} arguments in C`);
+}
 console.log('vector canvas builder test passed');

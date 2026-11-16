@@ -870,6 +870,7 @@ bool vector_nodes() {
         {"a transform on a clip", tree(R"JSON({"op":"group","clip":{"d":"M0 0H1V1Z","transform":[1,0,0,1,0,0]}},{"op":"end"})JSON")},
         {"an extra key on a paint", tree(R"JSON({"op":"path","d":"M0 0H1V1Z","fill":{"gradient":{"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]},"opacity":1}})JSON")},
         {"an extra key on a gradient", tree(R"JSON({"op":"path","d":"M0 0H1V1Z","fill":{"gradient":{"units":"user","stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}}})JSON")},
+        {"a miter limit under one", tree(R"JSON({"op":"path","d":"M0 0H10V10Z","strokeMiterLimit":0})JSON")},
         {"an extra key on a stop", tree(R"JSON({"op":"path","d":"M0 0H1V1Z","fill":{"gradient":{"stops":[{"position":0,"color":"#000000","opacity":1},{"position":1,"color":"#ffffff"}]}}})JSON")},
     };
     for (const auto& [what, json] : refusals) {

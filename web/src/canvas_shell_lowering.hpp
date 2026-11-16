@@ -3,6 +3,7 @@
 #include <vellum/graphics/effect.hpp>
 #include <vellum/graphics/lowering_diagnostic.hpp>
 #include <vellum/graphics/paint_command.hpp>
+#include <vellum/graphics/path_geometry.hpp>
 #include <vellum/graphics/scene.hpp>
 #include <vellum/graphics/scene_acceptance.hpp>
 #include <vellum/graphics/vector_asset.hpp>
@@ -12,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -228,6 +230,38 @@ inline void paint(std::string& out, const vellum::graphics::VectorPaint& source,
 /// rule), `restore`, `fill` and `stroke` (path data, an optional
 /// `transform`, and a paint of `color`, `linear` endpoints or `radial`
 /// circles with `stops`, drawn in the optional `space` coordinates).
+/// The vector node `vellum_web_begin_vector` starts. The rendered node's
+/// opacity applies to the asset as one group, as it does natively.
+[[nodiscard]] inline vellum::graphics::SceneNode vector_node(
+    std::string id, const vellum::graphics::Rect& bounds, float opacity) {
+    vellum::graphics::SceneNode node{
+        .id = std::move(id), .kind = vellum::graphics::SceneNode::Kind::vector, .bounds = bounds};
+    node.opacity = opacity;
+    return node;
+}
+
+/// The group operation `vellum_web_vector_group` adds, or nullopt when its
+/// clip path data does not parse. `has_clip` carries whether the group has a
+/// clip at all: an empty clip path clips everything away, as it does
+/// natively, while no clip draws everything.
+[[nodiscard]] inline std::optional<vellum::graphics::VectorOp> vector_group_op(
+    const vellum::graphics::Affine2D& transform, float opacity, bool has_clip,
+    std::string_view clip, bool evenodd) {
+    vellum::graphics::VectorOp op{
+        .kind = vellum::graphics::VectorOp::Kind::push_group,
+        .transform = transform,
+        .opacity = opacity,
+    };
+    if (has_clip) {
+        vellum::graphics::PathGeometry geometry;
+        if (!vellum::graphics::parse_svg_path_data(clip, geometry)) return std::nullopt;
+        geometry.fill_rule = evenodd ? vellum::graphics::FillRule::evenodd
+                                     : vellum::graphics::FillRule::nonzero;
+        op.clip = std::make_shared<const vellum::graphics::PathGeometry>(std::move(geometry));
+    }
+    return op;
+}
+
 struct CanvasVectorPlan final {
     std::string json;
     std::vector<std::string> losses;

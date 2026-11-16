@@ -26,6 +26,7 @@ export const SVG_ASSET_LIMITS = Object.freeze({
     maxCompiledDepth: 64,
     maxSubtreeDepth: 192,
     maxDashes: 64,
+    maxDashSegments: 90000,
     maxGradientStops: 64,
     maxSourceIdBytes: 900,
     maxNodeBudget: 100000,
@@ -67,9 +68,24 @@ function apply(m, x, y) {
     return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
 }
 
+// Plain decimal notation, which every path-data and number reader takes.
+function plain(number) {
+    const text = String(number);
+    if (!/e/i.test(text)) return text;
+    const digits = Math.min(100, Math.max(0, 7 - Math.floor(Math.log10(Math.abs(number)))));
+    return number.toFixed(digits).replace(/\.?0+$/, '');
+}
+
+// Six decimals, or seven significant digits below 0.1, so geometry a large
+// transform later scales up keeps its precision. Below 1e-12 even the
+// largest matrix entry allowed leaves it under a thousandth of a pixel, so
+// rounding noise from trigonometry becomes zero.
 function fmt(value) {
-    const rounded = Math.round(value * 1e6) / 1e6;
-    return Object.is(rounded, -0) ? '0' : String(rounded);
+    if (Math.abs(value) < 1e-12) return '0';
+    const rounded = Math.abs(value) < 0.1
+        ? Number(value.toPrecision(7))
+        : Math.round(value * 1e6) / 1e6;
+    return Object.is(rounded, -0) || rounded === 0 ? '0' : plain(rounded);
 }
 
 function cleanMatrix(m) {
@@ -101,6 +117,8 @@ function decodeText(value) {
 }
 
 const TEXT_ELEMENTS = new Set(['title', 'desc', 'text', 'tspan', 'textPath', 'style', 'metadata']);
+// Whitespace between the runs of a text element draws, so it is kept.
+const SPACED_TEXT = new Set(['text', 'tspan', 'textPath']);
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink';
 const XML_NAMESPACE = 'http://www.w3.org/XML/1998/namespace';
@@ -192,7 +210,7 @@ function parseXml(svg) {
     if (/<!/.test(text)) refuse('a markup declaration is not allowed');
 
     const root = { name: '#document', qualified: '#document', attributes: Object.create(null),
-        children: [], text: '', dropped: false,
+        children: [], parts: [], text: '', dropped: false,
         scope: new Map([['', SVG_NAMESPACE], ['xml', XML_NAMESPACE]]) };
     const stack = [root];
     let elements = 0;
@@ -207,8 +225,12 @@ function parseXml(svg) {
                 decodeText(content);
             } else {
                 if (!TEXT_ELEMENTS.has(parent.name)) refuse(`text content inside <${parent.name}>`);
-                parent.text += decodeText(content);
+                const decoded = decodeText(content);
+                parent.text += decoded;
+                parent.parts.push(decoded);
             }
+        } else if (content && SPACED_TEXT.has(stack.at(-1).name) && !stack.at(-1).dropped) {
+            stack.at(-1).parts.push(content);
         }
         if (next === -1) break;
         tag.lastIndex = next;
@@ -244,8 +266,11 @@ function parseXml(svg) {
             refuse(`<${name}> is outside the SVG namespace (${resolved.namespace || 'none'})`);
         }
         const node = { name: resolved.local, qualified: name, attributes: resolved.attributes,
-            children: [], text: '', dropped, scope: resolved.scope };
-        if (!dropped) parent.children.push(node);
+            children: [], parts: [], text: '', dropped, scope: resolved.scope };
+        if (!dropped) {
+            parent.children.push(node);
+            parent.parts.push(node);
+        }
         if (!selfClosing) {
             stack.push(node);
             if (stack.length - 1 > SVG_ASSET_LIMITS.maxDepth) {
@@ -308,9 +333,13 @@ function urlReferences(value, where) {
     return references;
 }
 
+// CSS the importer does not model, any of which could carry a resource:
+// at-rules, comments, escapes and image functions.
+const UNMODELLED_CSS = /@|\/\*|\\|expression\s*\(|javascript:|image-set|image\s*\(|cross-fade|element\s*\(/i;
+
 function styleDeclarations(value, where) {
-    if (/@import|expression\s*\(|javascript:|\\/i.test(value)) {
-        refuse(`${where} has a style with an import, expression or escape`);
+    if (UNMODELLED_CSS.test(value)) {
+        refuse(`${where} has a style with an at-rule, comment, escape, expression or image function`);
     }
     const declarations = Object.create(null);
     for (const part of value.split(';')) {
@@ -349,10 +378,88 @@ function checkAnimation(node, where) {
     }
 }
 
+// Following one of these references copies the referenced element's content
+// into the referencing one, so it counts toward the expansion budget.
+const EXPANDING_PROPERTIES = new Set(['clip-path', 'mask', 'filter', 'marker-start', 'marker-mid',
+    'marker-end']);
+const TEMPLATES = new Set(['pattern', 'filter']);
+
+// Every reference an element holds, as [target, expands]. A use, clip,
+// mask, filter, marker, pattern paint or pattern or filter template copies
+// its target; a gradient paint or gradient template only reads stops.
+function referencesOf(node, ids) {
+    const found = [];
+    for (const name of ['href', 'xlink:href']) {
+        const target = ids.get(localReference(node.attributes[name] ?? '') ?? '');
+        if (target) found.push([target, node.name === 'use' || TEMPLATES.has(target.name)]);
+    }
+    const values = [...Object.entries(node.attributes)];
+    if (node.attributes.style !== undefined) {
+        values.push(...Object.entries(styleDeclarations(node.attributes.style, `<${node.name}>`)));
+    }
+    for (const [name, value] of values) {
+        if (name === 'href' || name === 'xlink:href' || name === 'style') continue;
+        for (const id of urlReferences(value, `<${node.name}> ${name}`)) {
+            const target = ids.get(id);
+            if (!target) continue;
+            found.push([target, EXPANDING_PROPERTIES.has(name) ||
+                ((name === 'fill' || name === 'stroke') && target.name === 'pattern')]);
+        }
+    }
+    return found;
+}
+
+// One iterative walk over the document's children and references refuses a
+// reference cycle and bounds what expansion can cost before any is done: the
+// nodes every reference kind copies in and how deep they nest, each element
+// costed once.
+function checkExpansion(root, ids) {
+    const sizes = new Map();
+    const depths = new Map();
+    const open = new Set();
+    const edgesOf = (node) => [...node.children.map((child) => [child, true]),
+        ...referencesOf(node, ids)];
+    const frames = [[root, edgesOf(root), 0]];
+    open.add(root);
+    while (frames.length > 0) {
+        const frame = frames.at(-1);
+        const [node, edges] = frame;
+        if (frame[2] < edges.length) {
+            const [target] = edges[frame[2]];
+            frame[2] += 1;
+            if (open.has(target)) {
+                const trail = frames.slice(frames.findIndex(([held]) => held === target))
+                    .map(([held]) => held.attributes.id ?? `<${held.name}>`);
+                refuse(`the reference cycle ${[...trail, trail[0]].slice(0, 16).join(' -> ')}`);
+            }
+            if (sizes.has(target)) continue;
+            open.add(target);
+            frames.push([target, edgesOf(target), 0]);
+            continue;
+        }
+        let total = 1;
+        let depth = 1;
+        for (const [target, expands] of edges) {
+            if (!expands) continue;
+            total += sizes.get(target);
+            depth = Math.max(depth, 1 + depths.get(target));
+        }
+        sizes.set(node, Math.min(total, SVG_ASSET_LIMITS.maxExpandedNodes + 1));
+        depths.set(node, Math.min(depth, SVG_ASSET_LIMITS.maxExpandedDepth + 1));
+        open.delete(node);
+        frames.pop();
+    }
+    if (sizes.get(root) > SVG_ASSET_LIMITS.maxExpandedNodes) {
+        refuse(`references expand to more than ${SVG_ASSET_LIMITS.maxExpandedNodes} nodes`);
+    }
+    if (depths.get(root) > SVG_ASSET_LIMITS.maxExpandedDepth) {
+        refuse(`references nest deeper than ${SVG_ASSET_LIMITS.maxExpandedDepth}`);
+    }
+}
+
 function checkHostility(root) {
     const ids = new Map();
-    const references = new Map();
-    const visit = (node, holders) => {
+    const visit = (node) => {
         const where = `<${node.name}>`;
         if (FORBIDDEN_ELEMENTS.has(node.name)) refuse(`${where} is not allowed in an asset`);
         // A CSS escape (\69 for "i") can spell any forbidden word, so a
@@ -361,22 +468,22 @@ function checkHostility(root) {
             refuse('a <style> element with an import, URL, expression or escape');
         }
         if (ANIMATING_ELEMENTS.has(node.name)) checkAnimation(node, where);
-        const own = [];
         for (const [name, value] of Object.entries(node.attributes)) {
             const lower = name.toLowerCase();
             if (lower.startsWith('on')) refuse(`${where} has the event handler ${name}`);
             if (lower === 'xml:base') refuse(`${where} sets xml:base`);
+            // No SVG attribute needs a CSS escape, and one can spell a URL.
+            if (value.includes('\\')) refuse(`${where} ${name} holds a CSS escape`);
             if (lower === 'href' || lower === 'xlink:href') {
                 const id = localReference(value);
                 if (id === null) refuse(`${where} references ${value} outside the asset`);
-                own.push(id);
                 continue;
             }
             if (/javascript:|data:/i.test(value)) refuse(`${where} ${name} holds a script or data URL`);
-            own.push(...urlReferences(value, `${where} ${name}`));
+            urlReferences(value, `${where} ${name}`);
             if (name === 'style') {
                 for (const [property, declared] of Object.entries(styleDeclarations(value, where))) {
-                    own.push(...urlReferences(declared, `${where} style ${property}`));
+                    urlReferences(declared, `${where} style ${property}`);
                     if (!COLOR_ATTRIBUTES.has(property)) checkNumbers(declared, `${where} style ${property}`);
                 }
                 continue;
@@ -388,84 +495,14 @@ function checkHostility(root) {
         if (typeof node.attributes.id === 'string') {
             const id = node.attributes.id;
             if (!id || id.length > 256) refuse(`${where} has an empty or overlong id`);
+            if (!/^[\p{L}\p{N}_.:-]+$/u.test(id)) refuse(`${where} has an id with characters outside letters, digits and _.:-`);
             if (ids.has(id)) refuse(`the id ${id} is used twice`);
             ids.set(id, node);
         }
-        const inner = typeof node.attributes.id === 'string' ? [...holders, node.attributes.id] : holders;
-        for (const id of own) {
-            for (const holder of inner) {
-                if (!references.has(holder)) references.set(holder, new Set());
-                references.get(holder).add(id);
-            }
-        }
-        for (const child of node.children) visit(child, inner);
+        for (const child of node.children) visit(child);
     };
-    visit(root, []);
-    // A referenced element that, directly or through its descendants,
-    // references itself would expand forever: refuse every reference cycle.
-    // A referenced element that, directly or through its descendants,
-    // references itself would expand forever. The search is iterative, so a
-    // long chain costs its length, not stack depth.
-    const colour = new Map();
-    const from = new Map();
-    for (const start of references.keys()) {
-        if (colour.has(start)) continue;
-        colour.set(start, 'open');
-        const stack = [[start, (references.get(start) ?? new Set()).values()]];
-        while (stack.length > 0) {
-            const [id, next] = stack.at(-1);
-            const step = next.next();
-            if (step.done) {
-                colour.set(id, 'done');
-                stack.pop();
-                continue;
-            }
-            const target = step.value;
-            if (!ids.has(target)) continue;
-            if (colour.get(target) === 'open') {
-                const trail = [target];
-                for (let at = id; at !== target && at !== undefined; at = from.get(at)) trail.unshift(at);
-                refuse(`the reference cycle ${[target, ...trail].slice(0, 16).join(' -> ')}`);
-            }
-            if (colour.has(target)) continue;
-            colour.set(target, 'open');
-            from.set(target, id);
-            stack.push([target, (references.get(target) ?? new Set()).values()]);
-        }
-    }
-    // Bound the work `use` expansion can cause before doing any of it: the
-    // nodes it expands to and how deep it nests, each element visited once.
-    const sizes = new Map();
-    const depths = new Map();
-    const targetOf = (node) => (node.name === 'use'
-        ? ids.get(localReference(node.attributes.href ?? node.attributes['xlink:href'] ?? '') ?? '')
-        : undefined);
-    const pending = [[root, false]];
-    while (pending.length > 0) {
-        const [node, expanded] = pending.pop();
-        if (sizes.has(node)) continue;
-        const target = targetOf(node);
-        const next = target ? [...node.children, target] : node.children;
-        if (!expanded) {
-            pending.push([node, true]);
-            for (const child of next) if (!sizes.has(child)) pending.push([child, false]);
-            continue;
-        }
-        let total = 1;
-        let depth = 1;
-        for (const child of next) {
-            total += sizes.get(child) ?? 0;
-            depth = Math.max(depth, 1 + (depths.get(child) ?? 0));
-        }
-        sizes.set(node, Math.min(total, SVG_ASSET_LIMITS.maxExpandedNodes + 1));
-        depths.set(node, Math.min(depth, SVG_ASSET_LIMITS.maxExpandedDepth + 1));
-    }
-    if (sizes.get(root) > SVG_ASSET_LIMITS.maxExpandedNodes) {
-        refuse(`use references expand to more than ${SVG_ASSET_LIMITS.maxExpandedNodes} nodes`);
-    }
-    if (depths.get(root) > SVG_ASSET_LIMITS.maxExpandedDepth) {
-        refuse(`use references nest deeper than ${SVG_ASSET_LIMITS.maxExpandedDepth}`);
-    }
+    visit(root);
+    checkExpansion(root, ids);
     return ids;
 }
 
@@ -903,6 +940,51 @@ function pathBounds(segments) {
 }
 
 // One path's segments must fit the renderer's path budgets once serialized.
+// The length the native renderer bounds a dashed stroke with: each line and
+// curve control polygon, and each arc as its ellipse's circumference.
+function pathLengthBound(segments) {
+    let length = 0;
+    let x = 0;
+    let y = 0;
+    let startX = 0;
+    let startY = 0;
+    const to = (nextX, nextY) => {
+        length += Math.hypot(nextX - x, nextY - y);
+        x = nextX;
+        y = nextY;
+    };
+    for (const segment of segments) {
+        const [kind, ...values] = segment;
+        if (kind === 'M') {
+            [x, y] = values;
+            [startX, startY] = values;
+        } else if (kind === 'Z') {
+            to(startX, startY);
+        } else if (kind === 'A') {
+            if (values[0] > 0 && values[1] > 0 && (x !== values[5] || y !== values[6])) {
+                const { rx, ry } = arcCenter(x, y, segment);
+                length += 2 * Math.PI * Math.max(rx, ry);
+                x = values[5];
+                y = values[6];
+            } else {
+                to(values[5], values[6]);
+            }
+        } else {
+            for (let index = 0; index + 1 < values.length; index += 2) to(values[index], values[index + 1]);
+        }
+    }
+    return length;
+}
+
+// How many dashes a dash array draws along a path, as the native renderer
+// counts them: an odd array repeats once to make its period.
+function dashSegments(segments, dashes) {
+    const total = dashes.reduce((sum, dash) => sum + Math.fround(dash), 0);
+    const odd = dashes.length % 2 !== 0;
+    return pathLengthBound(segments) * (odd ? dashes.length : dashes.length / 2) /
+        (odd ? 2 * total : total);
+}
+
 function checkPathBudget(segments) {
     const values = segments.reduce((sum, segment) => sum + segment.length - 1, 0);
     if (segments.length > SVG_ASSET_LIMITS.maxPathCommands ||
@@ -1145,6 +1227,8 @@ class Importer {
         this.tokenMatches = new Set();
         this.nodeCount = 0;
         this.pathBytes = 0;
+        this.expanded = 0;
+        this.nesting = 0;
         this.root = parseXml(svg);
         this.ids = checkHostility(this.root);
         this.parents = new Map();
@@ -1309,7 +1393,23 @@ class Importer {
         }
     }
 
+    // Every element lowered, through any reference, counts against the same
+    // limits the expansion preflight applies.
     element(node, path, state, active, scoped = false) {
+        if (++this.expanded > SVG_ASSET_LIMITS.maxExpandedNodes) {
+            refuse(`references expand to more than ${SVG_ASSET_LIMITS.maxExpandedNodes} nodes`);
+        }
+        if (++this.nesting > SVG_ASSET_LIMITS.maxExpandedDepth) {
+            refuse(`references nest deeper than ${SVG_ASSET_LIMITS.maxExpandedDepth}`);
+        }
+        try {
+            return this.lowerElement(node, path, state, active, scoped);
+        } finally {
+            this.nesting -= 1;
+        }
+    }
+
+    lowerElement(node, path, state, active, scoped) {
         if (SILENT.has(node.name) || DEFINITIONS.has(node.name)) return null;
         if (ANIMATION.has(node.name)) {
             this.report('svg-animation-dropped', path, `<${node.name}> was dropped; the static frame is drawn`);
@@ -1689,7 +1789,12 @@ class Importer {
             } else if (parsed.length > SVG_ASSET_LIMITS.maxDashes) {
                 this.rasterOnly.push({ path, reason: `a stroke-dasharray of ${parsed.length} entries, beyond ${SVG_ASSET_LIMITS.maxDashes}, needs rasterization` });
             } else if (parsed.reduce((sum, part) => sum + part, 0) > 0) {
-                dashes = parsed;
+                const count = dashSegments(segments, parsed);
+                if (count > SVG_ASSET_LIMITS.maxDashSegments) {
+                    this.rasterOnly.push({ path, reason: `a stroke-dasharray that draws about ${Math.round(count)} dashes, beyond ${SVG_ASSET_LIMITS.maxDashSegments}, needs rasterization` });
+                } else {
+                    dashes = parsed;
+                }
             }
         }
         const join = ['miter', 'round', 'bevel'].includes(state['stroke-linejoin']) ? state['stroke-linejoin'] : 'miter';
@@ -1758,6 +1863,12 @@ class Importer {
                     }
                     const childValues = declared(shapeNode);
                     if (childValues.display === 'none') continue;
+                    for (const holder of new Set([child, shapeNode])) {
+                        const nested = declared(holder)['clip-path'];
+                        if (nested !== undefined && nested !== 'none') {
+                            this.rasterOnly.push({ path, reason: 'a clip-path inside a clipPath needs rasterization' });
+                        }
+                    }
                     // A hidden shape contributes no clip area; visibility
                     // inherits along the clipPath, through a use to its target.
                     const visibility = childValues.visibility !== undefined &&
@@ -1806,7 +1917,9 @@ class Importer {
             this.report('svg-mask-region-unclipped', path,
                 'the mask region is not applied: content farther than 10% beyond the masked bounding box is masked but not clipped');
             group.mask = { mode, id: `${group.id}:mask`,
-                children: this.children(definition, `${group.id}:mask`, this.inherit(INITIAL, definition), new Set(active).add(id), true) };
+                children: this.children(definition, `${group.id}:mask`,
+                    this.inherit(this.parents.has(definition) ? this.stateOf(this.parents.get(definition)) : INITIAL, definition),
+                    new Set(active).add(id), true) };
         }
     }
 }
@@ -2246,6 +2359,126 @@ function validateOptions(options) {
     return { ...options, sourceId, nodeBudget, pathDataBudget };
 }
 
+// ---------------------------------------------------------------------------
+// The rasterizer's input: the sanitized tree written out again from an
+// allowlist, never the source text. An element, attribute or value outside
+// the allowlist is left out, and the asset reports what was left out.
+
+const RASTER_INPUT_ELEMENTS = new Set(['svg', 'g', 'defs', 'symbol', 'use', 'switch', 'path',
+    'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'clipPath', 'mask',
+    'linearGradient', 'radialGradient', 'stop', 'pattern', 'marker', 'text', 'tspan', 'textPath',
+    'filter', 'feBlend', 'feColorMatrix', 'feComponentTransfer', 'feComposite',
+    'feConvolveMatrix', 'feDiffuseLighting', 'feDisplacementMap', 'feDistantLight',
+    'feDropShadow', 'feFlood', 'feFuncA', 'feFuncB', 'feFuncG', 'feFuncR', 'feGaussianBlur',
+    'feMerge', 'feMergeNode', 'feMorphology', 'feOffset', 'fePointLight', 'feSpecularLighting',
+    'feSpotLight', 'feTile', 'feTurbulence']);
+const RASTER_INPUT_PLAIN = new Set([
+    'x', 'y', 'width', 'height', 'cx', 'cy', 'r', 'rx', 'ry', 'x1', 'y1', 'x2', 'y2', 'fx', 'fy',
+    'fr', 'd', 'points', 'viewBox', 'preserveAspectRatio', 'offset', 'pathLength',
+    'gradientUnits', 'spreadMethod', 'clipPathUnits', 'maskUnits', 'maskContentUnits',
+    'mask-type', 'patternUnits', 'patternContentUnits', 'filterUnits', 'primitiveUnits',
+    'markerUnits', 'markerWidth', 'markerHeight', 'refX', 'refY', 'orient',
+    'fill-opacity', 'fill-rule', 'stroke-opacity', 'stroke-width', 'stroke-linecap',
+    'stroke-linejoin', 'stroke-miterlimit', 'stroke-dasharray', 'stroke-dashoffset',
+    'visibility', 'clip-rule', 'color-interpolation', 'color-interpolation-filters', 'opacity',
+    'display', 'overflow', 'stop-opacity', 'flood-opacity', 'paint-order', 'vector-effect',
+    'shape-rendering', 'mix-blend-mode', 'isolation', 'xml:space',
+    'font-size', 'font-weight', 'font-style', 'font-variant', 'font-stretch', 'text-anchor',
+    'dominant-baseline', 'alignment-baseline', 'baseline-shift', 'letter-spacing',
+    'word-spacing', 'text-decoration', 'writing-mode', 'direction', 'unicode-bidi',
+    'text-rendering', 'startOffset', 'method', 'spacing', 'side', 'textLength', 'lengthAdjust',
+    'dx', 'dy', 'rotate',
+    'in', 'in2', 'result', 'stdDeviation', 'mode', 'operator', 'k1', 'k2', 'k3', 'k4', 'type',
+    'values', 'tableValues', 'slope', 'intercept', 'amplitude', 'exponent', 'radius', 'scale',
+    'xChannelSelector', 'yChannelSelector', 'baseFrequency', 'numOctaves', 'seed',
+    'stitchTiles', 'order', 'kernelMatrix', 'divisor', 'bias', 'targetX', 'targetY', 'edgeMode',
+    'preserveAlpha', 'surfaceScale', 'specularConstant', 'specularExponent', 'diffuseConstant',
+    'kernelUnitLength', 'azimuth', 'elevation', 'z', 'pointsAtX', 'pointsAtY', 'pointsAtZ',
+    'limitingConeAngle']);
+const RASTER_INPUT_PAINTS = new Set(['fill', 'stroke']);
+const RASTER_INPUT_COLORS = new Set(['stop-color', 'color', 'flood-color', 'lighting-color']);
+const RASTER_INPUT_REFERENCES = new Set(['clip-path', 'mask', 'filter', 'marker-start',
+    'marker-mid', 'marker-end']);
+const RASTER_INPUT_TRANSFORMS = new Set(['transform', 'gradientTransform', 'patternTransform']);
+// Attributes that never change what is drawn, left out without a report.
+const RASTER_INPUT_QUIET = new Set(['id', 'style', 'class', 'role', 'lang', 'xml:lang', 'version',
+    'baseProfile', 'cursor', 'pointer-events', 'tabindex', 'focusable', 'requiredFeatures',
+    'requiredExtensions', 'systemLanguage', 'href', 'xlink:href']);
+const LOCAL_URL = /^url\(\s*(['"]?)#([^'")\s]+)\1\s*\)\s*(.*)$/;
+
+function rasterColor(value, paint) {
+    if (paint && ['none', 'context-fill', 'context-stroke'].includes(value)) return value;
+    if (value === 'currentColor') return value;
+    const color = parseColor(value);
+    if (color === null) return null;
+    if (color[3] === 1) return hexString(color);
+    return `rgba(${color.slice(0, 3).map((part) => Math.round(part)).join(',')},${plain(color[3])})`;
+}
+
+// The attribute as the rasterizer is given it: [name, value], null when it
+// is outside the allowlist, or undefined when it is left out quietly.
+function rasterAttribute(name, value) {
+    if (RASTER_INPUT_PLAIN.has(name)) {
+        return /^[A-Za-z0-9_\s,.+\-%]*$/.test(value) ? [name, value] : null;
+    }
+    if (name === 'font-family') return /^[A-Za-z0-9_\s,.\-'"]*$/.test(value) ? [name, value] : null;
+    if (RASTER_INPUT_COLORS.has(name)) {
+        const color = rasterColor(value, false);
+        return color === null ? null : [name, color];
+    }
+    if (RASTER_INPUT_PAINTS.has(name)) {
+        const url = LOCAL_URL.exec(value);
+        if (!url) {
+            const color = rasterColor(value, true);
+            return color === null ? null : [name, color];
+        }
+        if (!url[3]) return [name, `url(#${url[2]})`];
+        const fallback = rasterColor(url[3].trim(), true);
+        return fallback === null ? null : [name, `url(#${url[2]}) ${fallback}`];
+    }
+    if (RASTER_INPUT_REFERENCES.has(name)) {
+        if (value === 'none') return [name, value];
+        const url = LOCAL_URL.exec(value);
+        return url && !url[3] ? [name, `url(#${url[2]})`] : null;
+    }
+    if (RASTER_INPUT_TRANSFORMS.has(name)) {
+        const matrix = parseTransform(value);
+        return matrix === null ? null : [name, `matrix(${matrix.map(plain).join(' ')})`];
+    }
+    if (RASTER_INPUT_QUIET.has(name) || name.startsWith('aria-') || name.startsWith('data-')) {
+        return undefined;
+    }
+    return null;
+}
+
+const escapeXml = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+function rasterInput(root) {
+    const left = new Set();
+    const write = (node, top) => {
+        const name = node.name === 'a' ? 'g' : node.name;
+        if (!RASTER_INPUT_ELEMENTS.has(name)) {
+            if (!SILENT.has(name)) left.add(`<${node.name}>`);
+            return '';
+        }
+        const attributes = top ? [['xmlns', SVG_NAMESPACE], ['xmlns:xlink', XLINK_NAMESPACE]] : [];
+        if (typeof node.attributes.id === 'string') attributes.push(['id', node.attributes.id]);
+        const href = node.attributes.href ?? node.attributes['xlink:href'];
+        if (href !== undefined && node.name !== 'a') attributes.push(['xlink:href', `#${localReference(href)}`]);
+        for (const [key, value] of Object.entries(declared(node))) {
+            const written = rasterAttribute(key, value);
+            if (written === null) left.add(`${key} on <${node.name}>`);
+            else if (written !== undefined) attributes.push(written);
+        }
+        const open = attributes.map(([key, value]) => ` ${key}="${escapeXml(value)}"`).join('');
+        const content = node.parts.map((part) => (typeof part === 'string'
+            ? (SPACED_TEXT.has(name) ? escapeXml(part) : '') : write(part, false))).join('');
+        return content ? `<${name}${open}>${content}</${name}>` : `<${name}${open}/>`;
+    };
+    return { svg: write(root, true), left: [...left].sort() };
+}
+
 /**
  * Import an SVG asset as DesignIR source nodes.
  *
@@ -2275,7 +2508,12 @@ export function importSvgAsset(svg, options = {}) {
 
     const rasterReasons = [...new Set(importer.rasterOnly.map((item) => item.reason))];
     const rasterize = () => {
-        const raster = settings.rasterize(svg, { width: importer.width, height: importer.height });
+        const input = rasterInput(importer.root);
+        if (input.left.length > 0) {
+            importer.report('svg-raster-input-sanitized', settings.sourceId,
+                `the rasterizer was given the asset without ${input.left.join(', ')}`);
+        }
+        const raster = settings.rasterize(input.svg, { width: importer.width, height: importer.height });
         if (!raster || typeof raster.contentHash !== 'string') {
             throw new TypeError('rasterize must return an asset with a contentHash');
         }

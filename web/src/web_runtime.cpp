@@ -262,11 +262,13 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_add_text(
 /// Starts a `vector` node with a compiled asset of the given view box and
 /// content hash; operations follow, and `vellum_web_end_vector` adds it.
 EMSCRIPTEN_KEEPALIVE int vellum_web_begin_vector(
-    const char* id, float x, float y, float width, float height, float view_x, float view_y,
-    float view_width, float view_height, const char* content_hash) {
+    const char* id, float x, float y, float width, float height, float opacity, float view_x,
+    float view_y, float view_width, float view_height, const char* content_hash) {
     if (!kernel || id == nullptr || id[0] == '\0' || content_hash == nullptr ||
-        building_vector || !finite({x, y, width, height, view_x, view_y, view_width, view_height}) ||
-        width < 0.0F || height < 0.0F || !(view_width > 0.0F) || !(view_height > 0.0F) ||
+        building_vector ||
+        !finite({x, y, width, height, opacity, view_x, view_y, view_width, view_height}) ||
+        width < 0.0F || height < 0.0F || opacity < 0.0F || opacity > 1.0F ||
+        !(view_width > 0.0F) || !(view_height > 0.0F) ||
         !vellum::graphics::is_content_hash(content_hash)) {
         return 0;
     }
@@ -274,35 +276,22 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_begin_vector(
     building_asset = std::make_shared<vellum::graphics::VectorAsset>();
     building_asset->content_hash = content_hash;
     building_asset->view_box = {view_x, view_y, view_width, view_height};
-    building_vector = vellum::graphics::SceneNode{
-        .id = id,
-        .kind = vellum::graphics::SceneNode::Kind::vector,
-        .bounds = {x, y, width, height},
-    };
+    building_vector = vellum::web::vector_node(id, {x, y, width, height}, opacity);
     return 1;
 }
 
 EMSCRIPTEN_KEEPALIVE int vellum_web_vector_group(
-    float a, float b, float c, float d, float tx, float ty, float opacity, const char* clip,
-    int clip_evenodd) {
+    float a, float b, float c, float d, float tx, float ty, float opacity, int has_clip,
+    const char* clip, int clip_evenodd) {
     if (!room_for_op() || clip == nullptr || !finite({a, b, c, d, tx, ty, opacity}) ||
         opacity < 0.0F || opacity > 1.0F ||
         building_depth >= vellum::graphics::kMaxVectorGroupDepth) {
         return 0;
     }
-    vellum::graphics::VectorOp op{
-        .kind = vellum::graphics::VectorOp::Kind::push_group,
-        .transform = {a, b, c, d, tx, ty},
-        .opacity = opacity,
-    };
-    if (clip[0] != '\0') {
-        vellum::graphics::PathGeometry geometry;
-        if (!vellum::graphics::parse_svg_path_data(clip, geometry)) return 0;
-        geometry.fill_rule = clip_evenodd != 0 ? vellum::graphics::FillRule::evenodd
-                                               : vellum::graphics::FillRule::nonzero;
-        op.clip = std::make_shared<const vellum::graphics::PathGeometry>(std::move(geometry));
-    }
-    building_asset->ops.push_back(std::move(op));
+    auto op = vellum::web::vector_group_op({a, b, c, d, tx, ty}, opacity, has_clip != 0, clip,
+                                           clip_evenodd != 0);
+    if (!op) return 0;
+    building_asset->ops.push_back(std::move(*op));
     ++building_depth;
     return 1;
 }

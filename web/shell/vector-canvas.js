@@ -99,9 +99,9 @@ function drawSteps(context, plan) {
 
 const BUILDER_SIGNATURES = {
     begin: ['vellum_web_begin_vector', ['string', 'number', 'number', 'number', 'number',
-        'number', 'number', 'number', 'number', 'string']],
+        'number', 'number', 'number', 'number', 'number', 'string']],
     group: ['vellum_web_vector_group', ['number', 'number', 'number', 'number', 'number',
-        'number', 'number', 'string', 'number']],
+        'number', 'number', 'number', 'string', 'number']],
     end: ['vellum_web_vector_end_group', []],
     path: ['vellum_web_vector_path', ['string', 'number', ...Array(19).fill('number')]],
     dash: ['vellum_web_vector_dash', ['number']],
@@ -131,19 +131,27 @@ const SPREADS = { pad: 0, repeat: 1, reflect: 2 };
 const JOINS = { miter: 0, round: 1, bevel: 2 };
 const CAPS = { butt: 0, round: 1, square: 2 };
 
+// Adds a rendered Vector node to the shell's scene, with the node's own
+// opacity, which applies to the asset as one group.
+export function addVectorNode(module, node, x, y, width, height) {
+    const opacity = node.style?.opacity;
+    addVectorAsset(module, node.id, x, y, width, height, node.asset,
+        typeof opacity === 'number' && Number.isFinite(opacity) ? Math.min(1, Math.max(0, opacity)) : 1);
+}
+
 // Adds a compiled vector asset, in the form the runtime's Vector primitive
 // carries, to the shell's scene as one vector node.
-export function addVectorAsset(module, id, x, y, width, height, asset) {
+export function addVectorAsset(module, id, x, y, width, height, asset, opacity = 1) {
     const api = Object.fromEntries(Object.entries(BUILDER_SIGNATURES).map(([name, [symbol, args]]) =>
         [name, module.cwrap(symbol, 'number', args)]));
     const ok = (value, what) => {
         if (!value) throw new Error(`the web shell refused ${what} of vector ${id}`);
     };
-    ok(api.begin(id, x, y, width, height, ...asset.viewBox, asset.contentHash), 'the asset');
+    ok(api.begin(id, x, y, width, height, opacity, ...asset.viewBox, asset.contentHash), 'the asset');
     for (const op of asset.ops) {
         if (op.op === 'group') {
-            ok(api.group(...(op.transform ?? IDENTITY), op.opacity ?? 1, op.clip?.d ?? '',
-                op.clip?.rule === 'evenodd' ? 1 : 0), 'a group');
+            ok(api.group(...(op.transform ?? IDENTITY), op.opacity ?? 1, op.clip ? 1 : 0,
+                op.clip?.d ?? '', op.clip?.rule === 'evenodd' ? 1 : 0), 'a group');
         } else if (op.op === 'end') {
             ok(api.end(), 'a group end');
         } else {

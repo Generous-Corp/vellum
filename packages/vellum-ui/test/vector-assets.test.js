@@ -97,6 +97,10 @@ test('the vector primitive refuses malformed compiled assets', () => {
     assert.throws(tree({ ...asset, ops: [{ op: 'path', d: 'M0 0', fill: 'red' }] }), /hex color/);
     assert.throws(tree({ ...asset, ops: [{ op: 'path', d: 'M0 0', script: 1 }] }), /unsupported/);
     assert.throws(tree({ ...asset, viewBox: [0, 0, 0, 10] }), /positive/);
+    const miter = (value) => tree({ ...asset, ops: [{ op: 'path', d: 'M0 0H10V10Z', strokeMiterLimit: value }] });
+    assert.throws(miter(0), /strokeMiterLimit must be at least 1/);
+    assert.throws(miter(0.5), /strokeMiterLimit must be at least 1/);
+    assert.doesNotThrow(miter(1));
 });
 
 test('vector asset fields are not read below DesignIR version 6', async () => {

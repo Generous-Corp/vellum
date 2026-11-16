@@ -97,7 +97,11 @@ test('rasterization is the last fallback and is always a recorded loss', async (
     let calls = 0;
     const rasterize = (input, size) => {
         calls += 1;
-        assert.equal(input, svg);
+        assert.equal(input, '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ' +
+            'width="120" height="60" viewBox="0 0 120 60"><defs><filter id="soft"><feGaussianBlur stdDeviation="2"/>' +
+            '</filter></defs><rect id="plate" width="120" height="60" fill="#334155"/>' +
+            '<circle id="blurred" cx="30" cy="30" r="20" fill="#f59e0b" filter="url(#soft)"/>' +
+            '<text id="caption" x="60" y="35" fill="#ffffff">Hi</text></svg>');
         assert.deepEqual(size, { width: 120, height: 60 });
         return { contentHash: `sha256:${'b'.repeat(64)}`, mimeType: 'image/png' };
     };
@@ -269,7 +273,8 @@ test('rasterizing keeps the earlier losses and authored ids never collide with g
         '<rect width="5" height="5" filter="url(#f)"><animate attributeName="x" to="1"/></rect><filter id="f"/>'),
         { source, rasterize: () => ({ contentHash: `sha256:${'f'.repeat(64)}` }) });
     assert.equal(raster.mode, 'rasterized');
-    assert.deepEqual(codes(raster.document), ['svg-animation-dropped', 'svg-rasterized']);
+    assert.deepEqual(codes(raster.document),
+        ['svg-animation-dropped', 'svg-raster-input-sanitized', 'svg-rasterized']);
     const ids = svgAssetToDesignIR(wrap(
         '<rect id="a" transform="translate(1 1)" width="1" height="1"/><rect id="a:shape" width="1" height="1"/>' +
         '<rect id="a.0" width="1" height="1"/>'), { source });
