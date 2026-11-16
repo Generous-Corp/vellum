@@ -232,7 +232,15 @@ class SdlWindowHostImpl : public SdlWindowHost {
                     case SDL_EVENT_WINDOW_FOCUS_LOST:
                         cancel_pointer();
                         break;
+                    case SDL_EVENT_WINDOW_MOUSE_ENTER: {
+                        float x = 0, y = 0;
+                        SDL_GetMouseState(&x, &y);
+                        hover_cursor_.set_pointer(window_to_root(x, y));
+                        needs_repaint_ = true;
+                        break;
+                    }
                     case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+                        SDL_ShowCursor();
                         hover_cursor_.clear_pointer();
                         root_.simulate_hover({-1, -1});
                         needs_repaint_ = true;
@@ -482,6 +490,14 @@ private:
         auto* target = pointer_capture_.live_in(root_);
         pointer_capture_.reset();
         const auto button = std::exchange(pointer_button_, MouseButton::none);
+        if (button == MouseButton::left) {
+            MouseEvent event;
+            event.position = pointer_point_;
+            event.window_position = pointer_point_;
+            event.phase = MousePhase::release;
+            event.is_cancelled = true;
+            root_.dispatch_gesture_pointer_event(event);
+        }
         if (target)
             deliver_mouse_cancel(root_, target, pointer_point_, modifiers(SDL_GetModState()),
                                  click_count_, button);
