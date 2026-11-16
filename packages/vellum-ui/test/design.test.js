@@ -490,6 +490,8 @@ test('Design refuses path fields it would otherwise drop', () => {
     });
     assert.doesNotThrow(() => materializeDesign(document({ strokeWidth: 2 })),
         'control: a supported path paint field is accepted');
+    assert.throws(() => materializeDesign(document({ borderRadius: 4 })),
+        /design path zig paint\.borderRadius is not supported/);
     assert.throws(() => materializeDesign(document({ strokeOpacity: 0.5 })),
         /design path zig paint\.strokeOpacity is not supported/);
     const stopped = (stop) => ({

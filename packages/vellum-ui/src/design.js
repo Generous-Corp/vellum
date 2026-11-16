@@ -175,7 +175,7 @@ function retainedGradient(context, refs, prefix, gradient) {
     return output;
 }
 
-const PATH_PAINT_FIELDS = new Set(['fill', 'stroke', 'borderRadius', ...PATH_STROKE_FIELDS]);
+const PATH_PAINT_FIELDS = new Set(['fill', 'stroke', ...PATH_STROKE_FIELDS]);
 const PATH_GEOMETRY_FIELDS = new Set(['d', 'fillRule']);
 
 function requirePathFields(node, name, value, allowed) {
