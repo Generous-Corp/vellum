@@ -425,6 +425,13 @@ class ReceiverTests(unittest.TestCase):
             **overrides,
         )
 
+    def test_the_lag_bound_does_not_exceed_the_watchdog_sla(self) -> None:
+        policy = json.loads(
+            (Path(__file__).resolve().parents[2] / "provenance/pulp-observatory/receiver-policy.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertLessEqual(receiver.COALESCE_MAX_LAG_MINUTES, policy["cursor_lag_sla_minutes"])
+
     def test_decision_for_a_release_change(self) -> None:
         coalesce, reason = receiver.coalesce_decision(release=["scripts/release_request.py"], lag_minutes=0)
         self.assertTrue(coalesce)
