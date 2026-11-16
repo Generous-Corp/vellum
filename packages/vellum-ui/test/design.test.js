@@ -492,6 +492,23 @@ test('Design refuses path fields it would otherwise drop', () => {
         'control: a supported path paint field is accepted');
     assert.throws(() => materializeDesign(document({ strokeOpacity: 0.5 })),
         /design path zig paint\.strokeOpacity is not supported/);
+    const stopped = (stop) => ({
+        tokens: { 'c.fill': { $type: 'color', $value: '#14b8a6' } },
+        root: {
+            id: 'root', kind: 'view', properties: { layout: { width: 40, height: 40 }, paint: {
+                backgroundLinearGradient: {
+                    angle: 90,
+                    stops: [{ position: 0, color: '{c.fill}', ...stop },
+                        { position: 1, color: '#ffffff' }],
+                },
+            } },
+            children: [],
+        },
+    });
+    assert.doesNotThrow(() => materializeDesign(stopped({})),
+        'control: a stop with a position and a colour is accepted');
+    assert.throws(() => materializeDesign(stopped({ opacity: 0.5 })),
+        /backgroundLinearGradient\.stops\.0\.opacity is not supported/);
     assert.throws(() => materializeDesign(document({}, { d: 'M0 0', winding: 'x' })),
         /design path zig path\.winding is not supported/);
 });

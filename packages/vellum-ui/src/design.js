@@ -161,10 +161,17 @@ function retainedGradient(context, refs, prefix, gradient) {
         }
         output[field] = value;
     }
-    output.stops = gradient.stops.map((stop, index) => ({
-        position: stop?.position,
-        color: colorSlot(context, refs, `${prefix}.stops.${index}`, stop?.color),
-    }));
+    output.stops = gradient.stops.map((stop, index) => {
+        for (const field of Object.keys(stop ?? {})) {
+            if (field !== 'position' && field !== 'color' && stop[field] !== undefined) {
+                throw new TypeError(`${prefix}.stops.${index}.${field} is not supported`);
+            }
+        }
+        return {
+            position: stop?.position,
+            color: colorSlot(context, refs, `${prefix}.stops.${index}`, stop?.color),
+        };
+    });
     return output;
 }
 
