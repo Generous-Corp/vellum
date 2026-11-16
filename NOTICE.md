@@ -1373,6 +1373,51 @@ which draws from its Mbed TLS CTR-DRBG instance.
 
 ---
 
+## Optional V8 provider
+
+With `VELLUM_ENABLE_V8=ON` the SDK installs `lib/libv8.dylib`, the sealed V8
+15.8.62.6 shared library built by danielraffel/v8-builder
+(`v8-m158-15.8.62.6-38351a002e2c`), and links it from
+`Vellum::SkiaDawnProvider`. The default Vellum build and SDK do not carry it.
+
+Copyright 2014 the V8 project authors. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+     notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+     copyright notice, this list of conditions and the following
+     disclaimer in the documentation and/or other materials provided
+     with the distribution.
+   * Neither the name of Google Inc. nor the names of its
+     contributors may be used to endorse or promote products derived
+     from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+The library exports only the `v8::` and `cppgc::` API, and statically
+bundles libraries whose notices survive that sealing. V8 is built with `Intl`,
+so it carries ICU's code under the Unicode License V3 and the ICU license (the
+ICU section above); the mac-arm64 archive ships no separate ICU data file. It also carries zlib under the zlib
+license and Abseil under the Apache License, Version 2.0 (the Chromium zlib,
+Abseil and Apache License sections above). Re-check these bundled notices
+against the V8 source tree's `third_party` licenses whenever the V8 pin moves.
+
+---
+
 ## Optional RmlUi module
 
 The components below are fetched at pinned identities and built from source
@@ -1515,7 +1560,7 @@ here and must travel with the mirrored files.
 | SDL3 | zlib | `render-2d` and `view-core` unit external input, built from source as `SDL3-static`; bytes not mirrored | Carry zlib notice; license ships under `sdk/mirror/share/licenses/sdl3/` |
 | SheenBidi | Apache-2.0 | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | Carry Apache-2.0 text |
 | Skia and skcms | BSD-3-Clause | `canvas` unit external input (`mirror/core/canvas/`); bytes not mirrored | Text above |
-| V8 | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned scripted-view unit, when selected) | Text above plus ICU/zlib/Abseil |
+| V8 | BSD-3-Clause | `view-script` unit external input with `VELLUM_ENABLE_V8=ON`; `lib/libv8.dylib` installed beside the provider; bytes not mirrored | Text in "Optional V8 provider" plus ICU/zlib/Abseil |
 | yaml-cpp | MIT | `design-import` unit external input, built from source as `yaml-cpp`; bytes not mirrored | Carry upstream MIT text; license ships under `sdk/mirror/share/licenses/yaml-cpp/` |
 | Yoga | MIT | `view-core` unit external input, built from source as `yogacore`; bytes not mirrored | Carry upstream MIT text; license ships under `sdk/mirror/share/licenses/yoga/` |
 

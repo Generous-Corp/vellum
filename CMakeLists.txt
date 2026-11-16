@@ -22,6 +22,10 @@ option(VELLUM_ENABLE_AUTHORING "Build the native JavaScript/TypeScript applicati
 option(VELLUM_ENABLE_WEB "Build the experimental browser/Wasm proof" OFF)
 option(VELLUM_ENABLE_MIRROR
     "Package the landed mirror's units (needs the locked Skia/Dawn archive)" OFF)
+option(VELLUM_ENABLE_V8
+    "Compile the mirror's view-script unit with the sealed V8 provider and install libv8 (needs VELLUM_ENABLE_MIRROR)" OFF)
+set(VELLUM_V8_ARCHIVE "" CACHE FILEPATH
+    "Local copy of the pinned sealed V8 archive; digest-checked like a download")
 option(VELLUM_ENABLE_ADDRESS_SANITIZER
     "Instrument Vellum targets with AddressSanitizer" OFF)
 option(VELLUM_ENABLE_RMLUI
@@ -87,6 +91,10 @@ endif()
 add_subdirectory(gpu-runtime)
 
 set(VELLUM_PACKAGE_HAS_MIRROR OFF)
+if(VELLUM_ENABLE_V8 AND NOT VELLUM_ENABLE_MIRROR)
+    message(FATAL_ERROR "Vellum: VELLUM_ENABLE_V8 compiles the mirror's view-script unit; "
+        "it needs VELLUM_ENABLE_MIRROR=ON")
+endif()
 if(VELLUM_ENABLE_MIRROR)
     include(tools/mirror/VellumMirror.cmake)
 endif()
@@ -235,6 +243,11 @@ if(VELLUM_BUILD_TESTS)
             graphics/tests/layer_cache_test.cpp)
         target_link_libraries(vellum-layer-cache-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.layer-cache COMMAND vellum-layer-cache-test)
+
+        add_executable(vellum-plot-test
+            graphics/tests/plot_test.cpp)
+        target_link_libraries(vellum-plot-test PRIVATE Vellum::Graphics Threads::Threads)
+        add_test(NAME vellum.plot COMMAND vellum-plot-test)
 
         add_executable(vellum-damage-test
             graphics/tests/damage_test.cpp)
@@ -555,6 +568,8 @@ if(VELLUM_BUILD_TESTS)
                 "-DVELLUM_MIRROR_DEPS_DIR=${VELLUM_MIRROR_DEPS_DIR}"
                 "-DVELLUM_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}"
                 "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
+                "-DVELLUM_ENABLE_V8=${VELLUM_MIRROR_HAS_V8}"
+                "-DVELLUM_V8_VERSION=${VELLUM_V8_VERSION}"
                 ${_vellum_view_audio_archive_arg}
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
         # An installed consumer reaches Vellum's value model through the view

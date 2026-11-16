@@ -40,17 +40,72 @@ run_chrome_interaction_capture = BACKEND_MODULE["run_chrome_interaction_capture"
 validate_interaction_plan = BACKEND_MODULE["validate_interaction_plan"]
 
 sys.path.insert(0, str(REPO / "cli"))
+sys.path.insert(0, str(REPO / "cli/tests"))
 try:
     import vellum_png
+    import live_browser
 finally:
+    sys.path.pop(0)
     sys.path.pop(0)
 
 
-def browser_for_capture() -> str | None:
-    try:
-        return chrome_path()
-    except BackendFailure:
-        return None
+class LiveBrowserGateTests(unittest.TestCase):
+    """Live-browser tests never reach for the installed Chrome by default."""
+
+    def run_live_capture_test(self, environ: dict[str, str]):
+        case = next(case for case in globals().values()
+                    if isinstance(case, type) and issubclass(case, unittest.TestCase)
+                    and hasattr(case, "test_a_live_browser_capture_is_a_png_of_the_page"))
+        suite = unittest.TestSuite([case("test_a_live_browser_capture_is_a_png_of_the_page")])
+        result = unittest.TestResult()
+        system = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        with mock.patch.dict("os.environ", environ, clear=True), \
+             mock.patch("subprocess.Popen") as popen, \
+             mock.patch("subprocess.run") as run, \
+             mock.patch("shutil.which", return_value="/usr/bin/google-chrome"):
+            suite.run(result)
+        launched = [call for call in popen.call_args_list + run.call_args_list
+                    if system in repr(call) or "google-chrome" in repr(call)]
+        return result, popen, run, launched
+
+    def test_unset_pinned_browser_skips_and_never_launches_system_chrome(self) -> None:
+        result, popen, run, launched = self.run_live_capture_test({})
+        self.assertEqual((len(result.skipped), len(result.failures), len(result.errors)), (1, 0, 0))
+        self.assertIn("VELLUM_CHROME_PATH", result.skipped[0][1])
+        self.assertEqual(launched, [])
+        popen.assert_not_called()
+        run.assert_not_called()
+
+    def test_a_set_but_unusable_pinned_browser_fails_instead_of_skipping(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = str(Path(directory) / "no-such-chrome")
+            plain = Path(directory) / "plain"
+            plain.write_text("x", encoding="utf-8")
+            plain.chmod(0o644)
+            for pin in (missing, str(plain)):
+                with self.subTest(pin=pin):
+                    self.assertIsNone(live_browser.live_browser_skip_reason({"VELLUM_CHROME_PATH": pin}))
+                    result, popen, run, launched = self.run_live_capture_test({"VELLUM_CHROME_PATH": pin})
+                    self.assertEqual(len(result.skipped), 0)
+                    self.assertEqual(len(result.failures) + len(result.errors), 1)
+                    self.assertIn("VELLUM_CHROME_PATH does not name an executable browser",
+                                  (result.failures + result.errors)[0][1])
+                    self.assertEqual(launched, [])
+                    popen.assert_not_called()
+                    run.assert_not_called()
+
+    def test_escape_hatch_is_the_only_way_to_allow_the_system_browser(self) -> None:
+        self.assertIsNone(live_browser.live_browser_skip_reason({"VELLUM_TEST_ALLOW_SYSTEM_CHROME": "1"}))
+        self.assertIsNotNone(live_browser.live_browser_skip_reason({"VELLUM_TEST_ALLOW_SYSTEM_CHROME": "0"}))
+        self.assertIsNotNone(live_browser.live_browser_skip_reason({}))
+        self.assertIsNotNone(live_browser.live_browser_skip_reason({"VELLUM_CHROME_PATH": ""}))
+
+    def test_a_pinned_executable_browser_may_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            browser = Path(directory) / "chrome"
+            browser.write_text("#!/bin/sh\n", encoding="utf-8")
+            browser.chmod(0o755)
+            self.assertIsNone(live_browser.live_browser_skip_reason({"VELLUM_CHROME_PATH": str(browser)}))
 
 
 class ChromeDiscoveryTests(unittest.TestCase):
@@ -431,7 +486,7 @@ class WebCaptureArtifactTests(unittest.TestCase):
             self.assertEqual(output.read_bytes(), b"earlier capture")
             self.assertEqual([path.name for path in output.parent.iterdir()], ["hero.png"])
 
-    @unittest.skipUnless(browser_for_capture(), "a Chrome browser is required for the live capture proof")
+    @live_browser.requires_pinned_chrome
     def test_a_live_browser_capture_is_a_png_of_the_page(self) -> None:
         site = self.project / "site"
         site.mkdir()
