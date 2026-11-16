@@ -326,25 +326,19 @@ def framework_file_set(repo: Path) -> tuple[set[str], dict[str, dict[str, Any]],
     The transfer record's paths, minus the ports ledger's removals, plus its
     additions. A ledger that is malformed or does not replay is refused.
     """
-    record = load_json(repo / FRAMEWORK_TRANSFER)
-    transferred = {row["framework_path"] for row in record.get("records", [])}
-    expected, added, removed, errors = framework_ports.file_set(repo, transferred)
-    if errors:
-        raise PlanError(errors[0])
+    expected, added, removed, _ = framework_file_set_scoped(repo)
     return expected, added, removed
 
 
-def framework_ledger(repo: Path) -> tuple[dict[str, dict[str, Any]], set[str], dict[str, frozenset[str]]]:
-    """The ports ledger, replayed once: (added rows by path, removed paths, platform scopes).
-
-    A ledger that is malformed or does not replay is refused.
-    """
+def framework_file_set_scoped(repo: Path
+                              ) -> tuple[set[str], dict[str, dict[str, Any]], set[str], dict[str, frozenset[str]]]:
+    """framework_file_set, plus the platforms each ledger-added source is compiled on."""
     record = load_json(repo / FRAMEWORK_TRANSFER)
     transferred = {row["framework_path"] for row in record.get("records", [])}
-    _, added, removed, scopes, errors = framework_ports.file_set_scoped(repo, transferred)
+    expected, added, removed, scopes, errors = framework_ports.file_set_scoped(repo, transferred)
     if errors:
         raise PlanError(errors[0])
-    return added, removed, scopes
+    return expected, added, removed, scopes
 
 
 # The platform the landed receipt's closures describe: load_closures refuses
@@ -497,7 +491,10 @@ def source_compile_options_for(repo: Path, receipt: dict[str, Any],
         # A ledger-added source is compiled like an exported one, so the
         # framework's CMake may set its per-source options the same way.
         # Only on the platforms its scope lists.
-        added, _, scopes = framework_ledger(repo) if ledger is None else (ledger[0], None, ledger[1])
+        if ledger is None:
+            _, added, _, scopes = framework_file_set_scoped(repo)
+        else:
+            added, scopes = ledger
         exported |= {path.removeprefix(f"{FRAMEWORK_DIR}/") for path in added
                      if framework_ports.compiled(path) and framework_ports.compiled_on(scopes, path, platform)}
     try:
@@ -1215,7 +1212,8 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     receipt_path, receipt = newest_receipt(repo)
     file_count = (verify_framework_identity(repo, receipt_path, receipt) if transferred(repo)
                   else verify_mirror_identity(repo, receipt))
-    ports_added, ports_removed, scopes = framework_ledger(repo) if transferred(repo) else ({}, set(), {})
+    _, ports_added, ports_removed, scopes = (framework_file_set_scoped(repo) if transferred(repo)
+                                             else (set(), {}, set(), {}))
     declared, declared_errors = (framework_ports.declared_units(repo, ports_added, scopes) if transferred(repo)
                                  else ([], []))
     if declared_errors:
