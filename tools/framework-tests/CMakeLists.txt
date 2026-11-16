@@ -46,7 +46,7 @@ vellum_add_framework_test(param-model-binding
 
 # The view-script unit runs the sealed V8 provider (VELLUM_ENABLE_V8). Without
 # V8 the same test is the control: it must still run to completion and fail
-# exactly its five V8 cases while its QuickJS case passes, which proves the
+# exactly its seven V8 cases while its QuickJS case passes, which proves the
 # checks see a build that does not link V8.
 vellum_add_framework_test(v8-engine
     SOURCES v8_engine_test.cpp
@@ -56,7 +56,7 @@ if(VELLUM_ENABLE_V8)
         VELLUM_TEST_EXPECTED_V8_VERSION="${VELLUM_V8_VERSION}")
 else()
     set_tests_properties(vellum.framework.v8-engine PROPERTIES
-        PASS_REGULAR_EXPRESSION "PASS quickjs_is_not_reported_as_v8\n.*6 cases, 5 failed")
+        PASS_REGULAR_EXPRESSION "PASS quickjs_is_not_reported_as_v8\n.*8 cases, 7 failed")
 endif()
 
 # The scripted WebGPU binding against a headless Dawn device (the Null
