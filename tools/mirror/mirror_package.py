@@ -334,6 +334,22 @@ def framework_file_set(repo: Path) -> tuple[set[str], dict[str, dict[str, Any]],
     return expected, added, removed
 
 
+def framework_scopes(repo: Path) -> dict[str, frozenset[str]]:
+    """The platforms each ledger-added source is compiled on (framework_ports.replay_scoped)."""
+    record = load_json(repo / FRAMEWORK_TRANSFER)
+    transferred = {row["framework_path"] for row in record.get("records", [])}
+    scopes, errors = framework_ports.scopes(repo, transferred)
+    if errors:
+        raise PlanError(errors[0])
+    return scopes
+
+
+# The platform the landed receipt's closures describe: load_closures refuses
+# any closure not exported for the Darwin arm64 Skia build. A platform with no
+# verified closure is refused by plan().
+RECEIPT_PLATFORM = "macos-arm64"
+
+
 def verify_framework_identity(repo: Path, receipt_path: str, receipt: dict[str, Any]) -> int:
     """Hold framework/ to its file set: the transfer record and the ports ledger.
 
@@ -456,7 +472,8 @@ def mirror_cmake_files(repo: Path) -> dict[str, str]:
 
 
 def source_compile_options_for(repo: Path, receipt: dict[str, Any],
-                               units: list[tuple[str, dict[str, Any]]]) -> dict[str, list[str]]:
+                               units: list[tuple[str, dict[str, Any]]],
+                               platform: str = RECEIPT_PLATFORM) -> dict[str, list[str]]:
     """Exported source -> the per-source COMPILE_OPTIONS Pulp's CMake applies to it
     under the closures' configure (tools/mirror/source_compile_options.py)."""
     configures = {json.dumps((closure.get("configure") or {}).get("options"), sort_keys=True)
@@ -471,8 +488,11 @@ def source_compile_options_for(repo: Path, receipt: dict[str, Any],
     if transferred(repo):
         # A ledger-added source is compiled like an exported one, so the
         # framework's CMake may set its per-source options the same way.
+        # Only on the platforms its scope lists.
         _, added, _ = framework_file_set(repo)
-        exported |= {path.removeprefix(f"{FRAMEWORK_DIR}/") for path in added if framework_ports.compiled(path)}
+        scopes = framework_scopes(repo)
+        exported |= {path.removeprefix(f"{FRAMEWORK_DIR}/") for path in added
+                     if framework_ports.compiled(path) and framework_ports.compiled_on(scopes, path, platform)}
     try:
         targets = {target["name"] for _, closure in units for target in closure.get("targets", [])}
         return source_compile_options.evaluate(mirror_cmake_files(repo), options, exported, targets)
@@ -1177,18 +1197,29 @@ def plan_declared_targets(repo: Path, declared: list[dict[str, Any]], units: lis
 
 def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
          skia_asset_sha256: str | None = None,
-         in_tree_definitions: dict[str, list[str]] | None = None) -> dict[str, Any]:
+         in_tree_definitions: dict[str, list[str]] | None = None,
+         platform: str = "macos-arm64") -> dict[str, Any]:
     repo = repo.resolve()
+    if platform not in framework_ports.PLATFORMS:
+        raise PlanError(f"unknown platform {platform!r}; known: {list(framework_ports.PLATFORMS)}")
     receipt_path, receipt = newest_receipt(repo)
     file_count = (verify_framework_identity(repo, receipt_path, receipt) if transferred(repo)
                   else verify_mirror_identity(repo, receipt))
     _, ports_added, ports_removed = framework_file_set(repo) if transferred(repo) else (set(), {}, set())
-    declared, declared_errors = (framework_ports.declared_units(repo, ports_added) if transferred(repo)
+    scopes = framework_scopes(repo) if transferred(repo) else {}
+    declared, declared_errors = (framework_ports.declared_units(repo, ports_added, scopes) if transferred(repo)
                                  else ([], []))
     if declared_errors:
         raise PlanError(declared_errors[0])
     units = load_closures(repo, receipt)
-    source_options = source_compile_options_for(repo, receipt, units)
+    if platform != RECEIPT_PLATFORM:
+        raise PlanError(f"no verified closure for platform {platform}: the landed closures describe "
+                        f"{RECEIPT_PLATFORM}")
+    # A ledger-added source or declared target is planned only on its platforms.
+    ports_added = {path: row for path, row in ports_added.items()
+                   if not framework_ports.compiled(path) or framework_ports.compiled_on(scopes, path, platform)}
+    declared = [target for target in declared if platform in framework_ports.platforms_of(target)]
+    source_options = source_compile_options_for(repo, receipt, units, platform)
     attached: set[str] = set()
     ported_targets: set[str] = set()
     deps = external_dependencies(units)
@@ -1374,6 +1405,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         "mirror_tree": receipt["mirror_tree"],
         "mirror_files_verified": file_count,
         "framework_native_edits": framework_native_edits(repo) if transferred(repo) else [],
+        "platform": platform,
         "framework_ports": {"added": sorted(ports_added), "removed": sorted(ports_removed)},
         "framework_units": [target["name"] for target in declared],
         "native_preludes": generated["native_preludes"],
@@ -1505,6 +1537,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skia-asset-sha256", help="digest of the Skia/Dawn archive Vellum locks")
     parser.add_argument("--cmake-output", type=Path, required=True)
     parser.add_argument("--json-output", type=Path)
+    parser.add_argument("--platform", default="macos-arm64",
+                        help="the platform key to plan for; it needs a verified closure")
     parser.add_argument(
         "--in-tree-definitions", action="append", default=[], metavar="NAME=DEF|DEF",
         help="an in-tree dependency's INTERFACE_COMPILE_DEFINITIONS, from the configured targets")
@@ -1516,7 +1550,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         build_plan = plan(args.repo, args.deps_dir.resolve(), args.generated_dir.resolve(),
                           args.skia_dir.resolve() if args.skia_dir else None,
-                          args.skia_asset_sha256, in_tree_definitions)
+                          args.skia_asset_sha256, in_tree_definitions, args.platform)
     except PlanError as error:
         print(f"vellum-mirror-package: {error}", file=sys.stderr)
         return 1

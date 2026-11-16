@@ -1549,7 +1549,8 @@ def framework_ports_state(root: Path, transferred: set[str], pulp_root: Path | N
     checks: dict[str, object] = {"framework_ports_added": sorted(added), "framework_ports_removed": sorted(removed)}
     # Targets no closure builds are declared in the unit manifest, each source
     # also accounted for by its ledger row (framework_ports.units_errors).
-    declared, unit_errors = ports.declared_units(root, added)
+    scopes, _ = ports.scopes(root, transferred)  # its errors are the file set's, reported above
+    declared, unit_errors = ports.declared_units(root, added, scopes)
     errors = errors + unit_errors
     checks["framework_units_declared"] = [target["name"] for target in declared]
     rows, row_errors = ports.load(root)

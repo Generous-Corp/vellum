@@ -303,5 +303,127 @@ class DeclaredUnitsTest(unittest.TestCase):
                                    "is not a directory framework/ holds")
 
 
+
+class PlatformScopeTest(unittest.TestCase):
+    """Schema v2: a compiled source carries the platforms it is compiled on."""
+
+    SRC = "framework/core/a/src/new.cpp"
+
+    def scoped(self, platforms, path: str = SRC, **overrides) -> dict:
+        fields = {"target": "a-target", "framework_blob": None, "platforms": platforms, **overrides}
+        return row(path, "scoped", **fields)
+
+    def errors(self, candidate) -> list:
+        return fp.row_errors(candidate, "row")
+
+    def assertRefused(self, candidate, fragment: str) -> None:
+        errors = self.errors(candidate)
+        self.assertTrue(any(fragment in error for error in errors), errors)
+
+    def test_a_compiled_row_may_name_known_platforms(self) -> None:
+        self.assertEqual(self.errors(row(platforms=["linux-x64", "macos-arm64"])), [])
+        self.assertEqual(self.errors(self.scoped(["windows-x64"])), [])
+
+    def test_platform_lists_are_checked(self) -> None:
+        self.assertRefused(row(platforms=["beos-ppc"]), "unknown platform")
+        self.assertRefused(row(platforms=[]), "non-empty list")
+        self.assertRefused(row(platforms=["linux-x64", "linux-x64"]), "non-empty list")
+        self.assertRefused(row(platforms="linux-x64"), "non-empty list")
+
+    def test_only_compiled_sources_carry_a_scope(self) -> None:
+        self.assertRefused(row("framework/core/a/include/vellum/a/new.hpp", platforms=["linux-x64"]),
+                           "platforms scope only a compilable source")
+        self.assertRefused(row("framework/core/a/src/old.cpp", "removed", platforms=["linux-x64"]),
+                           "platforms scope only a compilable source")
+        self.assertRefused(self.scoped(["linux-x64"], path="framework/core/a/include/a.hpp", target=None),
+                           "only a compilable source can be scoped")
+
+    def test_a_scoped_row_names_its_platforms_and_target(self) -> None:
+        missing = self.scoped(["linux-x64"])
+        del missing["platforms"]
+        self.assertRefused(missing, "names the platforms")
+        self.assertRefused(self.scoped(["linux-x64"], target=None), "target must name")
+        self.assertRefused(self.scoped(["linux-x64"], framework_blob="b" * 40), "framework_blob is null")
+
+    def test_a_v1_document_holds_no_scope(self) -> None:
+        document = json.dumps({"schema": fp.SCHEMA_V1, "rows": [row(platforms=["linux-x64"])]})
+        rows, errors = fp.parse(document)
+        self.assertEqual(rows, [])
+        self.assertTrue(any("needs schema" in error for error in errors), errors)
+        document = json.dumps({"schema": fp.SCHEMA_V1, "rows": [row(), self.scoped(["linux-x64"])]})
+        self.assertTrue(any("needs schema" in error for error in fp.parse(document)[1]))
+        # Control: the landed v1 shape still reads, and v2 reads the same rows with a scope.
+        self.assertEqual(fp.parse(json.dumps({"schema": fp.SCHEMA_V1, "rows": [row()]}))[1], [])
+        self.assertEqual(fp.parse(ledger([row(platforms=["linux-x64"])]))[1], [])
+
+    def test_replay_scopes_each_added_source(self) -> None:
+        header = row("framework/core/a/include/vellum/a/new.hpp")
+        added, _, scopes, errors = fp.replay_scoped([row(), header], set())
+        self.assertEqual(errors, [])
+        self.assertEqual(scopes, {self.SRC: frozenset({"macos-arm64"})})
+        self.assertIn(header["framework_path"], added)
+        _, _, scopes, _ = fp.replay_scoped([row(platforms=["linux-x64"])], set())
+        self.assertEqual(scopes[self.SRC], frozenset({"linux-x64"}))
+
+    def test_a_scoped_row_replaces_the_scope_and_keeps_the_adding_row(self) -> None:
+        adding = row()
+        added, _, scopes, errors = fp.replay_scoped([adding, self.scoped(["linux-x64", "windows-x64"])], set())
+        self.assertEqual(errors, [])
+        self.assertEqual(scopes[self.SRC], frozenset({"linux-x64", "windows-x64"}))
+        # The joining-blob check keys on the adding row; a scope change never replaces it.
+        self.assertIs(added[self.SRC], adding)
+
+    def test_a_scoped_row_needs_a_source_the_ledger_adds_to_the_same_target(self) -> None:
+        _, _, scopes, errors = fp.replay_scoped([self.scoped(["linux-x64"])], set())
+        self.assertTrue(any("cannot be scoped" in error for error in errors), errors)
+        _, _, _, errors = fp.replay_scoped([self.scoped(["linux-x64"])], {self.SRC})
+        self.assertTrue(any("cannot be scoped" in error for error in errors), errors)  # a transferred file
+        _, _, _, errors = fp.replay_scoped([row(), self.scoped(["linux-x64"], target="b-target")], set())
+        self.assertTrue(any("cannot move it" in error for error in errors), errors)
+
+    def test_removing_and_re_adding_resets_the_scope(self) -> None:
+        rows = [row(), self.scoped(["linux-x64"]), row(change="removed"), row()]
+        _, _, scopes, errors = fp.replay_scoped(rows, set())
+        self.assertEqual(errors, [])
+        self.assertEqual(scopes[self.SRC], frozenset({"macos-arm64"}))
+        _, removed, scopes, _ = fp.replay_scoped(rows[:3], set())
+        self.assertNotIn(self.SRC, scopes)
+        self.assertIn(self.SRC, removed)
+
+    def test_scopes_reads_the_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            (repo / fp.LEDGER).parent.mkdir(parents=True)
+            (repo / fp.LEDGER).write_text(ledger([row(platforms=["linux-x64"])]), encoding="utf-8")
+            scopes, errors = fp.scopes(repo, set())
+            self.assertEqual(errors, [])
+            self.assertTrue(fp.compiled_on(scopes, self.SRC, "linux-x64"))
+            self.assertFalse(fp.compiled_on(scopes, self.SRC, "macos-arm64"))
+            # A broken ledger scopes nothing.
+            (repo / fp.LEDGER).write_text(ledger([row(platforms=["nope"])]), encoding="utf-8")
+            self.assertEqual(fp.scopes(repo, set())[0], {})
+
+    def test_declared_targets_carry_a_covered_scope(self) -> None:
+        target = {"name": "vellum-a", "type": "STATIC_LIBRARY", "unit": "a", "sources": [self.SRC],
+                  "include_dirs": [], "compile_definitions": [], "link_targets": [], "reason": "r",
+                  "platforms": ["linux-x64"]}
+        self.assertEqual(fp.unit_target_errors(target, "t"), [])
+        self.assertTrue(fp.unit_target_errors({**target, "platforms": ["nope"]}, "t"))
+        added = {self.SRC: row(target="vellum-a", platforms=["linux-x64"])}
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            self.assertEqual(fp.units_errors(repo, [target], added), [])
+            wider = {**target, "platforms": ["linux-x64", "macos-arm64"]}
+            self.assertTrue(any("is not scoped" in e for e in fp.units_errors(repo, [wider], added)))
+            # An unscoped target means macOS, which this source is not scoped to.
+            plain = {k: v for k, v in target.items() if k != "platforms"}
+            self.assertTrue(any("is not scoped" in e for e in fp.units_errors(repo, [plain], added)))
+            # A later scoped row widens the source, so the wider target is covered.
+            widened = {self.SRC: frozenset({"linux-x64", "macos-arm64"})}
+            self.assertEqual(fp.units_errors(repo, [wider], added, widened), [])
+        v1 = json.dumps({"schema": fp.UNITS_SCHEMA_V1, "targets": [target]})
+        self.assertTrue(any("needs schema" in e for e in fp.parse_units(v1)[1]))
+
+
 if __name__ == "__main__":
     unittest.main()

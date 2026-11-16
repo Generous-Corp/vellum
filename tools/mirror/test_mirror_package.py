@@ -1391,6 +1391,109 @@ class FrameworkPortsPlanTest(unittest.TestCase):
                          ["web_compat_preludes_gen.cpp", "web_compat_preludes_gen.hpp"])
 
 
+class PlatformScopePlanTest(unittest.TestCase):
+    """A ledger-added source or declared target is planned only on the platforms its scope lists."""
+
+    NEW = "framework/core/runtime/src/ported.cpp"
+    LIB = "framework/core/example/src/example.cpp"
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = TransferredFixture(Path(self.temporary.name))
+        mp.BUILD_INFO_INPUTS[EXPORT_ID] = {"version": "1.2.3"}
+
+    def tearDown(self) -> None:
+        mp.BUILD_INFO_INPUTS.pop(EXPORT_ID, None)
+        self.temporary.cleanup()
+
+    def scoped_row(self, path: str, target: str, platforms: list[str] | None) -> dict:
+        if not (self.fixture.repo / path).exists():
+            self.fixture.write(path, b"int ported() { return 2; }\n")
+        row = self.fixture.row(path, target=target)
+        if platforms is not None:
+            row["platforms"] = platforms
+        return row
+
+    def sources(self, plan: dict) -> list[str]:
+        return [source for unit in plan["units"] for target in unit["targets"] for source in target["sources"]]
+
+    def planned(self, relative: str) -> str:
+        return str(self.fixture.repo.resolve() / relative)
+
+    def test_an_unscoped_row_compiles_on_macos(self) -> None:
+        # A v1 row names no platform; it keeps meaning the macOS build it was proven on.
+        self.fixture.write_ledger([self.scoped_row(self.NEW, "pulp-runtime", None)])
+        plan = self.fixture.plan()
+        self.assertEqual(plan["platform"], "macos-arm64")
+        self.assertIn(self.planned(self.NEW), self.sources(plan))
+
+    def test_a_source_scoped_to_another_platform_is_not_compiled_on_macos(self) -> None:
+        self.fixture.write_ledger([self.scoped_row(self.NEW, "pulp-runtime", ["linux-x64"])])
+        plan = self.fixture.plan()
+        self.assertNotIn(self.planned(self.NEW), self.sources(plan))
+        self.assertNotIn(self.NEW, plan["framework_ports"]["added"])
+        # Control: the same row scoped to macOS is compiled.
+        self.fixture.write_ledger([self.scoped_row(self.NEW, "pulp-runtime", ["linux-x64", "macos-arm64"])])
+        self.assertIn(self.planned(self.NEW), self.sources(self.fixture.plan()))
+
+    def test_a_scoped_row_moves_a_source_between_platforms(self) -> None:
+        added = self.scoped_row(self.NEW, "pulp-runtime", ["macos-arm64"])
+        narrowed = {**self.scoped_row(self.NEW, "pulp-runtime", ["linux-x64"]), "change": "scoped",
+                    "framework_blob": None}
+        self.fixture.write_ledger([added, narrowed])
+        self.assertNotIn(self.planned(self.NEW), self.sources(self.fixture.plan()))
+        widened = {**narrowed, "platforms": ["linux-x64", "macos-arm64"]}
+        self.fixture.write_ledger([added, narrowed, widened])
+        self.assertIn(self.planned(self.NEW), self.sources(self.fixture.plan()))
+
+    def test_a_platform_with_no_verified_closure_is_refused(self) -> None:
+        self.fixture.write_ledger([self.scoped_row(self.NEW, "pulp-runtime", ["linux-x64"])])
+        with self.assertRaises(mp.PlanError) as caught:
+            mp.plan(self.fixture.repo, self.fixture.deps, self.fixture.generated, self.fixture.skia,
+                    self.fixture.skia_asset, platform="linux-x64")
+        self.assertIn("no verified closure for platform linux-x64", str(caught.exception))
+        with self.assertRaises(mp.PlanError) as caught:
+            mp.plan(self.fixture.repo, self.fixture.deps, self.fixture.generated, self.fixture.skia,
+                    self.fixture.skia_asset, platform="beos-ppc")
+        self.assertIn("unknown platform", str(caught.exception))
+        # Control: the platform the landed closures describe plans.
+        mp.plan(self.fixture.repo, self.fixture.deps, self.fixture.generated, self.fixture.skia,
+                self.fixture.skia_asset, platform="macos-arm64")
+
+    def test_a_declared_target_for_another_platform_is_not_planned(self) -> None:
+        self.fixture.write(self.LIB, b"int example() { return 3; }\n")
+        rows = [self.scoped_row(self.LIB, "vellum-example", ["linux-x64"])]
+        self.fixture.write_ledger(rows)
+        library = {"name": "vellum-example", "type": "STATIC_LIBRARY", "unit": "example", "sources": [self.LIB],
+                   "include_dirs": [], "compile_definitions": [], "link_targets": ["pulp-runtime"],
+                   "reason": "a unit no closure builds", "platforms": ["linux-x64"]}
+        self.fixture.write(mp.framework_ports.UNITS, json.dumps(
+            {"schema": mp.framework_ports.UNITS_SCHEMA, "targets": [library]}).encode())
+        plan = self.fixture.plan()
+        self.assertEqual(plan["framework_units"], [])
+        self.assertNotIn(self.planned(self.LIB), self.sources(plan))
+        # Control: scoped to macOS as well, it is planned.
+        rows[0]["platforms"] = library["platforms"] = ["linux-x64", "macos-arm64"]
+        self.fixture.write_ledger(rows)
+        self.fixture.write(mp.framework_ports.UNITS, json.dumps(
+            {"schema": mp.framework_ports.UNITS_SCHEMA, "targets": [library]}).encode())
+        plan = self.fixture.plan()
+        self.assertEqual(plan["framework_units"], ["vellum-example"])
+        self.assertIn(self.planned(self.LIB), self.sources(plan))
+
+    def test_a_declared_target_wider_than_its_source_is_refused(self) -> None:
+        self.fixture.write(self.LIB, b"int example() { return 3; }\n")
+        self.fixture.write_ledger([self.scoped_row(self.LIB, "vellum-example", ["linux-x64"])])
+        library = {"name": "vellum-example", "type": "STATIC_LIBRARY", "unit": "example", "sources": [self.LIB],
+                   "include_dirs": [], "compile_definitions": [], "link_targets": ["pulp-runtime"],
+                   "reason": "a unit no closure builds", "platforms": ["linux-x64", "macos-arm64"]}
+        self.fixture.write(mp.framework_ports.UNITS, json.dumps(
+            {"schema": mp.framework_ports.UNITS_SCHEMA, "targets": [library]}).encode())
+        with self.assertRaises(mp.PlanError) as caught:
+            self.fixture.plan()
+        self.assertIn("is not scoped", str(caught.exception))
+
+
 class DeclaredUnitPlanTest(unittest.TestCase):
     """A target no closure builds is compiled only as provenance/framework/units.json declares it."""
 
