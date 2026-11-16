@@ -656,6 +656,7 @@ std::size_t MetalRenderInterface::trim() {
     if (s.layer_count != 0 || s.frame_pipelines)
         return 0;
     const std::size_t released = s.cached_bytes();
+    s.frame = {};
     s.layer_pool.clear();
     s.stencil = nil;
     s.post = {};
@@ -723,6 +724,10 @@ void MetalRenderInterface::end_frame() {
     auto& s = *state_;
     if (s.layer_count == 0 || !s.frame_pipelines) {
         s.end_pass();
+        // A begin_frame that failed after choosing pipelines leaves no frame open.
+        s.frame_pipelines = nullptr;
+        s.layer_count = 0;
+        s.frame = {};
         return;
     }
     s.end_pass();
@@ -746,6 +751,9 @@ void MetalRenderInterface::end_frame() {
     }
     s.layer_count = 0;
     s.frame_pipelines = nullptr;
+    // The frame target holds the caller's command buffer and texture; keeping
+    // them would hold the last frame's resources until the next frame.
+    s.frame = {};
 }
 
 Rml::CompiledGeometryHandle MetalRenderInterface::CompileGeometry(

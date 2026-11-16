@@ -105,7 +105,9 @@ class MetalRenderInterface final : public Rml::RenderInterface {
     //
     // Call it between frames: with no frame being encoded, that is outside
     // begin_frame() .. end_frame(); during one it releases nothing and returns
-    // 0. It never waits for the GPU. The previous frame's command buffer may
+    // 0. Like every other member it is not thread-safe: call it on the thread
+    // that draws, or serialise it with begin_frame() .. end_frame() (a host
+    // that draws on a render thread calls it there, or under the same lock). It never waits for the GPU. The previous frame's command buffer may
     // still be executing, which is safe because a command buffer made the usual
     // way (-[MTLCommandQueue commandBuffer]) retains every resource it uses. A
     // caller that makes its buffers with unretained references must wait for

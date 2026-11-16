@@ -69,8 +69,10 @@ allocates again what it uses and draws the same pixels, so the first frame
 after a trim pays the allocation. A host that hides an editor calls it to hand
 the memory back.
 
-Call it between frames. During a frame (between `begin_frame()` and
-`end_frame()`) it releases nothing and returns 0. It never waits for the GPU:
+Call it between frames, on the thread that draws or serialised with
+`begin_frame()` and `end_frame()`: the renderer is not thread-safe, and a host
+that draws on a render thread calls `trim()` there or under the same lock.
+During a frame it releases nothing and returns 0. It never waits for the GPU:
 the previous frame's command buffer may still be running, which is safe
 because a command buffer made with `-[MTLCommandQueue commandBuffer]` retains
 the resources it uses. A caller whose buffers use unretained references waits
