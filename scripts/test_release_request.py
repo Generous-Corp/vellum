@@ -363,7 +363,7 @@ class ReleaseTagWorkflowWiring(unittest.TestCase):
 
     def test_statuses_are_fetched_and_passed_to_pending_and_check(self) -> None:
         region = self.region()
-        self.assertIn("commits/$GITHUB_SHA/statuses", region)
+        self.assertIn("commits/${{ github.sha }}/statuses", region)
         for sub in ("pending", "check"):
             self.assertIn('--statuses "$RUNNER_TEMP/statuses.json"', self.command(region, sub), sub)
 
