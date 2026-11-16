@@ -573,7 +573,7 @@ class Isolation(unittest.TestCase):
         self.assertEqual(self.found(push), [])
         # A read of another endpoint needs no App token.
         self.assertEqual(self.found(self.read(token="${{ github.token }}",
-                                              run='run: gh api "repos/$GITHUB_REPOSITORY/actions/runs" > out.json\n')), [])
+                                              run='run: gh api "repos/${{ github.repository }}/actions/runs" > out.json\n')), [])
 
     def test_a_comment_naming_the_app_token_does_not_satisfy_the_rule(self) -> None:
         run = ("run: |\n          # GH_TOKEN: ${{ steps.app-token.outputs.token }}\n"
@@ -790,7 +790,7 @@ class Isolation(unittest.TestCase):
         self.refused(self.read(token="${{ github.token }}", run=unknown))
         # A read of another endpoint, redirected, still needs no App token.
         self.assertEqual(self.found(self.read(token="${{ github.token }}",
-                                              run='run: gh api >out.json "repos/$GITHUB_REPOSITORY/actions/runs"\n')), [])
+                                              run='run: gh api >out.json "repos/${{ github.repository }}/actions/runs"\n')), [])
 
     def test_an_escaped_or_quoted_gh_spelling_is_still_gh_api(self) -> None:
         # The shell runs each of these as `gh api`; the Administration-only
@@ -948,6 +948,34 @@ class Isolation(unittest.TestCase):
         # An escaped backslash at the end of a line is not a continuation.
         self.assertEqual(policy.shell_commands("echo a\\\\\nb"), ["echo a\\\\", "b"])
 
+    def test_mutable_shell_endpoint_values_need_the_app_token(self) -> None:
+        for target in ('repos/$GITHUB_REPOSITORY/$GITHUB_SHA',
+                       'repos/${GITHUB_REPOSITORY}/${GITHUB_SHA}',
+                       'repos/${{ github.repository }}/$GITHUB_SHA',
+                       'repos/$GITHUB_REPOSITORY/actions/runs'):
+            with self.subTest(target=target):
+                run = ('run: |\n          GITHUB_SHA=immutable-releases\n'
+                       '          GITHUB_REPOSITORY=owner/repo\n'
+                       f'          gh api "{target}"\n')
+                self.refused(self.read(token="${{ github.token }}", run=run), "unresolved expansion")
+                self.assertEqual(self.found(self.read(run=run)), [])
+        # Shell assignments cannot change GitHub's pre-shell context values.
+        run = ('run: |\n          GITHUB_SHA=immutable-releases\n'
+               '          GITHUB_REPOSITORY=owner/repo\n'
+               '          gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs"\n')
+        self.assertEqual(self.found(self.read(token="${{ github.token }}", run=run)), [])
+
+    def test_ansi_c_shell_quoting_is_refused_before_call_detection(self) -> None:
+        for command in ("g$'h' api", "$'gh' api", "gh a$'pi'", r"$'\x67h' api",
+                        "g$\\\n'h' api"):
+            with self.subTest(command=command):
+                script = f"{command} repos/owner/repo/immutable-releases"
+                run = "run: |\n" + "".join("          " + line + "\n" for line in script.splitlines())
+                self.refused(self.read(token="${{ github.token }}", run=run), "ANSI-C")
+                # This syntax is unsupported even with a valid App token.
+                self.refused(self.read(run=run), "ANSI-C")
+        self.assertEqual(self.found(self.read(run='run: gh api repos/owner/repo/immutable-releases\n')), [])
+
     def test_an_endpoint_built_from_an_expansion_needs_the_app_token(self) -> None:
         for target in ('"repos/$R/$ENDPOINT"', '"repos/$GITHUB_REPOSITORY/$ENDPOINT"',
                        '"repos/$GITHUB_REPOSITORY/${ENDPOINT}"', '"repos/$GITHUB_REPOSITORY/x$ENDPOINT"',
@@ -957,11 +985,9 @@ class Isolation(unittest.TestCase):
                 run = f"run: gh api {target} > out.json\n"
                 self.refused(self.read(token="${{ github.token }}", run=run), "unresolved expansion")
                 self.assertEqual(self.found(self.read(run=run)), [])
-        # The bounded safe substitutions: the runner's repository in the repo
-        # slot and the runner's commit sha.
-        for target in ('"repos/$GITHUB_REPOSITORY/actions/runs"', '"repos/${GITHUB_REPOSITORY}/pulls"',
-                       '"repos/${{ github.repository }}/pulls"',
-                       '"repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100"'):
+        # Only immutable GitHub context substitutions are bounded safe values.
+        for target in ('"repos/${{ github.repository }}/pulls"',
+                       '"repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs?per_page=100"'):
             with self.subTest(target=target):
                 run = f"run: gh api {target} > out.json\n"
                 self.assertEqual(self.found(self.read(token="${{ github.token }}", run=run)), [])

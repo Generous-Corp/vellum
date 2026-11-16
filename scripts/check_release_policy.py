@@ -967,27 +967,18 @@ def gh_api_targets(run: str) -> list[str | None]:
     return targets
 
 
-# Expansions an endpoint may hold without counting as dynamic: the runner's own
-# repository in the `repos/<owner>/<repo>` slot, and the runner's commit sha.
-# Neither value can hold `/`, `?` or `#` beyond the owner/repo separator, so
-# neither can turn the path into another endpoint. A step that sets either name
-# in its own env makes it an arbitrary value again.
+# Only GitHub context expressions are immutable before shell execution.
+# Shell variables can be reassigned by run scripts, regardless of step.env.
+# The repository is safe only in the owner/repo slot; the SHA is hexadecimal.
 SAFE_REPOSITORY_SLOT = re.compile(
-    r"^(/?repos/)(?:\$GITHUB_REPOSITORY(?![A-Za-z0-9_])|\$\{GITHUB_REPOSITORY\}"
-    r"|\$\{\{\s*github\.repository\s*\}\})(?=/|$)")
-SAFE_SHA = re.compile(r"\$GITHUB_SHA(?![A-Za-z0-9_])|\$\{GITHUB_SHA\}|\$\{\{\s*github\.sha\s*\}\}")
+    r"^(/?repos/)\$\{\{\s*github\.repository\s*\}\}(?=/|$)")
+SAFE_SHA = re.compile(r"\$\{\{\s*github\.sha\s*\}\}")
 
 
-def dynamic_endpoint(target: str, env: dict[str, str] | None) -> bool:
-    """Whether an endpoint's path holds an expansion other than the bounded
-    safe ones, so its value (`repos/$R/$ENDPOINT`) could be any endpoint,
-    an Administration-only one included."""
-    path = target
-    overridden = set(env or {})
-    if "GITHUB_REPOSITORY" not in overridden:
-        path = SAFE_REPOSITORY_SLOT.sub(r"\1owner/repo", path)
-    if "GITHUB_SHA" not in overridden:
-        path = SAFE_SHA.sub("0" * 40, path)
+def dynamic_endpoint(target: str) -> bool:
+    """Whether an endpoint contains an expansion whose value is unproved."""
+    path = SAFE_REPOSITORY_SLOT.sub(r"\1owner/repo", target)
+    path = SAFE_SHA.sub("0" * 40, path)
     return "$" in path or "`" in path
 
 
@@ -1015,6 +1006,12 @@ def app_token_problems(name: str, workflow: str) -> list[str]:
                 continue
             if step.run is None:
                 continue
+            # ANSI-C quotes can construct command names and endpoints using
+            # escapes. The word reader does not decode them, so reject this
+            # unsupported syntax before deciding whether a gh api call exists.
+            if any("$'" in line for line in shell_commands(step.run)):
+                found.append(f"{name}: {step.title} uses unsupported ANSI-C shell quoting")
+                continue
             targets = gh_api_targets(step.run)
             if step.unreadable and targets:
                 found.append(f"{name}: {step.title} calls gh api but cannot be read: {step.unreadable}")
@@ -1029,7 +1026,7 @@ def app_token_problems(name: str, workflow: str) -> list[str]:
             # Fail closed: an endpoint built from an unresolved expansion
             # (`repos/$R/$ENDPOINT`) may resolve to an Administration-only
             # path, so it needs the App token as well.
-            dynamic = any(target and dynamic_endpoint(target, step.env) for target in targets)
+            dynamic = any(target and dynamic_endpoint(target) for target in targets)
             if not named and not dynamic and not any(target and ADMIN_ENDPOINT.search(target) for target in targets):
                 continue
             token = STEP_TOKEN.fullmatch((step.env or {}).get("GH_TOKEN", ""))
