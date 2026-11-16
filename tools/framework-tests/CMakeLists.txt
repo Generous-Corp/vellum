@@ -132,6 +132,12 @@ else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES webgpu_multi_draw_test.cpp)
 endif()
 
+# The frame-level render pass manager is header-only; any render unit gives the
+# test the include root.
+vellum_add_framework_test(render-pass
+    SOURCES render_pass_test.cpp
+    UNITS Vellum::MirrorRender_2d)
+
 # The WGSL validator behind vellum_add_wgsl_shaders(): it compiles each shader
 # on Dawn's Null adapter. It compiles the render unit's WGSL helper and
 # diagnostics itself and links the device layer directly, as the gpu-runtime
@@ -187,6 +193,10 @@ set_tests_properties(vellum.framework.wgsl-validate-creates-stamp-dir PROPERTIES
 vellum_add_framework_test(widget-bridge-param-model
     SOURCES widget_bridge_param_model_test.cpp
     UNITS Vellum::MirrorView_script Vellum::Value)
+
+vellum_add_framework_test(host-param-surface-model
+    SOURCES host_param_surface_model_test.cpp
+    UNITS Vellum::MirrorView_core Vellum::Value)
 
 # Every test file here must be registered above. A test file that no
 # vellum_add_framework_test() names would build nothing and run nothing while
