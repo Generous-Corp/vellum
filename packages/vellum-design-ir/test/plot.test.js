@@ -19,6 +19,7 @@ async function document() {
 function withPlot(design, plot, schemaVersion = DESIGN_IR_PLOTS_VERSION) {
     const copy = structuredClone(design);
     copy.root.plot = plot;
+    copy.root.children = [];
     copy.schemaVersion = schemaVersion;
     return copy;
 }
@@ -136,6 +137,7 @@ test('an explicit null source is refused, not defaulted, through normalization t
 
 test('normalization keeps a source node plot binding', async () => {
     const source = JSON.parse(await readFile(new URL('revision-a.source.json', fixtures), 'utf8'));
+    source.root.children = [];
     source.root.plot = { slots: 8, channel: 'spectrum', style: 'bar' };
     const design = normalizeImport(source);
     assert.deepEqual(design.root.plot, { channel: 'spectrum', slots: 8, style: 'bar' });
@@ -145,6 +147,7 @@ test('normalization keeps a source node plot binding', async () => {
 
 test('versions are cumulative: a document with compositing and plots is version 5', async () => {
     const source = JSON.parse(await readFile(new URL('revision-a.source.json', fixtures), 'utf8'));
+    source.root.children = [];
     source.root.plot = { slots: 8, channel: 'spectrum', style: 'bar' };
     source.root.compositing = { blendMode: 'multiply', opacity: 0.5 };
     const design = normalizeImport(source);
@@ -172,7 +175,7 @@ test('each field is legal from its own version: compositing 2, material 3, plot 
     const source = JSON.parse(await readFile(new URL('revision-a.source.json', fixtures), 'utf8'));
     source.root.children[0].compositing = { blendMode: 'multiply' };
     source.root.children[0].material = { id: 'vellum.frosted-glass', values: { blur: 4 } };
-    source.root.plot = { style: 'meter', channel: 'meters' };
+    source.root.children[0].children[0].plot = { style: 'meter', channel: 'meters' };
     const design = normalizeImport(source);
     assert.equal(design.schemaVersion, 5);
     assert.deepEqual(validateDesignIR(design), { issues: [], valid: true });
@@ -181,10 +184,11 @@ test('each field is legal from its own version: compositing 2, material 3, plot 
         .map((entry) => entry.path)
         .sort();
     const expected = {
-        1: ['$.root.children[0].compositing', '$.root.children[0].material', '$.root.plot'],
-        2: ['$.root.children[0].material', '$.root.plot'],
-        3: ['$.root.plot'],
-        4: ['$.root.plot'],
+        1: ['$.root.children[0].children[0].plot', '$.root.children[0].compositing',
+            '$.root.children[0].material'],
+        2: ['$.root.children[0].children[0].plot', '$.root.children[0].material'],
+        3: ['$.root.children[0].children[0].plot'],
+        4: ['$.root.children[0].children[0].plot'],
         5: [],
     };
     for (const [version, paths] of Object.entries(expected)) {
@@ -193,7 +197,7 @@ test('each field is legal from its own version: compositing 2, material 3, plot 
         assert.deepEqual(versionIssues(document), paths, `version ${version}`);
     }
     const material = structuredClone(source);
-    delete material.root.plot;
+    delete material.root.children[0].children[0].plot;
     delete material.root.children[0].compositing;
     assert.equal(normalizeImport(material).schemaVersion, 3);
 });
@@ -225,4 +229,14 @@ test('the schema declares plot bindings without samples', async () => {
         '{"const":"bar"}': { const: 'vector' },
         '{"const":"meter"}': { const: 'meter' },
     });
+});
+
+test('a node with a plot binding and children is refused by validation', async () => {
+    const design = await document();
+    const copy = structuredClone(design);
+    copy.root.plot = { style: 'meter', channel: 'meters' };
+    copy.schemaVersion = DESIGN_IR_PLOTS_VERSION;
+    assert.ok(copy.root.children.length > 0);
+    assert.ok(validateDesignIR(copy).issues.some((entry) =>
+        entry.path === '$.root.plot' && entry.code === 'children'));
 });

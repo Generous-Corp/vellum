@@ -722,7 +722,7 @@ PaintExtent paint_extent(const PaintCommand& command) {
         return {moved};
     }
     if (command.kind == PaintCommand::Kind::plot) {
-        constexpr float snap_reach = 1.0F;
+        constexpr float snap_reach = 2.0F;
         return {{box.x - snap_reach, box.y - snap_reach, box.width + 2.0F * snap_reach,
                  box.height + 2.0F * snap_reach}};
     }

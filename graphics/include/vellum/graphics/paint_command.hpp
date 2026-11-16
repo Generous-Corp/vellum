@@ -170,8 +170,8 @@ struct PaintCommand final {
 /// `transform`: the box grown by each shadow's offset, spread, and 1.5 times
 /// its blur radius, a mesh's clipped vertex extent, or a path's
 /// `path_paint_box`. Text may overflow its box, so its extent is the box
-/// with `bounded` false. A plot's is its box grown by one logical pixel, which
-/// holds the device grid it snaps to at any scale of 0.5 or more.
+/// with `bounded` false. A plot's is its box grown by two logical pixels, which
+/// holds the device grid it snaps to at any scale of 0.25 or more.
 struct PaintExtent final {
     Rect rect{};
     bool bounded = true;

@@ -875,14 +875,52 @@ void review_fixes() {
            "sample damage on a box past the column limit is empty, as it draws no samples");
 }
 
+void snapped_removal_damage() {
+    struct Case final {
+        float scale;
+        Rect box;
+        float magnify;
+    };
+    for (const Case item : {Case{0.25F, {1.96F, 1.96F, 4.0F, 4.0F}, 40.0F},
+                            Case{0.25F, {1.96F, 1.96F, 40.0F, 40.0F}, 2.0F},
+                            Case{1.0F, {0.49F, 0.49F, 1.0F, 1.0F}, 100.0F},
+                            Case{2.0F, {0.26F, 0.26F, 1.0F, 1.0F}, 40.0F}}) {
+        Scene with = plot_scene(line_spec(4, {0.5F}));
+        auto& node = with.root.children[1];
+        node.bounds = item.box;
+        node.transform = Affine2D{.a = item.magnify, .d = item.magnify};
+        Scene without = with;
+        without.root.children.pop_back();
+        const auto damage = compute_scene_damage(with, without, item.scale);
+        const auto commands = make_paint_commands(with);
+        const auto& drawn_command = commands.back();
+        const Rect snapped = plot_grid_rect(drawn_command.bounds, item.scale);
+        auto drawn =
+            to_pixel_rect(transformed_bounds(drawn_command.transform, snapped), item.scale);
+        const PixelRect frame = frame_rect(with, item.scale);
+        if (drawn) {
+            drawn->left = std::max(drawn->left, frame.left);
+            drawn->top = std::max(drawn->top, frame.top);
+            drawn->right = std::min(drawn->right, frame.right);
+            drawn->bottom = std::min(drawn->bottom, frame.bottom);
+        }
+        const auto b = damage.bounds();
+        expect(drawn && b.left <= drawn->left && b.top <= drawn->top && b.right >= drawn->right &&
+                   b.bottom >= drawn->bottom,
+               "removing a transformed plot damages every pixel its snapped grid drew at scale " +
+                   std::to_string(item.scale),
+               bounds_of(damage));
+    }
+}
+
 void lowering() {
     const Scene scene = plot_scene(line_spec(4, {0.5F}));
     const auto commands = make_paint_commands(scene);
     expect(commands.size() == 2U && commands[1].kind == PaintCommand::Kind::plot &&
                commands[1].plot == scene.root.children[1].plot &&
                commands[1].bounds.x == kPlotBox.x &&
-               paint_extent(commands[1]).rect.width == kPlotBox.width + 2.0F &&
-               paint_extent(commands[1]).rect.x == kPlotBox.x - 1.0F &&
+               paint_extent(commands[1]).rect.width == kPlotBox.width + 4.0F &&
+               paint_extent(commands[1]).rect.x == kPlotBox.x - 2.0F &&
                paint_extent(commands[1]).bounded,
            "a plot lowers to one command carrying its spec over its box");
     expect(to_string(PaintCommand::Kind::plot) == "plot" && draws_content(PaintCommand::Kind::plot),
@@ -906,6 +944,7 @@ int main() {
     producer_thread();
     large_feed();
     review_fixes();
+    snapped_removal_damage();
     lowering();
     if (failures != 0) {
         std::cerr << failures << " plot check(s) failed\n";

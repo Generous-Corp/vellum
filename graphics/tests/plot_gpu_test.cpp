@@ -810,6 +810,7 @@ void snapped_plot_removal() {
     const Case cases[] = {
         {"fractional edge at 1x under a 100x transform", 1.0F, {0.49F, 0.49F, 1.0F, 1.0F}, 100.0F},
         {"fractional edge at 2x under a 40x transform", 2.0F, {0.26F, 0.26F, 1.0F, 1.0F}, 40.0F},
+        {"fractional edge at 0.25x under a 40x transform", 0.25F, {1.96F, 1.96F, 4.0F, 4.0F}, 40.0F},
         {"fractional edge at 1x untransformed", 1.0F, {10.4F, 10.4F, 20.3F, 20.3F}, 1.0F},
     };
     for (const auto& item : cases) {

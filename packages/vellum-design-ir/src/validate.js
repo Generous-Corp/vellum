@@ -288,6 +288,9 @@ function validateNode(node, path, sourceKey, issues, schemaVersion) {
             ));
         }
         validatePlotBinding(node.plot, `${path}.plot`, issues);
+        if (Array.isArray(node.children) && node.children.length > 0) {
+            issues.push(issue(`${path}.plot`, 'children', 'a node with a plot binding has no children'));
+        }
     }
     if (node.tracks !== undefined) {
         if (!(schemaVersion >= DESIGN_IR_TRACKS_VERSION)) {
