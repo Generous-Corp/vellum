@@ -31,7 +31,10 @@ struct SceneAcceptance final {
 /// clip that fails `clip_is_valid`, an effect `find_invalid_effect` reports,
 /// an undrawable path, an
 /// image node without a valid reference or with children, or an image table
-/// that `scene_images_are_valid` rejects.
+/// that `scene_images_are_valid` rejects. A scene with tracks is also refused
+/// for a non-finite clock or a track `find_invalid_tracks` reports, and every
+/// rule after the version checks applies to the scene as `evaluate_tracks`
+/// draws it, so a track that drives a transform to infinity is refused.
 [[nodiscard]] SceneAcceptance accept_scene(const Scene& scene);
 
 }  // namespace vellum::graphics

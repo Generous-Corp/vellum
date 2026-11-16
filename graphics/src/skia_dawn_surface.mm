@@ -1,4 +1,5 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
+#include <vellum/graphics/animation.hpp>
 #include <vellum/graphics/capture_stats.hpp>
 #include <vellum/graphics/damage.hpp>
 #include <vellum/graphics/effect.hpp>
@@ -12,6 +13,7 @@
 #include "skia_dawn_surface_test_access.hpp"
 #include <gpu_runtime/gpu_surface.hpp>
 
+#include "animation_testing.hpp"
 #include "skia_dawn_surface_testing.hpp"
 #include "skia_resource_caches.hpp"
 #include "utf8_text.hpp"
@@ -1900,21 +1902,35 @@ public:
         return true;
     }
 
-    bool render(const Scene& scene, std::string* error) {
-        if (!accepts_with_diagnostics(scene, error)) return false;
+    // The scene each render path draws: `authored` with its tracks evaluated
+    // at its clock, held in `storage` when it has any.
+    static const Scene& drawn_scene(const Scene& authored, std::optional<Scene>& storage) {
+        if (!scene_has_tracks(authored)) return authored;
+        return storage.emplace(evaluate_tracks(authored));
+    }
+
+    bool render(const Scene& authored, std::string* error) {
+        if (!accepts_with_diagnostics(authored, error)) return false;
+        std::optional<Scene> storage;
+        const Scene& scene = drawn_scene(authored, storage);
         discard_tracked_damage(scene);
         return draw_frame(scene, FullRepaintReason::full_render, nullptr, error);
     }
 
-    bool render_incremental(const Scene& scene, std::string* error) {
-        if (!accepts_with_diagnostics(scene, error)) return false;
-        tracker_.commit(scene, config_.scale);
+    bool render_incremental(const Scene& authored, std::string* error) {
+        if (!accepts_with_diagnostics(authored, error)) return false;
+        std::optional<Scene> storage;
+        const Scene& scene = drawn_scene(authored, storage);
+        tracker_.commit(testing::animation_rules().evaluate_for_damage ? scene : authored,
+                        config_.scale);
         const auto damage = tracker_.take_damage();
         return draw_frame(scene, FullRepaintReason::none, &damage, error);
     }
 
-    bool render(const Scene& scene, const DamageRegion& damage, std::string* error) {
-        if (!accepts_with_diagnostics(scene, error)) return false;
+    bool render(const Scene& authored, const DamageRegion& damage, std::string* error) {
+        if (!accepts_with_diagnostics(authored, error)) return false;
+        std::optional<Scene> storage;
+        const Scene& scene = drawn_scene(authored, storage);
         const auto invalidated = tracker_.take_damage();
         discard_tracked_damage(scene);
         const auto frame = frame_rect(scene, config_.scale);

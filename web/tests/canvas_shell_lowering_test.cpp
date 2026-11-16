@@ -518,6 +518,42 @@ bool gradient_reports_and_version_gate() {
 }
 }  // namespace
 
+// The shell draws a scene with tracks at its clock, as the native renderer
+// does, with no loss of its own.
+bool track_evaluation() {
+    using vellum::graphics::AnimatedProperty;
+    using vellum::graphics::AnimationTrack;
+    using vellum::graphics::kSceneVersionMismatchCode;
+    Scene scene;
+    scene.width = 16.0F;
+    scene.height = 16.0F;
+    scene.root.id = "root";
+    SceneNode fader{.id = "fader", .kind = SceneNode::Kind::rectangle,
+                    .bounds = {0.0F, 0.0F, 8.0F, 8.0F},
+                    .fill = vellum::graphics::Color::hex(0xFFFFFF)};
+    fader.tracks.push_back(AnimationTrack{
+        .property = AnimatedProperty::opacity,
+        .keyframes = {{.time = 0.0, .value = 0.0F}, {.time = 2.0, .value = 1.0F}}});
+    scene.root.children.push_back(fader);
+    scene.clock = 0.5;
+    const auto quarter = vellum::web::lower_for_canvas_shell(scene);
+    if (!quarter.accepted || quarter.commands.size() != 1U || quarter.commands[0].opacity != 0.25F ||
+        quarter.losses != 0 || !quarter.diagnostics.empty()) {
+        std::cerr << "the shell did not draw an opacity track at its clock without loss\n";
+        return false;
+    }
+    scene.clock = 1.5;
+    const auto later = vellum::web::lower_for_canvas_shell(scene);
+    if (!later.accepted || later.commands.size() != 1U || later.commands[0].opacity != 0.75F) {
+        std::cerr << "control: the shell drew the same frame at a later clock\n";
+        return false;
+    }
+    auto older = scene;
+    older.scene_version = 10U;
+    return refused(older, "scene version 10 cannot carry the animation tracks at fader",
+                   kSceneVersionMismatchCode, "fader");
+}
+
 bool effect_lowering() {
     using vellum::graphics::EffectKind;
     using vellum::graphics::NodeEffect;
@@ -595,6 +631,7 @@ bool effect_lowering() {
 
 int main() {
     if (!image_refusals()) return 1;
+    if (!track_evaluation()) return 1;
     if (!mask_reports()) return 1;
     if (!blend_lowering()) return 1;
     if (!gradient_reports_and_version_gate()) return 1;
