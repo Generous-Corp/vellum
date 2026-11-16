@@ -341,9 +341,9 @@ def framework_file_set_scoped(repo: Path
     return expected, added, removed, scopes
 
 
-# The platform the landed receipt's closures describe: load_closures refuses
-# any closure not exported for the Darwin arm64 Skia build. A platform with no
-# verified closure is refused by plan().
+# The platform the landed receipt's closures describe (load_closures refuses
+# any closure not exported for the Darwin arm64 Skia build), defined once in
+# framework_ports. plan() refuses every other platform.
 RECEIPT_PLATFORM = framework_ports.RECEIPT_PLATFORM
 
 

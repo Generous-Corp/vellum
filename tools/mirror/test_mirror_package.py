@@ -1527,6 +1527,17 @@ class PlatformScopePlanTest(unittest.TestCase):
             self.fixture.plan()
         self.assertIn("cannot take it out of the macos-arm64 build", str(caught.exception))
 
+    def test_a_removal_cannot_carry_a_source_out_of_the_macos_build(self) -> None:
+        added = self.scoped_row(self.NEW, "pulp-runtime", None)
+        removed = {**added, "change": "removed", "target": None, "framework_blob": None}
+        self.fixture.write_ledger([added, removed, {**added, "platforms": ["wasm32"]}])
+        with self.assertRaises(mp.PlanError) as caught:
+            self.fixture.plan()
+        self.assertIn("comes back only with macos-arm64", str(caught.exception))
+        # Control: back with macOS in scope, it is compiled again.
+        self.fixture.write_ledger([added, removed, {**added, "platforms": ["macos-arm64", "wasm32"]}])
+        self.assertIn(self.planned(self.NEW), self.sources(self.fixture.plan()))
+
     def test_a_row_scoped_off_macos_still_names_a_real_target(self) -> None:
         # Nothing else builds it yet, so the plan checks its target whatever its scope.
         self.fixture.write_ledger([self.scoped_row(self.NEW, "no-such-target", ["linux-x64"])])

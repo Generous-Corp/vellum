@@ -203,11 +203,15 @@ def replay_scoped(rows: list[dict[str, Any]], transferred: set[str]
     path it was added with, so it makes no provenance claim the adding row
     did not. A scope change may not take a source out of the macOS build
     while macOS compiles it: the macOS closure is the only one landed, and
-    leaving it would leave the source compiled nowhere a lane checks.
+    leaving it would leave the source compiled nowhere a lane checks. The
+    same holds across a removal: a path once compiled on macOS comes back
+    only with macOS in its scope. A new source may be scoped off macOS; its
+    target is still checked by the build plan.
     """
     added: dict[str, dict[str, Any]] = {}
     removed: set[str] = set()
     scopes: dict[str, frozenset[str]] = {}
+    on_macos: set[str] = set()  # paths the ledger has compiled on macOS at some point
     errors: list[str] = []
     for index, row in enumerate(rows):
         where, path = f"{LEDGER} rows[{index}]", row["framework_path"]
@@ -225,6 +229,8 @@ def replay_scoped(rows: list[dict[str, Any]], transferred: set[str]
                               f"take it out of the {RECEIPT_PLATFORM} build")
             else:
                 scopes[path] = platforms_of(row)
+                if RECEIPT_PLATFORM in scopes[path]:
+                    on_macos.add(path)
             continue
         scopes.pop(path, None)
         if row["change"] == "added":
@@ -232,11 +238,16 @@ def replay_scoped(rows: list[dict[str, Any]], transferred: set[str]
                 errors.append(f"{where}: {path} is in the transfer record; a ledger row may only remove it")
             elif path in added:
                 errors.append(f"{where}: {path} is already added")
+            elif compiled(path) and path in on_macos and RECEIPT_PLATFORM not in platforms_of(row):
+                errors.append(f"{where}: {path} was compiled on {RECEIPT_PLATFORM}; it comes back only "
+                              f"with {RECEIPT_PLATFORM} in its scope")
             else:
                 added[path] = row
                 removed.discard(path)
                 if compiled(path):
                     scopes[path] = platforms_of(row)
+                    if RECEIPT_PLATFORM in scopes[path]:
+                        on_macos.add(path)
         elif path in added:
             del added[path]
             removed.add(path)

@@ -406,6 +406,21 @@ class PlatformScopeTest(unittest.TestCase):
         errors = fp.replay_scoped(rows + [self.scoped(["linux-x64"])], set())[3]
         self.assertTrue(any("cannot take it out" in e for e in errors), errors)
 
+    def test_a_removal_cannot_carry_a_source_out_of_the_macos_build(self) -> None:
+        removed = row(change="removed")
+        for readd in (row(platforms=["wasm32"]), row(platforms=["linux-x64"])):
+            errors = fp.replay_scoped([row(), removed, readd], set())[3]
+            self.assertTrue(any("comes back only with macos-arm64" in e for e in errors), errors)
+        # Also after a scope change brought it into macOS.
+        rows = [row(platforms=["linux-x64"]), self.scoped(["linux-x64", "macos-arm64"]), removed,
+                row(platforms=["linux-x64"])]
+        self.assertTrue(any("comes back only" in e for e in fp.replay_scoped(rows, set())[3]))
+        # Controls: back with macOS is fine; a source never on macOS may come back off it.
+        self.assertEqual(fp.replay_scoped([row(), removed, row(platforms=["macos-arm64", "wasm32"])],
+                                          set())[3], [])
+        self.assertEqual(fp.replay_scoped([row(platforms=["linux-x64"]), removed, row(platforms=["wasm32"])],
+                                          set())[3], [])
+
     def test_a_scoped_row_makes_no_provenance_claim_of_its_own(self) -> None:
         adding = row(platforms=["linux-x64"])
         for other, fragment in (({"pulp_path": "core/unrelated/x.cpp"}, "a scope change names the same"),
