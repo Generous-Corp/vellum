@@ -1,6 +1,8 @@
 #include "rendered_tree_materializer.hpp"
 
 #include <vellum/graphics/paint_command.hpp>
+#include <vellum/graphics/plot.hpp>
+#include <vellum/graphics/scene_acceptance.hpp>
 
 #include <algorithm>
 #include <clocale>
@@ -651,6 +653,120 @@ bool image_nodes() {
                     "image bad does not accept children", "children");
 }
 
+// A plot node carries its channel binding and drawing fields into a plot spec
+// with no samples; its background is the box's backgroundColor. Bad values
+// fail atomically with an invalid-plot error, and a version 11 scene refuses
+// the plot.
+bool plot_nodes() {
+    using vellum::graphics::LoweringDiagnostic;
+    using vellum::graphics::PlotChannelShape;
+    using vellum::graphics::PlotStyle;
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    const auto tree = wrap_tree(R"JSON(
+        {"type":"plot","id":"scope","plot":"line","channel":"output","source":"scalar",
+         "slots":240,"history":"sweep","min":-1,"max":1,"lineWidth":2,"lineColor":"#F97316",
+         "style":{"width":120,"height":60,"backgroundColor":"#111827","borderRadius":4}},
+        {"type":"plot","id":"level","plot":"meter","channel":"meters","audioChannel":1,
+         "orientation":"horizontal","peakWidth":3,"fillColor":"#22C55E","peakColor":"#FFFFFF",
+         "loudness":"lufs","style":{"width":100,"height":12}})JSON");
+    if (!vellum::authoring::materialize_rendered_tree(tree, rendered, &error)) {
+        std::cerr << "plot: " << error << '\n';
+        return false;
+    }
+    const auto* scope = vellum::graphics::find_node(rendered.scene, "scope");
+    const auto* level = vellum::graphics::find_node(rendered.scene, "level");
+    if (scope == nullptr || level == nullptr || scope->kind != vellum::graphics::SceneNode::Kind::plot ||
+        !scope->plot || !level->plot || scope->plot->style != PlotStyle::line ||
+        scope->plot->channel != "output" || scope->plot->shape != PlotChannelShape::scalar ||
+        scope->plot->slot_count != 240U ||
+        scope->plot->history != vellum::graphics::PlotHistory::sweep ||
+        scope->plot->value_min != -1.0F || scope->plot->value_max != 1.0F ||
+        scope->plot->line_width != 2.0F || scope->plot->line_color.red8() != 0xF9U ||
+        !scope->plot->samples.empty() || scope->fill.red8() != 0x11U ||
+        level->plot->style != PlotStyle::level_meter ||
+        level->plot->shape != PlotChannelShape::meter || level->plot->audio_channel != 1U ||
+        level->plot->orientation != vellum::graphics::PlotOrientation::horizontal ||
+        level->plot->peak_width != 3.0F || level->plot->peak_color.blue8() != 0xFFU) {
+        std::cerr << "plot: the plot fields were not materialized\n";
+        return false;
+    }
+    const auto reported = [&](std::string_view node, std::string_view property) {
+        return std::any_of(rendered.diagnostics.begin(), rendered.diagnostics.end(),
+            [&](const LoweringDiagnostic& diagnostic) {
+                return diagnostic.node_id == node && diagnostic.property == property &&
+                       diagnostic.code == vellum::graphics::kStyleDroppedCode;
+            });
+    };
+    if (!reported("scope", "borderRadius") || !reported("level", "loudness") ||
+        reported("scope", "backgroundColor")) {
+        std::cerr << "plot: dropped keys were not reported as expected\n";
+        return false;
+    }
+    if (!vellum::graphics::accept_scene(rendered.scene).accepted) {
+        std::cerr << "plot: the materialized scene was refused\n";
+        return false;
+    }
+    auto older = rendered.scene;
+    older.scene_version = 11U;
+    const auto refused = vellum::graphics::accept_scene(older);
+    if (refused.accepted || refused.diagnostics.size() != 1U ||
+        refused.diagnostics[0].code != vellum::graphics::kSceneVersionMismatchCode ||
+        refused.diagnostics[0].node_id != "scope") {
+        std::cerr << "plot: a version 11 scene did not refuse the plot\n";
+        return false;
+    }
+    const auto rejected = [&](std::string_view attributes, std::string_view expected_error,
+                              std::string_view property) {
+        const auto bad = wrap_tree(std::string(R"JSON({"type":"plot","id":"bad")JSON") +
+                                   std::string(attributes) +
+                                   R"JSON(,"style":{"width":10,"height":10}})JSON");
+        vellum::authoring::RenderedApplication kept = rendered;
+        std::string why;
+        std::vector<LoweringDiagnostic> diagnostics;
+        const bool ok = !vellum::authoring::materialize_rendered_tree(
+                            bad, kept, &why, &diagnostics) &&
+                        why == expected_error && !diagnostics.empty() &&
+                        diagnostics.back().severity == LoweringDiagnostic::Severity::error &&
+                        diagnostics.back().code == vellum::graphics::kInvalidPlotCode &&
+                        diagnostics.back().node_id == "bad" &&
+                        diagnostics.back().property == property &&
+                        kept.scene.width == rendered.scene.width;
+        if (!ok) std::cerr << "plot was not rejected as expected: " << why << '\n';
+        return ok;
+    };
+    static_assert(vellum::graphics::kInvalidPlotCode == "VELLUM_INVALID_PLOT");
+    return rejected(R"(,"plot":"pie","channel":"c","slots":4)",
+                    "plot bad plot must be line, area, bar or meter", "plot") &&
+           rejected(R"(,"plot":"line","slots":4)",
+                    "plot bad requires the name of a value-feed channel in channel", "channel") &&
+           rejected(R"(,"plot":"line","channel":"c","slots":2.5)",
+                    "plot bad slots must be a whole number of at most 4194304", "slots") &&
+           rejected(R"(,"plot":"bar","channel":"c","source":"scalar","slots":4)",
+                    "plot bad cannot be drawn: a bar plot reads a vector channel", "plot") &&
+           rejected(R"(,"plot":"line","channel":"c")",
+                    "plot bad cannot be drawn: the slot count is not between 1 and kMaxPlotSlots",
+                    "plot") &&
+           rejected(R"(,"plot":"area","channel":"c","slots":4,"min":1,"max":1)",
+                    "plot bad cannot be drawn: the value range is not finite or is empty",
+                    "plot") &&
+           rejected(R"(,"plot":"line","channel":"c","slots":4,"min":"low")",
+                    "plot bad min must be a finite number", "min") &&
+           rejected(R"(,"plot":"line","channel":"c","slots":4,"lineColor":"red")",
+                    "plot bad lineColor must be a colour", "lineColor") &&
+           rejected(R"(,"plot":"line","channel":"c","slots":4,"lineColor":"#0x12AB")",
+                    "plot bad lineColor must be a colour", "lineColor") &&
+           rejected(R"(,"plot":"line","channel":"c","slots":4194304.0000001)",
+                    "plot bad slots must be a whole number of at most 4194304", "slots") &&
+           rejected(R"(,"plot":"line","channel":"c","slots":4,"min":1,"max":1.00000001)",
+                    "plot bad cannot be drawn: the value range is not finite or is empty",
+                    "plot") &&
+           rejected(R"(,"plot":"line","channel":"c","slots":4,"max":1e100)",
+                    "plot bad max must be a finite number", "max") &&
+           rejected(R"(,"plot":"line","channel":"c","slots":4,"children":[{"type":"view","id":"x"}])",
+                    "plot bad does not accept children", "children");
+}
+
 // overflow, clipPath, maskMode and isolation reach the scene; bad values fail
 // atomically, and keys that cannot apply are reported.
 bool grouping_keys() {
@@ -794,6 +910,115 @@ bool grouping_keys() {
            refuses(R"("clipPath":"M0 0 L")", "node bad has an invalid clipPath: ", true);
 }
 
+// Tracks on a node become `SceneNode::tracks`, drawn at the scene clock; a
+// malformed or invalid track fails materialization with the node named.
+bool animation_tracks() {
+    using vellum::graphics::AnimatedProperty;
+    using vellum::graphics::BlendMode;
+    using vellum::graphics::EasingKind;
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    const auto tree = wrap_tree(R"JSON(
+      {"type":"view","id":"pulse","style":{"x":10,"y":10,"width":40,"height":40,
+         "backgroundColor":"#FFFFFF","boxShadow":{"color":"#000000","blurRadius":4},
+         "mixBlendMode":"multiply"},
+       "tracks":[
+         {"property":"opacity","keyframes":[
+           {"time":0,"value":0,"easing":"ease"},
+           {"time":1,"value":1,"easing":{"type":"steps","steps":3,"position":"start"}},
+           {"time":2,"value":0.5}]},
+         {"property":"translateX","keyframes":[
+           {"time":0,"value":0,"easing":{"type":"spring","stiffness":170,"damping":26}},
+           {"time":4,"value":30}]},
+         {"property":"fill","keyframes":[{"time":0,"value":"#FF0000"},{"time":1,"value":"#0000FF80"}]},
+         {"property":"shadowColor","index":0,"keyframes":[{"time":0,"value":"#000000"}]}],
+       "children":[]}
+    )JSON");
+    if (!vellum::authoring::materialize_rendered_tree(tree, rendered, &error)) {
+        std::cerr << "tracks: " << error << '\n';
+        return false;
+    }
+    const auto* pulse = vellum::graphics::find_node(rendered.scene, "pulse");
+    if (pulse == nullptr || pulse->tracks.size() != 4U ||
+        pulse->blend_mode != BlendMode::multiply ||
+        pulse->tracks[0].property != AnimatedProperty::opacity ||
+        pulse->tracks[0].keyframes.size() != 3U ||
+        pulse->tracks[0].keyframes[0].easing.kind != EasingKind::cubic_bezier ||
+        !near(pulse->tracks[0].keyframes[0].easing.x1, 0.25F) ||
+        pulse->tracks[0].keyframes[1].easing.kind != EasingKind::steps ||
+        pulse->tracks[0].keyframes[1].easing.steps != 3U ||
+        pulse->tracks[0].keyframes[1].easing.step_position !=
+            vellum::graphics::StepPosition::jump_start ||
+        pulse->tracks[1].keyframes[0].easing.kind != EasingKind::spring ||
+        pulse->tracks[1].keyframes[0].easing.stiffness != 170.0F ||
+        pulse->tracks[2].keyframes[1].color.blue != 1.0F ||
+        !near(pulse->tracks[2].keyframes[1].color.alpha, 128.0F / 255.0F) ||
+        rendered.scene.scene_version != vellum::graphics::kSceneVersion) {
+        std::cerr << "tracks: the node's tracks were not materialized as written\n";
+        return false;
+    }
+    auto at = rendered.scene;
+    at.clock = 1.5;
+    const auto commands = vellum::graphics::make_paint_commands(at);
+    const auto drawn = std::find_if(commands.begin(), commands.end(),
+        [](const auto& command) { return command.node_id == "pulse"; });
+    if (drawn == commands.end() || !near(drawn->opacity, 2.0F / 3.0F)) {
+        std::cerr << "tracks: the materialized scene did not draw at its clock\n";
+        return false;
+    }
+    auto older = rendered.scene;
+    older.scene_version = 10U;
+    const auto refused = vellum::graphics::scene_loss_diagnostics(older);
+    if (refused.size() != 1U || refused[0].code != vellum::graphics::kSceneVersionMismatchCode ||
+        refused[0].property != "tracks" || refused[0].node_id != "pulse") {
+        std::cerr << "tracks: a version 10 copy was not refused for its tracks\n";
+        return false;
+    }
+
+    const auto failing = [&](std::string_view tracks, std::string_view expected) {
+        vellum::authoring::RenderedApplication kept;
+        std::string why;
+        const auto bad = wrap_tree(std::string(R"JSON({"type":"view","id":"bad",
+            "style":{"width":10,"height":10},"children":[],"tracks":)JSON") +
+            std::string(tracks) + "}");
+        const bool ok = !vellum::authoring::materialize_rendered_tree(bad, kept, &why) &&
+                        why == expected;
+        if (!ok) std::cerr << "tracks: expected \"" << expected << "\", got \"" << why << "\"\n";
+        return ok;
+    };
+    return failing(R"({"property":"opacity"})", "node bad tracks: must be an array") &&
+           failing(R"([{"property":"blur","keyframes":[]}])",
+                   "node bad tracks: a track has an unknown property") &&
+           failing(R"([{"property":"fill","keyframes":[{"time":0,"value":0.5}]}])",
+                   "node bad tracks: a colour keyframe value must be #rrggbb or #rrggbbaa") &&
+           failing(R"([{"property":"opacity","keyframes":[{"time":0,"value":0,"easing":"bounce"}]}])",
+                   "node bad tracks: easing bounce is not linear, ease, ease-in, ease-out or "
+                   "ease-in-out") &&
+           failing(R"([{"property":"opacity","keyframes":[{"time":1,"value":0},{"time":0,"value":1}]}])",
+                   "node bad tracks: keyframe 1 does not come after the one before it") &&
+           failing(R"([{"property":"shadowColor","index":2,"keyframes":[{"time":0,"value":"#000000"}]}])",
+                   "node bad tracks: a shadow colour track names shadow 2, which the node does "
+                   "not have") &&
+           failing(R"([{"property":"opacity","keyframes":[{"time":0,"value":0}]},
+                       {"property":"opacity","keyframes":[{"time":0,"value":1}]}])",
+                   "node bad tracks: two tracks animate the same property") &&
+           failing(R"([{"property":"opacity","foo":1,"keyframes":[{"time":0,"value":0}]}])",
+                   "node bad tracks: the opacity track does not take foo") &&
+           failing(R"([{"property":"opacity","index":1,"keyframes":[{"time":0,"value":0}]}])",
+                   "node bad tracks: the opacity track does not take index") &&
+           failing(R"([{"property":"shadowColor","stop":1,"keyframes":[{"time":0,"value":"#000000"}]}])",
+                   "node bad tracks: the shadowColor track does not take stop") &&
+           failing(R"([{"property":"opacity","keyframes":[{"time":0,"value":0,"clock":2}]}])",
+                   "node bad tracks: a keyframe does not take clock") &&
+           failing(R"([{"property":"opacity","keyframes":[{"time":0,"value":0,
+                       "easing":{"type":"spring","stiffnes":90}}]}])",
+                   "node bad tracks: spring easing does not take stiffnes") &&
+           failing(R"([{"property":"opacity","keyframes":[{"time":0,"value":0,
+                       "easing":{"type":"spring","stiffness":100,"damping":10}},
+                       {"time":1,"value":1}]}])",
+                   "node bad tracks: keyframe 1 comes before the spring from keyframe 0 settles");
+}
+
 // `mixBlendMode` reaches the scene in the canonical and CSS spellings on every
 // node type, and an unknown name fails the tree atomically.
 bool blend_mode_key() {
@@ -859,7 +1084,9 @@ bool blend_mode_key() {
         return wrap_tree(std::string(R"JSON(
           {"type":"view","id":"content","style":{"width":20,"height":20},"children":[]},
           {"type":"view","id":"cutout","style":{"width":10,"height":10,"maskMode":"alpha",
-            "mixBlendMode":")JSON") + std::string(blend) + R"JSON("},"children":[]})JSON");
+            "mixBlendMode":")JSON") + std::string(blend) + R"JSON("},
+            "tracks":[{"property":"opacity","keyframes":[
+              {"time":0,"value":0},{"time":1,"value":1}]}],"children":[]})JSON");
     };
     if (vellum::authoring::materialize_rendered_tree(masked("multiply"), rendered, &error) ||
         error != "node cutout mixBlendMode cannot apply to a mask" ||
@@ -869,6 +1096,11 @@ bool blend_mode_key() {
     }
     if (!vellum::authoring::materialize_rendered_tree(masked("normal"), rendered, &error)) {
         std::cerr << "blend mode: a mask with the normal mode was refused: " << error << '\n';
+        return false;
+    }
+    const auto* animated_mask = vellum::graphics::find_node(rendered.scene, "cutout");
+    if (animated_mask == nullptr || animated_mask->tracks.size() != 1U) {
+        std::cerr << "blend mode: a normal mask did not retain its animation track\n";
         return false;
     }
     return true;
@@ -1319,8 +1551,8 @@ int main() {
 
 
     return compositing_keys() && transform_pivots_once() && transform_ignores_locale() &&
-           image_nodes() &&
-                   path_nodes() && grouping_keys() && blend_mode_key()
+           image_nodes() && path_nodes() && plot_nodes() && grouping_keys() &&
+           animation_tracks() && blend_mode_key()
                ? 0
                : 1;
 }

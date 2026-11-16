@@ -25,9 +25,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "cli"))
+sys.path.insert(0, str(REPO / "cli/tests"))
+from live_browser import live_browser_skip_reason  # noqa: E402
 from vellum_cdp import CdpAdmission  # noqa: E402
 from vellum_cdp_client import CdpClient  # noqa: E402
 from vellum_web_backend import chrome_path  # noqa: E402
+sys.path.pop(0)
 sys.path.pop(0)
 
 TOLERANCE = 0.5
@@ -196,6 +199,10 @@ def locate_source(dump: dict, node_id: str) -> tuple[str, int]:
 
 def main() -> int:
     host = sys.argv[1]
+    reason = live_browser_skip_reason()
+    if reason is not None:
+        print(f"SKIP: {reason}")
+        return 77
     chrome = chrome_boxes(twin_html())
     if chrome.get("meter", (0, 0, 0, 0))[2] != expected_meter_width():
         sys.exit(f"chrome twin did not report the expected meter width: {chrome}")

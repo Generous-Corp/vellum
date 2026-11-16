@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
+    DESIGN_IR_VERSIONS,
     DESIGN_IR_SCHEMA,
     DesignIRValidationError,
     indexTree,
@@ -9,6 +10,7 @@ import {
     parseDesignIR,
     stableStringify,
     summarizeDesignIR,
+    SUPPORTED_DESIGN_IR_VERSIONS,
     validateDesignIR,
 } from '../src/index.js';
 
@@ -156,8 +158,64 @@ test('unknown adapter fields are preserved and diagnosed instead of dropped', ()
 
 test('unknown schema versions are rejected rather than best-effort parsed', async () => {
     const document = normalizeImport(await fixture('revision-a.source.json'));
-    document.schemaVersion = 4;
+    document.schemaVersion = 6;
     assert.throws(() => parseDesignIR(document), DesignIRValidationError);
+});
+
+test('schema version 3 remains readable without a material reference', async () => {
+    const document = normalizeImport(await fixture('revision-a.source.json'));
+    document.schemaVersion = 3;
+    assert.doesNotThrow(() => parseDesignIR(document));
+});
+
+test('schema version names remain aliases across the five-version reader', () => {
+    assert.strictEqual(SUPPORTED_DESIGN_IR_VERSIONS, DESIGN_IR_VERSIONS);
+    assert.deepEqual([...DESIGN_IR_VERSIONS], [1, 2, 3, 4, 5]);
+});
+
+test('normalization chooses the lowest version covering tracks and compositing', async () => {
+    const source = await fixture('revision-a.source.json');
+    const target = source.root.children[0];
+    target.compositing = { blendMode: 'multiply' };
+    target.tracks = [{
+        property: 'opacity',
+        keyframes: [{ time: 0, value: 0 }, { time: 1, value: 1 }],
+    }];
+
+    const both = normalizeImport(source);
+    assert.equal(both.schemaVersion, 4);
+    assert.deepEqual(validateDesignIR(both), { issues: [], valid: true });
+
+    const compositingOnly = structuredClone(source);
+    delete compositingOnly.root.children[0].tracks;
+    assert.equal(normalizeImport(compositingOnly).schemaVersion, 2);
+
+    const plain = structuredClone(source);
+    delete plain.root.children[0].tracks;
+    delete plain.root.children[0].compositing;
+    assert.equal(normalizeImport(plain).schemaVersion, 1);
+});
+
+test('version validation gates tracks at 4 and compositing at 2', async () => {
+    const source = await fixture('revision-a.source.json');
+    source.root.children[0].compositing = { blendMode: 'multiply' };
+    source.root.children[0].tracks = [{
+        property: 'opacity',
+        keyframes: [{ time: 0, value: 0 }, { time: 1, value: 1 }],
+    }];
+    const document = normalizeImport(source);
+    for (const version of [1, 2, 3, 4]) {
+        const candidate = structuredClone(document);
+        candidate.schemaVersion = version;
+        const result = validateDesignIR(candidate);
+        if (version < 4) {
+            assert.ok(result.issues.some(({ path }) => path.endsWith('.tracks')), `tracks at ${version}`);
+        }
+        if (version < 2) {
+            assert.ok(result.issues.some(({ path }) => path.endsWith('.compositing')), `compositing at ${version}`);
+        }
+        if (version === 4) assert.deepEqual(result, { issues: [], valid: true });
+    }
 });
 
 function reverseObjectKeys(value) {

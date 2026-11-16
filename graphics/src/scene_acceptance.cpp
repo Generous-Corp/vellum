@@ -1,9 +1,11 @@
 #include <vellum/graphics/scene_acceptance.hpp>
 
+#include <vellum/graphics/animation.hpp>
 #include <vellum/graphics/effect.hpp>
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/path_geometry.hpp>
+#include <vellum/graphics/plot.hpp>
 
 #include <cmath>
 #include <optional>
@@ -71,11 +73,16 @@ struct EffectRefusal final {
     std::string_view code;
 };
 
+std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_node,
+                          std::optional<EffectRefusal>& effect,
+                          std::optional<std::string>& plot_node);
+
 // Why `scene` is refused, or empty. `image_node` is set to the refused
 // image's id, and `image` to true, for an image or image-table refusal;
-// `effect` is set for an effect refusal.
+// `effect` is set for an effect refusal and `plot_node` for a plot refusal.
 std::string refusal(const Scene& scene, bool& image, std::string& image_node,
-                    std::optional<EffectRefusal>& effect) {
+                    std::optional<EffectRefusal>& effect,
+                    std::optional<std::string>& plot_node) {
     if (!scene_version_is_supported(scene.scene_version)) {
         return "scene version " + std::to_string(scene.scene_version) +
                " is not supported by this renderer";
@@ -97,6 +104,22 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node,
         return "the gradient at " + unsupported->id + " cannot be drawn exactly: " +
                gradient_reason;
     }
+    std::string reason;
+    std::optional<Scene> evaluated;
+    if (scene_has_tracks(scene)) {
+        if (!std::isfinite(scene.clock)) return "the scene clock is not finite";
+        if (const auto* animated = find_invalid_tracks(scene.root, reason); animated != nullptr) {
+            return "tracks of " + animated->id + " cannot be evaluated: " + reason;
+        }
+        evaluated.emplace(evaluate_tracks(scene));
+    }
+    return drawn_refusal(evaluated ? *evaluated : scene, image, image_node, effect, plot_node);
+}
+
+// Why the scene as drawn, with its tracks evaluated, is refused, or empty.
+std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_node,
+                          std::optional<EffectRefusal>& effect,
+                          std::optional<std::string>& plot_node) {
     if (const auto* invalid = find_non_finite_compositing(scene.root); invalid != nullptr) {
         return "scene node " + invalid->id +
                " has a non-finite transform, opacity, or corner radius";
@@ -129,6 +152,10 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node,
         image = true;
         return reason;
     }
+    if (const auto* plot = find_invalid_plot(scene.root, reason); plot != nullptr) {
+        plot_node = plot->id;
+        return "plot " + plot->id + " cannot be drawn: " + reason;
+    }
     return {};
 }
 
@@ -140,7 +167,8 @@ SceneAcceptance accept_scene(const Scene& scene) {
     bool image = false;
     std::string image_node;
     std::optional<EffectRefusal> effect;
-    result.reason = refusal(scene, image, image_node, effect);
+    std::optional<std::string> plot_node;
+    result.reason = refusal(scene, image, image_node, effect, plot_node);
     result.accepted = result.reason.empty();
     if (result.accepted) return result;
 
@@ -158,6 +186,16 @@ SceneAcceptance accept_scene(const Scene& scene) {
             .code = std::string(effect->code),
             .node_id = std::move(effect->node_id),
             .property = "effects",
+            .message = result.reason,
+        });
+    }
+    if (plot_node) {
+        result.diagnostics.push_back({
+            .severity = LoweringDiagnostic::Severity::error,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(kInvalidPlotCode),
+            .node_id = std::move(*plot_node),
+            .property = "plot",
             .message = result.reason,
         });
     }

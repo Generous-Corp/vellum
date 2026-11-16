@@ -2,8 +2,10 @@ import {
     AUTHORED_OVERLAY_SCHEMA,
     AUTHORED_OVERLAY_VERSION,
     DESIGN_IR_COMPOSITING_VERSION,
+    DESIGN_IR_PLOTS_VERSION,
     DESIGN_IR_SCHEMA,
     DESIGN_IR_MATERIALS_VERSION,
+    DESIGN_IR_TRACKS_VERSION,
     DESIGN_IR_VERSIONS,
     DISPOSITIONS,
     REIMPORT_REPORT_SCHEMA,
@@ -245,7 +247,7 @@ export function parseReimportReport(text) {
     return value;
 }
 
-function validateNode(node, path, sourceKey, issues, version) {
+function validateNode(node, path, sourceKey, issues, schemaVersion) {
     requireObject(node, path, issues);
     if (!isObject(node)) return;
     string(node.id, `${path}.id`, issues);
@@ -277,8 +279,27 @@ function validateNode(node, path, sourceKey, issues, version) {
         }
     }
     requireObject(node.properties, `${path}.properties`, issues);
+    if (node.plot !== undefined) {
+        if (!(schemaVersion >= DESIGN_IR_PLOTS_VERSION)) {
+            issues.push(issue(
+                `${path}.plot`,
+                'version',
+                `a plot binding needs schemaVersion ${DESIGN_IR_PLOTS_VERSION} or later`,
+            ));
+        }
+        validatePlotBinding(node.plot, `${path}.plot`, issues);
+        if (Array.isArray(node.children) && node.children.length > 0) {
+            issues.push(issue(`${path}.plot`, 'children', 'a node with a plot binding has no children'));
+        }
+    }
+    if (node.tracks !== undefined) {
+        if (!(schemaVersion >= DESIGN_IR_TRACKS_VERSION)) {
+            issues.push(issue(`${path}.tracks`, 'version', `tracks need schemaVersion ${DESIGN_IR_TRACKS_VERSION}`));
+        }
+        validateTracks(node.tracks, `${path}.tracks`, issues);
+    }
     if (node.material !== undefined) {
-        if (!(version >= DESIGN_IR_MATERIALS_VERSION)) {
+        if (!(schemaVersion >= DESIGN_IR_MATERIALS_VERSION)) {
             issues.push(issue(
                 `${path}.material`,
                 'version',
@@ -291,12 +312,12 @@ function validateNode(node, path, sourceKey, issues, version) {
         issues.push(issue(`${path}.children`, 'type', 'children must be an array'));
     } else {
         node.children.forEach((child, index) =>
-            validateNode(child, `${path}.children[${index}]`, sourceKey, issues, version),
+            validateNode(child, `${path}.children[${index}]`, sourceKey, issues, schemaVersion),
         );
         validateMaskReferences(node, path, issues);
     }
     if (node.compositing !== undefined) {
-        if (!(version >= DESIGN_IR_COMPOSITING_VERSION)) {
+        if (!(schemaVersion >= DESIGN_IR_COMPOSITING_VERSION)) {
             issues.push(issue(
                 `${path}.compositing`,
                 'version',
@@ -330,6 +351,264 @@ function validateMaskReferences(parent, path, issues) {
             issues.push(issue(where, 'mask', 'a mask node cannot reference another mask'));
         }
     });
+}
+
+const PLOT_FIELDS = new Set([
+    'style', 'channel', 'source', 'slots', 'history', 'orientation', 'audioChannel', 'min', 'max',
+    'baseline', 'lineWidth', 'barGap', 'peakWidth', 'lineColor', 'fillColor', 'peakColor',
+]);
+// A Map, so a style such as 'constructor' or '__proto__' finds no inherited entry.
+const PLOT_SOURCES = new Map([
+    ['line', ['scalar', 'vector']], ['area', ['scalar', 'vector']], ['bar', ['vector']], ['meter', ['meter']],
+]);
+const MAX_PLOT_SLOTS = 4194304;
+const PLOT_FLOAT_MAX = 3.4028234663852886e38;
+
+// A plot binding names a value-feed channel and how to draw it, under the
+// rules the renderer's `plot_is_valid` applies; samples arrive at run time.
+function validatePlotBinding(plot, path, issues) {
+    requireObject(plot, path, issues);
+    if (!isObject(plot)) return;
+    for (const key of Object.keys(plot)) {
+        if (!PLOT_FIELDS.has(key)) {
+            issues.push(issue(`${path}.${key}`, 'unknown-field', 'a plot binding carries no such field'));
+        }
+    }
+    const sources = typeof plot.style === 'string' ? PLOT_SOURCES.get(plot.style) : undefined;
+    if (sources === undefined) {
+        issues.push(issue(`${path}.style`, 'enum', 'plot style must be line, area, bar or meter'));
+    }
+    if (typeof plot.channel !== 'string' || plot.channel.length === 0) {
+        issues.push(issue(`${path}.channel`, 'type', 'a plot names its channel'));
+    }
+    // Only an absent source takes the default; an explicit null is refused.
+    const source = plot.source === undefined ? (plot.style === 'meter' ? 'meter' : 'vector') : plot.source;
+    if (sources !== undefined && !sources.includes(source)) {
+        issues.push(issue(`${path}.source`, 'enum', `a ${plot.style} plot reads a ${sources.join(' or ')} channel`));
+    }
+    const enumField = (key, values) => {
+        if (plot[key] !== undefined && !values.includes(plot[key])) {
+            issues.push(issue(`${path}.${key}`, 'enum', `${key} must be ${values.join(' or ')}`));
+        }
+    };
+    enumField('history', ['scroll', 'sweep']);
+    enumField('orientation', ['vertical', 'horizontal']);
+    const integer = (key, minimum, maximum) => {
+        const value = plot[key];
+        if (value !== undefined && (!Number.isInteger(value) || value < minimum || value > maximum)) {
+            issues.push(issue(`${path}.${key}`, 'range', `${key} must be a whole number from ${minimum} to ${maximum}`));
+        }
+    };
+    integer('slots', 1, MAX_PLOT_SLOTS);
+    integer('audioChannel', 0, 1024);
+    if (plot.style !== 'meter' && plot.slots === undefined) {
+        issues.push(issue(`${path}.slots`, 'type', 'a line, area or bar plot declares its slots'));
+    }
+    // The renderer holds these as single-precision floats, so a value must
+    // fit one, and limits and the range compare the rounded values.
+    const finite = (value) => typeof value === 'number' && Number.isFinite(value) &&
+        Math.abs(value) <= PLOT_FLOAT_MAX;
+    for (const key of ['min', 'max', 'baseline', 'lineWidth', 'barGap', 'peakWidth']) {
+        if (plot[key] === undefined) continue;
+        if (!finite(plot[key])) {
+            issues.push(issue(`${path}.${key}`, 'type', `${key} must be a finite number within float range`));
+        } else if (['lineWidth', 'barGap', 'peakWidth'].includes(key) &&
+            (Math.fround(plot[key]) < 0 || Math.fround(plot[key]) > 4096)) {
+            issues.push(issue(`${path}.${key}`, 'range', `${key} must be from 0 to 4096`));
+        }
+    }
+    const low = plot.min === undefined ? 0 : plot.min;
+    const high = plot.max === undefined ? 1 : plot.max;
+    if (finite(low) && finite(high) && Math.fround(low) === Math.fround(high)) {
+        issues.push(issue(`${path}.max`, 'range', 'a plot value range must not be empty once rounded to float'));
+    }
+    for (const key of ['lineColor', 'fillColor', 'peakColor']) {
+        const color = plot[key];
+        if (color !== undefined &&
+            (typeof color !== 'string' || !/^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/.test(color))) {
+            issues.push(issue(`${path}.${key}`, 'format', `${key} must be #RRGGBB or #RRGGBBAA`));
+        }
+    }
+}
+
+const ANIMATED_PROPERTIES = new Set([
+    'opacity', 'translateX', 'translateY', 'scaleX', 'scaleY', 'rotation',
+    'fill', 'strokeColor', 'shadowColor', 'gradientStopColor', 'textRunColor',
+]);
+const COLOR_PROPERTIES = new Set([
+    'fill', 'strokeColor', 'shadowColor', 'gradientStopColor', 'textRunColor',
+]);
+const INDEXED_PROPERTIES = new Set(['shadowColor', 'gradientStopColor', 'textRunColor']);
+const FLOAT_MAX = 3.4028234663852886e38;
+const SPRING_REST_THRESHOLD = 1e-4;
+const EASING_KEYWORDS = new Set(['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out']);
+const HEX_COLOR = /^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/;
+
+// Animation tracks carry keyframes only; the host clock that evaluates them
+// is passed per frame and never stored in the document.
+function validateTracks(tracks, path, issues) {
+    if (!Array.isArray(tracks)) {
+        issues.push(issue(path, 'type', 'tracks must be an array'));
+        return;
+    }
+    if (tracks.length > 32) issues.push(issue(path, 'range', 'a node has at most 32 tracks'));
+    const seen = new Set();
+    tracks.forEach((track, index) => {
+        const trackPath = `${path}[${index}]`;
+        requireObject(track, trackPath, issues);
+        if (!isObject(track)) return;
+        for (const key of Object.keys(track)) {
+            if (!['property', 'index', 'stop', 'keyframes'].includes(key)) {
+                issues.push(issue(`${trackPath}.${key}`, 'unknown-field', 'a track carries property, index, stop and keyframes'));
+            }
+        }
+        if (!ANIMATED_PROPERTIES.has(track.property)) {
+            issues.push(issue(`${trackPath}.property`, 'enum', 'track property is not an animatable property'));
+        }
+        for (const field of ['index', 'stop']) {
+            const value = track[field];
+            if (value === undefined) continue;
+            const used = field === 'index' ? INDEXED_PROPERTIES.has(track.property) : track.property === 'gradientStopColor';
+            if (!used) {
+                issues.push(issue(`${trackPath}.${field}`, 'unknown-field', `a ${track.property} track takes no ${field}`));
+            } else if (!Number.isInteger(value) || value < 0 || value > 65535) {
+                issues.push(issue(`${trackPath}.${field}`, 'range', `${field} must be an integer from 0 to 65535`));
+            }
+        }
+        const address = `${track.property}/${track.index ?? 0}/${track.stop ?? 0}`;
+        if (seen.has(address)) {
+            issues.push(issue(trackPath, 'duplicate', 'two tracks animate the same property'));
+        }
+        seen.add(address);
+        if (!Array.isArray(track.keyframes) || track.keyframes.length === 0 || track.keyframes.length > 256) {
+            issues.push(issue(`${trackPath}.keyframes`, 'type', 'keyframes must be an array of 1 to 256 keyframes'));
+            return;
+        }
+        const color = COLOR_PROPERTIES.has(track.property);
+        let previous = -Infinity;
+        track.keyframes.forEach((keyframe, keyIndex) => {
+            const keyPath = `${trackPath}.keyframes[${keyIndex}]`;
+            requireObject(keyframe, keyPath, issues);
+            if (!isObject(keyframe)) return;
+            for (const key of Object.keys(keyframe)) {
+                if (!['time', 'value', 'easing'].includes(key)) {
+                    issues.push(issue(`${keyPath}.${key}`, 'unknown-field', 'a keyframe carries time, value and easing'));
+                }
+            }
+            if (typeof keyframe.time !== 'number' || !Number.isFinite(keyframe.time) || Math.abs(keyframe.time) > FLOAT_MAX) {
+                issues.push(issue(`${keyPath}.time`, 'type', 'keyframe time must be a finite number of seconds within float range'));
+            } else if (!(keyframe.time > previous)) {
+                issues.push(issue(`${keyPath}.time`, 'order', 'keyframe times must strictly increase'));
+            }
+            if (typeof keyframe.time === 'number') previous = keyframe.time;
+            const valid = color
+                ? typeof keyframe.value === 'string' && HEX_COLOR.test(keyframe.value)
+                : typeof keyframe.value === 'number' && Number.isFinite(keyframe.value) && Math.abs(keyframe.value) <= FLOAT_MAX;
+            if (!valid) {
+                issues.push(issue(
+                    `${keyPath}.value`,
+                    'type',
+                    color ? 'a colour keyframe value is #rrggbb or #rrggbbaa' : 'a keyframe value is a finite number within float range',
+                ));
+            }
+            if (keyframe.easing !== undefined) validateEasing(keyframe.easing, `${keyPath}.easing`, issues);
+            const next = track.keyframes[keyIndex + 1];
+            if (isObject(keyframe.easing) && keyframe.easing.type === 'spring' && isObject(next) &&
+                typeof next.time === 'number' && typeof keyframe.time === 'number' &&
+                next.time - keyframe.time < springSettleTime(keyframe.easing)) {
+                issues.push(issue(`${keyPath}.easing`, 'range', 'the next keyframe comes before this spring settles'));
+            }
+        });
+    });
+}
+
+// The time after release from which a spring's displacement and speed stay
+// below the rest threshold, computed as the native renderer computes it from
+// single-precision constants. Infinite for constants that never settle.
+function springSettleTime(easing) {
+    const constant = (value, fallback) => Math.fround(typeof value === 'number' ? value : fallback);
+    const stiffness = constant(easing.stiffness, 100);
+    const damping = constant(easing.damping, 10);
+    const mass = constant(easing.mass, 1);
+    const velocity = constant(easing.velocity, 0);
+    if (!(stiffness > 0 && damping > 0 && mass > 0) || !Number.isFinite(velocity)) return Infinity;
+    const omega = Math.sqrt(stiffness / mass);
+    const zeta = damping / (2 * Math.sqrt(stiffness * mass));
+    const start = -1;
+    let bound;
+    let rate;
+    if (Math.abs(zeta - 1) <= 1e-6) {
+        const b = velocity + omega * start;
+        const reach = 2 / (Math.E * omega);
+        bound = Math.max(Math.abs(start) + Math.abs(b) * reach, Math.abs(b - omega * start) + omega * Math.abs(b) * reach);
+        rate = omega / 2;
+    } else if (zeta < 1) {
+        const damped = omega * Math.sqrt(1 - zeta * zeta);
+        const b = (velocity + zeta * omega * start) / damped;
+        bound = Math.hypot(start, b) * Math.max(1, omega);
+        rate = zeta * omega;
+    } else {
+        const root = Math.sqrt(zeta * zeta - 1);
+        const slow = -omega * (zeta - root);
+        const fast = -omega * (zeta + root);
+        const c2 = (velocity - slow * start) / (fast - slow);
+        const c1 = start - c2;
+        bound = Math.max(Math.abs(c1) + Math.abs(c2), Math.abs(c1 * slow) + Math.abs(c2 * fast));
+        rate = -slow;
+    }
+    if (!Number.isFinite(bound) || !Number.isFinite(rate) || rate <= 0) return Infinity;
+    if (bound <= SPRING_REST_THRESHOLD) return 0;
+    return Math.log(bound / SPRING_REST_THRESHOLD) / rate;
+}
+
+function validateEasing(easing, path, issues) {
+    if (typeof easing === 'string') {
+        if (!EASING_KEYWORDS.has(easing)) {
+            issues.push(issue(path, 'enum', 'easing keyword must be linear, ease, ease-in, ease-out or ease-in-out'));
+        }
+        return;
+    }
+    requireObject(easing, path, issues);
+    if (!isObject(easing)) return;
+    const finite = (value) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= FLOAT_MAX;
+    const fields = {
+        cubicBezier: ['type', 'x1', 'y1', 'x2', 'y2'],
+        steps: ['type', 'steps', 'position'],
+        spring: ['type', 'stiffness', 'damping', 'mass', 'velocity'],
+    };
+    const allowed = Object.hasOwn(fields, easing.type) ? fields[easing.type] : undefined;
+    if (allowed === undefined) {
+        issues.push(issue(`${path}.type`, 'enum', 'easing type must be cubicBezier, steps or spring'));
+        return;
+    }
+    for (const key of Object.keys(easing)) {
+        if (!allowed.includes(key)) {
+            issues.push(issue(`${path}.${key}`, 'unknown-field', `${easing.type} easing does not take ${key}`));
+        }
+    }
+    if (easing.type === 'cubicBezier') {
+        const unit = (value) => finite(value) && value >= 0 && value <= 1;
+        if (!unit(easing.x1) || !unit(easing.x2) || !finite(easing.y1) || !finite(easing.y2)) {
+            issues.push(issue(path, 'range', 'cubicBezier needs x1 and x2 in [0, 1] and y1 and y2 within float range'));
+        }
+    } else if (easing.type === 'steps') {
+        if (!Number.isInteger(easing.steps) || easing.steps < 1 || easing.steps > 65535 ||
+            (easing.position === 'none' && easing.steps < 2)) {
+            issues.push(issue(`${path}.steps`, 'range', 'steps must be an integer from 1, or 2 with position none, to 65535'));
+        }
+        if (easing.position !== undefined && !['start', 'end', 'none', 'both'].includes(easing.position)) {
+            issues.push(issue(`${path}.position`, 'enum', 'steps position must be start, end, none or both'));
+        }
+    } else {
+        for (const field of ['stiffness', 'damping', 'mass']) {
+            if (easing[field] !== undefined && !(finite(easing[field]) && easing[field] > 0)) {
+                issues.push(issue(`${path}.${field}`, 'range', `spring ${field} must be positive and within float range`));
+            }
+        }
+        if (easing.velocity !== undefined && !finite(easing.velocity)) {
+            issues.push(issue(`${path}.velocity`, 'type', 'spring velocity must be finite and within float range'));
+        }
+    }
 }
 
 // A material reference carries an id and values only: the uniforms' types,

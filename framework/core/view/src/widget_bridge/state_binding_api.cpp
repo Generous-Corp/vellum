@@ -20,7 +20,9 @@
 #include "api_registry.hpp"
 #include "bridge_dispatch.hpp"
 
+#include <vellum/runtime/log.hpp>
 #include <vellum/state/param_json.hpp>
+#include <vellum/value/param_metadata.hpp>
 
 #include <choc/text/choc_JSON.h>
 
@@ -38,6 +40,52 @@
 #include <vector>
 
 namespace vellum::view {
+
+namespace {
+
+// getParamMetadata for a model-built bridge. The plain range, step, curve and
+// labels come from value::ParamMetadata when the model provides it; without it
+// the range is the model's plain value at 0 and 1, the labels are the display
+// text of each value, and no curve is reported.
+choc::value::Value model_param_metadata(value::ParamModel& model, value::ParamHandle param) {
+    if (!param.valid())
+        return choc::value::Value();  // undefined in JS, as for an unknown store name
+    const auto info = model.info(param);
+    auto obj = choc::value::createObject("");
+    obj.addMember("name", choc::value::createString(info.name));
+    obj.addMember("unit", choc::value::createString(info.unit));
+    auto labels = choc::value::createEmptyArray();
+    if (auto* metadata = value::metadata_of(model)) {
+        const auto range = metadata->range(param);
+        obj.addMember("min", choc::value::createFloat64(range.plain_min));
+        obj.addMember("max", choc::value::createFloat64(range.plain_max));
+        obj.addMember("default", choc::value::createFloat64(range.plain_default));
+        obj.addMember("step", choc::value::createFloat64(range.step));
+        obj.addMember("skew", choc::value::createFloat64(range.skew));
+        obj.addMember("symmetricSkew", choc::value::createBool(range.symmetric_skew));
+        // An unevenly spaced discrete axis lists its values; step is then 0.
+        if (!range.plain_values.empty()) {
+            auto values = choc::value::createEmptyArray();
+            for (const double v : range.plain_values)
+                values.addArrayElement(choc::value::createFloat64(v));
+            obj.addMember("values", values);
+        }
+        for (const auto& label : metadata->value_labels(param))
+            labels.addArrayElement(choc::value::createString(label));
+    } else {
+        obj.addMember("min", choc::value::createFloat64(model.plain(param, 0.0)));
+        obj.addMember("max", choc::value::createFloat64(model.plain(param, 1.0)));
+        obj.addMember("default", choc::value::createFloat64(model.plain(param, info.default_normalized)));
+        for (int i = 0; i < info.value_count && info.value_count >= 2; ++i)
+            labels.addArrayElement(choc::value::createString(model.display_text(
+                param, value::value_index_to_normalized(i, info.value_count))));
+    }
+    obj.addMember("valueCount", choc::value::createInt32(info.value_count));
+    obj.addMember("labels", labels);
+    return obj;
+}
+
+}  // namespace
 
 void WidgetBridge::begin_param_gesture(const std::string& widget_id) {
     auto it = param_gesture_routes_.find(widget_id);
@@ -210,6 +258,18 @@ std::string_view value_channel_name(std::string_view source) {
     if (source.size() <= kPrefix.size() || source.substr(0, kPrefix.size()) != kPrefix)
         return {};
     return source.substr(kPrefix.size());
+}
+
+/// A model-built bridge does not bind widgets to parameters or subscribe to
+/// them yet: those paths read a StateStore. Refuse loudly instead of binding
+/// nothing; a value-channel source is unaffected.
+bool refuse_param_binding_on_model(bool has_store, const char* function, std::string_view source) {
+    if (has_store || !value_channel_name(source).empty())
+        return false;
+    runtime::log_warn("WidgetBridge: {}('{}') is not supported on a bridge built over a "
+                      "ParamModel; nothing was bound",
+                      function, source);
+    return true;
 }
 } // namespace
 
@@ -756,6 +816,8 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
     register_bridge_function(api, "__subscribeParam__", [&self](choc::javascript::ArgumentList args) {
         const auto name = args.get<std::string>(0, "");
         if (name.empty()) return choc::value::createInt64(0);
+        if (refuse_param_binding_on_model(self.has_store_, "onParamChanged", name))
+            return choc::value::createInt64(0);
         state::ParamID param_id = 0;
         if (!self.resolve_param_id(name, param_id)) return choc::value::createInt64(0);
 
@@ -843,25 +905,38 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
 
     register_bridge_function(api, "getParamMetadata", [&self](choc::javascript::ArgumentList args) {
         const auto name = args.get<std::string>(0, "");
-        for (std::size_t i = 0; i < self.store_.param_count(); ++i) {
-            const auto* info = &self.store_.all_params()[i];
-            if (info && info->name == name) return state::param_metadata_to_value(*info);
+        if (self.has_store_) {
+            for (std::size_t i = 0; i < self.store_.param_count(); ++i) {
+                const auto* info = &self.store_.all_params()[i];
+                if (info && info->name == name) return state::param_metadata_to_value(*info);
+            }
+            return choc::value::Value();  // undefined in JS — an unknown name is not an empty object
         }
-        return choc::value::Value();  // undefined in JS — an unknown name is not an empty object
+        return model_param_metadata(self.params_, self.params_.resolve(name));
     });
 
     // formatParamValue(name, value, isNormalized?) -> display string.
     // Honours the author's to_string, then an enum label, then unit-suffixed
     // numeric — the same order the host and the inspector use, so a UI never
-    // shows a different string than the DAW.
+    // shows a different string than the DAW. A model-built bridge asks the
+    // model for the text of the value's normalized position.
     register_bridge_function(api, "formatParamValue", [&self](choc::javascript::ArgumentList args) {
         const auto name = args.get<std::string>(0, "");
-        const auto raw = static_cast<float>(args.get<double>(1, 0.0));
+        // Kept as a double: the model API is double-valued, and narrowing here
+        // would collapse plain values a float cannot tell apart (2^24 + 1).
+        const double raw = args.get<double>(1, 0.0);
         const bool normalized = args.get<bool>(2, false);
+        if (!self.has_store_) {
+            const auto param = self.params_.resolve(name);
+            if (!param.valid()) return choc::value::Value();
+            const double position = normalized ? raw : self.params_.normalized_from_plain(param, raw);
+            return choc::value::createString(self.params_.display_text(param, position));
+        }
         for (std::size_t i = 0; i < self.store_.param_count(); ++i) {
             const auto* info = &self.store_.all_params()[i];
             if (!info || info->name != name) continue;
-            const float value = normalized ? info->range.denormalize(raw) : raw;
+            const auto raw_f = static_cast<float>(raw);
+            const float value = normalized ? info->range.denormalize(raw_f) : raw_f;
             return choc::value::createString(state::param_display_text(*info, value));
         }
         return choc::value::Value();
@@ -875,6 +950,16 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
     register_bridge_function(api, "parseParamValue", [&self](choc::javascript::ArgumentList args) {
         const auto name = args.get<std::string>(0, "");
         const auto text = args.get<std::string>(1, "");
+        if (!self.has_store_) {
+            const auto param = self.params_.resolve(name);
+            if (!param.valid()) return choc::value::Value();
+            const auto parsed = self.params_.parse_text(param, text);
+            auto out = choc::value::createObject("");
+            out.addMember("ok", choc::value::createBool(parsed.has_value()));
+            out.addMember("value", choc::value::createFloat64(parsed ? self.params_.plain(param, *parsed) : 0.0));
+            out.addMember("normalized", choc::value::createFloat64(parsed ? *parsed : 0.0));
+            return out;
+        }
         for (std::size_t i = 0; i < self.store_.param_count(); ++i) {
             const auto* info = &self.store_.all_params()[i];
             if (!info || info->name != name) continue;
@@ -890,30 +975,16 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
         return choc::value::Value();
     });
 
+    // getParam(name) -> normalized value, 0 for an unknown name.
     register_bridge_function(api, "getParam", [&self](choc::javascript::ArgumentList args) {
-        auto name = args.get<std::string>(0, "");
-
-        for (size_t i = 0; i < self.store_.param_count(); ++i) {
-            auto* info = &self.store_.all_params()[i];
-            if (info && info->name == name) {
-                return choc::value::createFloat64(self.store_.get_normalized(info->id));
-            }
-        }
-        return choc::value::createFloat64(0);
+        const auto param = self.params_.resolve(args.get<std::string>(0, ""));
+        return choc::value::createFloat64(self.params_.normalized(param));
     });
 
-    // setParam(name, normalized_value) -> set parameter in store
+    // setParam(name, normalized_value) -> set the parameter through the model.
     register_bridge_function(api, "setParam", [&self](choc::javascript::ArgumentList args) {
-        auto name = args.get<std::string>(0, "");
-        auto value = args.get<double>(1, 0);
-
-        for (size_t i = 0; i < self.store_.param_count(); ++i) {
-            auto* info = &self.store_.all_params()[i];
-            if (info && info->name == name) {
-                self.store_.set_normalized(info->id, static_cast<float>(value));
-                break;
-            }
-        }
+        const auto param = self.params_.resolve(args.get<std::string>(0, ""));
+        self.params_.set_normalized(param, args.get<double>(1, 0));
         return choc::value::Value();
     });
 
@@ -925,6 +996,8 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
     // without losing host automation touch/release or undo grouping. Returns
     // true if the param exists and the binding was set.
     register_bridge_function(api, "bindWidgetToParam", [&self](choc::javascript::ArgumentList args) {
+        if (refuse_param_binding_on_model(self.has_store_, "bindWidgetToParam", args.get<std::string>(1, "")))
+            return choc::value::createBool(false);
         return choc::value::createBool(
             self.add_param_binding(args.get<std::string>(0, ""),
                               args.get<std::string>(1, ""),
@@ -935,6 +1008,8 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
     // bindMeter(widgetId, source, transform?) -> bind a Meter widget to a param
     // (the source drives both the rms and peak fill). Same native-push contract.
     register_bridge_function(api, "bindMeter", [&self](choc::javascript::ArgumentList args) {
+        if (refuse_param_binding_on_model(self.has_store_, "bindMeter", args.get<std::string>(1, "")))
+            return choc::value::createBool(false);
         return choc::value::createBool(
             self.add_param_binding(args.get<std::string>(0, ""),
                               args.get<std::string>(1, ""),
@@ -946,6 +1021,8 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
     // to a vector value channel. Scope sources are value channels only: there is
     // no parameter shape that carries a block of samples.
     register_bridge_function(api, "bindScope", [&self](choc::javascript::ArgumentList args) {
+        if (refuse_param_binding_on_model(self.has_store_, "bindScope", args.get<std::string>(1, "")))
+            return choc::value::createBool(false);
         return choc::value::createBool(
             self.add_param_binding(args.get<std::string>(0, ""),
                               args.get<std::string>(1, ""),

@@ -614,6 +614,212 @@ inline constexpr std::array<BlendMode, 29> kAllBlendModes{
     return std::nullopt;
 }
 
+/// How a keyframe eases toward the next one.
+enum class EasingKind : std::uint8_t {
+    /// Progress equals elapsed time.
+    linear,
+    /// CSS `cubic-bezier(x1, y1, x2, y2)`; both x values lie in [0, 1].
+    cubic_bezier,
+    /// CSS `steps(steps, step_position)`.
+    steps,
+    /// A damped spring released from rest at the keyframe's value toward the
+    /// next keyframe's value, run in seconds of the host clock rather than
+    /// stretched over the segment. It is exactly at the next value from
+    /// `spring_settle_time` on, and the next keyframe must come no sooner.
+    spring,
+};
+
+/// Where `steps` easing jumps, as CSS `jump-start`, `jump-end`, `jump-none`
+/// and `jump-both`.
+enum class StepPosition : std::uint8_t {
+    jump_start,
+    jump_end,
+    jump_none,
+    jump_both,
+};
+
+struct Easing final {
+    EasingKind kind = EasingKind::linear;
+    float x1 = 0.0F;
+    float y1 = 0.0F;
+    float x2 = 1.0F;
+    float y2 = 1.0F;
+    /// At least 1, or at least 2 for `jump_none`.
+    std::uint32_t steps = 1U;
+    StepPosition step_position = StepPosition::jump_end;
+    /// Spring constants: stiffness, damping and mass are positive, and
+    /// `initial_velocity` is in progress per second, so 1 is the whole
+    /// distance per second.
+    float stiffness = 100.0F;
+    float damping = 10.0F;
+    float mass = 1.0F;
+    float initial_velocity = 0.0F;
+};
+
+/// What a track animates on its node.
+enum class AnimatedProperty : std::uint8_t {
+    /// `SceneNode::opacity`.
+    opacity,
+    /// The animated transform's channels. Together they form translate,
+    /// then rotate (degrees, clockwise on screen), then scale, applied about
+    /// the node's origin before the node's own `transform`. A channel without
+    /// a track keeps its identity value.
+    translate_x,
+    translate_y,
+    scale_x,
+    scale_y,
+    rotation_degrees,
+    /// `SceneNode::fill`.
+    fill,
+    /// The stroke colour of a `path` node.
+    stroke_color,
+    /// The colour of `box_shadows[index]`.
+    shadow_color,
+    /// The colour of `fill_gradients[index].stops[stop]`.
+    gradient_stop_color,
+    /// The colour of `text_runs[index]`.
+    text_run_color,
+};
+
+[[nodiscard]] constexpr bool is_color_property(AnimatedProperty property) noexcept {
+    return property == AnimatedProperty::fill || property == AnimatedProperty::stroke_color ||
+           property == AnimatedProperty::shadow_color ||
+           property == AnimatedProperty::gradient_stop_color ||
+           property == AnimatedProperty::text_run_color;
+}
+
+/// One keyframe of a track. `time` is in seconds of the host clock the caller
+/// passes as `Scene::clock`. A scalar property reads `value`, a colour
+/// property reads `color` (straight alpha). `easing` shapes the segment from
+/// this keyframe to the next; the last keyframe's easing is unused.
+struct AnimationKeyframe final {
+    double time = 0.0;
+    float value = 0.0F;
+    Color color{};
+    Easing easing{};
+};
+
+/// A keyframed animation of one property of its node. Keyframe times are
+/// finite and strictly increasing. Before the first keyframe the track holds
+/// the first value and after the last it holds the last, so a track at rest
+/// leaves its node unchanged from frame to frame. Colours interpolate
+/// premultiplied, as CSS does, and the result is clamped to [0, 1].
+struct AnimationTrack final {
+    AnimatedProperty property = AnimatedProperty::opacity;
+    /// The shadow, gradient or text run a colour track addresses.
+    std::uint32_t index = 0U;
+    /// The gradient stop a `gradient_stop_color` track addresses.
+    std::uint32_t stop = 0U;
+    std::vector<AnimationKeyframe> keyframes;
+};
+/// What a plot node draws.
+enum class PlotStyle : std::uint8_t {
+    /// A line through the samples, `line_width` thick.
+    line,
+    /// The area between the samples and `baseline`.
+    area,
+    /// One bar per slot from `baseline` to its sample, `bar_gap` apart.
+    bar,
+    /// A level meter: a bar from `value_min` to the level, and a tick at the
+    /// peak.
+    level_meter,
+};
+
+/// The shape of the `ValueFeed` channel a plot reads, as
+/// `vellum::value::ChannelShape` names it.
+enum class PlotChannelShape : std::uint8_t {
+    /// One number per publish; a line or area plot keeps a history of them.
+    scalar,
+    /// RMS and peak levels per audio channel; a level meter reads one.
+    meter,
+    /// A block of samples; each publish replaces the whole plot.
+    vector,
+};
+
+/// How a line or area plot of a scalar channel places a new sample once its
+/// slots are full.
+enum class PlotHistory : std::uint8_t {
+    /// Samples fill the slots from the left, then every publish shifts them
+    /// one slot left and the newest enters at the right.
+    scroll,
+    /// Samples wrap around and overwrite the oldest slot in place, leaving
+    /// the slot after the newest empty, as an oscilloscope sweep does.
+    sweep,
+};
+
+/// The direction a level meter grows.
+enum class PlotOrientation : std::uint8_t {
+    /// From the bottom edge up.
+    vertical,
+    /// From the left edge rightwards.
+    horizontal,
+};
+
+/// What a `plot` node draws: samples of a `vellum::value::ValueFeed` channel.
+///
+/// The plot's binding (`channel`, `shape` and `audio_channel`) names the
+/// channel; `PlotFeedSampler` reads the feed on the render thread and
+/// replaces the spec with one carrying the newest `samples`. The renderer
+/// draws `samples` and never reads a feed itself, so a scene stays a value.
+///
+/// Line, area and bar plots spread `slot_count` slots evenly across the
+/// node's box, slot 0 at the left, and map `value_min` to the bottom edge
+/// and `value_max` to the top; values outside are pinned to the edges. Each
+/// device-pixel column draws the minimum and maximum of the slots it covers,
+/// so a dense feed draws one span per column and its peaks survive. A slot
+/// holding NaN draws nothing and breaks the line. A level meter reads
+/// `samples[0]` as its level and `samples[1]` as its peak.
+///
+/// The samples are drawn as device-pixel-aligned rectangles without
+/// anti-aliasing, over the node's `fill`. With `fill_gradients` the
+/// background is drawn as a rectangle of that fill and those gradients
+/// behind the plot instead. Corner radii
+/// do not apply to a plot. Like a path's geometry, a spec must not be mutated
+/// once a scene references it; replace the pointer to change it.
+struct PlotSpec final {
+    PlotStyle style = PlotStyle::line;
+    /// The verbatim name of the channel the plot reads. A plot without one
+    /// draws the samples it carries, and `PlotFeedSampler` leaves it alone.
+    std::string channel;
+    PlotChannelShape shape = PlotChannelShape::vector;
+    /// The audio channel of a meter channel that a level meter shows, at most
+    /// `kMaxPlotAudioChannel`.
+    std::uint32_t audio_channel = 0;
+    /// Slots across the box for a line, area or bar plot, at least 1 and at
+    /// most `kMaxPlotSlots`; a level meter ignores it.
+    std::uint32_t slot_count = 0;
+    PlotHistory history = PlotHistory::scroll;
+    PlotOrientation orientation = PlotOrientation::vertical;
+    float value_min = 0.0F;
+    float value_max = 1.0F;
+    /// Where an area or bar plot's fill starts.
+    float baseline = 0.0F;
+    /// The line of a line plot.
+    Color line_color = Color::hex(0x38BDF8);
+    /// The fill of an area plot, bar plot or level meter.
+    Color fill_color = Color::hex(0x22C55E);
+    /// The peak tick of a level meter.
+    Color peak_color = Color::hex(0xF8FAFC);
+    /// Logical pixels, at most `kMaxPlotStroke`; at least one device pixel is
+    /// drawn.
+    float line_width = 1.0F;
+    /// Logical pixels between neighbouring bars, at most `kMaxPlotStroke`.
+    float bar_gap = 0.0F;
+    /// Logical thickness of a level meter's peak tick, at most
+    /// `kMaxPlotStroke`; zero draws none.
+    float peak_width = 2.0F;
+    /// One value per slot (a line, area or bar plot), or the level and peak
+    /// (a level meter). Missing slots draw nothing.
+    std::vector<float> samples;
+};
+
+/// The largest `PlotSpec::slot_count` a scene may carry.
+inline constexpr std::uint32_t kMaxPlotSlots = 1U << 22U;
+/// The largest `PlotSpec::audio_channel`.
+inline constexpr std::uint32_t kMaxPlotAudioChannel = 1024U;
+/// The largest line width, bar gap and peak width, in logical pixels.
+inline constexpr float kMaxPlotStroke = 4096.0F;
+
 /// The scene schema version this build produces.
 ///
 /// The version is a single integer. Bump it when a change can alter rendered
@@ -649,8 +855,13 @@ inline constexpr std::array<BlendMode, 29> kAllBlendModes{
 /// `LinearGradient`, and gradient strokes on paths. A plain linear fill
 /// gradient stays legal at every version.
 ///
-/// Version 10 adds `SceneNode::effects`. A scene of an earlier version is
-/// still accepted when no node sets them; one that does fails
+/// Version 10 adds `SceneNode::effects`, and version 11 adds
+/// `SceneNode::tracks`, evaluated at `Scene::clock`. A scene of an earlier
+/// version is still accepted when no node sets the newer fields; one that
+/// does fails `scene_fields_match_version` and is refused.
+///
+/// Version 12 adds the `plot` node kind. A scene of an earlier version is
+/// still accepted when it has no plot node; one that does fails
 /// `scene_fields_match_version` and is refused.
 ///
 /// Claimed versions, in order:
@@ -658,10 +869,9 @@ inline constexpr std::array<BlendMode, 29> kAllBlendModes{
 /// version 6: blend modes and DesignIR compositing fields; version 7: token
 /// receipts; version 8: gradient vocabulary; version 9: vector assets;
 /// version 10: effects and materials; version 11: animation tracks; version
-/// 12: plots. This build gives versions 7 and 9 no fields of their own and
-/// does not accept 11 or 12; the branches that own them add their fields and
-/// damage support.
-inline constexpr std::uint32_t kSceneVersion = 10U;
+/// 12: plot nodes. This build gives versions 7 and 9 no fields of their
+/// own; the branches that own them add their fields and damage support.
+inline constexpr std::uint32_t kSceneVersion = 12U;
 
 /// The oldest scene schema version this build still consumes.
 inline constexpr std::uint32_t kMinSupportedSceneVersion = 1U;
@@ -690,6 +900,7 @@ struct SceneNode final {
         mesh,
         path,
         image,
+        plot,
     };
 
     std::string id;
@@ -760,6 +971,14 @@ struct SceneNode final {
     /// the effect budget (`effect_chain_cost`) is drawn without its effects
     /// and reported as a loss. A mask node cannot carry effects.
     std::vector<NodeEffect> effects;
+    /// Animations of the node's own properties, evaluated at `Scene::clock`
+    /// (see `evaluate_tracks`). Every consumer draws and diffs the evaluated
+    /// values, never these fields' static values alone. At most one track per
+    /// property and address.
+    std::vector<AnimationTrack> tracks;
+    /// What a `plot` node draws. A plot node without it, or with children,
+    /// is refused.
+    std::shared_ptr<const PlotSpec> plot;
 };
 
 /// The corner radii a node is drawn with: `corner_radii` when present,
@@ -851,6 +1070,20 @@ struct SceneNode final {
     if (uses_version_6_fields(node)) return &node;
     for (const auto& child : node.children) {
         if (const auto* found = find_version_6_fields(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
+/// Whether a node sets a field version 11 introduced: an animation track.
+[[nodiscard]] inline bool uses_version_11_fields(const SceneNode& node) noexcept {
+    return !node.tracks.empty();
+}
+
+/// The first node, in depth-first order, that `uses_version_11_fields`.
+[[nodiscard]] inline const SceneNode* find_version_11_fields(const SceneNode& node) noexcept {
+    if (uses_version_11_fields(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_11_fields(child); found != nullptr) return found;
     }
     return nullptr;
 }
@@ -989,6 +1222,7 @@ struct SceneNode final {
     case SceneNode::Kind::mesh:
     case SceneNode::Kind::path:
     case SceneNode::Kind::image:
+    case SceneNode::Kind::plot:
         return true;
     }
     return false;
@@ -1024,6 +1258,11 @@ struct Scene final {
     /// The decoded assets image nodes name by content hash. Each hash appears
     /// at most once.
     std::vector<std::shared_ptr<const ImageAsset>> images;
+    /// The host clock, in seconds, at which tracks are evaluated. The caller
+    /// passes it for every frame; no renderer reads a clock of its own, so the
+    /// same scene at the same clock draws the same frame. Without tracks it
+    /// changes nothing.
+    double clock = 0.0;
 };
 
 /// The first node, in depth-first order, of a kind version 3 introduced: a
@@ -1046,6 +1285,16 @@ struct Scene final {
     return nullptr;
 }
 
+/// The first node, in depth-first order, of a kind version 12 introduced: a
+/// `plot` node.
+[[nodiscard]] inline const SceneNode* find_version_12_kinds(const SceneNode& node) noexcept {
+    if (node.kind == SceneNode::Kind::plot) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_12_kinds(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
 /// Whether every field and kind the scene uses exists at its version: a
 /// version 1 scene sets no field that `uses_version_2_fields` reports, a
 /// version 1 or 2 scene has no node that `find_version_3_kinds` reports, a
@@ -1053,8 +1302,10 @@ struct Scene final {
 /// a scene before version 5 sets no field that `uses_version_5_fields`
 /// reports, a scene before version 6 sets no field that
 /// `uses_version_6_fields` reports, a scene before version 8 has no node
-/// that `node_uses_version_8_fields` reports, and a scene before version 10
-/// sets no field that `uses_version_10_fields` reports.
+/// that `node_uses_version_8_fields` reports, a scene before version 10
+/// sets no field that `uses_version_10_fields` reports, and a scene before
+/// version 11 has no track, and a scene before version 12 has no node that
+/// `find_version_12_kinds` reports.
 [[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
     return (scene.scene_version >= 2U || find_version_2_fields(scene.root) == nullptr) &&
            (scene.scene_version >= 3U || find_version_3_kinds(scene.root) == nullptr) &&
@@ -1062,7 +1313,9 @@ struct Scene final {
            (scene.scene_version >= 5U || find_version_5_fields(scene.root) == nullptr) &&
            (scene.scene_version >= 6U || find_version_6_fields(scene.root) == nullptr) &&
            (scene.scene_version >= 8U || !node_uses_version_8_fields(scene.root)) &&
-           (scene.scene_version >= 10U || find_version_10_fields(scene.root) == nullptr);
+           (scene.scene_version >= 10U || find_version_10_fields(scene.root) == nullptr) &&
+           (scene.scene_version >= 11U || find_version_11_fields(scene.root) == nullptr) &&
+           (scene.scene_version >= 12U || find_version_12_kinds(scene.root) == nullptr);
 }
 
 /// The first node, in depth-first order, that its scene's version cannot
@@ -1094,6 +1347,12 @@ struct Scene final {
     }
     if (scene.scene_version < 10U) {
         if (const auto* found = find_version_10_fields(scene.root); found != nullptr) return found;
+    }
+    if (scene.scene_version < 11U) {
+        if (const auto* found = find_version_11_fields(scene.root); found != nullptr) return found;
+    }
+    if (scene.scene_version < 12U) {
+        if (const auto* found = find_version_12_kinds(scene.root); found != nullptr) return found;
     }
     return nullptr;
 }

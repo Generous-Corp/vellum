@@ -9371,7 +9371,7 @@
       "class": "schema",
       "deadline": "2026-11-16T04:38:17Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-8e310c5768624deae6e4947f221ea87369e0112f",
       "mapped_contracts": [
         "canvas-kernel",
@@ -9385,7 +9385,7 @@
       "class": "schema",
       "deadline": "2026-11-16T05:03:32Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-247828fbd567039d5b1867fa52721da84930ddd8",
       "mapped_contracts": [
         "canvas-kernel",
@@ -9580,7 +9580,7 @@
       "class": "rendering",
       "deadline": "2026-11-16T18:05:35Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-3a55fcd7a4f4df908c66bfde258ba490ea894132",
       "mapped_contracts": [
         "canvas-kernel"
@@ -9592,7 +9592,7 @@
       "class": "rendering",
       "deadline": "2026-11-16T18:41:53Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-b45063865ead68d2ef2aa71fa8d62cebaa8d06fa",
       "mapped_contracts": [
         "canvas-kernel"
@@ -9629,7 +9629,7 @@
       "class": "rendering",
       "deadline": "2026-11-16T23:45:00Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-33e10ef3f63ebf2a0ddfa71b55f2cb1ec611b00f",
       "mapped_contracts": [
         "canvas-kernel"
@@ -9641,7 +9641,7 @@
       "class": "rendering",
       "deadline": "2026-11-17T03:14:23Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-3e55cfa74ddc01a1e6106c8a383eed86816f26a0",
       "mapped_contracts": [
         "canvas-kernel"
@@ -9692,7 +9692,7 @@
       "class": "rendering",
       "deadline": "2026-11-17T21:49:04Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-fc470cb062bd23f6d2127a5d75834dbb8a9746bc",
       "mapped_contracts": [
         "canvas-kernel"
@@ -9704,7 +9704,7 @@
       "class": "schema",
       "deadline": "2026-11-18T02:27:16Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-bb930214b2d72b52c3cd100a0ff42d44d3287399",
       "mapped_contracts": [
         "retained-ui-kernel"
@@ -9809,6 +9809,37 @@
     },
     {
       "class": "rendering",
+      "deadline": "2026-11-18T19:16:34Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-025ef0df017a4f4e2086ba55414343ff55f5d8b8",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "capture-primitives",
+        "macos-shell",
+        "render-skia-dawn"
+      ],
+      "source_commit": "025ef0df017a4f4e2086ba55414343ff55f5d8b8",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-11-18T19:16:34Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-b953e359f24ae3615e72e4c083c1f7bfce3964e9",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "capture-primitives",
+        "design-schema-compiler",
+        "macos-shell",
+        "render-skia-dawn"
+      ],
+      "source_commit": "b953e359f24ae3615e72e4c083c1f7bfce3964e9",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
       "deadline": "2026-11-18T20:35:41Z",
       "direction": "framework-to-Pulp",
       "disposition": "framework-only",
@@ -9820,10 +9851,22 @@
       "source_repository": "Generous-Corp/vellum"
     },
     {
+      "class": "schema",
+      "deadline": "2026-11-18T20:40:12Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-67db41b3ce75fcc9047d0fb374462e03d88e5f40",
+      "mapped_contracts": [
+        "design-schema-compiler"
+      ],
+      "source_commit": "67db41b3ce75fcc9047d0fb374462e03d88e5f40",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
       "class": "platform",
       "deadline": "2026-11-18T20:50:00Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-34030544f46d09ebc6ecaa116b45cba588fc905e",
       "mapped_contracts": [
         "capture-primitives",
@@ -9836,7 +9879,7 @@
       "class": "schema",
       "deadline": "2026-11-18T20:50:00Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-4496a37439da02a412def6eb5f852b5b60945880",
       "mapped_contracts": [
         "capture-primitives",
@@ -9850,7 +9893,7 @@
       "class": "schema",
       "deadline": "2026-11-18T20:50:00Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-6e1bbe7ae5372a280a03c21c80b39afbc689167e",
       "mapped_contracts": [
         "canvas-kernel",
@@ -9863,7 +9906,7 @@
       "class": "schema",
       "deadline": "2026-11-18T20:50:00Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-9ea1391c1ae25520f01c95059906c188397306e3",
       "mapped_contracts": [
         "capture-primitives",
@@ -9871,6 +9914,59 @@
         "retained-ui-kernel"
       ],
       "source_commit": "9ea1391c1ae25520f01c95059906c188397306e3",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-18T20:53:05Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-33bc98fdb3b8a20ddae51e972a7f458bc1ecabdd",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "33bc98fdb3b8a20ddae51e972a7f458bc1ecabdd",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-11-18T20:53:05Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-3c579e96687c7c03cfeaca28f29529261499c48f",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "design-schema-compiler",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "3c579e96687c7c03cfeaca28f29529261499c48f",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-11-18T20:53:05Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-603601a6dab68fa6d146f5719ec09935714e22f0",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "design-schema-compiler",
+        "render-skia-dawn",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "603601a6dab68fa6d146f5719ec09935714e22f0",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-11-18T20:53:05Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-7d7134c85effc7269f76d5f5eb183689d4bbcbe4",
+      "mapped_contracts": [
+        "design-schema-compiler"
+      ],
+      "source_commit": "7d7134c85effc7269f76d5f5eb183689d4bbcbe4",
       "source_repository": "Generous-Corp/vellum"
     },
     {
@@ -9903,7 +9999,7 @@
       "class": "platform",
       "deadline": "2026-11-18T23:54:45Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-83f18e8076adcc33017582fb400047ef0dea1c54",
       "mapped_contracts": [
         "capture-primitives",
@@ -9944,7 +10040,7 @@
       "class": "importer",
       "deadline": "2026-11-18T04:22:22Z",
       "direction": "framework-to-Pulp",
-      "disposition": "pending",
+      "disposition": "framework-only",
       "event_id": "vellum-64d58e1003dc65e6fe758b2a1e8d13afff7f4511",
       "mapped_contracts": [
         "capture-primitives",
@@ -9953,14 +10049,160 @@
       ],
       "source_commit": "64d58e1003dc65e6fe758b2a1e8d13afff7f4511",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-11-18T06:54:32Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-64fa8248da9f0de742e293e8fdbcd77874bfc4a6",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "capture-primitives",
+        "design-schema-compiler",
+        "macos-shell",
+        "render-skia-dawn",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "64fa8248da9f0de742e293e8fdbcd77874bfc4a6",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-11-18T07:07:39Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-3a8ba7ddacd2ed2636c5985235eb483ab64d9951",
+      "mapped_contracts": [
+        "capture-primitives",
+        "macos-shell",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "3a8ba7ddacd2ed2636c5985235eb483ab64d9951",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-18T09:07:46Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-a46aa56367839717213efe0339272b73a82dafbb",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "a46aa56367839717213efe0339272b73a82dafbb",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-11-18T09:07:46Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-f95140e7fd8e4739945e6a5b8e033d57c72924a7",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "capture-primitives",
+        "design-schema-compiler",
+        "macos-shell",
+        "render-skia-dawn",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "f95140e7fd8e4739945e6a5b8e033d57c72924a7",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "test",
+      "deadline": "2026-11-22T11:41:55Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-01a021d0d961200e3a6bfd532c8926ccd3c9f245",
+      "mapped_contracts": [
+        "retained-ui-kernel"
+      ],
+      "source_commit": "01a021d0d961200e3a6bfd532c8926ccd3c9f245",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-18T15:55:52Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-0e169ecb7aaa0bbe5cd13e14b7e70a02822b8fa9",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "render-skia-dawn"
+      ],
+      "source_commit": "0e169ecb7aaa0bbe5cd13e14b7e70a02822b8fa9",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "importer",
+      "deadline": "2026-11-18T15:55:52Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-8b0152968efa44a8dee8091899dfe933f7ad3796",
+      "mapped_contracts": [
+        "capture-primitives",
+        "macos-shell",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "8b0152968efa44a8dee8091899dfe933f7ad3796",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-11-18T17:25:32Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-16ba0f5c9a5af85251285d6364a0f8a7a92d7ac1",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "capture-primitives",
+        "design-schema-compiler",
+        "macos-shell",
+        "render-skia-dawn",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "16ba0f5c9a5af85251285d6364a0f8a7a92d7ac1",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-11-18T19:23:52Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-bc2e43adbaf1f030b1f588cd3f9848e5ff8da326",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "capture-primitives",
+        "design-schema-compiler",
+        "macos-shell",
+        "render-skia-dawn"
+      ],
+      "source_commit": "bc2e43adbaf1f030b1f588cd3f9848e5ff8da326",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "schema",
+      "deadline": "2026-11-18T21:14:29Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-30ed0039554934581412b575eefbbbcc9392fd31",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "design-schema-compiler",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "30ed0039554934581412b575eefbbbcc9392fd31",
+      "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-11-15T14:22:52Z",
+  "generated_at": "2026-11-16T08:25:12Z",
   "health": "pass",
-  "maximum_pending_age_days": 4.406,
+  "maximum_pending_age_days": 0.0,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
-  "pending": 14,
+  "pending": 0,
   "release_blockers": [],
   "repeated_generic_fixes": {
     "canvas-kernel": 2,

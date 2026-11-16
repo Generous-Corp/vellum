@@ -44,6 +44,21 @@ vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
 
+# The view-script unit runs the sealed V8 provider (VELLUM_ENABLE_V8). Without
+# V8 the same test is the control: it must still run to completion and fail
+# exactly its seven V8 cases while its QuickJS case passes, which proves the
+# checks see a build that does not link V8.
+vellum_add_framework_test(v8-engine
+    SOURCES v8_engine_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::MirrorCanvas)
+if(VELLUM_ENABLE_V8)
+    target_compile_definitions(vellum-framework-v8-engine-test PRIVATE
+        VELLUM_TEST_EXPECTED_V8_VERSION="${VELLUM_V8_VERSION}")
+else()
+    set_tests_properties(vellum.framework.v8-engine PROPERTIES
+        PASS_REGULAR_EXPRESSION "PASS quickjs_is_not_reported_as_v8\n.*8 cases, 7 failed")
+endif()
+
 # The scripted WebGPU binding against a headless Dawn device (the Null
 # adapter). The provider keeps GpuSurface::create_dawn hidden, so the test links
 # the device library itself, which brings the one Dawn this executable uses. It
@@ -118,6 +133,10 @@ set_tests_properties(vellum.framework.wgsl-validate-rejects-invalid PROPERTIES
 set_tests_properties(vellum.framework.wgsl-validate-creates-stamp-dir PROPERTIES
     SKIP_REGULAR_EXPRESSION "stamp written: skipped"
     LABELS "framework;wgsl" TIMEOUT 60)
+
+vellum_add_framework_test(widget-bridge-param-model
+    SOURCES widget_bridge_param_model_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::Value)
 
 # Every test file here must be registered above. A test file that no
 # vellum_add_framework_test() names would build nothing and run nothing while
