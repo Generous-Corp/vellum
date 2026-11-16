@@ -404,6 +404,14 @@ void gradient_expressibility() {
                    loss[0].message.find(reason) != std::string::npos,
                what + " is refused as not expressible" +
                    (loss.empty() ? std::string() : ": " + loss[0].message));
+        auto node = box("g", {0.0F, 0.0F, 30.0F, 10.0F});
+        node.fill_gradients = {gradient};
+        auto scene = scene_with({node});
+        scene.scene_version = 8U;
+        const auto acceptance = accept_scene(scene);
+        expect(!acceptance.accepted && acceptance.diagnostics.size() == 1U &&
+                   acceptance.diagnostics[0].code == kGradientNotExpressibleCode,
+               what + " keeps its diagnostic through accept_scene");
     };
 
     for (const std::string space : {"srgb", "linear-srgb", "display-p3"}) {

@@ -18,7 +18,8 @@ const source = { key: 'assets', adapter: 'svg', adapterVersion: '1', formatVersi
 // A document with one path node, as a vector source writes one.
 const pathRoot = () => ({ kind: 'view', sourceId: 'svg', properties: { layout: { width: 10, height: 10 }, paint: {} },
     children: [{ kind: 'path', sourceId: 'svg.0', properties: { layout: { x: 0, y: 0, width: 0, height: 0 },
-        path: { d: 'M0 0L5 0L5 5L0 5Z', fill: '#ff0000', stroke: 'none' } }, children: [] }] });
+        path: { d: 'M0 0L5 0L5 5L0 5Z', fillRule: 'nonzero' },
+        paint: { fill: '#ff0000', stroke: 'none' } }, children: [] }] });
 
 function refused(document, pattern) {
     const { valid, issues } = validateDesignIR(document);
@@ -73,8 +74,20 @@ test('a document without vector asset fields stays at version 1', () => {
     assert.ok(matches(document, schema), 'the published schema accepts it');
 });
 
-test('vector asset fields need version 6 in the validator and the published schema', () => {
-    const document = normalizeImport({ source, root: pathRoot() });
+test('compiled vector asset fields need version 6 while paths stay in the earlier contract', () => {
+    const pathDocument = normalizeImport({ source, root: pathRoot() });
+    assert.equal(pathDocument.schemaVersion, DESIGN_IR_VERSION);
+    assert.doesNotThrow(() => validateDesignIR(pathDocument, { throwOnError: true }));
+    assert.ok(matches(pathDocument, schema), 'the published schema accepts a version 1 path');
+    for (const version of [1, 2, 3, 4, 5]) {
+        assert.doesNotThrow(() => validateDesignIR({ ...pathDocument, schemaVersion: version }, { throwOnError: true }), `path at ${version}`);
+        assert.ok(matches({ ...pathDocument, schemaVersion: version }, schema), `schema accepts path at ${version}`);
+    }
+    const document = normalizeImport({ source, root: {
+        ...pathRoot(),
+        children: [...pathRoot().children, { kind: 'vector', sourceId: 'svg.1',
+            properties: { vector: { asset: { contentHash: `sha256:${'a'.repeat(64)}` } } }, children: [] }],
+    } });
     assert.equal(DESIGN_IR_VERSION, 1);
     assert.equal(document.schemaVersion, DESIGN_IR_VECTOR_ASSET_VERSION);
     assert.doesNotThrow(() => validateDesignIR(document, { throwOnError: true }));
@@ -83,7 +96,6 @@ test('vector asset fields need version 6 in the validator and the published sche
     assert.ok(refused(older, /needs schemaVersion 6/));
     assert.equal(matches(older, schema), false, 'the published schema refuses version 1');
     for (const [field, edit] of [
-        ['a path kind', (node) => ({ ...node, kind: 'path', properties: {} })],
         ['a vector bucket', (node) => ({ ...node, properties: { vector: {} } })],
         ['an image source', (node) => ({ ...node, properties: { image: { source: 'x' } } })],
         ['a paint transform', (node) => ({ ...node, properties: { paint: { transform: 'none' } } })],
@@ -133,7 +145,8 @@ test('the required version counts material references, recursively', async () =>
     assert.equal(requiredDesignIRVersion(node({ material: glass })), 3, 'material only');
     assert.equal(requiredDesignIRVersion(node({}, [node({}, [node({ material: glass })])])), 3, 'nested material');
     assert.equal(requiredDesignIRVersion(node({ compositing: { opacity: 0.5 } }, [node({ material: glass })])), 3, 'material and compositing');
-    assert.equal(requiredDesignIRVersion(node({ material: glass }, [node({ kind: 'path' })])), 6, 'material and a vector field');
+    assert.equal(requiredDesignIRVersion(node({ material: glass }, [node({ kind: 'path' })])), 3, 'material and a path');
+    assert.equal(requiredDesignIRVersion(node({ material: glass }, [node({ kind: 'vector' })])), 6, 'material and a vector');
     assert.equal(requiredDesignIRVersion(node({ compositing: { opacity: 0.5 } })), 2, 'compositing only');
     assert.equal(requiredDesignIRVersion(node()), 1, 'nothing');
 });

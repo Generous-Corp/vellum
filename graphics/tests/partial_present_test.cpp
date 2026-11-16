@@ -7,6 +7,7 @@
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/path_geometry.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
+#include <vellum/graphics/token_receipts.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -462,12 +463,15 @@ Scene grouping_scene(float width, float height);
 void damage_model_version_gate() {
     expect(kDamageModelSceneVersion >= 12U && partial_redraw_supported(3U) &&
                partial_redraw_supported(4U) && partial_redraw_supported(5U) &&
-               partial_redraw_supported(6U) && partial_redraw_supported(8U) &&
-               partial_redraw_supported(9U) && partial_redraw_supported(10U) && partial_redraw_supported(11U) &&
+               partial_redraw_supported(6U) && partial_redraw_supported(7U) &&
+               partial_redraw_supported(8U) && partial_redraw_supported(9U) &&
+               partial_redraw_supported(10U) && partial_redraw_supported(11U) &&
                partial_redraw_supported(12U) &&
                partial_redraw_supported(kDamageModelSceneVersion) &&
-               !partial_redraw_supported(kDamageModelSceneVersion + 1U),
-           "partial redraw covers scene versions up to the damage gate, 6, 8, 10, 11 and 12 included");
+               !partial_redraw_supported(kDamageModelSceneVersion + 1U) &&
+               !partial_redraw_supported(0U) &&
+               partial_redraw_supported(kMinSupportedSceneVersion),
+           "partial redraw covers scene versions 1 through the damage gate and refuses 0 and the next one");
     expect(to_string(FullRepaintReason::damage_model_version) == "damage_model_version",
            "the damage-model version fallback has a telemetry name");
     constexpr std::uint32_t width = 400;
@@ -1506,6 +1510,153 @@ void grouping_sequence(float scale, bool layer_cache) {
     }
 }
 
+Scene themed_scene(float width, float height) {
+    Scene scene = base_scene(width, height);
+    scene.tokens = {
+        {"theme.accent", "primitive", Color::hex(0xF472B6)},
+        {"theme.good", "primitive", Color::hex(0x22C55E)},
+        {"theme.stroke", "primitive", Color::hex(0xF59E0B)},
+        {"theme.text", "primitive", Color::hex(0xE5E7EB)},
+        {"theme.shadow", "primitive", Color::rgba(0.0F, 0.0F, 0.0F, 0.6F)},
+        {"theme.stop", "primitive", Color::hex(0x6366F1)},
+    };
+    scene.root.children.push_back(path_node(
+        "zig", {width * 0.62F, height * 0.40F, 44.0F, 38.0F}, Color::hex(0x1E293B), 3.0F,
+        Color::hex(0xF59E0B)));
+    node(scene, "zig").color_tokens = {{TokenSlot::Kind::path_stroke, 0, 0, 2U}};
+    scene.root.children.push_back({
+        .id = "themed-label",
+        .kind = SceneNode::Kind::text,
+        .bounds = {width * 0.05F, height * 0.78F, 120.0F, 16.0F},
+        .text_runs = {{.text = "Theme", .style = {.font_family = "Inter", .font_size = 13.0F,
+                                                    .color = Color::hex(0xE5E7EB)}}},
+        .color_tokens = {{TokenSlot::Kind::text_run, 0, 0, 3U}},
+    });
+    scene.root.children.push_back({
+        .id = "glow",
+        .kind = SceneNode::Kind::rectangle,
+        .bounds = {width * 0.30F, height * 0.42F, 54.0F, 40.0F},
+        .fill_gradients = {{.angle_degrees = 90.0F,
+                            .stops = {{0.0F, Color::hex(0x6366F1)},
+                                      {1.0F, Color::hex(0xEC4899)}}}},
+        .box_shadows = {{.offset_x = 2.0F, .offset_y = 3.0F, .blur_radius = 6.0F,
+                         .color = Color::rgba(0.0F, 0.0F, 0.0F, 0.6F)}},
+        .corner_radius = 5.0F,
+        .color_tokens = {{TokenSlot::Kind::box_shadow, 0, 0, 4U},
+                         {TokenSlot::Kind::gradient_stop, 0, 0, 5U}},
+    });
+    node(scene, "mover").fill_token = 0U;
+    node(scene, "swatch").fill_token = 1U;
+    SceneNode faded{
+        .id = "faded",
+        .kind = SceneNode::Kind::group,
+        .bounds = {width * 0.55F, height * 0.10F, 90.0F, 60.0F},
+        .opacity = 0.6F,
+    };
+    for (int index = 0; index < 2; ++index) {
+        faded.children.push_back({
+            .id = "faded/" + std::to_string(index),
+            .kind = SceneNode::Kind::rectangle,
+            .bounds = {static_cast<float>(index) * 30.0F, static_cast<float>(index) * 14.0F,
+                       56.0F, 40.0F},
+            .fill = Color::hex(0xF472B6),
+            .corner_radius = 6.0F,
+            .fill_token = 0U,
+        });
+    }
+    scene.root.children.push_back(std::move(faded));
+    return scene;
+}
+
+struct ThemeValues final {
+    std::uint32_t accent = 0xF472B6;
+    std::uint32_t good = 0x22C55E;
+    std::uint32_t stroke = 0xF59E0B;
+    std::uint32_t text = 0xE5E7EB;
+    float shadow_alpha = 0.6F;
+    std::uint32_t stop = 0x6366F1;
+};
+
+std::vector<TokenReceipt> theme_receipts(const ThemeValues& values) {
+    return {
+        {"theme.accent", "primitive", Color::hex(values.accent)},
+        {"theme.good", "primitive", Color::hex(values.good)},
+        {"theme.stroke", "primitive", Color::hex(values.stroke)},
+        {"theme.text", "primitive", Color::hex(values.text)},
+        {"theme.shadow", "primitive", Color::rgba(0.0F, 0.0F, 0.0F, values.shadow_alpha)},
+        {"theme.stop", "primitive", Color::hex(values.stop)},
+    };
+}
+
+void theme_switch_sequence(float scale, bool layer_cache) {
+    constexpr std::uint32_t width = 400;
+    constexpr std::uint32_t height = 300;
+    const std::string size = std::string(layer_cache ? "cache on " : "cache off ") + "@" +
+                             std::to_string(static_cast<int>(scale)) + " theme ";
+    auto full = make_surface(width, height, scale);
+    auto partial = make_surface(width, height, scale, layer_cache);
+    if (!full || !partial) return;
+    Scene scene = themed_scene(static_cast<float>(width), static_cast<float>(height));
+    if (!render_both(*full, *partial, scene)) return;
+    compare(size + "the first frame", *full, *partial);
+
+    struct Switch final {
+        std::string name;
+        std::vector<TokenReceipt> values;
+        std::size_t changed;
+        bool damages;
+    };
+    const std::vector<Switch> switches = {
+        {"switch the accent", theme_receipts({.accent = 0x3B82F6}), 1U, true},
+        {"switch the other token", theme_receipts({.accent = 0x3B82F6, .good = 0xEAB308}), 1U,
+         true},
+        {"switch a stroke", theme_receipts({.accent = 0x3B82F6, .good = 0xEAB308,
+                                            .stroke = 0x10B981}), 1U, true},
+        {"switch a text colour", theme_receipts({.accent = 0x3B82F6, .good = 0xEAB308,
+                                                 .stroke = 0x10B981, .text = 0xFDE68A}), 1U, true},
+        {"switch a shadow colour", theme_receipts({.accent = 0x3B82F6, .good = 0xEAB308,
+                                                   .stroke = 0x10B981, .text = 0xFDE68A,
+                                                   .shadow_alpha = 0.9F}), 1U, true},
+        {"switch a gradient stop", theme_receipts({.accent = 0x3B82F6, .good = 0xEAB308,
+                                                   .stroke = 0x10B981, .text = 0xFDE68A,
+                                                   .shadow_alpha = 0.9F, .stop = 0xF97316}),
+         1U, true},
+        {"switch a stroke and a stop back",
+         theme_receipts({.accent = 0x3B82F6, .good = 0xEAB308, .text = 0xFDE68A,
+                         .shadow_alpha = 0.9F}), 2U, true},
+        {"switch to the same values",
+         theme_receipts({.accent = 0x3B82F6, .good = 0xEAB308, .text = 0xFDE68A,
+                         .shadow_alpha = 0.9F}), 0U, false},
+    };
+    for (const auto& step : switches) {
+        const auto result = apply_token_values(scene, step.values);
+        expect(result.applied && result.changed.size() == step.changed,
+               size + step.name + " re-resolves the expected entries");
+        if (!render_both(*full, *partial, scene)) return;
+        const auto stats = partial->frame_stats();
+        expect(!stats.full_repaint && stats.full_repaint_reason == FullRepaintReason::none,
+               size + step.name + " repaints only its damage", describe(stats));
+        if (step.damages) {
+            expect(stats.damage_area_pixels > 0 &&
+                       stats.paint_commands_recorded < stats.paint_commands_total,
+                   size + step.name + " re-records a subset of the paint commands",
+                   describe(stats));
+        } else {
+            expect(stats.damage_area_pixels == 0 && stats.paint_commands_recorded == 0,
+                   size + step.name + " records nothing", describe(stats));
+        }
+        compare(size + step.name, *full, *partial);
+    }
+
+    Scene stale = scene;
+    stale.tokens[0].value = Color::hex(0x00FF00);
+    std::string error;
+    const auto before = partial->frame_stats().frame;
+    expect(!partial->render_incremental(stale, &error) && !error.empty() &&
+               partial->frame_stats().frame == before,
+           size + "a table edit that leaves node fills stale is refused, not drawn", error);
+}
+
 bool redraws_identically(const Scene& before, const Scene& after, const DamageRegion& damage,
                          float scale, std::string& message) {
     auto full = make_surface(400, 300, scale);
@@ -2389,6 +2540,10 @@ int main() {
             blend_sequence(2.0F, cached);
         }
         blend_damage_controls();
+        for (const bool cached : {false, true}) {
+            theme_switch_sequence(1.0F, cached);
+            theme_switch_sequence(2.0F, cached);
+        }
     } catch (const std::exception& exception) {
         std::cerr << "FAIL " << exception.what() << '\n';
         return 1;

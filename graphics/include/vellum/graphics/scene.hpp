@@ -108,6 +108,9 @@ struct TextStyle final {
 struct TextRun final {
     std::string text;
     TextStyle style;
+    /// True when the run's colour came from its containing node. Explicit
+    /// literal colours stay fixed even when they happen to equal that colour.
+    bool inherits_color = true;
 };
 
 /// Premultiplied RGBA8 texels, row-major, top row first.
@@ -889,13 +892,14 @@ inline constexpr float kMaxPlotStroke = 4096.0F;
 /// version 1 scene is still accepted when none of its nodes sets them; one
 /// that does fails `scene_fields_match_version` and is refused.
 ///
-/// Version 3 adds the `path` node kind. A version 1 or 2 scene is still
-/// accepted when it has no path node; one that does fails
-/// `scene_fields_match_version` and is refused.
+/// Version 3 adds the `path` node kind and `SceneNode::path`. A version 1 or
+/// 2 scene is still accepted when no node is a path or carries path geometry;
+/// one that does fails `scene_fields_match_version` and is refused.
 ///
-/// Version 4 adds the `image` node kind and `Scene::images`. A scene of an
-/// earlier version is still accepted when it has no image node; one that does
-/// fails `scene_fields_match_version` and is refused.
+/// Version 4 adds the `image` node kind, `SceneNode::image` and
+/// `Scene::images`. A scene of an earlier version is still accepted when no
+/// node is an image or carries an image reference and its image table is
+/// empty; one that does fails `scene_fields_match_version` and is refused.
 ///
 /// Version 5 adds `SceneNode::clip`, `mask`, and `isolate`. A scene of an
 /// earlier version is still accepted when none of its nodes sets them; one
@@ -904,6 +908,12 @@ inline constexpr float kMaxPlotStroke = 4096.0F;
 /// Version 6 adds `SceneNode::blend_mode`. A scene of an earlier version is
 /// still accepted when none of its nodes sets it; one that does fails
 /// `scene_fields_match_version` and is refused.
+///
+/// Version 7 adds `Scene::tokens`, `SceneNode::fill_token` and
+/// `SceneNode::color_tokens`. A scene of an
+/// earlier version is still accepted when its token table is empty and no node
+/// sets a token reference; one that does fails `scene_fields_match_version`
+/// and is refused.
 ///
 /// Version 8 adds the gradient vocabulary: radial, two-circle radial and
 /// conic kinds, spread, interpolation, colour space and their geometry on
@@ -926,11 +936,10 @@ inline constexpr float kMaxPlotStroke = 4096.0F;
 ///
 /// Claimed versions, in order:
 /// version 4: image nodes; version 5: clip, mask and isolation on groups;
-/// version 6: blend modes and DesignIR compositing fields; version 7: token
-/// receipts; version 8: gradient vocabulary; version 9: vector assets;
+/// version 6: blend modes and DesignIR compositing fields; version 7: interned
+/// token receipts; version 8: gradient vocabulary; version 9: vector assets;
 /// version 10: effects and materials; version 11: animation tracks; version
-/// 12: plot nodes. Version 7 has no fields of its own in this build; the
-/// branch that owns them adds its fields and damage support.
+/// 12: plot nodes.
 inline constexpr std::uint32_t kSceneVersion = 12U;
 
 /// The oldest scene schema version this build still consumes.
@@ -951,6 +960,40 @@ inline constexpr std::uint32_t kMinSupportedSceneVersion = 1U;
 /// it does not know refuses the scene rather than treating the node as a
 /// `group`; producers report authored content they cannot express as a known
 /// kind through `LoweringDiagnostic` instead of emitting it.
+/// One design token as it resolved for a scene: where it came from and the
+/// colour it produced. A scene holds each receipt once in `Scene::tokens`, and
+/// nodes name it by index.
+struct TokenReceipt final {
+    /// The token's name in its design document, unique within a scene.
+    std::string path;
+    /// The layer the value came from, such as `primitive`, `semantic` or
+    /// `theme`.
+    std::string layer;
+    Color value{};
+};
+
+/// A colour of a node other than `SceneNode::fill`, named so a token receipt
+/// can drive it.
+struct TokenSlot final {
+    enum class Kind : std::uint8_t {
+        /// `text_runs[index].style.color`.
+        text_run,
+        /// `box_shadows[index].color`.
+        box_shadow,
+        /// `fill_gradients[index].stops[stop].color`.
+        gradient_stop,
+        /// `path->stroke.color`; `index` and `stop` are zero.
+        path_stroke,
+    };
+
+    Kind kind = Kind::text_run;
+    std::uint32_t index = 0;
+    std::uint32_t stop = 0;
+    /// The index in `Scene::tokens` of the receipt the slot's colour was
+    /// resolved from.
+    std::uint32_t token = 0;
+};
+
 struct SceneNode final {
     enum class Kind {
         group,
@@ -1028,6 +1071,16 @@ struct SceneNode final {
     /// paint, so it keeps `normal`; `accept_scene` refuses a mask with any
     /// other mode.
     BlendMode blend_mode = BlendMode::normal;
+    /// The index in `Scene::tokens` of the receipt `fill` was resolved from.
+    /// `fill` always holds the receipt's value, so a renderer draws it without
+    /// consulting the table; the reference lets a theme switch find the nodes
+    /// a changed receipt affects.
+    std::optional<std::uint32_t> fill_token;
+    /// The receipts that drive the node's other colours: text runs, box
+    /// shadows, gradient stops and a path's stroke. Each slot must exist and
+    /// hold its receipt's value, as `fill` does. A slot appears at most once.
+    /// A mesh's packed vertex colours are not slots.
+    std::vector<TokenSlot> color_tokens;
     /// What a `vector` node draws. A vector node without it, with children,
     /// or with an asset that fails `vector_asset_is_valid` is refused.
     std::shared_ptr<const VectorAsset> vector;
@@ -1106,6 +1159,20 @@ struct SceneNode final {
     if (uses_version_5_fields(node)) return &node;
     for (const auto& child : node.children) {
         if (const auto* found = find_version_5_fields(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
+/// Whether a node sets a field version 7 introduced: a token reference.
+[[nodiscard]] inline bool uses_version_7_fields(const SceneNode& node) noexcept {
+    return node.fill_token.has_value() || !node.color_tokens.empty();
+}
+
+/// The first node, in depth-first order, that `uses_version_7_fields`.
+[[nodiscard]] inline const SceneNode* find_version_7_fields(const SceneNode& node) noexcept {
+    if (uses_version_7_fields(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_7_fields(child); found != nullptr) return found;
     }
     return nullptr;
 }
@@ -1319,11 +1386,17 @@ struct Scene final {
     float width = 0.0F;
     float height = 0.0F;
     Color background = Color::hex(0x111827);
+    /// The token receipt that resolved the scene clear colour, when one was
+    /// supplied by the authoring tree.
+    std::optional<std::uint32_t> background_token;
     SceneNode root;
     std::uint32_t scene_version = kSceneVersion;
     /// The decoded assets image nodes name by content hash. Each hash appears
     /// at most once.
     std::vector<std::shared_ptr<const ImageAsset>> images;
+    /// The interned token receipts nodes reference through
+    /// `SceneNode::fill_token`. Each path appears at most once.
+    std::vector<TokenReceipt> tokens;
     /// The host clock, in seconds, at which tracks are evaluated. The caller
     /// passes it for every frame; no renderer reads a clock of its own, so the
     /// same scene at the same clock draws the same frame. Without tracks it
@@ -1376,71 +1449,154 @@ struct Scene final {
     return nullptr;
 }
 
-/// Whether every field and kind the scene uses exists at its version: a
-/// version 1 scene sets no field that `uses_version_2_fields` reports, a
-/// version 1 or 2 scene has no node that `find_version_3_kinds` reports, a
-/// scene before version 4 has no node that `find_version_4_kinds` reports,
-/// a scene before version 5 sets no field that `uses_version_5_fields`
-/// reports, a scene before version 6 sets no field that
-/// `uses_version_6_fields` reports, a scene before version 8 has no node
-/// that `node_uses_version_8_fields` reports, a scene before version 9 has no
-/// node that `uses_version_9_fields`, a scene before version 10 sets no field
-/// that `uses_version_10_fields` reports, a scene before version 11 has no
-/// track, and a scene before version 12 has no node that
-/// `find_version_12_kinds` reports.
-[[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
-    return (scene.scene_version >= 2U || find_version_2_fields(scene.root) == nullptr) &&
-           (scene.scene_version >= 3U || find_version_3_kinds(scene.root) == nullptr) &&
-           (scene.scene_version >= 4U || find_version_4_kinds(scene.root) == nullptr) &&
-           (scene.scene_version >= 5U || find_version_5_fields(scene.root) == nullptr) &&
-           (scene.scene_version >= 6U || find_version_6_fields(scene.root) == nullptr) &&
-           (scene.scene_version >= 8U || !node_uses_version_8_fields(scene.root)) &&
-           (scene.scene_version >= 9U || find_version_9_fields(scene.root) == nullptr) &&
-           (scene.scene_version >= 10U || find_version_10_fields(scene.root) == nullptr) &&
-           (scene.scene_version >= 11U || find_version_11_fields(scene.root) == nullptr) &&
-           (scene.scene_version >= 12U || find_version_12_kinds(scene.root) == nullptr);
+/// Whether a node sets a field version 3 introduced: the `path` kind or path
+/// geometry on a node of any kind.
+[[nodiscard]] inline bool uses_version_3_fields(const SceneNode& node) noexcept {
+    return node.kind == SceneNode::Kind::path || node.path != nullptr;
 }
 
-/// The first node, in depth-first order, that its scene's version cannot
-/// carry: a field or kind newer than `scene.scene_version`, or a kind outside
-/// `is_known_kind`. Null when `scene_fields_match_version` holds and every
-/// kind and blend mode is known.
-[[nodiscard]] inline const SceneNode* find_version_mismatch(const Scene& scene) noexcept {
-    if (const auto* unknown = find_unknown_kind(scene.root); unknown != nullptr) return unknown;
-    if (const auto* unknown = find_unknown_blend_mode(scene.root); unknown != nullptr) {
-        return unknown;
-    }
-    if (scene.scene_version < 2U) {
-        if (const auto* found = find_version_2_fields(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 3U) {
-        if (const auto* found = find_version_3_kinds(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 4U) {
-        if (const auto* found = find_version_4_kinds(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 5U) {
-        if (const auto* found = find_version_5_fields(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 6U) {
-        if (const auto* found = find_version_6_fields(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 8U) {
-        if (const auto* found = find_version_8_fields(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 9U) {
-        if (const auto* found = find_version_9_fields(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 10U) {
-        if (const auto* found = find_version_10_fields(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 11U) {
-        if (const auto* found = find_version_11_fields(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 12U) {
-        if (const auto* found = find_version_12_kinds(scene.root); found != nullptr) return found;
+/// Whether a node sets a field version 4 introduced: the `image` kind or an
+/// image reference on a node of any kind.
+[[nodiscard]] inline bool uses_version_4_fields(const SceneNode& node) noexcept {
+    return node.kind == SceneNode::Kind::image || node.image.has_value();
+}
+
+/// A field, kind or table that a scene's version cannot carry.
+struct SceneVersionMismatch final {
+    /// The node that carries it; the root for a scene-level table.
+    const SceneNode* node = nullptr;
+    /// The version that introduced it, or zero for a kind outside
+    /// `is_known_kind`.
+    std::uint32_t introduced = 0;
+    /// The property that carries it: `kind`, `transform`, `path`, `image`,
+    /// `images`, `clip`, `mask`, `isolate`, `blend_mode`, `fill_token`,
+    /// `color_tokens`, `background_token`, `tokens`, `fill_gradients`,
+    /// `stroke_gradient`, `vector`, `effects` or `tracks`.
+    std::string_view property;
+};
+
+namespace detail {
+
+template <typename Predicate>
+[[nodiscard]] const SceneNode* find_first(const SceneNode& node, Predicate predicate) noexcept {
+    if (predicate(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_first(child, predicate); found != nullptr) return found;
     }
     return nullptr;
+}
+
+[[nodiscard]] inline std::optional<SceneVersionMismatch> find_version_field_mismatch(
+    const Scene& scene) noexcept {
+    const auto version = scene.scene_version;
+    if (version < 2U) {
+        if (const auto* found = find_version_2_fields(scene.root)) {
+            return SceneVersionMismatch{found, 2U, "transform"};
+        }
+    }
+    if (version < 3U) {
+        if (const auto* found = find_first(
+                scene.root, [](const SceneNode& node) { return uses_version_3_fields(node); })) {
+            return SceneVersionMismatch{
+                found, 3U, found->kind == SceneNode::Kind::path ? "kind" : "path"};
+        }
+    }
+    if (version < 4U) {
+        if (const auto* found = find_first(
+                scene.root, [](const SceneNode& node) { return uses_version_4_fields(node); })) {
+            return SceneVersionMismatch{
+                found, 4U, found->kind == SceneNode::Kind::image ? "kind" : "image"};
+        }
+        if (!scene.images.empty()) return SceneVersionMismatch{&scene.root, 4U, "images"};
+    }
+    if (version < 5U) {
+        if (const auto* found = find_version_5_fields(scene.root)) {
+            return SceneVersionMismatch{
+                found, 5U, found->clip ? "clip" : found->mask ? "mask" : "isolate"};
+        }
+    }
+    if (version < 6U) {
+        if (const auto* found = find_version_6_fields(scene.root)) {
+            return SceneVersionMismatch{found, 6U, "blend_mode"};
+        }
+    }
+    if (version < 7U) {
+        if (const auto* found = find_version_7_fields(scene.root)) {
+            return SceneVersionMismatch{
+                found, 7U, found->fill_token ? "fill_token" : "color_tokens"};
+        }
+        if (scene.background_token) {
+            return SceneVersionMismatch{&scene.root, 7U, "background_token"};
+        }
+        if (!scene.tokens.empty()) return SceneVersionMismatch{&scene.root, 7U, "tokens"};
+    }
+    if (version < 8U) {
+        if (const auto* found = find_version_8_fields(scene.root)) {
+            const bool stroke =
+                found->stroke_gradient || (found->path && found->path->stroke.gradient);
+            return SceneVersionMismatch{found, 8U, stroke ? "stroke_gradient" : "fill_gradients"};
+        }
+    }
+    if (version < 9U) {
+        if (const auto* found = find_version_9_fields(scene.root)) {
+            return SceneVersionMismatch{found, 9U, "vector"};
+        }
+    }
+    if (version < 10U) {
+        if (const auto* found = find_version_10_fields(scene.root)) {
+            return SceneVersionMismatch{found, 10U, "effects"};
+        }
+    }
+    if (version < 11U) {
+        if (const auto* found = find_version_11_fields(scene.root)) {
+            return SceneVersionMismatch{found, 11U, "tracks"};
+        }
+    }
+    if (version < 12U) {
+        if (const auto* found = find_version_12_kinds(scene.root)) {
+            return SceneVersionMismatch{found, 12U, "kind"};
+        }
+    }
+    return std::nullopt;
+}
+
+}  // namespace detail
+
+/// Whether every field, kind and table the scene uses exists at its version:
+/// a version 1 scene sets no field that `uses_version_2_fields` reports, a
+/// version 1 or 2 scene has no node that `uses_version_3_fields` reports, a
+/// scene before version 4 has no node that `uses_version_4_fields` reports
+/// and no image table, a scene before version 5 sets no field that
+/// `uses_version_5_fields` reports, a scene before version 6 sets no field
+/// that `uses_version_6_fields` reports, and a scene before version 7 has no
+/// token table and no node that `uses_version_7_fields` reports, a scene
+/// before version 8 has no node that `find_version_8_fields` reports, a
+/// scene before version 9 has no node that `uses_version_9_fields` reports, and a
+/// scene before version 10 sets no field that `uses_version_10_fields`
+/// reports.
+[[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
+    return !detail::find_version_field_mismatch(scene).has_value();
+}
+
+/// The first field, kind or table its scene's version cannot carry, oldest
+/// version first and depth-first within a version, after any kind outside
+/// `is_known_kind` or blend mode outside `BlendMode`. Empty when
+/// `scene_fields_match_version` holds and every kind and blend mode is known.
+[[nodiscard]] inline std::optional<SceneVersionMismatch> find_scene_version_mismatch(
+    const Scene& scene) noexcept {
+    if (const auto* unknown = find_unknown_kind(scene.root); unknown != nullptr) {
+        return SceneVersionMismatch{unknown, 0U, "kind"};
+    }
+    if (const auto* unknown = find_unknown_blend_mode(scene.root); unknown != nullptr) {
+        return SceneVersionMismatch{unknown, 0U, "blend_mode"};
+    }
+    return detail::find_version_field_mismatch(scene);
+}
+
+/// The node `find_scene_version_mismatch` reports, or null.
+[[nodiscard]] inline const SceneNode* find_version_mismatch(const Scene& scene) noexcept {
+    const auto found = find_scene_version_mismatch(scene);
+    return found ? found->node : nullptr;
 }
 
 [[nodiscard]] inline const SceneNode* find_node(

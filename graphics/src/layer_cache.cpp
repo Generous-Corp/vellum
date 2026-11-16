@@ -18,7 +18,7 @@ namespace {
 // the field-coverage test in layer_cache_test.cpp, then this number.
 static_assert(sizeof(PaintCommand) == 472,
               "PaintCommand changed: update paint_commands_equal and hash_command");
-static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 80,
+static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 88,
               "TextStyle or TextRun changed: update same_style, same_runs and hash_command");
 static_assert(sizeof(BoxShadow) == 32, "BoxShadow changed: update same_shadows and hash_command");
 static_assert(sizeof(LinearGradient) == 104 && sizeof(GradientStop) == 20,
@@ -120,7 +120,8 @@ bool same_style(const TextStyle& a, const TextStyle& b) {
 bool same_runs(const std::vector<TextRun>& a, const std::vector<TextRun>& b) {
     if (a.size() != b.size()) return false;
     for (std::size_t index = 0; index < a.size(); ++index) {
-        if (a[index].text != b[index].text || !same_style(a[index].style, b[index].style)) {
+        if (a[index].text != b[index].text || a[index].inherits_color != b[index].inherits_color ||
+            !same_style(a[index].style, b[index].style)) {
             return false;
         }
     }
@@ -319,6 +320,7 @@ std::uint64_t hash_command(const PaintCommand& command) {
         hash.real(run.style.letter_spacing);
         hash.color(run.style.color);
         hash.number((run.style.underline ? 1U : 0U) | (run.style.strikethrough ? 2U : 0U));
+        hash.number(run.inherits_color ? 1U : 0U);
     }
     hash.number(reinterpret_cast<std::uintptr_t>(command.mesh.get()));
     hash.number(command.mesh ? reinterpret_cast<std::uintptr_t>(command.mesh->texture.get())
@@ -372,6 +374,43 @@ std::uint64_t hash_command(const PaintCommand& command) {
     hash.real(command.effect_box.y);
     hash.real(command.effect_box.width);
     hash.real(command.effect_box.height);
+    return hash.value();
+}
+
+// The content of every mesh in `commands[begin, end)`: vertices, indices,
+// clip and texture texels. Pointer identity is not enough, because a producer
+// may rewrite a mesh's texels in place behind a const view.
+std::uint64_t mesh_digest(const std::vector<PaintCommand>& commands, std::size_t begin,
+                          std::size_t end) {
+    Hasher hash;
+    for (auto index = begin; index < end; ++index) {
+        const auto& mesh = commands[index].mesh;
+        if (!mesh) continue;
+        hash.number(index - begin);
+        hash.number(mesh->vertices.size());
+        for (const auto& vertex : mesh->vertices) {
+            hash.real(vertex.x);
+            hash.real(vertex.y);
+            hash.real(vertex.u);
+            hash.real(vertex.v);
+            hash.number(vertex.premultiplied_rgba);
+        }
+        hash.number(mesh->indices.size());
+        hash.bytes(mesh->indices.data(), mesh->indices.size() * sizeof(std::uint32_t));
+        hash.number(mesh->clip_enabled ? 1U : 0U);
+        hash.real(mesh->clip.x);
+        hash.real(mesh->clip.y);
+        hash.real(mesh->clip.width);
+        hash.real(mesh->clip.height);
+        hash.number(mesh->texture ? 1U : 0U);
+        if (mesh->texture) {
+            hash.number(mesh->texture->width);
+            hash.number(mesh->texture->height);
+            hash.number(mesh->texture->premultiplied_rgba.size());
+            hash.bytes(mesh->texture->premultiplied_rgba.data(),
+                       mesh->texture->premultiplied_rgba.size());
+        }
+    }
     return hash.value();
 }
 
@@ -549,11 +588,13 @@ std::vector<LayerCache::Layer> LayerCache::plan(
         }
         ++stats_.candidates;
 
+        const auto meshes = mesh_digest(commands, content_begin, content_end);
         Hasher hash;
         hash.number(content_end - content_begin);
         for (auto index = content_begin; index < content_end; ++index) {
             hash.number(hashes[index]);
         }
+        hash.number(meshes);
         auto [found, inserted] = entries_.try_emplace(id);
         auto& entry = found->second;
         if (count_frame) {
@@ -569,6 +610,8 @@ std::vector<LayerCache::Layer> LayerCache::plan(
                 commands.begin() + static_cast<std::ptrdiff_t>(content_begin),
                 commands.begin() + static_cast<std::ptrdiff_t>(content_end));
             drop(id, entry, classify_change(entry.image_commands, next));
+        } else if (entry.has_image && entry.image_mesh_digest != meshes) {
+            drop(id, entry, LayerInvalidation::resource);
         }
 
         if (range.begin < selected_end) {
@@ -600,6 +643,7 @@ std::vector<LayerCache::Layer> LayerCache::plan(
         const bool build = !entry.has_image;
         if (build) {
             entry.pending_inexact = !opacity_layer;
+            entry.pending_mesh_digest = meshes;
             entry.pending_commands.assign(
                 commands.begin() + static_cast<std::ptrdiff_t>(content_begin),
                 commands.begin() + static_cast<std::ptrdiff_t>(content_end));
@@ -661,6 +705,7 @@ bool LayerCache::admit(std::string_view node_id, std::int64_t pixels) {
     entry.hits_since_build = 0;
     entry.pixels = pixels;
     entry.image_commands = std::move(entry.pending_commands);
+    entry.image_mesh_digest = entry.pending_mesh_digest;
     entry.image_node_ids = std::move(entry.pending_node_ids);
     entry.pending_commands.clear();
     entry.pending_node_ids.clear();

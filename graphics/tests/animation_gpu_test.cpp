@@ -479,6 +479,60 @@ void refusal_keeps_frame() {
 
 }  // namespace
 
+Scene token_scene(double clock) {
+    Scene scene;
+    scene.scene_version = kDamageModelSceneVersion;
+    scene.width = kWidth;
+    scene.height = kHeight;
+    scene.background = Color::hex(0x000000);
+    scene.clock = clock;
+    scene.tokens = {{"main.color.accent", "primitive", Color::hex(0xFF0000)}};
+    scene.root = {.id = "root", .kind = SceneNode::Kind::group,
+                  .bounds = {0.0F, 0.0F, kWidth, kHeight}};
+    auto tint = box("tint", {50, 10, 30, 30}, Color::hex(0xFF0000));
+    tint.fill_token = 0U;
+    tint.tracks.push_back(track(AnimatedProperty::fill,
+                                {color_key(0.0, Color::hex(0xFF0000)),
+                                 color_key(1.0, Color::hex(0x0000FF))}));
+    scene.root.children.push_back(std::move(tint));
+    return scene;
+}
+
+void animated_token_fill(float scale) {
+    const std::string size = "scale " + std::to_string(static_cast<int>(scale)) + ": ";
+    auto surface = make_surface(scale);
+    if (!surface) return;
+    std::string error;
+    if (!expect(surface->render(token_scene(0.0), &error),
+                size + "a token-driven fill at clock 0 renders", error)) {
+        return;
+    }
+    const auto start = capture(*surface);
+    expect(start.ok && near(pixel(start, 65, 25, scale), {255, 0, 0}, 0),
+           size + "a token-driven fill at rest draws its receipt colour",
+           text(pixel(start, 65, 25, scale)));
+    if (!expect(surface->render(token_scene(0.5), &error),
+                size + "a token-driven fill animated to another colour renders", error)) {
+        return;
+    }
+    const auto half = capture(*surface);
+    expect(half.ok && near(pixel(half, 65, 25, scale), {128, 0, 128}),
+           size + "render draws the evaluated token fill at clock 0.5",
+           text(pixel(half, 65, 25, scale)));
+    if (!expect(surface->render_incremental(token_scene(1.0), &error),
+                size + "an incremental frame of an animated token fill renders", error)) {
+        return;
+    }
+    const auto end = capture(*surface);
+    expect(end.ok && near(pixel(end, 65, 25, scale), {0, 0, 255}),
+           size + "render_incremental draws the evaluated token fill at clock 1",
+           text(pixel(end, 65, 25, scale)));
+    auto stale = token_scene(0.5);
+    stale.root.children[0].fill = Color::hex(0x00FF00);
+    expect(!surface->render(stale, &error),
+           size + "control: a stale authored token fill is still refused");
+}
+
 int main() {
     std::string error;
     if (!harness::prepare_device(&error)) {
@@ -493,6 +547,8 @@ int main() {
     partial_redraw(2.0F, false);
     partial_redraw(2.0F, true);
     refusal_keeps_frame();
+    animated_token_fill(1.0F);
+    animated_token_fill(2.0F);
     if (failures != 0) {
         std::cout << failures << " animation GPU checks failed\n";
         return 1;

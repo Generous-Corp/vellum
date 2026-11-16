@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -561,6 +562,21 @@ bool contains(const std::string& text, std::string_view part) {
     return false;
 }
 
+std::vector<double> plan_numbers(const std::string& json, std::string_view key) {
+    const auto begin = json.find('"' + std::string(key) + "\":[");
+    if (begin == std::string::npos) return {};
+    const char* cursor = json.c_str() + begin + key.size() + 4U;
+    std::vector<double> values;
+    while (*cursor != ']') {
+        char* end = nullptr;
+        const double value = std::strtod(cursor, &end);
+        if (end == cursor || (*end != ',' && *end != ']')) return {};
+        values.push_back(value);
+        cursor = *end == ',' ? end + 1 : end;
+    }
+    return values;
+}
+
 // The canvas shell draws a compiled vector asset from a plan the shared core
 // writes, maps gradients exactly where canvas 2D can, and names each
 // approximation it makes.
@@ -609,11 +625,16 @@ bool vector_plans() {
         !contains(plan.json, "{\"op\":\"save\",\"alpha\":0.5,\"transform\":[1,0,0,1,5,5]}") ||
         !contains(plan.json, "{\"op\":\"clip\",\"d\":\"M0 0L10 0L10 10L0 10Z\",\"rule\":\"nonzero\"}") ||
         !contains(plan.json, "\"paint\":{\"color\":[1,0,0,1]}") ||
-        !contains(plan.json, "\"linear\":[60,30,90,30]") ||
         !contains(plan.json, "\"radial\":[5,5,0,5,5,5]") ||
         !contains(plan.json, "\"space\":[30,0,0,10,0,0]") ||
         !contains(plan.json, "{\"op\":\"stroke\",\"d\":\"M0 0L10 0L10 10L0 10Z\",\"width\":2,"
                              "\"join\":\"miter\",\"cap\":\"butt\",\"miter\":4,")) {
+        return false;
+    }
+    const auto linear = plan_numbers(plan.json, "linear");
+    if (linear.size() != 4U || linear[0] != 60.0 || linear[1] != 30.0 ||
+        std::abs(linear[2] - 90.0) > 2e-6 || std::abs(linear[3] - 30.0) > 2e-6) {
+        std::cerr << "the vector linear gradient endpoints moved: " << plan.json << '\n';
         return false;
     }
     if (plan.losses.size() != 3U || lowering.losses != 1) {
@@ -653,6 +674,110 @@ bool vector_plans() {
     if (refused.accepted || !refused.commands.empty() || refused.diagnostics.size() != 1U ||
         refused.diagnostics[0].code != vellum::graphics::kSceneVersionMismatchCode) {
         std::cerr << "the shell drew a version 8 scene with a vector node\n";
+        return false;
+    }
+    return true;
+}
+
+bool vector_large_coordinate_geometry_round_trips() {
+    using namespace vellum::graphics;
+    auto path = std::make_shared<PathGeometry>();
+    if (!parse_svg_path_data("M10000000 0H10000001V10H10000000Z", *path)) return false;
+    const auto lowered = vellum::web::lower_for_canvas_shell(vector_scene({
+        {.kind = VectorOp::Kind::path, .transform = {.tx = -10000000.0F}, .path = path,
+         .fill = {.color = Color::hex(0xFF0000)}}}));
+    if (!lowered.accepted || lowered.commands.size() != 1U) return false;
+    const auto plan = vellum::web::lower_vector_for_canvas(lowered.commands[0], 1.0F);
+    const auto begin = plan.json.find("\"d\":\"");
+    if (begin == std::string::npos) return false;
+    const auto end = plan.json.find('"', begin + 5U);
+    PathGeometry decoded;
+    const auto transform = plan_numbers(plan.json, "transform");
+    if (!parse_svg_path_data(plan.json.substr(begin + 5U, end - begin - 5U), decoded) ||
+        decoded.values != path->values || transform.size() != 6U ||
+        decoded.values[0] + transform[4] != 0.0 ||
+        decoded.values[2] + transform[4] != 1.0) {
+        std::cerr << "vector_large_coordinate_geometry_round_trips: translated one-unit "
+                     "rectangle lost its width: " << plan.json << '\n';
+        return false;
+    }
+    return true;
+}
+
+bool vector_nearly_singular_matrices_round_trip() {
+    using namespace vellum::graphics;
+    const Affine2D matrix{.a = 1.0F, .b = 1.0F, .c = 1.0F,
+                          .d = std::nextafter(1.0F, 2.0F)};
+    const auto lowered = vellum::web::lower_for_canvas_shell(vector_scene({
+        {.kind = VectorOp::Kind::path, .transform = matrix, .path = rectangle_path(0.0F),
+         .fill = {.gradient = ramp(GradientKind::two_circle_radial),
+                  .gradient_transform = matrix}}}));
+    if (!lowered.accepted || lowered.commands.size() != 1U) return false;
+    const auto plan = vellum::web::lower_vector_for_canvas(lowered.commands[0], 1.0F);
+    const std::vector<double> expected{matrix.a, matrix.b, matrix.c, matrix.d, 0.0, 0.0};
+    for (const auto key : {"transform", "space"}) {
+        const auto values = plan_numbers(plan.json, key);
+        if (values != expected || values[0] * values[3] - values[1] * values[2] <= 0.0) {
+            std::cerr << "vector_nearly_singular_matrices_round_trip: " << key
+                      << " lost its invertibility: " << plan.json << '\n';
+            return false;
+        }
+    }
+    return true;
+}
+
+bool vector_gradient_double_values_round_trip() {
+    using namespace vellum::graphics;
+    const auto lowered = vellum::web::lower_for_canvas_shell(vector_scene({
+        {.kind = VectorOp::Kind::path, .path = rectangle_path(0.0F),
+         .fill = {.gradient = ramp(GradientKind::two_circle_radial),
+                  .gradient_transform = {.a = 1.0F, .b = 1.0F, .c = -1.0F, .d = 1.0F}}}}));
+    if (!lowered.accepted || lowered.commands.size() != 1U) return false;
+    const auto plan = vellum::web::lower_vector_for_canvas(lowered.commands[0], 1.0F);
+    const auto circles = plan_numbers(plan.json, "radial");
+    if (circles.size() != 6U || circles[5] != std::sqrt(2.0) * 0.5) {
+        std::cerr << "vector_gradient_double_values_round_trip: derived radius lost precision: "
+                  << plan.json << '\n';
+        return false;
+    }
+    return true;
+}
+
+bool vector_small_scale_radial_transforms_preserve_space() {
+    using namespace vellum::graphics;
+    for (const float size : {1e-6F, 1.0F, 1e6F}) {
+        for (const Affine2D transform : {
+                 Affine2D{.a = size, .d = 10.0F * size},
+                 Affine2D{.a = size, .c = 0.5F * size, .d = size},
+                 Affine2D{.a = size, .b = size, .c = -size, .d = size}}) {
+            auto scene = vector_scene({
+                {.kind = VectorOp::Kind::path, .path = rectangle_path(0.0F),
+                 .fill = {.gradient = ramp(GradientKind::two_circle_radial),
+                          .gradient_transform = transform}}});
+            // The small gradient fills a visible frame when its view box is enlarged.
+            auto asset = std::make_shared<VectorAsset>(*scene.root.children[0].vector);
+            asset->view_box = {0.0F, 0.0F, size * 10.0F, size * 10.0F};
+            scene.root.children[0].vector = asset;
+            const auto lowered = vellum::web::lower_for_canvas_shell(scene);
+            if (!lowered.accepted || lowered.commands.size() != 1U || lowered.losses != 0 ||
+                !lowered.diagnostics.empty()) return false;
+            const auto plan = vellum::web::lower_vector_for_canvas(lowered.commands[0], 1.0F);
+            const bool circular = transform.b != 0.0F;
+            const bool has_space = !plan_numbers(plan.json, "space").empty();
+            if (has_space == circular || !plan.losses.empty()) {
+                std::cerr << "vector_small_scale_radial_transforms_preserve_space: size="
+                          << size << " circular=" << circular << ": " << plan.json << '\n';
+                return false;
+            }
+        }
+    }
+    double scale = 1.0;
+    if (vellum::web::canvas_vector_detail::similarity({.a = 0.0F, .d = 0.0F}, scale) ||
+        scale != 0.0 ||
+        vellum::web::canvas_vector_detail::similarity({.a = 0.0F, .d = 1.0F}, scale) ||
+        scale != 0.0) {
+        std::cerr << "vector_small_scale_radial_transforms_preserve_space: degenerate scale "
+                     "was treated as a similarity\n";
         return false;
     }
     return true;
@@ -1186,6 +1311,11 @@ bool plot_lowering() {
 int main() {
     if (!image_refusals()) return 1;
     if (!vector_plans()) return 1;
+    bool vector_regressions = vector_large_coordinate_geometry_round_trips();
+    vector_regressions &= vector_nearly_singular_matrices_round_trip();
+    vector_regressions &= vector_gradient_double_values_round_trip();
+    vector_regressions &= vector_small_scale_radial_transforms_preserve_space();
+    if (!vector_regressions) return 1;
     if (!vector_builder_helpers()) return 1;
     if (!digest_covers_fields()) return 1;
     if (!track_evaluation()) return 1;

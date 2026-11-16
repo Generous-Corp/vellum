@@ -13,12 +13,12 @@ function isObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-// Why a node needs DesignIR version 6, or null: a path or vector node, a
-// path or vector property bucket, an image source, or a vector paint key.
+// Why a node needs DesignIR version 6, or null: a vector node or property
+// bucket, an image source, or a vector paint key. Path nodes and geometry are
+// part of the version 1-5 path contract.
 function vectorAssetField(node) {
-    if (node.kind === 'path' || node.kind === 'vector') return `kind ${node.kind}`;
+    if (node.kind === 'vector') return `kind ${node.kind}`;
     const properties = isObject(node.properties) ? node.properties : {};
-    if (properties.path !== undefined) return 'properties.path';
     if (properties.vector !== undefined) return 'properties.vector';
     if (isObject(properties.image) && properties.image.source !== undefined) {
         return 'properties.image.source';

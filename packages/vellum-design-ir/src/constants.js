@@ -25,9 +25,9 @@ export const DESIGN_IR_TRACKS_VERSION = 4;
  */
 export const DESIGN_IR_PLOTS_VERSION = 5;
 /**
- * The schema version that adds vector assets: path and vector nodes,
- * `properties.path`, `properties.vector`, `properties.image.source`, and the
- * paint keys transform, clipPath and overflow.
+ * The schema version that adds compiled vector assets, `properties.vector`,
+ * `properties.image.source`, and the paint keys transform, clipPath and
+ * overflow. Path nodes and their geometry use the version 1-5 contract.
  */
 export const DESIGN_IR_VECTOR_ASSET_VERSION = 6;
 /**

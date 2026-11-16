@@ -75,12 +75,11 @@
   },
   "$defs": {
     "nodeBeforeVectorAssets": {
-      "description": "A node, and every node beneath it, without the vector asset fields DesignIR version 6 adds.",
+      "description": "A node, and every node beneath it, without the vector asset fields DesignIR version 6 adds. Path nodes and geometry are part of the earlier contract.",
       "properties": {
-        "kind": { "not": { "enum": ["path", "vector"] } },
+        "kind": { "not": { "const": "vector" } },
         "properties": {
           "properties": {
-            "path": false,
             "vector": false,
             "image": { "properties": { "source": false } },
             "paint": { "properties": { "transform": false, "clipPath": false, "overflow": false } }

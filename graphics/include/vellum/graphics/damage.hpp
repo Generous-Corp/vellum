@@ -274,9 +274,10 @@ public:
 /// the damage model learns its fields and this constant is raised.
 inline constexpr std::uint32_t kDamageModelSceneVersion = 12U;
 
-/// Whether a scene of `version` may be redrawn from its damage alone.
+/// Whether a scene of `version` may be redrawn from its damage alone: a
+/// version from `kMinSupportedSceneVersion` to `kDamageModelSceneVersion`.
 [[nodiscard]] constexpr bool partial_redraw_supported(std::uint32_t version) noexcept {
-    return version <= kDamageModelSceneVersion;
+    return version >= kMinSupportedSceneVersion && version <= kDamageModelSceneVersion;
 }
 
 /// Grows `rects` until every one of `areas` that a rect overlaps lies wholly

@@ -187,6 +187,10 @@ void versioning() {
     expect(current.accepted, "a version 9 scene with a compiled vector asset is accepted",
            current.reason);
     const auto older = vector_scene(8U, asset);
+    const auto mismatch = find_scene_version_mismatch(older);
+    expect(mismatch && mismatch->node->id == "icon" && mismatch->introduced == 9U &&
+               mismatch->property == "vector",
+           "the shared version mismatch identifies the vector field introduced in version 9");
     expect(!scene_fields_match_version(older) && find_version_mismatch(older) != nullptr &&
                find_version_mismatch(older)->id == "icon",
            "a version 8 scene cannot carry the vector node");
@@ -194,7 +198,8 @@ void versioning() {
     expect(!refused.accepted && refused.diagnostics.size() == 1U &&
                refused.diagnostics[0].code == kSceneVersionMismatchCode &&
                refused.diagnostics[0].property == "vector" &&
-               refused.diagnostics[0].node_id == "icon",
+               refused.diagnostics[0].node_id == "icon" &&
+               refused.reason == "scene version 8 cannot carry the compiled vector asset at icon",
            "the version 8 refusal names the vector field and node", refused.reason);
     expect(make_paint_commands(older).empty(), "a refused older scene lowers to no commands");
     auto stray = legacy_scene(8U);
@@ -215,6 +220,23 @@ void versioning() {
 
 void acceptance() {
     const auto asset = std::make_shared<const VectorAsset>(sample());
+    auto themed = vector_scene(9U, asset);
+    themed.tokens.push_back({"main.color.backdrop", "primitive", themed.root.children[0].fill});
+    themed.root.children[0].fill_token = 0U;
+    expect(accept_scene(themed).accepted, "a valid token receipt and vector asset coexist");
+    themed.root.children[0].fill_token = 1U;
+    themed.root.children[1].vector.reset();
+    const auto token_refused = accept_scene(themed);
+    expect(!token_refused.accepted && token_refused.diagnostics.size() == 1U &&
+               token_refused.diagnostics[0].code == kInvalidTokenReferenceCode &&
+               token_refused.diagnostics[0].node_id == "backdrop",
+           "token validation still precedes vector validation in the same scene");
+    themed.root.children[0].fill_token = 0U;
+    const auto vector_refused = accept_scene(themed);
+    expect(!vector_refused.accepted && vector_refused.diagnostics.size() == 1U &&
+               vector_refused.diagnostics[0].code == kInvalidVectorAssetCode &&
+               vector_refused.diagnostics[0].node_id == "icon",
+           "repairing the token exposes the vector refusal in the same scene");
     auto missing = vector_scene(9U, nullptr);
     auto refused = accept_scene(missing);
     expect(!refused.accepted && refused.diagnostics.size() == 1U &&

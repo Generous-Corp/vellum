@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -37,7 +38,8 @@ namespace canvas_vector_detail {
 
 inline void number(std::string& out, double value) {
     char buffer[32];
-    std::snprintf(buffer, sizeof(buffer), "%.7g", std::isfinite(value) ? value : 0.0);
+    std::snprintf(buffer, sizeof(buffer), "%.*g", std::numeric_limits<double>::max_digits10,
+                  std::isfinite(value) ? value : 0.0);
     out += buffer;
 }
 
@@ -100,12 +102,16 @@ inline void quoted(std::string& out, std::string_view text) {
 }
 
 inline bool similarity(const vellum::graphics::Affine2D& m, double& scale) {
-    const double ab = std::hypot(m.a, m.b);
-    const double cd = std::hypot(m.c, m.d);
-    const double dot = static_cast<double>(m.a) * m.c + static_cast<double>(m.b) * m.d;
+    const double ab = std::hypot(static_cast<double>(m.a), static_cast<double>(m.b));
+    const double cd = std::hypot(static_cast<double>(m.c), static_cast<double>(m.d));
+    if (!(ab > 0.0) || !(cd > 0.0) || !std::isfinite(ab) || !std::isfinite(cd)) {
+        scale = 0.0;
+        return false;
+    }
     scale = std::sqrt(std::abs(static_cast<double>(m.a) * m.d - static_cast<double>(m.b) * m.c));
-    const double tolerance = 1e-5 * std::max(1.0, std::max(ab, cd));
-    return std::abs(ab - cd) <= tolerance && std::abs(dot) <= tolerance * std::max(1.0, ab);
+    const double dot = (m.a / ab) * (m.c / cd) + (m.b / ab) * (m.d / cd);
+    constexpr double tolerance = 1e-5;
+    return std::abs(ab - cd) / std::max(ab, cd) <= tolerance && std::abs(dot) <= tolerance;
 }
 
 inline vellum::graphics::Point map(const vellum::graphics::Affine2D& m, double x, double y) {

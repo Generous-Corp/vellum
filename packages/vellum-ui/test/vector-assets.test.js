@@ -19,7 +19,8 @@ const vectorDocument = () => normalizeImport({
     source: { key: 'assets', adapter: 'svg', adapterVersion: '1', formatVersion: '1.1', revision: 'fixture' },
     root: { kind: 'view', sourceId: 'svg', properties: { layout: { width: 200, height: 120 }, paint: {} }, children: [
         { kind: 'path', sourceId: 'svg.0', properties: { layout: { x: 0, y: 0, width: 0, height: 0 },
-            path: { d: 'M0 0L10 0L10 10Z', fill: '#ff0000', stroke: 'none' } }, children: [] },
+            path: { d: 'M0 0L10 0L10 10Z', fillRule: 'nonzero' },
+            paint: { fill: '#ff0000', stroke: 'none' } }, children: [] },
         { kind: 'vector', sourceId: 'svg.1', properties: { layout: { x: 0, y: 0, width: 20, height: 20 },
             vector: { asset: { contentHash: `sha256:${'a'.repeat(64)}`, viewBox: [0, 0, 20, 20],
                 ops: [{ op: 'path', d: 'M0 0H20V20Z', fill: '#0000ff' }] } } }, children: [] },
@@ -135,8 +136,13 @@ test('hidden descendants are held to the vector version gate', () => {
         copy.root.children = [hidden(copy.root.children[index])];
         assert.doesNotThrow(() => materializeDesign(copy, { viewport: { width: 200, height: 120 } }));
         for (const version of [1, 5]) {
-            assert.throws(() => materializeDesign({ ...copy, schemaVersion: version },
-                { viewport: { width: 200, height: 120 } }), /needs schemaVersion 6/, `version ${version}`);
+            if (index === 0) {
+                assert.doesNotThrow(() => materializeDesign({ ...copy, schemaVersion: version },
+                    { viewport: { width: 200, height: 120 } }), `path version ${version}`);
+            } else {
+                assert.throws(() => materializeDesign({ ...copy, schemaVersion: version },
+                    { viewport: { width: 200, height: 120 } }), /needs schemaVersion 6/, `vector version ${version}`);
+            }
         }
     }
 });

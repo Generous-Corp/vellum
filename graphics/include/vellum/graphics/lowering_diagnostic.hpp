@@ -88,6 +88,11 @@ inline constexpr std::string_view kPlotTooWideCode = "VELLUM_PLOT_TOO_WIDE";
 /// Skia Graphite may lack, are ever reported this way.
 inline constexpr std::string_view kBlendModeFallbackCode = "VELLUM_BLEND_MODE_FALLBACK";
 
+/// A scene whose token table repeats a path or holds a value that is not
+/// finite, or a node whose token reference is out of range or disagrees with
+/// its `fill`; always an error.
+inline constexpr std::string_view kInvalidTokenReferenceCode = "VELLUM_INVALID_TOKEN_REFERENCE";
+
 [[nodiscard]] constexpr std::string_view to_string(
     LoweringDiagnostic::Severity severity) noexcept {
     switch (severity) {
