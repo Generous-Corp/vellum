@@ -25,7 +25,9 @@ fails when:
   cannot run with the signing key or an App token;
 - a job of a release workflow that can reach a GitHub credential or holds
   the signing key runs a step sequence that matches none of its variants in RUN_ALLOWLIST, key for
-  key and in order (an "unsupported run body"), has an expression in a run
+  key and in order, with the job's and workflow's settings (env, runs-on,
+  permissions and every key but name and steps) as its first entry (an
+  "unsupported run body"), has an expression in a run
   body, uses an action not pinned to a commit, or runs elsewhere (container,
   services, a default working-directory). The check reads no shell: an exact, owner-reviewed
   list replaces analysis of what a body might run. Because the base branch's
@@ -277,6 +279,11 @@ class Workflow:
     root_keys: frozenset[str] = frozenset()
     # "workflow" and the jobs whose defaults set a working directory for every run step.
     directory_defaults: frozenset[str] = frozenset()
+    # Each job's settings that reach every one of its steps: the job's keys but
+    # `name` and `steps`, and the workflow's keys but `name`, `run-name` and
+    # `jobs`, as plain strings, lists and mappings. Compared against
+    # RUN_ALLOWLIST as the first entry of each variant.
+    job_context: dict[str, dict] | None = None
 
 
 ROOT_KEYS = frozenset({"name", "run-name", "on", "permissions", "env", "defaults", "concurrency", "jobs"})
@@ -340,6 +347,13 @@ def parse_workflow(text: str) -> Workflow:
             refuse(f"{label}.defaults.run.shell must be bash")
         return shell
 
+    def plain(node):
+        if isinstance(node, yaml.ScalarNode):
+            return node.value
+        if isinstance(node, yaml.SequenceNode):
+            return [plain(child) for child in node.value]
+        return {scalar(key, "mapping key"): plain(value) for key, value in node.value}
+
     def contents(node) -> str:
         if isinstance(node, yaml.ScalarNode):
             return node.value
@@ -372,7 +386,9 @@ def parse_workflow(text: str) -> Workflow:
             refuse("workflow must have a jobs mapping")
         shell = default_shell(root, "bash", "workflow")
         workflow_env = strings(root["env"], "workflow.env") if "env" in root else {}
-        parsed = Workflow({}, {}, [], [], {}, {}, frozenset(root))
+        parsed = Workflow({}, {}, [], [], {}, {}, frozenset(root), job_context={})
+        workflow_context = {key: plain(value) for key, value in root.items()
+                            if key not in ("name", "run-name", "jobs")}
         for job, body in mapping(root["jobs"], "jobs").items():
             fields = mapping(body, f"job {job}", JOB_KEYS)
             job_shell = default_shell(fields, shell, f"job {job}")
@@ -381,6 +397,9 @@ def parse_workflow(text: str) -> Workflow:
                                        or SECRET.search(str(workflow_env)))
             parsed.job_text[job] = contents(body) + "\n" + "\n".join(f"{k}: {v}" for k, v in workflow_env.items())
             parsed.job_keys[job] = frozenset(fields)
+            parsed.job_context[job] = {
+                "workflow": workflow_context,
+                "job": {key: plain(value) for key, value in fields.items() if key not in ("name", "steps")}}
             if "environment" in fields:
                 environment = fields["environment"]
                 if isinstance(environment, yaml.MappingNode):
@@ -686,9 +705,9 @@ def reviewed_job(text: str) -> bool:
 
 
 def allowlist_entries(name: str, workflow: str) -> dict[str, list[dict]]:
-    """Each credential-holding job's steps, in order: the variant RUN_ALLOWLIST would list for it."""
+    """Each credential-holding job's context and steps, in order: the variant RUN_ALLOWLIST would list for it."""
     parsed = parse_workflow(workflow)
-    return {job: [step.fields for step in steps]
+    return {job: [parsed.job_context[job], *(step.fields for step in steps)]
             for job, steps in parsed.jobs.items() if reviewed_job(parsed.job_text[job])}
 
 
@@ -698,8 +717,10 @@ def _body(text: str) -> str:
 
 
 # Each credential-holding job of a release workflow, as one or more step
-# sequences it may run: every step in order, every key but `name` exactly as
-# the workflow writes it (a run body without its trailing whitespace). The
+# sequences it may run: first the settings every step inherits (the
+# workflow's keys but name, run-name and jobs; the job's keys but name and
+# steps), then every step in order, every key but `name` exactly as the
+# workflow writes it (a run body without its trailing whitespace). The
 # release-path review reads here the exact shell that will hold a token.
 #
 # release-policy.yml also runs the base branch's copy of this check, with the
@@ -708,6 +729,48 @@ def _body(text: str) -> str:
 # check passes), and the second changes the workflow and removes the old one.
 RUN_ALLOWLIST: dict[tuple[str, str], list[list[dict]]] = {
     ('release-tag.yml', 'select-release-commit'): [[
+        {
+            'workflow': {
+                'on': {
+                    'push': {
+                        'branches': [
+                            'main',
+                        ],
+                        'paths': [
+                            'provenance/pulp-observatory/cursor.json',
+                        ],
+                    },
+                    'schedule': [
+                        {
+                            'cron': '17 9 * * 1',
+                        },
+                    ],
+                    'workflow_dispatch': '',
+                },
+                'permissions': {
+                    'contents': 'read',
+                    'checks': 'read',
+                    'statuses': 'read',
+                },
+                'concurrency': {
+                    'group': "${{ github.event_name == 'push' && 'release-tag' || 'release-dry-run' }}",
+                    'cancel-in-progress': 'false',
+                },
+            },
+            'job': {
+                'if': "github.event_name == 'push'",
+                'runs-on': 'ubuntu-latest',
+                'permissions': {
+                    'actions': 'read',
+                    'checks': 'read',
+                    'contents': 'read',
+                    'pull-requests': 'read',
+                },
+                'outputs': {
+                    'tag': '${{ steps.release.outputs.tag }}',
+                },
+            },
+        },
         {
             'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
             'with': {
@@ -776,6 +839,41 @@ printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"'''),
         },
     ]],
     ('release-tag.yml', 'sign-release-tag'): [[
+        {
+            'workflow': {
+                'on': {
+                    'push': {
+                        'branches': [
+                            'main',
+                        ],
+                        'paths': [
+                            'provenance/pulp-observatory/cursor.json',
+                        ],
+                    },
+                    'schedule': [
+                        {
+                            'cron': '17 9 * * 1',
+                        },
+                    ],
+                    'workflow_dispatch': '',
+                },
+                'permissions': {
+                    'contents': 'read',
+                    'checks': 'read',
+                    'statuses': 'read',
+                },
+                'concurrency': {
+                    'group': "${{ github.event_name == 'push' && 'release-tag' || 'release-dry-run' }}",
+                    'cancel-in-progress': 'false',
+                },
+            },
+            'job': {
+                'needs': 'select-release-commit',
+                'if': "needs.select-release-commit.outputs.tag != ''",
+                'runs-on': 'ubuntu-latest',
+                'environment': 'release',
+            },
+        },
         {
             'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
             'with': {
@@ -996,6 +1094,45 @@ echo "signed, pushed and froze $TAG at $OBJECT" >> "$GITHUB_STEP_SUMMARY"'''),
     ]],
     ('release-tag.yml', 'dry-run-gate'): [[
         {
+            'workflow': {
+                'on': {
+                    'push': {
+                        'branches': [
+                            'main',
+                        ],
+                        'paths': [
+                            'provenance/pulp-observatory/cursor.json',
+                        ],
+                    },
+                    'schedule': [
+                        {
+                            'cron': '17 9 * * 1',
+                        },
+                    ],
+                    'workflow_dispatch': '',
+                },
+                'permissions': {
+                    'contents': 'read',
+                    'checks': 'read',
+                    'statuses': 'read',
+                },
+                'concurrency': {
+                    'group': "${{ github.event_name == 'push' && 'release-tag' || 'release-dry-run' }}",
+                    'cancel-in-progress': 'false',
+                },
+            },
+            'job': {
+                'runs-on': 'ubuntu-latest',
+                'permissions': {
+                    'actions': 'read',
+                    'contents': 'read',
+                },
+                'outputs': {
+                    'run': '${{ steps.gate.outputs.run }}',
+                },
+            },
+        },
+        {
             'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
             'with': {
                 'ref': '${{ github.sha }}',
@@ -1033,6 +1170,41 @@ echo "dry run: $run ($(head -n 1 "$RUNNER_TEMP/gate-reason.txt"))" >> "$GITHUB_S
         },
     ]],
     ('release-tag.yml', 'sign-dry-run-tag'): [[
+        {
+            'workflow': {
+                'on': {
+                    'push': {
+                        'branches': [
+                            'main',
+                        ],
+                        'paths': [
+                            'provenance/pulp-observatory/cursor.json',
+                        ],
+                    },
+                    'schedule': [
+                        {
+                            'cron': '17 9 * * 1',
+                        },
+                    ],
+                    'workflow_dispatch': '',
+                },
+                'permissions': {
+                    'contents': 'read',
+                    'checks': 'read',
+                    'statuses': 'read',
+                },
+                'concurrency': {
+                    'group': "${{ github.event_name == 'push' && 'release-tag' || 'release-dry-run' }}",
+                    'cancel-in-progress': 'false',
+                },
+            },
+            'job': {
+                'needs': 'dry-run-gate',
+                'if': "needs.dry-run-gate.outputs.run == 'true'",
+                'runs-on': 'ubuntu-latest',
+                'environment': 'release',
+            },
+        },
         {
             'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
             'with': {
@@ -1138,6 +1310,45 @@ echo "pushed the dry-run tag $TAG at $OBJECT; sdk-release deletes it and its dra
     ]],
     ('version-at-land.yml', 'plan'): [[
         {
+            'workflow': {
+                'on': {
+                    'push': {
+                        'branches': [
+                            'main',
+                        ],
+                    },
+                    'schedule': [
+                        {
+                            'cron': '41 */6 * * *',
+                        },
+                    ],
+                    'workflow_dispatch': '',
+                },
+                'permissions': {
+                    'contents': 'read',
+                    'pull-requests': 'read',
+                },
+                'concurrency': {
+                    'group': 'version-at-land',
+                    'cancel-in-progress': 'false',
+                },
+                'env': {
+                    'BUMP_BRANCH': 'automation/version-bump',
+                },
+            },
+            'job': {
+                'runs-on': 'ubuntu-latest',
+                'timeout-minutes': '15',
+                'outputs': {
+                    'action': '${{ steps.plan.outputs.action }}',
+                    'version': '${{ steps.plan.outputs.version }}',
+                    'main': '${{ steps.plan.outputs.main }}',
+                    'number': '${{ steps.standing.outputs.number }}',
+                    'current': '${{ steps.standing.outputs.current }}',
+                },
+            },
+        },
+        {
             'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
             'with': {
                 'ref': 'main',
@@ -1242,6 +1453,40 @@ printf 'number=%s\ncurrent=%s\n' "$number" "$current" >> "$GITHUB_OUTPUT"'''),
         },
     ]],
     ('version-at-land.yml', 'push'): [[
+        {
+            'workflow': {
+                'on': {
+                    'push': {
+                        'branches': [
+                            'main',
+                        ],
+                    },
+                    'schedule': [
+                        {
+                            'cron': '41 */6 * * *',
+                        },
+                    ],
+                    'workflow_dispatch': '',
+                },
+                'permissions': {
+                    'contents': 'read',
+                    'pull-requests': 'read',
+                },
+                'concurrency': {
+                    'group': 'version-at-land',
+                    'cancel-in-progress': 'false',
+                },
+                'env': {
+                    'BUMP_BRANCH': 'automation/version-bump',
+                },
+            },
+            'job': {
+                'needs': 'plan',
+                'if': "needs.plan.outputs.action == 'bump' && needs.plan.outputs.current != 'true'",
+                'runs-on': 'ubuntu-latest',
+                'timeout-minutes': '10',
+            },
+        },
         {
             'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
             'with': {
@@ -1366,15 +1611,23 @@ def run_body_problems(name: str, workflow: str, allowlist: dict | None = None) -
         for key in sorted(parsed.job_keys[job] & UNSUPPORTED_CREDENTIAL_JOB_KEYS):
             found.append(f"{name}: job {job} holds a credential and sets {key}")
         variants = allowlist.get((name, job), [])
-        fields = [step.fields for step in job_steps]
+        # The job's and workflow's settings reach every step (env such as
+        # BASH_ENV, runs-on, permissions, environment), so they are reviewed
+        # text too: the first entry of each variant.
+        fields = [parsed.job_context[job], *(step.fields for step in job_steps)]
         if fields not in variants:
-            # Name the first step that differs from the closest variant.
+            # Name the first entry that differs from the closest variant.
             closest = max(variants, default=[], key=lambda variant: next(
                 (i for i, (a, b) in enumerate(zip(fields, variant)) if a != b), min(len(fields), len(variant))))
             index = next((i for i, (a, b) in enumerate(zip(fields, closest)) if a != b), min(len(fields), len(closest)))
-            title = job_steps[index].title if index < len(job_steps) else f"the end of job {job}"
-            found.append(f"{name}: {title} of job {job} matches no step sequence RUN_ALLOWLIST lists for it "
-                         f"(unsupported run body): it differs at step {index + 1} of {len(job_steps)}")
+            if index == 0:
+                found.append(f"{name}: the job and workflow settings of job {job} match no variant RUN_ALLOWLIST "
+                             f"lists for it (unsupported run body): env, runs-on, permissions and every other "
+                             f"key but name and steps are reviewed")
+            else:
+                title = job_steps[index - 1].title if index - 1 < len(job_steps) else f"the end of job {job}"
+                found.append(f"{name}: {title} of job {job} matches no step sequence RUN_ALLOWLIST lists for it "
+                             f"(unsupported run body): it differs at step {index} of {len(job_steps)}")
         minted: set[str] = set()
         for step in job_steps:
             if step.uses is not None and not PINNED_ACTION.fullmatch(step.uses):

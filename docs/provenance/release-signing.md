@@ -266,7 +266,9 @@ promotion attestation and prove full-matrix parity.
 - **A job that can reach a GitHub token or the signing key runs only reviewed steps.** In the three release workflows, every job that
   names `GH_TOKEN`, `GITHUB_TOKEN`, the App-token action, a token or any secret, the signing key included, runs exactly
   one of the step sequences `RUN_ALLOWLIST` in `scripts/check_release_policy.py` lists for it: every step in order,
-  every key but `name` as written. The check reads no shell, so a bypass spelled in shell is simply a body that is not
+  every key but `name` as written, preceded by the settings every step inherits (the workflow's and the job's `env`,
+  `runs-on`, `permissions`, `environment` and every other key but `name`, `run-name`, `jobs` and `steps`), so an
+  inherited `BASH_ENV` or `BASH_FUNC_*` is a change to reviewed text too. The check reads no shell, so a bypass spelled in shell is simply a body that is not
   on the list. Run bodies in those jobs hold no `${{ }}` expressions; inputs come through the step's `env:` and are
   read as `"$NAME"`. A step that names an Administration-only endpoint must hold the App token minted earlier in its
   job, no step sets `GITHUB_TOKEN`, and the signing step has no GitHub token in scope. At run time each

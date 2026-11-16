@@ -1355,6 +1355,41 @@ class RunAllowlist(unittest.TestCase):
                 self.assert_unsupported(self.judged(policy.VERSION_WORKFLOW, push, (
                     f"          MAIN: ${{{{ needs.plan.outputs.main }}}}\n          {key}: /tmp/x\n          VERSION:")))
 
+    def test_job_and_workflow_settings_are_reviewed(self) -> None:
+        # The HOLD at 99c0b0cbc: only each step's keys were compared, but a
+        # workflow- or job-level env (BASH_ENV, BASH_FUNC_*, GIT_CONFIG_*,
+        # LD_PRELOAD, PATH) or job setting reaches every reviewed step.
+        bump = "env:\n  BUMP_BRANCH: automation/version-bump\n"
+        job = "    runs-on: ubuntu-latest\n    timeout-minutes: 10\n"
+        hostile = {
+            "BASH_ENV": "scripts/x.sh", "BASH_FUNC_read%%": "'() { record=; return 0; }'",
+            "GIT_CONFIG_COUNT": "'1'", "LD_PRELOAD": "/tmp/x.so", "PATH": "./bin:/usr/bin",
+        }
+        for key, value in hostile.items():
+            with self.subTest(scope="workflow", key=key):
+                self.assert_unsupported(self.judged(policy.VERSION_WORKFLOW, bump, bump + f"  {key}: {value}\n"))
+            with self.subTest(scope="job", key=key):
+                self.assert_unsupported(self.judged(policy.VERSION_WORKFLOW, job, job + f"    env:\n      {key}: {value}\n"))
+        # Changing an inherited value the steps use is a change to what they run.
+        self.assert_unsupported(self.judged(
+            policy.VERSION_WORKFLOW, bump, "env:\n  BUMP_BRANCH: main\n"))
+        for new in ("    runs-on: self-hosted\n    timeout-minutes: 10\n",
+                    "    runs-on: ubuntu-latest\n    timeout-minutes: 600\n",
+                    job + "    permissions:\n      contents: write\n"):
+            with self.subTest(new=new):
+                self.assert_unsupported(self.judged(policy.VERSION_WORKFLOW, job, new))
+        sign = "    runs-on: ubuntu-latest\n    environment: release\n"
+        self.assertEqual(self.workflows[policy.SIGNING_WORKFLOW].count(sign), 2)
+        for new in ("    runs-on: macos-latest\n    environment: release\n",
+                    "    runs-on: ubuntu-latest\n    environment: release\n    env:\n      BASH_ENV: x.sh\n"):
+            with self.subTest(new=new):
+                text = self.workflows[policy.SIGNING_WORKFLOW].replace(sign, new, 1)
+                problems = policy.run_body_problems(policy.SIGNING_WORKFLOW, text)
+                self.assertTrue(any(UNSUPPORTED in p and "job and workflow settings" in p for p in problems), problems)
+        # Positive controls: the settings as reviewed.
+        self.assertEqual(self.judged(policy.VERSION_WORKFLOW, bump, bump), [])
+        self.assertEqual(self.judged(policy.VERSION_WORKFLOW, job, job), [])
+
     def test_a_reviewed_step_cannot_change_any_key(self) -> None:
         # Every key but `name` is reviewed: the token, the checkout, a working
         # directory or `continue-on-error` change what the token-holding step does.
