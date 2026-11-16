@@ -24,6 +24,69 @@ EVENT = "provenance/pulp-observatory/events/vellum-abc.yaml"
 SDK = "graphics/src/canvas.cpp"
 
 
+# What each real defect changed, from the week's pull-request proofs whose only
+# catch was the GPU: the early full proof must keep running for each of them.
+GPU_ONLY_DEFECTS = {
+    "html-import GPU capture": [
+        "apps/app-host/CMakeLists.txt", "apps/app-host/test_html_import_geometry.py",
+        "cli/vellum_web_backend.py", "packages/vellum-ui/src/design.js", "scripts/ci_lanes.json"],
+    "retained-surface partial present": [
+        "apps/app-host/main.mm", "docs/architecture/gpu-boundary.md",
+        "graphics/src/skia_dawn_surface.mm", "graphics/tests/partial_present_test.cpp"],
+    "graphics tests registered in CI": [
+        "CMakeLists.txt", "graphics/CMakeLists.txt", "tools/mirror/VellumMirror.cmake"],
+    "graphics tests registered in CI, damage": [
+        "CMakeLists.txt", "graphics/CMakeLists.txt", "graphics/src/damage.cpp"],
+    "render cache": [
+        "graphics/include/vellum/graphics/damage.hpp", "graphics/src/render_cache.hpp",
+        "graphics/tests/render_cache_gpu_test.cpp", "packages/vellum-ui/src/runtime.js"],
+}
+
+
+class EarlyProofTests(unittest.TestCase):
+    def test_each_gpu_only_defect_runs_the_early_proof(self) -> None:
+        for name, paths in GPU_ONLY_DEFECTS.items():
+            with self.subTest(defect=name):
+                early, reason = classifier.early_proof(paths)
+                self.assertTrue(early, reason)
+
+    def test_changes_the_cheap_lane_covers_stay_cheap(self) -> None:
+        for paths in (
+            ["docs/ci/local-first-actions.md"],
+            ["scripts/ci_lanes.json", "scripts/test_gates.py"],
+            ["framework/core/platform/src/alert.cpp", "provenance/framework/ports.json"],
+            ["tools/provenance/observatory.py", ".github/workflows/provenance.yml"],
+            ["packages/vellum-ui/src/design.js", "cli/vellum_web_backend.py"],
+            ["CMakeLists.txt", "cmake/VellumTestClasses.cmake"],
+        ):
+            with self.subTest(paths=paths):
+                early, reason = classifier.early_proof(paths)
+                self.assertFalse(early, reason)
+
+    def test_every_doubt_runs_the_early_proof(self) -> None:
+        for paths in (
+            [], [""], ["/graphics/x.cpp"], ["docs/../graphics/x.cpp"],
+            ["scripts/classify_gpu_proof.py"], ["scripts/test_classify_gpu_proof.py"],
+            [".github/workflows/gpu-macos.yml"],
+            ["docs/a.md", "gpu-runtime/renderer-lock.json"],
+            ["rmlui/src/soft_raster.hpp"], ["provenance/third-party-lock.json"],
+            ["graphics/shaders/blur.wgsl"],
+        ):
+            with self.subTest(paths=paths):
+                early, reason = classifier.early_proof(paths)
+                self.assertTrue(early, reason)
+
+    def test_cli_prints_one_word_and_an_old_base_exits_two(self) -> None:
+        for paths, expected in ((["docs/a.md"], "cheap"), ([SDK], "early"), ([], "early")):
+            result = subprocess.run(["python3", "-I", str(SCRIPT), "--early-proof", *paths],
+                                    capture_output=True, text=True, check=True)
+            self.assertEqual(result.stdout, expected + "\n")
+        # The verdict that gates the full proof is unchanged by the new flag.
+        result = subprocess.run(["python3", "-I", str(SCRIPT), SDK],
+                                capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout, "required\n")
+
+
 class ClassifierTests(unittest.TestCase):
     def test_observatory_evidence_alone_needs_no_proof(self) -> None:
         required, _ = classifier.classify([CURSOR, REPORT, EVENT])
@@ -78,7 +141,7 @@ CLASSIFY_STEP = "Classify the change against the base's rules"
 GUARD_STEP = "Prove a skipped proof was allowed"
 
 
-class WorkflowStepTests(unittest.TestCase):
+class StepHarness(unittest.TestCase):
     """Drive the workflow's own step text against real merge commits."""
 
     def setUp(self) -> None:
@@ -134,6 +197,12 @@ class WorkflowStepTests(unittest.TestCase):
         )
         return result, output.read_text()
 
+    def merge_again(self, changes: dict[str, str]) -> str:
+        self.git("branch", "-q", "-D", "topic")
+        return self.merge(changes)
+
+
+class WorkflowStepTests(StepHarness):
     def test_evidence_only_change_is_unaffected_and_the_guard_agrees(self) -> None:
         sha = self.merge({CURSOR: '{"v": 2}\n', EVENT: "{}\n"})
         result, output = self.run_step(CLASSIFY_STEP, sha)
@@ -211,10 +280,6 @@ class WorkflowStepTests(unittest.TestCase):
         _, output = self.run_step(CLASSIFY_STEP, self.git("rev-parse", "HEAD"))
         self.assertEqual(output, "")
 
-    def merge_again(self, changes: dict[str, str]) -> str:
-        self.git("branch", "-q", "-D", "topic")
-        return self.merge(changes)
-
     def test_every_proof_step_waits_for_the_classifier(self) -> None:
         import re
         def steps(job: str):
@@ -252,6 +317,154 @@ class WorkflowStepTests(unittest.TestCase):
             self.text,
         )
         self.assertIn("unaffected: ${{ steps.classify.outputs.unaffected }}", self.text)
+
+DEPTH_STEP = "Choose the pull-request proof depth"
+CHEAP_GUARD_STEP = "Prove the cheap lane was allowed"
+
+
+class CheapLaneStepTests(StepHarness):
+    """The depth step and its guard, run against real merge commits with a stubbed `gh`."""
+
+    def run_depth(self, sha: str, labels: str | None = "", mode: str = "", payload: str = "[]",
+                  event: str = "pull_request", classifier_flag: bool = True):
+        temp = Path(self.directory.name) / "depth"
+        temp.mkdir(exist_ok=True)
+        output = temp / "github_output"
+        output.write_text("")
+        bin_dir = temp / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        gh = bin_dir / "gh"
+        # labels None: the API is unreachable and the payload's labels are read.
+        gh.write_text("#!/bin/sh\n" + ("exit 1\n" if labels is None else f"printf '%s' '{labels}'\n"))
+        gh.chmod(0o755)
+        result = subprocess.run(
+            ["bash", "-e", "-c", step_script(self.text, DEPTH_STEP)],
+            cwd=self.root, capture_output=True, text=True,
+            env=dict(os.environ, GITHUB_SHA=sha, GITHUB_OUTPUT=str(output), GITHUB_EVENT_NAME=event,
+                     GITHUB_REPOSITORY="o/r", RUNNER_TEMP=str(temp), PR_NUMBER="7", GH_TOKEN="x",
+                     PAYLOAD_LABELS=payload, PROOF_MODE=mode, PATH=f"{bin_dir}:{os.environ['PATH']}"),
+        )
+        return result, output.read_text()
+
+    def test_a_pull_request_the_classifier_clears_takes_the_cheap_lane(self) -> None:
+        sha = self.merge({"docs/note.md": "x\n"})
+        result, output = self.run_depth(sha)
+        self.assertEqual(output, "cheap=true\n", result.stdout + result.stderr)
+        guard, _ = self.run_step(CHEAP_GUARD_STEP, sha)
+        self.assertEqual(guard.returncode, 0, guard.stderr)
+
+    def test_each_reason_for_the_early_full_proof_is_honoured(self) -> None:
+        docs = self.merge({"docs/note.md": "x\n"})
+        for name, kwargs in (
+            ("the rollback variable", {"mode": "full"}),
+            ("the gpu-proof label", {"labels": "bug\ngpu-proof\n"}),
+            ("the gpu-proof label from the event payload", {"labels": None, "payload": '["gpu-proof"]'}),
+            ("an unreadable label list", {"labels": None, "payload": "not json"}),
+        ):
+            with self.subTest(reason=name):
+                result, output = self.run_depth(docs, **kwargs)
+                self.assertEqual(output, "", result.stdout + result.stderr)
+                self.assertIn("Running the full GPU proof now", result.stdout)
+        other = self.run_depth(docs, labels="bug\nsuperseded\n")[1]
+        self.assertEqual(other, "cheap=true\n")
+        fallback = self.run_depth(docs, labels=None, payload='["bug"]')[1]
+        self.assertEqual(fallback, "cheap=true\n")
+
+    def test_a_gpu_relevant_change_runs_the_early_full_proof(self) -> None:
+        sha = self.merge({SDK: "int changed;\n"})
+        result, output = self.run_depth(sha)
+        self.assertEqual(output, "", result.stdout + result.stderr)
+        self.assertIn("the base's classifier says: early", result.stdout)
+
+    def test_a_base_without_the_flag_runs_the_early_full_proof(self) -> None:
+        # A base from before the flag rejects it with exit 2.
+        self.write("scripts/classify_gpu_proof.py", "import sys\nprint('usage', file=sys.stderr)\nsys.exit(2)\n")
+        self.commit("old classifier")
+        sha = self.merge({"docs/note.md": "x\n"})
+        result, output = self.run_depth(sha)
+        self.assertEqual(output, "", result.stdout + result.stderr)
+        self.assertIn("unavailable", result.stdout)
+
+    def test_a_change_to_the_classifier_never_takes_the_cheap_lane(self) -> None:
+        sha = self.merge({"scripts/classify_gpu_proof.py": SCRIPT.read_text() + "\n# edit\n"})
+        self.assertEqual(self.run_depth(sha)[1], "")
+
+    def test_the_guard_refuses_the_cheap_lane_outside_a_pull_request_or_for_a_gpu_change(self) -> None:
+        docs = self.merge({"docs/note.md": "x\n"})
+        for event in ("merge_group", "push", "workflow_dispatch"):
+            with self.subTest(event=event):
+                guard, _ = self.run_step(CHEAP_GUARD_STEP, docs, event=event)
+                self.assertNotEqual(guard.returncode, 0)
+                self.assertIn("may not take the cheap lane", guard.stdout)
+        gpu = self.merge_again({SDK: "int w;\n"})
+        guard, _ = self.run_step(CHEAP_GUARD_STEP, gpu)
+        self.assertNotEqual(guard.returncode, 0)
+        self.assertIn("the base's classifier says: early", guard.stdout)
+
+
+class CheapLaneWorkflowTests(unittest.TestCase):
+    def setUp(self) -> None:
+        import yaml
+        self.workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+        self.text = WORKFLOW.read_text(encoding="utf-8")
+        self.steps = {step["name"]: step for step in self.workflow["jobs"]["gpu-macos-arm64"]["steps"]}
+
+    def test_the_required_contexts_keep_their_names(self) -> None:
+        self.assertEqual(sorted(self.workflow["jobs"]),
+                         ["cancel-destroyed-groups", "gpu-macos-arm64", "sterile-consumer"])
+        for job in ("gpu-macos-arm64", "sterile-consumer"):
+            self.assertEqual(self.workflow["jobs"][job]["name"], job)
+
+    def test_the_depth_step_runs_only_on_pull_requests(self) -> None:
+        condition = self.steps[DEPTH_STEP]["if"]
+        self.assertIn("github.event_name == 'pull_request'", condition)
+        self.assertNotIn("merge_group", condition)
+        self.assertEqual(self.steps[DEPTH_STEP]["id"], "depth")
+
+    # The steps the cheap lane runs; every other proof step must skip when it is chosen.
+    CHEAP_KEEPS = {
+        CLASSIFY_STEP, DEPTH_STEP, "Derive the release identity from CMakeLists.txt",
+        "Check out full preserved Vellum history without credentials",
+        "Reuse an identical-tree proof", "Re-check the external state a reused proof read",
+        "Size builds to this runner", "Download and verify the locked Skia and Dawn archive",
+        "Set up the authoring toolchain", "Verify the exact release source contract",
+        "Build the installed TypeScript and JSX Phase 3 fixture",
+        "Fetch and verify the pinned Pulp view-audio archive",
+        "Build the cheap pull-request slice", "Run the pr-fast tests", CHEAP_GUARD_STEP,
+        "Prove a skipped proof was allowed", "Record the classifier-skip equivalence receipt",
+        "Upload the classifier-skip equivalence receipt",
+    }
+
+    def test_every_other_proof_step_skips_in_the_cheap_lane(self) -> None:
+        for name, step in self.steps.items():
+            if name in self.CHEAP_KEEPS:
+                continue
+            with self.subTest(step=name):
+                self.assertIn("steps.depth.outputs.cheap != 'true'", step.get("if", ""))
+
+    def test_the_cheap_lane_runs_the_labelled_tests_and_leaves_no_reusable_receipt(self) -> None:
+        self.assertIn("ctest --test-dir build-cheap -L pr-fast", self.steps["Run the pr-fast tests"]["run"])
+        self.assertIn("-DVELLUM_REQUIRE_GPU=ON", self.steps["Build the cheap pull-request slice"]["run"])
+        # select_reusable_gpu_proof.py needs this receipt; a cheap run must never write it.
+        for name in ("Record the tree this pull-request proof covered", "Upload the proven-tree receipt"):
+            self.assertIn("steps.depth.outputs.cheap != 'true'", self.steps[name]["if"])
+
+    def test_the_verified_release_source_step_stays_in_the_cheap_lane(self) -> None:
+        step = self.steps["Verify the exact release source contract"]
+        self.assertNotIn("depth", step["if"])
+        self.assertIn("--lane release-source", step["run"])
+
+    def test_sterile_consumer_only_reports_a_cheap_run(self) -> None:
+        job = self.workflow["jobs"]["sterile-consumer"]
+        self.assertIn("outputs.cheap == 'true'", job["runs-on"])
+        for step in job["steps"]:
+            condition = step.get("if", "")
+            if step["name"].startswith(("Report", "Install the pinned", "Export", "Download", "Record",
+                                        "Verify", "Demonstrate", "Run the complete", "Retain")):
+                if step["name"] in ("Report the cheap pull-request lane",):
+                    self.assertIn("outputs.cheap == 'true'", condition)
+                elif "reused" not in step["name"] and "does not cover" not in step["name"]:
+                    self.assertIn("outputs.cheap != 'true'", condition, step["name"])
 
 
 if __name__ == "__main__":

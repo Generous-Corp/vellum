@@ -287,6 +287,9 @@
         "script": "scripts/test_classify_gpu_proof.py"
       },
       {
+        "script": "scripts/test_gpu_proof_guard.py"
+      },
+      {
         "script": "scripts/test_check_renderer_lock.py",
         "isolated": true
       },

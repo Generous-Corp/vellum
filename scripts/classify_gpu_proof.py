@@ -7,6 +7,11 @@
 Prints `required` or `not-required` and exits 0; exit 2 means it was invoked
 wrongly, and a caller treats anything but `not-required` as `required`.
 
+With --early-proof it instead prints `early` or `cheap` for a pull request:
+`early` when any changed path can only be proved on a GPU (GPU_RELEVANT) or
+the list is empty or malformed, and `cheap` otherwise. A base without this flag exits 2, which the workflow reads as
+`early`. The merge group runs the full proof whatever this says.
+
 The proof is required unless every changed path is observatory evidence that
 nothing the proof runs reads: the cursor, the generated reports, and event
 records under provenance/pulp-observatory/. The receiver's coalesced evidence
@@ -42,6 +47,13 @@ ALWAYS = (
 )
 
 
+# The rules that judge a change are proved by the full proof early too.
+ALWAYS_EARLY = (
+    re.compile(r"scripts/classify_gpu_proof\.py"),
+    re.compile(r"scripts/test_classify_gpu_proof\.py"),
+)
+
+
 def classify(paths: list[str]) -> tuple[bool, str]:
     """Return (required, reason)."""
     if not paths:
@@ -56,14 +68,59 @@ def classify(paths: list[str]) -> tuple[bool, str]:
     return False, f"all {len(paths)} changed paths are observatory evidence"
 
 
+# Paths whose change can only be caught by a GPU adapter: the Skia/Dawn
+# graphics backend and its tests, the pinned renderer runtime, the apps that
+# open a window or capture a frame, the RmlUi renderer, and the workflow that runs the proof. A pull request
+# touching any of them runs the full proof now; anything else gets the cheap
+# lane and the merge group runs the full proof before main moves.
+GPU_RELEVANT = (
+    re.compile(r"graphics/.*"),
+    re.compile(r"gpu-runtime/.*"),
+    re.compile(r"apps/.*"),
+    re.compile(r"rmlui/.*"),
+    re.compile(r"packages/vellum-swift/.*"),
+    re.compile(r".*\.(metal|wgsl)"),
+    re.compile(r"provenance/third-party-lock\.json"),
+    re.compile(r"\.github/workflows/gpu-macos\.yml"),
+    re.compile(r"scripts/(run_parity_proofs|build_web_payload|select_reusable_[a-z_]*proof|classify_gpu_proof)\.py"),
+)
+
+
+def early_proof(paths: list[str]) -> tuple[bool, str]:
+    """Return (early, reason): whether a pull request should run the full GPU
+    proof now instead of the cheap lane, leaving it to the merge group.
+
+    Fails closed on an empty list or a malformed path, and on any path in
+    GPU_RELEVANT or ALWAYS.
+    """
+    if not paths:
+        return True, "no changed paths were supplied"
+    for path in paths:
+        if not path or path.startswith("/") or ".." in path.split("/"):
+            return True, f"unexpected path {path!r}"
+        if any(rule.fullmatch(path) for rule in ALWAYS_EARLY + GPU_RELEVANT):
+            return True, f"{path} can only be proved on a GPU"
+    return False, f"none of the {len(paths)} changed paths needs a GPU adapter"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--files0-from", type=Path)
+    parser.add_argument(
+        "--early-proof",
+        action="store_true",
+        help="print `early` or `cheap`: whether a pull request should run the full proof now",
+    )
     parser.add_argument("paths", nargs="*")
     args = parser.parse_args(argv)
     paths = list(args.paths)
     if args.files0_from is not None:
         paths += [item for item in args.files0_from.read_bytes().decode("utf-8").split("\0") if item]
+    if args.early_proof:
+        early, reason = early_proof(paths)
+        print(f"classify: {reason}", file=sys.stderr)
+        print("early" if early else "cheap")
+        return 0
     required, reason = classify(paths)
     print(f"classify: {reason}", file=sys.stderr)
     print("required" if required else "not-required")
