@@ -12,9 +12,12 @@ name: Windows
 # first. So the mirror and the GPU backend are off here, and the configure
 # check below fails if either turns on silently.
 #
-# Tests: ctest must find at least one test and every test it finds must pass.
-# The list of tests that ran is uploaded, so a change in what Windows covers is
-# visible in the artifact rather than inferred from a green check.
+# Tests: every registered test not run by the Python interpreter (the C++
+# binaries and the CMake install-consumer scripts) must pass, and a named set
+# of them must be present. The Python repository tooling tests are left to the
+# macOS and Linux lanes. The JUnit report is uploaded, so a change in what
+# Windows covers is visible in the artifact rather than inferred from a green
+# check.
 #
 # Advisory: not a required check.
 on:
@@ -80,7 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           cmake -S . -B build-windows \
-            -G "Visual Studio 17 2022" -A "${{ matrix.arch }}" \
+            -A "${{ matrix.arch }}" \
             -DVELLUM_BUILD_TESTS=ON \
             -DVELLUM_ENABLE_MIRROR=OFF \
             -DVELLUM_ENABLE_GPU=OFF \
@@ -102,12 +105,39 @@ jobs:
         shell: bash
         run: cmake --build build-windows --config Release --parallel 4
 
-      - name: Test
+      - name: Test the C++
         shell: bash
         run: |
           set -euo pipefail
+          # Every registered test that is not run by the Python interpreter:
+          # the C++ test binaries and the CMake install-consumer scripts. A new
+          # C++ test joins without editing this list. The Python repository
+          # tooling tests are POSIX-specific today and run on the macOS and
+          # Linux lanes.
+          ctest --test-dir build-windows -C Release --show-only=json-v1 > "$RUNNER_TEMP/tests.json"
+          regex="$(python3 -I - "$RUNNER_TEMP/tests.json" <<'PY'
+          import json, re, sys
+          tests = json.load(open(sys.argv[1], encoding="utf-8"))["tests"]
+          def python(test):
+              command = test.get("command") or [""]
+              return "python" in command[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+          names = [t["name"] for t in tests if not python(t)]
+          # Controls: tests that must be here, so a broken selection or a
+          # configure that registered nothing cannot pass.
+          for required in ("vellum.foundation", "vellum.runtime", "vellum.value.feed",
+                           "vellum.install-consumer", "gpu-runtime.bootstrap"):
+              if required not in names:
+                  sys.exit(f"::error::{required} is not registered")
+          if len(names) < 20:
+              sys.exit(f"::error::only {len(names)} C++ tests registered")
+          print(f"{len(names)} C++ tests of {len(tests)}", file=sys.stderr)
+          if not all(re.fullmatch(r"[A-Za-z0-9.-]+", n) for n in names):
+              sys.exit("::error::a test name needs escaping beyond '.'")
+          print("^(" + "|".join(n.replace(".", r"\.") for n in names) + ")$")
+          PY
+          )"
           ctest --test-dir build-windows -C Release --output-on-failure \
-            --no-tests=error --output-junit "$RUNNER_TEMP/windows-ctest.xml"
+            --no-tests=error -R "$regex" --output-junit "$RUNNER_TEMP/windows-ctest.xml"
 
       - name: Upload test results
         if: always()
