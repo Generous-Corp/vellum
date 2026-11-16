@@ -1325,6 +1325,7 @@ class RunAllowlist(unittest.TestCase):
             ("release-tag.yml", "select-release-commit"), ("release-tag.yml", "sign-release-tag"),
             ("release-tag.yml", "dry-run-gate"), ("release-tag.yml", "sign-dry-run-tag"),
             ("release-tag.yml", "release-policy-check"), ("release-tag.yml", "dry-run-policy-check"),
+            ("release-policy.yml", "release-policy"),
             ("version-at-land.yml", "plan"), ("version-at-land.yml", "push")]))
         self.assertEqual(sorted(policy.RUN_ALLOWLIST), covered)
         self.assertNotIn("${{", "".join(step.get("run", "") for variants in policy.RUN_ALLOWLIST.values()
@@ -1364,10 +1365,32 @@ class RunAllowlist(unittest.TestCase):
                 parsed = policy.parse_workflow(base.format(with_=with_))
                 self.assertTrue(policy.reviewed_job(parsed.job_text["check"]))
                 self.assert_unsupported(policy.run_body_problems(name, base.format(with_=with_)))
-        # Positive control: credentials not persisted, nothing else credentialed.
+        # Credentials not persisted and nothing else credentialed: such a job is
+        # still reviewed in a release workflow, and passes once allowlisted.
         safe = base.format(with_="        with:\n          persist-credentials: false\n")
-        self.assertFalse(policy.reviewed_job(policy.parse_workflow(safe).job_text["check"]))
-        self.assertEqual(policy.run_body_problems(name, safe), [])
+        self.assertFalse(policy.reaches_credential(policy.parse_workflow(safe).job_text["check"]))
+        self.assert_unsupported(policy.run_body_problems(name, safe))
+        self.assertEqual(policy.run_body_problems(name, safe, allowlist_for({name: safe})), [])
+
+    def test_an_action_with_an_implicit_token_is_reviewed(self) -> None:
+        # The HOLD at 444ed8dc5: actions/github-script gets the Actions token
+        # through its default input, so its job names no credential. Every job
+        # of a release workflow is reviewed, so it cannot be added unseen.
+        script = ("      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea\n"
+                  "        with:\n          script: github.rest.repos.get(context.repo)\n")
+        for name in policy.RELEASE_WORKFLOWS:
+            text = self.workflows[name]
+            job = sorted(policy.parse_workflow(text).jobs)[0]
+            anchor = "\n  " + job + ":\n"
+            head, tail = text.split(anchor, 1)
+            steps_at = tail.index("    steps:\n") + len("    steps:\n")
+            changed = head + anchor + tail[:steps_at] + script + tail[steps_at:]
+            with self.subTest(workflow=name, job=job):
+                self.assertFalse(policy.reaches_credential(script))
+                self.assert_unsupported(policy.run_body_problems(name, changed))
+        # The real workflows, every job reviewed, pass as listed.
+        for name, text in self.workflows.items():
+            self.assertEqual(policy.run_body_problems(name, text), [])
 
     def test_locale_quoted_gh_is_not_in_the_allowlist(self) -> None:
         # The HOLD at 160897c17: `g$"h" api` and `gh a$"pi"` run gh api, and
@@ -1617,12 +1640,11 @@ class RunAllowlist(unittest.TestCase):
         clean = key.replace("{run}", "git tag -s v1")
         self.assertEqual(policy.run_body_problems(policy.SIGNING_WORKFLOW, clean,
                                                   allowlist_for({policy.SIGNING_WORKFLOW: clean})), [])
-        # Every job of the signing workflow is reviewed, so the no-secret
-        # control is version-at-land's: there a job without one is not listed.
+        # Every job of a release workflow is reviewed, secret or not.
         plain = key.replace("          K: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}\n", "          K: x\n").replace(
             "{run}", "p'y'thon3 scripts/x.py")
-        self.assertEqual(policy.run_body_problems(policy.VERSION_WORKFLOW, plain), [])
-        self.assert_unsupported(policy.run_body_problems(policy.SIGNING_WORKFLOW, plain))
+        for name in policy.RELEASE_WORKFLOWS:
+            self.assert_unsupported(policy.run_body_problems(name, plain))
 
     def test_the_signing_key_never_shares_a_step_with_a_github_credential(self) -> None:
         key = "          RELEASE_TAG_SIGNING_KEY: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}\n          TAG: ${{ steps.decision"

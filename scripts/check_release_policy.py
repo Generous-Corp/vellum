@@ -23,8 +23,7 @@ fails when:
   version-at-land.yml that holds a secret runs Python in any step, or a repository
   Python file is named like a standard-library module, so checked-out code
   cannot run with the signing key or an App token;
-- a job of a release workflow that can reach a GitHub credential or holds
-  the signing key, or any job of release-tag.yml, runs a step sequence that matches none of its variants in RUN_ALLOWLIST, key for
+- any job of a release workflow runs a step sequence that matches none of its variants in RUN_ALLOWLIST, key for
   key and in order, with the job's and workflow's settings (env, runs-on,
   permissions and every key but name and steps) as its first entry (an
   "unsupported run body"), has an expression in a run
@@ -676,10 +675,11 @@ def dynamic_load_problems(root: Path, path: str, source: Path, also_policy: froz
     return found
 
 
-# A job of a release workflow that can reach a GitHub credential or holds the
-# signing key runs only steps written, key for key, in RUN_ALLOWLIST. The check does not read shell:
-# whatever a run body does, it does it because the owner reviewed that exact
-# text here. A job reaches a credential when its text names GH_TOKEN,
+# Every job of a release workflow runs only steps written, key for key, in
+# RUN_ALLOWLIST. The check does not read shell: whatever a run body does, it
+# does it because the owner reviewed that exact text here. Outside release
+# workflows the check does not apply. reaches_credential still decides which
+# steps beside the signing key are refused. A job reaches a credential when its text names GH_TOKEN,
 # GITHUB_TOKEN or the App-token action, or an expression in it names a secret
 # other than the signing key, a token, a step's outputs by index, or the
 # github context as a whole.
@@ -709,14 +709,16 @@ def reaches_credential(text: str) -> bool:
 
 
 def reviewed_job(text: str, workflow: str | None = None) -> bool:
-    """A job RUN_ALLOWLIST must list: one that reaches a GitHub credential or
-    holds the signing key, and every job of the signing workflow. Python run
-    beside a secret is otherwise found only by spelling (`p'y'thon3` runs
-    python3), so those jobs are reviewed text too. The signing workflow's jobs
-    without a secret include the ones that run this check with its third-party
-    parser, kept out of the jobs that hold the key; they stay reviewed so the
-    check cannot be dropped from them unseen."""
-    return (workflow == SIGNING_WORKFLOW or reaches_credential(text)
+    """A job RUN_ALLOWLIST must list: every job of a release workflow, and
+    elsewhere one that reaches a GitHub credential or holds the signing key.
+
+    Text cannot tell which jobs hold a credential: an action receives the
+    Actions token through a default input (actions/github-script) without
+    the workflow naming it, and Python beside a secret is found only by
+    spelling (`p'y'thon3` runs python3). So no job of a release workflow is
+    classified; each is reviewed text, including the ones that run this
+    check with its third-party parser, apart from the key."""
+    return (workflow in RELEASE_WORKFLOWS or reaches_credential(text)
             or SIGNING_KEY.search(text) is not None)
 
 
@@ -1446,6 +1448,74 @@ git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-ac
   push "https://github.com/$GITHUB_REPOSITORY" "refs/tags/$TAG:refs/tags/$TAG"
 test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)" = "$OBJECT"
 echo "pushed the dry-run tag $TAG at $OBJECT; sdk-release deletes it and its draft" >> "$GITHUB_STEP_SUMMARY"'''),
+        },
+    ]],
+    ('release-policy.yml', 'release-policy'): [[
+        {
+            'workflow': {
+                'on': {
+                    'pull_request': '',
+                    'merge_group': {
+                        'branches': [
+                            'main',
+                        ],
+                    },
+                    'push': {
+                        'branches': [
+                            'main',
+                        ],
+                    },
+                },
+                'permissions': {
+                    'contents': 'read',
+                },
+            },
+            'job': {
+                'runs-on': 'ubuntu-latest',
+            },
+        },
+        {
+            'uses': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
+            'with': {
+                'fetch-depth': '0',
+                'persist-credentials': 'false',
+            },
+        },
+        {
+            'run': _body(r'''
+set -euo pipefail
+python3 -I -m venv "$RUNNER_TEMP/release-policy-venv"
+"$RUNNER_TEMP"/release-policy-venv/bin/python3 -I -m pip install --disable-pip-version-check \
+  --only-binary=:all: --require-hashes -r scripts/release_policy_requirements.txt'''),
+        },
+        {
+            'run': _body(r'''
+set -euo pipefail
+"$RUNNER_TEMP"/release-policy-venv/bin/python3 -I scripts/run_ci_lane.py --lane release-policy'''),
+        },
+        {
+            'if': "github.event_name != 'push'",
+            'env': {
+                'BASE_SHA': '${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}',
+            },
+            'run': _body(r'''
+set -euo pipefail
+[[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+base="$RUNNER_TEMP/policy-base"
+git worktree add --detach "$base" "$BASE_SHA"
+if ! grep -q -- '--from-base' "$base/scripts/check_release_policy.py"; then
+  echo "::notice::the base branch's check_release_policy.py predates --from-base; nothing to run"
+  exit 0
+fi
+"$RUNNER_TEMP"/release-policy-venv/bin/python3 -I "$base/scripts/check_release_policy.py" --root "$GITHUB_WORKSPACE" --from-base check'''),
+        },
+        {
+            'if': "github.event_name == 'pull_request'",
+            'env': {
+                'BASE_SHA': '${{ github.event.pull_request.base.sha }}',
+                'HEAD_SHA': '${{ github.event.pull_request.head.sha }}',
+            },
+            'run': 'python3 -I scripts/version_at_land.py lint --revisions "$BASE_SHA..$HEAD_SHA" || true',
         },
     ]],
     ('version-at-land.yml', 'plan'): [[
