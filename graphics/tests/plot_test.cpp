@@ -913,6 +913,21 @@ void snapped_removal_damage() {
     }
 }
 
+void gradient_background_removal_damage() {
+    Scene with = plot_scene(line_spec(4, {0.5F}));
+    auto& node = with.root.children[1];
+    node.bounds = {0.1F, 0.1F, 0.2F, 0.2F};
+    node.transform = Affine2D{.a = 100.0F, .d = 100.0F};
+    node.fill_gradients = {{.stops = {{.position = 0.0F, .color = Color::hex(0x111827)},
+                                      {.position = 1.0F, .color = Color::hex(0x334155)}}}};
+    Scene without = with;
+    without.root.children.pop_back();
+    const auto damage = compute_scene_damage(with, without, 1.0F);
+    expect(!damage.empty() && damage.bounds().right >= 20 && damage.bounds().bottom >= 20,
+           "removing a gradient-backed plot whose snapped grid is empty damages its background",
+           bounds_of(damage));
+}
+
 void lowering() {
     const Scene scene = plot_scene(line_spec(4, {0.5F}));
     const auto commands = make_paint_commands(scene);
@@ -945,6 +960,7 @@ int main() {
     large_feed();
     review_fixes();
     snapped_removal_damage();
+    gradient_background_removal_damage();
     lowering();
     if (failures != 0) {
         std::cerr << failures << " plot check(s) failed\n";

@@ -329,9 +329,9 @@
         "min": { "type": "number" },
         "max": { "type": "number" },
         "baseline": { "type": "number" },
-        "lineWidth": { "type": "number", "minimum": 0, "maximum": 4096 },
-        "barGap": { "type": "number", "minimum": 0, "maximum": 4096 },
-        "peakWidth": { "type": "number", "minimum": 0, "maximum": 4096 },
+        "lineWidth": { "type": "number", "minimum": 0, "maximum": 4096.000244140625 },
+        "barGap": { "type": "number", "minimum": 0, "maximum": 4096.000244140625 },
+        "peakWidth": { "type": "number", "minimum": 0, "maximum": 4096.000244140625 },
         "lineColor": { "$ref": "#/$defs/plotColor" },
         "fillColor": { "$ref": "#/$defs/plotColor" },
         "peakColor": { "$ref": "#/$defs/plotColor" }

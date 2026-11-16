@@ -221,7 +221,7 @@ test('the schema declares plot bindings without samples', async () => {
     assert.equal(definitions.plotBinding.properties.slots.maximum, 4194304);
     assert.deepEqual(definitions.plotBinding.if, { properties: { style: { const: 'meter' } } });
     assert.deepEqual(definitions.plotBinding.else, { required: ['slots'] });
-    assert.equal(definitions.plotBinding.properties.lineWidth.maximum, 4096);
+    assert.equal(definitions.plotBinding.properties.lineWidth.maximum, 4096.000244140625);
     const sources = Object.fromEntries(definitions.plotBinding.allOf.map((rule) => [
         JSON.stringify(rule.if.properties.style), rule.then.properties.source]));
     assert.deepEqual(sources, {

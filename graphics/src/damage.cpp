@@ -544,9 +544,21 @@ private:
             constexpr float nan = std::numeric_limits<float>::quiet_NaN();
             damage = Rect{nan, nan, nan, nan};
         } else if (!hidden) {
-            const Rect painted_box = node.kind == SceneNode::Kind::plot && node.plot
-                                         ? plot_grid_rect(absolute, scale_)
-                                         : absolute;
+            Rect painted_box = absolute;
+            if (node.kind == SceneNode::Kind::plot && node.plot) {
+                painted_box = plot_grid_rect(absolute, scale_);
+                if (!node.fill_gradients.empty()) {
+                    const float left = std::min(painted_box.x, absolute.x);
+                    const float top = std::min(painted_box.y, absolute.y);
+                    const float right = std::max(painted_box.x + painted_box.width,
+                                                 absolute.x + absolute.width);
+                    const float bottom = std::max(painted_box.y + painted_box.height,
+                                                  absolute.y + absolute.height);
+                    painted_box = rect_empty(painted_box)
+                                      ? absolute
+                                      : Rect{left, top, right - left, bottom - top};
+                }
+            }
             damage = transformed_paint_bounds(node, painted_box, transform, logical_frame,
                                               propagation);
             if (backdrop && !rect_empty(absolute)) {

@@ -488,6 +488,10 @@ test('DesignIR plot bindings normalize, materialize and render as a plot node', 
     assert.equal(node.min, -1);
     assert.equal(node.lineColor, '#F97316');
 
+    const hidden = structuredClone(imported);
+    hidden.schemaVersion = 4;
+    hidden.root.children[0].properties.layout = { display: 'none' };
+    assert.throws(() => materializeDesign(hidden), /plot needs schemaVersion 5/);
     const older = structuredClone(imported);
     older.schemaVersion = 4;
     assert.throws(() => materializeDesign(older), /plot needs schemaVersion 5/);

@@ -286,7 +286,7 @@ function materializeNode(node, context, depth, root = false) {
 
 // Check even hidden descendants before lowering; an unsupported field must
 // never disappear silently when this consumer reads a newer document.
-function requireSupportedFields(root) {
+function requireSupportedFields(root, version) {
     let nodes = 0;
     function visit(node, depth) {
         if (depth > MAXIMUM_DEPTH || ++nodes > MAXIMUM_NODES) {
@@ -295,6 +295,9 @@ function requireSupportedFields(root) {
         plainObject(node, `design node at depth ${depth}`);
         if (node.material !== undefined) {
             throw new Error(`design node ${node.id} has unsupported material`);
+        }
+        if (node.plot !== undefined && version < PLOTS_VERSION) {
+            throw new Error(`design node ${node.id} plot needs schemaVersion ${PLOTS_VERSION}`);
         }
         if (node.tracks !== undefined && (!Array.isArray(node.tracks) || node.tracks.length > 0)) {
             throw new Error(`design node ${node.id} has unsupported tracks`);
@@ -309,7 +312,7 @@ function materialize(document, options, missingActionTarget) {
     plainObject(document, 'design');
     const version = designVersion(document);
     const root = document.root;
-    requireSupportedFields(root);
+    requireSupportedFields(root, version);
     const rootLayout = root?.properties?.layout &&
         typeof root.properties.layout === 'object' &&
         !Array.isArray(root.properties.layout)
