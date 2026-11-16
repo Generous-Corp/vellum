@@ -270,7 +270,12 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
   list, and each of its sources must be scoped to every platform it lists. The
   mirror build plans for one platform at a time and refuses a platform no
   landed closure describes. Scope never touches the file set: `framework/`
-  holds a scoped file on every platform.
+  holds a scoped file on every platform. A scope change, or a removal
+  followed by a new row, cannot take a source out of the `macos-arm64` build
+  once it is there, and a scoped row repeats its adding row's origin, Pulp
+  path and Pulp commits. A brand-new source scoped only to other platforms is
+  compiled nowhere until a verified closure for one of them lands; that is
+  intended, and the plan still checks that its target exists.
 - **The file set.** `framework/` holds exactly the transfer record's paths,
   minus the ledger's removals, plus its additions. A file with neither a
   transfer record nor a ledger row fails, and so does a listed file that is

@@ -199,9 +199,9 @@ def replay_scoped(rows: list[dict[str, Any]], transferred: set[str]
     is compiled on: its adding row's scope, replaced by any later scoped row.
     `added` keeps the adding row itself, so checks keyed on that row (the
     joining blob) are never bypassed by a scope change. A scoped row must
-    name a source the ledger currently adds, with the target, origin and Pulp
-    path it was added with, so it makes no provenance claim the adding row
-    did not. A scope change may not take a source out of the macOS build
+    name a source the ledger currently adds, with the target, origin, Pulp
+    path and Pulp commits it was added with, so it makes no provenance claim
+    the adding row did not. A scope change may not take a source out of the macOS build
     while macOS compiles it: the macOS closure is the only one landed, and
     leaving it would leave the source compiled nowhere a lane checks. The
     same holds across a removal: a path once compiled on macOS comes back
@@ -221,9 +221,10 @@ def replay_scoped(rows: list[dict[str, Any]], transferred: set[str]
             elif row["target"] != added[path]["target"]:
                 errors.append(f"{where}: {path} was added to {added[path]['target']}, so a scope change "
                               f"cannot move it to {row['target']}")
-            elif (row["origin"], row["pulp_path"]) != (added[path]["origin"], added[path]["pulp_path"]):
-                errors.append(f"{where}: {path} was added with origin {added[path]['origin']} and Pulp path "
-                              f"{added[path]['pulp_path']}; a scope change names the same")
+            elif ((row["origin"], row["pulp_path"], row["pulp_commits"])
+                  != (added[path]["origin"], added[path]["pulp_path"], added[path]["pulp_commits"])):
+                errors.append(f"{where}: {path} was added with origin {added[path]['origin']}, Pulp path "
+                              f"{added[path]['pulp_path']} and its Pulp commits; a scope change names the same")
             elif RECEIPT_PLATFORM in scopes[path] and RECEIPT_PLATFORM not in platforms_of(row):
                 errors.append(f"{where}: {path} is compiled on {RECEIPT_PLATFORM}; a scope change cannot "
                               f"take it out of the {RECEIPT_PLATFORM} build")

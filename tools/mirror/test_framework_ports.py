@@ -428,9 +428,10 @@ class PlatformScopeTest(unittest.TestCase):
                                  "a scope change names the same")):
             errors = fp.replay_scoped([adding, self.scoped(["windows-x64"], **other)], set())[3]
             self.assertTrue(any(fragment in e for e in errors), (other, errors))
-        # Control: the adding row's origin and Pulp path, with its own commits.
-        self.assertEqual(fp.replay_scoped([adding, self.scoped(["windows-x64"], pulp_commits=["c" * 40])],
-                                          set())[3], [])
+        errors = fp.replay_scoped([adding, self.scoped(["windows-x64"], pulp_commits=["c" * 40])], set())[3]
+        self.assertTrue(any("a scope change names the same" in e for e in errors), errors)
+        # Control: the adding row's origin, Pulp path and commits.
+        self.assertEqual(fp.replay_scoped([adding, self.scoped(["windows-x64"])], set())[3], [])
 
     def test_the_landed_ledger_compiles_everything_on_macos_only(self) -> None:
         # Today's ports.json names no scope, so every source it adds keeps

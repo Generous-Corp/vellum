@@ -1097,12 +1097,15 @@ class VerifyExtractionTests(unittest.TestCase):
             errors, checks = self.ports_verdict(root, pulp_root=pulp, defer=False)
             self.assertEqual(errors, [])
             self.assertIs(checks["framework_ports_proved"], True)
-            # One that does not hold it is refused, for the scoped row alone.
-            self.write_ports_v2(root, [added, dict(scoped, pulp_commits=[before])])
+            # A scoped row naming other commits than its adding row is refused,
+            # so it can make no Pulp claim the adding row's proof does not cover.
+            self.write_ports_v2(root, [added, dict(scoped, pulp_commits=[before, on_main])])
             errors, _ = self.ports_verdict(root, pulp_root=pulp, defer=False)
-            self.assertEqual(len(errors), 1, errors)
-            self.assertIn(f"rows[1]: the last named Pulp commit {before[:12]} holds no file at core/a/src/new.cpp",
-                          errors[0])
+            self.assertTrue(any("a scope change names the same" in e for e in errors), errors)
+            # Both rows' commits must still be commits on Pulp main.
+            self.write_ports_v2(root, [dict(added, pulp_commits=["d" * 40]), dict(scoped, pulp_commits=["d" * 40])])
+            errors, _ = self.ports_verdict(root, pulp_root=pulp, defer=False)
+            self.assertEqual(sum(f"is not a commit on Pulp origin/main" in e for e in errors), 2, errors)
 
     def test_ports_rows_name_real_commits_on_pulp_main(self) -> None:
         self.hide_ci_git_base()
