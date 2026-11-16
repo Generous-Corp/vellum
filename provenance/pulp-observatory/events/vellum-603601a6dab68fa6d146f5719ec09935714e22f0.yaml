@@ -1,0 +1,87 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-14T20:53:05Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-603601a6dab68fa6d146f5719ec09935714e22f0",
+  "include_dependency_deltas": [
+    "graphics/CMakeLists.txt",
+    "graphics/include/vellum/graphics/animation.hpp",
+    "graphics/include/vellum/graphics/damage.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/include/vellum/graphics/scene_acceptance.hpp",
+    "graphics/src/animation_testing.hpp",
+    "graphics/tests/CMakeLists.txt"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/src/rendered_tree_materializer.mm",
+    "authoring/tests/rendered_tree_materializer_test.cpp",
+    "graphics/CMakeLists.txt",
+    "graphics/include/vellum/graphics/animation.hpp",
+    "graphics/include/vellum/graphics/damage.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/include/vellum/graphics/scene_acceptance.hpp",
+    "graphics/src/animation.cpp",
+    "graphics/src/animation_testing.hpp",
+    "graphics/src/damage.cpp",
+    "graphics/src/paint_command.cpp",
+    "graphics/src/scene_acceptance.cpp",
+    "graphics/src/skia_dawn_surface.mm",
+    "graphics/tests/CMakeLists.txt",
+    "graphics/tests/animation_gpu_test.cpp",
+    "graphics/tests/animation_test.cpp",
+    "graphics/tests/grouping_test.cpp",
+    "graphics/tests/paint_command_test.cpp",
+    "graphics/tests/partial_present_test.cpp",
+    "packages/vellum-design-ir/schema/design-ir-v1.schema.json",
+    "packages/vellum-design-ir/src/index.d.ts",
+    "packages/vellum-design-ir/src/normalize.js",
+    "packages/vellum-design-ir/src/validate.js",
+    "packages/vellum-design-ir/test/animation.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "4c9d95fcb078b00c0b68652c79b2a2a4a0f312c0",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "d47d0d2c99dd9e3521becf0a3a98379ccaa2a583",
+    "to_commit": "7d7134c85effc7269f76d5f5eb183689d4bbcbe4"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-design-ir/schema/design-ir-v1.schema.json",
+    "packages/vellum-design-ir/src/index.d.ts",
+    "packages/vellum-design-ir/src/normalize.js",
+    "packages/vellum-design-ir/src/validate.js",
+    "packages/vellum-design-ir/test/animation.test.js"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "603601a6dab68fa6d146f5719ec09935714e22f0",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

@@ -10,11 +10,13 @@ import hashlib
 import html
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 import os
 from pathlib import Path
 import re
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tarfile
@@ -30,6 +32,7 @@ from vellum_manifest import (
 )
 from vellum_scenario import (
     ScenarioValidationError,
+    unproven_commands,
     validate_scenario_document as validate_shared_scenario_document,
 )
 from vellum_cdp import CdpAdmission
@@ -40,7 +43,7 @@ from vellum_browser import browser_version, configured_provenance
 
 RESULT_SCHEMA = "vellum.backend.result.v1"
 SUPPORTED_TARGET = "web"
-WEB_COMMANDS = {"build", "run", "test", "package"}
+WEB_COMMANDS = {"build", "run", "test", "capture", "package"}
 PRIVATE_VELLUM_INCLUDE = re.compile(
     r'^\s*#\s*include\s*[<"](vellum/[^>"]+)[>"]', re.MULTILINE,
 )
@@ -462,8 +465,11 @@ def chrome_path() -> str:
 
 
 def validate_scenario_evidence(
-    evidence: dict[str, Any], *, expected_wasm_ids: list[str] | None = None
+    evidence: dict[str, Any], *, expected_wasm_ids: list[str] | None = None,
+    scenario: dict[str, Any] | None = None,
 ) -> None:
+    """`scenario`, when given, holds the evidence to its command steps: each
+    must be reported invoked, with a changed rendered tree, in step order."""
     def valid_frame(value: object) -> bool:
         if not isinstance(value, dict):
             return False
@@ -509,6 +515,21 @@ def validate_scenario_evidence(
             f"Browser scenario proof failed: {evidence}",
             status="test_failed",
         )
+    if scenario is not None:
+        commands = evidence.get("commands", [])
+        proven = [
+            item.get("target") for item in commands
+            if isinstance(item, dict) and item.get("invoked") is True and item.get("changed") is True
+            and isinstance(item.get("invocations"), int) and not isinstance(item.get("invocations"), bool)
+            and item["invocations"] >= 1
+        ] if isinstance(commands, list) else []
+        unproven = unproven_commands(scenario, proven)
+        if unproven or (isinstance(commands, list) and len(proven) != len(commands)):
+            raise BackendFailure(
+                "Browser scenario did not prove its command steps ran and changed the rendered tree: "
+                + ", ".join(unproven or ["malformed command evidence"]),
+                status="test_failed",
+            )
     expected = sorted(expected_wasm_ids or [])
     observed: list[str] = []
     for item in components:
@@ -654,6 +675,91 @@ def _snapshot_node_value(snapshot: dict[str, Any], nodes: dict[str, Any], key: s
     return _snapshot_string(snapshot, value, f"{key}[{index}]", allow_absent=True)
 
 
+def _snapshot_layout_boxes(layout: dict[str, Any], included: set[int]) -> dict[int, tuple[float, ...]]:
+    """Chrome's border-box rect for every node it laid out, in page CSS px."""
+    indices = layout.get("nodeIndex")
+    bounds = layout.get("bounds")
+    if bounds is None:
+        return {}
+    if not isinstance(indices, list) or not isinstance(bounds, list) or len(indices) != len(bounds):
+        raise BackendFailure("DOMSnapshot layout bounds are malformed", status="test_failed")
+    boxes: dict[int, tuple[float, ...]] = {}
+    for node_index, rect in zip(indices, bounds):
+        if not isinstance(node_index, int) or node_index not in included:
+            raise BackendFailure("DOMSnapshot layout references an invalid node", status="test_failed")
+        if (not isinstance(rect, list) or len(rect) != 4 or
+                not all(isinstance(value, (int, float)) and not isinstance(value, bool) and
+                        math.isfinite(value) for value in rect) or rect[2] < 0 or rect[3] < 0):
+            raise BackendFailure("DOMSnapshot layout bounds are malformed", status="test_failed")
+        boxes[node_index] = tuple(float(value) for value in rect)
+    return boxes
+
+
+def _lower_layout_boxes(
+    source_nodes: list[dict[str, Any] | None], tree_children: dict[int, list[int]],
+    root_index: int, boxes: dict[int, tuple[float, ...]],
+) -> None:
+    """Carry Chrome's layout into each node as a box relative to its parent.
+
+    Native layout places a child at its parent-relative ``x``/``y`` with the
+    given ``width``/``height``, so lowering Chrome's absolute boxes this way
+    reproduces them exactly. A text node Chrome gave no area to (collapsed
+    whitespace) and an element without a layout object (``display: none``)
+    lower to ``display: none`` and are not rendered. A node without a box whose
+    descendants have one (``display: contents``, a shadow root) passes its
+    parent's box through, so its descendants keep their positions.
+    """
+    if root_index not in boxes:
+        return
+
+    def boxed(index: int) -> bool:
+        rect = boxes.get(index)
+        if rect is None:
+            return False
+        if source_nodes[index]["kind"] == "text":  # type: ignore[index]
+            return rect[2] > 0 and rect[3] > 0
+        return True
+
+    contains_box: dict[int, bool] = {}
+    order: list[int] = []
+    stack = [root_index]
+    while stack:
+        index = stack.pop()
+        order.append(index)
+        stack.extend(tree_children.get(index, []))
+    for index in reversed(order):
+        contains_box[index] = boxed(index) or any(
+            contains_box[child] for child in tree_children.get(index, []))
+
+    def rounded(value: float) -> float | int:
+        value = round(value, 4)
+        return int(value) if value.is_integer() else value
+
+    # The root carries no size: Chrome's window is not the project's viewport,
+    # and a root width/height would override the scenario viewport (800x600 by
+    # default). Children are placed by their parent-relative boxes alone.
+    root_rect = boxes[root_index]
+    pending = [(child, root_rect) for child in tree_children.get(root_index, [])]
+    while pending:
+        index, parent = pending.pop()
+        properties = source_nodes[index]["properties"]  # type: ignore[index]
+        if boxed(index):
+            rect = boxes[index]
+            properties["layout"] = {
+                "x": rounded(rect[0] - parent[0]), "y": rounded(rect[1] - parent[1]),
+                "width": rounded(rect[2]), "height": rounded(rect[3]),
+            }
+        elif contains_box[index]:
+            rect = parent
+            properties["layout"] = {
+                "x": 0, "y": 0, "width": rounded(rect[2]), "height": rounded(rect[3]),
+            }
+        else:
+            properties["layout"] = {"display": "none"}
+            continue
+        pending.extend((child, rect) for child in tree_children.get(index, []))
+
+
 def lower_dom_snapshot(
     snapshot: dict[str, Any], *, settled_snapshot: dict[str, Any], screenshot: dict[str, Any],
     interaction_evidence: list[dict[str, Any]] | None = None,
@@ -752,9 +858,13 @@ def lower_dom_snapshot(
                 if refs:
                     existing = source_nodes[node_index]["properties"].get("assetRefs", [])  # type: ignore[index]
                     source_nodes[node_index]["properties"]["assetRefs"] = sorted(set(existing + refs))  # type: ignore[index]
+        boxes = _snapshot_layout_boxes(layout, included)
+    else:
+        boxes = {}
     if not included:
         raise BackendFailure("DOMSnapshot contained no lowerable nodes", status="test_failed")
     root_index = next((index for index in sorted(included) if node_types[index] == 9), min(included))
+    tree_children: dict[int, list[int]] = {}
     for index in sorted(included):
         if index == root_index:
             continue
@@ -764,6 +874,8 @@ def lower_dom_snapshot(
         if not isinstance(parent, int) or parent < 0 or parent == index:
             parent = root_index
         source_nodes[parent]["children"].append(source_nodes[index])  # type: ignore[index]
+        tree_children.setdefault(parent, []).append(index)
+    _lower_layout_boxes(source_nodes, tree_children, root_index, boxes)
     assets = [record["asset"] for record in records.values()]
     assets.sort(key=lambda item: item["id"])
     evidence = {
@@ -1041,7 +1153,10 @@ def run_scenario(
     finally:
         server.shutdown(); thread.join(5)
         scenario_copy.unlink(missing_ok=True)
-    validate_scenario_evidence(evidence, expected_wasm_ids=expected_wasm_ids)
+    validate_scenario_evidence(
+        evidence, expected_wasm_ids=expected_wasm_ids,
+        scenario=json.loads(scenario.read_text(encoding="utf-8")),
+    )
     return evidence
 
 
@@ -1086,6 +1201,43 @@ def interaction_plan_path(context: dict[str, Any], value: str | None) -> dict[st
         raise BackendFailure(f"Cannot read interaction plan at {path}: {error}", status="invalid_interaction_plan") from error
 
 
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+def write_capture_artifact(envelope: dict[str, Any], output: Path) -> dict[str, Any]:
+    """Write a browser capture's screenshot to `output` as a PNG file and
+    describe the file written. The envelope carries the screenshot the
+    browser returned; this is the only place it leaves the process."""
+    try:
+        screenshot = envelope["root"]["properties"]["captureEvidence"]["screenshot"]
+        if screenshot.get("mimeType") != "image/png":
+            raise ValueError("the capture is not a PNG")
+        data = base64.b64decode(screenshot["data"], validate=True)
+        if len(data) != screenshot.get("byteLength"):
+            raise ValueError("the capture length differs from its record")
+        if len(data) < 33 or not data.startswith(PNG_SIGNATURE) or data[12:16] != b"IHDR":
+            raise ValueError("the capture is not a PNG")
+        width, height = struct.unpack(">II", data[16:24])
+        if not width or not height:
+            raise ValueError("the capture has no pixels")
+    except (KeyError, TypeError, AttributeError, ValueError, struct.error) as error:
+        raise BackendFailure(f"Browser capture holds no usable screenshot: {error}",
+                             status="capture_failed") from error
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Written beside the destination and moved into place, so a reader never
+    # sees a partial file and a failed capture leaves any earlier one intact.
+    partial = output.with_name(f".{output.name}.partial")
+    try:
+        partial.write_bytes(data)
+        os.replace(partial, output)
+    finally:
+        partial.unlink(missing_ok=True)
+    return {
+        "output": str(output), "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+        "width": width, "height": height,
+    }
+
+
 def write_reproducible_archive(source: Path, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("wb") as raw:
@@ -1125,6 +1277,26 @@ def command_result(command: str, args: argparse.Namespace, context: dict[str, An
         )
         return result(command, ok=True, status="tests_passed", message="Web scenario passed in Chrome",
                       data={"target": "web", "build": str(built["root"]), "evidence": evidence})
+    if command == "capture":
+        if args.scenario or args.matrix or args.montage:
+            raise BackendFailure(
+                "The web backend captures an interaction plan; --scenario, --matrix and --montage are macOS only",
+                status="invalid_arguments", exit_code=2)
+        if not args.interaction_plan:
+            raise BackendFailure("Web capture requires --interaction-plan", status="invalid_arguments", exit_code=2)
+        plan = interaction_plan_path(context, args.interaction_plan)
+        default = f"artifacts/{Path(args.interaction_plan).stem}.png"
+        output = safe_relative(context["root"], args.output or default, "capture output")
+        if output == context["root"] or output.suffix.lower() != ".png":
+            raise BackendFailure("Capture output must end in .png", status="invalid_arguments", exit_code=2)
+        built = ensure_build(context, sdk)
+        envelope = run_chrome_interaction_capture(built["root"], plan)
+        artifact = write_capture_artifact(envelope, output)
+        return result(command, ok=True, status="captured", message=f"Captured {output}", data={
+            "target": "web", "plan": plan["name"], **artifact,
+            "captureId": envelope["captureId"], "viewport": envelope["viewport"],
+            "browser": envelope["source"]["browser"],
+        })
     if command == "run":
         built = ensure_build(context, sdk, args.no_build)
         serve = [sys.executable, "-m", "http.server", "8000", "--directory", str(built["root"])]
@@ -1152,6 +1324,11 @@ def parser(command: str) -> argparse.ArgumentParser:
     if command == "run":
         value.add_argument("--no-build", action="store_true"); value.add_argument("--no-window", action="store_true")
         value.add_argument("--self-test", action="store_true")
+    if command == "capture":
+        value.add_argument("--interaction-plan"); value.add_argument("--output")
+        # Accepted so the refusal names them, not argparse.
+        value.add_argument("--scenario"); value.add_argument("--matrix")
+        value.add_argument("--montage", action="store_true")
     if command == "package": value.add_argument("--output")
     return value
 

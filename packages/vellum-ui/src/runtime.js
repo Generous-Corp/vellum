@@ -19,8 +19,13 @@ const MAXIMUM_PATH_DASHES = 64;
 const HEX_COLOR = /^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/;
 const INTRINSIC_TYPES = new Set([
     'view', 'stack', 'text', 'text-run', 'text-input', 'button', 'image', 'canvas', 'custom',
-    'path',
+    'path', 'plot',
 ]);
+const MAXIMUM_PLOT_SLOTS = 4194304;
+const PLOT_FLOAT_MAX = 3.4028234663852886e38;
+const MAXIMUM_PLOT_AUDIO_CHANNEL = 1024;
+// Native kMaxPlotStroke: the widest line, bar gap or peak tick in logical pixels.
+const MAXIMUM_PLOT_STROKE = 4096;
 
 let renderingRuntime = null;
 
@@ -158,6 +163,7 @@ export const Button = primitive('button');
 export const Image = primitive('image');
 export const Canvas = primitive('canvas');
 export const Path = primitive('path');
+export const Plot = primitive('plot');
 export function TextInput(properties = {}) {
     return jsx('text-input', { ...properties, primitiveVersion: TEXT_INPUT_PRIMITIVE_VERSION });
 }
@@ -232,6 +238,30 @@ export function useMemo(factory, dependencies) {
     return record.value;
 }
 
+/**
+ * Binds the handler a defined command runs while this component is mounted.
+ * The host invokes it like a press: inside a dispatch, so state the handler
+ * sets is rendered. One component binds a given command per render.
+ */
+export function useCommand(command, handler) {
+    const runtime = renderingRuntime;
+    if (runtime === null || runtime.renderState === null ||
+        runtime.renderState.frameStack.length === 0) {
+        throw new Error('useCommand can only be called while rendering a component');
+    }
+    if (typeof command !== 'string' || command.length === 0) {
+        throw new TypeError('useCommand requires a command id');
+    }
+    if (typeof handler !== 'function') {
+        throw new TypeError('useCommand requires a handler function');
+    }
+    const action = `command:${command}`;
+    if (runtime.renderState.handlers.has(action)) {
+        throw new Error(`command is already bound in this render: ${command}`);
+    }
+    runtime.renderState.handlers.set(action, handler);
+}
+
 export function useEffect(effect, dependencies) {
     const { frameId, frame, index } = activeHook('useEffect');
     registerEffect(frame, frameId, index, effect, dependencies);
@@ -267,15 +297,60 @@ function finitePaintNumber(value, path, { optional = false, nonNegative = false 
     }
 }
 
+const GRADIENT_KINDS = ['linear', 'radial', 'two-circle-radial', 'conic'];
+const GRADIENT_SPREADS = ['pad', 'repeat', 'reflect'];
+const GRADIENT_INTERPOLATIONS = ['srgb', 'linear-srgb', 'oklab'];
+const GRADIENT_COLOR_SPACES = ['srgb', 'linear-srgb', 'display-p3'];
+// The gradient kinds each geometry field applies to; the native renderer
+// refuses a field set on any other kind rather than ignore it.
+const GRADIENT_KIND_FIELDS = [
+    ['angle', ['linear', 'conic']],
+    ['centerX', ['radial', 'two-circle-radial', 'conic']],
+    ['centerY', ['radial', 'two-circle-radial', 'conic']],
+    ['focalX', ['two-circle-radial']],
+    ['focalY', ['two-circle-radial']],
+];
+
+function gradientKeyword(value, path, allowed) {
+    if (value !== undefined && !allowed.includes(value)) {
+        throw new TypeError(`${path} must be one of ${allowed.join(', ')}`);
+    }
+}
+
 function validateLinearGradient(value, path) {
-    const gradient = paintStyleObject(
-        value, path, ['angle', 'repeating', 'repeatLength', 'stops']);
-    finitePaintNumber(gradient.angle, `${path}.angle`);
+    const gradient = paintStyleObject(value, path, [
+        'kind', 'angle', 'repeating', 'repeatLength', 'spread', 'interpolation', 'colorSpace',
+        'centerX', 'centerY', 'radiusX', 'radiusY', 'focalX', 'focalY', 'startRadius',
+        'endRadius', 'stops',
+    ]);
+    gradientKeyword(gradient.kind, `${path}.kind`, GRADIENT_KINDS);
+    const kind = gradient.kind ?? 'linear';
+    for (const [field, kinds] of GRADIENT_KIND_FIELDS) {
+        if (gradient[field] !== undefined && !kinds.includes(kind)) {
+            throw new TypeError(`${path}.${field} does not apply to a ${kind} gradient`);
+        }
+    }
+    finitePaintNumber(gradient.angle, `${path}.angle`, {
+        optional: gradient.kind !== undefined && gradient.kind !== 'linear',
+    });
     if (gradient.repeating !== undefined && typeof gradient.repeating !== 'boolean') {
         throw new TypeError(`${path}.repeating must be boolean`);
     }
     finitePaintNumber(
         gradient.repeatLength, `${path}.repeatLength`, { optional: true, nonNegative: true });
+    gradientKeyword(gradient.spread, `${path}.spread`, GRADIENT_SPREADS);
+    if (gradient.spread !== undefined && gradient.repeating !== undefined &&
+        gradient.repeating !== (gradient.spread !== 'pad')) {
+        throw new TypeError(`${path}.repeating contradicts ${path}.spread`);
+    }
+    gradientKeyword(gradient.interpolation, `${path}.interpolation`, GRADIENT_INTERPOLATIONS);
+    gradientKeyword(gradient.colorSpace, `${path}.colorSpace`, GRADIENT_COLOR_SPACES);
+    for (const name of ['centerX', 'centerY', 'focalX', 'focalY']) {
+        finitePaintNumber(gradient[name], `${path}.${name}`, { optional: true });
+    }
+    for (const name of ['radiusX', 'radiusY', 'startRadius', 'endRadius']) {
+        finitePaintNumber(gradient[name], `${path}.${name}`, { optional: true, nonNegative: true });
+    }
     if (!Array.isArray(gradient.stops) ||
         gradient.stops.length < 2 || gradient.stops.length > 64) {
         throw new TypeError(`${path}.stops must contain between 2 and 64 stops`);
@@ -340,10 +415,13 @@ function validatePath(properties, path) {
         }
     }
     if (stroke !== undefined) {
-        if (stroke !== 'none' && !(typeof stroke === 'string' && HEX_COLOR.test(stroke))) {
-            throw new TypeError(`${path}.stroke must be a hex color or none`);
+        if (stroke !== null && typeof stroke === 'object') {
+            output.stroke = validateLinearGradient(stroke, `${path}.stroke`);
+        } else if (stroke === 'none' || (typeof stroke === 'string' && HEX_COLOR.test(stroke))) {
+            output.stroke = stroke;
+        } else {
+            throw new TypeError(`${path}.stroke must be a hex color or none, or a gradient`);
         }
-        output.stroke = stroke;
     }
     finitePaintNumber(
         properties.strokeWidth, `${path}.strokeWidth`, { optional: true, nonNegative: true });
@@ -372,6 +450,89 @@ function validatePath(properties, path) {
         dashes.forEach((dash, index) => finitePaintNumber(
             dash, `${path}.strokeDasharray[${index}]`, { nonNegative: true }));
         output.strokeDasharray = [...dashes];
+    }
+    return output;
+}
+
+function plotWhole(value, path, minimum, maximum) {
+    if (value === undefined) return;
+    if (!Number.isInteger(value) || value < minimum || value > maximum) {
+        throw new TypeError(`${path} must be a whole number from ${minimum} to ${maximum}`);
+    }
+}
+
+const PLOT_SOURCES_BY_STYLE = Object.freeze({
+    line: Object.freeze(['scalar', 'vector']),
+    area: Object.freeze(['scalar', 'vector']),
+    bar: Object.freeze(['vector']),
+    meter: Object.freeze(['meter']),
+});
+
+// A plot names a value-feed channel and how to draw it; the samples arrive at
+// run time, so a plot carries none.
+function validatePlot(properties, path) {
+    const style = pathKeyword(properties.plot, `${path}.plot`, ['line', 'area', 'bar', 'meter']);
+    if (style === undefined) throw new TypeError(`${path}.Plot plot must be line, area, bar or meter`);
+    if (typeof properties.channel !== 'string' || properties.channel.length === 0) {
+        throw new TypeError(`${path}.Plot channel must name a value-feed channel`);
+    }
+    const output = { plot: style, channel: properties.channel };
+    for (const [name, values] of [
+        ['source', ['scalar', 'meter', 'vector']],
+        ['history', ['scroll', 'sweep']],
+        ['orientation', ['vertical', 'horizontal']],
+    ]) {
+        const value = pathKeyword(properties[name], `${path}.${name}`, values);
+        if (value !== undefined) output[name] = value;
+    }
+    // The channel shape each style reads, matching native plot_is_valid: an
+    // omitted source defaults to vector, or meter for a meter plot.
+    const shapes = PLOT_SOURCES_BY_STYLE[style];
+    if (output.source !== undefined && !shapes.includes(output.source)) {
+        throw new TypeError(
+            `${path}.source must be ${shapes.join(' or ')} for a ${style} plot`);
+    }
+    plotWhole(properties.slots, `${path}.slots`, 1, MAXIMUM_PLOT_SLOTS);
+    plotWhole(properties.audioChannel, `${path}.audioChannel`, 0, MAXIMUM_PLOT_AUDIO_CHANNEL);
+    if (style !== 'meter' && properties.slots === undefined) {
+        throw new TypeError(`${path}.Plot slots is required for a ${style} plot`);
+    }
+    // The renderer holds these as single-precision floats: a value must fit
+    // one, and the stroke limit and the range compare the rounded values.
+    for (const name of ['min', 'max', 'baseline', 'lineWidth', 'barGap', 'peakWidth']) {
+        const value = properties[name];
+        if (value === undefined) continue;
+        finitePaintNumber(value, `${path}.${name}`);
+        if (Math.abs(value) > PLOT_FLOAT_MAX) {
+            throw new TypeError(`${path}.${name} must be within float range`);
+        }
+    }
+    for (const name of ['lineWidth', 'barGap', 'peakWidth']) {
+        const value = properties[name];
+        if (value === undefined) continue;
+        if (Math.fround(value) < 0) {
+            throw new TypeError(`${path}.${name} must be a non-negative finite number`);
+        }
+        if (Math.fround(value) > MAXIMUM_PLOT_STROKE) {
+            throw new TypeError(`${path}.${name} must be at most ${MAXIMUM_PLOT_STROKE}`);
+        }
+    }
+    // Native plot_is_valid refuses an empty range of floats; min defaults to 0
+    // and max to 1.
+    const low = properties.min === undefined ? 0 : properties.min;
+    const high = properties.max === undefined ? 1 : properties.max;
+    if (Math.fround(low) === Math.fround(high)) {
+        throw new TypeError(`${path}.Plot value range must not be empty once rounded to float (min equals max)`);
+    }
+    for (const name of ['lineColor', 'fillColor', 'peakColor']) {
+        const color = properties[name];
+        if (color !== undefined && !(typeof color === 'string' && HEX_COLOR.test(color))) {
+            throw new TypeError(`${path}.${name} must be a hex color`);
+        }
+    }
+    for (const name of ['slots', 'audioChannel', 'min', 'max', 'baseline', 'lineWidth', 'barGap',
+        'peakWidth', 'lineColor', 'fillColor', 'peakColor']) {
+        if (properties[name] !== undefined) output[name] = properties[name];
     }
     return output;
 }
@@ -413,7 +574,7 @@ function validateStyle(style, path) {
             throw new TypeError(`${path}.style.${name} has unsupported property semantics`);
         }
         const value = descriptor.value;
-        if (name === 'backgroundLinearGradient') {
+        if (name === 'backgroundLinearGradient' || name === 'backgroundGradient') {
             result[name] = validateLinearGradient(value, `${path}.style.${name}`);
             continue;
         }
@@ -509,6 +670,9 @@ function materialize(value, runtime, path) {
     if (value.type === 'path' && childValues.length > 0) {
         throw new TypeError(`${path}.Path does not accept children`);
     }
+    if (value.type === 'plot' && childValues.length > 0) {
+        throw new TypeError(`${path}.Plot does not accept children`);
+    }
     if (value.type === 'image' && childValues.length > 0 &&
         typeof value.props.source === 'string' &&
         /^(?:sha256:)?[0-9a-f]{64}$/i.test(value.props.source.trim())) {
@@ -516,6 +680,7 @@ function materialize(value, runtime, path) {
     }
     const pathProperties = value.type === 'path' ? validatePath(value.props, path) : undefined;
     const imageProperties = value.type === 'image' ? validateImage(value.props, path) : undefined;
+    const plotProperties = value.type === 'plot' ? validatePlot(value.props, path) : undefined;
     let textRunText;
     if (value.type === 'text-run') {
         const unsupported = Object.keys(value.props).filter(
@@ -596,6 +761,7 @@ function materialize(value, runtime, path) {
     }
     if (pathProperties !== undefined) Object.assign(node, pathProperties);
     if (imageProperties !== undefined) Object.assign(node, imageProperties);
+    if (plotProperties !== undefined) Object.assign(node, plotProperties);
     if (value.type === 'custom') {
         if (typeof value.props.component !== 'string' ||
             !/^[a-z][a-z0-9-]{0,63}$/.test(value.props.component)) {
@@ -709,6 +875,7 @@ class Runtime {
         }
         this.frames = new Map();
         this.handlers = new Map();
+        this.commandInvocations = new Map();
         this.namedActions = new Map(Object.entries(options.actions ?? {}));
         for (const [name, action] of this.namedActions) {
             if (!name || typeof action !== 'function') {
@@ -852,6 +1019,21 @@ class Runtime {
                 if (!named) throw new Error(`unknown Vellum action: ${action}`);
                 const nextModel = named(workingModel, payload);
                 if (nextModel !== undefined) workingModel = durableValue(nextModel, 'model');
+            } else if (action.startsWith('command:')) {
+                // A command runs like any other action: inside this mutation
+                // frame, so the state it sets and the model it returns are
+                // committed by the render below.
+                const command = action.slice('command:'.length);
+                if (!services.commands.has(command)) {
+                    throw new Error(`command is not defined: ${command}`);
+                }
+                // The handler a mounted component bound with useCommand in
+                // the render this dispatch starts from.
+                const handler = this.handlers.get(action);
+                if (!handler) throw new Error(`command has no handler: ${command}`);
+                handler(payload ?? {});
+                this.commandInvocations.set(
+                    command, (this.commandInvocations.get(command) ?? 0) + 1);
             } else {
                 throw new Error(`invalid Vellum action namespace: ${action}`);
             }
@@ -1035,6 +1217,26 @@ export function mount(application) {
         },
         hasCommand(command) {
             return services.commands.has(command);
+        },
+        invokeCommand(command, arguments_ = {}) {
+            if (typeof command !== 'string' || command.length === 0) {
+                throw new TypeError('invokeCommand requires a command id');
+            }
+            assertPlainJson(arguments_, 'arguments');
+            // Materialize any state update that is already pending (a setter
+            // called outside a dispatch) so the baseline is the tree the
+            // command starts from, and only the command's own effect counts.
+            const before = stableStringify(runtime.renderIfDirty());
+            const tree = runtime.dispatch(`command:${command}`, arguments_);
+            return stableStringify({
+                protocol: PROTOCOL,
+                command,
+                invocations: runtime.commandInvocations.get(command) ?? 0,
+                // Whether the retained tree differs from the one rendered
+                // before the handler ran: the command's visible effect.
+                changed: stableStringify(tree) !== before,
+                tree,
+            });
         },
     });
     Object.defineProperty(globalThis, '__vellum', {

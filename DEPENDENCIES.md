@@ -122,6 +122,18 @@ that inventory from the archive bytes before the renderer is release
 eligible. The manifest resolves each file to its nearest ancestor license file;
 it does not adjudicate license compatibility.
 
+## Three.js runtime payload
+
+`assets/threejs` carries Three.js 0.183.1 (MIT), the runtime a scripted view
+loads as ES modules: `build/three.webgpu.js`, `build/three.core.js`,
+`build/three.module.js`, the OrbitControls, GLTFLoader, BufferGeometryUtils and
+SkeletonUtils add-ons, `LICENSE` and `package.json`. The files are unmodified
+bytes of `mrdoob/three.js` at revision `077dd13c0e869d9f3dbe55875686f920367de457`.
+Each file is pinned by SHA-256 in `assets/threejs/payload-manifest.json`, and
+that manifest is pinned in `provenance/third-party-lock.json`.
+`scripts/check_threejs_payload.py` refuses a missing, extra or changed file,
+and the root `CMakeLists.txt` runs it at configure time.
+
 ## Compatibility observations, not attestations
 
 Representative Mach-O members report these `LC_BUILD_VERSION` tuples:
@@ -169,6 +181,23 @@ archives, and FreeType's archive), with the same notices.
 | Lua | `5.4.7`, `lua-5.4.7.tar.gz` SHA-256 `9fbf5e28ef86c69858f6d3d34eccc32e911c1a28b4120ff3e84aaa70cfbf1e30` | MIT | The sandboxed `VellumRmlUi::Lua` host, only with `VELLUM_RMLUI_LUA=ON` | Library only; the `lua` and `luac` front ends are not built. RmlUi's own Lua plugin is not built, since it keeps one process-wide `lua_State` |
 | RmlUi | `6.3`, commit `ba95ffe8bfb6370efb2cdcca927eaad4710c5413` | MIT | `VellumRmlUi::Core`; `VellumRmlUi::Native` (redistributed headers and archives) | Samples, third-party containers, SVG, Lottie and Tracy disabled; notice in `rmlui/NOTICE-Native.md` with RmlUi's `LICENSE.txt`; one Vellum patch, `rmlui/cmake/patches/rmlui-fractional-glyph-advances.patch` (the default font engine accumulates glyph advances and kerning in 26.6 and rounds only the pen, so text is not up to 5 % wider at small sizes; an upstream candidate, not filed) |
 | stb_image_write | `v1.16`, `nothings/stb` commit `d14d46f6b44456eb88beac58cba833a4135d4c89`, `stb_image_write.h` SHA-256 `cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05` | MIT (chosen of MIT or public domain) | `VellumRmlUi::SoftRenderer` PNG encoder | Single header, compiled into one translation unit |
+
+## Optional V8 provider
+
+With `VELLUM_ENABLE_V8=ON` (default OFF; it needs `VELLUM_ENABLE_MIRROR=ON`)
+the mirror's `view-script` unit compiles its V8 backend, and the installed SDK
+carries the sealed V8 shared library that backend runs on. The pin is the
+`V8` row of `provenance/third-party-lock.json`; the configure step
+(`framework/tools/cmake/VellumV8Provider.cmake`) downloads the archive or
+takes `VELLUM_V8_ARCHIVE`, refuses any other SHA-256, and refuses a manifest
+that is not sealed or that does not pair with the Skia and Dawn commits
+`gpu-runtime/renderer-lock.json` pins. Every source file that includes V8
+headers compiles with the archive's own `consumer_defines`, which are part of
+V8's ABI.
+
+| Dependency | Pinned identity | License | Used by | Notes |
+|---|---|---|---|---|
+| V8 | `v8-m158-15.8.62.6-38351a002e2c` (V8 `15.8.62.6`, revision `38351a002e2c2890eca99d3abb6622728bfd7798`), `danielraffel/v8-builder` asset `v8-mac-arm64-m158-15.8.62.6-38351a002e2c.zip` SHA-256 `828ec374aad252afd284da044743c2099ce3c9401d5e914df79aec4713517eff`; `release-metadata.json` SHA-256 `5393fe41d2b16e39bed2e5e526dab8e08bc1d4b865eb13ea5b3056c05b67e6b1` | BSD-3-Clause; bundles ICU (Unicode-3.0), zlib and Abseil (Apache-2.0) | `Vellum::SkiaDawnProvider` links `libv8.dylib`; the SDK installs it in `lib/` beside the provider and its manifest in `share/vellum/v8/` | Milestone-matched to `chrome/m158`: built against Skia `be7d7c3e996e567eda7dc9774274f7a0103cdb8c` and Dawn `1716e88cc9e58398fab5d4473f7f2e858667b677`. The library exports only the `v8::` and `cppgc::` API; its ICU, zlib and Abseil stay internal, so they cannot bind to the provider's copies (`tools/mirror/v8_symbol_census.py`). The archive ships no ICU locale data file, so `Intl` formatting and collation fail (and `Date.prototype.toLocaleString` aborts the process); Unicode property escapes, case mapping and normalization work. Notice in `NOTICE.md` |
 
 ## Developer prerequisites
 
@@ -233,7 +262,7 @@ Vellum dependencies. Versions and licenses were cross-checked against Pulp's
 | SDL3 | `release-3.4.18` (`829a65d7`) | zlib | `render-2d` and `view-core` unit external input, built from source as the `SDL3-static` link target the link policy allows; bytes not mirrored; license ships under `sdk/mirror/share/licenses/sdl3/` | MIT-compatible |
 | SheenBidi | `v3.0.0` | Apache-2.0 | `canvas` unit external input (`framework/core/canvas/`); bytes not mirrored | MIT-compatible |
 | Skia and skcms | `be7d7c3e996e567eda7dc9774274f7a0103cdb8c` | BSD-3-Clause | `canvas` unit external input (`framework/core/canvas/`); bytes not mirrored | MIT-compatible; renderer notice exists |
-| V8 | `v8-m153-15.3.76.5-26cef0256b0e` | BSD-3-Clause | not mirrored; no landed unit consumes it yet (planned scripted-view unit, when selected) | MIT-compatible; sealed provider |
+| V8 | `v8-m158-15.8.62.6-38351a002e2c` | BSD-3-Clause | `view-script` unit external input with `VELLUM_ENABLE_V8=ON` (see "Optional V8 provider"); bytes not mirrored | MIT-compatible; sealed provider |
 | yaml-cpp | `0.9.0` (`56e3bb55`) | MIT | `design-import` unit external input, built from source as the `yaml-cpp` link target the link policy allows; bytes not mirrored; license ships under `sdk/mirror/share/licenses/yaml-cpp/` | MIT-compatible |
 | Yoga | `v3.2.1` (`042f5013`) | MIT | `view-core` unit external input, built from source as the `yogacore` link target the link policy allows; bytes not mirrored; license ships under `sdk/mirror/share/licenses/yoga/` | MIT-compatible |
 

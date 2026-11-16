@@ -4,6 +4,7 @@ import {
     Fragment,
     Image,
     Path,
+    Plot,
     Stack,
     Text,
     TextRun,
@@ -127,6 +128,15 @@ const star = (
     />
 );
 void star;
+const scope = (
+    <Plot id="scope" plot="line" channel="output" slots={240} lineColor="#f97316"
+        style={{ width: 120, height: 60 }} />
+);
+void scope;
+// @ts-expect-error A plot names its channel.
+const unbound = <Plot id="unbound" plot="meter" />;
+void unbound;
+
 // @ts-expect-error A path requires its path data.
 const missingData = <Path id="no-data" />;
 void missingData;
@@ -153,6 +163,15 @@ const masked = (
     </Stack>
 );
 void masked;
+const blended = (
+    <Stack id="blended" style={{ mixBlendMode: 'color-dodge' }}>
+        <Stack id="blended/inner" style={{ mixBlendMode: 'destination_in' }} />
+    </Stack>
+);
+void blended;
+// @ts-expect-error mixBlendMode takes the blend mode names.
+const unknownBlend = <Stack id="unknown-blend" style={{ mixBlendMode: 'spectral' }} />;
+void unknownBlend;
 // @ts-expect-error maskMode is alpha or luminance.
 const badMask = <Stack id="bad-mask" style={{ maskMode: 'inverted' }} />;
 void badMask;

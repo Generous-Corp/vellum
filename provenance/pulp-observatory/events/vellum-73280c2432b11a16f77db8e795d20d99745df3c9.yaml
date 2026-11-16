@@ -1,0 +1,69 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-14T09:14:26Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-73280c2432b11a16f77db8e795d20d99745df3c9",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/damage.hpp",
+    "graphics/include/vellum/graphics/lowering_diagnostic.hpp",
+    "graphics/include/vellum/graphics/paint_command.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/src/render_cache.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/src/rendered_tree_materializer.mm",
+    "authoring/tests/rendered_tree_materializer_test.cpp",
+    "graphics/include/vellum/graphics/damage.hpp",
+    "graphics/include/vellum/graphics/lowering_diagnostic.hpp",
+    "graphics/include/vellum/graphics/paint_command.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/src/damage.cpp",
+    "graphics/src/layer_cache.cpp",
+    "graphics/src/paint_command.cpp",
+    "graphics/src/path_geometry.cpp",
+    "graphics/src/render_cache.hpp",
+    "graphics/src/scene_acceptance.cpp",
+    "graphics/src/skia_dawn_surface.mm",
+    "graphics/tests/damage_test.cpp",
+    "graphics/tests/grouping_test.cpp",
+    "graphics/tests/partial_present_test.cpp",
+    "graphics/tests/render_cache_gpu_test.cpp",
+    "graphics/tests/render_cache_test.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "16328be437079b3af434a054a00a4f4cb8811d3b",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "75f009fc9790e0722142539e93611d8d44d76346",
+    "to_commit": "369ba630114c256ea382fe687311b027170d625d"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "73280c2432b11a16f77db8e795d20d99745df3c9",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

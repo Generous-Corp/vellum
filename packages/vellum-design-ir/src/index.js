@@ -3,12 +3,23 @@ export {
     AUTHORED_OVERLAY_VERSION,
     COMPILER_NAME,
     COMPILER_VERSION,
+    BLEND_MODES,
+    BLEND_MODES_TIER_1,
+    BLEND_MODES_TIER_2,
+    DESIGN_IR_COMPOSITING_VERSION,
+    DESIGN_IR_PLOTS_VERSION,
     DESIGN_IR_SCHEMA,
+    DESIGN_IR_MATERIALS_VERSION,
+    DESIGN_IR_TRACKS_VERSION,
     DESIGN_IR_VERSION,
+    DESIGN_IR_VERSIONS,
     DISPOSITIONS,
+    MASK_MODES,
     REIMPORT_REPORT_SCHEMA,
     REIMPORT_REPORT_VERSION,
     SEVERITIES,
+    SUPPORTED_DESIGN_IR_VERSIONS,
+    blendModeTier,
 } from './constants.js';
 export { buildLossReport, normalizeDiagnostic } from './diagnostics.js';
 export { DesignIRConflictError, DesignIRValidationError } from './errors.js';

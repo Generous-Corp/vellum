@@ -63,6 +63,13 @@ choc::value::Value model_param_metadata(value::ParamModel& model, value::ParamHa
         obj.addMember("step", choc::value::createFloat64(range.step));
         obj.addMember("skew", choc::value::createFloat64(range.skew));
         obj.addMember("symmetricSkew", choc::value::createBool(range.symmetric_skew));
+        // An unevenly spaced discrete axis lists its values; step is then 0.
+        if (!range.plain_values.empty()) {
+            auto values = choc::value::createEmptyArray();
+            for (const double v : range.plain_values)
+                values.addArrayElement(choc::value::createFloat64(v));
+            obj.addMember("values", values);
+        }
         for (const auto& label : metadata->value_labels(param))
             labels.addArrayElement(choc::value::createString(label));
     } else {
@@ -1005,7 +1012,9 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
     // model for the text of the value's normalized position.
     register_bridge_function(api, "formatParamValue", [&self](choc::javascript::ArgumentList args) {
         const auto name = args.get<std::string>(0, "");
-        const auto raw = static_cast<float>(args.get<double>(1, 0.0));
+        // Kept as a double: the model API is double-valued, and narrowing here
+        // would collapse plain values a float cannot tell apart (2^24 + 1).
+        const double raw = args.get<double>(1, 0.0);
         const bool normalized = args.get<bool>(2, false);
         if (!self.has_store_) {
             const auto param = self.params_.resolve(name);
@@ -1016,7 +1025,8 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
         for (std::size_t i = 0; i < self.store_.param_count(); ++i) {
             const auto* info = &self.store_.all_params()[i];
             if (!info || info->name != name) continue;
-            const float value = normalized ? info->range.denormalize(raw) : raw;
+            const auto raw_f = static_cast<float>(raw);
+            const float value = normalized ? info->range.denormalize(raw_f) : raw_f;
             return choc::value::createString(state::param_display_text(*info, value));
         }
         return choc::value::Value();

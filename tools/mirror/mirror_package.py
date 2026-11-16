@@ -138,6 +138,10 @@ BUILD_TIMESTAMP_PLACEHOLDER = "<build-timestamp>"
 # `patches` names Vellum transformations applied after checkout. Each is
 # proved only by the closure: the patched bytes must hash to the recorded
 # digest, so a patch that drifts from the export fails the plan.
+# `post_patches` names Vellum-only fixes that Pulp does not carry. They are
+# applied after the closure digests are checked, so the digests keep proving
+# the Pulp-equivalent bytes, and a reused checkout is restored first so the
+# check never sees them.
 DEPENDENCIES: dict[str, dict[str, Any]] = {
     "highway": {
         "kind": "cmake",
@@ -173,6 +177,7 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
     "choc": {
         "kind": "headers",
         "patches": ["v8-compatibility", "json-positive-exponent", "file-watcher-lifetime"],
+        "post_patches": ["v8-module-resolution"],
     },
     "brotli": {"kind": "sources"},
     "woff2": {"kind": "sources"},
@@ -264,6 +269,7 @@ PATCHED_PATHS = {
     "v8-compatibility": CHOC_V8_HEADER,
     "json-positive-exponent": CHOC_JSON_HEADER,
     "file-watcher-lifetime": CHOC_FILE_WATCHER_HEADER,
+    "v8-module-resolution": CHOC_V8_HEADER,
 }
 CHOC_JSON_BEFORE = (
     "                    hadExponent = true;\n"
@@ -645,6 +651,102 @@ def apply_choc_file_watcher_patch(root: Path) -> None:
         header.write_text(text, encoding="utf-8")
 
 
+# An unresolvable import makes choc's loadStaticModule return an empty
+# MaybeLocal without throwing, so the TryCatch holds no exception and no
+# message; reading either through an empty handle dereferences null. The
+# resolver now throws a JS Error naming the specifier, and the exception
+# reader tolerates an empty exception, an empty message and a missing origin.
+CHOC_V8_MODULE_EDITS = (
+    (
+        "        v8::String::Utf8Value str (isolate, v);\n"
+        "        return *str;",
+        "        if (v.IsEmpty())\n"
+        "            return {};\n"
+        "\n"
+        "        v8::String::Utf8Value str (isolate, v);\n"
+        "        return *str ? std::string (*str) : std::string();",
+    ),
+    (
+        "        v8::Local<v8::Message> message = tryCatch.Message();\n"
+        "\n"
+        "        auto desc = v8StringToStd (tryCatch.Exception());\n"
+        "\n"
+        "        if (desc.empty())\n"
+        "            return {};\n"
+        "\n"
+        "        auto filename = v8StringToStd (message->GetScriptOrigin().ResourceName());\n"
+        "        int lineNumber = message->GetLineNumber (localContext).FromJust();\n"
+        "        int startCol = message->GetStartColumn (localContext).FromJust();\n"
+        "        int endCol = message->GetEndColumn (localContext).FromJust();\n",
+        "        v8::Local<v8::Message> message = tryCatch.Message();\n"
+        "\n"
+        "        auto desc = v8StringToStd (tryCatch.Exception());\n"
+        "\n"
+        "        if (desc.empty())\n"
+        "            return {};\n"
+        "\n"
+        "        if (message.IsEmpty())\n"
+        "            return desc;\n"
+        "\n"
+        "        auto filename = v8StringToStd (message->GetScriptOrigin().ResourceName());\n"
+        "        int lineNumber = message->GetLineNumber (localContext).FromMaybe (0);\n"
+        "        int startCol = message->GetStartColumn (localContext).FromMaybe (0);\n"
+        "        int endCol = message->GetEndColumn (localContext).FromMaybe (0);\n",
+    ),
+    (
+        "        if (auto sourceLine = v8StringToStd (message->GetSourceLine (localContext).ToLocalChecked()); ! sourceLine.empty())",
+        "        v8::Local<v8::String> sourceLineHandle;\n"
+        "\n"
+        "        if (message->GetSourceLine (localContext).ToLocal (&sourceLineHandle)\n"
+        "             && ! v8StringToStd (sourceLineHandle).empty())",
+    ),
+    (
+        "            result << sourceLine << std::endl;",
+        "            auto sourceLine = v8StringToStd (sourceLineHandle);\n"
+        "            result << sourceLine << std::endl;",
+    ),
+    (
+        "        if (currentModuleResolver != nullptr)\n"
+        "        {\n"
+        "            auto path = v8StringToStd (specifier);\n"
+        "            auto maybeCode = (*currentModuleResolver) (path);\n"
+        "\n"
+        "            if (maybeCode)\n"
+        "                return loadModule (c, stringToV8 (*maybeCode));\n"
+        "        }\n"
+        "\n"
+        "        return {};",
+        "        auto path = v8StringToStd (specifier);\n"
+        "\n"
+        "        if (currentModuleResolver != nullptr)\n"
+        "        {\n"
+        "            auto maybeCode = (*currentModuleResolver) (path);\n"
+        "\n"
+        "            if (maybeCode)\n"
+        "                return loadModule (c, stringToV8 (*maybeCode));\n"
+        "        }\n"
+        "\n"
+        "        isolate->ThrowException (v8::Exception::Error (stringToV8 (\"Cannot find module '\" + path + \"'\")));\n"
+        "        return {};",
+    ),
+)
+
+
+def apply_choc_v8_module_patch(root: Path) -> None:
+    """Apply each edit once; an edit already present is left alone."""
+    header = root / CHOC_V8_HEADER
+    text = header.read_text(encoding="utf-8")
+    original = text
+    for before, after in CHOC_V8_MODULE_EDITS:
+        if after in text:
+            continue
+        if text.count(before) != 1:
+            raise PlanError("choc V8 module resolution patch no longer matches the expected source")
+        text = text.replace(before, after)
+    if text != original:
+        header.write_text(text, encoding="utf-8")
+
+
 def apply_patch(name: str, patch: str, root: Path) -> None:
     if name != "choc" or patch not in PATCHED_PATHS:
         raise PlanError(f"unknown patch {patch!r} for {name}")
@@ -653,6 +755,9 @@ def apply_patch(name: str, patch: str, root: Path) -> None:
         return
     if patch == "file-watcher-lifetime":
         apply_choc_file_watcher_patch(root)
+        return
+    if patch == "v8-module-resolution":
+        apply_choc_v8_module_patch(root)
         return
     header = root / CHOC_JSON_HEADER
     text = header.read_text(encoding="utf-8")
@@ -725,6 +830,14 @@ def prepare_in_tree(name: str, entry: dict[str, Any], repo: Path) -> Path:
     return repo
 
 
+def restore_patched(name: str, root: Path, paths: list[str]) -> None:
+    """Return the patched files of a reused checkout to the pinned bytes."""
+    completed = subprocess.run(["git", "checkout", "-q", "--", *paths], cwd=root,
+                               capture_output=True, text=True, check=False)
+    if completed.returncode:
+        raise PlanError(f"restoring {name} patched files failed: {completed.stderr.strip()}")
+
+
 def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_dir: Path | None,
                          skia_asset_sha256: str | None, repo: Path | None = None) -> dict[str, Path]:
     roots: dict[str, Path] = {}
@@ -744,8 +857,10 @@ def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_d
             root = skia_dir
         else:
             root = deps_dir / f"{name}-{entry['pin']}"
+            patch_names = [*recipe.get("patches", []), *recipe.get("post_patches", [])]
             fetch_git(name, entry["source"], entry["pin"], root, submodules=bool(recipe.get("submodules")),
-                      patched={PATCHED_PATHS[p] for p in recipe.get("patches", [])})
+                      patched={PATCHED_PATHS[p] for p in patch_names})
+            restore_patched(name, root, sorted({PATCHED_PATHS[p] for p in patch_names}))
             for patch in recipe.get("patches", []):
                 apply_patch(name, patch, root)
         for relative, digest in sorted(entry["files"].items()):
@@ -754,6 +869,8 @@ def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_d
                 raise PlanError(f"{name}@{entry['pin'][:12]} has no {relative}")
             if sha256_file(candidate) != digest:
                 raise PlanError(f"{name}@{entry['pin'][:12]}:{relative} does not match the closure digest")
+        for patch in recipe.get("post_patches", []):
+            apply_patch(name, patch, root)
         roots[name] = root
     return roots
 
@@ -1052,6 +1169,129 @@ def in_tree_abi_violations(name: str, target: str, closure_definitions: list[str
     return None
 
 
+def declared_dependencies(declared: list[dict[str, Any]], units: list[tuple[str, dict[str, Any]]],
+                          closure_pinned: set[str]) -> dict[str, dict[str, Any]]:
+    """The pinned dependencies declared targets link that no closure pins.
+
+    A declared target (provenance/framework/units.json) may link a third-party
+    target only through a `cmake` recipe. When a closure pins that dependency
+    the closure's pin is used; otherwise the recipe must carry its own `pin`
+    (a full commit) and `source`, and the checkout is fetched at exactly that
+    commit. A link to a target no recipe provides is refused by
+    plan_declared_targets.
+    """
+    closure_targets = {target["name"] for _, closure in units for target in closure.get("targets", [])}
+    declared_names = {target["name"] for target in declared}
+    provided = {target: name for name, recipe in DEPENDENCIES.items() for target in recipe.get("provides", [])}
+    found: dict[str, dict[str, Any]] = {}
+    for target in declared:
+        for link in target["link_targets"]:
+            if link in closure_targets or link in declared_names or link not in provided:
+                continue
+            name = provided[link]
+            recipe = DEPENDENCIES[name]
+            if recipe["kind"] != "cmake":
+                raise PlanError(f"{framework_ports.UNITS}: {target['name']} links {link}, but a declared target "
+                                f"links third-party code only through a cmake recipe, and {name} is {recipe['kind']}")
+            if name in closure_pinned or name in found:
+                continue
+            pin, source = recipe.get("pin"), recipe.get("source")
+            if not SHA40.match(str(pin)) or not isinstance(source, str) or not source:
+                raise PlanError(f"{framework_ports.UNITS}: {target['name']} links {link}, but no closure pins "
+                                f"{name} and its recipe names no pinned commit and source")
+            found[name] = {"pin": pin, "source": source, "asset_sha256": None, "root": pin, "files": {}}
+    return found
+
+
+def plan_declared_targets(repo: Path, declared: list[dict[str, Any]], units: list[tuple[str, dict[str, Any]]],
+                          planned: dict[str, tuple[str, dict[str, Any]]], unit_definitions: dict[str, list[str]],
+                          provided: dict[str, str], closure_pinned: set[str],
+                          declared_deps: dict[str, dict[str, Any]], source_options: dict[str, list[str]],
+                          unit_rows: list[dict[str, Any]], attached: set[str],
+                          compiled_paths: set[str]) -> list[dict[str, Any]]:
+    """Plan the targets provenance/framework/units.json declares; returns the executables.
+
+    Static libraries are appended to `unit_rows` as new units, after the
+    closures' units and in declaration order, so each links only units built
+    before it. A declared target compiles exactly its declared sources, each
+    of which its ledger row adds to it (framework_ports.units_errors). It
+    compiles with its declared include directories and definitions plus, for
+    every mirrored library target it links, that target's include directories
+    and its unit's interface definitions: what an installed consumer of that
+    unit is given. Nothing about it is read from the sources.
+    """
+    closure_units = {unit for unit, _ in units}
+    declared_units: dict[str, list[dict[str, Any]]] = {}
+    executables: list[dict[str, Any]] = []
+    where = framework_ports.UNITS
+    last_unit = None
+    for target in declared:
+        name, kind = target["name"], target["type"]
+        if name in planned:
+            raise PlanError(f"{where}: {name} is already a mirrored target of unit {planned[name][0]}")
+        if name in provided:
+            raise PlanError(f"{where}: {name} is a target the {provided[name]} recipe provides")
+        if kind == "STATIC_LIBRARY" and target["unit"] in closure_units:
+            raise PlanError(f"{where}: {name} declares unit {target['unit']}, which a closure describes; "
+                            "a declared library builds in a new unit, and a source joins a closure target "
+                            "through its ledger row")
+        if kind == "STATIC_LIBRARY" and target["unit"] in declared_units and target["unit"] != last_unit:
+            # Units link in declaration order; a unit split around another
+            # could link it both ways.
+            raise PlanError(f"{where}: the targets of unit {target['unit']} are not declared together")
+        last_unit = target["unit"] if kind == "STATIC_LIBRARY" else last_unit
+        include_dirs = [str(repo / FRAMEWORK_DIR / include) for include in target["include_dirs"]]
+        definitions = set(target["compile_definitions"])
+        internal, external, interfaces = [], [], []
+        for link in target["link_targets"]:
+            if link in planned:
+                # Executables are never linked: framework_ports.units_errors refuses it.
+                linked_unit, linked = planned[link]
+                internal.append(link)
+                include_dirs += [d for d in linked["include_dirs"] if d not in include_dirs]
+                definitions.update(unit_definitions[linked_unit])
+                interfaces += [i for i in linked["in_tree_interfaces"] if i not in interfaces]
+            elif link in provided and (provided[link] in closure_pinned or provided[link] in declared_deps):
+                # declared_dependencies has refused every recipe that is not a cmake build.
+                external.append(link)
+            else:
+                raise PlanError(f"{where}: {name} links {link}, which is neither a mirrored target, a target "
+                                "declared before it, nor a pinned recipe target")
+        option_sources = []
+        for path in target["sources"]:
+            compiled_paths.add(path)
+            source = path.removeprefix(f"{FRAMEWORK_DIR}/")
+            if source in source_options:
+                option_sources.append({"source": str(repo / path), "options": source_options[source]})
+                attached.add(source)
+        row = {
+            "name": name,
+            "type": kind,
+            "declared": True,
+            "sources": [str(repo / path) for path in target["sources"]],
+            "source_compile_options": option_sources,
+            "include_dirs": include_dirs,
+            "compile_definitions": sorted(definitions),
+            "internal_links": internal,
+            "external_links": external,
+            "skia": False,
+            "skia_asset_sha256": None,
+            "in_tree_interfaces": interfaces,
+        }
+        if kind == "EXECUTABLE":
+            executables.append(row)
+            planned[name] = ("", row)
+        else:
+            declared_units.setdefault(target["unit"], []).append(row)
+            planned[name] = (target["unit"], row)
+            unit_definitions[target["unit"]] = sorted(
+                set(unit_definitions.get(target["unit"], [])) | definitions)
+    for unit, targets in declared_units.items():
+        unit_rows.append({"name": unit, "targets": targets, "declared": True,
+                          "compile_definitions": unit_definitions[unit]})
+    return executables
+
+
 def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
          skia_asset_sha256: str | None = None,
          in_tree_definitions: dict[str, list[str]] | None = None) -> dict[str, Any]:
@@ -1060,12 +1300,18 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     file_count = (verify_framework_identity(repo, receipt_path, receipt) if transferred(repo)
                   else verify_mirror_identity(repo, receipt))
     _, ports_added, ports_removed = framework_file_set(repo) if transferred(repo) else (set(), {}, set())
+    declared, declared_errors = (framework_ports.declared_units(repo, ports_added) if transferred(repo)
+                                 else ([], []))
+    if declared_errors:
+        raise PlanError(declared_errors[0])
     units = load_closures(repo, receipt)
     source_options = source_compile_options_for(repo, receipt, units)
     attached: set[str] = set()
     ported_targets: set[str] = set()
     deps = external_dependencies(units)
-    roots = prepare_dependencies(deps, deps_dir, skia_dir, skia_asset_sha256, repo)
+    closure_pinned = set(deps)
+    declared_deps = declared_dependencies(declared, units, closure_pinned)
+    roots = prepare_dependencies({**deps, **declared_deps}, deps_dir, skia_dir, skia_asset_sha256, repo)
     generated = prepare_generated(repo, receipt, units, generated_dir)
     # GPU device types are not part of the installed surface: the installed
     # copy of each choke header carries an #error guard (gpu_surface_guard.py).
@@ -1079,6 +1325,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
 
     provided = {target: name for name, recipe in DEPENDENCIES.items() for target in recipe.get("provides", [])}
     unit_rows = []
+    planned: dict[str, tuple[str, dict[str, Any]]] = {}
     all_targets: dict[str, str] = {}
     for unit, closure in units:
         for target in closure.get("targets", []):
@@ -1132,7 +1379,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                 if link in all_targets:
                     internal.append(link)
                 elif link in provided:
-                    if provided[link] not in deps and provided[link] not in roots:
+                    if provided[link] not in closure_pinned:
                         # A dependency built from source still has to be fetched.
                         raise PlanError(f"{unit}/{name} links {link}, but no closure pins {provided[link]}")
                     external.append(link)
@@ -1185,6 +1432,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                 "skia_asset_sha256": skia[0].get("asset_sha256") if skia else None,
                 "in_tree_interfaces": in_tree_interfaces,
             })
+            planned[name] = (unit, targets[-1])
         # VellumMirror.cmake links a unit's third-party targets into
         # vellum-skia-dawn-provider when any of its targets uses Skia, and into
         # the unit's own dylib otherwise. An in-tree static target linked into
@@ -1199,10 +1447,15 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
             "targets": targets,
             "compile_definitions": sorted(closure.get("compile_definitions", [])),
         })
+    unit_definitions = {row["name"]: row["compile_definitions"] for row in unit_rows}
+    executables = plan_declared_targets(repo, declared, units, planned, unit_definitions, provided,
+                                        closure_pinned, declared_deps, source_options, unit_rows, attached,
+                                        ported_targets)
     uncompiled = sorted(f"{path} (target {row['target']})" for path, row in ports_added.items()
                         if row["target"] is not None and path not in ported_targets)
     if uncompiled:
-        raise PlanError(f"the ports ledger adds sources to targets no closure builds: {uncompiled[:5]}")
+        raise PlanError("the ports ledger adds sources to targets no closure builds and "
+                        f"{framework_ports.UNITS} does not declare: {uncompiled[:5]}")
     unattached = sorted(set(source_options) - attached)
     if unattached:
         raise PlanError(f"per-source compile options name sources no mirrored target compiles: {unattached}")
@@ -1227,7 +1480,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
             if path.is_file() and re.match(r"(?i)(license|copying|notice)", path.name)
         )
         if not found:
-            raise PlanError(f"{name}@{deps[name]['pin'][:12]} carries no license file")
+            raise PlanError(f"{name}@{({**deps, **declared_deps})[name]['pin'][:12]} carries no license file")
         licenses[name] = found
     return {
         "schema": PLAN_SCHEMA,
@@ -1239,11 +1492,12 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         "mirror_files_verified": file_count,
         "framework_native_edits": framework_native_edits(repo) if transferred(repo) else [],
         "framework_ports": {"added": sorted(ports_added), "removed": sorted(ports_removed)},
+        "framework_units": [target["name"] for target in declared],
         "native_preludes": generated["native_preludes"],
         "closures": [unit["closure_manifest"] for unit in receipt["units"]],
         "dependencies": {name: {"pin": entry["pin"], "source": entry["source"],
                                  "files_verified": len(entry["files"])}
-                          for name, entry in sorted(deps.items())},
+                          for name, entry in sorted({**deps, **declared_deps}.items())},
         "cmake_dependencies": cmake_deps,
         "licenses": licenses,
         "choc_root": str(roots["choc"]) if "choc" in roots else None,
@@ -1254,6 +1508,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         "binary_data": generated["binary_data"],
         "source_compile_options": source_options,
         "units": unit_rows,
+        "executables": executables,
         "gpu_guard": gpu_guard,
     }
 
@@ -1314,10 +1569,16 @@ def write_cmake(build_plan: dict[str, Any], output: Path) -> None:
         lines.append(f"set(VELLUM_MIRROR_GPU_GUARD_{index}_EXCLUDE "
                      f"{cmake_quote(cmake_path_suffix_regex(header['relative']))})")
     lines += cmake_list("VELLUM_MIRROR_UNITS", [unit["name"] for unit in build_plan["units"]])
-    for unit in build_plan["units"]:
-        ukey = re.sub(r"[^A-Za-z0-9]", "_", unit["name"]).upper()
-        lines += cmake_list(f"VELLUM_MIRROR_UNIT_{ukey}_TARGETS", [t["name"] for t in unit["targets"]])
-        lines += cmake_list(f"VELLUM_MIRROR_UNIT_{ukey}_DEFINITIONS", unit["compile_definitions"])
+    # Executables declared in provenance/framework/units.json: built against
+    # the unit libraries, never installed.
+    lines += cmake_list("VELLUM_MIRROR_EXECUTABLES", [t["name"] for t in build_plan.get("executables", [])])
+    groups = [(unit["name"], unit) for unit in build_plan["units"]]
+    groups.append(("", {"targets": build_plan.get("executables", [])}))
+    for unit_name, unit in groups:
+        if unit_name:
+            ukey = re.sub(r"[^A-Za-z0-9]", "_", unit_name).upper()
+            lines += cmake_list(f"VELLUM_MIRROR_UNIT_{ukey}_TARGETS", [t["name"] for t in unit["targets"]])
+            lines += cmake_list(f"VELLUM_MIRROR_UNIT_{ukey}_DEFINITIONS", unit["compile_definitions"])
         for target in unit["targets"]:
             tkey = re.sub(r"[^A-Za-z0-9]", "_", target["name"]).upper()
             lines += cmake_list(f"VELLUM_MIRROR_TARGET_{tkey}_SOURCES", target["sources"])
@@ -1343,7 +1604,9 @@ def write_cmake(build_plan: dict[str, Any], output: Path) -> None:
             for index, entry in enumerate(option_sources):
                 lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_OPTION_SOURCE_{index} {cmake_quote(entry['source'])})")
                 lines += cmake_list(f"VELLUM_MIRROR_TARGET_{tkey}_OPTION_SOURCE_{index}_OPTIONS", entry["options"])
-            lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_UNIT {cmake_quote(unit['name'])})")
+            lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_UNIT {cmake_quote(unit_name)})")
+            lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_TYPE {cmake_quote(target.get('type', 'STATIC_LIBRARY'))})")
+            lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_DECLARED {'ON' if target.get('declared') else 'OFF'})")
     output.parent.mkdir(parents=True, exist_ok=True)
     text = "\n".join(lines) + "\n"
     if not output.is_file() or output.read_text(encoding="utf-8") != text:

@@ -614,6 +614,7 @@ class VerifyExtractionTests(unittest.TestCase):
             "tools/mirror/consumer/direct_main.cpp",
             "tools/mirror/consumer/main.cpp",
             "tools/mirror/consumer/runtime_image_census_main.cpp",
+            "tools/mirror/consumer/v8_main.cpp",
             "tools/mirror/canvas_provider_anchor.cpp",
             "tools/mirror/gpu_surface_guard.py",
             "scripts/install_core.py",
@@ -936,6 +937,53 @@ class VerifyExtractionTests(unittest.TestCase):
             (root / "framework/external/x/first_party.cpp").write_bytes(b"int y;\n")
             _, checks = self.ports_verdict(root)
             self.assertEqual(checks["framework_external_unrecorded"], ["framework/external/x/first_party.cpp"])
+
+    def write_units(self, root: Path, targets: list[dict]) -> None:
+        path = root / verify_extraction.FRAMEWORK_UNITS
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"schema": "vellum.framework-units.v1", "targets": targets}), encoding="utf-8")
+
+    def test_a_target_no_closure_builds_is_declared_and_agrees_with_the_ledger(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n",
+                                          "framework/core/a/include/vellum/a/a.hpp": b"int a();\n"})
+            (root / self.PORTED).write_bytes(b"int n;\n")
+            row = dict(self.ports_row(self.PORTED), target="vellum-a-tool")
+            self.write_ports(root, [row])
+            target = {"name": "vellum-a-tool", "type": "EXECUTABLE", "unit": None, "sources": [self.PORTED],
+                      "include_dirs": ["core/a/include"], "compile_definitions": [], "link_targets": [],
+                      "reason": "a tool no closure builds"}
+
+            def unit_errors() -> tuple[list[str], dict]:
+                errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+                return [e for e in errors if verify_extraction.FRAMEWORK_UNITS in e
+                        or verify_extraction.FRAMEWORK_PORTS in e], checks
+
+            # Control: the declaration that agrees with the row passes.
+            self.write_units(root, [target])
+            errors, checks = unit_errors()
+            self.assertEqual(errors, [])
+            self.assertEqual(checks["framework_units_declared"], ["vellum-a-tool"])
+            for declared, fragment in (
+                ([dict(target, sources=["framework/core/a/src/other.cpp"])], "has no ports ledger row adding it"),
+                ([dict(target, name="vellum-other")], "is added by its ledger row to vellum-a-tool"),
+                ([dict(target, include_dirs=["core/b/include"])], "is not a directory framework/ holds"),
+                ([dict(target, name="pulp-a-tool")], "may not carry a Pulp name"),
+                ([dict(target, extra=1)], "must have exactly"),
+            ):
+                self.write_units(root, declared)
+                errors, checks = unit_errors()
+                self.assertTrue(any(fragment in e for e in errors), (declared, errors))
+                self.assertEqual(checks["framework_units_declared"], [])
+            # A row naming a declared target that does not list its source.
+            other = "framework/core/a/src/other.cpp"
+            (root / other).write_bytes(b"int o;\n")
+            self.write_ports(root, [row, dict(self.ports_row(other), target="vellum-a-tool")])
+            self.write_units(root, [target])
+            errors, _ = unit_errors()
+            self.assertTrue(any("which does not list it in" in e for e in errors), errors)
 
     def test_the_ports_ledger_is_append_only(self) -> None:
         self.hide_ci_git_base()
@@ -2283,6 +2331,182 @@ class VerifyExtractionTests(unittest.TestCase):
         self.assertEqual(report["checks"]["mirror_edge_findings"], [])
         if pulp_root is not None:
             self.assertTrue(report["checks"]["mirror_origins_verified_against_pulp"])
+
+    def derive_refusal(self, files: dict[str, bytes]) -> str:
+        """The refusal derive_framework_transfer gives a base holding exactly these files."""
+        with tempfile.TemporaryDirectory() as temporary, tempfile.TemporaryDirectory() as scratch:
+            root = Path(temporary)
+            for relative, data in files.items():
+                (root / relative).parent.mkdir(parents=True, exist_ok=True)
+                (root / relative).write_bytes(data)
+            base = self.git_commit_all(root, "a base")
+            with self.assertRaises(ValueError) as caught:
+                verify_extraction.derive_framework_transfer(root, base, Path(scratch))
+            return str(caught.exception)
+
+    def test_a_transfer_cannot_be_derived_from_a_base_the_rename_cannot_take(self) -> None:
+        source = {"mirror/core/a/include/pulp/a/a.hpp": b"#pragma once\nnamespace pulp::a {\nint f();\n}\n"}
+        self.assertIn("has no mirror/ to rename", self.derive_refusal({"README.md": b"no mirror here\n"}))
+        self.assertIn("the landed rename tool refuses the base's mirror/",
+                      self.derive_refusal({"mirror/core/a/src/a.cpp": b"int a;\n"}))
+        # A base whose mirror renames but whose newest export receipt is unreadable.
+        self.assertIn("the base's newest export receipt is unreadable", self.derive_refusal(source))
+        self.assertIn("the base's newest export receipt is unreadable", self.derive_refusal(
+            {**source, "provenance/mirror/receipts/index.json": json.dumps({"receipts": []}).encode()}))
+
+    def test_the_ports_history_base_that_cannot_be_found_is_refused(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "README.md").write_text("a root commit\n")
+            self.git_commit_all(root, "a root commit")
+            ports = verify_extraction.load_framework_ports()
+            self.assertEqual(verify_extraction.framework_ports_history_errors(root, ports), [])
+            # The CI base names no commit and a root commit has no parent to fall back to.
+            with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": "d" * 40}):
+                errors = verify_extraction.framework_ports_history_errors(root, ports)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn(f"{verify_extraction.FRAMEWORK_PORTS}: history base is unavailable", errors[0])
+
+    def test_a_ports_ledger_the_history_base_holds_unreadable_is_refused(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ledger = root / verify_extraction.FRAMEWORK_PORTS
+            ledger.parent.mkdir(parents=True)
+            ledger.write_text("not json")
+            base = self.git_commit_all(root, "a ledger nothing can read")
+            self.write_ports(root, [])
+            self.git_commit_all(root, "a readable ledger")
+            ports = verify_extraction.load_framework_ports()
+            with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": base}):
+                errors = verify_extraction.framework_ports_history_errors(root, ports)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn(f"{verify_extraction.FRAMEWORK_PORTS}: unreadable at {base}", errors[0])
+
+    def pulp_with_file(self, pulp: Path, pulp_path: str, data: bytes) -> tuple[str, str]:
+        """A Pulp checkout whose main holds one file: (commit, the file's blob)."""
+        run = lambda *args: subprocess.check_output(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=pulp, text=True).strip()
+        pulp.mkdir(parents=True)
+        run("init", "-q", "-b", "main")
+        (pulp / pulp_path).parent.mkdir(parents=True)
+        (pulp / pulp_path).write_bytes(data)
+        run("add", "-A")
+        run("commit", "-q", "-m", "the port's source")
+        commit = run("rev-parse", "HEAD")
+        run("update-ref", "refs/remotes/origin/main", commit)
+        return commit, run("rev-parse", f"{commit}:{pulp_path}")
+
+    def test_a_ports_row_s_pulp_proof_refuses_each_way_the_row_can_misstate_pulp(self) -> None:
+        pulp_path, ported = "core/a/include/pulp/a/new.hpp", "framework/core/a/include/vellum/a/new.hpp"
+        data = b"#include <pulp/a/a.hpp>\nnamespace pulp::a { int first(); }\n"
+        renamed = verify_extraction.git_blob_sha(
+            b"#include <vellum/a/a.hpp>\nnamespace vellum::a { int first(); }\n")
+        with tempfile.TemporaryDirectory() as temporary:
+            pulp = Path(temporary) / "pulp"
+            commit, blob = self.pulp_with_file(pulp, pulp_path, data)
+
+            def errors(rename: dict | None = self.RENAME, **row_fields) -> list[str]:
+                row = self.ports_row(ported, commits=[commit], pulp_path=pulp_path, blob=renamed)
+                row.update(row_fields)
+                return verify_extraction.framework_ports_pulp_errors(pulp, "origin/main", [row], rename)
+
+            self.assertEqual(errors(), [])  # control: the row that states Pulp truthfully
+            self.assertEqual(len(errors(None)), 1)
+            self.assertIn("carries no rename table to put core/a/include/pulp/a/new.hpp through", errors(None)[0])
+            wrong_path = errors(framework_path="framework/core/a/include/vellum/a/other.hpp")
+            self.assertEqual(len(wrong_path), 1, wrong_path)
+            self.assertIn(f"renames to {ported}, not framework/core/a/include/vellum/a/other.hpp", wrong_path[0])
+            wrong_blob = errors(framework_blob="b" * 40)
+            self.assertEqual(len(wrong_blob), 1, wrong_blob)
+            self.assertIn(f"framework_blob {'b' * 12} is not Pulp {commit[:12]}:{pulp_path} put through the "
+                          f"transfer's rename ({renamed[:12]})", wrong_blob[0])
+            # A file listed at the commit whose object the checkout lost cannot be read.
+            loose = pulp / ".git/objects" / blob[:2] / blob[2:]
+            self.assertTrue(loose.is_file())
+            loose.chmod(0o644)
+            loose.unlink()
+            unreadable = errors()
+            self.assertEqual(len(unreadable), 1, unreadable)
+            self.assertIn(f"cannot read Pulp {commit[:12]}:{pulp_path}", unreadable[0])
+
+    def test_the_ports_proof_of_a_native_row_needs_a_pulp_checkout_that_can_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root, not_a_checkout = Path(temporary) / "vellum", Path(temporary) / "empty"
+            not_a_checkout.mkdir()
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            (root / self.PORTED).write_bytes(b"int written_here;\n")
+            added = {self.PORTED: self.ports_row(self.PORTED)}
+            self.assertEqual(verify_extraction.framework_ports_native_errors(root, added, None), [])
+            errors = verify_extraction.framework_ports_native_errors(root, added, not_a_checkout)
+            self.assertEqual(errors, [f"{verify_extraction.FRAMEWORK_PORTS}: Pulp checkout {not_a_checkout} could "
+                                      "not be asked for the native rows' blobs"])
+
+    def test_a_ports_row_s_file_must_be_the_blob_it_records(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            (root / self.PORTED).write_bytes(b"int n;\n")
+            recorded = verify_extraction.git_blob_sha(b"int n;\n")
+            row = self.ports_row(self.PORTED, commits=["9" * 40], blob=recorded)
+            self.write_ports(root, [row])
+            self.assertEqual(self.ports_verdict(root)[0], [])  # control: the file is the recorded blob
+            (root / self.PORTED).write_bytes(b"int different;\n")
+            wrong = verify_extraction.git_blob_sha(b"int different;\n")
+            expected = (f"{verify_extraction.FRAMEWORK_PORTS} rows[0]: {self.PORTED} is blob {wrong[:12]}, not the "
+                        f"recorded {recorded[:12]}")
+            errors, _ = self.ports_verdict(root)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertTrue(errors[0].startswith(expected), errors)
+            # The same refusal from the function that judges it, for a row this change appends.
+            self.assertEqual(len(verify_extraction.framework_ports_joining_errors(root, [row], {self.PORTED: row}, 0)), 1)
+            # A row the base already holds is ordinary framework source: its bytes may change.
+            self.assertEqual(verify_extraction.framework_ports_joining_errors(root, [row], {self.PORTED: row}, 1), [])
+
+    def test_the_transfer_state_refuses_a_checkout_that_is_not_consistent(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_framework_debt(root, {})
+            _, errors = verify_extraction.framework_transfer_state(root)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("exist without framework/: the transfer's data lands only with the transferred tree", errors[0])
+            self.assertIn(verify_extraction.FRAMEWORK_NAME_DEBT, errors[0])
+            (root / "framework").mkdir()
+            _, errors = verify_extraction.framework_transfer_state(root)
+            self.assertIn(f"framework/ exists without {verify_extraction.FRAMEWORK_TRANSFER_RECORD}", errors)
+
+    def test_the_transfer_state_refuses_a_history_base_that_is_missing_or_that_lost_framework(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "framework/core/a").mkdir(parents=True)
+            (root / "framework/core/a/a.cpp").write_text("int a;\n")
+            base = self.git_commit_all(root, "framework lands")
+            subprocess.run(["git", "-C", str(root), "rm", "-q", "-r", "framework"], check=True)
+            self.git_commit_all(root, "framework is removed")
+            with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": base}):
+                _, errors = verify_extraction.framework_transfer_state(root)
+            self.assertEqual(errors, ["framework/ was transferred at the base and is gone at HEAD; it cannot be removed"])
+            # A CI base that names no commit, on a root commit, leaves nothing to judge against.
+            solo = Path(temporary) / "solo"
+            solo.mkdir()
+            (solo / "README.md").write_text("root\n")
+            self.git_commit_all(solo, "root")
+            with mock.patch.dict(os.environ, {"VELLUM_GIT_BASE": "d" * 40}):
+                _, errors = verify_extraction.framework_transfer_state(solo)
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn("framework transfer: history base is unavailable", errors[0])
+
+    def test_an_introduction_that_cannot_be_listed_against_its_base_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "README.md").write_text("root\n")
+            self.git_commit_all(root, "root")
+            self.assertEqual(verify_extraction.framework_introduction_errors(root, "e" * 40, {}),
+                             ["cannot list the change against " + "e" * 40])
 
 
 class RendererPinTests(unittest.TestCase):

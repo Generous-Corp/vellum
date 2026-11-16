@@ -4,7 +4,11 @@ import {BrowserSemanticAdapter, inferredSemanticRole} from './text_semantics.js'
 const canvas = document.querySelector('#vellum-canvas');
 const status = document.querySelector('#vellum-status');
 const accessibilityRoot = document.querySelector('#vellum-accessibility');
-const context = canvas.getContext('2d');
+const surface = canvas.getContext('2d');
+// The context drawn into: the canvas, or the offscreen layer of the innermost
+// blended group.
+let context = surface;
+const groups = [];
 
 function cssColor(red, green, blue, alpha) {
     return `rgba(${Math.round(red * 255)},${Math.round(green * 255)},${Math.round(blue * 255)},${alpha})`;
@@ -16,6 +20,8 @@ globalThis.VellumCanvasBackend = Object.freeze({
         canvas.width = Math.round(width * scale);
         canvas.height = Math.round(height * scale);
         canvas.style.aspectRatio = `${width} / ${height}`;
+        context = surface;
+        groups.length = 0;
         context.setTransform(scale, 0, 0, scale, 0, 0);
         context.fillStyle = cssColor(red, green, blue, alpha);
         context.fillRect(0, 0, width, height);
@@ -31,6 +37,54 @@ globalThis.VellumCanvasBackend = Object.freeze({
         context.textBaseline = 'alphabetic';
         context.fillStyle = cssColor(red, green, blue, alpha);
         context.fillText(text, x, baseline);
+    },
+    // A blended group draws offscreen and meets the canvas once, so its
+    // members blend with each other normally and the group alpha applies once.
+    blendBegin(operation, alpha) {
+        const layer = document.createElement('canvas');
+        layer.width = canvas.width;
+        layer.height = canvas.height;
+        const layerContext = layer.getContext('2d');
+        layerContext.setTransform(context.getTransform());
+        groups.push({ context, operation, alpha });
+        context = layerContext;
+    },
+    blendEnd() {
+        const group = groups.pop();
+        if (!group) return;
+        const layer = context.canvas;
+        context = group.context;
+        context.save();
+        context.setTransform(1, 0, 0, 1, 0, 0);
+        context.globalCompositeOperation = group.operation;
+        context.globalAlpha = group.alpha;
+        context.drawImage(layer, 0, 0);
+        context.restore();
+    },
+    filter(css) {
+        context.filter = css;
+    },
+    colorMatrix(id, values) {
+        const namespace = 'http://www.w3.org/2000/svg';
+        let definitions = document.getElementById('vellum-filters');
+        if (!definitions) {
+            definitions = document.createElementNS(namespace, 'svg');
+            definitions.id = 'vellum-filters';
+            definitions.setAttribute('width', '0');
+            definitions.setAttribute('height', '0');
+            definitions.style.position = 'absolute';
+            document.body.append(definitions);
+        }
+        let filter = document.getElementById(id);
+        if (!filter) {
+            filter = document.createElementNS(namespace, 'filter');
+            filter.id = id;
+            filter.setAttribute('color-interpolation-filters', 'sRGB');
+            filter.append(document.createElementNS(namespace, 'feColorMatrix'));
+            definitions.append(filter);
+        }
+        filter.firstElementChild.setAttribute('type', 'matrix');
+        filter.firstElementChild.setAttribute('values', values);
     },
     finish() {},
 });
@@ -337,6 +391,7 @@ async function runScenario(path) {
     const keys = [];
     const touches = [];
     const assertions = [];
+    const commands = [];
     const services = [];
     const throws = [];
     const compositions = [];
@@ -494,9 +549,27 @@ async function runScenario(path) {
             }
             assertions.push({action: step.action, target: step.target, passed: true});
         } else if (step.action === 'command') {
+            // A command step passes only when the command is defined, its
+            // handler ran, and the rendered tree changed.
             if (!bridge.hasCommand(step.target)) {
                 throw new Error(`scenario command is not defined: ${step.target}`);
             }
+            if (typeof bridge.invokeCommand !== 'function') {
+                throw new Error('application bridge cannot invoke commands');
+            }
+            const before = current.digest;
+            const invoked = JSON.parse(bridge.invokeCommand(step.target));
+            if (invoked.command !== step.target || !(invoked.invocations >= 1)) {
+                throw new Error(`scenario command did not run: ${step.target}`);
+            }
+            current = render();
+            if (invoked.changed !== true) {
+                throw new Error(`scenario command had no rendered effect: ${step.target}`);
+            }
+            commands.push({
+                target: step.target, invoked: true, invocations: invoked.invocations,
+                changed: true, before, after: current.digest,
+            });
             assertions.push({action: step.action, target: step.target, passed: true});
         } else if (step.action === 'service-result') {
             if (step.service?.ok === false && typeof step.service.error?.code === 'string') {
@@ -541,7 +614,7 @@ async function runScenario(path) {
     }
     return {schema: 'vellum.web-proof.v1', scenario: scenario.name, backend: api.backend(),
         authoringRuntime: 'browser JavaScript', initial, final: current,
-        captures, presses, inputs, keys, touches, assertions, services, throws,
+        captures, presses, inputs, keys, touches, assertions, commands, services, throws,
         compositions, accessibility,
         scrollContainers, components: [...componentEvidence.values()],
         canvasDataBytes: canvas.toDataURL('image/png').length};

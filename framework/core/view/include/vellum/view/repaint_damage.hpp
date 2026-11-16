@@ -2,7 +2,8 @@
 
 #include <vellum/view/geometry.hpp>
 
-// FU-2 / WI-17 — the partial-repaint damage model.
+// The partial-repaint damage model: which dirty rect a frame may repaint so
+// the result stays pixel-identical to a full repaint.
 //
 // `compute_effective_damage` is the pure, side-effect-free heart of partial
 // repaint: given the requested dirty rect (in ROOT logical coordinates, exactly

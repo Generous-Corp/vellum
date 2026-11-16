@@ -4,7 +4,11 @@ import { Button, Stack, Text, mount, useState } from './vellum-ui/runtime.js';
 const canvas = document.querySelector('#vellum-canvas');
 const status = document.querySelector('#status');
 const proof = document.querySelector('#proof');
-const context = canvas.getContext('2d');
+const surface = canvas.getContext('2d');
+// The context drawn into: the canvas, or the offscreen layer of the innermost
+// blended group.
+let context = surface;
+const groups = [];
 
 function cssColor(red, green, blue, alpha) {
     return `rgba(${Math.round(red * 255)},${Math.round(green * 255)},` +
@@ -17,6 +21,8 @@ globalThis.VellumCanvasBackend = Object.freeze({
         canvas.width = Math.round(width * scale);
         canvas.height = Math.round(height * scale);
         canvas.style.aspectRatio = `${width} / ${height}`;
+        context = surface;
+        groups.length = 0;
         context.setTransform(scale, 0, 0, scale, 0, 0);
         context.fillStyle = cssColor(red, green, blue, alpha);
         context.fillRect(0, 0, width, height);
@@ -32,6 +38,54 @@ globalThis.VellumCanvasBackend = Object.freeze({
         context.textBaseline = 'alphabetic';
         context.fillStyle = cssColor(red, green, blue, alpha);
         context.fillText(text, x, baseline);
+    },
+    // A blended group draws offscreen and meets the canvas once, so its
+    // members blend with each other normally and the group alpha applies once.
+    blendBegin(operation, alpha) {
+        const layer = document.createElement('canvas');
+        layer.width = canvas.width;
+        layer.height = canvas.height;
+        const layerContext = layer.getContext('2d');
+        layerContext.setTransform(context.getTransform());
+        groups.push({ context, operation, alpha });
+        context = layerContext;
+    },
+    blendEnd() {
+        const group = groups.pop();
+        if (!group) return;
+        const layer = context.canvas;
+        context = group.context;
+        context.save();
+        context.setTransform(1, 0, 0, 1, 0, 0);
+        context.globalCompositeOperation = group.operation;
+        context.globalAlpha = group.alpha;
+        context.drawImage(layer, 0, 0);
+        context.restore();
+    },
+    filter(css) {
+        context.filter = css;
+    },
+    colorMatrix(id, values) {
+        const namespace = 'http://www.w3.org/2000/svg';
+        let definitions = document.getElementById('vellum-filters');
+        if (!definitions) {
+            definitions = document.createElementNS(namespace, 'svg');
+            definitions.id = 'vellum-filters';
+            definitions.setAttribute('width', '0');
+            definitions.setAttribute('height', '0');
+            definitions.style.position = 'absolute';
+            document.body.append(definitions);
+        }
+        let filter = document.getElementById(id);
+        if (!filter) {
+            filter = document.createElementNS(namespace, 'filter');
+            filter.id = id;
+            filter.setAttribute('color-interpolation-filters', 'sRGB');
+            filter.append(document.createElementNS(namespace, 'feColorMatrix'));
+            definitions.append(filter);
+        }
+        filter.firstElementChild.setAttribute('type', 'matrix');
+        filter.firstElementChild.setAttribute('values', values);
     },
     finish() {},
 });
@@ -66,6 +120,7 @@ const api = {
     begin: module.cwrap('vellum_web_begin_frame', 'number', ['number','number','number','number','number','number']),
     rectangle: module.cwrap('vellum_web_add_rectangle', 'number', ['string','number','number','number','number','number','number','number','number','number']),
     text: module.cwrap('vellum_web_add_text', 'number', ['string','string','number','number','number','number','number','number','number','number','number']),
+    setScale: module.cwrap('vellum_web_set_scale', 'number', ['number']),
     render: module.cwrap('vellum_web_render', 'number', []),
     count: module.cwrap('vellum_web_command_count', 'number', []),
     digest: module.cwrap('vellum_web_command_digest', 'number', []),
@@ -156,6 +211,7 @@ function render() {
     const height = number(style, 'height', 0);
     if (!(width > 0 && height > 0)) throw new Error('browser proof requires positive root width and height');
     const background = color(style.backgroundColor, '#f8fafc');
+    api.setScale(globalThis.devicePixelRatio || 1);
     if (!api.begin(width, height, ...background)) throw new Error('Wasm core rejected the frame');
     interactions = [];
     lowerNode(tree, { x: 0, y: 0, width, height }, 0, 0);

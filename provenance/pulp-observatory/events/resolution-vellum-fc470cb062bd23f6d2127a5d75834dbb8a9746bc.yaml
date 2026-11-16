@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-16T04:01:27Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-fc470cb062bd23f6d2127a5d75834dbb8a9746bc",
+  "kind": "resolution",
+  "linked_commits": [
+    "fc470cb062bd23f6d2127a5d75834dbb8a9746bc"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@claude-observatory-agent",
+  "rationale": "Test-only: pins blurred shadows inside faded groups in Vellum's partial-present test; Pulp has no counterpart. Pulp search at origin/main ced536cbc56b (git grep -w over core tools test examples apple ship inspect) for partial_present and PaintCommand returns 0; control SkiaSurface on the same search returns 288 in 64 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-10 and 2026-11-13); no schema or API delta. Any later resolution overrides it.",
+  "resolves": "vellum-fc470cb062bd23f6d2127a5d75834dbb8a9746bc",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

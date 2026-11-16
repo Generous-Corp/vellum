@@ -8,6 +8,49 @@ export type CapabilityDeclaration =
     | 'text-v1'
     | 'external-v1'
     | 'state-v1';
+export type BlendMode =
+    | 'normal'
+    | 'multiply'
+    | 'screen'
+    | 'overlay'
+    | 'darken'
+    | 'lighten'
+    | 'difference'
+    | 'exclusion'
+    | 'source_over'
+    | 'source-over'
+    | 'destination_in'
+    | 'destination-in'
+    | 'destination_out'
+    | 'destination-out'
+    | 'hue'
+    | 'saturation'
+    | 'color'
+    | 'luminosity'
+    | 'color_dodge'
+    | 'color-dodge'
+    | 'color_burn'
+    | 'color-burn'
+    | 'hard_light'
+    | 'hard-light'
+    | 'soft_light'
+    | 'soft-light'
+    | 'clear'
+    | 'source'
+    | 'destination'
+    | 'source_in'
+    | 'source-in'
+    | 'source_out'
+    | 'source-out'
+    | 'source_atop'
+    | 'source-atop'
+    | 'destination_over'
+    | 'destination-over'
+    | 'destination_atop'
+    | 'destination-atop'
+    | 'xor'
+    | 'plus';
+
 export interface ServiceCapabilities {
     commands?: 'v1' | 'denied' | 'unsupported';
     files?: 'user-selected-text-v1' | 'denied' | 'unsupported';
@@ -82,10 +125,34 @@ export declare const services: Readonly<{
     }>;
 }>;
 
+/**
+ * A gradient paint. Positions and radii are fractions of the painted box.
+ * Linear and conic angles follow CSS: 0 points up and angles run clockwise.
+ * `radiusX` and `radiusY` shape a radial ellipse (0 means half the box);
+ * `startRadius` and `endRadius` size the two-circle form's circles as
+ * fractions of the box's shorter side (0 means 0), centred on the focal point
+ * and the centre. `colorSpace` is the space the stops are written in and
+ * `interpolation` the space they blend in. `repeatLength` applies to linear
+ * gradients only, `angle` to linear and conic ones, `centerX`/`centerY` to
+ * every kind but linear, and `focalX`/`focalY` to two-circle-radial ones; a
+ * field set on a kind it does not apply to is refused.
+ */
 export interface LinearGradientStyle {
-    angle: number;
+    kind?: 'linear' | 'radial' | 'two-circle-radial' | 'conic';
+    angle?: number;
     repeating?: boolean;
     repeatLength?: number;
+    spread?: 'pad' | 'repeat' | 'reflect';
+    interpolation?: 'srgb' | 'linear-srgb' | 'oklab';
+    colorSpace?: 'srgb' | 'linear-srgb' | 'display-p3';
+    centerX?: number;
+    centerY?: number;
+    radiusX?: number;
+    radiusY?: number;
+    focalX?: number;
+    focalY?: number;
+    startRadius?: number;
+    endRadius?: number;
     stops: Array<{ position: number; color: string }>;
 }
 export interface BoxShadowStyle {
@@ -126,6 +193,12 @@ export interface Style {
     maskMode?: 'alpha' | 'luminance';
     /** `isolate` composites the node and its subtree as one group. */
     isolation?: 'auto' | 'isolate';
+    /**
+     * Blends the node and its subtree with what lies beneath it. The CSS spelling
+     * (`color-dodge`) and the underscore spelling are the same mode. Tier 2 modes
+     * may be drawn as `normal` with a warning on a renderer that lacks them.
+     */
+    mixBlendMode?: BlendMode;
     backgroundColor?: string;
     color?: string;
     direction?: 'horizontal' | 'vertical';
@@ -135,6 +208,7 @@ export interface Style {
     letterSpacing?: number;
     textDecoration?: string;
     backgroundLinearGradient?: LinearGradientStyle;
+    backgroundGradient?: LinearGradientStyle;
     boxShadow?: BoxShadowStyle;
 }
 
@@ -236,7 +310,7 @@ export interface PathProps extends Omit<ElementProps, 'children' | 'text' | 'sou
     d: string;
     fillRule?: 'nonzero' | 'evenodd';
     fill?: string | LinearGradientStyle;
-    stroke?: string;
+    stroke?: string | LinearGradientStyle;
     strokeWidth?: number;
     strokeLineJoin?: 'miter' | 'round' | 'bevel';
     strokeLineCap?: 'butt' | 'round' | 'square';
@@ -246,6 +320,33 @@ export interface PathProps extends Omit<ElementProps, 'children' | 'text' | 'sou
     children?: never;
 }
 export declare const Path: Component<PathProps>;
+
+/**
+ * A plot of a value-feed channel. The host feeds its samples at run time;
+ * colours are hex strings and the box's backgroundColor paints behind it.
+ */
+export interface PlotProps extends Omit<ElementProps, 'children' | 'text' | 'source'> {
+    plot: 'line' | 'area' | 'bar' | 'meter';
+    /** The verbatim name of the channel. */
+    channel: string;
+    source?: 'scalar' | 'meter' | 'vector';
+    /** Slots across the box; required unless the plot is a meter. */
+    slots?: number;
+    history?: 'scroll' | 'sweep';
+    orientation?: 'vertical' | 'horizontal';
+    audioChannel?: number;
+    min?: number;
+    max?: number;
+    baseline?: number;
+    lineWidth?: number;
+    barGap?: number;
+    peakWidth?: number;
+    lineColor?: string;
+    fillColor?: string;
+    peakColor?: string;
+    children?: never;
+}
+export declare const Plot: Component<PlotProps>;
 
 export interface CustomComponentProps extends ElementProps {
     component: string;
@@ -310,6 +411,14 @@ export interface VellumBridge {
     pumpJSON(): string;
     isDirty(): boolean;
     hasCommand(command: string): boolean;
+    /**
+     * Runs the handler a mounted component bound to a defined command with
+     * `useCommand`, and renders. Returns the JSON envelope
+     * `{protocol, command, invocations, changed, tree}`, where `changed` says
+     * whether the rendered tree differs from the one before; throws when the command is
+     * not defined or has no handler.
+     */
+    invokeCommand(command: string, arguments_?: Record<string, JsonValue>): string;
 }
 export type WidenScalar<Value> = Value extends string ? string
     : Value extends number ? number
@@ -324,6 +433,15 @@ export declare function useState<Value extends JsonValue>(
     WidenScalar<Value>,
     (next: WidenScalar<Value> | ((previous: WidenScalar<Value>) => WidenScalar<Value>)) => void,
 ];
+/**
+ * Binds the handler a command defined with `services.commands.define` runs
+ * while this component is mounted. The host invokes it inside a dispatch, so
+ * state the handler sets is rendered.
+ */
+export declare function useCommand(
+    command: string,
+    handler: (arguments_: Record<string, JsonValue>) => void,
+): void;
 export declare function useMemo<Value>(
     factory: () => Value,
     dependencies: readonly unknown[],

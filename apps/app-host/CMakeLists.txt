@@ -34,6 +34,17 @@ if(VELLUM_BUILD_TESTS)
             "$<TARGET_FILE:vellum-app-host>")
     set_tests_properties(vellum.app-host-manual-clock-capture PROPERTIES
         ENVIRONMENT "MTL_DEBUG_LAYER=0")
+    # The browser is resolved when the test runs, so a pin supplied or an
+    # escape hatch enabled after configure still reaches the test. With no
+    # browser named it reports a skip; a named browser that does not resolve
+    # fails.
+    add_test(NAME vellum.app-host-agent-workflow
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_agent_workflow.py"
+            "$<TARGET_FILE:vellum-app-host>")
+    set_tests_properties(vellum.app-host-agent-workflow PROPERTIES
+        ENVIRONMENT "MTL_DEBUG_LAYER=0"
+        SKIP_RETURN_CODE 77)
     find_program(VELLUM_NODE_EXECUTABLE NAMES node)
     if(VELLUM_NODE_EXECUTABLE AND
        EXISTS "${PROJECT_SOURCE_DIR}/packages/vellum-ui/node_modules/esbuild")
@@ -45,6 +56,17 @@ if(VELLUM_BUILD_TESTS)
                 "${VELLUM_NODE_EXECUTABLE}")
         set_tests_properties(vellum.app-host-design-anchor-dump PROPERTIES
             ENVIRONMENT "MTL_DEBUG_LAYER=0")
+        # Chrome is resolved when the test runs, since CI installs its pinned
+        # browser after configuring. Without any browser the test reports a
+        # skip; a named browser that does not resolve fails.
+        add_test(NAME vellum.app-host-html-import-geometry
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/test_html_import_geometry.py"
+                "$<TARGET_FILE:vellum-app-host>"
+                "${VELLUM_NODE_EXECUTABLE}")
+        set_tests_properties(vellum.app-host-html-import-geometry PROPERTIES
+            ENVIRONMENT "MTL_DEBUG_LAYER=0"
+            SKIP_RETURN_CODE 77)
     endif()
 endif()
 
@@ -119,6 +141,13 @@ if(VELLUM_BUILD_TESTS)
         PREFIX ""
         CXX_VISIBILITY_PRESET hidden)
 
+    add_library(vellum-sheen-component MODULE
+        tests/sheen_component.cpp)
+    target_link_libraries(vellum-sheen-component PRIVATE Vellum::ComponentAbi)
+    set_target_properties(vellum-sheen-component PROPERTIES
+        PREFIX ""
+        CXX_VISIBILITY_PRESET hidden)
+
     add_executable(vellum-component-registry-test
         component_registry.cpp
         tests/component_registry_test.cpp)
@@ -131,5 +160,6 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.component-registry-bounds
         COMMAND vellum-component-registry-test
             "$<TARGET_FILE:vellum-unterminated-component>"
-            "$<TARGET_FILE:vellum-unterminated-text-component>")
+            "$<TARGET_FILE:vellum-unterminated-text-component>"
+            "$<TARGET_FILE:vellum-sheen-component>")
 endif()

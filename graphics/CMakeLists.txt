@@ -1,11 +1,15 @@
 add_library(vellum-graphics
+    src/animation.cpp
     src/capture_stats.cpp
     src/damage.cpp
+    src/effect.cpp
     src/image_asset.cpp
     src/image_decode_queue.cpp
     src/layer_cache.cpp
     src/paint_command.cpp
     src/path_geometry.cpp
+    src/plot.cpp
+    src/plot_feed.cpp
     src/render_telemetry.cpp
     src/scene_acceptance.cpp)
 add_library(Vellum::Graphics ALIAS vellum-graphics)
@@ -24,7 +28,7 @@ target_compile_features(vellum-graphics PUBLIC cxx_std_20)
 # link contract, not just the tests.
 find_package(Threads REQUIRED)
 target_link_libraries(vellum-graphics
-    PUBLIC Vellum::Runtime Threads::Threads)
+    PUBLIC Vellum::Runtime Vellum::Value Threads::Threads)
 
 if(APPLE)
     target_sources(vellum-graphics PRIVATE src/core_graphics_canvas.mm)

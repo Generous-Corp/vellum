@@ -86,8 +86,10 @@ public:
                                                    std::string_view text) override;
     [[nodiscard]] std::optional<double> modulated_normalized(ParamHandle param) override;
 
-    /// The spec's plain range. The step is the distance between neighbouring
-    /// values when `value_count` is two or more, and 0 otherwise.
+    /// The spec's plain range. With `value_count` two or more the step is the
+    /// distance between neighbouring values; with three or more and a skew
+    /// other than 1 the values are not evenly spaced, so the step is 0 and
+    /// `plain_values` lists them. A continuous parameter has step 0.
     [[nodiscard]] ParamRange range(ParamHandle param) override;
     /// The spec's `value_labels` when it has exactly `value_count` of them.
     [[nodiscard]] std::vector<std::string> value_labels(ParamHandle param) override;

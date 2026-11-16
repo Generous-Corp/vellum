@@ -7,6 +7,7 @@
 #include <emscripten.h>
 
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -17,6 +18,7 @@ namespace {
 
 vellum::graphics::Scene scene;
 vellum::web::CanvasShellLowering lowering;
+float device_scale = 1.0F;
 const std::vector<vellum::graphics::PaintCommand>& commands = lowering.commands;
 std::unique_ptr<vellum::runtime::Kernel> kernel;
 
@@ -37,6 +39,33 @@ EM_JS(void, canvas_text,
        float red, float green, float blue, float alpha), {
     globalThis.VellumCanvasBackend.text(
         UTF8ToString(text), x, baseline, size, red, green, blue, alpha);
+});
+
+// A backend written before group compositing has no blendBegin or blendEnd;
+// the shell then draws blended groups as normal and reports each one rather
+// than calling a missing function.
+EM_JS(int, canvas_has_group_compositing, (), {
+    const backend = globalThis.VellumCanvasBackend;
+    return backend && typeof backend.blendBegin === "function" &&
+        typeof backend.blendEnd === "function" ? 1 : 0;
+});
+
+EM_JS(void, canvas_blend_begin, (const char* operation, float alpha), {
+    globalThis.VellumCanvasBackend.blendBegin(UTF8ToString(operation), alpha);
+});
+
+EM_JS(void, canvas_blend_end, (), {
+    globalThis.VellumCanvasBackend.blendEnd();
+});
+
+EM_JS(void, canvas_filter, (const char* css), {
+    const backend = globalThis.VellumCanvasBackend;
+    if (backend.filter) backend.filter(UTF8ToString(css));
+});
+
+EM_JS(void, canvas_color_matrix, (const char* id, const char* values), {
+    const backend = globalThis.VellumCanvasBackend;
+    if (backend.colorMatrix) backend.colorMatrix(UTF8ToString(id), UTF8ToString(values));
 });
 
 EM_JS(void, canvas_finish, (), {
@@ -97,6 +126,12 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_begin_frame(
     return 1;
 }
 
+EMSCRIPTEN_KEEPALIVE int vellum_web_set_scale(float scale) {
+    if (!(scale > 0.0F) || !std::isfinite(scale)) return 0;
+    device_scale = scale;
+    return 1;
+}
+
 EMSCRIPTEN_KEEPALIVE int vellum_web_add_rectangle(
     const char* id, float x, float y, float width, float height, float radius,
     float red, float green, float blue, float alpha) {
@@ -134,20 +169,60 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_add_text(
 EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     if (!kernel || scene.width <= 0.0F || scene.height <= 0.0F) return 0;
     using Kind = vellum::graphics::PaintCommand::Kind;
+    const vellum::web::CanvasShellCapabilities capabilities{
+        .group_compositing = canvas_has_group_compositing() != 0,
+        .scale = device_scale,
+    };
     // A refused scene draws nothing and keeps the previous canvas, as the
     // native renderer keeps its previous frame.
-    lowering = vellum::web::lower_for_canvas_shell(scene);
+    lowering = vellum::web::lower_for_canvas_shell(scene, capabilities);
     if (!lowering.accepted) return 0;
-    const auto opacities = vellum::graphics::effective_opacities(commands);
+    const auto plan = vellum::web::canvas_shell_paint_plan(commands, capabilities);
+    const auto& opacities = plan.opacities;
     const auto masked = vellum::web::canvas_shell_masked(commands);
+    // Whether each open layer was begun as a composited group, so its
+    // end_layer composites it.
+    std::vector<bool> open_groups;
     const auto background = scene.background;
     canvas_begin(scene.width, scene.height, background.red, background.green,
                  background.blue, background.alpha);
+    for (const auto& matrix : lowering.color_matrices) {
+        canvas_color_matrix(matrix.id.c_str(), matrix.values.c_str());
+    }
+    std::string filter;
     for (std::size_t index = 0; index < commands.size(); ++index) {
         const auto& command = commands[index];
         if (masked[index]) continue;
+        if (vellum::graphics::draws_content(command.kind) && lowering.filters[index] != filter) {
+            filter = lowering.filters[index];
+            canvas_filter(filter.empty() ? "none" : filter.c_str());
+        }
         auto color = command.fill;
         color.alpha *= opacities[index];
+        if (command.kind == Kind::begin_layer) {
+            const bool group = !plan.group_operations[index].empty();
+            open_groups.push_back(group);
+            if (group) {
+                // A group draws on a fresh context; the filter is set again on
+                // whichever context the next member draws to.
+                if (!filter.empty()) canvas_filter("none");
+                filter.clear();
+                const std::string operation(plan.group_operations[index]);
+                canvas_blend_begin(operation.c_str(), opacities[index]);
+            }
+            continue;
+        }
+        if (command.kind == Kind::end_layer) {
+            if (!open_groups.empty()) {
+                if (open_groups.back()) {
+                    if (!filter.empty()) canvas_filter("none");
+                    filter.clear();
+                    canvas_blend_end();
+                }
+                open_groups.pop_back();
+            }
+            continue;
+        }
         switch (command.kind) {
         case Kind::rectangle:
             canvas_rectangle(
@@ -180,15 +255,17 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
         case Kind::end_clip:
         case Kind::begin_mask:
         case Kind::end_mask:
+        case Kind::plot:
             break;
         }
     }
+    if (!filter.empty()) canvas_filter("none");
     canvas_finish();
     return 1;
 }
 
 /// The number of commands the last render drew with a loss; see
-/// `vellum::web::canvas_shell_loses`.
+/// `vellum::web::canvas_shell_loss_count`.
 EMSCRIPTEN_KEEPALIVE int vellum_web_lowering_loss_count() {
     return lowering.losses;
 }
