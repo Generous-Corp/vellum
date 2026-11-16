@@ -363,7 +363,12 @@ nothing. A version 10 or older scene with a track is refused with
 `VELLUM_SCENE_VERSION_MISMATCH`.
 
 `FrameDriver` (`vellum/graphics/frame_driver.hpp`) is the host loop that runs
-tracks and plots. The host calls `frame` from its vsync source with that
+tracks and plots. It is the scene client of `foundation::FramePump`
+(`vellum/foundation/frame_pump.hpp`), which owns what is not specific to a
+scene: the clock, resume handling, frame-needed gating, the thread-safe wake,
+bounded render retries and the reduced-motion setting. Any content that can be
+advanced and then drawn can drive the same pump with its own advance and render
+functions. The host calls `frame` from its vsync source with that
 source's own monotonic presentation time, on the thread that owns the scene
 and the surface. The driver advances `Scene::clock` by the measured time since
 the previous frame, starting from zero at the first frame, so keyframe times

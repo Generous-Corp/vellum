@@ -15,8 +15,6 @@ bool any_plot(const SceneNode& node) noexcept {
                        [](const SceneNode& child) { return any_plot(child); });
 }
 
-PlotChannelShape plot_shape(const PlotSpec& spec) noexcept { return spec.shape; }
-
 value::ChannelShape channel_shape(PlotChannelShape shape) noexcept {
     switch (shape) {
     case PlotChannelShape::scalar: return value::ChannelShape::scalar;
@@ -29,7 +27,7 @@ value::ChannelShape channel_shape(PlotChannelShape shape) noexcept {
 void add_bound_publishes(const SceneNode& node, const value::ValueFeed& feed,
                          std::uint32_t& signature) noexcept {
     if (node.kind == SceneNode::Kind::plot && node.plot != nullptr && !node.plot->channel.empty()) {
-        const auto index = feed.find(node.plot->channel, channel_shape(plot_shape(*node.plot)));
+        const auto index = feed.find(node.plot->channel, channel_shape(node.plot->shape));
         if (index) {
             signature = (signature * 31U + static_cast<std::uint32_t>(*index)) * 31U +
                         feed.publish_count(*index);
@@ -44,12 +42,17 @@ std::uint32_t feed_signature(const value::ValueFeed& feed, const Scene& scene) n
     return signature;
 }
 
+foundation::FramePumpOptions pump_options(const FrameDriverOptions& options) noexcept {
+    return {.nominal_dt = options.nominal_dt,
+            .wake_threshold = options.wake_threshold,
+            .max_render_retries = options.max_render_retries,
+            .reduced_motion = options.reduced_motion};
+}
+
 }  // namespace
 
 FrameDriver::FrameDriver(RenderFunction render, FrameDriverOptions options)
-    : render_(std::move(render)),
-      options_(options),
-      reduced_motion_(options.reduced_motion),
+    : render_(std::move(render)), options_(options), pump_(pump_options(options)),
       sampler_(options.feed) {}
 
 FrameDriver::~FrameDriver() = default;
@@ -59,96 +62,58 @@ void FrameDriver::set_feed(value::ValueFeed* feed) {
     feed_signature_ = 0;
     feed_live_ = false;
     ticks_since_publish_ = 0;
-    request_frame();
+    pump_.request_frame();
 }
-
-void FrameDriver::set_reduced_motion(bool reduced) {
-    reduced_motion_ = reduced;
-    request_frame();
-}
-
-void FrameDriver::set_clock(double seconds) {
-    clock_ = seconds;
-    request_frame();
-}
-
-void FrameDriver::set_wake(WakeFunction wake) {
-    wake_ = std::move(wake);
-    if (wake_ && requested_.load(std::memory_order_acquire)) wake_();
-}
-
-void FrameDriver::request_frame() {
-    if (!requested_.exchange(true, std::memory_order_acq_rel) && wake_) wake_();
-}
-
-void FrameDriver::suspend() noexcept { have_last_ = false; }
 
 FrameReport FrameDriver::frame(Scene& scene, double now_seconds) {
     FrameReport report;
-    const bool requested = requested_.exchange(false, std::memory_order_acq_rel);
-    bool exhausted = false;
-
-    double dt = 0.0;
-    if (!have_last_ || now_seconds - last_now_ > options_.wake_threshold) {
-        dt = options_.nominal_dt;
-        report.resumed = true;
-        last_now_ = now_seconds;
-    } else if (now_seconds > last_now_) {
-        dt = now_seconds - last_now_;
-        last_now_ = now_seconds;
-    }
-    have_last_ = true;
-    clock_ += dt;
-
-    const std::optional<double> end = tracks_end_time(scene);
-    if (reduced_motion_ && end && clock_ < *end) {
-        dt += *end - clock_;
-        clock_ = *end;
-    }
-    scene.clock = clock_;
-    report.clock = clock_;
-    report.dt = dt;
-
-    bool plots_changed = false;
-    if (feed_ != nullptr && any_plot(scene.root)) {
-        const std::uint32_t signature = feed_signature(*feed_, scene);
-        if (signature != feed_signature_) {
-            feed_signature_ = signature;
-            feed_live_ = true;
-            ticks_since_publish_ = 0;
-        } else if (feed_live_) {
-            ++ticks_since_publish_;
+    const auto advance = [&](foundation::FrameTick& tick) {
+        const std::optional<double> end = tracks_end_time(scene);
+        if (tick.reduced_motion && end && tick.clock < *end) {
+            tick.dt += *end - tick.clock;
+            tick.clock = *end;
         }
-        report.feed = sampler_.sample(*feed_, scene);
-        report.sampled = true;
-        plots_changed = !report.feed.updated.empty();
-        const std::uint32_t stale_after = options_.feed.stale_after_ticks;
-        if (feed_live_ && ticks_since_publish_ >= stale_after) feed_live_ = false;
-    } else {
-        feed_live_ = false;
-    }
+        scene.clock = tick.clock;
 
-    const bool track_moved =
-        end && (!rendered_once_ || (rendered_clock_ < *end && clock_ != rendered_clock_));
-    if (!rendered_once_ || requested || track_moved || plots_changed) {
-        report.rendered = true;
-        report.render_ok = render_ && render_(scene, &report.error);
-        if (report.render_ok) {
-            rendered_once_ = true;
-            rendered_clock_ = clock_;
-            failed_renders_ = 0;
+        bool plots_changed = false;
+        if (feed_ != nullptr && any_plot(scene.root)) {
+            const std::uint32_t signature = feed_signature(*feed_, scene);
+            if (signature != feed_signature_) {
+                feed_signature_ = signature;
+                feed_live_ = true;
+                ticks_since_publish_ = 0;
+            } else if (feed_live_) {
+                ++ticks_since_publish_;
+            }
+            report.feed = sampler_.sample(*feed_, scene);
+            report.sampled = true;
+            plots_changed = !report.feed.updated.empty();
+            if (feed_live_ && ticks_since_publish_ >= options_.feed.stale_after_ticks) {
+                feed_live_ = false;
+            }
         } else {
-            rendered_once_ = false;
-            if (failed_renders_ < options_.max_render_retries) ++failed_renders_;
-            else exhausted = true;
+            feed_live_ = false;
         }
-    }
 
-    report.tracks_running = end && clock_ < *end;
-    report.feed_active = feed_live_;
-    report.needs_next_frame =
-        report.tracks_running || feed_live_ || frame_requested() ||
-        (!report.render_ok && !exhausted);
+        report.tracks_running = end && tick.clock < *end;
+        report.feed_active = feed_live_;
+        const bool track_moved = end && rendered_clock_ < *end && tick.clock != rendered_clock_;
+        return foundation::FrameStep{.changed = track_moved || plots_changed,
+                                     .wants_more = report.tracks_running || feed_live_};
+    };
+    const auto render = [&](std::string* error) {
+        const bool ok = render_ && render_(scene, error);
+        if (ok) rendered_clock_ = scene.clock;
+        return ok;
+    };
+    const foundation::PumpReport pumped = pump_.frame(now_seconds, advance, render);
+    report.clock = pumped.clock;
+    report.dt = pumped.dt;
+    report.resumed = pumped.resumed;
+    report.rendered = pumped.rendered;
+    report.render_ok = pumped.render_ok;
+    report.error = pumped.error;
+    report.needs_next_frame = pumped.needs_next_frame;
     return report;
 }
 

@@ -1,13 +1,14 @@
 #pragma once
 
+#include <vellum/foundation/frame_pump.hpp>
 #include <vellum/graphics/lowering_diagnostic.hpp>
 #include <vellum/graphics/plot_feed.hpp>
 #include <vellum/graphics/scene.hpp>
 #include <vellum/value/value_feed.hpp>
 
-#include <atomic>
 #include <cstdint>
 #include <functional>
+#include <utility>
 #include <optional>
 #include <string>
 
@@ -54,12 +55,13 @@ struct FrameReport final {
     /// yet gone stale. Channels no plot reads do not count.
     bool feed_active = false;
     /// The host should tick again, also after a failed render (up to
-    /// `max_render_retries` in a row) so the next tick retries; when false it should stop its display link and call `suspend`,
-    /// and costs no frames until `request_frame`.
+    /// `max_render_retries` in a row) so the next tick retries; when false it
+    /// should stop its display link and call `suspend`, and costs no frames
+    /// until `request_frame`.
     bool needs_next_frame = false;
 };
 
-/// The per-frame loop a host runs a `Scene` with animation tracks (scene
+/// The `Scene` client of `foundation::FramePump`: the per-frame loop a host runs a `Scene` with animation tracks (scene
 /// version 11) and value plots (version 12) through.
 ///
 /// The host calls `frame` from its vsync source, on the thread that owns the
@@ -90,7 +92,7 @@ struct FrameReport final {
 class FrameDriver final {
 public:
     using RenderFunction = std::function<bool(const Scene&, std::string*)>;
-    using WakeFunction = std::function<void()>;
+    using WakeFunction = foundation::FramePump::WakeFunction;
 
     explicit FrameDriver(RenderFunction render, FrameDriverOptions options = {});
     ~FrameDriver();
@@ -101,32 +103,19 @@ public:
     /// feed must outlive its use here.
     void set_feed(value::ValueFeed* feed);
 
-    /// Main thread. Takes effect on the next frame.
-    void set_reduced_motion(bool reduced);
-    [[nodiscard]] bool reduced_motion() const noexcept { return reduced_motion_; }
+    /// The shared clock, gating and wake state; see `foundation::FramePump`.
+    /// A host drives requests, suspend, wake and reduced motion through it.
+    [[nodiscard]] foundation::FramePump& pump() noexcept { return pump_; }
+    [[nodiscard]] const foundation::FramePump& pump() const noexcept { return pump_; }
 
-    /// Moves the clock, for a host that restarts the epoch the keyframe times
-    /// use. Main thread; the next frame renders.
-    void set_clock(double seconds);
-    [[nodiscard]] double clock() const noexcept { return clock_; }
-
-    /// Called from `request_frame`, on whatever thread requested; it must be
-    /// thread safe and cheap, normally a hop to the thread that owns the
-    /// vsync source. Installing it while a request is already pending calls it
-    /// once, so the order of setup does not lose the first wake. Main thread,
-    /// before any other thread calls `request_frame`.
-    void set_wake(WakeFunction wake);
-
-    /// Asks for the next frame to render and wakes the host, once until that
-    /// frame runs. Any thread.
-    void request_frame();
-    [[nodiscard]] bool frame_requested() const noexcept {
-        return requested_.load(std::memory_order_acquire);
-    }
-
-    /// The host is about to stop ticking. The next frame is a resume
-    /// whatever the gap. Main thread.
-    void suspend() noexcept;
+    void set_reduced_motion(bool reduced) { pump_.set_reduced_motion(reduced); }
+    [[nodiscard]] bool reduced_motion() const noexcept { return pump_.reduced_motion(); }
+    void set_clock(double seconds) { pump_.set_clock(seconds); }
+    [[nodiscard]] double clock() const noexcept { return pump_.clock(); }
+    void set_wake(WakeFunction wake) { pump_.set_wake(std::move(wake)); }
+    void request_frame() { pump_.request_frame(); }
+    [[nodiscard]] bool frame_requested() const noexcept { return pump_.frame_requested(); }
+    void suspend() noexcept { pump_.suspend(); }
 
     /// One frame at `now_seconds`. Mutates `scene`: its clock, and the samples
     /// of the plots a feed updated.
@@ -134,21 +123,14 @@ public:
 
 private:
     RenderFunction render_;
-    WakeFunction wake_;
     FrameDriverOptions options_;
-    bool reduced_motion_ = false;
+    foundation::FramePump pump_;
     PlotFeedSampler sampler_;
     value::ValueFeed* feed_ = nullptr;
     std::uint32_t feed_signature_ = 0;
     bool feed_live_ = false;
     std::uint32_t ticks_since_publish_ = 0;
-    double clock_ = 0.0;
-    double last_now_ = 0.0;
-    bool have_last_ = false;
-    bool rendered_once_ = false;
     double rendered_clock_ = 0.0;
-    std::uint32_t failed_renders_ = 0;
-    std::atomic<bool> requested_{false};
 };
 
 }  // namespace vellum::graphics

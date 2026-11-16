@@ -30,7 +30,7 @@ target_compile_features(vellum-graphics PUBLIC cxx_std_20)
 # link contract, not just the tests.
 find_package(Threads REQUIRED)
 target_link_libraries(vellum-graphics
-    PUBLIC Vellum::Runtime Vellum::Value Threads::Threads)
+    PUBLIC Vellum::Foundation Vellum::Runtime Vellum::Value Threads::Threads)
 
 if(APPLE)
     target_sources(vellum-graphics PRIVATE src/core_graphics_canvas.mm)
