@@ -31,7 +31,8 @@ struct SceneAcceptance final {
 /// non-finite transform, opacity or corner radius, a root marked as a mask, a
 /// clip that fails `clip_is_valid`, an effect `find_invalid_effect` reports,
 /// an undrawable path, an image node without a valid reference or with
-/// children, an image table that `scene_images_are_valid` rejects, or a plot
+/// children, an image table that `scene_images_are_valid` rejects, a token
+/// table or reference that `find_invalid_token_reference` reports, or a plot
 /// that `find_invalid_plot` reports. A scene with tracks is also refused
 /// for a non-finite clock or a track `find_invalid_tracks` reports, and every
 /// rule after the version checks applies to the scene as `evaluate_tracks`

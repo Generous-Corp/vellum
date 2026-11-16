@@ -303,6 +303,13 @@ struct PaintCommandRange final {
 [[nodiscard]] std::vector<PaintCommand> make_paint_commands(
     const Scene& scene, std::vector<PaintCommandRange>* ranges);
 
+/// Lowers a scene whose tracks `evaluate_tracks` has already applied. Token
+/// receipts name authored colours, so the caller validates them on the
+/// authored scene (`accept_scene`) and this does not check them again; an
+/// animated token fill therefore keeps the colour its track gave it.
+[[nodiscard]] std::vector<PaintCommand> make_evaluated_paint_commands(
+    const Scene& evaluated, std::vector<PaintCommandRange>* ranges);
+
 /// Whether a mesh can be drawn as given: every index names a vertex, the index
 /// count is a multiple of three, every position and texture coordinate is
 /// finite, and a texture's pixel buffer matches its dimensions. On failure

@@ -11,7 +11,8 @@ add_library(vellum-graphics
     src/plot.cpp
     src/plot_feed.cpp
     src/render_telemetry.cpp
-    src/scene_acceptance.cpp)
+    src/scene_acceptance.cpp
+    src/token_receipts.cpp)
 add_library(Vellum::Graphics ALIAS vellum-graphics)
 
 set_target_properties(vellum-graphics PROPERTIES
