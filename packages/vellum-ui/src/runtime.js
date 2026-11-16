@@ -475,7 +475,29 @@ function vectorPaint(value, path) {
     }
     const paint = paintStyleObject(value, path, ['gradient', 'transform']);
     validateLinearGradient(paint.gradient, `${path}.gradient`, { coincidentStops: true });
+    if (paint.gradient.repeatLength !== undefined) {
+        throw new TypeError(`${path}.gradient cannot set a repeat length in a vector asset`);
+    }
     vectorMatrix(paint.transform, `${path}.transform`);
+    if (paint.transform !== undefined) {
+        const [a, b, c, d] = paint.transform.map(Math.fround);
+        const determinant = Math.fround(Math.fround(a * d) - Math.fround(b * c));
+        if (!Number.isFinite(determinant) || determinant === 0) {
+            throw new TypeError(`${path}.transform must be invertible in float32`);
+        }
+    }
+}
+
+// The native materializer reads every vector number as float32, so a number
+// that overflows it is refused here too.
+function float32Numbers(value, path) {
+    if (typeof value === 'number') {
+        if (!Number.isFinite(Math.fround(value))) throw new TypeError(`${path} is beyond the float32 range`);
+    } else if (Array.isArray(value)) {
+        value.forEach((item, index) => float32Numbers(item, `${path}[${index}]`));
+    } else if (value !== null && typeof value === 'object') {
+        for (const [key, item] of Object.entries(value)) float32Numbers(item, `${path}.${key}`);
+    }
 }
 
 // A compiled vector asset: the display list one vector node draws.
@@ -490,7 +512,8 @@ function validateVector(properties, path) {
     }
     asset.viewBox.forEach((number, index) => finitePaintNumber(
         number, `${path}.Vector asset viewBox[${index}]`));
-    if (!(asset.viewBox[2] > 0) || !(asset.viewBox[3] > 0)) {
+    float32Numbers(asset.viewBox, `${path}.Vector asset viewBox`);
+    if (!(Math.fround(asset.viewBox[2]) > 0) || !(Math.fround(asset.viewBox[3]) > 0)) {
         throw new TypeError(`${path}.Vector asset viewBox needs a positive width and height`);
     }
     if (!Array.isArray(asset.ops) || asset.ops.length > MAXIMUM_VECTOR_OPS) {
@@ -545,6 +568,7 @@ function validateVector(properties, path) {
         } else {
             throw new TypeError(`${where}.op must be group, end or path`);
         }
+        float32Numbers(raw, where);
     });
     if (depth !== 0) throw new TypeError(`${path}.Vector asset leaves a group open`);
     return { asset: cloneJson(asset, `${path}.Vector asset`) };

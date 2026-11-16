@@ -101,6 +101,15 @@ test('the vector primitive refuses malformed compiled assets', () => {
     assert.throws(miter(0), /strokeMiterLimit must be at least 1/);
     assert.throws(miter(0.5), /strokeMiterLimit must be at least 1/);
     assert.doesNotThrow(miter(1));
+    assert.throws(tree({ ...asset, viewBox: [0, 0, 1e100, 10] }), /float32/);
+    assert.throws(tree({ ...asset, viewBox: [0, 0, 1e-50, 10] }), /positive/);
+    assert.throws(tree({ ...asset, ops: [{ op: 'group', transform: [1e39, 0, 0, 1, 0, 0] }, { op: 'end' }] }), /float32/);
+    const ramp = { angle: 90, stops: [{ position: 0, color: '#000000' }, { position: 1, color: '#ffffff' }] };
+    const painted = (fill) => tree({ ...asset, ops: [{ op: 'path', d: 'M0 0H10V10Z', fill }] });
+    assert.doesNotThrow(painted({ gradient: ramp, transform: [1, 0, 0, 1, 0, 0] }));
+    assert.throws(painted({ gradient: { ...ramp, repeatLength: 1 } }), /repeat length/);
+    assert.throws(painted({ gradient: ramp, transform: [0, 0, 0, 0, 0, 0] }), /invertible/);
+    assert.throws(painted({ gradient: ramp, transform: [1e-30, 0, 0, 1e-30, 0, 0] }), /invertible/);
 });
 
 test('vector asset fields are not read below DesignIR version 6', async () => {

@@ -211,3 +211,48 @@ test('tiny geometry keeps its precision before a large transform, in plain notat
     assert.doesNotMatch(op.d, /e/);
     assert.ok(SVG_ASSET_LIMITS.maxDashSegments < 100000);
 });
+
+test('a paint fallback is a colour or none, so a chain of references cannot recurse', () => {
+    const chained = wrap(`<rect width="1" height="1" fill="${'url(#x) '.repeat(50000)}red"/>`);
+    const imported = importSvgAsset(chained);
+    assert.ok(codes(imported.diagnostics).includes('svg-property-invalid'));
+    const fallback = importSvgAsset(wrap('<rect width="1" height="1" fill="url(#missing) red"/>'));
+    assert.match(JSON.stringify(fallback.root), /"fill":"#ff0000"/, 'a colour fallback still paints');
+});
+
+test('the rasterizer is never asked for more pixels than the raster budget', () => {
+    const sized = (width, height) => `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><text>x</text></svg>`;
+    let calls = 0;
+    const rasterize = () => { calls += 1; return raster; };
+    assert.equal(importSvgAsset(sized(8192, 2048), { rasterize }).mode, 'rasterized', 'at the pixel limit');
+    for (const [width, height] of [[1000000, 1000000], [8193, 1], [8192, 2049]]) {
+        assert.throws(() => importSvgAsset(sized(width, height), { rasterize }), /rasterizing at/);
+    }
+    assert.equal(calls, 1);
+    assert.equal(importSvgAsset(sized(1000000, 1000000)).mode, 'subtree', 'without a rasterizer the text is a loss');
+});
+
+test('inherit takes the parent value for a property that does not inherit', () => {
+    const stops = importSvgAsset(wrap('<linearGradient id="g" stop-color="red"><stop offset="0" stop-color="inherit"/>' +
+        '<stop offset="1" stop-color="blue"/></linearGradient><rect width="10" height="10" fill="url(#g)"/>'));
+    const text = JSON.stringify(stops.root);
+    assert.match(text, /#ff0000/);
+    assert.doesNotMatch(text, /#000000/);
+    const faded = importSvgAsset(wrap('<g opacity="0.5"><g opacity="inherit"><rect width="1" height="1"/></g></g>'));
+    assert.equal((JSON.stringify(faded.root).match(/"opacity":0.5/g) ?? []).length, 2);
+});
+
+test('a clip-path on a clipPath, as an attribute or a style, is rasterized or reported', () => {
+    for (const clip of ['clip-path="url(#i)"', 'style="clip-path:url(#i)"']) {
+        const svg = wrap(`<defs><clipPath id="i"><rect width="5" height="10"/></clipPath><clipPath id="o" ${clip}>` +
+            '<rect width="10" height="10"/></clipPath></defs><rect width="10" height="10" clip-path="url(#o)"/>');
+        assert.equal(importSvgAsset(svg, { rasterize: () => raster }).mode, 'rasterized', clip);
+        const loss = importSvgAsset(svg).diagnostics.find((item) => item.code === 'svg-raster-feature-dropped');
+        assert.match(loss?.message ?? '', /clip-path on a clipPath/, clip);
+    }
+});
+
+test('a stylesheet is reported wherever it is, definitions included', () => {
+    const imported = importSvgAsset(wrap('<defs><style>rect{fill:red}</style></defs><rect width="10" height="10"/>'));
+    assert.deepEqual(codes(imported.diagnostics), ['svg-style-element-dropped']);
+});

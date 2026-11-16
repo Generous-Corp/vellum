@@ -1,4 +1,5 @@
 #include "canvas_shell_lowering.hpp"
+#include "command_digest.hpp"
 
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/lowering_diagnostic.hpp>
@@ -681,8 +682,23 @@ bool vector_builder_helpers() {
     }
     const auto opacities = vellum::graphics::effective_opacities(lowering.commands);
     const auto plan = vellum::web::lower_vector_for_canvas(lowering.commands[0], opacities[0]);
-    return contains(plan.json, "\"alpha\":0.5,") &&
-           contains(plan.json, "{\"op\":\"clip\",\"d\":\"\",\"rule\":\"nonzero\"}");
+    if (!contains(plan.json, "\"alpha\":0.5,") ||
+        !contains(plan.json, "{\"op\":\"clip\",\"d\":\"\",\"rule\":\"nonzero\"}")) {
+        return false;
+    }
+    // The proof digest tells the node's opacity apart, and an opaque frame
+    // hashes the same each time.
+    const auto digest = [&](float opacity) {
+        auto faded = vector_scene({red});
+        faded.root.children[0].opacity = opacity;
+        return vellum::web::command_digest(vellum::web::lower_for_canvas_shell(faded).commands);
+    };
+    if (digest(1.0F) != digest(1.0F) || digest(1.0F) == digest(0.5F) ||
+        digest(0.5F) == digest(0.25F)) {
+        std::cerr << "the command digest does not carry a vector node's opacity\n";
+        return false;
+    }
+    return true;
 }
 }  // namespace
 

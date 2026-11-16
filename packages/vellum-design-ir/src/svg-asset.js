@@ -31,6 +31,8 @@ export const SVG_ASSET_LIMITS = Object.freeze({
     maxSourceIdBytes: 900,
     maxNodeBudget: 100000,
     maxMatrixEntry: 1e9,
+    maxRasterSide: 8192,
+    maxRasterPixels: 16 * 1024 * 1024,
 });
 export const DEFAULT_SVG_NODE_BUDGET = 512;
 export const DEFAULT_SVG_PATH_DATA_BUDGET = 64 * 1024;
@@ -267,6 +269,7 @@ function parseXml(svg) {
         }
         const node = { name: resolved.local, qualified: name, attributes: resolved.attributes,
             children: [], parts: [], text: '', dropped, scope: resolved.scope };
+        Object.defineProperty(node, 'parent', { value: parent });
         if (!dropped) {
             parent.children.push(node);
             parent.parts.push(node);
@@ -1117,8 +1120,13 @@ function declared(node) {
     if (node.attributes.style !== undefined) {
         Object.assign(values, styleDeclarations(node.attributes.style, `<${node.name}>`));
     }
+    // An inherited property's `inherit` is its default; any other takes the
+    // parent's value, as CSS defines it.
     for (const [name, value] of Object.entries(values)) {
-        if (value === 'inherit') delete values[name];
+        if (value !== 'inherit') continue;
+        const inherited = INHERITED.includes(name) || !node.parent ? undefined : declared(node.parent)[name];
+        if (inherited === undefined) delete values[name];
+        else values[name] = inherited;
     }
     return values;
 }
@@ -1134,8 +1142,10 @@ const ENUMERATED = {
 function validProperty(name, value) {
     if (ENUMERATED[name]) return ENUMERATED[name].includes(value);
     if (name === 'fill' || name === 'stroke') {
-        return value === 'none' || value === 'currentColor' || /^url\(/.test(value) ||
-            parseColor(value) !== null;
+        const url = /^url\(\s*(['"]?)#[^'")\s]+\1\s*\)\s*(.*)$/.exec(value);
+        const color = url ? url[2] : value;
+        return (url !== null && color === '') || color === 'none' || color === 'currentColor' ||
+            parseColor(color) !== null;
     }
     if (name === 'color') return parseColor(value) !== null;
     if (name === 'fill-opacity' || name === 'stroke-opacity') {
@@ -1307,6 +1317,19 @@ class Importer {
             this.rasterOnly.push({ path: this.rootId, reason: 'filter needs rasterization' });
         }
         this.dropUnknownAttributes(svg, this.rootId);
+        // A stylesheet anywhere, definitions included, is not applied.
+        const pending = [[svg, this.rootId]];
+        while (pending.length > 0) {
+            const [node, path] = pending.pop();
+            node.children.forEach((child, index) => {
+                if (child.name === 'style') {
+                    this.report('svg-style-element-dropped', `${path}.${index}`,
+                        'a <style> element was dropped; CSS selectors are not applied');
+                } else {
+                    pending.push([child, `${path}.${index}`]);
+                }
+            });
+        }
         // A root with display none draws nothing, whatever it contains.
         const children = values.display === 'none' ? []
             : this.children(svg, this.rootId, this.inherit(INITIAL, svg), new Set());
@@ -1415,10 +1438,7 @@ class Importer {
             this.report('svg-animation-dropped', path, `<${node.name}> was dropped; the static frame is drawn`);
             return null;
         }
-        if (node.name === 'style') {
-            this.report('svg-style-element-dropped', path, 'a <style> element was dropped; CSS selectors are not applied');
-            return null;
-        }
+        if (node.name === 'style') return null;
         if (RASTER_ELEMENTS.has(node.name) || node.name === 'tspan' || node.name === 'textPath') {
             this.rasterOnly.push({ path, reason: `<${node.name}> needs rasterization` });
             return { kind: 'raster-only', path, element: node.name };
@@ -1627,15 +1647,21 @@ class Importer {
         return this.children(target, `${sourceId}:${escapeId(targetId)}`, this.inherit(inner, target, `${sourceId}`), active, true);
     }
 
-    paint(value, opacity, path, property, state) {
+    // A fallback is a colour or none, never another reference, so the
+    // fallback a paint names resolves without recursing again.
+    paint(value, opacity, path, property, state, fallback = false) {
         if (value === undefined || value === 'none') return { kind: 'none' };
         const url = /^url\(\s*(['"]?)#([^'")]+)\1\s*\)\s*(.*)$/.exec(value);
+        if (url && fallback) {
+            this.report('svg-paint-dropped', path, `${property} has a reference as a fallback; nothing was painted`);
+            return { kind: 'none' };
+        }
         if (url) {
             const definition = this.ids.get(url[2]);
             if (definition && (definition.name === 'linearGradient' || definition.name === 'radialGradient')) {
                 const gradient = this.gradient(definition, path, property, state);
                 if (!gradient) {
-                    if (url[3]) return this.paint(url[3].trim(), opacity, path, property, state);
+                    if (url[3]) return this.paint(url[3].trim(), opacity, path, property, state, true);
                     return { kind: 'none' };
                 }
                 if (gradient.stops.length === 1) {
@@ -1649,7 +1675,7 @@ class Importer {
                 this.rasterOnly.push({ path, reason: `the ${property} pattern needs rasterization` });
                 return { kind: 'none' };
             }
-            if (url[3]) return this.paint(url[3].trim(), opacity, path, property, state);
+            if (url[3]) return this.paint(url[3].trim(), opacity, path, property, state, true);
             this.report('svg-paint-unresolved', path, `${property} names ${url[2]}, which is not a gradient in the asset; nothing was painted`);
             return { kind: 'none' };
         }
@@ -1890,8 +1916,9 @@ class Importer {
                         transform: multiply(clipTransform, childTransform) });
                 }
                 group.clip = { shapes, units };
-                if (definition.attributes['clip-path']) {
-                    this.report('svg-clip-nested-dropped', path, 'a clip-path on a clipPath was dropped');
+                const nested = declared(definition)['clip-path'];
+                if (nested !== undefined && nested !== 'none') {
+                    this.rasterOnly.push({ path, reason: 'a clip-path on a clipPath needs rasterization' });
                 }
             }
         }
@@ -2508,6 +2535,12 @@ export function importSvgAsset(svg, options = {}) {
 
     const rasterReasons = [...new Set(importer.rasterOnly.map((item) => item.reason))];
     const rasterize = () => {
+        const side = Math.max(Math.ceil(importer.width), Math.ceil(importer.height));
+        if (side > SVG_ASSET_LIMITS.maxRasterSide ||
+            Math.ceil(importer.width) * Math.ceil(importer.height) > SVG_ASSET_LIMITS.maxRasterPixels) {
+            refuse(`rasterizing at ${importer.width}x${importer.height} is beyond ` +
+                `${SVG_ASSET_LIMITS.maxRasterSide} pixels a side or ${SVG_ASSET_LIMITS.maxRasterPixels} pixels`);
+        }
         const input = rasterInput(importer.root);
         if (input.left.length > 0) {
             importer.report('svg-raster-input-sanitized', settings.sourceId,

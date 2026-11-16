@@ -549,15 +549,11 @@ test('the expanded nesting limit holds at the limit and refuses one past it', ()
         for (let index = 1; index <= levels; index += 1) body += `<use id="u${index}" href="#u${index - 1}"/>`;
         return wrap(`${body}</defs><use href="#u${levels}"/>`);
     };
-    // svg, the outer use, then two levels per use link: the deepest legal
-    // chain is found by the limit itself.
-    let legal = 0;
-    for (let levels = 1; levels < 80; levels += 1) {
-        try { importSvgAsset(nested(levels)); legal = levels; } catch { break; }
-    }
-    assert.ok(legal > 0);
-    assert.doesNotThrow(() => importSvgAsset(nested(legal)), 'at the limit');
-    assert.throws(() => importSvgAsset(nested(legal + 1)), /nest deeper than 64/, 'one past the limit');
+    // The svg, the outer use and u0 are three levels, and each link adds
+    // one, so 61 links nest exactly 64 deep.
+    assert.equal(SVG_ASSET_LIMITS.maxExpandedDepth, 64);
+    assert.doesNotThrow(() => importSvgAsset(nested(61)), 'at the limit');
+    assert.throws(() => importSvgAsset(nested(62)), /nest deeper than 64/, 'one past the limit');
 });
 
 test('every importer limit matches its consumer and holds at the limit and one past it', () => {
