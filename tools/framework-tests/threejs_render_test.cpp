@@ -6,11 +6,10 @@
 // the wrong colour, which these pixel checks see. Exits 77 (skipped) when the
 // host has no rendering adapter.
 //
-// The binding replays each buffered draw as its own render pass with the
-// pass's load operation, so a draw that clears erases the draws before it:
-// today a frame shows only its last draw. The checks below look at the object
-// drawn last (the peak bar, the pulse core, the ribbon, the room's point
-// cloud), so they hold until that is fixed.
+// A scene draws several objects in one render pass, so the checks count each
+// object's own colour in the readback: every object a scene adds must appear,
+// not only the one drawn last. The spectrum scene also checks depth: the bars
+// stand in front of the peak bar, so they cover it wherever the two overlap.
 
 #include "framework_test.hpp"
 #include "threejs_gpu.hpp"
@@ -181,7 +180,7 @@ state.status = 'ready';
     CHECK(corner[0] > 150 && corner[1] < 80);
 }
 
-FRAMEWORK_TEST(spectrum_bars_render_their_peak_bar) {
+FRAMEWORK_TEST(spectrum_bars_render_in_front_of_their_peak_bar) {
     ModuleOutcome m;
     ScriptedView v(320, 220, threejs_test::surface().get());
     register_frame(v, "__readSpectrumFrame__", 1.0, 0.5, 0.0, 0.25,
@@ -218,10 +217,15 @@ state.status = 'ready';
     threejs_test::report("spectrum", r);
     CHECK(r.ok());
     if (!r.ok()) return;
+    // The 24 sky-blue bars (0x38bdf8) and the lime peak bar (0xa3e635).
+    const auto bars = r.count([](int red, int g, int b) { return red < 110 && g >= 150 && g <= 225 && b > 205; });
+    const auto peak = r.count([](int red, int g, int b) { return red > 120 && g > 190 && b < 110; });
+    std::fprintf(stderr, "  spectrum bar pixels: %zu, peak pixels: %zu\n", bars, peak);
+    CHECK(bars > 2000);
+    CHECK(peak > 120);
+    // The centre bars are nearer than the peak bar, so the centre shows a bar.
     const auto* c = r.center();
-    CHECK(c[1] > 110);
-    CHECK(c[1] > c[0]);
-    CHECK(c[1] > c[2]);
+    CHECK(c[2] > 205 && c[0] < 110);
 }
 
 FRAMEWORK_TEST(a_point_cloud_renders_around_its_pulse_core) {
@@ -264,10 +268,20 @@ state.status = 'ready';
     threejs_test::report("particles", r);
     CHECK(r.ok());
     if (!r.ok()) return;
-    const auto* c = r.center();
-    CHECK(c[1] > 85);
-    CHECK(c[2] > 85);
-    CHECK(c[1] + c[2] > c[0] + 70);
+    // The core sphere (0x7dd3fc) fills the centre; the points ring it, out past
+    // the sphere's edge about 15 pixels from the centre.
+    const auto core = r.count([](int red, int g, int b) { return std::abs(red - 125) < 20 && std::abs(g - 211) < 20 && b > 230; });
+    size_t ring = 0;
+    for (uint32_t y = 0; y < r.height; ++y)
+        for (uint32_t x = 0; x < r.width; ++x) {
+            const auto* p = r.at(x, y);
+            if (std::hypot(double(x) - r.width / 2.0, double(y) - r.height / 2.0) > 22.0 &&
+                p[1] > 85 && p[2] > 85 && p[1] + p[2] > p[0] + 70)
+                ++ring;
+        }
+    std::fprintf(stderr, "  particles core pixels: %zu, ring pixels: %zu\n", core, ring);
+    CHECK(core > 300);
+    CHECK(ring > 120);
 }
 
 FRAMEWORK_TEST(an_indexed_waveform_ribbon_renders) {
@@ -427,9 +441,17 @@ state.status = 'ready';
     CHECK(r.ok());
     if (!r.ok()) return;
     CHECK(r.width == 180 && r.height == 140);
-    const auto lit = r.count([](int red, int g, int b) { return g > 70 && b > 60 && g + b > red + 30; });
-    std::fprintf(stderr, "  room lit pixels: %zu\n", lit);
-    CHECK(lit > 12);
+    // The source sphere (pink), the listener sphere (0x7dd3fc), the reflection
+    // lines (pale yellow to green) and the cloud (cyan).
+    const auto source = r.count([](int red, int g, int b) { return red > 190 && g < 160 && b > 80 && b < 190; });
+    const auto listener = r.count([](int red, int g, int b) { return std::abs(red - 125) < 25 && std::abs(g - 211) < 25 && b > 225; });
+    const auto lines = r.count([](int red, int g, int b) { return red >= 200 && g >= 230 && b < 200; });
+    const auto cloud = r.count([](int red, int g, int b) { return red < 170 && g > 200 && b >= 220; });
+    std::fprintf(stderr, "  room source: %zu, listener: %zu, lines: %zu, cloud: %zu\n", source, listener, lines, cloud);
+    CHECK(source >= 2);
+    CHECK(listener >= 6);
+    CHECK(lines > 50);
+    CHECK(cloud > 20);
 }
 
 } // namespace
