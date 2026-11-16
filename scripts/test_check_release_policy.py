@@ -770,6 +770,14 @@ class Isolation(unittest.TestCase):
         elsewhere = ("jobs:\n  mint:\n" + "    steps:\n" + self.MINT.format(id="app-token")
                      + "  read:\n" + self.read(mint=""))
         self.refused(elsewhere)
+        # Allowlisting the steps does not stand in for the mint: each of these
+        # still reads without a token minted earlier in its own job.
+        for label, workflow in {**{label: self.read(mint=mint) for label, mint in cases.items()},
+                                "later": later, "elsewhere": elsewhere}.items():
+            with self.subTest(allowlisted=label):
+                problems = self.allowed(workflow)
+                self.assertTrue(any("Administration-only" in p for p in problems), problems)
+        self.assertEqual(self.allowed(self.read()), [])
 
     def test_a_gh_api_call_split_across_lines_is_read(self) -> None:
         for label, run in {
@@ -1383,6 +1391,19 @@ class RunAllowlist(unittest.TestCase):
             "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "uses: ./.github/actions/local", 1)
         problems = policy.run_body_problems(policy.SIGNING_WORKFLOW, local, allowlist_for({policy.SIGNING_WORKFLOW: local}))
         self.assertTrue(any("not an action pinned" in p for p in problems), problems)
+
+    def test_gh_token_is_the_actions_token_or_a_minted_one(self) -> None:
+        # Outside the Administration reads, GH_TOKEN is still one of the two
+        # credentials the review expects, even in an allowlisted step.
+        old = "          GH_TOKEN: ${{ github.token }}\n          TAG: ${{ steps.select.outputs.tag }}"
+        for value in ("${{ secrets.SHIPYARD_APP_PRIVATE_KEY }}", "${{ steps.select.outputs.tag }}", "ghp_literal",
+                      "${{ steps.later.outputs.token }}"):
+            with self.subTest(value=value):
+                text = self.workflows[policy.SIGNING_WORKFLOW].replace(old, old.replace("${{ github.token }}", value), 1)
+                self.assertNotEqual(text, self.workflows[policy.SIGNING_WORKFLOW])
+                problems = policy.run_body_problems(policy.SIGNING_WORKFLOW, text,
+                                                    allowlist_for({policy.SIGNING_WORKFLOW: text}))
+                self.assertTrue(any("neither the Actions token" in p for p in problems), problems)
 
     def test_the_signing_key_never_shares_a_step_with_a_github_credential(self) -> None:
         key = "          RELEASE_TAG_SIGNING_KEY: ${{ secrets.RELEASE_TAG_SIGNING_KEY }}\n          TAG: ${{ steps.decision"
