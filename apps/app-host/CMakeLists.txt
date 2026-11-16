@@ -41,7 +41,8 @@ if(VELLUM_BUILD_TESTS)
                 "${CMAKE_CURRENT_SOURCE_DIR}/test_agent_workflow.py"
                 "$<TARGET_FILE:vellum-app-host>")
         set_tests_properties(vellum.app-host-agent-workflow PROPERTIES
-            ENVIRONMENT "MTL_DEBUG_LAYER=0")
+            ENVIRONMENT "MTL_DEBUG_LAYER=0"
+            SKIP_RETURN_CODE 77)
     endif()
     find_program(VELLUM_NODE_EXECUTABLE NAMES node)
     if(VELLUM_NODE_EXECUTABLE AND
