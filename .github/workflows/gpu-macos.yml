@@ -239,6 +239,41 @@ jobs:
           # the GPU build and both reproducible SDK builds.
           printf 'VELLUM_MIRROR_DEPS_DIR=%s\n' "$RUNNER_TEMP/vellum-mirror-deps" >> "$GITHUB_ENV"
 
+      - name: Download and verify the locked V8 provider
+        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The V8 row of provenance/third-party-lock.json is the only place
+          # the pin is written; configure checks the same digest again.
+          reader="$RUNNER_TEMP/read_v8_lock.py"
+          cat > "$reader" <<'PY'
+          import json, re, sys
+          lock = json.load(open("provenance/third-party-lock.json", encoding="utf-8"))
+          rows = [row for row in lock["dependencies"] if row.get("name") == "V8"]
+          if len(rows) != 1:
+              sys.exit("the dependency lock has no single V8 row")
+          url, sha256 = rows[0]["url"], rows[0]["sha256"]
+          # Fail closed on anything but a v8-builder mac-arm64 release asset.
+          if (not re.fullmatch(r"https://github\.com/danielraffel/v8-builder/releases/download/"
+                               r"v8-m[0-9]+-[0-9.]+-[0-9a-f]+/v8-mac-arm64-[A-Za-z0-9._-]+\.zip", url)
+                  or not re.fullmatch(r"[0-9a-f]{64}", sha256)):
+              sys.exit("the V8 lock row names an unexpected asset")
+          print(url, url.rsplit("/", 1)[1], sha256)
+          PY
+          python3 -I "$reader" > "$RUNNER_TEMP/v8-lock-asset.txt"
+          read -r url asset sha256 < "$RUNNER_TEMP/v8-lock-asset.txt"
+          [[ "$url" =~ ^https://github\.com/danielraffel/v8-builder/releases/download/v8-m[0-9]+-[0-9.]+-[0-9a-f]+/v8-mac-arm64-[A-Za-z0-9._-]+\.zip$ ]]
+          [[ "$sha256" =~ ^[0-9a-f]{64}$ ]]
+          archive="$RUNNER_TEMP/$asset"
+          curl --fail --location --silent --show-error \
+            --retry 12 --retry-max-time 180 --retry-all-errors \
+            --continue-at - \
+            "$url" \
+            --output "$archive"
+          printf '%s  %s\n' "$sha256" "$archive" | shasum -a 256 -c -
+          printf 'VELLUM_V8_ARCHIVE=%s\n' "$archive" >> "$GITHUB_ENV"
+
       - name: Set up the authoring toolchain
         if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -318,6 +353,8 @@ jobs:
             -DVELLUM_ENABLE_MIRROR=ON \
             -DVELLUM_MIRROR_DEPS_DIR="$VELLUM_MIRROR_DEPS_DIR" \
             -DVELLUM_VIEW_AUDIO_ARCHIVE="$VELLUM_VIEW_AUDIO_ARCHIVE" \
+            -DVELLUM_ENABLE_V8=ON \
+            -DVELLUM_V8_ARCHIVE="$VELLUM_V8_ARCHIVE" \
             -DVELLUM_ENABLE_RMLUI=ON \
             -DVELLUM_RMLUI_VELLUM_RENDERER=ON
           cmake --build build-gpu --parallel "$VELLUM_BUILD_JOBS"
