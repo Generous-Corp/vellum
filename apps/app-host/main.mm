@@ -1,9 +1,11 @@
 #import <Cocoa/Cocoa.h>
 #import <Metal/Metal.h>
+#import <QuartzCore/CADisplayLink.h>
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <vellum/authoring/js_application.hpp>
 #include <vellum/graphics/capture_stats.hpp>
+#include <vellum/graphics/frame_driver.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
 #include <vellum/graphics/dawn_native_bootstrap.hpp>
@@ -32,6 +34,7 @@ using vellum::authoring::Interaction;
 using vellum::authoring::JsApplication;
 using vellum::authoring::RenderedApplication;
 using vellum::authoring::TextInputControl;
+using vellum::graphics::FrameDriver;
 using vellum::graphics::SkiaDawnSurface;
 using vellum::app_host::ComponentModuleSpec;
 using vellum::app_host::ComponentRegistry;
@@ -487,6 +490,10 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
     std::unique_ptr<ComponentRegistry> _components;
     RenderedApplication _rendered;
     std::unique_ptr<SkiaDawnSurface> _surface;
+    std::unique_ptr<FrameDriver> _driver;
+    id _displayLink;
+    NSTimer* _frameTimer;
+    id _motionObserver;
     std::filesystem::path _persistencePath;
     std::string _focusedInputId;
     NSRange _selectedTextRange;
@@ -571,6 +578,69 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
 
 - (void)dealloc {
     [_asyncTimer invalidate];
+    [self stopFrames];
+    if (_motionObserver != nil) {
+        [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:_motionObserver];
+    }
+}
+
+- (void)startFrames {
+    if (_driver == nullptr || self.window == nil) return;
+    if (@available(macOS 14.0, *)) {
+        if (_displayLink == nil) {
+            _displayLink = [self displayLinkWithTarget:self selector:@selector(frameTick:)];
+            [_displayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+        }
+        ((CADisplayLink*)_displayLink).paused = NO;
+        return;
+    }
+    if (_frameTimer == nil) {
+        __weak VellumApplicationView* weakSelf = self;
+        _frameTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 60.0
+                                                      repeats:YES
+                                                        block:^(NSTimer* timer) {
+            (void)timer;
+            [weakSelf frameTick:nil];
+        }];
+    }
+}
+
+- (void)pauseFrames {
+    if (_driver != nullptr) _driver->suspend();
+    if (@available(macOS 14.0, *)) {
+        if (_displayLink != nil) ((CADisplayLink*)_displayLink).paused = YES;
+    }
+    [_frameTimer invalidate];
+    _frameTimer = nil;
+}
+
+- (void)stopFrames {
+    if (@available(macOS 14.0, *)) {
+        [(CADisplayLink*)_displayLink invalidate];
+    }
+    _displayLink = nil;
+    [_frameTimer invalidate];
+    _frameTimer = nil;
+}
+
+- (void)frameTick:(id)link {
+    if (_driver == nullptr || !_surface) return;
+    double now = CACurrentMediaTime();
+    if (@available(macOS 14.0, *)) {
+        if ([link isKindOfClass:CADisplayLink.class]) {
+            const double target = ((CADisplayLink*)link).targetTimestamp;
+            if (target > 0.0) now = target;
+        }
+    }
+    const auto report = _driver->frame(_rendered.scene, now);
+    if (!report.render_ok) {
+        NSLog(@"Vellum frame failed: %s", report.error.c_str());
+    }
+    if (!report.needs_next_frame) [self pauseFrames];
+}
+
+- (void)requestFrame {
+    if (_driver != nullptr) _driver->request_frame();
 }
 
 - (void)pumpAsyncWork:(NSTimer*)timer {
@@ -591,7 +661,7 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
 - (BOOL)finishMutation:(std::string*)error {
     if (!_components->expand(_rendered.scene, error)) return NO;
     if (!persist_state(*_application, _persistencePath, error)) return NO;
-    if (_surface && !_surface->render_incremental(_rendered.scene, error)) return NO;
+    [self requestFrame];
     _accessibility->sync(_rendered.accessibility_nodes);
     return YES;
 }
@@ -630,7 +700,14 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
 
 - (void)viewDidMoveToWindow {
     [super viewDidMoveToWindow];
-    if (self.window == nil || _surface) return;
+    if (self.window == nil) {
+        [self stopFrames];
+        return;
+    }
+    if (_surface) {
+        [self requestFrame];
+        return;
+    }
     CAMetalLayer* layer = static_cast<CAMetalLayer*>(self.layer);
     const float scale = static_cast<float>(self.window.backingScaleFactor);
     layer.contentsScale = scale;
@@ -647,10 +724,36 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
          .scale = scale,
          .native_surface_handle = (__bridge void*)layer},
         &error);
-    if (!_surface || !validate_gpu(*_surface, true, &error) ||
-        !_surface->render(_rendered.scene, &error)) {
+    if (!_surface || !validate_gpu(*_surface, true, &error)) {
         NSLog(@"Vellum GPU initialization failed: %s", error.c_str());
+        return;
     }
+    SkiaDawnSurface* surface = _surface.get();
+    _driver = std::make_unique<FrameDriver>(
+        [surface](const vellum::graphics::Scene& scene, std::string* failure) {
+            return surface->render_incremental(scene, failure);
+        });
+    _driver->set_reduced_motion(
+        NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion);
+    __weak VellumApplicationView* weakSelf = self;
+    _driver->set_wake([weakSelf] {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [weakSelf startFrames];
+        });
+    });
+    _motionObserver = [NSWorkspace.sharedWorkspace.notificationCenter
+        addObserverForName:NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification
+                    object:nil
+                     queue:NSOperationQueue.mainQueue
+                usingBlock:^(NSNotification* note) {
+        (void)note;
+        VellumApplicationView* owner = weakSelf;
+        if (owner == nil || owner->_driver == nullptr) return;
+        owner->_driver->set_reduced_motion(
+            NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion);
+        owner->_driver->request_frame();
+    }];
+    _driver->request_frame();
 }
 
 - (void)mouseDown:(NSEvent*)event {

@@ -362,6 +362,29 @@ exactly at its target from its settle time on, so a track at rest damages
 nothing. A version 10 or older scene with a track is refused with
 `VELLUM_SCENE_VERSION_MISMATCH`.
 
+`FrameDriver` (`vellum/graphics/frame_driver.hpp`) is the host loop that runs
+tracks and plots. The host calls `frame` from its vsync source with that
+source's own monotonic presentation time, on the thread that owns the scene
+and the surface. The driver advances `Scene::clock` by the measured time since
+the previous frame, starting from zero at the first frame, so keyframe times
+are seconds since the driver's first frame. A gap over 250 ms, or the first
+frame after `suspend`, advances one nominal frame so animation never catches up
+on idle time; a repeated or backwards timestamp advances nothing; and with
+reduced motion the clock jumps to the end of the last track. It then samples
+the feed into the scene's plots once and calls the host's render function,
+which for the macOS app host is `SkiaDawnSurface::render_incremental`, only
+when the frame can differ from the last one drawn: the first frame, a
+requested frame, a clock that moved while a track still had keyframes ahead,
+or a plot whose samples changed. `FrameReport::needs_next_frame` turns false
+once every track has settled and a feed has been silent for
+`stale_after_ticks` ticks, and the host then stops its display link, so an
+idle app draws no frames. `request_frame`, callable from any thread, is the way
+back. The driver reads no clock of its own, so an injected clock gives the same
+frames. The macOS app host drives it from a `CADisplayLink` (a main-thread
+timer before macOS 14), pauses the link when no frame is needed, and follows
+the system reduce-motion setting. It attaches no feed, so its plots stay empty
+until a host supplies one with `set_feed`.
+
 A path damages its control box outset by its stroke reach: half the width,
 times the miter limit for miter joins or sqrt(2) for square and round caps,
 with dashes ignored. A stroke of zero width, or with a transparent colour,
