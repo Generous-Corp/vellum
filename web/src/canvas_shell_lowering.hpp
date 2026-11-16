@@ -410,6 +410,8 @@ struct CanvasShellCapabilities final {
     /// them has neither; the shell then draws every blended group as `normal`
     /// and reports each one.
     bool group_compositing = true;
+    /// Device pixels per logical pixel, which plots snap their rectangles to.
+    float scale = 1.0F;
 };
 
 /// How the shell draws each command of a scene.
@@ -621,7 +623,11 @@ struct CanvasShellLowering final {
         .diagnostics = std::move(acceptance.diagnostics),
     };
     if (!lowering.accepted) return lowering;
-    lowering.commands = canvas_shell_expand_plots(vellum::graphics::make_paint_commands(scene));
+    lowering.commands = canvas_shell_expand_plots(vellum::graphics::make_paint_commands(scene),
+                                                 capabilities.scale);
+    for (auto& wide : vellum::graphics::plot_extent_diagnostics(scene, capabilities.scale)) {
+        lowering.diagnostics.push_back(std::move(wide));
+    }
     lowering.losses = canvas_shell_loss_count(lowering.commands, capabilities);
     for (auto& diagnostic : canvas_shell_mask_diagnostics(lowering.commands)) {
         lowering.diagnostics.push_back(std::move(diagnostic));

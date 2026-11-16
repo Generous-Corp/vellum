@@ -698,6 +698,59 @@ bool effect_lowering() {
 // An untransformed plot is drawn as disjoint rectangles that composite it as
 // one group with no loss; a turned one is not drawn and is reported; a
 // version 11 scene with a plot is refused as the native renderer refuses it.
+bool plot_device_scale() {
+    using vellum::graphics::PlotChannelShape;
+    using vellum::graphics::PlotSpec;
+    using vellum::graphics::PlotStyle;
+    using vellum::graphics::SceneNode;
+    Scene scene;
+    scene.width = 16.0F;
+    scene.height = 16.0F;
+    scene.root.id = "root";
+    scene.root.kind = SceneNode::Kind::group;
+    auto spec = std::make_shared<PlotSpec>();
+    spec->style = PlotStyle::area;
+    spec->shape = PlotChannelShape::vector;
+    spec->slot_count = 1;
+    spec->samples = {1.0F};
+    SceneNode plot{.id = "snap", .kind = SceneNode::Kind::plot,
+                   .bounds = {0.26F, 0.0F, 1.0F, 4.0F}, .fill = vellum::graphics::Color::hex(0x000000)};
+    plot.plot = spec;
+    scene.root.children.push_back(plot);
+    const auto widest = [](const vellum::web::CanvasShellLowering& lowered) {
+        float left = 1e9F;
+        float right = -1e9F;
+        for (const auto& command : lowered.commands) {
+            if (command.kind != vellum::graphics::PaintCommand::Kind::rectangle) continue;
+            left = std::min(left, command.bounds.x);
+            right = std::max(right, command.bounds.x + command.bounds.width);
+        }
+        return std::pair{left, right};
+    };
+    const auto one = widest(vellum::web::lower_for_canvas_shell(scene));
+    const auto two = widest(vellum::web::lower_for_canvas_shell(scene, {.scale = 2.0F}));
+    if (one.first != 0.0F || one.second != 1.0F || two.first != 0.5F || two.second != 1.5F) {
+        std::cerr << "plot snapping ignored the shell's device scale: " << one.first << ","
+                  << one.second << " at 1, " << two.first << "," << two.second << " at 2\n";
+        return false;
+    }
+    SceneNode& wide = scene.root.children[0];
+    wide.id = "wide";
+    wide.bounds = {0.0F, 0.0F, 70000.0F, 4.0F};
+    const auto lowered = vellum::web::lower_for_canvas_shell(scene);
+    const bool reported = std::any_of(
+        lowered.diagnostics.begin(), lowered.diagnostics.end(),
+        [](const vellum::graphics::LoweringDiagnostic& diagnostic) {
+            return diagnostic.code == vellum::graphics::kPlotTooWideCode &&
+                   diagnostic.node_id == "wide";
+        });
+    if (!reported) {
+        std::cerr << "a plot wider than the column limit was lowered without a diagnostic\n";
+        return false;
+    }
+    return true;
+}
+
 bool plot_lowering() {
     using vellum::graphics::Color;
     using vellum::graphics::PaintCommand;
@@ -856,6 +909,7 @@ int main() {
     if (!gradient_reports_and_version_gate()) return 1;
     if (!effect_lowering()) return 1;
     if (!plot_lowering()) return 1;
+    if (!plot_device_scale()) return 1;
     using vellum::graphics::Affine2D;
     using vellum::graphics::CornerRadii;
     using vellum::graphics::SceneNode;

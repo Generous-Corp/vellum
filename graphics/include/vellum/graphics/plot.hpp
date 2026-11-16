@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vellum/graphics/color.hpp>
+#include <vellum/graphics/lowering_diagnostic.hpp>
 #include <vellum/graphics/scene.hpp>
 
 #include <cstdint>
@@ -77,6 +78,11 @@ struct PlotGrid final {
 /// The widest plot, in device pixels, whose samples are drawn; a wider plot
 /// draws only its background.
 inline constexpr std::int32_t kMaxPlotColumns = 1 << 16;
+
+/// One `kPlotTooWideCode` warning for each valid line, area or bar plot in
+/// `scene` whose device-pixel width at `scale` is over `kMaxPlotColumns`.
+[[nodiscard]] std::vector<LoweringDiagnostic> plot_extent_diagnostics(const Scene& scene,
+                                                                      float scale);
 
 /// What a plot draws over `box` at `scale`: the background when `background`
 /// is visible, then, for a line, area or bar plot, one span per device-pixel

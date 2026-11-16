@@ -833,6 +833,30 @@ void snapped_plot_removal() {
     }
 }
 
+void wide_plot() {
+    auto surface = make_surface(1.0F);
+    if (!surface) return;
+    Scene scene = empty_scene();
+    scene.root.children.push_back(plot_node(
+        "wide", {0.0F, 20.0F, static_cast<float>(kMaxPlotColumns) + 8.0F, 40.0F},
+        spec_of(PlotStyle::area, PlotChannelShape::vector, 4, {0.5F, 0.5F, 0.5F, 0.5F})));
+    std::string error;
+    const bool drew = surface->render(scene, &error);
+    const auto& diagnostics = surface->diagnostics();
+    expect(drew && diagnostics.size() == 1U && diagnostics[0].code == kPlotTooWideCode &&
+               diagnostics[0].node_id == "wide",
+           "a plot wider than the column limit draws and reports a warning", error);
+    const auto shot = capture(*surface);
+    expect(shot.ok && is(shot.at(10, 30), kPlotFill),
+           "a plot wider than the column limit still draws its background");
+    Scene narrow = empty_scene();
+    narrow.root.children.push_back(plot_node(
+        "narrow", {0.0F, 20.0F, 100.0F, 40.0F},
+        spec_of(PlotStyle::area, PlotChannelShape::vector, 4, {0.5F, 0.5F, 0.5F, 0.5F})));
+    expect(surface->render(narrow, &error) && surface->diagnostics().empty(),
+           "control: a plot within the column limit reports nothing", error);
+}
+
 void unresolved_binding() {
     for (const float scale : {1.0F, 2.0F}) {
         const std::string at = "@" + std::to_string(static_cast<int>(scale)) + " ";
@@ -884,6 +908,7 @@ int main() {
     large_feed();
     snapped_plot_removal();
     unresolved_binding();
+    wide_plot();
     version_gate();
     if (failures != 0) {
         std::cerr << failures << " plot GPU check(s) failed\n";

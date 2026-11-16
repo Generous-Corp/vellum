@@ -475,6 +475,40 @@ Rect plot_grid_rect(const Rect& box, float scale) noexcept {
     return logical(grid.left, grid.top, grid.right, grid.bottom, scale);
 }
 
+namespace {
+
+void collect_wide(const SceneNode& node, float x, float y, float scale,
+                  std::vector<LoweringDiagnostic>& out) {
+    const float absolute_x = x + node.bounds.x;
+    const float absolute_y = y + node.bounds.y;
+    if (node.kind == SceneNode::Kind::plot && node.plot && plot_is_valid(*node.plot) &&
+        node.plot->style != PlotStyle::level_meter) {
+        const auto grid = plot_grid({absolute_x, absolute_y, node.bounds.width, node.bounds.height},
+                                    scale);
+        if (static_cast<std::int64_t>(grid.right) - grid.left > kMaxPlotColumns) {
+            out.push_back({
+                .severity = LoweringDiagnostic::Severity::warning,
+                .disposition = LoweringDiagnostic::Disposition::lowered,
+                .code = std::string(kPlotTooWideCode),
+                .node_id = node.id,
+                .property = "bounds",
+                .message = "plot " + node.id + " is wider than " +
+                           std::to_string(kMaxPlotColumns) +
+                           " device pixels, so it draws only its background",
+            });
+        }
+    }
+    for (const auto& child : node.children) collect_wide(child, absolute_x, absolute_y, scale, out);
+}
+
+}  // namespace
+
+std::vector<LoweringDiagnostic> plot_extent_diagnostics(const Scene& scene, float scale) {
+    std::vector<LoweringDiagnostic> out;
+    if (std::isfinite(scale) && scale > 0.0F) collect_wide(scene.root, 0.0F, 0.0F, scale, out);
+    return out;
+}
+
 PlotGeometry plot_geometry(const PlotSpec& plot, const Color& background, const Rect& box,
                            float scale) {
     PlotGeometry geometry;

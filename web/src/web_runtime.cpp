@@ -7,6 +7,7 @@
 #include <emscripten.h>
 
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -17,6 +18,7 @@ namespace {
 
 vellum::graphics::Scene scene;
 vellum::web::CanvasShellLowering lowering;
+float device_scale = 1.0F;
 const std::vector<vellum::graphics::PaintCommand>& commands = lowering.commands;
 std::unique_ptr<vellum::runtime::Kernel> kernel;
 
@@ -124,6 +126,12 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_begin_frame(
     return 1;
 }
 
+EMSCRIPTEN_KEEPALIVE int vellum_web_set_scale(float scale) {
+    if (!(scale > 0.0F) || !std::isfinite(scale)) return 0;
+    device_scale = scale;
+    return 1;
+}
+
 EMSCRIPTEN_KEEPALIVE int vellum_web_add_rectangle(
     const char* id, float x, float y, float width, float height, float radius,
     float red, float green, float blue, float alpha) {
@@ -163,6 +171,7 @@ EMSCRIPTEN_KEEPALIVE int vellum_web_render() {
     using Kind = vellum::graphics::PaintCommand::Kind;
     const vellum::web::CanvasShellCapabilities capabilities{
         .group_compositing = canvas_has_group_compositing() != 0,
+        .scale = device_scale,
     };
     // A refused scene draws nothing and keeps the previous canvas, as the
     // native renderer keeps its previous frame.

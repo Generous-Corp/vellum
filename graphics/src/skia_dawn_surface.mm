@@ -2072,7 +2072,12 @@ public:
     bool accepts_with_diagnostics(const Scene& scene, std::string* error) {
         auto acceptance = accept_scene(scene);
         diagnostics_ = std::move(acceptance.diagnostics);
-        if (acceptance.accepted) return true;
+        if (acceptance.accepted) {
+            for (auto& wide : plot_extent_diagnostics(scene, config_.scale)) {
+                diagnostics_.push_back(std::move(wide));
+            }
+            return true;
+        }
         set_error(error, std::move(acceptance.reason));
         return false;
     }
