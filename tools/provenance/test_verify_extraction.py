@@ -604,9 +604,35 @@ class VerifyExtractionTests(unittest.TestCase):
         self.assertIn("android", census)
         self.assertEqual(refused, census - native)
 
+    def test_design_pipeline_folder_is_exempt_on_the_folder_boundary_only(self) -> None:
+        body = b"#include <vellum/view/design_import.hpp>\nnamespace vellum::authoring { vellum::view::DesignIR x; }\n"
+        allowed = {
+            "authoring/design_pipeline/design_pipeline.cpp",
+            "authoring/design_pipeline/include/vellum/authoring/design_pipeline.hpp",
+            "authoring/design_pipeline/tests/deep/nested/golden_test.cpp",
+        }
+        refused = {
+            "authoring/x.hpp",
+            "authoring/design_pipeline.hpp",
+            "authoring/other/design_pipeline.hpp",
+            "authoring/other/design_pipeline/foo.hpp",
+            "authoring/design_pipeline_evil/foo.hpp",
+            "authoring/design_pipelines/foo.hpp",
+            "authoring/src/design_pipeline/foo.hpp",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for relative in allowed | refused:
+                (root / relative).parent.mkdir(parents=True, exist_ok=True)
+                (root / relative).write_bytes(body)
+
+            findings = verify_extraction.scan_renamed_mirror(root)
+
+            self.assertEqual(sorted({f["path"] for f in findings}), sorted(refused))
+
     def test_renamed_mirror_exemptions_are_pinned(self) -> None:
         # Any change to what the rule skips must show up as an edit here.
-        self.assertEqual(verify_extraction.RENAMED_MIRROR_EXEMPT_PREFIXES, ())
+        self.assertEqual(verify_extraction.RENAMED_MIRROR_EXEMPT_PREFIXES, ("authoring/design_pipeline/",))
         self.assertEqual(verify_extraction.FRAMEWORK_TEST_ROOT, "tools/framework-tests/")
         self.assertEqual(verify_extraction.RENAMED_MIRROR_EXEMPT_PATHS, {
             "tools/mirror/consumer/cross_image_main.cpp",
