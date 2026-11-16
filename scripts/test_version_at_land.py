@@ -408,7 +408,8 @@ class Workflow(unittest.TestCase):
         # so hostile Git settings reached token-holding commands.
         hostile = {name: "() { builtin echo shadowed >&2; return 0; }" for name in (
             "BASH_FUNC_read%%", "BASH_FUNC_env%%", "BASH_FUNC_builtin%%", "BASH_FUNC_local%%",
-            "BASH_FUNC_printf%%", "BASH_FUNC_command%%", "BASH_FUNC_exec%%", "BASH_FUNC_/usr/bin/env%%")}
+            "BASH_FUNC_printf%%", "BASH_FUNC_command%%", "BASH_FUNC_exec%%", "BASH_FUNC_unset%%",
+            "BASH_FUNC_/usr/bin/env%%")}
         settings = {"GIT_EXEC_PATH": "/untrusted", "GIT_SSH_COMMAND": "/untrusted/ssh", "GIT_CONFIG_GLOBAL": "/untrusted",
                     "GITHUB_TOKEN": "wrong-token", "GH_CONFIG_DIR": "/untrusted/gh"}
         for shell in sorted({"/bin/bash", shutil.which("bash") or "/bin/bash"}):

@@ -1376,6 +1376,34 @@ class RunAllowlist(unittest.TestCase):
         renamed = sign.replace("- name: Sign the tag\n", "- name: Sign the release tag\n")
         self.assertEqual(policy.run_body_problems(policy.SIGNING_WORKFLOW, renamed), [])
 
+    def test_a_reviewed_job_runs_its_steps_in_bash(self) -> None:
+        # A default or step shell other than bash turns a reviewed body into
+        # another language beside the token or the key, so it is refused even
+        # when the changed steps are allowlisted. Only a default working
+        # directory is refused among the other defaults; shell: bash stays.
+        sign = self.workflows[policy.SIGNING_WORKFLOW]
+        job = "    environment: release\n    steps:\n      - name: Check out the reconciled"
+        step = "      - name: Sign the tag\n        id: sign\n"
+        for shell in ("python", "python -I {0}", "sh", "pwsh", "bash {0}", "${{ inputs.shell }}"):
+            for label, old, new in (
+                    ("workflow", "permissions:\n  contents: read\n  checks: read",
+                     f"defaults:\n  run:\n    shell: {shell}\npermissions:\n  contents: read\n  checks: read"),
+                    ("job", job, job.replace("    steps:", f"    defaults:\n      run:\n        shell: {shell}\n    steps:")),
+                    ("step", step, step + f"        shell: {shell}\n")):
+                with self.subTest(shell=shell, location=label):
+                    text = sign.replace(old, new, 1)
+                    self.assertNotEqual(text, sign)
+                    problems = policy.run_body_problems(policy.SIGNING_WORKFLOW, text,
+                                                        allowlist_for({policy.SIGNING_WORKFLOW: text}))
+                    self.assertTrue(any("shell must be bash" in p for p in problems), problems)
+        for label, old, new in (("workflow", "permissions:\n  contents: read\n  checks: read",
+                                 "defaults:\n  run:\n    shell: bash\npermissions:\n  contents: read\n  checks: read"),
+                                ("job", job, job.replace("    steps:", "    defaults:\n      run:\n        shell: bash\n    steps:"))):
+            with self.subTest(bash=label):
+                text = sign.replace(old, new, 1)
+                self.assertEqual(policy.run_body_problems(policy.SIGNING_WORKFLOW, text,
+                                                          allowlist_for({policy.SIGNING_WORKFLOW: text})), [])
+
     def test_a_credential_job_runs_only_pinned_actions_in_place(self) -> None:
         for old, new in {
             "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1":
