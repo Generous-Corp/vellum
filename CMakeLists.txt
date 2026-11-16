@@ -30,6 +30,8 @@ option(VELLUM_ENABLE_ADDRESS_SANITIZER
     "Instrument Vellum targets with AddressSanitizer" OFF)
 option(VELLUM_ENABLE_RMLUI
     "Build the optional RmlUi module (rmlui/; fetches its pinned RmlUi source)" OFF)
+set(VELLUM_PULP_CENSUS_LIBRARIES "" CACHE STRING
+    "Static libraries of a Pulp build (a list); the install census then requires that no installed dylib exports a name they define")
 set(VELLUM_AUTHORING_TEST_BUNDLE "" CACHE FILEPATH
     "Optional @vellum/ui classic-script bundle for the real JavaScriptCore integration test")
 set(VELLUM_PHASE3_TEST_BUNDLE "" CACHE FILEPATH
@@ -574,6 +576,7 @@ if(VELLUM_BUILD_TESTS)
                 "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
                 "-DVELLUM_ENABLE_V8=${VELLUM_MIRROR_HAS_V8}"
                 "-DVELLUM_V8_VERSION=${VELLUM_V8_VERSION}"
+                "-DVELLUM_PULP_CENSUS_LIBRARIES=${VELLUM_PULP_CENSUS_LIBRARIES}"
                 ${_vellum_view_audio_archive_arg}
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
         # An installed consumer reaches Vellum's value model through the view
