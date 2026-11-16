@@ -304,6 +304,20 @@
       "required": ["style", "channel"],
       "if": { "properties": { "style": { "const": "meter" } } },
       "else": { "required": ["slots"] },
+      "allOf": [
+        {
+          "if": { "required": ["style"], "properties": { "style": { "enum": ["line", "area"] } } },
+          "then": { "properties": { "source": { "enum": ["scalar", "vector"] } } }
+        },
+        {
+          "if": { "required": ["style"], "properties": { "style": { "const": "bar" } } },
+          "then": { "properties": { "source": { "const": "vector" } } }
+        },
+        {
+          "if": { "required": ["style"], "properties": { "style": { "const": "meter" } } },
+          "then": { "properties": { "source": { "const": "meter" } } }
+        }
+      ],
       "properties": {
         "style": { "enum": ["line", "area", "bar", "meter"] },
         "channel": { "type": "string", "minLength": 1 },

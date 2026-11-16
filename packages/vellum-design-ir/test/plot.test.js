@@ -218,4 +218,11 @@ test('the schema declares plot bindings without samples', async () => {
     assert.deepEqual(definitions.plotBinding.if, { properties: { style: { const: 'meter' } } });
     assert.deepEqual(definitions.plotBinding.else, { required: ['slots'] });
     assert.equal(definitions.plotBinding.properties.lineWidth.maximum, 4096);
+    const sources = Object.fromEntries(definitions.plotBinding.allOf.map((rule) => [
+        JSON.stringify(rule.if.properties.style), rule.then.properties.source]));
+    assert.deepEqual(sources, {
+        '{"enum":["line","area"]}': { enum: ['scalar', 'vector'] },
+        '{"const":"bar"}': { const: 'vector' },
+        '{"const":"meter"}': { const: 'meter' },
+    });
 });
