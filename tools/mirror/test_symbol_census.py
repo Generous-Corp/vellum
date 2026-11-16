@@ -3,10 +3,15 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location("symbol_census", HERE / "symbol_census.py")
@@ -61,6 +66,40 @@ class SymbolCensusTest(unittest.TestCase):
         # A private-external pulp:: symbol is still left over from the rename.
         _, findings = run({"a.dylib": listing(sym(FN), sym(PULP_FN, "private external"))})
         self.assertEqual(len(findings), 1)
+
+    def test_local_pulp_definition_fails(self) -> None:
+        # `nm -g` omits local symbols; the census reads the full table, so a local
+        # pulp:: function beside an exported vellum:: one is still caught.
+        _, findings = run({"a.dylib": listing(sym(FN), sym(PULP_FN, ""))})
+        self.assertEqual(len(findings), 1)
+        self.assertIn("pulp::", findings[0])
+
+    def test_nm_reads_the_full_symbol_table(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake(cmd, **kwargs):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with mock.patch.object(sc.subprocess, "run", fake):
+            sc.run_nm(Path("a.dylib"))
+        self.assertNotIn("-g", calls[0])
+
+    def test_failed_otool_cannot_pass(self) -> None:
+        failed = subprocess.CompletedProcess(["otool"], 1, stdout=classes("Menu"), stderr="truncated file")
+        with mock.patch.object(sc.subprocess, "run", return_value=failed):
+            with self.assertRaisesRegex(RuntimeError, "otool failed for a.dylib: truncated file"):
+                sc.run_otool(Path("a.dylib"))
+
+    def test_main_is_blind_when_otool_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "a.dylib"
+            image.write_bytes(b"x")
+            with mock.patch.object(sc, "run_nm", return_value=listing(sym(FN))), \
+                    mock.patch.object(sc, "run_demangle", demangle), \
+                    mock.patch.object(sc, "run_otool", side_effect=RuntimeError("otool failed for a.dylib: bad")), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(sc.main([str(image)]), 3)
 
     def test_same_export_in_two_images_fails(self) -> None:
         _, findings = run({"a.dylib": listing(sym(FN)), "b.dylib": listing(sym(FN))})

@@ -11,15 +11,16 @@ Three questions, answered per image set:
   process two definitions, and a class registered twice is a runtime warning
   with an arbitrary winner.
 
-Only exported strong definitions count (`nm -g -m`, "external", not weak and
-not "private external"): a hidden or weak copy cannot be bound from another
-image. Objective-C classes come from class metadata (`otool -oV`), because a
+The `pulp::` and `vellum::` counts read the full symbol table (`nm -m`), local
+and hidden definitions included. Only exported strong definitions count for the
+duplicate check ("external", not weak and not "private external"): a hidden or
+weak copy cannot be bound from another image. Objective-C classes come from class metadata (`otool -oV`), because a
 class is one per process whatever its symbols' visibility. Images with
 identical content (versioned dylib names) are read once.
 
 --plant is the control for the duplicate check: it lists the largest image
 twice and the run must then fail. Exit: 0 clean, 1 findings, 3 blind (no
-images, or no `vellum::` definition).
+images, no `vellum::` definition, or nm/otool failed on an image).
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from typing import Callable, Iterable
 
 PULP = re.compile(r"(?<![\w])pulp::")
 VELLUM = re.compile(r"(?<![\w])vellum::")
-# `nm -g -m`: "<value> (<segment,section>) <attributes> <name>"
+# `nm -m`: "<value> (<segment,section>) <attributes> <name>"
 _NM_LINE = re.compile(r"^\s*(?:[0-9a-fA-F]+\s+)?\((?P<section>[^)]*)\)\s+(?P<attrs>.*?)\s*(?P<name>\S+)$")
 _OBJC_CLASS = re.compile(r"^[0-9a-f]+\s+0x[0-9a-f]+\s+_OBJC_CLASS_\$_(\S+)$")
 
@@ -44,7 +45,7 @@ Demangle = Callable[[list[str]], dict[str, str]]
 
 
 def exported_strong(listing: str) -> set[str]:
-    """Defined, exported, non-weak names of an `nm -g -m` listing."""
+    """Defined, exported, non-weak names of an `nm -m` listing."""
     names: set[str] = set()
     for line in listing.splitlines():
         match = _NM_LINE.match(line)
@@ -56,11 +57,11 @@ def exported_strong(listing: str) -> set[str]:
 
 
 def all_defined(listing: str) -> set[str]:
-    """Every defined name, hidden and weak included (for the pulp:: count)."""
+    """Every defined name, local, hidden and weak included (for the pulp:: count)."""
     names: set[str] = set()
     for line in listing.splitlines():
         match = _NM_LINE.match(line)
-        if match and match["section"] != "undefined" and "external" in match["attrs"].split():
+        if match and match["section"] != "undefined":
             names.add(match["name"])
     return names
 
@@ -80,15 +81,18 @@ def objc_classes(listing: str) -> set[str]:
 
 
 def run_nm(image: Path) -> str:
-    done = subprocess.run(["nm", "-g", "-m", str(image)], capture_output=True, text=True, errors="replace", check=False)
+    done = subprocess.run(["nm", "-m", str(image)], capture_output=True, text=True, errors="replace", check=False)
     if done.returncode:
         raise RuntimeError(f"nm failed for {image}: {done.stderr.strip()}")
     return done.stdout
 
 
 def run_otool(image: Path) -> str:
-    return subprocess.run(["otool", "-oV", str(image)], capture_output=True, text=True, errors="replace",
-                          check=False).stdout
+    done = subprocess.run(["otool", "-oV", str(image)], capture_output=True, text=True, errors="replace",
+                          check=False)
+    if done.returncode:
+        raise RuntimeError(f"otool failed for {image}: {done.stderr.strip()}")
+    return done.stdout
 
 
 def run_demangle(names: list[str]) -> dict[str, str]:
@@ -160,7 +164,11 @@ def main(argv: list[str] | None = None) -> int:
     images = distinct_images(args.images)
     if args.plant and images:
         images = images + [max(images, key=lambda p: p.stat().st_size)]
-    report, findings = census(images, frozenset(args.allow))
+    try:
+        report, findings = census(images, frozenset(args.allow))
+    except RuntimeError as error:
+        print(f"symbol census: blind, {error}", file=sys.stderr)
+        return 3
     print(f"symbol census: {report}")
     for finding in findings:
         print(f"symbol census: {finding}", file=sys.stderr)
