@@ -44,6 +44,10 @@ vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
 
+vellum_add_framework_test(knob-fine-drag
+    SOURCES knob_fine_drag_test.cpp
+    UNITS Vellum::MirrorView_core)
+
 # The view-script unit runs the sealed V8 provider (VELLUM_ENABLE_V8). Without
 # V8 the same test is the control: it must still run to completion and fail
 # exactly its seven V8 cases while its QuickJS case passes, which proves the
