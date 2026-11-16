@@ -97,6 +97,17 @@ class Policy(unittest.TestCase):
         self.workflow("exfiltrate.yml", "jobs:\n  x:\n    environment: { name: release }\n")
         self.assertTrue(any("exfiltrate.yml" in p for p in policy.problems(self.tmp)))
 
+    def test_environment_names_are_case_insensitive(self) -> None:
+        # GitHub treats `Release` and `RELEASE` as the protected `release` environment.
+        for spelling in ("Release", "RELEASE", "{ name: RELEASE }", "{ name: Release }"):
+            with self.subTest(spelling=spelling):
+                self.workflow("exfiltrate.yml", f"jobs:\n  x:\n    environment: {spelling}\n")
+                self.assertTrue(any("exfiltrate.yml" in p for p in policy.problems(self.tmp)),
+                                policy.problems(self.tmp))
+        # Positive control: an unrelated environment passes this guard.
+        self.workflow("exfiltrate.yml", "jobs:\n  x:\n    environment: staging\n")
+        self.assertFalse(any("exfiltrate.yml" in p and "environment" in p for p in policy.problems(self.tmp)))
+
     def test_multiline_environment_mapping_fails(self) -> None:
         self.workflow("exfiltrate.yml", "jobs:\n  x:\n    environment:\n      name: release\n")
         self.assertTrue(any("exfiltrate.yml" in p for p in policy.problems(self.tmp)))
@@ -1315,6 +1326,23 @@ class RunAllowlist(unittest.TestCase):
         # A job with no listed variant fails too.
         missing = {key: value for key, value in policy.RUN_ALLOWLIST.items() if key != (name, "sign-release-tag")}
         self.assert_unsupported(policy.run_body_problems(name, text, missing))
+
+    def test_a_checkout_that_persists_credentials_makes_the_job_reviewed(self) -> None:
+        # The HOLD at 5f84d49dd: actions/checkout leaves the Actions token in
+        # Git's config unless persist-credentials is false.
+        name = "release-policy.yml"
+        base = ("jobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: "
+                "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n{with_}      - run: echo hi\n")
+        for with_ in ("", "        with:\n          persist-credentials: true\n",
+                      "        with:\n          persist-credentials: 'TRUE'\n"):
+            with self.subTest(with_=with_):
+                parsed = policy.parse_workflow(base.format(with_=with_))
+                self.assertTrue(policy.reviewed_job(parsed.job_text["check"]))
+                self.assert_unsupported(policy.run_body_problems(name, base.format(with_=with_)))
+        # Positive control: credentials not persisted, nothing else credentialed.
+        safe = base.format(with_="        with:\n          persist-credentials: false\n")
+        self.assertFalse(policy.reviewed_job(policy.parse_workflow(safe).job_text["check"]))
+        self.assertEqual(policy.run_body_problems(name, safe), [])
 
     def test_locale_quoted_gh_is_not_in_the_allowlist(self) -> None:
         # The HOLD at 160897c17: `g$"h" api` and `gh a$"pi"` run gh api, and

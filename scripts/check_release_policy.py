@@ -410,7 +410,8 @@ def parse_workflow(text: str) -> Workflow:
                 value = scalar(environment, "environment")
                 if not re.fullmatch(r"[A-Za-z0-9_-]+", value):
                     refuse("environment must have a literal name")
-                parsed.environments.append(value)
+                # GitHub environment names are case-insensitive.
+                parsed.environments.append(value.lower())
             if "uses" in fields:
                 parsed.reusable.append(scalar(fields["uses"], "job uses"))
                 if "steps" in fields:
@@ -457,6 +458,10 @@ def parse_workflow(text: str) -> Workflow:
                 if SECRET.search(str(workflow_env)) or SECRET.search(str(job_env)):
                     step.text += "\n" + str(workflow_env) + str(job_env)
                 parsed.jobs[job].append(step)
+                # actions/checkout persists the Actions token for Git unless told not to.
+                if (step.uses or "").lower().startswith("actions/checkout@") and str(
+                        (step.fields.get("with") or {}).get("persist-credentials", "true")).strip().lower() != "false":
+                    parsed.job_text[job] += "\n${{ github.token }} # actions/checkout persists credentials"
         parsed.directory_defaults = frozenset(directories)
         return parsed
     except (yaml.YAMLError, RecursionError) as error:
