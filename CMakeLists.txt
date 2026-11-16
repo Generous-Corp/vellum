@@ -244,11 +244,20 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-layer-cache-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.layer-cache COMMAND vellum-layer-cache-test)
 
+        add_executable(vellum-plot-test
+            graphics/tests/plot_test.cpp)
+        target_link_libraries(vellum-plot-test PRIVATE Vellum::Graphics Threads::Threads)
+        add_test(NAME vellum.plot COMMAND vellum-plot-test)
+
         add_executable(vellum-damage-test
             graphics/tests/damage_test.cpp)
         target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.damage COMMAND vellum-damage-test)
 
+        add_executable(vellum-token-receipts-test
+            graphics/tests/token_receipts_test.cpp)
+        target_link_libraries(vellum-token-receipts-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.token-receipts COMMAND vellum-token-receipts-test)
         add_executable(vellum-animation-test
             graphics/tests/animation_test.cpp)
         target_include_directories(vellum-animation-test PRIVATE graphics/src)
