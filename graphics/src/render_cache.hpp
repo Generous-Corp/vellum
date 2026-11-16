@@ -230,6 +230,7 @@ struct TextStyleFields final {
 struct TextRunFields final {
     std::string text;
     TextStyleFields style;
+    bool inherits_color;
 };
 static_assert(sizeof(TextStyle) == sizeof(TextStyleFields) &&
                   sizeof(TextRun) == sizeof(TextRunFields),

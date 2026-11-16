@@ -869,7 +869,7 @@ bool legacy_scene_paths() {
 
 bool scene_versioning() {
     using vellum::graphics::SceneNode;
-    static_assert(vellum::graphics::kSceneVersion >= 11U);
+    static_assert(vellum::graphics::kSceneVersion >= 12U);
     static_assert(vellum::graphics::kMinSupportedSceneVersion == 1U);
     static_assert(vellum::graphics::scene_version_is_supported(vellum::graphics::kSceneVersion));
     static_assert(vellum::graphics::scene_version_is_supported(1U));

@@ -28,6 +28,10 @@ EXPECTED_RUNNERS = {
         "VELLUM_LOCAL_MACOS_RUNS_ON_JSON",
         '["macos-15"]',
     ),
+    "linux.yml": (
+        "VELLUM_LINUX_RUNS_ON_JSON",
+        '["ubuntu-latest"]',
+    ),
     "observatory-overdue-issue.yml": ("__hosted__", "ubuntu-latest"),
     "product-quality.yml": (
         "VELLUM_LINUX_RUNS_ON_JSON",

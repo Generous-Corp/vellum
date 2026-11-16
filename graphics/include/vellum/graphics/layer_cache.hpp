@@ -230,6 +230,10 @@ private:
         std::int64_t pixels = 0;
         /// The commands the image was recorded from.
         std::vector<PaintCommand> image_commands;
+        /// The content of every mesh and texture those commands drew, which a
+        /// producer may rewrite in place behind the same pointers.
+        std::uint64_t image_mesh_digest = 0;
+        std::uint64_t pending_mesh_digest = 0;
         /// Every node id in the subtree when the image was recorded.
         std::vector<std::string> image_node_ids;
         /// The commands and ids of a planned build, kept until `admit`.
