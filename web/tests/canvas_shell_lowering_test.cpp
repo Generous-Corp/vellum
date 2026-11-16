@@ -812,6 +812,26 @@ bool plot_lowering() {
         std::cerr << "a Tier 2 blended plot did not fall back to normal with one warning\n";
         return false;
     }
+    // An ordinary rectangle whose id happens to read like a plot background,
+    // drawn just before a faded plot without one, keeps its own paint.
+    Scene sibling = scene;
+    sibling.root.children.insert(sibling.root.children.begin(),
+                                 SceneNode{.id = "spectrum/background",
+                                           .kind = SceneNode::Kind::rectangle,
+                                           .bounds = {4.0F, 2.0F, 20.0F, 24.0F},
+                                           .fill = Color::hex(0xEF4444),
+                                           .corner_radius = 3.0F});
+    const auto beside = vellum::web::lower_for_canvas_shell(sibling);
+    const auto kept = std::find_if(beside.commands.begin(), beside.commands.end(),
+                                   [](const PaintCommand& command) {
+                                       return command.node_id == "spectrum/background";
+                                   });
+    if (!beside.accepted || kept == beside.commands.end() ||
+        kept->kind != PaintCommand::Kind::rectangle || kept->fill.alpha != 1.0F ||
+        kept->opacity != 1.0F || kept->corner_radius != 3.0F || kept->plot_background) {
+        std::cerr << "an ordinary rectangle named like a plot background was swallowed\n";
+        return false;
+    }
     scene.root.children[0].transform =
         vellum::graphics::Affine2D{.a = 0.0F, .b = 1.0F, .c = -1.0F, .d = 0.0F};
     const auto turned = vellum::web::lower_for_canvas_shell(scene);

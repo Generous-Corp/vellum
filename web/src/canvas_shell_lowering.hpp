@@ -117,7 +117,7 @@ struct CanvasShellPlotPiece final {
 /// pieces (`canvas_shell_flatten`) that each carry the plot's opacity, so an
 /// overlap such as a fill over the background, or a peak over a meter level,
 /// is blended once, as one group. A gradient background, which lowers to a
-/// `node_id + "/background"` rectangle just before the plot, is flattened
+/// rectangle marked `plot_background` just before the plot, is flattened
 /// with the plot's rectangles: its colour joins the pieces and the rectangle
 /// keeps only its gradients, which the shell does not draw. When that
 /// rectangle and the plot are all an opacity layer holds, the layer's
@@ -141,6 +141,7 @@ struct CanvasShellPlotPiece final {
         std::vector<CanvasShellPlotPiece> drawn;
         float opacity = command.opacity;
         if (!output.empty() && output.back().kind == PaintCommand::Kind::rectangle &&
+            output.back().plot_background &&
             output.back().node_id == command.node_id + "/background" &&
             vellum::graphics::is_identity(output.back().transform)) {
             auto& background = output.back();

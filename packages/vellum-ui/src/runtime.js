@@ -22,6 +22,7 @@ const INTRINSIC_TYPES = new Set([
     'path', 'plot',
 ]);
 const MAXIMUM_PLOT_SLOTS = 4194304;
+const PLOT_FLOAT_MAX = 3.4028234663852886e38;
 const MAXIMUM_PLOT_AUDIO_CHANNEL = 1024;
 // Native kMaxPlotStroke: the widest line, bar gap or peak tick in logical pixels.
 const MAXIMUM_PLOT_STROKE = 4096;
@@ -496,18 +497,32 @@ function validatePlot(properties, path) {
     if (style !== 'meter' && properties.slots === undefined) {
         throw new TypeError(`${path}.Plot slots is required for a ${style} plot`);
     }
-    for (const name of ['min', 'max', 'baseline']) {
-        finitePaintNumber(properties[name], `${path}.${name}`, { optional: true });
+    // The renderer holds these as single-precision floats: a value must fit
+    // one, and the stroke limit and the range compare the rounded values.
+    for (const name of ['min', 'max', 'baseline', 'lineWidth', 'barGap', 'peakWidth']) {
+        const value = properties[name];
+        if (value === undefined) continue;
+        finitePaintNumber(value, `${path}.${name}`);
+        if (Math.abs(value) > PLOT_FLOAT_MAX) {
+            throw new TypeError(`${path}.${name} must be within float range`);
+        }
     }
     for (const name of ['lineWidth', 'barGap', 'peakWidth']) {
-        finitePaintNumber(properties[name], `${path}.${name}`, { optional: true, nonNegative: true });
-        if (properties[name] > MAXIMUM_PLOT_STROKE) {
+        const value = properties[name];
+        if (value === undefined) continue;
+        if (Math.fround(value) < 0) {
+            throw new TypeError(`${path}.${name} must be a non-negative finite number`);
+        }
+        if (Math.fround(value) > MAXIMUM_PLOT_STROKE) {
             throw new TypeError(`${path}.${name} must be at most ${MAXIMUM_PLOT_STROKE}`);
         }
     }
-    // Native plot_is_valid refuses an empty range; min defaults to 0 and max to 1.
-    if ((properties.min ?? 0) === (properties.max ?? 1)) {
-        throw new TypeError(`${path}.Plot value range must not be empty (min equals max)`);
+    // Native plot_is_valid refuses an empty range of floats; min defaults to 0
+    // and max to 1.
+    const low = properties.min === undefined ? 0 : properties.min;
+    const high = properties.max === undefined ? 1 : properties.max;
+    if (Math.fround(low) === Math.fround(high)) {
+        throw new TypeError(`${path}.Plot value range must not be empty once rounded to float (min equals max)`);
     }
     for (const name of ['lineColor', 'fillColor', 'peakColor']) {
         const color = properties[name];

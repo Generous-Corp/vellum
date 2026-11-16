@@ -131,6 +131,9 @@ struct PaintCommand final {
     Rect effect_box{};
     /// What a `plot` command draws.
     std::shared_ptr<const PlotSpec> plot;
+    /// On a `rectangle`, set when lowering emitted it as the gradient
+    /// background of the `plot` command that follows it.
+    bool plot_background = false;
 };
 
 [[nodiscard]] constexpr std::string_view to_string(PaintCommand::Kind kind) noexcept {
@@ -232,7 +235,8 @@ struct ResolvedLinearGradient final {
 /// with no commands emits nothing. An image node always emits its command,
 /// with the asset `find_image_asset` resolves, or none when it is missing.
 /// A plot node with a spec emits its command, preceded by a rectangle named
-/// `node_id + "/background"` when it has fill gradients; one without a spec
+/// `node_id + "/background"` with `plot_background` set when it has fill
+/// gradients; one without a spec
 /// contributes nothing for itself.
 ///
 /// A node whose opacity is below one and whose subtree draws more than one

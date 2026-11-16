@@ -249,6 +249,7 @@ void equality_covers_every_field() {
         {"clip_rect height", [](PaintCommand& c) { c.clip_rect.height = 1.0F; }},
         {"mask_mode", [](PaintCommand& c) { c.mask_mode = MaskMode::luminance; }},
         {"plot", [](PaintCommand& c) { c.plot = std::make_shared<PlotSpec>(); }},
+        {"plot_background", [](PaintCommand& c) { c.plot_background = true; }},
         {"blend_mode", [](PaintCommand& c) { c.blend_mode = BlendMode::multiply; }},
         {"effect count", [](PaintCommand& c) { c.effects.push_back({}); }},
         {"effect kind", [](PaintCommand& c) { c.effects[0].kind = EffectKind::blur; }},

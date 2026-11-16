@@ -754,6 +754,15 @@ bool plot_nodes() {
                     "plot bad min must be a finite number", "min") &&
            rejected(R"(,"plot":"line","channel":"c","slots":4,"lineColor":"red")",
                     "plot bad lineColor must be a colour", "lineColor") &&
+           rejected(R"(,"plot":"line","channel":"c","slots":4,"lineColor":"#0x12AB")",
+                    "plot bad lineColor must be a colour", "lineColor") &&
+           rejected(R"(,"plot":"line","channel":"c","slots":4194304.0000001)",
+                    "plot bad slots must be a whole number of at most 4194304", "slots") &&
+           rejected(R"(,"plot":"line","channel":"c","slots":4,"min":1,"max":1.00000001)",
+                    "plot bad cannot be drawn: the value range is not finite or is empty",
+                    "plot") &&
+           rejected(R"(,"plot":"line","channel":"c","slots":4,"max":1e100)",
+                    "plot bad max must be a finite number", "max") &&
            rejected(R"(,"plot":"line","channel":"c","slots":4,"children":[{"type":"view","id":"x"}])",
                     "plot bad does not accept children", "children");
 }

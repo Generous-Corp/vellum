@@ -1020,12 +1020,19 @@ bool materialize_plot(
         if (!orientation) return reject("orientation", "orientation must be vertical or horizontal");
         spec.orientation = static_cast<vellum::graphics::PlotOrientation>(*orientation);
     }
+    // Whole numbers are checked as written, before any rounding to float, so
+    // a value just past a whole number or the limit is refused as the
+    // JavaScript validators refuse it.
     const auto count = [&](NSString* key, std::uint32_t& value, std::uint32_t limit) {
         id raw = source[key];
         if (raw == nil) return true;
-        float number = 0.0F;
-        if (!finite_number(raw, number) || number < 0.0F || number != std::floor(number) ||
-            number > static_cast<float>(limit)) {
+        if (![raw isKindOfClass:NSNumber.class] ||
+            CFGetTypeID((__bridge CFTypeRef)raw) == CFBooleanGetTypeID()) {
+            return false;
+        }
+        const double number = [static_cast<NSNumber*>(raw) doubleValue];
+        if (!std::isfinite(number) || number < 0.0 || number != std::floor(number) ||
+            number > static_cast<double>(limit)) {
             return false;
         }
         value = static_cast<std::uint32_t>(number);
@@ -1052,7 +1059,16 @@ bool materialize_plot(
              {@"lineColor", &spec.line_color}, {@"fillColor", &spec.fill_color},
              {@"peakColor", &spec.peak_color}}}) {
         if (source[key] == nil) continue;
-        const auto color = parse_color(source[key]);
+        // Exactly # and six or eight hex digits, as the JavaScript validators
+        // require; the shared parser also takes forms such as #0x12ab.
+        const auto strict = [](id value) {
+            if (![value isKindOfClass:NSString.class]) return false;
+            const std::string text = cpp_string(value);
+            if ((text.size() != 7U && text.size() != 9U) || text[0] != '#') return false;
+            return std::all_of(text.begin() + 1, text.end(),
+                               [](char c) { return std::isxdigit(static_cast<unsigned char>(c)) != 0; });
+        };
+        const auto color = strict(source[key]) ? parse_color(source[key]) : std::nullopt;
         if (!color) return reject(cpp_string(key), cpp_string(key) + " must be a colour");
         *field = *color;
     }

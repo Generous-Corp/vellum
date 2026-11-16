@@ -16,7 +16,7 @@ namespace {
 // PaintCommand field: a field they skip lets a cached image survive a change
 // to it. This size changes when a field is added; update both functions, and
 // the field-coverage test in layer_cache_test.cpp, then this number.
-static_assert(sizeof(PaintCommand) == 448,
+static_assert(sizeof(PaintCommand) == 456,
               "PaintCommand changed: update paint_commands_equal and hash_command");
 static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 80,
               "TextStyle or TextRun changed: update same_style, same_runs and hash_command");
@@ -206,7 +206,8 @@ bool same_paint(const PaintCommand& a, const PaintCommand& b) {
            a.blend_mode == b.blend_mode &&
            same_rect(a.clip_rect, b.clip_rect) && a.mask_mode == b.mask_mode &&
            same_image_reference(a.image, b.image) && a.image_asset == b.image_asset &&
-           same_effects(a.effects, b.effects) && same_rect(a.effect_box, b.effect_box);
+           same_effects(a.effects, b.effects) && same_rect(a.effect_box, b.effect_box) &&
+           a.plot_background == b.plot_background;
 }
 
 class Hasher final {
@@ -349,6 +350,7 @@ std::uint64_t hash_command(const PaintCommand& command) {
     }
     hash.number(reinterpret_cast<std::uintptr_t>(command.image_asset.get()));
     hash.number(reinterpret_cast<std::uintptr_t>(command.plot.get()));
+    hash.number(command.plot_background ? 1U : 0U);
     hash.number(command.effects.size());
     for (const auto& effect : command.effects) {
         hash.number(static_cast<std::uint64_t>(effect.kind));

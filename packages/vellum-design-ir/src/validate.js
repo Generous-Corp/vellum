@@ -359,6 +359,7 @@ const PLOT_SOURCES = new Map([
     ['line', ['scalar', 'vector']], ['area', ['scalar', 'vector']], ['bar', ['vector']], ['meter', ['meter']],
 ]);
 const MAX_PLOT_SLOTS = 4194304;
+const PLOT_FLOAT_MAX = 3.4028234663852886e38;
 
 // A plot binding names a value-feed channel and how to draw it, under the
 // rules the renderer's `plot_is_valid` applies; samples arrive at run time.
@@ -377,7 +378,8 @@ function validatePlotBinding(plot, path, issues) {
     if (typeof plot.channel !== 'string' || plot.channel.length === 0) {
         issues.push(issue(`${path}.channel`, 'type', 'a plot names its channel'));
     }
-    const source = plot.source ?? (plot.style === 'meter' ? 'meter' : 'vector');
+    // Only an absent source takes the default; an explicit null is refused.
+    const source = plot.source === undefined ? (plot.style === 'meter' ? 'meter' : 'vector') : plot.source;
     if (sources !== undefined && !sources.includes(source)) {
         issues.push(issue(`${path}.source`, 'enum', `a ${plot.style} plot reads a ${sources.join(' or ')} channel`));
     }
@@ -399,18 +401,23 @@ function validatePlotBinding(plot, path, issues) {
     if (plot.style !== 'meter' && plot.slots === undefined) {
         issues.push(issue(`${path}.slots`, 'type', 'a line, area or bar plot declares its slots'));
     }
-    const finite = (value) => typeof value === 'number' && Number.isFinite(value);
+    // The renderer holds these as single-precision floats, so a value must
+    // fit one, and limits and the range compare the rounded values.
+    const finite = (value) => typeof value === 'number' && Number.isFinite(value) &&
+        Math.abs(value) <= PLOT_FLOAT_MAX;
     for (const key of ['min', 'max', 'baseline', 'lineWidth', 'barGap', 'peakWidth']) {
         if (plot[key] === undefined) continue;
         if (!finite(plot[key])) {
-            issues.push(issue(`${path}.${key}`, 'type', `${key} must be a finite number`));
+            issues.push(issue(`${path}.${key}`, 'type', `${key} must be a finite number within float range`));
         } else if (['lineWidth', 'barGap', 'peakWidth'].includes(key) &&
-            (plot[key] < 0 || plot[key] > 4096)) {
+            (Math.fround(plot[key]) < 0 || Math.fround(plot[key]) > 4096)) {
             issues.push(issue(`${path}.${key}`, 'range', `${key} must be from 0 to 4096`));
         }
     }
-    if ((plot.min ?? 0) === (plot.max ?? 1)) {
-        issues.push(issue(`${path}.max`, 'range', 'a plot value range must not be empty'));
+    const low = plot.min === undefined ? 0 : plot.min;
+    const high = plot.max === undefined ? 1 : plot.max;
+    if (finite(low) && finite(high) && Math.fround(low) === Math.fround(high)) {
+        issues.push(issue(`${path}.max`, 'range', 'a plot value range must not be empty once rounded to float'));
     }
     for (const key of ['lineColor', 'fillColor', 'peakColor']) {
         const color = plot[key];

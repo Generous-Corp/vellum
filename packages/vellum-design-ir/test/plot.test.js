@@ -65,6 +65,11 @@ test('a plot binding refuses what the renderer cannot draw', async () => {
         [{ style: 'line', channel: 'c', slots: 4, lineWidth: -1 }, 'range'],
         [{ style: 'line', channel: 'c', slots: 4, barGap: 1e30 }, 'range'],
         [{ style: 'line', channel: 'c', slots: 4, lineColor: 'red' }, 'format'],
+        [{ style: 'line', channel: 'c', slots: 4, min: 1, max: 1.00000001 }, 'range'],
+        [{ style: 'line', channel: 'c', slots: 4, max: 1e100 }, 'type'],
+        [{ style: 'line', channel: 'c', slots: 4, max: 3.4028235e38 }, 'type'],
+        [{ style: 'line', channel: 'c', slots: 4, source: null }, 'enum'],
+        [{ style: 'meter', channel: 'c', source: null }, 'enum'],
         [{ style: 'line', channel: 'c', slots: 4, samples: [1, 2] }, 'unknown-field'],
         [{ style: 'line', channel: 'c', slots: 4, min: 1 }, 'range'],
         [{ style: 'line', channel: 'c', slots: 4, lineWidth: 4097 }, 'range'],
@@ -118,6 +123,15 @@ test('plot bindings need schema version 5 and documents without them stay versio
     });
     assert.ok(validateDesignIR(nested).issues.some((entry) => entry.code === 'version'),
         'a nested plot at version 1 is refused');
+});
+
+test('an explicit null source is refused, not defaulted, through normalization too', async () => {
+    const source = JSON.parse(await readFile(new URL('revision-a.source.json', fixtures), 'utf8'));
+    source.root.plot = { style: 'bar', channel: 'spectrum', slots: 8, source: null };
+    assert.throws(() => normalizeImport(source));
+    const wide = await document();
+    const plot = { style: 'line', channel: 'c', slots: 4, lineWidth: 4096.0000001 };
+    assert.deepEqual(validateDesignIR(withPlot(wide, plot)), { issues: [], valid: true });
 });
 
 test('normalization keeps a source node plot binding', async () => {

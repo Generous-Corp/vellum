@@ -238,6 +238,7 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
                 .fill = node.fill,
                 .fill_gradients = node.fill_gradients,
                 .transform = transform,
+                .plot_background = true,
             });
         }
         output.push_back({

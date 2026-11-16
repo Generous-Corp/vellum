@@ -478,6 +478,13 @@ test('serializes a plot node bound to a value-feed channel', () => {
     rejects({ lineWidth: -1 }, /lineWidth must be a non-negative finite number/);
     rejects({ min: Number.NaN }, /min must be a finite number/);
     rejects({ lineColor: 'red' }, /lineColor must be a hex color/);
+    // The native renderer holds ranges as floats: these match its refusals.
+    rejects({ min: 1, max: 1.00000001 }, /value range must not be empty once rounded to float/);
+    rejects({ max: 1e100 }, /max must be within float range/);
+    rejects({ max: 3.4028235e38 }, /max must be within float range/);
+    rejects({ source: null }, /source must be one of/);
+    assert.doesNotThrow(() => mount(() => jsx(Plot, { id: 'wide', plot: 'line', channel: 'c',
+        slots: 4, lineWidth: 4096.0000001 })).renderJSON());
     rejects({ children: jsx(View, {}) }, /Plot does not accept children/);
 
     // Each style reads only the channel shapes native materialization accepts.
