@@ -276,6 +276,19 @@ class RmlUiSdkArtifactTest(unittest.TestCase):
         with self.assertRaises(ArtifactError):
             builder.check_payload(files - {"lib/libvellum-rmlui-native.a"})
 
+    def test_the_builder_accepts_rmlui_container_headers_and_refuses_its_package(self) -> None:
+        # RmlUi bundles header-only containers with their licence under its
+        # headers, which the archive carries; its own CMake package is not
+        # part of the archive.
+        files = set(builder.required_files())
+        files |= {"include/RmlUi/Core/Containers/itlib/flat_map.hpp",
+                  "include/RmlUi/Core/Containers/LICENSE.txt"}
+        builder.check_payload(files)
+        with self.assertRaises(ArtifactError):
+            builder.check_payload(files | {"lib/cmake/RmlUi/RmlUiConfig.cmake"})
+        with self.assertRaises(ArtifactError):
+            builder.check_payload(files | {"include/RmlUi/Core/Other.txt"})
+
 
 if __name__ == "__main__":
     unittest.main()
