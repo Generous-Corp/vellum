@@ -52,15 +52,19 @@ Vector assets use schema version 9. A `vector` node holds a compiled vector
 asset: a display list of groups (transform, clip, opacity) and paths whose
 fills and strokes carry colours or gradients, which the Skia renderer and the
 Canvas2D shell both draw. DesignIR carries it as a `vector` node with
-`properties.vector`, and vellum-ui as the `Vector` primitive; both refuse an
-asset the native renderer would refuse.
+`properties.vector`, and vellum-ui as the `Vector` primitive. The vellum-ui
+primitive and the native materializer refuse an asset the native renderer
+would refuse; DesignIR checks versions and field gating, not the asset's
+contents.
 
-A DesignIR document that uses these fields (path and vector nodes, their
-property buckets, image sources and the opacity, transform, clip, mask,
-isolation and overflow paint keys) is written at DesignIR schema version 6;
-one without them stays at version 1. The validator and the published schema
-refuse those fields below version 6, and versions 2 to 5 are reserved for
-blend modes, effects and materials, animation tracks and plots.
+A DesignIR document is written at the oldest schema version that carries every
+field it uses: version 1 without any of the later fields, version 2 for the
+`compositing` object (blend mode, opacity, mask and isolation), 3 for material
+references, 4 for animation tracks and 5 for plot bindings. Version 6 covers
+path and vector nodes, `properties.path`, `properties.vector`,
+`properties.image.source`, and the paint keys `transform`, `clipPath` and
+`overflow`. The validator and the published schema refuse each field below the
+version that adds it, whatever the document's version.
 
 The history-preserving Pulp projection has been removed from the active tip.
 Its authorship and exact blobs remain auditable in Git history and immutable
