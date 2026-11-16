@@ -10,7 +10,10 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
+try:
+    import yaml
+except ImportError:  # the isolated lane has no PyYAML
+    yaml = None
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("gpu_proof_guard", Path(__file__).with_name("gpu_proof_guard.py"))
@@ -130,6 +133,7 @@ class AlarmTests(unittest.TestCase):
         main = [queue_run(60, "failure")]
         self.assertTrue(self.evaluate(queue[:-1], main=main, jobs={60: gpu[50]})["gpu_only_escapes"])
 
+    @unittest.skipIf(yaml is None, "PyYAML is not installed")
     def test_the_gpu_only_steps_exist_in_the_workflow(self) -> None:
         workflow = yaml.safe_load((ROOT / ".github/workflows/gpu-macos.yml").read_text(encoding="utf-8"))
         names = {step["name"] for job in workflow["jobs"].values() for step in job["steps"]}
@@ -166,6 +170,7 @@ class AlarmTests(unittest.TestCase):
         self.assertTrue(any("created=%3E%3D2026-11-15T12:00:00Z" in path for path in seen), seen)
 
 
+@unittest.skipIf(yaml is None, "PyYAML is not installed")
 class GuardWorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.workflow = yaml.safe_load((ROOT / ".github/workflows/gpu-proof-guard.yml").read_text(encoding="utf-8"))

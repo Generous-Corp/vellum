@@ -201,6 +201,17 @@ class SelectorTests(unittest.TestCase):
                 mutate(github)
                 self.assert_declines(github, fragment)
 
+    def test_a_cheap_lane_run_is_never_reused_as_a_gpu_proof(self) -> None:
+        # The cheap pull-request lane succeeds in both proof jobs but writes no
+        # tree receipt (its receipt steps skip), so the queue runs the full proof.
+        github = FakeGitHub()
+        github.artifacts[RUN_ID] = []
+        self.assert_declines(github, "uploaded no tree receipt")
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        for step in ("Record the tree this pull-request proof covered", "Upload the proven-tree receipt"):
+            block = workflow.split(f"      - name: {step}\n", 1)[1].split("\n      - name:", 1)[0]
+            self.assertIn("steps.depth.outputs.cheap != 'true'", block, step)
+
     def test_a_receipt_archive_with_extra_files_is_refused(self) -> None:
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as bundle:
@@ -314,7 +325,27 @@ REUSE_IF = (
     "(github.event_name == 'merge_group' && steps.classify.outputs.unaffected != 'true') "
     "|| (github.event_name == 'push' && github.ref == 'refs/heads/main')"
 )
-GPU_GATE = "steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''"
+GPU_GATE = (
+    "steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' "
+    "&& steps.reuse.outputs.run_id == ''"
+)
+# The steps the cheap pull-request lane keeps (a pull request never reuses a proof,
+# so these skip only on the classifier's verdict and the lane itself).
+CHEAP_KEPT_GATE = "steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''"
+CHEAP_KEPT_STEPS = {
+    "Size builds to this runner",
+    "Download and verify the locked Skia and Dawn archive",
+    "Set up the authoring toolchain",
+    "Verify the exact release source contract",
+    "Build the installed TypeScript and JSX Phase 3 fixture",
+}
+# Run only in a cheap pull-request lane, which is never a reused queue run.
+CHEAP_ONLY_STEPS = {
+    "Build the cheap pull-request slice": "steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap == 'true'",
+    "Run the pr-fast tests": "steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap == 'true'",
+    "Prove the cheap lane was allowed": "always() && steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap == 'true'",
+}
+DEPTH_STEP = "Choose the pull-request proof depth"
 # test_ci_runner_policy.py holds this step to a byte-exact canonical text
 # shared with the release finalizer, so it carries no condition. It only
 # fetches and verifies a digest-pinned archive, so a reused run still passes it
@@ -325,6 +356,7 @@ UNGATED_GPU_STEPS = {"Fetch and verify the pinned Pulp view-audio archive"}
 RECHECK_STEP = "Re-check the external state a reused proof read"
 STERILE_GATE = (
     "needs.gpu-macos-arm64.outputs.unaffected != 'true' && "
+    "needs.gpu-macos-arm64.outputs.cheap != 'true' && "
     "needs.gpu-macos-arm64.outputs.reused_run == ''"
 )
 # The classifier's own trailing guard (scripts/test_classify_gpu_proof.py).
@@ -346,9 +378,10 @@ def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
         dict(steps)[names[reuse]],
         REUSE_IF,
     )
-    # Checkout, the release identity and the classifier precede the decision.
-    test.assertEqual(reuse, 3)
+    # Checkout, the release identity, the classifier and the proof depth precede the decision.
+    test.assertEqual(reuse, 4)
     test.assertEqual(names[2], "Classify the change against the base's rules")
+    test.assertEqual(names[3], DEPTH_STEP)
     for name, condition in steps[reuse + 1:]:
         if name in UNGATED_GPU_STEPS:
             test.assertEqual(condition, "", name)
@@ -358,6 +391,12 @@ def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
             continue
         if name in SKIP_RECEIPT_STEPS:
             test.assertEqual(condition, SKIP_RECEIPT_IF, name)
+            continue
+        if name in CHEAP_ONLY_STEPS:
+            test.assertEqual(condition, CHEAP_ONLY_STEPS[name], name)
+            continue
+        if name in CHEAP_KEPT_STEPS:
+            test.assertEqual(condition, CHEAP_KEPT_GATE, name)
             continue
         if name == GUARD_STEP:
             test.assertEqual(condition, "always() && steps.classify.outputs.unaffected == 'true'", name)
@@ -389,7 +428,10 @@ def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
     )
     test.assertEqual(sterile[1], ("Report a change the proof does not cover",
                                   "needs.gpu-macos-arm64.outputs.unaffected == 'true'"))
-    for name, condition in sterile[2:]:
+    test.assertEqual(sterile[2], (
+        "Report the cheap pull-request lane",
+        "needs.gpu-macos-arm64.outputs.unaffected != 'true' && needs.gpu-macos-arm64.outputs.cheap == 'true'"))
+    for name, condition in sterile[3:]:
         test.assertTrue(
             condition in (STERILE_GATE, f"always() && {STERILE_GATE}"),
             f"sterile-consumer {name!r} runs in a reused queue run: if: {condition!r}",

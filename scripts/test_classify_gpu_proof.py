@@ -402,9 +402,15 @@ class CheapLaneStepTests(StepHarness):
         self.assertIn("the base's classifier says: early", guard.stdout)
 
 
+try:
+    import yaml
+except ImportError:  # the isolated lane has no PyYAML; the text-level wiring tests still run
+    yaml = None
+
+
+@unittest.skipIf(yaml is None, "PyYAML is not installed")
 class CheapLaneWorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
-        import yaml
         self.workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         self.text = WORKFLOW.read_text(encoding="utf-8")
         self.steps = {step["name"]: step for step in self.workflow["jobs"]["gpu-macos-arm64"]["steps"]}
