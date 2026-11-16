@@ -7,7 +7,7 @@
 #include <cmath>
 #include <cstddef>
 
-// FU-2 / WI-17 — pure partial-repaint damage model. See repaint_damage.hpp for
+// Pure partial-repaint damage model. See repaint_damage.hpp for
 // the pixel-identity rule this implements. No GPU / canvas / platform state.
 
 namespace vellum::view {

@@ -2,6 +2,13 @@ export const DESIGN_IR_SCHEMA: 'https://vellum.dev/schemas/design-ir/v1';
 export const AUTHORED_OVERLAY_SCHEMA: 'https://vellum.dev/schemas/design-ir/authored-overlay/v1';
 export const REIMPORT_REPORT_SCHEMA: 'https://vellum.dev/schemas/design-ir/reimport-report/v1';
 export const DESIGN_IR_VERSION: 1;
+export const DESIGN_IR_COMPOSITING_VERSION: 2;
+export const DESIGN_IR_MATERIALS_VERSION: 3;
+/** The DesignIR version that adds animation tracks on nodes. */
+export const DESIGN_IR_TRACKS_VERSION: 4;
+/** Every version this build reads. */
+export const DESIGN_IR_VERSIONS: readonly [1, 2, 3, 4];
+export const SUPPORTED_DESIGN_IR_VERSIONS: typeof DESIGN_IR_VERSIONS;
 export const AUTHORED_OVERLAY_VERSION: 1;
 export const REIMPORT_REPORT_VERSION: 1;
 export const COMPILER_NAME: '@vellum/design-ir';
@@ -43,6 +50,59 @@ export interface DesignIdentity {
     ordinal?: number;
 }
 
+export type BlendModeTier1 =
+    | 'normal'
+    | 'multiply'
+    | 'screen'
+    | 'overlay'
+    | 'darken'
+    | 'lighten'
+    | 'difference'
+    | 'exclusion'
+    | 'source_over'
+    | 'destination_in'
+    | 'destination_out';
+export type BlendModeTier2 =
+    | 'hue'
+    | 'saturation'
+    | 'color'
+    | 'luminosity'
+    | 'color_dodge'
+    | 'color_burn'
+    | 'hard_light'
+    | 'soft_light'
+    | 'clear'
+    | 'source'
+    | 'destination'
+    | 'source_in'
+    | 'source_out'
+    | 'source_atop'
+    | 'destination_over'
+    | 'destination_atop'
+    | 'xor'
+    | 'plus';
+export type BlendMode = BlendModeTier1 | BlendModeTier2;
+export type MaskMode = 'alpha' | 'luminance';
+
+export const BLEND_MODES_TIER_1: readonly BlendModeTier1[];
+export const BLEND_MODES_TIER_2: readonly BlendModeTier2[];
+export const BLEND_MODES: readonly BlendMode[];
+export const MASK_MODES: readonly MaskMode[];
+export function blendModeTier(mode: string): 0 | 1 | 2;
+
+/** Mirrors the renderer's scene node: opacity, blend mode, isolation and masking. */
+export interface NodeCompositing {
+    /** From 0 to 1; absent means 1. */
+    opacity?: number;
+    /** Absent means `normal`. */
+    blendMode?: BlendMode;
+    isolate?: boolean;
+    /** Makes the node a mask for its siblings. */
+    mask?: MaskMode;
+    /** The identity of the sibling mask node that applies to this node. */
+    maskRef?: string;
+}
+
 export interface DesignNode {
     id: string;
     identity: DesignIdentity;
@@ -52,7 +112,56 @@ export interface DesignNode {
     text?: string;
     properties: Record<string, JsonValue>;
     extensions?: Record<string, JsonValue>;
+    /** Present only in a version 4 document. */
+    tracks?: AnimationTrack[];
+    /** Present in version 2 or later, and only for non-default values. */
+    compositing?: NodeCompositing;
+    material?: MaterialReference;
     children: DesignNode[];
+}
+
+/** A property an animation track can drive. */
+export type AnimatedProperty =
+    | 'opacity' | 'translateX' | 'translateY' | 'scaleX' | 'scaleY' | 'rotation'
+    | 'fill' | 'strokeColor' | 'shadowColor' | 'gradientStopColor' | 'textRunColor';
+
+export type Easing =
+    | 'linear' | 'ease' | 'ease-in' | 'ease-out' | 'ease-in-out'
+    | { type: 'cubicBezier'; x1: number; y1: number; x2: number; y2: number }
+    | { type: 'steps'; steps: number; position?: 'start' | 'end' | 'none' | 'both' }
+    | { type: 'spring'; stiffness?: number; damping?: number; mass?: number; velocity?: number };
+
+/** One keyframe: seconds of the host clock, a number or a #rrggbb[aa] colour. */
+export interface AnimationKeyframe {
+    time: number;
+    value: number | string;
+    easing?: Easing;
+}
+
+/**
+ * A keyframed animation of one property of its node. `index` names the
+ * shadow, gradient or text run and `stop` the gradient stop it addresses.
+ */
+export interface AnimationTrack {
+    property: AnimatedProperty;
+    index?: number;
+    stop?: number;
+    keyframes: AnimationKeyframe[];
+}
+
+/** A material value: a number, two numbers, or a straight RGBA colour. */
+export type MaterialValue =
+    | number
+    | [number, number]
+    | { red: number; green: number; blue: number; alpha: number };
+
+/**
+ * A registered material named by id with values for its uniforms. The
+ * uniforms' types, ranges and defaults belong to the material's registration.
+ */
+export interface MaterialReference {
+    id: string;
+    values: Record<string, MaterialValue>;
 }
 
 export interface DesignSource {
@@ -78,7 +187,11 @@ export interface DesignToken {
 
 export interface DesignIR {
     $schema: typeof DESIGN_IR_SCHEMA;
-    schemaVersion: 1;
+    /**
+     * 1, 2 when a node carries `compositing`, 3 when a node carries a
+     * material reference, or 4 when a node carries animation tracks.
+     */
+    schemaVersion: 1 | 2 | 3 | 4;
     compiler: { name: string; version: string };
     source: DesignSource;
     root: DesignNode;
@@ -111,6 +224,9 @@ export interface SourceNode {
     text?: string;
     properties?: Record<string, JsonValue>;
     extensions?: Record<string, JsonValue>;
+    tracks?: AnimationTrack[];
+    compositing?: NodeCompositing;
+    material?: MaterialReference;
     losses?: Array<Partial<DesignDiagnostic> & Pick<DesignDiagnostic, 'code' | 'message'>>;
     children?: SourceNode[];
     [adapterField: string]: unknown;
@@ -214,7 +330,10 @@ export function buildLossReport(diagnostics: DesignDiagnostic[]): DesignIR['loss
 export function normalizeTokens(rawTokens: unknown, sourceKey: string): Record<string, DesignToken>;
 export function resolveTokenLayers(document: DesignIR, overlay?: Partial<AuthoredOverlay>): TokenLayers;
 export function diffTokens(previous: DesignIR['tokens'], next: DesignIR['tokens']): unknown[];
-export function normalizeImport(input: ImportSourceModel, options?: { compilerVersion?: string }): DesignIR;
+export function normalizeImport(
+    input: ImportSourceModel,
+    options?: { compilerVersion?: string; schemaVersion?: 1 | 2 | 3 },
+): DesignIR;
 export function decodeFigmaPluginExport(
     input: unknown,
     options: { sourceKey: string; sourceHash: string; revision?: string },

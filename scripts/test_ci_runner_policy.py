@@ -99,24 +99,41 @@ BROWSER_JOBS = {
 }
 
 # Both gpu-macos.yml jobs select their runner with exactly this expression:
-# merge-group and push runs take the merge-group class variable when it is set,
-# and everything else is the reviewed local variable with a hosted fallback.
+# merge-group runs take the merge-group class variable when it is set, and
+# everything else (push included, so a main re-proof never queues ahead of a
+# merge-queue entry) is the reviewed local variable with a hosted fallback.
 GPU_RUNS_ON = (
-    "runs-on: ${{ fromJSON(((github.event_name == 'merge_group' || "
-    "github.event_name == 'push') && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) "
+    "runs-on: ${{ fromJSON((github.event_name == 'merge_group' && "
+    "vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) "
     "|| vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '[\"macos-15\"]') }}"
 )
+
+# sterile-consumer selects a hosted runner when gpu-macos-arm64 reported a
+# reused proof or a change the proof does not cover (the job then only prints
+# a notice), and otherwise exactly the GPU selector.
+STERILE_HOSTED_WHEN = (
+    "(needs.gpu-macos-arm64.outputs.reused_run != '' || "
+    "needs.gpu-macos-arm64.outputs.unaffected == 'true') && '[\"ubuntu-24.04\"]'"
+)
+STERILE_RUNS_ON = (
+    "runs-on: ${{ fromJSON((" + STERILE_HOSTED_WHEN + ") || "
+    + GPU_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")] + ") }}"
+)
+# Hosted helper jobs in gpu-macos.yml, by name, with their exact runner. They
+# never run a proof, so they are not held to the GPU selector.
+GPU_HOSTED_JOBS = {"cancel-destroyed-groups": "runs-on: ubuntu-24.04"}
 
 
 def evaluate_actions_expression(expression: str, context: dict[str, str]) -> str:
     """Evaluate the GitHub Actions expression subset a runs-on selector uses.
 
-    Strings, `github.event_name`, `vars.NAME` (unset reads as ''), `==`, `&&`,
-    `||` and parentheses, with the documented semantics: `a && b` is `a` when
-    `a` is falsy, else `b`; `a || b` is `a` when `a` is truthy, else `b`; the
-    empty string is falsy; `==` yields 'true' or ''.
+    Strings, `github.event_name`, `vars.NAME` and `needs.JOB.outputs.NAME`
+    (unset reads as ''), `==`, `!=`, `&&`, `||` and parentheses, with the
+    documented semantics: `a && b` is `a` when `a` is falsy, else `b`;
+    `a || b` is `a` when `a` is truthy, else `b`; the empty string is falsy;
+    `==` and `!=` yield 'true' or ''.
     """
-    tokens = re.findall(r"'(?:[^']|'')*'|==|&&|\|\||[()]|[A-Za-z_][A-Za-z0-9_.]*", expression)
+    tokens = re.findall(r"'(?:[^']|'')*'|==|!=|&&|\|\||[()]|[A-Za-z_][A-Za-z0-9_.-]*", expression)
     if "".join(tokens) != re.sub(r"\s+", "", expression):
         raise ValueError(f"unsupported expression: {expression}")
     position = 0
@@ -140,15 +157,15 @@ def evaluate_actions_expression(expression: str, context: dict[str, str]) -> str
             return token[1:-1].replace("''", "'")
         if token == "github.event_name":
             return context["event_name"]
-        if token.startswith("vars."):
+        if token.startswith(("vars.", "needs.")):
             return context.get(token, "")
         raise ValueError(f"unsupported token {token!r}")
 
     def comparison() -> str:
         left = primary()
-        while peek() == "==":
-            take()
-            left = "true" if left == primary() else ""
+        while peek() in ("==", "!="):
+            equal = take() == "=="
+            left = "true" if (left == primary()) == equal else ""
         return left
 
     def conjunction() -> str:
@@ -316,7 +333,7 @@ PULP_API_READER_GIT_CALLS = {
 # backslash continuation inside a word, a glued `os.system` argument, a
 # value written to a file for a later step), so any change to the reader is
 # a reviewed change to this digest. The checks below only explain a failure.
-PULP_API_READER_SHA256 = "374a28e9eb5dec1fbdd07e1aeb085756b97d921827d74d3c68ac1c1d36664370"
+PULP_API_READER_SHA256 = "bfccaa48622f4d96b8d733aa150886792172c1d2ca7efe1faee5fb42134ed725"
 # The reader reshapes the GitHub responses it fetched through this script, so
 # the script is part of the reader: it is pinned byte for byte like the step
 # and must carry no transport of its own (every read stays a gh call above).
@@ -1122,10 +1139,24 @@ class RunnerPolicyTests(unittest.TestCase):
 
         for path in workflow_paths:
             variable, fallback = EXPECTED_RUNNERS[path.name]
+            text = path.read_text(encoding="utf-8")
+            hosted_helpers = set()
+            if path.name == "gpu-macos.yml":
+                jobs = workflow_jobs(text)
+                for job, selector in GPU_HOSTED_JOBS.items():
+                    lines = [line.strip() for line in jobs[job].splitlines()
+                             if line.strip().startswith("runs-on:")]
+                    self.assertEqual(lines, [selector], job)
+                    hosted_helpers.add(selector)
+                self.assertEqual(
+                    sum(line.strip() in hosted_helpers for line in text.splitlines()),
+                    len(GPU_HOSTED_JOBS),
+                    "a hosted selector appears outside the hosted helper jobs",
+                )
             runs_on_lines = [
                 line.strip()
-                for line in path.read_text(encoding="utf-8").splitlines()
-                if line.strip().startswith("runs-on:")
+                for line in text.splitlines()
+                if line.strip().startswith("runs-on:") and line.strip() not in hosted_helpers
             ]
             self.assertTrue(runs_on_lines, path.name)
             if variable == "__mixed__":
@@ -1184,10 +1215,10 @@ class RunnerPolicyTests(unittest.TestCase):
 
     def test_gpu_jobs_select_the_merge_group_class_only_when_it_is_set(self) -> None:
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
-        for job in ("gpu-macos-arm64", "sterile-consumer"):
+        for job, selector in (("gpu-macos-arm64", GPU_RUNS_ON), ("sterile-consumer", STERILE_RUNS_ON)):
             lines = [line.strip() for line in workflow_jobs(gpu)[job].splitlines()
                      if line.strip().startswith("runs-on:")]
-            self.assertEqual(lines, [GPU_RUNS_ON], job)
+            self.assertEqual(lines, [selector], job)
         expression = GPU_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")]
         local = '["self-hosted","macOS","ARM64","vellum-build-macos"]'
         merge = '["self-hosted","macOS","ARM64","vellum-build-macos-merge-group"]'
@@ -1201,7 +1232,7 @@ class RunnerPolicyTests(unittest.TestCase):
                     self.assertEqual(evaluate_actions_expression(expression, context),
                                      evaluate_actions_expression(before, context))
                     context["vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON"] = merge
-                    expected = (merge if event in ("merge_group", "push")
+                    expected = (merge if event == "merge_group"
                                 else evaluate_actions_expression(before, context))
                     self.assertEqual(evaluate_actions_expression(expression, context), expected)
         # Control: the evaluator is not reading every selector as the fallback.
@@ -1210,6 +1241,55 @@ class RunnerPolicyTests(unittest.TestCase):
             evaluate_actions_expression(before, {"event_name": "push",
                                                  "vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local}),
             local)
+
+    def test_sterile_consumer_reports_a_reused_or_uncovered_proof_on_a_hosted_runner(self) -> None:
+        gpu_expression = GPU_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")]
+        sterile_expression = STERILE_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")]
+        local = '["self-hosted","macOS","ARM64","vellum-build-macos"]'
+        merge = '["self-hosted","macOS","ARM64","vellum-build-macos-merge-group"]'
+        reused = "needs.gpu-macos-arm64.outputs.reused_run"
+        unaffected = "needs.gpu-macos-arm64.outputs.unaffected"
+        for event in ("pull_request", "merge_group", "push", "workflow_dispatch"):
+            for variables in ({}, {"vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local},
+                              {"vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local,
+                               "vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON": merge}):
+                context = {"event_name": event, **variables}
+                with self.subTest(event=event, variables=sorted(variables), proof="built"):
+                    for built in ({}, {unaffected: "false"}, {reused: ""}):
+                        self.assertEqual(
+                            evaluate_actions_expression(sterile_expression, {**context, **built}),
+                            evaluate_actions_expression(gpu_expression, context))
+                for reported in ({reused: "43671219549"}, {unaffected: "true"},
+                                 {reused: "43671219549", unaffected: "true"}):
+                    with self.subTest(event=event, variables=sorted(variables), proof=sorted(reported)):
+                        self.assertEqual(
+                            evaluate_actions_expression(sterile_expression, {**context, **reported}),
+                            '["ubuntu-24.04"]')
+        # Control: the evaluator reads needs outputs at all.
+        self.assertEqual(evaluate_actions_expression(reused, {"event_name": "push", reused: "7"}), "7")
+
+    def test_destroyed_group_cancellation_cannot_skip_or_satisfy_a_proof(self) -> None:
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        jobs = workflow_jobs(gpu)
+        self.assertEqual(sorted(jobs), ["cancel-destroyed-groups", "gpu-macos-arm64", "sterile-consumer"])
+        # A job skipped because a job it needs failed reports a passing required
+        # check, so neither proof job may depend on the helper.
+        needs = {job: [line.strip() for line in body.splitlines() if line.startswith("    needs:")]
+                 for job, body in jobs.items()}
+        self.assertEqual(needs["gpu-macos-arm64"], [])
+        self.assertEqual(needs["sterile-consumer"], ["needs: gpu-macos-arm64"])
+        for job in ("gpu-macos-arm64", "sterile-consumer"):
+            self.assertNotIn("cancel-destroyed-groups", jobs[job], job)
+        helper = jobs["cancel-destroyed-groups"]
+        self.assertEqual([line for line in helper.splitlines() if line.startswith("    if:")],
+                         ["    if: github.event_name == 'merge_group'"])
+        self.assertIn("    permissions:\n      actions: write\n      contents: read\n    steps:", helper)
+        self.assertEqual(gpu.count("actions: write"), 1)
+        self.assertIn("python3 -I scripts/cancel_destroyed_queue_proofs.py", helper)
+        self.assertIn('--ref "$GITHUB_REF"', helper)
+        self.assertIn('--run-id "$GITHUB_RUN_ID"', helper)
+        self.assertIn("persist-credentials: false", helper)
+        self.assertTrue((ROOT / "scripts" / "cancel_destroyed_queue_proofs.py").is_file())
 
     def test_gpu_local_runner_policy_rejects_guard_mutations(self) -> None:
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")

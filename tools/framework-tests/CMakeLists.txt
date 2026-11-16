@@ -112,6 +112,62 @@ else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES ${_vellum_threejs_tests})
 endif()
 
+vellum_add_framework_test(gpu-capabilities
+    SOURCES gpu_capabilities_test.cpp
+    UNITS Vellum::MirrorRender_2d)
+
+# The WGSL validator behind vellum_add_wgsl_shaders(): it compiles each shader
+# on Dawn's Null adapter. It compiles the render unit's WGSL helper and
+# diagnostics itself and links the device layer directly, as the gpu-runtime
+# device test does, so it never loads a second copy of the render unit. Nothing
+# here installs it. It is a test-side executable, so its source carries the
+# test file name and is recorded as registered for the check below.
+add_executable(vellum-wgsl-validate wgsl_validate_test.cpp
+    "${PROJECT_SOURCE_DIR}/framework/core/render/src/wgsl_compile.cpp"
+    "${PROJECT_SOURCE_DIR}/framework/core/render/src/wgsl_diagnostics.cpp")
+set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES wgsl_validate_test.cpp)
+target_include_directories(vellum-wgsl-validate PRIVATE
+    "${PROJECT_SOURCE_DIR}/framework/core/render/src" "${PROJECT_SOURCE_DIR}/gpu-runtime/include"
+    ${_vellum_framework_test_includes})
+# The compile definitions the render unit's sources are built with, so the
+# helper sources compiled here see the same device layer.
+target_compile_definitions(vellum-wgsl-validate PRIVATE
+    "$<TARGET_PROPERTY:vellum-mirror-render-2d,INTERFACE_COMPILE_DEFINITIONS>")
+target_link_libraries(vellum-wgsl-validate PRIVATE VellumGpuRuntime::Device VellumGpuRuntime::Dawn)
+set_target_properties(vellum-wgsl-validate PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-skia-dawn-provider>")
+
+# Exit 77 means the host has no Null adapter, which ctest reports as a skip.
+# The rejecting case passes only on exit 1 with the positioned diagnostic, so
+# a skip can never read as a pass.
+set(_vellum_wgsl_fixtures "${PROJECT_SOURCE_DIR}/fixtures/wgsl")
+add_test(NAME vellum.framework.wgsl-validate-accepts-valid
+    COMMAND vellum-wgsl-validate "${_vellum_wgsl_fixtures}/valid_fill.wgsl")
+add_test(NAME vellum.framework.wgsl-validate-rejects-invalid
+    COMMAND "${CMAKE_COMMAND}"
+        "-DVALIDATOR=$<TARGET_FILE:vellum-wgsl-validate>"
+        "-DSHADER=${_vellum_wgsl_fixtures}/invalid_identifier.wgsl"
+        "-DEXPECT=invalid_identifier[.]wgsl:4:[0-9]+: error: .*colour"
+        -P "${PROJECT_SOURCE_DIR}/cmake/CheckWgslRejects.cmake")
+add_test(NAME vellum.framework.wgsl-validate-creates-stamp-dir
+    COMMAND "${CMAKE_COMMAND}"
+        "-DVALIDATOR=$<TARGET_FILE:vellum-wgsl-validate>"
+        "-DSHADER=${_vellum_wgsl_fixtures}/valid_fill.wgsl"
+        "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/wgsl-stamp-dir-test"
+        -P "${PROJECT_SOURCE_DIR}/cmake/CheckWgslStampDir.cmake")
+set_tests_properties(vellum.framework.wgsl-validate-accepts-valid PROPERTIES
+    SKIP_RETURN_CODE 77 LABELS "framework;wgsl" TIMEOUT 60)
+set_tests_properties(vellum.framework.wgsl-validate-rejects-invalid PROPERTIES
+    SKIP_REGULAR_EXPRESSION "WGSL was not validated"
+    LABELS "framework;wgsl" TIMEOUT 60)
+set_tests_properties(vellum.framework.wgsl-validate-creates-stamp-dir PROPERTIES
+    SKIP_REGULAR_EXPRESSION "stamp written: skipped"
+    LABELS "framework;wgsl" TIMEOUT 60)
+
 # Every test file here must be registered above. A test file that no
 # vellum_add_framework_test() names would build nothing and run nothing while
 # the lane stays green, so configure refuses it.

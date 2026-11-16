@@ -110,11 +110,60 @@ hold, and any doubt or error runs the full proof:
 
 The proof steps that read state outside the tree, the Pulp ancestry check in
 `verify_extraction.py` and the attested view-audio archive fetch, run again in
-the reused queue run. Pushes to `main` and release tags always run the full
-proof, so every landed commit is still proven from scratch after it lands.
+the reused queue run. Release tags, release dry-run tags and manual dispatches
+always run the full proof.
 Reuse adds no trust beyond today's: a queue run already executes the pull
 request's own workflow definition, so the reviewed exact head is what decides
 both runs.
+
+## Reusing the queue's proof on the push to main
+
+The merge queue fast-forwards `main` to the commit its `merge_group` run
+proved, so the push that follows carries the same commit and tree. Rebuilding
+it proved nothing new and cost about as much as the queue run. The push run now
+reports the queue's proof when `scripts/select_reusable_merge_group_proof.py`
+finds a `merge_group` run that:
+
+- is a run of `gpu-macos.yml` on exactly the pushed commit, on a
+  `gh-readonly-queue/main/` ref, from this repository;
+- succeeded, with both proof jobs `success` (not `skipped`) in its latest
+  attempt, on that commit;
+- built the proof or itself reported an identical-tree pull-request proof, or
+  skipped it on the classifier's verdict under proven equivalence (below);
+- started within the last twelve hours.
+
+### The classifier may authorize a push skip only under proven equivalence
+
+The classifier (`scripts/classify_gpu_proof.py`) judges pull requests and queue
+entries, never a push. A push may report a queue run that skipped the proof on
+the classifier's verdict only when the push proves it is that same
+classification. The queue run uploads a receipt (`vellum-gpu-classifier-skip`)
+and the push recomputes every fact from git and compares it to the receipt,
+field by field; a missing, mistyped or different field runs the full proof:
+
+- same inputs: the pushed commit's tree is the queue commit's tree, and the
+  push's previous main tip is the base the queue run classified against, so the
+  changed paths (compared by digest) are identical;
+- same classifier: the script's blob at that base is the receipt's blob (the
+  allowlist is part of the script, so there is no other configuration), and
+  running that copy over the changed paths says `not-required` again;
+- same requirements: the queue run's two required contexts both succeeded in
+  the current attempt, and the pushed tree needs nothing a queue run does not
+  produce. The only such item is the parity proof execution receipt, which
+  release readiness binds to the push run: if the parity completion record is
+  in the pushed tree the push always proves, for every kind of reuse;
+- the queue run is a success of this workflow in this repository, as above.
+
+The equivalence evidence is written to the push run's job summary. The owner
+approved this narrower rule on 2026-11-15; before it, a push never reused a
+classifier skip.
+
+Any doubt, including an API error, runs the full proof. Both jobs still run
+and report on the push, with only their steps skipped: `release-tag.yml` reads
+the newest check run of each required context on the landed commit, and a job
+skipped by its own condition would read there as unmet. The reused run's URL is
+written to the job summary. Release tags, dry-run tags and dispatches never
+reuse.
 
 ## Changes the GPU proof cannot see
 
@@ -131,3 +180,29 @@ workflow needs the proof by rule, as does an empty diff or a base without the
 classifier. A trailing guard re-derives the verdict and fails the job if the
 proof was skipped for anything else, or on any event other than a pull request
 or queue entry. Pushes to `main` and release tags always run the full proof.
+
+## Reporting a skipped proof without a Mac
+
+When `gpu-macos-arm64` reports a reused proof or a change the proof cannot see,
+every `sterile-consumer` step except one notice is skipped. The job then
+selects a hosted `ubuntu-24.04` runner instead of the scarce local Mac class,
+and still runs and reports as it did before. When the proof was built,
+`sterile-consumer` selects exactly the runner `gpu-macos-arm64` does,
+including the merge-group class on `merge_group` and push runs.
+
+## Cancelling proofs of destroyed merge groups
+
+A queue entry's merge group lives on
+`refs/heads/gh-readonly-queue/main/pr-<n>-<sha>`. When GitHub rebuilds an
+entry's group, the new group keeps `pr-<n>` with a new suffix and the old
+group is destroyed. GitHub Actions offers no event for a destroyed group, since
+`merge_group` has only the `checks_requested` activity type, so the old
+group's proof would keep its place in the Mac queue. The hosted
+`cancel-destroyed-groups` job runs on every `merge_group` run and cancels each
+older unfinished `merge_group` run of `gpu-macos.yml` from this repository
+whose ref names the same entry (`scripts/cancel_destroyed_queue_proofs.py`).
+A pull request is the last entry of at most one live group, so an older run
+for the same entry always belongs to a destroyed group. Neither proof job
+needs the helper: a job skipped because a job it needs failed reports a
+passing required check, so the helper must never be able to skip or satisfy a
+proof. A helper error cancels nothing more and is reported as a warning.

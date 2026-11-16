@@ -1,4 +1,5 @@
-// View paint pipeline — extracted from view.cpp (WI-27 decomposition).
+// View paint pipeline, kept apart from view.cpp so the paint path can be read
+// and changed on its own.
 //
 // Holds View::paint_all and its private paint helpers (apply_canvas_transforms,
 // push_effect_layers / pop_effect_layers, paint_outset_shadows,
@@ -2040,7 +2041,7 @@ void View::paint_post_decorations(canvas::Canvas& canvas,
 void View::paint_content(canvas::Canvas& canvas, const EffectLayerState& layers,
                          std::int64_t& children_ns) {
     // The subtree's own content, painted INSIDE the effect/opacity layers that
-    // push_effect_layers opened. Kept as one unit so FU-3's subtree cache can
+    // push_effect_layers opened. Kept as one unit so the subtree scene cache can
     // wrap exactly this (background/border/paint()/children/decorations) while
     // the animatable layer wrappers stay outside the cache.
     // An import-resolved ancestor clip wraps this view's OWN ink — its shadow,
@@ -2299,7 +2300,7 @@ void View::paint_all(canvas::Canvas& canvas) {
     // the one deliberate save-depth asymmetry, owned by this greppable pair.
     const EffectLayerState layers = push_effect_layers(canvas);
 
-    // Everything painted INSIDE those layers (the FU-3 subtree-cache unit).
+    // Everything painted INSIDE those layers (what the subtree scene cache records).
     // Routed through the cache wrapper: when set_subtree_cached(true) and the
     // backend records, this replays a recorded scene instead of re-walking the
     // subtree; otherwise it is a straight-through paint_content call. The

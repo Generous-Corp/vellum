@@ -117,16 +117,6 @@
       "surface": "optional rmlui/ module only; single header compiled into the VellumRmlUi::SoftRenderer PNG encoder"
     },
     {
-      "name": "Three.js",
-      "version": "0.183.1",
-      "revision": "077dd13c0e869d9f3dbe55875686f920367de457",
-      "license": "MIT",
-      "source": "https://github.com/mrdoob/three.js",
-      "path": "assets/threejs",
-      "payload_manifest_sha256": "1ed7c6f46541a8b803ba7c6386ae6b7751d4b30c1b82b3532db534481eba5b34",
-      "surface": "unmodified runtime payload (three.webgpu build, core and module companions, OrbitControls, GLTFLoader, BufferGeometryUtils, SkeletonUtils) that scripted views load as ES modules; each file is pinned by SHA-256 in assets/threejs/payload-manifest.json"
-    },
-    {
       "name": "V8",
       "version": "v8-m158-15.8.62.6-38351a002e2c",
       "v8_version": "15.8.62.6",
@@ -142,6 +132,16 @@
       "release_metadata_url": "https://github.com/danielraffel/v8-builder/releases/download/v8-m158-15.8.62.6-38351a002e2c/release-metadata.json",
       "release_metadata_sha256": "5393fe41d2b16e39bed2e5e526dab8e08bc1d4b865eb13ea5b3056c05b67e6b1",
       "surface": "optional VELLUM_ENABLE_V8 only; the sealed shared libv8.dylib (exports only the v8:: and cppgc:: API; its ICU, zlib and Abseil stay internal) is linked by the installed Vellum::SkiaDawnProvider and installed beside it in lib/, with its manifest under share/vellum/v8/; the mirror's view-script unit compiles its V8 backend against the archive's headers and consumer_defines"
+    },
+    {
+      "name": "Three.js",
+      "version": "0.183.1",
+      "revision": "077dd13c0e869d9f3dbe55875686f920367de457",
+      "license": "MIT",
+      "source": "https://github.com/mrdoob/three.js",
+      "path": "assets/threejs",
+      "payload_manifest_sha256": "1ed7c6f46541a8b803ba7c6386ae6b7751d4b30c1b82b3532db534481eba5b34",
+      "surface": "unmodified runtime payload (three.webgpu build, core and module companions, OrbitControls, GLTFLoader, BufferGeometryUtils, SkeletonUtils) that scripted views load as ES modules; each file is pinned by SHA-256 in assets/threejs/payload-manifest.json"
     }
   ],
   "runtime_toolchain_dependencies": {

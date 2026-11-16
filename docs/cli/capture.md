@@ -93,6 +93,31 @@ IDs, and 64 KiB UTF-8 input values. Unknown fields, unknown actions, malformed
 payloads, missing targets, and unavailable handlers fail rather than being
 ignored.
 
+A `vellum.scenario.v2` flow can also run an application command:
+
+```json
+{ "action": "command", "target": "item.add" }
+```
+
+The application describes the command with `services.commands.define` and a
+mounted component binds what it does:
+
+```tsx
+services.commands.define([{ id: 'item.add', title: 'Add item', shortcut: 'Primary+N' }]);
+
+function Board() {
+    const [items, setItems] = useState<string[]>([]);
+    useCommand('item.add', () => setItems((current) => [...current, 'New item']));
+    return <Text id="items">{items.join(', ')}</Text>;
+}
+```
+
+The host runs the bound handler the way it runs a press, so state the handler
+sets is rendered. The step passes only when the command is defined, a mounted
+component has bound a handler, the handler ran, and the rendered tree changed.
+A command that is only defined, whose component is not mounted, or whose
+handler changes nothing rendered fails the step, on macOS and on the web.
+
 This is semantic retained-tree automation, not browser automation. Pointer
 coordinates, accessibility queries, arbitrary key chords, arbitrary IME input,
 and richer synchronization are not supported.
@@ -153,6 +178,18 @@ and retains one bounded PNG screenshot in the capture root evidence. The
 result is suitable for validation with `lowerBrowserCaptureToDesignIR`. It does
 not expose public-network browsing or arbitrary JavaScript execution.
 
+To keep the settled page as an image file, capture the plan instead:
+
+```sh
+vellum capture --target web --interaction-plan tests/save-board-plan.json --output artifacts/saved.png
+```
+
+It runs the plan the same way and writes the browser's screenshot to the
+output as a PNG, by default `artifacts/<plan file name>.png`. The result names
+the file with its SHA-256, byte length and pixel size, the capture id, the
+viewport and the exact browser. A failed capture leaves an earlier file at
+that path untouched. `--scenario`, `--matrix` and `--montage` are macOS only.
+
 The live DOM snapshot is lowered into the envelope's semantic `root` tree. DOM
 attributes and bounded computed-style strings are scanned for `data:` assets;
 each asset is decoded, SHA-256 addressed as `assets/<digest>.<extension>`, and
@@ -161,6 +198,19 @@ metadata and base64 bytes. The top-level `assets` array is the canonical
 DesignIR asset manifest, while the evidence receipt makes the capture
 self-contained for a later materializer. Malformed URLs, unsafe or oversized
 payloads, excessive nodes/assets, and an unlowerable snapshot fail closed.
+
+Each node keeps the box Chrome laid it out at, as `properties.layout`. The
+document root carries no size: Chrome's capture window is not the project's
+viewport, so the scenario viewport decides the root's size. Every other
+laid-out node carries an `x`, `y`, `width` and `height` relative to its parent,
+which is how native layout places a child. A node Chrome rendered no box for (an element
+with `display: none`, collapsed whitespace) is lowered as `display: none` and
+is not rendered. A box-less node whose descendants have boxes, such as a
+`display: contents` element or a shadow root, spans its parent so that its
+descendants keep their positions. `apps/app-host/test_html_import_geometry.py`
+checks that every native box on `fixtures/html-import` matches Chrome's within
+1 px. Geometry is the only layout carried; paint, images and typography are
+not lowered by this step.
 
 Raw HTML sources use the same isolated browser path through
 `vellum import --source-type html FILE` (or `claude-design`). The source is

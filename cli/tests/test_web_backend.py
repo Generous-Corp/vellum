@@ -33,6 +33,24 @@ lower_dom_snapshot = BACKEND_MODULE["lower_dom_snapshot"]
 CAPTURE_STYLE_NAMES = BACKEND_MODULE["CAPTURE_STYLE_NAMES"]
 chrome_path = BACKEND_MODULE["chrome_path"]
 BackendFailure = BACKEND_MODULE["BackendFailure"]
+write_capture_artifact = BACKEND_MODULE["write_capture_artifact"]
+command_result = BACKEND_MODULE["command_result"]
+backend_parser = BACKEND_MODULE["parser"]
+run_chrome_interaction_capture = BACKEND_MODULE["run_chrome_interaction_capture"]
+validate_interaction_plan = BACKEND_MODULE["validate_interaction_plan"]
+
+sys.path.insert(0, str(REPO / "cli"))
+try:
+    import vellum_png
+finally:
+    sys.path.pop(0)
+
+
+def browser_for_capture() -> str | None:
+    try:
+        return chrome_path()
+    except BackendFailure:
+        return None
 
 
 class ChromeDiscoveryTests(unittest.TestCase):
@@ -177,6 +195,62 @@ class BrowserCaptureLoweringTests(unittest.TestCase):
         self.assertEqual(computed[CAPTURE_STYLE_NAMES[0]], "block")
         self.assertEqual(computed[CAPTURE_STYLE_NAMES[1]], "")
 
+    def test_dom_snapshot_lowers_chrome_boxes_relative_to_parent(self) -> None:
+        """Each laid-out node keeps Chrome's box as a parent-relative frame."""
+        snapshot = {
+            "strings": ["#document", "BODY", "#text", "Hi", "  ", "HEAD", "SLOT", "SPAN"],
+            "documents": [{
+                "nodes": {
+                    # document > body > (text "Hi", whitespace, slot > span), document > head
+                    "nodeType": [9, 1, 3, 3, 1, 1, 1],
+                    "nodeName": [0, 1, 2, 2, 5, 6, 7],
+                    "nodeValue": [None, None, 3, 4, None, None, None],
+                    "parentIndex": [-1, 0, 1, 1, 0, 1, 5],
+                    "attributes": [[], [], [], [], [], [], []],
+                },
+                "layout": {
+                    "nodeIndex": [0, 1, 2, 3, 6],
+                    "styles": [[], [], [], [], []],
+                    "bounds": [[0, 0, 800, 600], [8, 48, 784, 120.5],
+                               [8, 48, 20.25, 18], [0, 0, 0, 0], [30, 70, 10, 12]],
+                },
+            }],
+        }
+        root, _assets, _evidence = lower_dom_snapshot(
+            snapshot, settled_snapshot=snapshot, screenshot={},
+        )
+        # The root keeps no size, so the scenario viewport decides it.
+        self.assertNotIn("layout", root["properties"])
+        body, head = root["children"]
+        text, space, slot = body["children"]
+        self.assertEqual(body["properties"]["layout"],
+                         {"x": 8, "y": 48, "width": 784, "height": 120.5})
+        self.assertEqual(text["properties"]["layout"],
+                         {"x": 0, "y": 0, "width": 20.25, "height": 18})
+        # Collapsed whitespace and display: none have no box and are hidden.
+        self.assertEqual(space["properties"]["layout"], {"display": "none"})
+        self.assertEqual(head["properties"]["layout"], {"display": "none"})
+        # A box-less node with laid-out descendants passes its parent's box
+        # through, so the span still lands at Chrome's absolute (30, 70).
+        self.assertEqual(slot["properties"]["layout"],
+                         {"x": 0, "y": 0, "width": 784, "height": 120.5})
+        self.assertEqual(slot["children"][0]["properties"]["layout"],
+                         {"x": 22, "y": 22, "width": 10, "height": 12})
+
+    def test_dom_snapshot_rejects_malformed_layout_bounds(self) -> None:
+        snapshot = {
+            "strings": ["#document"],
+            "documents": [{
+                "nodes": {
+                    "nodeType": [9], "nodeName": [0], "nodeValue": [None],
+                    "parentIndex": [-1], "attributes": [[]],
+                },
+                "layout": {"nodeIndex": [0], "styles": [[]], "bounds": [[0, 0, -1, 10]]},
+            }],
+        }
+        with self.assertRaisesRegex(BackendFailure, "layout bounds"):
+            lower_dom_snapshot(snapshot, settled_snapshot=snapshot, screenshot={})
+
     def test_dom_snapshot_lowers_nodes_and_localizes_data_url_assets(self) -> None:
         payload = b"capture-asset"
         encoded = base64.b64encode(payload).decode("ascii")
@@ -227,6 +301,162 @@ class BrowserCaptureLoweringTests(unittest.TestCase):
             lower_dom_snapshot(snapshot, settled_snapshot=snapshot, screenshot={})
 
 
+class WebCaptureArtifactTests(unittest.TestCase):
+    """The web backend's capture command leaves a PNG file a caller can open."""
+
+    PLAN = {
+        "schema": "vellum.browser-interaction-plan.v1", "name": "capture-proof",
+        "steps": [{"action": "snapshot", "name": "settled", "computedStyles": ["display"]}],
+    }
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.project = Path(temporary.name).resolve()
+
+    def envelope(self, png: bytes, **screenshot: object) -> dict:
+        record = {"mimeType": "image/png", "data": base64.b64encode(png).decode("ascii"),
+                  "byteLength": len(png), **screenshot}
+        return {
+            "schema": "vellum.browser-capture-envelope.v1", "captureId": "c" * 32,
+            "source": {"browser": "Chrome/1.2.3", "plan": "capture-proof"},
+            "viewport": {"width": 3, "height": 2},
+            "root": {"properties": {"captureEvidence": {"screenshot": record}}},
+        }
+
+    def png(self) -> bytes:
+        pixels = bytes([10, 100, 200, 255]) * 5 + bytes([250, 20, 30, 255])
+        return vellum_png.encode_png(vellum_png.RgbaImage(3, 2, pixels))
+
+    def capture(self, *extra: str, envelope: dict | None = None):
+        """Run the capture command with the build and the browser stood in for."""
+        plan = self.project / "plans/hero.json"
+        plan.parent.mkdir(exist_ok=True)
+        plan.write_text(json.dumps(self.PLAN), encoding="utf-8")
+        seen: list = []
+
+        def browser(build, plan, **_):
+            seen.append((build, plan["name"]))
+            return envelope if envelope is not None else self.envelope(self.png())
+
+        args = backend_parser("capture").parse_args(
+            ["--project", str(self.project), "--json", "--interaction-plan", "plans/hero.json", *extra])
+        # runpy hands back a copy of the module's globals; the functions keep the original.
+        with mock.patch.dict(command_result.__globals__, {
+            "ensure_build": lambda context, sdk, no_build=False: {"root": self.project / "build"},
+            "run_chrome_interaction_capture": browser,
+        }):
+            return command_result("capture", args, {"root": self.project, "slug": "app"}, self.project), seen
+
+    def test_capture_writes_the_browser_screenshot_as_a_png_file(self) -> None:
+        result, seen = self.capture()
+        self.assertEqual(seen, [(self.project / "build", "capture-proof")])
+        output = self.project / "artifacts/hero.png"
+        self.assertEqual((result["ok"], result["status"]), (True, "captured"))
+        data = result["data"]
+        self.assertEqual(data["output"], str(output))
+        # The artifact is the file: decoded on its own, it is the browser's image.
+        image = vellum_png.read_png(output)
+        self.assertEqual((image.width, image.height), (3, 2))
+        self.assertEqual(image.pixels[:4], bytes([10, 100, 200, 255]))
+        self.assertEqual(image.pixels[-4:], bytes([250, 20, 30, 255]))
+        written = output.read_bytes()
+        self.assertEqual(written, self.png())
+        self.assertEqual((data["bytes"], data["width"], data["height"]), (len(written), 3, 2))
+        self.assertEqual(data["sha256"], __import__("hashlib").sha256(written).hexdigest())
+        self.assertEqual((data["target"], data["plan"], data["captureId"], data["browser"]),
+                         ("web", "capture-proof", "c" * 32, "Chrome/1.2.3"))
+        self.assertEqual([path.name for path in output.parent.iterdir()], ["hero.png"])
+
+    def test_capture_is_a_command_of_the_web_backend(self) -> None:
+        # Through the backend's own entry point, as the vellum CLI invokes it.
+        plan = self.project / "hero.json"
+        plan.write_text(json.dumps(self.PLAN), encoding="utf-8")
+        emitted: list = []
+        main = BACKEND_MODULE["main"]
+        with mock.patch.dict(main.__globals__, {
+            "project_context": lambda project: {"root": self.project, "slug": "app"},
+            "sdk_root": lambda: self.project,
+            "ensure_build": lambda context, sdk, no_build=False: {"root": self.project / "build"},
+            "run_chrome_interaction_capture": lambda build, plan, **_: self.envelope(self.png()),
+            "emit": emitted.append,
+        }):
+            status = main(["capture", "--project", str(self.project), "--json",
+                           "--interaction-plan", "hero.json", "--output", "out/hero.png"])
+        self.assertEqual(status, 0, emitted)
+        self.assertEqual((emitted[0]["command"], emitted[0]["status"]), ("capture", "captured"))
+        self.assertEqual(vellum_png.read_png(self.project / "out/hero.png").width, 3)
+        self.assertIn("capture", BACKEND_MODULE["WEB_COMMANDS"])
+
+    def test_capture_honors_the_requested_output(self) -> None:
+        result, _ = self.capture("--output", "shots/home.png")
+        self.assertEqual(result["data"]["output"], str(self.project / "shots/home.png"))
+        self.assertTrue((self.project / "shots/home.png").is_file())
+        self.assertFalse((self.project / "artifacts").exists())
+
+    def test_capture_refuses_arguments_it_cannot_honor(self) -> None:
+        for extra, fragment in (
+            (("--output", "shots/home.jpg"), "must end in .png"),
+            (("--output", "../outside.png"), "capture output"),
+            (("--scenario", "smoke"), "macOS only"),
+            (("--matrix", "m.json"), "macOS only"),
+            (("--montage",), "macOS only"),
+        ):
+            with self.subTest(extra=extra), self.assertRaises(BackendFailure) as raised:
+                self.capture(*extra)
+            self.assertIn(fragment, str(raised.exception))
+        args = backend_parser("capture").parse_args(["--project", str(self.project), "--json"])
+        with self.assertRaisesRegex(BackendFailure, "requires --interaction-plan"):
+            command_result("capture", args, {"root": self.project, "slug": "app"}, self.project)
+        self.assertEqual(list(self.project.rglob("*.png")), [])
+
+    def test_a_capture_without_a_usable_screenshot_fails_and_keeps_the_earlier_file(self) -> None:
+        output = self.project / "artifacts/hero.png"
+        output.parent.mkdir()
+        output.write_bytes(b"earlier capture")
+        good = self.png()
+        cases = {
+            "not a PNG": self.envelope(b"GIF89a" + bytes(40)),
+            "wrong type": self.envelope(good, mimeType="image/jpeg"),
+            "length differs": self.envelope(good, byteLength=len(good) + 1),
+            "not base64": self.envelope(good, data="@@@"),
+            "truncated": self.envelope(good[:20]),
+            "no pixels": self.envelope(good[:16] + bytes(8) + good[24:]),
+            "no screenshot": {"root": {"properties": {"captureEvidence": {}}}},
+        }
+        for label, envelope in cases.items():
+            with self.subTest(label), self.assertRaises(BackendFailure) as raised:
+                self.capture(envelope=envelope)
+            self.assertEqual(raised.exception.status, "capture_failed")
+            self.assertEqual(output.read_bytes(), b"earlier capture")
+            self.assertEqual([path.name for path in output.parent.iterdir()], ["hero.png"])
+
+    @unittest.skipUnless(browser_for_capture(), "a Chrome browser is required for the live capture proof")
+    def test_a_live_browser_capture_is_a_png_of_the_page(self) -> None:
+        site = self.project / "site"
+        site.mkdir()
+        (site / "index.html").write_text(
+            "<!doctype html><html><body style='margin:0;background:rgb(10,100,200)'>"
+            "<div style='width:40px;height:40px;background:rgb(250,20,30)'></div></body></html>\n",
+            encoding="utf-8")
+        envelope = run_chrome_interaction_capture(site, validate_interaction_plan(self.PLAN))
+        artifact = write_capture_artifact(envelope, self.project / "artifacts/live.png")
+        image = vellum_png.read_png(self.project / "artifacts/live.png")
+        self.assertEqual((image.width, image.height), (artifact["width"], artifact["height"]))
+        viewport = envelope["viewport"]
+        self.assertEqual(image.width * viewport["height"], image.height * viewport["width"])
+        scale = image.width // viewport["width"]
+        self.assertGreaterEqual(scale, 1)
+
+        def pixel(x: int, y: int) -> tuple[int, ...]:
+            offset = (y * scale * image.width + x * scale) * 4
+            return tuple(image.pixels[offset:offset + 4])
+
+        # The file shows the page the browser drew: the square, then the background.
+        self.assertEqual(pixel(20, 20), (250, 20, 30, 255))
+        self.assertEqual(pixel(viewport["width"] // 2, viewport["height"] // 2), (10, 100, 200, 255))
+
+
 class WebScenarioEvidenceTests(unittest.TestCase):
     def test_sdk_path_detector_catches_absolute_and_relative_install_names(self) -> None:
         prefix = Path("/private/tmp/vellum-sdk")
@@ -265,6 +495,51 @@ class WebScenarioEvidenceTests(unittest.TestCase):
 
     def test_static_boot_and_render_scenario_is_valid(self) -> None:
         validate_scenario_evidence(self.evidence(presses=[]))
+
+    COMMAND_SCENARIO = {
+        "schema": "vellum.scenario.v2", "name": "commands",
+        "steps": [{"action": "wait-for-idle"}, {"action": "command", "target": "item.add"},
+                  {"action": "command", "target": "item.rename"}],
+    }
+
+    def command_evidence(self, *commands: dict) -> dict:
+        evidence = self.evidence(presses=[])
+        evidence["commands"] = list(commands)
+        return evidence
+
+    @staticmethod
+    def ran(target: str, **changes: object) -> dict:
+        return {"target": target, "invoked": True, "invocations": 1, "changed": True,
+                "before": 1, "after": 2, **changes}
+
+    def test_command_steps_need_evidence_that_they_ran_and_had_an_effect(self) -> None:
+        validate_scenario_evidence(
+            self.command_evidence(self.ran("item.add"), self.ran("item.rename")),
+            scenario=self.COMMAND_SCENARIO)
+        refused = {
+            "no command evidence": self.evidence(presses=[]),
+            "one command unproven": self.command_evidence(self.ran("item.add")),
+            "out of order": self.command_evidence(self.ran("item.rename"), self.ran("item.add")),
+            "another command": self.command_evidence(self.ran("item.add"), self.ran("item.archive")),
+            "ran without an effect": self.command_evidence(
+                self.ran("item.add", changed=False), self.ran("item.rename")),
+            "not invoked": self.command_evidence(
+                self.ran("item.add", invoked=False), self.ran("item.rename")),
+            "no handler run counted": self.command_evidence(
+                self.ran("item.add", invocations=0), self.ran("item.rename")),
+            "an extra unproven entry": self.command_evidence(
+                self.ran("item.add"), self.ran("item.rename"), {"target": "item.add"}),
+            "evidence is not a list": {**self.evidence(presses=[]), "commands": {"item.add": True}},
+        }
+        for label, evidence in refused.items():
+            with self.subTest(label), self.assertRaises(BackendFailure) as raised:
+                validate_scenario_evidence(evidence, scenario=self.COMMAND_SCENARIO)
+            self.assertIn("did not prove its command steps", str(raised.exception))
+        # A scenario with no command step needs none, and accepts none.
+        plain = {"schema": "vellum.scenario.v2", "name": "plain", "steps": [{"action": "wait-for-idle"}]}
+        validate_scenario_evidence(self.evidence(presses=[]), scenario=plain)
+        with self.assertRaises(BackendFailure):
+            validate_scenario_evidence(self.command_evidence(self.ran("item.add")), scenario=plain)
 
     def test_every_semantic_press_must_change_rendered_state(self) -> None:
         with self.assertRaises(BackendFailure) as caught:
