@@ -18,6 +18,7 @@
 #include <vellum/view/reload_capabilities.hpp>
 #include <vellum/view/value_channel_set.hpp>
 #include <vellum/state/store.hpp>
+#include <vellum/value/param_model.hpp>
 
 namespace vellum::view { struct ClaudeBundle; }
 #include <algorithm>
@@ -68,6 +69,20 @@ public:
     WidgetBridge(ScriptEngine& engine, View& root, state::StateStore& store,
                  render::GpuSurface* gpu_surface = nullptr,
                  CapabilitySet granted_capabilities = CapabilitySet::all());
+    // A bridge over a value::ParamModel instead of a store. Scripts name
+    // parameters by key; getParam, setParam, formatParamValue,
+    // parseParamValue and getParamMetadata go through the model, and
+    // getParamMetadata reports the plain range when the model provides
+    // value::ParamMetadata. A store-built bridge goes through a model over its
+    // store for the same calls, and keeps the store's own formatting, parsing
+    // and metadata.
+    WidgetBridge(ScriptEngine& engine, View& root, value::ParamModel& params,
+                 render::GpuSurface* gpu_surface = nullptr,
+                 CapabilitySet granted_capabilities = CapabilitySet::all());
+
+    // The model the parameter functions reach: the one this bridge was built
+    // over, or the bridge's own model over its store.
+    value::ParamModel& params() noexcept { return params_; }
     ~WidgetBridge();
 
     // Attach (or replace) the GPU surface AFTER construction. Mirrors the
@@ -510,9 +525,20 @@ private:
     // Defined in widget_bridge.cpp — the table is an implementation detail.
     struct ApiGroup;
 
+    // Exactly one of `store` and `params` is non-null.
+    WidgetBridge(ScriptEngine& engine, View& root, state::StateStore* store,
+                 value::ParamModel* params, render::GpuSurface* gpu_surface,
+                 CapabilitySet granted_capabilities);
+
     ScriptEngine& engine_;
     View& root_;
+    // A model-built bridge owns an empty store, so the store-only features see
+    // no parameters; a store-built bridge owns the model over its store.
+    std::unique_ptr<state::StateStore> owned_store_;
     state::StateStore& store_;
+    std::unique_ptr<value::ParamModel> owned_params_;
+    value::ParamModel& params_;
+    bool has_store_ = true;
     // Effectful-API-group gate. See the constructor doc + reload_capabilities.hpp.
     CapabilitySet granted_capabilities_;
     render::GpuSurface* gpu_surface_ = nullptr;

@@ -27,12 +27,14 @@ import observatory  # noqa: E402
 
 WARN_HOURS = 24
 URGENT_HOURS = 4
+POLICY_PATH = Path("provenance/pulp-observatory/receiver-policy.json")
 
 
 def overdue(root: Path, now: datetime) -> dict[str, object]:
     budgets = observatory.load_budgets(root / observatory.BUDGETS_PATH)
     rows = []
     soon = []
+    pending = []
     oldest = 0.0
     for event in observatory.effective_observations(observatory.load_events(root)):
         if event["disposition"] != "pending":
@@ -40,6 +42,13 @@ def overdue(root: Path, now: datetime) -> dict[str, object]:
         discovered = observatory.parse_utc(event["discovered_at"], "event.discovered_at")
         oldest = max(oldest, (now - discovered).total_seconds() / 86400)
         due = observatory.deadline(event, budgets)
+        pending.append({"event_id": str(event["event_id"]), "class": str(event["class"]),
+                        "deadline": observatory.utc_text(due),
+                        "source_repository": str(event.get("source_repository") or ""),
+                        "source_commit": str(event.get("source_commit") or ""),
+                        "needs_ruling": False,
+                        "hours_left": round((due - now).total_seconds() / 3600, 1),
+                        "urgent": False})
         if now > due:
             rows.append({"event_id": str(event["event_id"]), "class": str(event["class"]),
                          "deadline": observatory.utc_text(due)})
@@ -56,7 +65,12 @@ def overdue(root: Path, now: datetime) -> dict[str, object]:
                              "hours_left": round(hours_left, 1),
                              "urgent": hours_left <= URGENT_HOURS})
     limit = budgets["maximum_pending_event_age_days"]
+    policy = json.loads((root / POLICY_PATH).read_text(encoding="utf-8")) if (root / POLICY_PATH).is_file() else {}
     return {
+        "pending": sorted(pending, key=lambda row: (row["deadline"], row["event_id"])),
+        "pending_count": len(pending),
+        "pending_limit": budgets["maximum_pending_events"],
+        "pending_warning": policy.get("pending_warning", budgets["maximum_pending_events"]),
         "overdue": sorted(rows, key=lambda row: (row["deadline"], row["event_id"])),
         "oldest_pending_days": round(oldest, 2),
         "maximum_pending_event_age_days": limit,

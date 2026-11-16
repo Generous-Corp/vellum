@@ -276,6 +276,42 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     endforeach()
 endforeach()
 
+# Optional V8 (VELLUM_ENABLE_V8). The closures build view-script with QuickJS
+# only, so its V8 backend compiles as a stub. This is the one native addition
+# to that unit's compile: the backend's PULP_HAS_V8 switch, the provider
+# identity the backend reports, and the sealed provider's consumer_defines,
+# which arrive through the imported target and are part of V8's ABI. The
+# unit's objects live in vellum-skia-dawn-provider, which links libv8.dylib
+# and finds it beside itself once installed.
+set(VELLUM_MIRROR_HAS_V8 OFF)
+if(VELLUM_ENABLE_V8)
+    if(NOT TARGET pulp-view-script)
+        message(FATAL_ERROR "Vellum: VELLUM_ENABLE_V8 needs the mirror's view-script unit")
+    endif()
+    include("${VELLUM_MIRROR_SOURCE_DIR}/tools/cmake/VellumV8Provider.cmake")
+    vellum_v8_resolve_provider(
+        LOCK "${PROJECT_SOURCE_DIR}/provenance/third-party-lock.json"
+        RENDERER_LOCK "${PROJECT_SOURCE_DIR}/gpu-runtime/renderer-lock.json"
+        WORK_DIR "${CMAKE_BINARY_DIR}/_deps/vellum-v8"
+        ARCHIVE "${VELLUM_V8_ARCHIVE}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${PROJECT_SOURCE_DIR}/provenance/third-party-lock.json")
+    target_link_libraries(pulp-view-script PRIVATE vellum-v8)
+    target_compile_definitions(pulp-view-script PRIVATE
+        PULP_HAS_V8=1
+        PULP_V8_PROVIDER_KIND="v8builder"
+        PULP_V8_PROVIDER_PATH="@rpath/libv8.dylib"
+        PULP_V8_EXPECTED_RUNTIME_VERSION="${VELLUM_V8_VERSION}")
+    target_link_libraries(vellum-skia-dawn-provider PRIVATE vellum-v8)
+    install(FILES "${VELLUM_V8_LIBRARY}"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                    GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+    install(FILES "${VELLUM_V8_MANIFEST}"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/vellum/v8")
+    set(VELLUM_MIRROR_HAS_V8 ON)
+endif()
+
 # A mirrored source can include Vellum's value model: one probe compiled with
 # view-core's own include directories and definitions. It fails to compile when
 # the value-model include edge above is missing.
