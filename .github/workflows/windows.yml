@@ -31,7 +31,7 @@ on:
       - 'apps/minimal-scene/**'
       - '.github/workflows/windows.yml'
   push:
-    branches: [main]
+    branches: [main, 'platform-windows/**']
     paths:
       - 'CMakeLists.txt'
       - 'cmake/**'
