@@ -55,3 +55,12 @@ command = "scripts/gates.sh --full origin/main"
 [targets.mac]
 backend = "local"
 platform = "macos-arm64"
+
+[landability]
+# Workflows that produce the required checks; the default build.yml does not exist here.
+workflows = [
+  ".github/workflows/gpu-macos.yml",
+  ".github/workflows/provenance.yml",
+  ".github/workflows/product-quality.yml",
+  ".github/workflows/readme-quick-start.yml",
+]
