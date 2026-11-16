@@ -75,7 +75,10 @@ function plain(number) {
     const text = String(number);
     if (!/e/i.test(text)) return text;
     const digits = Math.min(100, Math.max(0, 7 - Math.floor(Math.log10(Math.abs(number)))));
-    return number.toFixed(digits).replace(/\.?0+$/, '');
+    let fixed = number.toFixed(digits);
+    if (!fixed.includes('.')) return fixed;
+    while (fixed.endsWith('0')) fixed = fixed.slice(0, -1);
+    return fixed.endsWith('.') ? fixed.slice(0, -1) : fixed;
 }
 
 // Six decimals, or seven significant digits below 0.1, so geometry a large
@@ -92,6 +95,96 @@ function fmt(value) {
 
 function cleanMatrix(m) {
     return m.map((value) => Number(fmt(value)));
+}
+
+// ---------------------------------------------------------------------------
+// Linear scanners. Text from the asset is read by these, or by a regular
+// expression with no adjacent or nested quantifiers that can match the same
+// character, so no input costs more than a pass over it.
+
+function isSpace(character) {
+    return character === ' ' || character === '\t' || character === '\n' || character === '\r' ||
+        character === '\f';
+}
+
+function skipSpace(text, index) {
+    let at = index;
+    while (at < text.length && isSpace(text[at])) at += 1;
+    return at;
+}
+
+function isDigit(character) {
+    return character !== undefined && character >= '0' && character <= '9';
+}
+
+// The end of the number that starts at `index`, as CSS and SVG write one:
+// an optional sign, digits with an optional fraction or a fraction alone,
+// then, when `exponent` allows, an optional exponent. -1 when none starts
+// there.
+function numberEnd(text, index, exponent = true) {
+    let at = index;
+    if (text[at] === '+' || text[at] === '-') at += 1;
+    let digits = 0;
+    while (isDigit(text[at])) { at += 1; digits += 1; }
+    if (text[at] === '.') {
+        at += 1;
+        while (isDigit(text[at])) { at += 1; digits += 1; }
+    }
+    if (digits === 0) return -1;
+    if (exponent && (text[at] === 'e' || text[at] === 'E')) {
+        let next = at + 1;
+        if (text[next] === '+' || text[next] === '-') next += 1;
+        const start = next;
+        while (isDigit(text[next])) next += 1;
+        if (next > start) at = next;
+    }
+    return at;
+}
+
+// The number `text` holds exactly, followed by `suffix`, or null.
+function exactNumber(text, suffix = '', exponent = true) {
+    if (!text.endsWith(suffix)) return null;
+    const body = text.slice(0, text.length - suffix.length);
+    return body && numberEnd(body, 0, exponent) === body.length ? Number(body) : null;
+}
+
+// `url(...)` read from `index`, which holds "url(" in any case: the text it
+// names and where it ends, or null when it is not closed. A quoted URL ends
+// at its quote; an unquoted one at space or a parenthesis.
+function readUrl(text, index) {
+    let at = skipSpace(text, index + 4);
+    let inner;
+    if (text[at] === '"' || text[at] === "'") {
+        const close = text.indexOf(text[at], at + 1);
+        if (close === -1) return null;
+        inner = text.slice(at + 1, close);
+        at = close + 1;
+    } else {
+        const start = at;
+        while (at < text.length && text[at] !== ')' && text[at] !== '(' && !isSpace(text[at]) &&
+            text[at] !== '"' && text[at] !== "'") at += 1;
+        inner = text.slice(start, at);
+    }
+    if (/[()"']/.test(inner)) return null;
+    at = skipSpace(text, at);
+    return text[at] === ')' ? { inner, end: at + 1 } : null;
+}
+
+// A value that starts with `url(...)`: the local id it names (null when it
+// is not local) and the trimmed rest, or null when it is not a URL.
+function leadingUrl(value) {
+    const text = value.trim();
+    if (text.slice(0, 4).toLowerCase() !== 'url(') return null;
+    const url = readUrl(text, 0);
+    if (!url) return null;
+    return { id: localReference(url.inner), inner: url.inner, rest: text.slice(url.end).trim() };
+}
+
+// `!important` at the end of a declaration, and the value before it.
+function splitImportant(raw) {
+    const text = raw.trimEnd();
+    if (!text.toLowerCase().endsWith('!important')) return { value: text, important: false };
+    return { value: text.slice(0, -'!important'.length).trimEnd(), important: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -196,14 +289,63 @@ function stripComments(text) {
     }
 }
 
+const NAME_START = /^[A-Za-z_]$/;
+const ATTRIBUTE_START = /^[A-Za-z_:]$/;
+const NAME_CHARACTER = /^[\w.:-]$/;
+
+function nameEndAt(text, index) {
+    let at = index;
+    while (at < text.length && NAME_CHARACTER.test(text[at])) at += 1;
+    return at;
+}
+
+// The tag that starts at the "<" at `index`: closing or not, its name, its
+// attributes with their raw values, whether it closes itself and where it
+// ends; null when it is malformed. Attributes are separated by space and
+// their values quoted, without "<".
+function scanTag(text, index) {
+    let at = index + 1;
+    const closing = text[at] === '/';
+    if (closing) at += 1;
+    if (!NAME_START.test(text[at] ?? '')) return null;
+    const nameEnd = nameEndAt(text, at + 1);
+    const name = text.slice(at, nameEnd);
+    at = nameEnd;
+    const attributes = [];
+    for (;;) {
+        const spaced = skipSpace(text, at);
+        if (text[spaced] === '>') return { closing, name, attributes, selfClosing: false, end: spaced + 1 };
+        if (text[spaced] === '/' && text[spaced + 1] === '>') {
+            return { closing, name, attributes, selfClosing: true, end: spaced + 2 };
+        }
+        if (spaced === at || !ATTRIBUTE_START.test(text[spaced] ?? '')) return null;
+        const attributeEnd = nameEndAt(text, spaced + 1);
+        const attribute = text.slice(spaced, attributeEnd);
+        at = skipSpace(text, attributeEnd);
+        if (text[at] !== '=') return null;
+        at = skipSpace(text, at + 1);
+        const quote = text[at];
+        if (quote !== '"' && quote !== "'") return null;
+        const close = text.indexOf(quote, at + 1);
+        if (close === -1) return null;
+        const value = text.slice(at + 1, close);
+        if (value.includes('<')) return null;
+        attributes.push([attribute, value]);
+        at = close + 1;
+    }
+}
+
 function parseXml(svg) {
     if (typeof svg !== 'string') refuse('the asset is not a string');
     if (utf8Length(svg) > SVG_ASSET_LIMITS.maxBytes) {
         refuse(`the asset exceeds ${SVG_ASSET_LIMITS.maxBytes} bytes`);
     }
     let text = svg.replace(/^﻿/, '');
-    const declaration = /^\s*<\?xml\s[^?]*\?>/.exec(text);
-    if (declaration) text = text.slice(declaration[0].length);
+    const start = skipSpace(text, 0);
+    if (text.startsWith('<?xml', start) && isSpace(text[start + 5])) {
+        const close = text.indexOf('?', start + 5);
+        if (close !== -1 && text[close + 1] === '>') text = text.slice(close + 2);
+    }
     if (/<!DOCTYPE/i.test(text)) refuse('a document type declaration is not allowed');
     if (/<!ENTITY/i.test(text)) refuse('an entity declaration is not allowed');
     if (/<!\[CDATA\[/i.test(text)) refuse('a CDATA section is not allowed');
@@ -217,7 +359,6 @@ function parseXml(svg) {
     const stack = [root];
     let elements = 0;
     let cursor = 0;
-    const tag = /<(\/?)([A-Za-z_][\w.:-]*)((?:\s+[A-Za-z_:][\w.:-]*\s*=\s*(?:"[^"<]*"|'[^'<]*'))*)\s*(\/?)>/y;
     while (cursor < text.length) {
         const next = text.indexOf('<', cursor);
         const content = text.slice(cursor, next === -1 ? text.length : next);
@@ -235,13 +376,12 @@ function parseXml(svg) {
             stack.at(-1).parts.push(content);
         }
         if (next === -1) break;
-        tag.lastIndex = next;
-        const match = tag.exec(text);
-        if (!match) refuse(`malformed markup at byte ${next}`);
-        cursor = tag.lastIndex;
-        const [, closing, name, attributeText, selfClosing] = match;
+        const scanned = scanTag(text, next);
+        if (!scanned) refuse(`malformed markup at byte ${next}`);
+        cursor = scanned.end;
+        const { closing, name, attributes: found, selfClosing } = scanned;
         if (closing) {
-            if (attributeText || selfClosing) refuse(`malformed closing tag </${name}>`);
+            if (found.length > 0 || selfClosing) refuse(`malformed closing tag </${name}>`);
             if (stack.length < 2 || stack.at(-1).qualified !== name) {
                 refuse(`mismatched closing tag </${name}>`);
             }
@@ -253,13 +393,13 @@ function parseXml(svg) {
         }
         const raw = [];
         const seen = new Set();
-        for (const found of attributeText.matchAll(/([A-Za-z_:][\w.:-]*)\s*=\s*(?:"([^"<]*)"|'([^'<]*)')/g)) {
+        for (const [attribute, value] of found) {
             if (raw.length >= SVG_ASSET_LIMITS.maxAttributes) {
                 refuse(`<${name}> has more than ${SVG_ASSET_LIMITS.maxAttributes} attributes`);
             }
-            if (seen.has(found[1])) refuse(`duplicate attribute ${found[1]} on <${name}>`);
-            seen.add(found[1]);
-            raw.push([found[1], decodeText(found[2] ?? found[3])]);
+            if (seen.has(attribute)) refuse(`duplicate attribute ${attribute} on <${name}>`);
+            seen.add(attribute);
+            raw.push([attribute, decodeText(value)]);
         }
         const parent = stack.at(-1);
         const resolved = resolveNames(name, raw, parent.scope);
@@ -307,41 +447,60 @@ const NON_NUMERIC_ATTRIBUTES = new Set(['id', 'class', 'href', 'xlink:href', 'xm
     'aria-label', 'patternUnits', 'patternContentUnits', 'filterUnits', 'primitiveUnits',
     'text-anchor', 'dominant-baseline', 'font-weight', 'font-style', 'pointer-events',
     'cursor', 'title']);
-const NUMBER = /[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/g;
-
 function checkNumbers(value, where) {
-    for (const match of value.matchAll(NUMBER)) {
-        const number = Number(match[0]);
-        if (!Number.isFinite(number) || Math.abs(number) > SVG_ASSET_LIMITS.maxNumber) {
-            refuse(`${where} has the number ${match[0]}, beyond ±${SVG_ASSET_LIMITS.maxNumber}`);
+    let at = 0;
+    while (at < value.length) {
+        const end = numberEnd(value, at);
+        if (end === -1) {
+            at += 1;
+            continue;
         }
+        const text = value.slice(at, end);
+        const number = Number(text);
+        if (!Number.isFinite(number) || Math.abs(number) > SVG_ASSET_LIMITS.maxNumber) {
+            refuse(`${where} has the number ${text.slice(0, 32)}, beyond ±${SVG_ASSET_LIMITS.maxNumber}`);
+        }
+        at = end;
     }
 }
 
 function localReference(value) {
-    const match = /^\s*#([^\s#]+)\s*$/.exec(value);
-    return match ? match[1] : null;
+    const text = value.trim();
+    if (text[0] !== '#' || text.length < 2) return null;
+    const id = text.slice(1);
+    return /[\s#]/.test(id) ? null : id;
 }
 
+// The local ids every url() in a value names; any other URL, or one left
+// open, is refused.
 function urlReferences(value, where) {
     const references = [];
-    for (const match of value.matchAll(/url\(\s*(['"]?)([^'")]*)\1\s*\)/gi)) {
-        const id = localReference(match[2]);
-        if (id === null) refuse(`${where} references ${match[2] || 'an empty URL'} outside the asset`);
+    const lower = value.toLowerCase();
+    let from = 0;
+    for (;;) {
+        const start = lower.indexOf('url(', from);
+        if (start === -1) return references;
+        const url = readUrl(value, start);
+        if (!url) refuse(`${where} has a malformed url()`);
+        const id = localReference(url.inner);
+        if (id === null) refuse(`${where} references ${url.inner.slice(0, 64) || 'an empty URL'} outside the asset`);
         references.push(id);
+        from = url.end;
     }
-    if (/url\(/i.test(value.replace(/url\(\s*(['"]?)[^'")]*\1\s*\)/gi, ''))) {
-        refuse(`${where} has a malformed url()`);
-    }
-    return references;
 }
 
 // CSS the importer does not model, any of which could carry a resource:
 // at-rules, comments, escapes and image functions.
-const UNMODELLED_CSS = /@|\/\*|\\|expression\s*\(|javascript:|image-set|image\s*\(|cross-fade|element\s*\(/i;
+const UNMODELLED_CSS = ['@', '/*', '\\', 'expression(', 'javascript:', 'image-set', 'image(',
+    'cross-fade', 'element('];
+
+function unmodelledCss(value) {
+    const compact = value.toLowerCase().replace(/\s+/g, '');
+    return UNMODELLED_CSS.some((part) => compact.includes(part));
+}
 
 function styleDeclarations(value, where) {
-    if (UNMODELLED_CSS.test(value)) {
+    if (unmodelledCss(value)) {
         refuse(`${where} has a style with an at-rule, comment, escape, expression or image function`);
     }
     const declarations = Object.create(null);
@@ -351,13 +510,12 @@ function styleDeclarations(value, where) {
         const colon = part.indexOf(':');
         if (colon <= 0) refuse(`${where} has a malformed style declaration`);
         const name = part.slice(0, colon).trim().toLowerCase();
-        const raw = part.slice(colon + 1).trim();
-        const isImportant = /\s*!important$/i.test(raw);
+        const raw = splitImportant(part.slice(colon + 1).trim());
         if (!/^[a-z-]+$/.test(name)) refuse(`${where} has a malformed style property`);
         // A later normal declaration does not override an important one.
-        if (important.has(name) && !isImportant) continue;
-        if (isImportant) important.add(name);
-        declarations[name] = raw.replace(/\s*!important$/i, '');
+        if (important.has(name) && !raw.important) continue;
+        if (raw.important) important.add(name);
+        declarations[name] = raw.value;
     }
     return declarations;
 }
@@ -368,7 +526,11 @@ function styleDeclarations(value, where) {
 // targeting href or by animating to a URL, is refused.
 const ANIMATING_ELEMENTS = new Set(['animate', 'animateColor', 'animateMotion',
     'animateTransform', 'set', 'discard']);
-const URL_LIKE = /[a-z][a-z0-9+.-]*:|\/\/|url\(/i;
+// A scheme, a protocol-relative path or a url(), as anything an animation
+// could point outside the asset with.
+function urlLike(value) {
+    return value.includes(':') || value.includes('//') || value.toLowerCase().includes('url(');
+}
 
 function checkAnimation(node, where) {
     const target = (node.attributes.attributeName ?? '').trim().toLowerCase();
@@ -379,7 +541,8 @@ function checkAnimation(node, where) {
         const value = node.attributes[name];
         if (value === undefined) continue;
         for (const item of value.split(';')) {
-            if (URL_LIKE.test(item) && !/^\s*url\(\s*(['"]?)#[^'")]+\1\s*\)\s*$/i.test(item)) {
+            const url = leadingUrl(item);
+            if (urlLike(item) && !(url && url.id !== null && url.rest === '')) {
                 refuse(`${where} ${name} animates to a reference outside the asset`);
             }
         }
@@ -534,9 +697,13 @@ function parseColor(value) {
         return hexColor([...text.slice(1)].map((digit) => digit + digit).join(''));
     }
     if (/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/.test(text)) return hexColor(text.slice(1));
-    const functional = /^(rgba?|hsla?)\(\s*([^)]*)\)$/.exec(text);
-    if (!functional) return null;
-    const parts = functional[2].split(/\s*[,/]\s*|\s+/).filter(Boolean);
+    const open = text.indexOf('(');
+    const kind = text.slice(0, open);
+    if (!['rgb', 'rgba', 'hsl', 'hsla'].includes(kind) || !text.endsWith(')')) return null;
+    const body = text.slice(open + 1, -1);
+    if (body.includes(')') || body.includes('(')) return null;
+    const functional = [text, kind];
+    const parts = body.split(/[\s,/]+/).filter(Boolean);
     if (parts.length !== 3 && parts.length !== 4) return null;
     const alpha = parts.length === 4 ? channel(parts[3], 1) : 1;
     if (alpha === null) return null;
@@ -546,10 +713,11 @@ function parseColor(value) {
         return [...rgb.map((part) => Math.round(Math.min(255, Math.max(0, part)))),
             Math.min(1, Math.max(0, alpha))];
     }
-    const angle = /^([+-]?(?:\d+\.?\d*|\.\d+))(deg|rad|grad|turn)?$/.exec(parts[0]);
-    if (!angle) return null;
     const turns = { deg: 1, rad: 180 / Math.PI, grad: 0.9, turn: 360 };
-    const hue = Number(angle[1]) * turns[angle[2] ?? 'deg'];
+    const unitStart = numberEnd(parts[0], 0, false);
+    const unit = unitStart === -1 ? null : parts[0].slice(unitStart) || 'deg';
+    if (unit === null || !Object.hasOwn(turns, unit)) return null;
+    const hue = Number(parts[0].slice(0, unitStart)) * turns[unit];
     let saturation = channel(parts[1], 1);
     let lightness = channel(parts[2], 1);
     if (!Number.isFinite(hue) || saturation === null || lightness === null ||
@@ -571,9 +739,9 @@ function parseColor(value) {
 }
 
 function channel(part, scale) {
-    if (/^[+-]?(?:\d+\.?\d*|\.\d+)%$/.test(part)) return Number.parseFloat(part) / 100 * scale;
-    if (/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(part)) return Number.parseFloat(part);
-    return null;
+    const percent = part.endsWith('%') ? exactNumber(part, '%', false) : null;
+    if (percent !== null) return percent / 100 * scale;
+    return exactNumber(part, '', false);
 }
 
 function hexColor(hex) {
@@ -590,23 +758,22 @@ function hexString(color, opacity = 1) {
 
 function parseNumber(value) {
     if (value === undefined) return undefined;
-    const text = value.trim();
-    if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(text)) return null;
-    return Number(text);
+    return exactNumber(value.trim());
 }
 
 // A length in user units: a number, optionally in px. Other units are not
 // read, so the caller reports the attribute and uses its default.
 function parseLength(value) {
     if (value === undefined) return undefined;
-    const match = /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)(px)?\s*$/.exec(value);
-    return match ? Number(match[1]) : null;
+    const text = value.trim();
+    return text.endsWith('px') ? exactNumber(text, 'px') : exactNumber(text);
 }
 
 function parseFraction(value, fallback) {
     if (value === undefined) return fallback;
     const text = value.trim();
-    if (/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?%$/.test(text)) return Number(text.slice(0, -1)) / 100;
+    const percent = text.endsWith('%') ? exactNumber(text, '%') : null;
+    if (percent !== null) return percent / 100;
     const number = parseNumber(text);
     return number === null ? null : number;
 }
@@ -674,10 +841,11 @@ function parsePathData(data) {
     };
     const numberAt = () => {
         skip();
-        const match = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/.exec(text.slice(index, index + 64));
-        if (!match) return null;
-        index += match[0].length;
-        return Number(match[0]);
+        const end = numberEnd(text, index);
+        if (end === -1) return null;
+        const number = Number(text.slice(index, end));
+        index = end;
+        return number;
     };
     const flagAt = () => {
         skip();
@@ -1103,14 +1271,68 @@ const INHERITED = ['fill', 'fill-opacity', 'fill-rule', 'stroke', 'stroke-opacit
     'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'stroke-miterlimit',
     'stroke-dasharray', 'stroke-dashoffset', 'color', 'visibility', 'clip-rule',
     'color-interpolation'];
-const OWN = ['opacity', 'transform', 'clip-path', 'mask', 'display', 'filter',
-    'marker-start', 'marker-mid', 'marker-end', 'stop-color', 'stop-opacity'];
-const READ_ELSEWHERE = new Set(['id', 'd', 'points', 'x', 'y', 'width', 'height', 'cx', 'cy',
-    'r', 'rx', 'ry', 'x1', 'y1', 'x2', 'y2', 'fx', 'fy', 'fr', 'href', 'xlink:href', 'xmlns',
-    'xmlns:xlink', 'viewBox', 'preserveAspectRatio', 'version', 'baseProfile', 'style',
-    'offset', 'gradientUnits', 'gradientTransform', 'spreadMethod', 'clipPathUnits',
-    'maskUnits', 'maskContentUnits', 'mask-type', 'xml:space', 'class', 'role', 'aria-label',
-    'xml:lang', 'lang', 'overflow']);
+// Every attribute and property the importer knows, in one table that both
+// lowering and the rasterizer's input read. `lowered` says what lowering does
+// with it: 'cascade' reads it from the attribute or a style, 'attribute' only
+// from the attribute (a style value is a loss, and CSS geometry needs
+// rasterization), 'raster' means only elements that are rasterized draw it,
+// 'unsupported' is a loss, and 'quiet' never changes what is drawn. `written`
+// is the value grammar the rasterizer's input keeps it under; one without a
+// grammar is never written.
+const PROPERTIES = new Map();
+const declare = (lowered, written, names) => {
+    for (const name of names) PROPERTIES.set(name, { lowered, written });
+};
+declare('cascade', 'paint', ['fill', 'stroke']);
+declare('cascade', 'color', ['color', 'stop-color']);
+declare('cascade', 'reference', ['clip-path', 'mask', 'filter', 'marker-start', 'marker-mid',
+    'marker-end']);
+declare('cascade', 'transform', ['transform']);
+declare('cascade', 'plain', ['fill-opacity', 'fill-rule', 'stroke-opacity', 'stroke-width',
+    'stroke-linecap', 'stroke-linejoin', 'stroke-miterlimit', 'stroke-dasharray',
+    'stroke-dashoffset', 'visibility', 'clip-rule', 'color-interpolation', 'opacity', 'display',
+    'overflow', 'stop-opacity', 'offset', 'mask-type']);
+declare('attribute', 'plain', ['x', 'y', 'width', 'height', 'cx', 'cy', 'r', 'rx', 'ry', 'x1',
+    'y1', 'x2', 'y2', 'fx', 'fy', 'fr', 'd', 'points', 'viewBox', 'preserveAspectRatio',
+    'gradientUnits', 'spreadMethod', 'clipPathUnits', 'maskUnits', 'maskContentUnits']);
+declare('attribute', 'transform', ['gradientTransform']);
+declare('raster', 'transform', ['patternTransform']);
+declare('raster', 'color', ['flood-color', 'lighting-color']);
+declare('raster', 'font', ['font-family']);
+declare('raster', 'plain', ['patternUnits', 'patternContentUnits', 'filterUnits',
+    'primitiveUnits', 'markerUnits', 'markerWidth', 'markerHeight', 'refX', 'refY', 'orient',
+    'color-interpolation-filters', 'flood-opacity', 'xml:space',
+    'font-size', 'font-weight', 'font-style', 'font-variant', 'font-stretch', 'text-anchor',
+    'dominant-baseline', 'alignment-baseline', 'baseline-shift', 'letter-spacing',
+    'word-spacing', 'text-decoration', 'writing-mode', 'direction', 'unicode-bidi',
+    'text-rendering', 'startOffset', 'method', 'spacing', 'side', 'textLength', 'lengthAdjust',
+    'dx', 'dy', 'rotate',
+    'in', 'in2', 'result', 'stdDeviation', 'mode', 'operator', 'k1', 'k2', 'k3', 'k4', 'type',
+    'values', 'tableValues', 'slope', 'intercept', 'amplitude', 'exponent', 'radius', 'scale',
+    'xChannelSelector', 'yChannelSelector', 'baseFrequency', 'numOctaves', 'seed',
+    'stitchTiles', 'order', 'kernelMatrix', 'divisor', 'bias', 'targetX', 'targetY', 'edgeMode',
+    'preserveAlpha', 'surfaceScale', 'specularConstant', 'specularExponent', 'diffuseConstant',
+    'kernelUnitLength', 'azimuth', 'elevation', 'z', 'pointsAtX', 'pointsAtY', 'pointsAtZ',
+    'limitingConeAngle']);
+declare('unsupported', 'plain', ['pathLength', 'paint-order', 'vector-effect', 'shape-rendering',
+    'mix-blend-mode', 'isolation']);
+declare('quiet', null, ['id', 'style', 'class', 'role', 'lang', 'xml:lang', 'version',
+    'baseProfile', 'cursor', 'pointer-events', 'tabindex', 'focusable', 'requiredFeatures',
+    'requiredExtensions', 'systemLanguage', 'href', 'xlink:href']);
+// Geometry CSS can set, which shapes read only from attributes.
+const CSS_GEOMETRY = new Set(['x', 'y', 'width', 'height', 'cx', 'cy', 'r', 'rx', 'ry', 'd']);
+
+function propertyOf(name) {
+    if (name.startsWith('aria-') || name.startsWith('data-')) return { lowered: 'quiet', written: null };
+    return PROPERTIES.get(name);
+}
+
+// The CSS geometry a style sets on an element, which lowering does not read.
+function styledGeometry(node) {
+    if (node.attributes.style === undefined) return [];
+    return Object.keys(styleDeclarations(node.attributes.style, `<${node.name}>`))
+        .filter((name) => CSS_GEOMETRY.has(name));
+}
 const INITIAL = Object.freeze({
     fill: 'black', 'fill-opacity': '1', 'fill-rule': 'nonzero', stroke: 'none',
     'stroke-opacity': '1', 'stroke-width': '1', 'stroke-linecap': 'butt',
@@ -1156,8 +1378,9 @@ const ENUMERATED = {
 function validProperty(name, value) {
     if (ENUMERATED[name]) return ENUMERATED[name].includes(value);
     if (name === 'fill' || name === 'stroke') {
-        const url = /^url\(\s*(['"]?)#[^'")\s]+\1\s*\)\s*(.*)$/.exec(value);
-        const color = url ? url[2] : value;
+        const url = leadingUrl(value);
+        if (url && url.id === null) return false;
+        const color = url ? url.rest : value;
         return (url !== null && color === '') || color === 'none' || color === 'currentColor' ||
             parseColor(color) !== null;
     }
@@ -1193,10 +1416,11 @@ const SHA256_K = new Uint32Array([
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ]);
 
-// Authored ids double their colons and dots, so no authored id can equal an
-// identity the importer generates with a single ":" or "." separator.
+// An authored id enters an identity as its length, "_", then the id, after a
+// ":". Generated parts after a ":" start with a letter, so an identity
+// splits back into its parts one way only and no two distinct paths collide.
 function escapeId(id) {
-    return id.replace(/[:.]/g, (character) => character + character);
+    return `${id.length}_${id}`;
 }
 
 function sha256(text) {
@@ -1347,8 +1571,8 @@ class Importer {
         // A root with display none draws nothing, whatever it contains.
         const children = values.display === 'none' ? []
             : this.children(svg, this.rootId, this.inherit(INITIAL, svg), new Set());
-        // ".viewport" has a single dot, which escapeId never leaves in an
-        // authored id, so no authored id="viewport" can collide with it.
+        // ".viewport" follows the root id; an authored id always enters
+        // after a ":" with its length, so id="viewport" cannot collide with it.
         return { kind: 'group', id: `${this.rootId}.viewport`, transform: viewport, opacity,
             children, name: this.title(svg) };
     }
@@ -1421,12 +1645,26 @@ class Importer {
         return typeof node.attributes.id === 'string' ? `${this.rootId}:${escapeId(node.attributes.id)}` : path;
     }
 
+    // Only what the property table says lowering reads counts as handled;
+    // anything else is a loss, and CSS geometry, which shapes read only from
+    // attributes, sends the asset to the rasterizer.
     dropUnknownAttributes(node, path) {
+        const styled = node.attributes.style === undefined ? {}
+            : styleDeclarations(node.attributes.style, `<${node.name}>`);
         for (const name of Object.keys(declared(node))) {
-            if (INHERITED.includes(name) || OWN.includes(name) || READ_ELSEWHERE.has(name)) continue;
-            if (name.startsWith('xmlns') || name.startsWith('aria-') || name.startsWith('data-')) continue;
-            if (/^(font|text|letter|word|dominant|alignment|baseline|writing|unicode|direction|glyph|kerning)/.test(name)) continue;
-            this.report('svg-attribute-dropped', path, `<${node.name}> ${name} is not supported and was dropped`);
+            const property = propertyOf(name);
+            if (!property || property.lowered === 'unsupported') {
+                this.report('svg-attribute-dropped', path, `<${node.name}> ${name} is not supported and was dropped`);
+            } else if (property.lowered === 'attribute' && Object.hasOwn(styled, name)) {
+                // The root's size comes from its attributes or the caller, and
+                // a raster is made at that size, so rasterizing would not
+                // honour a CSS size on it either.
+                if (CSS_GEOMETRY.has(name) && node !== this.root) {
+                    this.rasterOnly.push({ path, reason: `<${node.name}> ${name} set in a style needs rasterization` });
+                } else {
+                    this.report('svg-attribute-dropped', path, `<${node.name}> ${name} is read only as an attribute; its style value was dropped`);
+                }
+            }
         }
     }
 
@@ -1529,8 +1767,22 @@ class Importer {
                             this.instanceChildren(target, sourceId, targetId, inner, nextActive), path, inner, nextActive));
                     }
                 } else {
-                    group.children.push(this.symbolGroup(target, `${sourceId}:${escapeId(targetId)}.symbol`,
-                        this.instanceChildren(target, sourceId, targetId, inner, nextActive), path, inner, nextActive));
+                    // Without a viewBox a symbol still sets a viewport: the
+                    // use's width and height, the symbol's, or the whole of
+                    // the viewport it is drawn in. It clips unless its
+                    // overflow is visible, and gradient percentages are of it.
+                    for (const name of ['width', 'height']) {
+                        const given = node.attributes[name] ?? target.attributes[name];
+                        if (given !== undefined && parseLength(given) === null) {
+                            this.report('svg-length-unit-dropped', path, `the ${name} of a symbol instance uses a unit other than px; the viewport size was used`);
+                        }
+                    }
+                    const size = width > 0 && height > 0 ? [width, height] : [...this.viewportSize];
+                    const content = this.inViewport(size,
+                        () => this.instanceChildren(target, sourceId, targetId, inner, nextActive));
+                    group.children.push(this.viewportClip(`${sourceId}:${escapeId(targetId)}.viewport`,
+                        declared(target).overflow ?? 'hidden', size[0], size[1],
+                        [this.symbolGroup(target, `${sourceId}:${escapeId(targetId)}.symbol`, content, path, inner, nextActive)]));
                 }
             } else {
                 const outer = this.useSize;
@@ -1674,7 +1926,8 @@ class Importer {
     // fallback a paint names resolves without recursing again.
     paint(value, opacity, path, property, state, fallback = false) {
         if (value === undefined || value === 'none') return { kind: 'none' };
-        const url = /^url\(\s*(['"]?)#([^'")]+)\1\s*\)\s*(.*)$/.exec(value);
+        const leading = leadingUrl(value);
+        const url = leading && leading.id !== null ? [value, '', leading.id, leading.rest] : null;
         if (url && fallback) {
             this.report('svg-paint-dropped', path, `${property} has a reference as a fallback; nothing was painted`);
             return { kind: 'none' };
@@ -1788,8 +2041,9 @@ class Importer {
             d: Math.sqrt((viewWidth * viewWidth + viewHeight * viewHeight) / 2) };
         const coordinate = (name, fallback, axis) => {
             const raw = attribute(name) ?? fallback;
-            const percent = /^\s*([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)%\s*$/.exec(raw);
-            if (percent) return Number(percent[1]) / 100 * (units === 'user' ? extent[axis] : 1);
+            const trimmed = raw.trim();
+            const percent = trimmed.endsWith('%') ? exactNumber(trimmed, '%') : null;
+            if (percent !== null) return percent / 100 * (units === 'user' ? extent[axis] : 1);
             const value = units === 'user' ? parseLength(raw) : parseNumber(raw);
             if (value === null || value === undefined) {
                 this.report('svg-gradient-coordinate-dropped', path, `${property} gradient ${name} is malformed; its default was used`);
@@ -1865,7 +2119,8 @@ class Importer {
     clipAndMask(group, values, path, state, active) {
         const clip = values['clip-path'];
         if (clip !== undefined && clip !== 'none') {
-            const id = localReference(/^url\(\s*(['"]?)([^'")]*)\1\s*\)$/.exec(clip)?.[2] ?? '');
+            const url = leadingUrl(clip);
+            const id = url && url.rest === '' ? url.id : null;
             const definition = id === null ? null : this.ids.get(id);
             if (!definition || definition.name !== 'clipPath') {
                 this.report('svg-clip-unresolved', path, `clip-path ${clip} names no clipPath in the asset; the content is hidden`);
@@ -1913,6 +2168,9 @@ class Importer {
                     }
                     const childValues = declared(shapeNode);
                     if (childValues.display === 'none') continue;
+                    for (const name of styledGeometry(shapeNode)) {
+                        this.rasterOnly.push({ path, reason: `a clipPath <${shapeNode.name}> ${name} set in a style needs rasterization` });
+                    }
                     for (const holder of new Set([child, shapeNode])) {
                         const nested = declared(holder)['clip-path'];
                         if (nested !== undefined && nested !== 'none') {
@@ -1948,7 +2206,8 @@ class Importer {
         }
         const mask = values.mask;
         if (mask !== undefined && mask !== 'none') {
-            const id = localReference(/^url\(\s*(['"]?)([^'")]*)\1\s*\)$/.exec(mask)?.[2] ?? '');
+            const url = leadingUrl(mask);
+            const id = url && url.rest === '' ? url.id : null;
             const definition = id === null ? null : this.ids.get(id);
             if (!definition || definition.name !== 'mask') {
                 this.report('svg-mask-unresolved', path, `mask ${mask} names no mask in the asset; the content is hidden`);
@@ -2005,7 +2264,7 @@ function subtreeGradient(gradient, why) {
         return { kind: 'linear', angle, map: (offset) => start + offset * span };
     }
     if (g.fx !== g.cx || g.fy !== g.cy || g.fr !== 0) return why('a radial gradient with a focal point');
-    if (!(g.r > 0)) return why('a radial gradient with no radius');
+    if (!(Math.fround(Number(fmt(g.r))) > 0)) return why('a radial gradient with no radius');
     return { kind: 'radial', centerX: g.cx, centerY: g.cy, radiusX: g.r, radiusY: g.r,
         spread: gradient.spread, map: (offset) => offset };
 }
@@ -2216,6 +2475,14 @@ function compiledGradient(gradient, bounds, opacity) {
         shape = { kind: 'two-circle-radial', centerX: Number(fmt(g.cx)), centerY: Number(fmt(g.cy)),
             focalX: Number(fmt(g.fx)), focalY: Number(fmt(g.fy)), startRadius: Number(fmt(Math.max(0, g.fr))),
             endRadius: Number(fmt(g.r)) };
+        // The renderer refuses identical circles, judged on the written
+        // values as float32, so rounding that makes them identical paints
+        // the last stop, as SVG does for a focal circle that fills the end.
+        const f = Math.fround;
+        if (f(shape.startRadius) === f(shape.endRadius) && f(shape.focalX) === f(shape.centerX) &&
+            f(shape.focalY) === f(shape.centerY)) {
+            return { solid: stops.at(-1).color, degenerate: true };
+        }
     }
     // The renderer checks invertibility in float32; so does the importer.
     const f = space.map((value) => Math.fround(Number(fmt(value))));
@@ -2229,13 +2496,14 @@ function compiledGradient(gradient, bounds, opacity) {
     };
 }
 
-function compiledPaint(paint, bounds) {
+function compiledPaint(paint, bounds, degenerate = () => {}) {
     if (paint.kind === 'none') return 'none';
     if (paint.kind === 'color') return hexString(paint.color, paint.opacity);
     if (paint.gradient.units === 'box' && (!bounds || !(bounds.width > 0) || !(bounds.height > 0))) {
         return 'none';
     }
     const resolved = compiledGradient(paint.gradient, bounds, paint.opacity);
+    if (resolved.degenerate) degenerate();
     if (resolved.solid) return resolved.solid;
     return { gradient: resolved.gradient, transform: resolved.transform };
 }
@@ -2249,9 +2517,11 @@ class CompiledLowering {
     lower(item) {
         if (item.kind === 'raster-only') return;
         if (item.kind === 'shape') {
+            const degenerate = () => this.importer.report('svg-gradient-degenerate', item.id,
+                'a two-circle radial gradient whose circles become identical once written was drawn as its last stop');
             const op = { op: 'path', d: serializePath(item.segments),
-                fill: compiledPaint(item.fill, item.bounds),
-                stroke: compiledPaint(item.stroke, item.bounds) };
+                fill: compiledPaint(item.fill, item.bounds, degenerate),
+                stroke: compiledPaint(item.stroke, item.bounds, degenerate) };
             if (item.fillRule === 'evenodd') op.fillRule = 'evenodd';
             if (op.stroke !== 'none') {
                 op.strokeWidth = item.strokeWidth;
@@ -2423,40 +2693,6 @@ const RASTER_INPUT_ELEMENTS = new Set(['svg', 'g', 'defs', 'symbol', 'use', 'swi
     'feDropShadow', 'feFlood', 'feFuncA', 'feFuncB', 'feFuncG', 'feFuncR', 'feGaussianBlur',
     'feMerge', 'feMergeNode', 'feMorphology', 'feOffset', 'fePointLight', 'feSpecularLighting',
     'feSpotLight', 'feTile', 'feTurbulence']);
-const RASTER_INPUT_PLAIN = new Set([
-    'x', 'y', 'width', 'height', 'cx', 'cy', 'r', 'rx', 'ry', 'x1', 'y1', 'x2', 'y2', 'fx', 'fy',
-    'fr', 'd', 'points', 'viewBox', 'preserveAspectRatio', 'offset', 'pathLength',
-    'gradientUnits', 'spreadMethod', 'clipPathUnits', 'maskUnits', 'maskContentUnits',
-    'mask-type', 'patternUnits', 'patternContentUnits', 'filterUnits', 'primitiveUnits',
-    'markerUnits', 'markerWidth', 'markerHeight', 'refX', 'refY', 'orient',
-    'fill-opacity', 'fill-rule', 'stroke-opacity', 'stroke-width', 'stroke-linecap',
-    'stroke-linejoin', 'stroke-miterlimit', 'stroke-dasharray', 'stroke-dashoffset',
-    'visibility', 'clip-rule', 'color-interpolation', 'color-interpolation-filters', 'opacity',
-    'display', 'overflow', 'stop-opacity', 'flood-opacity', 'paint-order', 'vector-effect',
-    'shape-rendering', 'mix-blend-mode', 'isolation', 'xml:space',
-    'font-size', 'font-weight', 'font-style', 'font-variant', 'font-stretch', 'text-anchor',
-    'dominant-baseline', 'alignment-baseline', 'baseline-shift', 'letter-spacing',
-    'word-spacing', 'text-decoration', 'writing-mode', 'direction', 'unicode-bidi',
-    'text-rendering', 'startOffset', 'method', 'spacing', 'side', 'textLength', 'lengthAdjust',
-    'dx', 'dy', 'rotate',
-    'in', 'in2', 'result', 'stdDeviation', 'mode', 'operator', 'k1', 'k2', 'k3', 'k4', 'type',
-    'values', 'tableValues', 'slope', 'intercept', 'amplitude', 'exponent', 'radius', 'scale',
-    'xChannelSelector', 'yChannelSelector', 'baseFrequency', 'numOctaves', 'seed',
-    'stitchTiles', 'order', 'kernelMatrix', 'divisor', 'bias', 'targetX', 'targetY', 'edgeMode',
-    'preserveAlpha', 'surfaceScale', 'specularConstant', 'specularExponent', 'diffuseConstant',
-    'kernelUnitLength', 'azimuth', 'elevation', 'z', 'pointsAtX', 'pointsAtY', 'pointsAtZ',
-    'limitingConeAngle']);
-const RASTER_INPUT_PAINTS = new Set(['fill', 'stroke']);
-const RASTER_INPUT_COLORS = new Set(['stop-color', 'color', 'flood-color', 'lighting-color']);
-const RASTER_INPUT_REFERENCES = new Set(['clip-path', 'mask', 'filter', 'marker-start',
-    'marker-mid', 'marker-end']);
-const RASTER_INPUT_TRANSFORMS = new Set(['transform', 'gradientTransform', 'patternTransform']);
-// Attributes that never change what is drawn, left out without a report.
-const RASTER_INPUT_QUIET = new Set(['id', 'style', 'class', 'role', 'lang', 'xml:lang', 'version',
-    'baseProfile', 'cursor', 'pointer-events', 'tabindex', 'focusable', 'requiredFeatures',
-    'requiredExtensions', 'systemLanguage', 'href', 'xlink:href']);
-const LOCAL_URL = /^url\(\s*(['"]?)#([^'")\s]+)\1\s*\)\s*(.*)$/;
-
 function rasterColor(value, paint) {
     if (paint && ['none', 'context-fill', 'context-stroke'].includes(value)) return value;
     if (value === 'currentColor') return value;
@@ -2469,37 +2705,36 @@ function rasterColor(value, paint) {
 // The attribute as the rasterizer is given it: [name, value], null when it
 // is outside the allowlist, or undefined when it is left out quietly.
 function rasterAttribute(name, value) {
-    if (RASTER_INPUT_PLAIN.has(name)) {
+    const property = propertyOf(name);
+    if (!property) return null;
+    const written = property.written;
+    if (written === null) return undefined;
+    if (written === 'plain') {
         return /^[A-Za-z0-9_\s,.+\-%]*$/.test(value) ? [name, value] : null;
     }
-    if (name === 'font-family') return /^[A-Za-z0-9_\s,.\-'"]*$/.test(value) ? [name, value] : null;
-    if (RASTER_INPUT_COLORS.has(name)) {
+    if (written === 'font') return /^[A-Za-z0-9_\s,.\-'"]*$/.test(value) ? [name, value] : null;
+    if (written === 'color') {
         const color = rasterColor(value, false);
         return color === null ? null : [name, color];
     }
-    if (RASTER_INPUT_PAINTS.has(name)) {
-        const url = LOCAL_URL.exec(value);
+    if (written === 'paint') {
+        const url = leadingUrl(value);
         if (!url) {
             const color = rasterColor(value, true);
             return color === null ? null : [name, color];
         }
-        if (!url[3]) return [name, `url(#${url[2]})`];
-        const fallback = rasterColor(url[3].trim(), true);
-        return fallback === null ? null : [name, `url(#${url[2]}) ${fallback}`];
+        if (url.id === null) return null;
+        if (!url.rest) return [name, `url(#${url.id})`];
+        const fallback = rasterColor(url.rest, true);
+        return fallback === null ? null : [name, `url(#${url.id}) ${fallback}`];
     }
-    if (RASTER_INPUT_REFERENCES.has(name)) {
+    if (written === 'reference') {
         if (value === 'none') return [name, value];
-        const url = LOCAL_URL.exec(value);
-        return url && !url[3] ? [name, `url(#${url[2]})`] : null;
+        const url = leadingUrl(value);
+        return url && url.id !== null && !url.rest ? [name, `url(#${url.id})`] : null;
     }
-    if (RASTER_INPUT_TRANSFORMS.has(name)) {
-        const matrix = parseTransform(value);
-        return matrix === null ? null : [name, `matrix(${matrix.map(plain).join(' ')})`];
-    }
-    if (RASTER_INPUT_QUIET.has(name) || name.startsWith('aria-') || name.startsWith('data-')) {
-        return undefined;
-    }
-    return null;
+    const matrix = parseTransform(value);
+    return matrix === null ? null : [name, `matrix(${matrix.map(plain).join(' ')})`];
 }
 
 const escapeXml = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;')
@@ -2682,4 +2917,14 @@ export function svgAssetToDesignIR(svg, { source, tokens, ...options } = {}) {
 
 export const svgAssetTesting = Object.freeze({
     parsePathData, pathBounds, serializePath, parseColor, parseTransform, sha256,
+    // Every scanner that reads text from the asset, for the linear-time test.
+    scanners: Object.freeze({
+        numberEnd: (text) => numberEnd(text, 0), readUrl: (text) => readUrl(text, 0), leadingUrl,
+        urlReferences: (text) => urlReferences(text, 'test'), localReference,
+        scanTag: (text) => scanTag(text, 0), splitImportant, unmodelledCss,
+        styleDeclarations: (text) => styleDeclarations(text, 'test'),
+        checkNumbers: (text) => checkNumbers(text, 'test'), parseLength, parseNumber,
+        parseFraction: (text) => parseFraction(text, 0), parseColor, parseTransform, parsePathData,
+        decodeText, stripComments, parseXml, urlLike,
+    }),
 });

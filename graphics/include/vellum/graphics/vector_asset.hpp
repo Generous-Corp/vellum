@@ -27,7 +27,9 @@ namespace vellum::graphics {
 /// The box a valid asset can paint, in view-box coordinates: the union of
 /// every path operation's `path_paint_box` under the transforms of its
 /// enclosing groups and its own, ignoring clips. Empty when no operation
-/// paints. The box can be non-finite for a stroke with a huge miter limit.
+/// paints. The box is non-finite, and so unbounded, when any operation's
+/// extent is, as for a stroke with a huge miter limit or transforms whose
+/// composition overflows float32.
 [[nodiscard]] std::optional<Rect> vector_asset_paint_box(const VectorAsset& asset);
 
 /// `vector_asset_paint_box` mapped by `vector_view_box_transform` onto

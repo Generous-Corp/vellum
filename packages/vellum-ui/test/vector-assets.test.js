@@ -71,9 +71,9 @@ test('a retheme changes only the token-bound node of an imported subtree', async
         void right;
         return JSON.stringify(own) !== JSON.stringify(next);
     });
-    assert.deepEqual(changed, ['assets/svg:swatch']);
-    assert.equal(before.get('assets/svg:swatch').fill, '#e11d48');
-    assert.equal(after.get('assets/svg:swatch').fill, '#22c55e');
+    assert.deepEqual(changed, ['assets/svg:6_swatch']);
+    assert.equal(before.get('assets/svg:6_swatch').fill, '#e11d48');
+    assert.equal(after.get('assets/svg:6_swatch').fill, '#22c55e');
 });
 
 test('the compiled form of one asset is a single vector node', async () => {

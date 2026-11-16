@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { importSvgAsset, SVG_ASSET_LIMITS, SvgAssetRefusal } from '../src/index.js';
+import { importSvgAsset, SVG_ASSET_LIMITS, svgAssetToDesignIR, SvgAssetRefusal } from '../src/index.js';
+import { svgAssetTesting } from '../src/svg-asset.js';
 
 const wrap = (body, attributes = '') =>
     `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"${attributes}>${body}</svg>`;
@@ -294,4 +295,128 @@ test('a clipPath transform is read from its style as well as its attribute', () 
             '<rect width="10" height="10" clip-path="url(#c)"/>');
         assert.match(JSON.stringify(importSvgAsset(svg, { sourceKey: 's' }).root), /matrix\(1, 0, 0, 1, 5, 0\)/, transform);
     }
+});
+
+const N = 100000;
+const PATHOLOGICAL = {
+    'spaces': ' '.repeat(N),
+    'an unterminated url(': `url(${' '.repeat(N)}!`,
+    'an unterminated local url(': `url(#a${' '.repeat(N)}x`,
+    'nested parentheses': '('.repeat(N),
+    'unbalanced parentheses': `${'(('.repeat(N / 2)})`,
+    'closing parentheses': ')'.repeat(N),
+    'an unterminated colour function': `rgb(${' '.repeat(N)}!`,
+    'a long digit run': `${'1'.repeat(N)}x`,
+    'a long fraction before a percent': `1.${'1'.repeat(N)}%x`,
+    'a long exponent': `1e${'1'.repeat(N)}`,
+    'repeated comment openers': '<!--'.repeat(N / 4),
+    'repeated CSS comment openers': '/*'.repeat(N / 2),
+    'a long scheme without a colon': `${'a'.repeat(N)}!`,
+    'an unterminated tag of attributes': `<a${' b="c"'.repeat(N / 6)}`,
+    'an unterminated tag of spaces': `<a${' '.repeat(N)}`,
+    'a near-miss important': `x${' '.repeat(N)}!importan`,
+    'repeated ampersands': '&amp'.repeat(N / 4),
+    'repeated url openers': 'url('.repeat(N / 4),
+    'repeated transforms': 'matrix('.repeat(N / 7),
+};
+
+// The fastest of three runs, so a busy machine does not fail a linear scan;
+// a backtracking one takes seconds to minutes on these inputs.
+function fastest(run) {
+    let best = Infinity;
+    for (let attempt = 0; attempt < 3 && best >= 200; attempt += 1) {
+        const start = performance.now();
+        try { run(); } catch (error) {
+            if (!(error instanceof SvgAssetRefusal) && !(error instanceof TypeError)) throw error;
+        }
+        best = Math.min(best, performance.now() - start);
+    }
+    return best;
+}
+
+test('every scanner that reads asset text runs in linear time on pathological input', () => {
+    for (const [scanner, scan] of Object.entries(svgAssetTesting.scanners)) {
+        for (const [shape, input] of Object.entries(PATHOLOGICAL)) {
+            const elapsed = fastest(() => scan(input));
+            assert.ok(elapsed < 200, `${scanner} on ${shape} took ${elapsed.toFixed(1)} ms`);
+        }
+    }
+});
+
+test('a whole import of pathological attribute values stays fast', () => {
+    const svgs = { 'the reported unterminated url(': `<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(${' '.repeat(N)}!"/></svg>` };
+    for (const [shape, input] of Object.entries(PATHOLOGICAL)) {
+        if (/[<&"]/.test(input)) continue;
+        for (const attribute of ['fill', 'style', 'transform', 'd', 'points', 'stop-color', 'clip-path', 'id']) {
+            svgs[`${shape} in ${attribute}`] = wrap(`<path ${attribute}="${input}"/>`);
+        }
+    }
+    for (const [shape, input] of Object.entries(PATHOLOGICAL)) {
+        const body = input.replace(/[<&]/g, ' ');
+        svgs[`${shape} as title text`] = wrap(`<title>${body}</title><rect width="1" height="1"/>`);
+        svgs[`${shape} as text`] = wrap(`<text>${body}</text>`);
+    }
+    const source = { key: 's', adapter: 'svg', adapterVersion: '1', formatVersion: '1.1', revision: 't' };
+    for (const [name, svg] of Object.entries(svgs)) {
+        const imported = fastest(() => importSvgAsset(svg, { sourceKey: 's', rasterize: () => raster }));
+        assert.ok(imported < 200, `${name} took ${imported.toFixed(1)} ms`);
+        const normalized = fastest(() => svgAssetToDesignIR(svg, { source, rasterize: () => raster }));
+        assert.ok(normalized < 200, `${name} through DesignIR took ${normalized.toFixed(1)} ms`);
+    }
+});
+
+test('identities from distinct use paths never collide', () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><defs><rect id="b" width="1" height="1"/>' +
+        '<rect id=":b" width="1" height="1"/></defs><use id="a:" href="#b"/><use id="a" href="#:b"/></svg>';
+    const ids = [];
+    const visit = (node) => { ids.push(node.sourceId); node.children.forEach(visit); };
+    visit(importSvgAsset(svg).root);
+    assert.equal(new Set(ids).size, ids.length, ids.join(' '));
+    assert.doesNotThrow(() => svgAssetToDesignIR(svg, { source: { key: 's', adapter: 'svg', adapterVersion: '1',
+        formatVersion: '1.1', revision: 't' } }));
+    assert.ok(ids.includes('svg:2_a::1_b') && ids.includes('svg:1_a:2_:b'), ids.join(' '));
+});
+
+test('a symbol without a viewBox sets the viewport its instance clips to and its percentages use', () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="20"><linearGradient id="g" ' +
+        'gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="red"/><stop offset="1" stop-color="blue"/>' +
+        '</linearGradient><symbol id="s"><rect width="40" height="10" fill="url(#g)"/></symbol>' +
+        '<use href="#s" width="20" height="10"/></svg>';
+    const ops = importSvgAsset(svg).root.children[0].properties.vector.asset.ops;
+    assert.ok(ops.some((op) => op.clip?.d === 'M0 0L20 0L20 10L0 10Z'), JSON.stringify(ops));
+    const ramp = ops.find((op) => op.op === 'path').fill;
+    assert.equal(ramp.transform[0], 20, 'the ramp ends at 100% of the 20-unit symbol viewport');
+    const visible = importSvgAsset(svg.replace('<symbol id="s">', '<symbol id="s" overflow="visible">'));
+    assert.ok(!visible.root.children[0].properties.vector.asset.ops.some((op) => op.clip), 'overflow visible does not clip');
+});
+
+test('geometry set in a style is rasterized or a loss, never silently dropped', () => {
+    const svg = wrap('<rect style="width:10px;height:10px;fill:red"/>');
+    const dropped = importSvgAsset(svg);
+    const loss = dropped.diagnostics.filter((item) => item.code === 'svg-raster-feature-dropped');
+    assert.ok(loss.some((item) => /width set in a style/.test(item.message)), JSON.stringify(dropped.diagnostics));
+    const bytes = handed(svg);
+    assert.match(bytes, /<rect width="10px" height="10px" fill="#ff0000"\/>/);
+    const clip = wrap('<clipPath id="c"><rect style="width:5px" height="10"/></clipPath><rect width="10" height="10" clip-path="url(#c)"/>');
+    assert.equal(importSvgAsset(clip, { rasterize: () => raster }).mode, 'rasterized');
+    const unread = importSvgAsset(wrap('<polyline style="points:0 0 5 5" points="0 0 10 10" stroke="red"/><rect width="1" height="1" bogus="1"/>'));
+    assert.deepEqual(codes(unread.diagnostics), ['svg-attribute-dropped', 'svg-attribute-dropped']);
+    const read = importSvgAsset(wrap('<rect width="1" height="1" style="fill:red;opacity:.5" font-size="3"/>'));
+    assert.deepEqual(codes(read.diagnostics), [], 'what lowering reads, or only text uses, is no loss');
+    const sized = importSvgAsset(wrap('<rect width="1" height="1"/>', ' style="width:24px"'), { rasterize: () => raster });
+    assert.equal(sized.mode, 'subtree', 'a CSS size on the root is a loss, not a reason to rasterize');
+    assert.deepEqual(codes(sized.diagnostics), ['svg-attribute-dropped']);
+});
+
+test('a two-circle gradient whose circles become identical once written paints its last stop with a loss', () => {
+    const radial = (fr) => wrap(`<radialGradient id="g" r=".5" fr="${fr}"><stop offset="0" stop-color="red"/>` +
+        '<stop offset="1" stop-color="blue"/></radialGradient><rect width="10" height="10" fill="url(#g)"/>');
+    const degenerate = importSvgAsset(radial('.49999999'));
+    const op = degenerate.root.children[0].properties.vector.asset.ops.find((item) => item.op === 'path');
+    assert.equal(op.fill, '#0000ff');
+    assert.ok(codes(degenerate.diagnostics).includes('svg-gradient-degenerate'));
+    const distinct = importSvgAsset(radial('.4'));
+    const kept = distinct.root.children[0].properties.vector.asset.ops.find((item) => item.op === 'path');
+    assert.equal(kept.fill.gradient.kind, 'two-circle-radial');
+    assert.ok(!codes(distinct.diagnostics).includes('svg-gradient-degenerate'));
 });

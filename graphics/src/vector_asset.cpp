@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 namespace vellum::graphics {
@@ -178,8 +179,15 @@ std::optional<Rect> vector_asset_paint_box(const VectorAsset& asset) {
                 strokes ? Color::rgba(0.0F, 0.0F, 0.0F, 1.0F) : Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
             const auto box = path_paint_box(geometry);
             if (!box) break;
-            painted = bounds_union(painted,
-                                   transformed_bounds(concat(stack.back(), op.transform), *box));
+            const Rect mapped = transformed_bounds(concat(stack.back(), op.transform), *box);
+            // A union drops NaN, so one non-finite extent makes the whole
+            // box unbounded rather than vanishing from it.
+            if (!std::isfinite(mapped.x) || !std::isfinite(mapped.y) ||
+                !std::isfinite(mapped.width) || !std::isfinite(mapped.height)) {
+                const float infinity = std::numeric_limits<float>::infinity();
+                return Rect{-infinity, -infinity, infinity, infinity};
+            }
+            painted = bounds_union(painted, mapped);
             break;
         }
         }

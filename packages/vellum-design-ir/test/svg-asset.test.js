@@ -78,14 +78,14 @@ test('token-bound colours and stable identities survive a subtree import', async
     const second = svgAssetToDesignIR(svg, options).document;
     const ids = [...indexTree(first.root).index.keys()];
     assert.deepEqual(ids, [...indexTree(second.root).index.keys()]);
-    const swatch = indexTree(first.root).index.get('assets/svg:swatch').node;
+    const swatch = indexTree(first.root).index.get('assets/svg:6_swatch').node;
     assert.equal(swatch.properties.path.fill, '{assets.brand.accent}');
     const uses = svgAssetToDesignIR(await fixture('use'), { source }).document;
     const useIds = [...indexTree(uses.root).index.keys()];
     assert.equal(new Set(useIds).size, useIds.length);
-    assert.ok(useIds.includes('assets/svg:first:tile.0'));
-    assert.ok(useIds.includes('assets/svg:second:tile.0'));
-    assert.ok(useIds.includes('assets/svg:pairs:pairing.1:tile.1'));
+    assert.ok(useIds.includes('assets/svg:5_first:4_tile.0'));
+    assert.ok(useIds.includes('assets/svg:6_second:4_tile.0'));
+    assert.ok(useIds.includes('assets/svg:5_pairs:7_pairing.1:4_tile.1'));
 });
 
 test('rasterization is the last fallback and is always a recorded loss', async () => {
@@ -280,14 +280,14 @@ test('rasterizing keeps the earlier losses and authored ids never collide with g
         '<rect id="a.0" width="1" height="1"/>'), { source });
     const all = [...indexTree(ids.document.root).index.keys()];
     assert.equal(new Set(all).size, all.length);
-    assert.ok(all.includes('assets/svg:a:shape') && all.includes('assets/svg:a::shape'));
+    assert.ok(all.includes('assets/svg:1_a:shape') && all.includes('assets/svg:7_a:shape'));
 });
 
 test('an authored id="viewport" does not collide with the generated viewport', () => {
     const imported = svgAssetToDesignIR(wrap('<rect id="viewport" width="1" height="1"/>'), { source });
     const all = [...indexTree(imported.document.root).index.keys()];
     assert.equal(new Set(all).size, all.length);
-    assert.ok(all.includes('assets/svg:viewport'));
+    assert.ok(all.includes('assets/svg:8_viewport'));
 });
 
 test('a root with display none draws nothing, as an attribute or a style', () => {
@@ -351,7 +351,7 @@ test('a symbol viewport clips in output units, before its viewBox transform', ()
     };
     visit(subtree.root);
     assert.equal(subtree.mode, 'subtree');
-    assert.deepEqual(clips, [{ id: 'svg:u:s.viewport', clip: 'M0 0L20 0L20 20L0 20Z', transform: undefined }]);
+    assert.deepEqual(clips, [{ id: 'svg:1_u:1_s.viewport', clip: 'M0 0L20 0L20 20L0 20Z', transform: undefined }]);
     const compiled = compiledOps(importSvgAsset(svg, { nodeBudget: 1 }));
     const clipped = compiled.findIndex((op) => op.clip);
     assert.equal(compiled[clipped].clip.d, 'M0 0L20 0L20 20L0 20Z');
@@ -488,7 +488,7 @@ test('a symbol keeps its own opacity as one group on each instance', () => {
         (node.children ?? []).forEach(visit);
     };
     visit(subtree.root);
-    assert.deepEqual(groups, [{ id: 'svg.1:s.symbol', opacity: 0.5, children: 2 }]);
+    assert.deepEqual(groups, [{ id: 'svg.1:1_s.symbol', opacity: 0.5, children: 2 }]);
     const compiled = compiledOps(importSvgAsset(svg, { nodeBudget: 1 }));
     assert.ok(compiled.some((op) => op.op === 'group' && op.opacity === 0.5), 'the compiled form groups it too');
 });

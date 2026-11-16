@@ -306,13 +306,13 @@ void blended_vectors() {
         if (std::string(name) == "gradients") {
             SceneNode* swatch = nullptr;
             for (auto& child : blended.children) {
-                if (child.id == "assets/svg:swatch") swatch = &child;
+                if (child.id == "assets/svg:6_swatch") swatch = &child;
             }
             expect(swatch != nullptr, "the subtree swatch is found");
             if (swatch == nullptr) return;
             swatch->blend_mode = BlendMode::multiply;
             for (auto& child : blended.children) {
-                if (child.id == "assets/svg:dot") child.blend_mode = BlendMode::multiply;
+                if (child.id == "assets/svg:3_dot") child.blend_mode = BlendMode::multiply;
             }
         } else {
             expect(blended.kind == SceneNode::Kind::vector, "the compiled fixture is a vector node");
@@ -427,6 +427,58 @@ SweepCount sweep_damage_edges(const Scene& scene, float scale, bool layer_cache)
 std::string sweep_detail(const SweepCount& count) {
     return std::to_string(count.differing) + " of " + std::to_string(count.edges) +
            " edges differ, " + std::to_string(count.partial) + " partial; first " + count.first;
+}
+
+// Nested transforms that overflow float32 inside a vector whose view box
+// scales them back down still paint the whole frame, so a change under them
+// must damage all of it: the partial frame stays byte-identical to a full one.
+void nonfinite_vector_damage() {
+    PathGeometry square;
+    if (!parse_svg_path_data("M0 0H1V1H0Z", square)) return;
+    const auto unit = std::make_shared<const PathGeometry>(std::move(square));
+    const auto scene_with = [&](std::uint32_t color) {
+        Scene scene;
+        scene.width = 64.0F;
+        scene.height = 64.0F;
+        scene.background = Color::hex(0xFFFFFF);
+        scene.root.id = "root";
+        auto asset = std::make_shared<VectorAsset>();
+        asset->content_hash = "sha256:" + std::string(64, 'b');
+        asset->view_box = {0.0F, 0.0F, 1e30F, 1e30F};
+        const Affine2D huge{.a = 1e20F, .d = 1e20F};
+        asset->ops = {
+            {.kind = VectorOp::Kind::path, .path = unit, .fill = {.color = Color::hex(0x000000)}},
+            {.kind = VectorOp::Kind::push_group, .transform = huge},
+            {.kind = VectorOp::Kind::path, .transform = huge, .path = unit,
+             .fill = {.color = Color::hex(color)}},
+            {.kind = VectorOp::Kind::pop_group},
+        };
+        SceneNode node{.id = "overflow", .kind = SceneNode::Kind::vector,
+                       .bounds = {0.0F, 0.0F, 1.0F, 1.0F}};
+        node.vector = std::move(asset);
+        scene.root.children.push_back(std::move(node));
+        return scene;
+    };
+    const auto red = scene_with(0xFF0000);
+    const auto blue = scene_with(0x0000FF);
+    for (const float scale : {1.0F, 2.0F}) {
+        for (const bool cache : {false, true}) {
+            auto full = make_surface(red, scale);
+            auto partial = make_surface(red, scale, cache);
+            if (!full || !partial) return;
+            std::string error;
+            expect(full->render(red, &error) && partial->render_incremental(red, &error),
+                   "the overflowing vector renders", error);
+            expect(full->render(blue, &error) && partial->render_incremental(blue, &error),
+                   "the overflowing vector renders after its fill changes", error);
+            std::string message;
+            expect(same_frame(*full, *partial, message),
+                   "a fill change under an overflowing transform redraws byte-identically at " +
+                       std::to_string(static_cast<int>(scale)) + "x" +
+                       (cache ? " with the layer cache" : ""),
+                   message);
+        }
+    }
 }
 
 void damage_sweeps() {
@@ -654,6 +706,7 @@ int main(int argc, char** argv) {
     per_node_damage();
     version_refusal();
     damage_sweeps();
+    nonfinite_vector_damage();
     std::cout << (failures == 0 ? "vector asset GPU tests passed\n" : "vector asset GPU tests failed\n");
     return failures == 0 ? 0 : 1;
 }

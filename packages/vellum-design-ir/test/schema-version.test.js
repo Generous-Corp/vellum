@@ -133,12 +133,12 @@ test('SVG opacity and masks lower into compositing, not vector paint keys', () =
     const nodes = [];
     const visit = (node) => { nodes.push(node); node.children.forEach(visit); };
     visit(document.root);
-    const group = nodes.find((node) => node.id === 'assets/svg:g');
+    const group = nodes.find((node) => node.id === 'assets/svg:1_g');
     assert.deepEqual(group.compositing, { opacity: 0.5 });
-    const mask = nodes.find((node) => node.id === 'assets/svg:g:mask');
+    const mask = nodes.find((node) => node.id === 'assets/svg:1_g:mask');
     assert.deepEqual(mask.compositing, { mask: 'luminance' });
-    const content = nodes.find((node) => node.id === 'assets/svg:g:content');
-    assert.deepEqual(content.compositing, { maskRef: 'assets/svg:g:mask' });
+    const content = nodes.find((node) => node.id === 'assets/svg:1_g:content');
+    assert.deepEqual(content.compositing, { maskRef: 'assets/svg:1_g:mask' });
     for (const node of nodes) {
         for (const key of ['opacity', 'maskMode', 'isolation']) {
             assert.equal(node.properties.paint?.[key], undefined, `${node.id} paint.${key}`);
