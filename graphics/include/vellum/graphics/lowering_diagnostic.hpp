@@ -72,6 +72,16 @@ inline constexpr std::string_view kSceneVersionMismatchCode = "VELLUM_SCENE_VERS
 /// fidelity loss, so the scene is refused rather than approximated.
 inline constexpr std::string_view kGradientNotExpressibleCode =
     "VELLUM_GRADIENT_NOT_EXPRESSIBLE";
+/// A plot node without a spec, with children, or with a spec that fails
+/// `plot_is_valid`; always an error.
+inline constexpr std::string_view kInvalidPlotCode = "VELLUM_INVALID_PLOT";
+/// A plot whose channel the feed it samples does not have with the plot's
+/// shape; a warning. The plot's samples are cleared, so it draws nothing
+/// but its background.
+inline constexpr std::string_view kPlotChannelUnboundCode = "VELLUM_PLOT_CHANNEL_UNBOUND";
+/// A line, area or bar plot wider than `kMaxPlotColumns` device pixels at the
+/// scale it is drawn at; a warning. It draws only its background.
+inline constexpr std::string_view kPlotTooWideCode = "VELLUM_PLOT_TOO_WIDE";
 
 /// A blend mode the backend cannot draw; a warning. The group was drawn with
 /// the `normal` mode instead. Only Tier 2 modes, which a backend other than

@@ -227,6 +227,29 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
             .image = node.image,
             .image_asset = node.image ? images.find(node.image->content_hash) : nullptr,
         });
+    } else if (node.kind == SceneNode::Kind::plot && node.plot) {
+        // A gradient background is drawn as a rectangle behind the plot, which
+        // then paints only its samples.
+        const bool gradient = !node.fill_gradients.empty();
+        if (gradient) {
+            output.push_back({
+                .kind = PaintCommand::Kind::rectangle,
+                .node_id = node.id + "/background",
+                .bounds = absolute,
+                .fill = node.fill,
+                .fill_gradients = node.fill_gradients,
+                .transform = transform,
+                .plot_background = true,
+            });
+        }
+        output.push_back({
+            .kind = PaintCommand::Kind::plot,
+            .node_id = node.id,
+            .bounds = absolute,
+            .fill = gradient ? Color::rgba(0.0F, 0.0F, 0.0F, 0.0F) : node.fill,
+            .transform = transform,
+            .plot = node.plot,
+        });
     } else if (node.kind == SceneNode::Kind::mesh && node.mesh) {
         output.push_back({
             .kind = PaintCommand::Kind::mesh,
@@ -645,6 +668,10 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
             });
             return output;
         }
+        if (!compositing && needs(12U) && node->kind == SceneNode::Kind::plot) {
+            return refuse(node->id, "scene version " + version +
+                                        " cannot carry the plot node " + node->id);
+        }
         output.push_back({
             .severity = LoweringDiagnostic::Severity::error,
             .disposition = LoweringDiagnostic::Disposition::unsupported,
@@ -714,6 +741,11 @@ PaintExtent paint_extent(const PaintCommand& command) {
                             std::isfinite(moved.width) && std::isfinite(moved.height);
         if (!finite) return {box, false};
         return {moved};
+    }
+    if (command.kind == PaintCommand::Kind::plot) {
+        constexpr float snap_reach = 2.0F;
+        return {{box.x - snap_reach, box.y - snap_reach, box.width + 2.0F * snap_reach,
+                 box.height + 2.0F * snap_reach}};
     }
     if (command.kind == PaintCommand::Kind::image) return {box};
     if (command.kind == PaintCommand::Kind::vector) {

@@ -340,7 +340,7 @@ test('DesignIR materialization validates the schema version of compositing', () 
     delete unversioned.schemaVersion;
     assert.throws(() => materializeDesign(unversioned), /needs schemaVersion 2/);
     const newer = structuredClone(document);
-    for (const version of [2, 3, 4]) {
+    for (const version of [2, 3, 4, 5]) {
         newer.schemaVersion = version;
         assert.equal(renderedTree(newer).children[0].style.mixBlendMode, 'multiply');
         newer.root.children[0].compositing.mask = 'alpha';
@@ -465,4 +465,38 @@ test('refuses unsupported tracks and materials throughout the design tree', () =
     empty.schemaVersion = 4;
     empty.root.tracks = [];
     assert.doesNotThrow(() => materializeDesign(empty));
+});
+
+test('DesignIR plot bindings normalize, materialize and render as a plot node', async () => {
+    const source = JSON.parse(await readFile(join(fixtures, 'revision-a.source.json'), 'utf8'));
+    const leaf = (node) => (node.children.length === 0 ? node : leaf(node.children[0]));
+    const target = leaf(source.root);
+    target.plot = {
+        style: 'line', channel: 'output', source: 'scalar', slots: 240, history: 'sweep',
+        min: -1, max: 1, lineWidth: 2, lineColor: '#F97316',
+    };
+    const imported = normalizeImport(source);
+    assert.equal(imported.schemaVersion, 5);
+    const tree = JSON.parse(mount(() => materializeDesign(imported)).renderJSON()).tree;
+    const find = (node) => (node.type === 'plot' ? node : node.children.map(find).find(Boolean));
+    const node = find(tree);
+    assert.equal(node.plot, 'line');
+    assert.equal(node.channel, 'output');
+    assert.equal(node.source, 'scalar');
+    assert.equal(node.slots, 240);
+    assert.equal(node.history, 'sweep');
+    assert.equal(node.min, -1);
+    assert.equal(node.lineColor, '#F97316');
+
+    const hidden = structuredClone(imported);
+    hidden.schemaVersion = 4;
+    hidden.root.children[0].properties.layout = { display: 'none' };
+    assert.throws(() => materializeDesign(hidden), /plot needs schemaVersion 5/);
+    const older = structuredClone(imported);
+    older.schemaVersion = 4;
+    assert.throws(() => materializeDesign(older), /plot needs schemaVersion 5/);
+    const parented = structuredClone(imported);
+    const bound = (candidate) => (candidate.plot !== undefined ? candidate : candidate.children.map(bound).find(Boolean));
+    bound(parented.root).children = [{ id: 'main/inner', kind: 'view', children: [] }];
+    assert.throws(() => materializeDesign(parented), /binds a plot and cannot have children/);
 });

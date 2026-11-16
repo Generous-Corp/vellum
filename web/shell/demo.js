@@ -124,6 +124,7 @@ const api = {
     begin: module.cwrap('vellum_web_begin_frame', 'number', ['number','number','number','number','number','number']),
     rectangle: module.cwrap('vellum_web_add_rectangle', 'number', ['string','number','number','number','number','number','number','number','number','number']),
     text: module.cwrap('vellum_web_add_text', 'number', ['string','string','number','number','number','number','number','number','number','number','number']),
+    setScale: module.cwrap('vellum_web_set_scale', 'number', ['number']),
     render: module.cwrap('vellum_web_render', 'number', []),
     count: module.cwrap('vellum_web_command_count', 'number', []),
     digest: module.cwrap('vellum_web_command_digest', 'number', []),
@@ -216,6 +217,7 @@ function render() {
     const height = number(style, 'height', 0);
     if (!(width > 0 && height > 0)) throw new Error('browser proof requires positive root width and height');
     const background = color(style.backgroundColor, '#f8fafc');
+    api.setScale(globalThis.devicePixelRatio || 1);
     if (!api.begin(width, height, ...background)) throw new Error('Wasm core rejected the frame');
     interactions = [];
     lowerNode(tree, { x: 0, y: 0, width, height }, 0, 0);

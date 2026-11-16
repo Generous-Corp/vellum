@@ -1,5 +1,6 @@
 #include "animation_testing.hpp"
 #include "damage_testing.hpp"
+#include "plot_testing.hpp"
 
 #include <vellum/graphics/animation.hpp>
 #include <vellum/graphics/damage.hpp>
@@ -7,6 +8,7 @@
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/path_geometry.hpp>
+#include <vellum/graphics/plot.hpp>
 #include <vellum/graphics/vector_asset.hpp>
 
 #include <algorithm>
@@ -239,6 +241,9 @@ std::size_t own_draws(const SceneNode& node) noexcept {
         return (!node.path || !node.path->verbs.empty()) ? 1 : 0;
     case SceneNode::Kind::vector:
         return 1;
+    case SceneNode::Kind::plot:
+        if (!node.plot) return 0;
+        return node.fill_gradients.empty() ? 1 : 2;
     case SceneNode::Kind::group:
     case SceneNode::Kind::custom:
         return 0;
@@ -356,8 +361,15 @@ SceneNode paint_fields(const SceneNode& node) {
     copy.isolate = node.isolate;
     copy.vector = node.vector;
     copy.blend_mode = node.blend_mode;
+    copy.plot = node.plot;
     copy.effects = node.effects;
     return copy;
+}
+
+bool same_plot(const std::shared_ptr<const PlotSpec>& a, const std::shared_ptr<const PlotSpec>& b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    return plot_specs_equal(*a, *b);
 }
 
 bool same_effects(const std::vector<NodeEffect>& a, const std::vector<NodeEffect>& b) {
@@ -408,6 +420,15 @@ struct NodeRecord final {
     /// For a node with a backdrop effect, the frame-space area its backdrop
     /// samples: its box grown by the backdrop's reach.
     std::optional<Rect> backdrop_sample;
+    /// The composed transform, the clip bounding the node's damage and the
+    /// radius enclosing effects spread it by, which a plot's sample damage
+    /// goes through.
+    Affine2D transform{};
+    std::optional<Rect> paint_clip;
+    float spread_radius = 0.0F;
+    /// Whether a change of samples alone may damage only the spans it
+    /// changes: the node is a visible plot whose damage no effect spreads.
+    bool sample_spans = false;
 };
 
 }  // namespace damage_detail
@@ -532,11 +553,28 @@ private:
 
         const Rect logical_frame{0.0F, 0.0F, width_, height_};
         std::optional<Rect> damage;
+        bool spread = false;
         if (!finite) {
             constexpr float nan = std::numeric_limits<float>::quiet_NaN();
             damage = Rect{nan, nan, nan, nan};
         } else if (!hidden) {
-            damage = transformed_paint_bounds(node, absolute, transform, logical_frame, propagation);
+            Rect painted_box = absolute;
+            if (node.kind == SceneNode::Kind::plot && node.plot) {
+                painted_box = plot_grid_rect(absolute, scale_);
+                if (!node.fill_gradients.empty()) {
+                    const float left = std::min(painted_box.x, absolute.x);
+                    const float top = std::min(painted_box.y, absolute.y);
+                    const float right = std::max(painted_box.x + painted_box.width,
+                                                 absolute.x + absolute.width);
+                    const float bottom = std::max(painted_box.y + painted_box.height,
+                                                  absolute.y + absolute.height);
+                    painted_box = rect_empty(painted_box)
+                                      ? absolute
+                                      : Rect{left, top, right - left, bottom - top};
+                }
+            }
+            damage = transformed_paint_bounds(node, painted_box, transform, logical_frame,
+                                              propagation);
             if (backdrop && !rect_empty(absolute)) {
                 damage = unite(damage, transformed_bounds(transform, absolute));
             }
@@ -545,6 +583,7 @@ private:
                 const float radius = propagation.effect_radius(node);
                 if (std::isfinite(radius) && radius > 0.0F) {
                     damage = outset(*damage, radius * largest_scale(transform));
+                    spread = true;
                 }
                 if (inner.any && inner.radius > 0.0F) damage = outset(*damage, inner.radius);
                 const auto& bounding = inner.any ? inner.clip : paint_clip;
@@ -562,6 +601,12 @@ private:
                                 : nullptr,
                             absolute, damage, 0, 0,
                             !hidden && finite ? backdrop_sample : std::nullopt});
+        records_[position].transform = transform;
+        records_[position].paint_clip = inner.any ? inner.clip : paint_clip;
+        records_[position].spread_radius = inner.any ? std::max(0.0F, inner.radius) : 0.0F;
+        records_[position].sample_spans = node.kind == SceneNode::Kind::plot && node.plot &&
+                                          damage.has_value() && !spread &&
+                                          !blend_mode_clears_backdrop(node.blend_mode);
         const bool drawing = finite && !hidden;
         std::size_t drawn = drawing ? own_draws(node) : 0;
         for (std::size_t child = 0; child < node.children.size(); ++child) {
@@ -657,6 +702,37 @@ void add_mask_parent(DamageRegion& region, const Snapshot& snapshot, const NodeR
     if (record.paint.mask) add_parent(region, snapshot, record);
 }
 
+// Two records of the same plot that differ only in their samples: the same
+// box, transform, clip, background and layout.
+bool samples_alone_differ(const NodeRecord& was, const NodeRecord& now) {
+    if (!was.sample_spans || !now.sample_spans || !was.paint.plot || !now.paint.plot) return false;
+    if (!same_rect(was.absolute, now.absolute) || !same_optional_rect(was.damage, now.damage) ||
+        !same_optional_rect(was.paint_clip, now.paint_clip) ||
+        !same_float(was.spread_radius, now.spread_radius) ||
+        !same_transform(was.transform, now.transform) ||
+        !same_color(was.paint.fill, now.paint.fill)) {
+        return false;
+    }
+    SceneNode left = was.paint;
+    SceneNode right = now.paint;
+    left.plot.reset();
+    right.plot.reset();
+    return !paint_differs(left, right) && plot_layout_equal(*was.paint.plot, *now.paint.plot);
+}
+
+void add_sample_spans(DamageRegion& region, const NodeRecord& was, const NodeRecord& now,
+                      float scale) {
+    for (const auto& span : plot_sample_damage(*was.paint.plot, *now.paint.plot, now.absolute,
+                                               scale)) {
+        std::optional<Rect> mapped = transformed_bounds(now.transform, span);
+        if (now.spread_radius > 0.0F && testing::plot_rules().grow_by_effects) {
+            mapped = outset(*mapped, now.spread_radius);
+        }
+        if (now.paint_clip) mapped = clip_to(*mapped, *now.paint_clip);
+        add_logical(region, mapped, scale);
+    }
+}
+
 // A backdrop effect redraws its box from what lies beneath it, so damage
 // reaching the area it samples damages the box too, which may in turn reach
 // another backdrop's sample.
@@ -720,8 +796,12 @@ void diff_snapshots(const Snapshot& before, const Snapshot& after, DamageRegion&
         if (!same_rect(was->absolute, now.absolute) || paint_differs(was->paint, now.paint) ||
             was->image_asset != now.image_asset ||
             !same_optional_rect(was->damage, now.damage)) {
-            add_logical(region, was->damage, scale);
-            add_logical(region, now.damage, scale);
+            if (samples_alone_differ(*was, now)) {
+                add_sample_spans(region, *was, now, scale);
+            } else {
+                add_logical(region, was->damage, scale);
+                add_logical(region, now.damage, scale);
+            }
         }
     }
     for (const auto& was : before.records()) {
@@ -1036,6 +1116,9 @@ std::optional<Rect> node_paint_bounds(const SceneNode& node, const Rect& absolut
         return rect_empty(absolute_bounds) ? std::nullopt : std::optional<Rect>(absolute_bounds);
     case SceneNode::Kind::vector:
         return vector_node_bounds(node, absolute_bounds, Affine2D{}, frame);
+    case SceneNode::Kind::plot:
+        if (!node.plot || rect_empty(absolute_bounds)) return std::nullopt;
+        return absolute_bounds;
     }
     return std::nullopt;
 }
@@ -1052,6 +1135,9 @@ std::optional<Rect> transformed_paint_bounds(const SceneNode& node, const Rect& 
     case SceneNode::Kind::custom:
     case SceneNode::Kind::image:
         if (rect_empty(absolute_bounds)) return std::nullopt;
+        return transformed_bounds(transform, absolute_bounds);
+    case SceneNode::Kind::plot:
+        if (!node.plot || rect_empty(absolute_bounds)) return std::nullopt;
         return transformed_bounds(transform, absolute_bounds);
     case SceneNode::Kind::text:
         if (node.text.empty() && node.text_runs.empty()) return std::nullopt;
@@ -1129,6 +1215,10 @@ bool paint_differs(const SceneNode& previous, const SceneNode& next) {
                previous.custom_properties_json != next.custom_properties_json;
     case SceneNode::Kind::vector:
         return previous.vector != next.vector;
+    case SceneNode::Kind::plot:
+        return !same_color(previous.fill, next.fill) ||
+               !same_gradients(previous.fill_gradients, next.fill_gradients) ||
+               !same_plot(previous.plot, next.plot);
     }
     return true;
 }
