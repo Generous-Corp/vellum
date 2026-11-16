@@ -22,9 +22,10 @@ The public slice consists of:
   application builds, plus a headers-only `Vellum::DawnHeaders` target for an
   embedding host's authenticated bootstrap and compute code.
 
-The scene carries a single integer schema version, `kSceneVersion`, now 11.
+The scene carries a single integer schema version, `kSceneVersion`, now 12.
 Version 9 is reserved and adds no fields in this build.
-Version 10 adds node effects; version 11 adds animation tracks.
+Version 10 adds node effects; version 11 adds animation tracks; version 12
+adds plot nodes, whose samples arrive at run time.
 A change that can alter rendered output bumps it: a new node kind, a new field
 that changes how a scene is drawn, or a change in meaning. A change that only
 adds metadata keeps it. Consumers accept versions from
@@ -40,7 +41,7 @@ DesignIR document path. Versions are claimed in order: version 4: image nodes;
 version 5: clip, mask and isolation on groups; version 6: blend modes and
 DesignIR compositing fields; version 7: interned token receipts; version 8:
 gradient vocabulary; version 9: vector assets (no fields yet); version 10:
-effects and materials; version 11: animation tracks.
+effects and materials; version 11: animation tracks; version 12: plot nodes.
 
 `Scene::tokens` interns each design token that resolved to a colour once, as a
 receipt of its path, the layer that produced the value (`primitive`,
@@ -303,13 +304,14 @@ on any node type and fails the tree for an unknown name.
 
 DesignIR schema version 2 adds the node `compositing` object (opacity, blend
 mode, isolation, a mask mode and a mask reference to a sibling mask) with the
-same names. Readers accept DesignIR versions 1 through 4. Version 3 adds
-material references; version 4 adds node animation tracks. Normalization
-writes the lowest version that covers the
-document: 4 when a node has tracks, otherwise 3 when a node has a material
-reference, otherwise 2 when a node uses compositing, otherwise 1. Compositing
-requires version 2 or later, materials require version 3, and tracks require
-version 4; the validator and published JSON schema enforce all three gates. A mask
+same names. Readers accept DesignIR versions 1 through 5. Version 3 adds
+material references; version 4 adds node animation tracks; version 5 adds
+plot bindings. Normalization writes the lowest version that covers the
+document: 5 when a node has a plot binding, otherwise 4 when a node has tracks,
+otherwise 3 when a node has a material reference, otherwise 2 when a node uses compositing, otherwise 1. Compositing
+requires version 2 or later, materials require version 3, tracks require
+version 4 and plot bindings require version 5; the validator and published JSON
+schema enforce all four gates. A mask
 reference must name a sibling that is a mask. `materializeDesign` lowers the object into the retained
 `opacity`, `mixBlendMode`, `isolation` and `maskMode` styles. Because the
 renderer applies a mask to every sibling, it accepts a mask reference only when
@@ -335,10 +337,11 @@ threshold fall back to a full repaint. Hosts pass `invalidate` reasons and node 
 rectangle counts, the commands re-recorded and why a frame repainted fully.
 What is cached and when it is discarded is renderer policy: the scene schema
 carries no cache hints. Partial redraw is enabled only for scene versions the
-damage model understands, up to `kDamageModelSceneVersion` (11), which covers
+damage model understands, up to `kDamageModelSceneVersion` (12), which covers
 transforms, group opacity, per-corner radii, paths, images, clips, masks and
-isolation on groups, blend modes, token references, gradient vocabulary and
-animation tracks. A version the renderer accepts but the damage model
+isolation on groups, blend modes, token references, gradient vocabulary,
+animation tracks and plot nodes, where a plot whose samples alone change
+damages only the spans of those samples. A version the renderer accepts but the damage model
 does not yet understand repaints fully with reason `damage_model_version`. A version outside
 [`kMinSupportedSceneVersion`, `kSceneVersion`] is refused before anything is
 drawn, and partial redraw likewise serves no version below
