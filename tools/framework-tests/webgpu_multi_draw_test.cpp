@@ -232,6 +232,30 @@ FRAMEWORK_TEST(a_nearer_earlier_draw_is_not_overwritten_by_a_farther_later_one) 
     CHECK(is_green(r.at(56, kHeight / 2)));
 }
 
+FRAMEWORK_TEST(a_discarding_pass_keeps_every_draw_for_later_draws) {
+    // storeOp=discard on a multi-draw pass: each draw replays as its own native
+    // pass, so an earlier draw must survive into the next one.
+    ScriptedCanvas s;
+    s.engine.evaluate(std::string(kSetup) + R"JS(
+const encoder = dev.createCommandEncoder();
+const attachment = colourAttachment();
+attachment.storeOp = 'discard';
+const pass = encoder.beginRenderPass({colorAttachments: [attachment]});
+draw(pass, pipeline('1.0, 0.0, 0.0', false), quad(-1, 0, 0.5));
+draw(pass, pipeline('0.0, 1.0, 0.0', false), quad(0, 1, 0.5));
+pass.end();
+dev.queue.submit([encoder.finish()]);
+)JS");
+    CHECK(draw_results(s) == "true,true");
+    CHECK(s.js_string("gpuErrors.join(' | ')").empty());
+    const auto r = paint_canvas(s);
+    report("discard", r);
+    CHECK(r.ok());
+    if (!r.ok()) return;
+    CHECK(is_red(r.at(8, kHeight / 2)));
+    CHECK(is_green(r.at(56, kHeight / 2)));
+}
+
 FRAMEWORK_TEST(a_second_pass_that_clears_starts_from_its_clear_colour) {
     // Control for the first-draw rule: a new pass applies its own load
     // operation, so the earlier pass's draws are cleared away.

@@ -1759,7 +1759,13 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
         wgpu::RenderPassColorAttachment color_attachment{};
         color_attachment.view = texture_view;
         color_attachment.loadOp = load_op == "clear" ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load;
-        color_attachment.storeOp = store_op == "discard" ? wgpu::StoreOp::Discard : wgpu::StoreOp::Store;
+        // Every draw of a script pass replays as its own native pass and the
+        // next one loads this one's colour, so a requested `discard` must not
+        // discard here: the binding does not know which draw is the last, and
+        // the colour of a discarded pass is undefined for whoever reads it.
+        // Storing is always a valid reading of `discard`.
+        (void) store_op;
+        color_attachment.storeOp = wgpu::StoreOp::Store;
         if (color_attachment.loadOp == wgpu::LoadOp::Clear && payload.hasObjectMember("clearValue") && payload["clearValue"].isObject()) {
             auto clear_value = payload["clearValue"];
             color_attachment.clearValue = {
