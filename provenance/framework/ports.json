@@ -414,6 +414,92 @@
       ],
       "framework_blob": "f1ebbfb20b15fe3d373fc602cd2e4229a28cf2aa",
       "reason": "AT-SPI2 role, state and interface constants the Linux accessibility provider maps onto."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/linux/clipboard_linux.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/linux/clipboard_linux.cpp",
+      "pulp_commits": [
+        "128963148254baca63322422b235b05534c25a65",
+        "727559be1ef72ec58b4c8936476afbe713bff805",
+        "7a9a6d443e185e2a6bac546ca9f71020e3901ab0",
+        "dafe11558009958c1d2180230b540069185185fd",
+        "ff925f05f654f65798bf3d95642b692ce0a84e7c"
+      ],
+      "framework_blob": "49127f59018dbd771ebe44ab91fe106660ff6126",
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "Linux clipboard backend selected by the platform unit's Linux source list."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/linux/environment_linux.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/linux/environment_linux.cpp",
+      "pulp_commits": [
+        "48e95d54c5d5c2e6c7a03b568577a5c47b43b784",
+        "436c5ed2e8ed7c1380a8173def8ae3d10dac43ab",
+        "ff925f05f654f65798bf3d95642b692ce0a84e7c"
+      ],
+      "framework_blob": "225b3cb96cbe96785e71c46021bcdf223378dc7a",
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "Linux environment queries (appearance, locale, special directories) for the platform unit."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/linux/file_dialog_portal_linux.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/linux/file_dialog_portal_linux.cpp",
+      "pulp_commits": [
+        "1aafcb782fbe83c73af4ef159288a58239c5f3df",
+        "ff925f05f654f65798bf3d95642b692ce0a84e7c",
+        "0ddb6168c5d74a2e05b4ed83d5e05bd6bf3ddb58",
+        "198c5affe531501a3542d94dd1d4c45f06ee6536"
+      ],
+      "framework_blob": "dc01b06fe8ffb8a0859c8982aff9b7dcca282296",
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "File dialogs through the desktop portal over D-Bus on Linux."
+    },
+    {
+      "framework_path": "framework/core/events/platform/linux/avahi_backend.cpp",
+      "change": "added",
+      "target": "pulp-events",
+      "origin": "pulp",
+      "pulp_path": "core/events/platform/linux/avahi_backend.cpp",
+      "pulp_commits": [
+        "39728e3fd6adce1f970d72b2cbe1932e7b2727bf",
+        "79b67c1ca1f7cbb38b9740b9ed409cdc3d7a9ca9",
+        "d31069d8e3c641ea7943991427b1275f76cc2a56"
+      ],
+      "framework_blob": "07f3c0dc39bebb468ce040d819acd791f6aa75e4",
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "Service discovery backend that loads libavahi-client at run time on Linux."
+    },
+    {
+      "framework_path": "framework/core/events/platform/linux/libnotify_backend.cpp",
+      "change": "added",
+      "target": "pulp-events",
+      "origin": "pulp",
+      "pulp_path": "core/events/platform/linux/libnotify_backend.cpp",
+      "pulp_commits": [
+        "087981c90b6833fe78cd894574089a703e981a35"
+      ],
+      "framework_blob": "58ce6ea83bb9f1b87493b92ac134e472e8dc7ee6",
+      "platforms": [
+        "linux-x64"
+      ],
+      "reason": "Push notification backend that loads libnotify at run time on Linux."
     }
   ]
 }
