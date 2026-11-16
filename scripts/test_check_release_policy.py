@@ -723,7 +723,20 @@ class Isolation(unittest.TestCase):
                   "1b10c78c7865c340bc4f6099eb2f838309f1e8c3\n")
         workflow = hidden + self.read(mint="")
         problems = policy.step_layout_problems(policy.SIGNING_WORKFLOW, workflow)
-        self.assertTrue(any("unsupported construct" in problem for problem in problems),
+        self.assertTrue(any("steps:` key inside a block scalar" in problem for problem in problems),
+                        problems)
+
+    def test_a_job_block_scalar_cannot_mint_an_app_token(self) -> None:
+        # The hidden list is text in `env.NOTE`; it is not a runnable step and
+        # must not satisfy the later Administration-only read's token reference.
+        hidden = ("jobs:\n  sign:\n    env:\n      NOTE: |\n"
+                  "        steps:\n"
+                  "          - id: app-token\n"
+                  "            uses: actions/create-github-app-token@"
+                  "1b10c78c7865c340bc4f6099eb2f838309f1e8c3\n")
+        workflow = hidden + self.read(mint="")
+        problems = policy.run_body_problems(policy.SIGNING_WORKFLOW, workflow)
+        self.assertTrue(any("steps:` key inside a block scalar" in problem for problem in problems),
                         problems)
 
     def test_a_column_zero_comment_does_not_hide_the_steps(self) -> None:
