@@ -35,7 +35,7 @@ on:
       - '.gitattributes'
       - '.github/workflows/windows.yml'
   push:
-    branches: [main, 'platform-windows/**']
+    branches: [main]
     paths:
       - 'CMakeLists.txt'
       - 'cmake/**'
