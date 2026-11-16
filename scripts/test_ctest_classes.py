@@ -14,7 +14,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -106,6 +108,63 @@ class CtestClassesTest(unittest.TestCase):
             if len(present) != 1:
                 wrong[test["name"]] = labels
         self.assertEqual(wrong, {})
+
+
+CMAKE = shutil.which("cmake")
+MODULE = ROOT / "cmake" / "VellumTestClasses.cmake"
+
+
+@unittest.skipUnless(CMAKE, "cmake is required")
+class ClassifierConfigureTest(unittest.TestCase):
+    """Configures tiny projects that include the real classifier module."""
+
+    def configure(self, *, parent_test: bool, vellum_tests: str = "ON",
+                  cmake_version: str = "", listed: bool = True) -> subprocess.CompletedProcess:
+        tmp = Path(tempfile.mkdtemp(prefix="vellum-classes-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        vellum = tmp / "vellum"
+        (vellum / "cmake").mkdir(parents=True)
+        (vellum / "scripts").mkdir()
+        shutil.copy(MODULE, vellum / "cmake" / "VellumTestClasses.cmake")
+        (vellum / "scripts" / "ctest_classes.json").write_text(json.dumps(
+            {"schema": "vellum.ctest-classes.v1",
+             "classes": {"pr-fast": ["vellum.own"] if listed else [], "gpu": [], "slow": []}}))
+        own = "add_test(NAME vellum.own COMMAND ${CMAKE_COMMAND} -E true)\n" 
+        (vellum / "CMakeLists.txt").write_text(
+            "cmake_minimum_required(VERSION 3.24)\nproject(vellum NONE)\n"
+            f"set(VELLUM_BUILD_TESTS {vellum_tests})\n"
+            + ("enable_testing()\n" + own if vellum_tests == "ON" else "")
+            + "include(cmake/VellumTestClasses.cmake)\n"
+            'vellum_apply_test_classes("${CMAKE_CURRENT_SOURCE_DIR}/scripts/ctest_classes.json")\n')
+        parent = tmp / "parent"
+        parent.mkdir()
+        (parent / "CMakeLists.txt").write_text(
+            "cmake_minimum_required(VERSION 3.24)\nproject(parent NONE)\nenable_testing()\n"
+            + ("add_test(NAME parent.unrelated COMMAND ${CMAKE_COMMAND} -E true)\n" if parent_test else "")
+            + f"add_subdirectory({vellum.as_posix()} vellum-build)\n")
+        args = [CMAKE, "-S", str(parent), "-B", str(tmp / "b")]
+        if cmake_version:
+            args.append(f"-DVELLUM_TEST_CLASSES_CMAKE_VERSION={cmake_version}")
+        return subprocess.run(args, capture_output=True, text=True)
+
+    def test_embedding_ignores_unrelated_parent_tests(self) -> None:
+        result = self.configure(parent_test=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_tests_disabled_configures_without_labelling(self) -> None:
+        result = self.configure(parent_test=True, vellum_tests="OFF")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_supported_minimum_cmake_skips_labels(self) -> None:
+        result = self.configure(parent_test=False, cmake_version="3.24.0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("skipped", result.stdout)
+
+    def test_own_unclassified_test_still_fails(self) -> None:
+        # Guard: scoping must not hide Vellum's own unlisted tests.
+        result = self.configure(parent_test=False, listed=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("vellum.own", result.stderr)
 
 
 if __name__ == "__main__":
