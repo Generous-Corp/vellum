@@ -351,7 +351,8 @@ test('a symbol viewport clips in output units, before its viewBox transform', ()
     const clipped = compiled.findIndex((op) => op.clip);
     assert.equal(compiled[clipped].clip.d, 'M0 0L20 0L20 20L0 20Z');
     assert.equal(compiled[clipped].transform, undefined, 'the clip group has no viewBox transform');
-    assert.deepEqual(compiled[clipped + 1].transform, [2, 0, 0, 2, 0, 0], 'the viewBox transform comes inside it');
+    assert.ok(compiled.slice(clipped + 1).some((op) => op.op === 'group' &&
+        JSON.stringify(op.transform) === JSON.stringify([2, 0, 0, 2, 0, 0])), 'the viewBox transform comes inside it');
 });
 
 test('a user-space gradient stroke on a horizontal or vertical line still paints', () => {
@@ -385,4 +386,103 @@ test('an invisible root is never rasterized, even with a filter', () => {
     importSvgAsset(wrap('<filter id="f"/><rect width="5" height="5"/>', ' filter="url(#f)"'),
         { rasterize: () => { calls += 1; return { contentHash: `sha256:${'a'.repeat(64)}` }; } });
     assert.equal(calls, 1, 'a visible root with a filter is still rasterized');
+});
+
+test('an href reaches the XLink namespace only under the xlink prefix', () => {
+    const cases = {
+        'an aliased XLink prefix': '<svg xmlns="http://www.w3.org/2000/svg" xmlns:r="http://www.w3.org/1999/xlink" width="10" height="10">' +
+            '<image r:href="https://example.invalid/x.png" width="10" height="10"/><text>raster</text></svg>',
+        'an href under an unknown prefix': '<svg xmlns="http://www.w3.org/2000/svg" xmlns:q="urn:other" width="10" height="10">' +
+            '<image q:href="https://example.invalid/x.png" width="10" height="10"/><text>raster</text></svg>',
+        'xlink rebound': '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="urn:other" width="10" height="10"><text>raster</text></svg>',
+        'an aliased animated href': '<svg xmlns="http://www.w3.org/2000/svg" xmlns:r="http://www.w3.org/1999/xlink" width="10" height="10">' +
+            '<image width="10" height="10"><set attributeName="r:href" to="#x"/></image><text>raster</text></svg>',
+    };
+    for (const [name, svg] of Object.entries(cases)) {
+        let handed = null;
+        assert.throws(() => importSvgAsset(svg, { rasterize: (input) => { handed = input; } }), SvgAssetRefusal, name);
+        assert.equal(handed, null, `${name} never reaches the rasterizer`);
+    }
+    assert.doesNotThrow(() => importSvgAsset('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" ' +
+        'xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="10" height="10">' +
+        '<rect id="r" inkscape:label="box" width="1" height="1"/><use xlink:href="#r"/></svg>'));
+});
+
+test('comments are removed in linear time and malformed ones refused', () => {
+    const started = Date.now();
+    assert.throws(() => importSvgAsset(wrap('<!--'.repeat(200000))), /unterminated comment/);
+    assert.throws(() => importSvgAsset(wrap(`<!--${'<!-- '.repeat(100000)}-->`)), SvgAssetRefusal);
+    assert.doesNotThrow(() => importSvgAsset(wrap(`${'<!-- a -->'.repeat(50000)}<rect width="1" height="1"/>`)));
+    assert.ok(Date.now() - started < 2000, `took ${Date.now() - started} ms`);
+    assert.throws(() => importSvgAsset(wrap('<!-- a -- b -->')), /malformed comment/);
+});
+
+function firstFill(imported) {
+    const visit = (node) => node.kind === 'path' ? node : (node.children ?? []).map(visit).find(Boolean);
+    return visit(imported.root)?.properties.path.fill;
+}
+
+test('gradient stops and interpolation resolve along the gradient definition', () => {
+    const svg = (extra = '') => wrap(`<defs color="red" ${extra}><linearGradient id="g">
+        <stop offset="0" stop-color="currentColor"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs>
+        <rect width="5" height="5" color="blue" fill="url(#g)"/>`);
+    assert.equal(firstFill(importSvgAsset(svg())).stops[0].color, '#ff0000', 'subtree');
+    const compiled = compiledOps(importSvgAsset(svg(), { nodeBudget: 1 })).find((op) => op.op === 'path');
+    assert.equal(compiled.fill.gradient.stops[0].color, '#ff0000', 'compiled');
+    const linear = importSvgAsset(svg('color-interpolation="linearRGB"'));
+    assert.equal(linear.mode, 'compiled', 'linearRGB on the definition routes to the compiled form');
+    assert.equal(compiledOps(linear).find((op) => op.op === 'path').fill.gradient.interpolation, 'linear-srgb');
+});
+
+test('a clipPath use composes its transform with x and y, and clip-rule comes from the clipPath', () => {
+    const svg = wrap(`<defs><rect id="r" width="2" height="2"/>
+        <clipPath id="c"><use href="#r" transform="translate(10 0)" x="1"/></clipPath>
+        <clipPath id="e" clip-rule="evenodd"><path d="M0 0H10V10H0Z M2 2H8V8H2Z"/></clipPath></defs>
+        <rect width="20" height="20" fill="#ff0000" clip-path="url(#c)"/>
+        <rect id="h" width="20" height="20" fill="#00ff00" clip-path="url(#e)"/>`);
+    const compiled = compiledOps(importSvgAsset(svg, { nodeBudget: 1 }));
+    const clipped = compiled.filter((op) => op.clip);
+    const wrapper = compiled.findIndex((op) => op.clip && op.transform);
+    assert.deepEqual(compiled[wrapper].transform, [1, 0, 0, 1, 11, 0], 'translate(10 0) then x=1');
+    assert.ok(clipped.some((op) => op.clip.rule === 'evenodd'), 'the clipPath clip-rule makes a hole');
+    const subtree = importSvgAsset(svg, { sourceKey: 'assets' });
+    const holes = [];
+    const visit = (node) => {
+        if (node.properties?.path?.fillRule === 'evenodd') holes.push(node);
+        (node.children ?? []).forEach(visit);
+    };
+    visit(subtree.root);
+    assert.equal(holes.length, 1, 'the subtree lowers the evenodd clip as an evenodd coverage path');
+});
+
+test('a nested svg with overflow visible is not clipped, as an attribute or a style', () => {
+    const clips = (svg) => {
+        const found = [];
+        const visit = (node) => {
+            if (node.properties?.paint?.clipPath) found.push(node.properties.paint.clipPath);
+            (node.children ?? []).forEach(visit);
+        };
+        visit(importSvgAsset(svg).root);
+        return found;
+    };
+    const nested = (attribute) => `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+        <svg width="20" height="20" ${attribute}><rect width="40" height="40" fill="#ff0000"/></svg></svg>`;
+    assert.deepEqual(clips(nested('')), ['M0 0L20 0L20 20L0 20Z']);
+    assert.deepEqual(clips(nested('overflow="visible"')), []);
+    assert.deepEqual(clips(nested('style="overflow: visible"')), []);
+});
+
+test('a symbol keeps its own opacity as one group on each instance', () => {
+    const svg = wrap(`<symbol id="s" opacity="0.5"><rect width="4" height="4" fill="#ff0000"/>
+        <rect x="2" width="4" height="4" fill="#0000ff"/></symbol><use href="#s"/>`);
+    const subtree = importSvgAsset(svg, { sourceKey: 'assets' });
+    const groups = [];
+    const visit = (node) => {
+        if (node.compositing?.opacity !== undefined) groups.push({ id: node.sourceId, opacity: node.compositing.opacity, children: node.children.length });
+        (node.children ?? []).forEach(visit);
+    };
+    visit(subtree.root);
+    assert.deepEqual(groups, [{ id: 'svg.1:s.symbol', opacity: 0.5, children: 2 }]);
+    const compiled = compiledOps(importSvgAsset(svg, { nodeBudget: 1 }));
+    assert.ok(compiled.some((op) => op.op === 'group' && op.opacity === 0.5), 'the compiled form groups it too');
 });

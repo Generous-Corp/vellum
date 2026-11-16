@@ -92,6 +92,22 @@ function decodeText(value) {
 
 const TEXT_ELEMENTS = new Set(['title', 'desc', 'text', 'tspan', 'textPath', 'style', 'metadata']);
 
+// Removes XML comments with one linear scan. A comment holding "--" or one
+// left open is malformed.
+function stripComments(text) {
+    let output = '';
+    let cursor = 0;
+    for (;;) {
+        const start = text.indexOf('<!--', cursor);
+        if (start === -1) return output + text.slice(cursor);
+        const end = text.indexOf('-->', start + 4);
+        if (end === -1) refuse('an unterminated comment');
+        if (text.slice(start + 4, end).includes('--')) refuse('a malformed comment');
+        output += text.slice(cursor, start);
+        cursor = end + 3;
+    }
+}
+
 function parseXml(svg) {
     if (typeof svg !== 'string') refuse('the asset is not a string');
     if (utf8Length(svg) > SVG_ASSET_LIMITS.maxBytes) {
@@ -104,10 +120,7 @@ function parseXml(svg) {
     if (/<!ENTITY/i.test(text)) refuse('an entity declaration is not allowed');
     if (/<!\[CDATA\[/i.test(text)) refuse('a CDATA section is not allowed');
     if (/<\?/.test(text)) refuse('a processing instruction is not allowed');
-    text = text.replace(/<!--[\s\S]*?-->/g, (comment) => {
-        if (comment.slice(4, -3).includes('--')) refuse('a malformed comment');
-        return '';
-    });
+    text = stripComments(text);
     if (/<!/.test(text)) refuse('a markup declaration is not allowed');
 
     const root = { name: '#document', attributes: Object.create(null), children: [], text: '' };
@@ -254,6 +267,33 @@ function checkAnimation(node, where) {
     }
 }
 
+const XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink';
+
+// Reference checks read href and xlink:href by name, so a reference may not
+// reach the XLink namespace any other way: no other prefix may be bound to
+// it, xlink may not be bound to anything else, and no other prefix may carry
+// an href.
+function checkNamespace(name, value, where) {
+    const colon = name.indexOf(':');
+    if (name.startsWith('xmlns:')) {
+        const prefix = name.slice(6);
+        if (value.trim() === XLINK_NAMESPACE && prefix !== 'xlink') {
+            refuse(`${where} binds the prefix ${prefix} to the XLink namespace`);
+        }
+        if (prefix === 'xlink' && value.trim() !== XLINK_NAMESPACE) {
+            refuse(`${where} binds the xlink prefix to another namespace`);
+        }
+        return;
+    }
+    if (colon > 0) {
+        const prefix = name.slice(0, colon);
+        const local = name.slice(colon + 1).toLowerCase();
+        if (local === 'href' && prefix !== 'xlink') {
+            refuse(`${where} has the reference ${name} in a namespace other than XLink`);
+        }
+    }
+}
+
 function checkHostility(root) {
     const ids = new Map();
     const references = new Map();
@@ -269,6 +309,7 @@ function checkHostility(root) {
         const own = [];
         for (const [name, value] of Object.entries(node.attributes)) {
             const lower = name.toLowerCase();
+            checkNamespace(name, value, where);
             if (lower.startsWith('on')) refuse(`${where} has the event handler ${name}`);
             if (lower === 'xml:base') refuse(`${where} sets xml:base`);
             if (lower === 'href' || lower === 'xlink:href') {
@@ -1017,6 +1058,13 @@ class Importer {
         this.pathBytes = 0;
         this.root = parseXml(svg);
         this.ids = checkHostility(this.root);
+        this.parents = new Map();
+        this.states = new Map();
+        const link = (node) => node.children.forEach((child) => {
+            this.parents.set(child, node);
+            link(child);
+        });
+        link(this.root);
         this.rootId = options.sourceId;
         this.colorTokens = new Map(Object.entries(options.colorTokens ?? {})
             .map(([color, token]) => [color.toLowerCase(), token]));
@@ -1238,22 +1286,25 @@ class Importer {
                         // units, so it applies before the viewBox transform,
                         // as a nested <svg> clips. It has a group of its own
                         // so a clip-path on the use element still applies.
-                        group.children.push({ kind: 'group', id: `${sourceId}:${escapeId(targetId)}.viewport`,
-                            transform: [...IDENTITY], opacity: 1,
-                            clip: { units: 'user', shapes: [{ segments: [['M', 0, 0], ['L', width, 0], ['L', width, height], ['L', 0, height], ['Z']], rule: 'nonzero', transform: [...IDENTITY] }] },
-                            children: [{ kind: 'group', id: `${sourceId}:${escapeId(targetId)}`,
-                                transform: this.viewBoxTransform(box, width, height,
-                                    target.attributes.preserveAspectRatio, path),
-                                opacity: 1,
-                                children: this.inViewport([box[2], box[3]], () => this.children(target,
-                                    `${sourceId}:${escapeId(targetId)}`, this.inherit(inner, target), nextActive, true)) }] });
+                        const instance = this.symbolGroup(target, `${sourceId}:${escapeId(targetId)}.symbol`, [{
+                            kind: 'group', id: `${sourceId}:${escapeId(targetId)}`,
+                            transform: this.viewBoxTransform(box, width, height,
+                                target.attributes.preserveAspectRatio, path),
+                            opacity: 1,
+                            children: this.inViewport([box[2], box[3]], () => this.children(target,
+                                `${sourceId}:${escapeId(targetId)}`, this.inherit(inner, target), nextActive, true)) }],
+                            path, inner, nextActive);
+                        group.children.push(this.viewportClip(`${sourceId}:${escapeId(targetId)}.viewport`,
+                            declared(target).overflow ?? 'hidden', width, height, [instance]));
                     } else {
                         this.report('svg-symbol-viewbox-dropped', path,
                             `<use> of a symbol with a viewBox needs a width and height; the viewBox was ignored`);
-                        group.children.push(...this.instanceChildren(target, sourceId, targetId, inner, nextActive));
+                        group.children.push(this.symbolGroup(target, `${sourceId}:${escapeId(targetId)}.symbol`,
+                            this.instanceChildren(target, sourceId, targetId, inner, nextActive), path, inner, nextActive));
                     }
                 } else {
-                    group.children.push(...this.instanceChildren(target, sourceId, targetId, inner, nextActive));
+                    group.children.push(this.symbolGroup(target, `${sourceId}:${escapeId(targetId)}.symbol`,
+                        this.instanceChildren(target, sourceId, targetId, inner, nextActive), path, inner, nextActive));
                 }
             } else {
                 const lowered = this.element(target, `${sourceId}:${escapeId(targetId)}`, inner, nextActive, true);
@@ -1282,14 +1333,12 @@ class Importer {
                 const inside = this.inViewport(size,
                     () => this.children(node, scoped ? sourceId : path, inner, active, scoped));
                 if (width > 0 && height > 0) {
-                    group.clip = { units: 'user', shapes: [{ segments: [['M', 0, 0], ['L', width, 0], ['L', width, height], ['L', 0, height], ['Z']], rule: 'nonzero', transform: [...IDENTITY] }] };
-                    if (box && box.length === 4 && box[2] > 0 && box[3] > 0) {
-                        group.children.push({ kind: 'group', id: `${sourceId}:viewport`,
+                    const content = hasBox
+                        ? [{ kind: 'group', id: `${sourceId}:viewport`,
                             transform: this.viewBoxTransform(box, width, height, node.attributes.preserveAspectRatio, path),
-                            opacity: 1, children: inside });
-                    } else {
-                        group.children.push(...inside);
-                    }
+                            opacity: 1, children: inside }]
+                        : inside;
+                    group.children.push(this.viewportClip(`${sourceId}.clip`, values.overflow, width, height, content));
                 } else {
                     this.report('svg-nested-viewport-dropped', path, 'a nested <svg> without a px width and height draws unclipped');
                     group.children.push(...inside);
@@ -1329,6 +1378,48 @@ class Importer {
         } finally {
             this.viewportSize = outer;
         }
+    }
+
+    // A nested viewport clips to its box unless its overflow is visible or
+    // auto. The clip has a group of its own, so a clip-path on the element
+    // still applies.
+    viewportClip(id, overflow, width, height, children) {
+        const visible = overflow === 'visible' || overflow === 'auto';
+        return { kind: 'group', id, transform: [...IDENTITY], opacity: 1, children,
+            ...(visible ? {} : { clip: { units: 'user', shapes: [{ segments: [['M', 0, 0], ['L', width, 0], ['L', width, height], ['L', 0, height], ['Z']], rule: 'nonzero', transform: [...IDENTITY] }] } }) };
+    }
+
+    // A symbol's own opacity, clip-path, mask and filter apply to its
+    // instance as one group.
+    symbolGroup(target, id, children, path, inner, active) {
+        const values = declared(target);
+        const group = { kind: 'group', id, transform: [...IDENTITY], opacity: 1, children };
+        if (values.opacity !== undefined) {
+            const parsed = parseFraction(values.opacity, 1);
+            if (parsed === null) this.report('svg-opacity-dropped', path, '<symbol> has a malformed opacity');
+            else group.opacity = Math.min(1, Math.max(0, parsed));
+        }
+        if (values.filter !== undefined && values.filter !== 'none') {
+            this.rasterOnly.push({ path, reason: 'a symbol filter needs rasterization' });
+        }
+        this.clipAndMask(group, values, path, inner, active);
+        return group;
+    }
+
+    // The presentation state an element inherits along its own ancestry, as
+    // a gradient, stop or clipPath child resolves currentColor,
+    // color-interpolation and clip-rule. Invalid declarations are skipped,
+    // as `inherit` skips them.
+    stateOf(node) {
+        if (this.states.has(node)) return this.states.get(node);
+        const parent = this.parents.get(node);
+        const state = { ...(parent ? this.stateOf(parent) : INITIAL) };
+        const values = declared(node);
+        for (const name of INHERITED) {
+            if (values[name] !== undefined && validProperty(name, values[name])) state[name] = values[name];
+        }
+        this.states.set(node, state);
+        return state;
     }
 
     lengthOrZero(node, name, path) {
@@ -1414,7 +1505,7 @@ class Importer {
             }
             offset = Math.min(1, Math.max(previous, offset));
             previous = offset;
-            const raw = values['stop-color'] === 'currentColor' ? state.color : (values['stop-color'] ?? 'black');
+            const raw = values['stop-color'] === 'currentColor' ? this.stateOf(stop).color : (values['stop-color'] ?? 'black');
             const color = parseColor(raw);
             if (!color) {
                 this.report('svg-stop-color-dropped', path, `a gradient stop colour ${raw} is not read; black was used`);
@@ -1481,7 +1572,7 @@ class Importer {
         if (!['pad', 'repeat', 'reflect'].includes(spread)) {
             this.report('svg-gradient-spread-dropped', path, `${property} gradient spreadMethod ${spread} is unknown; pad was used`);
         }
-        const interpolation = state['color-interpolation'] === 'linearRGB' ? 'linear-srgb' : 'srgb';
+        const interpolation = this.stateOf(definition)['color-interpolation'] === 'linearRGB' ? 'linear-srgb' : 'srgb';
         return { kind, units, transform, spread: ['pad', 'repeat', 'reflect'].includes(spread) ? spread : 'pad',
             geometry, stops, interpolation, id: definition.attributes.id };
     }
@@ -1550,7 +1641,16 @@ class Importer {
                             this.report('svg-clip-child-dropped', path, 'a clipPath <use> that does not name a shape was dropped');
                             continue;
                         }
-                        childTransform = [1, 0, 0, 1, this.lengthOrZero(child, 'x', path), this.lengthOrZero(child, 'y', path)];
+                        // SVG applies the use element's transform, then its
+                        // x and y, then the referenced shape's transform.
+                        const useValues = declared(child);
+                        if (useValues.transform !== undefined) {
+                            const parsed = parseTransform(useValues.transform);
+                            if (parsed === null) this.report('svg-transform-dropped', path, 'a clipPath <use> has a malformed transform, which was dropped');
+                            else childTransform = parsed;
+                        }
+                        childTransform = multiply(childTransform,
+                            [1, 0, 0, 1, this.lengthOrZero(child, 'x', path), this.lengthOrZero(child, 'y', path)]);
                         shapeNode = target;
                     }
                     if (!SHAPES.has(shapeNode.name)) {
@@ -1570,7 +1670,11 @@ class Importer {
                     }
                     const segments = shapeSegments(shapeNode, (code, message) => this.report(code, path, message));
                     if (segments.length === 0) continue;
-                    shapes.push({ segments, rule: (childValues['clip-rule'] ?? values['clip-rule'] ?? state['clip-rule']) === 'evenodd' ? 'evenodd' : 'nonzero',
+                    // clip-rule inherits along the clipPath's own ancestry:
+                    // the shape, the use that names it, then the clipPath.
+                    const ownRule = validProperty('clip-rule', childValues['clip-rule'] ?? '') ? childValues['clip-rule'] : undefined;
+                    const rule = ownRule ?? this.stateOf(child)['clip-rule'];
+                    shapes.push({ segments, rule: rule === 'evenodd' ? 'evenodd' : 'nonzero',
                         transform: multiply(clipTransform, childTransform) });
                 }
                 group.clip = { shapes, units };

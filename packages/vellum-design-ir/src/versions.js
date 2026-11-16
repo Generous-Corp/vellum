@@ -1,5 +1,6 @@
 import {
     DESIGN_IR_COMPOSITING_VERSION,
+    DESIGN_IR_MATERIALS_VERSION,
     DESIGN_IR_VECTOR_ASSET_VERSION,
     DESIGN_IR_VECTOR_PAINT_KEYS,
     DESIGN_IR_VERSION,
@@ -41,15 +42,20 @@ export function findVectorAssetField(root, path = '$.root') {
     return null;
 }
 
-function usesCompositing(node) {
-    return isObject(node) && (node.compositing !== undefined ||
-        (Array.isArray(node.children) && node.children.some(usesCompositing)));
+function usesField(node, field) {
+    return isObject(node) && (node[field] !== undefined ||
+        (Array.isArray(node.children) && node.children.some((child) => usesField(child, field))));
 }
 
-/** The oldest DesignIR version that carries every field the tree uses. */
+/**
+ * The oldest DesignIR version that carries every field the tree uses: 6 for
+ * a vector asset field, 3 for a material reference, 2 for compositing,
+ * otherwise 1.
+ */
 export function requiredDesignIRVersion(root) {
     if (findVectorAssetField(root)) return DESIGN_IR_VECTOR_ASSET_VERSION;
-    return usesCompositing(root) ? DESIGN_IR_COMPOSITING_VERSION : DESIGN_IR_VERSION;
+    if (usesField(root, 'material')) return DESIGN_IR_MATERIALS_VERSION;
+    return usesField(root, 'compositing') ? DESIGN_IR_COMPOSITING_VERSION : DESIGN_IR_VERSION;
 }
 
 /**

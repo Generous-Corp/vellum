@@ -288,6 +288,11 @@ function materializeNode(node, context, depth, root = false) {
         throw new Error(
             `design node ${node.id} ${vectorField} needs schemaVersion ${VECTOR_ASSET_VERSION}`);
     }
+    // A material reference has no lowering in this materializer yet; refusing
+    // it is honest, where dropping it would silently change the paint.
+    if (node.material !== undefined) {
+        throw new Error(`design node ${node.id} carries a material, which this materializer does not draw`);
+    }
     applyCompositing(style, compositingOf(node, context.version, root));
     resolveMaskReferences(node, context.version);
 

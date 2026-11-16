@@ -107,3 +107,18 @@ test('vector asset fields are not read below DesignIR version 6', async () => {
             { viewport: { width: 200, height: 120 } }), /needs schemaVersion 6/);
     }
 });
+
+test('a material-bearing node is refused at version 3 and 6, never dropped', async () => {
+    const { document } = await render(cases[0]);
+    for (const version of [3, 6]) {
+        const material = structuredClone(document);
+        material.schemaVersion = version;
+        const target = version === 3 ? material.root : material.root.children[0];
+        if (version === 3) {
+            material.root.children = [];
+        }
+        target.material = { id: 'vellum.frosted-glass', values: { blur: 12 } };
+        assert.throws(() => materializeDesign(material, { viewport: { width: 200, height: 120 } }),
+            /carries a material, which this materializer does not draw/, `version ${version}`);
+    }
+});

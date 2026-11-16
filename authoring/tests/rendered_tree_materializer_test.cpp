@@ -867,6 +867,10 @@ bool vector_nodes() {
         {"opacity on a path", tree(R"JSON({"op":"path","d":"M0 0H1V1Z","opacity":0.5})JSON")},
         {"a clip on a path", tree(R"JSON({"op":"path","d":"M0 0H1V1Z","clip":{"d":"M0 0H1V1Z"}})JSON")},
         {"a field on a group end", tree(R"JSON({"op":"group"},{"op":"end","opacity":1})JSON")},
+        {"a transform on a clip", tree(R"JSON({"op":"group","clip":{"d":"M0 0H1V1Z","transform":[1,0,0,1,0,0]}},{"op":"end"})JSON")},
+        {"an extra key on a paint", tree(R"JSON({"op":"path","d":"M0 0H1V1Z","fill":{"gradient":{"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]},"opacity":1}})JSON")},
+        {"an extra key on a gradient", tree(R"JSON({"op":"path","d":"M0 0H1V1Z","fill":{"gradient":{"units":"user","stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}}})JSON")},
+        {"an extra key on a stop", tree(R"JSON({"op":"path","d":"M0 0H1V1Z","fill":{"gradient":{"stops":[{"position":0,"color":"#000000","opacity":1},{"position":1,"color":"#ffffff"}]}}})JSON")},
     };
     for (const auto& [what, json] : refusals) {
         std::vector<vellum::graphics::LoweringDiagnostic> diagnostics;
@@ -876,6 +880,27 @@ bool vector_nodes() {
             diagnostics.back().node_id != "icon") {
             std::cerr << "vector: " << what << " was not refused with the vector code: " << error
                       << '\n';
+            return false;
+        }
+    }
+    const auto extra_asset_key = wrap_tree(R"JSON({"type":"vector","id":"icon","style":{"width":1,"height":1},
+        "asset":{"contentHash":"sha256:)JSON" + std::string(64, 'd') +
+        R"JSON(","viewBox":[0,0,1,1],"ops":[],"units":"px"},"children":[]})JSON");
+    {
+        std::vector<vellum::graphics::LoweringDiagnostic> diagnostics;
+        if (vellum::authoring::materialize_rendered_tree(extra_asset_key, rendered, &error, &diagnostics) ||
+            diagnostics.empty() || diagnostics.back().code != vellum::graphics::kInvalidVectorAssetCode) {
+            std::cerr << "vector: an extra key on the asset was not refused\n";
+            return false;
+        }
+    }
+    const std::string accepted_controls[] = {
+        tree(R"JSON({"op":"group","clip":{"d":"M0 0H1V1Z","rule":"evenodd"}},{"op":"end"})JSON"),
+        tree(R"JSON({"op":"path","d":"M0 0H1V1Z","fill":{"gradient":{"kind":"linear","angle":90,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]},"transform":[1,0,0,1,0,0]}})JSON"),
+    };
+    for (const auto& json : accepted_controls) {
+        if (!vellum::authoring::materialize_rendered_tree(json, rendered, &error)) {
+            std::cerr << "vector: a well-formed nested object was refused: " << error << '\n';
             return false;
         }
     }

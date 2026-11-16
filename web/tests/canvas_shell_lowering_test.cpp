@@ -632,6 +632,17 @@ bool vector_plans() {
         std::cerr << "an exactly drawn vector asset reported a loss\n";
         return false;
     }
+    auto controlled = vector_scene({lossy[4]});
+    controlled.root.children[0].id = std::string("a\nb\tc\x01" "d\"e\\f");
+    const auto escaped = vellum::web::lower_for_canvas_shell(controlled);
+    const auto escaped_plan = vellum::web::lower_vector_for_canvas(escaped.commands.at(0), 1.0F);
+    if (!contains(escaped_plan.json, "\"id\":\"a\\u000ab\\u0009c\\u0001d\\\"e\\\\f\"")) return false;
+    for (const char character : escaped_plan.json) {
+        if (static_cast<unsigned char>(character) < 0x20U) {
+            std::cerr << "the canvas plan holds a raw control character\n";
+            return false;
+        }
+    }
     auto older = vector_scene({lossy[4]});
     older.scene_version = 8U;
     const auto refused = vellum::web::lower_for_canvas_shell(older);

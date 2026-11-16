@@ -78,9 +78,18 @@ inline std::string path_data(const vellum::graphics::PathGeometry& path) {
     return out;
 }
 
+// A JSON string: quotes and backslashes escaped, and every control character
+// below U+0020 written as a \u escape, so any node id parses.
 inline void quoted(std::string& out, std::string_view text) {
     out += '"';
     for (const char character : text) {
+        const auto code = static_cast<unsigned char>(character);
+        if (code < 0x20U) {
+            char escape[8];
+            std::snprintf(escape, sizeof(escape), "\\u%04x", static_cast<unsigned>(code));
+            out += escape;
+            continue;
+        }
         if (character == '"' || character == '\\') out += '\\';
         out += character;
     }
@@ -108,7 +117,7 @@ inline void stops(std::string& out, const vellum::graphics::LinearGradient& grad
         if (!first) out += ',';
         first = false;
         numbers(out, {stop.position, stop.color.red, stop.color.green, stop.color.blue,
-                      stop.color.alpha * alpha});
+                      static_cast<double>(stop.color.alpha) * alpha});
     }
     out += ']';
 }
@@ -124,7 +133,7 @@ inline void paint(std::string& out, const vellum::graphics::VectorPaint& source,
     if (!source.gradient) {
         out += "{\"color\":";
         numbers(out, {source.color.red, source.color.green, source.color.blue,
-                      source.color.alpha * alpha});
+                      static_cast<double>(source.color.alpha) * alpha});
         out += '}';
         return;
     }
@@ -141,7 +150,7 @@ inline void paint(std::string& out, const vellum::graphics::VectorPaint& source,
         losses.push_back(where + " conic gradient is drawn as its first stop's colour");
         const auto& first = gradient.stops.front().color;
         out += "{\"color\":";
-        numbers(out, {first.red, first.green, first.blue, first.alpha * alpha});
+        numbers(out, {first.red, first.green, first.blue, static_cast<double>(first.alpha) * alpha});
         out += '}';
         return;
     }

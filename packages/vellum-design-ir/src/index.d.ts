@@ -8,7 +8,7 @@ export const DESIGN_IR_VECTOR_ASSET_VERSION: 6;
 export const DESIGN_IR_LATEST_VERSION: 6;
 export const DESIGN_IR_VERSIONS: readonly [1, 2, 3, 4, 5, 6];
 export function findVectorAssetField(root: unknown, path?: string): { path: string; field: string } | null;
-export function requiredDesignIRVersion(root: unknown): 1 | 2 | 6;
+export function requiredDesignIRVersion(root: unknown): 1 | 2 | 3 | 6;
 export function designIRVersionProblem(document: { schemaVersion: unknown; root: unknown }): string | null;
 export const AUTHORED_OVERLAY_VERSION: 1;
 export const REIMPORT_REPORT_VERSION: 1;

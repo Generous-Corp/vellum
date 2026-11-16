@@ -992,6 +992,27 @@ bool parse_affine(id raw, vellum::graphics::Affine2D& output) {
     return true;
 }
 
+// The first key of `object` outside `allowed`, or empty when every key is
+// known. A non-string key is reported as itself.
+template <std::size_t Size>
+std::string unknown_key(NSDictionary* object, const std::array<std::string_view, Size>& allowed) {
+    for (id key in object) {
+        if (![key isKindOfClass:NSString.class]) return "a non-string key";
+        const std::string name = cpp_string(key);
+        if (!contains(allowed, name)) return name;
+    }
+    return {};
+}
+
+constexpr std::array<std::string_view, 3> kVectorAssetKeys{"contentHash", "viewBox", "ops"};
+constexpr std::array<std::string_view, 2> kVectorClipKeys{"d", "rule"};
+constexpr std::array<std::string_view, 2> kVectorPaintKeys{"gradient", "transform"};
+constexpr std::array<std::string_view, 16> kVectorGradientKeys{
+    "kind", "angle", "repeating", "repeatLength", "spread", "interpolation", "colorSpace",
+    "centerX", "centerY", "radiusX", "radiusY", "focalX", "focalY", "startRadius",
+    "endRadius", "stops"};
+constexpr std::array<std::string_view, 2> kVectorStopKeys{"position", "color"};
+
 bool parse_vector_path_data(id raw, id rule, vellum::graphics::PathGeometry& output,
                             std::string& reason) {
     if (![raw isKindOfClass:NSString.class]) {
@@ -1031,6 +1052,25 @@ bool parse_vector_paint(id raw, vellum::graphics::VectorPaint& output, const std
         return false;
     }
     NSDictionary* source = raw;
+    if (const auto key = unknown_key(source, kVectorPaintKeys); !key.empty()) {
+        reason = name + " does not take " + key;
+        return false;
+    }
+    if ([source[@"gradient"] isKindOfClass:NSDictionary.class]) {
+        NSDictionary* gradient = source[@"gradient"];
+        if (const auto key = unknown_key(gradient, kVectorGradientKeys); !key.empty()) {
+            reason = name + ".gradient does not take " + key;
+            return false;
+        }
+        for (id stop in array_or_empty(gradient[@"stops"])) {
+            if (![stop isKindOfClass:NSDictionary.class]) continue;
+            if (const auto key = unknown_key(static_cast<NSDictionary*>(stop), kVectorStopKeys);
+                !key.empty()) {
+                reason = name + ".gradient stops do not take " + key;
+                return false;
+            }
+        }
+    }
     std::vector<vellum::graphics::LinearGradient> gradients;
     std::string why;
     if (source[@"gradient"] == nil ||
@@ -1067,6 +1107,9 @@ bool materialize_vector(
         return reject("asset", "requires a compiled asset object");
     }
     NSDictionary* asset_source = source[@"asset"];
+    if (const auto key = unknown_key(asset_source, kVectorAssetKeys); !key.empty()) {
+        return reject("asset", "asset does not take " + key);
+    }
     auto asset = std::make_shared<vellum::graphics::VectorAsset>();
     if (![asset_source[@"contentHash"] isKindOfClass:NSString.class]) {
         return reject("asset", "requires a contentHash string");
@@ -1128,6 +1171,10 @@ bool materialize_vector(
             if (id clip = op_source[@"clip"]; clip != nil) {
                 if (![clip isKindOfClass:NSDictionary.class]) {
                     return reject("asset", where + " clip must be an object");
+                }
+                if (const auto key = unknown_key(static_cast<NSDictionary*>(clip), kVectorClipKeys);
+                    !key.empty()) {
+                    return reject("asset", where + " clip does not take " + key);
                 }
                 vellum::graphics::PathGeometry geometry;
                 if (!parse_vector_path_data(static_cast<NSDictionary*>(clip)[@"d"],

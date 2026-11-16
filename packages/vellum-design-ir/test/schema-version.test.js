@@ -145,3 +145,15 @@ test('SVG opacity and masks lower into compositing, not vector paint keys', () =
         }
     }
 });
+
+test('the required version counts material references, recursively', async () => {
+    const { requiredDesignIRVersion } = await import('../src/index.js');
+    const node = (extra = {}, children = []) => ({ kind: 'view', properties: {}, children, ...extra });
+    const glass = { id: 'vellum.frosted-glass', values: {} };
+    assert.equal(requiredDesignIRVersion(node({ material: glass })), 3, 'material only');
+    assert.equal(requiredDesignIRVersion(node({}, [node({}, [node({ material: glass })])])), 3, 'nested material');
+    assert.equal(requiredDesignIRVersion(node({ compositing: { opacity: 0.5 } }, [node({ material: glass })])), 3, 'material and compositing');
+    assert.equal(requiredDesignIRVersion(node({ material: glass }, [node({ kind: 'path' })])), 6, 'material and a vector field');
+    assert.equal(requiredDesignIRVersion(node({ compositing: { opacity: 0.5 } })), 2, 'compositing only');
+    assert.equal(requiredDesignIRVersion(node()), 1, 'nothing');
+});
