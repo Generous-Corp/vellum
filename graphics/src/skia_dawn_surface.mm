@@ -3266,6 +3266,10 @@ const GpuEvidence& SkiaDawnSurface::evidence() const noexcept {
 
 namespace testing {
 
+void unbound_plot_layers_for_scale(std::vector<PaintCommand>& commands, float scale) {
+    unbound_plot_layers(commands, scale);
+}
+
 void set_partial_redraw_rules(const PartialRedrawRules& rules) noexcept {
     enclose_paths = rules.enclose_paths;
     enclose_own_layers = rules.enclose_own_layers;
