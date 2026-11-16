@@ -29,6 +29,7 @@ on:
       - 'graphics/**'
       - 'gpu-runtime/**'
       - 'apps/minimal-scene/**'
+      - '.gitattributes'
       - '.github/workflows/windows.yml'
   push:
     branches: [main, 'platform-windows/**']
@@ -41,6 +42,7 @@ on:
       - 'graphics/**'
       - 'gpu-runtime/**'
       - 'apps/minimal-scene/**'
+      - '.gitattributes'
       - '.github/workflows/windows.yml'
   workflow_dispatch:
 
