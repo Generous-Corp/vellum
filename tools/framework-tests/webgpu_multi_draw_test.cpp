@@ -391,6 +391,41 @@ dev.queue.submit([encoder.finish()]);
     CHECK(is_yellow(r.at(56, kHeight / 2)));
 }
 
+FRAMEWORK_TEST(retired_depth_textures_do_not_accumulate) {
+    // A script that recreates its depth texture (three.js does on every resize)
+    // names a new depth key each time. Depth A is written near on the left, then
+    // twelve other depth textures are used, then A is loaded and drawn at 0.8.
+    // The bridge keeps a bounded number of depth textures, so A has been
+    // released by then and loads as a fresh, cleared depth: the draw lands
+    // (yellow). An unbounded store would still hold 0.2 there and reject it (red).
+    ScriptedCanvas s;
+    s.engine.evaluate(std::string(kSetup) + kLoadHelpers + R"JS(
+const a = depthTexture();
+const encoder = dev.createCommandEncoder();
+let pass = encoder.beginRenderPass({colorAttachments: [colourAttachment()],
+                                    depthStencilAttachment: depthAttachment(a, 'clear')});
+draw(pass, pipeline('1.0, 0.0, 0.0', true), quad(-1, 0, 0.2));
+pass.end();
+for (let i = 0; i < 12; ++i) {
+  pass = encoder.beginRenderPass({colorAttachments: [loadAttachment()],
+                                  depthStencilAttachment: depthAttachment(depthTexture(), 'clear')});
+  draw(pass, pipeline('0.0, 0.0, 1.0', true), quad(0, 1, 0.9));
+  pass.end();
+}
+pass = encoder.beginRenderPass({colorAttachments: [loadAttachment()],
+                                depthStencilAttachment: depthAttachment(a, 'load')});
+draw(pass, pipeline('1.0, 1.0, 0.0', true), quad(-1, 0, 0.8));
+pass.end();
+dev.queue.submit([encoder.finish()]);
+)JS");
+    CHECK(s.js_string("gpuErrors.join(' | ')").empty());
+    const auto r = paint_canvas(s);
+    report("depth-bounded", r);
+    CHECK(r.ok());
+    if (!r.ok()) return;
+    CHECK(is_yellow(r.at(8, kHeight / 2)));
+}
+
 FRAMEWORK_TEST(a_zero_count_draw_keeps_the_pass_clear_and_later_draws) {
     // The canvas holds green. A pass clears to blue, issues draw(0) and
     // drawIndexed(0), then draws red on the left: the right half must be the

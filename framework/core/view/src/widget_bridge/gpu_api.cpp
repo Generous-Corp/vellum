@@ -1264,12 +1264,45 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
                 depth_key = payload["depthStencil"]["key"].getWithDefault<std::string>("");
             }
             if (depth_key.empty()) depth_key = "target:" + (canvas_id.empty() ? target_texture_id : canvas_id);
-            using DepthTextures = std::unordered_map<std::string, wgpu::Texture>;
-            auto& depth_store = self.native_gpu_bridge_state_->pass_depths;
-            if (!depth_store) depth_store = std::make_shared<DepthTextures>();
-            auto& depth_texture = (*static_cast<DepthTextures*>(depth_store.get()))[depth_key];
+            struct DepthEntry {
+                wgpu::Texture texture;
+                std::string owner;      // the colour target the depth was last used with
+                uint64_t last_use = 0;  // pass counter, for eviction
+            };
+            struct DepthStore {
+                std::unordered_map<std::string, DepthEntry> entries;
+                uint64_t clock = 0;
+            };
+            // A script that recreates its depth texture (three.js does on every
+            // resize) gets a new key each time, so the store is bounded: a
+            // target's depth of another size is stale the moment a new one is
+            // made for it, and the least recently used entry goes past the cap.
+            constexpr size_t kMaxPassDepths = 8;
+            auto& depth_store_ptr = self.native_gpu_bridge_state_->pass_depths;
+            if (!depth_store_ptr) depth_store_ptr = std::make_shared<DepthStore>();
+            auto& depth_store = *static_cast<DepthStore*>(depth_store_ptr.get());
             const uint32_t depth_w = target_canvas_state ? target_canvas_state->width : target_texture_state->width;
             const uint32_t depth_h = target_canvas_state ? target_canvas_state->height : target_texture_state->height;
+            const std::string depth_owner = canvas_id.empty() ? target_texture_id : canvas_id;
+            if (depth_store.entries.find(depth_key) == depth_store.entries.end()) {
+                for (auto it = depth_store.entries.begin(); it != depth_store.entries.end();) {
+                    const auto& e = it->second;
+                    const bool stale = e.owner == depth_owner && e.texture &&
+                        (e.texture.GetWidth() != depth_w || e.texture.GetHeight() != depth_h ||
+                         e.texture.GetSampleCount() != target_sample_count);
+                    it = stale ? depth_store.entries.erase(it) : std::next(it);
+                }
+                while (depth_store.entries.size() >= kMaxPassDepths) {
+                    auto lru = depth_store.entries.begin();
+                    for (auto it = depth_store.entries.begin(); it != depth_store.entries.end(); ++it)
+                        if (it->second.last_use < lru->second.last_use) lru = it;
+                    depth_store.entries.erase(lru);
+                }
+            }
+            auto& depth_entry = depth_store.entries[depth_key];
+            depth_entry.owner = depth_owner;
+            depth_entry.last_use = ++depth_store.clock;
+            auto& depth_texture = depth_entry.texture;
             bool fresh_depth = false;
             if (!depth_texture || depth_texture.GetWidth() != depth_w || depth_texture.GetHeight() != depth_h ||
                 depth_texture.GetSampleCount() != target_sample_count) {
