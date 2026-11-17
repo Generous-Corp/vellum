@@ -64,6 +64,19 @@ set_target_properties(vellum-animation-gpu-test PROPERTIES
 add_test(NAME vellum.gpu.animation
     COMMAND vellum-animation-gpu-test)
 
+add_executable(vellum-frame-driver-gpu-test
+    frame_driver_gpu_test.cpp)
+target_link_libraries(vellum-frame-driver-gpu-test PRIVATE
+    vellum-scene-capture-harness)
+set_target_properties(vellum-frame-driver-gpu-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.frame-driver
+    COMMAND vellum-frame-driver-gpu-test)
+set_tests_properties(vellum.gpu.frame-driver PROPERTIES
+    SKIP_RETURN_CODE 77)
+
 add_executable(vellum-render-cache-gpu-test
     render_cache_gpu_test.cpp)
 target_link_libraries(vellum-render-cache-gpu-test PRIVATE
@@ -145,6 +158,38 @@ set_target_properties(vellum-layer-text-extent-test PROPERTIES
 add_test(NAME vellum.layer-text-extent
     COMMAND vellum-layer-text-extent-test "${PROJECT_SOURCE_DIR}/assets/fonts")
 
+# Vector assets: the static rendered vector fixtures, materialized and drawn
+# on the GPU, with pixel oracles and damage sweeps. The same binary prints
+# the canvas shell's plans for the browser oracle.
+if(VELLUM_ENABLE_AUTHORING AND APPLE)
+    add_executable(vellum-vector-asset-gpu-test vector_asset_gpu_test.cpp)
+    target_link_libraries(vellum-vector-asset-gpu-test PRIVATE
+        vellum-scene-capture-harness vellum-authoring)
+    target_include_directories(vellum-vector-asset-gpu-test PRIVATE
+        ${PROJECT_SOURCE_DIR}/authoring/src
+        ${PROJECT_SOURCE_DIR}/web/src)
+    target_compile_definitions(vellum-vector-asset-gpu-test PRIVATE
+        VELLUM_VECTOR_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/fixtures/vector-assets")
+    set_target_properties(vellum-vector-asset-gpu-test PROPERTIES
+        OSX_ARCHITECTURES arm64
+        MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+        BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>;$<TARGET_FILE_DIR:vellum-authoring>")
+    add_test(NAME vellum.gpu.vector-assets
+        COMMAND vellum-vector-asset-gpu-test)
+    find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME vellum.web.vector-canvas-oracle
+        COMMAND "${Python3_EXECUTABLE}"
+            "${PROJECT_SOURCE_DIR}/web/tests/run_vector_canvas_oracle.py"
+            --plans "$<TARGET_FILE:vellum-vector-asset-gpu-test>"
+            --shell "${PROJECT_SOURCE_DIR}/web/shell")
+    set_tests_properties(vellum.web.vector-canvas-oracle PROPERTIES SKIP_RETURN_CODE 77)
+    find_program(VELLUM_NODE_EXECUTABLE NAMES node)
+    if(VELLUM_NODE_EXECUTABLE)
+        add_test(NAME vellum.web.vector-canvas-builder
+            COMMAND "${VELLUM_NODE_EXECUTABLE}"
+                "${PROJECT_SOURCE_DIR}/web/tests/vector_canvas_builder_test.mjs")
+    endif()
+endif()
 add_executable(vellum-plot-gpu-test
     plot_gpu_test.cpp)
 target_link_libraries(vellum-plot-gpu-test PRIVATE
@@ -161,3 +206,18 @@ add_test(NAME vellum.gpu.plots
     COMMAND vellum-plot-gpu-test)
 set_tests_properties(vellum.gpu.plots PROPERTIES
     SKIP_RETURN_CODE 77)
+
+add_executable(vellum-frame-debug-test
+    frame_debug_test.mm)
+target_link_libraries(vellum-frame-debug-test PRIVATE
+    vellum-scene-capture-harness
+    "-framework QuartzCore")
+# The test reaches SkiaDawnSurfaceTestAccess, which is not installed.
+target_include_directories(vellum-frame-debug-test PRIVATE
+    ${PROJECT_SOURCE_DIR}/graphics/src)
+set_target_properties(vellum-frame-debug-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.frame-debug
+    COMMAND vellum-frame-debug-test)

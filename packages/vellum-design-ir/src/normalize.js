@@ -2,9 +2,9 @@ import {
     COMPILER_NAME,
     COMPILER_VERSION,
     DESIGN_IR_COMPOSITING_VERSION,
-    DESIGN_IR_SCHEMA,
     DESIGN_IR_PLOTS_VERSION,
     DESIGN_IR_MATERIALS_VERSION,
+    DESIGN_IR_SCHEMA,
     DESIGN_IR_TRACKS_VERSION,
     DESIGN_IR_VERSION,
     DESIGN_IR_VERSIONS,
@@ -21,6 +21,7 @@ import { canonicalize, deepClone } from './stable-json.js';
 import { normalizeTokens } from './tokens.js';
 import { normalizeSha256ContentHash } from './assets.js';
 import { validateDesignIR } from './validate.js';
+import { requiredDesignIRVersion } from './versions.js';
 
 const KNOWN_NODE_FIELDS = new Set([
     'children',
@@ -77,7 +78,8 @@ export function normalizeImport(input, options = {}) {
         // The lowest version that carries every field the document uses,
         // unless the caller names one; validation refuses a version too old
         // for a field.
-        schemaVersion: options.schemaVersion ?? requiredVersion(root),
+        schemaVersion: options.schemaVersion ??
+            Math.max(requiredVersion(root), requiredDesignIRVersion(root)),
         source,
         tokens: normalizeTokens(input.tokens, source.key),
     });

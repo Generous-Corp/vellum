@@ -7,6 +7,7 @@
 #include <vellum/graphics/plot.hpp>
 #include <vellum/graphics/plot_feed.hpp>
 #include <vellum/graphics/scene_acceptance.hpp>
+#include <vellum/graphics/vector_asset.hpp>
 #include <vellum/value/in_memory_value_feed.hpp>
 
 #include <atomic>
@@ -944,6 +945,51 @@ void lowering() {
 
 }  // namespace
 
+void plot_with_vector_node() {
+    PathGeometry geometry;
+    expect(parse_svg_path_data("M0 0H20V10H0Z", geometry), "the vector fixture path parses");
+    VectorAsset asset{.content_hash = "sha256:" + std::string(64, 'd'),
+                      .view_box = {0.0F, 0.0F, 20.0F, 10.0F}};
+    asset.ops.push_back({.kind = VectorOp::Kind::path,
+                         .path = std::make_shared<const PathGeometry>(std::move(geometry)),
+                         .fill = {.color = Color::hex(0x00FF00)}});
+    const auto shared = std::make_shared<const VectorAsset>(std::move(asset));
+    const auto both = [&](std::uint32_t version) {
+        Scene scene = plot_scene(line_spec(10, {0.5F}), version);
+        SceneNode vector{.id = "icon", .kind = SceneNode::Kind::vector,
+                         .bounds = {160.0F, 40.0F, 40.0F, 20.0F}};
+        vector.vector = shared;
+        scene.root.children.push_back(std::move(vector));
+        return scene;
+    };
+    const auto current = accept_scene(both(kSceneVersion));
+    expect(current.accepted, "a plot and a vector node in one version 12 scene are accepted",
+           current.reason);
+    expect(make_paint_commands(both(kSceneVersion)).size() >= 3U,
+           "a plot and a vector node both lower to commands");
+    for (std::uint32_t version = 9U; version <= 11U; ++version) {
+        const auto refused = accept_scene(both(version));
+        expect(!refused.accepted && refused.diagnostics.size() == 1U &&
+                   refused.diagnostics[0].code == kSceneVersionMismatchCode &&
+                   refused.diagnostics[0].node_id == "plot",
+               "with a vector node, version " + std::to_string(version) + " still refuses the plot",
+               refused.reason);
+    }
+    for (std::uint32_t version = 6U; version <= 8U; ++version) {
+        Scene scene = both(version);
+        scene.root.children.erase(scene.root.children.begin() + 1);
+        const auto refused = accept_scene(scene);
+        expect(!refused.accepted && refused.diagnostics.size() == 1U &&
+                   refused.diagnostics[0].code == kSceneVersionMismatchCode &&
+                   refused.diagnostics[0].node_id == "icon",
+               "a vector node alone is refused at version " + std::to_string(version),
+               refused.reason);
+    }
+    Scene vector_only = both(11U);
+    vector_only.root.children.erase(vector_only.root.children.begin() + 1);
+    expect(accept_scene(vector_only).accepted, "a vector node alone is accepted at version 11");
+}
+
 int main() {
     line_oracle();
     decimated_peak_oracle();
@@ -954,6 +1000,7 @@ int main() {
     plot_with_gradient_fill();
     plot_with_blend_mode();
     plot_under_effects();
+    plot_with_vector_node();
     invalid_plots();
     sampler();
     producer_thread();

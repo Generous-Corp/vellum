@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 EXPECTED_RUNNERS = {
+    "android.yml": ("__hosted__", "ubuntu-24.04"),
     "authority-activation.yml": ("__hosted__", "ubuntu-latest"),
     "authority-release.yml": ("__hosted__", "ubuntu-latest"),
     "framework-trusted-verify.yml": ("__hosted__", "ubuntu-24.04"),
@@ -67,6 +68,7 @@ EXPECTED_RUNNERS = {
     ),
     "sdk-release.yml": ("__mixed__", ""),
     "version-at-land.yml": ("__hosted__", "ubuntu-latest"),
+    "windows.yml": ("__hosted__", "windows-2022"),
     "workflow-lint.yml": ("__hosted__", "ubuntu-latest"),
 }
 
@@ -74,6 +76,8 @@ HOSTED_LABELS = (
     "ubuntu-latest",
     "ubuntu-24.04",
     "windows-latest",
+    "windows-2022",
+    "windows-11-arm",
     "macos-latest",
     "macos-13",
     "macos-14",

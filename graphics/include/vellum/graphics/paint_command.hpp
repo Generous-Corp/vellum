@@ -65,6 +65,9 @@ struct PaintCommand final {
         /// Multiplies the enclosing group by the mask's coverage, taken by
         /// `mask_mode`.
         end_mask,
+        /// Draws the compiled vector asset `vector`, its view box stretched
+        /// onto `bounds`.
+        vector,
         /// Draws `plot` over `bounds` on `fill`, as `plot_geometry` lays it
         /// out at the renderer's scale.
         plot,
@@ -122,6 +125,8 @@ struct PaintCommand final {
     std::optional<ImageReference> image;
     /// The asset `Scene::images` holds for `image`, or null when it is missing.
     std::shared_ptr<const ImageAsset> image_asset;
+    /// What a `vector` command draws.
+    std::shared_ptr<const VectorAsset> vector;
     /// On a `begin_layer`, the node's effect chain when its effects apply.
     std::vector<NodeEffect> effects;
     /// On a `begin_layer` with `effects`, the node's box in absolute
@@ -149,6 +154,7 @@ struct PaintCommand final {
     case PaintCommand::Kind::end_clip: return "end_clip";
     case PaintCommand::Kind::begin_mask: return "begin_mask";
     case PaintCommand::Kind::end_mask: return "end_mask";
+    case PaintCommand::Kind::vector: return "vector";
     case PaintCommand::Kind::plot: return "plot";
     }
     return "unknown";
@@ -168,10 +174,11 @@ struct PaintCommand final {
 
 /// The area a command can paint, in its `bounds` coordinates before
 /// `transform`: the box grown by each shadow's offset, spread, and 1.5 times
-/// its blur radius, a mesh's clipped vertex extent, or a path's
-/// `path_paint_box`. Text may overflow its box, so its extent is the box
-/// with `bounded` false. A plot's is its box grown by two logical pixels, which
-/// holds the device grid it snaps to at any scale of 0.25 or more.
+/// its blur radius, a mesh's clipped vertex extent, a path's
+/// `path_paint_box`, or a vector asset's `vector_paint_bounds`. Text may
+/// overflow its box, so its extent is the box with `bounded` false. A plot's
+/// is its box grown by two logical pixels, which holds the device grid it
+/// snaps to at any scale of 0.25 or more.
 struct PaintExtent final {
     Rect rect{};
     bool bounded = true;
@@ -183,7 +190,8 @@ struct PaintExtent final {
 [[nodiscard]] constexpr bool draws_content(PaintCommand::Kind kind) noexcept {
     return kind == PaintCommand::Kind::rectangle || kind == PaintCommand::Kind::text ||
            kind == PaintCommand::Kind::mesh || kind == PaintCommand::Kind::path ||
-           kind == PaintCommand::Kind::image || kind == PaintCommand::Kind::plot;
+           kind == PaintCommand::Kind::image || kind == PaintCommand::Kind::vector ||
+           kind == PaintCommand::Kind::plot;
 }
 
 /// The axis-aligned box that contains `rect` once mapped by `transform`.
@@ -302,6 +310,13 @@ struct PaintCommandRange final {
 /// one. `ranges`, when non-null, is cleared first; `node` points into `scene`.
 [[nodiscard]] std::vector<PaintCommand> make_paint_commands(
     const Scene& scene, std::vector<PaintCommandRange>* ranges);
+
+/// Lowers a scene whose tracks `evaluate_tracks` has already applied. Token
+/// receipts name authored colours, so the caller validates them on the
+/// authored scene (`accept_scene`) and this does not check them again; an
+/// animated token fill therefore keeps the colour its track gave it.
+[[nodiscard]] std::vector<PaintCommand> make_evaluated_paint_commands(
+    const Scene& evaluated, std::vector<PaintCommandRange>* ranges);
 
 /// Whether a mesh can be drawn as given: every index names a vertex, the index
 /// count is a multiple of three, every position and texture coordinate is

@@ -1031,6 +1031,82 @@ class VerifyExtractionTests(unittest.TestCase):
             self.write_ports(root, [first_row, self.ports_row(self.PORTED, "removed")])
             self.assertEqual(self.ports_verdict(root)[0], [])
 
+    def write_ports_v2(self, root: Path, rows: list[dict]) -> None:
+        path = root / verify_extraction.FRAMEWORK_PORTS
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"schema": "vellum.framework-ports.v2", "rows": rows}), encoding="utf-8")
+
+    def test_a_declared_target_is_judged_against_the_scoped_rows(self) -> None:
+        # verify_framework passes the ledger's scopes, scoped rows included,
+        # to the unit check, so it agrees with the build plan.
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n",
+                                          "framework/core/a/include/vellum/a/a.hpp": b"int a();\n"})
+            (root / self.PORTED).write_bytes(b"int n;\n")
+            added = dict(self.ports_row(self.PORTED), target="vellum-a-tool", platforms=["linux-x64"])
+            widened = dict(added, change="scoped", platforms=["linux-x64", "macos-arm64"])
+            target = {"name": "vellum-a-tool", "type": "EXECUTABLE", "unit": None, "sources": [self.PORTED],
+                      "include_dirs": ["core/a/include"], "compile_definitions": [], "link_targets": [],
+                      "reason": "a tool no closure builds", "platforms": ["linux-x64", "macos-arm64"]}
+            path = root / verify_extraction.FRAMEWORK_UNITS
+            path.write_text(json.dumps({"schema": "vellum.framework-units.v2", "targets": [target]}),
+                            encoding="utf-8")
+
+            def unit_errors() -> tuple[list[str], dict]:
+                errors, checks = verify_extraction.verify_framework(root, None, "origin/main", defer_identity=True)
+                return [e for e in errors if verify_extraction.FRAMEWORK_UNITS in e
+                        or verify_extraction.FRAMEWORK_PORTS in e], checks
+
+            self.write_ports_v2(root, [added, widened])
+            errors, checks = unit_errors()
+            self.assertEqual(errors, [])
+            self.assertEqual(checks["framework_units_declared"], ["vellum-a-tool"])
+            # Control: without the scoped row the source does not cover macOS.
+            self.write_ports_v2(root, [added])
+            errors, checks = unit_errors()
+            self.assertTrue(any("is not scoped" in e for e in errors), errors)
+            self.assertEqual(checks["framework_units_declared"], [])
+
+    def test_a_scoped_pulp_row_names_a_file_pulp_holds(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root, pulp = Path(temporary) / "vellum", Path(temporary) / "pulp"
+            root.mkdir()
+            pulp.mkdir()
+            run = lambda *args: subprocess.check_output(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=pulp, text=True).strip()
+            run("init", "-q", "-b", "main")
+            (pulp / "core/a/src").mkdir(parents=True)
+            (pulp / "core/a/src/old.cpp").write_text("int old;\n")
+            run("add", "-A"); run("commit", "-q", "-m", "before the port's source")
+            before = run("rev-parse", "HEAD")
+            (pulp / "core/a/src/new.cpp").write_text("int n;\n")
+            run("add", "-A"); run("commit", "-q", "-m", "the port's source")
+            on_main = run("rev-parse", "HEAD")
+            run("update-ref", "refs/remotes/origin/main", on_main)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            self.record_rename(root)
+            (root / self.PORTED).write_bytes(b"int n;\n")
+            blob = verify_extraction.git_blob_sha(b"int n;\n")
+            added = dict(self.ports_row(self.PORTED, commits=[on_main], blob=blob), platforms=["linux-x64"])
+            scoped = dict(added, change="scoped", framework_blob=None, platforms=["linux-x64", "windows-x64"])
+            # The scoped row's last named commit holds the file: proved.
+            self.write_ports_v2(root, [added, scoped])
+            errors, checks = self.ports_verdict(root, pulp_root=pulp, defer=False)
+            self.assertEqual(errors, [])
+            self.assertIs(checks["framework_ports_proved"], True)
+            # A scoped row naming other commits than its adding row is refused,
+            # so it can make no Pulp claim the adding row's proof does not cover.
+            self.write_ports_v2(root, [added, dict(scoped, pulp_commits=[before, on_main])])
+            errors, _ = self.ports_verdict(root, pulp_root=pulp, defer=False)
+            self.assertTrue(any("a scope change names the same" in e for e in errors), errors)
+            # Both rows' commits must still be commits on Pulp main.
+            self.write_ports_v2(root, [dict(added, pulp_commits=["d" * 40]), dict(scoped, pulp_commits=["d" * 40])])
+            errors, _ = self.ports_verdict(root, pulp_root=pulp, defer=False)
+            self.assertEqual(sum(f"is not a commit on Pulp origin/main" in e for e in errors), 2, errors)
+
     def test_ports_rows_name_real_commits_on_pulp_main(self) -> None:
         self.hide_ci_git_base()
         with tempfile.TemporaryDirectory() as temporary:
