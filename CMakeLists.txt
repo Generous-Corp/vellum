@@ -171,6 +171,12 @@ if(VELLUM_BUILD_TESTS)
         foundation/tests/foundation_test.cpp)
     target_link_libraries(vellum-foundation-test PRIVATE Vellum::Foundation)
     add_test(NAME vellum.foundation COMMAND vellum-foundation-test)
+    find_program(VELLUM_NODE_EXECUTABLE NAMES node)
+    if(VELLUM_NODE_EXECUTABLE)
+        add_test(NAME vellum.limits-drift
+            COMMAND "${VELLUM_NODE_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/limits/generate_limits.mjs" --check)
+    endif()
 
     add_executable(vellum-value-param-model-test
         foundation/tests/value/param_model_test.cpp)
