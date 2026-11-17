@@ -20,7 +20,10 @@ specialized embedding.
 Inter is the default face. Jost requests select the nearest packaged 400, 500,
 600, or 700 face. Characters absent from a requested face fall back only to the
 packaged variable Noto Sans Arabic, Noto Sans JP, and Inter families; host font
-databases are not part of measurement or paint. Copyright notices and the full
+databases are not part of measurement or paint. A character none of them
+covers draws as the face's missing-glyph box from scene version 13 (as `?`
+before it), and the surface reports its code point as a
+`VELLUM_TEXT_GLYPH_MISSING` warning. Copyright notices and the full
 SIL OFL 1.1 text are in the repository and installed `NOTICE.md`.
 Installed native app builds copy these seven faces into
 `Contents/Resources/vellum/fonts`; the relocated GPU library resolves that

@@ -23,6 +23,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <vector>
 
 namespace vellum::graphics::detail {
 
@@ -31,6 +32,10 @@ namespace vellum::graphics::detail {
 struct CachedParagraph final {
     std::shared_ptr<skia::textlayout::Paragraph> paragraph;
     TextMetrics metrics;
+    /// The lines a laid-out paragraph was broken into.
+    std::uint32_t line_count = 1U;
+    /// The code points the shaper found no face for, ascending.
+    std::vector<std::uint32_t> unresolved;
 };
 
 /// The SHA-256 of `bytes`.

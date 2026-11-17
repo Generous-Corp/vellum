@@ -1017,18 +1017,26 @@ void scripted_telemetry() {
            "lowering a budget trims to it", to_json(t));
 
     surface->simulate_device_loss();
-    expect(!surface->render(full, &error), "rendering after a device loss fails");
+    expect(!surface->finish(&error), "finish after a device loss fails");
     t = surface->telemetry();
     expect(t.trims == 3 && t.last_trim == CacheTrimReason::device_lost &&
                t.paragraphs.entries == 0 && t.gradients.entries == 0 &&
-               t.textures.entries == 0 && t.atlas_bytes == 0 && t.textures.bytes == 0,
+               t.textures.entries == 0 && t.atlas_bytes == 0 && t.textures.bytes == 0 &&
+               t.device_losses == 1,
            "a device loss drops every cache", to_json(t));
-    // A second loss notification must still invalidate caches. The public
-    // surface remains fail-closed after loss, so this exercises the repeated
-    // failure path that a recovered device would use before its next frame.
+    expect(!surface->finish(&error) && surface->telemetry().trims == 3,
+           "a loss seen twice trims once", to_json(surface->telemetry()));
+    render(*surface, full);
+    t = surface->telemetry();
+    expect(t.trims == 3 && t.device_recoveries == 1 && t.paragraphs.entries > 0 &&
+               t.full_repaint,
+           "the next frame recovers and refills the caches", to_json(t));
+    // The recovered device starts a new lifetime, so its loss trims again.
     surface->simulate_device_loss();
-    expect(!surface->render(full, &error) && surface->telemetry().trims == 3,
-           "a second device loss remains fail-closed without double-counting");
+    expect(!surface->finish(&error) && surface->telemetry().trims == 4 &&
+               surface->telemetry().paragraphs.entries == 0 &&
+               surface->telemetry().device_losses == 2,
+           "a loss of the recovered device drops its caches", to_json(surface->telemetry()));
 }
 
 }  // namespace

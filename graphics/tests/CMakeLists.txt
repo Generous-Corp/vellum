@@ -88,6 +88,17 @@ set_target_properties(vellum-render-cache-gpu-test PROPERTIES
 add_test(NAME vellum.gpu.render-cache
     COMMAND vellum-render-cache-gpu-test)
 
+add_executable(vellum-device-recovery-gpu-test
+    device_recovery_gpu_test.cpp)
+target_link_libraries(vellum-device-recovery-gpu-test PRIVATE
+    vellum-scene-capture-harness)
+set_target_properties(vellum-device-recovery-gpu-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.device-recovery
+    COMMAND vellum-device-recovery-gpu-test)
+
 add_executable(vellum-image-gpu-test
     image_gpu_test.cpp)
 target_link_libraries(vellum-image-gpu-test PRIVATE
@@ -190,6 +201,22 @@ if(VELLUM_ENABLE_AUTHORING AND APPLE)
                 "${PROJECT_SOURCE_DIR}/web/tests/vector_canvas_builder_test.mjs")
     endif()
 endif()
+add_executable(vellum-text-layout-gpu-test
+    text_layout_gpu_test.cpp)
+target_link_libraries(vellum-text-layout-gpu-test PRIVATE
+    vellum-scene-capture-harness)
+# The test reaches SkiaDawnSurfaceTestAccess, which is not installed.
+target_include_directories(vellum-text-layout-gpu-test PRIVATE
+    ${PROJECT_SOURCE_DIR}/graphics/src)
+set_target_properties(vellum-text-layout-gpu-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.text-layout
+    COMMAND vellum-text-layout-gpu-test)
+set_tests_properties(vellum.gpu.text-layout PROPERTIES
+    SKIP_RETURN_CODE 77)
+
 add_executable(vellum-plot-gpu-test
     plot_gpu_test.cpp)
 target_link_libraries(vellum-plot-gpu-test PRIVATE
