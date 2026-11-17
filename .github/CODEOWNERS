@@ -37,6 +37,7 @@
 /scripts/release_cadence.py @danielraffel
 /scripts/release_dry_run.py @danielraffel
 /scripts/release_path_review.py @danielraffel
+/scripts/release_policy_requirements.txt @danielraffel
 /scripts/release_request.py @danielraffel
 /scripts/retired_release_tags.py @danielraffel
 /scripts/run_ci_lane.py @danielraffel

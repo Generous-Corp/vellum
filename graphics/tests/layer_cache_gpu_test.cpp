@@ -691,6 +691,102 @@ void budget_on_the_gpu() {
            "subtrees refused by the budget still draw");
 }
 
+
+// A producer may rewrite a mesh's texels in place behind the scene's const
+// view. A faded subtree drawing that mesh must not keep its old image.
+void mutated_texture_in_cached_subtree() {
+    constexpr std::uint32_t width = 200;
+    constexpr std::uint32_t height = 160;
+    auto texture = std::make_shared<MeshTexture>();
+    texture->width = 4;
+    texture->height = 4;
+    texture->premultiplied_rgba.assign(4U * 4U * 4U, 0U);
+    const auto paint = [&](std::uint8_t red, std::uint8_t green, std::uint8_t blue) {
+        for (std::size_t texel = 0; texel < 16U; ++texel) {
+            texture->premultiplied_rgba[texel * 4U + 0U] = red;
+            texture->premultiplied_rgba[texel * 4U + 1U] = green;
+            texture->premultiplied_rgba[texel * 4U + 2U] = blue;
+            texture->premultiplied_rgba[texel * 4U + 3U] = 255U;
+        }
+    };
+    paint(230, 40, 40);
+    auto quad = std::make_shared<TriangleMesh>();
+    quad->vertices = {
+        {.x = 0.0F, .y = 0.0F, .u = 0.0F, .v = 0.0F},
+        {.x = 60.0F, .y = 0.0F, .u = 1.0F, .v = 0.0F},
+        {.x = 60.0F, .y = 60.0F, .u = 1.0F, .v = 1.0F},
+        {.x = 0.0F, .y = 60.0F, .u = 0.0F, .v = 1.0F},
+    };
+    quad->indices = {0, 1, 2, 0, 2, 3};
+    quad->texture = texture;
+    Scene scene = harness::fixtures::empty(static_cast<float>(width), static_cast<float>(height));
+    SceneNode faded{.id = "faded", .bounds = {20.0F, 20.0F, 150.0F, 110.0F}, .opacity = 0.7F};
+    faded.children.push_back({.id = "faded/bg",
+                              .kind = SceneNode::Kind::rectangle,
+                              .bounds = {0.0F, 0.0F, 150.0F, 110.0F},
+                              .fill = Color::hex(0x334155),
+                              .corner_radius = 8.0F});
+    faded.children.push_back({.id = "faded/quad",
+                              .kind = SceneNode::Kind::mesh,
+                              .bounds = {20.0F, 20.0F, 60.0F, 60.0F},
+                              .mesh = quad});
+    scene.root.children.push_back(std::move(faded));
+
+    auto plain = make_surface(width, height, 1.0F, uncached());
+    auto cached = make_surface(width, height, 1.0F, {});
+    if (!plain || !cached) return;
+    for (int frame = 0; frame < 2; ++frame) {
+        if (!render(*plain, scene) || !render(*cached, scene)) return;
+    }
+    const auto warm = cached->layer_cache_stats();
+    expect(warm.layers == 1U && warm.hits == 1U && warm.builds == 0U,
+           "control: the faded subtree with a textured mesh is drawn from its image",
+           describe(warm));
+    const auto before = capture(*cached);
+
+    paint(40, 200, 90);
+    const auto resource_drops =
+        warm.invalidations[static_cast<std::size_t>(LayerInvalidation::resource)];
+    if (!render(*plain, scene) || !render(*cached, scene)) return;
+    const auto rebuilt = cached->layer_cache_stats();
+    expect(rebuilt.builds == 1U && rebuilt.hits == 0U &&
+               rebuilt.invalidations[static_cast<std::size_t>(LayerInvalidation::resource)] ==
+                   resource_drops + 1U,
+           "texels rewritten in place drop the cached image as a resource change",
+           describe(rebuilt));
+    const auto after = capture(*cached);
+    const auto changed = harness::compare_pixels(
+        before.result.rgba, before.result.pixel_width, before.result.pixel_height,
+        after.result.rgba, after.result.pixel_width, after.result.pixel_height, 0);
+    expect(changed.differing_pixels > 0U, "the rewritten texels reach the screen",
+           describe(changed));
+    const auto against = difference(*plain, *cached, 0);
+    expect(against.differing_pixels == 0U,
+           "the rebuilt image matches the uncached frame byte for byte", describe(against));
+
+    if (!render(*plain, scene) || !render(*cached, scene)) return;
+    const auto settled = cached->layer_cache_stats();
+    expect(settled.hits == 1U && settled.builds == 0U &&
+               difference(*plain, *cached, 0).differing_pixels == 0U,
+           "the unchanged texels are drawn from the rebuilt image again", describe(settled));
+}
+
+// Partial redraw serves only versions the renderer accepts: version 0 is
+// below `kMinSupportedSceneVersion`.
+void partial_redraw_rejects_version_zero() {
+    auto surface = make_surface(64, 64, 1.0F, {});
+    if (!surface) return;
+    expect(!SkiaDawnSurfaceTestAccess::serves_partial_redraw(*surface, 0U) &&
+               !partial_redraw_supported(0U),
+           "version 0 is not served from damage");
+    expect(SkiaDawnSurfaceTestAccess::serves_partial_redraw(*surface, kMinSupportedSceneVersion) &&
+               SkiaDawnSurfaceTestAccess::serves_partial_redraw(*surface,
+                                                                kDamageModelSceneVersion) &&
+               !SkiaDawnSurfaceTestAccess::serves_partial_redraw(*surface,
+                                                                 kDamageModelSceneVersion + 1U),
+           "control: every supported version up to the damage model is served");
+}
+
 }  // namespace
 
 int main() {
@@ -708,6 +804,8 @@ int main() {
     partial_presentation_with_layers();
     exact_layer_inside_damage_rect();
     budget_on_the_gpu();
+    mutated_texture_in_cached_subtree();
+    partial_redraw_rejects_version_zero();
     std::cout << (failures == 0 ? "layer cache: all checks passed\n"
                                 : "layer cache: " + std::to_string(failures) + " failed\n");
     return failures == 0 ? 0 : 1;

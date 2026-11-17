@@ -139,6 +139,10 @@ BUILD_TIMESTAMP_PLACEHOLDER = "<build-timestamp>"
 # `patches` names Vellum transformations applied after checkout. Each is
 # proved only by the closure: the patched bytes must hash to the recorded
 # digest, so a patch that drifts from the export fails the plan.
+# `post_patches` names Vellum-only fixes that Pulp does not carry. They are
+# applied after the closure digests are checked, so the digests keep proving
+# the Pulp-equivalent bytes, and a reused checkout is restored first so the
+# check never sees them.
 DEPENDENCIES: dict[str, dict[str, Any]] = {
     "highway": {
         "kind": "cmake",
@@ -174,6 +178,7 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
     "choc": {
         "kind": "headers",
         "patches": ["v8-compatibility", "json-positive-exponent", "file-watcher-lifetime"],
+        "post_patches": ["v8-module-resolution"],
     },
     "brotli": {"kind": "sources"},
     "woff2": {"kind": "sources"},
@@ -265,6 +270,7 @@ PATCHED_PATHS = {
     "v8-compatibility": CHOC_V8_HEADER,
     "json-positive-exponent": CHOC_JSON_HEADER,
     "file-watcher-lifetime": CHOC_FILE_WATCHER_HEADER,
+    "v8-module-resolution": CHOC_V8_HEADER,
 }
 CHOC_JSON_BEFORE = (
     "                    hadExponent = true;\n"
@@ -671,6 +677,102 @@ def apply_choc_file_watcher_patch(root: Path) -> None:
         header.write_text(text, encoding="utf-8")
 
 
+# An unresolvable import makes choc's loadStaticModule return an empty
+# MaybeLocal without throwing, so the TryCatch holds no exception and no
+# message; reading either through an empty handle dereferences null. The
+# resolver now throws a JS Error naming the specifier, and the exception
+# reader tolerates an empty exception, an empty message and a missing origin.
+CHOC_V8_MODULE_EDITS = (
+    (
+        "        v8::String::Utf8Value str (isolate, v);\n"
+        "        return *str;",
+        "        if (v.IsEmpty())\n"
+        "            return {};\n"
+        "\n"
+        "        v8::String::Utf8Value str (isolate, v);\n"
+        "        return *str ? std::string (*str) : std::string();",
+    ),
+    (
+        "        v8::Local<v8::Message> message = tryCatch.Message();\n"
+        "\n"
+        "        auto desc = v8StringToStd (tryCatch.Exception());\n"
+        "\n"
+        "        if (desc.empty())\n"
+        "            return {};\n"
+        "\n"
+        "        auto filename = v8StringToStd (message->GetScriptOrigin().ResourceName());\n"
+        "        int lineNumber = message->GetLineNumber (localContext).FromJust();\n"
+        "        int startCol = message->GetStartColumn (localContext).FromJust();\n"
+        "        int endCol = message->GetEndColumn (localContext).FromJust();\n",
+        "        v8::Local<v8::Message> message = tryCatch.Message();\n"
+        "\n"
+        "        auto desc = v8StringToStd (tryCatch.Exception());\n"
+        "\n"
+        "        if (desc.empty())\n"
+        "            return {};\n"
+        "\n"
+        "        if (message.IsEmpty())\n"
+        "            return desc;\n"
+        "\n"
+        "        auto filename = v8StringToStd (message->GetScriptOrigin().ResourceName());\n"
+        "        int lineNumber = message->GetLineNumber (localContext).FromMaybe (0);\n"
+        "        int startCol = message->GetStartColumn (localContext).FromMaybe (0);\n"
+        "        int endCol = message->GetEndColumn (localContext).FromMaybe (0);\n",
+    ),
+    (
+        "        if (auto sourceLine = v8StringToStd (message->GetSourceLine (localContext).ToLocalChecked()); ! sourceLine.empty())",
+        "        v8::Local<v8::String> sourceLineHandle;\n"
+        "\n"
+        "        if (message->GetSourceLine (localContext).ToLocal (&sourceLineHandle)\n"
+        "             && ! v8StringToStd (sourceLineHandle).empty())",
+    ),
+    (
+        "            result << sourceLine << std::endl;",
+        "            auto sourceLine = v8StringToStd (sourceLineHandle);\n"
+        "            result << sourceLine << std::endl;",
+    ),
+    (
+        "        if (currentModuleResolver != nullptr)\n"
+        "        {\n"
+        "            auto path = v8StringToStd (specifier);\n"
+        "            auto maybeCode = (*currentModuleResolver) (path);\n"
+        "\n"
+        "            if (maybeCode)\n"
+        "                return loadModule (c, stringToV8 (*maybeCode));\n"
+        "        }\n"
+        "\n"
+        "        return {};",
+        "        auto path = v8StringToStd (specifier);\n"
+        "\n"
+        "        if (currentModuleResolver != nullptr)\n"
+        "        {\n"
+        "            auto maybeCode = (*currentModuleResolver) (path);\n"
+        "\n"
+        "            if (maybeCode)\n"
+        "                return loadModule (c, stringToV8 (*maybeCode));\n"
+        "        }\n"
+        "\n"
+        "        isolate->ThrowException (v8::Exception::Error (stringToV8 (\"Cannot find module '\" + path + \"'\")));\n"
+        "        return {};",
+    ),
+)
+
+
+def apply_choc_v8_module_patch(root: Path) -> None:
+    """Apply each edit once; an edit already present is left alone."""
+    header = root / CHOC_V8_HEADER
+    text = header.read_text(encoding="utf-8")
+    original = text
+    for before, after in CHOC_V8_MODULE_EDITS:
+        if after in text:
+            continue
+        if text.count(before) != 1:
+            raise PlanError("choc V8 module resolution patch no longer matches the expected source")
+        text = text.replace(before, after)
+    if text != original:
+        header.write_text(text, encoding="utf-8")
+
+
 def apply_patch(name: str, patch: str, root: Path) -> None:
     if name != "choc" or patch not in PATCHED_PATHS:
         raise PlanError(f"unknown patch {patch!r} for {name}")
@@ -679,6 +781,9 @@ def apply_patch(name: str, patch: str, root: Path) -> None:
         return
     if patch == "file-watcher-lifetime":
         apply_choc_file_watcher_patch(root)
+        return
+    if patch == "v8-module-resolution":
+        apply_choc_v8_module_patch(root)
         return
     header = root / CHOC_JSON_HEADER
     text = header.read_text(encoding="utf-8")
@@ -751,6 +856,14 @@ def prepare_in_tree(name: str, entry: dict[str, Any], repo: Path) -> Path:
     return repo
 
 
+def restore_patched(name: str, root: Path, paths: list[str]) -> None:
+    """Return the patched files of a reused checkout to the pinned bytes."""
+    completed = subprocess.run(["git", "checkout", "-q", "--", *paths], cwd=root,
+                               capture_output=True, text=True, check=False)
+    if completed.returncode:
+        raise PlanError(f"restoring {name} patched files failed: {completed.stderr.strip()}")
+
+
 def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_dir: Path | None,
                          skia_asset_sha256: str | None, repo: Path | None = None) -> dict[str, Path]:
     roots: dict[str, Path] = {}
@@ -770,8 +883,10 @@ def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_d
             root = skia_dir
         else:
             root = deps_dir / f"{name}-{entry['pin']}"
+            patch_names = [*recipe.get("patches", []), *recipe.get("post_patches", [])]
             fetch_git(name, entry["source"], entry["pin"], root, submodules=bool(recipe.get("submodules")),
-                      patched={PATCHED_PATHS[p] for p in recipe.get("patches", [])})
+                      patched={PATCHED_PATHS[p] for p in patch_names})
+            restore_patched(name, root, sorted({PATCHED_PATHS[p] for p in patch_names}))
             for patch in recipe.get("patches", []):
                 apply_patch(name, patch, root)
         for relative, digest in sorted(entry["files"].items()):
@@ -780,6 +895,8 @@ def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_d
                 raise PlanError(f"{name}@{entry['pin'][:12]} has no {relative}")
             if sha256_file(candidate) != digest:
                 raise PlanError(f"{name}@{entry['pin'][:12]}:{relative} does not match the closure digest")
+        for patch in recipe.get("post_patches", []):
+            apply_patch(name, patch, root)
         roots[name] = root
     return roots
 

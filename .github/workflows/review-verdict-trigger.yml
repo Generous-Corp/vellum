@@ -16,4 +16,5 @@ jobs:
     timeout-minutes: 1
     steps:
       - name: Hand the review to Review verdict
-        run: 'true'
+        run: |
+          true

@@ -1,0 +1,5 @@
+# Check every file out byte for byte, on every platform. Vellum pins file
+# contents by SHA-256 (the Three.js payload, framework blobs, fixtures), so a
+# line-ending conversion on checkout, which Git for Windows does by default,
+# makes a Windows configure refuse its own sources.
+* -text

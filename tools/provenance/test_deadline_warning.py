@@ -174,5 +174,51 @@ class IssueTests(unittest.TestCase):
         self.assertEqual([c[:2] for c in calls], [("issue", "create"), ("issue", "close")])
 
 
+class TrackingIssueTests(unittest.TestCase):
+    SUBJECT = lambda self, repository, commit: "Add the thing"  # noqa: E731
+
+    def test_a_near_deadline_event_names_its_commit_due_date_and_action(self) -> None:
+        soon = summary_at(23)["due_soon"]
+        (create,) = deadline_warning.plan(soon, [], LOOKUP, self.SUBJECT)
+        body = create["body"]
+        self.assertIn("`" + "c" * 9 + "` Add the thing", body)
+        self.assertIn("2026-11-20T12:00:00Z", body)
+        self.assertIn("a disposition", body)
+
+    def test_a_subject_cannot_break_the_table(self) -> None:
+        soon = summary_at(23)["due_soon"]
+        for subject in ("Handle A | B", "Fix `code` here", "two\nlines | and `ticks`"):
+            body = deadline_warning.render(soon, LOOKUP, lambda repository, commit, s=subject: s)
+            row = [line for line in body.splitlines() if line.startswith("| " + EVENT_ID)]
+            with self.subTest(subject=subject):
+                self.assertEqual(len(row), 1)
+                cells = row[0].replace("\\|", "").split("|")
+                self.assertEqual(len(cells), 9)  # 7 columns between 8 bars, plus the empty ends
+        self.assertIn("Handle A \\| B", deadline_warning.render(soon, LOOKUP, lambda r, c: "Handle A | B"))
+
+    def test_nothing_pending_closes_the_open_issue_and_otherwise_does_nothing(self) -> None:
+        issue = {"number": 7, "title": deadline_warning.TITLE, "body": "old"}
+        (close,) = deadline_warning.plan([], [issue], None, None, [], None)
+        self.assertEqual((close["op"], close["number"]), ("close", 7))
+        self.assertEqual(deadline_warning.plan([], [], None, None, [], None), [])
+
+    def test_a_pending_count_at_the_warning_level_opens_the_issue_with_every_event(self) -> None:
+        row = summary_at(60)["pending"][0]
+        pressure = {"count": 15, "warning": 15, "limit": 20}
+        (create,) = deadline_warning.plan([], [], LOOKUP, self.SUBJECT, [row], pressure)
+        self.assertIn("15 observations are pending", create["body"])
+        self.assertIn("limit 20", create["body"])
+        self.assertIn(EVENT_ID, create["body"])
+        self.assertIn("a disposition", create["body"])
+
+    def test_a_pending_count_below_the_warning_level_opens_nothing(self) -> None:
+        self.assertEqual(deadline_warning.plan([], [], None, None, summary_at(60)["pending"], None), [])
+
+    def test_the_summary_reports_the_count_and_the_policy_levels(self) -> None:
+        summary = summary_at(60)
+        self.assertEqual((summary["pending_count"], summary["pending_limit"]), (1, 20))
+        self.assertIn("pending_warning", summary)
+
+
 if __name__ == "__main__":
     unittest.main()

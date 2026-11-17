@@ -78,6 +78,16 @@ class CpuRenderInterface final : public Rml::RenderInterface {
 
     void set_image_decoder(ImageDecoder decoder);
 
+    // Bytes held between frames by the layer buffers, the clip mask and the
+    // recorded-command storage.
+    [[nodiscard]] std::size_t cached_bytes() const noexcept;
+    // Releases that storage and returns the bytes it held; the next frame
+    // allocates again what it uses and draws the same pixels. The frame
+    // target is the caller's and is never touched. Between frames only: during
+    // one it releases nothing and returns 0. Not to be called while worker
+    // threads are drawing, which is never the case between frames.
+    std::size_t trim();
+
     // Draws on `threads` threads, the calling thread included: 1, the
     // default, starts none; more starts threads - 1 workers owned by this
     // instance. With workers, a frame's calls are recorded and drawn at

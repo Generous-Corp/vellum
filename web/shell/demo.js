@@ -1,5 +1,6 @@
 import createVellumCore from './vellum_web_core.js';
 import { Button, Stack, Text, mount, useState } from './vellum-ui/runtime.js';
+import { addVectorNode, drawVector } from './vector-canvas.js';
 
 const canvas = document.querySelector('#vellum-canvas');
 const status = document.querySelector('#status');
@@ -38,6 +39,9 @@ globalThis.VellumCanvasBackend = Object.freeze({
         context.textBaseline = 'alphabetic';
         context.fillStyle = cssColor(red, green, blue, alpha);
         context.fillText(text, x, baseline);
+    },
+    vector(plan) {
+        drawVector(context, plan);
     },
     // A blended group draws offscreen and meets the canvas once, so its
     // members blend with each other normally and the group alpha applies once.
@@ -120,6 +124,7 @@ const api = {
     begin: module.cwrap('vellum_web_begin_frame', 'number', ['number','number','number','number','number','number']),
     rectangle: module.cwrap('vellum_web_add_rectangle', 'number', ['string','number','number','number','number','number','number','number','number','number']),
     text: module.cwrap('vellum_web_add_text', 'number', ['string','string','number','number','number','number','number','number','number','number','number']),
+    setScale: module.cwrap('vellum_web_set_scale', 'number', ['number']),
     render: module.cwrap('vellum_web_render', 'number', []),
     count: module.cwrap('vellum_web_command_count', 'number', []),
     digest: module.cwrap('vellum_web_command_digest', 'number', []),
@@ -166,6 +171,8 @@ function lowerNode(node, proposed, parentX, parentY) {
         const foreground = color(style.color, '#111827');
         api.text(node.id, directText(node), absoluteX, absoluteY, proposed.width,
             proposed.height, Math.max(1, number(style, 'fontSize', 14)), ...foreground);
+    } else if (node.type === 'vector') {
+        addVectorNode(module, node, absoluteX, absoluteY, proposed.width, proposed.height);
     } else if (node.type === 'button' || style.backgroundColor) {
         const background = node.type === 'button' && !style.backgroundColor
             ? color('#14b8a6', '#14b8a6') : fill;
@@ -210,6 +217,7 @@ function render() {
     const height = number(style, 'height', 0);
     if (!(width > 0 && height > 0)) throw new Error('browser proof requires positive root width and height');
     const background = color(style.backgroundColor, '#f8fafc');
+    api.setScale(globalThis.devicePixelRatio || 1);
     if (!api.begin(width, height, ...background)) throw new Error('Wasm core rejected the frame');
     interactions = [];
     lowerNode(tree, { x: 0, y: 0, width, height }, 0, 0);

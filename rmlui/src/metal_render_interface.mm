@@ -260,6 +260,19 @@ struct MetalRenderInterface::State {
         return layer_pool[static_cast<std::size_t>(index)];
     }
 
+    static std::size_t bytes_of(id<MTLTexture> texture) {
+        return texture ? static_cast<std::size_t>(texture.allocatedSize) : 0;
+    }
+
+    std::size_t cached_bytes() const {
+        std::size_t total = bytes_of(stencil) + bytes_of(mask_image);
+        for (id<MTLTexture> layer : layer_pool)
+            total += bytes_of(layer);
+        for (id<MTLTexture> target : post)
+            total += bytes_of(target);
+        return total;
+    }
+
     id<MTLTexture> frame_texture(__strong id<MTLTexture>& slot) {
         if (!slot) {
             MTLTextureDescriptor* descriptor =
@@ -633,6 +646,27 @@ bool MetalRenderInterface::valid() const noexcept {
            s.stencil_incr;
 }
 
+std::size_t MetalRenderInterface::cached_target_bytes() const noexcept {
+    return state_->cached_bytes();
+}
+
+std::size_t MetalRenderInterface::trim() {
+    auto& s = *state_;
+    // A frame is being encoded: its layers are in use.
+    if (s.layer_count != 0 || s.frame_pipelines)
+        return 0;
+    const std::size_t released = s.cached_bytes();
+    s.frame = {};
+    s.layer_pool.clear();
+    s.stencil = nil;
+    s.post = {};
+    s.mask_image = nil;
+    // ensure_targets() reallocates at the next frame's first call.
+    s.target_width = 0;
+    s.target_height = 0;
+    return released;
+}
+
 std::size_t MetalRenderInterface::unsupported_calls() const noexcept {
     return state_->unsupported;
 }
@@ -690,6 +724,10 @@ void MetalRenderInterface::end_frame() {
     auto& s = *state_;
     if (s.layer_count == 0 || !s.frame_pipelines) {
         s.end_pass();
+        // A begin_frame that failed after choosing pipelines leaves no frame open.
+        s.frame_pipelines = nullptr;
+        s.layer_count = 0;
+        s.frame = {};
         return;
     }
     s.end_pass();
@@ -713,6 +751,9 @@ void MetalRenderInterface::end_frame() {
     }
     s.layer_count = 0;
     s.frame_pipelines = nullptr;
+    // The frame target holds the caller's command buffer and texture; keeping
+    // them would hold the last frame's resources until the next frame.
+    s.frame = {};
 }
 
 Rml::CompiledGeometryHandle MetalRenderInterface::CompileGeometry(

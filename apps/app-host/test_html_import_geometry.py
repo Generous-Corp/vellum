@@ -40,10 +40,13 @@ import tempfile
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "cli"))
+sys.path.insert(0, str(REPO / "cli/tests"))
+from live_browser import live_browser_skip_reason  # noqa: E402
 from vellum_cli import default_html_interaction_plan  # noqa: E402
 from vellum_html_source import stage_html_source  # noqa: E402
 from vellum_web_backend import BackendFailure, chrome_path  # noqa: E402
 from vellum_web_backend import run_chrome_interaction_capture  # noqa: E402
+sys.path.pop(0)
 sys.path.pop(0)
 
 TOLERANCE = 1.0
@@ -219,6 +222,10 @@ def report(name: str, result: dict) -> None:
 def main() -> int:
     host = sys.argv[1]
     node = sys.argv[2] if len(sys.argv) > 2 else "node"
+    reason = live_browser_skip_reason()
+    if reason is not None:
+        print(f"SKIP: {reason}")
+        return 77
     if not os.environ.get("VELLUM_CHROME_PATH"):
         try:
             chrome_path()

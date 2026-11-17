@@ -363,9 +363,24 @@ void apply_tracks(SceneNode& node, double clock) {
     for (auto& child : node.children) apply_tracks(child, clock);
 }
 
+void last_keyframe_time(const SceneNode& node, std::optional<double>& latest) noexcept {
+    for (const auto& track : node.tracks) {
+        if (track.keyframes.empty()) continue;
+        const double time = track.keyframes.back().time;
+        if (!latest || time > *latest) latest = time;
+    }
+    for (const auto& child : node.children) last_keyframe_time(child, latest);
+}
+
 }  // namespace
 
 bool scene_has_tracks(const Scene& scene) noexcept { return any_tracks(scene.root); }
+
+std::optional<double> tracks_end_time(const Scene& scene) noexcept {
+    std::optional<double> latest;
+    last_keyframe_time(scene.root, latest);
+    return latest;
+}
 
 double eased_progress(const Easing& easing, double elapsed) noexcept {
     if (elapsed <= 0.0) return easing.kind == EasingKind::steps ? steps(easing, 0.0) : 0.0;
