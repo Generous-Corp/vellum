@@ -166,10 +166,14 @@ jobs:
           if [ -z "$reason" ]; then
             base="$GITHUB_SHA^1"
             classifier="$RUNNER_TEMP/base-early-classify-gpu-proof.py"
+            classes="$RUNNER_TEMP/base-ctest-classes.json"
             verdict=""
+            # The base's test class manifest: without one the cheap lane has
+            # no pr-fast tests to run, so the full proof runs.
+            git show "$base:scripts/ctest_classes.json" > "$classes" 2>/dev/null || : > "$classes"
             if git show "$base:scripts/classify_gpu_proof.py" > "$classifier" 2>/dev/null &&
                git diff --name-only -z --no-renames "$base" "$GITHUB_SHA" > "$RUNNER_TEMP/depth-paths" &&
-               verdict="$(python3 -I "$classifier" --early-proof --files0-from "$RUNNER_TEMP/depth-paths")"; then
+               verdict="$(python3 -I "$classifier" --early-proof --classes-file "$classes" --files0-from "$RUNNER_TEMP/depth-paths")"; then
               :
             fi
             if [ "$verdict" != cheap ]; then
@@ -411,7 +415,7 @@ jobs:
 
       - name: Run the pr-fast tests
         if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap == 'true'
-        run: ctest --test-dir build-cheap -L pr-fast --output-on-failure
+        run: ctest --test-dir build-cheap -L pr-fast --no-tests=error --output-on-failure
 
       # Re-derive the verdict from scratch: the cheap lane may stand in for the
       # full proof only on a pull request, for a change the base's classifier
@@ -428,7 +432,9 @@ jobs:
           guard="$RUNNER_TEMP/guard-early-classify-gpu-proof.py"
           git show "$GITHUB_SHA^1:scripts/classify_gpu_proof.py" > "$guard"
           git diff --name-only -z --no-renames "$GITHUB_SHA^1" "$GITHUB_SHA" > "$RUNNER_TEMP/guard-early-paths"
-          verdict="$(python3 -I "$guard" --early-proof --files0-from "$RUNNER_TEMP/guard-early-paths")"
+          git show "$GITHUB_SHA^1:scripts/ctest_classes.json" > "$RUNNER_TEMP/guard-ctest-classes.json" 2>/dev/null ||
+            : > "$RUNNER_TEMP/guard-ctest-classes.json"
+          verdict="$(python3 -I "$guard" --early-proof --classes-file "$RUNNER_TEMP/guard-ctest-classes.json" --files0-from "$RUNNER_TEMP/guard-early-paths")"
           if [ "$verdict" != cheap ]; then
             echo "::error::the cheap lane ran, but the base's classifier says: $verdict"
             exit 1

@@ -88,18 +88,19 @@ def registered_tests(root: Path = ROOT) -> set[str]:
     return {name for name in names if "$" not in name}
 
 
-def listed_registered_tests(classes: dict[str, list[str]]) -> set[str]:
-    """Registered tests the manifest lists.
+def fixture_classes(registered: set[str]) -> dict[str, list[str]]:
+    """A manifest over the registered tests, for the mechanism tests, so they
+    hold whether or not the repository carries the real manifest."""
+    names = sorted(registered)
+    return {"pr-fast": names[0::3], "gpu": names[1::3], "slow": names[2::3]}
 
-    The mechanism tests below remove or double one listed test and expect
-    exactly that test back. A test another pull request registered without a
-    class would join every result, so they work on the listed set only;
-    test_every_registered_test_has_one_class covers unlisted tests.
-    """
-    return registered_tests() & set(classes_by_test(classes))
+
+HAS_MANIFEST = unittest.skipUnless(
+    MANIFEST.is_file(), "scripts/ctest_classes.json is not in this tree")
 
 
 class CtestClassesTest(unittest.TestCase):
+    @HAS_MANIFEST
     def test_manifest_lists_each_test_once(self) -> None:
         classes = load_manifest()
         for name in CLASSES:
@@ -108,6 +109,7 @@ class CtestClassesTest(unittest.TestCase):
                     if len(owners) != 1}
         self.assertEqual(repeated, {})
 
+    @HAS_MANIFEST
     def test_every_registered_test_has_one_class(self) -> None:
         registered = registered_tests()
         self.assertGreater(len(registered), 40, "the scan found the registrations")
@@ -116,8 +118,8 @@ class CtestClassesTest(unittest.TestCase):
         self.assertEqual(unclassified(registered, load_manifest()), [])
 
     def test_a_missing_label_is_reported(self) -> None:
-        classes = load_manifest()
-        registered = listed_registered_tests(classes)
+        registered = registered_tests()
+        classes = fixture_classes(registered)
         victim = classes["pr-fast"][0]
         self.assertIn(victim, registered)
         removed = {**classes, "pr-fast": [t for t in classes["pr-fast"] if t != victim]}
@@ -126,9 +128,9 @@ class CtestClassesTest(unittest.TestCase):
         self.assertEqual(unclassified(registered, doubled, "fail"), [victim])
 
     def test_unlisted_policy(self) -> None:
-        classes = load_manifest()
+        registered = registered_tests()
+        classes = fixture_classes(registered)
         victim = classes["pr-fast"][0]
-        registered = listed_registered_tests(classes)
         removed = {**classes, "pr-fast": [t for t in classes["pr-fast"] if t != victim]}
         self.assertEqual(unclassified(registered, removed, "fail"), [victim])
         self.assertEqual(unclassified(registered, removed, "gpu"), [])
@@ -138,9 +140,9 @@ class CtestClassesTest(unittest.TestCase):
         self.assertEqual(unclassified(registered, doubled, "gpu"), [victim])
 
     def test_unset_or_unknown_policy_fails_closed(self) -> None:
-        classes = load_manifest()
+        registered = registered_tests()
+        classes = fixture_classes(registered)
         victim = classes["pr-fast"][0]
-        registered = listed_registered_tests(classes)
         removed = {**classes, "pr-fast": [t for t in classes["pr-fast"] if t != victim]}
         # patch.dict restores the environment, including an unset variable,
         # so the strict check in another test never inherits "gpu" from here.
@@ -182,16 +184,21 @@ class ClassifierConfigureTest(unittest.TestCase):
 
     def configure(self, *, parent_test: bool, vellum_tests: str = "ON",
                   cmake_version: str = "", listed: bool = True,
-                  policy: str = "fail") -> subprocess.CompletedProcess:
+                  policy: str = "fail", manifest: str = "present") -> subprocess.CompletedProcess:
         tmp = Path(tempfile.mkdtemp(prefix="vellum-classes-"))
         self.addCleanup(shutil.rmtree, tmp, True)
         vellum = tmp / "vellum"
         (vellum / "cmake").mkdir(parents=True)
         (vellum / "scripts").mkdir()
         shutil.copy(MODULE, vellum / "cmake" / "VellumTestClasses.cmake")
-        (vellum / "scripts" / "ctest_classes.json").write_text(json.dumps(
-            {"schema": "vellum.ctest-classes.v1",
-             "classes": {"pr-fast": ["vellum.own"] if listed else [], "gpu": [], "slow": []}}))
+        if manifest != "absent":
+            # A manifest must list something to be live; an unlisted `vellum.own`
+            # is then an unclassified test, not an inert manifest.
+            names = [] if manifest == "empty" else (
+                ["vellum.own"] if listed else ["vellum.other"])
+            (vellum / "scripts" / "ctest_classes.json").write_text(json.dumps(
+                {"schema": "vellum.ctest-classes.v1",
+                 "classes": {"pr-fast": names, "gpu": [], "slow": []}}))
         own = "add_test(NAME vellum.own COMMAND ${CMAKE_COMMAND} -E true)\n" 
         (vellum / "CMakeLists.txt").write_text(
             "cmake_minimum_required(VERSION 3.24)\nproject(vellum NONE)\n"
@@ -205,11 +212,36 @@ class ClassifierConfigureTest(unittest.TestCase):
             "cmake_minimum_required(VERSION 3.24)\nproject(parent NONE)\nenable_testing()\n"
             + ("add_test(NAME parent.unrelated COMMAND ${CMAKE_COMMAND} -E true)\n" if parent_test else "")
             + f"add_subdirectory({vellum.as_posix()} vellum-build)\n")
-        args = [CMAKE, "-S", str(parent), "-B", str(tmp / "b")]
+        self.build = tmp / "b"
+        args = [CMAKE, "-S", str(parent), "-B", str(self.build)]
         if cmake_version:
             args.append(f"-DVELLUM_TEST_CLASSES_CMAKE_VERSION={cmake_version}")
         environment = {**os.environ, "VELLUM_UNLISTED_TEST_POLICY": policy}
         return subprocess.run(args, capture_output=True, text=True, env=environment)
+
+    def labelled(self, label: str) -> str:
+        return subprocess.run(["ctest", "--test-dir", str(self.build), "-N", "-L", label],
+                              capture_output=True, text=True).stdout
+
+    def test_without_a_manifest_configure_succeeds_and_labels_nothing(self) -> None:
+        # The rule ships before its data: no manifest means no enforcement,
+        # even for a test no manifest lists, under the strict policy.
+        result = self.configure(parent_test=False, manifest="absent")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("skipped", result.stdout)
+        self.assertIn("Total Tests: 0", self.labelled("pr-fast"))
+
+    def test_an_empty_manifest_labels_nothing_and_enforces_nothing(self) -> None:
+        result = self.configure(parent_test=False, manifest="empty")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("lists no test", result.stdout)
+        self.assertIn("Total Tests: 0", self.labelled("pr-fast"))
+
+    def test_a_manifest_applies_its_classes(self) -> None:
+        result = self.configure(parent_test=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("vellum.own", self.labelled("pr-fast"))
+        self.assertIn("Total Tests: 0", self.labelled("gpu"))
 
     def test_embedding_ignores_unrelated_parent_tests(self) -> None:
         result = self.configure(parent_test=True)

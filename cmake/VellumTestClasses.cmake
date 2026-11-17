@@ -12,6 +12,10 @@
 # groups and main) an unlisted test runs as gpu with a warning instead of
 # failing, so a test added by another pull request cannot break the queue.
 # The class is appended to any label the test already carries.
+#
+# Without the manifest, or with a manifest that lists no test, the module does
+# nothing: no test is labelled and none is enforced. The rule ships before its
+# data, and the cheap pull-request lane stays off until a manifest exists.
 
 set(_vellum_test_classes pr-fast gpu slow)
 
@@ -44,7 +48,22 @@ function(vellum_apply_test_classes manifest)
         return()
     endif()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${manifest}")
+    if(NOT EXISTS "${manifest}")
+        message(STATUS "Vellum test class labels skipped: no ${manifest}")
+        return()
+    endif()
     file(READ "${manifest}" _json)
+    set(_listed 0)
+    foreach(_class IN LISTS _vellum_test_classes)
+        string(JSON _count ERROR_VARIABLE _error LENGTH "${_json}" classes "${_class}")
+        if(NOT _error AND _count GREATER 0)
+            math(EXPR _listed "${_listed} + ${_count}")
+        endif()
+    endforeach()
+    if(_listed EQUAL 0)
+        message(STATUS "Vellum test class labels skipped: ${manifest} lists no test")
+        return()
+    endif()
     foreach(_class IN LISTS _vellum_test_classes)
         string(JSON _count LENGTH "${_json}" classes "${_class}")
         set(_names_${_class} "")

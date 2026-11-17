@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
 import subprocess
@@ -23,6 +24,9 @@ CURSOR = "provenance/pulp-observatory/cursor.json"
 REPORT = "provenance/pulp-observatory/reports/current.json"
 EVENT = "provenance/pulp-observatory/events/vellum-abc.yaml"
 SDK = "graphics/src/canvas.cpp"
+# A fixture manifest: the cheap lane needs the base to list a pr-fast test.
+CLASSES = json.dumps({"schema": "vellum.ctest-classes.v1",
+                      "classes": {"pr-fast": ["vellum.a"], "gpu": [], "slow": []}})
 
 
 # What each real defect changed, from the week's pull-request proofs whose only
@@ -48,7 +52,7 @@ class EarlyProofTests(unittest.TestCase):
     def test_each_gpu_only_defect_runs_the_early_proof(self) -> None:
         for name, paths in GPU_ONLY_DEFECTS.items():
             with self.subTest(defect=name):
-                early, reason = classifier.early_proof(paths)
+                early, reason = classifier.early_proof(paths, CLASSES)
                 self.assertTrue(early, reason)
 
     def test_changes_the_cheap_lane_covers_stay_cheap(self) -> None:
@@ -63,8 +67,16 @@ class EarlyProofTests(unittest.TestCase):
             ["rmlui/src/soft_raster.hpp", "rmlui/tests/cpu_hash_test.cpp"],
         ):
             with self.subTest(paths=paths):
-                early, reason = classifier.early_proof(paths)
+                early, reason = classifier.early_proof(paths, CLASSES)
                 self.assertFalse(early, reason)
+
+    def test_a_base_without_pr_fast_tests_runs_the_early_proof(self) -> None:
+        for text in (None, "", "not json", "{}", json.dumps({"schema": "other", "classes": {"pr-fast": ["a"]}}),
+                     json.dumps({"schema": "vellum.ctest-classes.v1", "classes": {"pr-fast": []}}),
+                     json.dumps({"schema": "vellum.ctest-classes.v1", "classes": {"gpu": ["a"]}})):
+            with self.subTest(text=text):
+                early, reason = classifier.early_proof(["docs/a.md"], text)
+                self.assertTrue(early, reason)
 
     def test_every_doubt_runs_the_early_proof(self) -> None:
         for paths in (
@@ -76,14 +88,22 @@ class EarlyProofTests(unittest.TestCase):
             ["graphics/shaders/blur.wgsl"],
         ):
             with self.subTest(paths=paths):
-                early, reason = classifier.early_proof(paths)
+                early, reason = classifier.early_proof(paths, CLASSES)
                 self.assertTrue(early, reason)
 
     def test_cli_prints_one_word_and_an_old_base_exits_two(self) -> None:
+        classes = Path(tempfile.mkdtemp()) / "classes.json"
+        classes.write_text(CLASSES)
         for paths, expected in ((["docs/a.md"], "cheap"), ([SDK], "early"), ([], "early")):
-            result = subprocess.run(["python3", "-I", str(SCRIPT), "--early-proof", *paths],
-                                    capture_output=True, text=True, check=True)
+            result = subprocess.run(
+                ["python3", "-I", str(SCRIPT), "--early-proof", "--classes-file", str(classes), *paths],
+                capture_output=True, text=True, check=True)
             self.assertEqual(result.stdout, expected + "\n")
+        # Without the manifest file, or with none supplied, the cheap lane is off.
+        for extra in ([], ["--classes-file", str(classes.parent / "absent.json")]):
+            result = subprocess.run(["python3", "-I", str(SCRIPT), "--early-proof", *extra, "docs/a.md"],
+                                    capture_output=True, text=True, check=True)
+            self.assertEqual(result.stdout, "early\n")
         # The verdict that gates the full proof is unchanged by the new flag.
         result = subprocess.run(["python3", "-I", str(SCRIPT), SDK],
                                 capture_output=True, text=True, check=True)
@@ -162,6 +182,7 @@ class StepHarness(unittest.TestCase):
         self.write("scripts/classify_gpu_proof.py", SCRIPT.read_text())
         self.write(SDK, "int x;\n")
         self.write(CURSOR, "{}\n")
+        self.write("scripts/ctest_classes.json", CLASSES)
         self.commit("base")
         self.text = self.workflow.read_text(encoding="utf-8")
 
@@ -391,6 +412,26 @@ class CheapLaneStepTests(StepHarness):
         result, output = self.run_depth(sha)
         self.assertEqual(output, "", result.stdout + result.stderr)
         self.assertIn("unavailable", result.stdout)
+
+    def test_a_base_without_a_class_manifest_runs_the_early_full_proof(self) -> None:
+        # The rule ships before its data: until a manifest exists on the base
+        # every pull request, the one that adds the manifest included, runs the
+        # full proof as before.
+        self.git("rm", "-q", "scripts/ctest_classes.json")
+        self.commit("no manifest")
+        sha = self.merge({"docs/note.md": "x\n"})
+        result, output = self.run_depth(sha)
+        self.assertEqual(output, "", result.stdout + result.stderr)
+        self.assertIn("the base's classifier says: early", result.stdout)
+        guard, _ = self.run_step(CHEAP_GUARD_STEP, sha)
+        self.assertNotEqual(guard.returncode, 0)
+
+    def test_the_pull_request_that_adds_the_manifest_runs_the_full_proof(self) -> None:
+        self.git("rm", "-q", "scripts/ctest_classes.json")
+        self.commit("no manifest")
+        sha = self.merge({"scripts/ctest_classes.json": CLASSES})
+        result, output = self.run_depth(sha)
+        self.assertEqual(output, "", result.stdout + result.stderr)
 
     def test_a_change_to_the_classifier_never_takes_the_cheap_lane(self) -> None:
         sha = self.merge({"scripts/classify_gpu_proof.py": SCRIPT.read_text() + "\n# edit\n"})

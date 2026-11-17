@@ -28,6 +28,7 @@ a workflow is required by rule, and an empty change list is required too.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -85,13 +86,29 @@ GPU_RELEVANT = (
 )
 
 
-def early_proof(paths: list[str]) -> tuple[bool, str]:
+def has_pr_fast_tests(classes_text: str | None) -> bool:
+    """Whether the base's test class manifest lists at least one pr-fast test.
+    The cheap lane runs `ctest -L pr-fast`, so without such a test it proves
+    nothing; an absent, unreadable or empty manifest says no."""
+    try:
+        document = json.loads(classes_text or "")
+        names = document["classes"]["pr-fast"]
+        return (document["schema"] == "vellum.ctest-classes.v1" and isinstance(names, list)
+                and any(isinstance(name, str) and name for name in names))
+    except (ValueError, KeyError, TypeError):
+        return False
+
+
+def early_proof(paths: list[str], classes_text: str | None) -> tuple[bool, str]:
     """Return (early, reason): whether a pull request should run the full GPU
     proof now instead of the cheap lane, leaving it to the merge group.
 
-    Fails closed on an empty list or a malformed path, and on any path in
-    GPU_RELEVANT or ALWAYS.
+    Fails closed on an empty list or a malformed path, on any path in
+    GPU_RELEVANT or ALWAYS, and when the base has no test class manifest with a
+    pr-fast test (`classes_text` is the base's scripts/ctest_classes.json).
     """
+    if not has_pr_fast_tests(classes_text):
+        return True, "the base has no test class manifest with a pr-fast test"
     if not paths:
         return True, "no changed paths were supplied"
     for path in paths:
@@ -110,13 +127,23 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="print `early` or `cheap`: whether a pull request should run the full proof now",
     )
+    parser.add_argument(
+        "--classes-file", type=Path,
+        help="the base's scripts/ctest_classes.json, read by --early-proof; a missing or empty file means no cheap lane",
+    )
     parser.add_argument("paths", nargs="*")
     args = parser.parse_args(argv)
     paths = list(args.paths)
     if args.files0_from is not None:
         paths += [item for item in args.files0_from.read_bytes().decode("utf-8").split("\0") if item]
     if args.early_proof:
-        early, reason = early_proof(paths)
+        classes_text = None
+        if args.classes_file is not None:
+            try:
+                classes_text = args.classes_file.read_text(encoding="utf-8")
+            except OSError:
+                classes_text = None
+        early, reason = early_proof(paths, classes_text)
         print(f"classify: {reason}", file=sys.stderr)
         print("early" if early else "cheap")
         return 0
