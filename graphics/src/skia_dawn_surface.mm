@@ -108,6 +108,7 @@ std::atomic<bool> enclose_backdrops{true};
 
 std::atomic<std::uint32_t> failing_recreations{0U};
 std::atomic<std::uint32_t> losing_recreations{0U};
+std::atomic<std::uint32_t> failing_device_requests{0U};
 std::atomic<std::uint32_t> failing_rebuilds{0U};
 std::atomic<std::uint32_t> losing_frames{0U};
 std::atomic<testing::RecoveryClock> recovery_clock{nullptr};
@@ -2045,6 +2046,10 @@ public:
         instance_.ProcessEvents();
         if (adapter_status != wgpu::RequestAdapterStatus::Success || !adapter) {
             set_error(error, "Dawn Metal adapter unavailable: " + adapter_message);
+            return false;
+        }
+        if (take_injection(failing_device_requests)) {
+            set_error(error, "Dawn Metal device unavailable: failed by test injection");
             return false;
         }
 
@@ -3987,6 +3992,8 @@ void set_recovery_clock(RecoveryClock clock) noexcept { recovery_clock = clock; 
 void fail_device_recreations(std::uint32_t count) noexcept { failing_recreations = count; }
 
 void lose_recreated_devices(std::uint32_t count) noexcept { losing_recreations = count; }
+
+void fail_device_requests(std::uint32_t count) noexcept { failing_device_requests = count; }
 
 void fail_surface_rebuilds(std::uint32_t count) noexcept { failing_rebuilds = count; }
 

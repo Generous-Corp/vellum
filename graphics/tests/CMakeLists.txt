@@ -1,5 +1,6 @@
 add_library(vellum-scene-capture-harness STATIC
-    support/scene_capture_harness.cpp)
+    support/scene_capture_harness.cpp
+    support/gpu_test_environment.cpp)
 target_include_directories(vellum-scene-capture-harness PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(vellum-scene-capture-harness PUBLIC
@@ -63,6 +64,21 @@ set_target_properties(vellum-animation-gpu-test PROPERTIES
     BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
 add_test(NAME vellum.gpu.animation
     COMMAND vellum-animation-gpu-test)
+
+add_executable(vellum-gpu-test-environment-test
+    gpu_test_environment_test.cpp)
+target_link_libraries(vellum-gpu-test-environment-test PRIVATE
+    vellum-scene-capture-harness)
+target_include_directories(vellum-gpu-test-environment-test PRIVATE
+    ${PROJECT_SOURCE_DIR}/graphics/src)
+set_target_properties(vellum-gpu-test-environment-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.test-environment
+    COMMAND vellum-gpu-test-environment-test)
+set_tests_properties(vellum.gpu.test-environment PROPERTIES
+    SKIP_RETURN_CODE 77)
 
 add_executable(vellum-frame-driver-gpu-test
     frame_driver_gpu_test.cpp)

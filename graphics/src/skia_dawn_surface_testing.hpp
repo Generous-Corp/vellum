@@ -47,6 +47,10 @@ void set_recovery_clock(RecoveryClock clock) noexcept;
 /// adapter.
 void fail_device_recreations(std::uint32_t count) noexcept;
 
+/// Makes the next `count` device requests fail after the adapter was found,
+/// the first creation of a device included.
+void fail_device_requests(std::uint32_t count) noexcept;
+
 /// Makes the next `count` replacement devices lost as soon as they are created.
 void lose_recreated_devices(std::uint32_t count) noexcept;
 
