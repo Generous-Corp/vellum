@@ -56,6 +56,9 @@ inline constexpr std::string_view kInvalidPathCode = "VELLUM_INVALID_PATH";
 /// An image with children, an invalid fit, sampling or source rectangle, or a
 /// malformed asset table; always an error.
 inline constexpr std::string_view kInvalidImageCode = "VELLUM_INVALID_IMAGE";
+/// A vector node without a compiled asset, with children, or with an asset
+/// that fails `vector_asset_is_valid`; always an error.
+inline constexpr std::string_view kInvalidVectorAssetCode = "VELLUM_INVALID_VECTOR_ASSET";
 /// An image node whose asset is not in `Scene::images`; a warning. The
 /// renderer draws `kMissingImagePlaceholder` over the node's box instead. The
 /// same code warns of a source rectangle that leaves nothing of its image to
@@ -84,6 +87,11 @@ inline constexpr std::string_view kPlotTooWideCode = "VELLUM_PLOT_TOO_WIDE";
 /// the `normal` mode instead. Only Tier 2 modes, which a backend other than
 /// Skia Graphite may lack, are ever reported this way.
 inline constexpr std::string_view kBlendModeFallbackCode = "VELLUM_BLEND_MODE_FALLBACK";
+
+/// A scene whose token table repeats a path or holds a value that is not
+/// finite, or a node whose token reference is out of range or disagrees with
+/// its `fill`; always an error.
+inline constexpr std::string_view kInvalidTokenReferenceCode = "VELLUM_INVALID_TOKEN_REFERENCE";
 
 [[nodiscard]] constexpr std::string_view to_string(
     LoweringDiagnostic::Severity severity) noexcept {

@@ -1,0 +1,161 @@
+name: Android NDK
+
+# A temporary compile canary, not a build path: tools/android compiles a
+# hand-picked list of framework sources outside the mirror and builds no artifact
+# anyone consumes. The Android closure lane replaces it once the mirror's
+# multi-platform rule enables android-arm64.
+#
+# Cross-compiles the platform-neutral framework units for arm64-v8a with the
+# pinned NDK and proves the result is Android code: every object is a 64-bit
+# AArch64 ELF, the object count equals the sources CMake selected, and the JNI
+# probe's symbol is defined. A control compiles one object with the host
+# compiler and the same check must refuse it.
+#
+# The probe, the unit list and what is left out are in tools/android/. Rendering,
+# canvas and view units need the Skia/Dawn artifact, and runtime's mbedTLS users
+# need mbedTLS; neither is built here.
+#
+# Advisory: not a required check. It runs on pull requests and pushes that touch
+# the framework or this lane, never on merge groups.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'framework/**'
+      - 'foundation/**'
+      - 'tools/android/**'
+      - '.github/workflows/android.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'framework/**'
+      - 'foundation/**'
+      - 'tools/android/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('vellum-android-pr-{0}', github.ref) || format('vellum-android-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  ANDROID_NDK_VERSION: 30.0.14904198
+  ANDROID_API_FLOOR: 26
+  # The CHOC revision every mirror closure pins (tools/mirror/mirror_package.py).
+  CHOC_REVISION: b586f33d1c9e8bee98c2b420a5b20bf525c3c7be
+
+jobs:
+  android-framework-arm64:
+    name: android-framework-arm64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$sdkmanager"
+          # `yes` ends on SIGPIPE once the licenses are answered, so the answer
+          # runs outside pipefail.
+          (set +o pipefail; yes | "$sdkmanager" --licenses > /dev/null) || true
+          "$sdkmanager" --install "ndk;${ANDROID_NDK_VERSION}"
+          ndk="$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
+          test -f "$ndk/build/cmake/android.toolchain.cmake"
+          echo "ANDROID_NDK_ROOT=$ndk" >> "$GITHUB_ENV"
+          grep -E '^Pkg.Revision' "$ndk/source.properties"
+
+      - name: Fetch the pinned CHOC headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init --quiet "$RUNNER_TEMP/choc"
+          git -C "$RUNNER_TEMP/choc" fetch --quiet --depth 1 \
+            https://github.com/danielraffel/choc.git "$CHOC_REVISION"
+          git -C "$RUNNER_TEMP/choc" checkout --quiet --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/choc" rev-parse HEAD)" = "$CHOC_REVISION"
+          echo "VELLUM_CHOC_ROOT=$RUNNER_TEMP/choc" >> "$GITHUB_ENV"
+
+      - name: Configure for arm64-v8a
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S tools/android -B "$RUNNER_TEMP/android" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM="android-${ANDROID_API_FLOOR}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVELLUM_CHOC_ROOT="$VELLUM_CHOC_ROOT"
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build "$RUNNER_TEMP/android" --parallel "$(nproc)"
+
+      - name: Check the framework objects are AArch64
+        shell: bash
+        run: |
+          set -euo pipefail
+          sources="$(wc -l < "$RUNNER_TEMP/android/android-sources.txt")"
+          python3 -I tools/android/check_android_objects.py \
+            --build-dir "$RUNNER_TEMP/android" --expect-sources "$sources"
+
+      # The bridge headers are inert off Android, so a header that compiled to
+      # nothing would pass a plain compile. This translation unit names what
+      # they declare and the object must define the probe's symbol. It is
+      # written here, not kept as a source file: tools/ is not allowed to
+      # include the framework by its own names.
+      - name: Compile the JNI bridge probe and check its symbol
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          probe="$RUNNER_TEMP/probe"
+          mkdir -p "$probe/CMakeFiles/jni-probe.dir"
+          cat > "$probe/jni_probe.cpp" <<'CPP'
+          #include <vellum/platform/android/jni.hpp>
+          #include <vellum/platform/android/motion_bridge.h>
+          #include <type_traits>
+          #if !defined(__ANDROID__)
+          #error "the JNI probe must be built with the Android toolchain"
+          #endif
+          static_assert(std::is_same_v<decltype(vellum::android::g_vm), JavaVM*>);
+          static_assert(std::is_same_v<decltype(&vellum::android::get_env), JNIEnv* (*)()>);
+          extern "C" __attribute__((visibility("default"))) int vellum_android_probe_abi() {
+              bool (*tracing)() = &pulp_motion_tracing_enabled;
+              return tracing != nullptr && vellum::android::has_asset_manager() ? 1 : 0;
+          }
+          CPP
+          "$bin/aarch64-linux-android${ANDROID_API_FLOOR}-clang++" -std=c++20 -c \
+            -I framework/core/platform/include \
+            "$probe/jni_probe.cpp" -o "$probe/CMakeFiles/jni-probe.dir/jni_probe.o"
+          python3 -I tools/android/check_android_objects.py \
+            --build-dir "$probe" --expect-sources 1 \
+            --nm "$bin/llvm-nm" --require-symbol vellum_android_probe_abi
+
+      - name: Control, a host-compiled object must be refused
+        shell: bash
+        run: |
+          set -euo pipefail
+          control="$RUNNER_TEMP/control/CMakeFiles/host.dir"
+          mkdir -p "$control"
+          printf 'int host_object() { return 1; }\n' > "$RUNNER_TEMP/host.cpp"
+          c++ -c "$RUNNER_TEMP/host.cpp" -o "$control/host.o"
+          if python3 -I tools/android/check_android_objects.py \
+              --build-dir "$RUNNER_TEMP/control" --expect-sources 1; then
+            echo "the object check accepted a host-compiled object" >&2
+            exit 1
+          fi
+
+      - name: Unit tests of the object check
+        shell: bash
+        run: python3 -I tools/android/test_check_android_objects.py

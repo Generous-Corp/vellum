@@ -43,4 +43,20 @@ if(VELLUM_BUILD_TESTS)
     add_test(
         NAME vellum.rendered-tree-materializer
         COMMAND vellum-rendered-tree-materializer-test)
+
+    if(TARGET vellum-scene-capture-harness)
+        add_executable(vellum-token-theme-gpu-test
+            tests/token_theme_gpu_test.cpp)
+        target_include_directories(vellum-token-theme-gpu-test PRIVATE src)
+        target_link_libraries(vellum-token-theme-gpu-test PRIVATE
+            Vellum::Authoring vellum-scene-capture-harness)
+        set_target_properties(vellum-token-theme-gpu-test PROPERTIES
+            OSX_ARCHITECTURES arm64
+            MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+            BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+        add_test(NAME vellum.gpu.token-theme
+            COMMAND vellum-token-theme-gpu-test)
+        set_tests_properties(vellum.gpu.token-theme PROPERTIES
+            SKIP_RETURN_CODE 77)
+    endif()
 endif()

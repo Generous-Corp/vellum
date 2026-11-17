@@ -209,6 +209,8 @@ void Knob::on_mouse_leave() {
 
 void Knob::on_mouse_event(const MouseEvent& event) {
     if (!event.is_down) return;
+    if (!event.is_wheel && event.button == MouseButton::left)
+        fine_requested_ = event.isShiftDown();
     if (event.click_count < 2) return;
 
     // Direct modern-event callers historically receive the reset immediately.
@@ -268,6 +270,7 @@ void Knob::on_mouse_down(Point pos) {
     drag_start_y_ = pos.y;
     drag_last_y_ = pos.y;
     drag_start_proportion_ = position_for_value();
+    drag_fine_ = fine_requested_;
     if (!gesture_active_) {
         const auto lifetime = import_binding_lifetime_token();
         auto begin = on_gesture_begin;
@@ -281,6 +284,8 @@ void Knob::on_mouse_down(Point pos) {
 
 void Knob::on_mouse_up(Point) {
     mod_drag_ring_ = -1;
+    fine_requested_ = false;
+    drag_fine_ = false;
     if (window_host())
         window_host()->set_mouse_relative_mode(false);
     if (gesture_active_) {
@@ -324,12 +329,17 @@ void Knob::on_mouse_drag(Point pos) {
     // linearly; the core maps it back to a real value, then clamps and snaps it.
     // Sensitivity, the fine-drag divisor and the velocity law all live in the
     // core — the widget only supplies the pixels.
+    if (fine_requested_ != drag_fine_) {
+        drag_fine_ = fine_requested_;
+        drag_start_y_ = drag_last_y_;
+        drag_start_proportion_ = position_for_value();
+    }
     const double delta_total = static_cast<double>(drag_start_y_ - pos.y);
     const double delta_tick = static_cast<double>(drag_last_y_ - pos.y);
     drag_last_y_ = pos.y;
     const bool moved = core_.velocity_mode()
-        ? core_.drag_step(delta_tick, /*fine*/ false, Notify::none)
-        : core_.drag_to(delta_total, drag_start_proportion_, /*fine*/ false, Notify::none);
+        ? core_.drag_step(delta_tick, drag_fine_, Notify::none)
+        : core_.drag_to(delta_total, drag_start_proportion_, drag_fine_, Notify::none);
     if (!moved) return;
     const float snapped = static_cast<float>(core_.normalized());
     if (snapped == value_) return;

@@ -44,6 +44,10 @@ vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
 
+vellum_add_framework_test(knob-fine-drag
+    SOURCES knob_fine_drag_test.cpp
+    UNITS Vellum::MirrorView_core)
+
 # The view-script unit runs the sealed V8 provider (VELLUM_ENABLE_V8). Without
 # V8 the same test is the control: it must still run to completion and fail
 # exactly its seven V8 cases while its QuickJS case passes, which proves the
@@ -80,6 +84,12 @@ endif()
 
 vellum_add_framework_test(gpu-capabilities
     SOURCES gpu_capabilities_test.cpp
+    UNITS Vellum::MirrorRender_2d)
+
+# The frame-level render pass manager is header-only; any render unit gives the
+# test the include root.
+vellum_add_framework_test(render-pass
+    SOURCES render_pass_test.cpp
     UNITS Vellum::MirrorRender_2d)
 
 # The WGSL validator behind vellum_add_wgsl_shaders(): it compiles each shader
@@ -141,6 +151,10 @@ vellum_add_framework_test(widget-bridge-param-model
 vellum_add_framework_test(scripted-ui-param-model
     SOURCES scripted_ui_param_model_test.cpp
     UNITS Vellum::MirrorView_script Vellum::Value)
+
+vellum_add_framework_test(host-param-surface-model
+    SOURCES host_param_surface_model_test.cpp
+    UNITS Vellum::MirrorView_core Vellum::Value)
 
 # Every test file here must be registered above. A test file that no
 # vellum_add_framework_test() names would build nothing and run nothing while

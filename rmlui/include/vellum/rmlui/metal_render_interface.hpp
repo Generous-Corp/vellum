@@ -92,6 +92,33 @@ class MetalRenderInterface final : public Rml::RenderInterface {
     void begin_frame(const MetalFrameTarget& frame);
     void end_frame();
 
+    // Bytes held by the render targets the renderer caches between frames:
+    // the layer textures, the stencil, the filter targets and the mask image.
+    // They are sized to the frame target and allocated by the first frame
+    // that needs them.
+    [[nodiscard]] std::size_t cached_target_bytes() const noexcept;
+
+    // Releases those cached targets and returns the bytes they held. The next
+    // frame allocates again what it uses, so the first frame after a trim
+    // costs the allocation and draws the same pixels. For a host that hides
+    // an editor and wants its GPU memory back.
+    //
+    // Call it between frames: with no frame being encoded, that is outside
+    // begin_frame() .. end_frame(); during one it releases nothing and returns
+    // 0. Like every other member it is not thread-safe: call it on the thread
+    // that draws, or serialise it with begin_frame() .. end_frame() (a host
+    // that draws on a render thread calls it there, or under the same lock). It never waits for the GPU. The previous frame's command buffer may
+    // still be executing, which is safe because a command buffer made the usual
+    // way (-[MTLCommandQueue commandBuffer]) retains every resource it uses. A
+    // caller that makes its buffers with unretained references must wait for
+    // the last one to complete first.
+    //
+    // It leaves RmlUi's compiled geometry, textures, filters and shaders alone:
+    // RmlUi owns those handles and releases them through Rml::ReleaseTextures()
+    // and Rml::ReleaseCompiledGeometry(). Pipelines and samplers stay too; they
+    // belong to the device, not to a frame target.
+    std::size_t trim();
+
     // RmlUi render calls this renderer does not draw (application-defined
     // shaders, unknown filters, filters or shaders with missing parameters),
     // counted since construction.

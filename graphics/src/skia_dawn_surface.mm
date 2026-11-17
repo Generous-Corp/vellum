@@ -10,6 +10,7 @@
 #include <vellum/graphics/plot.hpp>
 #include <vellum/graphics/render_telemetry.hpp>
 #include <vellum/graphics/scene_acceptance.hpp>
+#include <vellum/graphics/vector_asset.hpp>
 
 #include "skia_dawn_surface_test_access.hpp"
 #include <gpu_runtime/gpu_surface.hpp>
@@ -98,6 +99,7 @@ std::atomic<bool> enclose_interpolated_fills{true};
 std::atomic<bool> enclose_images{true};
 std::atomic<bool> enclose_clips{true};
 std::atomic<bool> enclose_group_layers{true};
+std::atomic<bool> enclose_vector_assets{true};
 std::atomic<bool> enclose_effects{true};
 std::atomic<bool> enclose_backdrops{true};
 
@@ -855,12 +857,9 @@ bool draw_plot(SkCanvas& canvas, const PaintCommand& command, float opacity,
     return true;
 }
 
-SkPath sk_path(const PaintCommand& command) {
-    const auto& path = *command.path;
+SkPath sk_path(const PathGeometry& path, float x, float y) {
     SkPathBuilder builder(path.fill_rule == FillRule::evenodd ? SkPathFillType::kEvenOdd
                                                               : SkPathFillType::kWinding);
-    const float x = command.bounds.x;
-    const float y = command.bounds.y;
     std::size_t offset = 0;
     for (const auto verb : path.verbs) {
         const float* v = path.values.data() + offset;
@@ -884,6 +883,10 @@ SkPath sk_path(const PaintCommand& command) {
         }
     }
     return builder.detach();
+}
+
+SkPath sk_path(const PaintCommand& command) {
+    return sk_path(*command.path, command.bounds.x, command.bounds.y);
 }
 
 SkPaint::Join sk_join(StrokeJoin join) {
@@ -1009,6 +1012,110 @@ bool draw_path(SkCanvas& canvas, const PaintCommand& command, float opacity,
     return true;
 }
 
+bool stroke_paint(SkPaint& paint, const PathStroke& stroke, const std::string& node_id,
+                  std::string* error) {
+    paint.setStyle(SkPaint::kStroke_Style);
+    paint.setStrokeWidth(stroke.width);
+    paint.setStrokeJoin(sk_join(stroke.join));
+    paint.setStrokeCap(sk_cap(stroke.cap));
+    paint.setStrokeMiter(stroke.miter_limit);
+    if (stroke.dash_array.empty()) return true;
+    std::vector<SkScalar> intervals(stroke.dash_array.begin(), stroke.dash_array.end());
+    if (intervals.size() % 2U != 0U) {
+        intervals.insert(intervals.end(), stroke.dash_array.begin(), stroke.dash_array.end());
+    }
+    auto dashes = SkDashPathEffect::Make(intervals, stroke.dash_offset);
+    if (!dashes) {
+        set_error(error, "Skia could not build a dash pattern of vector " + node_id);
+        return false;
+    }
+    paint.setPathEffect(std::move(dashes));
+    return true;
+}
+
+// A gradient resolves against the unit box of its own gradient space, which
+// the paint's gradient transform maps into the operation's coordinates.
+bool vector_paint(SkPaint& paint, const VectorPaint& source, float opacity,
+                  FrameResources& resources, std::string* error) {
+    if (!source.gradient) {
+        paint.setColor4f(sk_color(source.color, opacity));
+        return true;
+    }
+    auto shader = linear_gradient_shader(
+        resolve_linear_gradient({0.0F, 0.0F, 1.0F, 1.0F}, *source.gradient), opacity, resources,
+        error);
+    if (!shader) return false;
+    paint.setShader(shader->makeWithLocalMatrix(sk_matrix(source.gradient_transform)));
+    return true;
+}
+
+// Draws a compiled vector asset: its view box stretched onto the command's
+// box, each group clipped and composited as one layer, and each path filled
+// and then stroked, as SVG paints them.
+bool draw_vector(SkCanvas& canvas, const PaintCommand& command, float opacity,
+                 FrameResources& resources, std::string* error) {
+    if (!command.vector) {
+        set_error(error, "vector " + command.node_id + " has no compiled asset");
+        return false;
+    }
+    const auto& asset = *command.vector;
+    std::string reason;
+    if (!vector_asset_is_valid(asset, &reason)) {
+        set_error(error, "vector " + command.node_id + " cannot be drawn: " + reason);
+        return false;
+    }
+    const auto& box = command.bounds;
+    if (!(box.width > 0.0F) || !(box.height > 0.0F)) return true;
+    const int saved = canvas.save();
+    canvas.concat(sk_matrix(vector_view_box_transform(box, asset.view_box)));
+    std::vector<int> groups;
+    const auto fail = [&] {
+        canvas.restoreToCount(saved);
+        return false;
+    };
+    for (const auto& op : asset.ops) {
+        if (op.kind == VectorOp::Kind::push_group) {
+            groups.push_back(canvas.save());
+            if (!is_identity(op.transform)) canvas.concat(sk_matrix(op.transform));
+            if (op.clip) canvas.clipPath(sk_path(*op.clip, 0.0F, 0.0F), SkClipOp::kIntersect, true);
+            if (op.opacity < 1.0F) {
+                canvas.saveLayerAlphaf(nullptr, op.opacity);
+                ++resources.layers;
+            }
+            continue;
+        }
+        if (op.kind == VectorOp::Kind::pop_group) {
+            canvas.restoreToCount(groups.back());
+            groups.pop_back();
+            continue;
+        }
+        const bool fills = vector_op_fills(op);
+        const bool strokes = vector_op_strokes(op);
+        if (!fills && !strokes) continue;
+        const int drawn = canvas.save();
+        if (!is_identity(op.transform)) canvas.concat(sk_matrix(op.transform));
+        const SkPath outline = sk_path(*op.path, 0.0F, 0.0F);
+        if (fills) {
+            SkPaint paint;
+            paint.setAntiAlias(op.path->antialias);
+            if (!vector_paint(paint, op.fill, opacity, resources, error)) return fail();
+            canvas.drawPath(outline, paint);
+        }
+        if (strokes) {
+            SkPaint paint;
+            paint.setAntiAlias(op.path->antialias);
+            if (!vector_paint(paint, op.stroke, opacity, resources, error) ||
+                !stroke_paint(paint, op.path->stroke, command.node_id, error)) {
+                return fail();
+            }
+            canvas.drawPath(outline, paint);
+        }
+        canvas.restoreToCount(drawn);
+    }
+    canvas.restoreToCount(saved);
+    return true;
+}
+
 bool draw_image(SkCanvas& canvas, const PaintCommand& command, float opacity,
                 FrameResources& resources, std::string* error) {
     const auto& box = command.bounds;
@@ -1076,6 +1183,11 @@ bool opacity_folds_into_paint(const PaintCommand& command) {
         // The image, or its placeholder, over a visible fill is two operations.
         return command.fill.alpha <= 0.0F;
     }
+    if (command.kind == PaintCommand::Kind::vector) {
+        if (!command.vector) return true;
+        const auto count = vector_paint_count(*command.vector);
+        return count.paints <= 1U && !count.grouped;
+    }
     if (command.kind == PaintCommand::Kind::text) {
         if (command.text_runs.empty()) return !command.underline && !command.strikethrough;
         return std::none_of(command.text_runs.begin(), command.text_runs.end(),
@@ -1105,8 +1217,18 @@ bool path_paints(const PaintCommand& command) {
            (command.fill.alpha > 0.0F || !command.fill_gradients.empty() || stroked);
 }
 
+// A vector asset paints paths, so its antialiased edges are enclosed whole
+// like a path's.
+bool vector_paints(const PaintCommand& command) {
+    return command.kind == PaintCommand::Kind::vector && command.vector && visible(command) &&
+           vector_paint_count(*command.vector).paints > 0U;
+}
+
 bool interpolates_colour(const PaintCommand& command) {
     if (!visible(command)) return false;
+    if (command.kind == PaintCommand::Kind::vector) {
+        return command.vector && vector_paint_count(*command.vector).gradients;
+    }
     if (command.kind == PaintCommand::Kind::mesh) {
         return command.mesh && !command.mesh->indices.empty();
     }
@@ -1207,6 +1329,8 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
         drawn = draw_path(canvas, command, paint_opacity, resources, error);
     } else if (command.kind == PaintCommand::Kind::image) {
         drawn = draw_image(canvas, command, paint_opacity, resources, error);
+    } else if (command.kind == PaintCommand::Kind::vector) {
+        drawn = draw_vector(canvas, command, paint_opacity, resources, error);
     } else if (command.kind == PaintCommand::Kind::plot) {
         drawn = draw_plot(canvas, command, paint_opacity, resources, error);
     } else {
@@ -1284,6 +1408,10 @@ Extent command_extent(const PaintCommand& command, const Rect& frame, float scal
         case PaintCommand::Kind::image:
             painted.kind = SceneNode::Kind::image;
             painted.image = command.image;
+            break;
+        case PaintCommand::Kind::vector:
+            painted.kind = SceneNode::Kind::vector;
+            painted.vector = command.vector;
             break;
         case PaintCommand::Kind::plot:
             painted.kind = SceneNode::Kind::plot;
@@ -1389,7 +1517,8 @@ bool close_over_layers(const Scene& scene, const std::vector<PaintCommand>& comm
             transformed_blur || (enclose_own_layers && composites_own_layer(command)) ||
             (enclose_paths && path_paints(command)) ||
             (enclose_interpolated_fills && interpolates_colour(command)) ||
-            (enclose_images && command.kind == PaintCommand::Kind::image && visible(command));
+            (enclose_images && command.kind == PaintCommand::Kind::image && visible(command)) ||
+            (enclose_vector_assets && vector_paints(command));
         const bool group_layer =
             enclose_group_layers && command.kind == PaintCommand::Kind::begin_layer;
         const bool clip_region = enclose_clips && command.kind == PaintCommand::Kind::begin_clip;
@@ -2007,6 +2136,10 @@ public:
         damage_model_version_ = version;
     }
 
+    bool test_serves_partial_redraw(std::uint32_t version) const noexcept {
+        return serves_partial_redraw(version);
+    }
+
     void simulate_device_loss() {
         if (!device_) return;
         device_.ForceLoss(wgpu::DeviceLostReason::Unknown, "Vellum simulated device loss");
@@ -2390,7 +2523,7 @@ private:
     }
 
     bool serves_partial_redraw(std::uint32_t version) const noexcept {
-        return version <= damage_model_version_;
+        return version >= kMinSupportedSceneVersion && version <= damage_model_version_;
     }
 
     bool fail_device_lost(std::string* error, std::string message) {
@@ -2502,7 +2635,7 @@ private:
         }
 
         std::vector<PaintCommandRange> ranges;
-        auto commands = make_paint_commands(scene, &ranges);
+        auto commands = make_evaluated_paint_commands(scene, &ranges);
         unbound_plot_layers(commands, config_.scale);
         std::vector<ParagraphSlot> paragraphs(commands.size());
         // stats_ and layer_count_ describe the last submitted frame until
@@ -3222,6 +3355,11 @@ void SkiaDawnSurfaceTestAccess::set_damage_model_version(SkiaDawnSurface& surfac
     surface.impl_->set_damage_model_version(version);
 }
 
+bool SkiaDawnSurfaceTestAccess::serves_partial_redraw(const SkiaDawnSurface& surface,
+                                                      std::uint32_t version) noexcept {
+    return surface.impl_->test_serves_partial_redraw(version);
+}
+
 void SkiaDawnSurface::set_cache_budgets(const RenderCacheBudgets& budgets) {
     impl_->set_cache_budgets(budgets);
 }
@@ -3277,6 +3415,7 @@ void set_partial_redraw_rules(const PartialRedrawRules& rules) noexcept {
     enclose_images = rules.enclose_images;
     enclose_clips = rules.enclose_clips;
     enclose_group_layers = rules.enclose_group_layers;
+    enclose_vector_assets = rules.enclose_vector_assets;
     enclose_effects = rules.enclose_effects;
     enclose_backdrops = rules.enclose_backdrops;
 }
@@ -3288,6 +3427,7 @@ PartialRedrawRules partial_redraw_rules() noexcept {
             .enclose_images = enclose_images,
             .enclose_clips = enclose_clips,
             .enclose_group_layers = enclose_group_layers,
+            .enclose_vector_assets = enclose_vector_assets,
             .enclose_effects = enclose_effects,
             .enclose_backdrops = enclose_backdrops};
 }
