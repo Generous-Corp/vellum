@@ -165,3 +165,20 @@ test('a vector node binds no token receipt to a background colour the native ren
         assert.equal(node.tokenRefs, undefined, backgroundColor);
     }
 });
+
+test('gradient geometry is accepted and refused as the native materializer does', async () => {
+    const cases = (await readFile(join(fixtures, 'gradient-parity.cases'), 'utf8'))
+        .split('\n').filter((line) => line !== '').map((line) => line.split('\t'));
+    assert.ok(cases.length > 30);
+    const asset = { contentHash: `sha256:${'a'.repeat(64)}`, viewBox: [0, 0, 10, 10] };
+    for (const [verdict, name, json] of cases) {
+        const gradient = JSON.parse(json);
+        const render = () => mount(createApp({
+            render: () => ({ $$typeof: Symbol.for('vellum.element'), type: 'vector',
+                props: { id: 'v', style: { width: 10, height: 10 }, asset: { ...asset,
+                    ops: [{ op: 'path', d: 'M0 0H10V10Z', fill: { gradient } }] } } }),
+        })).renderJSON();
+        if (verdict === 'valid') assert.doesNotThrow(render, name);
+        else assert.throws(render, TypeError, name);
+    }
+});
