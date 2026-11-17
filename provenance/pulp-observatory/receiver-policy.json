@@ -1,5 +1,5 @@
 {
-  "cursor_lag_sla_minutes": 30,
+  "cursor_lag_sla_minutes": 360,
   "named_response_owner": "@danielraffel",
   "pending_limit": 20,
   "pending_warning": 15,

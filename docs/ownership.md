@@ -72,7 +72,8 @@ the content came from, or `native` for a file Vellum wrote. A file of Pulp
 origin joins as Pulp's bytes at the named commit put through the transfer's
 rename; a port that differs from Pulp is a `native` row. The provenance lane
 proves the rows append-only and the Pulp commits and bytes against a Pulp checkout,
-and the mirror build compiles each added source into the target its row names.
+and the mirror build compiles each added source into the target its row names,
+on the platforms the row's scope lists (`macos-arm64` when it names none).
 A target no closure builds, a new library unit or an executable, is declared
 with its sources, include directories, definitions and links in
 `provenance/framework/units.json`, and

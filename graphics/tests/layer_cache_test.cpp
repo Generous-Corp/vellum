@@ -147,6 +147,7 @@ void equality_covers_every_field() {
                                 .fit = ImageFit::cover,
                                 .sampling = ImageSampling::nearest},
         .image_asset = std::make_shared<ImageAsset>(),
+        .vector = std::make_shared<VectorAsset>(),
         .effects = {{.kind = EffectKind::drop_shadow,
                      .sigma = 2.0F,
                      .offset_x = 1.0F,
@@ -157,6 +158,7 @@ void equality_covers_every_field() {
                                  .type = MaterialValueType::number,
                                  .value = {1.0F, 0.0F, 0.0F, 0.0F}}}}},
         .effect_box = {1.0F, 2.0F, 3.0F, 4.0F},
+        .plot = std::make_shared<PlotSpec>(),
     };
     expect(paint_commands_equal(base, base), "a command equals itself");
     const std::vector<Mutation> mutations{
@@ -229,6 +231,7 @@ void equality_covers_every_field() {
         {"image fit", [](PaintCommand& c) { c.image->fit = ImageFit::none; }},
         {"image sampling", [](PaintCommand& c) { c.image->sampling = ImageSampling::linear; }},
         {"image asset", [](PaintCommand& c) { c.image_asset = std::make_shared<ImageAsset>(); }},
+        {"vector asset", [](PaintCommand& c) { c.vector = std::make_shared<VectorAsset>(); }},
         {"transform a", [](PaintCommand& c) { c.transform.a = 2.0F; }},
         {"transform b", [](PaintCommand& c) { c.transform.b = 2.0F; }},
         {"transform c", [](PaintCommand& c) { c.transform.c = 2.0F; }},
@@ -247,6 +250,8 @@ void equality_covers_every_field() {
         {"clip_rect width", [](PaintCommand& c) { c.clip_rect.width = 1.0F; }},
         {"clip_rect height", [](PaintCommand& c) { c.clip_rect.height = 1.0F; }},
         {"mask_mode", [](PaintCommand& c) { c.mask_mode = MaskMode::luminance; }},
+        {"plot", [](PaintCommand& c) { c.plot = std::make_shared<PlotSpec>(); }},
+        {"plot_background", [](PaintCommand& c) { c.plot_background = true; }},
         {"blend_mode", [](PaintCommand& c) { c.blend_mode = BlendMode::multiply; }},
         {"effect count", [](PaintCommand& c) { c.effects.push_back({}); }},
         {"effect kind", [](PaintCommand& c) { c.effects[0].kind = EffectKind::blur; }},

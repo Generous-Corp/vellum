@@ -78,6 +78,11 @@ if(VELLUM_RMLUI_CPU)
     vellum_rmlui_add_test(vellum-rmlui-native-warm-test native_warm_test.cpp VellumRmlUi::Native VellumRmlUi::Cpu)
     add_test(NAME vellum.rmlui.native-warm COMMAND vellum-rmlui-native-warm-test)
 
+    # The API-level macros in native.hpp name interfaces that exist.
+    vellum_rmlui_add_test(vellum-rmlui-native-api-version-test native_api_version_test.cpp
+        VellumRmlUi::Native VellumRmlUi::Cpu)
+    add_test(NAME vellum.rmlui.native-api-version COMMAND vellum-rmlui-native-api-version-test)
+
     # A newly shown element draws its first frame with every transform it
     # inherits, so a host that repaints only on change never keeps a wrong one.
     vellum_rmlui_add_test(vellum-rmlui-first-frame-transform-test first_frame_transform_test.cpp
@@ -187,6 +192,15 @@ if(VELLUM_RMLUI_METAL AND VELLUM_RMLUI_FONTS)
     add_test(NAME vellum.rmlui.metal-layers
         COMMAND vellum-rmlui-metal-layers-test "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}")
     set_tests_properties(vellum.rmlui.metal-layers PROPERTIES SKIP_RETURN_CODE 77)
+
+    # MetalRenderInterface::trim(): releases the cached targets between frames,
+    # even with the previous frame still on the GPU, and draws the same pixels after.
+    vellum_rmlui_add_test(vellum-rmlui-metal-trim-test metal/metal_trim_test.mm
+        VellumRmlUi::Native VellumRmlUi::Metal)
+    target_compile_options(vellum-rmlui-metal-trim-test PRIVATE -fobjc-arc)
+    add_test(NAME vellum.rmlui.metal-trim
+        COMMAND vellum-rmlui-metal-trim-test "${_vellum_rmlui_rmlui_src}" "${_vellum_rmlui_fixtures}")
+    set_tests_properties(vellum.rmlui.metal-trim PROPERTIES SKIP_RETURN_CODE 77)
 
     vellum_rmlui_add_test(vellum-rmlui-metal-filters-test metal/metal_filters_test.mm
         VellumRmlUi::Native VellumRmlUi::Metal)

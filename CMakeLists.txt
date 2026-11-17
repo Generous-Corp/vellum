@@ -107,7 +107,8 @@ if(VELLUM_ENABLE_GRAPHICS)
     if(VELLUM_BUILD_TESTS AND TARGET vellum-gpu)
         foreach(_vellum_graphics_test IN ITEMS
                 vellum-layer-cache-gpu-test vellum-render-cache-gpu-test
-                vellum-partial-present-test vellum-scene-capture-harness-test)
+                vellum-partial-present-test vellum-scene-capture-harness-test
+                vellum-frame-debug-test)
             if(NOT TARGET ${_vellum_graphics_test})
                 message(FATAL_ERROR
                     "Vellum: VELLUM_BUILD_TESTS is on and the GPU backend is built, "
@@ -244,16 +245,39 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-layer-cache-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.layer-cache COMMAND vellum-layer-cache-test)
 
+        add_executable(vellum-vector-asset-test
+            graphics/tests/vector_asset_test.cpp)
+        target_link_libraries(vellum-vector-asset-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.vector-asset COMMAND vellum-vector-asset-test)
+        add_executable(vellum-plot-test
+            graphics/tests/plot_test.cpp)
+        target_link_libraries(vellum-plot-test PRIVATE Vellum::Graphics Threads::Threads)
+        add_test(NAME vellum.plot COMMAND vellum-plot-test)
+
         add_executable(vellum-damage-test
             graphics/tests/damage_test.cpp)
         target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.damage COMMAND vellum-damage-test)
 
+        add_executable(vellum-token-receipts-test
+            graphics/tests/token_receipts_test.cpp)
+        target_link_libraries(vellum-token-receipts-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.token-receipts COMMAND vellum-token-receipts-test)
         add_executable(vellum-animation-test
             graphics/tests/animation_test.cpp)
         target_include_directories(vellum-animation-test PRIVATE graphics/src)
         target_link_libraries(vellum-animation-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.animation COMMAND vellum-animation-test)
+
+        add_executable(vellum-frame-pump-test
+            foundation/tests/frame_pump_test.cpp)
+        target_link_libraries(vellum-frame-pump-test PRIVATE Vellum::Foundation)
+        add_test(NAME vellum.frame-pump COMMAND vellum-frame-pump-test)
+
+        add_executable(vellum-frame-driver-test
+            graphics/tests/frame_driver_test.cpp)
+        target_link_libraries(vellum-frame-driver-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.frame-driver COMMAND vellum-frame-driver-test)
 
         add_executable(vellum-effect-test
             graphics/tests/effect_test.cpp)

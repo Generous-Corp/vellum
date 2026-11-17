@@ -12,21 +12,42 @@ export const DESIGN_IR_VERSION = 1;
 export const DESIGN_IR_COMPOSITING_VERSION = 2;
 /**
  * The schema version that adds node material references. A document carries
- * it only when a node uses one; a document needing neither stays at
- * `DESIGN_IR_VERSION`. Each version keeps every field of the ones before it.
+ * it only when a node uses one.
  */
 export const DESIGN_IR_MATERIALS_VERSION = 3;
 /** The schema version that adds animation tracks on nodes. */
 export const DESIGN_IR_TRACKS_VERSION = 4;
-/** Every version this build can read. */
+/**
+ * The schema version that adds plot bindings on nodes. Each version keeps
+ * every field of the ones before it: a document is written at the oldest
+ * version that carries every field it uses, and a field stays illegal below
+ * the version that introduced it.
+ */
+export const DESIGN_IR_PLOTS_VERSION = 5;
+/**
+ * The schema version that adds compiled vector assets, `properties.vector`,
+ * `properties.image.source`, and the paint keys transform, clipPath and
+ * overflow. Path nodes and their geometry use the version 1-5 contract.
+ */
+export const DESIGN_IR_VECTOR_ASSET_VERSION = 6;
+/**
+ * Every version this build reads. A document is written at the oldest
+ * version that carries every field it uses, each version keeps every field of
+ * the ones before it, and a field stays illegal below the version that adds
+ * it, whatever the document's version.
+ */
 export const DESIGN_IR_VERSIONS = Object.freeze([
     DESIGN_IR_VERSION,
     DESIGN_IR_COMPOSITING_VERSION,
     DESIGN_IR_MATERIALS_VERSION,
     DESIGN_IR_TRACKS_VERSION,
+    DESIGN_IR_PLOTS_VERSION,
+    DESIGN_IR_VECTOR_ASSET_VERSION,
 ]);
 // Compatibility name for supported schema versions.
 export const SUPPORTED_DESIGN_IR_VERSIONS = DESIGN_IR_VERSIONS;
+export const DESIGN_IR_LATEST_VERSION = 6;
+export const DESIGN_IR_VECTOR_PAINT_KEYS = Object.freeze(['transform', 'clipPath', 'overflow']);
 export const AUTHORED_OVERLAY_VERSION = 1;
 export const REIMPORT_REPORT_VERSION = 1;
 export const COMPILER_NAME = '@vellum/design-ir';

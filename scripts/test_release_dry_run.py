@@ -621,7 +621,7 @@ class Wiring(unittest.TestCase):
         select = job_text("release-tag.yml", "select-release-commit")
         self.assertIn("if: github.event_name == 'push'", select)
         job = job_text("release-tag.yml", "sign-dry-run-tag")
-        self.assertIn("needs: dry-run-gate\n", job)
+        self.assertIn("needs: [dry-run-gate, dry-run-policy-check]\n", job)
         self.assertIn("\n    if: needs.dry-run-gate.outputs.run == 'true'\n", job)
         self.assertIn("environment: release", job)
         self.assertIn('test "$GITHUB_REF" = refs/heads/main', job)

@@ -138,6 +138,10 @@ BUILD_TIMESTAMP_PLACEHOLDER = "<build-timestamp>"
 # `patches` names Vellum transformations applied after checkout. Each is
 # proved only by the closure: the patched bytes must hash to the recorded
 # digest, so a patch that drifts from the export fails the plan.
+# `post_patches` names Vellum-only fixes that Pulp does not carry. They are
+# applied after the closure digests are checked, so the digests keep proving
+# the Pulp-equivalent bytes, and a reused checkout is restored first so the
+# check never sees them.
 DEPENDENCIES: dict[str, dict[str, Any]] = {
     "highway": {
         "kind": "cmake",
@@ -173,6 +177,7 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
     "choc": {
         "kind": "headers",
         "patches": ["v8-compatibility", "json-positive-exponent", "file-watcher-lifetime"],
+        "post_patches": ["v8-module-resolution"],
     },
     "brotli": {"kind": "sources"},
     "woff2": {"kind": "sources"},
@@ -264,6 +269,7 @@ PATCHED_PATHS = {
     "v8-compatibility": CHOC_V8_HEADER,
     "json-positive-exponent": CHOC_JSON_HEADER,
     "file-watcher-lifetime": CHOC_FILE_WATCHER_HEADER,
+    "v8-module-resolution": CHOC_V8_HEADER,
 }
 CHOC_JSON_BEFORE = (
     "                    hadExponent = true;\n"
@@ -326,12 +332,26 @@ def framework_file_set(repo: Path) -> tuple[set[str], dict[str, dict[str, Any]],
     The transfer record's paths, minus the ports ledger's removals, plus its
     additions. A ledger that is malformed or does not replay is refused.
     """
+    expected, added, removed, _ = framework_file_set_scoped(repo)
+    return expected, added, removed
+
+
+def framework_file_set_scoped(repo: Path
+                              ) -> tuple[set[str], dict[str, dict[str, Any]], set[str], dict[str, frozenset[str]]]:
+    """framework_file_set, plus the platforms each ledger-added source is compiled on."""
     record = load_json(repo / FRAMEWORK_TRANSFER)
     transferred = {row["framework_path"] for row in record.get("records", [])}
-    expected, added, removed, errors = framework_ports.file_set(repo, transferred)
+    expected, added, removed, scopes, errors = framework_ports.file_set_scoped(repo, transferred)
     if errors:
         raise PlanError(errors[0])
-    return expected, added, removed
+    return expected, added, removed, scopes
+
+
+# The platform the landed receipt's closures describe (load_closures refuses
+# any closure not exported for the Darwin arm64 Skia build). framework_ports
+# defines it; this module re-exports it, and plan() refuses every other
+# platform.
+RECEIPT_PLATFORM = framework_ports.RECEIPT_PLATFORM
 
 
 def verify_framework_identity(repo: Path, receipt_path: str, receipt: dict[str, Any]) -> int:
@@ -456,9 +476,15 @@ def mirror_cmake_files(repo: Path) -> dict[str, str]:
 
 
 def source_compile_options_for(repo: Path, receipt: dict[str, Any],
-                               units: list[tuple[str, dict[str, Any]]]) -> dict[str, list[str]]:
+                               units: list[tuple[str, dict[str, Any]]],
+                               platform: str = RECEIPT_PLATFORM,
+                               ledger: tuple[dict[str, dict[str, Any]], dict[str, frozenset[str]]] | None = None
+                               ) -> dict[str, list[str]]:
     """Exported source -> the per-source COMPILE_OPTIONS Pulp's CMake applies to it
-    under the closures' configure (tools/mirror/source_compile_options.py)."""
+    under the closures' configure (tools/mirror/source_compile_options.py).
+
+    `ledger` is the replayed (added rows, scopes) when the caller holds it.
+    """
     configures = {json.dumps((closure.get("configure") or {}).get("options"), sort_keys=True)
                   for _, closure in units}
     if len(configures) != 1:
@@ -471,8 +497,13 @@ def source_compile_options_for(repo: Path, receipt: dict[str, Any],
     if transferred(repo):
         # A ledger-added source is compiled like an exported one, so the
         # framework's CMake may set its per-source options the same way.
-        _, added, _ = framework_file_set(repo)
-        exported |= {path.removeprefix(f"{FRAMEWORK_DIR}/") for path in added if framework_ports.compiled(path)}
+        # Only on the platforms its scope lists.
+        if ledger is None:
+            _, added, _, scopes = framework_file_set_scoped(repo)
+        else:
+            added, scopes = ledger
+        exported |= {path.removeprefix(f"{FRAMEWORK_DIR}/") for path in added
+                     if framework_ports.compiled(path) and framework_ports.compiled_on(scopes, path, platform)}
     try:
         targets = {target["name"] for _, closure in units for target in closure.get("targets", [])}
         return source_compile_options.evaluate(mirror_cmake_files(repo), options, exported, targets)
@@ -645,6 +676,102 @@ def apply_choc_file_watcher_patch(root: Path) -> None:
         header.write_text(text, encoding="utf-8")
 
 
+# An unresolvable import makes choc's loadStaticModule return an empty
+# MaybeLocal without throwing, so the TryCatch holds no exception and no
+# message; reading either through an empty handle dereferences null. The
+# resolver now throws a JS Error naming the specifier, and the exception
+# reader tolerates an empty exception, an empty message and a missing origin.
+CHOC_V8_MODULE_EDITS = (
+    (
+        "        v8::String::Utf8Value str (isolate, v);\n"
+        "        return *str;",
+        "        if (v.IsEmpty())\n"
+        "            return {};\n"
+        "\n"
+        "        v8::String::Utf8Value str (isolate, v);\n"
+        "        return *str ? std::string (*str) : std::string();",
+    ),
+    (
+        "        v8::Local<v8::Message> message = tryCatch.Message();\n"
+        "\n"
+        "        auto desc = v8StringToStd (tryCatch.Exception());\n"
+        "\n"
+        "        if (desc.empty())\n"
+        "            return {};\n"
+        "\n"
+        "        auto filename = v8StringToStd (message->GetScriptOrigin().ResourceName());\n"
+        "        int lineNumber = message->GetLineNumber (localContext).FromJust();\n"
+        "        int startCol = message->GetStartColumn (localContext).FromJust();\n"
+        "        int endCol = message->GetEndColumn (localContext).FromJust();\n",
+        "        v8::Local<v8::Message> message = tryCatch.Message();\n"
+        "\n"
+        "        auto desc = v8StringToStd (tryCatch.Exception());\n"
+        "\n"
+        "        if (desc.empty())\n"
+        "            return {};\n"
+        "\n"
+        "        if (message.IsEmpty())\n"
+        "            return desc;\n"
+        "\n"
+        "        auto filename = v8StringToStd (message->GetScriptOrigin().ResourceName());\n"
+        "        int lineNumber = message->GetLineNumber (localContext).FromMaybe (0);\n"
+        "        int startCol = message->GetStartColumn (localContext).FromMaybe (0);\n"
+        "        int endCol = message->GetEndColumn (localContext).FromMaybe (0);\n",
+    ),
+    (
+        "        if (auto sourceLine = v8StringToStd (message->GetSourceLine (localContext).ToLocalChecked()); ! sourceLine.empty())",
+        "        v8::Local<v8::String> sourceLineHandle;\n"
+        "\n"
+        "        if (message->GetSourceLine (localContext).ToLocal (&sourceLineHandle)\n"
+        "             && ! v8StringToStd (sourceLineHandle).empty())",
+    ),
+    (
+        "            result << sourceLine << std::endl;",
+        "            auto sourceLine = v8StringToStd (sourceLineHandle);\n"
+        "            result << sourceLine << std::endl;",
+    ),
+    (
+        "        if (currentModuleResolver != nullptr)\n"
+        "        {\n"
+        "            auto path = v8StringToStd (specifier);\n"
+        "            auto maybeCode = (*currentModuleResolver) (path);\n"
+        "\n"
+        "            if (maybeCode)\n"
+        "                return loadModule (c, stringToV8 (*maybeCode));\n"
+        "        }\n"
+        "\n"
+        "        return {};",
+        "        auto path = v8StringToStd (specifier);\n"
+        "\n"
+        "        if (currentModuleResolver != nullptr)\n"
+        "        {\n"
+        "            auto maybeCode = (*currentModuleResolver) (path);\n"
+        "\n"
+        "            if (maybeCode)\n"
+        "                return loadModule (c, stringToV8 (*maybeCode));\n"
+        "        }\n"
+        "\n"
+        "        isolate->ThrowException (v8::Exception::Error (stringToV8 (\"Cannot find module '\" + path + \"'\")));\n"
+        "        return {};",
+    ),
+)
+
+
+def apply_choc_v8_module_patch(root: Path) -> None:
+    """Apply each edit once; an edit already present is left alone."""
+    header = root / CHOC_V8_HEADER
+    text = header.read_text(encoding="utf-8")
+    original = text
+    for before, after in CHOC_V8_MODULE_EDITS:
+        if after in text:
+            continue
+        if text.count(before) != 1:
+            raise PlanError("choc V8 module resolution patch no longer matches the expected source")
+        text = text.replace(before, after)
+    if text != original:
+        header.write_text(text, encoding="utf-8")
+
+
 def apply_patch(name: str, patch: str, root: Path) -> None:
     if name != "choc" or patch not in PATCHED_PATHS:
         raise PlanError(f"unknown patch {patch!r} for {name}")
@@ -653,6 +780,9 @@ def apply_patch(name: str, patch: str, root: Path) -> None:
         return
     if patch == "file-watcher-lifetime":
         apply_choc_file_watcher_patch(root)
+        return
+    if patch == "v8-module-resolution":
+        apply_choc_v8_module_patch(root)
         return
     header = root / CHOC_JSON_HEADER
     text = header.read_text(encoding="utf-8")
@@ -725,6 +855,14 @@ def prepare_in_tree(name: str, entry: dict[str, Any], repo: Path) -> Path:
     return repo
 
 
+def restore_patched(name: str, root: Path, paths: list[str]) -> None:
+    """Return the patched files of a reused checkout to the pinned bytes."""
+    completed = subprocess.run(["git", "checkout", "-q", "--", *paths], cwd=root,
+                               capture_output=True, text=True, check=False)
+    if completed.returncode:
+        raise PlanError(f"restoring {name} patched files failed: {completed.stderr.strip()}")
+
+
 def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_dir: Path | None,
                          skia_asset_sha256: str | None, repo: Path | None = None) -> dict[str, Path]:
     roots: dict[str, Path] = {}
@@ -744,8 +882,10 @@ def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_d
             root = skia_dir
         else:
             root = deps_dir / f"{name}-{entry['pin']}"
+            patch_names = [*recipe.get("patches", []), *recipe.get("post_patches", [])]
             fetch_git(name, entry["source"], entry["pin"], root, submodules=bool(recipe.get("submodules")),
-                      patched={PATCHED_PATHS[p] for p in recipe.get("patches", [])})
+                      patched={PATCHED_PATHS[p] for p in patch_names})
+            restore_patched(name, root, sorted({PATCHED_PATHS[p] for p in patch_names}))
             for patch in recipe.get("patches", []):
                 apply_patch(name, patch, root)
         for relative, digest in sorted(entry["files"].items()):
@@ -754,6 +894,8 @@ def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_d
                 raise PlanError(f"{name}@{entry['pin'][:12]} has no {relative}")
             if sha256_file(candidate) != digest:
                 raise PlanError(f"{name}@{entry['pin'][:12]}:{relative} does not match the closure digest")
+        for patch in recipe.get("post_patches", []):
+            apply_patch(name, patch, root)
         roots[name] = root
     return roots
 
@@ -1177,18 +1319,40 @@ def plan_declared_targets(repo: Path, declared: list[dict[str, Any]], units: lis
 
 def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
          skia_asset_sha256: str | None = None,
-         in_tree_definitions: dict[str, list[str]] | None = None) -> dict[str, Any]:
+         in_tree_definitions: dict[str, list[str]] | None = None,
+         platform: str = RECEIPT_PLATFORM) -> dict[str, Any]:
     repo = repo.resolve()
+    if platform not in framework_ports.PLATFORMS:
+        raise PlanError(f"unknown platform {platform!r}; known: {list(framework_ports.PLATFORMS)}")
+    if platform != RECEIPT_PLATFORM:
+        raise PlanError(f"no verified closure for platform {platform}: the landed closures describe "
+                        f"{RECEIPT_PLATFORM}")
     receipt_path, receipt = newest_receipt(repo)
     file_count = (verify_framework_identity(repo, receipt_path, receipt) if transferred(repo)
                   else verify_mirror_identity(repo, receipt))
-    _, ports_added, ports_removed = framework_file_set(repo) if transferred(repo) else (set(), {}, set())
-    declared, declared_errors = (framework_ports.declared_units(repo, ports_added) if transferred(repo)
+    _, ports_added, ports_removed, scopes = (framework_file_set_scoped(repo) if transferred(repo)
+                                             else (set(), {}, set(), {}))
+    declared, declared_errors = (framework_ports.declared_units(repo, ports_added, scopes) if transferred(repo)
                                  else ([], []))
     if declared_errors:
         raise PlanError(declared_errors[0])
     units = load_closures(repo, receipt)
-    source_options = source_compile_options_for(repo, receipt, units)
+    # Every compiled row names a target some closure builds or units.json
+    # declares, whatever its scope: a row scoped away from this platform is
+    # still checked here, since no other lane builds it yet.
+    known_targets = ({target["name"] for _, closure in units for target in closure.get("targets", [])}
+                     | {target["name"] for target in declared})
+    unknown = sorted(f"{path} (target {row['target']})" for path, row in ports_added.items()
+                     if row["target"] is not None and row["target"] not in known_targets)
+    if unknown:
+        raise PlanError("the ports ledger adds sources to targets no closure builds and "
+                        f"{framework_ports.UNITS} does not declare: {unknown[:5]}")
+    ledger = (ports_added, scopes)
+    # A ledger-added source or declared target is planned only on its platforms.
+    ports_added = {path: row for path, row in ports_added.items()
+                   if not framework_ports.compiled(path) or framework_ports.compiled_on(scopes, path, platform)}
+    declared = [target for target in declared if platform in framework_ports.platforms_of(target)]
+    source_options = source_compile_options_for(repo, receipt, units, platform, ledger)
     attached: set[str] = set()
     ported_targets: set[str] = set()
     deps = external_dependencies(units)
@@ -1505,6 +1669,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skia-asset-sha256", help="digest of the Skia/Dawn archive Vellum locks")
     parser.add_argument("--cmake-output", type=Path, required=True)
     parser.add_argument("--json-output", type=Path)
+    parser.add_argument("--platform", default=RECEIPT_PLATFORM,
+                        help="the platform key to plan for; it needs a verified closure")
     parser.add_argument(
         "--in-tree-definitions", action="append", default=[], metavar="NAME=DEF|DEF",
         help="an in-tree dependency's INTERFACE_COMPILE_DEFINITIONS, from the configured targets")
@@ -1516,7 +1682,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         build_plan = plan(args.repo, args.deps_dir.resolve(), args.generated_dir.resolve(),
                           args.skia_dir.resolve() if args.skia_dir else None,
-                          args.skia_asset_sha256, in_tree_definitions)
+                          args.skia_asset_sha256, in_tree_definitions, args.platform)
     except PlanError as error:
         print(f"vellum-mirror-package: {error}", file=sys.stderr)
         return 1

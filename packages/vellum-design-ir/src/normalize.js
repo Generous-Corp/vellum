@@ -2,8 +2,9 @@ import {
     COMPILER_NAME,
     COMPILER_VERSION,
     DESIGN_IR_COMPOSITING_VERSION,
-    DESIGN_IR_SCHEMA,
+    DESIGN_IR_PLOTS_VERSION,
     DESIGN_IR_MATERIALS_VERSION,
+    DESIGN_IR_SCHEMA,
     DESIGN_IR_TRACKS_VERSION,
     DESIGN_IR_VERSION,
     DESIGN_IR_VERSIONS,
@@ -20,6 +21,7 @@ import { canonicalize, deepClone } from './stable-json.js';
 import { normalizeTokens } from './tokens.js';
 import { normalizeSha256ContentHash } from './assets.js';
 import { validateDesignIR } from './validate.js';
+import { requiredDesignIRVersion } from './versions.js';
 
 const KNOWN_NODE_FIELDS = new Set([
     'children',
@@ -29,6 +31,7 @@ const KNOWN_NODE_FIELDS = new Set([
     'losses',
     'material',
     'name',
+    'plot',
     'properties',
     'role',
     'semanticId',
@@ -75,7 +78,8 @@ export function normalizeImport(input, options = {}) {
         // The lowest version that carries every field the document uses,
         // unless the caller names one; validation refuses a version too old
         // for a field.
-        schemaVersion: options.schemaVersion ?? requiredVersion(root),
+        schemaVersion: options.schemaVersion ??
+            Math.max(requiredVersion(root), requiredDesignIRVersion(root)),
         source,
         tokens: normalizeTokens(input.tokens, source.key),
     });
@@ -92,6 +96,7 @@ function requiredVersion(node) {
     if (node.compositing !== undefined) version = DESIGN_IR_COMPOSITING_VERSION;
     if (node.material !== undefined) version = DESIGN_IR_MATERIALS_VERSION;
     if (node.tracks !== undefined) version = DESIGN_IR_TRACKS_VERSION;
+    if (node.plot !== undefined) version = DESIGN_IR_PLOTS_VERSION;
     for (const child of node.children) version = Math.max(version, requiredVersion(child));
     return version;
 }
@@ -145,6 +150,7 @@ function normalizeNode(rawNode, context) {
     }
     if (rawNode.extensions !== undefined) output.extensions = canonicalize(rawNode.extensions);
     if (rawNode.tracks !== undefined) output.tracks = canonicalize(rawNode.tracks);
+    if (rawNode.plot !== undefined) output.plot = canonicalize(rawNode.plot);
     if (rawNode.compositing !== undefined) {
         const problems = compositingProblems(rawNode.compositing, `${context.path}.compositing`);
         if (problems.length > 0) {

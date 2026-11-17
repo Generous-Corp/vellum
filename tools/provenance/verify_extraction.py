@@ -1472,6 +1472,8 @@ def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[
             if not proved[commit]:
                 real = False
                 errors.append(f"{where}: Pulp commit {commit} is not a commit on Pulp {pulp_main_ref}")
+        # A scoped row repeats its adding row's path and commits
+        # (framework_ports.replay_scoped), so the adding row's proof covers it.
         if not real or row["change"] != "added":
             continue
         commit, pulp_path = row["pulp_commits"][-1], row["pulp_path"]
@@ -1549,7 +1551,8 @@ def framework_ports_state(root: Path, transferred: set[str], pulp_root: Path | N
     checks: dict[str, object] = {"framework_ports_added": sorted(added), "framework_ports_removed": sorted(removed)}
     # Targets no closure builds are declared in the unit manifest, each source
     # also accounted for by its ledger row (framework_ports.units_errors).
-    declared, unit_errors = ports.declared_units(root, added)
+    scopes, _ = ports.scopes(root, transferred)  # its errors are the file set's, reported above
+    declared, unit_errors = ports.declared_units(root, added, scopes)
     errors = errors + unit_errors
     checks["framework_units_declared"] = [target["name"] for target in declared]
     rows, row_errors = ports.load(root)

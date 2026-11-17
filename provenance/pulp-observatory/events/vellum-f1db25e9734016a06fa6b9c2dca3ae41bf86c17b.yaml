@@ -1,0 +1,57 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "render-skia-dawn"
+  ],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-16T19:47:39Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-f1db25e9734016a06fa6b9c2dca3ae41bf86c17b",
+  "include_dependency_deltas": [
+    "graphics/CMakeLists.txt",
+    "graphics/include/vellum/graphics/frame_trace.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/src/frame_trace.hpp",
+    "graphics/src/skia_dawn_surface_test_access.hpp",
+    "graphics/tests/CMakeLists.txt"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "render-skia-dawn"
+  ],
+  "mapped_paths": [
+    "graphics/CMakeLists.txt",
+    "graphics/include/vellum/graphics/frame_trace.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/src/frame_trace.cpp",
+    "graphics/src/frame_trace.hpp",
+    "graphics/src/skia_dawn_surface.mm",
+    "graphics/src/skia_dawn_surface_test_access.hpp",
+    "graphics/tests/CMakeLists.txt",
+    "graphics/tests/frame_debug_test.mm"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "5322a15843ec521a9ffe79f818ed5adc5023c72f",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "e57c5d0eb8a020db522aeac17557236eaa92ecd9",
+    "to_commit": "f1db25e9734016a06fa6b9c2dca3ae41bf86c17b"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "f1db25e9734016a06fa6b9c2dca3ae41bf86c17b",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
