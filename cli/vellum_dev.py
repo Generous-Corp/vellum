@@ -72,6 +72,37 @@ def snapshot(root: Path) -> tuple[str, dict[str, str]]:
     return digest.hexdigest(), records
 
 
+# The digest a build records and `--no-build` checks it against. Kept here, in
+# a module every install already ships, beside the fingerprint it records.
+SOURCE_DIGEST_NAME = "source-digest.json"
+SOURCE_DIGEST_SCHEMA = "vellum.build-source-digest.v1"
+
+
+def write_source_digest(directory: Path, project: Path) -> None:
+    (directory / SOURCE_DIGEST_NAME).write_text(json.dumps({
+        "schema": SOURCE_DIGEST_SCHEMA, "digest": snapshot(project)[0],
+    }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def staleness(directory: Path, project: Path) -> str | None:
+    """Why the build in `directory` cannot be proven fresh for `project`, or
+    None when its recorded digest matches the current sources."""
+    try:
+        recorded = json.loads((directory / SOURCE_DIGEST_NAME).read_text(encoding="utf-8"))
+        built = recorded["digest"]
+        valid = recorded["schema"] == SOURCE_DIGEST_SCHEMA and isinstance(built, str)
+    except (OSError, ValueError, KeyError, TypeError):
+        valid = False
+    if not valid:
+        return ("Build records no source digest, so its freshness cannot be proven; "
+                "run vellum build")
+    current = snapshot(project)[0]
+    if built != current:
+        return (f"Build is stale: it was built from source digest {built[:12]} but the "
+                f"project is now {current[:12]}; run vellum build")
+    return None
+
+
 def changed(previous: dict[str, str], current: dict[str, str]) -> list[str]:
     return sorted(
         name for name in set(previous) | set(current)

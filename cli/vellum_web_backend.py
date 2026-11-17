@@ -26,7 +26,7 @@ import time
 from typing import Any, Iterable
 from urllib.parse import quote, unquote_to_bytes
 
-from vellum_build_digest import staleness, write_source_digest
+from vellum_dev import staleness, write_source_digest
 from vellum_manifest import (
     LOCK_NAME, LOCK_SCHEMA, ManifestError, imported_materialized_design,
     load_app_manifest, load_components_manifest,
