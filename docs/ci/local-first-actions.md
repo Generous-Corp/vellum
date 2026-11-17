@@ -95,6 +95,54 @@ roll back; every event then selects the generic class again.
 `readme-quick-start.yml` and the hosted portion of `sdk-release.yml`; it is not
 the selector for these two required GPU jobs.
 
+## The cheap pull-request lane
+
+A pull request does not run the full GPU proof by default. `gpu-macos-arm64`
+(the same required context, the same job) runs the cheap lane instead: the
+release-source contract, a configure and build with the same flags as the full
+proof (the pinned Skia/Dawn archive, mirror and RmlUi included), and
+`ctest -L pr-fast`. `sterile-consumer` prints a notice on a hosted runner. The
+merge group runs the full GPU proof and `sterile-consumer` exactly as before,
+on the merged tree, so `main` keeps its guarantee. The cheap lane writes no
+`vellum-gpu-proof-tree` receipt, so the merge group never reuses a cheap run in
+place of a GPU proof.
+
+A pull request runs the full proof now, as it did before, when any of these hold:
+
+- the base's classifier (`scripts/classify_gpu_proof.py --early-proof`, read
+  from the base, never from the change) says a changed path can only be proved
+  on a GPU: `graphics/`, `gpu-runtime/`, `apps/`, `packages/vellum-swift/`,
+  shader sources, `provenance/third-party-lock.json`, the proof workflow and
+  the classifier itself;
+- the pull request carries the `gpu-proof` label (the labels are read when the
+  job starts, so add the label and re-run the job);
+- the base has no `--early-proof` flag, the label list cannot be read, or the
+  verdict is anything but `cheap`: every doubt takes the full proof.
+
+The cheap lane runs on the same runner class as the old pull-request proof
+(`VELLUM_LOCAL_MACOS_RUNS_ON_JSON`). No separate build-only class is
+registered with TartCI yet, and the lane's runner is chosen before its depth
+is known, so moving it needs a depth job ahead of it.
+
+### Roll back
+
+Set the repository variable `VELLUM_PR_GPU_PROOF` to `full`. Every pull request
+then takes the early full proof again. Delete the variable to return to the
+cheap lane. Nothing else changes: the required context names, the merge group
+and the receipts are the same either way.
+
+### Retry and alarms
+
+`gpu-proof-guard.yml` re-runs the failed jobs of a pull-request or queue run
+once, and only when every failed job failed on infrastructure (a lost runner,
+a 5xx or refused download). A failure with a defect signature in its log, a
+second attempt and a push are never retried. Every six hours it also checks the
+last day of queue runs and opens, or updates, one tracking issue titled
+"Cheap pull-request lane: alarm" when more than one queue entry was ejected,
+any queue or `main` run failed at a GPU-only step, or more than one in ten
+queue runs failed. The issue closes when the alarms clear. Both live in
+`scripts/gpu_proof_guard.py`.
+
 ### Organization settings required before enablement
 
 An organization administrator must update runner group **8**
