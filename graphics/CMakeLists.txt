@@ -4,11 +4,13 @@ add_library(vellum-graphics
     src/damage.cpp
     src/effect.cpp
     src/frame_driver.cpp
+    src/hit_test.cpp
     src/image_asset.cpp
     src/image_decode_queue.cpp
     src/layer_cache.cpp
     src/paint_command.cpp
     src/path_geometry.cpp
+    src/pointer_router.cpp
     src/vector_asset.cpp
     src/plot.cpp
     src/plot_feed.cpp
