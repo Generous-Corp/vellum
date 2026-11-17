@@ -1403,35 +1403,21 @@ def framework_ports_history_errors(root: Path, ports) -> list[str]:
     return []
 
 
-# A pull request that moves a Pulp-origin file to another origin needs this label, which only the owner applies.
-# It is not `owner-decision`: the admission pipeline skips that label, and an approved change must still land.
-# The label is read from the pull_request event payload; the payload is the one the run started with, so after
-# the owner adds the label the check runs again on a new push (or a close and reopen), not on a re-run.
-PORTS_ORIGIN_LABEL = "owner-approved-origin-change"
-# The merge queue and a push to main run after the pull request's own run has judged the change; neither event
-# carries the pull request's labels, so only a pull request (or a local run, which has no event) is judged.
-PORTS_ORIGIN_EVENTS_SKIPPED = frozenset({"merge_group", "push", "workflow_dispatch", "schedule"})
-
-
-def pull_request_labels() -> set[str]:
-    """The label names on the pull request that started this run; empty when there are none or they are unreadable."""
-    event_path = os.environ.get("GITHUB_EVENT_PATH")
-    if not event_path:
-        return set()
-    try:
-        labels = json.loads(Path(event_path).read_text(encoding="utf-8"))["pull_request"]["labels"]
-        return {label["name"] for label in labels if isinstance(label, dict) and isinstance(label.get("name"), str)}
-    except (OSError, ValueError, KeyError, TypeError):
-        return set()  # fail closed: no label, no waiver
+# A change that gives a Pulp-origin file another origin fails on every event, judged against the event's base
+# (VELLUM_GIT_BASE: a pull request's base, a merge group's base_sha). There is no waiver label: a genuine
+# owner-approved change goes through an owner decision with a ruleset bypass. The one exception is the push
+# that lands such a change on main itself, which this check already judged as a pull request and a merge group.
+def landing_on_main() -> bool:
+    return os.environ.get("GITHUB_EVENT_NAME") == "push" and os.environ.get("GITHUB_REF") == "refs/heads/main"
 
 
 def framework_ports_origin_errors(root: Path, ports, transferred: set[str]) -> list[str]:
-    """A file of Pulp origin stays Pulp's: no row may give it another origin, unless the owner labelled the pull request.
+    """A file of Pulp origin stays Pulp's: no row this change adds or edits may give it another origin.
 
     A Pulp-origin path is one the transfer record carries or a row at the history base gives origin `pulp`. A
     row this change adds or edits that names such a path with origin `native` moves it.
     """
-    if os.environ.get("GITHUB_EVENT_NAME", "") in PORTS_ORIGIN_EVENTS_SKIPPED:
+    if landing_on_main():
         return []
     base, base_error = load_mirror_export_verifier().history_base(root)
     if base_error or base is None:
@@ -1446,12 +1432,13 @@ def framework_ports_origin_errors(root: Path, ports, transferred: set[str]) -> l
     pulp_paths = set(transferred) | {row["framework_path"] for row in landed if row.get("origin") == "pulp"}
     # Only a row this change adds or edits can move a file; a landed row stands as it is.
     moved = sorted({row["framework_path"] for row in rows if isinstance(row, dict) and row not in landed
-                    and row.get("origin") != "pulp" and row.get("framework_path") in pulp_paths})
-    if not moved or PORTS_ORIGIN_LABEL in pull_request_labels():
+                    and row.get("origin") != "pulp" and isinstance(row.get("framework_path"), str)
+                    and row["framework_path"] in pulp_paths})
+    if not moved:
         return []
     return [f"{FRAMEWORK_PORTS}: origin is not `pulp` for {len(moved)} path(s) that came from Pulp ({moved[:5]}); "
-            "a Pulp-origin file stays Pulp's and is changed in Pulp. Only the owner can waive this, by labelling "
-            f"the pull request `{PORTS_ORIGIN_LABEL}` and pushing again"]
+            "a Pulp-origin file stays Pulp's and is changed in Pulp; an owner-approved exception needs an owner "
+            "decision with a ruleset bypass"]
 
 
 def framework_ports_landed(root: Path, ports) -> int:
