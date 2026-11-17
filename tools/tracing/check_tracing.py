@@ -87,9 +87,36 @@ def source_errors(repo: Path) -> list[str]:
     return errors
 
 
+class InspectionError(RuntimeError):
+    """nm could not inspect an object; that is a failure, never an empty list."""
+
+
+def run_nm(flags: str, path: Path) -> list[str]:
+    if not path.exists():
+        raise InspectionError(f"{path} does not exist, so it cannot be inspected")
+    result = subprocess.run(["nm", flags, str(path)], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise InspectionError(f"nm {flags} {path} failed ({result.returncode}): {result.stderr.strip()}")
+    return result.stdout.splitlines()
+
+
 def defined_symbols(library: Path) -> list[str]:
-    result = subprocess.run(["nm", "-gU", str(library)], capture_output=True, text=True)
-    return result.stdout.splitlines() if result.returncode == 0 else []
+    """Every symbol the image defines, local and private ones included.
+
+    `nm -U` lists defined symbols without the external-only filter of `-g`, so
+    a runtime hidden inside an image (local or private-extern) still shows.
+    Lines are `<value> <type> <name>`; undefined and debug entries are dropped.
+    """
+    symbols = []
+    for line in run_nm("-U", library):
+        parts = line.split(None, 2)
+        if len(parts) == 3 and len(parts[0]) >= 8 and parts[1] not in ("U", "-"):
+            symbols.append(parts[2])
+    return symbols
+
+
+def undefined_symbols(path: Path) -> list[str]:
+    return [line.split()[-1] for line in run_nm("-u", path) if line.strip()]
 
 
 def framework_compiles(ninja_text: str) -> list[tuple[str, str]]:
@@ -118,9 +145,11 @@ def adapter_errors(ninja_text: str, build: Path) -> list[str]:
         if includes and "graphics/include" in includes.group(1):
             errors.append("the framework trace adapter compiles with the renderer's include directory")
         obj = build / statement.group(1)
-        undefined = subprocess.run(["nm", "-u", str(obj)], capture_output=True, text=True).stdout
-        if obj.exists() and "graphics" in undefined:
-            errors.append("the framework trace adapter object references renderer symbols")
+        try:
+            if any("graphics" in symbol for symbol in undefined_symbols(obj)):
+                errors.append("the framework trace adapter object references renderer symbols")
+        except InspectionError as error:
+            errors.append(str(error))
         return errors
     return ["build.ninja has no compile of frame_trace_adapter.cpp"]
 
@@ -147,10 +176,14 @@ def build_errors(repo: Path, build: Path, expect: str) -> list[str]:
     sources = sorted(path.name for path in (build / "_deps").glob("vellum_perfetto*"))
     libraries = sorted({p for pattern in LIBRARY_GLOBS for p in build.glob(pattern)
                         if "CMakeFiles" not in p.parts})
-    runtimes = [library.name for library in libraries
-                if any(RUNTIME_SYMBOL in symbol for symbol in defined_symbols(library))]
-    perfetto_symbols = [library.name for library in libraries
-                        if any("perfetto" in symbol.lower() for symbol in defined_symbols(library))]
+    try:
+        defined = {library: defined_symbols(library) for library in libraries}
+    except InspectionError as error:
+        return errors + [str(error)]
+    runtimes = [library.name for library, symbols in defined.items()
+                if any(RUNTIME_SYMBOL in symbol for symbol in symbols)]
+    perfetto_symbols = [library.name for library, symbols in defined.items()
+                        if any("perfetto" in symbol.lower() for symbol in symbols)]
 
     if expect == "off":
         if sources:
@@ -164,6 +197,16 @@ def build_errors(repo: Path, build: Path, expect: str) -> list[str]:
                           f"switches, for example {leaking[0]}")
         if perfetto_symbols:
             errors.append(f"tracing-off libraries define Perfetto symbols: {perfetto_symbols}")
+        # The frame trace bridge is compiled out without tracing, so no image
+        # may reference the framework adapter's emitters.
+        try:
+            bridged = [library.name for library in libraries
+                       if any(symbol.lstrip("_").startswith("vellum_native_trace_")
+                              for symbol in undefined_symbols(library))]
+        except InspectionError as error:
+            return errors + [str(error)]
+        if bridged:
+            errors.append(f"tracing-off libraries reference vellum_native_trace_* emitters: {bridged}")
     else:
         if not (build / "_deps/vellum_perfetto-src/perfetto.cc").exists():
             errors.append("a tracing-on build has no fetched perfetto.cc")

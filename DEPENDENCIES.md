@@ -205,8 +205,10 @@ With `VELLUM_ENABLE_TRACING=ON` (default OFF; it needs `VELLUM_ENABLE_MIRROR=ON`
 the mirrored framework units compile with their trace macros on and the
 foundation unit's library carries one Perfetto, so the framework's slices and
 the renderer's frame trace share one trace session. It is development tooling:
-the default build and every shippable SDK or release artifact leave it OFF,
-fetch nothing for it, and link nothing from it. The configure step
+the default build and every shippable SDK or release artifact are built with
+it OFF, fetch nothing for it, and link nothing from it. Installing a tracing-ON
+build is not blocked: its foundation library carries Perfetto, so a development
+SDK installed by hand from such a build contains it and must not be shipped. The configure step
 (`cmake/VellumTracing.cmake`) downloads the release artifact and refuses any
 other SHA-256. `FETCHCONTENT_SOURCE_DIR_VELLUM_PERFETTO` builds an unpacked
 copy instead, unchecked. `tools/tracing/check_tracing.py` keeps the module,
@@ -214,7 +216,7 @@ this row and `provenance/third-party-lock.json` on one pin.
 
 | Dependency | Pinned identity | License | Used by | Notes |
 |---|---|---|---|---|
-| Perfetto | `v57.2`, `google/perfetto` release asset `perfetto-cpp-sdk-src.zip` (`perfetto.h` and `perfetto.cc`) SHA-256 `c6fa3d89aee30f7da39402c9cd178c9f2e344544fda5c2109fd8457e319c3a2f` | Apache-2.0; the amalgamation also carries BSD-2-Clause code from OpenBSD's `tree.h` | `vellum-perfetto`, compiled as one position-independent static library and whole-archive linked into `vellum-mirror-foundation`, only with `VELLUM_ENABLE_TRACING=ON` | Never linked into a default build, an installed SDK or a release artifact. Perfetto's `TRACE_EVENT` takes a mutex when a chunk rolls over, so it is not real-time safe: trace UI, render and process-level code, never a live audio thread. Notice in `NOTICE.md` |
+| Perfetto | `v57.2`, `google/perfetto` release asset `perfetto-cpp-sdk-src.zip` (`perfetto.h` and `perfetto.cc`) SHA-256 `c6fa3d89aee30f7da39402c9cd178c9f2e344544fda5c2109fd8457e319c3a2f` | Apache-2.0; the amalgamation also carries BSD-2-Clause code from OpenBSD's `tree.h` | `vellum-perfetto`, compiled as one position-independent static library and whole-archive linked into `vellum-mirror-foundation`, only with `VELLUM_ENABLE_TRACING=ON` | Never linked into a default build or a release artifact. A development SDK installed by hand from a tracing-ON build does contain it (the foundation library is installed as built); do not ship one. Perfetto's `TRACE_EVENT` takes a mutex when a chunk rolls over, so it is not real-time safe: trace UI, render and process-level code, never a live audio thread. Notice in `NOTICE.md` |
 
 ## Developer prerequisites
 

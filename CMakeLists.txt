@@ -570,6 +570,23 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" -I tools/tracing/check_tracing.py
             source "${CMAKE_CURRENT_SOURCE_DIR}"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.tracing-check-unit
+        COMMAND "${Python3_EXECUTABLE}" -I tools/tracing/test_check_tracing.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # An arm64 host asked for another or a mixed target architecture.
+    foreach(_vellum_osx_arch IN ITEMS x86_64 "arm64$<SEMICOLON>x86_64")
+        string(REGEX REPLACE "[^A-Za-z0-9]" "-" _vellum_osx_name "${_vellum_osx_arch}")
+        add_test(NAME vellum.tracing-refused-arm64-host-target-${_vellum_osx_name}
+            COMMAND "${CMAKE_COMMAND}" -S tools/tracing/platform-probe
+                -B "${CMAKE_CURRENT_BINARY_DIR}/tracing-probe-osx-${_vellum_osx_name}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                -DVELLUM_ENABLE_TRACING=ON -DVELLUM_ENABLE_MIRROR=ON
+                -DVELLUM_TRACING_SYSTEM=Darwin -DVELLUM_TRACING_ARCH=arm64
+                "-DCMAKE_OSX_ARCHITECTURES=${_vellum_osx_arch}"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(vellum.tracing-refused-arm64-host-target-${_vellum_osx_name} PROPERTIES
+            PASS_REGULAR_EXPRESSION "supported only on macos-arm64")
+    endforeach()
     foreach(_vellum_probe IN ITEMS Linux/x86_64 Windows/AMD64 Darwin/x86_64)
         string(REPLACE "/" ";" _vellum_probe_parts "${_vellum_probe}")
         list(GET _vellum_probe_parts 0 _vellum_probe_system)

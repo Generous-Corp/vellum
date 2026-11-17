@@ -87,6 +87,7 @@ char native_sink_tag = 0;
 
 }  // namespace
 
+#if defined(VELLUM_NATIVE_TRACE_BRIDGE) && VELLUM_NATIVE_TRACE_BRIDGE
 bool install_native_frame_trace() noexcept {
     if (!vellum_native_trace_enabled()) return false;
     FrameTraceSink sink;
@@ -102,6 +103,11 @@ bool install_native_frame_trace() noexcept {
     set_frame_trace_sink(sink);
     return true;
 }
+#else
+// Without VELLUM_ENABLE_TRACING the framework adapter is not linked, so no
+// vellum_native_trace_* symbol may be referenced from this object.
+bool install_native_frame_trace() noexcept { return false; }
+#endif
 
 void remove_native_frame_trace() noexcept { clear_frame_trace_sink_for(&native_sink_tag); }
 

@@ -41,6 +41,16 @@ if(NOT VELLUM_TRACING_SYSTEM STREQUAL "Darwin" OR NOT VELLUM_TRACING_ARCH MATCHE
         "turn it off until another platform proves it")
 endif()
 
+# The effective target architectures decide what Perfetto and the mirror
+# libraries compile for, not the host: an arm64 Mac asked for x86_64 or a
+# universal build must be refused too.
+if(CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+    message(FATAL_ERROR
+        "Vellum: VELLUM_ENABLE_TRACING is supported only on macos-arm64 "
+        "(CMAKE_OSX_ARCHITECTURES is '${CMAKE_OSX_ARCHITECTURES}'); "
+        "turn it off or build arm64 only")
+endif()
+
 message(STATUS
     "Vellum: VELLUM_ENABLE_TRACING=ON, development-only Perfetto tracing is "
     "compiled in. Do not ship this build.")

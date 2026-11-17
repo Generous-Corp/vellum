@@ -1525,8 +1525,9 @@ SOFTWARE.
 
 With `VELLUM_ENABLE_TRACING=ON` the foundation unit's library carries Perfetto
 v57.2's amalgamated tracing SDK (`perfetto.h` and `perfetto.cc`, fetched by
-SHA-256), for development builds only. The default build, every installed SDK
-and every release artifact leave it out.
+SHA-256), for development builds only. The default build and every release artifact
+leave it out. A development SDK installed by hand from a tracing-ON build
+carries it in the foundation library, so these notices apply to that copy.
 
 Copyright (C) 2019 The Android Open Source Project
 

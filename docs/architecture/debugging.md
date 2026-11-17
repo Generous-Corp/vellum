@@ -77,7 +77,7 @@ are read only inside that branch.
 
 A development build can put the renderer's tracks in the same Perfetto session
 as the framework's. It is off by default: nothing is fetched, compiled or
-linked for it unless you configure it, and no shippable build has it.
+linked for it unless you configure it, and no shippable build has it. Configure refuses a tracing build for any target other than macos-arm64, including an x86_64 or universal `CMAKE_OSX_ARCHITECTURES` on an arm64 Mac.
 
 1. Configure a mirror build with tracing on. The configure fetches Perfetto
    v57.2 and refuses any archive whose SHA-256 differs from the pin in
@@ -94,13 +94,13 @@ linked for it unless you configure it, and no shippable build has it.
    returning false in a build without tracing, so no `#if` is needed:
 
    ```cpp
-   #include <vellum/render/frame_trace_adapter.hpp>
+   #include <vellum/graphics/frame_trace.hpp>
    #include <vellum/runtime/trace_session.hpp>
 
    vellum::runtime::Tracing::start({}, "/tmp/vellum.pftrace");
-   vellum::render::install_native_frame_trace();
+   vellum::graphics::install_native_frame_trace();
    // ... render ...
-   vellum::render::remove_native_frame_trace();
+   vellum::graphics::remove_native_frame_trace();
    vellum::runtime::Tracing::stop();
    ```
 
