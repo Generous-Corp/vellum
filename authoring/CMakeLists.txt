@@ -22,6 +22,17 @@ target_link_libraries(vellum-authoring
         "-framework Foundation"
         "-framework JavaScriptCore")
 
+# vellum-graphics is a static archive that vellum-skia-dawn-provider also
+# embeds. Exporting its functions from this dylib as well would define each of
+# them in two images of one process, so they stay internal here: authoring
+# code calls its own copy, and a consumer that uses vellum::graphics links
+# Vellum::Graphics itself (it is a PUBLIC dependency).
+if(APPLE)
+    target_link_options(vellum-authoring PRIVATE
+        "LINKER:-unexported_symbol,__ZN6vellum8graphics*"
+        "LINKER:-unexported_symbol,__ZNK6vellum8graphics*")
+endif()
+
 if(VELLUM_BUILD_TESTS)
     add_executable(vellum-clock-and-source-test
         tests/clock_and_source_test.cpp)
