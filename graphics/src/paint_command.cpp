@@ -2,6 +2,7 @@
 
 #include <vellum/graphics/animation.hpp>
 #include <vellum/graphics/image_asset.hpp>
+#include <vellum/graphics/vector_asset.hpp>
 #include <vellum/graphics/token_receipts.hpp>
 
 #include <algorithm>
@@ -257,6 +258,14 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
             .bounds = absolute,
             .mesh = node.mesh,
             .transform = transform,
+        });
+    } else if (node.kind == SceneNode::Kind::vector) {
+        output.push_back({
+            .kind = PaintCommand::Kind::vector,
+            .node_id = node.id,
+            .bounds = absolute,
+            .transform = transform,
+            .vector = node.vector,
         });
     }
     if (subtree_clip) open_clip();
@@ -620,6 +629,7 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
                 : "cannot carry token receipts, found at " + node.id;
             break;
         case 8U: message = "cannot carry gradient vocabulary at " + node.id; break;
+        case 9U: message = "cannot carry the compiled vector asset at " + node.id; break;
         case 10U: message = "cannot carry the effects at " + node.id; break;
         case 11U: message = "cannot carry the animation tracks at " + node.id; break;
         case 12U: message = "cannot carry the plot node " + node.id; break;
@@ -708,6 +718,15 @@ PaintExtent paint_extent(const PaintCommand& command) {
                  box.height + 2.0F * snap_reach}};
     }
     if (command.kind == PaintCommand::Kind::image) return {box};
+    if (command.kind == PaintCommand::Kind::vector) {
+        if (!command.vector || !vector_asset_is_valid(*command.vector)) return {box, false};
+        const auto painted = vector_paint_bounds(*command.vector, box);
+        if (!painted) return {{box.x, box.y, 0.0F, 0.0F}};
+        const bool finite = std::isfinite(painted->x) && std::isfinite(painted->y) &&
+                            std::isfinite(painted->width) && std::isfinite(painted->height);
+        if (!finite) return {box, false};
+        return {*painted};
+    }
     if (!draws_content(command.kind)) return {box};
     Rect extent = box;
     for (const auto& shadow : command.box_shadows) {

@@ -195,6 +195,11 @@ public:
         /// the configured install data directory relative to the GPU library,
         /// or the native app's bundle-local `Resources/vellum/fonts` directory.
         std::string font_directory;
+        /// Outlines each presented frame's damage rectangles on top of the
+        /// image the screen shows (see `set_damage_overlay`). The environment
+        /// variable `VELLUM_DAMAGE_OVERLAY=1` turns it on for a surface whose
+        /// configuration leaves it off.
+        bool damage_overlay = false;
     };
 
     static std::unique_ptr<SkiaDawnSurface> create(
@@ -274,6 +279,16 @@ public:
 
     /// Layer-cache telemetry for the most recent frame.
     [[nodiscard]] LayerCacheStats layer_cache_stats() const;
+
+    /// Turns the damage overlay on or off from the next frame. When on, the
+    /// presented image, and a capture of it, carries a translucent outline
+    /// around each damage rectangle of the frame that produced it, in a
+    /// different colour for a full repaint. The outlines are drawn after the
+    /// retained surface is complete, into the swapchain texture or a
+    /// capture's scratch copy, so the retained surface, the damage tracker and
+    /// every layer cache see exactly what they see with the overlay off.
+    void set_damage_overlay(bool enabled) noexcept;
+    [[nodiscard]] bool damage_overlay() const noexcept;
 
     /// Waits until every frame submitted so far has finished on the GPU.
     [[nodiscard]] bool finish(std::string* error = nullptr);

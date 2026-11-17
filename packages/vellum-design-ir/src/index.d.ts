@@ -7,9 +7,14 @@ export const DESIGN_IR_MATERIALS_VERSION: 3;
 /** The DesignIR version that adds animation tracks on nodes. */
 export const DESIGN_IR_TRACKS_VERSION: 4;
 export const DESIGN_IR_PLOTS_VERSION: 5;
+export const DESIGN_IR_VECTOR_ASSET_VERSION: 6;
+export const DESIGN_IR_LATEST_VERSION: 6;
 /** Every version this build reads. */
-export const DESIGN_IR_VERSIONS: readonly [1, 2, 3, 4, 5];
+export const DESIGN_IR_VERSIONS: readonly [1, 2, 3, 4, 5, 6];
 export const SUPPORTED_DESIGN_IR_VERSIONS: typeof DESIGN_IR_VERSIONS;
+export function findVectorAssetField(root: unknown, path?: string): { path: string; field: string } | null;
+export function requiredDesignIRVersion(root: unknown): 1 | 2 | 3 | 4 | 5 | 6;
+export function designIRVersionProblem(document: { schemaVersion: unknown; root: unknown }): string | null;
 export const AUTHORED_OVERLAY_VERSION: 1;
 export const REIMPORT_REPORT_VERSION: 1;
 export const COMPILER_NAME: '@vellum/design-ir';
@@ -215,12 +220,12 @@ export interface DesignToken {
 export interface DesignIR {
     $schema: typeof DESIGN_IR_SCHEMA;
     /**
-     * The oldest version carrying every field the document uses: 5 when a
-     * node carries `plot`, 4 when a node carries animation tracks, 3 when a
-     * node carries `material`, 2 when a node carries `compositing`,
-     * otherwise 1.
+     * The oldest version carrying every field the document uses: 6 when a
+     * node uses vector asset fields, 5 when a node carries `plot`, 4 when a
+     * node carries animation tracks, 3 when a node carries `material`, 2
+     * when a node carries `compositing`, otherwise 1.
      */
-    schemaVersion: 1 | 2 | 3 | 4 | 5;
+    schemaVersion: 1 | 2 | 3 | 4 | 5 | 6;
     compiler: { name: string; version: string };
     source: DesignSource;
     root: DesignNode;
@@ -361,7 +366,7 @@ export function resolveTokenLayers(document: DesignIR, overlay?: Partial<Authore
 export function diffTokens(previous: DesignIR['tokens'], next: DesignIR['tokens']): unknown[];
 export function normalizeImport(
     input: ImportSourceModel,
-    options?: { compilerVersion?: string; schemaVersion?: 1 | 2 | 3 | 4 | 5 },
+    options?: { compilerVersion?: string; schemaVersion?: 1 | 2 | 3 | 4 | 5 | 6 },
 ): DesignIR;
 export function decodeFigmaPluginExport(
     input: unknown,

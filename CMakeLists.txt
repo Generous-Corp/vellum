@@ -108,7 +108,7 @@ if(VELLUM_ENABLE_GRAPHICS)
         foreach(_vellum_graphics_test IN ITEMS
                 vellum-layer-cache-gpu-test vellum-render-cache-gpu-test
                 vellum-device-recovery-gpu-test vellum-partial-present-test
-                vellum-scene-capture-harness-test)
+                vellum-scene-capture-harness-test vellum-frame-debug-test)
             if(NOT TARGET ${_vellum_graphics_test})
                 message(FATAL_ERROR
                     "Vellum: VELLUM_BUILD_TESTS is on and the GPU backend is built, "
@@ -245,6 +245,10 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-layer-cache-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.layer-cache COMMAND vellum-layer-cache-test)
 
+        add_executable(vellum-vector-asset-test
+            graphics/tests/vector_asset_test.cpp)
+        target_link_libraries(vellum-vector-asset-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.vector-asset COMMAND vellum-vector-asset-test)
         add_executable(vellum-plot-test
             graphics/tests/plot_test.cpp)
         target_link_libraries(vellum-plot-test PRIVATE Vellum::Graphics Threads::Threads)
