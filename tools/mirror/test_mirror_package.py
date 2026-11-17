@@ -1619,6 +1619,8 @@ class PlatformRecordPlanTest(unittest.TestCase):
             "pulp_repository": "Generous-Corp/pulp", "pulp_sha": PULP_SHA,
             "tool": {"path": "tools/scripts/vellum_closure.py", "pulp_blob": "f" * 40},
             "configure": {"identity": identity, "options_sha256": mp.platform_closures.options_sha256(options)},
+            "export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/123456789",
+                       "artifact_sha256": "e" * 64},
             "runner_image": {"name": "ubuntu-26.04", "version": "20261111.196.1"},
             "renderer_asset": {"name": "skia-build-linux-x64-gpu-release.zip", "sha256": "c" * 64},
             "units": [{"name": "foundation",
@@ -1663,6 +1665,17 @@ class PlatformRecordPlanTest(unittest.TestCase):
         self.write_record()
         self.assertEqual(render_snapshot_in(self.fixture, mp), json.loads(before[0]))
 
+    def test_a_record_without_its_export_is_refused(self) -> None:
+        record = self.write_record()
+        del record["export"]
+        (self.fixture.repo / "provenance/framework/platforms/linux-x64/record.json").write_text(
+            json.dumps(record), encoding="utf-8")
+        with self.assertRaises(mp.PlanError) as caught:
+            self.plan("linux-x64")
+        self.assertIn("must have exactly", str(caught.exception))
+        # macOS has no record at all, so it needs no export: its plan still loads.
+        self.assertNotIn("platform", self.plan("macos-arm64"))
+
     def test_no_record_or_a_broken_record_is_refused(self) -> None:
         with self.assertRaises(mp.PlanError) as caught:
             self.plan("linux-x64")
@@ -1674,6 +1687,15 @@ class PlatformRecordPlanTest(unittest.TestCase):
             ({"configure": {"identity": {"system": "Darwin", "processor": "arm64"}, "options_sha256": "0" * 64}},
              "is built for Linux x86_64"),
             ({"units": []}, "one or more closure manifests"),
+            ({"export": None}, "export names the Pulp run"),
+            ({"export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/1"}},
+             "export names the Pulp run"),
+            ({"export": {"run_url": "https://github.com/someone/pulp/actions/runs/1", "artifact_sha256": "e" * 64}},
+             "is not a https://github.com/Generous-Corp/pulp/actions/runs/<id> URL"),
+            ({"export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/1/job/2",
+                         "artifact_sha256": "e" * 64}}, "is not a https://github.com/Generous-Corp/pulp/actions/runs"),
+            ({"export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/1", "artifact_sha256": "E" * 64}},
+             "export.artifact_sha256 is not a lowercase SHA-256"),
         ):
             with self.subTest(overrides=overrides):
                 self.write_record(**overrides)

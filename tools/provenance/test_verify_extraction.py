@@ -1121,6 +1121,8 @@ class VerifyExtractionTests(unittest.TestCase):
             "schema": records.RECORD_SCHEMA, "platform": "linux-x64", "pulp_repository": "Generous-Corp/pulp",
             "pulp_sha": pulp_sha, "tool": {"path": records.EXPORTER, "pulp_blob": blob},
             "configure": {"identity": identity, "options_sha256": records.options_sha256(options)},
+            "export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/123456789",
+                       "artifact_sha256": "e" * 64},
             "runner_image": {"name": "ubuntu-26.04", "version": "1"},
             "renderer_asset": {"name": "skia-build-linux-x64-gpu-release.zip", "sha256": "c" * 64},
             "units": [{"name": "foundation", "closure_manifest": f"{records.ROOT}/linux-x64/foundation.json",

@@ -14,8 +14,9 @@ ledger. A platform's record pins those manifests:
 
 The record names the Pulp commit and the exporter blob that wrote the
 manifests, the configure (identity and options digest), the runner image the
-manifests were produced on, the renderer asset they link, and each manifest's
-digest. This module reads and checks a record; it runs no git. The mirror
+manifests were produced on, the renderer asset they link, each manifest's
+digest, and the Pulp workflow run that exported them with the digest of the
+artifact it uploaded. This module reads and checks a record; it runs no git. The mirror
 build (tools/mirror/mirror_package.py) plans a platform only from a record
 that passes, and the provenance lane checks every record.
 
@@ -36,7 +37,10 @@ INDEX_SCHEMA = "vellum.framework-platform-index.v1"
 RECORD_SCHEMA = "vellum.framework-platform-closure.v1"
 CLOSURE_SCHEMAS = ("pulp.vellum.closure.v1",)
 RECORD_KEYS = {"schema", "platform", "pulp_repository", "pulp_sha", "tool", "configure", "runner_image",
-               "renderer_asset", "units"}
+               "renderer_asset", "units", "export"}
+# The Pulp workflow run that exported the manifests, and the digest of the
+# artifact it uploaded: the audit trail from a record to the run that made it.
+EXPORT_RUN = re.compile(r"https://github\.com/Generous-Corp/pulp/actions/runs/[1-9][0-9]*\Z")
 PULP_REPOSITORY = "Generous-Corp/pulp"
 EXPORTER = "tools/scripts/vellum_closure.py"
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
@@ -142,6 +146,14 @@ def load_record(repo: Path, key: str) -> tuple[dict[str, Any], list[tuple[str, d
     if not isinstance(image, dict) or set(image) != {"name", "version"} \
             or not all(isinstance(image[k], str) and image[k].strip() for k in ("name", "version")):
         raise RecordError(f"{where}: runner_image names the image and version the manifests were produced on")
+    export = record["export"]
+    if not isinstance(export, dict) or set(export) != {"run_url", "artifact_sha256"}:
+        raise RecordError(f"{where}: export names the Pulp run (run_url) and its artifact's sha256 (artifact_sha256)")
+    if not isinstance(export["run_url"], str) or not EXPORT_RUN.match(export["run_url"]):
+        raise RecordError(f"{where}: export.run_url {export['run_url']!r} is not a "
+                          "https://github.com/Generous-Corp/pulp/actions/runs/<id> URL")
+    if not SHA256.match(str(export["artifact_sha256"])):
+        raise RecordError(f"{where}: export.artifact_sha256 is not a lowercase SHA-256")
     asset = record["renderer_asset"]
     if not isinstance(asset, dict) or set(asset) != {"name", "sha256"} or not isinstance(asset["name"], str) \
             or not SHA256.match(str(asset["sha256"])):
