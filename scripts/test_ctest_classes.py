@@ -85,6 +85,17 @@ def registered_tests(root: Path = ROOT) -> set[str]:
     return {name for name in names if "$" not in name}
 
 
+def listed_registered_tests(classes: dict[str, list[str]]) -> set[str]:
+    """Registered tests the manifest lists.
+
+    The mechanism tests below remove or double one listed test and expect
+    exactly that test back. A test another pull request registered without a
+    class would join every result, so they work on the listed set only;
+    test_every_registered_test_has_one_class covers unlisted tests.
+    """
+    return registered_tests() & set(classes_by_test(classes))
+
+
 class CtestClassesTest(unittest.TestCase):
     def test_manifest_lists_each_test_once(self) -> None:
         classes = load_manifest()
@@ -97,11 +108,13 @@ class CtestClassesTest(unittest.TestCase):
     def test_every_registered_test_has_one_class(self) -> None:
         registered = registered_tests()
         self.assertGreater(len(registered), 40, "the scan found the registrations")
-        self.assertEqual(unclassified(registered, load_manifest(), "fail"), [])
+        # Reads VELLUM_UNLISTED_TEST_POLICY like the configure step: strict in
+        # pull requests and locally, tolerant in merge groups and on main.
+        self.assertEqual(unclassified(registered, load_manifest()), [])
 
     def test_a_missing_label_is_reported(self) -> None:
         classes = load_manifest()
-        registered = registered_tests()
+        registered = listed_registered_tests(classes)
         victim = classes["pr-fast"][0]
         self.assertIn(victim, registered)
         removed = {**classes, "pr-fast": [t for t in classes["pr-fast"] if t != victim]}
@@ -112,7 +125,7 @@ class CtestClassesTest(unittest.TestCase):
     def test_unlisted_policy(self) -> None:
         classes = load_manifest()
         victim = classes["pr-fast"][0]
-        registered = registered_tests()
+        registered = listed_registered_tests(classes)
         removed = {**classes, "pr-fast": [t for t in classes["pr-fast"] if t != victim]}
         self.assertEqual(unclassified(registered, removed, "fail"), [victim])
         self.assertEqual(unclassified(registered, removed, "gpu"), [])
@@ -124,7 +137,7 @@ class CtestClassesTest(unittest.TestCase):
     def test_unset_or_unknown_policy_fails_closed(self) -> None:
         classes = load_manifest()
         victim = classes["pr-fast"][0]
-        registered = registered_tests()
+        registered = listed_registered_tests(classes)
         removed = {**classes, "pr-fast": [t for t in classes["pr-fast"] if t != victim]}
         saved = os.environ.pop("VELLUM_UNLISTED_TEST_POLICY", None)
         self.addCleanup(lambda: saved is None or os.environ.update(
