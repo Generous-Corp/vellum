@@ -1,0 +1,50 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "design-schema-compiler",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-16T07:40:25Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-fedbdbf39c220c1c8a6f455f1f1a0938a0d72a72",
+  "include_dependency_deltas": [],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "design-schema-compiler",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "packages/vellum-design-ir/src/svg-asset.js",
+    "packages/vellum-design-ir/test/svg-asset-sanitize.test.js",
+    "packages/vellum-ui/src/runtime.js",
+    "packages/vellum-ui/test/vector-assets.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "ca6d387b80af6a0ad3004809e4696721c4ba9b28",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "3c3a8a04e4a9ae0a1a445d8417d252831e26db9f",
+    "to_commit": "fedbdbf39c220c1c8a6f455f1f1a0938a0d72a72"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-design-ir/src/svg-asset.js",
+    "packages/vellum-design-ir/test/svg-asset-sanitize.test.js"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "fedbdbf39c220c1c8a6f455f1f1a0938a0d72a72",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

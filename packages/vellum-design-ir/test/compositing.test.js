@@ -192,14 +192,14 @@ test('a version 1 document refuses compositing, and version 3 remains readable',
     assert.throws(() => parseDesignIR(older), DesignIRValidationError);
 
     // Versions are cumulative: every later known version keeps compositing.
-    for (const version of [3, 4, 5]) {
+    for (const version of [3, 4, 5, 6]) {
         const later = structuredClone(document);
         later.schemaVersion = version;
         assert.deepEqual(validateDesignIR(later), { issues: [], valid: true }, `version ${version}`);
     }
 
     const newer = structuredClone(document);
-    newer.schemaVersion = 6;
+    newer.schemaVersion = 7;
     assert.equal(issuesOf(newer)[0].path, '$.schemaVersion');
     const accepted = structuredClone(document);
     accepted.schemaVersion = 3;

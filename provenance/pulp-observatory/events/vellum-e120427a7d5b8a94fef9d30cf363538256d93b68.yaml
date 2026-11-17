@@ -1,0 +1,62 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-16T09:41:55Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-e120427a7d5b8a94fef9d30cf363538256d93b68",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/vector_asset.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "graphics/include/vellum/graphics/vector_asset.hpp",
+    "graphics/src/vector_asset.cpp",
+    "graphics/tests/vector_asset_gpu_test.cpp",
+    "packages/vellum-design-ir/src/svg-asset.js",
+    "packages/vellum-design-ir/test/schema-version.test.js",
+    "packages/vellum-design-ir/test/svg-asset-sanitize.test.js",
+    "packages/vellum-design-ir/test/svg-asset.test.js",
+    "packages/vellum-ui/test/vector-assets.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "385520f4ff36c6d167cf733cb6a541b13c49c8f3",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "3c3a8a04e4a9ae0a1a445d8417d252831e26db9f",
+    "to_commit": "e120427a7d5b8a94fef9d30cf363538256d93b68"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-design-ir/src/svg-asset.js",
+    "packages/vellum-design-ir/test/schema-version.test.js",
+    "packages/vellum-design-ir/test/svg-asset-sanitize.test.js",
+    "packages/vellum-design-ir/test/svg-asset.test.js"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "e120427a7d5b8a94fef9d30cf363538256d93b68",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
