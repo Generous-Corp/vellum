@@ -107,8 +107,8 @@ if(VELLUM_ENABLE_GRAPHICS)
     if(VELLUM_BUILD_TESTS AND TARGET vellum-gpu)
         foreach(_vellum_graphics_test IN ITEMS
                 vellum-layer-cache-gpu-test vellum-render-cache-gpu-test
-                vellum-partial-present-test vellum-scene-capture-harness-test
-                vellum-frame-debug-test)
+                vellum-device-recovery-gpu-test vellum-partial-present-test
+                vellum-scene-capture-harness-test vellum-frame-debug-test)
             if(NOT TARGET ${_vellum_graphics_test})
                 message(FATAL_ERROR
                     "Vellum: VELLUM_BUILD_TESTS is on and the GPU backend is built, "
