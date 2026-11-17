@@ -415,8 +415,8 @@ void damage_per_update() {
 }
 
 void versioning() {
-    static_assert(kSceneVersion == 12U);
-    static_assert(kDamageModelSceneVersion == 12U);
+    static_assert(kSceneVersion >= 12U);
+    static_assert(kDamageModelSceneVersion >= 12U);
     const auto spec = line_spec(10, {0.5F});
     const Scene current = plot_scene(spec);
     expect(accept_scene(current).accepted, "a version 12 scene with a plot is accepted");

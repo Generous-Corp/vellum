@@ -194,6 +194,7 @@ void append_node(const ImageAssetIndex& images, const SceneNode& node, float par
             .underline = node.underline,
             .strikethrough = node.strikethrough,
             .text_runs = node.text_runs,
+            .text_layout = node.text_layout,
             .transform = transform,
         });
     } else if (node.kind == SceneNode::Kind::path && (!node.path || !node.path->verbs.empty())) {
@@ -490,6 +491,13 @@ std::vector<PaintCommand> make_paint_commands(const Scene& scene) {
 
 namespace {
 
+void apply_missing_glyph_policy(std::vector<PaintCommand>& commands, std::uint32_t version) {
+    if (!draws_missing_glyph_box(version)) return;
+    for (auto& command : commands) {
+        if (command.kind == PaintCommand::Kind::text) command.missing_glyph_box = true;
+    }
+}
+
 void pair_nodes(const SceneNode& authored, const SceneNode& evaluated,
                 std::unordered_map<const SceneNode*, const SceneNode*>& pairs) {
     pairs.emplace(&evaluated, &authored);
@@ -517,9 +525,11 @@ std::vector<PaintCommand> make_paint_commands(
             pair_nodes(scene.root, evaluated.root, pairs);
             for (auto& range : *ranges) range.node = pairs.at(range.node);
         }
+        apply_missing_glyph_policy(output, scene.scene_version);
         return output;
     }
     append_node(ImageAssetIndex(scene), scene.root, 0.0F, 0.0F, Affine2D{}, output, ranges);
+    apply_missing_glyph_policy(output, scene.scene_version);
     return output;
 }
 
@@ -532,6 +542,7 @@ std::vector<PaintCommand> make_evaluated_paint_commands(
     if (evaluated.root.mask) return output;
     append_node(ImageAssetIndex(evaluated), evaluated.root, 0.0F, 0.0F, Affine2D{}, output,
                 ranges);
+    apply_missing_glyph_policy(output, evaluated.scene_version);
     return output;
 }
 
@@ -633,6 +644,7 @@ std::vector<LoweringDiagnostic> scene_loss_diagnostics(const Scene& scene) {
         case 10U: message = "cannot carry the effects at " + node.id; break;
         case 11U: message = "cannot carry the animation tracks at " + node.id; break;
         case 12U: message = "cannot carry the plot node " + node.id; break;
+        case 13U: message = "cannot carry the text layout of " + node.id; break;
         default:
             message = "cannot carry a field of version " + std::to_string(mismatch->introduced) +
                       " at " + node.id;
