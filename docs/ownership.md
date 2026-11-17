@@ -74,6 +74,10 @@ rename; a port that differs from Pulp is a `native` row. The provenance lane
 proves the rows append-only and the Pulp commits and bytes against a Pulp checkout,
 and the mirror build compiles each added source into the target its row names,
 on the platforms the row's scope lists (`macos-arm64` when it names none).
+A Pulp name that survives the rename (a `PULP_*` macro or a `pulp_*` C name) is
+spelled the Vellum way through
+[`provenance/framework/respell.json`](../provenance/framework/respell.json),
+whose every entry is derived from bytes, never written by hand.
 A target no closure builds, a new library unit or an executable, is declared
 with its sources, include directories, definitions and links in
 `provenance/framework/units.json`, and

@@ -276,6 +276,30 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
   path and Pulp commits. A brand-new source scoped only to other platforms is
   compiled nowhere until a verified closure for one of them lands; that is
   intended, and the plan still checks that its target exists.
+- **The port respell.** Some Pulp names survive the transfer's rename:
+  `PULP_*` macros and `pulp_*` C names. A ported file must carry no name
+  debt, and a linker-visible `pulp_` name would clash with Pulp's own copy in
+  one process. `provenance/framework/respell.json` lists each such name and
+  its Vellum spelling (only the prefix changes). Every entry is one of five
+  kinds, each recognised from bytes and never chosen by hand:
+  - a macro the closures define, which a ported source spells `VELLUM_<X>`
+    and the build gives with the closure's value;
+  - a name a closure lists as a link export;
+  - a macro the ported file `#define`s itself, respelled in that file;
+  - a function or object a file defines with C linkage, respelled in every
+    `framework/` file so callers and the definition agree;
+  - an opt-in switch: a macro a ported file only tests and that nothing
+    defines, respelled in every file that tests it. A macro used for its
+    value but defined nowhere is not a switch.
+
+  The respell changes identifier tokens in code and comments, never a string
+  or character literal. A Pulp-origin row's blob is Pulp's bytes put through
+  the rename and then the respell. The table must be exactly what the bytes
+  imply, read with the respell undone, so a hand-written entry or a missing
+  one fails. With a Pulp checkout, each ported entry's kind must also show in
+  Pulp's bytes. No `framework/` file may keep a respelled name's old
+  spelling, and a change that adds an entry may edit a transferred file only
+  by that respell.
 - **The file set.** `framework/` holds exactly the transfer record's paths,
   minus the ledger's removals, plus its additions. A file with neither a
   transfer record nor a ledger row fails, and so does a listed file that is

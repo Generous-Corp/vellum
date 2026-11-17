@@ -76,7 +76,7 @@ PERFETTO_TRACK_EVENT_STATIC_STORAGE();
 #  define PULP_TRACING_KEEP_SYMBOL __attribute__((used, visibility("default")))
 #endif
 extern "C" PULP_TRACING_KEEP_SYMBOL
-const char pulp_tracing_ship_sentinel[] = "PULP_TRACING_COMPILED_IN__DO_NOT_SHIP";
+const char vellum_tracing_ship_sentinel[] = "PULP_TRACING_COMPILED_IN__DO_NOT_SHIP";
 
 namespace vellum::runtime {
 

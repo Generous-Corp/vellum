@@ -1470,6 +1470,58 @@ class MacosPlanSnapshotTest(unittest.TestCase):
         self.assertNotEqual(scoped.replace(str(Path(directory).resolve()), "<tmp>"), plan_json)
 
 
+class RespellAliasPlanTest(unittest.TestCase):
+    """A ported source spelling a closure macro VELLUM_<X> gets VELLUM_<X> with the target's PULP_<X> value."""
+
+    NEW = "framework/core/runtime/src/ported.cpp"
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = TransferredFixture(Path(self.temporary.name))
+        mp.BUILD_INFO_INPUTS[EXPORT_ID] = {"version": "1.2.3"}
+        self.fixture.closure["targets"][0]["compile_definitions"] = ["PULP_HAS_SKIA=1", "PULP_FLAG"]
+        self.fixture.write_receipt()
+
+    def tearDown(self) -> None:
+        mp.BUILD_INFO_INPUTS.pop(EXPORT_ID, None)
+        self.temporary.cleanup()
+
+    def port(self, body: bytes, entries: list[dict]) -> dict:
+        self.fixture.write(self.NEW, body)
+        self.fixture.write_ledger([self.fixture.row(self.NEW, target="pulp-runtime")])
+        self.fixture.write(mp.port_respell.TABLE, mp.port_respell.render(entries).encode())
+        return self.fixture.plan()
+
+    @staticmethod
+    def alias(old: str) -> dict:
+        return {"old": old, "new": mp.port_respell.respelled(old), "kind": "closure-macro", "evidence": None}
+
+    def test_a_ported_source_using_an_alias_gets_it(self) -> None:
+        plan = self.port(b"#if VELLUM_HAS_SKIA && defined(VELLUM_FLAG)\nint a;\n#endif\n",
+                         [self.alias("PULP_FLAG"), self.alias("PULP_HAS_SKIA")])
+        target = plan["units"][0]["targets"][0]
+        self.assertEqual(target["source_compile_definitions"],
+                         [{"source": str(self.fixture.repo.resolve() / self.NEW),
+                           "definitions": ["VELLUM_FLAG", "VELLUM_HAS_SKIA=1"]}])
+        output = Path(self.temporary.name) / "plan.cmake"
+        mp.write_cmake(plan, output)
+        self.assertIn("VELLUM_MIRROR_TARGET_PULP_RUNTIME_DEFINITION_SOURCE_0_DEFINITIONS", output.read_text())
+        self.assertIn('"VELLUM_HAS_SKIA=1"', output.read_text())
+
+    def test_a_source_using_no_alias_gets_nothing_and_the_plan_is_unchanged(self) -> None:
+        plan = self.port(b"int a;  // mentions VELLUM_HAS_SKIA only in a comment\n", [self.alias("PULP_HAS_SKIA")])
+        self.assertNotIn("source_compile_definitions", plan["units"][0]["targets"][0])
+        output = Path(self.temporary.name) / "plan.cmake"
+        mp.write_cmake(plan, output)
+        self.assertNotIn("DEFINITION_SOURCE", output.read_text())
+
+    def test_a_macro_the_target_does_not_define_is_not_aliased(self) -> None:
+        plan = self.port(b"#ifdef VELLUM_OTHER\n#endif\nint b = VELLUM_HAS_SKIA;\n",
+                         [self.alias("PULP_HAS_SKIA"), self.alias("PULP_OTHER")])
+        rows = plan["units"][0]["targets"][0]["source_compile_definitions"]
+        self.assertEqual(rows[0]["definitions"], ["VELLUM_HAS_SKIA=1"])
+
+
 class PlatformScopePlanTest(unittest.TestCase):
     """A ledger-added source or declared target is planned only on the platforms its scope lists."""
 

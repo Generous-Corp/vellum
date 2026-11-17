@@ -81,6 +81,20 @@ endforeach()
 set(VELLUM_MIRROR_BINARY_DATA_DIR "${CMAKE_CURRENT_BINARY_DIR}/vellum-mirror-binary-data")
 include("${_vellum_mirror_plan_cmake}")
 
+# A ported source that spells a closure macro PULP_<X> as VELLUM_<X> (the port
+# respell, tools/mirror/port_respell.py) gets VELLUM_<X> with its target's
+# value. The plan lists these only for sources that use one.
+function(_vellum_mirror_alias_definitions tkey)
+    if(NOT DEFINED VELLUM_MIRROR_TARGET_${tkey}_DEFINITION_SOURCE_COUNT)
+        return()
+    endif()
+    math(EXPR _last "${VELLUM_MIRROR_TARGET_${tkey}_DEFINITION_SOURCE_COUNT} - 1")
+    foreach(_index RANGE ${_last})
+        set_property(SOURCE "${VELLUM_MIRROR_TARGET_${tkey}_DEFINITION_SOURCE_${_index}}" APPEND PROPERTY
+            COMPILE_DEFINITIONS ${VELLUM_MIRROR_TARGET_${tkey}_DEFINITION_SOURCE_${_index}_DEFINITIONS})
+    endforeach()
+endfunction()
+
 # Object paths and __FILE__ must not carry the host's checkout or build path:
 # the SDK is built twice in different directories and compared byte for byte.
 set(_vellum_mirror_prefix_maps
@@ -247,6 +261,7 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
                     "${VELLUM_MIRROR_TARGET_${_tkey}_OPTION_SOURCE_${_vellum_option_index}_OPTIONS}")
             endforeach()
         endif()
+        _vellum_mirror_alias_definitions("${_tkey}")
         # A target that links an in-tree dependency compiles against its
         # interface target, so the in-tree INTERFACE definitions (the ones the
         # plan compared with the closure) apply to the mirrored sources.
@@ -533,6 +548,7 @@ foreach(_vellum_mirror_executable IN LISTS VELLUM_MIRROR_EXECUTABLES)
                 "${VELLUM_MIRROR_TARGET_${_tkey}_OPTION_SOURCE_${_vellum_option_index}_OPTIONS}")
         endforeach()
     endif()
+    _vellum_mirror_alias_definitions("${_tkey}")
     _vellum_mirror_declared_recipe_usage("${_vellum_mirror_executable}")
     set(_vellum_executable_units)
     foreach(_link IN LISTS VELLUM_MIRROR_TARGET_${_tkey}_INTERNAL_LINKS)

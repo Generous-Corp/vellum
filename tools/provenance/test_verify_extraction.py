@@ -1107,6 +1107,136 @@ class VerifyExtractionTests(unittest.TestCase):
             errors, _ = self.ports_verdict(root, pulp_root=pulp, defer=False)
             self.assertEqual(sum(f"is not a commit on Pulp origin/main" in e for e in errors), 2, errors)
 
+    def write_respell(self, root: Path, entries: list[dict]) -> None:
+        path = root / verify_extraction.FRAMEWORK_RESPELL
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"schema": "vellum.framework-respell.v1", "entries": entries}), encoding="utf-8")
+
+    @staticmethod
+    def respell_entry(old: str, kind: str, evidence: str | None) -> dict:
+        new = ("VELLUM_" + old[5:]) if old.startswith("PULP_") else ("vellum_" + old[5:])
+        return {"old": old, "new": new, "kind": kind, "evidence": evidence}
+
+    def write_closures(self, root: Path, definitions: list[str]) -> None:
+        """Give the fixture's transfer an export receipt whose one closure defines these macros."""
+        record = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+        record.write_text(json.dumps(dict(json.loads(record.read_text(encoding="utf-8")),
+                                          export_receipt="provenance/mirror/receipts/r.json")), encoding="utf-8")
+        closure = root / "provenance/mirror/closures/r/a.json"
+        closure.parent.mkdir(parents=True, exist_ok=True)
+        closure.write_text(json.dumps({"compile_definitions": definitions, "targets": []}), encoding="utf-8")
+        receipt = root / "provenance/mirror/receipts/r.json"
+        receipt.parent.mkdir(parents=True, exist_ok=True)
+        receipt.write_text(json.dumps({"units": [{"closure_manifest": "provenance/mirror/closures/r/a.json"}]}),
+                           encoding="utf-8")
+
+    def respell_verdict(self, root: Path, pulp_root: Path | None = None, defer: bool = True) -> tuple[list[str], dict]:
+        errors, checks = verify_extraction.verify_framework(root, pulp_root, "origin/main", defer_identity=defer)
+        return [e for e in errors if verify_extraction.FRAMEWORK_RESPELL in e], checks
+
+    def test_the_respell_table_is_what_the_bytes_imply(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            hooks = "framework/core/a/src/hooks.cpp"
+            caller = "framework/core/a/src/caller.cpp"
+            self.framework_fixture(root, {hooks: b'extern "C" void vellum_anchor() {}\n',
+                                          caller: b'extern "C" void vellum_anchor();\nvoid f() { vellum_anchor(); }\n'})
+            anchor = self.respell_entry("pulp_anchor", "extern-c", hooks)
+            # The table the bytes imply: proved.
+            self.write_respell(root, [anchor])
+            errors, checks = self.respell_verdict(root)
+            self.assertEqual(errors, [])
+            self.assertEqual(checks["framework_respell_entries"], 1)
+            # A hand-added entry nothing implies is refused.
+            extra = self.respell_entry("pulp_invented", "extern-c", hooks)
+            self.write_respell(root, [anchor, extra])
+            errors, _ = self.respell_verdict(root)
+            self.assertTrue(any("pulp_invented" in e and "not written by hand" in e for e in errors), errors)
+            # A closure macro the closures do not define is refused.
+            self.write_closures(root, ["PULP_HAS_SKIA=1"])
+            undefined = self.respell_entry("PULP_NOT_DEFINED", "closure-macro", None)
+            self.write_respell(root, [undefined, anchor])
+            errors, _ = self.respell_verdict(root)
+            self.assertTrue(any("PULP_NOT_DEFINED is not a macro the closures define" in e for e in errors), errors)
+            # A name left in its Pulp spelling is an entry the table lacks, and a stale spelling.
+            self.write_respell(root, [anchor])
+            (root / caller).write_bytes(b'extern "C" void pulp_anchor();\nvoid f() { pulp_anchor(); }\n')
+            errors, _ = self.respell_verdict(root)
+            self.assertTrue(any(caller in e and "still spells pulp_anchor" in e for e in errors), errors)
+            (root / hooks).write_bytes(b'extern "C" void pulp_anchor() {}\n')
+            self.write_respell(root, [])
+            errors, _ = self.respell_verdict(root)
+            self.assertTrue(any("imply pulp_anchor" in e and "does not list" in e for e in errors), errors)
+
+    def test_a_new_entry_edits_a_transferred_file_only_by_its_respell(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            hooks = "framework/core/a/src/hooks.cpp"
+            self.framework_fixture(root, {hooks: b'extern "C" void pulp_anchor() {}\nint other = 1;\n'})
+            base = self.git_commit_all(root, "before the respell")
+            os.environ["VELLUM_GIT_BASE"] = base
+            self.write_respell(root, [self.respell_entry("pulp_anchor", "extern-c", hooks)])
+            (root / hooks).write_bytes(b'extern "C" void vellum_anchor() {}\nint other = 1;\n')
+            self.track(root)
+            errors, _ = self.respell_verdict(root)
+            self.assertEqual(errors, [])
+            # Control: the same change plus any other edit to the file is refused.
+            (root / hooks).write_bytes(b'extern "C" void vellum_anchor() {}\nint other = 2;\n')
+            self.track(root)
+            errors, _ = self.respell_verdict(root)
+            self.assertTrue(any("changed by more than the respell" in e for e in errors), errors)
+
+    def test_a_ported_row_is_proved_through_the_respell(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root, pulp = Path(temporary) / "vellum", Path(temporary) / "pulp"
+            root.mkdir()
+            pulp.mkdir()
+            run = lambda *args: subprocess.check_output(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=pulp, text=True).strip()
+            run("init", "-q", "-b", "main")
+            (pulp / "core/a/src").mkdir(parents=True)
+            source = ('#define PULP_TAG "x"\nextern "C" int pulp_role_of(int pulp_role) { return pulp_role; }\n'
+                      '#ifdef PULP_FORCE\n#endif\nconst char* t = PULP_TAG;\n')
+            (pulp / "core/a/src/new.cpp").write_text(source)
+            run("add", "-A"); run("commit", "-q", "-m", "the port's source")
+            on_main = run("rev-parse", "HEAD")
+            run("update-ref", "refs/remotes/origin/main", on_main)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            self.record_rename(root)
+            self.write_closures(root, ["PULP_HAS_SKIA=1"])
+            entries = [self.respell_entry("PULP_FORCE", "opt-in-switch", self.PORTED),
+                       self.respell_entry("PULP_TAG", "file-macro", self.PORTED),
+                       self.respell_entry("pulp_role_of", "extern-c", self.PORTED)]
+            ported = (source.replace("PULP_TAG", "VELLUM_TAG").replace("PULP_FORCE", "VELLUM_FORCE")
+                      .replace("pulp_role_of", "vellum_role_of")).encode()
+            self.assertIn(b"int pulp_role)", ported)  # not C-linkage: left as Pulp spelled it
+            (root / self.PORTED).write_bytes(ported)
+            blob = verify_extraction.git_blob_sha(ported)
+            self.write_ports(root, [self.ports_row(self.PORTED, commits=[on_main], blob=blob)])
+            self.write_respell(root, entries)
+            errors, checks = self.ports_verdict(root, pulp_root=pulp, defer=False)
+            self.assertEqual(errors, [])
+            respell_errors, checks = self.respell_verdict(root, pulp_root=pulp, defer=False)
+            self.assertEqual(respell_errors, [])
+            self.assertIs(checks["framework_respell_proved"], True)
+            self.assertIs(checks["framework_ports_proved"], True)
+            # Control: without the respell the row's blob is not Pulp's renamed bytes.
+            self.write_respell(root, [])
+            errors, _ = self.ports_verdict(root, pulp_root=pulp, defer=False)
+            self.assertTrue(any("put through the transfer's rename (" in e for e in errors), errors)
+            # A switch the file uses for its value is no switch: Pulp's bytes refuse it.
+            self.write_respell(root, entries)
+            (pulp / "core/a/src/new.cpp").write_text(source.replace("#ifdef PULP_FORCE", "#if PULP_FORCE"))
+            run("add", "-A"); run("commit", "-q", "-m", "value use")
+            run("update-ref", "refs/remotes/origin/main", run("rev-parse", "HEAD"))
+            self.write_ports(root, [self.ports_row(self.PORTED, commits=[run("rev-parse", "HEAD")], blob=blob)])
+            respell_errors, _ = self.respell_verdict(root, pulp_root=pulp, defer=False)
+            self.assertTrue(any("does not show PULP_FORCE as a opt-in-switch" in e for e in respell_errors),
+                            respell_errors)
+
     def test_ports_rows_name_real_commits_on_pulp_main(self) -> None:
         self.hide_ci_git_base()
         with tempfile.TemporaryDirectory() as temporary:

@@ -74,6 +74,10 @@ FRAMEWORK_EXTERNAL_UPDATE_KEYS = {"path", "from_blob", "to_blob", "reason", "dep
 # or `native` for a file Vellum wrote. tools/mirror/framework_ports.py reads
 # and replays it for this verifier and for the mirror build plan.
 FRAMEWORK_PORTS_TOOL = Path(__file__).resolve().parents[1] / "mirror" / "framework_ports.py"
+# The port respell table (provenance/framework/respell.json): Pulp names a
+# framework/ file carries under a Vellum spelling. tools/mirror/port_respell.py
+# reads and recognises it; this module proves it.
+PORT_RESPELL_TOOL = Path(__file__).resolve().parents[1] / "mirror" / "port_respell.py"
 FRAMEWORK_VELLUM_DECLARATION = re.compile(r"namespace\s+vellum(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])vellum\s*::")
 # The rules the framework transfer is judged by. A change that introduces the
 # transfer record may touch none of them, so the rename tool and checks that
@@ -1364,11 +1368,21 @@ def load_framework_ports():
     return module
 
 
+def load_port_respell():
+    spec = importlib.util.spec_from_file_location("port_respell", PORT_RESPELL_TOOL)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {PORT_RESPELL_TOOL}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 FRAMEWORK_PORTS = load_framework_ports().LEDGER
 FRAMEWORK_UNITS = load_framework_ports().UNITS
 # The files that only exist together with framework/.
+FRAMEWORK_RESPELL = load_port_respell().TABLE
 FRAMEWORK_DATA_FILES = (FRAMEWORK_TRANSFER_RECORD, FRAMEWORK_NAME_DEBT, FRAMEWORK_EXTERNAL_UPDATES, FRAMEWORK_PORTS,
-                        FRAMEWORK_UNITS)
+                        FRAMEWORK_UNITS, FRAMEWORK_RESPELL)
 
 
 def framework_ports_history_errors(root: Path, ports) -> list[str]:
@@ -1434,7 +1448,8 @@ def framework_ports_joining_errors(root: Path, rows: list[dict], added: dict[str
 
 
 def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[dict],
-                                rename: dict | None = None) -> list[str]:
+                                rename: dict | None = None, respell: list[dict] | None = None,
+                                collect: dict[str, str] | None = None) -> list[str]:
     """Prove every Pulp claim a row makes against the Pulp checkout, never from the row's text.
 
     Each commit must be a commit object in the checkout and an ancestor of
@@ -1443,8 +1458,13 @@ def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[
     gives it; and framework_blob must be the blob of that file's bytes put
     through the transfer's rename (verify_mirror_rename_identity.forward_bytes
     with the transfer record's rename table, the transform the transfer proof
-    itself applies). A removed row's pulp_path is not looked up: the file may
-    be gone from every commit it names.
+    itself applies), then through the port respell table
+    (port_respell.apply_bytes) when one is given. A removed row's pulp_path is
+    not looked up: the file may be gone from every commit it names.
+
+    `collect`, when given, receives each added row's Pulp bytes after the
+    rename and before the respell, by framework path: the evidence the
+    respell table is derived from.
     """
     identity = load_rename_identity_verifier()
     rename = rename or {}
@@ -1501,11 +1521,18 @@ def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[
                             {x.lower() for x in edge.get("binary_suffixes", [])}):
             protected = [x["literal"].encode() for x in rename["literal_exclusions"] if x.get("path") == pulp_path]
             data, _ = identity.forward_bytes(data, rename, protected)
+        respeller = load_port_respell()
+        if collect is not None and respeller.respells(row["framework_path"]):
+            collect[row["framework_path"]] = data.decode("utf-8", errors="replace")
+        renamed = data
+        if respell:
+            data = respeller.apply_bytes(data, respell, row["framework_path"], ported=True)
+        through = "the transfer's rename" + (" and the port respell" if data != renamed else "")
         renamed_blob = git_blob_sha(data)
         if renamed_blob != row["framework_blob"]:
             errors.append(f"{where}: framework_blob {row['framework_blob'][:12]} is not Pulp {commit[:12]}:{pulp_path} "
-                          f"put through the transfer's rename ({renamed_blob[:12]}); a port that differs from "
-                          "Pulp is a native row")
+                          f"put through {through} ({renamed_blob[:12]}); a port that differs from Pulp is a native "
+                          "row")
     return errors
 
 
@@ -1566,11 +1593,185 @@ def framework_ports_state(root: Path, transferred: set[str], pulp_root: Path | N
         checks["framework_ports_proved"] = "deferred: no Pulp checkout"
         if not defer_identity:
             errors.append(f"{FRAMEWORK_PORTS}: no Pulp checkout proved the Pulp commits it names; pass --pulp-root")
-    else:
-        proof = framework_ports_pulp_errors(pulp_root, pulp_main_ref, rows, rename)
+    respeller = load_port_respell()
+    table, table_errors = respeller.load(root)
+    errors.extend(table_errors)
+    ported: dict[str, str] | None = None
+    if pulp_rows and pulp_root is not None:
+        ported = {}
+        proof = framework_ports_pulp_errors(pulp_root, pulp_main_ref, rows, rename, table, ported)
         checks["framework_ports_proved"] = not proof
         errors.extend(proof)
+        ported = {path: text for path, text in ported.items() if path in added}
+    elif not pulp_rows:
+        ported = {}
+    if not table_errors:
+        respell_errors, respell_checks = framework_respell_errors(root, table, ported, added)
+        errors.extend(respell_errors)
+        checks.update(respell_checks)
     return expected, errors, checks
+
+
+def framework_sources(root: Path) -> dict[str, str]:
+    """Every framework/ source the port respell reads, as the checkout holds it (external/ excluded)."""
+    respeller = load_port_respell()
+    out = {}
+    for path in active_files(root, (FRAMEWORK_ROOT.rstrip("/"),)):
+        relative = path.relative_to(root).as_posix()
+        if relative.startswith(FRAMEWORK_ROOT + "external/") or not respeller.respells(relative):
+            continue
+        out[relative] = path.read_text(encoding="utf-8", errors="replace")
+    return out
+
+
+def framework_closure_names(root: Path) -> tuple[set[str], set[str], list[str]]:
+    """(PULP_ macros the transfer's closures define, pulp_ names they list as link exports, errors)."""
+    try:
+        transfer = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
+        receipt = json.loads((root / transfer["export_receipt"]).read_text(encoding="utf-8"))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return set(), set(), [f"{FRAMEWORK_RESPELL}: cannot read the transfer's closures: {exc}"]
+    macros: set[str] = set()
+    exports: set[str] = set()
+    for unit in receipt.get("units", []):
+        try:
+            closure = json.loads((root / unit["closure_manifest"]).read_text(encoding="utf-8"))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return set(), set(), [f"{FRAMEWORK_RESPELL}: cannot read closure {unit.get('closure_manifest')}: {exc}"]
+        definitions = list(closure.get("compile_definitions", []))
+        for target in closure.get("targets", []):
+            definitions += target.get("compile_definitions", [])
+        macros |= {item.split("=", 1)[0] for item in definitions if item.startswith("PULP_")}
+        exports |= {row.get("name") for row in closure.get("link_exports", []) or []
+                    if isinstance(row, dict) and str(row.get("name", "")).startswith("pulp_")}
+    return macros, exports, []
+
+
+def framework_respell_errors(root: Path, table: list[dict], ported: dict[str, str] | None,
+                             added: dict[str, dict]) -> tuple[list[str], dict[str, object]]:
+    """Prove the port respell table (tools/mirror/port_respell.py).
+
+    The table must be exactly what the bytes imply. framework/ is read as it
+    is now with the table's respell undone, so a respelled definition still
+    counts as evidence and a name left in its Pulp spelling counts as a
+    missing entry; an entry nothing implies is refused as hand-written. With
+    a Pulp checkout (`ported`: each ported source's Pulp bytes after the
+    rename), a ported entry's kind must also show in Pulp's own bytes. No
+    framework/ file may still spell a respelled name the old way, and an
+    entry this change adds may edit a transferred file only by that respell.
+    """
+    respeller = load_port_respell()
+    checks: dict[str, object] = {"framework_respell_entries": len(table)}
+    errors: list[str] = []
+    current = framework_sources(root)
+    undo = {entry["new"]: entry["old"] for entry in table}
+    pulp_added = {path for path, row in added.items() if row["origin"] == "pulp"}
+    as_pulp = {path: respeller.apply(text, undo) for path, text in current.items()}
+    ported_now = {path: as_pulp[path] for path in pulp_added if path in as_pulp}
+    others = {path: text for path, text in as_pulp.items() if path not in pulp_added}
+    # The closures are read only when a name could depend on them.
+    needs_closures = (any(entry["kind"] in ("closure-macro", "link-export", "opt-in-switch") for entry in table)
+                      or any(respeller.pulp_tokens(text) for text in ported_now.values()))
+    macros: set[str] = set()
+    exports: set[str] = set()
+    if needs_closures:
+        macros, exports, closure_errors = framework_closure_names(root)
+        if closure_errors:
+            return closure_errors, checks
+    for index, entry in enumerate(table):
+        where, kind, old, evidence = f"{FRAMEWORK_RESPELL} entries[{index}]", entry["kind"], entry["old"], entry["evidence"]
+        if kind == "closure-macro" and old not in macros:
+            errors.append(f"{where}: {old} is not a macro the closures define")
+        elif kind == "link-export" and old not in exports:
+            errors.append(f"{where}: {old} is not a name the closures list as a link export")
+        elif kind in ("file-macro", "opt-in-switch") and evidence not in pulp_added:
+            errors.append(f"{where}: a {kind} entry's evidence is a ported Pulp source, not {evidence}")
+        elif ported is not None and evidence in ported:
+            recognised = {"file-macro": respeller.self_defined_macros, "extern-c": respeller.extern_c_definitions,
+                          "opt-in-switch": respeller.opt_in_switches}[kind](ported[evidence])
+            if old not in recognised:
+                errors.append(f"{where}: Pulp's {evidence} does not show {old} as a {kind}")
+    errors += respeller.consistency_errors(table, current)
+    if any(entry["kind"] == "opt-in-switch" for entry in table):
+        errors += respeller.switch_errors(table, current, macros, framework_respell_repo_texts(root))
+    derived = respeller.derive(ported_now, others, macros, exports, as_pulp)
+
+    def key(entry: dict) -> tuple:
+        return entry["old"], entry["kind"], entry["evidence"]
+
+    stored, implied = {key(e) for e in table}, {key(e) for e in derived}
+    for extra in sorted(stored - implied, key=str):
+        errors.append(f"{FRAMEWORK_RESPELL}: {extra[0]} ({extra[1]}, {extra[2]}) is not implied by the bytes; "
+                      "the table is derived, not written by hand")
+    for absent in sorted(implied - stored, key=str):
+        errors.append(f"{FRAMEWORK_RESPELL}: the bytes imply {absent[0]} ({absent[1]}, {absent[2]}), "
+                      "which the table does not list")
+    errors += framework_respell_edit_errors(root, table, set(current) - pulp_added)
+    checks["framework_respell_proved"] = (not errors) if ported is not None or not ported_now else \
+        "deferred: no Pulp checkout for the ported entries"
+    return errors, checks
+
+
+def framework_respell_repo_texts(root: Path) -> dict[str, str]:
+    """Tracked text outside framework/ and provenance/, where an opt-in switch could still be set."""
+    listed = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, check=False)
+    out = {}
+    for relative in listed.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
+        if not relative or relative.startswith((FRAMEWORK_ROOT, "provenance/")):
+            continue
+        path = root / relative
+        if not path.is_file() or path.is_symlink() or path.stat().st_size > 2_000_000:
+            continue
+        try:
+            out[relative] = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+    return out
+
+
+def framework_respell_edit_errors(root: Path, table: list[dict], transferred: set[str]) -> list[str]:
+    """A table entry this change adds edits a transferred file by exactly its respell.
+
+    Each transferred file that changed from the history base, and whose base
+    bytes spell a newly added framework-wide name, must equal its base bytes
+    respelled by the added entries alone.
+    """
+    respeller = load_port_respell()
+    base, base_error = load_mirror_export_verifier().history_base(root)
+    if base_error:
+        return [f"{FRAMEWORK_RESPELL}: {base_error}"]
+    if base is None:
+        return []
+    shown = subprocess.run(["git", "-C", str(root), "show", f"{base}:{FRAMEWORK_RESPELL}"],
+                           capture_output=True, check=False)
+    landed, _ = respeller.parse(shown.stdout.decode("utf-8", errors="replace")) if shown.returncode == 0 else ([], [])
+    before = {(e["old"], e["kind"]) for e in landed}
+    new_entries = [e for e in table if (e["old"], e["kind"]) not in before and e["kind"] in respeller.FRAMEWORK_WIDE]
+    if not new_entries:
+        return []
+    olds = {e["old"] for e in new_entries}
+    errors = []
+    changed = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "-z", base, "--", FRAMEWORK_ROOT.rstrip("/")],
+                             capture_output=True, check=False)
+    if changed.returncode != 0:
+        return [f"{FRAMEWORK_RESPELL}: cannot diff framework/ against {base}"]
+    edited = set(changed.stdout.decode("utf-8", errors="surrogateescape").split("\0"))
+    for path in sorted(set(transferred) & edited):
+        old_bytes = subprocess.run(["git", "-C", str(root), "show", f"{base}:{path}"],
+                                   capture_output=True, check=False)
+        if old_bytes.returncode != 0:
+            continue
+        text = old_bytes.stdout.decode("utf-8", errors="replace")
+        if not (olds & respeller.pulp_tokens(text)):
+            continue
+        head = root / path
+        if not head.is_file():
+            continue
+        expected = respeller.apply(text, {e["old"]: e["new"] for e in new_entries})
+        if head.read_text(encoding="utf-8", errors="replace") != expected:
+            errors.append(f"{FRAMEWORK_RESPELL}: {path} changed by more than the respell of {sorted(olds)}; "
+                          "land the respell on its own")
+    return errors
 
 
 def framework_transfer_state(root: Path) -> tuple[dict[str, object], list[str]]:
