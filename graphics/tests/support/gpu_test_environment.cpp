@@ -50,7 +50,7 @@ ProbeOutcome probe_real_adapter() {
                 } else {
                     probed.result = AdapterProbeResult::error;
                 }
-                probed.detail = std::string(message.data, message.length);
+                probed.detail = to_text(message);
             });
         instance.ProcessEvents();
         return probed;
@@ -59,6 +59,12 @@ ProbeOutcome probe_real_adapter() {
 }
 
 }  // namespace
+
+std::string to_text(const wgpu::StringView& value) {
+    if (value.data == nullptr || value.length == 0) return {};
+    if (value.length == WGPU_STRLEN) return std::string(value.data);
+    return std::string(value.data, value.length);
+}
 
 int GpuStatus::exit_code() const noexcept {
     switch (outcome) {

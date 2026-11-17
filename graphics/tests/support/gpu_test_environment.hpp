@@ -2,6 +2,8 @@
 
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
+#include "dawn/webgpu_cpp.h"
+
 #include <memory>
 #include <string>
 
@@ -45,6 +47,10 @@ struct SurfaceResult final {
 /// Creates a surface after `prepare_gpu_environment`. A creation failure once
 /// an adapter exists is `GpuOutcome::failed`, never `no_adapter`.
 [[nodiscard]] SurfaceResult create_gpu_surface(const SkiaDawnSurface::Config& config);
+
+/// A Dawn string as text. Null data or a zero length is empty, and a length of
+/// `WGPU_STRLEN` means the data is NUL-terminated.
+[[nodiscard]] std::string to_text(const wgpu::StringView& value);
 
 /// What an adapter probe found. Only `absent` is a skip; `error` is a failure.
 enum class AdapterProbeResult {

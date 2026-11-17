@@ -31,6 +31,21 @@ harness::AdapterProbeResult some_adapter(std::string*) {
 
 const vellum::graphics::SkiaDawnSurface::Config kConfig{.width = 16, .height = 16};
 
+void string_views_are_null_safe() {
+    expect(harness::to_text(wgpu::StringView{nullptr, 0}).empty(),
+           "a null string view with length 0 is empty");
+    expect(harness::to_text(wgpu::StringView{nullptr, WGPU_STRLEN}).empty(),
+           "a null string view with WGPU_STRLEN is empty");
+    expect(harness::to_text(wgpu::StringView{"ignored", 0}).empty(),
+           "a zero length string view is empty");
+    expect(harness::to_text(wgpu::StringView{"adapter unavailable", 19}) == "adapter unavailable",
+           "a counted message is copied");
+    expect(harness::to_text(wgpu::StringView{"counted message", 7}) == "counted",
+           "a counted message stops at its length");
+    expect(harness::to_text(wgpu::StringView{"terminated", WGPU_STRLEN}) == "terminated",
+           "a NUL-terminated message is copied whole");
+}
+
 void exit_codes() {
     expect(harness::GpuStatus{harness::GpuOutcome::ready, {}}.exit_code() == 0,
            "a ready status exits 0");
@@ -88,6 +103,7 @@ void failure_after_an_adapter_is_a_failure() {
 }  // namespace
 
 int main() {
+    string_views_are_null_safe();
     exit_codes();
     forced_no_adapter_is_a_skip();
     adapter_request_error_is_a_failure();
