@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vellum/graphics/color.hpp>
+#include <vellum/graphics/feature_versions.hpp>
 
 #include <algorithm>
 #include <array>
@@ -935,12 +936,13 @@ inline constexpr float kMaxPlotStroke = 4096.0F;
 /// `scene_fields_match_version` and is refused.
 ///
 /// Claimed versions, in order:
+/// version 2: transform, opacity and corner radii; version 3: path nodes;
 /// version 4: image nodes; version 5: clip, mask and isolation on groups;
 /// version 6: blend modes and DesignIR compositing fields; version 7: interned
 /// token receipts; version 8: gradient vocabulary; version 9: vector assets;
 /// version 10: effects and materials; version 11: animation tracks; version
 /// 12: plot nodes.
-inline constexpr std::uint32_t kSceneVersion = 12U;
+inline constexpr std::uint32_t kSceneVersion = latest_scene_version();
 
 /// The oldest scene schema version this build still consumes.
 inline constexpr std::uint32_t kMinSupportedSceneVersion = 1U;

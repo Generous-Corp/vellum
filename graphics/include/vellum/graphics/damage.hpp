@@ -273,6 +273,7 @@ public:
 /// versions the damage model understands; a newer scene repaints fully until
 /// the damage model learns its fields and this constant is raised.
 inline constexpr std::uint32_t kDamageModelSceneVersion = 12U;
+static_assert(kDamageModelSceneVersion <= kSceneVersion);
 
 /// Whether a scene of `version` may be redrawn from its damage alone: a
 /// version from `kMinSupportedSceneVersion` to `kDamageModelSceneVersion`.
