@@ -28,7 +28,10 @@
       "vellum.effects",
       "vellum.foundation",
       "vellum.framework.gpu-capabilities",
+      "vellum.framework.host-param-surface-model",
+      "vellum.framework.knob-fine-drag",
       "vellum.framework.param-model-binding",
+      "vellum.framework.render-pass",
       "vellum.framework.widget-bridge",
       "vellum.framework.widget-bridge-param-model",
       "vellum.gpu-runtime-artifact-unit",
@@ -94,12 +97,14 @@
       "vellum.value.install-consumer",
       "vellum.value.param-metadata",
       "vellum.value.param-model",
+      "vellum.vector-asset",
       "vellum.web.browser-process-cleanup",
       "vellum.web.browser-proof-wait",
       "vellum.web.canvas-shell-lowering",
       "vellum.web.layout-contract",
       "vellum.web.no-engine",
-      "vellum.web.no-engine-negative-control"
+      "vellum.web.no-engine-negative-control",
+      "vellum.web.vector-canvas-builder"
     ],
     "gpu": [
       "gpu-runtime.device",
@@ -159,6 +164,7 @@
       "vellum.gpu.token-theme",
       "vellum.gpu.transformed_clip",
       "vellum.gpu.transformed_shadow_and_text",
+      "vellum.gpu.vector-assets",
       "vellum.macos-accessibility",
       "vellum.rmlui.cpu-blend-control",
       "vellum.rmlui.cpu-vs-metal",
@@ -169,8 +175,10 @@
       "vellum.rmlui.metal-image-decode",
       "vellum.rmlui.metal-layers",
       "vellum.rmlui.metal-reference",
+      "vellum.rmlui.metal-trim",
       "vellum.rmlui.metal-visual",
       "vellum.rmlui.native",
+      "vellum.rmlui.native-api-version",
       "vellum.rmlui.native-text-input",
       "vellum.rmlui.native-text-width",
       "vellum.rmlui.native-warm",
@@ -180,7 +188,8 @@
       "vellum.scene-capture-harness.record",
       "vellum.smoke-native",
       "vellum.swift-host-proof",
-      "vellum.swift-host-proof-native"
+      "vellum.swift-host-proof-native",
+      "vellum.web.vector-canvas-oracle"
     ],
     "slow": [
       "gpu-runtime.install-consumer",
