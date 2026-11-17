@@ -26,6 +26,16 @@ package library) or an executable, its sources, include directories, compile
 definitions and link targets. Each declared source must also have the ledger
 row that adds it to that target, so nothing is built that a row does not
 account for. A missing manifest declares nothing.
+
+Platform scope (schema v2). The closures name what each platform compiles;
+a ledger-added source is compiled only on the platforms its scope lists. A
+compiled row may carry `platforms`, a list of platform keys; a row without it
+is scoped to the reference platform, macos-arm64, which is what every v1 row
+was proven on. A `scoped` row re-states the platform set of a source the
+ledger already adds, to the same target, so the scope can widen or narrow
+without editing a landed row. A declared target in the unit manifest carries
+the same optional list, and each of its sources' scopes must cover it. A v1
+document may hold neither `platforms` nor `scoped` rows.
 """
 
 from __future__ import annotations
@@ -36,14 +46,24 @@ from pathlib import Path
 from typing import Any
 
 LEDGER = "provenance/framework/ports.json"
-SCHEMA = "vellum.framework-ports.v1"
+SCHEMA_V1 = "vellum.framework-ports.v1"
+SCHEMA = "vellum.framework-ports.v2"
+SCHEMAS = (SCHEMA_V1, SCHEMA)
 FRAMEWORK_PREFIX = "framework/"
 # Third-party source is pinned by blob and changes only through
 # provenance/framework/external-updates.json, never through this ledger.
 EXTERNAL_PREFIX = "framework/external/"
 ROW_KEYS = {"framework_path", "change", "target", "origin", "pulp_path", "pulp_commits", "framework_blob",
             "reason"}
-CHANGES = ("added", "removed")
+CHANGES = ("added", "removed", "scoped")
+# Every platform the mirror build can be selected for. A key here builds only
+# when the platform also has a verified closure and a renderer lock entry.
+PLATFORMS = ("macos-arm64", "linux-x64", "linux-arm64", "windows-x64", "windows-arm64", "ios-device-arm64",
+             "ios-simulator-arm64", "android-arm64-v8a", "android-x86_64", "wasm32")
+# The platform the landed closures describe; v1 rows were proven on it, and
+# it is the scope of a row that names none.
+RECEIPT_PLATFORM = "macos-arm64"
+DEFAULT_PLATFORMS = (RECEIPT_PLATFORM,)
 ORIGINS = ("pulp", "native")
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".m", ".mm"}
 SAFE_PATH = re.compile(r"(?:[A-Za-z0-9_.+@-]+/)*[A-Za-z0-9_.+@-]+\Z")
@@ -61,10 +81,23 @@ def compiled(path: str) -> bool:
     return Path(path).suffix in SOURCE_SUFFIXES
 
 
+def platform_list_errors(value: Any, where: str) -> list[str]:
+    """What is wrong with a `platforms` value: a non-empty list of distinct known platform keys."""
+    if not string_list(value) or not value:
+        return [f"{where}: platforms must be a non-empty list of distinct platform keys"]
+    unknown = [item for item in value if item not in PLATFORMS]
+    return [f"{where}: platforms names unknown platform {item!r}; known: {list(PLATFORMS)}" for item in unknown]
+
+
+def platforms_of(entry: dict[str, Any]) -> frozenset[str]:
+    """The platforms a well-formed row or declared target is scoped to."""
+    return frozenset(entry.get("platforms") or DEFAULT_PLATFORMS)
+
+
 def row_errors(row: Any, where: str) -> list[str]:
     """What is wrong with one row's shape; empty when it is well formed."""
-    if not isinstance(row, dict) or set(row) != ROW_KEYS:
-        return [f"{where}: must have exactly {sorted(ROW_KEYS)}"]
+    if not isinstance(row, dict) or set(row) - {"platforms"} != ROW_KEYS:
+        return [f"{where}: must have exactly {sorted(ROW_KEYS)}, and optionally platforms"]
     errors: list[str] = []
     path, change, origin = row["framework_path"], row["change"], row["origin"]
     if not safe_relative(path) or not path.startswith(FRAMEWORK_PREFIX):
@@ -90,13 +123,23 @@ def row_errors(row: Any, where: str) -> list[str]:
     else:
         errors.append(f"{where}: origin must be one of {list(ORIGINS)}")
     blob = row["framework_blob"]
+    scoped = change == "scoped"
+    if scoped or (change == "added" and compiled(path)):
+        if scoped and "platforms" not in row:
+            errors.append(f"{where}: a scoped row names the platforms it scopes the source to")
+        if "platforms" in row:
+            errors.extend(platform_list_errors(row["platforms"], where))
+    elif "platforms" in row:
+        errors.append(f"{where}: platforms scope only a compilable source a row adds or scopes")
+    if scoped and not compiled(path):
+        errors.append(f"{where}: only a compilable source can be scoped")
     if change == "added" and origin == "pulp":
         if not isinstance(blob, str) or not COMMIT.match(blob):
             errors.append(f"{where}: a row adding a Pulp file records the file's git blob id in framework_blob")
     elif blob is not None:
         errors.append(f"{where}: framework_blob is null unless the row adds a file of Pulp origin")
     target = row["target"]
-    if change == "added" and compiled(path):
+    if (change == "added" or scoped) and compiled(path):
         if not isinstance(target, str) or not TARGET_NAME.match(target):
             errors.append(f"{where}: {path} is a compilable source, so target must name the mirrored "
                           "target that compiles it")
@@ -112,10 +155,14 @@ def parse(text: str) -> tuple[list[dict[str, Any]], list[str]]:
     except ValueError as exc:
         return [], [f"{LEDGER}: unreadable: {exc}"]
     if not isinstance(document, dict) or set(document) != {"schema", "rows"} \
-            or document["schema"] != SCHEMA or not isinstance(document["rows"], list):
-        return [], [f"{LEDGER}: must be an object with schema {SCHEMA} and a rows list"]
+            or document["schema"] not in SCHEMAS or not isinstance(document["rows"], list):
+        return [], [f"{LEDGER}: must be an object with schema {SCHEMA} (or {SCHEMA_V1}) and a rows list"]
     errors = [error for index, row in enumerate(document["rows"])
               for error in row_errors(row, f"{LEDGER} rows[{index}]")]
+    if document["schema"] == SCHEMA_V1:
+        errors.extend(f"{LEDGER} rows[{index}]: platform scope needs schema {SCHEMA}"
+                      for index, row in enumerate(document["rows"])
+                      if isinstance(row, dict) and ("platforms" in row or row.get("change") == "scoped"))
     return ([] if errors else document["rows"]), errors
 
 
@@ -133,27 +180,75 @@ def load(repo: Path) -> tuple[list[dict[str, Any]], list[str]]:
 
 
 def replay(rows: list[dict[str, Any]], transferred: set[str]) -> tuple[dict[str, dict[str, Any]], set[str], list[str]]:
-    """Apply well-formed rows in order to the transferred set: (added, removed, errors).
+    """Apply well-formed rows in order to the transferred set: (added, removed, errors)."""
+    added, removed, _, errors = replay_scoped(rows, transferred)
+    return added, removed, errors
+
+
+def replay_scoped(rows: list[dict[str, Any]], transferred: set[str]
+                  ) -> tuple[dict[str, dict[str, Any]], set[str], dict[str, frozenset[str]], list[str]]:
+    """Apply well-formed rows in order to the transferred set: (added, removed, scopes, errors).
 
     `added` maps each path the ledger currently adds to its row; `removed` is
     the transferred and once-added paths the ledger currently removes. A path
     the transfer record lists may only be removed, once: its content is the
     transfer's, so it cannot come back as a port. A path may be added only
     while it is absent, and removed only while it is present.
+
+    `scopes` maps each compilable source the ledger adds to the platforms it
+    is compiled on: its adding row's scope, replaced by any later scoped row.
+    `added` keeps the adding row itself, so checks keyed on that row (the
+    joining blob) are never bypassed by a scope change. A scoped row must
+    name a source the ledger currently adds, with the target, origin, Pulp
+    path and Pulp commits it was added with, so it makes no provenance claim
+    the adding row did not. A scope change may not take a source out of the macOS build
+    while macOS compiles it: the macOS closure is the only one landed, and
+    leaving it would leave the source compiled nowhere a lane checks. The
+    same holds across a removal: a path once compiled on macOS comes back
+    only with macOS in its scope. A new source may be scoped off macOS; its
+    target is still checked by the build plan.
     """
     added: dict[str, dict[str, Any]] = {}
     removed: set[str] = set()
+    scopes: dict[str, frozenset[str]] = {}
+    on_macos: set[str] = set()  # paths the ledger has compiled on macOS at some point
     errors: list[str] = []
     for index, row in enumerate(rows):
         where, path = f"{LEDGER} rows[{index}]", row["framework_path"]
+        if row["change"] == "scoped":
+            if path not in added:
+                errors.append(f"{where}: {path} is not a source the ledger adds, so it cannot be scoped")
+            elif row["target"] != added[path]["target"]:
+                errors.append(f"{where}: {path} was added to {added[path]['target']}, so a scope change "
+                              f"cannot move it to {row['target']}")
+            elif ((row["origin"], row["pulp_path"], row["pulp_commits"])
+                  != (added[path]["origin"], added[path]["pulp_path"], added[path]["pulp_commits"])):
+                errors.append(f"{where}: {path} was added with origin {added[path]['origin']}, Pulp path "
+                              f"{added[path]['pulp_path']} and its Pulp commits; a scope change names the same")
+            elif RECEIPT_PLATFORM in scopes[path] and RECEIPT_PLATFORM not in platforms_of(row):
+                errors.append(f"{where}: {path} is compiled on {RECEIPT_PLATFORM}; a scope change cannot "
+                              f"take it out of the {RECEIPT_PLATFORM} build")
+            else:
+                scopes[path] = platforms_of(row)
+                if RECEIPT_PLATFORM in scopes[path]:
+                    on_macos.add(path)
+            continue
+        scopes.pop(path, None)
         if row["change"] == "added":
             if path in transferred:
                 errors.append(f"{where}: {path} is in the transfer record; a ledger row may only remove it")
             elif path in added:
                 errors.append(f"{where}: {path} is already added")
+            elif compiled(path) and path in on_macos and RECEIPT_PLATFORM not in platforms_of(row):
+                errors.append(f"{where}: {path} was compiled on {RECEIPT_PLATFORM}; it comes back only "
+                              f"with {RECEIPT_PLATFORM} in its scope")
             else:
                 added[path] = row
                 removed.discard(path)
+                if compiled(path):
+                    scopes[path] = platforms_of(row)
+                    if RECEIPT_PLATFORM in scopes[path]:
+                        on_macos.add(path)
         elif path in added:
             del added[path]
             removed.add(path)
@@ -161,13 +256,14 @@ def replay(rows: list[dict[str, Any]], transferred: set[str]) -> tuple[dict[str,
             removed.add(path)
         else:
             errors.append(f"{where}: {path} is not a file framework/ holds, so it cannot be removed")
-    return added, removed, errors
+    return added, removed, scopes, errors
 
 
 UNITS = "provenance/framework/units.json"
-UNITS_SCHEMA = "vellum.framework-units.v1"
+UNITS_SCHEMA = "vellum.framework-units.v2"
 UNIT_TARGET_KEYS = {"name", "type", "unit", "sources", "include_dirs", "compile_definitions", "link_targets",
                     "reason"}
+UNITS_SCHEMA_V1 = "vellum.framework-units.v1"
 TARGET_TYPES = ("STATIC_LIBRARY", "EXECUTABLE")
 DEFINITION = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:=[A-Za-z0-9_.+-]*)?\Z")
 # Owned configuration: VELLUM_MIRROR_BUILD turns off the GPU-surface guard and
@@ -186,9 +282,11 @@ def unit_target_errors(target: Any, where: str) -> list[str]:
     library in a new unit, or an executable. Everything the build does with it
     is written here; nothing is inferred from the sources.
     """
-    if not isinstance(target, dict) or set(target) != UNIT_TARGET_KEYS:
-        return [f"{where}: must have exactly {sorted(UNIT_TARGET_KEYS)}"]
+    if not isinstance(target, dict) or set(target) - {"platforms"} != UNIT_TARGET_KEYS:
+        return [f"{where}: must have exactly {sorted(UNIT_TARGET_KEYS)}, and optionally platforms"]
     errors: list[str] = []
+    if "platforms" in target:
+        errors.extend(platform_list_errors(target["platforms"], where))
     name, kind, unit = target["name"], target["type"], target["unit"]
     if not isinstance(name, str) or not TARGET_NAME.match(name):
         return [f"{where}: name {name!r} is not a target name"]
@@ -243,10 +341,14 @@ def parse_units(text: str) -> tuple[list[dict[str, Any]], list[str]]:
     except ValueError as exc:
         return [], [f"{UNITS}: unreadable: {exc}"]
     if not isinstance(document, dict) or set(document) != {"schema", "targets"} \
-            or document["schema"] != UNITS_SCHEMA or not isinstance(document["targets"], list):
-        return [], [f"{UNITS}: must be an object with schema {UNITS_SCHEMA} and a targets list"]
+            or document["schema"] not in (UNITS_SCHEMA_V1, UNITS_SCHEMA) or not isinstance(document["targets"], list):
+        return [], [f"{UNITS}: must be an object with schema {UNITS_SCHEMA} (or {UNITS_SCHEMA_V1}) and a targets list"]
     errors = [error for index, target in enumerate(document["targets"])
               for error in unit_target_errors(target, f"{UNITS} targets[{index}]")]
+    if document["schema"] == UNITS_SCHEMA_V1:
+        errors.extend(f"{UNITS} targets[{index}]: platform scope needs schema {UNITS_SCHEMA}"
+                      for index, target in enumerate(document["targets"])
+                      if isinstance(target, dict) and "platforms" in target)
     return ([] if errors else document["targets"]), errors
 
 
@@ -263,7 +365,8 @@ def load_units(repo: Path) -> tuple[list[dict[str, Any]], list[str]]:
         return [], [f"{UNITS}: unreadable: {exc}"]
 
 
-def units_errors(repo: Path, targets: list[dict[str, Any]], added: dict[str, dict[str, Any]]) -> list[str]:
+def units_errors(repo: Path, targets: list[dict[str, Any]], added: dict[str, dict[str, Any]],
+                 scopes: dict[str, frozenset[str]] | None = None) -> list[str]:
     """What is wrong with well-formed declared targets against the ledger and the checkout.
 
     Each source is declared twice and the two must agree: the target lists it,
@@ -272,8 +375,12 @@ def units_errors(repo: Path, targets: list[dict[str, Any]], added: dict[str, dic
     target, are both refused. A declared link to another declared target must
     name a static library declared earlier, so the units build in order and
     form no cycle. Links to closure and recipe targets are judged by the build
-    plan, which reads the closures (tools/mirror/mirror_package.py).
+    plan, which reads the closures (tools/mirror/mirror_package.py). A
+    declared target is built only on its platforms, so each source's scope
+    must cover them; `scopes` defaults to each adding row's own scope.
     """
+    if scopes is None:
+        scopes = {path: platforms_of(row) for path, row in added.items() if compiled(path)}
     errors: list[str] = []
     seen: dict[str, str] = {}
     for index, target in enumerate(targets):
@@ -283,6 +390,12 @@ def units_errors(repo: Path, targets: list[dict[str, Any]], added: dict[str, dic
         for link in target["link_targets"]:
             if seen.get(link) == "EXECUTABLE":
                 errors.append(f"{where}: {name} links the executable {link}")
+            elif link in seen:
+                linked = next(other for other in targets[:index] if other["name"] == link)
+                missing = sorted(platforms_of(target) - platforms_of(linked))
+                if missing:
+                    errors.append(f"{where}: {name} is built on {missing}, where the target it links, "
+                                  f"{link}, is not")
         later = {other["name"] for other in targets[index + 1:]}
         for link in sorted(set(target["link_targets"]) & later - set(seen)):
             errors.append(f"{where}: {name} links {link}, which is declared after it")
@@ -293,6 +406,11 @@ def units_errors(repo: Path, targets: list[dict[str, Any]], added: dict[str, dic
                 errors.append(f"{where}: source {source} has no ports ledger row adding it")
             elif row["target"] != name:
                 errors.append(f"{where}: source {source} is added by its ledger row to {row['target']}, not {name}")
+            else:
+                missing = sorted(platforms_of(target) - scopes.get(source, frozenset()))
+                if missing:
+                    errors.append(f"{where}: {name} is built on {missing}, where its source {source} "
+                                  "is not scoped")
         for include in target["include_dirs"]:
             directory = repo / FRAMEWORK_PREFIX / include
             if directory.is_symlink() or not directory.is_dir():
@@ -306,14 +424,15 @@ def units_errors(repo: Path, targets: list[dict[str, Any]], added: dict[str, dic
     return errors
 
 
-def declared_units(repo: Path, added: dict[str, dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+def declared_units(repo: Path, added: dict[str, dict[str, Any]],
+                   scopes: dict[str, frozenset[str]] | None = None) -> tuple[list[dict[str, Any]], list[str]]:
     """(targets, errors) for the unit manifest, judged against the ledger's added rows.
 
     With errors no target is returned, so a broken manifest never widens what is built.
     """
     targets, errors = load_units(repo)
     if not errors:
-        errors = units_errors(repo, targets, added)
+        errors = units_errors(repo, targets, added, scopes)
     return ([] if errors else targets), errors
 
 
@@ -323,9 +442,33 @@ def file_set(repo: Path, transferred: set[str]) -> tuple[set[str], dict[str, dic
     With errors the expected set is the transfer record's alone, so a broken
     ledger never widens what is accepted.
     """
+    expected, added, removed, _, errors = file_set_scoped(repo, transferred)
+    return expected, added, removed, errors
+
+
+def file_set_scoped(repo: Path, transferred: set[str]
+                    ) -> tuple[set[str], dict[str, dict[str, Any]], set[str], dict[str, frozenset[str]], list[str]]:
+    """file_set, plus the platforms each ledger-added source is compiled on.
+
+    With errors no source is added or scoped.
+    """
     rows, errors = load(repo)
-    added, removed, replay_errors = replay(rows, transferred)
+    added, removed, scoped, replay_errors = replay_scoped(rows, transferred)
     errors = errors + replay_errors
     if errors:
-        return set(transferred), {}, set(), errors
-    return (set(transferred) - removed) | set(added), added, removed, errors
+        return set(transferred), {}, set(), {}, errors
+    return (set(transferred) - removed) | set(added), added, removed, scoped, errors
+
+
+def scopes(repo: Path, transferred: set[str]) -> tuple[dict[str, frozenset[str]], list[str]]:
+    """(scopes, errors): the platforms each ledger-added source is compiled on.
+
+    With errors no source is scoped, so a broken ledger never widens what is built.
+    """
+    _, _, _, scoped, errors = file_set_scoped(repo, transferred)
+    return scoped, errors
+
+
+def compiled_on(scope: dict[str, frozenset[str]], path: str, platform: str) -> bool:
+    """Whether the ledger-added source at path is compiled on platform."""
+    return platform in scope.get(path, frozenset())

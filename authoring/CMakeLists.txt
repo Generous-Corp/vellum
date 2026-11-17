@@ -38,6 +38,8 @@ if(VELLUM_BUILD_TESTS)
         tests/rendered_tree_materializer_test.cpp)
     target_include_directories(vellum-rendered-tree-materializer-test
         PRIVATE src)
+    target_compile_definitions(vellum-rendered-tree-materializer-test PRIVATE
+        VELLUM_VECTOR_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/fixtures/vector-assets")
     target_link_libraries(
         vellum-rendered-tree-materializer-test PRIVATE Vellum::Authoring)
     add_test(
@@ -60,3 +62,5 @@ if(VELLUM_BUILD_TESTS)
             SKIP_RETURN_CODE 77)
     endif()
 endif()
+
+add_subdirectory(design_pipeline)

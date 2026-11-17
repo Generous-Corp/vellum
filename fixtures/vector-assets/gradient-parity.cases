@@ -1,0 +1,42 @@
+valid	linear default	{"angle":180,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+valid	linear angle 90	{"angle":90,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+valid	linear explicit zero radii	{"radiusX":0,"radiusY":0,"angle":180,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+valid	radial default	{"kind":"radial","stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+valid	radial radii	{"kind":"radial","radiusX":2,"radiusY":1,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+valid	radial centre	{"kind":"radial","centerX":0.2,"centerY":0.7,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+valid	radial explicit default end radius	{"kind":"radial","endRadius":0.5,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+valid	radial explicit zero start radius	{"kind":"radial","startRadius":0,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+valid	two-circle default	{"kind":"two-circle-radial","stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+valid	two-circle radii	{"kind":"two-circle-radial","startRadius":0.1,"endRadius":0.6,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+valid	two-circle focal	{"kind":"two-circle-radial","focalX":0.25,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+valid	two-circle equal radii apart	{"kind":"two-circle-radial","startRadius":0.3,"endRadius":0.3,"focalX":0.2,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+valid	two-circle explicit zero radii x y	{"kind":"two-circle-radial","radiusX":0,"radiusY":0,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+valid	conic angle	{"kind":"conic","angle":45,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+valid	conic centre	{"kind":"conic","centerX":0.3,"centerY":0.4,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+valid	conic explicit default radii	{"kind":"conic","endRadius":0.5,"startRadius":0,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+valid	repeat false	{"repeating":false,"angle":180,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	linear with explicit default centre	{"centerX":0.5,"centerY":0.5,"angle":180,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	linear with explicit default focal	{"focalX":0.5,"focalY":0.5,"angle":180,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	radial with explicit angle 180	{"kind":"radial","angle":180,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	linear with radiusX	{"angle":90,"radiusX":1,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	linear with radiusY	{"radiusY":1,"angle":180,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	linear with start radius	{"startRadius":0.1,"angle":180,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	linear with end radius	{"endRadius":1,"angle":180,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	linear with centre x	{"centerX":0.3,"angle":180,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	linear with focal x	{"focalX":0.1,"angle":180,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	linear with repeat length	{"repeatLength":5,"angle":180,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	radial with start radius	{"kind":"radial","startRadius":1,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	radial with end radius	{"kind":"radial","endRadius":0.4,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	radial with angle 90	{"kind":"radial","angle":90,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	radial with focal x	{"kind":"radial","focalX":0.1,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	radial with repeat length	{"kind":"radial","repeatLength":2,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	radial with radius beyond float32	{"kind":"radial","radiusX":1e+39,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	two-circle with radiusX	{"kind":"two-circle-radial","radiusX":1,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	two-circle with angle 90	{"kind":"two-circle-radial","angle":90,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	two-circle identical circles	{"kind":"two-circle-radial","startRadius":1,"endRadius":1,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	two-circle identical circles at default end radius	{"kind":"two-circle-radial","startRadius":0.5,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	two-circle identical after float32 radius	{"kind":"two-circle-radial","startRadius":0.5000000001,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	two-circle identical after float32 focal	{"kind":"two-circle-radial","startRadius":0.5,"focalX":0.5000000001,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	conic with radiusX	{"kind":"conic","radiusX":1,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	conic with focal y	{"kind":"conic","focalY":0.2,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
+invalid	conic with start radius	{"kind":"conic","startRadius":0.2,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}
