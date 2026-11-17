@@ -101,7 +101,9 @@ std::string to_json(const RenderTelemetry& telemetry) {
         << ",\"cpu_milliseconds\":" << json_number(telemetry.cpu_milliseconds)
         << ",\"resize_settled\":" << (telemetry.resize_settled ? "true" : "false")
         << ",\"trims\":" << telemetry.trims
-        << ",\"last_trim\":" << json_string(to_string(telemetry.last_trim)) << '}';
+        << ",\"last_trim\":" << json_string(to_string(telemetry.last_trim))
+        << ",\"device_losses\":" << telemetry.device_losses
+        << ",\"device_recoveries\":" << telemetry.device_recoveries << '}';
     return out.str();
 }
 

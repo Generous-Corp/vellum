@@ -82,9 +82,59 @@ else()
         "webgpu_error_scopes_test.cpp")
 endif()
 
+# The Three.js bridge tests run the pinned payload (VELLUM_THREEJS_DIR) on V8,
+# which they need: QuickJS cannot parse the builds. Module loading needs no
+# device. The scene test checks behaviour on any adapter, falling back to
+# Dawn's Null adapter; the render test reads pixels back and exits 77 (skipped)
+# without a rendering adapter.
+set(_vellum_threejs_tests threejs_modules_test.cpp threejs_scene_test.cpp threejs_render_test.cpp)
+if(VELLUM_ENABLE_V8)
+    vellum_add_framework_test(threejs-modules
+        SOURCES threejs_modules_test.cpp
+        UNITS Vellum::MirrorView_script)
+    target_compile_definitions(vellum-framework-threejs-modules-test PRIVATE
+        VELLUM_TEST_THREEJS_DIR="${VELLUM_THREEJS_DIR}")
+    if(TARGET vellum-dawn-headers AND TARGET VellumGpuRuntime::Device)
+        foreach(_vellum_threejs_name IN ITEMS scene render)
+            set(_vellum_threejs_target "vellum-framework-threejs-${_vellum_threejs_name}-test")
+            vellum_add_framework_test(threejs-${_vellum_threejs_name}
+                SOURCES threejs_${_vellum_threejs_name}_test.cpp
+                UNITS Vellum::MirrorView_script Vellum::MirrorRender_2d Vellum::DawnHeaders
+                       VellumGpuRuntime::Device)
+            target_include_directories("${_vellum_threejs_target}" PRIVATE
+                "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+            target_compile_definitions("${_vellum_threejs_target}" PRIVATE
+                VELLUM_TEST_THREEJS_DIR="${VELLUM_THREEJS_DIR}")
+            set_tests_properties(vellum.framework.threejs-${_vellum_threejs_name} PROPERTIES
+                SKIP_RETURN_CODE 77)
+        endforeach()
+    else()
+        set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+            threejs_scene_test.cpp threejs_render_test.cpp)
+    endif()
+else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES ${_vellum_threejs_tests})
+endif()
+
 vellum_add_framework_test(gpu-capabilities
     SOURCES gpu_capabilities_test.cpp
     UNITS Vellum::MirrorRender_2d)
+
+# Several draws in one scripted WebGPU render pass, read back through Skia on a
+# real Dawn adapter. The test links the device library for the headless
+# surface, as the other GPU tests here do, and exits 77 (skipped) without a
+# rendering adapter.
+if(TARGET vellum-dawn-headers AND TARGET VellumGpuRuntime::Device)
+    vellum_add_framework_test(webgpu-multi-draw
+        SOURCES webgpu_multi_draw_test.cpp
+        UNITS Vellum::MirrorView_script Vellum::MirrorRender_2d Vellum::DawnHeaders
+               VellumGpuRuntime::Device)
+    target_include_directories(vellum-framework-webgpu-multi-draw-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/gpu-runtime/include")
+    set_tests_properties(vellum.framework.webgpu-multi-draw PROPERTIES SKIP_RETURN_CODE 77)
+else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES webgpu_multi_draw_test.cpp)
+endif()
 
 # The frame-level render pass manager is header-only; any render unit gives the
 # test the include root.
@@ -175,6 +225,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET Vellum::MirrorView_core)
 else()
     set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES ${_vellum_linux_host_sources})
 endif()
+
+vellum_add_framework_test(scripted-ui-param-model
+    SOURCES scripted_ui_param_model_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::Value)
 
 vellum_add_framework_test(host-param-surface-model
     SOURCES host_param_surface_model_test.cpp

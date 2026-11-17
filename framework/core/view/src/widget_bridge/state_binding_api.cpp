@@ -85,6 +85,36 @@ choc::value::Value model_param_metadata(value::ParamModel& model, value::ParamHa
     return obj;
 }
 
+// The onParamChanged payload for a model-built bridge: name, unit, the plain
+// value, normalized, the plain range and default, and display text, as the
+// store's snapshot has. A model knows no host base-plus-offset modulation, so
+// the payload says so with `hasModulated: false` and carries no `modulated`
+// number; a store's payload carries it. The model has no store id, so there
+// is no `id`.
+choc::value::Value model_param_snapshot(value::ParamModel& model, value::ParamHandle param,
+                                        double plain_value) {
+    const auto info = model.info(param);
+    const double normalized = model.normalized(param);
+    auto obj = choc::value::createObject("");
+    obj.addMember("name", choc::value::createString(info.name));
+    obj.addMember("unit", choc::value::createString(info.unit));
+    obj.addMember("value", choc::value::createFloat64(plain_value));
+    obj.addMember("normalized", choc::value::createFloat64(normalized));
+    obj.addMember("hasModulated", choc::value::createBool(false));
+    if (auto* metadata = value::metadata_of(model)) {
+        const auto range = metadata->range(param);
+        obj.addMember("default", choc::value::createFloat64(range.plain_default));
+        obj.addMember("min", choc::value::createFloat64(range.plain_min));
+        obj.addMember("max", choc::value::createFloat64(range.plain_max));
+    } else {
+        obj.addMember("default", choc::value::createFloat64(model.plain(param, info.default_normalized)));
+        obj.addMember("min", choc::value::createFloat64(model.plain(param, 0.0)));
+        obj.addMember("max", choc::value::createFloat64(model.plain(param, 1.0)));
+    }
+    obj.addMember("display", choc::value::createString(model.display_text(param, normalized)));
+    return obj;
+}
+
 }  // namespace
 
 void WidgetBridge::begin_param_gesture(const std::string& widget_id) {
@@ -100,9 +130,10 @@ void WidgetBridge::begin_param_gesture(const std::string& widget_id) {
         });
     if (binding == param_bindings_.end()) return;
     route->active_param_id = binding->param_id;
+    route->active_param = binding->param;
     route->active = true;
     try {
-        store_.acquire_gesture(route->active_param_id);
+        param_gesture_open(route->active_param_id, route->active_param);
     } catch (...) {
         // StateStore records the lease and open gesture before invoking its
         // host callback. Preserve the route so release still balances it,
@@ -155,7 +186,7 @@ void WidgetBridge::finish_param_gesture_route(
     if (!route || !route->active) return;
     const state::ParamID id = route->active_param_id;
     route->active = false;
-    store_.release_gesture(id);
+    param_gesture_close(id, route->active_param);
 }
 
 void WidgetBridge::release_param_gesture_route(
@@ -182,7 +213,7 @@ void WidgetBridge::release_all_param_gesture_routes() noexcept {
         const state::ParamID id = route->active_param_id;
         route->active = false;
         try {
-            store_.release_gesture(id);
+            param_gesture_close(id, route->active_param);
         } catch (...) {
             // The StateStore has already removed the open gesture. Continue
             // releasing the remaining routes and preserve noexcept teardown.
@@ -194,7 +225,13 @@ void WidgetBridge::defer_all_param_gesture_routes() {
     for (auto& [widget_id, route] : param_gesture_routes_) {
         (void)widget_id;
         if (!route->active) continue;
-        store_.defer_gesture_release(route->active_param_id);
+        // The drag stays open across the replacement and ends later, outside
+        // the replacement's deadline fence: the store queues its release, and
+        // a model's end is recorded here without calling the model.
+        if (has_store_)
+            store_.defer_gesture_release(route->active_param_id);
+        else
+            deferred_model_gesture_ends_.push_back(route->active_param);
         route->active = false;
     }
     param_gesture_routes_.clear();
@@ -259,35 +296,92 @@ std::string_view value_channel_name(std::string_view source) {
         return {};
     return source.substr(kPrefix.size());
 }
-
-/// A model-built bridge does not bind widgets to parameters or subscribe to
-/// them yet: those paths read a StateStore. Refuse loudly instead of binding
-/// nothing; a value-channel source is unaffected.
-bool refuse_param_binding_on_model(bool has_store, const char* function, std::string_view source) {
-    if (has_store || !value_channel_name(source).empty())
-        return false;
-    runtime::log_warn("WidgetBridge: {}('{}') is not supported on a bridge built over a "
-                      "ParamModel; nothing was bound",
-                      function, source);
-    return true;
-}
 } // namespace
 
 bool WidgetBridge::resolve_param_id(const std::string& name, state::ParamID& out) const {
+    value::ParamHandle handle;
+    return resolve_param(name, out, handle);
+}
+
+bool WidgetBridge::resolve_param(const std::string& name, state::ParamID& id,
+                                 value::ParamHandle& handle) const {
+    if (!has_store_) {
+        handle = params_.resolve(name);
+        id = handle.id;
+        return handle.valid();
+    }
     for (std::size_t i = 0; i < store_.param_count(); ++i) {
         const auto* info = &store_.all_params()[i];
         if (info && info->name == name) {
-            out = info->id;
+            id = info->id;
+            handle = params_.resolve(name);
             return true;
         }
     }
     return false;
 }
 
+float WidgetBridge::param_normalized(state::ParamID id, value::ParamHandle handle) const {
+    return has_store_ ? store_.get_normalized(id) : static_cast<float>(params_.normalized(handle));
+}
+
+float WidgetBridge::param_plain(state::ParamID id, value::ParamHandle handle) const {
+    if (has_store_)
+        return store_.get_value(id);
+    // A widget's value is a float; this is the one narrowing, at that boundary.
+    return static_cast<float>(model_plain(handle));
+}
+
+double WidgetBridge::model_plain(value::ParamHandle handle) const {
+    if (auto* metadata = value::metadata_of(params_))
+        return metadata->plain_value(handle);
+    return params_.plain(handle, params_.normalized(handle));
+}
+
+std::optional<float> WidgetBridge::param_playing(state::ParamID id,
+                                                 value::ParamHandle handle) const {
+    if (has_store_)
+        return store_.displayed_modulation(id);
+    if (const auto played = params_.modulated_normalized(handle))
+        return static_cast<float>(*played);
+    return std::nullopt;
+}
+
+std::vector<value::ParamHandle> WidgetBridge::take_deferred_model_gesture_ends() {
+    return std::exchange(deferred_model_gesture_ends_, {});
+}
+
+void WidgetBridge::deliver_deferred_model_gesture_ends() noexcept {
+    // Moved out first, so an end that re-enters this delivers nothing twice.
+    const auto ends = std::exchange(deferred_model_gesture_ends_, {});
+    for (const auto& handle : ends) {
+        try {
+            params_.end(handle);
+        } catch (...) {
+            // Every deferred end is attempted; one that throws does not keep
+            // the rest open, and teardown stays noexcept.
+        }
+    }
+}
+
+void WidgetBridge::param_gesture_open(state::ParamID id, value::ParamHandle handle) {
+    if (has_store_)
+        store_.acquire_gesture(id);
+    else
+        params_.begin(handle);
+}
+
+void WidgetBridge::param_gesture_close(state::ParamID id, value::ParamHandle handle) {
+    if (has_store_)
+        store_.release_gesture(id);
+    else
+        params_.end(handle);
+}
+
 void WidgetBridge::derive_binding_transform(ParamBinding& b, View* w) {
     b.derive_from_param = false;  // one shot, whatever we conclude below
-    const auto* info = store_.info(b.param_id);
-    if (info == nullptr) return;
+    const auto* info = has_store_ ? store_.info(b.param_id) : nullptr;
+    if (info == nullptr && (has_store_ || !b.param.valid())) return;
 
     // Only widgets that present the param in REAL units need a derived
     // transform. A Knob/Fader/Toggle/ProgressBar is a [0,1] surface, and the
@@ -305,8 +399,17 @@ void WidgetBridge::derive_binding_transform(ParamBinding& b, View* w) {
     // ~10 kHz on a 20 Hz..20 kHz range. For a dB meter it replaces hand-copied
     // dbMin/dbMax with the range the parameter already declares.
     b.transform.db = true;
-    b.transform.db_min = info->range.min;
-    b.transform.db_max = info->range.max;
+    if (info != nullptr) {
+        b.transform.db_min = info->range.min;
+        b.transform.db_max = info->range.max;
+    } else if (auto* metadata = value::metadata_of(params_)) {
+        const auto range = metadata->range(b.param);
+        b.transform.db_min = static_cast<float>(range.plain_min);
+        b.transform.db_max = static_cast<float>(range.plain_max);
+    } else {
+        b.transform.db_min = static_cast<float>(params_.plain(b.param, 0.0));
+        b.transform.db_max = static_cast<float>(params_.plain(b.param, 1.0));
+    }
 }
 
 
@@ -372,8 +475,8 @@ bool WidgetBridge::apply_param_binding(ParamBinding& b, View* w,
     // choose between as there is for a parameter.
     const float src = !b.value_channel.empty()
                           ? value_frame->rms[0]
-                          : (b.transform.db ? store_.get_value(b.param_id)
-                                            : store_.get_normalized(b.param_id));
+                          : (b.transform.db ? param_plain(b.param_id, b.param)
+                                            : param_normalized(b.param_id, b.param));
     const float target = b.transform.apply(src);
     if (std::isnan(target)) return false;  // never churn on a NaN source
 
@@ -402,7 +505,7 @@ bool WidgetBridge::apply_param_binding(ParamBinding& b, View* w,
     const auto show_modulation = [&](auto* control) {
         if (!b.value_channel.empty())
             return;
-        if (const auto played = store_.displayed_modulation(b.param_id))
+        if (const auto played = param_playing(b.param_id, b.param))
             control->set_modulated_value(*played);
         else
             control->clear_modulated_value();
@@ -493,6 +596,34 @@ void WidgetBridge::service_param_subscriptions() {
         const auto id = param_subscriptions_[i].id;
         if (id == 0) continue;  // cancelled by an earlier handler this pass
         const auto param_id = param_subscriptions_[i].param_id;
+        const auto param = param_subscriptions_[i].param;
+        if (!has_store_) {
+            // A model's change signal and payload stay in its double
+            // precision; two values a float cannot tell apart still change.
+            auto& sub = param_subscriptions_[i];
+            const double plain = model_plain(param);
+            const double normalized = params_.normalized(param);
+            if (std::isnan(plain) || std::isnan(normalized)) continue;
+            const auto playing = params_.modulated_normalized(param);
+            if (plain == sub.model_plain && normalized == sub.model_normalized &&
+                playing.has_value() == sub.model_has_playing &&
+                (!playing || *playing == sub.model_playing))
+                continue;
+            sub.model_plain = plain;
+            sub.model_normalized = normalized;
+            sub.model_has_playing = playing.has_value();
+            sub.model_playing = playing.value_or(0.0);
+            auto snapshot = model_param_snapshot(params_, param, plain);
+            snapshot.addMember("playing", playing ? choc::value::createFloat64(*playing)
+                                                  : choc::value::Value());
+            const auto payload = choc::json::toString(snapshot);
+            safe_dispatch_eval(callback_alive_, &engine_,
+                               "__dispatch__(" + js_string_literal(param_subscription_key(id)) +
+                                   ", 'paramchange', " + payload + ")",
+                               "param change subscription");
+            // `sub` may have been reallocated or tombstoned by the handler.
+            continue;
+        }
         const float value = store_.get_value(param_id);
         const float modulated = store_.get_modulated(param_id);
         // A NaN value never compares equal, so without this it would dispatch
@@ -660,6 +791,7 @@ bool WidgetBridge::add_param_binding(const std::string& widget_id,
     bool value_channel_found = false;
     float neutral = 0.0f;
     state::ParamID id = 0;
+    value::ParamHandle handle;
     if (const auto channel = value_channel_name(param_name); !channel.empty()) {
         // Shape follows the target: a scope wants a vector channel, everything
         // else a meter channel. A shape mismatch is a MISS, not a coercion —
@@ -684,13 +816,14 @@ bool WidgetBridge::add_param_binding(const std::string& widget_id,
         // A scope has no parameter equivalent — there is no store shape that
         // carries a block of samples.
         return fail(BindingOutcome::unknown_value_channel);
-    } else if (!resolve_param_id(param_name, id)) {
+    } else if (!resolve_param(param_name, id, handle)) {
         return fail(BindingOutcome::unknown_param);
     }
 
     ParamBinding binding;
     binding.widget_id = widget_id;
     binding.param_id = id;
+    binding.param = handle;
     binding.value_channel = std::move(value_channel);
     binding.neutral = neutral;
     binding.target = target;
@@ -816,19 +949,26 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
     register_bridge_function(api, "__subscribeParam__", [&self](choc::javascript::ArgumentList args) {
         const auto name = args.get<std::string>(0, "");
         if (name.empty()) return choc::value::createInt64(0);
-        if (refuse_param_binding_on_model(self.has_store_, "onParamChanged", name))
-            return choc::value::createInt64(0);
         state::ParamID param_id = 0;
-        if (!self.resolve_param_id(name, param_id)) return choc::value::createInt64(0);
+        value::ParamHandle param;
+        if (!self.resolve_param(name, param_id, param)) return choc::value::createInt64(0);
 
         ParamSubscription sub;
         sub.id = self.next_param_subscription_id_++;
         sub.param_id = param_id;
+        sub.param = param;
         sub.param_name = name;
-        // Seed from the store so the first frame is not reported as a change.
-        sub.last_value = self.store_.get_value(param_id);
-        sub.last_modulated = self.store_.get_modulated(param_id);
-        const auto playing = self.store_.displayed_modulation(param_id);
+        // Seed from the parameter so the first frame is not reported as a change.
+        if (!self.has_store_) {
+            sub.model_plain = self.model_plain(param);
+            sub.model_normalized = self.params_.normalized(param);
+            const auto model_playing = self.params_.modulated_normalized(param);
+            sub.model_has_playing = model_playing.has_value();
+            sub.model_playing = model_playing.value_or(0.0);
+        }
+        sub.last_value = self.param_plain(param_id, param);
+        sub.last_modulated = self.has_store_ ? self.store_.get_modulated(param_id) : 0.0f;
+        const auto playing = self.param_playing(param_id, param);
         sub.has_playing = playing.has_value();
         sub.last_playing = playing.value_or(0.0f);
         self.param_subscriptions_.push_back(std::move(sub));
@@ -996,8 +1136,6 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
     // without losing host automation touch/release or undo grouping. Returns
     // true if the param exists and the binding was set.
     register_bridge_function(api, "bindWidgetToParam", [&self](choc::javascript::ArgumentList args) {
-        if (refuse_param_binding_on_model(self.has_store_, "bindWidgetToParam", args.get<std::string>(1, "")))
-            return choc::value::createBool(false);
         return choc::value::createBool(
             self.add_param_binding(args.get<std::string>(0, ""),
                               args.get<std::string>(1, ""),
@@ -1008,8 +1146,6 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
     // bindMeter(widgetId, source, transform?) -> bind a Meter widget to a param
     // (the source drives both the rms and peak fill). Same native-push contract.
     register_bridge_function(api, "bindMeter", [&self](choc::javascript::ArgumentList args) {
-        if (refuse_param_binding_on_model(self.has_store_, "bindMeter", args.get<std::string>(1, "")))
-            return choc::value::createBool(false);
         return choc::value::createBool(
             self.add_param_binding(args.get<std::string>(0, ""),
                               args.get<std::string>(1, ""),
@@ -1021,8 +1157,6 @@ void BridgeRegistrars::register_state_binding_api(WidgetBridge& self) {
     // to a vector value channel. Scope sources are value channels only: there is
     // no parameter shape that carries a block of samples.
     register_bridge_function(api, "bindScope", [&self](choc::javascript::ArgumentList args) {
-        if (refuse_param_binding_on_model(self.has_store_, "bindScope", args.get<std::string>(1, "")))
-            return choc::value::createBool(false);
         return choc::value::createBool(
             self.add_param_binding(args.get<std::string>(0, ""),
                               args.get<std::string>(1, ""),
