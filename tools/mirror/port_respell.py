@@ -277,17 +277,49 @@ def opt_in_switches(text: str) -> set[str]:
 
 # -- applying -------------------------------------------------------------------
 
+PREFIX_TOKEN = re.compile(r"(?<![A-Za-z0-9_])((?:PULP_|pulp_)[A-Za-z0-9_]*_)(?![A-Za-z0-9_])")
+
+
+def comment_prefixes(text: str, mapping: dict[str, str]) -> dict[str, str]:
+    """Shared prefixes a comment may name for several respelled names.
+
+    A comment token ending in `_` (`pulp_motion_` in "the `pulp_motion_*`
+    functions") is respelled when it is a strict prefix of at least two names
+    this file respells, with the same prefix change. Any other PULP_ or pulp_
+    token stays as it is, and counts as name debt.
+    """
+    present = [old for old in mapping if old in pulp_tokens(text)]
+    out = {}
+    # Candidates are read outside literals; apply() uses them in comments only.
+    for token in set(PREFIX_TOKEN.findall(blanked(text, keep_comments=True))):
+        if token not in mapping and sum(1 for old in present if old.startswith(token) and old != token) >= 2:
+            out[token] = respelled(token)
+    return out
+
+
 def apply(text: str, mapping: dict[str, str]) -> str:
-    """Respell identifier tokens in code and comments; literals are never changed."""
+    """Respell identifier tokens in code and comments; literals are never changed.
+
+    In comments, a shared prefix of two or more respelled names is respelled
+    too (comment_prefixes).
+    """
     if not mapping:
         return text
-    pattern = re.compile(r"(?<![A-Za-z0-9_])(" + "|".join(re.escape(k) for k in sorted(mapping, key=len, reverse=True))
-                         + r")(?![A-Za-z0-9_])")
+    prefixes = comment_prefixes(text, mapping)
+
+    def compile(names: dict[str, str]) -> re.Pattern[str]:
+        return re.compile(r"(?<![A-Za-z0-9_])(" + "|".join(re.escape(k) for k in sorted(names, key=len, reverse=True))
+                          + r")(?![A-Za-z0-9_])")
+
+    in_code = compile(mapping)
+    in_comment = compile({**mapping, **prefixes})
     parts = []
     for kind, a, b in segments(text):
         piece = text[a:b]
-        if kind != "literal":
-            piece = pattern.sub(lambda m: mapping[m.group(1)], piece)
+        if kind == "code":
+            piece = in_code.sub(lambda m: mapping[m.group(1)], piece)
+        elif kind == "comment":
+            piece = in_comment.sub(lambda m: {**mapping, **prefixes}[m.group(1)], piece)
         parts.append(piece)
     return "".join(parts)
 

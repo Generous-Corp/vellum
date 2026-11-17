@@ -42,10 +42,35 @@ class LexingTest(unittest.TestCase):
             pr.respelled("PulpThing")
 
 
+class CommentPrefixTest(unittest.TestCase):
+    MAPPING = {"pulp_motion_publish": "vellum_motion_publish", "pulp_motion_enabled": "vellum_motion_enabled",
+               "pulp_role_of": "vellum_role_of"}
+    SOURCE = ('// A C ABI (`pulp_motion_*`) for Kotlin; see pulp_role_ and pulp_other_.\n'
+              'extern "C" void pulp_motion_publish() {}\nextern "C" bool pulp_motion_enabled() { return true; }\n'
+              'extern "C" int pulp_role_of() { return 0; }\nconst char* s = "pulp_motion_ in a string";\n'
+              'int pulp_motion_ = 0;  // a code token is never a prefix\n')
+
+    def test_a_shared_prefix_in_a_comment_is_respelled(self) -> None:
+        out = pr.apply(self.SOURCE, self.MAPPING)
+        self.assertIn("A C ABI (`vellum_motion_*`)", out)
+        self.assertIn("vellum_motion_publish()", out)
+
+    def test_other_comment_tokens_and_literals_and_code_are_not(self) -> None:
+        out = pr.apply(self.SOURCE, self.MAPPING)
+        self.assertIn("pulp_other_.", out)  # an unrelated pulp_ token
+        self.assertIn("see pulp_role_ and", out)  # a prefix of only one respelled name
+        self.assertIn('"pulp_motion_ in a string"', out)  # literal untouched
+        self.assertIn("int pulp_motion_ = 0;", out)  # code token, not a prefix rule
+
+    def test_a_prefix_needs_two_names_present_in_the_file(self) -> None:
+        one = '// the pulp_motion_* calls\nextern "C" void pulp_motion_publish() {}\n'
+        self.assertIn("pulp_motion_*", pr.apply(one, self.MAPPING))
+
+
 class RecogniserTest(unittest.TestCase):
     SOURCE = """#define PULP_LOG_TAG "Pulp"
 #define PULP_LOGI(...) log(PULP_LOG_TAG, __VA_ARGS__)
-#if defined(__ANDROID__) && !defined(PULP_RENDER_LOOP_FORCE_TIMER)
+#if defined(__ANDROID__) && !defined(PULP_TEST_ONLY_SWITCH)
 #endif
 #ifndef PULP_ONLY_TESTED
 #endif
@@ -80,7 +105,7 @@ JNIEXPORT jint JNICALL Java_com_pulp_x(JNIEnv*) { return 0; }
 
     def test_a_switch_is_only_tested_and_a_value_use_is_not_one(self) -> None:
         switches = pr.opt_in_switches(self.SOURCE)
-        self.assertEqual(switches, {"PULP_RENDER_LOOP_FORCE_TIMER", "PULP_ONLY_TESTED"})
+        self.assertEqual(switches, {"PULP_TEST_ONLY_SWITCH", "PULP_ONLY_TESTED"})
         self.assertEqual(pr.macro_uses(self.SOURCE, "PULP_VALUE_USED"), (0, 1))
         self.assertNotIn("PULP_VALUE_USED", switches)
         # A defined macro is not a switch either.
