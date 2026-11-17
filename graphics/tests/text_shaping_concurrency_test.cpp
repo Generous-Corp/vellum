@@ -9,6 +9,7 @@
 #include <future>
 #include <iostream>
 #include <latch>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -17,6 +18,9 @@ namespace {
 
 using vellum::graphics::Color;
 using vellum::graphics::SkiaDawnSurface;
+using vellum::graphics::TextAlign;
+using vellum::graphics::TextLayout;
+using vellum::graphics::TextMeasureOptions;
 using vellum::graphics::TextMetrics;
 using vellum::graphics::TextRun;
 using vellum::graphics::TextStyle;
@@ -24,6 +28,7 @@ using vellum::graphics::TextStyle;
 struct ShapeResult final {
     bool ok = false;
     TextMetrics metrics;
+    std::uint32_t lines = 1U;
     std::string error;
 };
 
@@ -41,11 +46,39 @@ bool same_metrics(const TextMetrics& lhs, const TextMetrics& rhs) {
         close(lhs.descent, rhs.descent) && close(lhs.baseline, rhs.baseline);
 }
 
-ShapeResult measure(std::vector<TextRun> runs) {
+struct ShapeCase final {
+    std::vector<TextRun> runs;
+    std::optional<TextMeasureOptions> options;
+};
+
+ShapeResult measure(const ShapeCase& shape) {
     ShapeResult result;
-    result.ok = SkiaDawnSurface::measure_text(
-        runs, result.metrics, {}, &result.error);
+    if (!shape.options) {
+        result.ok = SkiaDawnSurface::measure_text(shape.runs, result.metrics, {}, &result.error);
+        return result;
+    }
+    vellum::graphics::TextLayoutMetrics laid_out;
+    result.ok = SkiaDawnSurface::measure_text(shape.runs, *shape.options, laid_out, {},
+                                              &result.error);
+    result.metrics = laid_out.metrics;
+    result.lines = laid_out.lines;
     return result;
+}
+
+std::optional<TextMeasureOptions> make_options(std::uint32_t& state) {
+    const auto value = next_random(state);
+    if ((value & 1U) == 0U) return std::nullopt;
+    constexpr std::array<TextAlign, 4> aligns{TextAlign::start, TextAlign::center,
+                                              TextAlign::end, TextAlign::justify};
+    const auto max_lines = (value >> 6U) % 3U;
+    return TextMeasureOptions{
+        .layout = TextLayout{.align = aligns[(value >> 1U) % aligns.size()],
+                             .line_height = static_cast<float>((value >> 3U) % 3U) * 0.75F,
+                             .max_lines = max_lines,
+                             .ellipsis = max_lines > 0U && ((value >> 8U) & 1U) != 0U},
+        .width = 20.0F + static_cast<float>((value >> 9U) % 120U),
+        .scene_version = ((value >> 16U) & 1U) != 0U ? 13U : 12U,
+    };
 }
 
 std::vector<TextRun> make_runs(std::uint32_t& state) {
@@ -97,10 +130,11 @@ int main() {
     constexpr std::size_t cases_per_round = 8U;
     std::uint32_t state = 0x56454C4CU;
     for (int round = 0; round < rounds; ++round) {
-        std::vector<std::vector<TextRun>> cases;
+        std::vector<ShapeCase> cases;
         cases.reserve(cases_per_round);
         for (std::size_t index = 0; index < cases_per_round; ++index) {
-            cases.push_back(make_runs(state));
+            auto runs = make_runs(state);
+            cases.push_back({.runs = std::move(runs), .options = make_options(state)});
         }
 
         std::vector<std::future<ShapeResult>> futures;
@@ -108,15 +142,15 @@ int main() {
         std::latch ready(static_cast<std::ptrdiff_t>(cases.size() * 2U));
         std::promise<void> release;
         const auto start = release.get_future().share();
-        for (const auto& runs : cases) {
+        for (const auto& shape : cases) {
             futures.push_back(std::async(
-                std::launch::async, [owned = runs, &ready, start] {
+                std::launch::async, [owned = shape, &ready, start] {
                     ready.count_down();
                     start.wait();
                     return measure(owned);
                 }));
             futures.push_back(std::async(
-                std::launch::async, [owned = runs, &ready, start] {
+                std::launch::async, [owned = shape, &ready, start] {
                     ready.count_down();
                     start.wait();
                     return measure(owned);
@@ -132,7 +166,8 @@ int main() {
             if (!first.ok || !second.ok || !serial.ok ||
                 first.metrics.width <= 0.0F || first.metrics.ascent <= 0.0F ||
                 !same_metrics(first.metrics, second.metrics) ||
-                !same_metrics(first.metrics, serial.metrics)) {
+                !same_metrics(first.metrics, serial.metrics) || first.lines != second.lines ||
+                first.lines != serial.lines) {
                 std::cerr << "text-shaping concurrency mismatch at round " << round
                           << " case " << index << ": " << first.error << ' '
                           << second.error << ' ' << serial.error << '\n';

@@ -566,6 +566,10 @@ struct CanvasShellPlotPiece final {
     return output;
 }
 
+/// A text node with a `TextLayout`, which the canvas shell draws on one
+/// unwrapped, left-aligned line; a warning.
+inline constexpr std::string_view kTextLayoutNotDrawnCode = "VELLUM_WEB_TEXT_LAYOUT_NOT_DRAWN";
+
 /// An effect the canvas shell does not draw; a warning. The shell draws blur
 /// and colour matrix effects through the canvas `filter`; a drop shadow, a
 /// backdrop blur and a material are drawn without.
@@ -695,7 +699,8 @@ canvas_shell_effect_diagnostics(const std::vector<vellum::graphics::PaintCommand
 /// already a loss. `canvas_shell_gradient_diagnostics` names each of them.
 /// A compiled vector asset is drawn through `lower_vector_for_canvas` and
 /// counts once when that plan approximates anything. A plot left after
-/// `canvas_shell_expand_plots` is not drawn and counts once.
+/// `canvas_shell_expand_plots` is not drawn and counts once. Text with a
+/// layout is drawn on one line and counts once.
 [[nodiscard]] inline bool canvas_shell_loses(
     const vellum::graphics::PaintCommand& command) noexcept {
     using Kind = vellum::graphics::PaintCommand::Kind;
@@ -706,6 +711,7 @@ canvas_shell_effect_diagnostics(const std::vector<vellum::graphics::PaintCommand
         return true;
     }
     if (!vellum::graphics::draws_content(command.kind)) return false;
+    if (command.kind == Kind::text && command.text_layout) return true;
     if (command.kind == vellum::graphics::PaintCommand::Kind::vector) {
         return !lower_vector_for_canvas(command, 1.0F).losses.empty();
     }
@@ -1010,8 +1016,9 @@ struct CanvasShellLowering final {
     /// warning for each mask the shell skips, one `kBlendModeFallbackCode`
     /// warning for each blended group drawn as `normal`, the gradient
     /// warnings, one `kEffectNotDrawnCode` warning for each effect it does
-    /// not draw, and one `kPlotNotDrawnCode` warning for each plot it does not
-    /// draw.
+    /// not draw, one `kPlotNotDrawnCode` warning for each plot it does not
+    /// draw, and one `kTextLayoutNotDrawnCode` warning for each text node with
+    /// a layout.
     std::vector<vellum::graphics::LoweringDiagnostic> diagnostics;
     /// The commands the shell draws; empty for a refused scene.
     std::vector<vellum::graphics::PaintCommand> commands;
@@ -1068,6 +1075,22 @@ struct CanvasShellLowering final {
             .property = "transform",
             .message = "plot " + command.node_id +
                        " was not drawn: the canvas shell draws plots only untransformed",
+        });
+    }
+    for (std::size_t index = 0; index < lowering.commands.size(); ++index) {
+        const auto& command = lowering.commands[index];
+        if (masked[index] || command.kind != vellum::graphics::PaintCommand::Kind::text ||
+            !command.text_layout) {
+            continue;
+        }
+        lowering.diagnostics.push_back({
+            .severity = vellum::graphics::LoweringDiagnostic::Severity::warning,
+            .disposition = vellum::graphics::LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(kTextLayoutNotDrawnCode),
+            .node_id = command.node_id,
+            .property = "text_layout",
+            .message = "text " + command.node_id +
+                       " was drawn on one line: the canvas shell does not wrap or align text",
         });
     }
     return lowering;

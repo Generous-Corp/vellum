@@ -255,6 +255,7 @@ int check_native() {
     for (int frame = 0; frame < 8; ++frame) {
         move(scene, frame * 7 + 1);
         if (frame == 4) native->invalidate(InvalidationReason::reload);
+        if (frame == 6) native->simulate_device_loss();
         harness::CaptureResult expected;
         harness::CaptureResult actual;
         if (frame == 0 && !native->render_incremental(scene, &error)) {
@@ -276,12 +277,15 @@ int check_native() {
         }
         expected.ok = actual.ok = true;
         const auto stats = native->frame_stats();
-        const bool expected_full = frame == 0 || frame == 4;
+        const bool expected_full = frame == 0 || frame == 4 || frame == 6;
         const auto verdict = harness::assert_identical(expected, actual);
         if (frame == 0) first = actual;
         const bool advanced = frame == 0 || !harness::assert_identical(first, actual);
+        const bool recovered = frame != 6 ||
+            (stats.full_repaint_reason == FullRepaintReason::device_recovered &&
+             stats.device_recoveries == 1U);
         const bool ok = static_cast<bool>(verdict) && advanced && stats.presented &&
-            stats.full_repaint == expected_full;
+            stats.full_repaint == expected_full && recovered;
         std::cout << (ok ? "PASS" : "FAIL") << " native frame " << frame
                   << " full=" << stats.full_repaint << " reason="
                   << to_string(stats.full_repaint_reason) << " presented=" << stats.presented

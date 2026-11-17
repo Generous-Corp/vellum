@@ -1,0 +1,20 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-11-17T00:58:27Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-9479680c315e063f3ad16d3a1dc2e66afb09f12c",
+  "kind": "resolution",
+  "linked_commits": [
+    "9479680c315e063f3ad16d3a1dc2e66afb09f12c"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-native graphics change with no Pulp consumer; owner-approved agent classification 2026-11-10",
+  "resolves": "vellum-9479680c315e063f3ad16d3a1dc2e66afb09f12c",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

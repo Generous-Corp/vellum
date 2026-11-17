@@ -527,8 +527,8 @@ void invalidation_matrix() {
            "the frame after a failure has no stale pixels");
 }
 
-// A lost device never recovers: the surface fails every later frame. The host
-// recreates the surface, which rebuilds the layers from scratch.
+// A device loss drops every layer image; the next frame recreates the device
+// and rebuilds the same layers from scratch.
 void device_loss_rebuild() {
     constexpr std::uint32_t width = 320;
     constexpr std::uint32_t height = 240;
@@ -542,20 +542,18 @@ void device_loss_rebuild() {
     const auto warm = lost->layer_cache_stats();
     lost->simulate_device_loss();
     std::string error;
-    expect(!lost->render(scene, &error), "a lost device fails the frame", error);
+    expect(!lost->finish(&error), "finish reports the lost device", error);
     const auto gone = lost->layer_cache_stats();
     expect(gone.layers == 0U && gone.invalidated(LayerInvalidation::device_lost) == warm.layers,
            "device loss drops every image", describe(gone));
 
-    auto rebuilt = make_inexact_surface(width, height, 2.0F);
-    if (!rebuilt) return;
     for (int frame = 0; frame < 5; ++frame) {
-        if (!render(*rebuilt, scene)) return;
+        if (!render(*lost, scene)) return;
     }
-    const auto again = rebuilt->layer_cache_stats();
+    const auto again = lost->layer_cache_stats();
     expect(again.layers == warm.layers && again.hits == warm.layers,
-           "a recreated surface rebuilds the same layers", describe(again));
-    const auto after = capture(*rebuilt);
+           "the recovered surface rebuilds the same layers", describe(again));
+    const auto after = capture(*lost);
     if (!before.ok || !after.ok) {
         expect(false, "device-loss captures succeed", before.error + after.error);
         return;

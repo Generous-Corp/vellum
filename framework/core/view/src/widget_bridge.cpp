@@ -440,6 +440,8 @@ WidgetBridge::~WidgetBridge() {
         callback_alive_->retire_dispatch();
     }
     release_all_param_gesture_routes();
+    // Ends a realm replacement deferred and no session took.
+    deliver_deferred_model_gesture_ends();
     // Saved starting layouts belong to widgets this bridge no longer reaches.
     {
         std::vector<std::uint64_t> ids;

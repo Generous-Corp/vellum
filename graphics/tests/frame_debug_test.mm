@@ -444,12 +444,14 @@ void scripted_trace() {
     surface->simulate_device_loss();
     std::string loss_error;
     const bool rendered = surface->render_incremental(scene, &loss_error);
-    expect(!rendered, "a render after device loss fails");
+    expect(rendered, "the render after a device loss recovers", loss_error);
     const auto lost = recorder.events();
     expect(count_named(lost, TraceEvent::Kind::instant, "graphics.device_lost") == 1,
            "device loss emits one instant");
     expect(count_named(lost, TraceEvent::Kind::instant, "graphics.cache_trim") == 1,
            "device loss emits its cache-trim instant");
+    expect(count_named(lost, TraceEvent::Kind::instant, "graphics.device_recovered") == 1,
+           "the recovery emits one instant");
     std::size_t depth = 0;
     bool balanced = true;
     for (const auto& event : recorder.events()) {
