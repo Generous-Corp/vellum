@@ -97,60 +97,6 @@ bool read_node(const std::string& server, const std::string& path, WireNode& out
     return got_role && got_name && got_children;
 }
 
-constexpr unsigned kCoordScreen = 0;
-constexpr unsigned kCoordWindow = 1;
-constexpr unsigned kCoordParent = 2;
-
-struct Extents {
-    bool ok = false;
-    int x = 0, y = 0, w = 0, h = 0;
-};
-
-Extents get_extents(void* handle, const std::string& server, const std::string& path,
-                    unsigned coord_type) {
-    Extents out;
-    out.ok = run_client_call(handle, [&] {
-        DBus client;
-        if (!client.connect_session())
-            return false;
-        return client.call_method(
-            server, path, kIfaceComponent, "GetExtents",
-            [&](DBus::Writer& writer) { writer.append_uint32(coord_type); },
-            [&](DBus::Reader& r) {
-                DBus::Reader fields;
-                if (r.recurse(fields)) {
-                    fields.read_int32(out.x);
-                    fields.read_int32(out.y);
-                    fields.read_int32(out.w);
-                    fields.read_int32(out.h);
-                }
-            });
-    });
-    return out;
-}
-
-// 1 inside, 0 outside, -1 when the call failed.
-int contains(void* handle, const std::string& server, const std::string& path, int px, int py,
-             unsigned coord_type) {
-    bool inside = false;
-    const bool ok = run_client_call(handle, [&] {
-        DBus client;
-        if (!client.connect_session())
-            return false;
-        return client.call_method(
-            server, path, kIfaceComponent, "Contains",
-            [&](DBus::Writer& writer) {
-                writer.append_int32(px);
-                writer.append_int32(py);
-                writer.append_uint32(coord_type);
-            },
-            [&](DBus::Reader& r) {
-                r.read_bool(inside);
-            });
-    });
-    return ok ? (inside ? 1 : 0) : -1;
-}
-
 std::unique_ptr<view::View> labelled(view::View::AccessRole role, const char* label,
                                      view::Rect bounds) {
     auto child = std::make_unique<view::View>();
@@ -218,85 +164,29 @@ FRAMEWORK_TEST(exported_tree_has_the_roles_and_nesting_of_the_view_tree) {
     CHECK(gain.role_name == "slider");
     CHECK(footer.role == atspi::role_to_atspi_role(view::View::AccessRole::label));
 
-    // The slider's window extents are its bounds summed up the View chain:
+    // The slider's screen extents are its bounds summed up the View chain:
     // (20,30) + (5,5) + (10,40) = (35,75), size 200x24.
-    const Extents in_window = get_extents(handle, server, gain.path, kCoordWindow);
-    CHECK(in_window.ok);
-    CHECK(in_window.x == 35 && in_window.y == 75 && in_window.w == 200 && in_window.h == 24);
-
-    view::shutdown_accessibility(handle);
-}
-
-FRAMEWORK_TEST(screen_coordinates_follow_the_window_origin) {
-    Tree tree;
-    std::string server;
-    void* handle = view::init_accessibility_on_session_bus_for_test(tree.root, &server);
-    CHECK(handle != nullptr);
-    if (!handle)
-        return;
-    const std::string gain_path = "/org/a11y/atspi/accessible/3";
-
-    // Before the host reports where the window sits, a screen request is refused
-    // instead of answered in window space.
-    CHECK(!get_extents(handle, server, gain_path, kCoordScreen).ok);
-
-    // A window displaced from the desktop origin: screen = window + origin.
-    view::accessibility_set_window_origin(handle, 100, 200);
-    const Extents on_screen = get_extents(handle, server, gain_path, kCoordScreen);
-    CHECK(on_screen.ok);
-    CHECK(on_screen.x == 135 && on_screen.y == 275 && on_screen.w == 200 && on_screen.h == 24);
-    const Extents in_window = get_extents(handle, server, gain_path, kCoordWindow);
-    CHECK(in_window.ok);
-    CHECK(in_window.x == 35 && in_window.y == 75);
-
-    // Hit tests use the same space: (140,280) is inside on screen, outside in the window.
-    CHECK(contains(handle, server, gain_path, 140, 280, kCoordScreen) == 1);
-    CHECK(contains(handle, server, gain_path, 140, 280, kCoordWindow) == 0);
-    CHECK(contains(handle, server, gain_path, 40, 80, kCoordWindow) == 1);
-    CHECK(contains(handle, server, gain_path, 40, 80, kCoordScreen) == 0);
-
-    // Parent-relative coordinates are not supported and are refused.
-    CHECK(!get_extents(handle, server, gain_path, kCoordParent).ok);
-
-    view::shutdown_accessibility(handle);
-}
-
-FRAMEWORK_TEST(get_all_returns_every_property_get_serves) {
-    Tree tree;
-    std::string server;
-    void* handle = view::init_accessibility_on_session_bus_for_test(tree.root, &server);
-    CHECK(handle != nullptr);
-    if (!handle)
-        return;
-    std::vector<std::string> keys;
-    const bool ok = run_client_call(handle, [&] {
+    int x = 0, y = 0, w = 0, h = 0;
+    const bool extents = run_client_call(handle, [&] {
         DBus client;
         if (!client.connect_session())
             return false;
         return client.call_method(
-            server, "/org/a11y/atspi/accessible/1", "org.freedesktop.DBus.Properties", "GetAll",
-            [](DBus::Writer& writer) { writer.append_string(kIfaceAccessible); },
+            server, gain.path, kIfaceComponent, "GetExtents",
+            [](DBus::Writer& writer) { writer.append_uint32(0u); },
             [&](DBus::Reader& r) {
-                DBus::Reader array;
-                if (!r.recurse(array))
-                    return;
-                while (array.arg_type() != 0) {
-                    DBus::Reader entry;
-                    std::string key;
-                    if (array.recurse(entry) && entry.read_string(key))
-                        keys.push_back(key);
-                    if (!array.next())
-                        break;
+                DBus::Reader fields;
+                if (r.recurse(fields)) {
+                    fields.read_int32(x);
+                    fields.read_int32(y);
+                    fields.read_int32(w);
+                    fields.read_int32(h);
                 }
             });
     });
-    CHECK(ok);
-    for (const char* wanted : {"Name", "Description", "Parent", "ChildCount"}) {
-        bool found = false;
-        for (const auto& key : keys)
-            found = found || key == wanted;
-        CHECK(found);
-    }
+    CHECK(extents);
+    CHECK(x == 35 && y == 75 && w == 200 && h == 24);
+
     view::shutdown_accessibility(handle);
 }
 

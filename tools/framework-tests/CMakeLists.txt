@@ -44,10 +44,6 @@ vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
 
-vellum_add_framework_test(linux-pure-helpers
-    SOURCES linux_pure_helpers_test.cpp
-    UNITS Vellum::MirrorView_core)
-
 vellum_add_framework_test(knob-fine-drag
     SOURCES knob_fine_drag_test.cpp
     UNITS Vellum::MirrorView_core)
@@ -209,8 +205,7 @@ vellum_add_framework_test(widget-bridge-param-model
 # or a session bus a case exits 77 and ctest reports a skip. Each has a control
 # that must also pass (an unexported path, and a run with the resize and the
 # click left out).
-set(_vellum_linux_host_sources linux_atspi_tree_test.cpp linux_sdl_window_x11_test.cpp
-    linux_backends_test.cpp)
+set(_vellum_linux_host_sources linux_atspi_tree_test.cpp linux_sdl_window_x11_test.cpp)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET Vellum::MirrorView_core)
     find_package(X11 REQUIRED COMPONENTS Xtest)
     vellum_add_framework_test(linux-atspi-tree
@@ -219,16 +214,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET Vellum::MirrorView_core)
     vellum_add_framework_test(linux-sdl-window-x11
         SOURCES linux_sdl_window_x11_test.cpp
         UNITS Vellum::MirrorView_core)
-    # The Avahi and libnotify backends against fake libraries: no display, bus
-    # or daemon needed.
-    vellum_add_framework_test(linux-backends
-        SOURCES linux_backends_test.cpp
-        UNITS Vellum::MirrorView_core)
     target_link_libraries(vellum-framework-linux-sdl-window-x11-test PRIVATE X11::X11 X11::Xtest)
     add_test(NAME vellum.framework.linux-sdl-window-x11-control
         COMMAND vellum-framework-linux-sdl-window-x11-test --control)
     foreach(_linux_host_test IN ITEMS linux-atspi-tree linux-sdl-window-x11
-            linux-sdl-window-x11-control linux-backends)
+            linux-sdl-window-x11-control)
         set_tests_properties(vellum.framework.${_linux_host_test} PROPERTIES
             SKIP_RETURN_CODE 77 LABELS "framework;linux-host" TIMEOUT 90)
     endforeach()

@@ -333,14 +333,6 @@ class SdlWindowHostImpl : public SdlWindowHost {
             // Service inbound accessibility IPC (Linux AT-SPI registry / Orca
             // method calls on the exported View tree). Cheap when no assistive
             // tech is connected; a no-op on the sentinel handle.
-#if defined(__linux__) && !defined(__ANDROID__)
-            {
-                // Screen-coordinate Component calls need the window's origin.
-                int origin_x = 0, origin_y = 0;
-                if (SDL_GetWindowPosition(window_, &origin_x, &origin_y))
-                    accessibility_set_window_origin(accessibility_handle_, origin_x, origin_y);
-            }
-#endif
             accessibility_pump(accessibility_handle_);
 
             if (idle_callback_)

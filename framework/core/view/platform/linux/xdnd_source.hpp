@@ -1,11 +1,8 @@
 #pragma once
 
 // Self-contained XDND drag-SOURCE handshake for the standalone window-host
-// outbound path (drag_drop_linux.cpp). Given a Display*, it creates its own
-// protocol source window on that connection, so the XdndStatus and XdndFinished
-// replies (delivered to the connection that created the window they address)
-// arrive on the connection being pumped. It owns the XdndSelection, grabs the
-// pointer on the screen's root window, drives
+// outbound path (drag_drop_linux.cpp). Given a Display* and an XDND-aware
+// `source` window, it owns the XdndSelection, grabs the pointer, drives
 // XdndEnter/Position/Drop toward whatever XdndAware window is under the pointer,
 // serves the `text/uri-list` payload on request, and returns true if a target
 // accepted the drop. Bounded by a wall-clock deadline so an unresponsive target
@@ -30,10 +27,10 @@
 
 namespace vellum::view::xdnd {
 
-inline bool run_drag_source(Display* display, int screen,
+inline bool run_drag_source(Display* display, int screen, Window source,
                             const std::vector<std::string>& paths,
                             std::chrono::milliseconds timeout) {
-    if (!display || paths.empty()) return false;
+    if (!display || !source || paths.empty()) return false;
     const std::string uri_list = build_uri_list(paths);
     if (uri_list.empty()) return false;
 
@@ -64,16 +61,16 @@ inline bool run_drag_source(Display* display, int screen,
     // The XdndAware window under a root-space pointer: descend to the deepest
     // window, then walk up to the first XdndAware ancestor.
     auto target_at = [&](int rx, int ry, int* version_out) -> Window {
-        Window top = RootWindow(display, screen);
-        Window cur = top, child = top; int wx = 0, wy = 0;
+        Window root = RootWindow(display, screen);
+        Window cur = root, child = root; int wx = 0, wy = 0;
         while (child != None &&
-               XTranslateCoordinates(display, top, cur, rx, ry, &wx, &wy, &child)) {
+               XTranslateCoordinates(display, root, cur, rx, ry, &wx, &wy, &child)) {
             if (child == None) break;
             cur = child;
         }
         for (Window w = cur; w != None;) {
-            const int ver = negotiated_version(aware_version(w));
-            if (ver > 0) { if (version_out) *version_out = ver; return w; }
+            int ver = aware_version(w);
+            if (ver > 0) { if (version_out) *version_out = ver < 5 ? ver : 5; return w; }
             Window r = 0, parent = 0, *kids = nullptr; unsigned int nk = 0;
             if (!XQueryTree(display, w, &r, &parent, &kids, &nk)) break;
             if (kids) XFree(kids);
@@ -113,36 +110,11 @@ inline bool run_drag_source(Display* display, int screen,
         XSendEvent(display, req.requestor, False, NoEventMask, &note);
     };
 
-    // The protocol source: an unmapped input-only window created on this
-    // connection. Targets address XdndStatus / XdndFinished to it, and those
-    // messages reach the client that created the window, which is this pumped
-    // connection.
-    XSetWindowAttributes source_attrs{};
-    source_attrs.override_redirect = True;
-    const Window root = RootWindow(display, screen);
-    const Window source = XCreateWindow(display, root, -10, -10, 1, 1, 0, 0, InputOnly,
-                                        CopyFromParent, CWOverrideRedirect, &source_attrs);
-    if (!source) return false;
-    auto release = [&](bool grabbed) {
-        if (grabbed) XUngrabPointer(display, CurrentTime);
-        // Relinquish XdndSelection ownership now the drag is over: the
-        // timeout and cancel paths must not leak it.
-        XSetSelectionOwner(display, xa_XdndSelection, None, CurrentTime);
-        XDestroyWindow(display, source);
-        XFlush(display);
-    };
-
     XSetSelectionOwner(display, xa_XdndSelection, source, CurrentTime);
-    if (XGetSelectionOwner(display, xa_XdndSelection) != source) {
-        release(false);
-        return false;
-    }
-    // The grab sits on the root window, which is always viewable; the source
-    // window is never mapped.
-    if (XGrabPointer(display, root, True, ButtonReleaseMask | PointerMotionMask,
+    if (XGetSelectionOwner(display, xa_XdndSelection) != source) return false;
+    if (XGrabPointer(display, source, True, ButtonReleaseMask | PointerMotionMask,
                      GrabModeAsync, GrabModeAsync, None, None,
                      CurrentTime) != GrabSuccess) {
-        release(false);
         return false;
     }
 
@@ -177,16 +149,10 @@ inline bool run_drag_source(Display* display, int screen,
                      static_cast<long>(ev.xmotion.time),
                      static_cast<long>(xa_XdndActionCopy));
         } else if (ev.type == ClientMessage) {
-            const auto sender = static_cast<unsigned long>(ev.xclient.data.l[0]);
-            if (ev.xclient.window != source) continue;
             if (ev.xclient.message_type == xa_XdndStatus) {
-                if (!status_is_from_target(sender, target)) continue;
                 accepted = (ev.xclient.data.l[1] & 1L) != 0;
             } else if (ev.xclient.message_type == xa_XdndFinished) {
-                const auto outcome = finished_outcome(sender, target, dropped, target_ver,
-                                                      ev.xclient.data.l[1]);
-                if (!outcome) continue;
-                result = *outcome;
+                result = dropped && (ev.xclient.data.l[1] & 1L) != 0;
                 break;
             }
         } else if (ev.type == SelectionRequest) {
@@ -205,7 +171,11 @@ inline bool run_drag_source(Display* display, int screen,
         }
     }
 
-    release(true);
+    XUngrabPointer(display, CurrentTime);
+    // Relinquish XdndSelection ownership now the drag is over (mirrors the plugin
+    // host's hardening — the timeout/cancel paths must not leak ownership).
+    XSetSelectionOwner(display, xa_XdndSelection, None, CurrentTime);
+    XFlush(display);
     return result;
 }
 

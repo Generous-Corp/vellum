@@ -38,9 +38,3 @@ missing display, session bus or XTest extension is a skip (exit 77). Each has a
 control: the window test's `--control` run leaves out the resize and the click
 and must see neither, and the AT-SPI test must fail to read a path the provider
 never exported and must stop answering once the provider is shut down.
-
-`linux_backends_test.cpp` runs the Avahi and libnotify backends against fake
-libraries, so it needs no display, bus or daemon, and registers on Linux under
-the same label. `linux_pure_helpers_test.cpp` covers the platform-independent
-helpers behind the Linux backends (AT-SPI character offsets, XDND reply
-validation, memory-pressure classification) and runs on every platform.
