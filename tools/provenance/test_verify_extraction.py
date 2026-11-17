@@ -2520,8 +2520,9 @@ class VerifyExtractionTests(unittest.TestCase):
 
     def test_the_owner_label_waives_the_origin_guard_and_nothing_else_does(self) -> None:
         row = self.ports_row("framework/core/a/src/a.cpp", "removed")
-        self.assertEqual(self.origin_guard([row], [], labels=["owner-decision"]), [])
+        self.assertEqual(self.origin_guard([row], [], labels=["owner-approved-origin-change"]), [])
         self.assertEqual(len(self.origin_guard([row], [], labels=["bug", "ready"])), 1)
+        self.assertEqual(len(self.origin_guard([row], [], labels=["owner-decision"])), 1)  # admission skips it
         self.assertEqual(len(self.origin_guard([row], [], labels=[])), 1)
         # An unreadable event payload waives nothing.
         self.hide_ci_git_base()

@@ -1404,9 +1404,10 @@ def framework_ports_history_errors(root: Path, ports) -> list[str]:
 
 
 # A pull request that moves a Pulp-origin file to another origin needs this label, which only the owner applies.
+# It is not `owner-decision`: the admission pipeline skips that label, and an approved change must still land.
 # The label is read from the pull_request event payload; the payload is the one the run started with, so after
 # the owner adds the label the check runs again on a new push (or a close and reopen), not on a re-run.
-PORTS_ORIGIN_LABEL = "owner-decision"
+PORTS_ORIGIN_LABEL = "owner-approved-origin-change"
 # The merge queue and a push to main run after the pull request's own run has judged the change; neither event
 # carries the pull request's labels, so only a pull request (or a local run, which has no event) is judged.
 PORTS_ORIGIN_EVENTS_SKIPPED = frozenset({"merge_group", "push", "workflow_dispatch", "schedule"})
