@@ -60,3 +60,5 @@ if(VELLUM_BUILD_TESTS)
             SKIP_RETURN_CODE 77)
     endif()
 endif()
+
+add_subdirectory(design_pipeline)
