@@ -22,10 +22,11 @@ The public slice consists of:
   application builds, plus a headers-only `Vellum::DawnHeaders` target for an
   embedding host's authenticated bootstrap and compute code.
 
-The scene carries a single integer schema version, `kSceneVersion`, now 12.
+The scene carries a single integer schema version, `kSceneVersion`, now 13.
 Version 9 is reserved and adds no fields in this build.
 Version 10 adds node effects; version 11 adds animation tracks; version 12
-adds plot nodes, whose samples arrive at run time.
+adds plot nodes, whose samples arrive at run time; version 13 adds text layout
+and draws missing glyphs as boxes (see Text layout and missing glyphs).
 A change that can alter rendered output bumps it: a new node kind, a new field
 that changes how a scene is drawn, or a change in meaning. A change that only
 adds metadata keeps it. Consumers accept versions from
@@ -41,7 +42,8 @@ DesignIR document path. Versions are claimed in order: version 4: image nodes;
 version 5: clip, mask and isolation on groups; version 6: blend modes and
 DesignIR compositing fields; version 7: interned token receipts; version 8:
 gradient vocabulary; version 9: vector assets (no fields yet); version 10:
-effects and materials; version 11: animation tracks; version 12: plot nodes.
+effects and materials; version 11: animation tracks; version 12: plot nodes;
+version 13: text layout.
 
 `Scene::tokens` interns each design token that resolved to a colour once, as a
 receipt of its path, the layer that produced the value (`primitive`,
@@ -244,6 +246,43 @@ dropped with a warning, any other invalid value fails the tree, and invalid
 clip path data fails it with `VELLUM_INVALID_PATH`. Hit testing and
 accessibility boxes ignore clips and masks.
 
+## Text layout and missing glyphs
+
+A text node without `SceneNode::text_layout` draws as every scene before
+version 13 drew it: one unwrapped, left-aligned line from the top-left corner
+of its box, laid out at an unbounded width. A `TextLayout` (version 13) wraps
+the paragraph at the box width and sets its alignment (`start`, `center`,
+`end` or `justify`, on a left-to-right base direction), its line height as a
+multiple of each line's largest font size with the extra space split above and
+below the glyphs (zero keeps the fonts' spacing), a line limit and an ellipsis
+(U+2026) that ends the last line when the limit cuts the text. Lines past the
+box's height are drawn below it, unclipped. `accept_scene` refuses a layout on
+a node that is not text, an unknown alignment, a negative or non-finite line
+height and an ellipsis without a line limit with `VELLUM_INVALID_TEXT_LAYOUT`,
+and a layout in a scene before version 13 with `VELLUM_SCENE_VERSION_MISMATCH`.
+`SkiaDawnSurface::measure_text` takes `TextMeasureOptions` to measure a
+laid-out paragraph the way it is drawn; the overload without options keeps the
+version 12 measurement. The web canvas shell draws laid-out text on one line
+and reports `VELLUM_WEB_TEXT_LAYOUT_NOT_DRAWN`.
+
+Glyphs come only from the packaged faces. Each run tries its own family, then
+Noto Sans Arabic, Noto Sans JP and Inter, character by character; host font
+fallback stays disabled, because a host font database differs between
+machines and OS releases and would make captures and goldens depend on the
+host. No broader packaged face is available, so a character none of those
+faces covers has no glyph. From version 13 it draws as the face's
+missing-glyph (.notdef) box, so the loss is visible and the text keeps its
+characters; scenes before version 13 keep drawing it as `?`, so their pixels
+do not change. Invalid UTF-8 draws as `?` at every version. Either way the
+surface's `diagnostics()` carries one `VELLUM_TEXT_GLYPH_MISSING` warning per
+text node naming each uncovered code point once, in ascending order; from
+version 13 a default-ignorable code point, which the shaper draws as nothing,
+is not reported. Each text's result is remembered, so an unchanged text is not
+scanned again on the next frame. The
+paragraph cache keys on the layout, the width it wraps at and this policy, so
+the same runs at two versions or widths never share a paragraph, and every
+paragraph is still built and laid out under the one SkParagraph lock.
+
 ## Blend modes
 
 `SceneNode::blend_mode` (scene version 6) combines a node and its subtree with
@@ -337,11 +376,18 @@ threshold fall back to a full repaint. Hosts pass `invalidate` reasons and node 
 rectangle counts, the commands re-recorded and why a frame repainted fully.
 What is cached and when it is discarded is renderer policy: the scene schema
 carries no cache hints. Partial redraw is enabled only for scene versions the
-damage model understands, up to `kDamageModelSceneVersion` (12), which covers
+damage model understands, up to `kDamageModelSceneVersion` (13), which covers
 transforms, group opacity, per-corner radii, paths, images, clips, masks and
 isolation on groups, blend modes, token references, gradient vocabulary,
-animation tracks and plot nodes, where a plot whose samples alone change
-damages only the spans of those samples. A version the renderer accepts but the damage model
+animation tracks, plot nodes, where a plot whose samples alone change
+damages only the spans of those samples, and text layout. A laid-out
+paragraph's damage spans the frame's width from its box grown by a font size,
+because alignment can move an unbreakable cluster past either edge, and reaches
+the frame's bottom unless a line limit bounds it by that many lines of its line
+height (or two and a half font sizes per line at the fonts' own spacing, which
+every packaged face fits), each rounded up to a whole pixel and one more for
+the shaper's per-line rounding, plus two font sizes of overhang. The renderer's layer
+extents measure the laid-out lines exactly. A version the renderer accepts but the damage model
 does not yet understand repaints fully with reason `damage_model_version`. A version outside
 [`kMinSupportedSceneVersion`, `kSceneVersion`] is refused before anything is
 drawn, and partial redraw likewise serves no version below
@@ -475,7 +521,8 @@ caches only faded groups, so its partial frames stay byte-identical to full
 repaints whatever each surface has cached.
 The surface keeps three cross-frame resource caches under
 `RenderCacheBudgets`: laid-out text paragraphs keyed by every run's text and
-style (the colour with any folded opacity included) and the font directory;
+style (the colour with any folded opacity included), the font directory, the
+text layout with the width it wraps at, and the missing-glyph policy;
 linear-gradient shaders keyed by their exact end points, colours, positions and
 tile mode; and GPU textures uploaded from mesh textures and image assets,
 keyed by size and the SHA-256 of the texels rather than by address, so mesh

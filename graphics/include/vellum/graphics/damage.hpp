@@ -174,11 +174,19 @@ public:
         const SceneNode& node, const Rect& absolute_bounds) const;
 
     /// The absolute logical area the glyphs of a text node can cover. Text is
-    /// laid out without wrapping and painted unclipped at the box origin, so
-    /// the default extends to the right edge of `frame` and adds 1.4 times the
-    /// largest font size per line break, plus one font size of overhang on
-    /// every side. A renderer-backed override can measure exactly, for
-    /// example with `SkiaDawnSurface::measure_text`.
+    /// painted unclipped from the box origin. Without a `TextLayout` it is one
+    /// unwrapped line, so the default extends to the right edge of `frame`
+    /// and adds 1.4 times the largest font size per line break, plus one font
+    /// size of overhang on every side. With a layout, a wrapped line can still
+    /// pass either edge of the box (an unbreakable cluster centred or aligned
+    /// to the end), so the default spans `frame` horizontally from the box
+    /// grown by one font size. It reaches the bottom of `frame` unless
+    /// `max_lines` bounds the paragraph, in which case it covers that many
+    /// lines of the layout's line height, or of `kTextNaturalLineHeightBound`
+    /// font sizes when the line height is the fonts' own, each rounded up to
+    /// a whole pixel and one more for the shaper's per-line rounding, plus two
+    /// font sizes of overhang above and below. A renderer-backed override can measure
+    /// exactly, for example with `SkiaDawnSurface::measure_text`.
     ///
     /// The extent is in the node's untransformed coordinates. A text node
     /// under a non-identity composed transform damages the whole frame
@@ -186,6 +194,11 @@ public:
     [[nodiscard]] virtual Rect text_extent(
         const SceneNode& node, const Rect& absolute_bounds, const Rect& frame) const;
 };
+
+/// The most a line of the packaged faces spans, in font sizes, at their own
+/// line spacing; Noto Sans Arabic, the tallest, spans 2.1. Damage bounds a
+/// line-limited paragraph with it.
+inline constexpr float kTextNaturalLineHeightBound = 2.5F;
 
 /// The absolute logical area a node paints by itself, including shadows,
 /// text extent and mesh geometry, in its untransformed coordinates and before
@@ -272,7 +285,7 @@ public:
 /// damage model understands. Partial redraw is enabled only for scene
 /// versions the damage model understands; a newer scene repaints fully until
 /// the damage model learns its fields and this constant is raised.
-inline constexpr std::uint32_t kDamageModelSceneVersion = 12U;
+inline constexpr std::uint32_t kDamageModelSceneVersion = 13U;
 
 /// Whether a scene of `version` may be redrawn from its damage alone: a
 /// version from `kMinSupportedSceneVersion` to `kDamageModelSceneVersion`.

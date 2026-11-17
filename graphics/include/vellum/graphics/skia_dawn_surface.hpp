@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -103,6 +104,25 @@ struct TextMetrics final {
     float baseline = 0.0F;
 };
 
+/// A laid-out paragraph's metrics: `metrics.width` is its longest line and
+/// `metrics.ascent` plus `metrics.descent` its height.
+struct TextLayoutMetrics final {
+    TextMetrics metrics;
+    /// The lines the paragraph was laid out on.
+    std::uint32_t lines = 1U;
+};
+
+/// How `SkiaDawnSurface::measure_text` lays a paragraph out, as a text node
+/// of a scene of `scene_version` with `layout` and a box `width` wide draws it.
+struct TextMeasureOptions final {
+    /// Absent measures one unwrapped line, as a node without a layout draws.
+    std::optional<TextLayout> layout;
+    /// The width a laid-out paragraph wraps at; unused without `layout`.
+    float width = 0.0F;
+    /// Picks the missing-glyph policy (see `draws_missing_glyph_box`).
+    std::uint32_t scene_version = kSceneVersion;
+};
+
 /// Skia Graphite rendering on a Dawn device.
 ///
 /// `native_surface_handle` is a CAMetalLayer on macOS. Passing nullptr creates
@@ -147,9 +167,20 @@ public:
 
     static std::unique_ptr<SkiaDawnSurface> create(
         const Config& config, std::string* error = nullptr);
+    /// Measures `runs` as one unwrapped line, drawing a character no packaged
+    /// face covers as `?`, the way a text node of a scene before version 13
+    /// is drawn.
     [[nodiscard]] static bool measure_text(
         const std::vector<TextRun>& runs,
         TextMetrics& metrics,
+        std::string_view font_directory = {},
+        std::string* error = nullptr);
+    /// Measures `runs` the way a text node laid out as `options` describes is
+    /// drawn.
+    [[nodiscard]] static bool measure_text(
+        const std::vector<TextRun>& runs,
+        const TextMeasureOptions& options,
+        TextLayoutMetrics& metrics,
         std::string_view font_directory = {},
         std::string* error = nullptr);
 

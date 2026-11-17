@@ -79,6 +79,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -224,6 +225,12 @@ SkFontStyle font_style(const TextStyle& style) {
 struct PackagedFontSet {
     sk_sp<skia::textlayout::FontCollection> collection;
     std::vector<sk_sp<SkTypeface>> typefaces;
+    /// The family name of each of `typefaces`.
+    std::vector<SkString> families;
+    /// The code points each run text was found to miss, by policy, family and
+    /// text, so an unchanged text is not scanned again every frame.
+    std::unordered_map<std::string, std::vector<std::uint32_t>> missing;
+    std::size_t missing_bytes = 0;
 };
 
 bool is_nonrendering_code_point(std::uint32_t code_point) {
@@ -435,24 +442,27 @@ bool draw_linear_gradient(
     return true;
 }
 
-bool build_text_paragraph(
-    const std::vector<TextRun>& requested_runs,
-    std::string_view requested_directory,
-    std::unique_ptr<skia::textlayout::Paragraph>& paragraph,
-    TextMetrics& metrics,
-    std::string* error) {
-    static std::mutex paragraph_mutex;
-    const std::scoped_lock lock(paragraph_mutex);
-    static const sk_sp<SkFontMgr> manager = SkFontMgr_New_CoreText(nullptr);
-    static const sk_sp<SkUnicode> unicode = SkUnicodes::ICU::Make();
-    static std::unordered_map<std::string, PackagedFontSet> font_cache;
-    const auto directory = font_directory(requested_directory);
-    if (!manager || !unicode || directory.empty() ||
-        !std::filesystem::is_directory(directory)) {
-        set_error(error, "Vellum packaged font directory is unavailable: " + directory.string());
-        return false;
-    }
+std::mutex& text_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
 
+// The segmenter every paragraph is shaped with. The caller holds `text_mutex`.
+const sk_sp<SkUnicode>& text_unicode() {
+    static const sk_sp<SkUnicode> unicode = SkUnicodes::ICU::Make();
+    return unicode;
+}
+
+// The packaged faces in `directory`, loaded once per directory. The caller
+// holds `text_mutex`.
+PackagedFontSet* packaged_fonts(const std::filesystem::path& directory,
+                                std::string* error) {
+    static const sk_sp<SkFontMgr> manager = SkFontMgr_New_CoreText(nullptr);
+    static std::unordered_map<std::string, PackagedFontSet> font_cache;
+    if (!manager || directory.empty() || !std::filesystem::is_directory(directory)) {
+        set_error(error, "Vellum packaged font directory is unavailable: " + directory.string());
+        return nullptr;
+    }
     const auto cache_key = directory.lexically_normal().string();
     auto cached = font_cache.find(cache_key);
     if (cached == font_cache.end()) {
@@ -468,14 +478,17 @@ bool build_text_paragraph(
             auto typeface = manager->makeFromFile(path.c_str());
             if (!typeface) {
                 set_error(error, "Vellum packaged font is unavailable: " + path.string());
-                return false;
+                return nullptr;
             }
+            SkString family;
+            typeface->getFamilyName(&family);
+            loaded.families.push_back(std::move(family));
             loaded.typefaces.push_back(typeface);
             provider->registerTypeface(std::move(typeface));
         }
         if (!has_packaged_glyph(static_cast<std::uint32_t>('?'), loaded.typefaces)) {
             set_error(error, "Vellum packaged fonts have no unsupported-text placeholder");
-            return false;
+            return nullptr;
         }
         loaded.collection = sk_make_sp<skia::textlayout::FontCollection>();
         loaded.collection->setAssetFontManager(provider);
@@ -484,31 +497,187 @@ bool build_text_paragraph(
         loaded.collection->disableFontFallback();
         cached = font_cache.emplace(cache_key, std::move(loaded)).first;
     }
+    return &cached->second;
+}
+
+// The families a run is shaped with, in the order the shaper tries them for
+// each character: its own, then the packaged fallbacks.
+std::vector<SkString> run_families(const TextStyle& style) {
+    return {
+        SkString(style.font_family.empty() ? "Inter" : style.font_family.c_str()),
+        SkString("Noto Sans Arabic"),
+        SkString("Noto Sans JP"),
+        SkString("Inter"),
+    };
+}
+
+// Whether a face of one of `families` has a glyph for `code_point`.
+bool families_cover(std::uint32_t code_point, const std::vector<SkString>& families,
+                    const PackagedFontSet& fonts) {
+    if (is_nonrendering_code_point(code_point)) return true;
+    for (std::size_t index = 0; index < fonts.typefaces.size(); ++index) {
+        const bool listed = std::any_of(families.begin(), families.end(),
+            [&](const SkString& family) { return family.equals(fonts.families[index]); });
+        if (listed &&
+            fonts.typefaces[index]->unicharToGlyph(static_cast<SkUnichar>(code_point)) != 0U) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The code points of `text` that the run cannot draw, as `build_text_paragraph`
+// decides it: from version 13 those no face of the run's families covers,
+// leaving out the default-ignorable ones the shaper draws as nothing; before
+// it those no packaged face covers, which it replaces with `?`. Invalid
+// sequences draw as `?` at every version and are not reported. Results are
+// remembered per text in `fonts`. The caller holds `text_mutex`.
+void collect_missing_glyphs(std::string_view text, const TextStyle& style,
+                            bool missing_glyph_box, PackagedFontSet& fonts,
+                            std::vector<std::uint32_t>& missing) {
+    if (std::all_of(text.begin(), text.end(),
+                    [](char byte) { return static_cast<unsigned char>(byte) < 0x80U; })) {
+        return;
+    }
+    const auto& family = style.font_family;
+    std::string key = (missing_glyph_box ? "b" : "q") + std::to_string(family.size()) + ":";
+    key += family;
+    key += text;
+    if (const auto found = fonts.missing.find(key); found != fonts.missing.end()) {
+        missing.insert(missing.end(), found->second.begin(), found->second.end());
+        return;
+    }
+    const auto families = run_families(style);
+    const auto& unicode = text_unicode();
+    std::vector<std::uint32_t> found;
+    for (std::size_t offset = 0U; offset < text.size();) {
+        const auto decoded = detail::decode_utf8(text, offset);
+        offset = decoded.end;
+        if (!decoded.valid) continue;
+        const bool covered = missing_glyph_box
+            ? families_cover(decoded.code_point, families, fonts) ||
+                  (unicode && unicode->isDefaultIgnorable(static_cast<SkUnichar>(decoded.code_point)))
+            : has_packaged_glyph(decoded.code_point, fonts.typefaces);
+        if (!covered) found.push_back(decoded.code_point);
+    }
+    constexpr std::size_t kMissingBudget = 8U * 1024U * 1024U;
+    const std::size_t bytes = key.size() + found.size() * sizeof(std::uint32_t) + 64U;
+    if (fonts.missing_bytes + bytes > kMissingBudget) {
+        fonts.missing.clear();
+        fonts.missing_bytes = 0;
+    }
+    missing.insert(missing.end(), found.begin(), found.end());
+    fonts.missing.emplace(std::move(key), std::move(found));
+    fonts.missing_bytes += bytes;
+}
+
+std::string code_point_name(std::uint32_t code_point) {
+    std::array<char, 16> buffer{};
+    std::snprintf(buffer.data(), buffer.size(), "U+%04X", code_point);
+    return buffer.data();
+}
+
+// One `kTextGlyphMissingCode` warning for each text node of `scene` with
+// characters it cannot draw, in depth-first order.
+std::vector<LoweringDiagnostic> missing_glyph_diagnostics(const Scene& scene,
+                                                          std::string_view requested_directory) {
+    std::vector<LoweringDiagnostic> output;
+    const std::scoped_lock lock(text_mutex());
+    auto* fonts = packaged_fonts(font_directory(requested_directory), nullptr);
+    if (fonts == nullptr) return output;
+    const bool box = draws_missing_glyph_box(scene.scene_version);
+    const std::function<void(const SceneNode&)> walk = [&](const SceneNode& node) {
+        if (node.kind == SceneNode::Kind::text) {
+            std::vector<std::uint32_t> missing;
+            if (node.text_runs.empty()) {
+                const TextStyle style{.font_family = node.font_family};
+                collect_missing_glyphs(node.text, style, box, *fonts, missing);
+            }
+            for (const auto& run : node.text_runs) {
+                collect_missing_glyphs(run.text, run.style, box, *fonts, missing);
+            }
+            std::sort(missing.begin(), missing.end());
+            missing.erase(std::unique(missing.begin(), missing.end()), missing.end());
+            if (!missing.empty()) {
+                std::string names;
+                for (const auto code_point : missing) {
+                    if (!names.empty()) names += ", ";
+                    names += code_point_name(code_point);
+                }
+                output.push_back({
+                    .severity = LoweringDiagnostic::Severity::warning,
+                    .disposition = LoweringDiagnostic::Disposition::unsupported,
+                    .code = std::string(kTextGlyphMissingCode),
+                    .node_id = node.id,
+                    .property = "text",
+                    .message = "text " + node.id + " has no packaged glyph for " + names +
+                               (box ? "; drawn as the missing-glyph box" : "; drawn as ?"),
+                });
+            }
+        }
+        for (const auto& child : node.children) walk(child);
+    };
+    walk(scene.root);
+    return output;
+}
+
+skia::textlayout::TextAlign skia_text_align(TextAlign align) {
+    switch (align) {
+    case TextAlign::start: return skia::textlayout::TextAlign::kStart;
+    case TextAlign::center: return skia::textlayout::TextAlign::kCenter;
+    case TextAlign::end: return skia::textlayout::TextAlign::kEnd;
+    case TextAlign::justify: return skia::textlayout::TextAlign::kJustify;
+    }
+    return skia::textlayout::TextAlign::kStart;
+}
+
+// Shapes and lays out the paragraph `request` describes. Without a layout it
+// is one unwrapped, left-aligned line, as every scene before version 13 drew
+// it; with one it wraps at `request.width`.
+bool build_text_paragraph(
+    const detail::ParagraphKey& request,
+    detail::CachedParagraph& built,
+    std::string* error) {
+    const std::scoped_lock lock(text_mutex());
+    const auto& unicode = text_unicode();
+    if (!unicode) {
+        set_error(error, "Vellum could not create the ICU text segmenter");
+        return false;
+    }
+    const auto* fonts = packaged_fonts(font_directory(request.font_directory), error);
+    if (fonts == nullptr) return false;
 
     skia::textlayout::ParagraphStyle paragraph_style;
-    paragraph_style.setMaxLines(1U);
-    paragraph_style.setTextAlign(skia::textlayout::TextAlign::kLeft);
+    if (request.layout) {
+        paragraph_style.setTextAlign(skia_text_align(request.layout->align));
+        if (request.layout->max_lines > 0U) {
+            paragraph_style.setMaxLines(request.layout->max_lines);
+        }
+        if (request.layout->ellipsis) paragraph_style.setEllipsis(SkString("\xE2\x80\xA6"));
+    } else {
+        paragraph_style.setMaxLines(1U);
+        paragraph_style.setTextAlign(skia::textlayout::TextAlign::kLeft);
+    }
     auto builder = skia::textlayout::ParagraphBuilder::make(
-        paragraph_style, cached->second.collection, unicode);
+        paragraph_style, fonts->collection, unicode);
     if (!builder) {
         set_error(error, "Vellum could not create the attributed-text paragraph builder");
         return false;
     }
 
-    for (const auto& requested : requested_runs) {
+    for (const auto& requested : request.runs) {
         if (requested.text.empty()) continue;
         skia::textlayout::TextStyle style;
-        style.setFontFamilies({
-            SkString(requested.style.font_family.empty()
-                ? "Inter" : requested.style.font_family.c_str()),
-            SkString("Noto Sans Arabic"),
-            SkString("Noto Sans JP"),
-            SkString("Inter"),
-        });
+        style.setFontFamilies(run_families(requested.style));
         style.setFontStyle(font_style(requested.style));
         style.setFontSize(std::max(1.0F, requested.style.font_size));
         style.setLetterSpacing(requested.style.letter_spacing);
         style.setFontEdging(SkFont::Edging::kAntiAlias);
+        if (request.layout && request.layout->line_height > 0.0F) {
+            style.setHeight(request.layout->line_height);
+            style.setHeightOverride(true);
+            style.setHalfLeading(true);
+        }
         SkPaint foreground;
         foreground.setAntiAlias(true);
         foreground.setColor4f(sk_color(requested.style.color));
@@ -519,25 +688,36 @@ bool build_text_paragraph(
         style.setDecoration(static_cast<skia::textlayout::TextDecoration>(decoration));
         style.setDecorationColor(foreground.getColor());
         builder->pushStyle(style);
-        const auto text = replace_unsupported_text(
-            requested.text, cached->second.typefaces);
+        const auto text = request.missing_glyph_box
+            ? detail::replace_unsupported_text(requested.text, [](std::uint32_t) { return true; })
+            : replace_unsupported_text(requested.text, fonts->typefaces);
         builder->addText(text.data(), text.size());
         builder->pop();
     }
 
-    paragraph = builder->Build();
+    auto paragraph = builder->Build();
     if (!paragraph) {
         set_error(error, "Vellum could not build the attributed-text paragraph");
         return false;
     }
-    paragraph->layout(1000000000.0F);
-    metrics = {
-        .width = paragraph->getMaxIntrinsicWidth(),
+    if (request.layout) {
+        paragraph->layout(std::isfinite(request.width) ? std::max(0.0F, request.width)
+                                                       : 1000000000.0F);
+    } else {
+        paragraph->layout(1000000000.0F);
+    }
+    built.metrics = {
+        .width = request.layout ? paragraph->getLongestLine() : paragraph->getMaxIntrinsicWidth(),
         .ascent = paragraph->getAlphabeticBaseline(),
         .descent = std::max(
             0.0F, paragraph->getHeight() - paragraph->getAlphabeticBaseline()),
         .baseline = paragraph->getAlphabeticBaseline(),
     };
+    if (request.layout) built.line_count = static_cast<std::uint32_t>(paragraph->lineNumber());
+    const auto unresolved = paragraph->unresolvedCodepoints();
+    built.unresolved.assign(unresolved.begin(), unresolved.end());
+    std::sort(built.unresolved.begin(), built.unresolved.end());
+    built.paragraph = std::shared_ptr<skia::textlayout::Paragraph>(std::move(paragraph));
     return true;
 }
 
@@ -595,20 +775,33 @@ SkRect layer_rect(const Rect& rect) {
 
 using ParagraphSlot = detail::CachedParagraph;
 
-// Finds the laid-out paragraph for `runs`, or builds and caches it.
-bool paragraph_for(std::vector<TextRun> runs, std::string_view directory,
-                   FrameResources& resources, ParagraphSlot& slot, std::string* error) {
+// What `command` shapes `runs` with: its layout, the box width it wraps at
+// and how it draws missing glyphs.
+detail::ParagraphKey paragraph_key(const PaintCommand& command, std::vector<TextRun> runs,
+                                   std::string_view directory) {
+    return {
+        .font_directory = std::string(directory),
+        .runs = std::move(runs),
+        .layout = command.text_layout,
+        .width = command.text_layout ? command.bounds.width : 0.0F,
+        .missing_glyph_box = command.missing_glyph_box,
+    };
+}
+
+// Finds the laid-out paragraph for `command` drawn with `runs`, or builds and
+// caches it.
+bool paragraph_for(const PaintCommand& command, std::vector<TextRun> runs,
+                   std::string_view directory, FrameResources& resources, ParagraphSlot& slot,
+                   std::string* error) {
     auto* caches = resources.caches;
-    detail::ParagraphKey key{.font_directory = std::string(directory), .runs = std::move(runs)};
+    auto key = paragraph_key(command, std::move(runs), directory);
     if (caches != nullptr) {
         if (const auto* cached = caches->paragraphs.find(key, caches->frame)) {
             slot = *cached;
             return true;
         }
     }
-    std::unique_ptr<skia::textlayout::Paragraph> built;
-    if (!build_text_paragraph(key.runs, directory, built, slot.metrics, error)) return false;
-    slot.paragraph = std::move(built);
+    if (!build_text_paragraph(key, slot, error)) return false;
     if (caches != nullptr) {
         const auto bytes = detail::estimated_paragraph_bytes(key);
         caches->paragraphs.insert(std::move(key), slot, bytes, caches->frame);
@@ -645,7 +838,8 @@ bool draw_text(SkCanvas& canvas, const PaintCommand& command, float opacity,
     ParagraphSlot built;
     ParagraphSlot& cached = slot != nullptr ? *slot : built;
     if (!cached.paragraph &&
-        !paragraph_for(text_draw_runs(command, opacity), directory, resources, cached, error)) {
+        !paragraph_for(command, text_draw_runs(command, opacity), directory, resources, cached,
+                       error)) {
         return false;
     }
     auto& paragraph = cached.paragraph;
@@ -1397,6 +1591,7 @@ Extent command_extent(const PaintCommand& command, const Rect& frame, float scal
             painted.kind = SceneNode::Kind::text;
             painted.text = command.text;
             painted.text_runs = command.text_runs;
+            painted.text_layout = command.text_layout;
             painted.font_size = command.font_size;
             break;
         case PaintCommand::Kind::mesh:
@@ -1621,13 +1816,11 @@ void record_gpu_time(skgpu::graphite::GpuFinishedContext context,
 std::optional<Rect> measured_text_extent(const PaintCommand& command,
                                          std::string_view directory, ParagraphSlot& slot,
                                          std::string* error) {
-    if (!slot.paragraph) {
-        std::unique_ptr<skia::textlayout::Paragraph> paragraph;
-        if (!build_text_paragraph(text_draw_runs(command, own_paint_opacity(command)),
-                                  directory, paragraph, slot.metrics, error)) {
-            return std::nullopt;
-        }
-        slot.paragraph = std::shared_ptr<skia::textlayout::Paragraph>(std::move(paragraph));
+    if (!slot.paragraph &&
+        !build_text_paragraph(
+            paragraph_key(command, text_draw_runs(command, own_paint_opacity(command)), directory),
+            slot, error)) {
+        return std::nullopt;
     }
     const auto& metrics = slot.metrics;
     float overhang = command.font_size;
@@ -2283,6 +2476,9 @@ public:
         if (acceptance.accepted) {
             for (auto& wide : plot_extent_diagnostics(scene, config_.scale)) {
                 diagnostics_.push_back(std::move(wide));
+            }
+            for (auto& missing : missing_glyph_diagnostics(scene, config_.font_directory)) {
+                diagnostics_.push_back(std::move(missing));
             }
             return true;
         }
@@ -3431,6 +3627,13 @@ std::optional<Rect> SkiaDawnSurfaceTestAccess::measure_layer_text_extent(
     return measured_text_extent(command, directory, slot, error);
 }
 
+std::vector<std::uint32_t> SkiaDawnSurfaceTestAccess::unresolved_code_points(
+    const PaintCommand& command, std::string_view directory, std::string* error) {
+    ParagraphSlot slot;
+    if (!measured_text_extent(command, directory, slot, error)) return {};
+    return slot.unresolved;
+}
+
 SkiaDawnSurface::SkiaDawnSurface(std::unique_ptr<Impl> impl) noexcept
     : impl_(std::move(impl)) {}
 
@@ -3453,9 +3656,33 @@ bool SkiaDawnSurface::measure_text(
     TextMetrics& metrics,
     std::string_view requested_font_directory,
     std::string* error) {
-    std::unique_ptr<skia::textlayout::Paragraph> paragraph;
-    return build_text_paragraph(
-        runs, requested_font_directory, paragraph, metrics, error);
+    detail::CachedParagraph built;
+    if (!build_text_paragraph({.font_directory = std::string(requested_font_directory),
+                               .runs = runs},
+                              built, error)) {
+        return false;
+    }
+    metrics = built.metrics;
+    return true;
+}
+
+bool SkiaDawnSurface::measure_text(
+    const std::vector<TextRun>& runs,
+    const TextMeasureOptions& options,
+    TextLayoutMetrics& metrics,
+    std::string_view requested_font_directory,
+    std::string* error) {
+    detail::CachedParagraph built;
+    if (!build_text_paragraph({.font_directory = std::string(requested_font_directory),
+                               .runs = runs,
+                               .layout = options.layout,
+                               .width = options.layout ? options.width : 0.0F,
+                               .missing_glyph_box = draws_missing_glyph_box(options.scene_version)},
+                              built, error)) {
+        return false;
+    }
+    metrics = {.metrics = built.metrics, .lines = options.layout ? built.line_count : 1U};
+    return true;
 }
 
 bool SkiaDawnSurface::render(const Scene& scene, std::string* error) {

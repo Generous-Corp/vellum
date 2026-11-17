@@ -461,12 +461,12 @@ void command_extents() {
 Scene grouping_scene(float width, float height);
 
 void damage_model_version_gate() {
-    expect(kDamageModelSceneVersion >= 12U && partial_redraw_supported(3U) &&
+    expect(kDamageModelSceneVersion >= 13U && partial_redraw_supported(3U) &&
                partial_redraw_supported(4U) && partial_redraw_supported(5U) &&
                partial_redraw_supported(6U) && partial_redraw_supported(7U) &&
                partial_redraw_supported(8U) && partial_redraw_supported(9U) &&
                partial_redraw_supported(10U) && partial_redraw_supported(11U) &&
-               partial_redraw_supported(12U) &&
+               partial_redraw_supported(12U) && partial_redraw_supported(13U) &&
                partial_redraw_supported(kDamageModelSceneVersion) &&
                !partial_redraw_supported(kDamageModelSceneVersion + 1U) &&
                !partial_redraw_supported(0U) &&
