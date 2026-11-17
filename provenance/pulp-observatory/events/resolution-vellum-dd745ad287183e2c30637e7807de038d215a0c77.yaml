@@ -1,0 +1,24 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-17T10:14:54Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-dd745ad287183e2c30637e7807de038d215a0c77",
+  "kind": "resolution",
+  "linked_commits": [
+    "dd745ad287183e2c30637e7807de038d215a0c77"
+  ],
+  "linked_pull_requests": [
+    "Generous-Corp/vellum#546"
+  ],
+  "owner": "@graphics-lead-gfxtext",
+  "rationale": "Plain merge of origin/main into the text layout branch by the repair lane; it carries only main's own changes, already observed on main, and no schema or API delta. Classified like merge 563102f7e.",
+  "resolves": "vellum-dd745ad287183e2c30637e7807de038d215a0c77",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
