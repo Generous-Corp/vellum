@@ -1584,6 +1584,13 @@ class PlatformRecordPlanTest(unittest.TestCase):
             self.plan("linux-x64")
         self.assertIn("does not match the record's digest", str(caught.exception))
 
+    def test_a_platform_without_a_record_is_refused_before_any_other_work(self) -> None:
+        # framework/ is broken too; the missing record is still what is reported.
+        self.fixture.write("framework/core/runtime/src/stray.cpp", b"int stray;\n")
+        with self.assertRaises(mp.PlanError) as caught:
+            self.plan("linux-x64")
+        self.assertIn("lists no record for it", str(caught.exception))
+
     def test_a_closure_source_framework_lacks_must_be_ported_first(self) -> None:
         self.write_record(["core/runtime/src/linux_host.cpp"])
         with self.assertRaises(mp.PlanError) as caught:
