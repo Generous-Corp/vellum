@@ -1030,6 +1030,24 @@ class SourceCompileOptionsTest(unittest.TestCase):
                 self.evaluate(text)
 
 
+class SourceOptionVectorsTest(unittest.TestCase):
+    """The shared decision vectors in fixtures/source-option-vectors.json, each evaluated as written."""
+
+    def test_every_vector_decides_as_expected(self) -> None:
+        document = json.loads((HERE / "fixtures/source-option-vectors.json").read_text(encoding="utf-8"))
+        self.assertEqual(document["schema"], "vellum.source-option-vectors.v1")
+        self.assertGreater(len(document["vectors"]), 10)  # control: the file was read
+        for vector in document["vectors"]:
+            with self.subTest(vector=vector["name"]):
+                files = {"core/x/CMakeLists.txt": vector["cmake"]}
+                if vector["expect"] == "refused":
+                    with self.assertRaises(mp.source_compile_options.SourceOptionsError):
+                        mp.source_compile_options.evaluate(files, vector["options"], {"core/x/src/a.cpp"})
+                else:
+                    result = mp.source_compile_options.evaluate(files, vector["options"], {"core/x/src/a.cpp"})
+                    self.assertEqual(result.get("core/x/src/a.cpp", []), vector["expect"])
+
+
 class SourceCompileOptionsBypassTest(unittest.TestCase):
     """The ways CMake can set a per-source property from somewhere other than
     the target's own directory, injected into a Pulp-shaped tree."""
