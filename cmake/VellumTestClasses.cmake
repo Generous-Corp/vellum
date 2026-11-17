@@ -10,7 +10,8 @@
 # classes, fails the configure, so a new test cannot silently fall outside
 # every lane. With VELLUM_UNLISTED_TEST_POLICY=gpu in the environment (merge
 # groups and main) an unlisted test runs as gpu with a warning instead of
-# failing, so a test added by another pull request cannot break the queue. The class is appended to any label the test already carries.
+# failing, so a test added by another pull request cannot break the queue.
+# The class is appended to any label the test already carries.
 
 set(_vellum_test_classes pr-fast gpu slow)
 
@@ -25,12 +26,22 @@ function(_vellum_collect_directories directory out_var)
 endfunction()
 
 # vellum_apply_test_classes(<manifest>)
-# Call once, after the last add_subdirectory().
+# Call once, after the last add_subdirectory(), from Vellum's top-level directory.
 function(vellum_apply_test_classes manifest)
-    if(CMAKE_VERSION VERSION_LESS 3.28)
-        message(FATAL_ERROR
-            "vellum_apply_test_classes needs CMake 3.28 for set_property(TEST ... DIRECTORY); "
-            "found ${CMAKE_VERSION}")
+    # Vellum tests disabled: nothing of ours is registered, so nothing to label.
+    if(DEFINED VELLUM_BUILD_TESTS AND NOT VELLUM_BUILD_TESTS)
+        return()
+    endif()
+    # The project still supports CMake 3.24; set_property(TEST ... DIRECTORY)
+    # needs 3.28, so older versions skip labelling instead of failing configure.
+    # VELLUM_TEST_CLASSES_CMAKE_VERSION overrides the version for the regression test.
+    if(NOT DEFINED VELLUM_TEST_CLASSES_CMAKE_VERSION)
+        set(VELLUM_TEST_CLASSES_CMAKE_VERSION "${CMAKE_VERSION}")
+    endif()
+    if(VELLUM_TEST_CLASSES_CMAKE_VERSION VERSION_LESS 3.28)
+        message(STATUS
+            "Vellum test class labels skipped: CMake ${VELLUM_TEST_CLASSES_CMAKE_VERSION} < 3.28")
+        return()
     endif()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${manifest}")
     file(READ "${manifest}" _json)
@@ -46,7 +57,8 @@ function(vellum_apply_test_classes manifest)
         endif()
     endforeach()
 
-    _vellum_collect_directories("${CMAKE_SOURCE_DIR}" _directories)
+    # Only Vellum's own subtree: an embedding project's tests are not ours.
+    _vellum_collect_directories("${CMAKE_CURRENT_SOURCE_DIR}" _directories)
     set(_problems "")
     foreach(_directory IN LISTS _directories)
         get_property(_tests DIRECTORY "${_directory}" PROPERTY TESTS)
