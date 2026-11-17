@@ -64,6 +64,19 @@ set_target_properties(vellum-animation-gpu-test PROPERTIES
 add_test(NAME vellum.gpu.animation
     COMMAND vellum-animation-gpu-test)
 
+add_executable(vellum-frame-driver-gpu-test
+    frame_driver_gpu_test.cpp)
+target_link_libraries(vellum-frame-driver-gpu-test PRIVATE
+    vellum-scene-capture-harness)
+set_target_properties(vellum-frame-driver-gpu-test PROPERTIES
+    OSX_ARCHITECTURES arm64
+    MACOSX_DEPLOYMENT_TARGET ${VELLUM_MACOS_DEPLOYMENT_TARGET}
+    BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
+add_test(NAME vellum.gpu.frame-driver
+    COMMAND vellum-frame-driver-gpu-test)
+set_tests_properties(vellum.gpu.frame-driver PROPERTIES
+    SKIP_RETURN_CODE 77)
+
 add_executable(vellum-render-cache-gpu-test
     render_cache_gpu_test.cpp)
 target_link_libraries(vellum-render-cache-gpu-test PRIVATE

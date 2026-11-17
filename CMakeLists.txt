@@ -269,6 +269,16 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-animation-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.animation COMMAND vellum-animation-test)
 
+        add_executable(vellum-frame-pump-test
+            foundation/tests/frame_pump_test.cpp)
+        target_link_libraries(vellum-frame-pump-test PRIVATE Vellum::Foundation)
+        add_test(NAME vellum.frame-pump COMMAND vellum-frame-pump-test)
+
+        add_executable(vellum-frame-driver-test
+            graphics/tests/frame_driver_test.cpp)
+        target_link_libraries(vellum-frame-driver-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.frame-driver COMMAND vellum-frame-driver-test)
+
         add_executable(vellum-effect-test
             graphics/tests/effect_test.cpp)
         target_link_libraries(vellum-effect-test PRIVATE Vellum::Graphics)
