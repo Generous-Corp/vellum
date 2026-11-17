@@ -16,7 +16,7 @@ namespace {
 // PaintCommand field: a field they skip lets a cached image survive a change
 // to it. This size changes when a field is added; update both functions, and
 // the field-coverage test in layer_cache_test.cpp, then this number.
-static_assert(sizeof(PaintCommand) == 472,
+static_assert(sizeof(PaintCommand) == 496,
               "PaintCommand changed: update paint_commands_equal and hash_command");
 static_assert(sizeof(TextStyle) == 56 && sizeof(TextRun) == 88,
               "TextStyle or TextRun changed: update same_style, same_runs and hash_command");
@@ -188,6 +188,12 @@ bool same_image_reference(const std::optional<ImageReference>& a,
     return !a->source_rect || same_rect(*a->source_rect, *b->source_rect);
 }
 
+bool same_text_layout(const std::optional<TextLayout>& a, const std::optional<TextLayout>& b) {
+    if (a.has_value() != b.has_value()) return false;
+    return !a || (a->align == b->align && same_float(a->line_height, b->line_height) &&
+                  a->max_lines == b->max_lines && a->ellipsis == b->ellipsis);
+}
+
 bool reads_backdrop(const PaintCommand& command) noexcept {
     return command.kind == PaintCommand::Kind::begin_layer &&
            command.blend_mode != BlendMode::normal;
@@ -201,7 +207,8 @@ bool same_paint(const PaintCommand& a, const PaintCommand& b) {
            same_float(a.font_size, b.font_size) && a.font_family == b.font_family &&
            a.font_weight == b.font_weight && same_float(a.letter_spacing, b.letter_spacing) &&
            a.underline == b.underline && a.strikethrough == b.strikethrough &&
-           same_runs(a.text_runs, b.text_runs) && same_float(a.opacity, b.opacity) &&
+           same_runs(a.text_runs, b.text_runs) && same_text_layout(a.text_layout, b.text_layout) &&
+           a.missing_glyph_box == b.missing_glyph_box && same_float(a.opacity, b.opacity) &&
            same_radii(a.corner_radii, b.corner_radii) &&
            a.layer_unbounded == b.layer_unbounded && a.layer_isolated == b.layer_isolated &&
            a.blend_mode == b.blend_mode &&
@@ -322,6 +329,14 @@ std::uint64_t hash_command(const PaintCommand& command) {
         hash.number((run.style.underline ? 1U : 0U) | (run.style.strikethrough ? 2U : 0U));
         hash.number(run.inherits_color ? 1U : 0U);
     }
+    hash.number(command.text_layout ? 1U : 0U);
+    if (command.text_layout) {
+        hash.number(static_cast<std::uint64_t>(command.text_layout->align));
+        hash.real(command.text_layout->line_height);
+        hash.number(command.text_layout->max_lines);
+        hash.number(command.text_layout->ellipsis ? 1U : 0U);
+    }
+    hash.number(command.missing_glyph_box ? 1U : 0U);
     hash.number(reinterpret_cast<std::uintptr_t>(command.mesh.get()));
     hash.number(command.mesh ? reinterpret_cast<std::uintptr_t>(command.mesh->texture.get())
                              : 0U);

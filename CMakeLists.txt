@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(Vellum
-    VERSION 0.2.0
+    VERSION 0.2.1
     DESCRIPTION "Experimental audio-free native application kernel"
     LANGUAGES CXX)
 
@@ -107,8 +107,8 @@ if(VELLUM_ENABLE_GRAPHICS)
     if(VELLUM_BUILD_TESTS AND TARGET vellum-gpu)
         foreach(_vellum_graphics_test IN ITEMS
                 vellum-layer-cache-gpu-test vellum-render-cache-gpu-test
-                vellum-partial-present-test vellum-scene-capture-harness-test
-                vellum-frame-debug-test)
+                vellum-device-recovery-gpu-test vellum-partial-present-test
+                vellum-scene-capture-harness-test vellum-frame-debug-test)
             if(NOT TARGET ${_vellum_graphics_test})
                 message(FATAL_ERROR
                     "Vellum: VELLUM_BUILD_TESTS is on and the GPU backend is built, "
@@ -220,6 +220,16 @@ if(VELLUM_BUILD_TESTS)
             graphics/tests/paint_command_test.cpp)
         target_link_libraries(vellum-paint-command-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.paint-command COMMAND vellum-paint-command-test)
+        add_executable(vellum-hit-test-test
+            graphics/tests/hit_test_test.cpp)
+        target_link_libraries(vellum-hit-test-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.hit-test COMMAND vellum-hit-test-test)
+
+        add_executable(vellum-pointer-router-test
+            graphics/tests/pointer_router_test.cpp)
+        target_link_libraries(vellum-pointer-router-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.pointer-router COMMAND vellum-pointer-router-test)
+
         add_executable(vellum-image-node-test
             graphics/tests/image_node_test.cpp)
         target_link_libraries(vellum-image-node-test PRIVATE Vellum::Graphics)
@@ -253,6 +263,11 @@ if(VELLUM_BUILD_TESTS)
             graphics/tests/plot_test.cpp)
         target_link_libraries(vellum-plot-test PRIVATE Vellum::Graphics Threads::Threads)
         add_test(NAME vellum.plot COMMAND vellum-plot-test)
+
+        add_executable(vellum-text-layout-test
+            graphics/tests/text_layout_test.cpp)
+        target_link_libraries(vellum-text-layout-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.text-layout COMMAND vellum-text-layout-test)
 
         add_executable(vellum-damage-test
             graphics/tests/damage_test.cpp)
@@ -650,6 +665,10 @@ endif()
 if(TARGET vellum-authoring)
     install(DIRECTORY authoring/include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 endif()
+
+# Every test carries one of the pr-fast, gpu or slow class labels.
+include(cmake/VellumTestClasses.cmake)
+vellum_apply_test_classes("${CMAKE_CURRENT_SOURCE_DIR}/scripts/ctest_classes.json")
 
 # The system and architectures the installed binaries are built for. The
 # package config reports "not found" to a consumer that targets others.

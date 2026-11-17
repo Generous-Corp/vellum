@@ -1,0 +1,74 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-17T09:57:53Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-dd745ad287183e2c30637e7807de038d215a0c77",
+  "include_dependency_deltas": [
+    "authoring/CMakeLists.txt",
+    "authoring/design_pipeline/CMakeLists.txt",
+    "authoring/design_pipeline/include/vellum/authoring/design_pipeline.hpp",
+    "graphics/include/vellum/graphics/render_telemetry.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/src/skia_dawn_surface_testing.hpp",
+    "graphics/tests/CMakeLists.txt"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/CMakeLists.txt",
+    "authoring/design_pipeline/CMakeLists.txt",
+    "authoring/design_pipeline/include/vellum/authoring/design_pipeline.hpp",
+    "authoring/design_pipeline/src/design_pipeline.cpp",
+    "authoring/design_pipeline/tests/design_pipeline_test.cpp",
+    "authoring/tests/rendered_tree_materializer_test.cpp",
+    "graphics/include/vellum/graphics/render_telemetry.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/src/render_telemetry.cpp",
+    "graphics/src/skia_dawn_surface.mm",
+    "graphics/src/skia_dawn_surface_testing.hpp",
+    "graphics/tests/CMakeLists.txt",
+    "graphics/tests/device_recovery_gpu_test.cpp",
+    "graphics/tests/frame_debug_test.mm",
+    "graphics/tests/layer_cache_gpu_test.cpp",
+    "graphics/tests/partial_present_bench.mm",
+    "graphics/tests/partial_present_test.cpp",
+    "graphics/tests/render_cache_gpu_test.cpp",
+    "graphics/tests/render_cache_test.cpp",
+    "packages/vellum-ui/src/design.js",
+    "packages/vellum-ui/test/vector-assets.test.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "73832241996187f289d6b736aded57308da2da3c",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "bae85eab29100d42b46c00a1ee62dbe1fa7bb85e",
+    "to_commit": "a4f5e7cbfce3ec788114378f0fa20c75057917e0"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "dd745ad287183e2c30637e7807de038d215a0c77",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

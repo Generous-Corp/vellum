@@ -6,6 +6,8 @@
 #include <vellum/authoring/js_application.hpp>
 #include <vellum/graphics/capture_stats.hpp>
 #include <vellum/graphics/frame_driver.hpp>
+#include <vellum/graphics/hit_test.hpp>
+#include <vellum/graphics/pointer_router.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
 #include <vellum/graphics/dawn_native_bootstrap.hpp>
@@ -26,6 +28,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -482,6 +485,54 @@ std::filesystem::path packaged_state_path() {
 
 std::vector<ComponentModuleSpec> interactive_component_specs;
 
+using vellum::graphics::PointerEvent;
+using vellum::graphics::PointerModifiers;
+using vellum::graphics::PointerTarget;
+
+PointerModifiers pointer_modifiers(NSEvent* event) {
+    const NSEventModifierFlags flags = event.modifierFlags;
+    return {
+        .shift = (flags & NSEventModifierFlagShift) != 0,
+        .control = (flags & NSEventModifierFlagControl) != 0,
+        .alt = (flags & NSEventModifierFlagOption) != 0,
+        .meta = (flags & NSEventModifierFlagCommand) != 0,
+    };
+}
+
+const char* pointer_event_name(PointerEvent::Kind kind) {
+    switch (kind) {
+    case PointerEvent::Kind::press: return "press";
+    case PointerEvent::Kind::release: return "release";
+    case PointerEvent::Kind::click: return "click";
+    case PointerEvent::Kind::drag: return "drag";
+    case PointerEvent::Kind::cancel: return "cancel";
+    case PointerEvent::Kind::hover_enter: return "hoverEnter";
+    case PointerEvent::Kind::hover_leave: return "hoverLeave";
+    case PointerEvent::Kind::wheel: return "wheel";
+    }
+    return "";
+}
+
+bool event_feeds_target(const std::string& event, PointerTarget target) {
+    switch (target) {
+    case PointerTarget::press:
+        return event == "press" || event == "release" || event == "click" ||
+               event == "drag" || event == "cancel";
+    case PointerTarget::hover: return event == "hoverEnter" || event == "hoverLeave";
+    case PointerTarget::wheel: return event == "wheel";
+    }
+    return false;
+}
+
+std::unordered_set<std::string> interactive_nodes(
+    const RenderedApplication& rendered, PointerTarget target) {
+    std::unordered_set<std::string> ids;
+    for (const auto& item : rendered.interactions) {
+        if (event_feeds_target(item.event, target)) ids.insert(item.node_id);
+    }
+    return ids;
+}
+
 }  // namespace
 
 @interface VellumApplicationView : NSView <NSTextInputClient> {
@@ -501,6 +552,8 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
     NSMutableAttributedString* _markedText;
     std::unique_ptr<MacAccessibilityBridge> _accessibility;
     NSTimer* _asyncTimer;
+    std::unique_ptr<vellum::graphics::PointerRouter> _pointer;
+    NSTrackingArea* _trackingArea;
 }
 - (instancetype)initWithFrame:(NSRect)frame
                        bundle:(const std::string&)bundle
@@ -560,6 +613,12 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
             static_cast<std::uint32_t>(frame.size.height), 1.0F);
         _accessibility->sync(_rendered.accessibility_nodes);
         __weak VellumApplicationView* weakSelf = self;
+        _pointer = std::make_unique<vellum::graphics::PointerRouter>(
+            [weakSelf](vellum::graphics::Point point, PointerTarget target) {
+                VellumApplicationView* owner = weakSelf;
+                return owner == nil ? std::optional<std::string>{}
+                                    : [owner pickAt:point target:target];
+            });
         _asyncTimer = [NSTimer scheduledTimerWithTimeInterval:0.016
                                                        repeats:YES
                                                          block:^(NSTimer* timer) {
@@ -702,9 +761,11 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
 - (void)viewDidMoveToWindow {
     [super viewDidMoveToWindow];
     if (self.window == nil) {
+        if (_pointer != nullptr) [self deliverPointerEvents:_pointer->leave()];
         [self stopFrames];
         return;
     }
+    self.window.acceptsMouseMovedEvents = YES;
     if (_surface) {
         [self requestFrame];
         return;
@@ -779,20 +840,107 @@ std::vector<ComponentModuleSpec> interactive_component_specs;
         return;
     }
     _focusedInputId.clear();
-    const auto interaction = std::find_if(
-        _rendered.interactions.begin(), _rendered.interactions.end(),
-        [point](const Interaction& item) {
-            return item.event == "press" && point.x >= item.bounds.x &&
-                   point.y >= item.bounds.y &&
-                   point.x <= item.bounds.x + item.bounds.width &&
-                   point.y <= item.bounds.y + item.bounds.height;
-        });
-    if (interaction == _rendered.interactions.end()) return;
-    std::string error;
-    if (!_application->dispatch(
-            interaction->action, R"({"pointerType":"mouse"})", _rendered, &error) ||
-        ![self finishMutation:&error]) {
-        NSLog(@"Vellum interaction failed: %s", error.c_str());
+    [self deliverPointerEvents:_pointer->down(
+        [self pointerLocation:event], vellum::graphics::PointerButton::primary,
+        pointer_modifiers(event))];
+}
+
+- (void)mouseUp:(NSEvent*)event {
+    [self deliverPointerEvents:_pointer->up(
+        [self pointerLocation:event], vellum::graphics::PointerButton::primary,
+        pointer_modifiers(event))];
+}
+
+- (void)mouseDragged:(NSEvent*)event {
+    [self deliverPointerEvents:_pointer->move(
+        [self pointerLocation:event], pointer_modifiers(event))];
+}
+
+- (void)mouseMoved:(NSEvent*)event {
+    [self deliverPointerEvents:_pointer->move(
+        [self pointerLocation:event], pointer_modifiers(event))];
+}
+
+- (void)mouseExited:(NSEvent*)event {
+    if (_pointer->captured()) return;
+    [self deliverPointerEvents:_pointer->leave(pointer_modifiers(event))];
+}
+
+- (void)scrollWheel:(NSEvent*)event {
+    const CGFloat scale = event.hasPreciseScrollingDeltas ? 1.0 : 10.0;
+    const auto events = _pointer->wheel(
+        [self pointerLocation:event],
+        {static_cast<float>(event.scrollingDeltaX * scale),
+         static_cast<float>(event.scrollingDeltaY * scale)},
+        pointer_modifiers(event));
+    if (events.empty()) {
+        [super scrollWheel:event];
+        return;
+    }
+    [self deliverPointerEvents:events];
+}
+
+- (void)updateTrackingAreas {
+    if (_trackingArea != nil) [self removeTrackingArea:_trackingArea];
+    _trackingArea = [[NSTrackingArea alloc]
+        initWithRect:self.bounds
+             options:NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited |
+                     NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect
+               owner:self
+            userInfo:nil];
+    [self addTrackingArea:_trackingArea];
+    [super updateTrackingAreas];
+}
+
+- (vellum::graphics::Point)pointerLocation:(NSEvent*)event {
+    const NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+    return {static_cast<float>(point.x), static_cast<float>(point.y)};
+}
+
+- (std::optional<std::string>)pickAt:(vellum::graphics::Point)point
+                              target:(PointerTarget)target {
+    const auto ids = interactive_nodes(_rendered, target);
+    if (ids.empty()) return std::nullopt;
+    return vellum::graphics::pick(_rendered.scene, point, {.interactive = &ids});
+}
+
+- (NSDictionary*)pointerPayload:(const PointerEvent&)event {
+    return @{
+        @"pointerType": @"mouse",
+        @"x": @(event.position.x),
+        @"y": @(event.position.y),
+        @"startX": @(event.start.x),
+        @"startY": @(event.start.y),
+        @"deltaX": @(event.delta.x),
+        @"deltaY": @(event.delta.y),
+        @"over": @(event.over),
+        @"shift": @(event.modifiers.shift),
+        @"control": @(event.modifiers.control),
+        @"alt": @(event.modifiers.alt),
+        @"meta": @(event.modifiers.meta),
+    };
+}
+
+- (void)deliverPointerEvents:(const std::vector<PointerEvent>&)events {
+    for (const auto& event : events) {
+        const std::string name = pointer_event_name(event.kind);
+        std::vector<std::string> actions;
+        for (const auto& item : _rendered.interactions) {
+            if (item.node_id == event.node_id && item.event == name) {
+                actions.push_back(item.action);
+            }
+        }
+        for (const auto& action : actions) {
+            std::string error;
+            const bool dispatched = event.kind == PointerEvent::Kind::press
+                ? _application->dispatch(
+                      action, R"({"pointerType":"mouse"})", _rendered, &error)
+                : dispatch_payload(
+                      *_application, _rendered, action, [self pointerPayload:event], &error);
+            if (!dispatched || ![self finishMutation:&error]) {
+                NSLog(@"Vellum interaction failed: %s", error.c_str());
+            }
+        }
     }
 }
 

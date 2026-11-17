@@ -10,6 +10,7 @@
 #include <clocale>
 #include <cmath>
 #include <cstdint>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -1164,6 +1165,76 @@ bool grouping_keys() {
            refuses(R"("clipPath":"M0 0 L")", "node bad has an invalid clipPath: ", true);
 }
 
+// A vector node draws only its asset: a background colour on it is reported
+// as dropped and leaves the node's fill transparent. vellum-ui sends no token
+// receipt for it, so only the literal colour reaches this check.
+bool vector_background_dropped() {
+    {
+        const auto tree = wrap_tree(std::string(R"JSON({"type":"vector","id":"icon",
+          "style":{"x":0,"y":0,"width":10,"height":10,"backgroundColor":"#14b8a6"},)JSON") +
+          R"JSON("asset":{"contentHash":"sha256:)JSON" + std::string(64, 'd') +
+          R"JSON(","viewBox":[0,0,10,10],"ops":[]},"children":[]})JSON");
+        vellum::authoring::RenderedApplication rendered;
+        std::string error;
+        if (!vellum::authoring::materialize_rendered_tree(tree, rendered, &error)) {
+            std::cerr << "vector background: " << error << '\n';
+            return false;
+        }
+        const auto* node = vellum::graphics::find_node(rendered.scene, "icon");
+        const bool reported = std::any_of(
+            rendered.diagnostics.begin(), rendered.diagnostics.end(), [](const auto& d) {
+                return d.code == vellum::graphics::kStyleDroppedCode &&
+                       d.node_id == "icon" && d.property == "backgroundColor";
+            });
+        if (node == nullptr || node->fill.alpha != 0.0F || !reported) {
+            std::cerr << "vector background: a background colour was not dropped and reported\n";
+            return false;
+        }
+    }
+    return true;
+}
+
+// The cases the JavaScript vector validator reads too: each gradient is
+// materialized inside a compiled vector asset and must be accepted or refused
+// as its verdict says.
+bool gradient_parity() {
+    std::ifstream file(std::string(VELLUM_VECTOR_FIXTURE_DIR) + "/gradient-parity.cases");
+    if (!file) {
+        std::cerr << "gradient parity: the case file is missing\n";
+        return false;
+    }
+    const std::string hash = "sha256:" + std::string(64, 'd');
+    std::string line;
+    int cases = 0;
+    while (std::getline(file, line)) {
+        if (line.empty()) continue;
+        const auto first = line.find('\t');
+        const auto second = line.find('\t', first + 1);
+        const std::string verdict = line.substr(0, first);
+        const std::string name = line.substr(first + 1, second - first - 1);
+        const std::string gradient = line.substr(second + 1);
+        const auto tree = wrap_tree(std::string(R"JSON({"type":"vector","id":"icon",
+          "style":{"x":0,"y":0,"width":10,"height":10},"asset":{"contentHash":")JSON") + hash +
+          R"JSON(","viewBox":[0,0,10,10],"ops":[{"op":"path","d":"M0 0H10V10Z","fill":{"gradient":)JSON" +
+          gradient + R"JSON(}}]},"children":[]})JSON");
+        vellum::authoring::RenderedApplication rendered;
+        std::string error;
+        const bool accepted = vellum::authoring::materialize_rendered_tree(tree, rendered, &error);
+        if (accepted != (verdict == "valid")) {
+            std::cerr << "gradient parity: " << name << " was "
+                      << (accepted ? "accepted" : "refused: " + error) << ", expected " << verdict
+                      << '\n';
+            return false;
+        }
+        ++cases;
+    }
+    if (cases < 30) {
+        std::cerr << "gradient parity: too few cases\n";
+        return false;
+    }
+    return true;
+}
+
 // A compiled vector asset materializes into one vector node whose display
 // list carries groups, clips, solid and gradient paint with a gradient
 // transform, and stroke geometry; a malformed asset is refused with the
@@ -1967,6 +2038,8 @@ bool token_kind_audit() {
 
 int main() {
     if (!vector_nodes()) return 1;
+    if (!gradient_parity()) return 1;
+    if (!vector_background_dropped()) return 1;
     vellum::authoring::RenderedApplication rendered;
     std::string error;
     if (!vellum::authoring::materialize_rendered_tree(
