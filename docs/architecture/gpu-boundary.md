@@ -107,9 +107,12 @@ The authoring `transform` key takes CSS transform functions, matched without
 regard to case, with lengths in px or percent of the box. A list that does not
 parse is dropped with a `VELLUM_STYLE_DROPPED` warning and the node is drawn
 untransformed; only a list that composes to a non-finite matrix fails the
-tree. Interaction and accessibility boxes are the axis-aligned box of each
-node as drawn, so a rotated control hit-tests on that box, and a node whose
-transform has a zero determinant gets no interaction or text-input box.
+tree. Accessibility and text-input boxes are the axis-aligned box of each
+node as drawn, and a node whose transform has a zero determinant gets no
+interaction, accessibility or text-input box. Pointer interactions are not
+tested against those boxes: `Interaction::bounds` remains the node's
+axis-aligned box for hosts that have not moved to the picker, and a host that
+has moved calls `vellum::graphics::pick` (see Pointer input below).
 
 A `path` node carries a `PathGeometry`: a flat list of move, line,
 quadratic, cubic, SVG elliptical arc and close commands with their values,
@@ -243,8 +246,8 @@ makes a mask, and `isolation: isolate` isolation. A mask still takes its place
 in its parent's layout, so a mask meant to cover its siblings needs explicit
 `x` and `y` or a parent that does not stack it after them. A root `maskMode` is
 dropped with a warning, any other invalid value fails the tree, and invalid
-clip path data fails it with `VELLUM_INVALID_PATH`. Hit testing and
-accessibility boxes ignore clips and masks.
+clip path data fails it with `VELLUM_INVALID_PATH`. The scene picker respects
+clips and masks; accessibility boxes still ignore them.
 
 ## Text layout and missing glyphs
 
@@ -577,3 +580,49 @@ builds use the pinned artifact in
 `VELLUM_SKIA_DIR` remains available for local development, but it is accepted
 only when its Skia and Dawn libraries match the locked digests; an arbitrary
 directory is not release evidence.
+
+## Pointer input
+
+`graphics/hit_test.hpp` holds `pick(scene, point, options)`, which returns the
+id of the node under a point in frame coordinates. It needs no GPU. It walks the
+scene front to back in paint order, inverts each node's composed transform to
+map the point into the node, and tests what the node draws:
+
+- Path nodes and vector nodes by their fill geometry under the fill rule, and by
+  their stroke outline (half the stroke width plus the tolerance, with butt,
+  square and round caps and round and bevel joins; miter tips are treated as
+  bevels and dashes are ignored). Curves and arcs are flattened to within a
+  twentieth of a frame pixel, and the tolerance is applied in frame pixels
+  whatever the transform.
+- Mesh nodes by their triangles; every other kind by its box with its corner
+  radii. Only nodes that paint something are hittable (a group or custom node
+  draws nothing), plus the interactive nodes the caller names.
+- A node with opacity zero, a non-finite or zero-determinant transform, or an
+  outside-the-clip point is a miss, and so is its whole subtree. Clips (rectangle
+  with radii, or path) apply to a node's subtree and, with `clips_own_paint`, to
+  its own paint. A mask is never hit itself; its siblings are hit only where the
+  point lies on a painted shape of every mask node. The mask value (alpha or
+  luminance) is not sampled.
+- Tracks are evaluated at `Scene::clock` first.
+
+With `PickOptions::interactive` set, the topmost hittable node decides: the
+nearest interactive node from it up to the root is returned, and nothing is
+returned when none of them is interactive, because an unrelated painted node
+covers whatever lies beneath. Without it the topmost painted node is returned.
+
+`graphics/pointer_router.hpp` holds `PointerRouter`, a host-independent state
+machine. A host feeds it down, move, up, wheel, cancel and leave with modifier
+flags, and it returns typed events: press, release, click, drag (with delta),
+cancel, hover enter, hover leave and wheel. A press on an interactive node
+captures the pointer, so drags and the release go to that node outside its
+bounds; a click needs the release over the same node. The router asks the host
+for targets through a callback, so each event kind can use its own interactive
+set.
+
+The macOS app host uses both. It maps events to authored interaction names
+`press`, `release`, `click`, `drag`, `cancel`, `hoverEnter`, `hoverLeave` and
+`wheel`, picking among the nodes that have an interaction of the matching kind.
+A `press` action still receives exactly `{"pointerType":"mouse"}`; the other
+events add the pointer position, start position, delta, whether the pointer is
+over the node, and the modifier flags. The Swift and web hosts still scan the
+axis-aligned `Interaction::bounds`.
