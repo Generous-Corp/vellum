@@ -1515,6 +1515,12 @@ class RespellAliasPlanTest(unittest.TestCase):
         mp.write_cmake(plan, output)
         self.assertNotIn("DEFINITION_SOURCE", output.read_text())
 
+    def test_a_malformed_table_is_refused(self) -> None:
+        self.fixture.write(mp.port_respell.TABLE, b"[]")
+        with self.assertRaises(mp.PlanError) as caught:
+            self.fixture.plan()
+        self.assertIn("must be an object with schema", str(caught.exception))
+
     def test_a_macro_the_target_does_not_define_is_not_aliased(self) -> None:
         plan = self.port(b"#ifdef VELLUM_OTHER\n#endif\nint b = VELLUM_HAS_SKIA;\n",
                          [self.alias("PULP_HAS_SKIA"), self.alias("PULP_OTHER")])

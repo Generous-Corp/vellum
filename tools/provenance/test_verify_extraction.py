@@ -1159,6 +1159,13 @@ class VerifyExtractionTests(unittest.TestCase):
             self.write_respell(root, [undefined, anchor])
             errors, _ = self.respell_verdict(root)
             self.assertTrue(any("PULP_NOT_DEFINED is not a macro the closures define" in e for e in errors), errors)
+            # A link export the closures do not list, and a ported-only kind whose evidence is not a ported source.
+            self.write_respell(root, [anchor, self.respell_entry("pulp_not_exported", "link-export", None)])
+            errors, _ = self.respell_verdict(root)
+            self.assertTrue(any("pulp_not_exported is not a name the closures list" in e for e in errors), errors)
+            self.write_respell(root, [self.respell_entry("PULP_TAG", "file-macro", hooks), anchor])
+            errors, _ = self.respell_verdict(root)
+            self.assertTrue(any("evidence is a ported Pulp source, not " + hooks in e for e in errors), errors)
             # A name left in its Pulp spelling is an entry the table lacks, and a stale spelling.
             self.write_respell(root, [anchor])
             (root / caller).write_bytes(b'extern "C" void pulp_anchor();\nvoid f() { pulp_anchor(); }\n')
