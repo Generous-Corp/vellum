@@ -18,7 +18,9 @@ Three questions, answered per image set:
 The `pulp::` and `vellum::` counts read the full symbol table (`nm -m`), local
 and hidden definitions included. Only exported strong definitions count for the
 duplicate check ("external", not weak and not "private external"): a hidden or
-weak copy cannot be bound from another image. Objective-C classes come from class metadata (`otool -oV`), because a
+weak copy cannot be bound from another image. The Pulp overlap check includes
+externally visible weak definitions, because macOS can coalesce those across
+images. Objective-C classes come from class metadata (`otool -oV`), because a
 class is one per process whatever its symbols' visibility. Images with
 identical content (versioned dylib names) are read once.
 
@@ -61,6 +63,19 @@ def exported_strong(listing: str) -> set[str]:
         # `nm -m` may annotate a definition ("[referenced dynamically]",
         # "[no dead-strip]"); the annotation does not change what it exports.
         if _ANNOTATION.sub("", match["attrs"]).split() == ["external"]:
+            names.add(match["name"])
+    return names
+
+
+def exported_external(listing: str) -> set[str]:
+    """Defined names visible outside an image, including weak definitions."""
+    names: set[str] = set()
+    for line in listing.splitlines():
+        match = _NM_LINE.match(line)
+        if not match or match["section"] == "undefined":
+            continue
+        words = _ANNOTATION.sub("", match["attrs"]).split()
+        if "external" in words and "private" not in words and "hidden" not in words:
             names.add(match["name"])
     return names
 
@@ -157,11 +172,11 @@ def distinct_images(images: Iterable[Path]) -> list[Path]:
 
 
 def pulp_defined(libraries: list[Path], nm: Nm | None = None) -> set[str]:
-    """Exported strong names a Pulp build's static libraries define."""
+    """Externally visible names a Pulp build's static libraries define."""
     nm = nm or run_nm
     names: set[str] = set()
     for library in libraries:
-        names |= exported_strong(nm(library))
+        names |= exported_external(nm(library))
     return names
 
 
@@ -187,8 +202,10 @@ def census(images: list[Path], allow: frozenset[str] = frozenset(), nm: Nm | Non
         tag = f"{image}#{position}"
         for name in exported_strong(listing):
             symbol_owners.setdefault(name, []).append(tag)
-            if pulp_names is not None and name in pulp_names and name not in allow:
-                pulp_leaks.setdefault(str(image), set()).add(name)
+        if pulp_names is not None:
+            for name in exported_external(listing):
+                if name in pulp_names and name not in allow:
+                    pulp_leaks.setdefault(str(image), set()).add(name)
         for cls in objc_classes(otool(image)):
             class_owners.setdefault(cls, []).append(tag)
     duplicate_symbols = {n: o for n, o in symbol_owners.items() if len(o) > 1 and n not in allow}
@@ -239,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.plant_pulp:
             if pulp_names is None:
                 raise RuntimeError("--plant-pulp needs --pulp-library")
-            exported = sorted({n for image in images for n in exported_strong(run_nm(image))})
+            exported = sorted({n for image in images for n in exported_external(run_nm(image))})
             if not exported:
                 raise RuntimeError("no exported name to plant")
             pulp_names = pulp_names | {exported[0]}

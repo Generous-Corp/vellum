@@ -177,11 +177,24 @@ class SymbolCensusTest(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertIn("a Pulp build also defines", findings[0])
 
-    def test_hidden_or_weak_overlap_with_pulp_is_not_a_leak(self) -> None:
-        nm = {"a.dylib": listing(sym(FN), sym("_sdl", "private external"), sym("_w", "weak external"))}
+    def test_private_overlap_with_pulp_is_not_a_leak(self) -> None:
+        nm = {"a.dylib": listing(sym(FN), sym("_sdl", "private external"))}
         _, findings = sc.census([Path("a.dylib")], nm=lambda p: nm[str(p)], otool=lambda p: "", demangle=demangle,
-                                pulp_names=frozenset({"_sdl", "_w"}))
+                                pulp_names=frozenset({"_sdl"}))
         self.assertEqual(findings, [])
+
+    def test_weak_pulp_overlaps_fail_in_both_directions(self) -> None:
+        for image_attrs, pulp_attrs in (("weak external", "weak external"),
+                                        ("external", "weak external"),
+                                        ("weak external", "external")):
+            with self.subTest(image_attrs=image_attrs, pulp_attrs=pulp_attrs):
+                image = listing(sym(FN), sym("_shared", image_attrs))
+                pulp = listing(sym("_shared", pulp_attrs))
+                pulp_names = frozenset(sc.pulp_defined([Path("libp.a")], nm=lambda _: pulp))
+                _, findings = sc.census([Path("a.dylib")], nm=lambda _: image, otool=lambda _: "",
+                                        demangle=demangle, pulp_names=pulp_names)
+                self.assertEqual(len(findings), 1)
+                self.assertIn("a Pulp build also defines", findings[0])
 
     def test_pulp_overlap_check_off_without_a_pulp_set(self) -> None:
         nm = {"a.dylib": listing(sym(FN), sym("_mbedtls_ssl_init"))}
@@ -191,7 +204,7 @@ class SymbolCensusTest(unittest.TestCase):
 
     def test_pulp_defined_reads_exported_strong_names_across_libraries(self) -> None:
         lib = {"a.a": listing(sym("_x"), sym("_hidden", "private external")), "b.a": listing(sym("_y", "weak external"), sym("_z"))}
-        self.assertEqual(sc.pulp_defined([Path("a.a"), Path("b.a")], nm=lambda p: lib[str(p)]), {"_x", "_z"})
+        self.assertEqual(sc.pulp_defined([Path("a.a"), Path("b.a")], nm=lambda p: lib[str(p)]), {"_x", "_y", "_z"})
 
     def _run_main(self, pulp_listing: str, *extra: str) -> int:
         image_listing = listing(sym(FN), sym("_shared_c"))
