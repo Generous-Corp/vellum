@@ -30,14 +30,13 @@ endif()
 
 # Only macos-arm64 has a closure and a proof; the mirror's Darwin-shaped link
 # rules (whole-archive, dylib re-exports) are untested elsewhere. Fail closed
-# until another platform proves it. The override variables exist for the
-# platform test (tools/tracing/platform-probe).
-set(VELLUM_TRACING_SYSTEM "${CMAKE_SYSTEM_NAME}" CACHE STRING "System checked by the tracing platform guard")
-set(VELLUM_TRACING_ARCH "${CMAKE_SYSTEM_PROCESSOR}" CACHE STRING "Architecture checked by the tracing platform guard")
-if(NOT VELLUM_TRACING_SYSTEM STREQUAL "Darwin" OR NOT VELLUM_TRACING_ARCH MATCHES "^(arm64|aarch64)$")
+# until another platform proves it. The platform comes from CMake's own
+# CMAKE_SYSTEM_NAME and CMAKE_SYSTEM_PROCESSOR, never from a cache variable a
+# command line could override to claim another platform.
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
     message(FATAL_ERROR
         "Vellum: VELLUM_ENABLE_TRACING is supported only on macos-arm64 "
-        "(this configure is ${VELLUM_TRACING_SYSTEM}/${VELLUM_TRACING_ARCH}); "
+        "(this configure is ${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}); "
         "turn it off until another platform proves it")
 endif()
 
