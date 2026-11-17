@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.24)
+project(VellumTracingPlatformProbe LANGUAGES NONE)
+option(VELLUM_ENABLE_TRACING "" ON)
+option(VELLUM_ENABLE_MIRROR "" ON)
+include("${VELLUM_SOURCE_DIR}/cmake/VellumTracing.cmake")
