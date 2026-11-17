@@ -20,6 +20,7 @@
 #include "frame_trace.hpp"
 #include "skia_dawn_surface_testing.hpp"
 #include "skia_resource_caches.hpp"
+#include "text_paragraph.hpp"
 #include "utf8_text.hpp"
 
 #import <QuartzCore/CAMetalLayer.h>
@@ -228,67 +229,6 @@ SkRRect rounded_rect(const SkRect& rect, const CornerRadii& radii, float outset 
     return result;
 }
 
-std::filesystem::path font_directory(std::string_view requested) {
-    if (!requested.empty()) return std::filesystem::path(requested);
-    Dl_info info{};
-    if (dladdr(reinterpret_cast<const void*>(&font_directory), &info) != 0 &&
-        info.dli_fname != nullptr) {
-        const auto library_directory = std::filesystem::path(info.dli_fname).parent_path();
-        const auto bundled = library_directory.parent_path() /
-            "Resources" / "vellum" / "fonts";
-        if (std::filesystem::is_directory(bundled)) return bundled;
-        const auto installed = library_directory /
-            VELLUM_DATADIR_FROM_LIBDIR / "vellum" / "fonts";
-        if (std::filesystem::is_directory(installed)) return installed;
-        const auto build_tree = library_directory /
-            VELLUM_BUILD_DATADIR_FROM_PROVIDER_DIR / "vellum" / "fonts";
-        if (std::filesystem::is_directory(build_tree)) return build_tree;
-    }
-    return {};
-}
-
-SkFontStyle font_style(const TextStyle& style) {
-    return {std::clamp(style.font_weight, 100, 900),
-            SkFontStyle::kNormal_Width, SkFontStyle::kUpright_Slant};
-}
-
-struct PackagedFontSet {
-    sk_sp<skia::textlayout::FontCollection> collection;
-    std::vector<sk_sp<SkTypeface>> typefaces;
-    /// The family name of each of `typefaces`.
-    std::vector<SkString> families;
-    /// The code points each run text was found to miss, by policy, family and
-    /// text, so an unchanged text is not scanned again every frame.
-    std::unordered_map<std::string, std::vector<std::uint32_t>> missing;
-    std::size_t missing_bytes = 0;
-};
-
-bool is_nonrendering_code_point(std::uint32_t code_point) {
-    return code_point <= 0x1FU || (code_point >= 0x7FU && code_point <= 0x9FU) ||
-        (code_point >= 0x200BU && code_point <= 0x200FU) || code_point == 0x2060U ||
-        (code_point >= 0x202AU && code_point <= 0x202EU) ||
-        (code_point >= 0x2066U && code_point <= 0x2069U) ||
-        (code_point >= 0xFE00U && code_point <= 0xFE0FU) ||
-        (code_point >= 0xE0100U && code_point <= 0xE01EFU);
-}
-
-bool has_packaged_glyph(
-    std::uint32_t code_point,
-    const std::vector<sk_sp<SkTypeface>>& typefaces) {
-    if (is_nonrendering_code_point(code_point)) return true;
-    return std::any_of(typefaces.begin(), typefaces.end(), [code_point](const auto& face) {
-        return face->unicharToGlyph(static_cast<SkUnichar>(code_point)) != 0U;
-    });
-}
-
-std::string replace_unsupported_text(
-    std::string_view text,
-    const std::vector<sk_sp<SkTypeface>>& typefaces) {
-    return detail::replace_unsupported_text(text, [&typefaces](std::uint32_t code_point) {
-        return has_packaged_glyph(code_point, typefaces);
-    });
-}
-
 // Textures uploaded for one frame, so a texture shared by several meshes (a
 // glyph atlas, say) is hashed and looked up once.
 struct MeshTextureCache final {
@@ -472,135 +412,6 @@ bool draw_linear_gradient(
     return true;
 }
 
-std::mutex& text_mutex() {
-    static std::mutex mutex;
-    return mutex;
-}
-
-// The segmenter every paragraph is shaped with. The caller holds `text_mutex`.
-const sk_sp<SkUnicode>& text_unicode() {
-    static const sk_sp<SkUnicode> unicode = SkUnicodes::ICU::Make();
-    return unicode;
-}
-
-// The packaged faces in `directory`, loaded once per directory. The caller
-// holds `text_mutex`.
-PackagedFontSet* packaged_fonts(const std::filesystem::path& directory,
-                                std::string* error) {
-    static const sk_sp<SkFontMgr> manager = SkFontMgr_New_CoreText(nullptr);
-    static std::unordered_map<std::string, PackagedFontSet> font_cache;
-    if (!manager || directory.empty() || !std::filesystem::is_directory(directory)) {
-        set_error(error, "Vellum packaged font directory is unavailable: " + directory.string());
-        return nullptr;
-    }
-    const auto cache_key = directory.lexically_normal().string();
-    auto cached = font_cache.find(cache_key);
-    if (cached == font_cache.end()) {
-        PackagedFontSet loaded;
-        auto provider = sk_make_sp<skia::textlayout::TypefaceFontProvider>();
-        constexpr std::array<std::string_view, 7> packaged_fonts{
-            "Inter-Regular.ttf", "Jost-Regular.ttf", "Jost-Medium.ttf",
-            "Jost-SemiBold.ttf", "Jost-Bold.ttf", "NotoSansJP[wght].ttf",
-            "NotoSansArabic[wdth,wght].ttf",
-        };
-        for (const auto filename : packaged_fonts) {
-            const auto path = directory / filename;
-            auto typeface = manager->makeFromFile(path.c_str());
-            if (!typeface) {
-                set_error(error, "Vellum packaged font is unavailable: " + path.string());
-                return nullptr;
-            }
-            SkString family;
-            typeface->getFamilyName(&family);
-            loaded.families.push_back(std::move(family));
-            loaded.typefaces.push_back(typeface);
-            provider->registerTypeface(std::move(typeface));
-        }
-        if (!has_packaged_glyph(static_cast<std::uint32_t>('?'), loaded.typefaces)) {
-            set_error(error, "Vellum packaged fonts have no unsupported-text placeholder");
-            return nullptr;
-        }
-        loaded.collection = sk_make_sp<skia::textlayout::FontCollection>();
-        loaded.collection->setAssetFontManager(provider);
-        loaded.collection->setDefaultFontManager(provider, std::vector<SkString>{
-            SkString("Inter"), SkString("Noto Sans JP"), SkString("Noto Sans Arabic")});
-        loaded.collection->disableFontFallback();
-        cached = font_cache.emplace(cache_key, std::move(loaded)).first;
-    }
-    return &cached->second;
-}
-
-// The families a run is shaped with, in the order the shaper tries them for
-// each character: its own, then the packaged fallbacks.
-std::vector<SkString> run_families(const TextStyle& style) {
-    return {
-        SkString(style.font_family.empty() ? "Inter" : style.font_family.c_str()),
-        SkString("Noto Sans Arabic"),
-        SkString("Noto Sans JP"),
-        SkString("Inter"),
-    };
-}
-
-// Whether a face of one of `families` has a glyph for `code_point`.
-bool families_cover(std::uint32_t code_point, const std::vector<SkString>& families,
-                    const PackagedFontSet& fonts) {
-    if (is_nonrendering_code_point(code_point)) return true;
-    for (std::size_t index = 0; index < fonts.typefaces.size(); ++index) {
-        const bool listed = std::any_of(families.begin(), families.end(),
-            [&](const SkString& family) { return family.equals(fonts.families[index]); });
-        if (listed &&
-            fonts.typefaces[index]->unicharToGlyph(static_cast<SkUnichar>(code_point)) != 0U) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// The code points of `text` that the run cannot draw, as `build_text_paragraph`
-// decides it: from version 13 those no face of the run's families covers,
-// leaving out the default-ignorable ones the shaper draws as nothing; before
-// it those no packaged face covers, which it replaces with `?`. Invalid
-// sequences draw as `?` at every version and are not reported. Results are
-// remembered per text in `fonts`. The caller holds `text_mutex`.
-void collect_missing_glyphs(std::string_view text, const TextStyle& style,
-                            bool missing_glyph_box, PackagedFontSet& fonts,
-                            std::vector<std::uint32_t>& missing) {
-    if (std::all_of(text.begin(), text.end(),
-                    [](char byte) { return static_cast<unsigned char>(byte) < 0x80U; })) {
-        return;
-    }
-    const auto& family = style.font_family;
-    std::string key = (missing_glyph_box ? "b" : "q") + std::to_string(family.size()) + ":";
-    key += family;
-    key += text;
-    if (const auto found = fonts.missing.find(key); found != fonts.missing.end()) {
-        missing.insert(missing.end(), found->second.begin(), found->second.end());
-        return;
-    }
-    const auto families = run_families(style);
-    const auto& unicode = text_unicode();
-    std::vector<std::uint32_t> found;
-    for (std::size_t offset = 0U; offset < text.size();) {
-        const auto decoded = detail::decode_utf8(text, offset);
-        offset = decoded.end;
-        if (!decoded.valid) continue;
-        const bool covered = missing_glyph_box
-            ? families_cover(decoded.code_point, families, fonts) ||
-                  (unicode && unicode->isDefaultIgnorable(static_cast<SkUnichar>(decoded.code_point)))
-            : has_packaged_glyph(decoded.code_point, fonts.typefaces);
-        if (!covered) found.push_back(decoded.code_point);
-    }
-    constexpr std::size_t kMissingBudget = 8U * 1024U * 1024U;
-    const std::size_t bytes = key.size() + found.size() * sizeof(std::uint32_t) + 64U;
-    if (fonts.missing_bytes + bytes > kMissingBudget) {
-        fonts.missing.clear();
-        fonts.missing_bytes = 0;
-    }
-    missing.insert(missing.end(), found.begin(), found.end());
-    fonts.missing.emplace(std::move(key), std::move(found));
-    fonts.missing_bytes += bytes;
-}
-
 std::string code_point_name(std::uint32_t code_point) {
     std::array<char, 16> buffer{};
     std::snprintf(buffer.data(), buffer.size(), "U+%04X", code_point);
@@ -610,144 +421,112 @@ std::string code_point_name(std::uint32_t code_point) {
 // One `kTextGlyphMissingCode` warning for each text node of `scene` with
 // characters it cannot draw, in depth-first order.
 std::vector<LoweringDiagnostic> missing_glyph_diagnostics(const Scene& scene,
-                                                          std::string_view requested_directory) {
-    std::vector<LoweringDiagnostic> output;
-    const std::scoped_lock lock(text_mutex());
-    auto* fonts = packaged_fonts(font_directory(requested_directory), nullptr);
-    if (fonts == nullptr) return output;
-    const bool box = draws_missing_glyph_box(scene.scene_version);
+                                                          std::string_view directory) {
+    std::vector<const SceneNode*> nodes;
+    std::vector<std::size_t> first_query;
+    std::vector<detail::GlyphQuery> queries;
     const std::function<void(const SceneNode&)> walk = [&](const SceneNode& node) {
         if (node.kind == SceneNode::Kind::text) {
-            std::vector<std::uint32_t> missing;
-            if (node.text_runs.empty()) {
-                const TextStyle style{.font_family = node.font_family};
-                collect_missing_glyphs(node.text, style, box, *fonts, missing);
-            }
+            nodes.push_back(&node);
+            first_query.push_back(queries.size());
+            if (node.text_runs.empty()) queries.push_back({node.font_family, node.text});
             for (const auto& run : node.text_runs) {
-                collect_missing_glyphs(run.text, run.style, box, *fonts, missing);
-            }
-            std::sort(missing.begin(), missing.end());
-            missing.erase(std::unique(missing.begin(), missing.end()), missing.end());
-            if (!missing.empty()) {
-                std::string names;
-                for (const auto code_point : missing) {
-                    if (!names.empty()) names += ", ";
-                    names += code_point_name(code_point);
-                }
-                output.push_back({
-                    .severity = LoweringDiagnostic::Severity::warning,
-                    .disposition = LoweringDiagnostic::Disposition::unsupported,
-                    .code = std::string(kTextGlyphMissingCode),
-                    .node_id = node.id,
-                    .property = "text",
-                    .message = "text " + node.id + " has no packaged glyph for " + names +
-                               (box ? "; drawn as the missing-glyph box" : "; drawn as ?"),
-                });
+                queries.push_back({run.style.font_family, run.text});
             }
         }
         for (const auto& child : node.children) walk(child);
     };
     walk(scene.root);
+    std::vector<LoweringDiagnostic> output;
+    if (queries.empty()) return output;
+    const bool box = draws_missing_glyph_box(scene.scene_version);
+    const auto found = detail::find_missing_glyphs(
+        directory, queries,
+        box ? detail::MissingGlyphs::notdef_box : detail::MissingGlyphs::question_mark);
+    if (found.size() != queries.size()) return output;
+    for (std::size_t index = 0; index < nodes.size(); ++index) {
+        const auto end = index + 1U < nodes.size() ? first_query[index + 1U] : queries.size();
+        std::vector<std::uint32_t> missing;
+        for (auto query = first_query[index]; query < end; ++query) {
+            missing.insert(missing.end(), found[query].begin(), found[query].end());
+        }
+        std::sort(missing.begin(), missing.end());
+        missing.erase(std::unique(missing.begin(), missing.end()), missing.end());
+        if (missing.empty()) continue;
+        std::string names;
+        for (const auto code_point : missing) {
+            if (!names.empty()) names += ", ";
+            names += code_point_name(code_point);
+        }
+        const auto& node = *nodes[index];
+        output.push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(kTextGlyphMissingCode),
+            .node_id = node.id,
+            .property = "text",
+            .message = "text " + node.id + " has no packaged glyph for " + names +
+                       (box ? "; drawn as the missing-glyph box" : "; drawn as ?"),
+        });
+    }
     return output;
 }
 
-skia::textlayout::TextAlign skia_text_align(TextAlign align) {
+detail::ParagraphAlign paragraph_align(TextAlign align) {
     switch (align) {
-    case TextAlign::start: return skia::textlayout::TextAlign::kStart;
-    case TextAlign::center: return skia::textlayout::TextAlign::kCenter;
-    case TextAlign::end: return skia::textlayout::TextAlign::kEnd;
-    case TextAlign::justify: return skia::textlayout::TextAlign::kJustify;
+    case TextAlign::start: return detail::ParagraphAlign::start;
+    case TextAlign::center: return detail::ParagraphAlign::center;
+    case TextAlign::end: return detail::ParagraphAlign::end;
+    case TextAlign::justify: return detail::ParagraphAlign::justify;
     }
-    return skia::textlayout::TextAlign::kStart;
+    return detail::ParagraphAlign::start;
 }
 
-// Shapes and lays out the paragraph `request` describes. Without a layout it
-// is one unwrapped, left-aligned line, as every scene before version 13 drew
-// it; with one it wraps at `request.width`.
+// Shapes the paragraph `key` describes through `detail::shape_paragraph`.
+// Without a layout it is one unwrapped, left-aligned line, as every scene
+// before version 13 drew it; with one it wraps at `key.width`.
 bool build_text_paragraph(
-    const detail::ParagraphKey& request,
+    const detail::ParagraphKey& key,
     detail::CachedParagraph& built,
     std::string* error) {
-    const std::scoped_lock lock(text_mutex());
-    const auto& unicode = text_unicode();
-    if (!unicode) {
-        set_error(error, "Vellum could not create the ICU text segmenter");
-        return false;
-    }
-    const auto* fonts = packaged_fonts(font_directory(request.font_directory), error);
-    if (fonts == nullptr) return false;
-
-    skia::textlayout::ParagraphStyle paragraph_style;
-    if (request.layout) {
-        paragraph_style.setTextAlign(skia_text_align(request.layout->align));
-        if (request.layout->max_lines > 0U) {
-            paragraph_style.setMaxLines(request.layout->max_lines);
-        }
-        if (request.layout->ellipsis) paragraph_style.setEllipsis(SkString("\xE2\x80\xA6"));
-    } else {
-        paragraph_style.setMaxLines(1U);
-        paragraph_style.setTextAlign(skia::textlayout::TextAlign::kLeft);
-    }
-    auto builder = skia::textlayout::ParagraphBuilder::make(
-        paragraph_style, fonts->collection, unicode);
-    if (!builder) {
-        set_error(error, "Vellum could not create the attributed-text paragraph builder");
-        return false;
-    }
-
-    for (const auto& requested : request.runs) {
-        if (requested.text.empty()) continue;
-        skia::textlayout::TextStyle style;
-        style.setFontFamilies(run_families(requested.style));
-        style.setFontStyle(font_style(requested.style));
-        style.setFontSize(std::max(1.0F, requested.style.font_size));
-        style.setLetterSpacing(requested.style.letter_spacing);
-        style.setFontEdging(SkFont::Edging::kAntiAlias);
-        if (request.layout && request.layout->line_height > 0.0F) {
-            style.setHeight(request.layout->line_height);
-            style.setHeightOverride(true);
-            style.setHalfLeading(true);
-        }
-        SkPaint foreground;
-        foreground.setAntiAlias(true);
-        foreground.setColor4f(sk_color(requested.style.color));
-        style.setForegroundPaint(foreground);
-        int decoration = skia::textlayout::kNoDecoration;
-        if (requested.style.underline) decoration |= skia::textlayout::kUnderline;
-        if (requested.style.strikethrough) decoration |= skia::textlayout::kLineThrough;
-        style.setDecoration(static_cast<skia::textlayout::TextDecoration>(decoration));
-        style.setDecorationColor(foreground.getColor());
-        builder->pushStyle(style);
-        const auto text = request.missing_glyph_box
-            ? detail::replace_unsupported_text(requested.text, [](std::uint32_t) { return true; })
-            : replace_unsupported_text(requested.text, fonts->typefaces);
-        builder->addText(text.data(), text.size());
-        builder->pop();
-    }
-
-    auto paragraph = builder->Build();
-    if (!paragraph) {
-        set_error(error, "Vellum could not build the attributed-text paragraph");
-        return false;
-    }
-    if (request.layout) {
-        paragraph->layout(std::isfinite(request.width) ? std::max(0.0F, request.width)
-                                                       : 1000000000.0F);
-    } else {
-        paragraph->layout(1000000000.0F);
-    }
-    built.metrics = {
-        .width = request.layout ? paragraph->getLongestLine() : paragraph->getMaxIntrinsicWidth(),
-        .ascent = paragraph->getAlphabeticBaseline(),
-        .descent = std::max(
-            0.0F, paragraph->getHeight() - paragraph->getAlphabeticBaseline()),
-        .baseline = paragraph->getAlphabeticBaseline(),
+    detail::ParagraphRequest request{
+        .font_directory = key.font_directory,
+        .missing_glyphs = key.missing_glyph_box ? detail::MissingGlyphs::notdef_box
+                                                : detail::MissingGlyphs::question_mark,
     };
-    if (request.layout) built.line_count = static_cast<std::uint32_t>(paragraph->lineNumber());
-    const auto unresolved = paragraph->unresolvedCodepoints();
-    built.unresolved.assign(unresolved.begin(), unresolved.end());
-    std::sort(built.unresolved.begin(), built.unresolved.end());
-    built.paragraph = std::shared_ptr<skia::textlayout::Paragraph>(std::move(paragraph));
+    request.runs.reserve(key.runs.size());
+    for (const auto& run : key.runs) {
+        request.runs.push_back({
+            .text = run.text,
+            .style = {.font_family = run.style.font_family,
+                      .font_weight = run.style.font_weight,
+                      .font_size = run.style.font_size,
+                      .letter_spacing = run.style.letter_spacing,
+                      .color = sk_color(run.style.color),
+                      .underline = run.style.underline,
+                      .strikethrough = run.style.strikethrough},
+        });
+    }
+    if (key.layout) {
+        request.wrap = detail::ParagraphWrap{
+            .width = key.width,
+            .align = paragraph_align(key.layout->align),
+            .line_height = key.layout->line_height,
+            .max_lines = key.layout->max_lines,
+            .ellipsis = key.layout->ellipsis,
+        };
+    }
+    detail::ShapedParagraph shaped;
+    if (!detail::shape_paragraph(request, shaped, error)) return false;
+    built.paragraph = std::move(shaped.paragraph);
+    built.metrics = {
+        .width = shaped.width,
+        .ascent = shaped.ascent,
+        .descent = shaped.descent,
+        .baseline = shaped.baseline,
+    };
+    built.line_count = shaped.lines;
+    built.unresolved = std::move(shaped.unresolved);
     return true;
 }
 

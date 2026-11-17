@@ -285,6 +285,11 @@ scanned again on the next frame. The
 paragraph cache keys on the layout, the width it wraps at and this policy, so
 the same runs at two versions or widths never share a paragraph, and every
 paragraph is still built and laid out under the one SkParagraph lock.
+The shaping and font-fallback setup itself lives in
+`graphics/src/text_paragraph.hpp` and takes no scene types: a request of runs,
+styles, a wrap width and a missing-glyph policy returns a laid-out paragraph.
+The scene glue (style mapping, versioning, damage and diagnostics) stays in the
+renderer, so the setup can later move to a shared Skia-level library.
 
 ## Blend modes
 
