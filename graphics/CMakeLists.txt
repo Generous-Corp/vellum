@@ -51,6 +51,7 @@ if(VELLUM_HAS_SKIA_DAWN)
     # definitions avoids a private Skia symbol crossing a dylib boundary.
     target_sources(vellum-skia-dawn-provider PRIVATE
         src/dawn_bootstrap.cpp
+        src/frame_trace.cpp
         src/image_decode.mm
         src/skia_dawn_surface.mm)
     target_include_directories(vellum-skia-dawn-provider PRIVATE
