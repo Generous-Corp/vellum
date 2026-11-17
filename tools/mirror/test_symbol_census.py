@@ -45,6 +45,16 @@ def run(nm_by_image: dict[str, str], otool_by_image: dict[str, str] | None = Non
                      demangle=demangle)
 
 
+def stripped_classes(*names: str) -> str:
+    """Entries with no _OBJC_CLASS_$_ symbol: the name survives only in class_ro_t."""
+    rows = ["Contents of (__DATA_CONST,__objc_classlist) section"]
+    for n in names:
+        rows += ["0000000000004000 0x5000", "    isa        0x5028", "    data       0x4000",
+                 "        flags          0x0", f"        name           0x9000 {n}", "        baseMethods    0x0",
+                 "            name    0x55df8 (0x1f0120)"]
+    return "\n".join(rows) + "\n"
+
+
 def classes(*names: str) -> str:
     rows = ["Contents of (__DATA,__objc_classlist) section"]
     rows += [f"0000000000004000 0x5000 _OBJC_CLASS_$_{n}" for n in names]
@@ -182,6 +192,29 @@ class SymbolCensusTest(unittest.TestCase):
         _, findings = run(nm, {"a.dylib": classes("Menu"), "b.dylib": classes("Menu", "Other")})
         self.assertEqual(len(findings), 1)
         self.assertIn("Objective-C class Menu", findings[0])
+
+    def test_stripped_class_is_read_from_its_metadata(self) -> None:
+        self.assertEqual(sc.objc_classes(stripped_classes("Menu", "Other")), {"Menu", "Other"})
+        # a method's own `name` field, one indent deeper, is not the class name
+        self.assertNotIn("0x55df8", sc.objc_classes(stripped_classes("Menu")))
+
+    def test_same_stripped_class_in_two_images_fails(self) -> None:
+        nm = {"a.dylib": listing(sym(FN)), "b.dylib": listing(sym("_other"))}
+        _, findings = run(nm, {"a.dylib": stripped_classes("Menu"), "b.dylib": stripped_classes("Menu")})
+        self.assertEqual(len(findings), 1)
+        self.assertIn("Objective-C class Menu", findings[0])
+
+    def test_symbol_and_metadata_names_agree_for_a_symbolled_class(self) -> None:
+        rows = ["Contents of (__DATA_CONST,__objc_classlist) section",
+                "0000000000004000 0x5000 _OBJC_CLASS_$_Menu", "    data       0x4000",
+                "        name           0x9000 Menu"]
+        self.assertEqual(sc.objc_classes("\n".join(rows) + "\n"), {"Menu"})
+
+    def test_class_entry_with_no_name_is_an_error_not_a_skipped_class(self) -> None:
+        rows = ["Contents of (__DATA_CONST,__objc_classlist) section", "0000000000004000 0x5000",
+                "    isa        0x5028"]
+        with self.assertRaises(RuntimeError):
+            sc.objc_classes("\n".join(rows) + "\n")
 
     def test_listing_an_image_twice_is_caught(self) -> None:
         # The census's own plant: the same image seen twice.
