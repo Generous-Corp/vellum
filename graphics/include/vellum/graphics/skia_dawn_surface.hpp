@@ -201,8 +201,8 @@ public:
         const Config& config, std::string* error = nullptr);
     /// Creates a surface that draws with `device`, shared with every other
     /// surface created with it. A null `device` gives the surface its own, as
-    /// `create(config)` does.
-    static std::unique_ptr<SkiaDawnSurface> create(
+    /// `create` does.
+    static std::unique_ptr<SkiaDawnSurface> create_with_device(
         const Config& config, std::shared_ptr<SkiaDawnDevice> device,
         std::string* error = nullptr);
     [[nodiscard]] static bool measure_text(

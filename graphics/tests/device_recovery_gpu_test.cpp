@@ -14,9 +14,17 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace {
+
+// `&SkiaDawnSurface::create` must name one function, as installed consumers
+// take its address.
+static_assert(std::is_same_v<decltype(&vellum::graphics::SkiaDawnSurface::create),
+                             std::unique_ptr<vellum::graphics::SkiaDawnSurface> (*)(
+                                 const vellum::graphics::SkiaDawnSurface::Config&,
+                                 std::string*)>);
 
 using namespace vellum::graphics;
 namespace harness = vellum::graphics::capture_harness;
@@ -120,7 +128,7 @@ Scene base_scene() {
 
 std::unique_ptr<SkiaDawnSurface> make_surface(std::shared_ptr<SkiaDawnDevice> device = nullptr) {
     std::string error;
-    auto surface = SkiaDawnSurface::create(
+    auto surface = SkiaDawnSurface::create_with_device(
         {.width = kWidth, .height = kHeight, .scale = kScale}, std::move(device), &error);
     expect(surface != nullptr, "offscreen surface is created", error);
     return surface;

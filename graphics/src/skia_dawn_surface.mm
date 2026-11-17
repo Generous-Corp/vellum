@@ -3530,10 +3530,10 @@ SkiaDawnSurface& SkiaDawnSurface::operator=(SkiaDawnSurface&&) noexcept = defaul
 
 std::unique_ptr<SkiaDawnSurface> SkiaDawnSurface::create(
     const Config& config, std::string* error) {
-    return create(config, nullptr, error);
+    return create_with_device(config, nullptr, error);
 }
 
-std::unique_ptr<SkiaDawnSurface> SkiaDawnSurface::create(
+std::unique_ptr<SkiaDawnSurface> SkiaDawnSurface::create_with_device(
     const Config& config, std::shared_ptr<SkiaDawnDevice> device, std::string* error) {
     auto implementation = std::make_unique<Impl>();
     if (!implementation->initialize(config, device ? device->core_ : nullptr, error)) {
