@@ -453,17 +453,24 @@ class PlatformScopeTest(unittest.TestCase):
         # Control: the adding row's origin, Pulp path and commits.
         self.assertEqual(fp.replay_scoped([adding, self.scoped(["windows-x64"])], set())[3], [])
 
-    def test_the_landed_ledger_compiles_everything_on_macos_only(self) -> None:
-        # Today's ports.json names no scope, so every source it adds keeps
-        # compiling exactly where it did: on macOS.
+    def test_the_landed_ledger_scopes_only_rows_that_name_a_platform(self) -> None:
+        # A row that names no scope keeps compiling exactly where it did, on
+        # macOS; a source compiles elsewhere only when its adding row says so.
         repo = HERE.parents[1]
         rows, errors = fp.load(repo)
         self.assertEqual(errors, [])
-        compiled = [r["framework_path"] for r in rows if r["change"] == "added" and fp.compiled(r["framework_path"])]
-        self.assertTrue(compiled, "the landed ledger adds no compiled source; this check sees nothing")
+        added = {r["framework_path"]: r for r in rows
+                 if r["change"] == "added" and fp.compiled(r["framework_path"])}
+        self.assertTrue(added, "the landed ledger adds no compiled source; this check sees nothing")
         _, _, scopes, replay_errors = fp.replay_scoped(rows, set())
         self.assertEqual(replay_errors, [])
-        self.assertEqual({scopes[path] for path in compiled}, {frozenset({"macos-arm64"})})
+        unscoped = [path for path, r in added.items() if "platforms" not in r]
+        self.assertTrue(unscoped, "no unscoped compiled row; this check sees nothing")
+        self.assertEqual({scopes[path] for path in unscoped}, {frozenset({"macos-arm64"})})
+        for path, r in added.items():
+            if "platforms" in r:
+                self.assertEqual(scopes[path], frozenset(r["platforms"]))
+                self.assertNotIn("macos-arm64", scopes[path], path)
 
     def test_scopes_reads_the_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
