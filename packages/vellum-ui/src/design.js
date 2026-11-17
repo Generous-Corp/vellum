@@ -447,6 +447,7 @@ function materializeNode(node, context, depth, root = false) {
     context.ids.add(node.id);
     if (!Array.isArray(node.children)) throw new Error(`design node ${node.id} requires children`);
     const { style, refs } = retainedStyle(context, node, context.viewport, root);
+    if (node.kind === 'vector') delete refs.backgroundColor;
     const vectorField = vectorAssetField(node);
     if (vectorField !== null && context.version < VECTOR_ASSET_VERSION) {
         throw new Error(

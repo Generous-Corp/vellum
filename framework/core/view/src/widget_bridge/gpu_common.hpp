@@ -9,6 +9,7 @@
 #endif
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -47,6 +48,9 @@ struct WidgetBridge::NativeGpuBridgeState {
         wgpu::Texture texture;
 #endif
         bool configured = false;
+        // True once a pass has written the canvas texture. A canvas that holds
+        // nothing yet has nothing for a load operation to keep.
+        bool has_content = false;
     };
 
     struct TextureState {
@@ -65,6 +69,11 @@ struct WidgetBridge::NativeGpuBridgeState {
 
     std::unordered_map<std::string, CanvasContextState> canvases;
     std::unordered_map<std::string, TextureState> textures;
+    // Depth textures the buffered draws use, by the script's depth attachment
+    // key. A depth texture belongs to its attachment, not to a colour target.
+    // Type-erased because the GPU types are visible only where the draw code
+    // reads it: a map from key to wgpu::Texture.
+    std::shared_ptr<void> pass_depths;
     uint64_t next_texture_id = 1;
     detail::ScriptErrorScopes error_scopes;
 };

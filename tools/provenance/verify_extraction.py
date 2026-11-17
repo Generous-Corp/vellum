@@ -137,7 +137,13 @@ RENAMED_MIRROR_PATTERN = _ALL_NATIVE_PATTERNS[RENAMED_MIRROR_RULE]
 RENAMED_MIRROR_SCAN_ROOTS = EXPECTED_ACTIVE_ROOTS + ("components", "product", "tools", "web")
 # Paths that must spell the forbidden names: the consumer built against the
 # installed mirror, and the policy, its installer copy and their tests.
-RENAMED_MIRROR_EXEMPT_PREFIXES: tuple[str, ...] = ()
+RENAMED_MIRROR_EXEMPT_PREFIXES: tuple[str, ...] = (
+    # The design-import entry point wraps the mirrored design-import unit, so it
+    # names that unit's headers and namespace. Each prefix ends in "/", so it
+    # matches the folder and everything below it, never a sibling whose name
+    # merely starts the same way.
+    "authoring/design_pipeline/",
+)
 # The framework units' behavior tests include and call the units by their
 # names, so the renamed-mirror rule does not read them. A test only consumes:
 # it may hold flat files of the shapes below and may not open a `vellum`
