@@ -264,6 +264,11 @@ if(VELLUM_BUILD_TESTS)
         target_link_libraries(vellum-plot-test PRIVATE Vellum::Graphics Threads::Threads)
         add_test(NAME vellum.plot COMMAND vellum-plot-test)
 
+        add_executable(vellum-text-layout-test
+            graphics/tests/text_layout_test.cpp)
+        target_link_libraries(vellum-text-layout-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.text-layout COMMAND vellum-text-layout-test)
+
         add_executable(vellum-damage-test
             graphics/tests/damage_test.cpp)
         target_link_libraries(vellum-damage-test PRIVATE Vellum::Graphics)
@@ -660,6 +665,10 @@ endif()
 if(TARGET vellum-authoring)
     install(DIRECTORY authoring/include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 endif()
+
+# Every test carries one of the pr-fast, gpu or slow class labels.
+include(cmake/VellumTestClasses.cmake)
+vellum_apply_test_classes("${CMAKE_CURRENT_SOURCE_DIR}/scripts/ctest_classes.json")
 
 # The system and architectures the installed binaries are built for. The
 # package config reports "not found" to a consumer that targets others.
