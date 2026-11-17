@@ -51,6 +51,11 @@ void fail_device_recreations(std::uint32_t count) noexcept;
 /// the first creation of a device included.
 void fail_device_requests(std::uint32_t count) noexcept;
 
+/// Makes the next `count` plot draw operations fail. This is a test-only
+/// control for proving callers report a renderer failure instead of skipping
+/// the remaining pixel oracles.
+void fail_plot_draws(std::uint32_t count) noexcept;
+
 /// Makes the next `count` replacement devices lost as soon as they are created.
 void lose_recreated_devices(std::uint32_t count) noexcept;
 
