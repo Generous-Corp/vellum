@@ -317,6 +317,164 @@ depthPass({view: msaa.createView(), loadOp: 'clear', storeOp: 'store', clearValu
     CHECK(s.js_string("gpuErrors.join(' | ')").empty());
 }
 
+bool is_blue(const uint8_t* p) { return p[0] < 60 && p[1] < 60 && p[2] > 200; }
+bool is_yellow(const uint8_t* p) { return p[0] > 200 && p[1] > 200 && p[2] < 60; }
+
+// A pass into the canvas that loads the colour already there.
+constexpr const char* kLoadHelpers = R"JS(
+function loadAttachment() {
+    return {view: context.getCurrentTexture().createView(), loadOp: 'load', storeOp: 'store'};
+}
+function depthAttachment(texture, loadOp) {
+    return {view: texture.createView(), depthLoadOp: loadOp, depthClearValue: 1.0, depthStoreOp: 'store'};
+}
+function depthTexture() {
+    return dev.createTexture({size: {width: 64, height: 32}, format: 'depth24plus',
+                              usage: GPUTextureUsage.RENDER_ATTACHMENT});
+}
+)JS";
+
+FRAMEWORK_TEST(a_canvas_pass_that_loads_keeps_what_an_earlier_pass_drew) {
+    ScriptedCanvas s;
+    s.engine.evaluate(std::string(kSetup) + kLoadHelpers + R"JS(
+const encoder = dev.createCommandEncoder();
+let pass = encoder.beginRenderPass({colorAttachments: [colourAttachment()]});
+draw(pass, pipeline('1.0, 0.0, 0.0', false), quad(-1, 0, 0.5));
+pass.end();
+pass = encoder.beginRenderPass({colorAttachments: [loadAttachment()]});
+draw(pass, pipeline('0.0, 1.0, 0.0', false), quad(0, 1, 0.5));
+pass.end();
+dev.queue.submit([encoder.finish()]);
+)JS");
+    CHECK(draw_results(s) == "true,true");
+    CHECK(s.js_string("gpuErrors.join(' | ')").empty());
+    const auto r = paint_canvas(s);
+    report("canvas-load", r);
+    CHECK(r.ok());
+    if (!r.ok()) return;
+    CHECK(is_red(r.at(8, kHeight / 2)));
+    CHECK(is_green(r.at(56, kHeight / 2)));
+}
+
+FRAMEWORK_TEST(depth_belongs_to_the_depth_attachment_not_the_colour_target) {
+    // Pass 1 writes depth 0.2 over the left half of depth texture A. Pass 2
+    // clears depth texture B and writes 0.5 over the right half. Pass 3 loads A
+    // and draws at 0.8: A still holds 0.2 on the left, which rejects it, and 1.0
+    // on the right, which accepts it. Sharing one depth between the passes
+    // because they share a colour target gives the opposite result.
+    ScriptedCanvas s;
+    s.engine.evaluate(std::string(kSetup) + kLoadHelpers + R"JS(
+const a = depthTexture();
+const b = depthTexture();
+const encoder = dev.createCommandEncoder();
+let pass = encoder.beginRenderPass({colorAttachments: [colourAttachment()],
+                                    depthStencilAttachment: depthAttachment(a, 'clear')});
+draw(pass, pipeline('1.0, 0.0, 0.0', true), quad(-1, 0, 0.2));
+pass.end();
+pass = encoder.beginRenderPass({colorAttachments: [loadAttachment()],
+                                depthStencilAttachment: depthAttachment(b, 'clear')});
+draw(pass, pipeline('0.0, 1.0, 0.0', true), quad(0, 1, 0.5));
+pass.end();
+pass = encoder.beginRenderPass({colorAttachments: [loadAttachment()],
+                                depthStencilAttachment: depthAttachment(a, 'load')});
+draw(pass, pipeline('1.0, 1.0, 0.0', true), quad(-1, 1, 0.8));
+pass.end();
+dev.queue.submit([encoder.finish()]);
+)JS");
+    CHECK(draw_results(s) == "true,true,true");
+    CHECK(s.js_string("gpuErrors.join(' | ')").empty());
+    const auto r = paint_canvas(s);
+    report("depth-identity", r);
+    CHECK(r.ok());
+    if (!r.ok()) return;
+    CHECK(is_red(r.at(8, kHeight / 2)));
+    CHECK(is_yellow(r.at(56, kHeight / 2)));
+}
+
+FRAMEWORK_TEST(a_zero_count_draw_keeps_the_pass_clear_and_later_draws) {
+    // The canvas holds green. A pass clears to blue, issues draw(0) and
+    // drawIndexed(0), then draws red on the left: the right half must be the
+    // pass's blue, not the green left behind.
+    ScriptedCanvas s;
+    s.engine.evaluate(std::string(kSetup) + kLoadHelpers + R"JS(
+const indices = dev.createBuffer({size: 16, usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST});
+dev.queue.writeBuffer(indices, 0, new Uint32Array([0, 1, 2, 3]));
+const encoder = dev.createCommandEncoder();
+let pass = encoder.beginRenderPass({colorAttachments: [colourAttachment()]});
+draw(pass, pipeline('0.0, 1.0, 0.0', false), quad(-1, 1, 0.5));
+pass.end();
+pass = encoder.beginRenderPass({colorAttachments: [colourAttachment()]});
+const pipe = pipeline('1.0, 0.0, 0.0', false);
+pass.setPipeline(pipe);
+pass.setVertexBuffer(0, quad(-1, 0, 0.5));
+pass.draw(0);
+pass.setIndexBuffer(indices, 'uint32');
+pass.drawIndexed(0);
+pass.draw(6);
+pass.end();
+dev.queue.submit([encoder.finish()]);
+)JS");
+    CHECK(s.js_string("gpuErrors.join(' | ')").empty());
+    const auto r = paint_canvas(s);
+    report("zero-count", r);
+    CHECK(r.ok());
+    if (!r.ok()) return;
+    CHECK(is_red(r.at(8, kHeight / 2)));
+    CHECK(is_blue(r.at(56, kHeight / 2)));
+}
+
+FRAMEWORK_TEST(a_pass_with_only_a_zero_count_draw_still_clears) {
+    ScriptedCanvas s;
+    s.engine.evaluate(std::string(kSetup) + kLoadHelpers + R"JS(
+const encoder = dev.createCommandEncoder();
+let pass = encoder.beginRenderPass({colorAttachments: [colourAttachment()]});
+draw(pass, pipeline('0.0, 1.0, 0.0', false), quad(-1, 1, 0.5));
+pass.end();
+pass = encoder.beginRenderPass({colorAttachments: [colourAttachment()]});
+pass.setPipeline(pipeline('1.0, 0.0, 0.0', false));
+pass.setVertexBuffer(0, quad(-1, 0, 0.5));
+pass.draw(0);
+pass.end();
+dev.queue.submit([encoder.finish()]);
+)JS");
+    CHECK(s.js_string("gpuErrors.join(' | ')").empty());
+    const auto r = paint_canvas(s);
+    report("zero-only", r);
+    CHECK(r.ok());
+    if (!r.ok()) return;
+    CHECK(is_blue(r.at(8, kHeight / 2)));
+    CHECK(is_blue(r.at(56, kHeight / 2)));
+}
+
+FRAMEWORK_TEST(an_empty_pass_still_applies_its_depth_clear) {
+    // Near depth, then an empty pass that clears depth, then a far draw that
+    // loads depth: the far draw must land everywhere.
+    ScriptedCanvas s;
+    s.engine.evaluate(std::string(kSetup) + kLoadHelpers + R"JS(
+const d = depthTexture();
+const encoder = dev.createCommandEncoder();
+let pass = encoder.beginRenderPass({colorAttachments: [colourAttachment()],
+                                    depthStencilAttachment: depthAttachment(d, 'clear')});
+draw(pass, pipeline('1.0, 0.0, 0.0', true), quad(-1, 0, 0.2));
+pass.end();
+pass = encoder.beginRenderPass({colorAttachments: [loadAttachment()],
+                                depthStencilAttachment: depthAttachment(d, 'clear')});
+pass.end();
+pass = encoder.beginRenderPass({colorAttachments: [loadAttachment()],
+                                depthStencilAttachment: depthAttachment(d, 'load')});
+draw(pass, pipeline('0.0, 1.0, 0.0', true), quad(-1, 1, 0.8));
+pass.end();
+dev.queue.submit([encoder.finish()]);
+)JS");
+    CHECK(s.js_string("gpuErrors.join(' | ')").empty());
+    const auto r = paint_canvas(s);
+    report("empty-depth-pass", r);
+    CHECK(r.ok());
+    if (!r.ok()) return;
+    CHECK(is_green(r.at(8, kHeight / 2)));
+    CHECK(is_green(r.at(56, kHeight / 2)));
+}
+
 } // namespace
 
 int main() {

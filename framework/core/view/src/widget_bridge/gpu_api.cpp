@@ -274,6 +274,7 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
         state.usage = usage;
         state.alpha_mode = alpha_mode;
         state.configured = false;
+        state.has_content = false;
 
         wgpu::TextureDescriptor texture_desc{};
         texture_desc.label = "Pulp Native GPUCanvasContext";
@@ -682,6 +683,7 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
 
         auto command_buffer = encoder.Finish();
         queue_ptr->Submit(1, &command_buffer);
+        it->second.has_content = true;
 
         // Surface queue.submit success in the runtime log so device walks can
         // grep `PULP_WEBGPU_BRIDGE: queue.submit ok` without instrumenting JS.
@@ -1128,6 +1130,7 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
 
         auto command_buffer = encoder.Finish();
         queue_ptr->Submit(1, &command_buffer);
+        it->second.has_content = true;
         return choc::value::createBool(true);
 #endif
     });
@@ -1157,9 +1160,13 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
         auto load_op = payload.hasObjectMember("loadOp") ? payload["loadOp"].getWithDefault<std::string>("load") : "load";
         auto store_op = payload.hasObjectMember("storeOp") ? payload["storeOp"].getWithDefault<std::string>("store") : "store";
 
-        if ((canvas_id.empty() && target_texture_id.empty()) || vertex_code.empty() || fragment_code.empty() ||
-            !payload.hasObjectMember("vertexBuffers") || !payload["vertexBuffers"].isArray() ||
-            payload["vertexBuffers"].size() == 0) {
+        // A "pass-only" payload carries a pass's attachment operations with no
+        // draw: an empty pass still clears or loads its colour and depth.
+        const bool pass_only = draw_type == "pass-only";
+        if ((canvas_id.empty() && target_texture_id.empty()) ||
+            (!pass_only && (vertex_code.empty() || fragment_code.empty() ||
+                            !payload.hasObjectMember("vertexBuffers") || !payload["vertexBuffers"].isArray() ||
+                            payload["vertexBuffers"].size() == 0))) {
             return choc::value::createBool(false);
         }
 
@@ -1187,6 +1194,139 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
 
         detail::DeviceErrorScopeGuard error_scope_guard(
             self.native_gpu_bridge_state_->error_scopes, self.gpu_surface_, "buffered draw");
+
+        // The colour and depth attachments of one replayed pass. A script pass
+        // replays as one native pass per draw: only the first (`passDrawIndex`
+        // 0) applies the pass's load operations, and later draws load the
+        // colour and depth the earlier ones left, so a pass with several draws
+        // keeps all of them.
+        struct PassAttachments {
+            wgpu::TextureView color_view;
+            wgpu::TextureView depth_view;
+            wgpu::RenderPassColorAttachment color{};
+            wgpu::RenderPassDepthStencilAttachment depth{};
+            bool has_depth = false;
+        } attachments;
+        const bool first_draw_in_pass = !payload.hasObjectMember("passDrawIndex") ||
+                                        payload["passDrawIndex"].getWithDefault<int64_t>(0) <= 0;
+        const uint32_t target_sample_count = target_texture_state != nullptr
+            ? std::max<uint32_t>(1, target_texture_state->sample_count) : 1;
+
+        auto fill_pass_attachments = [&](bool want_depth) -> bool {
+            attachments.color_view = target_canvas_state != nullptr
+                ? target_canvas_state->texture.CreateView()
+                : target_texture_state->texture.CreateView();
+            if (!attachments.color_view) return false;
+
+            auto& color_attachment = attachments.color;
+            color_attachment.view = attachments.color_view;
+            color_attachment.loadOp = load_op == "clear" ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load;
+            // Every draw of a script pass replays as its own native pass and the
+            // next one loads this one's colour, so a requested `discard` must not
+            // discard here: the binding does not know which draw is the last, and
+            // the colour of a discarded pass is undefined for whoever reads it.
+            // Storing is always a valid reading of `discard`.
+            (void) store_op;
+            color_attachment.storeOp = wgpu::StoreOp::Store;
+            if (payload.hasObjectMember("clearValue") && payload["clearValue"].isObject()) {
+                auto clear_value = payload["clearValue"];
+                color_attachment.clearValue = {
+                    static_cast<float>(clear_value.hasObjectMember("r") ? clear_value["r"].getWithDefault<double>(0.0) : 0.0),
+                    static_cast<float>(clear_value.hasObjectMember("g") ? clear_value["g"].getWithDefault<double>(0.0) : 0.0),
+                    static_cast<float>(clear_value.hasObjectMember("b") ? clear_value["b"].getWithDefault<double>(0.0) : 0.0),
+                    static_cast<float>(clear_value.hasObjectMember("a") ? clear_value["a"].getWithDefault<double>(1.0) : 1.0)
+                };
+            }
+            // A canvas keeps alpha 1: draws write RGB only (the canvas pipeline's
+            // write mask), so the alpha a clear establishes is the alpha the
+            // canvas keeps, and Skia composites the RGB instead of blending
+            // alpha 0 against the card background. A requested load keeps the
+            // canvas as it is; only a canvas nothing has written yet, which has
+            // no colour to keep, is cleared to establish that alpha.
+            if (target_canvas_state != nullptr &&
+                (color_attachment.loadOp == wgpu::LoadOp::Clear || !target_canvas_state->has_content)) {
+                color_attachment.loadOp = wgpu::LoadOp::Clear;
+                color_attachment.clearValue.a = 1.0f;
+            }
+            if (!first_draw_in_pass) {
+                color_attachment.loadOp = wgpu::LoadOp::Load;
+            }
+
+            // The depth texture belongs to the pass's depth attachment, which the
+            // script names with a key, and outlives a single replayed draw. It is
+            // recreated when the target's size or sample count changes, so it
+            // always matches the colour attachment.
+            attachments.has_depth = false;
+            if (!want_depth) return true;
+            std::string depth_key;
+            if (payload.hasObjectMember("depthStencil") && payload["depthStencil"].isObject() &&
+                payload["depthStencil"].hasObjectMember("key")) {
+                depth_key = payload["depthStencil"]["key"].getWithDefault<std::string>("");
+            }
+            if (depth_key.empty()) depth_key = "target:" + (canvas_id.empty() ? target_texture_id : canvas_id);
+            auto& depth_texture = self.native_gpu_bridge_state_->pass_depths[depth_key];
+            const uint32_t depth_w = target_canvas_state ? target_canvas_state->width : target_texture_state->width;
+            const uint32_t depth_h = target_canvas_state ? target_canvas_state->height : target_texture_state->height;
+            bool fresh_depth = false;
+            if (!depth_texture || depth_texture.GetWidth() != depth_w || depth_texture.GetHeight() != depth_h ||
+                depth_texture.GetSampleCount() != target_sample_count) {
+                wgpu::TextureDescriptor depth_tex_desc{};
+                depth_tex_desc.size = {depth_w, depth_h, 1};
+                depth_tex_desc.sampleCount = target_sample_count;
+                depth_tex_desc.format = wgpu::TextureFormat::Depth24Plus;
+                depth_tex_desc.usage = wgpu::TextureUsage::RenderAttachment;
+                depth_texture = device_ptr->CreateTexture(&depth_tex_desc);
+                fresh_depth = true;
+            }
+            if (!depth_texture) return true;
+            auto& depth_attachment = attachments.depth;
+            attachments.depth_view = depth_texture.CreateView();
+            depth_attachment.view = attachments.depth_view;
+            depth_attachment.depthLoadOp = wgpu::LoadOp::Clear;
+            depth_attachment.depthStoreOp = wgpu::StoreOp::Store;
+            depth_attachment.depthClearValue = 1.0f;
+            if (payload.hasObjectMember("depthStencil") && payload["depthStencil"].isObject()) {
+                auto pass_depth = payload["depthStencil"];
+                if (pass_depth.hasObjectMember("depthLoadOp") &&
+                    pass_depth["depthLoadOp"].getWithDefault<std::string>("clear") == "load") {
+                    depth_attachment.depthLoadOp = wgpu::LoadOp::Load;
+                }
+                if (pass_depth.hasObjectMember("depthClearValue")) {
+                    depth_attachment.depthClearValue = static_cast<float>(
+                        std::clamp(pass_depth["depthClearValue"].getWithDefault<double>(1.0), 0.0, 1.0));
+                }
+            }
+            // A depth texture created just now holds nothing to load.
+            if (!first_draw_in_pass && !fresh_depth) {
+                depth_attachment.depthLoadOp = wgpu::LoadOp::Load;
+            } else if (fresh_depth) {
+                depth_attachment.depthLoadOp = wgpu::LoadOp::Clear;
+            }
+            attachments.has_depth = true;
+            return true;
+        };
+
+        if (pass_only) {
+            if (!fill_pass_attachments(payload.hasObjectMember("depthStencil") && payload["depthStencil"].isObject())) {
+                return choc::value::createBool(false);
+            }
+            wgpu::RenderPassDescriptor empty_pass_desc{};
+            empty_pass_desc.colorAttachmentCount = 1;
+            empty_pass_desc.colorAttachments = &attachments.color;
+            if (attachments.has_depth) empty_pass_desc.depthStencilAttachment = &attachments.depth;
+            wgpu::CommandEncoderDescriptor empty_encoder_desc{};
+            auto empty_encoder = device_ptr->CreateCommandEncoder(&empty_encoder_desc);
+            if (!empty_encoder) return choc::value::createBool(false);
+            auto empty_pass = empty_encoder.BeginRenderPass(&empty_pass_desc);
+            empty_pass.End();
+            auto empty_commands = empty_encoder.Finish();
+            queue_ptr->Submit(1, &empty_commands);
+            if (target_canvas_state != nullptr) {
+                target_canvas_state->has_content = true;
+                self.request_repaint();
+            }
+            return choc::value::createBool(true);
+        }
 
         wgpu::ShaderSourceWGSL vertex_wgsl{};
         vertex_wgsl.code = vertex_code.c_str();
@@ -1690,8 +1830,6 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
         pipeline_desc.primitive.cullMode = wgpu::CullMode::None;
         // The pipeline draws at the target's sample count, which a multisampled
         // texture target sets; a canvas is single-sampled.
-        const uint32_t target_sample_count = target_texture_state != nullptr
-            ? std::max<uint32_t>(1, target_texture_state->sample_count) : 1;
         pipeline_desc.multisample.count = target_sample_count;
         pipeline_desc.multisample.mask = ~0u;
         pipeline_desc.multisample.alphaToCoverageEnabled = false;
@@ -1743,108 +1881,14 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
             bind_groups.push_back(bind_group);
         }
 
-        auto texture_view = target_canvas_state != nullptr
-            ? target_canvas_state->texture.CreateView()
-            : target_texture_state->texture.CreateView();
-        if (!texture_view) return choc::value::createBool(false);
-
-        // Script records each draw of a render pass as its own payload, and each
-        // payload replays as its own native pass. Only the first draw of the
-        // script pass (`passDrawIndex` 0) applies the pass's load operations;
-        // later draws load the colour and depth the earlier ones left, so a
-        // pass with several draws keeps all of them.
-        const bool first_draw_in_pass = !payload.hasObjectMember("passDrawIndex") ||
-                                        payload["passDrawIndex"].getWithDefault<int64_t>(0) <= 0;
-
-        wgpu::RenderPassColorAttachment color_attachment{};
-        color_attachment.view = texture_view;
-        color_attachment.loadOp = load_op == "clear" ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load;
-        // Every draw of a script pass replays as its own native pass and the
-        // next one loads this one's colour, so a requested `discard` must not
-        // discard here: the binding does not know which draw is the last, and
-        // the colour of a discarded pass is undefined for whoever reads it.
-        // Storing is always a valid reading of `discard`.
-        (void) store_op;
-        color_attachment.storeOp = wgpu::StoreOp::Store;
-        if (color_attachment.loadOp == wgpu::LoadOp::Clear && payload.hasObjectMember("clearValue") && payload["clearValue"].isObject()) {
-            auto clear_value = payload["clearValue"];
-            color_attachment.clearValue = {
-                static_cast<float>(clear_value.hasObjectMember("r") ? clear_value["r"].getWithDefault<double>(0.0) : 0.0),
-                static_cast<float>(clear_value.hasObjectMember("g") ? clear_value["g"].getWithDefault<double>(0.0) : 0.0),
-                static_cast<float>(clear_value.hasObjectMember("b") ? clear_value["b"].getWithDefault<double>(0.0) : 0.0),
-                static_cast<float>(clear_value.hasObjectMember("a") ? clear_value["a"].getWithDefault<double>(1.0) : 1.0)
-            };
-        }
-        // For canvas-targeted draws, force loadOp=Clear with alpha=1 so the
-        // destination alpha starts opaque. Combined with the canvas-specific
-        // writeMask (RGB only, set above on the pipeline's color_target), this
-        // keeps the canvas swapchain alpha at 1 across all draws regardless of
-        // what alpha the shader emits. Without this, Three.js's composite
-        // (which writes alpha=0 for the canvas pass) leaves the canvas
-        // transparent and the canvasCard CSS background shows through.
-        if (target_canvas_state != nullptr) {
-            color_attachment.loadOp = wgpu::LoadOp::Clear;
-            color_attachment.clearValue.a = 1.0f;
-        }
-        if (!first_draw_in_pass) {
-            color_attachment.loadOp = wgpu::LoadOp::Load;
-        }
-
-        // The target's depth texture outlives a single replayed draw, so later
-        // draws of the same script pass test against the depth earlier ones
-        // wrote. It is recreated when the target's size or sample count
-        // changes, so it always matches the colour attachment.
-        wgpu::TextureView depth_view;
-        wgpu::RenderPassDepthStencilAttachment depth_attachment{};
-        if (has_depth) {
-            auto& depth_texture = target_canvas_state != nullptr ? target_canvas_state->pass_depth
-                                                                 : target_texture_state->pass_depth;
-            const uint32_t depth_w = target_canvas_state ? target_canvas_state->width : target_texture_state->width;
-            const uint32_t depth_h = target_canvas_state ? target_canvas_state->height : target_texture_state->height;
-            bool fresh_depth = false;
-            if (!depth_texture || depth_texture.GetWidth() != depth_w || depth_texture.GetHeight() != depth_h ||
-                depth_texture.GetSampleCount() != target_sample_count) {
-                wgpu::TextureDescriptor depth_tex_desc{};
-                depth_tex_desc.size = {depth_w, depth_h, 1};
-                depth_tex_desc.sampleCount = target_sample_count;
-                depth_tex_desc.format = wgpu::TextureFormat::Depth24Plus;
-                depth_tex_desc.usage = wgpu::TextureUsage::RenderAttachment;
-                depth_texture = device_ptr->CreateTexture(&depth_tex_desc);
-                fresh_depth = true;
-            }
-            if (depth_texture) {
-                depth_view = depth_texture.CreateView();
-                depth_attachment.view = depth_view;
-                depth_attachment.depthLoadOp = wgpu::LoadOp::Clear;
-                depth_attachment.depthStoreOp = wgpu::StoreOp::Store;
-                depth_attachment.depthClearValue = 1.0f;
-                if (payload.hasObjectMember("depthStencil") && payload["depthStencil"].isObject()) {
-                    auto pass_depth = payload["depthStencil"];
-                    if (pass_depth.hasObjectMember("depthLoadOp") &&
-                        pass_depth["depthLoadOp"].getWithDefault<std::string>("clear") == "load") {
-                        depth_attachment.depthLoadOp = wgpu::LoadOp::Load;
-                    }
-                    if (pass_depth.hasObjectMember("depthClearValue")) {
-                        depth_attachment.depthClearValue = static_cast<float>(
-                            std::clamp(pass_depth["depthClearValue"].getWithDefault<double>(1.0), 0.0, 1.0));
-                    }
-                }
-                // A depth texture created just now holds nothing to load.
-                if (!first_draw_in_pass && !fresh_depth) {
-                    depth_attachment.depthLoadOp = wgpu::LoadOp::Load;
-                } else if (fresh_depth) {
-                    depth_attachment.depthLoadOp = wgpu::LoadOp::Clear;
-                }
-            } else {
-                has_depth = false;
-            }
-        }
+        const bool want_depth = pipeline_has_depth || payload.hasObjectMember("depthStencil");
+        if (!fill_pass_attachments(want_depth)) return choc::value::createBool(false);
 
         wgpu::RenderPassDescriptor pass_desc{};
         pass_desc.colorAttachmentCount = 1;
-        pass_desc.colorAttachments = &color_attachment;
-        if (has_depth) {
-            pass_desc.depthStencilAttachment = &depth_attachment;
+        pass_desc.colorAttachments = &attachments.color;
+        if (attachments.has_depth) {
+            pass_desc.depthStencilAttachment = &attachments.depth;
         }
 
         wgpu::CommandEncoderDescriptor encoder_desc{};
@@ -1904,8 +1948,11 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
             auto first_index = static_cast<uint32_t>(std::max(0, payload.hasObjectMember("firstIndex") ? payload["firstIndex"].getWithDefault<int32_t>(0) : 0));
             auto base_vertex = static_cast<int32_t>(payload.hasObjectMember("baseVertex") ? payload["baseVertex"].getWithDefault<int32_t>(0) : 0);
             auto first_instance = static_cast<uint32_t>(std::max(0, payload.hasObjectMember("firstInstance") ? payload["firstInstance"].getWithDefault<int32_t>(0) : 0));
-            if (index_count == 0) return choc::value::createBool(false);
-            if (first_instance > 0 && device_ptr->HasFeature(wgpu::FeatureName::IndirectFirstInstance)) {
+            // A zero-count draw is legal: the pass still runs and applies its
+            // attachment operations.
+            if (index_count == 0) {
+                // nothing to draw
+            } else if (first_instance > 0 && device_ptr->HasFeature(wgpu::FeatureName::IndirectFirstInstance)) {
                 runtime::log_info(
                     "PULP_WEBGPU_BRIDGE: DrawIndexedIndirect/buffered firstInstance={} indexCount={} instanceCount={}",
                     first_instance, index_count, instance_count);
@@ -1925,8 +1972,9 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
             auto instance_count = static_cast<uint32_t>(std::max(1, payload.hasObjectMember("instanceCount") ? payload["instanceCount"].getWithDefault<int32_t>(1) : 1));
             auto first_vertex = static_cast<uint32_t>(std::max(0, payload.hasObjectMember("firstVertex") ? payload["firstVertex"].getWithDefault<int32_t>(0) : 0));
             auto first_instance = static_cast<uint32_t>(std::max(0, payload.hasObjectMember("firstInstance") ? payload["firstInstance"].getWithDefault<int32_t>(0) : 0));
-            if (vertex_count == 0) return choc::value::createBool(false);
-            if (first_instance > 0 && device_ptr->HasFeature(wgpu::FeatureName::IndirectFirstInstance)) {
+            if (vertex_count == 0) {
+                // nothing to draw
+            } else if (first_instance > 0 && device_ptr->HasFeature(wgpu::FeatureName::IndirectFirstInstance)) {
                 runtime::log_info(
                     "PULP_WEBGPU_BRIDGE: DrawIndirect/buffered firstInstance={} vertexCount={} instanceCount={}",
                     first_instance, vertex_count, instance_count);
@@ -1946,6 +1994,7 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
         auto command_buffer = encoder.Finish();
         queue_ptr->Submit(1, &command_buffer);
         if (target_canvas_state != nullptr) {
+            target_canvas_state->has_content = true;
             self.request_repaint();
         }
         return choc::value::createBool(true);

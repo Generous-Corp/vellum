@@ -45,10 +45,11 @@ struct WidgetBridge::NativeGpuBridgeState {
         std::string alpha_mode = "opaque";
 #ifdef PULP_HAS_SKIA
         wgpu::Texture texture;
-        // Depth the buffered draws of one script render pass share.
-        wgpu::Texture pass_depth;
 #endif
         bool configured = false;
+        // True once a pass has written the canvas texture. A canvas that holds
+        // nothing yet has nothing for a load operation to keep.
+        bool has_content = false;
     };
 
     struct TextureState {
@@ -61,14 +62,17 @@ struct WidgetBridge::NativeGpuBridgeState {
         uint32_t sample_count = 1;
 #ifdef PULP_HAS_SKIA
         wgpu::Texture texture;
-        // Depth the buffered draws of one script render pass share.
-        wgpu::Texture pass_depth;
 #endif
         bool configured = false;
     };
 
     std::unordered_map<std::string, CanvasContextState> canvases;
     std::unordered_map<std::string, TextureState> textures;
+#ifdef PULP_HAS_SKIA
+    // Depth textures the buffered draws use, by the script's depth attachment
+    // key. A depth texture belongs to its attachment, not to a colour target.
+    std::unordered_map<std::string, wgpu::Texture> pass_depths;
+#endif
     uint64_t next_texture_id = 1;
     detail::ScriptErrorScopes error_scopes;
 };

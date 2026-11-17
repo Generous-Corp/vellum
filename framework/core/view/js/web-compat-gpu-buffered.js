@@ -190,6 +190,51 @@ function __installNativeGpuBufferedDrawAugmentation() {
         return serializedBindGroups.length > 0 ? serializedBindGroups : null;
     }
 
+    var depthKeySequence = 0;
+
+    // Identity of a pass's depth attachment: the depth texture, so views of
+    // one texture share depth and different textures never do.
+    function depthAttachmentKey(depthStencil) {
+        var view = depthStencil && depthStencil.view ? depthStencil.view : null;
+        var texture = view && view.texture ? view.texture : view;
+        if (!texture) return "";
+        if (!texture._depthKey) texture._depthKey = "depth-" + (++depthKeySequence);
+        return texture._depthKey;
+    }
+
+    function serializeDepthAttachment(depthStencil) {
+        return {
+            key: depthAttachmentKey(depthStencil),
+            depthLoadOp: depthStencil.depthLoadOp || "load",
+            depthStoreOp: depthStencil.depthStoreOp || "store",
+            depthClearValue: depthStencil.depthClearValue == null ? 1 : Number(depthStencil.depthClearValue)
+        };
+    }
+
+    // A pass that drew nothing through the buffered path still owes its
+    // attachment operations: the colour load/clear and the depth load/clear.
+    function createPassOnlyPayload(attachment, attachmentView, depthStencil) {
+        if (!attachmentView || !attachmentView._nativeBridge || !depthStencil) return null;
+        var payload = { drawType: "pass-only", format: attachmentView.format || __mockPreferredCanvasFormat() };
+        if (attachmentView._nativeCanvasId) payload.canvasId = attachmentView._nativeCanvasId;
+        else if (attachmentView._nativeTextureId) payload.targetTextureId = attachmentView._nativeTextureId;
+        else return null;
+        if (attachment) {
+            payload.loadOp = attachment.loadOp || "load";
+            payload.storeOp = attachment.storeOp || "store";
+            if (attachment.clearValue) {
+                payload.clearValue = {
+                    r: Number(attachment.clearValue.r == null ? 0 : attachment.clearValue.r),
+                    g: Number(attachment.clearValue.g == null ? 0 : attachment.clearValue.g),
+                    b: Number(attachment.clearValue.b == null ? 0 : attachment.clearValue.b),
+                    a: Number(attachment.clearValue.a == null ? 1 : attachment.clearValue.a)
+                };
+            }
+        }
+        payload.depthStencil = serializeDepthAttachment(depthStencil);
+        return payload;
+    }
+
     function createBufferedDrawPayload(attachment, attachmentView, currentPipeline, currentBindGroups, currentVertexBuffers, currentIndexBuffer, drawDescriptor, depthStencil) {
         if (!attachmentView || !attachmentView._nativeBridge ||
             !currentPipeline || !currentPipeline._nativeBridge || !drawDescriptor) {
@@ -284,11 +329,7 @@ function __installNativeGpuBufferedDrawAugmentation() {
             };
         }
         if (depthStencil) {
-            payload.depthStencil = {
-                depthLoadOp: depthStencil.depthLoadOp || "load",
-                depthStoreOp: depthStencil.depthStoreOp || "store",
-                depthClearValue: depthStencil.depthClearValue == null ? 1 : Number(depthStencil.depthClearValue)
-            };
+            payload.depthStencil = serializeDepthAttachment(depthStencil);
         }
 
         var bindGroups = serializeBindGroups(currentBindGroups, vertexModule.code || "", fragmentModule.code || "");
@@ -531,6 +572,15 @@ function __installNativeGpuBufferedDrawAugmentation() {
         var originalEnd = encoder.end;
         encoder.end = function() {
             if (!emittedBufferedDraw && typeof init.onEnd === "function") {
+                var passOnlyPayload = createPassOnlyPayload(attachment, attachmentView, depthStencil);
+                if (passOnlyPayload) {
+                    // The native pass applies the colour clear too, so the
+                    // wrapped encoder's own clear is dropped.
+                    emittedBufferedDraw = true;
+                    init.onEnd({ type: "native-pass-only-buffered", payload: passOnlyPayload });
+                }
+            }
+            if (!emittedBufferedDraw && typeof init.onEnd === "function") {
                 var presentPayload = createPresentTexturePayload(attachmentView, currentPipeline, currentBindGroups);
                 if (presentPayload) {
                     init.onEnd({
@@ -563,6 +613,11 @@ function __installNativeGpuBufferedDrawAugmentation() {
                     if (!command) continue;
                     if (command.type === "native-clear-current-texture" && typeof __gpuQueueSubmitImpl === "function") {
                         __gpuQueueSubmitImpl(command.canvasId, command.r, command.g, command.b, command.a);
+                        continue;
+                    }
+                    if (command.type === "native-pass-only-buffered" &&
+                        typeof __gpuQueueDrawBufferedImpl === "function") {
+                        __gpuQueueDrawBufferedImpl(command.payload);
                         continue;
                     }
                     if (command.type === "native-draw-current-texture-buffered" &&
