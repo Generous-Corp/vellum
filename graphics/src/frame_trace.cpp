@@ -1,5 +1,7 @@
 #include "frame_trace.hpp"
 
+#include "native_trace_bridge.hpp"
+
 #include <unistd.h>
 
 #include <atomic>
@@ -77,6 +79,34 @@ void clear_frame_trace_sink() noexcept {
 
 bool frame_trace_enabled() noexcept {
     return detail::active_frame_trace_sink() != nullptr;
+}
+
+namespace {
+
+char native_sink_tag = 0;
+
+}  // namespace
+
+bool install_native_frame_trace() noexcept {
+    if (!vellum_native_trace_enabled()) return false;
+    FrameTraceSink sink;
+    sink.slice_begin = [](const char* name, void*) { vellum_native_trace_slice_begin(name); };
+    sink.slice_end = [](void*) { vellum_native_trace_slice_end(); };
+    sink.counter = [](const char* name, double value, void*) {
+        vellum_native_trace_counter(name, value);
+    };
+    sink.instant = [](const char* name, const char* detail, void*) {
+        vellum_native_trace_instant(name, detail);
+    };
+    sink.context = &native_sink_tag;
+    set_frame_trace_sink(sink);
+    return true;
+}
+
+void remove_native_frame_trace() noexcept { clear_frame_trace_sink_for(&native_sink_tag); }
+
+bool native_frame_trace_installed() noexcept {
+    return frame_trace_sink_context() == &native_sink_tag;
 }
 
 namespace {

@@ -8,7 +8,6 @@
 #include <vellum/graphics/damage.hpp>
 #include <vellum/graphics/frame_trace.hpp>
 #include <vellum/graphics/skia_dawn_surface.hpp>
-#include <vellum/render/frame_trace_adapter.hpp>
 #include <vellum/runtime/trace.hpp>
 #include <vellum/runtime/trace_session.hpp>
 
@@ -199,8 +198,8 @@ int main() {
 
     expect(!Tracing::active(), "no session is active at start");
     expect(Tracing::start({}, path.string(), 16u * 1024u), "the native session starts");
-    expect(vellum::render::install_native_frame_trace(), "the frame trace adapter installs");
-    expect(vellum::render::native_frame_trace_installed(), "the adapter's sink is the installed one");
+    expect(install_native_frame_trace(), "the frame trace adapter installs");
+    expect(native_frame_trace_installed(), "the adapter's sink is the installed one");
 
     Scene scene = harness::fixtures::combined(400.0F, 300.0F);
     scene.scene_version = kDamageModelSceneVersion;
@@ -223,16 +222,16 @@ int main() {
         TRACE_EVENT_INSTANT("render", "framework.native_trace_test.done");
     }
 
-    vellum::render::remove_native_frame_trace();
-    expect(!vellum::render::native_frame_trace_installed(), "removing the adapter clears its sink");
-    expect(vellum::render::install_native_frame_trace(), "the adapter installs again");
+    remove_native_frame_trace();
+    expect(!native_frame_trace_installed(), "removing the adapter clears its sink");
+    expect(install_native_frame_trace(), "the adapter installs again");
     int host_sink_tag = 0;
     FrameTraceSink host_sink;
     host_sink.context = &host_sink_tag;
     set_frame_trace_sink(host_sink);
-    expect(!vellum::render::native_frame_trace_installed(),
+    expect(!native_frame_trace_installed(),
            "a sink installed after the adapter replaces it");
-    vellum::render::remove_native_frame_trace();
+    remove_native_frame_trace();
     expect(frame_trace_sink_context() == &host_sink_tag,
            "removing the adapter leaves a host's sink installed");
     clear_frame_trace_sink();

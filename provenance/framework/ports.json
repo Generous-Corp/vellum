@@ -338,7 +338,7 @@
       "pulp_path": null,
       "pulp_commits": [],
       "framework_blob": null,
-      "reason": "Native adapter from the renderer's FrameTraceSink to the framework's Perfetto session, so one trace carries the framework's and the renderer's tracks. Vellum wrote this; Pulp has no frame trace sink. It compiles to stubs unless VELLUM_ENABLE_TRACING is on."
+      "reason": "Native emit API (plain C functions) from the renderer's frame trace to the framework's Perfetto session, so one trace carries the framework's and the renderer's tracks. Vellum wrote this; Pulp has no frame trace. It names no renderer type and compiles to no-op stubs unless VELLUM_ENABLE_TRACING is on. Scoped to macOS for now."
     },
     {
       "framework_path": "framework/core/render/src/frame_trace_adapter.cpp",
@@ -348,7 +348,7 @@
       "pulp_path": null,
       "pulp_commits": [],
       "framework_blob": null,
-      "reason": "Native adapter from the renderer's FrameTraceSink to the framework's Perfetto session, so one trace carries the framework's and the renderer's tracks. Vellum wrote this; Pulp has no frame trace sink. It compiles to stubs unless VELLUM_ENABLE_TRACING is on."
+      "reason": "Native emit API (plain C functions) from the renderer's frame trace to the framework's Perfetto session, so one trace carries the framework's and the renderer's tracks. Vellum wrote this; Pulp has no frame trace. It names no renderer type and compiles to no-op stubs unless VELLUM_ENABLE_TRACING is on. Scoped to macOS for now."
     }
   ]
 }

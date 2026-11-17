@@ -60,6 +60,19 @@ void clear_frame_trace_sink_for(void* context) noexcept;
 /// Whether a sink is installed.
 [[nodiscard]] bool frame_trace_enabled() noexcept;
 
+/// Installs a sink that forwards every signal to the framework's native
+/// Perfetto session (see docs/architecture/debugging.md), replacing any sink
+/// installed before it. Returns false, and installs nothing, unless the build
+/// has VELLUM_ENABLE_TRACING on.
+bool install_native_frame_trace() noexcept;
+
+/// Removes the sink `install_native_frame_trace` installed; a sink installed
+/// since stays.
+void remove_native_frame_trace() noexcept;
+
+/// Whether the native session's sink is the one now installed.
+[[nodiscard]] bool native_frame_trace_installed() noexcept;
+
 /// Records the frame trace events in memory and writes them as Chrome
 /// trace-event JSON, which https://ui.perfetto.dev and `trace_processor`
 /// open directly. Slices become slices, counters become counter tracks (named

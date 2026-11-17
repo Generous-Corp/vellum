@@ -1,25 +1,19 @@
 #pragma once
 
-namespace vellum::render {
-
-/// Routes the renderer's per-frame trace signals (`vellum/graphics/frame_trace.hpp`)
-/// into the process's native trace session (`vellum/runtime/trace_session.hpp`), so
-/// one Perfetto trace carries the framework's slices and the renderer's `graphics.*`
-/// slices, counters and instants. Slices and instants land in the "render"
-/// category; counters become counter tracks named after the renderer's counters.
+/// Emits trace slices, counters and instants into the framework's native
+/// Perfetto session. The functions take plain C types and name no renderer
+/// type, so the renderer can forward to them without including this header
+/// (it declares the same functions itself).
 ///
-/// Does nothing and returns false unless the build has `VELLUM_ENABLE_TRACING`
-/// on, so a caller needs no `#if`. It installs the process-wide frame trace sink,
-/// replacing any sink installed before it, and records only while a session is
-/// active (`Tracing::start`).
-bool install_native_frame_trace() noexcept;
-
-/// Removes the sink this adapter installed. A no-op when another sink has
-/// replaced it, or when it installed none, so a sink a host installed on its
-/// own is left alone.
-void remove_native_frame_trace() noexcept;
-
-/// Whether this adapter's sink is the one now installed.
-[[nodiscard]] bool native_frame_trace_installed() noexcept;
-
-}  // namespace vellum::render
+/// Without a build that has VELLUM_ENABLE_TRACING on, every function is a
+/// no-op and `vellum_native_trace_enabled` returns false. Slices and instants
+/// land in the "render" category; a counter becomes a counter track named
+/// after it. A slice opened by `vellum_native_trace_slice_begin` is closed by
+/// `vellum_native_trace_slice_end` on the same thread.
+extern "C" {
+bool vellum_native_trace_enabled(void);
+void vellum_native_trace_slice_begin(const char* name);
+void vellum_native_trace_slice_end(void);
+void vellum_native_trace_counter(const char* name, double value);
+void vellum_native_trace_instant(const char* name, const char* detail);
+}

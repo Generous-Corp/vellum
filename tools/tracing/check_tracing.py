@@ -106,6 +106,25 @@ def framework_compiles(ninja_text: str) -> list[tuple[str, str]]:
     return found
 
 
+def adapter_errors(ninja_text: str, build: Path) -> list[str]:
+    """The framework's trace adapter must not depend on the renderer."""
+    for block in ninja_text.split("\nbuild ")[1:]:
+        head = block.partition("\n\n")[0]
+        statement = re.match(r"(\S+\.o):\s+\S*COMPILER__\S+\s+\S*/frame_trace_adapter\.cpp", head.splitlines()[0])
+        if not statement:
+            continue
+        includes = re.search(r"^\s*INCLUDES = (.*)$", head, re.MULTILINE)
+        errors = []
+        if includes and "graphics/include" in includes.group(1):
+            errors.append("the framework trace adapter compiles with the renderer's include directory")
+        obj = build / statement.group(1)
+        undefined = subprocess.run(["nm", "-u", str(obj)], capture_output=True, text=True).stdout
+        if obj.exists() and "graphics" in undefined:
+            errors.append("the framework trace adapter object references renderer symbols")
+        return errors
+    return ["build.ninja has no compile of frame_trace_adapter.cpp"]
+
+
 def build_errors(repo: Path, build: Path, expect: str) -> list[str]:
     errors: list[str] = []
     cache = (build / "CMakeCache.txt").read_text(encoding="utf-8")
@@ -155,6 +174,7 @@ def build_errors(repo: Path, build: Path, expect: str) -> list[str]:
         if missing:
             errors.append(f"{len(missing)} of {len(compiles)} framework compiles lack "
                           f"PULP_TRACING_ENABLED=1, for example {missing[0]}")
+        errors += adapter_errors(text, build)
         if not libraries:
             errors.append("no built mirror library was found to check; build the unit libraries first")
         elif len(runtimes) != 1:

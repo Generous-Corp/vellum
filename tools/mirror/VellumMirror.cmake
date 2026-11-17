@@ -250,13 +250,6 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         # linked into the foundation unit below.
         if(VELLUM_ENABLE_TRACING)
             target_link_libraries("${_vellum_mirror_target}" PRIVATE vellum-tracing)
-            # The frame trace adapter beside gpu_runtime_hooks.cpp includes the
-            # renderer's sink header (function pointers only, nothing linked
-            # from graphics by this target; the provider holds both objects).
-            if(_vellum_mirror_target STREQUAL "pulp-gpu-device")
-                target_include_directories("${_vellum_mirror_target}" PRIVATE
-                    "${PROJECT_SOURCE_DIR}/graphics/include")
-            endif()
         endif()
         # Per-source options Pulp's own CMake sets on these sources (the plan
         # reads them from the mirrored CMake; source_compile_options.py).
