@@ -560,6 +560,22 @@ if(VELLUM_BUILD_TESTS)
         COMMAND "${Python3_EXECUTABLE}" -I tools/tracing/check_tracing.py
             source "${CMAKE_CURRENT_SOURCE_DIR}"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    foreach(_vellum_probe IN ITEMS Linux/x86_64 Windows/AMD64 Darwin/x86_64)
+        string(REPLACE "/" ";" _vellum_probe_parts "${_vellum_probe}")
+        list(GET _vellum_probe_parts 0 _vellum_probe_system)
+        list(GET _vellum_probe_parts 1 _vellum_probe_arch)
+        string(REPLACE "/" "-" _vellum_probe_name "${_vellum_probe}")
+        add_test(NAME vellum.tracing-refused-${_vellum_probe_name}
+            COMMAND "${CMAKE_COMMAND}" -S tools/tracing/platform-probe
+                -B "${CMAKE_CURRENT_BINARY_DIR}/tracing-probe-${_vellum_probe_name}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                -DVELLUM_ENABLE_TRACING=ON -DVELLUM_ENABLE_MIRROR=ON
+                -DVELLUM_TRACING_SYSTEM=${_vellum_probe_system}
+                -DVELLUM_TRACING_ARCH=${_vellum_probe_arch}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(vellum.tracing-refused-${_vellum_probe_name} PROPERTIES
+            PASS_REGULAR_EXPRESSION "supported only on macos-arm64")
+    endforeach()
     add_test(NAME vellum.tracing-build-state
         COMMAND "${Python3_EXECUTABLE}" -I tools/tracing/check_tracing.py
             build "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}"
