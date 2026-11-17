@@ -263,6 +263,27 @@ promotion attestation and prove full-matrix parity.
   Every release script runs as `python3 -I`, so no file in the checkout can shadow a standard-library module.
   `release-policy` enforces all of this, and it also refuses a repository Python file named like a
   standard-library module.
+- **The policy check's YAML parser never shares a job with a secret.** `check_release_policy.py` reads workflows with
+  PyYAML, so `release-tag.yml` runs it in `release-policy-check` and `dry-run-policy-check`, jobs that hold no secret
+  and mint no token; the signing jobs wait for them and never load the parser. Wherever PyYAML is installed (those
+  two jobs and `release-policy.yml`), it comes from `scripts/release_policy_requirements.txt` with
+  `pip --require-hashes` into a venv whose `python3` is called by path. Nothing goes on `GITHUB_PATH`, and no
+  reviewed job may name `GITHUB_PATH` or `GITHUB_ENV`, so no earlier step can change which `git`, `gh` or
+  `ssh-keygen` a later step runs.
+- **Every job of a release workflow runs only reviewed steps.** An action can receive the Actions token through a
+  default input without the workflow naming it, so no job of the three release workflows is classified: each runs exactly
+  one of the step sequences `RUN_ALLOWLIST` in `scripts/check_release_policy.py` lists for it: every step in order,
+  every key but `name` as written, preceded by the settings every step inherits (the workflow's and the job's `env`,
+  `runs-on`, `permissions`, `environment` and every other key but `name`, `run-name`, `jobs` and `steps`), so an
+  inherited `BASH_ENV` or `BASH_FUNC_*` is a change to reviewed text too. The check reads no shell, so a bypass spelled in shell is simply a body that is not
+  on the list. Run bodies in those jobs hold no `${{ }}` expressions; inputs come through the step's `env:` and are
+  read as `"$NAME"`. A step that names an Administration-only endpoint must hold the App token minted earlier in its
+  job, no step sets `GITHUB_TOKEN`, and the signing step has no GitHub token in scope. At run time each
+  Administration-only read fails on a non-2xx answer (`gh api` exits non-zero) and on a body of the wrong shape
+  (`jq -e`). Workflows outside the release path are not covered.
+- **Changing one of those steps takes two pull requests**, because `release-policy` also judges each pull request
+  with the base branch's list. The first adds the new step sequence as another variant of its job and changes no
+  workflow; the second changes the workflow and removes the old variant. Both are release-path changes.
 - **One key per tag namespace.** `v*` release tags are verified against `release-signers.allowed_signers` (the
   pipeline's key); `authority/*` tags against `authority-signers.allowed_signers` (the owner key that signed them).
   `verify_release_tag.py` picks the file from the tag name itself, refuses abbreviated or repeated flags, so a

@@ -148,6 +148,10 @@ vellum_add_framework_test(widget-bridge-param-model
     SOURCES widget_bridge_param_model_test.cpp
     UNITS Vellum::MirrorView_script Vellum::Value)
 
+vellum_add_framework_test(scripted-ui-param-model
+    SOURCES scripted_ui_param_model_test.cpp
+    UNITS Vellum::MirrorView_script Vellum::Value)
+
 vellum_add_framework_test(host-param-surface-model
     SOURCES host_param_surface_model_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)

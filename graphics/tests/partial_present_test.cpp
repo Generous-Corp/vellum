@@ -389,15 +389,17 @@ void device_loss() {
                error.find("lost") != std::string::npos && rgba.empty(),
            "a capture after device loss fails closed without submitting", error);
     error.clear();
-    expect(!surface->render_incremental(scene, &error) &&
-               error.find("lost") != std::string::npos,
-           "an incremental frame after device loss fails closed", error);
-    error.clear();
-    expect(!surface->render(scene, &error) && error.find("lost") != std::string::npos,
-           "a full frame after device loss fails closed", error);
-    error.clear();
     expect(!surface->finish(&error) && error.find("lost") != std::string::npos,
            "finish reports the lost device", error);
+    error.clear();
+    expect(surface->render_incremental(scene, &error),
+           "the next incremental frame recreates the device", error);
+    const auto stats = surface->frame_stats();
+    expect(stats.full_repaint && stats.full_repaint_reason == FullRepaintReason::device_recovered,
+           "the recovery frame repaints the whole frame", describe(stats));
+    error.clear();
+    expect(surface->finish(&error) && capture(*surface).ok,
+           "finish and capture succeed after recovery", error);
 }
 
 void capture_after_failure() {

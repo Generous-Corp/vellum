@@ -1,0 +1,77 @@
+{
+  "binary_data": {},
+  "build_info_dir": "<tmp>/generated/build-info",
+  "choc_headers": [],
+  "choc_root": null,
+  "closures": [
+    "provenance/mirror/closures/20990101-aaaaaaaaaaaa/foundation.json"
+  ],
+  "cmake_dependencies": {},
+  "dependencies": {
+    "skia": {
+      "files_verified": 1,
+      "pin": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "source": "https://skia.googlesource.com/skia.git"
+    }
+  },
+  "executables": [],
+  "export_id": "20990101-aaaaaaaaaaaa",
+  "framework_native_edits": [],
+  "framework_ports": {
+    "added": [
+      "framework/core/runtime/include/vellum/runtime/ported.hpp",
+      "framework/core/runtime/src/ported.mm"
+    ],
+    "removed": []
+  },
+  "framework_units": [],
+  "gpu_guard": {
+    "config_dir": "<tmp>/generated/gpu-surface-guard/config",
+    "headers": [],
+    "manifest": "<tmp>/generated/gpu-surface-guard/gpu-guarded-headers.txt"
+  },
+  "licenses": {},
+  "mirror_files_verified": 10,
+  "mirror_sha": "dddddddddddddddddddddddddddddddddddddddd",
+  "mirror_tree": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "native_preludes": {},
+  "pulp_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "receipt": "provenance/mirror/receipts/20990101-aaaaaaaaaaaa.json",
+  "root_namespace": "vellum",
+  "schema": "vellum.mirror-build-plan.v1",
+  "source_compile_options": {},
+  "source_dir": "<tmp>/repo/framework",
+  "units": [
+    {
+      "compile_definitions": [
+        "X=1"
+      ],
+      "name": "foundation",
+      "targets": [
+        {
+          "compile_definitions": [
+            "X=1"
+          ],
+          "external_links": [],
+          "in_tree_interfaces": [],
+          "include_dirs": [
+            "<tmp>/repo/framework/core/runtime/include",
+            "<tmp>/generated/build-info",
+            "<tmp>/skia/build/include",
+            "<tmp>/generated/preludes"
+          ],
+          "internal_links": [],
+          "name": "pulp-runtime",
+          "skia": true,
+          "skia_asset_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "source_compile_options": [],
+          "sources": [
+            "<tmp>/repo/framework/core/runtime/src/a.cpp",
+            "<tmp>/generated/preludes/web_compat_preludes_gen.cpp",
+            "<tmp>/repo/framework/core/runtime/src/ported.mm"
+          ]
+        }
+      ]
+    }
+  ]
+}

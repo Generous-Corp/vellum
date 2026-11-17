@@ -464,6 +464,8 @@ void telemetry_json() {
     telemetry.resize_settled = true;
     telemetry.trims = 2;
     telemetry.last_trim = CacheTrimReason::resize_settled;
+    telemetry.device_losses = 3;
+    telemetry.device_recoveries = 2;
     const auto json = to_json(telemetry);
     for (const char* expected : {
              "\"frame\":7", "\"full_repaint\":false",
@@ -474,6 +476,7 @@ void telemetry_json() {
              "\"entries\":4,\"bytes\":4096}", "\"atlas_bytes\":64",
              "\"gpu_time_available\":true", "\"gpu_milliseconds\":1.5",
              "\"resize_settled\":true", "\"trims\":2", "\"last_trim\":\"resize_settled\"",
+             "\"device_losses\":3", "\"device_recoveries\":2",
          }) {
         expect(json.find(expected) != std::string::npos,
                std::string("telemetry JSON holds ") + expected, json);
