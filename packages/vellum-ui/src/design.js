@@ -1,4 +1,4 @@
-import { Button, Canvas, Image, Path, Plot, Stack, Text, TextRun, View, jsx } from './runtime.js';
+import { Button, Canvas, Image, Path, Plot, Stack, Text, TextRun, Vector, View, jsx } from './runtime.js';
 
 const MAXIMUM_NODES = 100_000;
 const MAXIMUM_DEPTH = 256;
@@ -10,10 +10,13 @@ const EVENT_PROPERTIES = Object.freeze({
 });
 // DesignIR schema versions this materializer reads. Version 2 adds the node
 // `compositing` object, 3 adds material references, 4 adds tracks, and 5
-// adds plot bindings; a document without `schemaVersion` is version 1.
-const DESIGN_SCHEMA_VERSIONS = Object.freeze([1, 2, 3, 4, 5]);
+// adds plot bindings and 6 adds compiled vector assets; a document without
+// `schemaVersion` is version 1.
+const DESIGN_SCHEMA_VERSIONS = Object.freeze([1, 2, 3, 4, 5, 6]);
 const COMPOSITING_VERSION = 2;
 const PLOTS_VERSION = 5;
+const VECTOR_ASSET_VERSION = 6;
+const VECTOR_PAINT_KEYS = Object.freeze(['transform', 'clipPath', 'overflow']);
 const PLOT_BINDING_KEYS = Object.freeze([
     'channel', 'source', 'slots', 'history', 'orientation', 'audioChannel', 'min', 'max',
     'baseline', 'lineWidth', 'barGap', 'peakWidth', 'lineColor', 'fillColor', 'peakColor',
@@ -264,6 +267,9 @@ function retainedStyle(context, node, viewport, root) {
     if (typeof typography.fontSize === 'number' && Number.isFinite(typography.fontSize)) {
         style.fontSize = typography.fontSize;
     }
+    for (const property of VECTOR_PAINT_KEYS) {
+        if (typeof paint[property] === 'string') style[property] = paint[property];
+    }
     if (root) {
         style.width = viewport.width;
         style.height = viewport.height;
@@ -278,6 +284,21 @@ function designVersion(document) {
         throw new Error(`unsupported DesignIR schemaVersion: ${String(version)}`);
     }
     return version;
+}
+
+// The first vector asset field a node uses, which needs version 6, or null.
+// Path geometry and the path kind are part of the version 1-5 path contract.
+function vectorAssetField(node) {
+    if (node.kind === 'vector') return `kind ${node.kind}`;
+    const properties = node.properties && typeof node.properties === 'object' ? node.properties : {};
+    if (properties.vector !== undefined) return 'properties.vector';
+    if (properties.image && typeof properties.image === 'object' &&
+        properties.image.source !== undefined) {
+        return 'properties.image.source';
+    }
+    const paint = properties.paint && typeof properties.paint === 'object' ? properties.paint : {};
+    const key = VECTOR_PAINT_KEYS.find((name) => paint[name] !== undefined);
+    return key === undefined ? null : `properties.paint.${key}`;
 }
 
 // The node's validated `compositing` object, or undefined. It is version 2
@@ -377,6 +398,7 @@ function componentFor(node) {
     if (node.kind === 'canvas') return Canvas;
     if (node.kind === 'text-run') return TextRun;
     if (node.kind === 'path') return Path;
+    if (node.kind === 'vector') return Vector;
     if (node.kind === 'view') {
         const display = node.properties?.layout?.display;
         return display === 'flex' || display === 'grid' ? Stack : View;
@@ -425,6 +447,12 @@ function materializeNode(node, context, depth, root = false) {
     context.ids.add(node.id);
     if (!Array.isArray(node.children)) throw new Error(`design node ${node.id} requires children`);
     const { style, refs } = retainedStyle(context, node, context.viewport, root);
+    if (node.kind === 'vector') delete refs.backgroundColor;
+    const vectorField = vectorAssetField(node);
+    if (vectorField !== null && context.version < VECTOR_ASSET_VERSION) {
+        throw new Error(
+            `design node ${node.id} ${vectorField} needs schemaVersion ${VECTOR_ASSET_VERSION}`);
+    }
     applyCompositing(style, compositingOf(node, context.version, root));
     resolveMaskReferences(node, context.version);
     if ((node.kind === 'text-run' || node.kind === 'path') && node.children.length > 0) {
@@ -452,6 +480,17 @@ function materializeNode(node, context, depth, root = false) {
     if (node.kind === 'path') Object.assign(properties, pathPaint(context, node, refs));
     if (Object.keys(refs).length > 0) properties.tokenRefs = { ...refs };
     if (typeof node.text === 'string') properties.text = node.text;
+    if (node.kind === 'vector') {
+        const vector = node.properties?.vector;
+        if (!vector || typeof vector !== 'object' || !vector.asset) {
+            throw new Error(`design vector ${node.id} requires a compiled asset`);
+        }
+        properties.asset = vector.asset;
+    }
+    if (node.kind === 'image' && typeof node.properties?.image?.source === 'string') {
+        properties.source = node.properties.image.source;
+        if (typeof node.properties.image.fit === 'string') properties.fit = node.properties.image.fit;
+    }
     if (node.plot !== undefined) {
         const plot = plotBindingOf(node, context.version);
         properties.plot = plot.style;
@@ -486,6 +525,11 @@ function requireSupportedFields(root, version) {
         }
         if (node.plot !== undefined && version < PLOTS_VERSION) {
             throw new Error(`design node ${node.id} plot needs schemaVersion ${PLOTS_VERSION}`);
+        }
+        const vectorField = vectorAssetField(node);
+        if (vectorField !== null && version < VECTOR_ASSET_VERSION) {
+            throw new Error(
+                `design node ${node.id} ${vectorField} needs schemaVersion ${VECTOR_ASSET_VERSION}`);
         }
         if (node.tracks !== undefined && (!Array.isArray(node.tracks) || node.tracks.length > 0)) {
             throw new Error(`design node ${node.id} has unsupported tracks`);

@@ -390,6 +390,61 @@ enum class MaskMode : std::uint8_t {
     luminance,
 };
 
+/// A paint of a compiled vector asset: `color`, or `gradient` when it is set.
+/// The gradient resolves against the unit box {0, 0, 1, 1} of its own
+/// gradient space, so every position and radius it holds is a coordinate of
+/// that space, and `gradient_transform` maps gradient space into the
+/// coordinates of the operation that paints with it. This is how SVG's
+/// `objectBoundingBox` and `userSpaceOnUse` units and `gradientTransform`
+/// are carried exactly.
+struct VectorPaint final {
+    Color color = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    std::optional<LinearGradient> gradient;
+    Affine2D gradient_transform{};
+};
+
+/// One operation of a compiled vector asset's display list.
+///
+/// A `path` operation fills and then strokes `path`, mapped by `transform`
+/// into the enclosing group's coordinates. Its geometry supplies the fill
+/// rule and the stroke's width, joins, caps, miter limit and dashes; the
+/// colours come from `fill` and `stroke`, so the geometry's own stroke colour
+/// must be transparent and carry no gradient.
+///
+/// A `push_group` opens a group whose contents `transform` maps into the
+/// enclosing coordinates, clipped to the area `clip` fills (in the group's
+/// coordinates, under its fill rule) when it is set, and composited as one
+/// layer at `opacity`. A `pop_group` closes the innermost open group.
+struct VectorOp final {
+    enum class Kind : std::uint8_t { path, push_group, pop_group };
+    Kind kind = Kind::path;
+    Affine2D transform{};
+    std::shared_ptr<const PathGeometry> path;
+    VectorPaint fill;
+    VectorPaint stroke;
+    float opacity = 1.0F;
+    std::shared_ptr<const PathGeometry> clip;
+};
+
+/// The most operations one compiled vector asset may hold.
+inline constexpr std::size_t kMaxVectorOps = 16384U;
+/// The deepest nesting of groups in a compiled vector asset.
+inline constexpr std::size_t kMaxVectorGroupDepth = 64U;
+
+/// A compiled vector asset: one display list drawn by a single `vector`
+/// node. `view_box` is the asset's coordinate box; it is stretched onto the
+/// node's box, so a producer that wants an aspect-preserving fit sizes the
+/// node to the view box's aspect. Operations outside the view box still draw
+/// unless a group clips them. `content_hash` names the source the asset was
+/// compiled from, in the `sha256:` form of `ImageAsset::content_hash`. Like a
+/// mesh, an asset must not be mutated once a scene references it; replace
+/// the pointer to change it.
+struct VectorAsset final {
+    std::string content_hash;
+    Rect view_box{};
+    std::vector<VectorOp> ops;
+};
+
 /// What a node effect does. Every effect applies to the node and its subtree
 /// composited as one group.
 enum class EffectKind : std::uint8_t {
@@ -865,6 +920,11 @@ inline constexpr float kMaxPlotStroke = 4096.0F;
 /// `LinearGradient`, and gradient strokes on paths. A plain linear fill
 /// gradient stays legal at every version.
 ///
+/// Version 9 adds the `vector` node kind and `SceneNode::vector`, a compiled
+/// vector asset drawn as one node. A scene of an earlier version is still
+/// accepted when it has no vector node; one that does fails
+/// `scene_fields_match_version` and is refused.
+///
 /// Version 10 adds `SceneNode::effects`, and version 11 adds
 /// `SceneNode::tracks`, evaluated at `Scene::clock`. A scene of an earlier
 /// version is still accepted when no node sets the newer fields; one that
@@ -879,8 +939,7 @@ inline constexpr float kMaxPlotStroke = 4096.0F;
 /// version 6: blend modes and DesignIR compositing fields; version 7: interned
 /// token receipts; version 8: gradient vocabulary; version 9: vector assets;
 /// version 10: effects and materials; version 11: animation tracks; version
-/// 12: plot nodes. This build gives version 9 no fields of its own; the
-/// branch that owns it adds its fields and damage support.
+/// 12: plot nodes.
 inline constexpr std::uint32_t kSceneVersion = 12U;
 
 /// The oldest scene schema version this build still consumes.
@@ -944,6 +1003,8 @@ struct SceneNode final {
         mesh,
         path,
         image,
+        /// Draws `SceneNode::vector`, a compiled vector asset, over its box.
+        vector,
         plot,
     };
 
@@ -1020,6 +1081,9 @@ struct SceneNode final {
     /// hold its receipt's value, as `fill` does. A slot appears at most once.
     /// A mesh's packed vertex colours are not slots.
     std::vector<TokenSlot> color_tokens;
+    /// What a `vector` node draws. A vector node without it, with children,
+    /// or with an asset that fails `vector_asset_is_valid` is refused.
+    std::shared_ptr<const VectorAsset> vector;
     /// The node's effect chain; see `NodeEffect`. A node with effects is
     /// composited offscreen as one group, like an isolated node. A chain over
     /// the effect budget (`effect_chain_cost`) is drawn without its effects
@@ -1290,6 +1354,7 @@ struct SceneNode final {
     case SceneNode::Kind::mesh:
     case SceneNode::Kind::path:
     case SceneNode::Kind::image:
+    case SceneNode::Kind::vector:
     case SceneNode::Kind::plot:
         return true;
     }
@@ -1359,6 +1424,21 @@ struct Scene final {
     return nullptr;
 }
 
+/// Whether a node uses what version 9 introduced: the `vector` kind or a
+/// compiled vector asset.
+[[nodiscard]] inline bool uses_version_9_fields(const SceneNode& node) noexcept {
+    return node.kind == SceneNode::Kind::vector || node.vector != nullptr;
+}
+
+/// The first node, in depth-first order, that `uses_version_9_fields`.
+[[nodiscard]] inline const SceneNode* find_version_9_fields(const SceneNode& node) noexcept {
+    if (uses_version_9_fields(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_9_fields(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
 /// The first node, in depth-first order, of a kind version 12 introduced: a
 /// `plot` node.
 [[nodiscard]] inline const SceneNode* find_version_12_kinds(const SceneNode& node) noexcept {
@@ -1391,7 +1471,7 @@ struct SceneVersionMismatch final {
     /// The property that carries it: `kind`, `transform`, `path`, `image`,
     /// `images`, `clip`, `mask`, `isolate`, `blend_mode`, `fill_token`,
     /// `color_tokens`, `background_token`, `tokens`, `fill_gradients`,
-    /// `stroke_gradient`, `effects` or `tracks`.
+    /// `stroke_gradient`, `vector`, `effects` or `tracks`.
     std::string_view property;
 };
 
@@ -1457,6 +1537,11 @@ template <typename Predicate>
             return SceneVersionMismatch{found, 8U, stroke ? "stroke_gradient" : "fill_gradients"};
         }
     }
+    if (version < 9U) {
+        if (const auto* found = find_version_9_fields(scene.root)) {
+            return SceneVersionMismatch{found, 9U, "vector"};
+        }
+    }
     if (version < 10U) {
         if (const auto* found = find_version_10_fields(scene.root)) {
             return SceneVersionMismatch{found, 10U, "effects"};
@@ -1485,7 +1570,8 @@ template <typename Predicate>
 /// `uses_version_5_fields` reports, a scene before version 6 sets no field
 /// that `uses_version_6_fields` reports, and a scene before version 7 has no
 /// token table and no node that `uses_version_7_fields` reports, a scene
-/// before version 8 has no node that `find_version_8_fields` reports, and a
+/// before version 8 has no node that `find_version_8_fields` reports, a
+/// scene before version 9 has no node that `uses_version_9_fields` reports, and a
 /// scene before version 10 sets no field that `uses_version_10_fields`
 /// reports.
 [[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {

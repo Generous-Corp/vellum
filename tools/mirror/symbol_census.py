@@ -41,7 +41,10 @@ PULP = re.compile(r"(?<![\w])pulp::")
 VELLUM = re.compile(r"(?<![\w])vellum::")
 # `nm -m`: "<value> (<segment,section>) <attributes> <name>"
 _NM_LINE = re.compile(r"^\s*(?:[0-9a-fA-F]+\s+)?\((?P<section>[^)]*)\)\s+(?P<attrs>.*?)\s*(?P<name>\S+)$")
+_ANNOTATION = re.compile(r"\[[^\]]*\]")
 _OBJC_CLASS = re.compile(r"^[0-9a-f]+\s+0x[0-9a-f]+\s+_OBJC_CLASS_\$_(\S+)$")
+# The class_ro_t's own `name` field sits at the first indent level under `data`.
+_CLASS_RO_NAME = re.compile(r"^ {8}name\s+0x[0-9a-f]+\s+(\S+)\s*$")
 
 Nm = Callable[[Path], str]
 Otool = Callable[[Path], str]
@@ -55,7 +58,9 @@ def exported_strong(listing: str) -> set[str]:
         match = _NM_LINE.match(line)
         if not match or match["section"] == "undefined":
             continue
-        if match["attrs"].split() == ["external"]:
+        # `nm -m` may annotate a definition ("[referenced dynamically]",
+        # "[no dead-strip]"); the annotation does not change what it exports.
+        if _ANNOTATION.sub("", match["attrs"]).split() == ["external"]:
             names.add(match["name"])
     return names
 
@@ -71,16 +76,45 @@ def all_defined(listing: str) -> set[str]:
 
 
 def objc_classes(listing: str) -> set[str]:
-    """Class names from an `otool -oV` listing's `__objc_classlist`."""
+    """Class names from an `otool -oV` listing's `__objc_classlist`.
+
+    Each class is one top-level entry: an address line, then indented class
+    metadata. The name is the `name` field of the entry's class_ro_t, which a
+    stripped binary keeps even when the entry's own line carries no
+    `_OBJC_CLASS_$_` symbol. An entry whose metadata holds no name falls back
+    to that symbol; an entry with neither is an error, never a skipped class.
+    """
     classes: set[str] = set()
     in_classlist = False
+    entry: str | None = None   # the entry's address line, while one is open
+    symbol: str | None = None
+    name: str | None = None
+
+    def close() -> None:
+        nonlocal entry, symbol, name
+        if entry is not None:
+            found = name or symbol
+            if not found:
+                raise RuntimeError(f"an Objective-C class entry has no readable name: {entry!r}")
+            classes.add(found)
+        entry = symbol = name = None
+
     for line in listing.splitlines():
         if line.startswith("Contents of"):
+            close()
             in_classlist = "__objc_classlist" in line
-        elif in_classlist:
+        elif not in_classlist or not line.strip():
+            continue
+        elif not line[0].isspace():
+            close()
+            entry = line
             match = _OBJC_CLASS.match(line)
+            symbol = match[1] if match else None
+        elif name is None:
+            match = _CLASS_RO_NAME.match(line)
             if match:
-                classes.add(match[1])
+                name = match[1]
+    close()
     return classes
 
 

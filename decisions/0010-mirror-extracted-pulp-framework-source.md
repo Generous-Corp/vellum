@@ -260,6 +260,22 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
   object store holds, so Pulp content copied as it is cannot pass as native.
   A row that
   adds a compilable source names the mirrored target that compiles it.
+- **Platform scope.** The closures say what each platform compiles; a
+  ledger-added source is compiled only on the platforms its scope lists. In
+  schema v2 a row that adds a compilable source may carry `platforms`, a list
+  of platform keys, and a `scoped` row re-states the platform set of a source
+  the ledger already adds, to the same target, so a scope changes without
+  editing a landed row. A row with no scope means `macos-arm64`, the build
+  every v1 row was proven on. A target declared in `units.json` takes the same
+  list, and each of its sources must be scoped to every platform it lists. The
+  mirror build plans for one platform at a time and refuses a platform no
+  landed closure describes. Scope never touches the file set: `framework/`
+  holds a scoped file on every platform. A scope change, or a removal
+  followed by a new row, cannot take a source out of the `macos-arm64` build
+  once it is there, and a scoped row repeats its adding row's origin, Pulp
+  path and Pulp commits. A brand-new source scoped only to other platforms is
+  compiled nowhere until a verified closure for one of them lands; that is
+  intended, and the plan still checks that its target exists.
 - **The file set.** `framework/` holds exactly the transfer record's paths,
   minus the ledger's removals, plus its additions. A file with neither a
   transfer record nor a ledger row fails, and so does a listed file that is

@@ -1,5 +1,6 @@
 import createVellumCore from './vellum_web_core.js';
 import { Button, Stack, Text, mount, useState } from './vellum-ui/runtime.js';
+import { addVectorNode, drawVector } from './vector-canvas.js';
 
 const canvas = document.querySelector('#vellum-canvas');
 const status = document.querySelector('#status');
@@ -38,6 +39,9 @@ globalThis.VellumCanvasBackend = Object.freeze({
         context.textBaseline = 'alphabetic';
         context.fillStyle = cssColor(red, green, blue, alpha);
         context.fillText(text, x, baseline);
+    },
+    vector(plan) {
+        drawVector(context, plan);
     },
     // A blended group draws offscreen and meets the canvas once, so its
     // members blend with each other normally and the group alpha applies once.
@@ -167,6 +171,8 @@ function lowerNode(node, proposed, parentX, parentY) {
         const foreground = color(style.color, '#111827');
         api.text(node.id, directText(node), absoluteX, absoluteY, proposed.width,
             proposed.height, Math.max(1, number(style, 'fontSize', 14)), ...foreground);
+    } else if (node.type === 'vector') {
+        addVectorNode(module, node, absoluteX, absoluteY, proposed.width, proposed.height);
     } else if (node.type === 'button' || style.backgroundColor) {
         const background = node.type === 'button' && !style.backgroundColor
             ? color('#14b8a6', '#14b8a6') : fill;

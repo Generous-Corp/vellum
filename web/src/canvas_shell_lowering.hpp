@@ -3,12 +3,19 @@
 #include <vellum/graphics/effect.hpp>
 #include <vellum/graphics/lowering_diagnostic.hpp>
 #include <vellum/graphics/paint_command.hpp>
+#include <vellum/graphics/path_geometry.hpp>
 #include <vellum/graphics/plot.hpp>
 #include <vellum/graphics/scene.hpp>
 #include <vellum/graphics/scene_acceptance.hpp>
+#include <vellum/graphics/vector_asset.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstddef>
+#include <cstdio>
+#include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -21,6 +28,378 @@ namespace vellum::web {
 /// masked siblings unmasked and does not draw the mask's own commands.
 inline constexpr std::string_view kMaskNotCompositedCode = "VELLUM_WEB_MASK_NOT_COMPOSITED";
 inline constexpr std::string_view kGradientNotExpressibleCode = "VELLUM_WEB_GRADIENT_NOT_EXPRESSIBLE";
+/// A compiled vector asset the canvas shell draws with an approximation it
+/// names: group opacity over overlapping paint, a gradient spread,
+/// interpolation, colour space or kind canvas 2D lacks, or a stroke gradient
+/// under a transform that is not a similarity.
+inline constexpr std::string_view kVectorApproximatedCode = "VELLUM_WEB_VECTOR_APPROXIMATED";
+
+namespace canvas_vector_detail {
+
+inline void number(std::string& out, double value) {
+    char buffer[32];
+    std::snprintf(buffer, sizeof(buffer), "%.*g", std::numeric_limits<double>::max_digits10,
+                  std::isfinite(value) ? value : 0.0);
+    out += buffer;
+}
+
+inline void numbers(std::string& out, std::initializer_list<double> values) {
+    out += '[';
+    bool first = true;
+    for (const double value : values) {
+        if (!first) out += ',';
+        first = false;
+        number(out, value);
+    }
+    out += ']';
+}
+
+inline void matrix(std::string& out, const vellum::graphics::Affine2D& m) {
+    numbers(out, {m.a, m.b, m.c, m.d, m.tx, m.ty});
+}
+
+// SVG path data with absolute commands, which Path2D accepts as given.
+inline std::string path_data(const vellum::graphics::PathGeometry& path) {
+    using vellum::graphics::PathVerb;
+    std::string out;
+    std::size_t offset = 0;
+    for (const auto verb : path.verbs) {
+        const float* v = path.values.data() + offset;
+        const auto arity = vellum::graphics::path_verb_arity(verb);
+        offset += arity;
+        switch (verb) {
+        case PathVerb::move: out += 'M'; break;
+        case PathVerb::line: out += 'L'; break;
+        case PathVerb::quadratic: out += 'Q'; break;
+        case PathVerb::cubic: out += 'C'; break;
+        case PathVerb::arc: out += 'A'; break;
+        case PathVerb::close: out += 'Z'; break;
+        }
+        for (std::size_t index = 0; index < arity; ++index) {
+            if (index > 0U) out += ' ';
+            number(out, v[index]);
+        }
+    }
+    return out;
+}
+
+// A JSON string: quotes and backslashes escaped, and every control character
+// below U+0020 written as a \u escape, so any node id parses.
+inline void quoted(std::string& out, std::string_view text) {
+    out += '"';
+    for (const char character : text) {
+        const auto code = static_cast<unsigned char>(character);
+        if (code < 0x20U) {
+            char escape[8];
+            std::snprintf(escape, sizeof(escape), "\\u%04x", static_cast<unsigned>(code));
+            out += escape;
+            continue;
+        }
+        if (character == '"' || character == '\\') out += '\\';
+        out += character;
+    }
+    out += '"';
+}
+
+inline bool similarity(const vellum::graphics::Affine2D& m, double& scale) {
+    const double ab = std::hypot(static_cast<double>(m.a), static_cast<double>(m.b));
+    const double cd = std::hypot(static_cast<double>(m.c), static_cast<double>(m.d));
+    if (!(ab > 0.0) || !(cd > 0.0) || !std::isfinite(ab) || !std::isfinite(cd)) {
+        scale = 0.0;
+        return false;
+    }
+    scale = std::sqrt(std::abs(static_cast<double>(m.a) * m.d - static_cast<double>(m.b) * m.c));
+    const double dot = (m.a / ab) * (m.c / cd) + (m.b / ab) * (m.d / cd);
+    constexpr double tolerance = 1e-5;
+    return std::abs(ab - cd) / std::max(ab, cd) <= tolerance && std::abs(dot) <= tolerance;
+}
+
+inline vellum::graphics::Point map(const vellum::graphics::Affine2D& m, double x, double y) {
+    return vellum::graphics::apply(m, {static_cast<float>(x), static_cast<float>(y)});
+}
+
+inline void stops(std::string& out, const vellum::graphics::LinearGradient& gradient,
+                  float alpha) {
+    out += ",\"stops\":[";
+    bool first = true;
+    for (const auto& stop : gradient.stops) {
+        if (!first) out += ',';
+        first = false;
+        numbers(out, {stop.position, stop.color.red, stop.color.green, stop.color.blue,
+                      static_cast<double>(stop.color.alpha) * alpha});
+    }
+    out += ']';
+}
+
+// Writes `paint` as a canvas paint in the operation's coordinates. Linear
+// gradients map exactly under any affine gradient transform, as do radial
+// ones under a similarity; a fill radial gradient under any other transform
+// is drawn in gradient space (`space`), which only a fill can use.
+inline void paint(std::string& out, const vellum::graphics::VectorPaint& source, float alpha,
+                  bool fill, std::vector<std::string>& losses, const std::string& where) {
+    using vellum::graphics::GradientKind;
+    using vellum::graphics::GradientSpread;
+    if (!source.gradient) {
+        out += "{\"color\":";
+        numbers(out, {source.color.red, source.color.green, source.color.blue,
+                      static_cast<double>(source.color.alpha) * alpha});
+        out += '}';
+        return;
+    }
+    const auto& gradient = *source.gradient;
+    if (gradient.spread != GradientSpread::pad || gradient.repeating) {
+        losses.push_back(where + " gradient spread is drawn as pad; canvas 2D only pads");
+    }
+    if (!vellum::graphics::gradient_uses_legacy_interpolation(gradient)) {
+        losses.push_back(where +
+                         " gradient interpolation or colour space is drawn as sRGB by canvas 2D");
+    }
+    const auto& m = source.gradient_transform;
+    if (gradient.kind == GradientKind::conic) {
+        losses.push_back(where + " conic gradient is drawn as its first stop's colour");
+        const auto& first = gradient.stops.front().color;
+        out += "{\"color\":";
+        numbers(out, {first.red, first.green, first.blue, static_cast<double>(first.alpha) * alpha});
+        out += '}';
+        return;
+    }
+    if (gradient.kind == GradientKind::linear) {
+        const auto resolved =
+            vellum::graphics::resolve_linear_gradient({0.0F, 0.0F, 1.0F, 1.0F}, gradient);
+        const double dx = resolved.end_x - resolved.start_x;
+        const double dy = resolved.end_y - resolved.start_y;
+        const double length = dx * dx + dy * dy;
+        const double determinant = static_cast<double>(m.a) * m.d - static_cast<double>(m.b) * m.c;
+        // The ramp parameter is ((inverse(m) * p - start) . d) / |d|^2, a linear
+        // function of p whose gradient is inverse(A)^T d / |d|^2.
+        const double rx = (m.d * dx - m.b * dy) / determinant / length;
+        const double ry = (-m.c * dx + m.a * dy) / determinant / length;
+        const double r2 = rx * rx + ry * ry;
+        const auto start = map(m, resolved.start_x, resolved.start_y);
+        out += "{\"linear\":";
+        numbers(out, {start.x, start.y, start.x + rx / r2, start.y + ry / r2});
+        stops(out, gradient, alpha);
+        out += '}';
+        return;
+    }
+    double x0 = 0.0;
+    double y0 = 0.0;
+    double r0 = 0.0;
+    double x1 = 0.0;
+    double y1 = 0.0;
+    double r1 = 0.0;
+    vellum::graphics::Affine2D space = m;
+    if (gradient.kind == GradientKind::radial) {
+        const float rx = gradient.radius_x > 0.0F ? gradient.radius_x : 0.5F;
+        const float ry = gradient.radius_y > 0.0F ? gradient.radius_y : 0.5F;
+        space = vellum::graphics::concat(
+            m, {.a = rx, .d = ry, .tx = gradient.center_x, .ty = gradient.center_y});
+        r1 = 1.0;
+    } else {
+        x0 = gradient.focal_x;
+        y0 = gradient.focal_y;
+        r0 = gradient.start_radius;
+        x1 = gradient.center_x;
+        y1 = gradient.center_y;
+        r1 = gradient.end_radius;
+    }
+    double scale = 1.0;
+    if (similarity(space, scale)) {
+        const auto start = map(space, x0, y0);
+        const auto end = map(space, x1, y1);
+        out += "{\"radial\":";
+        numbers(out, {start.x, start.y, r0 * scale, end.x, end.y, r1 * scale});
+    } else if (fill) {
+        out += "{\"radial\":";
+        numbers(out, {x0, y0, r0, x1, y1, r1});
+        out += ",\"space\":";
+        matrix(out, space);
+    } else {
+        losses.push_back(where +
+                         " radial stroke gradient under a non-uniform transform is drawn with "
+                         "circular rings");
+        const auto start = map(space, x0, y0);
+        const auto end = map(space, x1, y1);
+        out += "{\"radial\":";
+        numbers(out, {start.x, start.y, r0 * scale, end.x, end.y, r1 * scale});
+    }
+    stops(out, gradient, alpha);
+    out += '}';
+}
+
+}  // namespace canvas_vector_detail
+
+/// What the canvas shell draws for one `vector` command: a JSON plan the
+/// shell's `drawVector` executes with a 2D context, and each approximation
+/// it makes. The plan's `matrix` maps the asset's view box into the frame,
+/// and its `steps` are, in order: `save` (with an `alpha` that multiplies
+/// the global alpha and an optional `transform`), `clip` (path data and fill
+/// rule), `restore`, `fill` and `stroke` (path data, an optional
+/// `transform`, and a paint of `color`, `linear` endpoints or `radial`
+/// circles with `stops`, drawn in the optional `space` coordinates).
+/// The vector node `vellum_web_begin_vector` starts. The rendered node's
+/// opacity applies to the asset as one group, as it does natively.
+[[nodiscard]] inline vellum::graphics::SceneNode vector_node(
+    std::string id, const vellum::graphics::Rect& bounds, float opacity) {
+    vellum::graphics::SceneNode node{
+        .id = std::move(id), .kind = vellum::graphics::SceneNode::Kind::vector, .bounds = bounds};
+    node.opacity = opacity;
+    return node;
+}
+
+/// The group operation `vellum_web_vector_group` adds, or nullopt when its
+/// clip path data does not parse. `has_clip` carries whether the group has a
+/// clip at all: an empty clip path clips everything away, as it does
+/// natively, while no clip draws everything.
+[[nodiscard]] inline std::optional<vellum::graphics::VectorOp> vector_group_op(
+    const vellum::graphics::Affine2D& transform, float opacity, bool has_clip,
+    std::string_view clip, bool evenodd) {
+    vellum::graphics::VectorOp op{
+        .kind = vellum::graphics::VectorOp::Kind::push_group,
+        .transform = transform,
+        .opacity = opacity,
+    };
+    if (has_clip) {
+        vellum::graphics::PathGeometry geometry;
+        if (!vellum::graphics::parse_svg_path_data(clip, geometry)) return std::nullopt;
+        geometry.fill_rule = evenodd ? vellum::graphics::FillRule::evenodd
+                                     : vellum::graphics::FillRule::nonzero;
+        op.clip = std::make_shared<const vellum::graphics::PathGeometry>(std::move(geometry));
+    }
+    return op;
+}
+
+struct CanvasVectorPlan final {
+    std::string json;
+    std::vector<std::string> losses;
+};
+
+[[nodiscard]] inline CanvasVectorPlan lower_vector_for_canvas(
+    const vellum::graphics::PaintCommand& command, float alpha) {
+    using vellum::graphics::VectorOp;
+    namespace detail = canvas_vector_detail;
+    CanvasVectorPlan plan;
+    if (!command.vector || !vellum::graphics::vector_asset_is_valid(*command.vector)) {
+        plan.json = "{\"steps\":[]}";
+        return plan;
+    }
+    const auto& asset = *command.vector;
+    auto& out = plan.json;
+    out = "{\"id\":";
+    detail::quoted(out, command.node_id);
+    out += ",\"matrix\":";
+    detail::matrix(out, vellum::graphics::concat(
+        command.transform, vellum::graphics::vector_view_box_transform(command.bounds,
+                                                                       asset.view_box)));
+    out += ",\"alpha\":";
+    detail::number(out, alpha);
+    out += ",\"steps\":[";
+    bool first = true;
+    const auto step = [&] {
+        if (!first) out += ',';
+        first = false;
+    };
+    // The paints inside each open group, to tell when its opacity, which the
+    // shell flattens into each paint, changes how overlapping paint blends.
+    struct Open final {
+        std::size_t index = 0;
+        float opacity = 1.0F;
+        std::size_t paints = 0;
+    };
+    std::vector<Open> open;
+    for (std::size_t index = 0; index < asset.ops.size(); ++index) {
+        const auto& op = asset.ops[index];
+        const std::string where = "operation " + std::to_string(index);
+        if (op.kind == VectorOp::Kind::push_group) {
+            step();
+            out += "{\"op\":\"save\",\"alpha\":";
+            detail::number(out, op.opacity);
+            if (!vellum::graphics::is_identity(op.transform)) {
+                out += ",\"transform\":";
+                detail::matrix(out, op.transform);
+            }
+            out += '}';
+            if (op.clip) {
+                step();
+                out += "{\"op\":\"clip\",\"d\":";
+                detail::quoted(out, detail::path_data(*op.clip));
+                out += op.clip->fill_rule == vellum::graphics::FillRule::evenodd
+                           ? ",\"rule\":\"evenodd\"}"
+                           : ",\"rule\":\"nonzero\"}";
+            }
+            open.push_back({index, op.opacity, 0U});
+            continue;
+        }
+        if (op.kind == VectorOp::Kind::pop_group) {
+            step();
+            out += "{\"op\":\"restore\"}";
+            const auto closed = open.back();
+            open.pop_back();
+            if (closed.opacity < 1.0F && closed.paints > 1U) {
+                plan.losses.push_back("group at operation " + std::to_string(closed.index) +
+                                      " has opacity over overlapping paint, which canvas 2D "
+                                      "applies to each paint");
+            }
+            if (!open.empty()) open.back().paints += closed.paints;
+            continue;
+        }
+        const bool fills = vellum::graphics::vector_op_fills(op);
+        const bool strokes = vellum::graphics::vector_op_strokes(op);
+        if (!fills && !strokes) continue;
+        const std::size_t paints = (fills ? 1U : 0U) + (strokes ? 1U : 0U);
+        if (!open.empty()) open.back().paints += paints;
+        const auto data = detail::path_data(*op.path);
+        if (fills) {
+            step();
+            out += "{\"op\":\"fill\",\"d\":";
+            detail::quoted(out, data);
+            out += op.path->fill_rule == vellum::graphics::FillRule::evenodd
+                       ? ",\"rule\":\"evenodd\""
+                       : ",\"rule\":\"nonzero\"";
+            if (!vellum::graphics::is_identity(op.transform)) {
+                out += ",\"transform\":";
+                detail::matrix(out, op.transform);
+            }
+            out += ",\"paint\":";
+            detail::paint(out, op.fill, 1.0F, true, plan.losses, where + " fill");
+            out += '}';
+        }
+        if (strokes) {
+            const auto& stroke = op.path->stroke;
+            step();
+            out += "{\"op\":\"stroke\",\"d\":";
+            detail::quoted(out, data);
+            if (!vellum::graphics::is_identity(op.transform)) {
+                out += ",\"transform\":";
+                detail::matrix(out, op.transform);
+            }
+            out += ",\"width\":";
+            detail::number(out, stroke.width);
+            constexpr std::array<const char*, 3> joins{"miter", "round", "bevel"};
+            constexpr std::array<const char*, 3> caps{"butt", "round", "square"};
+            out += ",\"join\":\"";
+            out += joins[static_cast<std::size_t>(stroke.join)];
+            out += "\",\"cap\":\"";
+            out += caps[static_cast<std::size_t>(stroke.cap)];
+            out += "\",\"miter\":";
+            detail::number(out, stroke.miter_limit);
+            if (!stroke.dash_array.empty()) {
+                out += ",\"dash\":[";
+                for (std::size_t dash = 0; dash < stroke.dash_array.size(); ++dash) {
+                    if (dash > 0U) out += ',';
+                    detail::number(out, stroke.dash_array[dash]);
+                }
+                out += "],\"dashOffset\":";
+                detail::number(out, stroke.dash_offset);
+            }
+            out += ",\"paint\":";
+            detail::paint(out, op.stroke, 1.0F, false, plan.losses, where + " stroke");
+            out += '}';
+        }
+    }
+    out += "]}";
+    return plan;
+}
 
 /// A plot the canvas shell does not draw, because its composed transform is
 /// not the identity; a warning. An untransformed plot is drawn exactly, as
@@ -313,8 +692,10 @@ canvas_shell_effect_diagnostics(const std::vector<vellum::graphics::PaintCommand
 /// are not counted, so scenes without the version 8 gradient vocabulary keep
 /// their loss counts. A fill gradient that uses that vocabulary counts once
 /// for its command; a gradient stroke counts through its path, which is
-/// already a loss. `canvas_shell_gradient_diagnostics` names each of them. A
-/// plot left after `canvas_shell_expand_plots` is not drawn and counts once.
+/// already a loss. `canvas_shell_gradient_diagnostics` names each of them.
+/// A compiled vector asset is drawn through `lower_vector_for_canvas` and
+/// counts once when that plan approximates anything. A plot left after
+/// `canvas_shell_expand_plots` is not drawn and counts once.
 [[nodiscard]] inline bool canvas_shell_loses(
     const vellum::graphics::PaintCommand& command) noexcept {
     using Kind = vellum::graphics::PaintCommand::Kind;
@@ -325,6 +706,9 @@ canvas_shell_effect_diagnostics(const std::vector<vellum::graphics::PaintCommand
         return true;
     }
     if (!vellum::graphics::draws_content(command.kind)) return false;
+    if (command.kind == vellum::graphics::PaintCommand::Kind::vector) {
+        return !lower_vector_for_canvas(command, 1.0F).losses.empty();
+    }
     return std::any_of(command.fill_gradients.begin(), command.fill_gradients.end(),
                        vellum::graphics::gradient_uses_version_8) ||
            !vellum::graphics::is_identity(command.transform) ||
@@ -570,6 +954,32 @@ canvas_shell_gradient_diagnostics(
     return output;
 }
 
+/// One `kVectorApproximatedCode` warning for each approximation the shell
+/// makes drawing a compiled vector asset outside a mask.
+[[nodiscard]] inline std::vector<vellum::graphics::LoweringDiagnostic>
+canvas_shell_vector_diagnostics(
+    const std::vector<vellum::graphics::PaintCommand>& commands) {
+    const auto masked = canvas_shell_masked(commands);
+    std::vector<vellum::graphics::LoweringDiagnostic> output;
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        const auto& command = commands[index];
+        if (masked[index] || command.kind != vellum::graphics::PaintCommand::Kind::vector) {
+            continue;
+        }
+        for (auto& loss : lower_vector_for_canvas(command, 1.0F).losses) {
+            output.push_back({
+                .severity = vellum::graphics::LoweringDiagnostic::Severity::warning,
+                .disposition = vellum::graphics::LoweringDiagnostic::Disposition::lowered,
+                .code = std::string(kVectorApproximatedCode),
+                .node_id = command.node_id,
+                .property = "vector",
+                .message = "vector " + command.node_id + ": " + std::move(loss),
+            });
+        }
+    }
+    return output;
+}
+
 /// The commands the shell draws with a loss: each `canvas_shell_loses`
 /// outside a mask, except a layer the shell composites as a group, which it
 /// draws exactly. A blended layer drawn as `normal` instead is counted, once.
@@ -636,6 +1046,9 @@ struct CanvasShellLowering final {
         lowering.diagnostics.push_back(std::move(diagnostic));
     }
     for (auto& diagnostic : canvas_shell_gradient_diagnostics(lowering.commands)) {
+        lowering.diagnostics.push_back(std::move(diagnostic));
+    }
+    for (auto& diagnostic : canvas_shell_vector_diagnostics(lowering.commands)) {
         lowering.diagnostics.push_back(std::move(diagnostic));
     }
     for (auto& diagnostic : canvas_shell_effect_diagnostics(

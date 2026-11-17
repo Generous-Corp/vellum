@@ -10,6 +10,7 @@
 #include <clocale>
 #include <cmath>
 #include <cstdint>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -1164,6 +1165,203 @@ bool grouping_keys() {
            refuses(R"("clipPath":"M0 0 L")", "node bad has an invalid clipPath: ", true);
 }
 
+// A vector node draws only its asset: a background colour on it is reported
+// as dropped and leaves the node's fill transparent. vellum-ui sends no token
+// receipt for it, so only the literal colour reaches this check.
+bool vector_background_dropped() {
+    {
+        const auto tree = wrap_tree(std::string(R"JSON({"type":"vector","id":"icon",
+          "style":{"x":0,"y":0,"width":10,"height":10,"backgroundColor":"#14b8a6"},)JSON") +
+          R"JSON("asset":{"contentHash":"sha256:)JSON" + std::string(64, 'd') +
+          R"JSON(","viewBox":[0,0,10,10],"ops":[]},"children":[]})JSON");
+        vellum::authoring::RenderedApplication rendered;
+        std::string error;
+        if (!vellum::authoring::materialize_rendered_tree(tree, rendered, &error)) {
+            std::cerr << "vector background: " << error << '\n';
+            return false;
+        }
+        const auto* node = vellum::graphics::find_node(rendered.scene, "icon");
+        const bool reported = std::any_of(
+            rendered.diagnostics.begin(), rendered.diagnostics.end(), [](const auto& d) {
+                return d.code == vellum::graphics::kStyleDroppedCode &&
+                       d.node_id == "icon" && d.property == "backgroundColor";
+            });
+        if (node == nullptr || node->fill.alpha != 0.0F || !reported) {
+            std::cerr << "vector background: a background colour was not dropped and reported\n";
+            return false;
+        }
+    }
+    return true;
+}
+
+// The cases the JavaScript vector validator reads too: each gradient is
+// materialized inside a compiled vector asset and must be accepted or refused
+// as its verdict says.
+bool gradient_parity() {
+    std::ifstream file(std::string(VELLUM_VECTOR_FIXTURE_DIR) + "/gradient-parity.cases");
+    if (!file) {
+        std::cerr << "gradient parity: the case file is missing\n";
+        return false;
+    }
+    const std::string hash = "sha256:" + std::string(64, 'd');
+    std::string line;
+    int cases = 0;
+    while (std::getline(file, line)) {
+        if (line.empty()) continue;
+        const auto first = line.find('\t');
+        const auto second = line.find('\t', first + 1);
+        const std::string verdict = line.substr(0, first);
+        const std::string name = line.substr(first + 1, second - first - 1);
+        const std::string gradient = line.substr(second + 1);
+        const auto tree = wrap_tree(std::string(R"JSON({"type":"vector","id":"icon",
+          "style":{"x":0,"y":0,"width":10,"height":10},"asset":{"contentHash":")JSON") + hash +
+          R"JSON(","viewBox":[0,0,10,10],"ops":[{"op":"path","d":"M0 0H10V10Z","fill":{"gradient":)JSON" +
+          gradient + R"JSON(}}]},"children":[]})JSON");
+        vellum::authoring::RenderedApplication rendered;
+        std::string error;
+        const bool accepted = vellum::authoring::materialize_rendered_tree(tree, rendered, &error);
+        if (accepted != (verdict == "valid")) {
+            std::cerr << "gradient parity: " << name << " was "
+                      << (accepted ? "accepted" : "refused: " + error) << ", expected " << verdict
+                      << '\n';
+            return false;
+        }
+        ++cases;
+    }
+    if (cases < 30) {
+        std::cerr << "gradient parity: too few cases\n";
+        return false;
+    }
+    return true;
+}
+
+// A compiled vector asset materializes into one vector node whose display
+// list carries groups, clips, solid and gradient paint with a gradient
+// transform, and stroke geometry; a malformed asset is refused with the
+// vector code.
+bool vector_nodes() {
+    const std::string hash = "sha256:" + std::string(64, 'd');
+    const auto tree = [&](std::string_view ops, std::string_view extra = {}) {
+        return wrap_tree(std::string(R"JSON({"type":"vector","id":"icon",
+          "style":{"x":10,"y":20,"width":100,"height":50},)JSON") + std::string(extra) +
+          R"JSON("asset":{"contentHash":")JSON" + hash +
+          R"JSON(","viewBox":[0,0,200,100],"ops":[)JSON" + std::string(ops) + "]},\"children\":[]}");
+    };
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    const auto valid = tree(R"JSON(
+        {"op":"group","transform":[1,0,0,1,5,5],"opacity":0.5,
+         "clip":{"d":"M0 0H50V50Z","rule":"evenodd"}},
+        {"op":"path","d":"M0 0H10V10Z","fill":"#ff000080","stroke":"#00ff00","strokeWidth":3,
+         "strokeLineJoin":"round","strokeLineCap":"square","strokeMiterLimit":2,
+         "strokeDasharray":[2,1],"strokeDashoffset":1},
+        {"op":"end"},
+        {"op":"path","d":"M0 0H10V10Z","fillRule":"evenodd","transform":[2,0,0,2,0,0],
+         "fill":{"gradient":{"kind":"two-circle-radial","stops":[
+            {"position":0,"color":"#000000"},{"position":0,"color":"#ffffff"},
+            {"position":1,"color":"#0000ff"}]},"transform":[10,0,0,5,1,2]},
+         "stroke":"none"})JSON");
+    if (!vellum::authoring::materialize_rendered_tree(valid, rendered, &error)) {
+        std::cerr << "vector: " << error << '\n';
+        return false;
+    }
+    const auto* node = vellum::graphics::find_node(rendered.scene, "icon");
+    if (node == nullptr || node->kind != vellum::graphics::SceneNode::Kind::vector ||
+        !node->vector || node->vector->content_hash != hash || node->vector->ops.size() != 4U ||
+        !near(node->bounds.x, 10.0F) || !near(node->vector->view_box.width, 200.0F) ||
+        !rendered.diagnostics.empty()) {
+        std::cerr << "vector: the compiled asset was not materialized\n";
+        return false;
+    }
+    using vellum::graphics::VectorOp;
+    const auto& ops = node->vector->ops;
+    const auto& group = ops[0];
+    const auto& stroked = ops[1];
+    const auto& shaded = ops[3];
+    if (group.kind != VectorOp::Kind::push_group || !near(group.opacity, 0.5F) ||
+        !group.clip || group.clip->fill_rule != vellum::graphics::FillRule::evenodd ||
+        !near(group.transform.tx, 5.0F) || stroked.kind != VectorOp::Kind::path ||
+        !near(stroked.fill.color.alpha, 128.0F / 255.0F) || !near(stroked.stroke.color.green, 1.0F) ||
+        !near(stroked.path->stroke.width, 3.0F) ||
+        stroked.path->stroke.join != vellum::graphics::StrokeJoin::round ||
+        stroked.path->stroke.cap != vellum::graphics::StrokeCap::square ||
+        stroked.path->stroke.dash_array.size() != 2U || ops[2].kind != VectorOp::Kind::pop_group ||
+        !shaded.fill.gradient ||
+        shaded.fill.gradient->kind != vellum::graphics::GradientKind::two_circle_radial ||
+        shaded.fill.gradient->stops.size() != 3U || !near(shaded.fill.gradient_transform.a, 10.0F) ||
+        !near(shaded.fill.gradient_transform.ty, 2.0F) || !near(shaded.transform.a, 2.0F) ||
+        shaded.path->fill_rule != vellum::graphics::FillRule::evenodd ||
+        shaded.stroke.color.alpha != 0.0F) {
+        std::cerr << "vector: an operation lost a field\n";
+        return false;
+    }
+    const std::vector<std::pair<std::string, std::string>> refusals{
+        {"an open group", tree(R"JSON({"op":"group"})JSON")},
+        {"an unknown op", tree(R"JSON({"op":"image"})JSON")},
+        {"bad path data", tree(R"JSON({"op":"path","d":"Q"})JSON")},
+        {"a bad paint", tree(R"JSON({"op":"path","d":"M0 0H1V1Z","fill":"red"})JSON")},
+        {"a singular gradient transform", tree(R"JSON({"op":"path","d":"M0 0H1V1Z",
+            "fill":{"gradient":{"stops":[{"position":0,"color":"#000000"},
+            {"position":1,"color":"#ffffff"}]},"transform":[0,0,0,0,0,0]}})JSON")},
+        {"an opacity over one", tree(R"JSON({"op":"group","opacity":2},{"op":"end"})JSON")},
+        {"opacity on a path", tree(R"JSON({"op":"path","d":"M0 0H1V1Z","opacity":0.5})JSON")},
+        {"a clip on a path", tree(R"JSON({"op":"path","d":"M0 0H1V1Z","clip":{"d":"M0 0H1V1Z"}})JSON")},
+        {"a field on a group end", tree(R"JSON({"op":"group"},{"op":"end","opacity":1})JSON")},
+        {"a transform on a clip", tree(R"JSON({"op":"group","clip":{"d":"M0 0H1V1Z","transform":[1,0,0,1,0,0]}},{"op":"end"})JSON")},
+        {"an extra key on a paint", tree(R"JSON({"op":"path","d":"M0 0H1V1Z","fill":{"gradient":{"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]},"opacity":1}})JSON")},
+        {"an extra key on a gradient", tree(R"JSON({"op":"path","d":"M0 0H1V1Z","fill":{"gradient":{"units":"user","stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]}}})JSON")},
+        {"a miter limit under one", tree(R"JSON({"op":"path","d":"M0 0H10V10Z","strokeMiterLimit":0})JSON")},
+        {"an extra key on a stop", tree(R"JSON({"op":"path","d":"M0 0H1V1Z","fill":{"gradient":{"stops":[{"position":0,"color":"#000000","opacity":1},{"position":1,"color":"#ffffff"}]}}})JSON")},
+    };
+    for (const auto& [what, json] : refusals) {
+        std::vector<vellum::graphics::LoweringDiagnostic> diagnostics;
+        if (vellum::authoring::materialize_rendered_tree(json, rendered, &error, &diagnostics) ||
+            diagnostics.empty() ||
+            diagnostics.back().code != vellum::graphics::kInvalidVectorAssetCode ||
+            diagnostics.back().node_id != "icon") {
+            std::cerr << "vector: " << what << " was not refused with the vector code: " << error
+                      << '\n';
+            return false;
+        }
+    }
+    const auto extra_asset_key = wrap_tree(R"JSON({"type":"vector","id":"icon","style":{"width":1,"height":1},
+        "asset":{"contentHash":"sha256:)JSON" + std::string(64, 'd') +
+        R"JSON(","viewBox":[0,0,1,1],"ops":[],"units":"px"},"children":[]})JSON");
+    {
+        std::vector<vellum::graphics::LoweringDiagnostic> diagnostics;
+        if (vellum::authoring::materialize_rendered_tree(extra_asset_key, rendered, &error, &diagnostics) ||
+            diagnostics.empty() || diagnostics.back().code != vellum::graphics::kInvalidVectorAssetCode) {
+            std::cerr << "vector: an extra key on the asset was not refused\n";
+            return false;
+        }
+    }
+    const std::string accepted_controls[] = {
+        tree(R"JSON({"op":"group","clip":{"d":"M0 0H1V1Z","rule":"evenodd"}},{"op":"end"})JSON"),
+        tree(R"JSON({"op":"path","d":"M0 0H1V1Z","fill":{"gradient":{"kind":"linear","angle":90,"stops":[{"position":0,"color":"#000000"},{"position":1,"color":"#ffffff"}]},"transform":[1,0,0,1,0,0]}})JSON"),
+    };
+    for (const auto& json : accepted_controls) {
+        if (!vellum::authoring::materialize_rendered_tree(json, rendered, &error)) {
+            std::cerr << "vector: a well-formed nested object was refused: " << error << '\n';
+            return false;
+        }
+    }
+    const auto bad_hash = wrap_tree(R"JSON({"type":"vector","id":"icon","style":{"width":1,"height":1},
+        "asset":{"contentHash":"md5:1","viewBox":[0,0,1,1],"ops":[]},"children":[]})JSON");
+    if (vellum::authoring::materialize_rendered_tree(bad_hash, rendered, &error)) {
+        std::cerr << "vector: a malformed content hash was accepted\n";
+        return false;
+    }
+    if (!vellum::authoring::materialize_rendered_tree(
+            tree("", R"JSON("extra":1,)JSON"), rendered, &error) ||
+        rendered.diagnostics.size() != 1U ||
+        rendered.diagnostics[0].code != vellum::graphics::kStyleDroppedCode ||
+        rendered.diagnostics[0].property != "extra") {
+        std::cerr << "vector: an unknown attribute was not reported\n";
+        return false;
+    }
+    return true;
+}
+
 bool expect(bool ok, const std::string& what) {
     if (!ok) std::cerr << "FAILED: " << what << std::endl;
     return ok;
@@ -1839,6 +2037,9 @@ bool token_kind_audit() {
 }
 
 int main() {
+    if (!vector_nodes()) return 1;
+    if (!gradient_parity()) return 1;
+    if (!vector_background_dropped()) return 1;
     vellum::authoring::RenderedApplication rendered;
     std::string error;
     if (!vellum::authoring::materialize_rendered_tree(
