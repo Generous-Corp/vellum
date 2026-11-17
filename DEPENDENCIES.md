@@ -199,6 +199,23 @@ V8's ABI.
 |---|---|---|---|---|
 | V8 | `v8-m158-15.8.62.6-38351a002e2c` (V8 `15.8.62.6`, revision `38351a002e2c2890eca99d3abb6622728bfd7798`), `danielraffel/v8-builder` asset `v8-mac-arm64-m158-15.8.62.6-38351a002e2c.zip` SHA-256 `828ec374aad252afd284da044743c2099ce3c9401d5e914df79aec4713517eff`; `release-metadata.json` SHA-256 `5393fe41d2b16e39bed2e5e526dab8e08bc1d4b865eb13ea5b3056c05b67e6b1` | BSD-3-Clause; bundles ICU (Unicode-3.0), zlib and Abseil (Apache-2.0) | `Vellum::SkiaDawnProvider` links `libv8.dylib`; the SDK installs it in `lib/` beside the provider and its manifest in `share/vellum/v8/` | Milestone-matched to `chrome/m158`: built against Skia `be7d7c3e996e567eda7dc9774274f7a0103cdb8c` and Dawn `1716e88cc9e58398fab5d4473f7f2e858667b677`. The library exports only the `v8::` and `cppgc::` API; its ICU, zlib and Abseil stay internal, so they cannot bind to the provider's copies (`tools/mirror/v8_symbol_census.py`). The archive ships no ICU locale data file, so `Intl` formatting and collation fail (and `Date.prototype.toLocaleString` aborts the process); Unicode property escapes, case mapping and normalization work. Notice in `NOTICE.md` |
 
+## Optional native tracing
+
+With `VELLUM_ENABLE_TRACING=ON` (default OFF; it needs `VELLUM_ENABLE_MIRROR=ON`)
+the mirrored framework units compile with their trace macros on and the
+foundation unit's library carries one Perfetto, so the framework's slices and
+the renderer's frame trace share one trace session. It is development tooling:
+the default build and every shippable SDK or release artifact leave it OFF,
+fetch nothing for it, and link nothing from it. The configure step
+(`cmake/VellumTracing.cmake`) downloads the release artifact and refuses any
+other SHA-256. `FETCHCONTENT_SOURCE_DIR_VELLUM_PERFETTO` builds an unpacked
+copy instead, unchecked. `tools/tracing/check_tracing.py` keeps the module,
+this row and `provenance/third-party-lock.json` on one pin.
+
+| Dependency | Pinned identity | License | Used by | Notes |
+|---|---|---|---|---|
+| Perfetto | `v57.2`, `google/perfetto` release asset `perfetto-cpp-sdk-src.zip` (`perfetto.h` and `perfetto.cc`) SHA-256 `c6fa3d89aee30f7da39402c9cd178c9f2e344544fda5c2109fd8457e319c3a2f` | Apache-2.0; the amalgamation also carries BSD-2-Clause code from OpenBSD's `tree.h` | `vellum-perfetto`, compiled as one position-independent static library and whole-archive linked into `vellum-mirror-foundation`, only with `VELLUM_ENABLE_TRACING=ON` | Never linked into a default build, an installed SDK or a release artifact. Perfetto's `TRACE_EVENT` takes a mutex when a chunk rolls over, so it is not real-time safe: trace UI, render and process-level code, never a live audio thread. Notice in `NOTICE.md` |
+
 ## Developer prerequisites
 
 CMake, a C++20 compiler, Python 3, Node.js, and npm are developer-supplied

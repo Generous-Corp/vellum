@@ -329,6 +329,26 @@
       ],
       "framework_blob": "93dd98aff033f69337e0cb665595ea5f0fa65aac",
       "reason": "Frame-level render pass manager: ordered background, content, effects, overlay and post-effect passes with a per-frame time budget and the whole-recording GPU render time, read by the inspector, the motion cost view and the UI preview. Distinct from the custom GPU pass API of Generous-Corp/vellum#432."
+    },
+    {
+      "framework_path": "framework/core/render/include/vellum/render/frame_trace_adapter.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Native adapter from the renderer's FrameTraceSink to the framework's Perfetto session, so one trace carries the framework's and the renderer's tracks. Vellum wrote this; Pulp has no frame trace sink. It compiles to stubs unless VELLUM_ENABLE_TRACING is on."
+    },
+    {
+      "framework_path": "framework/core/render/src/frame_trace_adapter.cpp",
+      "change": "added",
+      "target": "pulp-gpu-device",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Native adapter from the renderer's FrameTraceSink to the framework's Perfetto session, so one trace carries the framework's and the renderer's tracks. Vellum wrote this; Pulp has no frame trace sink. It compiles to stubs unless VELLUM_ENABLE_TRACING is on."
     }
   ]
 }

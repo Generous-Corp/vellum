@@ -28,6 +28,8 @@ set(VELLUM_V8_ARCHIVE "" CACHE FILEPATH
     "Local copy of the pinned sealed V8 archive; digest-checked like a download")
 option(VELLUM_ENABLE_ADDRESS_SANITIZER
     "Instrument Vellum targets with AddressSanitizer" OFF)
+option(VELLUM_ENABLE_TRACING
+    "Compile development-only native Perfetto tracing into the mirrored framework units (needs VELLUM_ENABLE_MIRROR; never ship enabled)" OFF)
 option(VELLUM_ENABLE_RMLUI
     "Build the optional RmlUi module (rmlui/; fetches its pinned RmlUi source)" OFF)
 set(VELLUM_AUTHORING_TEST_BUNDLE "" CACHE FILEPATH
@@ -68,6 +70,7 @@ if(APPLE AND VELLUM_ENABLE_GPU AND
 endif()
 
 include(cmake/VellumThreeJsPayload.cmake)
+include(cmake/VellumTracing.cmake)
 add_subdirectory(foundation)
 add_subdirectory(runtime)
 add_subdirectory(components)
@@ -544,6 +547,23 @@ if(VELLUM_BUILD_TESTS)
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.rmlui-sdk-artifact-unit
         COMMAND "${Python3_EXECUTABLE}" -I scripts/test_verify_rmlui_sdk_artifact.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Native Perfetto tracing stays out of a default build and is wired once
+    # in a tracing build: the source and pin checks, then the built tree
+    # against the option it was configured with.
+    if(VELLUM_ENABLE_TRACING)
+        set(_vellum_tracing_expect on)
+    else()
+        set(_vellum_tracing_expect off)
+    endif()
+    add_test(NAME vellum.tracing-source
+        COMMAND "${Python3_EXECUTABLE}" -I tools/tracing/check_tracing.py
+            source "${CMAKE_CURRENT_SOURCE_DIR}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.tracing-build-state
+        COMMAND "${Python3_EXECUTABLE}" -I tools/tracing/check_tracing.py
+            build "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}"
+            --expect ${_vellum_tracing_expect}
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.provenance-unit
         COMMAND "${Python3_EXECUTABLE}"

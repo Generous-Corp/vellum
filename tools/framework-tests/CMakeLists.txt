@@ -22,6 +22,11 @@ function(vellum_add_framework_test name)
     target_include_directories("${_target}" PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}" ${_vellum_framework_test_includes})
     target_link_libraries("${_target}" PRIVATE ${_test_UNITS})
+    # A tracing build compiles every mirrored object with the trace switch, so a
+    # test that includes framework headers must agree with it.
+    if(TARGET vellum-tracing)
+        target_link_libraries("${_target}" PRIVATE vellum-tracing)
+    endif()
     set_target_properties("${_target}" PROPERTIES
         CXX_STANDARD 20
         CXX_STANDARD_REQUIRED ON
@@ -110,6 +115,9 @@ target_include_directories(vellum-wgsl-validate PRIVATE
 target_compile_definitions(vellum-wgsl-validate PRIVATE
     "$<TARGET_PROPERTY:vellum-mirror-render-2d,INTERFACE_COMPILE_DEFINITIONS>")
 target_link_libraries(vellum-wgsl-validate PRIVATE VellumGpuRuntime::Device VellumGpuRuntime::Dawn)
+if(TARGET vellum-tracing)
+    target_link_libraries(vellum-wgsl-validate PRIVATE vellum-tracing)
+endif()
 set_target_properties(vellum-wgsl-validate PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON
@@ -143,6 +151,21 @@ set_tests_properties(vellum.framework.wgsl-validate-rejects-invalid PROPERTIES
 set_tests_properties(vellum.framework.wgsl-validate-creates-stamp-dir PROPERTIES
     SKIP_REGULAR_EXPRESSION "stamp written: skipped"
     LABELS "framework;wgsl" TIMEOUT 60)
+
+# One native Perfetto session holding the framework's and the renderer's tracks
+# (VELLUM_ENABLE_TRACING). It renders on a real surface and exits 77, a skip,
+# when the host has no adapter.
+if(VELLUM_ENABLE_TRACING AND TARGET vellum-scene-capture-harness)
+    vellum_add_framework_test(native-trace
+        SOURCES native_trace_test.cpp
+        UNITS Vellum::MirrorFoundation Vellum::MirrorRender_2d vellum-scene-capture-harness)
+    target_include_directories(vellum-framework-native-trace-test PRIVATE
+        "${PROJECT_SOURCE_DIR}/graphics/tests")
+    set_tests_properties(vellum.framework.native-trace PROPERTIES SKIP_RETURN_CODE 77)
+else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES
+        "native_trace_test.cpp")
+endif()
 
 vellum_add_framework_test(widget-bridge-param-model
     SOURCES widget_bridge_param_model_test.cpp

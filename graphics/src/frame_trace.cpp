@@ -57,14 +57,19 @@ bool install_frame_trace_sink_if_none(const FrameTraceSink& sink) {
     return true;
 }
 
+}  // namespace detail
+
 void clear_frame_trace_sink_for(void* context) noexcept {
-    const auto* active = active_frame_trace_sink_storage.load(std::memory_order_acquire);
+    const auto* active = detail::active_frame_trace_sink_storage.load(std::memory_order_acquire);
     if (active == nullptr || active->context != context) return;
-    active_frame_trace_sink_storage.compare_exchange_strong(
+    detail::active_frame_trace_sink_storage.compare_exchange_strong(
         active, nullptr, std::memory_order_acq_rel);
 }
 
-}  // namespace detail
+void* frame_trace_sink_context() noexcept {
+    const auto* active = detail::active_frame_trace_sink();
+    return active != nullptr ? active->context : nullptr;
+}
 
 void clear_frame_trace_sink() noexcept {
     detail::active_frame_trace_sink_storage.store(nullptr, std::memory_order_release);
@@ -163,7 +168,7 @@ bool FrameTraceRecorder::start_if_idle() {
     return detail::install_frame_trace_sink_if_none(state_->sink);
 }
 
-void FrameTraceRecorder::stop() noexcept { detail::clear_frame_trace_sink_for(state_.get()); }
+void FrameTraceRecorder::stop() noexcept { clear_frame_trace_sink_for(state_.get()); }
 
 std::size_t FrameTraceRecorder::event_count() const {
     std::lock_guard lock(state_->mutex);

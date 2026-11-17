@@ -73,6 +73,47 @@ With no sink installed, each emission site is one inlined atomic load and a
 branch, and nothing is formatted or allocated. The cache and layer counters
 are read only inside that branch.
 
+### One native Perfetto trace for the framework and the renderer
+
+A development build can put the renderer's tracks in the same Perfetto session
+as the framework's. It is off by default: nothing is fetched, compiled or
+linked for it unless you configure it, and no shippable build has it.
+
+1. Configure a mirror build with tracing on. The configure fetches Perfetto
+   v57.2 and refuses any archive whose SHA-256 differs from the pin in
+   `cmake/VellumTracing.cmake`:
+
+   ```sh
+   cmake -S . -B build-trace -G Ninja -DCMAKE_BUILD_TYPE=Release \
+       -DVELLUM_ENABLE_MIRROR=ON -DVELLUM_ENABLE_TRACING=ON \
+       -DVELLUM_SKIA_ARCHIVE=<skia-build-mac-universal-gpu-release.zip>
+   cmake --build build-trace
+   ```
+
+2. In your app, start the session and install the adapter. Both are no-ops
+   returning false in a build without tracing, so no `#if` is needed:
+
+   ```cpp
+   #include <vellum/render/frame_trace_adapter.hpp>
+   #include <vellum/runtime/trace_session.hpp>
+
+   vellum::runtime::Tracing::start({}, "/tmp/vellum.pftrace");
+   vellum::render::install_native_frame_trace();
+   // ... render ...
+   vellum::render::remove_native_frame_trace();
+   vellum::runtime::Tracing::stop();
+   ```
+
+3. Open `/tmp/vellum.pftrace` in https://ui.perfetto.dev. Framework slices and
+   the renderer's `graphics.*` slices, counters and instants share the file;
+   the renderer's tracks are in the `render` category.
+
+`install_native_frame_trace` installs the process-wide frame trace sink, so it
+replaces a sink you set before it and `VELLUM_FRAME_TRACE` stands down while it
+is installed. `vellum.framework.native-trace` runs this path on a real surface,
+reads the file back and checks both sets of slices; run it with
+`ctest --test-dir build-trace -R "tracing|native-trace"`.
+
 ## Damage overlay
 
 ```sh
