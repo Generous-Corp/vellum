@@ -4,11 +4,13 @@ add_library(vellum-graphics
     src/damage.cpp
     src/effect.cpp
     src/frame_driver.cpp
+    src/hit_test.cpp
     src/image_asset.cpp
     src/image_decode_queue.cpp
     src/layer_cache.cpp
     src/paint_command.cpp
     src/path_geometry.cpp
+    src/pointer_router.cpp
     src/vector_asset.cpp
     src/plot.cpp
     src/plot_feed.cpp
@@ -54,7 +56,8 @@ if(VELLUM_HAS_SKIA_DAWN)
         src/dawn_bootstrap.cpp
         src/frame_trace.cpp
         src/image_decode.mm
-        src/skia_dawn_surface.mm)
+        src/skia_dawn_surface.mm
+        src/text_paragraph.cpp)
     target_include_directories(vellum-skia-dawn-provider PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_compile_features(vellum-skia-dawn-provider PRIVATE cxx_std_20)

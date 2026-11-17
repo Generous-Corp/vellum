@@ -13,12 +13,14 @@
 #include <vellum/graphics/vector_asset.hpp>
 
 #include "skia_dawn_surface_test_access.hpp"
+#include <gpu_runtime/gpu_diagnostics.hpp>
 #include <gpu_runtime/gpu_surface.hpp>
 
 #include "animation_testing.hpp"
 #include "frame_trace.hpp"
 #include "skia_dawn_surface_testing.hpp"
 #include "skia_resource_caches.hpp"
+#include "text_paragraph.hpp"
 #include "utf8_text.hpp"
 
 #import <QuartzCore/CAMetalLayer.h>
@@ -79,6 +81,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -104,6 +107,35 @@ std::atomic<bool> enclose_group_layers{true};
 std::atomic<bool> enclose_vector_assets{true};
 std::atomic<bool> enclose_effects{true};
 std::atomic<bool> enclose_backdrops{true};
+
+std::atomic<std::uint32_t> failing_recreations{0U};
+std::atomic<std::uint32_t> losing_recreations{0U};
+std::atomic<std::uint32_t> failing_rebuilds{0U};
+std::atomic<std::uint32_t> losing_frames{0U};
+std::atomic<testing::RecoveryClock> recovery_clock{nullptr};
+
+std::chrono::steady_clock::time_point recovery_now() {
+    const auto clock = recovery_clock.load();
+    return clock != nullptr ? clock() : std::chrono::steady_clock::now();
+}
+
+// The wait before the next attempt after `failures` failures in a row.
+std::chrono::steady_clock::duration recovery_backoff(std::uint32_t failures) {
+    auto wait = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        testing::kDeviceRecoveryFirstBackoff);
+    const auto cap = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        testing::kDeviceRecoveryMaxBackoff);
+    for (std::uint32_t index = 1; index < failures && wait < cap; ++index) wait *= 2;
+    return std::min(wait, cap);
+}
+
+// Takes one from a test injection count, reporting whether there was one.
+bool take_injection(std::atomic<std::uint32_t>& count) noexcept {
+    auto pending = count.load();
+    while (pending > 0 && !count.compare_exchange_weak(pending, pending - 1U)) {
+    }
+    return pending > 0;
+}
 
 void set_error(std::string* destination, std::string message) {
     if (destination != nullptr) {
@@ -195,61 +227,6 @@ SkRRect rounded_rect(const SkRect& rect, const CornerRadii& radii, float outset 
     SkRRect result;
     result.setRectRadii(rect, corners);
     return result;
-}
-
-std::filesystem::path font_directory(std::string_view requested) {
-    if (!requested.empty()) return std::filesystem::path(requested);
-    Dl_info info{};
-    if (dladdr(reinterpret_cast<const void*>(&font_directory), &info) != 0 &&
-        info.dli_fname != nullptr) {
-        const auto library_directory = std::filesystem::path(info.dli_fname).parent_path();
-        const auto bundled = library_directory.parent_path() /
-            "Resources" / "vellum" / "fonts";
-        if (std::filesystem::is_directory(bundled)) return bundled;
-        const auto installed = library_directory /
-            VELLUM_DATADIR_FROM_LIBDIR / "vellum" / "fonts";
-        if (std::filesystem::is_directory(installed)) return installed;
-        const auto build_tree = library_directory /
-            VELLUM_BUILD_DATADIR_FROM_PROVIDER_DIR / "vellum" / "fonts";
-        if (std::filesystem::is_directory(build_tree)) return build_tree;
-    }
-    return {};
-}
-
-SkFontStyle font_style(const TextStyle& style) {
-    return {std::clamp(style.font_weight, 100, 900),
-            SkFontStyle::kNormal_Width, SkFontStyle::kUpright_Slant};
-}
-
-struct PackagedFontSet {
-    sk_sp<skia::textlayout::FontCollection> collection;
-    std::vector<sk_sp<SkTypeface>> typefaces;
-};
-
-bool is_nonrendering_code_point(std::uint32_t code_point) {
-    return code_point <= 0x1FU || (code_point >= 0x7FU && code_point <= 0x9FU) ||
-        (code_point >= 0x200BU && code_point <= 0x200FU) || code_point == 0x2060U ||
-        (code_point >= 0x202AU && code_point <= 0x202EU) ||
-        (code_point >= 0x2066U && code_point <= 0x2069U) ||
-        (code_point >= 0xFE00U && code_point <= 0xFE0FU) ||
-        (code_point >= 0xE0100U && code_point <= 0xE01EFU);
-}
-
-bool has_packaged_glyph(
-    std::uint32_t code_point,
-    const std::vector<sk_sp<SkTypeface>>& typefaces) {
-    if (is_nonrendering_code_point(code_point)) return true;
-    return std::any_of(typefaces.begin(), typefaces.end(), [code_point](const auto& face) {
-        return face->unicharToGlyph(static_cast<SkUnichar>(code_point)) != 0U;
-    });
-}
-
-std::string replace_unsupported_text(
-    std::string_view text,
-    const std::vector<sk_sp<SkTypeface>>& typefaces) {
-    return detail::replace_unsupported_text(text, [&typefaces](std::uint32_t code_point) {
-        return has_packaged_glyph(code_point, typefaces);
-    });
 }
 
 // Textures uploaded for one frame, so a texture shared by several meshes (a
@@ -435,109 +412,121 @@ bool draw_linear_gradient(
     return true;
 }
 
-bool build_text_paragraph(
-    const std::vector<TextRun>& requested_runs,
-    std::string_view requested_directory,
-    std::unique_ptr<skia::textlayout::Paragraph>& paragraph,
-    TextMetrics& metrics,
-    std::string* error) {
-    static std::mutex paragraph_mutex;
-    const std::scoped_lock lock(paragraph_mutex);
-    static const sk_sp<SkFontMgr> manager = SkFontMgr_New_CoreText(nullptr);
-    static const sk_sp<SkUnicode> unicode = SkUnicodes::ICU::Make();
-    static std::unordered_map<std::string, PackagedFontSet> font_cache;
-    const auto directory = font_directory(requested_directory);
-    if (!manager || !unicode || directory.empty() ||
-        !std::filesystem::is_directory(directory)) {
-        set_error(error, "Vellum packaged font directory is unavailable: " + directory.string());
-        return false;
-    }
+std::string code_point_name(std::uint32_t code_point) {
+    std::array<char, 16> buffer{};
+    std::snprintf(buffer.data(), buffer.size(), "U+%04X", code_point);
+    return buffer.data();
+}
 
-    const auto cache_key = directory.lexically_normal().string();
-    auto cached = font_cache.find(cache_key);
-    if (cached == font_cache.end()) {
-        PackagedFontSet loaded;
-        auto provider = sk_make_sp<skia::textlayout::TypefaceFontProvider>();
-        constexpr std::array<std::string_view, 7> packaged_fonts{
-            "Inter-Regular.ttf", "Jost-Regular.ttf", "Jost-Medium.ttf",
-            "Jost-SemiBold.ttf", "Jost-Bold.ttf", "NotoSansJP[wght].ttf",
-            "NotoSansArabic[wdth,wght].ttf",
-        };
-        for (const auto filename : packaged_fonts) {
-            const auto path = directory / filename;
-            auto typeface = manager->makeFromFile(path.c_str());
-            if (!typeface) {
-                set_error(error, "Vellum packaged font is unavailable: " + path.string());
-                return false;
+// One `kTextGlyphMissingCode` warning for each text node of `scene` with
+// characters it cannot draw, in depth-first order.
+std::vector<LoweringDiagnostic> missing_glyph_diagnostics(const Scene& scene,
+                                                          std::string_view directory) {
+    std::vector<const SceneNode*> nodes;
+    std::vector<std::size_t> first_query;
+    std::vector<detail::GlyphQuery> queries;
+    const std::function<void(const SceneNode&)> walk = [&](const SceneNode& node) {
+        if (node.kind == SceneNode::Kind::text) {
+            nodes.push_back(&node);
+            first_query.push_back(queries.size());
+            if (node.text_runs.empty()) queries.push_back({node.font_family, node.text});
+            for (const auto& run : node.text_runs) {
+                queries.push_back({run.style.font_family, run.text});
             }
-            loaded.typefaces.push_back(typeface);
-            provider->registerTypeface(std::move(typeface));
         }
-        if (!has_packaged_glyph(static_cast<std::uint32_t>('?'), loaded.typefaces)) {
-            set_error(error, "Vellum packaged fonts have no unsupported-text placeholder");
-            return false;
-        }
-        loaded.collection = sk_make_sp<skia::textlayout::FontCollection>();
-        loaded.collection->setAssetFontManager(provider);
-        loaded.collection->setDefaultFontManager(provider, std::vector<SkString>{
-            SkString("Inter"), SkString("Noto Sans JP"), SkString("Noto Sans Arabic")});
-        loaded.collection->disableFontFallback();
-        cached = font_cache.emplace(cache_key, std::move(loaded)).first;
-    }
-
-    skia::textlayout::ParagraphStyle paragraph_style;
-    paragraph_style.setMaxLines(1U);
-    paragraph_style.setTextAlign(skia::textlayout::TextAlign::kLeft);
-    auto builder = skia::textlayout::ParagraphBuilder::make(
-        paragraph_style, cached->second.collection, unicode);
-    if (!builder) {
-        set_error(error, "Vellum could not create the attributed-text paragraph builder");
-        return false;
-    }
-
-    for (const auto& requested : requested_runs) {
-        if (requested.text.empty()) continue;
-        skia::textlayout::TextStyle style;
-        style.setFontFamilies({
-            SkString(requested.style.font_family.empty()
-                ? "Inter" : requested.style.font_family.c_str()),
-            SkString("Noto Sans Arabic"),
-            SkString("Noto Sans JP"),
-            SkString("Inter"),
-        });
-        style.setFontStyle(font_style(requested.style));
-        style.setFontSize(std::max(1.0F, requested.style.font_size));
-        style.setLetterSpacing(requested.style.letter_spacing);
-        style.setFontEdging(SkFont::Edging::kAntiAlias);
-        SkPaint foreground;
-        foreground.setAntiAlias(true);
-        foreground.setColor4f(sk_color(requested.style.color));
-        style.setForegroundPaint(foreground);
-        int decoration = skia::textlayout::kNoDecoration;
-        if (requested.style.underline) decoration |= skia::textlayout::kUnderline;
-        if (requested.style.strikethrough) decoration |= skia::textlayout::kLineThrough;
-        style.setDecoration(static_cast<skia::textlayout::TextDecoration>(decoration));
-        style.setDecorationColor(foreground.getColor());
-        builder->pushStyle(style);
-        const auto text = replace_unsupported_text(
-            requested.text, cached->second.typefaces);
-        builder->addText(text.data(), text.size());
-        builder->pop();
-    }
-
-    paragraph = builder->Build();
-    if (!paragraph) {
-        set_error(error, "Vellum could not build the attributed-text paragraph");
-        return false;
-    }
-    paragraph->layout(1000000000.0F);
-    metrics = {
-        .width = paragraph->getMaxIntrinsicWidth(),
-        .ascent = paragraph->getAlphabeticBaseline(),
-        .descent = std::max(
-            0.0F, paragraph->getHeight() - paragraph->getAlphabeticBaseline()),
-        .baseline = paragraph->getAlphabeticBaseline(),
+        for (const auto& child : node.children) walk(child);
     };
+    walk(scene.root);
+    std::vector<LoweringDiagnostic> output;
+    if (queries.empty()) return output;
+    const bool box = draws_missing_glyph_box(scene.scene_version);
+    const auto found = detail::find_missing_glyphs(
+        directory, queries,
+        box ? detail::MissingGlyphs::notdef_box : detail::MissingGlyphs::question_mark);
+    if (found.size() != queries.size()) return output;
+    for (std::size_t index = 0; index < nodes.size(); ++index) {
+        const auto end = index + 1U < nodes.size() ? first_query[index + 1U] : queries.size();
+        std::vector<std::uint32_t> missing;
+        for (auto query = first_query[index]; query < end; ++query) {
+            missing.insert(missing.end(), found[query].begin(), found[query].end());
+        }
+        std::sort(missing.begin(), missing.end());
+        missing.erase(std::unique(missing.begin(), missing.end()), missing.end());
+        if (missing.empty()) continue;
+        std::string names;
+        for (const auto code_point : missing) {
+            if (!names.empty()) names += ", ";
+            names += code_point_name(code_point);
+        }
+        const auto& node = *nodes[index];
+        output.push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(kTextGlyphMissingCode),
+            .node_id = node.id,
+            .property = "text",
+            .message = "text " + node.id + " has no packaged glyph for " + names +
+                       (box ? "; drawn as the missing-glyph box" : "; drawn as ?"),
+        });
+    }
+    return output;
+}
+
+detail::ParagraphAlign paragraph_align(TextAlign align) {
+    switch (align) {
+    case TextAlign::start: return detail::ParagraphAlign::start;
+    case TextAlign::center: return detail::ParagraphAlign::center;
+    case TextAlign::end: return detail::ParagraphAlign::end;
+    case TextAlign::justify: return detail::ParagraphAlign::justify;
+    }
+    return detail::ParagraphAlign::start;
+}
+
+// Shapes the paragraph `key` describes through `detail::shape_paragraph`.
+// Without a layout it is one unwrapped, left-aligned line, as every scene
+// before version 13 drew it; with one it wraps at `key.width`.
+bool build_text_paragraph(
+    const detail::ParagraphKey& key,
+    detail::CachedParagraph& built,
+    std::string* error) {
+    detail::ParagraphRequest request{
+        .font_directory = key.font_directory,
+        .missing_glyphs = key.missing_glyph_box ? detail::MissingGlyphs::notdef_box
+                                                : detail::MissingGlyphs::question_mark,
+    };
+    request.runs.reserve(key.runs.size());
+    for (const auto& run : key.runs) {
+        request.runs.push_back({
+            .text = run.text,
+            .style = {.font_family = run.style.font_family,
+                      .font_weight = run.style.font_weight,
+                      .font_size = run.style.font_size,
+                      .letter_spacing = run.style.letter_spacing,
+                      .color = sk_color(run.style.color),
+                      .underline = run.style.underline,
+                      .strikethrough = run.style.strikethrough},
+        });
+    }
+    if (key.layout) {
+        request.wrap = detail::ParagraphWrap{
+            .width = key.width,
+            .align = paragraph_align(key.layout->align),
+            .line_height = key.layout->line_height,
+            .max_lines = key.layout->max_lines,
+            .ellipsis = key.layout->ellipsis,
+        };
+    }
+    detail::ShapedParagraph shaped;
+    if (!detail::shape_paragraph(request, shaped, error)) return false;
+    built.paragraph = std::move(shaped.paragraph);
+    built.metrics = {
+        .width = shaped.width,
+        .ascent = shaped.ascent,
+        .descent = shaped.descent,
+        .baseline = shaped.baseline,
+    };
+    built.line_count = shaped.lines;
+    built.unresolved = std::move(shaped.unresolved);
     return true;
 }
 
@@ -595,20 +584,33 @@ SkRect layer_rect(const Rect& rect) {
 
 using ParagraphSlot = detail::CachedParagraph;
 
-// Finds the laid-out paragraph for `runs`, or builds and caches it.
-bool paragraph_for(std::vector<TextRun> runs, std::string_view directory,
-                   FrameResources& resources, ParagraphSlot& slot, std::string* error) {
+// What `command` shapes `runs` with: its layout, the box width it wraps at
+// and how it draws missing glyphs.
+detail::ParagraphKey paragraph_key(const PaintCommand& command, std::vector<TextRun> runs,
+                                   std::string_view directory) {
+    return {
+        .font_directory = std::string(directory),
+        .runs = std::move(runs),
+        .layout = command.text_layout,
+        .width = command.text_layout ? command.bounds.width : 0.0F,
+        .missing_glyph_box = command.missing_glyph_box,
+    };
+}
+
+// Finds the laid-out paragraph for `command` drawn with `runs`, or builds and
+// caches it.
+bool paragraph_for(const PaintCommand& command, std::vector<TextRun> runs,
+                   std::string_view directory, FrameResources& resources, ParagraphSlot& slot,
+                   std::string* error) {
     auto* caches = resources.caches;
-    detail::ParagraphKey key{.font_directory = std::string(directory), .runs = std::move(runs)};
+    auto key = paragraph_key(command, std::move(runs), directory);
     if (caches != nullptr) {
         if (const auto* cached = caches->paragraphs.find(key, caches->frame)) {
             slot = *cached;
             return true;
         }
     }
-    std::unique_ptr<skia::textlayout::Paragraph> built;
-    if (!build_text_paragraph(key.runs, directory, built, slot.metrics, error)) return false;
-    slot.paragraph = std::move(built);
+    if (!build_text_paragraph(key, slot, error)) return false;
     if (caches != nullptr) {
         const auto bytes = detail::estimated_paragraph_bytes(key);
         caches->paragraphs.insert(std::move(key), slot, bytes, caches->frame);
@@ -645,7 +647,8 @@ bool draw_text(SkCanvas& canvas, const PaintCommand& command, float opacity,
     ParagraphSlot built;
     ParagraphSlot& cached = slot != nullptr ? *slot : built;
     if (!cached.paragraph &&
-        !paragraph_for(text_draw_runs(command, opacity), directory, resources, cached, error)) {
+        !paragraph_for(command, text_draw_runs(command, opacity), directory, resources, cached,
+                       error)) {
         return false;
     }
     auto& paragraph = cached.paragraph;
@@ -1397,6 +1400,7 @@ Extent command_extent(const PaintCommand& command, const Rect& frame, float scal
             painted.kind = SceneNode::Kind::text;
             painted.text = command.text;
             painted.text_runs = command.text_runs;
+            painted.text_layout = command.text_layout;
             painted.font_size = command.font_size;
             break;
         case PaintCommand::Kind::mesh:
@@ -1621,13 +1625,11 @@ void record_gpu_time(skgpu::graphite::GpuFinishedContext context,
 std::optional<Rect> measured_text_extent(const PaintCommand& command,
                                          std::string_view directory, ParagraphSlot& slot,
                                          std::string* error) {
-    if (!slot.paragraph) {
-        std::unique_ptr<skia::textlayout::Paragraph> paragraph;
-        if (!build_text_paragraph(text_draw_runs(command, own_paint_opacity(command)),
-                                  directory, paragraph, slot.metrics, error)) {
-            return std::nullopt;
-        }
-        slot.paragraph = std::shared_ptr<skia::textlayout::Paragraph>(std::move(paragraph));
+    if (!slot.paragraph &&
+        !build_text_paragraph(
+            paragraph_key(command, text_draw_runs(command, own_paint_opacity(command)), directory),
+            slot, error)) {
+        return std::nullopt;
     }
     const auto& metrics = slot.metrics;
     float overhang = command.font_size;
@@ -1933,47 +1935,33 @@ std::string_view to_string(FullRepaintReason reason) noexcept {
         case FullRepaintReason::frame_mismatch: return "frame_mismatch";
         case FullRepaintReason::damage_model_version: return "damage_model_version";
         case FullRepaintReason::damage_frame_mismatch: return "damage_frame_mismatch";
+        case FullRepaintReason::device_recovered: return "device_recovered";
     }
     return "unknown";
 }
 
-class SkiaDawnSurface::Impl final {
+namespace detail {
+
+// The Dawn instance and the current device of a `SkiaDawnDevice`, or of a
+// surface that owns its device. Everything but `LossState` belongs to the
+// render thread; the device-lost callback only publishes into `LossState`.
+class DawnDeviceCore final {
 public:
-    ~Impl() {
-        detail::flush_frame_trace_from_environment();
-        layer_images_.clear();
-        frame_surface_.reset();
-        retained_image_.reset();
-        retained_surface_.reset();
-        recorder_.reset();
-        if (context_) {
-            context_->submit(skgpu::graphite::SyncToCpu::kYes);
-            context_->checkAsyncWorkCompletion();
-        }
-        context_.reset();
-        current_texture_ = nullptr;
-        surface_ = nullptr;
+    DawnDeviceCore() = default;
+    DawnDeviceCore(const DawnDeviceCore&) = delete;
+    DawnDeviceCore& operator=(const DawnDeviceCore&) = delete;
+
+    ~DawnDeviceCore() {
         queue_ = nullptr;
         device_ = nullptr;
         adapter_ = nullptr;
+        compatible_surface_ = nullptr;
         instance_ = nullptr;
         native_instance_.reset();
     }
 
-    bool initialize(const Config& requested, std::string* error) {
-        config_ = requested;
-        detail::start_frame_trace_from_environment();
-        damage_overlay_ = config_.damage_overlay || environment_flag_on("VELLUM_DAMAGE_OVERLAY");
-        if (config_.width == 0 || config_.height == 0 ||
-            !std::isfinite(config_.scale) || config_.scale <= 0.0F) {
-            set_error(error, "GPU surface dimensions and scale must be positive");
-            return false;
-        }
-
-        if (!dawn_bootstrap_is_registered(error)) {
-            return false;
-        }
-
+    bool create_instance(std::string* error) {
+        if (!dawn_bootstrap_is_registered(error)) return false;
         wgpu::InstanceDescriptor instance_descriptor{};
         const wgpu::InstanceFeatureName instance_features[] = {
             wgpu::InstanceFeatureName::TimedWaitAny,
@@ -1987,81 +1975,359 @@ public:
             set_error(error, "Dawn could not create an instance");
             return false;
         }
+        return true;
+    }
+
+    // The surface every adapter this core requests must present to.
+    void set_compatible_surface(wgpu::Surface surface) {
+        compatible_surface_ = std::move(surface);
+    }
+
+    // Requests an adapter and a device from the instance and makes them
+    // current under the next generation. The current device is kept when
+    // either request fails.
+    bool acquire(std::string* error, const wgpu::Surface& compatible = {}) {
+        const auto current = generation_.load(std::memory_order_relaxed);
+        if (current > 0 && take_injection(failing_recreations)) {
+            set_error(error, "device recreation failed by test injection");
+            return false;
+        }
+        wgpu::RequestAdapterOptions adapter_options{};
+        adapter_options.powerPreference = wgpu::PowerPreference::HighPerformance;
+        adapter_options.backendType = wgpu::BackendType::Metal;
+        if (compatible) {
+            adapter_options.compatibleSurface = compatible;
+        } else if (compatible_surface_) {
+            adapter_options.compatibleSurface = compatible_surface_;
+        }
+        wgpu::Adapter adapter;
+        wgpu::RequestAdapterStatus adapter_status = wgpu::RequestAdapterStatus::Unavailable;
+        std::string adapter_message;
+        instance_.RequestAdapter(
+            &adapter_options,
+            wgpu::CallbackMode::AllowProcessEvents,
+            [&](wgpu::RequestAdapterStatus status, wgpu::Adapter result,
+                wgpu::StringView message) {
+                adapter_status = status;
+                adapter_message = string_view(message);
+                if (status == wgpu::RequestAdapterStatus::Success) {
+                    adapter = std::move(result);
+                }
+            });
+        instance_.ProcessEvents();
+        if (adapter_status != wgpu::RequestAdapterStatus::Success || !adapter) {
+            set_error(error, "Dawn Metal adapter unavailable: " + adapter_message);
+            return false;
+        }
+
+        const auto generation = current + 1U;
+        wgpu::DeviceDescriptor device_descriptor{};
+        device_descriptor.label = "Vellum Skia/Dawn Device";
+        const wgpu::FeatureName timestamp_feature[] = {wgpu::FeatureName::TimestampQuery};
+        if (adapter.HasFeature(wgpu::FeatureName::TimestampQuery)) {
+            device_descriptor.requiredFeatureCount = 1;
+            device_descriptor.requiredFeatures = timestamp_feature;
+        }
+        device_descriptor.SetDeviceLostCallback(
+            wgpu::CallbackMode::AllowSpontaneous,
+            [state = loss_, generation](const wgpu::Device&, wgpu::DeviceLostReason reason,
+                                        wgpu::StringView message) {
+                if (reason == wgpu::DeviceLostReason::Destroyed ||
+                    reason == wgpu::DeviceLostReason::CallbackCancelled ||
+                    reason == wgpu::DeviceLostReason::FailedCreation) {
+                    return;
+                }
+                state->publish(generation, string_view(message));
+            });
+        // Activated before the request, so a loss reported before the device
+        // is installed is kept rather than dropped as a stale generation.
+        loss_->activate(generation);
+        wgpu::Device device;
+        wgpu::RequestDeviceStatus device_status = wgpu::RequestDeviceStatus::Error;
+        std::string device_message;
+        adapter.RequestDevice(
+            &device_descriptor,
+            wgpu::CallbackMode::AllowProcessEvents,
+            [&](wgpu::RequestDeviceStatus status, wgpu::Device result,
+                wgpu::StringView message) {
+                device_status = status;
+                device_message = string_view(message);
+                if (status == wgpu::RequestDeviceStatus::Success) {
+                    device = std::move(result);
+                }
+            });
+        instance_.ProcessEvents();
+        if (device_status != wgpu::RequestDeviceStatus::Success || !device) {
+            loss_->activate(current);
+            set_error(error, "Dawn Metal device unavailable: " + device_message);
+            return false;
+        }
+        if (current > 0 && take_injection(losing_recreations)) {
+            device.ForceLoss(wgpu::DeviceLostReason::Unknown, "Vellum simulated device loss");
+            instance_.ProcessEvents();
+        }
+        adapter_ = std::move(adapter);
+        device_ = std::move(device);
+        queue_ = device_.GetQueue();
+        generation_.store(generation, std::memory_order_relaxed);
+        return true;
+    }
+
+    const wgpu::Instance& instance() const noexcept { return instance_; }
+    const wgpu::Adapter& adapter() const noexcept { return adapter_; }
+    const wgpu::Device& device() const noexcept { return device_; }
+    const wgpu::Queue& queue() const noexcept { return queue_; }
+    std::uint64_t generation() const noexcept {
+        return generation_.load(std::memory_order_relaxed);
+    }
+
+    // Whether the current device has been lost.
+    bool current_lost() const noexcept {
+        const auto current = generation();
+        return current > 0 && loss_->lost.load(std::memory_order_acquire) == current;
+    }
+
+    // Records that the device of `generation` is lost, as the callback does,
+    // for a loss the render thread found first (Graphite reporting it).
+    void report_lost(std::uint64_t generation, std::string_view message) {
+        loss_->publish(generation, message);
+    }
+
+    // Counts and reports the loss of `generation` once, however many surfaces
+    // see it.
+    void note_loss(std::uint64_t generation) {
+        if (generation <= reported_loss_) return;
+        reported_loss_ = generation;
+        losses_.fetch_add(1U, std::memory_order_relaxed);
+        const auto message = loss_->message_for(generation);
+        gpu_runtime::emit_gpu_diagnostic(
+            gpu_runtime::GpuDiagnosticSeverity::error, "vellum.graphics.device_lost",
+            message.empty() ? std::string_view("the Dawn device was lost")
+                            : std::string_view(message));
+    }
+
+
+    // Makes the current device usable: does nothing while it is live, and
+    // otherwise creates its replacement, at most once per call and no sooner
+    // than the backoff since the previous attempt allows. The replacement's
+    // adapter must present to `compatible` when it is given.
+    bool recover(std::string* error, const wgpu::Surface& compatible = {}) {
+        if (!current_lost()) return true;
+        if (terminal_.load(std::memory_order_acquire)) {
+            set_error(error, "the Dawn device was lost and could not be recreated after " +
+                                 std::to_string(testing::kDeviceRecoveryAttempts) +
+                                 " attempts");
+            return false;
+        }
+        const auto owner = render_thread_.load(std::memory_order_relaxed);
+        if (owner != std::thread::id{} && owner != std::this_thread::get_id()) {
+            set_error(error,
+                      "the Dawn device was lost; only its render thread may recreate it");
+            return false;
+        }
+        const auto now = recovery_now();
+        if (attempts_in_row_ > 0 && now < next_attempt_) {
+            const auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(
+                next_attempt_ - now);
+            set_error(error, "the Dawn device was lost; the next recreation attempt is in " +
+                                 std::to_string(wait.count()) + " ms");
+            return false;
+        }
+        // A replacement no surface has drawn on counts against the limit too,
+        // so devices that keep failing after creation end recovery as well.
+        if (attempts_in_row_ >= testing::kDeviceRecoveryAttempts) {
+            return give_up(error, "no replacement device drew a frame");
+        }
+        ++attempts_in_row_;
+        std::string reason;
+        bool created = acquire(&reason, compatible);
+        if (created && current_lost()) {
+            note_loss(generation());
+            created = false;
+            reason = "the new device was lost as soon as it was created";
+        }
+        if (created) {
+            recreations_.fetch_add(1U, std::memory_order_relaxed);
+            next_attempt_ = now + recovery_backoff(attempts_in_row_);
+            gpu_runtime::emit_gpu_diagnostic(
+                gpu_runtime::GpuDiagnosticSeverity::info, "vellum.graphics.device_recovered",
+                "a new Dawn device replaced the lost one");
+            return true;
+        }
+        failed_attempts_.fetch_add(1U, std::memory_order_relaxed);
+        if (attempts_in_row_ >= testing::kDeviceRecoveryAttempts) {
+            return give_up(error, reason);
+        }
+        next_attempt_ = now + recovery_backoff(attempts_in_row_);
+        const auto message = "the Dawn device was lost and recreating it failed: " + reason;
+        gpu_runtime::emit_gpu_diagnostic(gpu_runtime::GpuDiagnosticSeverity::warning,
+                                         "vellum.graphics.device_recovery", message);
+        set_error(error, message);
+        return false;
+    }
+
+    // A surface drew a frame on the device of `generation` from this thread,
+    // the render thread from now on. A frame on the current device also
+    // starts a new run of recreation attempts for its next loss.
+    void note_frame(std::uint64_t generation) noexcept {
+        render_thread_.store(std::this_thread::get_id(), std::memory_order_relaxed);
+        if (generation == this->generation() && !current_lost()) attempts_in_row_ = 0;
+    }
+
+    void force_loss() {
+        if (!device_ || current_lost()) return;
+        device_.ForceLoss(wgpu::DeviceLostReason::Unknown, "Vellum simulated device loss");
+        instance_.ProcessEvents();
+    }
+
+    DeviceRecoveryStats stats() const {
+        return {
+            .generation = generation(),
+            .losses = losses_.load(std::memory_order_relaxed),
+            .recreations = recreations_.load(std::memory_order_relaxed),
+            .failed_attempts = failed_attempts_.load(std::memory_order_relaxed),
+            .terminal = terminal_.load(std::memory_order_acquire),
+        };
+    }
+
+private:
+    bool give_up(std::string* error, const std::string& reason) {
+        terminal_.store(true, std::memory_order_release);
+        const auto message = "the Dawn device was lost and could not be recreated after " +
+                             std::to_string(attempts_in_row_) + " attempts: " + reason;
+        gpu_runtime::emit_gpu_diagnostic(gpu_runtime::GpuDiagnosticSeverity::fatal,
+                                         "vellum.graphics.device_recovery", message);
+        set_error(error, message);
+        return false;
+    }
+
+    // Shared with the device-lost callbacks, which can outlive the core and
+    // run on any thread.
+    struct LossState final {
+        std::atomic<std::uint64_t> lost{0};
+        std::mutex mutex;
+        std::uint64_t active = 0;
+        std::uint64_t message_generation = 0;
+        std::string message;
+
+        void activate(std::uint64_t generation) {
+            std::lock_guard lock(mutex);
+            active = generation;
+        }
+
+        void publish(std::uint64_t generation, std::string_view text) {
+            std::lock_guard lock(mutex);
+            if (generation != active || lost.load(std::memory_order_relaxed) >= generation) {
+                return;
+            }
+            message_generation = generation;
+            message.assign(text.substr(0, 256));
+            lost.store(generation, std::memory_order_release);
+        }
+
+        std::string message_for(std::uint64_t generation) {
+            std::lock_guard lock(mutex);
+            return message_generation == generation ? message : std::string{};
+        }
+    };
+
+    std::unique_ptr<dawn::native::Instance> native_instance_;
+    wgpu::Instance instance_;
+    wgpu::Surface compatible_surface_;
+    wgpu::Adapter adapter_;
+    wgpu::Device device_;
+    wgpu::Queue queue_;
+    std::atomic<std::uint64_t> generation_{0};
+    std::shared_ptr<LossState> loss_ = std::make_shared<LossState>();
+    std::uint64_t reported_loss_ = 0;
+    std::atomic<std::thread::id> render_thread_{};
+    std::uint32_t attempts_in_row_ = 0;
+    std::chrono::steady_clock::time_point next_attempt_{};
+    std::atomic<std::uint64_t> losses_{0};
+    std::atomic<std::uint64_t> recreations_{0};
+    std::atomic<std::uint64_t> failed_attempts_{0};
+    std::atomic<bool> terminal_{false};
+};
+
+}  // namespace detail
+
+class SkiaDawnSurface::Impl final {
+public:
+    ~Impl() {
+        detail::flush_frame_trace_from_environment();
+        layer_images_.clear();
+        frame_surface_.reset();
+        retained_image_.reset();
+        retained_surface_.reset();
+        recorder_.reset();
+        if (context_ && !stale()) {
+            context_->submit(skgpu::graphite::SyncToCpu::kYes);
+            context_->checkAsyncWorkCompletion();
+        }
+        context_.reset();
+        current_texture_ = nullptr;
+        surface_ = nullptr;
+        queue_ = nullptr;
+        device_ = nullptr;
+        adapter_ = nullptr;
+        core_.reset();
+    }
+
+    bool initialize(const Config& requested, std::shared_ptr<detail::DawnDeviceCore> core,
+                    std::string* error) {
+        config_ = requested;
+        detail::start_frame_trace_from_environment();
+        damage_overlay_ = config_.damage_overlay || environment_flag_on("VELLUM_DAMAGE_OVERLAY");
+        if (config_.width == 0 || config_.height == 0 ||
+            !std::isfinite(config_.scale) || config_.scale <= 0.0F) {
+            set_error(error, "GPU surface dimensions and scale must be positive");
+            return false;
+        }
+
+        const bool owns_device = core == nullptr;
+        if (owns_device) {
+            core = std::make_shared<detail::DawnDeviceCore>();
+            if (!core->create_instance(error)) return false;
+        }
+        core_ = std::move(core);
 
         if (config_.native_surface_handle != nullptr) {
             wgpu::SurfaceSourceMetalLayer source{};
             source.layer = config_.native_surface_handle;
             wgpu::SurfaceDescriptor descriptor{};
             descriptor.nextInChain = &source;
-            surface_ = instance_.CreateSurface(&descriptor);
+            surface_ = core_->instance().CreateSurface(&descriptor);
             if (!surface_) {
                 set_error(error, "Dawn could not create a Metal surface from CAMetalLayer");
                 return false;
             }
         }
 
-        wgpu::RequestAdapterOptions adapter_options{};
-        adapter_options.powerPreference = wgpu::PowerPreference::HighPerformance;
-        adapter_options.backendType = wgpu::BackendType::Metal;
-        if (surface_) {
-            adapter_options.compatibleSurface = surface_;
-        }
-        wgpu::RequestAdapterStatus adapter_status = wgpu::RequestAdapterStatus::Unavailable;
-        std::string adapter_message;
-        instance_.RequestAdapter(
-            &adapter_options,
-            wgpu::CallbackMode::AllowProcessEvents,
-            [&](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter,
-                wgpu::StringView message) {
-                adapter_status = status;
-                adapter_message = string_view(message);
-                if (status == wgpu::RequestAdapterStatus::Success) {
-                    adapter_ = std::move(adapter);
-                }
-            });
-        instance_.ProcessEvents();
-        if (adapter_status != wgpu::RequestAdapterStatus::Success || !adapter_) {
-            set_error(error, "Dawn Metal adapter unavailable: " + adapter_message);
+        if (owns_device) {
+            core_->set_compatible_surface(surface_);
+            if (!core_->acquire(error)) return false;
+        } else if (!core_->recover(error)) {
             return false;
         }
+        if (!build_on_device(error)) return false;
+        retained_reason_ = FullRepaintReason::first_frame;
+        return true;
+    }
 
-        wgpu::DeviceDescriptor device_descriptor{};
-        device_descriptor.label = "Vellum Skia/Dawn Device";
-        const wgpu::FeatureName timestamp_feature[] = {wgpu::FeatureName::TimestampQuery};
-        if (adapter_.HasFeature(wgpu::FeatureName::TimestampQuery)) {
-            device_descriptor.requiredFeatureCount = 1;
-            device_descriptor.requiredFeatures = timestamp_feature;
-        }
-        device_descriptor.SetDeviceLostCallback(
-            wgpu::CallbackMode::AllowSpontaneous,
-            [lost = device_lost_](const wgpu::Device&, wgpu::DeviceLostReason reason,
-                                  wgpu::StringView) {
-                if (reason != wgpu::DeviceLostReason::Destroyed) {
-                    lost->store(true, std::memory_order_release);
-                }
-            });
-        wgpu::RequestDeviceStatus device_status = wgpu::RequestDeviceStatus::Error;
-        std::string device_message;
-        adapter_.RequestDevice(
-            &device_descriptor,
-            wgpu::CallbackMode::AllowProcessEvents,
-            [&](wgpu::RequestDeviceStatus status, wgpu::Device device,
-                wgpu::StringView message) {
-                device_status = status;
-                device_message = string_view(message);
-                if (status == wgpu::RequestDeviceStatus::Success) {
-                    device_ = std::move(device);
-                }
-            });
-        instance_.ProcessEvents();
-        if (device_status != wgpu::RequestDeviceStatus::Success || !device_) {
-            set_error(error, "Dawn Metal device unavailable: " + device_message);
+    // Creates the Graphite context and recorder, configures the native
+    // surface and allocates the retained surface on the core's current device.
+    bool build_on_device(std::string* error) {
+        adapter_ = core_->adapter();
+        device_ = core_->device();
+        queue_ = core_->queue();
+        generation_ = core_->generation();
+        if (device_losses_ > 0 && take_injection(failing_rebuilds)) {
+            set_error(error, "the surface rebuild failed by test injection");
             return false;
         }
-        queue_ = device_.GetQueue();
 
         skgpu::graphite::DawnBackendContext backend_context;
-        backend_context.fInstance = instance_;
+        backend_context.fInstance = core_->instance();
         backend_context.fDevice = device_;
         backend_context.fQueue = queue_;
         skgpu::graphite::ContextOptions context_options;
@@ -2086,7 +2352,6 @@ public:
             return false;
         }
         note_configured();
-        retained_reason_ = FullRepaintReason::first_frame;
         gpu_stats_supported_ = static_cast<bool>(
             context_->supportedGpuStats() & skgpu::GpuStatsFlags::kElapsedTime);
 
@@ -2123,6 +2388,7 @@ public:
         frame_surface_.reset();
         retained_valid_ = false;
         retained_reason_ = FullRepaintReason::surface_recreated;
+        if (!ensure_device(nullptr, false)) return true;
         if (surface_ && !configure_surface(error)) {
             return false;
         }
@@ -2142,6 +2408,7 @@ public:
 
     bool render(const Scene& authored, std::string* error) {
         if (!accepts_with_diagnostics(authored, error)) return false;
+        if (!ensure_device(error, true)) return false;
         std::optional<Scene> storage;
         const Scene& scene = drawn_scene(authored, storage);
         discard_tracked_damage(scene);
@@ -2150,6 +2417,7 @@ public:
 
     bool render_incremental(const Scene& authored, std::string* error) {
         if (!accepts_with_diagnostics(authored, error)) return false;
+        if (!ensure_device(error, true)) return false;
         std::optional<Scene> storage;
         const Scene& scene = drawn_scene(authored, storage);
         tracker_.commit(testing::animation_rules().evaluate_for_damage ? scene : authored,
@@ -2160,6 +2428,7 @@ public:
 
     bool render(const Scene& authored, const DamageRegion& damage, std::string* error) {
         if (!accepts_with_diagnostics(authored, error)) return false;
+        if (!ensure_device(error, true)) return false;
         std::optional<Scene> storage;
         const Scene& scene = drawn_scene(authored, storage);
         const auto invalidated = tracker_.take_damage();
@@ -2195,9 +2464,7 @@ public:
     }
 
     void simulate_device_loss() {
-        if (!device_) return;
-        device_.ForceLoss(wgpu::DeviceLostReason::Unknown, "Vellum simulated device loss");
-        instance_.ProcessEvents();
+        if (device_ && generation_ == core_->generation()) core_->force_loss();
     }
 
     void invalidate(InvalidationReason reason, std::string_view node_id) {
@@ -2220,6 +2487,8 @@ public:
 
     FrameStats frame_stats() const {
         FrameStats stats = stats_;
+        stats.device_losses = device_losses_;
+        stats.device_recoveries = device_recoveries_;
         if (gpu_timer_ && gpu_timer_->frame == stats.frame && gpu_timer_->available) {
             stats.gpu_time_available = true;
             stats.gpu_milliseconds = static_cast<double>(gpu_timer_->nanoseconds) / 1.0e6;
@@ -2257,22 +2526,18 @@ public:
         telemetry.resize_settled = resize_state_.settled();
         telemetry.trims = trims_;
         telemetry.last_trim = last_trim_;
+        telemetry.device_losses = frame.device_losses;
+        telemetry.device_recoveries = frame.device_recoveries;
         return telemetry;
     }
 
     bool finish(std::string* error) {
-        if (!context_) {
-            set_error(error, "Skia/Dawn surface is not initialized");
-            return false;
-        }
+        if (!ensure_device(error, false)) return false;
         context_->submit(skgpu::graphite::SyncToCpu::kYes);
         context_->checkAsyncWorkCompletion();
-        instance_.ProcessEvents();
+        core_->instance().ProcessEvents();
         trace_gpu_time();
-        if (device_lost()) {
-            return fail_device_lost(error, "the Dawn device was lost");
-        }
-        return true;
+        return ensure_device(error, false);
     }
 
     // Records what the frame loses through `accept_scene`, the decision every
@@ -2283,6 +2548,9 @@ public:
         if (acceptance.accepted) {
             for (auto& wide : plot_extent_diagnostics(scene, config_.scale)) {
                 diagnostics_.push_back(std::move(wide));
+            }
+            for (auto& missing : missing_glyph_diagnostics(scene, config_.font_directory)) {
+                diagnostics_.push_back(std::move(missing));
             }
             return true;
         }
@@ -2327,10 +2595,7 @@ public:
             set_error(error, "capture requires one successfully submitted scene");
             return false;
         }
-        if (device_lost()) {
-            return fail_device_lost(
-                error, "the Dawn device was lost; the last good frame can no longer be read back");
-        }
+        if (!ensure_device(error, false)) return false;
         if (!retained_valid_) {
             const Scene scene = *last_scene_;
             const auto saved = stats_;
@@ -2365,6 +2630,7 @@ public:
     bool capture_effect_passes(const Scene& scene, std::string_view node_id,
                                std::vector<EffectPassCapture>& passes, std::string* error) {
         passes.clear();
+        if (!ensure_device(error, false)) return false;
         if (!context_ || !recorder_ || !retained_surface_) {
             set_error(error, "Skia/Dawn surface is not initialized");
             return false;
@@ -2572,27 +2838,92 @@ private:
         return true;
     }
 
-    bool device_lost() const {
-        return device_lost_->load(std::memory_order_acquire) ||
-            (context_ && context_->isDeviceLost());
+    // Whether the surface's device is lost or has been replaced.
+    bool stale() const {
+        return generation_ != core_->generation() || core_->current_lost();
     }
 
-    bool serves_partial_redraw(std::uint32_t version) const noexcept {
-        return version >= kMinSupportedSceneVersion && version <= damage_model_version_;
+    // Whether the surface can draw on a live device. A loss of its device is
+    // observed once: the loss is counted and every object on the dead device
+    // released. With `recover`, a lost device is then replaced (or the
+    // replacement another surface made is adopted) and the surface rebuilt.
+    bool ensure_device(std::string* error, bool recover) {
+        if (context_ && generation_ == core_->generation() && context_->isDeviceLost()) {
+            core_->report_lost(generation_, "Skia Graphite reported the device lost");
+        }
+        if (!stale()) return true;
+        if (context_) observe_loss();
+        if (!recover) {
+            set_error(error, core_->stats().terminal
+                                 ? "the Dawn device was lost and could not be recreated"
+                                 : "the Dawn device was lost; the next render recreates it");
+            return false;
+        }
+        if (!core_->recover(error, surface_)) return false;
+        if (rebuild_failures_ >= testing::kDeviceRecoveryAttempts) {
+            set_error(error, "the surface could not be rebuilt on the new Dawn device after " +
+                                 std::to_string(rebuild_failures_) + " attempts");
+            return false;
+        }
+        const auto now = recovery_now();
+        if (rebuild_failures_ > 0 && now < next_rebuild_) {
+            const auto wait =
+                std::chrono::duration_cast<std::chrono::milliseconds>(next_rebuild_ - now);
+            set_error(error, "the Dawn device was lost; the surface's next rebuild attempt is in " +
+                                 std::to_string(wait.count()) + " ms");
+            return false;
+        }
+        if (!build_on_device(error)) {
+            // The device is not at fault, so siblings keep it; this surface
+            // retries on its own backoff.
+            release_device();
+            generation_ = 0;
+            ++rebuild_failures_;
+            next_rebuild_ = now + recovery_backoff(rebuild_failures_);
+            return false;
+        }
+        rebuild_failures_ = 0;
+        ++device_recoveries_;
+        detail::trace_instant("graphics.device_recovered", "the surface was rebuilt on a new device");
+        retained_valid_ = false;
+        retained_reason_ = FullRepaintReason::device_recovered;
+        return true;
     }
 
-    bool fail_device_lost(std::string* error, std::string message) {
+    void observe_loss() {
+        core_->note_loss(generation_);
+        ++device_losses_;
+        detail::trace_instant("graphics.device_lost", "the Dawn device was lost");
         drop_all_layers(LayerInvalidation::device_lost);
         if (!device_loss_trimmed_) {
             device_loss_trimmed_ = true;
-            detail::trace_instant("graphics.device_lost", message.c_str());
             caches_.clear();
             note_trim(CacheTrimReason::device_lost);
         }
         retained_valid_ = false;
         retained_reason_ = FullRepaintReason::previous_frame_failed;
-        set_error(error, std::move(message));
-        return false;
+        tracker_ = DamageTracker{};
+        release_device();
+    }
+
+    // Releases every object that belongs to the surface's device. A lost
+    // device's work never completes, so nothing is submitted or waited on.
+    void release_device() {
+        frame_surface_.reset();
+        current_texture_ = nullptr;
+        retained_image_.reset();
+        retained_surface_.reset();
+        recorder_.reset();
+        context_.reset();
+        gpu_timer_.reset();
+        if (surface_) surface_.Unconfigure();
+        queue_ = nullptr;
+        device_ = nullptr;
+        adapter_ = nullptr;
+    }
+
+    bool serves_partial_redraw(std::uint32_t version) const noexcept {
+        return version >= kMinSupportedSceneVersion && version <= damage_model_version_;
     }
 
     // Records that the surface now matches its size, so the frame after it
@@ -2725,13 +3056,11 @@ private:
                     const DamageRegion* damage, std::string* error,
                     bool count_frame = true) {
         const auto started = std::chrono::steady_clock::now();
+        detail::FrameTraceSlice frame_slice("graphics.frame");
+        if (!ensure_device(error, count_frame)) return false;
         if (!context_ || !recorder_ || !evidence_.available || !retained_surface_) {
             set_error(error, "Skia/Dawn surface is not initialized");
             return false;
-        }
-        detail::FrameTraceSlice frame_slice("graphics.frame");
-        if (device_lost()) {
-            return fail_device_lost(error, "the Dawn device was lost");
         }
         trace_gpu_time();
         detail::FrameTraceSlice record_slice("graphics.record");
@@ -2933,7 +3262,14 @@ private:
             drop_all_layers(LayerInvalidation::frame_failed);
             return false;
         }
+        // A loss while the frame was recorded or submitted fails the frame:
+        // its pixels may never land, and the next render recovers.
+        if (stale()) {
+            set_error(error, "the Dawn device was lost while the frame was submitted");
+            return false;
+        }
         upload_guard.submitted = true;
+        if (count_frame) core_->note_frame(generation_);
         layer_count_ = resources.layers;
         note_frame_presented();
         retained_valid_ = true;
@@ -3270,6 +3606,7 @@ private:
             return false;
         }
         context_->submit(skgpu::graphite::SyncToCpu::kNo);
+        if (take_injection(losing_frames)) core_->force_loss();
 
         if (rgba != nullptr) {
             SkSurface& source = surface_ ? *frame_surface_
@@ -3290,7 +3627,7 @@ private:
             frame_surface_.reset();
             if (stats != nullptr) stats->presented = true;
         }
-        instance_.ProcessEvents();
+        core_->instance().ProcessEvents();
         return true;
     }
 
@@ -3381,8 +3718,12 @@ private:
     Config config_{};
     GpuEvidence evidence_{};
     std::optional<Scene> last_scene_;
-    std::unique_ptr<dawn::native::Instance> native_instance_;
-    wgpu::Instance instance_;
+    std::shared_ptr<detail::DawnDeviceCore> core_;
+    std::uint64_t generation_ = 0;
+    std::uint64_t device_losses_ = 0;
+    std::uint64_t device_recoveries_ = 0;
+    std::uint32_t rebuild_failures_ = 0;
+    std::chrono::steady_clock::time_point next_rebuild_{};
     wgpu::Adapter adapter_;
     wgpu::Device device_;
     wgpu::Queue queue_;
@@ -3406,7 +3747,6 @@ private:
     FrameStats stats_{};
     bool gpu_stats_supported_ = false;
     std::shared_ptr<GpuTimer> gpu_timer_;
-    std::shared_ptr<std::atomic_bool> device_lost_ = std::make_shared<std::atomic_bool>(false);
     detail::SkiaResourceCaches caches_;
     std::size_t layer_count_ = 0;
     gpu_runtime::SwapchainResizeState resize_state_;
@@ -3431,6 +3771,13 @@ std::optional<Rect> SkiaDawnSurfaceTestAccess::measure_layer_text_extent(
     return measured_text_extent(command, directory, slot, error);
 }
 
+std::vector<std::uint32_t> SkiaDawnSurfaceTestAccess::unresolved_code_points(
+    const PaintCommand& command, std::string_view directory, std::string* error) {
+    ParagraphSlot slot;
+    if (!measured_text_extent(command, directory, slot, error)) return {};
+    return slot.unresolved;
+}
+
 SkiaDawnSurface::SkiaDawnSurface(std::unique_ptr<Impl> impl) noexcept
     : impl_(std::move(impl)) {}
 
@@ -3440,12 +3787,32 @@ SkiaDawnSurface& SkiaDawnSurface::operator=(SkiaDawnSurface&&) noexcept = defaul
 
 std::unique_ptr<SkiaDawnSurface> SkiaDawnSurface::create(
     const Config& config, std::string* error) {
+    return create_with_device(config, nullptr, error);
+}
+
+std::unique_ptr<SkiaDawnSurface> SkiaDawnSurface::create_with_device(
+    const Config& config, std::shared_ptr<SkiaDawnDevice> device, std::string* error) {
     auto implementation = std::make_unique<Impl>();
-    if (!implementation->initialize(config, error)) {
+    if (!implementation->initialize(config, device ? device->core_ : nullptr, error)) {
         return nullptr;
     }
     return std::unique_ptr<SkiaDawnSurface>(
         new SkiaDawnSurface(std::move(implementation)));
+}
+
+SkiaDawnDevice::SkiaDawnDevice(std::shared_ptr<detail::DawnDeviceCore> core) noexcept
+    : core_(std::move(core)) {}
+
+SkiaDawnDevice::~SkiaDawnDevice() = default;
+
+std::shared_ptr<SkiaDawnDevice> SkiaDawnDevice::create(std::string* error) {
+    auto core = std::make_shared<detail::DawnDeviceCore>();
+    if (!core->create_instance(error) || !core->acquire(error)) return nullptr;
+    return std::shared_ptr<SkiaDawnDevice>(new SkiaDawnDevice(std::move(core)));
+}
+
+DeviceRecoveryStats SkiaDawnDevice::recovery_stats() const {
+    return core_->stats();
 }
 
 bool SkiaDawnSurface::measure_text(
@@ -3453,9 +3820,33 @@ bool SkiaDawnSurface::measure_text(
     TextMetrics& metrics,
     std::string_view requested_font_directory,
     std::string* error) {
-    std::unique_ptr<skia::textlayout::Paragraph> paragraph;
-    return build_text_paragraph(
-        runs, requested_font_directory, paragraph, metrics, error);
+    detail::CachedParagraph built;
+    if (!build_text_paragraph({.font_directory = std::string(requested_font_directory),
+                               .runs = runs},
+                              built, error)) {
+        return false;
+    }
+    metrics = built.metrics;
+    return true;
+}
+
+bool SkiaDawnSurface::measure_text(
+    const std::vector<TextRun>& runs,
+    const TextMeasureOptions& options,
+    TextLayoutMetrics& metrics,
+    std::string_view requested_font_directory,
+    std::string* error) {
+    detail::CachedParagraph built;
+    if (!build_text_paragraph({.font_directory = std::string(requested_font_directory),
+                               .runs = runs,
+                               .layout = options.layout,
+                               .width = options.layout ? options.width : 0.0F,
+                               .missing_glyph_box = draws_missing_glyph_box(options.scene_version)},
+                              built, error)) {
+        return false;
+    }
+    metrics = {.metrics = built.metrics, .lines = options.layout ? built.line_count : 1U};
+    return true;
 }
 
 bool SkiaDawnSurface::render(const Scene& scene, std::string* error) {
@@ -3596,6 +3987,16 @@ PartialRedrawRules partial_redraw_rules() noexcept {
 }
 
 void set_internal_sample_count(std::uint32_t count) noexcept { internal_samples = count; }
+
+void set_recovery_clock(RecoveryClock clock) noexcept { recovery_clock = clock; }
+
+void fail_device_recreations(std::uint32_t count) noexcept { failing_recreations = count; }
+
+void lose_recreated_devices(std::uint32_t count) noexcept { losing_recreations = count; }
+
+void fail_surface_rebuilds(std::uint32_t count) noexcept { failing_rebuilds = count; }
+
+void lose_device_during_frames(std::uint32_t count) noexcept { losing_frames = count; }
 
 std::uint32_t internal_sample_count() noexcept { return internal_samples; }
 

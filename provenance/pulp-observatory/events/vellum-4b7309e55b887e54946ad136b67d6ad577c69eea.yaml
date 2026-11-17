@@ -1,0 +1,58 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "render-skia-dawn"
+  ],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-16T22:02:51Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-4b7309e55b887e54946ad136b67d6ad577c69eea",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/render_telemetry.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/src/skia_dawn_surface_testing.hpp",
+    "graphics/tests/CMakeLists.txt"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "render-skia-dawn"
+  ],
+  "mapped_paths": [
+    "graphics/include/vellum/graphics/render_telemetry.hpp",
+    "graphics/include/vellum/graphics/skia_dawn_surface.hpp",
+    "graphics/src/render_telemetry.cpp",
+    "graphics/src/skia_dawn_surface.mm",
+    "graphics/src/skia_dawn_surface_testing.hpp",
+    "graphics/tests/CMakeLists.txt",
+    "graphics/tests/device_recovery_gpu_test.cpp",
+    "graphics/tests/layer_cache_gpu_test.cpp",
+    "graphics/tests/partial_present_bench.mm",
+    "graphics/tests/partial_present_test.cpp",
+    "graphics/tests/render_cache_gpu_test.cpp",
+    "graphics/tests/render_cache_test.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "626785b031076a60993b87cb0e890b46f45f444c",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "cc6a8e6b27feabc88db42908f774978a330c21fa",
+    "to_commit": "4b7309e55b887e54946ad136b67d6ad577c69eea"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "4b7309e55b887e54946ad136b67d6ad577c69eea",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

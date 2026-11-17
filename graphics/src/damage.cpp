@@ -147,6 +147,13 @@ bool same_style(const TextStyle& a, const TextStyle& b) {
            a.strikethrough == b.strikethrough;
 }
 
+bool same_text_layout(const std::optional<TextLayout>& a, const std::optional<TextLayout>& b) {
+    if (a.has_value() != b.has_value()) return false;
+    if (!a) return true;
+    return a->align == b->align && same_float(a->line_height, b->line_height) &&
+           a->max_lines == b->max_lines && a->ellipsis == b->ellipsis;
+}
+
 Affine2D effective_transform(const std::optional<Affine2D>& transform) noexcept {
     return transform && !is_identity(*transform) ? *transform : Affine2D{};
 }
@@ -347,6 +354,7 @@ SceneNode paint_fields(const SceneNode& node) {
     copy.underline = node.underline;
     copy.strikethrough = node.strikethrough;
     copy.text_runs = node.text_runs;
+    copy.text_layout = node.text_layout;
     copy.custom_component = node.custom_component;
     copy.custom_properties_json = node.custom_properties_json;
     copy.mesh = node.mesh;
@@ -1081,6 +1089,25 @@ Rect DamagePropagation::text_extent(const SceneNode& node, const Rect& absolute_
                                     const Rect& frame) const {
     float largest = std::max(1.0F, node.font_size);
     for (const auto& run : node.text_runs) largest = std::max(largest, run.style.font_size);
+    if (node.text_layout) {
+        const auto& layout = *node.text_layout;
+        const float width = std::max(0.0F, absolute_bounds.width);
+        const float box_height = std::max(0.0F, absolute_bounds.height);
+        const float left = std::min(absolute_bounds.x - largest, frame.x);
+        const float right = std::max(absolute_bounds.x + width + largest, frame.x + frame.width);
+        const float top = absolute_bounds.y - 2.0F * largest;
+        float bottom = std::max(absolute_bounds.y + box_height + 2.0F * largest,
+                                frame.y + frame.height);
+        if (layout.max_lines > 0U) {
+            const float line = std::ceil((layout.line_height > 0.0F ? layout.line_height
+                                                                    : kTextNaturalLineHeightBound) *
+                                         largest) +
+                               1.0F;
+            const float lines = static_cast<float>(layout.max_lines) * line;
+            bottom = absolute_bounds.y + std::max(box_height, lines) + 2.0F * largest;
+        }
+        return {left, top, right - left, bottom - top};
+    }
     const float lines = static_cast<float>(line_breaks(node) + 1U);
     const float width = std::max(0.0F, absolute_bounds.width);
     const float height = std::max({0.0F, absolute_bounds.height, lines * kLineHeightFactor * largest});
@@ -1194,6 +1221,7 @@ bool paint_differs(const SceneNode& previous, const SceneNode& next) {
                !same_float(previous.letter_spacing, next.letter_spacing) ||
                previous.underline != next.underline ||
                previous.strikethrough != next.strikethrough ||
+               !same_text_layout(previous.text_layout, next.text_layout) ||
                !same_gradients(previous.fill_gradients, next.fill_gradients) ||
                !same_shadows(previous.box_shadows, next.box_shadows) ||
                !same_float(previous.corner_radius, next.corner_radius);

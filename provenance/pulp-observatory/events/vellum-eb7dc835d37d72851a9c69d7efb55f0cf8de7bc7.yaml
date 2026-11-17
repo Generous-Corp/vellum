@@ -1,0 +1,57 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "capture-primitives",
+    "macos-shell"
+  ],
+  "contract_tests": [
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-17T04:55:28Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-eb7dc835d37d72851a9c69d7efb55f0cf8de7bc7",
+  "include_dependency_deltas": [
+    "graphics/CMakeLists.txt",
+    "graphics/include/vellum/graphics/hit_test.hpp",
+    "graphics/include/vellum/graphics/pointer_router.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "capture-primitives",
+    "macos-shell"
+  ],
+  "mapped_paths": [
+    "apps/app-host/main.mm",
+    "graphics/CMakeLists.txt",
+    "graphics/include/vellum/graphics/hit_test.hpp",
+    "graphics/include/vellum/graphics/pointer_router.hpp",
+    "graphics/src/hit_test.cpp",
+    "graphics/src/pointer_router.cpp",
+    "graphics/tests/hit_test_test.cpp",
+    "graphics/tests/pointer_router_test.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "e5314107d2f4fe667ee0ee682c70ea6005dc994a",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "cc6a8e6b27feabc88db42908f774978a330c21fa",
+    "to_commit": "eb7dc835d37d72851a9c69d7efb55f0cf8de7bc7"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "eb7dc835d37d72851a9c69d7efb55f0cf8de7bc7",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
