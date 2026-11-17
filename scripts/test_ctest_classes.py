@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -139,9 +140,12 @@ class CtestClassesTest(unittest.TestCase):
         victim = classes["pr-fast"][0]
         registered = listed_registered_tests(classes)
         removed = {**classes, "pr-fast": [t for t in classes["pr-fast"] if t != victim]}
-        saved = os.environ.pop("VELLUM_UNLISTED_TEST_POLICY", None)
-        self.addCleanup(lambda: saved is None or os.environ.update(
-            VELLUM_UNLISTED_TEST_POLICY=saved))
+        # patch.dict restores the environment, including an unset variable,
+        # so the strict check in another test never inherits "gpu" from here.
+        environment = mock.patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        os.environ.pop("VELLUM_UNLISTED_TEST_POLICY", None)
         self.assertEqual(unclassified(registered, removed), [victim], "unset fails")
         for value in ("", "GPU", "pr-fast", "warn", "gpu "):
             os.environ["VELLUM_UNLISTED_TEST_POLICY"] = value

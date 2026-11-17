@@ -225,5 +225,5 @@
       "vellum.web.text-ime-accessibility"
     ]
   },
-  "note": "slow also covers tests that need an input only the GPU lane provides: vellum.mirror-install-consumer needs VELLUM_VIEW_AUDIO_ARCHIVE, fetched from a Pulp release by tools/mirror/fetch_view_audio_archive.py."
+  "note": "slow also covers tests that need an input only the GPU lane provides: vellum.mirror-install-consumer needs VELLUM_VIEW_AUDIO_ARCHIVE, fetched from a Pulp release by tools/mirror/fetch_view_audio_archive.py; vellum.framework.threejs-modules needs V8, which only the GPU lane configures."
 }
