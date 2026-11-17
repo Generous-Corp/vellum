@@ -32,6 +32,11 @@ class SymbolInspection(unittest.TestCase):
         with fake_nm("0000000000001000 t __ZN8perfetto10TracingMuxerE"):
             self.assertEqual(ct.defined_symbols(self.lib), ["__ZN8perfetto10TracingMuxerE"])
 
+    def test_perfetto_namespace_is_recognised_and_skia_flag_is_not(self):
+        self.assertTrue(ct.is_perfetto_symbol("__ZN8perfetto10TracingMuxerE"))
+        self.assertFalse(ct.is_perfetto_symbol(
+            "__ZN28SkAndroidFrameworkTraceUtils23gUsePerfettoTrackEventsE"))
+
     def test_undefined_entries_are_not_definitions(self):
         with fake_nm("                 U _vellum_native_trace_enabled"):
             self.assertEqual(ct.defined_symbols(self.lib), [])

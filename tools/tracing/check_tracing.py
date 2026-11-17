@@ -100,6 +100,16 @@ def run_nm(flags: str, path: Path) -> list[str]:
     return result.stdout.splitlines()
 
 
+def is_perfetto_symbol(symbol: str) -> bool:
+    """Whether a symbol belongs to Perfetto's own `perfetto::` namespace.
+
+    A case-blind substring would also match Skia's own
+    `SkAndroidFrameworkTraceUtils::gUsePerfettoTrackEvents`, which the locked
+    renderer archive carries in every build.
+    """
+    return "8perfetto" in symbol
+
+
 def defined_symbols(library: Path) -> list[str]:
     """Every symbol the image defines, local and private ones included.
 
@@ -183,7 +193,7 @@ def build_errors(repo: Path, build: Path, expect: str) -> list[str]:
     runtimes = [library.name for library, symbols in defined.items()
                 if any(RUNTIME_SYMBOL in symbol for symbol in symbols)]
     perfetto_symbols = [library.name for library, symbols in defined.items()
-                        if any("perfetto" in symbol.lower() for symbol in symbols)]
+                        if any(is_perfetto_symbol(symbol) for symbol in symbols)]
 
     if expect == "off":
         if sources:
