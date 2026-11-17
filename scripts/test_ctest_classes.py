@@ -121,6 +121,21 @@ class CtestClassesTest(unittest.TestCase):
         doubled = {**classes, "gpu": sorted({*classes["gpu"], victim})}
         self.assertEqual(unclassified(registered, doubled, "gpu"), [victim])
 
+    def test_unset_or_unknown_policy_fails_closed(self) -> None:
+        classes = load_manifest()
+        victim = classes["pr-fast"][0]
+        registered = registered_tests()
+        removed = {**classes, "pr-fast": [t for t in classes["pr-fast"] if t != victim]}
+        saved = os.environ.pop("VELLUM_UNLISTED_TEST_POLICY", None)
+        self.addCleanup(lambda: saved is None or os.environ.update(
+            VELLUM_UNLISTED_TEST_POLICY=saved))
+        self.assertEqual(unclassified(registered, removed), [victim], "unset fails")
+        for value in ("", "GPU", "pr-fast", "warn", "gpu "):
+            os.environ["VELLUM_UNLISTED_TEST_POLICY"] = value
+            self.assertEqual(unclassified(registered, removed), [victim], f"{value!r} fails")
+        os.environ["VELLUM_UNLISTED_TEST_POLICY"] = "gpu"
+        self.assertEqual(unclassified(registered, removed), [])
+
     @unittest.skipUnless(os.environ.get("VELLUM_CTEST_BUILD_DIR"),
                          "set VELLUM_CTEST_BUILD_DIR to a configured build tree")
     def test_configured_tree_carries_one_class_label(self) -> None:
