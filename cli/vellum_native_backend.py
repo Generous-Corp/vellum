@@ -15,6 +15,7 @@ import sys
 import tempfile
 from typing import Any, Iterable
 
+from vellum_dev import snapshot as source_snapshot
 from vellum_manifest import (
     LOCK_NAME, LOCK_SCHEMA, ManifestError, imported_materialized_design,
     load_app_manifest, load_components_manifest,
@@ -402,6 +403,9 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     }
     with (contents / "Info.plist").open("wb") as output:
         plistlib.dump(info, output, sort_keys=True)
+    (resources / SOURCE_DIGEST_NAME).write_text(json.dumps({
+        "schema": SOURCE_DIGEST_SCHEMA, "digest": source_snapshot(project)[0],
+    }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if app.exists():
         shutil.rmtree(app)
     os.replace(staging, app)
@@ -417,6 +421,31 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
         "frameworks": framework_names,
         "components": installed_components,
     }
+
+
+SOURCE_DIGEST_NAME = "source-digest.json"
+SOURCE_DIGEST_SCHEMA = "vellum.build-source-digest.v1"
+
+
+def require_fresh_build(context: dict[str, Any], app: Path) -> None:
+    """Refuse a built app whose recorded source digest is missing or differs
+    from the current project tree, so `--no-build` never drives a stale build."""
+    record = app / "Contents/Resources" / SOURCE_DIGEST_NAME
+    try:
+        recorded = json.loads(record.read_text(encoding="utf-8"))
+        built = recorded["digest"]
+        valid = recorded["schema"] == SOURCE_DIGEST_SCHEMA and isinstance(built, str)
+    except (OSError, ValueError, KeyError, TypeError):
+        valid = False
+    if not valid:
+        raise BackendFailure(
+            "Built app records no source digest, so its freshness cannot be proven; "
+            "run vellum build", status="build_stale")
+    current = source_snapshot(context["root"])[0]
+    if built != current:
+        raise BackendFailure(
+            f"Built app is stale: it was built from source digest {built[:12]} but the "
+            f"project is now {current[:12]}; run vellum build", status="build_stale")
 
 
 def ensure_app(context: dict[str, Any], sdk: Path, no_build: bool = False) -> dict[str, Any]:
@@ -435,6 +464,7 @@ def ensure_app(context: dict[str, Any], sdk: Path, no_build: bool = False) -> di
         } for item in context["components"]]
         if any(not Path(item["path"]).is_file() for item in components):
             raise BackendFailure("Built app is missing a declared custom component module", status="build_missing")
+        require_fresh_build(context, app)
         return {
             "app": app, "bundle": bundle, "executable": executable,
             "source_map": source_map, "frameworks": [], "components": components,
