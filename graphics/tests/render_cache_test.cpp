@@ -355,6 +355,27 @@ void paragraph_keys() {
         key.runs[1].text = "B";
     });
     differs("font directory", [](ParagraphKey& key) { key.font_directory = "/other"; });
+    differs("text layout", [](ParagraphKey& key) { key.layout = TextLayout{}; });
+    const auto laid_out = [](ParagraphKey key) {
+        key.layout = TextLayout{.line_height = 1.25F, .max_lines = 2U};
+        key.width = 80.0F;
+        return key;
+    };
+    const auto laid_out_differs = [&](const char* what, auto edit) {
+        auto changed = laid_out(paragraph_key());
+        edit(changed);
+        const auto reference = laid_out(paragraph_key());
+        expect(!(changed == reference) && hash(changed) != hash(reference),
+               std::string("a laid-out paragraph key differs and hashes apart by ") + what);
+    };
+    laid_out_differs("alignment", [](ParagraphKey& key) { key.layout->align = TextAlign::end; });
+    laid_out_differs("line height", [](ParagraphKey& key) { key.layout->line_height = 1.5F; });
+    laid_out_differs("max lines", [](ParagraphKey& key) { key.layout->max_lines = 3U; });
+    laid_out_differs("ellipsis", [](ParagraphKey& key) { key.layout->ellipsis = true; });
+    laid_out_differs("width", [](ParagraphKey& key) { key.width = 81.0F; });
+    laid_out_differs("missing-glyph policy",
+                     [](ParagraphKey& key) { key.missing_glyph_box = true; });
+    laid_out_differs("layout presence", [](ParagraphKey& key) { key.layout.reset(); });
     expect(detail::estimated_paragraph_bytes(base) > detail::estimated_paragraph_bytes({}),
            "a paragraph's estimated size grows with its runs");
 }

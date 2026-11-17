@@ -244,14 +244,28 @@ inline bool same_style(const TextStyle& a, const TextStyle& b) noexcept {
            a.underline == b.underline && a.strikethrough == b.strikethrough;
 }
 
-/// Everything a laid-out paragraph depends on: the font directory and every
-/// run with the colour it is drawn in.
+inline bool same_text_layout(const std::optional<TextLayout>& a,
+                             const std::optional<TextLayout>& b) noexcept {
+    if (a.has_value() != b.has_value()) return false;
+    return !a || (a->align == b->align && same_bits(a->line_height, b->line_height) &&
+                  a->max_lines == b->max_lines && a->ellipsis == b->ellipsis);
+}
+
+/// Everything a laid-out paragraph depends on: the font directory, every run
+/// with the colour it is drawn in, the layout with the width it wraps at, and
+/// how missing glyphs are drawn.
 struct ParagraphKey final {
     std::string font_directory;
     std::vector<TextRun> runs;
+    std::optional<TextLayout> layout;
+    /// The width a laid-out paragraph wraps at; zero without a layout.
+    float width = 0.0F;
+    bool missing_glyph_box = false;
 
     friend bool operator==(const ParagraphKey& a, const ParagraphKey& b) noexcept {
-        if (a.font_directory != b.font_directory || a.runs.size() != b.runs.size()) {
+        if (a.font_directory != b.font_directory || a.runs.size() != b.runs.size() ||
+            !same_text_layout(a.layout, b.layout) || !same_bits(a.width, b.width) ||
+            a.missing_glyph_box != b.missing_glyph_box) {
             return false;
         }
         for (std::size_t index = 0; index < a.runs.size(); ++index) {
@@ -279,6 +293,15 @@ struct ParagraphKeyHash final {
             hasher.add_value(run.style.underline);
             hasher.add_value(run.style.strikethrough);
         }
+        hasher.add_value(key.layout.has_value());
+        if (key.layout) {
+            hasher.add_value(key.layout->align);
+            hasher.add_value(key.layout->line_height);
+            hasher.add_value(key.layout->max_lines);
+            hasher.add_value(key.layout->ellipsis);
+        }
+        hasher.add_value(key.width);
+        hasher.add_value(key.missing_glyph_box);
         return hasher.value();
     }
 };

@@ -56,7 +56,8 @@ if(VELLUM_HAS_SKIA_DAWN)
         src/dawn_bootstrap.cpp
         src/frame_trace.cpp
         src/image_decode.mm
-        src/skia_dawn_surface.mm)
+        src/skia_dawn_surface.mm
+        src/text_paragraph.cpp)
     target_include_directories(vellum-skia-dawn-provider PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_compile_features(vellum-skia-dawn-provider PRIVATE cxx_std_20)
