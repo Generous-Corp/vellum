@@ -1289,7 +1289,7 @@ class ReleaseTagWorkflow(unittest.TestCase):
         self.assertIn("python3 -I scripts/release_request.py select --commit \"$GITHUB_SHA\"", self.select_job)
 
     def test_the_signing_job_runs_only_for_a_selected_commit_and_decides_again(self) -> None:
-        self.assertIn("needs: select-release-commit", self.sign_job)
+        self.assertIn("needs: [select-release-commit, release-policy-check]\n", self.sign_job)
         self.assertIn("if: needs.select-release-commit.outputs.tag != ''", self.sign_job)
         self.assertIn("environment: release", self.sign_job)
         wait = self.step("Wait for the required checks to finish")
@@ -1337,7 +1337,7 @@ class ReleaseTagWorkflow(unittest.TestCase):
         self.assertNotIn("continue-on-error", self.select_job)
         self.assertIn("path: .exact-boundary-pulp", self.select_job)
         self.assertIn("ref: ${{ steps.select.outputs.pulp-cursor }}", self.select_job)
-        self.assertIn("needs: select-release-commit", self.sign_job)
+        self.assertIn("needs: [select-release-commit, release-policy-check]\n", self.sign_job)
         self.assertIn("if: needs.select-release-commit.outputs.tag != ''", self.sign_job)
 
     def test_the_tag_and_attestation_bind_the_pushed_commit(self) -> None:

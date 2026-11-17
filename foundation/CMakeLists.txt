@@ -1,4 +1,5 @@
 add_library(vellum-foundation
+    src/frame_pump.cpp
     src/platform.cpp
     src/status.cpp)
 add_library(Vellum::Foundation ALIAS vellum-foundation)

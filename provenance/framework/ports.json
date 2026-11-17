@@ -317,6 +317,18 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "Resolves the sealed V8 provider for VELLUM_ENABLE_V8 from Vellum's dependency lock: the digest-checked v8-builder archive, its manifest paired with the renderer lock's Skia and Dawn, and a per-file receipt. Vellum's counterpart to Pulp's tools/cmake/FindV8.cmake for its one platform."
+    },
+    {
+      "framework_path": "framework/core/render/include/vellum/render/render_pass.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/render/include/pulp/render/render_pass.hpp",
+      "pulp_commits": [
+        "8847d9e44b85928d87da567b77141efe0cab60d7"
+      ],
+      "framework_blob": "93dd98aff033f69337e0cb665595ea5f0fa65aac",
+      "reason": "Frame-level render pass manager: ordered background, content, effects, overlay and post-effect passes with a per-frame time budget and the whole-recording GPU render time, read by the inspector, the motion cost view and the UI preview. Distinct from the custom GPU pass API of Generous-Corp/vellum#432."
     }
   ]
 }

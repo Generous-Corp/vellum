@@ -19,8 +19,10 @@ const MAXIMUM_PATH_DASHES = 64;
 const HEX_COLOR = /^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/;
 const INTRINSIC_TYPES = new Set([
     'view', 'stack', 'text', 'text-run', 'text-input', 'button', 'image', 'canvas', 'custom',
-    'path', 'plot',
+    'path', 'vector', 'plot',
 ]);
+const MAXIMUM_VECTOR_OPS = 16384;
+const MAXIMUM_VECTOR_GROUP_DEPTH = 64;
 const MAXIMUM_PLOT_SLOTS = 4194304;
 const PLOT_FLOAT_MAX = 3.4028234663852886e38;
 const MAXIMUM_PLOT_AUDIO_CHANNEL = 1024;
@@ -163,6 +165,7 @@ export const Button = primitive('button');
 export const Image = primitive('image');
 export const Canvas = primitive('canvas');
 export const Path = primitive('path');
+export const Vector = primitive('vector');
 export const Plot = primitive('plot');
 export function TextInput(properties = {}) {
     return jsx('text-input', { ...properties, primitiveVersion: TEXT_INPUT_PRIMITIVE_VERSION });
@@ -317,7 +320,7 @@ function gradientKeyword(value, path, allowed) {
     }
 }
 
-function validateLinearGradient(value, path) {
+function validateLinearGradient(value, path, { coincidentStops = false } = {}) {
     const gradient = paintStyleObject(value, path, [
         'kind', 'angle', 'repeating', 'repeatLength', 'spread', 'interpolation', 'colorSpace',
         'centerX', 'centerY', 'radiusX', 'radiusY', 'focalX', 'focalY', 'startRadius',
@@ -360,7 +363,8 @@ function validateLinearGradient(value, path) {
         const stopPath = `${path}.stops[${index}]`;
         const stop = paintStyleObject(gradient.stops[index], stopPath, ['position', 'color']);
         finitePaintNumber(stop.position, `${stopPath}.position`);
-        if (stop.position < 0 || stop.position > 1 || stop.position <= previous ||
+        if (stop.position < 0 || stop.position > 1 ||
+            (coincidentStops ? stop.position < previous : stop.position <= previous) ||
             typeof stop.color !== 'string' ||
             !/^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/.test(stop.color)) {
             throw new TypeError(`${stopPath} requires an increasing position and hex color`);
@@ -452,6 +456,153 @@ function validatePath(properties, path) {
         output.strokeDasharray = [...dashes];
     }
     return output;
+}
+
+function vectorMatrix(value, path) {
+    if (value === undefined) return;
+    if (!Array.isArray(value) || value.length !== 6) {
+        throw new TypeError(`${path} must be six finite numbers`);
+    }
+    value.forEach((number, index) => finitePaintNumber(number, `${path}[${index}]`));
+}
+
+function vectorPathData(value, path) {
+    if (typeof value !== 'string' || value.length > MAXIMUM_PATH_DATA_LENGTH) {
+        throw new TypeError(
+            `${path} must be SVG path data of at most ${MAXIMUM_PATH_DATA_LENGTH} characters`);
+    }
+}
+
+function vectorGradientGeometry(gradient, path) {
+    const kind = gradient.kind ?? 'linear';
+    // Compare the native defaults after the materializer's float32 conversion.
+    const radiusX = Math.fround(gradient.radiusX ?? 0);
+    const radiusY = Math.fround(gradient.radiusY ?? 0);
+    const startRadius = Math.fround(gradient.startRadius ?? 0);
+    const endRadius = Math.fround(gradient.endRadius ?? 0.5);
+    if (kind !== 'radial' && (radiusX !== 0 || radiusY !== 0)) {
+        throw new TypeError(`${path}: radius x and y apply only to radial gradients`);
+    }
+    if (kind !== 'two-circle-radial' && (startRadius !== 0 || endRadius !== 0.5)) {
+        throw new TypeError(`${path}: start and end radius apply only to two-circle radial gradients`);
+    }
+    if (kind === 'two-circle-radial' && startRadius === endRadius &&
+        Math.fround(gradient.focalX ?? 0.5) === Math.fround(gradient.centerX ?? 0.5) &&
+        Math.fround(gradient.focalY ?? 0.5) === Math.fround(gradient.centerY ?? 0.5)) {
+        throw new TypeError(`${path}: the start and end circles of a two-circle radial gradient are identical`);
+    }
+}
+
+function vectorPaint(value, path) {
+    if (value === undefined || value === 'none') return;
+    if (typeof value === 'string') {
+        if (!HEX_COLOR.test(value)) throw new TypeError(`${path} must be a hex color, none or a gradient paint`);
+        return;
+    }
+    const paint = paintStyleObject(value, path, ['gradient', 'transform']);
+    validateLinearGradient(paint.gradient, `${path}.gradient`, { coincidentStops: true });
+    vectorGradientGeometry(paint.gradient, `${path}.gradient`);
+    if (paint.gradient.repeatLength !== undefined) {
+        throw new TypeError(`${path}.gradient cannot set a repeat length in a vector asset`);
+    }
+    vectorMatrix(paint.transform, `${path}.transform`);
+    if (paint.transform !== undefined) {
+        const [a, b, c, d] = paint.transform.map(Math.fround);
+        const determinant = Math.fround(Math.fround(a * d) - Math.fround(b * c));
+        if (!Number.isFinite(determinant) || determinant === 0) {
+            throw new TypeError(`${path}.transform must be invertible in float32`);
+        }
+    }
+}
+
+// The native materializer reads every vector number as float32, so a number
+// that overflows it is refused here too.
+function float32Numbers(value, path) {
+    if (typeof value === 'number') {
+        if (!Number.isFinite(Math.fround(value))) throw new TypeError(`${path} is beyond the float32 range`);
+    } else if (Array.isArray(value)) {
+        value.forEach((item, index) => float32Numbers(item, `${path}[${index}]`));
+    } else if (value !== null && typeof value === 'object') {
+        for (const [key, item] of Object.entries(value)) float32Numbers(item, `${path}.${key}`);
+    }
+}
+
+// A compiled vector asset: the display list one vector node draws.
+function validateVector(properties, path) {
+    const asset = paintStyleObject(properties.asset, `${path}.Vector asset`,
+        ['contentHash', 'viewBox', 'ops']);
+    if (typeof asset.contentHash !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(asset.contentHash)) {
+        throw new TypeError(`${path}.Vector asset contentHash must be sha256: and 64 hex digits`);
+    }
+    if (!Array.isArray(asset.viewBox) || asset.viewBox.length !== 4) {
+        throw new TypeError(`${path}.Vector asset viewBox must be four numbers`);
+    }
+    asset.viewBox.forEach((number, index) => finitePaintNumber(
+        number, `${path}.Vector asset viewBox[${index}]`));
+    float32Numbers(asset.viewBox, `${path}.Vector asset viewBox`);
+    if (!(Math.fround(asset.viewBox[2]) > 0) || !(Math.fround(asset.viewBox[3]) > 0)) {
+        throw new TypeError(`${path}.Vector asset viewBox needs a positive width and height`);
+    }
+    if (!Array.isArray(asset.ops) || asset.ops.length > MAXIMUM_VECTOR_OPS) {
+        throw new TypeError(`${path}.Vector asset ops must hold at most ${MAXIMUM_VECTOR_OPS} operations`);
+    }
+    let depth = 0;
+    asset.ops.forEach((raw, index) => {
+        const where = `${path}.Vector asset ops[${index}]`;
+        if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+            throw new TypeError(`${where} must be an object`);
+        }
+        if (raw.op === 'group') {
+            const op = paintStyleObject(raw, where, ['op', 'transform', 'opacity', 'clip']);
+            vectorMatrix(op.transform, `${where}.transform`);
+            finitePaintNumber(op.opacity, `${where}.opacity`, { optional: true, nonNegative: true });
+            if (op.opacity !== undefined && op.opacity > 1) throw new TypeError(`${where}.opacity must be at most 1`);
+            if (op.clip !== undefined) {
+                const clip = paintStyleObject(op.clip, `${where}.clip`, ['d', 'rule']);
+                vectorPathData(clip.d, `${where}.clip.d`);
+                pathKeyword(clip.rule, `${where}.clip.rule`, ['nonzero', 'evenodd']);
+            }
+            if (++depth > MAXIMUM_VECTOR_GROUP_DEPTH) {
+                throw new TypeError(`${where} nests groups deeper than ${MAXIMUM_VECTOR_GROUP_DEPTH}`);
+            }
+        } else if (raw.op === 'end') {
+            paintStyleObject(raw, where, ['op']);
+            if (--depth < 0) throw new TypeError(`${where} closes a group that is not open`);
+        } else if (raw.op === 'path') {
+            const op = paintStyleObject(raw, where, ['op', 'd', 'fillRule', 'transform', 'fill',
+                'stroke', 'strokeWidth', 'strokeLineJoin', 'strokeLineCap', 'strokeMiterLimit',
+                'strokeDasharray', 'strokeDashoffset']);
+            vectorPathData(op.d, `${where}.d`);
+            pathKeyword(op.fillRule, `${where}.fillRule`, ['nonzero', 'evenodd']);
+            vectorMatrix(op.transform, `${where}.transform`);
+            vectorPaint(op.fill, `${where}.fill`);
+            vectorPaint(op.stroke, `${where}.stroke`);
+            finitePaintNumber(op.strokeWidth, `${where}.strokeWidth`, { optional: true, nonNegative: true });
+            finitePaintNumber(op.strokeMiterLimit, `${where}.strokeMiterLimit`, { optional: true });
+            if (op.strokeMiterLimit !== undefined && op.strokeMiterLimit < 1) {
+                throw new TypeError(`${where}.strokeMiterLimit must be at least 1`);
+            }
+            finitePaintNumber(op.strokeDashoffset, `${where}.strokeDashoffset`, { optional: true });
+            pathKeyword(op.strokeLineJoin, `${where}.strokeLineJoin`, ['miter', 'round', 'bevel']);
+            pathKeyword(op.strokeLineCap, `${where}.strokeLineCap`, ['butt', 'round', 'square']);
+            if (op.strokeDasharray !== undefined) {
+                if (!Array.isArray(op.strokeDasharray) || op.strokeDasharray.length > MAXIMUM_PATH_DASHES) {
+                    throw new TypeError(`${where}.strokeDasharray must hold at most ${MAXIMUM_PATH_DASHES} numbers`);
+                }
+                op.strokeDasharray.forEach((dash, item) => finitePaintNumber(
+                    dash, `${where}.strokeDasharray[${item}]`, { nonNegative: true }));
+                const total = op.strokeDasharray.reduce((sum, dash) => sum + Math.fround(dash), 0);
+                if (op.strokeDasharray.length > 0 && !(total > 0)) {
+                    throw new TypeError(`${where}.strokeDasharray must not sum to zero`);
+                }
+            }
+        } else {
+            throw new TypeError(`${where}.op must be group, end or path`);
+        }
+        float32Numbers(raw, where);
+    });
+    if (depth !== 0) throw new TypeError(`${path}.Vector asset leaves a group open`);
+    return { asset: cloneJson(asset, `${path}.Vector asset`) };
 }
 
 function plotWhole(value, path, minimum, maximum) {
@@ -749,6 +900,9 @@ function materialize(value, runtime, path) {
     if (value.type === 'path' && childValues.length > 0) {
         throw new TypeError(`${path}.Path does not accept children`);
     }
+    if (value.type === 'vector' && childValues.length > 0) {
+        throw new TypeError(`${path}.Vector does not accept children`);
+    }
     if (value.type === 'plot' && childValues.length > 0) {
         throw new TypeError(`${path}.Plot does not accept children`);
     }
@@ -759,6 +913,7 @@ function materialize(value, runtime, path) {
     }
     const pathProperties = value.type === 'path' ? validatePath(value.props, path) : undefined;
     const imageProperties = value.type === 'image' ? validateImage(value.props, path) : undefined;
+    const vectorProperties = value.type === 'vector' ? validateVector(value.props, path) : undefined;
     const plotProperties = value.type === 'plot' ? validatePlot(value.props, path) : undefined;
     let textRunText;
     if (value.type === 'text-run') {
@@ -843,6 +998,7 @@ function materialize(value, runtime, path) {
     }
     if (pathProperties !== undefined) Object.assign(node, pathProperties);
     if (imageProperties !== undefined) Object.assign(node, imageProperties);
+    if (vectorProperties !== undefined) Object.assign(node, vectorProperties);
     if (plotProperties !== undefined) Object.assign(node, plotProperties);
     if (value.type === 'custom') {
         if (typeof value.props.component !== 'string' ||

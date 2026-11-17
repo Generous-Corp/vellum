@@ -10,6 +10,7 @@
 #include <vellum/graphics/path_geometry.hpp>
 #include <vellum/graphics/token_receipts.hpp>
 #include <vellum/graphics/plot.hpp>
+#include <vellum/graphics/vector_asset.hpp>
 
 #include <algorithm>
 #include <array>
@@ -52,9 +53,9 @@ constexpr float kDefaultButtonHeight = 44.0F;
 constexpr float kDefaultTextInputHeight = 44.0F;
 constexpr float kDefaultGenericHeight = 0.0F;
 constexpr float kTextLineHeightMultiplier = 1.4F;
-constexpr std::array<std::string_view, 11> kIntrinsicTypes{
+constexpr std::array<std::string_view, 12> kIntrinsicTypes{
     "view", "stack", "text", "text-run", "text-input", "button", "image", "canvas", "custom",
-    "path", "plot",
+    "path", "vector", "plot",
 };
 constexpr std::array<std::string_view, 6> kTextStyleKeys{
     "color", "fontFamily", "fontSize", "fontWeight", "letterSpacing", "textDecoration",
@@ -91,11 +92,11 @@ bool style_key_consumed(std::string_view type, std::string_view key, const Style
     if (key == "mixBlendMode") return true;
     // The root has no siblings to mask.
     if (key == "maskMode") return !use.root;
-    if (use.clips_to_box && type != "path" &&
+    if (use.clips_to_box && type != "path" && type != "vector" &&
         (key == "borderRadius" || contains(kCornerRadiusKeys, key))) {
         return true;
     }
-    if (type == "path") return false;
+    if (type == "path" || type == "vector") return false;
     if (type == "plot") return key == "backgroundColor";
     if (use.draws_image) {
         return key == "backgroundColor" || key == "borderRadius" ||
@@ -239,7 +240,8 @@ bool parse_linear_gradient_value(
     id raw,
     const std::string& name,
     std::vector<vellum::graphics::LinearGradient>& output,
-    std::string* error) {
+    std::string* error,
+    bool coincident_stops = false) {
     if (raw == nil) return true;
     if (![raw isKindOfClass:NSDictionary.class]) {
         set_error(error, name + " must be an object");
@@ -392,8 +394,11 @@ bool parse_linear_gradient_value(
         float position = 0.0F;
         const auto color = parse_color(stop[@"color"]);
         if (!finite_number(stop[@"position"], position) || position < 0.0F ||
-            position > 1.0F || position <= previous || !color) {
-            set_error(error, name + " stops require increasing positions and colors");
+            position > 1.0F || (coincident_stops ? position < previous : position <= previous) ||
+            !color) {
+            set_error(error, name + (coincident_stops
+                                         ? " stops require non-decreasing positions and colors"
+                                         : " stops require increasing positions and colors"));
             return false;
         }
         gradient.stops.push_back({.position = position, .color = *color});
@@ -1169,11 +1174,12 @@ std::optional<std::size_t> keyword(id value, const std::array<std::string_view, 
     return static_cast<std::size_t>(found - names.begin());
 }
 
-constexpr std::array<std::string_view, 20> kPathAttributes{
+constexpr std::array<std::string_view, 21> kPathAttributes{
     "type", "id", "children", "style", "events", "tracks", "accessibilityLabel",
     "accessibilityValue",
     "accessibilityRole", "accessibilityState", "d", "fillRule", "fill", "stroke", "strokeWidth",
     "strokeLineJoin", "strokeLineCap", "strokeMiterLimit", "strokeDasharray", "strokeDashoffset",
+    "anchor",
 };
 
 void report_dropped_path_attributes(
@@ -1311,6 +1317,315 @@ bool materialize_path(
     report_dropped_path_attributes(source, identity, context);
     output.kind = vellum::graphics::SceneNode::Kind::path;
     output.path = std::make_shared<const vellum::graphics::PathGeometry>(std::move(path));
+    return true;
+}
+
+bool reject_vector(
+    MaterializeContext& context, const std::string& node_id, std::string property,
+    std::string message, std::string* error) {
+    context.diagnostics->push_back({
+        .severity = LoweringDiagnostic::Severity::error,
+        .disposition = LoweringDiagnostic::Disposition::unsupported,
+        .code = std::string(vellum::graphics::kInvalidVectorAssetCode),
+        .node_id = node_id,
+        .property = std::move(property),
+        .message = message,
+    });
+    set_error(error, std::move(message));
+    return false;
+}
+
+constexpr std::array<std::string_view, 11> kVectorAttributes{
+    "type", "id", "children", "style", "events", "tracks", "accessibilityLabel",
+    "accessibilityValue", "accessibilityRole", "asset", "anchor",
+};
+
+bool parse_affine(id raw, vellum::graphics::Affine2D& output) {
+    if (raw == nil) return true;
+    if (![raw isKindOfClass:NSArray.class] || static_cast<NSArray*>(raw).count != 6U) return false;
+    NSArray* values = raw;
+    float numbers[6];
+    for (NSUInteger index = 0; index < 6U; ++index) {
+        if (!finite_number(values[index], numbers[index])) return false;
+    }
+    output = {numbers[0], numbers[1], numbers[2], numbers[3], numbers[4], numbers[5]};
+    return true;
+}
+
+// The first key of `object` outside `allowed`, or empty when every key is
+// known. A non-string key is reported as itself.
+template <std::size_t Size>
+std::string unknown_vector_key(NSDictionary* object, const std::array<std::string_view, Size>& allowed) {
+    for (id key in object) {
+        if (![key isKindOfClass:NSString.class]) return "a non-string key";
+        const std::string name = cpp_string(key);
+        if (!contains(allowed, name)) return name;
+    }
+    return {};
+}
+
+constexpr std::array<std::string_view, 3> kVectorAssetKeys{"contentHash", "viewBox", "ops"};
+constexpr std::array<std::string_view, 2> kVectorClipKeys{"d", "rule"};
+constexpr std::array<std::string_view, 2> kVectorPaintKeys{"gradient", "transform"};
+constexpr std::array<std::string_view, 16> kVectorGradientKeys{
+    "kind", "angle", "repeating", "repeatLength", "spread", "interpolation", "colorSpace",
+    "centerX", "centerY", "radiusX", "radiusY", "focalX", "focalY", "startRadius",
+    "endRadius", "stops"};
+constexpr std::array<std::string_view, 2> kVectorStopKeys{"position", "color"};
+
+bool parse_vector_path_data(id raw, id rule, vellum::graphics::PathGeometry& output,
+                            std::string& reason) {
+    if (![raw isKindOfClass:NSString.class]) {
+        reason = "path data must be a string";
+        return false;
+    }
+    if (!vellum::graphics::parse_svg_path_data(cpp_string(raw), output, &reason)) return false;
+    if (rule != nil) {
+        const auto value = keyword(rule, std::array<std::string_view, 2>{"nonzero", "evenodd"});
+        if (!value) {
+            reason = "fill rule must be nonzero or evenodd";
+            return false;
+        }
+        output.fill_rule = static_cast<vellum::graphics::FillRule>(*value);
+    }
+    return true;
+}
+
+bool parse_vector_paint(id raw, vellum::graphics::VectorPaint& output, const std::string& name,
+                        std::string& reason) {
+    if (raw == nil) return true;
+    if ([raw isEqual:@"none"]) {
+        output = {};
+        return true;
+    }
+    if ([raw isKindOfClass:NSString.class]) {
+        const auto color = parse_color(raw);
+        if (!color) {
+            reason = name + " must be a hex colour, none or a gradient paint";
+            return false;
+        }
+        output = {.color = *color};
+        return true;
+    }
+    if (![raw isKindOfClass:NSDictionary.class]) {
+        reason = name + " must be a hex colour, none or a gradient paint";
+        return false;
+    }
+    NSDictionary* source = raw;
+    if (const auto key = unknown_vector_key(source, kVectorPaintKeys); !key.empty()) {
+        reason = name + " does not take " + key;
+        return false;
+    }
+    if ([source[@"gradient"] isKindOfClass:NSDictionary.class]) {
+        NSDictionary* gradient = source[@"gradient"];
+        if (const auto key = unknown_vector_key(gradient, kVectorGradientKeys); !key.empty()) {
+            reason = name + ".gradient does not take " + key;
+            return false;
+        }
+        for (id stop in array_or_empty(gradient[@"stops"])) {
+            if (![stop isKindOfClass:NSDictionary.class]) continue;
+            if (const auto key = unknown_vector_key(static_cast<NSDictionary*>(stop), kVectorStopKeys);
+                !key.empty()) {
+                reason = name + ".gradient stops do not take " + key;
+                return false;
+            }
+        }
+    }
+    std::vector<vellum::graphics::LinearGradient> gradients;
+    std::string why;
+    if (source[@"gradient"] == nil ||
+        !parse_linear_gradient_value(source[@"gradient"], name + ".gradient", gradients, &why,
+                                     true)) {
+        reason = why.empty() ? name + " gradient paint requires a gradient" : why;
+        return false;
+    }
+    output = {.gradient = gradients.front()};
+    if (!parse_affine(source[@"transform"], output.gradient_transform)) {
+        reason = name + ".transform must be six finite numbers";
+        return false;
+    }
+    return true;
+}
+
+// A compiled vector asset: one display list drawn by a single node.
+bool materialize_vector(
+    NSDictionary* source, const std::string& identity, MaterializeContext& context,
+    vellum::graphics::SceneNode& output, std::string* error) {
+    using vellum::graphics::VectorOp;
+    const auto reject = [&](std::string property, const std::string& problem) {
+        return reject_vector(context, identity, std::move(property),
+            "vector " + identity + " " + problem, error);
+    };
+    id children = source[@"children"];
+    if (children != nil && (![children isKindOfClass:NSArray.class] ||
+                            static_cast<NSArray*>(children).count != 0U)) {
+        return reject("children", "does not accept children");
+    }
+    if (![source[@"asset"] isKindOfClass:NSDictionary.class]) {
+        return reject("asset", "requires a compiled asset object");
+    }
+    NSDictionary* asset_source = source[@"asset"];
+    if (const auto key = unknown_vector_key(asset_source, kVectorAssetKeys); !key.empty()) {
+        return reject("asset", "asset does not take " + key);
+    }
+    auto asset = std::make_shared<vellum::graphics::VectorAsset>();
+    if (![asset_source[@"contentHash"] isKindOfClass:NSString.class]) {
+        return reject("asset", "requires a contentHash string");
+    }
+    asset->content_hash = cpp_string(asset_source[@"contentHash"]);
+    id view_box = asset_source[@"viewBox"];
+    if (![view_box isKindOfClass:NSArray.class] || static_cast<NSArray*>(view_box).count != 4U ||
+        !finite_number(view_box[0], asset->view_box.x) ||
+        !finite_number(view_box[1], asset->view_box.y) ||
+        !finite_number(view_box[2], asset->view_box.width) ||
+        !finite_number(view_box[3], asset->view_box.height)) {
+        return reject("asset", "viewBox must be four finite numbers");
+    }
+    id ops = asset_source[@"ops"];
+    if (![ops isKindOfClass:NSArray.class] ||
+        static_cast<NSArray*>(ops).count > vellum::graphics::kMaxVectorOps) {
+        return reject("asset", "ops must be an array of at most " +
+                                   std::to_string(vellum::graphics::kMaxVectorOps) +
+                                   " operations");
+    }
+    NSUInteger index = 0;
+    for (id raw in static_cast<NSArray*>(ops)) {
+        const std::string where = "operation " + std::to_string(index++);
+        if (![raw isKindOfClass:NSDictionary.class] ||
+            ![static_cast<NSDictionary*>(raw)[@"op"] isKindOfClass:NSString.class]) {
+            return reject("asset", where + " must be an object with an op");
+        }
+        NSDictionary* op_source = raw;
+        const std::string kind = cpp_string(op_source[@"op"]);
+        static constexpr std::array<std::string_view, 4> kGroupKeys{
+            "op", "transform", "opacity", "clip"};
+        static constexpr std::array<std::string_view, 1> kEndKeys{"op"};
+        static constexpr std::array<std::string_view, 12> kPathKeys{
+            "op", "d", "fillRule", "transform", "fill", "stroke", "strokeWidth",
+            "strokeLineJoin", "strokeLineCap", "strokeMiterLimit", "strokeDasharray",
+            "strokeDashoffset"};
+        for (id key in op_source) {
+            if (![key isKindOfClass:NSString.class]) {
+                return reject("asset", where + " has a key that is not a string");
+            }
+            const std::string name = cpp_string(key);
+            const bool known = kind == "group" ? contains(kGroupKeys, name)
+                             : kind == "end"   ? contains(kEndKeys, name)
+                                               : contains(kPathKeys, name);
+            if (!known && (kind == "group" || kind == "end" || kind == "path")) {
+                return reject("asset", where + " " + kind + " does not take " + name);
+            }
+        }
+        VectorOp op;
+        if (!parse_affine(op_source[@"transform"], op.transform)) {
+            return reject("asset", where + " transform must be six finite numbers");
+        }
+        std::string reason;
+        if (kind == "group") {
+            op.kind = VectorOp::Kind::push_group;
+            if (op_source[@"opacity"] != nil && !finite_number(op_source[@"opacity"], op.opacity)) {
+                return reject("asset", where + " opacity must be a finite number");
+            }
+            if (id clip = op_source[@"clip"]; clip != nil) {
+                if (![clip isKindOfClass:NSDictionary.class]) {
+                    return reject("asset", where + " clip must be an object");
+                }
+                if (const auto key = unknown_vector_key(static_cast<NSDictionary*>(clip), kVectorClipKeys);
+                    !key.empty()) {
+                    return reject("asset", where + " clip does not take " + key);
+                }
+                vellum::graphics::PathGeometry geometry;
+                if (!parse_vector_path_data(static_cast<NSDictionary*>(clip)[@"d"],
+                                            static_cast<NSDictionary*>(clip)[@"rule"], geometry,
+                                            reason)) {
+                    return reject("asset", where + " clip: " + reason);
+                }
+                op.clip = std::make_shared<const vellum::graphics::PathGeometry>(
+                    std::move(geometry));
+            }
+        } else if (kind == "end") {
+            op.kind = VectorOp::Kind::pop_group;
+        } else if (kind == "path") {
+            op.kind = VectorOp::Kind::path;
+            vellum::graphics::PathGeometry geometry;
+            if (!parse_vector_path_data(op_source[@"d"], op_source[@"fillRule"], geometry,
+                                        reason)) {
+                return reject("asset", where + " " + reason);
+            }
+            op.fill = {.color = vellum::graphics::Color::hex(0x000000)};
+            if (!parse_vector_paint(op_source[@"fill"], op.fill, where + " fill", reason) ||
+                !parse_vector_paint(op_source[@"stroke"], op.stroke, where + " stroke", reason)) {
+                return reject("asset", reason);
+            }
+            auto& stroke = geometry.stroke;
+            stroke.width = 1.0F;
+            const auto number = [&](NSString* key, float& value) {
+                id number_value = op_source[key];
+                return number_value == nil || finite_number(number_value, value);
+            };
+            if (!number(@"strokeWidth", stroke.width) ||
+                !number(@"strokeMiterLimit", stroke.miter_limit) ||
+                !number(@"strokeDashoffset", stroke.dash_offset)) {
+                return reject("asset", where + " stroke numbers must be finite");
+            }
+            if (op_source[@"strokeLineJoin"] != nil) {
+                const auto join = keyword(op_source[@"strokeLineJoin"],
+                    std::array<std::string_view, 3>{"miter", "round", "bevel"});
+                if (!join) return reject("asset", where + " strokeLineJoin is unknown");
+                stroke.join = static_cast<vellum::graphics::StrokeJoin>(*join);
+            }
+            if (op_source[@"strokeLineCap"] != nil) {
+                const auto cap = keyword(op_source[@"strokeLineCap"],
+                    std::array<std::string_view, 3>{"butt", "round", "square"});
+                if (!cap) return reject("asset", where + " strokeLineCap is unknown");
+                stroke.cap = static_cast<vellum::graphics::StrokeCap>(*cap);
+            }
+            if (id dashes = op_source[@"strokeDasharray"]; dashes != nil) {
+                if (![dashes isKindOfClass:NSArray.class] ||
+                    static_cast<NSArray*>(dashes).count > vellum::graphics::kMaxPathDashes) {
+                    return reject("asset", where + " strokeDasharray must be an array of at most " +
+                                               std::to_string(vellum::graphics::kMaxPathDashes) +
+                                               " numbers");
+                }
+                for (id dash in static_cast<NSArray*>(dashes)) {
+                    float length = 0.0F;
+                    if (!finite_number(dash, length)) {
+                        return reject("asset", where + " dashes must be finite numbers");
+                    }
+                    stroke.dash_array.push_back(length);
+                }
+            }
+            op.path = std::make_shared<const vellum::graphics::PathGeometry>(std::move(geometry));
+        } else {
+            return reject("asset", where + " op must be group, end or path");
+        }
+        asset->ops.push_back(std::move(op));
+    }
+    std::string reason;
+    if (!vellum::graphics::vector_asset_is_valid(*asset, &reason)) {
+        return reject("asset", "cannot be drawn: " + reason);
+    }
+    NSArray* keys = [source.allKeys sortedArrayUsingSelector:@selector(compare:)];
+    for (id key in keys) {
+        if (![key isKindOfClass:NSString.class]) continue;
+        const std::string name = cpp_string(key);
+        if (contains(kVectorAttributes, name)) continue;
+        context.diagnostics->push_back({
+            .severity = LoweringDiagnostic::Severity::warning,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(vellum::graphics::kStyleDroppedCode),
+            .node_id = identity,
+            .property = name,
+            .message = "attribute " + name + " is not supported on vector nodes and was ignored",
+        });
+    }
+    output.kind = vellum::graphics::SceneNode::Kind::vector;
+    output.fill = vellum::graphics::Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    output.fill_gradients.clear();
+    output.box_shadows.clear();
+    output.corner_radius = 0.0F;
+    output.corner_radii.reset();
+    output.vector = std::move(asset);
     return true;
 }
 
@@ -1799,7 +2114,8 @@ bool parse_grouping(
         using Kind = vellum::graphics::SceneNode::Kind;
         const bool content_is_own_paint =
             output.kind == Kind::text || output.kind == Kind::path ||
-            output.kind == Kind::image || output.kind == Kind::plot;
+            output.kind == Kind::image || output.kind == Kind::vector ||
+            output.kind == Kind::plot;
         output.clip = vellum::graphics::NodeClip{
             .rect = {0.0F, 0.0F, output.bounds.width, output.bounds.height},
             .radii = vellum::graphics::resolved_corner_radii(output),
@@ -2052,6 +2368,8 @@ bool materialize_node(
 
     if (type_name == "path") {
         if (!materialize_path(source, identity, context, output, error)) return false;
+    } else if (type_name == "vector") {
+        if (!materialize_vector(source, identity, context, output, error)) return false;
     } else if (type_name == "plot") {
         if (!materialize_plot(source, identity, context, output, error)) return false;
     } else if (image_hash) {

@@ -8,6 +8,7 @@
 #include <vellum/view/theme.hpp>
 #include <vellum/view/view.hpp>
 #include <vellum/view/widget_bridge.hpp>
+#include <vellum/value/param_model.hpp>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -128,6 +129,12 @@ class ScriptedUiSession : public ScriptedEditorSession {
         std::function<std::string(std::string_view envelope_json)>;
 
     ScriptedUiSession(View& root, state::StateStore& store, ScriptedUiOptions options);
+    /// A session whose scripts reach parameters through `params` instead of a
+    /// store: its WidgetBridge is built over the model (see WidgetBridge's
+    /// ParamModel constructor for what a model-built bridge reports). A reload
+    /// probe runs over a read-only view of the same model, so a probe script
+    /// reads current values but cannot write them or open a gesture.
+    ScriptedUiSession(View& root, value::ParamModel& params, ScriptedUiOptions options);
     ~ScriptedUiSession() override;
 
     /// Tear down everything that borrows the root -- the realm, its engine and
@@ -304,6 +311,10 @@ class ScriptedUiSession : public ScriptedEditorSession {
     /// editor; the first load has nothing to protect and never probes, so an
     /// editor open evaluates its document exactly once. Exposed so tests and
     /// editor-open budgets can assert that by count rather than by wall time.
+    /// Writes a reload probe tried to make to a model-built session's model,
+    /// and dropped: values, plain values and gesture begins. Zero for a store
+    /// session, whose probe writes to its own copy of the store.
+    std::uint64_t probe_dropped_writes() const noexcept { return probe_dropped_writes_; }
     std::uint64_t probe_realm_evaluations() const noexcept {
         return probe_realm_evaluations_;
     }
@@ -350,9 +361,20 @@ private:
         NativeMessageHandler handler;
     };
 
+    ScriptedUiSession(View& root, state::StateStore* store, value::ParamModel* params,
+                      ScriptedUiOptions options);
+
     const std::uint64_t identity_;
     View& root_;
+    // A model-built session owns an empty store for the store-only paths
+    // (deferred gesture releases), which then have nothing to do.
+    std::unique_ptr<state::StateStore> owned_store_;
     state::StateStore& store_;
+    value::ParamModel* params_ = nullptr;
+    // Gesture ends a realm replacement deferred on a model-built bridge,
+    // delivered to params_ beside the store's deferred releases.
+    std::vector<value::ParamHandle> pending_model_gesture_ends_;
+    void deliver_pending_model_gesture_ends() noexcept;
     std::filesystem::path script_path_;
     std::filesystem::path theme_path_;
     std::string script_source_;
@@ -415,6 +437,7 @@ private:
     bool accessibility_retirement_pending_ = false;
     ReloadMetrics last_reload_metrics_{};   // JS-axis reload timings (item 1.2)
     std::uint64_t probe_realm_evaluations_ = 0;
+    std::uint64_t probe_dropped_writes_ = 0;
     bool document_load_pending_ = false;
     int deferred_load_polls_ = 0;
     std::function<void(bool, const std::string&)> document_loaded_callback_;

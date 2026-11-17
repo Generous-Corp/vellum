@@ -534,6 +534,53 @@ void test_deterministic_across_threads() {
 
 } // namespace
 
+// trim() releases the layer buffers, the clip mask and the command storage
+// between frames, returns what they held, and the next frame draws the same
+// bytes; during a frame it releases nothing.
+void test_trim() {
+    std::vector<std::uint8_t> buffer(kSize * kSize * 4);
+    CpuRenderInterface r;
+    r.set_threads(g_threads);
+    const auto blue = quad(r, 0, 0, 8, 8, {0, 0, 255, 255});
+    const auto half_red = quad(r, 0, 0, 4, 8, {128, 0, 0, 128});
+    // A layer and a clip mask in one frame, so both caches fill.
+    const auto draw = [&] {
+        VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+        r.RenderGeometry(blue, {0, 0}, 0);
+        const auto layer = r.PushLayer();
+        r.RenderGeometry(half_red, {0, 0}, 0);
+        r.EnableClipMask(true);
+        r.RenderToClipMask(Rml::ClipMaskOperation::Set, lower_left(r), {0, 0});
+        r.CompositeLayers(layer, 0, Rml::BlendMode::Blend, {});
+        r.EnableClipMask(false);
+        r.PopLayer();
+        r.end_frame();
+    };
+    VELLUM_RMLUI_CHECK(r.cached_bytes() == 0 && r.trim() == 0);
+    draw();
+    const std::vector<std::uint8_t> before = buffer;
+    const std::size_t held = r.cached_bytes();
+    // Control: the frame left something to release, at least the layer buffer.
+    VELLUM_RMLUI_CHECK(held >= kSize * kSize * 4);
+
+    // During a frame nothing is released.
+    VELLUM_RMLUI_CHECK(r.begin_frame(frame(buffer)));
+    VELLUM_RMLUI_CHECK(r.trim() == 0);
+    VELLUM_RMLUI_CHECK(r.cached_bytes() >= held);
+    r.end_frame();
+
+    // Between frames it releases what the frames cached and says how much.
+    const std::size_t cached = r.cached_bytes();
+    VELLUM_RMLUI_CHECK(r.trim() == cached);
+    VELLUM_RMLUI_CHECK(r.cached_bytes() == 0);
+    VELLUM_RMLUI_CHECK(r.trim() == 0);
+
+    // The next frame allocates again and draws the same bytes.
+    draw();
+    VELLUM_RMLUI_CHECK(buffer == before);
+    VELLUM_RMLUI_CHECK(r.cached_bytes() >= held);
+}
+
 int main() {
     for (const unsigned threads : {1u, 3u}) {
         g_threads = threads;
@@ -550,6 +597,7 @@ int main() {
         test_equal_area_resize_clears_reused_buffers();
         test_texture_limit();
         test_deterministic_across_threads();
+        test_trim();
     }
     return 0;
 }
