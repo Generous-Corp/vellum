@@ -1264,7 +1264,10 @@ void BridgeRegistrars::register_gpu_api(WidgetBridge& self) {
                 depth_key = payload["depthStencil"]["key"].getWithDefault<std::string>("");
             }
             if (depth_key.empty()) depth_key = "target:" + (canvas_id.empty() ? target_texture_id : canvas_id);
-            auto& depth_texture = self.native_gpu_bridge_state_->pass_depths[depth_key];
+            using DepthTextures = std::unordered_map<std::string, wgpu::Texture>;
+            auto& depth_store = self.native_gpu_bridge_state_->pass_depths;
+            if (!depth_store) depth_store = std::make_shared<DepthTextures>();
+            auto& depth_texture = (*static_cast<DepthTextures*>(depth_store.get()))[depth_key];
             const uint32_t depth_w = target_canvas_state ? target_canvas_state->width : target_texture_state->width;
             const uint32_t depth_h = target_canvas_state ? target_canvas_state->height : target_texture_state->height;
             bool fresh_depth = false;
