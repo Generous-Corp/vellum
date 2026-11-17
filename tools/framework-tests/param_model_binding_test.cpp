@@ -611,6 +611,54 @@ FRAMEWORK_TEST(store_model_plain_write_stores_what_set_value_stores) {
     }
 }
 
+FRAMEWORK_TEST(a_dropped_store_binding_leaves_its_widgets_writing_the_store) {
+    RecordingStore rs;
+    auto& store = rs.store;
+    vellum::view::Knob knob;
+    knob.set_bounds({0.0f, 0.0f, 48.0f, 48.0f});
+    vellum::view::Fader fader;
+    fader.set_bounds({0.0f, 0.0f, 24.0f, 160.0f});
+    vellum::view::RangeSlider slider;
+    slider.set_bounds({0.0f, 0.0f, 200.0f, 24.0f});
+    vellum::view::XYPad pad;
+    pad.set_bounds({0.0f, 0.0f, 100.0f, 100.0f});
+    {
+        // Bound, then the bindings go away while the widgets stay.
+        auto a = vellum::view::bind_parameter(knob, store, 2);
+        auto b = vellum::view::bind_parameter(fader, store, 4);
+        auto c = vellum::view::bind_parameter(slider, store, 2);
+        auto d = vellum::view::bind_parameter(pad, store, 2, 4);
+    }
+    // Reuse freed memory, so a callback reaching a freed model fails.
+    std::vector<std::unique_ptr<vellum::view::StateStoreParamModel>> scribble;
+    vellum::state::StateStore other;
+    for (int i = 0; i < 64; ++i)
+        scribble.push_back(std::make_unique<vellum::view::StateStoreParamModel>(other));
+
+    // The widgets' callbacks still write the store, with balanced gestures,
+    // as they did when the store overloads captured only the store.
+    const float depth = store.get_value(2);
+    knob.simulate_drag({24.0f, 40.0f}, {24.0f, 4.0f}, 8);
+    CHECK(store.get_value(2) > depth);
+    CHECK(rs.host_begins == 1);
+    CHECK(rs.host_ends == 1);
+
+    const float spread = store.get_value(4);
+    fader.simulate_drag({12.0f, 120.0f}, {12.0f, 20.0f}, 8);
+    CHECK(store.get_value(4) > spread);
+    CHECK(rs.host_begins == 2);
+    CHECK(rs.host_ends == 2);
+
+    slider.simulate_drag({20.0f, 12.0f}, {180.0f, 12.0f}, 8);
+    CHECK(rs.host_begins == 3);
+    CHECK(rs.host_ends == 3);
+
+    pad.simulate_drag({20.0f, 80.0f}, {80.0f, 20.0f}, 8);
+    CHECK(rs.host_begins == 5);
+    CHECK(rs.host_ends == 5);
+    CHECK(near(store.get_normalized(2), pad.x_value()));
+}
+
 }  // namespace
 
 int main() { return framework_test::run_all(); }
