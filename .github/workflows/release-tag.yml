@@ -131,9 +131,40 @@ jobs:
           set -euo pipefail
           printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
 
+  # The release policy check reads the workflows with a third-party YAML
+  # parser, so it runs in a job of its own that holds no secret and mints no
+  # token. The signing job needs it, and never loads the parser.
+  release-policy-check:
+    name: release-policy-check
+    needs: select-release-commit
+    if: needs.select-release-commit.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the reconciled commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      # PyYAML for the policy check, pinned by hash, in a venv called by path:
+      # nothing here goes on GITHUB_PATH.
+      - name: Install the release policy parser
+        run: |
+          set -euo pipefail
+          python3 -I -m venv "$RUNNER_TEMP/release-policy-venv"
+          "$RUNNER_TEMP"/release-policy-venv/bin/python3 -I -m pip install --disable-pip-version-check \
+            --only-binary=:all: --require-hashes -r scripts/release_policy_requirements.txt
+
+      - name: Check the release policy at the reconciled commit
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP"/release-policy-venv/bin/python3 -I scripts/check_release_policy.py check
+
   sign-release-tag:
     name: sign-release-tag
-    needs: select-release-commit
+    needs: [select-release-commit, release-policy-check]
     if: needs.select-release-commit.outputs.tag != ''
     runs-on: ubuntu-latest
     environment: release
@@ -170,6 +201,11 @@ jobs:
             > "$RUNNER_TEMP/required-checks.json"
           timeout 120 gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"
           timeout 120 gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"
+          # gh api exits non-zero on any non-2xx answer; a 2xx body of the wrong
+          # shape (another token, another endpoint) fails here, not in the decision.
+          jq -e 'type == "object" and (.contexts | type == "array")' "$RUNNER_TEMP/required-checks.json" > /dev/null
+          jq -e 'type == "array"' "$RUNNER_TEMP/branch-rules.json" > /dev/null
+          jq -e 'type == "object" and (.enabled | type == "boolean")' "$RUNNER_TEMP/immutable-releases.json" > /dev/null
           date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNNER_TEMP/immutable-releases-read-at.txt"
 
       - name: Wait for the required checks to finish
@@ -254,6 +290,11 @@ jobs:
             > "$RUNNER_TEMP/required-checks.json"
           timeout 120 gh api "repos/$GITHUB_REPOSITORY/rules/branches/main" > "$RUNNER_TEMP/branch-rules.json"
           timeout 120 gh api "repos/$GITHUB_REPOSITORY/immutable-releases" > "$RUNNER_TEMP/immutable-releases.json"
+          # gh api exits non-zero on any non-2xx answer; a 2xx body of the wrong
+          # shape (another token, another endpoint) fails here, not in the decision.
+          jq -e 'type == "object" and (.contexts | type == "array")' "$RUNNER_TEMP/required-checks.json" > /dev/null
+          jq -e 'type == "array"' "$RUNNER_TEMP/branch-rules.json" > /dev/null
+          jq -e 'type == "object" and (.enabled | type == "boolean")' "$RUNNER_TEMP/immutable-releases.json" > /dev/null
           date -u +%Y-%m-%dT%H:%M:%SZ > "$RUNNER_TEMP/immutable-releases-read-at.txt"
 
       - name: Decide whether the version may be tagged
@@ -274,7 +315,6 @@ jobs:
             --immutable-releases "$RUNNER_TEMP/immutable-releases.json" \
             --immutable-read-at "$(cat "$RUNNER_TEMP/immutable-releases-read-at.txt")")"
           test "$tag" = "$SELECTED_TAG"
-          python3 -I scripts/check_release_policy.py check
           python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
           version="${tag#v}"
           python3 -I scripts/release_request.py freeze --tag "$tag" > "$RUNNER_TEMP/freeze.json"
@@ -388,9 +428,52 @@ jobs:
           printf 'run=%s\n' "$run" >> "$GITHUB_OUTPUT"
           echo "dry run: $run ($(head -n 1 "$RUNNER_TEMP/gate-reason.txt"))" >> "$GITHUB_STEP_SUMMARY"
 
+  # The dry-run commit's own release policy, judged with the YAML parser in a
+  # job that holds no secret and mints no token. The parser is installed from
+  # this commit's hashed requirements before checking out the dry-run commit,
+  # which can predate them.
+  dry-run-policy-check:
+    name: dry-run-policy-check
+    needs: dry-run-gate
+    if: needs.dry-run-gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      commit: ${{ steps.check.outputs.commit }}
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # PyYAML for the policy check, pinned by hash, in a venv called by path:
+      # nothing here goes on GITHUB_PATH.
+      - name: Install the release policy parser
+        run: |
+          set -euo pipefail
+          python3 -I -m venv "$RUNNER_TEMP/release-policy-venv"
+          "$RUNNER_TEMP"/release-policy-venv/bin/python3 -I -m pip install --disable-pip-version-check \
+            --only-binary=:all: --require-hashes -r scripts/release_policy_requirements.txt
+
+      - name: Check the release policy at the dry-run commit
+        id: check
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          python3 -I scripts/release_dry_run.py plan --head "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+            --attempt "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/dry-run.txt"
+          commit="$(sed -n 's/^commit=//p' "$RUNNER_TEMP/dry-run.txt")"
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          git checkout --quiet --detach "$commit"
+          "$RUNNER_TEMP"/release-policy-venv/bin/python3 -I scripts/check_release_policy.py check
+          printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
+
   sign-dry-run-tag:
     name: sign-dry-run-tag
-    needs: dry-run-gate
+    needs: [dry-run-gate, dry-run-policy-check]
     if: needs.dry-run-gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     environment: release
@@ -404,6 +487,8 @@ jobs:
 
       - name: Choose the dry-run commit and build its attestation
         id: dry-run
+        env:
+          POLICY_COMMIT: ${{ needs.dry-run-policy-check.outputs.commit }}
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = Generous-Corp/vellum
@@ -417,8 +502,10 @@ jobs:
           [[ "$tag" =~ ^dry-run/(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))/[1-9][0-9]*-[1-9][0-9]*$ ]]
           test "$identity" = "${BASH_REMATCH[1]}"
           # The tagged commit's own release scripts decide, as on a release.
+          # release-policy-check judged this commit with the YAML parser; it must
+          # be the commit this job plans.
+          test "$commit" = "$POLICY_COMMIT"
           git checkout --quiet --detach "$commit"
-          python3 -I scripts/check_release_policy.py check
           python3 -I scripts/check_release_policy.py signer >> "$GITHUB_OUTPUT"
           # The signed message wraps v<version>'s attestation under its own
           # schema with the dry-run tag's name, so it can never pass for a release.

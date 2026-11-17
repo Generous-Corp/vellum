@@ -20,4 +20,5 @@ jobs:
     timeout-minutes: 1
     steps:
       - name: Hand the event to Release path review
-        run: 'true'
+        run: |
+          true

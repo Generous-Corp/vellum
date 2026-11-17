@@ -35,13 +35,18 @@
       "description": "A document below version 5 carries no plot binding on any node; plots are version 5 vocabulary.",
       "if": { "required": ["schemaVersion"], "properties": { "schemaVersion": { "enum": [1, 2, 3, 4] } } },
       "then": { "properties": { "root": { "$ref": "#/$defs/nodeWithoutPlot" } } }
+    },
+    {
+      "description": "A document before version 6 carries no vector asset field on any node.",
+      "if": { "required": ["schemaVersion"], "properties": { "schemaVersion": { "enum": [1, 2, 3, 4, 5] } } },
+      "then": { "properties": { "root": { "$ref": "#/$defs/nodeBeforeVectorAssets" } } }
     }
   ],
   "properties": {
     "$schema": { "const": "https://vellum.dev/schemas/design-ir/v1" },
     "schemaVersion": {
-      "enum": [1, 2, 3, 4, 5],
-      "description": "The oldest version carrying every field the document uses; each version keeps every field of the ones before it. Version 2 adds the node compositing object, version 3 node material references, version 4 animation tracks and version 5 plot bindings. A field is illegal below the version that introduced it."
+      "enum": [1, 2, 3, 4, 5, 6],
+      "description": "The oldest version carrying every field the document uses; each version keeps every field of the ones before it. Version 2 adds the node compositing object, version 3 node material references, version 4 animation tracks, version 5 plot bindings and version 6 the vector asset fields. A field is illegal below the version that introduced it."
     },
     "compiler": {
       "type": "object",
@@ -69,6 +74,20 @@
     "lossReport": { "$ref": "#/$defs/lossReport" }
   },
   "$defs": {
+    "nodeBeforeVectorAssets": {
+      "description": "A node, and every node beneath it, without the vector asset fields DesignIR version 6 adds. Path nodes and geometry are part of the earlier contract.",
+      "properties": {
+        "kind": { "not": { "const": "vector" } },
+        "properties": {
+          "properties": {
+            "vector": false,
+            "image": { "properties": { "source": false } },
+            "paint": { "properties": { "transform": false, "clipPath": false, "overflow": false } }
+          }
+        },
+        "children": { "type": "array", "items": { "$ref": "#/$defs/nodeBeforeVectorAssets" } }
+      }
+    },
     "jsonValue": {
       "oneOf": [
         { "type": ["null", "boolean", "number", "string"] },

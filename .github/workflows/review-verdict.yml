@@ -59,4 +59,5 @@ jobs:
       - name: Post review-verdict
         env:
           GH_TOKEN: ${{ github.token }}
-        run: '"${{ steps.python.outputs.python-path }}" scripts/review_verdict_status.py'
+        run: |
+          "${{ steps.python.outputs.python-path }}" scripts/review_verdict_status.py

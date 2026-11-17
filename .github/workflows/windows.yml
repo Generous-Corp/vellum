@@ -1,0 +1,149 @@
+name: Windows
+
+# Builds Vellum's own C++ (foundation, value, runtime, components, the
+# platform-neutral graphics code and gpu-runtime's bootstrap) with MSVC on
+# Windows x64 and ARM64, and runs the tests that configuration registers.
+#
+# What this lane does not build: framework/. The framework is compiled only
+# through the landed mirror, whose closures record the Darwin arm64
+# configuration (tools/mirror/VellumMirror.cmake refuses any other), and
+# gpu-runtime's Dawn device, whose renderer lock names macOS only. A Windows
+# framework build needs a Windows closure and a Windows renderer lock entry
+# first. So the mirror and the GPU backend are off here, and the configure
+# check below fails if either turns on silently.
+#
+# Tests: every registered test not run by the Python interpreter (the C++
+# binaries and the CMake install-consumer scripts) must pass, and a named set
+# of them must be present. The Python repository tooling tests are left to the
+# macOS and Linux lanes. The JUnit report is uploaded, so a change in what
+# Windows covers is visible in the artifact rather than inferred from a green
+# check.
+#
+# Advisory: not a required check.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'foundation/**'
+      - 'runtime/**'
+      - 'components/**'
+      - 'graphics/**'
+      - 'gpu-runtime/**'
+      - 'apps/minimal-scene/**'
+      - '.gitattributes'
+      - '.github/workflows/windows.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'foundation/**'
+      - 'runtime/**'
+      - 'components/**'
+      - 'graphics/**'
+      - 'gpu-runtime/**'
+      - 'apps/minimal-scene/**'
+      - '.gitattributes'
+      - '.github/workflows/windows.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('vellum-windows-pr-{0}', github.ref) || format('vellum-windows-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  windows:
+    name: Windows MSVC (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runs_on: '["windows-2022"]'
+          - arch: ARM64
+            runs_on: '["windows-11-arm"]'
+    runs-on: ${{ fromJSON(matrix.runs_on) }}
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-windows \
+            -A "${{ matrix.arch }}" \
+            -DVELLUM_BUILD_TESTS=ON \
+            -DVELLUM_ENABLE_MIRROR=OFF \
+            -DVELLUM_ENABLE_GPU=OFF \
+            -DVELLUM_BUILD_SMOKE_NATIVE=OFF
+
+      - name: Check what the configure enabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          cache=build-windows/CMakeCache.txt
+          grep -q '^CMAKE_GENERATOR_PLATFORM:INTERNAL=${{ matrix.arch }}$' "$cache" \
+            || { echo "::error::configured for the wrong platform"; exit 1; }
+          for off in VELLUM_ENABLE_MIRROR VELLUM_ENABLE_GPU; do
+            grep -q "^${off}:BOOL=OFF$" "$cache" \
+              || { echo "::error::${off} is not OFF"; exit 1; }
+          done
+
+      - name: Build
+        shell: bash
+        run: cmake --build build-windows --config Release --parallel 4
+
+      - name: Test the C++
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Every registered test that is not run by the Python interpreter:
+          # the C++ test binaries and the CMake install-consumer scripts. A new
+          # C++ test joins without editing this list. The Python repository
+          # tooling tests are POSIX-specific today and run on the macOS and
+          # Linux lanes.
+          ctest --test-dir build-windows -C Release --show-only=json-v1 > "$RUNNER_TEMP/tests.json"
+          regex="$(python3 -I - "$RUNNER_TEMP/tests.json" <<'PY'
+          import json, re, sys
+          tests = json.load(open(sys.argv[1], encoding="utf-8"))["tests"]
+          def python(test):
+              command = test.get("command") or [""]
+              return "python" in command[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+          names = [t["name"] for t in tests if not python(t)]
+          # Controls: tests that must be here, so a broken selection or a
+          # configure that registered nothing cannot pass.
+          for required in ("vellum.foundation", "vellum.runtime", "vellum.value.feed",
+                           "vellum.install-consumer", "gpu-runtime.bootstrap"):
+              if required not in names:
+                  sys.exit(f"::error::{required} is not registered")
+          if len(names) < 20:
+              sys.exit(f"::error::only {len(names)} C++ tests registered")
+          print(f"{len(names)} C++ tests of {len(tests)}", file=sys.stderr)
+          if not all(re.fullmatch(r"[A-Za-z0-9.-]+", n) for n in names):
+              sys.exit("::error::a test name needs escaping beyond '.'")
+          print("^(" + "|".join(n.replace(".", r"\.") for n in names) + ")$")
+          PY
+          )"
+          ctest --test-dir build-windows -C Release --output-on-failure \
+            --no-tests=error -R "$regex" --output-junit "$RUNNER_TEMP/windows-ctest.xml"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vellum-windows-${{ matrix.arch }}
+          path: ${{ runner.temp }}/windows-ctest.xml
+          if-no-files-found: warn
+          retention-days: 30
