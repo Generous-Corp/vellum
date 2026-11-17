@@ -2486,6 +2486,57 @@ class VerifyExtractionTests(unittest.TestCase):
             self.assertEqual(len(errors), 1, errors)
             self.assertIn(f"{verify_extraction.FRAMEWORK_PORTS}: unreadable at {base}", errors[0])
 
+    def origin_guard(self, rows_at_head: list[dict], rows_at_base: list[dict], *, event: str = "pull_request",
+                     labels: list[str] | None = None) -> list[str]:
+        """framework_ports_origin_errors for a fixture whose merge base holds rows_at_base and whose tree holds rows_at_head."""
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})  # a transferred file
+            self.write_ports(root, rows_at_base)
+            self.git_commit_all(root, "the base")
+            self.write_ports(root, rows_at_head)
+            payload = root.parent / f"{root.name}-event.json"
+            payload.write_text(json.dumps({"pull_request": {"labels": [{"name": n} for n in labels or []]}}))
+            self.addCleanup(payload.unlink)
+            env = {"GITHUB_EVENT_NAME": event, "GITHUB_EVENT_PATH": str(payload)}
+            with mock.patch.dict(os.environ, env):
+                return verify_extraction.framework_ports_origin_errors(
+                    root, verify_extraction.load_framework_ports(), {"framework/core/a/src/a.cpp"})
+
+    def test_a_pull_request_cannot_move_a_pulp_origin_file_to_another_origin(self) -> None:
+        transferred = "framework/core/a/src/a.cpp"
+        landed_pulp = self.ports_row("framework/core/a/src/p.cpp", commits=["a" * 40])
+        flipped = dict(landed_pulp, origin="native", pulp_path=None, pulp_commits=[], framework_blob=None)
+        # A new native row for a file the transfer carried.
+        errors = self.origin_guard([self.ports_row(transferred, "removed")], [])
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("origin is not `pulp`", errors[0])
+        self.assertIn(transferred, errors[0])
+        # A landed Pulp row edited to native.
+        self.assertEqual(len(self.origin_guard([flipped], [landed_pulp])), 1)
+        # A new native row for a path the base's ledger took from Pulp.
+        self.assertEqual(len(self.origin_guard([landed_pulp, dict(flipped, change="removed")], [landed_pulp])), 1)
+
+    def test_the_owner_label_waives_the_origin_guard_and_nothing_else_does(self) -> None:
+        row = self.ports_row("framework/core/a/src/a.cpp", "removed")
+        self.assertEqual(self.origin_guard([row], [], labels=["owner-decision"]), [])
+        self.assertEqual(len(self.origin_guard([row], [], labels=["bug", "ready"])), 1)
+        self.assertEqual(len(self.origin_guard([row], [], labels=[])), 1)
+        # An unreadable event payload waives nothing.
+        self.hide_ci_git_base()
+        with mock.patch.dict(os.environ, {"GITHUB_EVENT_PATH": "/nonexistent/event.json"}):
+            self.assertEqual(verify_extraction.pull_request_labels(), set())
+
+    def test_the_origin_guard_leaves_native_rows_and_landed_rows_alone(self) -> None:
+        native_new = self.ports_row("framework/core/a/src/n.cpp")  # a file Vellum wrote
+        self.assertEqual(self.origin_guard([native_new], []), [])
+        # A landed native row for a transferred file stands; only a row the change adds or edits moves a file.
+        landed = self.ports_row("framework/core/a/src/a.cpp", "removed")
+        self.assertEqual(self.origin_guard([landed], [landed]), [])
+        # The merge queue and a push judge a change its pull request already judged.
+        self.assertEqual(self.origin_guard([landed], [], event="merge_group"), [])
+
     def pulp_with_file(self, pulp: Path, pulp_path: str, data: bytes) -> tuple[str, str]:
         """A Pulp checkout whose main holds one file: (commit, the file's blob)."""
         run = lambda *args: subprocess.check_output(
