@@ -47,6 +47,7 @@ sys.path.append(str(Path(__file__).resolve().parent))
 import source_compile_options  # noqa: E402
 import framework_ports  # noqa: E402
 import gpu_surface_guard  # noqa: E402
+import platform_closures  # noqa: E402
 
 
 RECEIPT_SCHEMA = "pulp.vellum.export-receipt.v2"
@@ -1207,9 +1208,15 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     repo = repo.resolve()
     if platform not in framework_ports.PLATFORMS:
         raise PlanError(f"unknown platform {platform!r}; known: {list(framework_ports.PLATFORMS)}")
+    # Every platform but the receipt's needs a record; refuse before any other work.
     if platform != RECEIPT_PLATFORM:
-        raise PlanError(f"no verified closure for platform {platform}: the landed closures describe "
-                        f"{RECEIPT_PLATFORM}")
+        try:
+            listed = platform_closures.index(repo)
+        except platform_closures.RecordError as error:
+            raise PlanError(str(error)) from error
+        if platform not in listed:
+            raise PlanError(f"no verified closure for platform {platform}: the landed closures describe "
+                            f"{RECEIPT_PLATFORM}, and {platform_closures.INDEX} lists no record for it")
     receipt_path, receipt = newest_receipt(repo)
     file_count = (verify_framework_identity(repo, receipt_path, receipt) if transferred(repo)
                   else verify_mirror_identity(repo, receipt))
@@ -1219,7 +1226,20 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                                  else ([], []))
     if declared_errors:
         raise PlanError(declared_errors[0])
-    units = load_closures(repo, receipt)
+    record: dict[str, Any] | None = None
+    if platform == RECEIPT_PLATFORM:
+        units = load_closures(repo, receipt)
+        build_receipt = receipt
+    else:
+        try:
+            record, units = platform_closures.load_record(repo, platform)
+        except platform_closures.RecordError as error:
+            raise PlanError(str(error)) from error
+        if skia_asset_sha256 is not None and record["renderer_asset"]["sha256"] != skia_asset_sha256:
+            raise PlanError(f"the {platform} record links renderer asset {record['renderer_asset']['sha256']}, "
+                            f"but Vellum locks {skia_asset_sha256}")
+        # The build-info header Pulp generated names the commit the platform was exported at.
+        build_receipt = {**receipt, "pulp_sha": record["pulp_sha"]}
     # Every compiled row names a target some closure builds or units.json
     # declares, whatever its scope: a row scoped away from this platform is
     # still checked here, since no other lane builds it yet.
@@ -1231,6 +1251,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         raise PlanError("the ports ledger adds sources to targets no closure builds and "
                         f"{framework_ports.UNITS} does not declare: {unknown[:5]}")
     ledger = (ports_added, scopes)
+    all_ledger_added = set(ports_added)
     # A ledger-added source or declared target is planned only on its platforms.
     ports_added = {path: row for path, row in ports_added.items()
                    if not framework_ports.compiled(path) or framework_ports.compiled_on(scopes, path, platform)}
@@ -1242,7 +1263,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     closure_pinned = set(deps)
     declared_deps = declared_dependencies(declared, units, closure_pinned)
     roots = prepare_dependencies({**deps, **declared_deps}, deps_dir, skia_dir, skia_asset_sha256, repo)
-    generated = prepare_generated(repo, receipt, units, generated_dir)
+    generated = prepare_generated(repo, build_receipt, units, generated_dir)
     # GPU device types are not part of the installed surface: the installed
     # copy of each choke header carries an #error guard (gpu_surface_guard.py).
     try:
@@ -1283,7 +1304,17 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                 if ledger_removed(repo, source, ports_removed):
                     continue
                 if not candidate.is_file():
-                    raise PlanError(f"{unit}/{name}: source {source} is not in the landed mirror")
+                    raise PlanError(f"{unit}/{name}: source {source} is not in the landed mirror; "
+                                    "port it through the ledger first")
+                ledger_path = candidate.relative_to(repo).as_posix() if transferred(repo) else None
+                if ledger_path in all_ledger_added and ledger_path not in ports_added:
+                    raise PlanError(f"{unit}/{name}: {platform}'s closure compiles {ledger_path}, whose ledger "
+                                    f"scope leaves out {platform}; scope it to {platform}")
+                if ledger_path in ports_added:
+                    if ports_added[ledger_path]["target"] not in (name, None):
+                        raise PlanError(f"{unit}/{name}: {platform}'s closure compiles {ledger_path} in {name}, "
+                                        f"but its ledger row adds it to {ports_added[ledger_path]['target']}")
+                    continue  # the ledger row adds it to this target below
                 if candidate.suffix in SOURCE_SUFFIXES:
                     sources.append(str(candidate))
             # Sources the ports ledger added to this target: the closures do
@@ -1424,7 +1455,8 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         "framework_ports": {"added": sorted(ports_added), "removed": sorted(ports_removed)},
         "framework_units": [target["name"] for target in declared],
         "native_preludes": generated["native_preludes"],
-        "closures": [unit["closure_manifest"] for unit in receipt["units"]],
+        "closures": ([unit["closure_manifest"] for unit in receipt["units"]] if record is None
+                     else [unit["closure_manifest"] for unit in record["units"]]),
         "dependencies": {name: {"pin": entry["pin"], "source": entry["source"],
                                  "files_verified": len(entry["files"])}
                           for name, entry in sorted({**deps, **declared_deps}.items())},
@@ -1440,6 +1472,10 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         "units": unit_rows,
         "executables": executables,
         "gpu_guard": gpu_guard,
+        # Only a platform with its own record names it, so the receipt platform's plan is unchanged.
+        **({} if record is None else {"platform": platform,
+                                      "platform_record": f"{platform_closures.ROOT}/{platform}/record.json",
+                                      "platform_pulp_sha": record["pulp_sha"]}),
     }
 
 
@@ -1552,12 +1588,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skia-asset-sha256", help="digest of the Skia/Dawn archive Vellum locks")
     parser.add_argument("--cmake-output", type=Path, required=True)
     parser.add_argument("--json-output", type=Path)
-    parser.add_argument("--platform", default=RECEIPT_PLATFORM,
-                        help="the platform key to plan for; it needs a verified closure")
+    parser.add_argument("--platform", help="the platform key to plan for (default: from --system and "
+                        "--processor, else macos-arm64); it needs a verified closure")
+    parser.add_argument("--system", help="the target's CMAKE_SYSTEM_NAME")
+    parser.add_argument("--processor", help="the target's CMAKE_SYSTEM_PROCESSOR")
+    parser.add_argument("--apple-sdk", default="", help="the target's CMAKE_OSX_SYSROOT, for iOS")
     parser.add_argument(
         "--in-tree-definitions", action="append", default=[], metavar="NAME=DEF|DEF",
         help="an in-tree dependency's INTERFACE_COMPILE_DEFINITIONS, from the configured targets")
     args = parser.parse_args(argv)
+    platform = args.platform
+    if platform is None and args.system:
+        try:
+            platform = platform_closures.platform_of(args.system, args.processor or "", args.apple_sdk)
+        except platform_closures.RecordError as error:
+            print(f"vellum-mirror-package: {error}", file=sys.stderr)
+            return 1
+    platform = platform or RECEIPT_PLATFORM
     in_tree_definitions: dict[str, list[str]] = {}
     for item in args.in_tree_definitions:
         name, _, values = item.partition("=")
@@ -1565,7 +1612,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         build_plan = plan(args.repo, args.deps_dir.resolve(), args.generated_dir.resolve(),
                           args.skia_dir.resolve() if args.skia_dir else None,
-                          args.skia_asset_sha256, in_tree_definitions, args.platform)
+                          args.skia_asset_sha256, in_tree_definitions, platform)
     except PlanError as error:
         print(f"vellum-mirror-package: {error}", file=sys.stderr)
         return 1

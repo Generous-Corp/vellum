@@ -1364,6 +1364,62 @@ def load_framework_ports():
     return module
 
 
+PLATFORM_CLOSURES_TOOL = Path(__file__).resolve().parents[1] / "mirror" / "platform_closures.py"
+
+
+def load_platform_closures():
+    spec = importlib.util.spec_from_file_location("platform_closures", PLATFORM_CLOSURES_TOOL)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {PLATFORM_CLOSURES_TOOL}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def framework_platform_errors(root: Path, pulp_root: Path | None, pulp_main_ref: str,
+                              defer_identity: bool) -> tuple[list[str], dict[str, object]]:
+    """Every platform closure record (tools/mirror/platform_closures.py), and its Pulp claims.
+
+    The record's pins and shape need no Pulp checkout. Its Pulp commit must be
+    a commit on Pulp main, and the exporter blob it names must be Pulp's
+    tools/scripts/vellum_closure.py at that commit; that part fails closed
+    without a checkout unless the lane defers to the required provenance lane.
+    """
+    records = load_platform_closures()
+    errors = list(records.errors(root))
+    try:
+        listed = records.index(root)
+    except records.RecordError:
+        listed = {}
+    checks: dict[str, object] = {"framework_platform_records": sorted(listed)}
+    if errors or not listed:
+        checks["framework_platform_records_proved"] = not errors
+        return errors, checks
+    if pulp_root is None:
+        checks["framework_platform_records_proved"] = "deferred: no Pulp checkout"
+        if not defer_identity:
+            errors.append(f"{records.INDEX}: no Pulp checkout proved the records' Pulp commits; pass --pulp-root")
+        return errors, checks
+
+    def pulp(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(pulp_root), *args], capture_output=True, check=False)
+
+    main = pulp("rev-parse", "--verify", "--quiet", f"{pulp_main_ref}^{{commit}}")
+    if main.returncode != 0:
+        return [f"{records.INDEX}: Pulp checkout {pulp_root} has no {pulp_main_ref}"], checks
+    for key in listed:
+        record, _ = records.load_record(root, key)
+        sha, blob = record["pulp_sha"], record["tool"]["pulp_blob"]
+        if pulp("merge-base", "--is-ancestor", sha, main.stdout.decode().strip()).returncode != 0:
+            errors.append(f"{listed[key]}: Pulp commit {sha} is not a commit on Pulp {pulp_main_ref}")
+            continue
+        tool = pulp("rev-parse", "--verify", "--quiet", f"{sha}:{records.EXPORTER}")
+        if tool.returncode != 0 or tool.stdout.decode().strip() != blob:
+            errors.append(f"{listed[key]}: tool.pulp_blob {blob[:12]} is not Pulp {sha[:12]}:{records.EXPORTER}")
+    checks["framework_platform_records_proved"] = not errors
+    return errors, checks
+
+
 FRAMEWORK_PORTS = load_framework_ports().LEDGER
 FRAMEWORK_UNITS = load_framework_ports().UNITS
 # The files that only exist together with framework/.
@@ -1750,6 +1806,9 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
         pulp_root, pulp_main_ref, defer_identity, transfer.get("rename"))
     errors.extend(ports_errors)
     checks.update(ports_checks)
+    platform_errors, platform_checks = framework_platform_errors(root, pulp_root, pulp_main_ref, defer_identity)
+    errors.extend(platform_errors)
+    checks.update(platform_checks)
     # What git tracks (every entry, gitlinks included) and what the checkout
     # holds: a submodule or other non-file entry under framework/ is an extra.
     staged = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z", "--", FRAMEWORK_ROOT.rstrip("/")],

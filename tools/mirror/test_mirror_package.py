@@ -850,6 +850,21 @@ class SourceCompileOptionsTest(unittest.TestCase):
             'if(APPLE)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")\nendif()\n'),
             {"core/x/src/a.cpp": ["-fno-rtti"]})
 
+    def test_each_target_system_sets_its_own_platform_variables(self) -> None:
+        text = ('if(APPLE)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-fobjc-arc")\n'
+                'elseif(UNIX)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-fPIC")\nendif()\n')
+        linux = dict(self.RELEASE, CMAKE_SYSTEM_NAME="Linux")
+        self.assertEqual(self.evaluate(text), {"core/x/src/a.cpp": ["-fobjc-arc"]})
+        self.assertEqual(self.evaluate(text, linux), {"core/x/src/a.cpp": ["-fPIC"]})
+        self.assertEqual(self.evaluate('if(WIN32)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "/W4")\nendif()\n',
+                                       dict(self.RELEASE, CMAKE_SYSTEM_NAME="Windows")), {"core/x/src/a.cpp": ["/W4"]})
+        # Off Darwin the compiler is not recorded, so a condition on it fails closed.
+        with self.assertRaises(mp.source_compile_options.SourceOptionsError):
+            self.evaluate('if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")\n'
+                          '  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-O1")\nendif()\n', linux)
+        with self.assertRaises(mp.source_compile_options.SourceOptionsError):
+            self.evaluate(text, dict(self.RELEASE, CMAKE_SYSTEM_NAME="Haiku"))
+
     def test_debug_only_option_follows_the_build_type(self) -> None:
         text = ('get_property(_multi GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)\n'
                 'if(NOT _multi AND CMAKE_BUILD_TYPE STREQUAL "Debug" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")\n'
@@ -1468,6 +1483,142 @@ class MacosPlanSnapshotTest(unittest.TestCase):
             finally:
                 mp.BUILD_INFO_INPUTS.pop(EXPORT_ID, None)
         self.assertNotEqual(scoped.replace(str(Path(directory).resolve()), "<tmp>"), plan_json)
+
+
+class PlatformRecordPlanTest(unittest.TestCase):
+    """A platform other than macOS plans only from its own verified closure record."""
+
+    LINUX_HOST = "framework/core/runtime/src/linux_host.cpp"
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = TransferredFixture(Path(self.temporary.name))
+        mp.BUILD_INFO_INPUTS[EXPORT_ID] = {"version": "1.2.3"}
+
+    def tearDown(self) -> None:
+        mp.BUILD_INFO_INPUTS.pop(EXPORT_ID, None)
+        self.temporary.cleanup()
+
+    def write_record(self, extra_sources: list[str] | None = None, **overrides) -> dict:
+        closure = json.loads(json.dumps(self.fixture.closure))
+        options = {"CMAKE_SYSTEM_NAME": "Linux", "CMAKE_SYSTEM_PROCESSOR": "x86_64", "CMAKE_BUILD_TYPE": "Release",
+                   "PULP_ENABLE_GPU": "ON", "PULP_HAS_SKIA": "1"}
+        identity = {"gpu": True, "skia": True, "text_shaping": True, "build_type": "Release",
+                    "system": "Linux", "processor": "x86_64"}
+        closure["configure"] = {"options": options, "identity": identity}
+        closure["targets"][0]["sources"] += extra_sources or []
+        root = self.fixture.repo / "provenance/framework/platforms/linux-x64"
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "foundation.json").write_text(json.dumps(closure), encoding="utf-8")
+        record = {
+            "schema": "vellum.framework-platform-closure.v1", "platform": "linux-x64",
+            "pulp_repository": "Generous-Corp/pulp", "pulp_sha": PULP_SHA,
+            "tool": {"path": "tools/scripts/vellum_closure.py", "pulp_blob": "f" * 40},
+            "configure": {"identity": identity, "options_sha256": mp.platform_closures.options_sha256(options)},
+            "runner_image": {"name": "ubuntu-26.04", "version": "20261111.196.1"},
+            "renderer_asset": {"name": "skia-build-linux-x64-gpu-release.zip", "sha256": "c" * 64},
+            "units": [{"name": "foundation",
+                       "closure_manifest": "provenance/framework/platforms/linux-x64/foundation.json",
+                       "closure_sha256": mp.sha256_file(root / "foundation.json")}],
+        }
+        record.update(overrides)
+        (root / "record.json").write_text(json.dumps(record), encoding="utf-8")
+        (root.parent / "index.json").write_text(json.dumps({
+            "schema": "vellum.framework-platform-index.v1",
+            "platforms": {"linux-x64": "provenance/framework/platforms/linux-x64/record.json"}}), encoding="utf-8")
+        return record
+
+    def plan(self, platform: str) -> dict:
+        return mp.plan(self.fixture.repo, self.fixture.deps, self.fixture.generated, self.fixture.skia,
+                       self.fixture.skia_asset, platform=platform)
+
+    def sources(self, plan: dict) -> list[str]:
+        return [s for unit in plan["units"] for t in unit["targets"] for s in t["sources"]]
+
+    def planned(self, relative: str) -> str:
+        return str(self.fixture.repo.resolve() / relative)
+
+    def port_linux_host(self, platforms: list[str]) -> None:
+        self.fixture.write(self.LINUX_HOST, b"int linux_host() { return 4; }\n")
+        row = self.fixture.row(self.LINUX_HOST, target="pulp-runtime")
+        row["platforms"] = platforms
+        self.fixture.write_ledger([row])
+
+    def test_a_platform_with_a_record_plans_from_it(self) -> None:
+        self.port_linux_host(["linux-x64"])
+        self.write_record(["core/runtime/src/linux_host.cpp"])
+        plan = self.plan("linux-x64")
+        self.assertEqual(plan["platform"], "linux-x64")
+        self.assertEqual(plan["closures"], ["provenance/framework/platforms/linux-x64/foundation.json"])
+        sources = self.sources(plan)
+        self.assertEqual(sources.count(self.planned(self.LINUX_HOST)), 1)  # once, though closure and row both name it
+
+    def test_the_macos_plan_is_unchanged_by_another_platforms_record(self) -> None:
+        before = render_snapshot(mp, "no-ledger")
+        mp.BUILD_INFO_INPUTS[EXPORT_ID] = {"version": "1.2.3"}  # render_snapshot clears it
+        self.write_record()
+        self.assertEqual(render_snapshot_in(self.fixture, mp), json.loads(before[0]))
+
+    def test_no_record_or_a_broken_record_is_refused(self) -> None:
+        with self.assertRaises(mp.PlanError) as caught:
+            self.plan("linux-x64")
+        self.assertIn("lists no record for it", str(caught.exception))
+        for overrides, fragment in (
+            ({"platform": "windows-x64"}, "names platform"),
+            ({"pulp_sha": "x"}, "pulp_sha is not a full commit id"),
+            ({"renderer_asset": {"name": "a", "sha256": "d" * 64}}, "links skia asset"),
+            ({"configure": {"identity": {"system": "Darwin", "processor": "arm64"}, "options_sha256": "0" * 64}},
+             "is built for Linux x86_64"),
+            ({"units": []}, "one or more closure manifests"),
+        ):
+            with self.subTest(overrides=overrides):
+                self.write_record(**overrides)
+                with self.assertRaises(mp.PlanError) as caught:
+                    self.plan("linux-x64")
+                self.assertIn(fragment, str(caught.exception))
+        # A manifest edited after the record pinned it is refused.
+        self.write_record()
+        path = self.fixture.repo / "provenance/framework/platforms/linux-x64/foundation.json"
+        path.write_text(path.read_text() + " ", encoding="utf-8")
+        with self.assertRaises(mp.PlanError) as caught:
+            self.plan("linux-x64")
+        self.assertIn("does not match the record's digest", str(caught.exception))
+
+    def test_a_closure_source_framework_lacks_must_be_ported_first(self) -> None:
+        self.write_record(["core/runtime/src/linux_host.cpp"])
+        with self.assertRaises(mp.PlanError) as caught:
+            self.plan("linux-x64")
+        self.assertIn("port it through the ledger first", str(caught.exception))
+
+    def test_a_closure_source_scoped_away_from_the_platform_is_refused(self) -> None:
+        self.port_linux_host(["macos-arm64"])
+        self.write_record(["core/runtime/src/linux_host.cpp"])
+        with self.assertRaises(mp.PlanError) as caught:
+            self.plan("linux-x64")
+        self.assertIn("scope it to linux-x64", str(caught.exception))
+        # Control: scoped to Linux, it plans.
+        self.port_linux_host(["linux-x64"])
+        self.assertIn(self.planned(self.LINUX_HOST), self.sources(self.plan("linux-x64")))
+
+    def test_the_platform_key_comes_from_the_configure(self) -> None:
+        pc = mp.platform_closures
+        self.assertEqual(pc.platform_of("Linux", "x86_64"), "linux-x64")
+        self.assertEqual(pc.platform_of("Windows", "AMD64"), "windows-x64")
+        self.assertEqual(pc.platform_of("Emscripten", "wasm32"), "wasm32")
+        self.assertEqual(pc.platform_of("iOS", "arm64", "/x/iPhoneSimulator.sdk"), "ios-simulator-arm64")
+        self.assertEqual(pc.platform_of("iOS", "arm64", "/x/iPhoneOS.sdk"), "ios-device-arm64")
+        with self.assertRaises(pc.RecordError):
+            pc.platform_of("Haiku", "x86_64")
+
+
+def render_snapshot_in(fixture: "TransferredFixture", module) -> dict:
+    """The macOS plan of an existing fixture, normalized like render_snapshot."""
+    plan = module.plan(fixture.repo, fixture.deps, fixture.generated, fixture.skia, fixture.skia_asset)
+    text = json.dumps(plan, indent=2, sort_keys=True) + "\n"
+    root = fixture.repo.parent
+    for prefix in (str(root.resolve()), str(root)):
+        text = text.replace(prefix, "<tmp>")
+    return json.loads(text)
 
 
 class PlatformScopePlanTest(unittest.TestCase):

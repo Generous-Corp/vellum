@@ -14,7 +14,7 @@ kept by hand. Source-file properties are directory-scoped in CMake, so each
 CMakeLists.txt is read as one scope with the modules it include()s inlined,
 and only a scope that creates an exported target is judged. Each call's
 enclosing if()/elseif()/else() chain is evaluated against the configure the
-closure recorded (its Pulp options, the Darwin system, a single-config
+closure recorded (its Pulp options, its target system, a single-config
 generator, AppleClang and no extra CMAKE_<LANG>_FLAGS) with three-valued
 logic: a branch that cannot be decided, including one that reads a variable
 the configure does not record, is "unknown". In a judged scope, an option
@@ -300,16 +300,36 @@ class Condition:
         return truthy(text)
 
 
+# The platform variables CMake sets for each target system a closure records.
+# Only Darwin's compiler is known (the receipt's closures were exported with
+# AppleClang); elsewhere the compiler is not in the closure's configure, so a
+# condition on it is undecidable and an affected source fails closed.
+SYSTEM_VARIABLES = {
+    "Darwin": {"APPLE": "1", "UNIX": "1", "WIN32": "", "MSVC": "", "ANDROID": "", "IOS": "",
+               "EMSCRIPTEN": "", "LINUX": "", "CMAKE_HOST_APPLE": "1"},
+    "iOS": {"APPLE": "1", "UNIX": "1", "WIN32": "", "MSVC": "", "ANDROID": "", "IOS": "1",
+            "EMSCRIPTEN": "", "LINUX": ""},
+    "Linux": {"APPLE": "", "UNIX": "1", "WIN32": "", "MSVC": "", "ANDROID": "", "IOS": "",
+              "EMSCRIPTEN": "", "LINUX": "1"},
+    "Android": {"APPLE": "", "UNIX": "1", "WIN32": "", "MSVC": "", "ANDROID": "1", "IOS": "",
+                "EMSCRIPTEN": "", "LINUX": ""},
+    "Windows": {"APPLE": "", "UNIX": "", "WIN32": "1", "ANDROID": "", "IOS": "", "EMSCRIPTEN": "", "LINUX": ""},
+    "Emscripten": {"APPLE": "", "UNIX": "1", "WIN32": "", "MSVC": "", "ANDROID": "", "IOS": "",
+                   "EMSCRIPTEN": "1", "LINUX": ""},
+}
+
+
 def configure_environment(options: dict[str, str]) -> dict[str, object]:
-    """The variables a closure's configure fixes, plus the Darwin toolchain facts."""
-    if options.get("CMAKE_SYSTEM_NAME") != "Darwin":
-        raise SourceOptionsError(f"only a Darwin configure is evaluated, not {options.get('CMAKE_SYSTEM_NAME')!r}")
+    """The variables a closure's configure fixes, plus what CMake sets for its target system."""
+    system = options.get("CMAKE_SYSTEM_NAME")
+    if system not in SYSTEM_VARIABLES:
+        raise SourceOptionsError(f"no CMake platform variables are known for {system!r}")
     env: dict[str, object] = {name: value for name, value in options.items()}
+    env.update(SYSTEM_VARIABLES[system])
+    if system == "Darwin":
+        env.update({"CMAKE_CXX_COMPILER_ID": "AppleClang", "CMAKE_C_COMPILER_ID": "AppleClang",
+                    "CMAKE_OBJCXX_COMPILER_ID": "AppleClang"})
     env.update({
-        "APPLE": "1", "UNIX": "1", "WIN32": "", "MSVC": "", "ANDROID": "", "IOS": "",
-        "EMSCRIPTEN": "", "LINUX": "", "CMAKE_HOST_APPLE": "1",
-        "CMAKE_CXX_COMPILER_ID": "AppleClang", "CMAKE_C_COMPILER_ID": "AppleClang",
-        "CMAKE_OBJCXX_COMPILER_ID": "AppleClang",
         "CMAKE_C_FLAGS": "", "CMAKE_CXX_FLAGS": "",
         "CMAKE_SOURCE_DIR": SOURCE_ROOT, "PROJECT_SOURCE_DIR": SOURCE_ROOT,
         "CMAKE_HOME_DIRECTORY": SOURCE_ROOT, "PULP_ROOT_DIR": SOURCE_ROOT,

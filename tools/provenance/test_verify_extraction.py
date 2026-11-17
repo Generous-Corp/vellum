@@ -1107,6 +1107,72 @@ class VerifyExtractionTests(unittest.TestCase):
             errors, _ = self.ports_verdict(root, pulp_root=pulp, defer=False)
             self.assertEqual(sum(f"is not a commit on Pulp origin/main" in e for e in errors), 2, errors)
 
+    def write_platform_record(self, root: Path, pulp_sha: str, blob: str) -> None:
+        records = verify_extraction.load_platform_closures()
+        options = {"CMAKE_SYSTEM_NAME": "Linux", "CMAKE_SYSTEM_PROCESSOR": "x86_64", "CMAKE_BUILD_TYPE": "Release"}
+        identity = {"gpu": True, "skia": True, "text_shaping": True, "build_type": "Release",
+                    "system": "Linux", "processor": "x86_64"}
+        base = root / records.ROOT / "linux-x64"
+        base.mkdir(parents=True, exist_ok=True)
+        (base / "foundation.json").write_text(json.dumps({
+            "schema": "pulp.vellum.closure.v1", "configure": {"options": options, "identity": identity},
+            "targets": []}), encoding="utf-8")
+        (base / "record.json").write_text(json.dumps({
+            "schema": records.RECORD_SCHEMA, "platform": "linux-x64", "pulp_repository": "Generous-Corp/pulp",
+            "pulp_sha": pulp_sha, "tool": {"path": records.EXPORTER, "pulp_blob": blob},
+            "configure": {"identity": identity, "options_sha256": records.options_sha256(options)},
+            "runner_image": {"name": "ubuntu-26.04", "version": "1"},
+            "renderer_asset": {"name": "skia-build-linux-x64-gpu-release.zip", "sha256": "c" * 64},
+            "units": [{"name": "foundation", "closure_manifest": f"{records.ROOT}/linux-x64/foundation.json",
+                       "closure_sha256": records.sha256_file(base / "foundation.json")}]}), encoding="utf-8")
+        (root / records.INDEX).write_text(json.dumps({"schema": records.INDEX_SCHEMA, "platforms": {
+            "linux-x64": f"{records.ROOT}/linux-x64/record.json"}}), encoding="utf-8")
+
+    def test_a_platform_record_names_pulps_exporter_at_a_commit_on_main(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root, pulp = Path(temporary) / "vellum", Path(temporary) / "pulp"
+            root.mkdir()
+            pulp.mkdir()
+            run = lambda *args: subprocess.check_output(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=pulp, text=True).strip()
+            run("init", "-q", "-b", "main")
+            (pulp / "tools/scripts").mkdir(parents=True)
+            (pulp / "tools/scripts/vellum_closure.py").write_text("# exporter\n")
+            run("add", "-A"); run("commit", "-q", "-m", "exporter")
+            on_main = run("rev-parse", "HEAD")
+            run("update-ref", "refs/remotes/origin/main", on_main)
+            blob = run("rev-parse", f"{on_main}:tools/scripts/vellum_closure.py")
+            run("checkout", "-q", "-b", "side")
+            (pulp / "tools/scripts/vellum_closure.py").write_text("# side\n")
+            run("add", "-A"); run("commit", "-q", "-m", "side")
+            off_main = run("rev-parse", "HEAD")
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+
+            def verdict(sha: str, tool_blob: str, pulp_root: Path | None = pulp, defer: bool = False):
+                self.write_platform_record(root, sha, tool_blob)
+                errors, checks = verify_extraction.verify_framework(root, pulp_root, "origin/main",
+                                                                    defer_identity=defer)
+                return [e for e in errors if "platforms" in e], checks
+
+            errors, checks = verdict(on_main, blob)
+            self.assertEqual(errors, [])
+            self.assertEqual(checks["framework_platform_records"], ["linux-x64"])
+            self.assertIs(checks["framework_platform_records_proved"], True)
+            errors, _ = verdict(off_main, blob)
+            self.assertTrue(any("is not a commit on Pulp origin/main" in e for e in errors), errors)
+            errors, _ = verdict(on_main, "d" * 40)
+            self.assertTrue(any("is not Pulp" in e and "vellum_closure.py" in e for e in errors), errors)
+            errors, _ = verdict(on_main, blob, pulp_root=None)
+            self.assertTrue(any("no Pulp checkout proved the records' Pulp commits" in e for e in errors), errors)
+            errors, checks = verdict(on_main, blob, pulp_root=None, defer=True)
+            self.assertEqual(errors, [])
+            self.assertEqual(checks["framework_platform_records_proved"], "deferred: no Pulp checkout")
+            # A record directory the index does not list is refused.
+            (root / "provenance/framework/platforms/wasm32").mkdir()
+            errors, _ = verdict(on_main, blob)
+            self.assertTrue(any("wasm32/ is not listed" in e for e in errors), errors)
+
     def test_ports_rows_name_real_commits_on_pulp_main(self) -> None:
         self.hide_ci_git_base()
         with tempfile.TemporaryDirectory() as temporary:

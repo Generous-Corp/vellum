@@ -12,10 +12,26 @@
 # libraries forward their public namespace, while the provider owns the
 # mirrored implementation objects and pinned Skia/Dawn definitions.
 
-if(NOT APPLE OR NOT VELLUM_HAS_SKIA_DAWN)
-    message(FATAL_ERROR
-        "Vellum: the landed mirror was exported from the Darwin arm64 Skia/Dawn "
-        "configuration; VELLUM_ENABLE_MIRROR needs the locked Skia/Dawn archive")
+# macOS plans from the export receipt's Darwin arm64 closures. Every other
+# platform plans from its own closure record (tools/mirror/platform_closures.py)
+# and its renderer lock entry; mirror_package.py refuses a platform without a
+# verified record, so a platform is enabled only by landing one.
+if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    set(_vellum_mirror_platform_args --platform macos-arm64)
+    if(NOT VELLUM_HAS_SKIA_DAWN)
+        message(FATAL_ERROR
+            "Vellum: the landed mirror was exported from the Darwin arm64 Skia/Dawn "
+            "configuration; VELLUM_ENABLE_MIRROR needs the locked Skia/Dawn archive")
+    endif()
+else()
+    set(_vellum_mirror_platform_args
+        --system "${CMAKE_SYSTEM_NAME}" --processor "${CMAKE_SYSTEM_PROCESSOR}"
+        --apple-sdk "${CMAKE_OSX_SYSROOT}")
+    if(NOT VELLUM_HAS_SKIA_DAWN)
+        message(FATAL_ERROR
+            "Vellum: VELLUM_ENABLE_MIRROR on ${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_PROCESSOR} needs a "
+            "verified platform closure record and a renderer lock entry for this platform")
+    endif()
 endif()
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     message(FATAL_ERROR
@@ -23,7 +39,9 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         "configure with -DCMAKE_BUILD_TYPE=Release")
 endif()
 enable_language(C)
-enable_language(OBJCXX)
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
 find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
 
 set(VELLUM_MIRROR_DEPS_DIR "${CMAKE_BINARY_DIR}/_deps/vellum-mirror" CACHE PATH
@@ -52,6 +70,7 @@ execute_process(
         "${PROJECT_SOURCE_DIR}/tools/mirror/mirror_package.py"
         "--in-tree-definitions=vellum-gpu-runtime=${_vellum_mirror_gpu_runtime_definitions_arg}"
         --repo "${PROJECT_SOURCE_DIR}"
+        ${_vellum_mirror_platform_args}
         --deps-dir "${VELLUM_MIRROR_DEPS_DIR}"
         --generated-dir "${_vellum_mirror_generated}"
         --skia-dir "${VELLUM_SKIA_DIR}"
