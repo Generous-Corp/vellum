@@ -8,6 +8,7 @@ add_library(vellum-graphics
     src/layer_cache.cpp
     src/paint_command.cpp
     src/path_geometry.cpp
+    src/vector_asset.cpp
     src/plot.cpp
     src/plot_feed.cpp
     src/render_telemetry.cpp

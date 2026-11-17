@@ -1,0 +1,24 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-11-16T08:04:19Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-b69283a7f1a1e2fb3552b913ff2198502c7ae6f9",
+  "kind": "resolution",
+  "linked_commits": [
+    "b69283a7f1a1e2fb3552b913ff2198502c7ae6f9"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/490"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Vellum-native graphics change with no Pulp consumer; owner-approved agent classification 2026-11-10",
+  "resolves": "vellum-b69283a7f1a1e2fb3552b913ff2198502c7ae6f9",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

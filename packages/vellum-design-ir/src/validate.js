@@ -6,7 +6,6 @@ import {
     DESIGN_IR_SCHEMA,
     DESIGN_IR_MATERIALS_VERSION,
     DESIGN_IR_TRACKS_VERSION,
-    DESIGN_IR_VERSIONS,
     DISPOSITIONS,
     REIMPORT_REPORT_SCHEMA,
     REIMPORT_REPORT_VERSION,
@@ -16,6 +15,7 @@ import { compositingProblems } from './compositing.js';
 import { DesignIRValidationError } from './errors.js';
 import { indexTree } from './identity.js';
 import { jsonEqual } from './stable-json.js';
+import { designIRVersionProblem } from './versions.js';
 
 export function validateDesignIR(value, options = {}) {
     const issues = [];
@@ -24,13 +24,8 @@ export function validateDesignIR(value, options = {}) {
         return finish(issues, options, 'Invalid DesignIR');
     }
     exact(value.$schema, DESIGN_IR_SCHEMA, '$.$schema', issues);
-    if (!DESIGN_IR_VERSIONS.includes(value.schemaVersion)) {
-        issues.push(issue(
-            '$.schemaVersion',
-            'version',
-            `$.schemaVersion must be one of ${DESIGN_IR_VERSIONS.join(', ')}`,
-        ));
-    }
+    const versionProblem = designIRVersionProblem(value);
+    if (versionProblem) issues.push(issue('$.schemaVersion', 'version', versionProblem));
     requireObject(value.source, '$.source', issues);
     if (isObject(value.source)) {
         string(value.source.key, '$.source.key', issues);

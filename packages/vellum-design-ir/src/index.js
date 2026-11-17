@@ -9,8 +9,10 @@ export {
     DESIGN_IR_COMPOSITING_VERSION,
     DESIGN_IR_PLOTS_VERSION,
     DESIGN_IR_SCHEMA,
+    DESIGN_IR_LATEST_VERSION,
     DESIGN_IR_MATERIALS_VERSION,
     DESIGN_IR_TRACKS_VERSION,
+    DESIGN_IR_VECTOR_ASSET_VERSION,
     DESIGN_IR_VERSION,
     DESIGN_IR_VERSIONS,
     DISPOSITIONS,
@@ -46,6 +48,7 @@ export {
 } from './browser-capture.js';
 export { applyAuthoredOverlay, emptyAuthoredOverlay, resolveReference } from './overlay.js';
 export { reimportDesign } from './reimport.js';
+export { designIRVersionProblem, findVectorAssetField, requiredDesignIRVersion } from './versions.js';
 export { canonicalize, deepClone, fnv1a32, jsonEqual, stableStringify } from './stable-json.js';
 export { diffTokens, normalizeTokens, resolveTokenLayers } from './tokens.js';
 export {
