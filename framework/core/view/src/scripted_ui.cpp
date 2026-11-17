@@ -3,6 +3,8 @@
 #include <vellum/view/accessibility_provider.hpp>
 #include <vellum/view/value_channel_set.hpp>
 #include <vellum/runtime/log.hpp>
+#include <vellum/value/param_metadata.hpp>
+#include <optional>
 #include <vellum/runtime/trace.hpp>
 #include <atomic>
 #include <chrono>
@@ -12,6 +14,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace vellum::view {
 
@@ -104,12 +108,90 @@ void load_script_before_deadline(WidgetBridge& bridge, ScriptEngine& engine,
         std::rethrow_exception(load_error);
 }
 
+// A ParamModel that reads through to another and drops every write: values,
+// gestures and plain writes do nothing, and a subscription never fires. A
+// reload probe runs over it so the probe script cannot move a parameter or
+// open a host gesture. Each dropped write is counted in `dropped`, so a test
+// can see that a probe's write reached the wrapper and stopped there.
+class ReadOnlyParamModel : public value::ParamModel {
+public:
+    ReadOnlyParamModel(value::ParamModel& source, std::uint64_t& dropped)
+        : source_(source), dropped_(dropped) {}
+
+    value::ParamHandle resolve(std::string_view key) override { return source_.resolve(key); }
+    double normalized(value::ParamHandle p) override { return source_.normalized(p); }
+    void set_normalized(value::ParamHandle, double) override { ++dropped_; }
+    void begin(value::ParamHandle) override { ++dropped_; }
+    void end(value::ParamHandle) override {}
+    std::string display_text(value::ParamHandle p, double n) override { return source_.display_text(p, n); }
+    int value_count(value::ParamHandle p) override { return source_.value_count(p); }
+    value::Subscription subscribe(Listener) override { return {}; }
+    value::ParamInfo info(value::ParamHandle p) override { return source_.info(p); }
+    double plain(value::ParamHandle p, double n) override { return source_.plain(p, n); }
+    double normalized_from_plain(value::ParamHandle p, double v) override {
+        return source_.normalized_from_plain(p, v);
+    }
+    std::optional<double> parse_text(value::ParamHandle p, std::string_view t) override {
+        return source_.parse_text(p, t);
+    }
+    std::optional<double> modulated_normalized(value::ParamHandle p) override {
+        return source_.modulated_normalized(p);
+    }
+
+protected:
+    std::uint64_t& dropped() noexcept { return dropped_; }
+
+private:
+    value::ParamModel& source_;
+    std::uint64_t& dropped_;
+};
+
+// The read-only view of a source that provides value::ParamMetadata. It
+// provides it too, reading through, so a probe sees exactly the metadata the
+// live realm sees; a source without metadata gets the plain wrapper above, so
+// the probe sees none either.
+class ReadOnlyParamModelWithMetadata final : public ReadOnlyParamModel,
+                                             public value::ParamMetadata {
+public:
+    ReadOnlyParamModelWithMetadata(value::ParamModel& source, value::ParamMetadata& metadata,
+                                   std::uint64_t& dropped)
+        : ReadOnlyParamModel(source, dropped), metadata_(metadata) {}
+
+    value::ParamRange range(value::ParamHandle p) override { return metadata_.range(p); }
+    std::vector<std::string> value_labels(value::ParamHandle p) override {
+        return metadata_.value_labels(p);
+    }
+    double plain_value(value::ParamHandle p) override { return metadata_.plain_value(p); }
+    void set_plain_value(value::ParamHandle, double) override { ++dropped(); }
+
+private:
+    value::ParamMetadata& metadata_;
+};
+
+// The read-only view a probe runs over: with metadata exactly when the source
+// has it.
+std::unique_ptr<value::ParamModel> read_only_view(value::ParamModel& source,
+                                                  std::uint64_t& dropped) {
+    if (auto* metadata = value::metadata_of(source))
+        return std::make_unique<ReadOnlyParamModelWithMetadata>(source, *metadata, dropped);
+    return std::make_unique<ReadOnlyParamModel>(source, dropped);
+}
+
 } // namespace
 
 ScriptedUiSession::ScriptedUiSession(View& root, state::StateStore& store,
                                      ScriptedUiOptions options)
+    : ScriptedUiSession(root, &store, nullptr, std::move(options)) {}
+
+ScriptedUiSession::ScriptedUiSession(View& root, value::ParamModel& params,
+                                     ScriptedUiOptions options)
+    : ScriptedUiSession(root, nullptr, &params, std::move(options)) {}
+
+ScriptedUiSession::ScriptedUiSession(View& root, state::StateStore* store,
+                                     value::ParamModel* params, ScriptedUiOptions options)
     : identity_(next_scripted_ui_identity.fetch_add(1, std::memory_order_relaxed) + 1), root_(root),
-      store_(store), script_path_(options.script_source.empty() ? std::move(options.script_path)
+      owned_store_(store ? nullptr : std::make_unique<state::StateStore>()),
+      store_(store ? *store : *owned_store_), params_(params), script_path_(options.script_source.empty() ? std::move(options.script_path)
                                                                 : std::filesystem::path{})
       // An embedded source has no sibling directory to look in: a theme.json
       // relative to the process's working directory is not the plug-in's.
@@ -192,6 +274,21 @@ LogCallback ScriptedUiSession::engine_log_callback() {
 ScriptedUiSession::~ScriptedUiSession() {
     release_root();
     store_.flush_deferred_gesture_releases();
+    deliver_pending_model_gesture_ends();
+}
+
+void ScriptedUiSession::deliver_pending_model_gesture_ends() noexcept {
+    if (params_ == nullptr)
+        return;
+    // Moved out first, so an end that re-enters this delivers nothing twice.
+    const auto ends = std::exchange(pending_model_gesture_ends_, {});
+    for (const auto& handle : ends) {
+        try {
+            params_->end(handle);
+        } catch (...) {
+            // Every deferred end is attempted; teardown stays noexcept.
+        }
+    }
 }
 
 void ScriptedUiSession::release_root() noexcept {
@@ -531,6 +628,7 @@ bool ScriptedUiSession::poll(std::string* error) {
     // outside the Runtime.evaluate response fence (even if the realm stayed
     // quarantined).
     store_.flush_deferred_gesture_releases();
+    deliver_pending_model_gesture_ends();
     // Reported here rather than from evaluate(), which now returns before the
     // reset has been attempted. The fail-closed path is unchanged: the reset
     // already quarantined the partial realm and detached the engine.
@@ -789,8 +887,17 @@ bool ScriptedUiSession::rebuild_from_code(
                 probe_store.set_value(param.id, store_.get_value(param.id));
             }
             check_deadline();
-            auto probe_bridge = std::make_unique<WidgetBridge>(
-                *probe_engine, probe_root, probe_store, nullptr, granted_capabilities_);
+            // A model cannot be copied the way a store is, so the probe reads
+            // the session's model through a view that drops every write.
+            std::unique_ptr<value::ParamModel> probe_params;
+            if (params_)
+                probe_params = read_only_view(*params_, probe_dropped_writes_);
+            auto probe_bridge =
+                probe_params
+                    ? std::make_unique<WidgetBridge>(*probe_engine, probe_root, *probe_params,
+                                                     nullptr, granted_capabilities_)
+                    : std::make_unique<WidgetBridge>(*probe_engine, probe_root, probe_store,
+                                                     nullptr, granted_capabilities_);
             check_deadline();
             if (runtime_import_enabled_)
                 probe_bridge->install_runtime_import_handlers();
@@ -846,6 +953,11 @@ bool ScriptedUiSession::rebuild_from_code(
                 retired_runtime_realms_.pop_back();
                 throw;
             }
+            // A model drag the replacement deferred is delivered at the next
+            // poll, as the store's deferred releases are; taking the handles
+            // calls nothing.
+            for (const auto& handle : bridge_->take_deferred_model_gesture_ends())
+                pending_model_gesture_ends_.push_back(handle);
             auto& retired = retired_runtime_realms_.back();
             retired.engine = std::move(engine_);
             retired.bridge = std::move(bridge_);
@@ -858,8 +970,10 @@ bool ScriptedUiSession::rebuild_from_code(
         next_engine = make_engine(js_memory_limit_bytes_, engine_log_callback());
         install_native_message_handlers(*next_engine, false);
         check_deadline();
-        next_bridge = std::make_unique<WidgetBridge>(
-            *next_engine, root_, store_, gpu_surface_, granted_capabilities_);
+        next_bridge = params_ ? std::make_unique<WidgetBridge>(*next_engine, root_, *params_,
+                                                               gpu_surface_, granted_capabilities_)
+                              : std::make_unique<WidgetBridge>(*next_engine, root_, store_,
+                                                               gpu_surface_, granted_capabilities_);
         check_deadline();
         if (runtime_import_enabled_)
             next_bridge->install_runtime_import_handlers();

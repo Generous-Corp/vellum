@@ -58,8 +58,9 @@ void WidgetBridge::service_shader_value_bindings() {
             });
             if (binding.channel_name.empty() && !binding.param_name.empty()) {
                 state::ParamID param_id = 0;
-                if (resolve_param_id(binding.param_name, param_id)) {
-                    value = store_.get_normalized(param_id);
+                value::ParamHandle param;
+                if (resolve_param(binding.param_name, param_id, param)) {
+                    value = param_normalized(param_id, param);
                     found = true;
                     // Parameters are host-published state, so they do not
                     // use channel staleness decay.
@@ -283,7 +284,7 @@ void WidgetBridge::service_param_bindings() {
                 binding.last_publish_at = metadata->last_publish_at;
             float value = binding.neutral;
             if (binding.value_channel.empty()) {
-                value = store_.get_normalized(binding.param_id);
+                value = param_normalized(binding.param_id, binding.param);
             } else {
                 auto& snapshot = snapshots[i];
                 binding.neutral = snapshot.neutral;
