@@ -28,9 +28,9 @@ from pathlib import Path
 MODULE = "cmake/VellumTracing.cmake"
 OPTION = "VELLUM_ENABLE_TRACING"
 RUNTIME_SYMBOL = "TracingMuxer"
-LIBRARY_GLOBS = ("**/vellum-mirror-*.dylib", "**/libvellum-mirror-*.dylib",
-                 "**/vellum-skia-dawn-provider*.dylib", "**/libvellum-skia-dawn-provider*.dylib",
-                 "**/libvellum-gpu*.dylib", "**/vellum-gpu*.dylib")
+# The package libraries the build tree itself links, at its top level; an SDK a
+# test installs under the tree holds copies of them.
+LIBRARY_GLOBS = ("libvellum-mirror-*.dylib", "libvellum-skia-dawn-provider*.dylib", "libvellum-gpu*.dylib")
 
 
 def pins(repo: Path) -> dict[str, str]:

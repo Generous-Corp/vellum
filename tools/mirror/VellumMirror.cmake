@@ -210,6 +210,9 @@ endfunction()
 # the same compile usage every mirrored target and framework test takes.
 if(VELLUM_ENABLE_TRACING)
     target_compile_definitions(vellum-tracing INTERFACE PULP_TRACING_ENABLED=1)
+    # Perfetto's objects reach the foundation library, which must not carry the
+    # build host's paths either.
+    target_compile_options(vellum-perfetto PRIVATE ${_vellum_mirror_prefix_maps})
 endif()
 
 # Mirrored targets, exactly as the closures and units.json describe them.
