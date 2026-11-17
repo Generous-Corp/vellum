@@ -1526,7 +1526,11 @@ def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[
             collect[row["framework_path"]] = data.decode("utf-8", errors="replace")
         renamed = data
         if respell:
-            data = respeller.apply_bytes(data, respell, row["framework_path"], ported=True)
+            try:
+                data = respeller.apply_bytes(data, respell, row["framework_path"], ported=True)
+            except respeller.RespellError as error:
+                errors.append(f"{where}: Pulp {commit[:12]}:{pulp_path} cannot be respelled: {error}")
+                continue
         through = "the transfer's rename" + (" and the port respell" if data != renamed else "")
         renamed_blob = git_blob_sha(data)
         if renamed_blob != row["framework_blob"]:
@@ -1767,7 +1771,11 @@ def framework_respell_edit_errors(root: Path, table: list[dict], transferred: se
         head = root / path
         if not head.is_file():
             continue
-        expected = respeller.apply(text, {e["old"]: e["new"] for e in new_entries})
+        try:
+            expected = respeller.apply(text, {e["old"]: e["new"] for e in new_entries})
+        except respeller.RespellError as error:
+            errors.append(f"{FRAMEWORK_RESPELL}: {path} at the history base cannot be respelled: {error}")
+            continue
         if head.read_text(encoding="utf-8", errors="replace") != expected:
             errors.append(f"{FRAMEWORK_RESPELL}: {path} changed by more than the respell of {sorted(olds)}; "
                           "land the respell on its own")

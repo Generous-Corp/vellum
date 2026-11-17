@@ -304,10 +304,17 @@ def apply(text: str, mapping: dict[str, str]) -> str:
     too (comment_prefixes). Apply it to Pulp-spelled bytes: the prefix rule
     counts the names the text still spells the Pulp way, so on a file already
     respelled it finds none. To bring a file up to a changed table, use
-    reapply().
+    reapply(). A forward respell of text that already spells one of its
+    Vellum names is refused, so the mistake fails instead of leaving a stale
+    prefix; undoing (a mapping back to Pulp names) is never refused.
     """
     if not mapping:
         return text
+    forward = [new for new in mapping.values() if new.startswith(("VELLUM_", "vellum_"))]
+    already = sorted(set(forward) & tokens(text, keep_comments=True))
+    if already:
+        raise RespellError(f"the text already spells {already[:3]}; it is respelled, so use reapply() "
+                           "to bring it up to the table")
     prefixes = comment_prefixes(text, mapping)
 
     def compile(names: dict[str, str]) -> re.Pattern[str]:

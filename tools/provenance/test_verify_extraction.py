@@ -1189,6 +1189,18 @@ class VerifyExtractionTests(unittest.TestCase):
             self.track(root)
             errors, _ = self.respell_verdict(root)
             self.assertEqual(errors, [])
+            # A base that spells both the old and the new name cannot be respelled.
+            self.write_respell(root, [])
+            (root / hooks).write_bytes(b'extern "C" void pulp_anchor() {}\nvoid vellum_anchor();\n')
+            os.environ["VELLUM_GIT_BASE"] = self.git_commit_all(root, "both spellings")
+            self.write_respell(root, [self.respell_entry("pulp_anchor", "extern-c", hooks)])
+            (root / hooks).write_bytes(b'extern "C" void vellum_anchor() {}\nvoid vellum_anchor();\n')
+            self.track(root)
+            errors, _ = self.respell_verdict(root)
+            self.assertTrue(any("at the history base cannot be respelled" in e for e in errors), errors)
+            (root / hooks).write_bytes(b'extern "C" void vellum_anchor() {}\nint other = 1;\n')
+            os.environ["VELLUM_GIT_BASE"] = base
+            self.track(root)
             # Control: the same change plus any other edit to the file is refused.
             (root / hooks).write_bytes(b'extern "C" void vellum_anchor() {}\nint other = 2;\n')
             self.track(root)
@@ -1234,6 +1246,15 @@ class VerifyExtractionTests(unittest.TestCase):
             self.write_respell(root, [])
             errors, _ = self.ports_verdict(root, pulp_root=pulp, defer=False)
             self.assertTrue(any("put through the transfer's rename (" in e for e in errors), errors)
+            # Pulp bytes that already spell an entry's Vellum name cannot be respelled.
+            self.write_respell(root, entries)
+            (pulp / "core/a/src/new.cpp").write_text(source + "// see vellum_role_of\n")
+            run("add", "-A"); run("commit", "-q", "-m", "a vellum spelling")
+            spelled = run("rev-parse", "HEAD")
+            run("update-ref", "refs/remotes/origin/main", spelled)
+            self.write_ports(root, [self.ports_row(self.PORTED, commits=[spelled], blob=blob)])
+            errors, _ = self.ports_verdict(root, pulp_root=pulp, defer=False)
+            self.assertTrue(any("cannot be respelled" in e and "use reapply()" in e for e in errors), errors)
             # A switch the file uses for its value is no switch: Pulp's bytes refuse it.
             self.write_respell(root, entries)
             (pulp / "core/a/src/new.cpp").write_text(source.replace("#ifdef PULP_FORCE", "#if PULP_FORCE"))

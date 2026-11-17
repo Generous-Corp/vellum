@@ -66,11 +66,15 @@ class CommentPrefixTest(unittest.TestCase):
         once = pr.apply(self.SOURCE, self.MAPPING)
         self.assertEqual(pr.reapply(once, self.MAPPING), once)
         self.assertEqual(pr.reapply(self.SOURCE, self.MAPPING), once)
-        # apply() on respelled bytes sees no Pulp names, so a prefix left
-        # behind stays: the reason reapply() exists.
+        # apply() on respelled bytes would see no Pulp names and leave a stale
+        # prefix, so it refuses and names reapply().
         half = once.replace("vellum_motion_*", "pulp_motion_*")
-        self.assertIn("pulp_motion_*", pr.apply(half, self.MAPPING))
+        with self.assertRaises(pr.RespellError) as caught:
+            pr.apply(half, self.MAPPING)
+        self.assertIn("use reapply()", str(caught.exception))
         self.assertIn("vellum_motion_*", pr.reapply(half, self.MAPPING))
+        # Undoing is never refused: its targets are Pulp names.
+        self.assertIn("pulp_motion_publish", pr.apply(once, {v: k for k, v in self.MAPPING.items()}))
 
     def test_a_prefix_needs_two_names_present_in_the_file(self) -> None:
         one = '// the pulp_motion_* calls\nextern "C" void pulp_motion_publish() {}\n'
