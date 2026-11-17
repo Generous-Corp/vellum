@@ -28,8 +28,10 @@
 ///
 /// It returns a `ParameterBinding` that owns the store listener. The binding
 /// is lifetime-scoped: keep it alive for as long as the widget is bound
-/// (typically as a member of the editor, so it dies with the widget), and
-/// dropping it unbinds — there is no separate detach call.
+/// (typically as a member of the editor, so it dies with the widget).
+/// Dropping it stops parameter changes from reaching the widget; the widget's
+/// own callbacks stay installed and keep writing the store, with balanced
+/// gestures, until the widget replaces them or is destroyed.
 ///
 /// Without this, a widget changes the parameter audibly but the host does
 /// not record the move, because the raw value write is not bracketed in a
@@ -505,29 +507,59 @@ bind_parameter(ToggleButton& button, value::ParamModel& model, value::ParamHandl
                                [&button](bool on) { button.set_on(on); });
 }
 
+namespace detail {
+/// A store binding's widget callbacks outlive the binding: before the store
+/// overloads went through a model they captured only the store, so a drag
+/// after the binding was dropped still wrote it. Wrap `callback` so it also
+/// owns `model`, the model it reaches; the model holds only the store, so
+/// this keeps that behaviour and adds no ownership cycle.
+template <typename Fn>
+void keep_model_alive(std::function<Fn>& callback, std::shared_ptr<value::ParamModel> model) {
+    if (!callback)
+        return;
+    callback = [f = std::move(callback), keep = std::move(model)](auto... args) {
+        return f(args...);
+    };
+}
+
+/// Every gesture and value callback a continuous control's model binding
+/// installs.
+template <typename Control>
+void keep_model_alive_in_controls(Control& control, const std::shared_ptr<value::ParamModel>& model) {
+    keep_model_alive(control.on_gesture_begin, model);
+    keep_model_alive(control.on_change, model);
+    keep_model_alive(control.on_gesture_end, model);
+}
+} // namespace detail
+
 /// Knob ↔ parameter (normalized), through a `StateStoreParamModel`. The
 /// store's pump shows modulation.
 [[nodiscard]] inline ParameterBinding
 bind_parameter(Knob& knob, state::StateStore& store, state::ParamID id) {
     auto model = std::make_shared<StateStoreParamModel>(store);
-    return bind_parameter(knob, *model, model->handle(id))
-        .with_store_display(model, detail::watch_modulated_display(knob, store, id));
+    auto binding = bind_parameter(knob, *model, model->handle(id));
+    detail::keep_model_alive_in_controls(knob, model);
+    return std::move(binding).with_store_display(model,
+                                                 detail::watch_modulated_display(knob, store, id));
 }
 
 /// Fader ↔ parameter (normalized), as the knob.
 [[nodiscard]] inline ParameterBinding
 bind_parameter(Fader& fader, state::StateStore& store, state::ParamID id) {
     auto model = std::make_shared<StateStoreParamModel>(store);
-    return bind_parameter(fader, *model, model->handle(id))
-        .with_store_display(model, detail::watch_modulated_display(fader, store, id));
+    auto binding = bind_parameter(fader, *model, model->handle(id));
+    detail::keep_model_alive_in_controls(fader, model);
+    return std::move(binding).with_store_display(model,
+                                                 detail::watch_modulated_display(fader, store, id));
 }
 
 /// XY pad ↔ two parameters (normalized). A single drag drives both.
 [[nodiscard]] inline ParameterBinding
 bind_parameter(XYPad& pad, state::StateStore& store, state::ParamID x_id, state::ParamID y_id) {
     auto model = std::make_shared<StateStoreParamModel>(store);
-    return bind_parameter(pad, *model, model->handle(x_id), model->handle(y_id))
-        .with_store_display(model,
+    auto binding = bind_parameter(pad, *model, model->handle(x_id), model->handle(y_id));
+    detail::keep_model_alive_in_controls(pad, model);
+    return std::move(binding).with_store_display(model,
                             store.watch_modulation(x_id,
                                                    [&pad](std::optional<float> played) {
                                                        if (played)
@@ -548,8 +580,10 @@ bind_parameter(XYPad& pad, state::StateStore& store, state::ParamID x_id, state:
 [[nodiscard]] inline ParameterBinding
 bind_parameter(RangeSlider& slider, state::StateStore& store, state::ParamID id) {
     auto model = std::make_shared<StateStoreParamModel>(store);
-    return bind_parameter(slider, *model, model->handle(id))
-        .with_store_display(model, detail::watch_modulated_display(slider, store, id));
+    auto binding = bind_parameter(slider, *model, model->handle(id));
+    detail::keep_model_alive_in_controls(slider, model);
+    return std::move(binding).with_store_display(model,
+                                                 detail::watch_modulated_display(slider, store, id));
 }
 
 /// ComboBox ↔ stepped/index parameter. A selection is a one-shot gesture so

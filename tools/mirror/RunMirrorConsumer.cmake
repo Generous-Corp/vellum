@@ -93,6 +93,20 @@ if(NOT _planted EQUAL 1)
 endif()
 message(STATUS "symbol intersection control: ok")
 
+# Across every installed dylib: no pulp:: definition, vellum:: definitions seen,
+# and no exported symbol or Objective-C class defined by two images. The
+# forwarding anchor is defined once per mirror unit on purpose. A planted
+# duplicate must fail the same census.
+set(_census "${Python3_EXECUTABLE}" "-I" "${VELLUM_SOURCE_DIR}/tools/mirror/symbol_census.py"
+    --allow _vellum_mirror_forwarding_anchor ${_libraries} ${_installed_libraries})
+_run("installed dylib symbol census" ${_census})
+execute_process(COMMAND ${_census} --plant
+    RESULT_VARIABLE _census_planted OUTPUT_QUIET ERROR_QUIET)
+if(NOT _census_planted EQUAL 1)
+    message(FATAL_ERROR "symbol census control: a planted duplicate image gave ${_census_planted}, not 1")
+endif()
+message(STATUS "symbol census control: ok")
+
 set(_generator)
 find_program(_ninja ninja)
 if(_ninja)
