@@ -15,6 +15,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -46,10 +47,27 @@ def classes_by_test(classes: dict[str, list[str]]) -> dict[str, list[str]]:
     return owners
 
 
-def unclassified(registered: set[str], classes: dict[str, list[str]]) -> list[str]:
-    """Registered tests that are not under exactly one class."""
+def unclassified(registered: set[str], classes: dict[str, list[str]],
+                 policy: str | None = None) -> list[str]:
+    """Registered tests that are not under exactly one class.
+
+    With policy "gpu" (VELLUM_UNLISTED_TEST_POLICY, set for merge groups and
+    main) an unlisted test is not an error: it runs as gpu, and is reported on
+    stderr. A test listed under two classes is always an error.
+    """
+    policy = policy if policy is not None else os.environ.get("VELLUM_UNLISTED_TEST_POLICY", "fail")
     owners = classes_by_test(classes)
-    return sorted(test for test in registered if len(owners.get(test, [])) != 1)
+    bad = []
+    for test in sorted(registered):
+        count = len(owners.get(test, []))
+        if count == 1:
+            continue
+        if count == 0 and policy == "gpu":
+            print(f"UNLISTED TEST {test}: running as gpu; add it to {MANIFEST.name}",
+                  file=sys.stderr)
+            continue
+        bad.append(test)
+    return bad
 
 
 def registered_tests(root: Path = ROOT) -> set[str]:
@@ -79,7 +97,7 @@ class CtestClassesTest(unittest.TestCase):
     def test_every_registered_test_has_one_class(self) -> None:
         registered = registered_tests()
         self.assertGreater(len(registered), 40, "the scan found the registrations")
-        self.assertEqual(unclassified(registered, load_manifest()), [])
+        self.assertEqual(unclassified(registered, load_manifest(), "fail"), [])
 
     def test_a_missing_label_is_reported(self) -> None:
         classes = load_manifest()
@@ -87,9 +105,21 @@ class CtestClassesTest(unittest.TestCase):
         victim = classes["pr-fast"][0]
         self.assertIn(victim, registered)
         removed = {**classes, "pr-fast": [t for t in classes["pr-fast"] if t != victim]}
-        self.assertEqual(unclassified(registered, removed), [victim])
+        self.assertEqual(unclassified(registered, removed, "fail"), [victim])
         doubled = {**classes, "gpu": sorted({*classes["gpu"], victim})}
-        self.assertEqual(unclassified(registered, doubled), [victim])
+        self.assertEqual(unclassified(registered, doubled, "fail"), [victim])
+
+    def test_unlisted_policy(self) -> None:
+        classes = load_manifest()
+        victim = classes["pr-fast"][0]
+        registered = registered_tests()
+        removed = {**classes, "pr-fast": [t for t in classes["pr-fast"] if t != victim]}
+        self.assertEqual(unclassified(registered, removed, "fail"), [victim])
+        self.assertEqual(unclassified(registered, removed, "gpu"), [])
+        # A listed test keeps its class, and a doubly listed one still fails.
+        self.assertEqual(unclassified(registered, classes, "gpu"), [])
+        doubled = {**classes, "gpu": sorted({*classes["gpu"], victim})}
+        self.assertEqual(unclassified(registered, doubled, "gpu"), [victim])
 
     @unittest.skipUnless(os.environ.get("VELLUM_CTEST_BUILD_DIR"),
                          "set VELLUM_CTEST_BUILD_DIR to a configured build tree")

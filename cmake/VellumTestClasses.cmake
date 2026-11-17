@@ -8,7 +8,9 @@
 #
 # A test that is registered and missing from the file, or listed under two
 # classes, fails the configure, so a new test cannot silently fall outside
-# every lane. The class is appended to any label the test already carries.
+# every lane. With VELLUM_UNLISTED_TEST_POLICY=gpu in the environment (merge
+# groups and main) an unlisted test runs as gpu with a warning instead of
+# failing, so a test added by another pull request cannot break the queue. The class is appended to any label the test already carries.
 
 set(_vellum_test_classes pr-fast gpu slow)
 
@@ -60,7 +62,15 @@ function(vellum_apply_test_classes manifest)
                 set_property(TEST "${_test}" DIRECTORY "${_directory}"
                     APPEND PROPERTY LABELS "${_found}")
             elseif(_found_count EQUAL 0)
-                list(APPEND _problems "  ${_test}: not in ${manifest}")
+                if("$ENV{VELLUM_UNLISTED_TEST_POLICY}" STREQUAL "gpu")
+                    message(WARNING
+                        "UNLISTED TEST ${_test} is not in ${manifest}; running it as gpu. "
+                        "Add it to scripts/ctest_classes.json.")
+                    set_property(TEST "${_test}" DIRECTORY "${_directory}"
+                        APPEND PROPERTY LABELS gpu)
+                else()
+                    list(APPEND _problems "  ${_test}: not in ${manifest}")
+                endif()
             else()
                 list(JOIN _found "," _joined)
                 list(APPEND _problems "  ${_test}: listed under more than one class (${_joined})")
