@@ -300,7 +300,13 @@ void pixel_oracles() {
             spec->value_max = 0.0F;
             node->plot = spec;
         }
-        if (!surface->render(reversed, &error)) return;
+        hooks::fail_plot_draws(1);
+        expect(!surface->render(reversed, &error),
+               at + "a reversed-range plot draw failure fails the render", error);
+        hooks::fail_plot_draws(0);
+        if (!expect(surface->render(reversed, &error), at + "the reversed range renders", error)) {
+            return;
+        }
         const auto flipped = capture(*surface);
         const std::uint32_t quarter = top + rows / 4U;
         expect(flipped.ok && is(flipped.at(left + quiet, quarter), kLine) &&
@@ -309,7 +315,14 @@ void pixel_oracles() {
                at + "a reversed range draws its line mirrored", text(flipped.at(left + quiet, quarter)));
 
         PlotOverride off(hooks::PlotDecimation::first_sample, {});
-        if (!surface->render(oracle_scene(), &error)) return;
+        hooks::fail_plot_draws(1);
+        expect(!surface->render(oracle_scene(), &error),
+               at + "an oracle plot draw failure fails the render", error);
+        hooks::fail_plot_draws(0);
+        if (!expect(surface->render(oracle_scene(), &error),
+                    at + "the oracle scene renders after the failure control", error)) {
+            return;
+        }
         const auto lossy = capture(*surface);
         expect(lossy.ok && is(lossy.at(left + spike, top), kPlotFill),
                at + "negative control: first-sample decimation loses the spike's pixels",
