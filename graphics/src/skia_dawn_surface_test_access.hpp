@@ -36,6 +36,11 @@ struct SkiaDawnSurfaceTestAccess final {
     static std::optional<Rect> measure_layer_text_extent(
         const PaintCommand& command, std::string_view directory, std::string* error);
 
+    // The code points the shaper found no face for when it shaped `command`,
+    // ascending.
+    static std::vector<std::uint32_t> unresolved_code_points(
+        const PaintCommand& command, std::string_view directory, std::string* error);
+
     // Sets the newest scene version the surface redraws from damage alone
     // (`kDamageModelSceneVersion` by default). Raising it lets a test drive
     // the partial-redraw path with version-2 fields such as opacity, which
