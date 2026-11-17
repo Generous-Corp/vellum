@@ -36,6 +36,35 @@
 // asset and log routing is thread-local, so it follows whichever thread makes
 // the call.
 
+// API level. A consumer that builds against more than one release of this
+// module tests these macros instead of compiling a probe for each method:
+//
+//   #if defined(VELLUM_RMLUI_NATIVE_API_VERSION) && \
+//       (VELLUM_RMLUI_NATIVE_FEATURES & VELLUM_RMLUI_NATIVE_FEATURE_WARM)
+//
+// VELLUM_RMLUI_NATIVE_API_VERSION is 1 for the first release that defines
+// these macros and grows by one whenever a release adds an interface or
+// changes the behaviour of one a consumer can detect. VELLUM_RMLUI_NATIVE_FEATURES
+// is the set of feature bits below that this release has; a bit is never
+// reused for another meaning. A release older than the macros defines none of
+// them, so a consumer treats an undefined VELLUM_RMLUI_NATIVE_API_VERSION as no
+// features.
+//
+// The Native and Metal components ship in one package at one commit, so the
+// bit that names a Metal interface is defined here and holds whenever the Metal
+// component is built.
+#define VELLUM_RMLUI_NATIVE_API_VERSION 1
+// NativeContext::set_density_ratio() and density_ratio().
+#define VELLUM_RMLUI_NATIVE_FEATURE_DENSITY_RATIO (1u << 0)
+// NativeContext::warm().
+#define VELLUM_RMLUI_NATIVE_FEATURE_WARM (1u << 1)
+// trim() and its byte count on VellumRmlUi::Metal (MetalRenderInterface) and
+// VellumRmlUi::Cpu (CpuRenderInterface).
+#define VELLUM_RMLUI_NATIVE_FEATURE_RENDERER_TRIM (1u << 2)
+#define VELLUM_RMLUI_NATIVE_FEATURES                                                            \
+    (VELLUM_RMLUI_NATIVE_FEATURE_DENSITY_RATIO | VELLUM_RMLUI_NATIVE_FEATURE_WARM |             \
+     VELLUM_RMLUI_NATIVE_FEATURE_RENDERER_TRIM)
+
 #include <vellum/rmlui/assets.hpp>
 
 #include <RmlUi/Core.h>

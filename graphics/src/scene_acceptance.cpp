@@ -5,6 +5,9 @@
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
 #include <vellum/graphics/path_geometry.hpp>
+#include <vellum/graphics/plot.hpp>
+#include <vellum/graphics/vector_asset.hpp>
+#include <vellum/graphics/token_receipts.hpp>
 
 #include <cmath>
 #include <optional>
@@ -57,6 +60,28 @@ const SceneNode* find_undrawable_image(const SceneNode& node, std::string& reaso
     return nullptr;
 }
 
+// The first vector node, in depth-first order, that cannot be drawn: one
+// without an asset, with children, or with an invalid asset.
+const SceneNode* find_undrawable_vector(const SceneNode& node, std::string& reason) {
+    if (node.kind == SceneNode::Kind::vector) {
+        if (!node.vector) reason = "it has no compiled asset";
+        else if (!node.children.empty()) reason = "a vector node has no children";
+        if (!node.vector || !node.children.empty() ||
+            !vector_asset_is_valid(*node.vector, &reason)) {
+            return &node;
+        }
+    } else if (node.vector) {
+        reason = "only a vector node carries a compiled asset";
+        return &node;
+    }
+    for (const auto& child : node.children) {
+        if (const auto* found = find_undrawable_vector(child, reason); found != nullptr) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
 // The first mask node, in depth-first order, with a blend mode other than
 // `normal`. A mask contributes coverage to its siblings, not paint, so a blend
 // mode on it has no stage to apply in and refuses the scene.
@@ -73,13 +98,17 @@ struct EffectRefusal final {
 };
 
 std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_node,
-                          std::optional<EffectRefusal>& effect);
+                          std::string& vector_node, std::optional<EffectRefusal>& effect,
+                          std::optional<std::string>& plot_node);
 
 // Why `scene` is refused, or empty. `image_node` is set to the refused
 // image's id, and `image` to true, for an image or image-table refusal;
-// `effect` is set for an effect refusal.
+// `vector_node` is set for a vector refusal, `token_refusal` for a token
+// refusal, `effect` for an effect refusal and `plot_node` for a plot refusal.
 std::string refusal(const Scene& scene, bool& image, std::string& image_node,
-                    std::optional<EffectRefusal>& effect) {
+                    std::string& vector_node, std::optional<TokenRefusal>& token_refusal,
+                    std::optional<EffectRefusal>& effect,
+                    std::optional<std::string>& plot_node) {
     if (!scene_version_is_supported(scene.scene_version)) {
         return "scene version " + std::to_string(scene.scene_version) +
                " is not supported by this renderer";
@@ -101,6 +130,13 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node,
         return "the gradient at " + unsupported->id + " cannot be drawn exactly: " +
                gradient_reason;
     }
+    // Receipts name the authored colours, so they are checked before any
+    // track is evaluated.
+    if (auto token = find_invalid_token_reference(scene); token) {
+        auto reason = token->reason;
+        token_refusal = std::move(token);
+        return reason;
+    }
     std::string reason;
     std::optional<Scene> evaluated;
     if (scene_has_tracks(scene)) {
@@ -110,12 +146,14 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node,
         }
         evaluated.emplace(evaluate_tracks(scene));
     }
-    return drawn_refusal(evaluated ? *evaluated : scene, image, image_node, effect);
+    return drawn_refusal(evaluated ? *evaluated : scene, image, image_node, vector_node, effect,
+                         plot_node);
 }
 
 // Why the scene as drawn, with its tracks evaluated, is refused, or empty.
 std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_node,
-                          std::optional<EffectRefusal>& effect) {
+                          std::string& vector_node, std::optional<EffectRefusal>& effect,
+                          std::optional<std::string>& plot_node) {
     if (const auto* invalid = find_non_finite_compositing(scene.root); invalid != nullptr) {
         return "scene node " + invalid->id +
                " has a non-finite transform, opacity, or corner radius";
@@ -138,6 +176,10 @@ std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_no
         return path->path ? "path " + path->id + " cannot be drawn: " + reason
                           : "path " + path->id + " has no geometry";
     }
+    if (const auto* vector = find_undrawable_vector(scene.root, reason); vector != nullptr) {
+        vector_node = vector->id;
+        return "vector " + vector->id + " cannot be drawn: " + reason;
+    }
     if (const auto* undrawable = find_undrawable_image(scene.root, reason);
         undrawable != nullptr) {
         image = true;
@@ -147,6 +189,10 @@ std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_no
     if (!scene_images_are_valid(scene, &reason)) {
         image = true;
         return reason;
+    }
+    if (const auto* plot = find_invalid_plot(scene.root, reason); plot != nullptr) {
+        plot_node = plot->id;
+        return "plot " + plot->id + " cannot be drawn: " + reason;
     }
     return {};
 }
@@ -158,18 +204,37 @@ SceneAcceptance accept_scene(const Scene& scene) {
     result.diagnostics = scene_loss_diagnostics(scene);
     bool image = false;
     std::string image_node;
+    std::string vector_node;
+    std::optional<TokenRefusal> token;
     std::optional<EffectRefusal> effect;
-    result.reason = refusal(scene, image, image_node, effect);
+    std::optional<std::string> plot_node;
+    result.reason = refusal(scene, image, image_node, vector_node, token, effect, plot_node);
     result.accepted = result.reason.empty();
     if (result.accepted) return result;
 
     const bool version = !result.diagnostics.empty() &&
-        result.diagnostics.front().severity == LoweringDiagnostic::Severity::error;
+        result.diagnostics.front().severity == LoweringDiagnostic::Severity::error &&
+        (result.diagnostics.front().code == kSceneVersionMismatchCode ||
+         result.diagnostics.front().code == kGradientNotExpressibleCode);
     if (version) {
         result.diagnostics.resize(1U);
         return result;
     }
     result.diagnostics.clear();
+    if (token) {
+        result.diagnostics.push_back(token_refusal_diagnostic(*token));
+        return result;
+    }
+    if (!vector_node.empty()) {
+        result.diagnostics.push_back({
+            .severity = LoweringDiagnostic::Severity::error,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(kInvalidVectorAssetCode),
+            .node_id = std::move(vector_node),
+            .property = "vector",
+            .message = result.reason,
+        });
+    }
     if (effect) {
         result.diagnostics.push_back({
             .severity = LoweringDiagnostic::Severity::error,
@@ -177,6 +242,16 @@ SceneAcceptance accept_scene(const Scene& scene) {
             .code = std::string(effect->code),
             .node_id = std::move(effect->node_id),
             .property = "effects",
+            .message = result.reason,
+        });
+    }
+    if (plot_node) {
+        result.diagnostics.push_back({
+            .severity = LoweringDiagnostic::Severity::error,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(kInvalidPlotCode),
+            .node_id = std::move(*plot_node),
+            .property = "plot",
             .message = result.reason,
         });
     }

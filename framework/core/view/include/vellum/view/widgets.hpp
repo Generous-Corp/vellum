@@ -1206,6 +1206,8 @@ private:
   float drag_start_y_ = 0;
   float drag_start_proportion_ = 0; ///< travel proportion when the drag began
   float drag_last_y_ = 0;           ///< previous tick (velocity-mode integration)
+  bool fine_requested_ = false;     ///< Shift held on the latest pointer event
+  bool drag_fine_ = false;          ///< fine state the drag anchor was taken under
   bool gesture_active_ = false;
 
   /// The single place `value_` and `core_` are written. Clamps to [0,1], snaps

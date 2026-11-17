@@ -7,13 +7,16 @@
 #include <vellum/graphics/layer_cache.hpp>
 #include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/paint_command.hpp>
+#include <vellum/graphics/plot.hpp>
 #include <vellum/graphics/render_telemetry.hpp>
 #include <vellum/graphics/scene_acceptance.hpp>
+#include <vellum/graphics/vector_asset.hpp>
 
 #include "skia_dawn_surface_test_access.hpp"
 #include <gpu_runtime/gpu_surface.hpp>
 
 #include "animation_testing.hpp"
+#include "frame_trace.hpp"
 #include "skia_dawn_surface_testing.hpp"
 #include "skia_resource_caches.hpp"
 #include "utf8_text.hpp"
@@ -76,6 +79,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <limits>
@@ -97,6 +101,7 @@ std::atomic<bool> enclose_interpolated_fills{true};
 std::atomic<bool> enclose_images{true};
 std::atomic<bool> enclose_clips{true};
 std::atomic<bool> enclose_group_layers{true};
+std::atomic<bool> enclose_vector_assets{true};
 std::atomic<bool> enclose_effects{true};
 std::atomic<bool> enclose_backdrops{true};
 
@@ -262,6 +267,8 @@ struct FrameResources final {
     MeshTextureCache meshes;
     detail::SkiaResourceCaches* caches = nullptr;
     std::size_t layers = 0;
+    /// Device pixels per logical pixel, which plots lay their columns out in.
+    float scale = 1.0F;
     /// Textures this frame cached. Their uploads exist only in this frame's
     /// recording, so a frame that fails before it is submitted drops them.
     std::vector<detail::TextureKey> uploaded;
@@ -824,12 +831,37 @@ bool draw_mesh(SkCanvas& canvas, const PaintCommand& command,
     return true;
 }
 
-SkPath sk_path(const PaintCommand& command) {
-    const auto& path = *command.path;
+// A plot is device-pixel-aligned rectangles drawn without anti-aliasing, so
+// it reproduces exactly through any damage clip.
+bool draw_plot(SkCanvas& canvas, const PaintCommand& command, float opacity,
+               const FrameResources& resources, std::string* error) {
+    if (!command.plot) return true;
+    std::string reason;
+    if (!plot_is_valid(*command.plot, &reason)) {
+        set_error(error, "plot " + command.node_id + " cannot be drawn: " + reason);
+        return false;
+    }
+    const auto& plot = *command.plot;
+    const auto geometry = plot_geometry(plot, command.fill, command.bounds, resources.scale);
+    SkPaint paint;
+    paint.setAntiAlias(false);
+    for (const auto& piece : geometry.rects) {
+        Color color = command.fill;
+        if (piece.layer == PlotLayer::fill) color = plot.fill_color;
+        if (piece.layer == PlotLayer::line) color = plot.line_color;
+        if (piece.layer == PlotLayer::peak) color = plot.peak_color;
+        if (!(color.alpha > 0.0F)) continue;
+        paint.setColor4f(sk_color(color, opacity));
+        canvas.drawRect(
+            SkRect::MakeXYWH(piece.rect.x, piece.rect.y, piece.rect.width, piece.rect.height),
+            paint);
+    }
+    return true;
+}
+
+SkPath sk_path(const PathGeometry& path, float x, float y) {
     SkPathBuilder builder(path.fill_rule == FillRule::evenodd ? SkPathFillType::kEvenOdd
                                                               : SkPathFillType::kWinding);
-    const float x = command.bounds.x;
-    const float y = command.bounds.y;
     std::size_t offset = 0;
     for (const auto verb : path.verbs) {
         const float* v = path.values.data() + offset;
@@ -853,6 +885,10 @@ SkPath sk_path(const PaintCommand& command) {
         }
     }
     return builder.detach();
+}
+
+SkPath sk_path(const PaintCommand& command) {
+    return sk_path(*command.path, command.bounds.x, command.bounds.y);
 }
 
 SkPaint::Join sk_join(StrokeJoin join) {
@@ -978,6 +1014,110 @@ bool draw_path(SkCanvas& canvas, const PaintCommand& command, float opacity,
     return true;
 }
 
+bool stroke_paint(SkPaint& paint, const PathStroke& stroke, const std::string& node_id,
+                  std::string* error) {
+    paint.setStyle(SkPaint::kStroke_Style);
+    paint.setStrokeWidth(stroke.width);
+    paint.setStrokeJoin(sk_join(stroke.join));
+    paint.setStrokeCap(sk_cap(stroke.cap));
+    paint.setStrokeMiter(stroke.miter_limit);
+    if (stroke.dash_array.empty()) return true;
+    std::vector<SkScalar> intervals(stroke.dash_array.begin(), stroke.dash_array.end());
+    if (intervals.size() % 2U != 0U) {
+        intervals.insert(intervals.end(), stroke.dash_array.begin(), stroke.dash_array.end());
+    }
+    auto dashes = SkDashPathEffect::Make(intervals, stroke.dash_offset);
+    if (!dashes) {
+        set_error(error, "Skia could not build a dash pattern of vector " + node_id);
+        return false;
+    }
+    paint.setPathEffect(std::move(dashes));
+    return true;
+}
+
+// A gradient resolves against the unit box of its own gradient space, which
+// the paint's gradient transform maps into the operation's coordinates.
+bool vector_paint(SkPaint& paint, const VectorPaint& source, float opacity,
+                  FrameResources& resources, std::string* error) {
+    if (!source.gradient) {
+        paint.setColor4f(sk_color(source.color, opacity));
+        return true;
+    }
+    auto shader = linear_gradient_shader(
+        resolve_linear_gradient({0.0F, 0.0F, 1.0F, 1.0F}, *source.gradient), opacity, resources,
+        error);
+    if (!shader) return false;
+    paint.setShader(shader->makeWithLocalMatrix(sk_matrix(source.gradient_transform)));
+    return true;
+}
+
+// Draws a compiled vector asset: its view box stretched onto the command's
+// box, each group clipped and composited as one layer, and each path filled
+// and then stroked, as SVG paints them.
+bool draw_vector(SkCanvas& canvas, const PaintCommand& command, float opacity,
+                 FrameResources& resources, std::string* error) {
+    if (!command.vector) {
+        set_error(error, "vector " + command.node_id + " has no compiled asset");
+        return false;
+    }
+    const auto& asset = *command.vector;
+    std::string reason;
+    if (!vector_asset_is_valid(asset, &reason)) {
+        set_error(error, "vector " + command.node_id + " cannot be drawn: " + reason);
+        return false;
+    }
+    const auto& box = command.bounds;
+    if (!(box.width > 0.0F) || !(box.height > 0.0F)) return true;
+    const int saved = canvas.save();
+    canvas.concat(sk_matrix(vector_view_box_transform(box, asset.view_box)));
+    std::vector<int> groups;
+    const auto fail = [&] {
+        canvas.restoreToCount(saved);
+        return false;
+    };
+    for (const auto& op : asset.ops) {
+        if (op.kind == VectorOp::Kind::push_group) {
+            groups.push_back(canvas.save());
+            if (!is_identity(op.transform)) canvas.concat(sk_matrix(op.transform));
+            if (op.clip) canvas.clipPath(sk_path(*op.clip, 0.0F, 0.0F), SkClipOp::kIntersect, true);
+            if (op.opacity < 1.0F) {
+                canvas.saveLayerAlphaf(nullptr, op.opacity);
+                ++resources.layers;
+            }
+            continue;
+        }
+        if (op.kind == VectorOp::Kind::pop_group) {
+            canvas.restoreToCount(groups.back());
+            groups.pop_back();
+            continue;
+        }
+        const bool fills = vector_op_fills(op);
+        const bool strokes = vector_op_strokes(op);
+        if (!fills && !strokes) continue;
+        const int drawn = canvas.save();
+        if (!is_identity(op.transform)) canvas.concat(sk_matrix(op.transform));
+        const SkPath outline = sk_path(*op.path, 0.0F, 0.0F);
+        if (fills) {
+            SkPaint paint;
+            paint.setAntiAlias(op.path->antialias);
+            if (!vector_paint(paint, op.fill, opacity, resources, error)) return fail();
+            canvas.drawPath(outline, paint);
+        }
+        if (strokes) {
+            SkPaint paint;
+            paint.setAntiAlias(op.path->antialias);
+            if (!vector_paint(paint, op.stroke, opacity, resources, error) ||
+                !stroke_paint(paint, op.path->stroke, command.node_id, error)) {
+                return fail();
+            }
+            canvas.drawPath(outline, paint);
+        }
+        canvas.restoreToCount(drawn);
+    }
+    canvas.restoreToCount(saved);
+    return true;
+}
+
 bool draw_image(SkCanvas& canvas, const PaintCommand& command, float opacity,
                 FrameResources& resources, std::string* error) {
     const auto& box = command.bounds;
@@ -1045,6 +1185,11 @@ bool opacity_folds_into_paint(const PaintCommand& command) {
         // The image, or its placeholder, over a visible fill is two operations.
         return command.fill.alpha <= 0.0F;
     }
+    if (command.kind == PaintCommand::Kind::vector) {
+        if (!command.vector) return true;
+        const auto count = vector_paint_count(*command.vector);
+        return count.paints <= 1U && !count.grouped;
+    }
     if (command.kind == PaintCommand::Kind::text) {
         if (command.text_runs.empty()) return !command.underline && !command.strikethrough;
         return std::none_of(command.text_runs.begin(), command.text_runs.end(),
@@ -1074,8 +1219,18 @@ bool path_paints(const PaintCommand& command) {
            (command.fill.alpha > 0.0F || !command.fill_gradients.empty() || stroked);
 }
 
+// A vector asset paints paths, so its antialiased edges are enclosed whole
+// like a path's.
+bool vector_paints(const PaintCommand& command) {
+    return command.kind == PaintCommand::Kind::vector && command.vector && visible(command) &&
+           vector_paint_count(*command.vector).paints > 0U;
+}
+
 bool interpolates_colour(const PaintCommand& command) {
     if (!visible(command)) return false;
+    if (command.kind == PaintCommand::Kind::vector) {
+        return command.vector && vector_paint_count(*command.vector).gradients;
+    }
     if (command.kind == PaintCommand::Kind::mesh) {
         return command.mesh && !command.mesh->indices.empty();
     }
@@ -1161,7 +1316,9 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
     const float paint_opacity = own_paint_opacity(command);
     const bool layered = paint_opacity != opacity;
     if (layered && command.kind != PaintCommand::Kind::text) {
-        const auto bounds = layer_rect(paint_extent(command).rect);
+        const auto bounds = layer_rect(command.kind == PaintCommand::Kind::plot
+                                           ? plot_grid_rect(command.bounds, resources.scale)
+                                           : paint_extent(command).rect);
         canvas.saveLayerAlphaf(&bounds, opacity);
         ++resources.layers;
     }
@@ -1174,6 +1331,10 @@ bool paint_command(SkCanvas& canvas, const PaintCommand& command,
         drawn = draw_path(canvas, command, paint_opacity, resources, error);
     } else if (command.kind == PaintCommand::Kind::image) {
         drawn = draw_image(canvas, command, paint_opacity, resources, error);
+    } else if (command.kind == PaintCommand::Kind::vector) {
+        drawn = draw_vector(canvas, command, paint_opacity, resources, error);
+    } else if (command.kind == PaintCommand::Kind::plot) {
+        drawn = draw_plot(canvas, command, paint_opacity, resources, error);
     } else {
         drawn = draw_text(canvas, command, paint_opacity, layered ? opacity : 1.0F,
                           directory, resources, paragraph, error);
@@ -1201,12 +1362,32 @@ bool sane_box(const Rect& rect) {
         rect.width >= 0.0F && rect.height >= 0.0F;
 }
 
+// Lowering bounds a plot by a margin that holds its snapped grid at scales of
+// 0.25 and above. Below that the grid can leave the margin, so a layer that
+// holds a plot is left unbounded.
+void unbound_plot_layers(std::vector<PaintCommand>& commands, float scale) {
+    if (!(scale < 0.25F)) return;
+    std::vector<std::size_t> open;
+    for (std::size_t index = 0; index < commands.size(); ++index) {
+        const auto kind = commands[index].kind;
+        if (kind == PaintCommand::Kind::begin_layer) {
+            open.push_back(index);
+        } else if (kind == PaintCommand::Kind::end_layer) {
+            if (!open.empty()) open.pop_back();
+        } else if (kind == PaintCommand::Kind::plot) {
+            for (const auto layer : open) commands[layer].layer_unbounded = true;
+        }
+    }
+}
+
 // A command whose box is not finite has no known extent and is always drawn.
 Extent command_extent(const PaintCommand& command, const Rect& frame, float scale) {
     static const DamagePropagation propagation;
     if (!sane_box(command.bounds) || !draws_content(command.kind)) return std::nullopt;
     SceneNode painted;
     painted.bounds = command.bounds;
+    Rect box = command.bounds;
+    if (command.kind == PaintCommand::Kind::plot) box = plot_grid_rect(command.bounds, scale);
     switch (command.kind) {
         case PaintCommand::Kind::rectangle:
             painted.kind = SceneNode::Kind::rectangle;
@@ -1230,6 +1411,14 @@ Extent command_extent(const PaintCommand& command, const Rect& frame, float scal
             painted.kind = SceneNode::Kind::image;
             painted.image = command.image;
             break;
+        case PaintCommand::Kind::vector:
+            painted.kind = SceneNode::Kind::vector;
+            painted.vector = command.vector;
+            break;
+        case PaintCommand::Kind::plot:
+            painted.kind = SceneNode::Kind::plot;
+            painted.plot = command.plot;
+            break;
         case PaintCommand::Kind::begin_layer:
         case PaintCommand::Kind::end_layer:
         case PaintCommand::Kind::begin_clip:
@@ -1239,7 +1428,7 @@ Extent command_extent(const PaintCommand& command, const Rect& frame, float scal
             return std::nullopt;
     }
     return pixel_extent(
-        transformed_paint_bounds(painted, command.bounds, command.transform, frame, propagation),
+        transformed_paint_bounds(painted, box, command.transform, frame, propagation),
         scale);
 }
 
@@ -1330,7 +1519,8 @@ bool close_over_layers(const Scene& scene, const std::vector<PaintCommand>& comm
             transformed_blur || (enclose_own_layers && composites_own_layer(command)) ||
             (enclose_paths && path_paints(command)) ||
             (enclose_interpolated_fills && interpolates_colour(command)) ||
-            (enclose_images && command.kind == PaintCommand::Kind::image && visible(command));
+            (enclose_images && command.kind == PaintCommand::Kind::image && visible(command)) ||
+            (enclose_vector_assets && vector_paints(command));
         const bool group_layer =
             enclose_group_layers && command.kind == PaintCommand::Kind::begin_layer;
         const bool clip_region = enclose_clips && command.kind == PaintCommand::Kind::begin_clip;
@@ -1362,6 +1552,44 @@ bool close_over_layers(const Scene& scene, const std::vector<PaintCommand>& comm
 
 bool same_color(const Color& a, const Color& b) {
     return std::memcmp(&a, &b, sizeof(Color)) == 0;
+}
+
+bool environment_flag_on(const char* name) {
+    const char* raw = std::getenv(name);
+    if (raw == nullptr) return false;
+    const std::string_view text(raw);
+    return text == "1" || text == "true" || text == "TRUE" || text == "yes" || text == "on" ||
+        text == "ON";
+}
+
+constexpr int kDamageOverlayStroke = 2;
+
+void draw_damage_overlay(SkCanvas& canvas, const std::vector<PixelRect>& rects, bool full) {
+    const int saved = canvas.save();
+    canvas.resetMatrix();
+    SkPaint outline;
+    outline.setAntiAlias(false);
+    outline.setStyle(SkPaint::kStroke_Style);
+    outline.setStrokeWidth(static_cast<float>(kDamageOverlayStroke));
+    const SkColor color = full ? SkColorSetARGB(0xC0, 0xFF, 0x8A, 0x00)
+                               : SkColorSetARGB(0xC0, 0xFF, 0x2D, 0x95);
+    outline.setColor(color);
+    SkPaint solid;
+    solid.setAntiAlias(false);
+    solid.setColor(color);
+    constexpr int kInset = kDamageOverlayStroke / 2;
+    for (const auto& rect : rects) {
+        if (rect.empty()) continue;
+        const auto bounds = SkRect::Make(
+            SkIRect::MakeLTRB(rect.left, rect.top, rect.right, rect.bottom));
+        if (rect.width() <= 2 * kDamageOverlayStroke || rect.height() <= 2 * kDamageOverlayStroke) {
+            canvas.drawRect(bounds, solid);
+            continue;
+        }
+        canvas.drawRect(bounds.makeInset(static_cast<float>(kInset), static_cast<float>(kInset)),
+                        outline);
+    }
+    canvas.restoreToCount(saved);
 }
 
 struct GpuTimer final {
@@ -1712,6 +1940,7 @@ std::string_view to_string(FullRepaintReason reason) noexcept {
 class SkiaDawnSurface::Impl final {
 public:
     ~Impl() {
+        detail::flush_frame_trace_from_environment();
         layer_images_.clear();
         frame_surface_.reset();
         retained_image_.reset();
@@ -1733,6 +1962,8 @@ public:
 
     bool initialize(const Config& requested, std::string* error) {
         config_ = requested;
+        detail::start_frame_trace_from_environment();
+        damage_overlay_ = config_.damage_overlay || environment_flag_on("VELLUM_DAMAGE_OVERLAY");
         if (config_.width == 0 || config_.height == 0 ||
             !std::isfinite(config_.scale) || config_.scale <= 0.0F) {
             set_error(error, "GPU surface dimensions and scale must be positive");
@@ -1948,6 +2179,21 @@ public:
         damage_model_version_ = version;
     }
 
+    void set_damage_overlay(bool enabled) noexcept {
+        damage_overlay_ = enabled;
+        if (!enabled) overlay_rects_.clear();
+    }
+
+    bool damage_overlay() const noexcept { return damage_overlay_; }
+
+    std::vector<PixelRect> test_overlay_rects() const { return overlay_rects_; }
+
+    std::uint64_t test_overlay_presented() const noexcept { return overlay_presented_; }
+
+    bool test_serves_partial_redraw(std::uint32_t version) const noexcept {
+        return serves_partial_redraw(version);
+    }
+
     void simulate_device_loss() {
         if (!device_) return;
         device_.ForceLoss(wgpu::DeviceLostReason::Unknown, "Vellum simulated device loss");
@@ -2022,6 +2268,7 @@ public:
         context_->submit(skgpu::graphite::SyncToCpu::kYes);
         context_->checkAsyncWorkCompletion();
         instance_.ProcessEvents();
+        trace_gpu_time();
         if (device_lost()) {
             return fail_device_lost(error, "the Dawn device was lost");
         }
@@ -2033,7 +2280,12 @@ public:
     bool accepts_with_diagnostics(const Scene& scene, std::string* error) {
         auto acceptance = accept_scene(scene);
         diagnostics_ = std::move(acceptance.diagnostics);
-        if (acceptance.accepted) return true;
+        if (acceptance.accepted) {
+            for (auto& wide : plot_extent_diagnostics(scene, config_.scale)) {
+                diagnostics_.push_back(std::move(wide));
+            }
+            return true;
+        }
         set_error(error, std::move(acceptance.reason));
         return false;
     }
@@ -2119,7 +2371,8 @@ public:
         }
         if (!accepts_with_diagnostics(scene, error)) return false;
         std::vector<PaintCommandRange> ranges;
-        const auto commands = make_paint_commands(scene, &ranges);
+        auto commands = make_paint_commands(scene, &ranges);
+        unbound_plot_layers(commands, config_.scale);
         std::size_t begin = commands.size();
         for (std::size_t index = 0; index < commands.size(); ++index) {
             if (is_effect_layer(commands[index]) && commands[index].node_id == node_id) {
@@ -2325,13 +2578,14 @@ private:
     }
 
     bool serves_partial_redraw(std::uint32_t version) const noexcept {
-        return version <= damage_model_version_;
+        return version >= kMinSupportedSceneVersion && version <= damage_model_version_;
     }
 
     bool fail_device_lost(std::string* error, std::string message) {
         drop_all_layers(LayerInvalidation::device_lost);
         if (!device_loss_trimmed_) {
             device_loss_trimmed_ = true;
+            detail::trace_instant("graphics.device_lost", message.c_str());
             caches_.clear();
             note_trim(CacheTrimReason::device_lost);
         }
@@ -2357,6 +2611,49 @@ private:
     void note_trim(CacheTrimReason reason) {
         ++trims_;
         last_trim_ = reason;
+        if (detail::active_frame_trace_sink() != nullptr) {
+            detail::trace_instant("graphics.cache_trim", to_string(reason));
+        }
+    }
+
+    // The GPU time of a frame is known only once it has finished, so it is
+    // reported with the first call after that.
+    void trace_gpu_time() noexcept {
+        if (detail::active_frame_trace_sink() == nullptr) return;
+        if (!gpu_timer_ || !gpu_timer_->available || gpu_timer_->frame <= gpu_traced_frame_) return;
+        gpu_traced_frame_ = gpu_timer_->frame;
+        detail::trace_counter("graphics.gpu_ms",
+                              static_cast<double>(gpu_timer_->nanoseconds) / 1.0e6);
+    }
+
+    void trace_cache(const char* bytes_name, const char* rate_name, const CacheStats& stats) {
+        detail::trace_counter(bytes_name, static_cast<double>(stats.bytes));
+        detail::trace_counter(rate_name, frame_hit_rate(stats));
+    }
+
+    void trace_frame(const FrameStats& stats) {
+        if (detail::active_frame_trace_sink() == nullptr) return;
+        if (stats.full_repaint) {
+            detail::trace_instant("graphics.full_repaint",
+                                  to_string(stats.full_repaint_reason).data());
+        }
+        detail::trace_counter("graphics.damage_pixels",
+                              static_cast<double>(stats.damage_area_pixels));
+        detail::trace_counter("graphics.damage_rects",
+                              static_cast<double>(stats.damage_rects_after_coalescing));
+        detail::trace_counter("graphics.paint_commands_recorded",
+                              static_cast<double>(stats.paint_commands_recorded));
+        detail::trace_counter("graphics.paint_commands_total",
+                              static_cast<double>(stats.paint_commands_total));
+        detail::trace_counter("graphics.cpu_ms", stats.cpu_milliseconds);
+        detail::trace_counter("graphics.present_wait_ms", stats.present_wait_milliseconds);
+        detail::trace_counter("graphics.layer_count", static_cast<double>(layer_count_));
+        trace_cache("graphics.cache.paragraphs.bytes", "graphics.cache.paragraphs.hit_rate",
+                    caches_.paragraphs.stats());
+        trace_cache("graphics.cache.gradients.bytes", "graphics.cache.gradients.hit_rate",
+                    caches_.gradients.stats());
+        trace_cache("graphics.cache.textures.bytes", "graphics.cache.textures.hit_rate",
+                    caches_.textures.stats());
     }
 
     // Called after each frame is submitted. Once a resize has settled, entries
@@ -2432,18 +2729,24 @@ private:
             set_error(error, "Skia/Dawn surface is not initialized");
             return false;
         }
+        detail::FrameTraceSlice frame_slice("graphics.frame");
         if (device_lost()) {
             return fail_device_lost(error, "the Dawn device was lost");
         }
+        trace_gpu_time();
+        detail::FrameTraceSlice record_slice("graphics.record");
 
         std::vector<PaintCommandRange> ranges;
-        const auto commands = make_paint_commands(scene, &ranges);
+        auto commands = make_evaluated_paint_commands(scene, &ranges);
+        unbound_plot_layers(commands, config_.scale);
         std::vector<ParagraphSlot> paragraphs(commands.size());
         // stats_ and layer_count_ describe the last submitted frame until
         // this one submits, so the per-frame cache counters must too.
         const auto last_submitted = caches_.frame_state();
         caches_.begin_frame();
-        FrameResources resources{.meshes = {.recorder = recorder_.get()}, .caches = &caches_};
+        FrameResources resources{.meshes = {.recorder = recorder_.get()},
+                                 .caches = &caches_,
+                                 .scale = config_.scale};
         // A frame that is never submitted leaves no trace in the per-frame
         // telemetry; its lookups stay in the cumulative totals. A texture it
         // cached was never written on the GPU, so drop it and a later frame
@@ -2617,6 +2920,15 @@ private:
             stats.paint_commands_recorded = layer_commands_recorded;
         }
 
+        record_slice.end();
+        if (damage_overlay_) {
+            if (full) {
+                overlay_rects_.assign(1, target);
+            } else {
+                overlay_rects_ = rects;
+            }
+            overlay_full_ = full;
+        }
         if (!submit_frame(&stats, nullptr, error)) {
             drop_all_layers(LayerInvalidation::frame_failed);
             return false;
@@ -2631,6 +2943,7 @@ private:
         stats.cpu_milliseconds = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - started).count();
         stats_ = stats;
+        if (!internal_redraw_) trace_frame(stats);
         return true;
     }
 
@@ -2668,7 +2981,9 @@ private:
             }
             if (!draws_content(command.kind)) continue;
             if (!sane_box(command.bounds)) return std::nullopt;
-            Rect local = paint_extent(command).rect;
+            Rect local = command.kind == PaintCommand::Kind::plot
+                             ? plot_grid_rect(command.bounds, config_.scale)
+                             : paint_extent(command).rect;
             if (command.kind == PaintCommand::Kind::text) {
                 const auto measured =
                     measured_text_extent(command, config_.font_directory, paragraphs[index], nullptr);
@@ -2896,9 +3211,16 @@ private:
 
     bool submit_frame(FrameStats* stats, std::vector<std::uint8_t>* rgba,
                       std::string* error) {
+        detail::FrameTraceSlice submit_slice("graphics.submit");
+        sk_sp<SkSurface> overlay_target;
         if (surface_) {
             const auto waiting = std::chrono::steady_clock::now();
-            if (!acquire_frame_surface(error)) return false;
+            bool acquired = false;
+            {
+                detail::FrameTraceSlice wait_slice("graphics.present_wait");
+                acquired = acquire_frame_surface(error);
+            }
+            if (!acquired) return false;
             if (stats != nullptr) {
                 stats->present_wait_milliseconds = std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - waiting).count();
@@ -2907,6 +3229,23 @@ private:
             copy.setBlendMode(SkBlendMode::kSrc);
             frame_surface_->getCanvas()->drawImage(
                 retained_image_, 0.0F, 0.0F, SkSamplingOptions(), &copy);
+            if (damage_overlay_) {
+                draw_damage_overlay(*frame_surface_->getCanvas(), overlay_rects_, overlay_full_);
+                ++overlay_presented_;
+            }
+        } else if (rgba != nullptr && damage_overlay_ && !overlay_rects_.empty()) {
+            overlay_target = SkSurfaces::RenderTarget(
+                recorder_.get(), retained_info(physical_width(), physical_height()));
+            auto shown = SkSurfaces::AsImage(retained_surface_);
+            if (overlay_target && shown) {
+                SkPaint copy;
+                copy.setBlendMode(SkBlendMode::kSrc);
+                overlay_target->getCanvas()->drawImage(
+                    shown, 0.0F, 0.0F, SkSamplingOptions(), &copy);
+                draw_damage_overlay(*overlay_target->getCanvas(), overlay_rects_, overlay_full_);
+            } else {
+                overlay_target.reset();
+            }
         }
 
         auto recording = recorder_->snap();
@@ -2933,7 +3272,9 @@ private:
         context_->submit(skgpu::graphite::SyncToCpu::kNo);
 
         if (rgba != nullptr) {
-            SkSurface& source = surface_ ? *frame_surface_ : *retained_surface_;
+            SkSurface& source = surface_ ? *frame_surface_
+                : overlay_target       ? *overlay_target
+                                       : *retained_surface_;
             if (!read_target_rgba(source, *rgba, error)) {
                 current_texture_ = nullptr;
                 frame_surface_.reset();
@@ -2941,7 +3282,9 @@ private:
             }
         }
 
+        submit_slice.end();
         if (surface_) {
+            detail::FrameTraceSlice present_slice("graphics.present");
             surface_.Present();
             current_texture_ = nullptr;
             frame_surface_.reset();
@@ -3071,6 +3414,11 @@ private:
     bool trim_when_settled_ = false;
     std::uint64_t trim_since_frame_ = 0;
     bool internal_redraw_ = false;
+    bool damage_overlay_ = false;
+    bool overlay_full_ = false;
+    std::uint64_t overlay_presented_ = 0;
+    std::vector<PixelRect> overlay_rects_;
+    std::uint64_t gpu_traced_frame_ = 0;
     bool device_loss_trimmed_ = false;
     std::vector<LoweringDiagnostic> diagnostics_;
     std::uint64_t trims_ = 0;
@@ -3131,6 +3479,14 @@ FrameStats SkiaDawnSurface::frame_stats() const {
     return impl_->frame_stats();
 }
 
+void SkiaDawnSurface::set_damage_overlay(bool enabled) noexcept {
+    impl_->set_damage_overlay(enabled);
+}
+
+bool SkiaDawnSurface::damage_overlay() const noexcept {
+    return impl_->damage_overlay();
+}
+
 void SkiaDawnSurface::set_layer_cache_policy(const LayerCachePolicy& policy) {
     impl_->set_layer_cache_policy(policy);
 }
@@ -3150,6 +3506,21 @@ bool SkiaDawnSurfaceTestAccess::capture_effect_passes(SkiaDawnSurface& surface,
 void SkiaDawnSurfaceTestAccess::set_damage_model_version(SkiaDawnSurface& surface,
                                                          std::uint32_t version) noexcept {
     surface.impl_->set_damage_model_version(version);
+}
+
+std::vector<PixelRect> SkiaDawnSurfaceTestAccess::damage_overlay_rects(
+    const SkiaDawnSurface& surface) {
+    return surface.impl_->test_overlay_rects();
+}
+
+std::uint64_t SkiaDawnSurfaceTestAccess::damage_overlay_presented(
+    const SkiaDawnSurface& surface) noexcept {
+    return surface.impl_->test_overlay_presented();
+}
+
+bool SkiaDawnSurfaceTestAccess::serves_partial_redraw(const SkiaDawnSurface& surface,
+                                                      std::uint32_t version) noexcept {
+    return surface.impl_->test_serves_partial_redraw(version);
 }
 
 void SkiaDawnSurface::set_cache_budgets(const RenderCacheBudgets& budgets) {
@@ -3196,6 +3567,10 @@ const GpuEvidence& SkiaDawnSurface::evidence() const noexcept {
 
 namespace testing {
 
+void unbound_plot_layers_for_scale(std::vector<PaintCommand>& commands, float scale) {
+    unbound_plot_layers(commands, scale);
+}
+
 void set_partial_redraw_rules(const PartialRedrawRules& rules) noexcept {
     enclose_paths = rules.enclose_paths;
     enclose_own_layers = rules.enclose_own_layers;
@@ -3203,6 +3578,7 @@ void set_partial_redraw_rules(const PartialRedrawRules& rules) noexcept {
     enclose_images = rules.enclose_images;
     enclose_clips = rules.enclose_clips;
     enclose_group_layers = rules.enclose_group_layers;
+    enclose_vector_assets = rules.enclose_vector_assets;
     enclose_effects = rules.enclose_effects;
     enclose_backdrops = rules.enclose_backdrops;
 }
@@ -3214,6 +3590,7 @@ PartialRedrawRules partial_redraw_rules() noexcept {
             .enclose_images = enclose_images,
             .enclose_clips = enclose_clips,
             .enclose_group_layers = enclose_group_layers,
+            .enclose_vector_assets = enclose_vector_assets,
             .enclose_effects = enclose_effects,
             .enclose_backdrops = enclose_backdrops};
 }

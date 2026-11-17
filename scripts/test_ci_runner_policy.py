@@ -20,12 +20,17 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 EXPECTED_RUNNERS = {
+    "android.yml": ("__hosted__", "ubuntu-24.04"),
     "authority-activation.yml": ("__hosted__", "ubuntu-latest"),
     "authority-release.yml": ("__hosted__", "ubuntu-latest"),
     "framework-trusted-verify.yml": ("__hosted__", "ubuntu-24.04"),
     "gpu-macos.yml": (
         "VELLUM_LOCAL_MACOS_RUNS_ON_JSON",
         '["macos-15"]',
+    ),
+    "linux.yml": (
+        "VELLUM_LINUX_RUNS_ON_JSON",
+        '["ubuntu-latest"]',
     ),
     "observatory-overdue-issue.yml": ("__hosted__", "ubuntu-latest"),
     "product-quality.yml": (
@@ -63,6 +68,7 @@ EXPECTED_RUNNERS = {
     ),
     "sdk-release.yml": ("__mixed__", ""),
     "version-at-land.yml": ("__hosted__", "ubuntu-latest"),
+    "windows.yml": ("__hosted__", "windows-2022"),
     "workflow-lint.yml": ("__hosted__", "ubuntu-latest"),
 }
 
@@ -70,6 +76,8 @@ HOSTED_LABELS = (
     "ubuntu-latest",
     "ubuntu-24.04",
     "windows-latest",
+    "windows-2022",
+    "windows-11-arm",
     "macos-latest",
     "macos-13",
     "macos-14",

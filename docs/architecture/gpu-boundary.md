@@ -22,9 +22,10 @@ The public slice consists of:
   application builds, plus a headers-only `Vellum::DawnHeaders` target for an
   embedding host's authenticated bootstrap and compute code.
 
-The scene carries a single integer schema version, `kSceneVersion`, now 11.
-Versions 7 and 9 are reserved and add no fields in this build.
-Version 10 adds node effects; version 11 adds animation tracks.
+The scene carries a single integer schema version, `kSceneVersion`, now 12.
+Version 9 is reserved and adds no fields in this build.
+Version 10 adds node effects; version 11 adds animation tracks; version 12
+adds plot nodes, whose samples arrive at run time.
 A change that can alter rendered output bumps it: a new node kind, a new field
 that changes how a scene is drawn, or a change in meaning. A change that only
 adds metadata keeps it. Consumers accept versions from
@@ -38,9 +39,46 @@ diagnostic and reports authored style or content it drops as warnings on
 severity and disposition words but identify content by node ID, not by
 DesignIR document path. Versions are claimed in order: version 4: image nodes;
 version 5: clip, mask and isolation on groups; version 6: blend modes and
-DesignIR compositing fields; version 7: token table (reserved); version 8:
-gradient vocabulary; version 9: vector assets (reserved); version 10: effects
-and materials; version 11: animation tracks.
+DesignIR compositing fields; version 7: interned token receipts; version 8:
+gradient vocabulary; version 9: vector assets (no fields yet); version 10:
+effects and materials; version 11: animation tracks; version 12: plot nodes.
+
+`Scene::tokens` interns each design token that resolved to a colour once, as a
+receipt of its path, the layer that produced the value (`primitive`,
+`semantic` or `theme`) and the resolved colour. A node names its receipt by
+index in `SceneNode::fill_token`, and its `fill` always holds the receipt's
+value, so a renderer draws it without reading the table. The other colours of
+a node, its text runs, box shadows, gradient stops and a path's stroke, are
+named the same way through `SceneNode::color_tokens`; a mesh's packed vertex
+colours are not. `Design` in
+`@vellum/ui` emits a `tokenRefs` entry beside the resolved style colour, the
+runtime interns the entries into a `tokens` array on the root of the rendered
+tree, and the materializer rebuilds the table and the references. The slot
+names are `backgroundColor`, `color` (a text node or an attributed text run),
+`boxShadow`, `backgroundLinearGradient.stops.<n>`, and on a path `fill`,
+`fill.stops.<n>` and `stroke`. A name that is not a slot of the element, or
+that names a colour the element lacks, is refused with
+`VELLUM_INVALID_TOKEN_REFERENCE`; a colour the node type does not draw is
+reported as dropped. A short hex colour (`#fff`, `#ffff`) that `Design`
+resolves is the same colour as its long form and its receipt carries the long
+form; a gradient stop, box shadow or Path colour written directly in JSX takes
+only the six- and eight-digit forms. A theme
+switch calls `apply_token_values`, which re-resolves the table and rewrites
+only the fills, text runs, shadows, stops and strokes whose receipt changed, so
+the scene diff damages those nodes and no others. A text run without a slot of its own that
+carries its node's old colour follows it.
+A scene before version 7 that carries a table or a reference is refused with a
+version diagnostic. Version gates inspect fields and tables, not only kinds:
+path geometry on any node needs version 3, and an image reference on any node
+or a non-empty `Scene::images` needs version 4. A rendered-tree envelope may
+name its `sceneVersion`; without one the tree is built at the current
+version, and with one it is built at that version and refused when it carries
+a field the version lacks. At any version, a repeated path, a non-finite value, a
+reference past the end of the table, a slot the node lacks, or a colour that
+differs from its receipt, or a slot whose unused index or stop is not zero
+is refused with `VELLUM_INVALID_TOKEN_REFERENCE` by `accept_scene`,
+`make_paint_commands` and `scene_loss_diagnostics` alike, so a table edited
+without its nodes is never drawn stale.
 
 Nodes carry an optional affine transform about their origin, a group opacity,
 and per-corner radii beside the uniform `corner_radius` shorthand. All three
@@ -266,13 +304,14 @@ on any node type and fails the tree for an unknown name.
 
 DesignIR schema version 2 adds the node `compositing` object (opacity, blend
 mode, isolation, a mask mode and a mask reference to a sibling mask) with the
-same names. Readers accept DesignIR versions 1 through 4. Version 3 adds
-material references; version 4 adds node animation tracks. Normalization
-writes the lowest version that covers the
-document: 4 when a node has tracks, otherwise 3 when a node has a material
-reference, otherwise 2 when a node uses compositing, otherwise 1. Compositing
-requires version 2 or later, materials require version 3, and tracks require
-version 4; the validator and published JSON schema enforce all three gates. A mask
+same names. Readers accept DesignIR versions 1 through 5. Version 3 adds
+material references; version 4 adds node animation tracks; version 5 adds
+plot bindings. Normalization writes the lowest version that covers the
+document: 5 when a node has a plot binding, otherwise 4 when a node has tracks,
+otherwise 3 when a node has a material reference, otherwise 2 when a node uses compositing, otherwise 1. Compositing
+requires version 2 or later, materials require version 3, tracks require
+version 4 and plot bindings require version 5; the validator and published JSON
+schema enforce all four gates. A mask
 reference must name a sibling that is a mask. `materializeDesign` lowers the object into the retained
 `opacity`, `mixBlendMode`, `isolation` and `maskMode` styles. Because the
 renderer applies a mask to every sibling, it accepts a mask reference only when
@@ -298,13 +337,16 @@ threshold fall back to a full repaint. Hosts pass `invalidate` reasons and node 
 rectangle counts, the commands re-recorded and why a frame repainted fully.
 What is cached and when it is discarded is renderer policy: the scene schema
 carries no cache hints. Partial redraw is enabled only for scene versions the
-damage model understands, up to `kDamageModelSceneVersion` (11), which covers
+damage model understands, up to `kDamageModelSceneVersion` (12), which covers
 transforms, group opacity, per-corner radii, paths, images, clips, masks and
-isolation on groups, blend modes, gradient vocabulary and animation tracks.
-A version the renderer accepts but the damage model
+isolation on groups, blend modes, token references, gradient vocabulary,
+animation tracks and plot nodes, where a plot whose samples alone change
+damages only the spans of those samples. A version the renderer accepts but the damage model
 does not yet understand repaints fully with reason `damage_model_version`. A version outside
 [`kMinSupportedSceneVersion`, `kSceneVersion`] is refused before anything is
-drawn.
+drawn, and partial redraw likewise serves no version below
+`kMinSupportedSceneVersion`. The layer cache compares mesh and texture
+content, not pointers, so texels rewritten in place drop a cached image.
 
 Animation tracks on a node drive its opacity, the channels of an animated
 transform (translate, rotate, scale), its fill, a path's stroke colour, and the
@@ -319,6 +361,34 @@ before its first keyframe and its last value after its last, and a spring is
 exactly at its target from its settle time on, so a track at rest damages
 nothing. A version 10 or older scene with a track is refused with
 `VELLUM_SCENE_VERSION_MISMATCH`.
+
+`FrameDriver` (`vellum/graphics/frame_driver.hpp`) is the host loop that runs
+tracks and plots. It is the scene client of `foundation::FramePump`
+(`vellum/foundation/frame_pump.hpp`), which owns what is not specific to a
+scene: the clock, resume handling, frame-needed gating, the thread-safe wake,
+bounded render retries and the reduced-motion setting. Any content that can be
+advanced and then drawn can drive the same pump with its own advance and render
+functions. The host calls `frame` from its vsync source with that
+source's own monotonic presentation time, on the thread that owns the scene
+and the surface. The driver advances `Scene::clock` by the measured time since
+the previous frame, starting from zero at the first frame, so keyframe times
+are seconds since the driver's first frame. A gap over 250 ms, or the first
+frame after `suspend`, advances one nominal frame so animation never catches up
+on idle time; a repeated or backwards timestamp advances nothing; and with
+reduced motion the clock jumps to the end of the last track. It then samples
+the feed into the scene's plots once and calls the host's render function,
+which for the macOS app host is `SkiaDawnSurface::render_incremental`, only
+when the frame can differ from the last one drawn: the first frame, a
+requested frame, a clock that moved while a track still had keyframes ahead,
+or a plot whose samples changed. `FrameReport::needs_next_frame` turns false
+once every track has settled and a feed has been silent for
+`stale_after_ticks` ticks, and the host then stops its display link, so an
+idle app draws no frames. `request_frame`, callable from any thread, is the way
+back. The driver reads no clock of its own, so an injected clock gives the same
+frames. The macOS app host drives it from a `CADisplayLink` (a main-thread
+timer before macOS 14), pauses the link when no frame is needed, and follows
+the system reduce-motion setting. It attaches no feed, so its plots stay empty
+until a host supplies one with `set_feed`.
 
 A path damages its control box outset by its stroke reach: half the width,
 times the miter limit for miter joins or sqrt(2) for square and round caps,

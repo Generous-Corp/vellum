@@ -221,9 +221,11 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      # git and gh run from the system paths with an empty environment, so
-      # nothing an earlier step wrote to GITHUB_PATH, GITHUB_ENV or the git
-      # config can run while the token is held.
+      # git and gh run through /usr/bin/env -i with the token and the explicit
+      # safe settings only, so nothing an earlier step wrote to GITHUB_PATH,
+      # GITHUB_ENV or the git config can run while the token is held. The wrapper
+      # calls no shell builtin: bash does not import a function whose name holds
+      # a slash, so an inherited BASH_FUNC_* cannot change what it passes.
       - name: Push the bump branch and open its pull request
         env:
           GH_TOKEN: ${{ steps.bump-token.outputs.token }}
@@ -234,7 +236,7 @@ jobs:
           set -euo pipefail
           [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           [[ -z "$NUMBER" || "$NUMBER" =~ ^[0-9]+$ ]]
-          clean() { env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" GH_TOKEN="$GH_TOKEN" GIT_CONFIG_NOSYSTEM=1 "$@"; }
+          clean() { /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" GH_TOKEN="$GH_TOKEN" GIT_CONFIG_NOSYSTEM=1 "$@"; }
           auth="http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
           remote="https://github.com/$GITHUB_REPOSITORY"
           live="$(clean git -c core.hooksPath=/dev/null -c "$auth" ls-remote "$remote" refs/heads/main | cut -f1)"

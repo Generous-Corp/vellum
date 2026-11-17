@@ -108,6 +108,9 @@ struct TextStyle final {
 struct TextRun final {
     std::string text;
     TextStyle style;
+    /// True when the run's colour came from its containing node. Explicit
+    /// literal colours stay fixed even when they happen to equal that colour.
+    bool inherits_color = true;
 };
 
 /// Premultiplied RGBA8 texels, row-major, top row first.
@@ -385,6 +388,61 @@ enum class MaskMode : std::uint8_t {
     /// The mask's luminance multiplied by its alpha, as CSS `mask-mode:
     /// luminance` and SVG `<mask>` define it (Rec. 709 coefficients).
     luminance,
+};
+
+/// A paint of a compiled vector asset: `color`, or `gradient` when it is set.
+/// The gradient resolves against the unit box {0, 0, 1, 1} of its own
+/// gradient space, so every position and radius it holds is a coordinate of
+/// that space, and `gradient_transform` maps gradient space into the
+/// coordinates of the operation that paints with it. This is how SVG's
+/// `objectBoundingBox` and `userSpaceOnUse` units and `gradientTransform`
+/// are carried exactly.
+struct VectorPaint final {
+    Color color = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    std::optional<LinearGradient> gradient;
+    Affine2D gradient_transform{};
+};
+
+/// One operation of a compiled vector asset's display list.
+///
+/// A `path` operation fills and then strokes `path`, mapped by `transform`
+/// into the enclosing group's coordinates. Its geometry supplies the fill
+/// rule and the stroke's width, joins, caps, miter limit and dashes; the
+/// colours come from `fill` and `stroke`, so the geometry's own stroke colour
+/// must be transparent and carry no gradient.
+///
+/// A `push_group` opens a group whose contents `transform` maps into the
+/// enclosing coordinates, clipped to the area `clip` fills (in the group's
+/// coordinates, under its fill rule) when it is set, and composited as one
+/// layer at `opacity`. A `pop_group` closes the innermost open group.
+struct VectorOp final {
+    enum class Kind : std::uint8_t { path, push_group, pop_group };
+    Kind kind = Kind::path;
+    Affine2D transform{};
+    std::shared_ptr<const PathGeometry> path;
+    VectorPaint fill;
+    VectorPaint stroke;
+    float opacity = 1.0F;
+    std::shared_ptr<const PathGeometry> clip;
+};
+
+/// The most operations one compiled vector asset may hold.
+inline constexpr std::size_t kMaxVectorOps = 16384U;
+/// The deepest nesting of groups in a compiled vector asset.
+inline constexpr std::size_t kMaxVectorGroupDepth = 64U;
+
+/// A compiled vector asset: one display list drawn by a single `vector`
+/// node. `view_box` is the asset's coordinate box; it is stretched onto the
+/// node's box, so a producer that wants an aspect-preserving fit sizes the
+/// node to the view box's aspect. Operations outside the view box still draw
+/// unless a group clips them. `content_hash` names the source the asset was
+/// compiled from, in the `sha256:` form of `ImageAsset::content_hash`. Like a
+/// mesh, an asset must not be mutated once a scene references it; replace
+/// the pointer to change it.
+struct VectorAsset final {
+    std::string content_hash;
+    Rect view_box{};
+    std::vector<VectorOp> ops;
 };
 
 /// What a node effect does. Every effect applies to the node and its subtree
@@ -712,6 +770,113 @@ struct AnimationTrack final {
     std::uint32_t stop = 0U;
     std::vector<AnimationKeyframe> keyframes;
 };
+/// What a plot node draws.
+enum class PlotStyle : std::uint8_t {
+    /// A line through the samples, `line_width` thick.
+    line,
+    /// The area between the samples and `baseline`.
+    area,
+    /// One bar per slot from `baseline` to its sample, `bar_gap` apart.
+    bar,
+    /// A level meter: a bar from `value_min` to the level, and a tick at the
+    /// peak.
+    level_meter,
+};
+
+/// The shape of the `ValueFeed` channel a plot reads, as
+/// `vellum::value::ChannelShape` names it.
+enum class PlotChannelShape : std::uint8_t {
+    /// One number per publish; a line or area plot keeps a history of them.
+    scalar,
+    /// RMS and peak levels per audio channel; a level meter reads one.
+    meter,
+    /// A block of samples; each publish replaces the whole plot.
+    vector,
+};
+
+/// How a line or area plot of a scalar channel places a new sample once its
+/// slots are full.
+enum class PlotHistory : std::uint8_t {
+    /// Samples fill the slots from the left, then every publish shifts them
+    /// one slot left and the newest enters at the right.
+    scroll,
+    /// Samples wrap around and overwrite the oldest slot in place, leaving
+    /// the slot after the newest empty, as an oscilloscope sweep does.
+    sweep,
+};
+
+/// The direction a level meter grows.
+enum class PlotOrientation : std::uint8_t {
+    /// From the bottom edge up.
+    vertical,
+    /// From the left edge rightwards.
+    horizontal,
+};
+
+/// What a `plot` node draws: samples of a `vellum::value::ValueFeed` channel.
+///
+/// The plot's binding (`channel`, `shape` and `audio_channel`) names the
+/// channel; `PlotFeedSampler` reads the feed on the render thread and
+/// replaces the spec with one carrying the newest `samples`. The renderer
+/// draws `samples` and never reads a feed itself, so a scene stays a value.
+///
+/// Line, area and bar plots spread `slot_count` slots evenly across the
+/// node's box, slot 0 at the left, and map `value_min` to the bottom edge
+/// and `value_max` to the top; values outside are pinned to the edges. Each
+/// device-pixel column draws the minimum and maximum of the slots it covers,
+/// so a dense feed draws one span per column and its peaks survive. A slot
+/// holding NaN draws nothing and breaks the line. A level meter reads
+/// `samples[0]` as its level and `samples[1]` as its peak.
+///
+/// The samples are drawn as device-pixel-aligned rectangles without
+/// anti-aliasing, over the node's `fill`. With `fill_gradients` the
+/// background is drawn as a rectangle of that fill and those gradients
+/// behind the plot instead. Corner radii
+/// do not apply to a plot. Like a path's geometry, a spec must not be mutated
+/// once a scene references it; replace the pointer to change it.
+struct PlotSpec final {
+    PlotStyle style = PlotStyle::line;
+    /// The verbatim name of the channel the plot reads. A plot without one
+    /// draws the samples it carries, and `PlotFeedSampler` leaves it alone.
+    std::string channel;
+    PlotChannelShape shape = PlotChannelShape::vector;
+    /// The audio channel of a meter channel that a level meter shows, at most
+    /// `kMaxPlotAudioChannel`.
+    std::uint32_t audio_channel = 0;
+    /// Slots across the box for a line, area or bar plot, at least 1 and at
+    /// most `kMaxPlotSlots`; a level meter ignores it.
+    std::uint32_t slot_count = 0;
+    PlotHistory history = PlotHistory::scroll;
+    PlotOrientation orientation = PlotOrientation::vertical;
+    float value_min = 0.0F;
+    float value_max = 1.0F;
+    /// Where an area or bar plot's fill starts.
+    float baseline = 0.0F;
+    /// The line of a line plot.
+    Color line_color = Color::hex(0x38BDF8);
+    /// The fill of an area plot, bar plot or level meter.
+    Color fill_color = Color::hex(0x22C55E);
+    /// The peak tick of a level meter.
+    Color peak_color = Color::hex(0xF8FAFC);
+    /// Logical pixels, at most `kMaxPlotStroke`; at least one device pixel is
+    /// drawn.
+    float line_width = 1.0F;
+    /// Logical pixels between neighbouring bars, at most `kMaxPlotStroke`.
+    float bar_gap = 0.0F;
+    /// Logical thickness of a level meter's peak tick, at most
+    /// `kMaxPlotStroke`; zero draws none.
+    float peak_width = 2.0F;
+    /// One value per slot (a line, area or bar plot), or the level and peak
+    /// (a level meter). Missing slots draw nothing.
+    std::vector<float> samples;
+};
+
+/// The largest `PlotSpec::slot_count` a scene may carry.
+inline constexpr std::uint32_t kMaxPlotSlots = 1U << 22U;
+/// The largest `PlotSpec::audio_channel`.
+inline constexpr std::uint32_t kMaxPlotAudioChannel = 1024U;
+/// The largest line width, bar gap and peak width, in logical pixels.
+inline constexpr float kMaxPlotStroke = 4096.0F;
 
 /// The scene schema version this build produces.
 ///
@@ -727,13 +892,14 @@ struct AnimationTrack final {
 /// version 1 scene is still accepted when none of its nodes sets them; one
 /// that does fails `scene_fields_match_version` and is refused.
 ///
-/// Version 3 adds the `path` node kind. A version 1 or 2 scene is still
-/// accepted when it has no path node; one that does fails
-/// `scene_fields_match_version` and is refused.
+/// Version 3 adds the `path` node kind and `SceneNode::path`. A version 1 or
+/// 2 scene is still accepted when no node is a path or carries path geometry;
+/// one that does fails `scene_fields_match_version` and is refused.
 ///
-/// Version 4 adds the `image` node kind and `Scene::images`. A scene of an
-/// earlier version is still accepted when it has no image node; one that does
-/// fails `scene_fields_match_version` and is refused.
+/// Version 4 adds the `image` node kind, `SceneNode::image` and
+/// `Scene::images`. A scene of an earlier version is still accepted when no
+/// node is an image or carries an image reference and its image table is
+/// empty; one that does fails `scene_fields_match_version` and is refused.
 ///
 /// Version 5 adds `SceneNode::clip`, `mask`, and `isolate`. A scene of an
 /// earlier version is still accepted when none of its nodes sets them; one
@@ -743,25 +909,38 @@ struct AnimationTrack final {
 /// still accepted when none of its nodes sets it; one that does fails
 /// `scene_fields_match_version` and is refused.
 ///
+/// Version 7 adds `Scene::tokens`, `SceneNode::fill_token` and
+/// `SceneNode::color_tokens`. A scene of an
+/// earlier version is still accepted when its token table is empty and no node
+/// sets a token reference; one that does fails `scene_fields_match_version`
+/// and is refused.
+///
 /// Version 8 adds the gradient vocabulary: radial, two-circle radial and
 /// conic kinds, spread, interpolation, colour space and their geometry on
 /// `LinearGradient`, and gradient strokes on paths. A plain linear fill
 /// gradient stays legal at every version.
+///
+/// Version 9 adds the `vector` node kind and `SceneNode::vector`, a compiled
+/// vector asset drawn as one node. A scene of an earlier version is still
+/// accepted when it has no vector node; one that does fails
+/// `scene_fields_match_version` and is refused.
 ///
 /// Version 10 adds `SceneNode::effects`, and version 11 adds
 /// `SceneNode::tracks`, evaluated at `Scene::clock`. A scene of an earlier
 /// version is still accepted when no node sets the newer fields; one that
 /// does fails `scene_fields_match_version` and is refused.
 ///
+/// Version 12 adds the `plot` node kind. A scene of an earlier version is
+/// still accepted when it has no plot node; one that does fails
+/// `scene_fields_match_version` and is refused.
+///
 /// Claimed versions, in order:
 /// version 4: image nodes; version 5: clip, mask and isolation on groups;
-/// version 6: blend modes and DesignIR compositing fields; version 7: token
-/// receipts; version 8: gradient vocabulary; version 9: vector assets;
+/// version 6: blend modes and DesignIR compositing fields; version 7: interned
+/// token receipts; version 8: gradient vocabulary; version 9: vector assets;
 /// version 10: effects and materials; version 11: animation tracks; version
-/// 12: plots. This build gives versions 7 and 9 no fields of their own and
-/// does not accept 12; the branches that own them add their fields and
-/// damage support.
-inline constexpr std::uint32_t kSceneVersion = 11U;
+/// 12: plot nodes.
+inline constexpr std::uint32_t kSceneVersion = 12U;
 
 /// The oldest scene schema version this build still consumes.
 inline constexpr std::uint32_t kMinSupportedSceneVersion = 1U;
@@ -781,6 +960,40 @@ inline constexpr std::uint32_t kMinSupportedSceneVersion = 1U;
 /// it does not know refuses the scene rather than treating the node as a
 /// `group`; producers report authored content they cannot express as a known
 /// kind through `LoweringDiagnostic` instead of emitting it.
+/// One design token as it resolved for a scene: where it came from and the
+/// colour it produced. A scene holds each receipt once in `Scene::tokens`, and
+/// nodes name it by index.
+struct TokenReceipt final {
+    /// The token's name in its design document, unique within a scene.
+    std::string path;
+    /// The layer the value came from, such as `primitive`, `semantic` or
+    /// `theme`.
+    std::string layer;
+    Color value{};
+};
+
+/// A colour of a node other than `SceneNode::fill`, named so a token receipt
+/// can drive it.
+struct TokenSlot final {
+    enum class Kind : std::uint8_t {
+        /// `text_runs[index].style.color`.
+        text_run,
+        /// `box_shadows[index].color`.
+        box_shadow,
+        /// `fill_gradients[index].stops[stop].color`.
+        gradient_stop,
+        /// `path->stroke.color`; `index` and `stop` are zero.
+        path_stroke,
+    };
+
+    Kind kind = Kind::text_run;
+    std::uint32_t index = 0;
+    std::uint32_t stop = 0;
+    /// The index in `Scene::tokens` of the receipt the slot's colour was
+    /// resolved from.
+    std::uint32_t token = 0;
+};
+
 struct SceneNode final {
     enum class Kind {
         group,
@@ -790,6 +1003,9 @@ struct SceneNode final {
         mesh,
         path,
         image,
+        /// Draws `SceneNode::vector`, a compiled vector asset, over its box.
+        vector,
+        plot,
     };
 
     std::string id;
@@ -855,6 +1071,19 @@ struct SceneNode final {
     /// paint, so it keeps `normal`; `accept_scene` refuses a mask with any
     /// other mode.
     BlendMode blend_mode = BlendMode::normal;
+    /// The index in `Scene::tokens` of the receipt `fill` was resolved from.
+    /// `fill` always holds the receipt's value, so a renderer draws it without
+    /// consulting the table; the reference lets a theme switch find the nodes
+    /// a changed receipt affects.
+    std::optional<std::uint32_t> fill_token;
+    /// The receipts that drive the node's other colours: text runs, box
+    /// shadows, gradient stops and a path's stroke. Each slot must exist and
+    /// hold its receipt's value, as `fill` does. A slot appears at most once.
+    /// A mesh's packed vertex colours are not slots.
+    std::vector<TokenSlot> color_tokens;
+    /// What a `vector` node draws. A vector node without it, with children,
+    /// or with an asset that fails `vector_asset_is_valid` is refused.
+    std::shared_ptr<const VectorAsset> vector;
     /// The node's effect chain; see `NodeEffect`. A node with effects is
     /// composited offscreen as one group, like an isolated node. A chain over
     /// the effect budget (`effect_chain_cost`) is drawn without its effects
@@ -865,6 +1094,9 @@ struct SceneNode final {
     /// values, never these fields' static values alone. At most one track per
     /// property and address.
     std::vector<AnimationTrack> tracks;
+    /// What a `plot` node draws. A plot node without it, or with children,
+    /// is refused.
+    std::shared_ptr<const PlotSpec> plot;
 };
 
 /// The corner radii a node is drawn with: `corner_radii` when present,
@@ -927,6 +1159,20 @@ struct SceneNode final {
     if (uses_version_5_fields(node)) return &node;
     for (const auto& child : node.children) {
         if (const auto* found = find_version_5_fields(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
+/// Whether a node sets a field version 7 introduced: a token reference.
+[[nodiscard]] inline bool uses_version_7_fields(const SceneNode& node) noexcept {
+    return node.fill_token.has_value() || !node.color_tokens.empty();
+}
+
+/// The first node, in depth-first order, that `uses_version_7_fields`.
+[[nodiscard]] inline const SceneNode* find_version_7_fields(const SceneNode& node) noexcept {
+    if (uses_version_7_fields(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_7_fields(child); found != nullptr) return found;
     }
     return nullptr;
 }
@@ -1108,6 +1354,8 @@ struct SceneNode final {
     case SceneNode::Kind::mesh:
     case SceneNode::Kind::path:
     case SceneNode::Kind::image:
+    case SceneNode::Kind::vector:
+    case SceneNode::Kind::plot:
         return true;
     }
     return false;
@@ -1138,11 +1386,17 @@ struct Scene final {
     float width = 0.0F;
     float height = 0.0F;
     Color background = Color::hex(0x111827);
+    /// The token receipt that resolved the scene clear colour, when one was
+    /// supplied by the authoring tree.
+    std::optional<std::uint32_t> background_token;
     SceneNode root;
     std::uint32_t scene_version = kSceneVersion;
     /// The decoded assets image nodes name by content hash. Each hash appears
     /// at most once.
     std::vector<std::shared_ptr<const ImageAsset>> images;
+    /// The interned token receipts nodes reference through
+    /// `SceneNode::fill_token`. Each path appears at most once.
+    std::vector<TokenReceipt> tokens;
     /// The host clock, in seconds, at which tracks are evaluated. The caller
     /// passes it for every frame; no renderer reads a clock of its own, so the
     /// same scene at the same clock draws the same frame. Without tracks it
@@ -1170,61 +1424,179 @@ struct Scene final {
     return nullptr;
 }
 
-/// Whether every field and kind the scene uses exists at its version: a
-/// version 1 scene sets no field that `uses_version_2_fields` reports, a
-/// version 1 or 2 scene has no node that `find_version_3_kinds` reports, a
-/// scene before version 4 has no node that `find_version_4_kinds` reports,
-/// a scene before version 5 sets no field that `uses_version_5_fields`
-/// reports, a scene before version 6 sets no field that
-/// `uses_version_6_fields` reports, a scene before version 8 has no node
-/// that `node_uses_version_8_fields` reports, a scene before version 10
-/// sets no field that `uses_version_10_fields` reports, and a scene before
-/// version 11 has no track.
-[[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
-    return (scene.scene_version >= 2U || find_version_2_fields(scene.root) == nullptr) &&
-           (scene.scene_version >= 3U || find_version_3_kinds(scene.root) == nullptr) &&
-           (scene.scene_version >= 4U || find_version_4_kinds(scene.root) == nullptr) &&
-           (scene.scene_version >= 5U || find_version_5_fields(scene.root) == nullptr) &&
-           (scene.scene_version >= 6U || find_version_6_fields(scene.root) == nullptr) &&
-           (scene.scene_version >= 8U || !node_uses_version_8_fields(scene.root)) &&
-           (scene.scene_version >= 10U || find_version_10_fields(scene.root) == nullptr) &&
-           (scene.scene_version >= 11U || find_version_11_fields(scene.root) == nullptr);
+/// Whether a node uses what version 9 introduced: the `vector` kind or a
+/// compiled vector asset.
+[[nodiscard]] inline bool uses_version_9_fields(const SceneNode& node) noexcept {
+    return node.kind == SceneNode::Kind::vector || node.vector != nullptr;
 }
 
-/// The first node, in depth-first order, that its scene's version cannot
-/// carry: a field or kind newer than `scene.scene_version`, or a kind outside
-/// `is_known_kind`. Null when `scene_fields_match_version` holds and every
-/// kind and blend mode is known.
-[[nodiscard]] inline const SceneNode* find_version_mismatch(const Scene& scene) noexcept {
-    if (const auto* unknown = find_unknown_kind(scene.root); unknown != nullptr) return unknown;
-    if (const auto* unknown = find_unknown_blend_mode(scene.root); unknown != nullptr) {
-        return unknown;
-    }
-    if (scene.scene_version < 2U) {
-        if (const auto* found = find_version_2_fields(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 3U) {
-        if (const auto* found = find_version_3_kinds(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 4U) {
-        if (const auto* found = find_version_4_kinds(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 5U) {
-        if (const auto* found = find_version_5_fields(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 6U) {
-        if (const auto* found = find_version_6_fields(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 8U) {
-        if (const auto* found = find_version_8_fields(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 10U) {
-        if (const auto* found = find_version_10_fields(scene.root); found != nullptr) return found;
-    }
-    if (scene.scene_version < 11U) {
-        if (const auto* found = find_version_11_fields(scene.root); found != nullptr) return found;
+/// The first node, in depth-first order, that `uses_version_9_fields`.
+[[nodiscard]] inline const SceneNode* find_version_9_fields(const SceneNode& node) noexcept {
+    if (uses_version_9_fields(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_9_fields(child); found != nullptr) return found;
     }
     return nullptr;
+}
+
+/// The first node, in depth-first order, of a kind version 12 introduced: a
+/// `plot` node.
+[[nodiscard]] inline const SceneNode* find_version_12_kinds(const SceneNode& node) noexcept {
+    if (node.kind == SceneNode::Kind::plot) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_12_kinds(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
+/// Whether a node sets a field version 3 introduced: the `path` kind or path
+/// geometry on a node of any kind.
+[[nodiscard]] inline bool uses_version_3_fields(const SceneNode& node) noexcept {
+    return node.kind == SceneNode::Kind::path || node.path != nullptr;
+}
+
+/// Whether a node sets a field version 4 introduced: the `image` kind or an
+/// image reference on a node of any kind.
+[[nodiscard]] inline bool uses_version_4_fields(const SceneNode& node) noexcept {
+    return node.kind == SceneNode::Kind::image || node.image.has_value();
+}
+
+/// A field, kind or table that a scene's version cannot carry.
+struct SceneVersionMismatch final {
+    /// The node that carries it; the root for a scene-level table.
+    const SceneNode* node = nullptr;
+    /// The version that introduced it, or zero for a kind outside
+    /// `is_known_kind`.
+    std::uint32_t introduced = 0;
+    /// The property that carries it: `kind`, `transform`, `path`, `image`,
+    /// `images`, `clip`, `mask`, `isolate`, `blend_mode`, `fill_token`,
+    /// `color_tokens`, `background_token`, `tokens`, `fill_gradients`,
+    /// `stroke_gradient`, `vector`, `effects` or `tracks`.
+    std::string_view property;
+};
+
+namespace detail {
+
+template <typename Predicate>
+[[nodiscard]] const SceneNode* find_first(const SceneNode& node, Predicate predicate) noexcept {
+    if (predicate(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_first(child, predicate); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
+[[nodiscard]] inline std::optional<SceneVersionMismatch> find_version_field_mismatch(
+    const Scene& scene) noexcept {
+    const auto version = scene.scene_version;
+    if (version < 2U) {
+        if (const auto* found = find_version_2_fields(scene.root)) {
+            return SceneVersionMismatch{found, 2U, "transform"};
+        }
+    }
+    if (version < 3U) {
+        if (const auto* found = find_first(
+                scene.root, [](const SceneNode& node) { return uses_version_3_fields(node); })) {
+            return SceneVersionMismatch{
+                found, 3U, found->kind == SceneNode::Kind::path ? "kind" : "path"};
+        }
+    }
+    if (version < 4U) {
+        if (const auto* found = find_first(
+                scene.root, [](const SceneNode& node) { return uses_version_4_fields(node); })) {
+            return SceneVersionMismatch{
+                found, 4U, found->kind == SceneNode::Kind::image ? "kind" : "image"};
+        }
+        if (!scene.images.empty()) return SceneVersionMismatch{&scene.root, 4U, "images"};
+    }
+    if (version < 5U) {
+        if (const auto* found = find_version_5_fields(scene.root)) {
+            return SceneVersionMismatch{
+                found, 5U, found->clip ? "clip" : found->mask ? "mask" : "isolate"};
+        }
+    }
+    if (version < 6U) {
+        if (const auto* found = find_version_6_fields(scene.root)) {
+            return SceneVersionMismatch{found, 6U, "blend_mode"};
+        }
+    }
+    if (version < 7U) {
+        if (const auto* found = find_version_7_fields(scene.root)) {
+            return SceneVersionMismatch{
+                found, 7U, found->fill_token ? "fill_token" : "color_tokens"};
+        }
+        if (scene.background_token) {
+            return SceneVersionMismatch{&scene.root, 7U, "background_token"};
+        }
+        if (!scene.tokens.empty()) return SceneVersionMismatch{&scene.root, 7U, "tokens"};
+    }
+    if (version < 8U) {
+        if (const auto* found = find_version_8_fields(scene.root)) {
+            const bool stroke =
+                found->stroke_gradient || (found->path && found->path->stroke.gradient);
+            return SceneVersionMismatch{found, 8U, stroke ? "stroke_gradient" : "fill_gradients"};
+        }
+    }
+    if (version < 9U) {
+        if (const auto* found = find_version_9_fields(scene.root)) {
+            return SceneVersionMismatch{found, 9U, "vector"};
+        }
+    }
+    if (version < 10U) {
+        if (const auto* found = find_version_10_fields(scene.root)) {
+            return SceneVersionMismatch{found, 10U, "effects"};
+        }
+    }
+    if (version < 11U) {
+        if (const auto* found = find_version_11_fields(scene.root)) {
+            return SceneVersionMismatch{found, 11U, "tracks"};
+        }
+    }
+    if (version < 12U) {
+        if (const auto* found = find_version_12_kinds(scene.root)) {
+            return SceneVersionMismatch{found, 12U, "kind"};
+        }
+    }
+    return std::nullopt;
+}
+
+}  // namespace detail
+
+/// Whether every field, kind and table the scene uses exists at its version:
+/// a version 1 scene sets no field that `uses_version_2_fields` reports, a
+/// version 1 or 2 scene has no node that `uses_version_3_fields` reports, a
+/// scene before version 4 has no node that `uses_version_4_fields` reports
+/// and no image table, a scene before version 5 sets no field that
+/// `uses_version_5_fields` reports, a scene before version 6 sets no field
+/// that `uses_version_6_fields` reports, and a scene before version 7 has no
+/// token table and no node that `uses_version_7_fields` reports, a scene
+/// before version 8 has no node that `find_version_8_fields` reports, a
+/// scene before version 9 has no node that `uses_version_9_fields` reports, and a
+/// scene before version 10 sets no field that `uses_version_10_fields`
+/// reports.
+[[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
+    return !detail::find_version_field_mismatch(scene).has_value();
+}
+
+/// The first field, kind or table its scene's version cannot carry, oldest
+/// version first and depth-first within a version, after any kind outside
+/// `is_known_kind` or blend mode outside `BlendMode`. Empty when
+/// `scene_fields_match_version` holds and every kind and blend mode is known.
+[[nodiscard]] inline std::optional<SceneVersionMismatch> find_scene_version_mismatch(
+    const Scene& scene) noexcept {
+    if (const auto* unknown = find_unknown_kind(scene.root); unknown != nullptr) {
+        return SceneVersionMismatch{unknown, 0U, "kind"};
+    }
+    if (const auto* unknown = find_unknown_blend_mode(scene.root); unknown != nullptr) {
+        return SceneVersionMismatch{unknown, 0U, "blend_mode"};
+    }
+    return detail::find_version_field_mismatch(scene);
+}
+
+/// The node `find_scene_version_mismatch` reports, or null.
+[[nodiscard]] inline const SceneNode* find_version_mismatch(const Scene& scene) noexcept {
+    const auto found = find_scene_version_mismatch(scene);
+    return found ? found->node : nullptr;
 }
 
 [[nodiscard]] inline const SceneNode* find_node(
