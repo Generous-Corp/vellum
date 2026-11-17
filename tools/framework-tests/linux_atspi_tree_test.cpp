@@ -190,6 +190,47 @@ FRAMEWORK_TEST(exported_tree_has_the_roles_and_nesting_of_the_view_tree) {
     view::shutdown_accessibility(handle);
 }
 
+// Component.Contains answers a boolean, read back with DBus::Reader::read_bool.
+// The slider's window rectangle is (35,75) 200x24, so (40,80) is inside and
+// (500,500) is outside; the two answers differ, so the reader cannot be
+// returning a constant.
+FRAMEWORK_TEST(contains_reads_back_as_a_boolean) {
+    Tree tree;
+    std::string server;
+    void* handle = view::init_accessibility_on_session_bus_for_test(tree.root, &server);
+    CHECK(handle != nullptr);
+    if (!handle)
+        return;
+    WireNode root_node, panel, gain;
+    const bool found = run_client_call(handle, [&] {
+        return read_node(server, kRootPath, root_node) && root_node.child_paths.size() == 3 &&
+               read_node(server, root_node.child_paths[1], panel) && panel.child_paths.size() == 1 &&
+               read_node(server, panel.child_paths[0], gain);
+    });
+    CHECK(found);
+    auto contains = [&](int x, int y, bool& answer) {
+        return run_client_call(handle, [&] {
+            DBus client;
+            if (!client.connect_session())
+                return false;
+            return client.call_method(
+                server, gain.path, kIfaceComponent, "Contains",
+                [&](DBus::Writer& writer) {
+                    writer.append_int32(x);
+                    writer.append_int32(y);
+                    writer.append_uint32(1u);  // window coordinates
+                },
+                [&](DBus::Reader& r) { r.read_bool(answer); });
+        });
+    };
+    bool inside = false, outside = true;
+    CHECK(contains(40, 80, inside));
+    CHECK(contains(500, 500, outside));
+    CHECK(inside);
+    CHECK(!outside);
+    view::shutdown_accessibility(handle);
+}
+
 FRAMEWORK_TEST(control_an_unexported_path_cannot_be_read) {
     Tree tree;
     std::string server;
