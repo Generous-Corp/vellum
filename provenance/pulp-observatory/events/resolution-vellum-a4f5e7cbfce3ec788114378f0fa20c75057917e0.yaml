@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-17T10:14:54Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-a4f5e7cbfce3ec788114378f0fa20c75057917e0",
+  "kind": "resolution",
+  "linked_commits": [
+    "a4f5e7cbfce3ec788114378f0fa20c75057917e0"
+  ],
+  "linked_pull_requests": [
+    "Generous-Corp/vellum#546"
+  ],
+  "owner": "@graphics-lead-gfxtext",
+  "rationale": "Moves Vellum's paragraph shaping and packaged-font fallback into graphics/src/text_paragraph (internal detail:: code, no public header, no schema or API delta, capture-identical to before). git grep -w at Pulp aa630815 finds 0 files for shape_paragraph, find_missing_glyphs, ParagraphRequest, ShapedParagraph and GlyphQuery; the control FontCollection finds 18. No Pulp consumer.",
+  "resolves": "vellum-a4f5e7cbfce3ec788114378f0fa20c75057917e0",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

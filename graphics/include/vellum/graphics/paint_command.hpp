@@ -88,6 +88,12 @@ struct PaintCommand final {
     bool underline = false;
     bool strikethrough = false;
     std::vector<TextRun> text_runs;
+    /// On a `text` command, the node's `SceneNode::text_layout`.
+    std::optional<TextLayout> text_layout;
+    /// On a `text` command, set when a character no packaged face covers is
+    /// drawn as the font's missing-glyph box rather than as `?`; see
+    /// `draws_missing_glyph_box`.
+    bool missing_glyph_box = false;
     /// Mesh geometry, relative to `bounds.x`/`bounds.y`.
     std::shared_ptr<const TriangleMesh> mesh;
     /// Path geometry and stroke, relative to `bounds.x`/`bounds.y`. The fill
