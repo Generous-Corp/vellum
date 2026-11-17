@@ -62,6 +62,16 @@ class CommentPrefixTest(unittest.TestCase):
         self.assertIn('"pulp_motion_ in a string"', out)  # literal untouched
         self.assertIn("int pulp_motion_ = 0;", out)  # code token, not a prefix rule
 
+    def test_reapply_is_idempotent_and_apply_is_not_meant_to_be(self) -> None:
+        once = pr.apply(self.SOURCE, self.MAPPING)
+        self.assertEqual(pr.reapply(once, self.MAPPING), once)
+        self.assertEqual(pr.reapply(self.SOURCE, self.MAPPING), once)
+        # apply() on respelled bytes sees no Pulp names, so a prefix left
+        # behind stays: the reason reapply() exists.
+        half = once.replace("vellum_motion_*", "pulp_motion_*")
+        self.assertIn("pulp_motion_*", pr.apply(half, self.MAPPING))
+        self.assertIn("vellum_motion_*", pr.reapply(half, self.MAPPING))
+
     def test_a_prefix_needs_two_names_present_in_the_file(self) -> None:
         one = '// the pulp_motion_* calls\nextern "C" void pulp_motion_publish() {}\n'
         self.assertIn("pulp_motion_*", pr.apply(one, self.MAPPING))

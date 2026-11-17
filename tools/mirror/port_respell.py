@@ -301,7 +301,10 @@ def apply(text: str, mapping: dict[str, str]) -> str:
     """Respell identifier tokens in code and comments; literals are never changed.
 
     In comments, a shared prefix of two or more respelled names is respelled
-    too (comment_prefixes).
+    too (comment_prefixes). Apply it to Pulp-spelled bytes: the prefix rule
+    counts the names the text still spells the Pulp way, so on a file already
+    respelled it finds none. To bring a file up to a changed table, use
+    reapply().
     """
     if not mapping:
         return text
@@ -322,6 +325,11 @@ def apply(text: str, mapping: dict[str, str]) -> str:
             piece = in_comment.sub(lambda m: {**mapping, **prefixes}[m.group(1)], piece)
         parts.append(piece)
     return "".join(parts)
+
+
+def reapply(text: str, mapping: dict[str, str]) -> str:
+    """apply() for a file that may already be respelled: undo the mapping, then apply it."""
+    return apply(apply(text, {new: old for old, new in mapping.items()}), mapping)
 
 
 def mapping_for(entries: list[dict[str, Any]], path: str, ported: bool) -> dict[str, str]:
