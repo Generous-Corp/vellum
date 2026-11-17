@@ -194,7 +194,7 @@ class NativeBackendTests(unittest.TestCase):
     def test_no_build_refuses_a_build_with_no_recorded_digest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             context, sdk, app = self.built_project(Path(temporary))
-            record = app / "Contents/Resources" / BACKEND_MODULE["SOURCE_DIGEST_NAME"]
+            record = app / "Contents/Resources" / "source-digest.json"
             record.unlink()
             with self.assertRaisesRegex(BackendFailure, "records no source digest") as caught:
                 ensure_app(context, sdk, no_build=True)

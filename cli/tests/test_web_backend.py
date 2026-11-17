@@ -512,6 +512,50 @@ class WebCaptureArtifactTests(unittest.TestCase):
         self.assertEqual(pixel(viewport["width"] // 2, viewport["height"] // 2), (10, 100, 200, 255))
 
 
+class WebNoBuildFreshnessTests(unittest.TestCase):
+    """`--no-build` drives only a build whose recorded source digest matches."""
+
+    def built_project(self, root: Path) -> tuple[dict, Path]:
+        project = root / "application"
+        (project / "src").mkdir(parents=True)
+        (project / "src/main.tsx").write_text("export {};\n", encoding="utf-8")
+        (project / "app.toml").write_text("name = 'x'\n", encoding="utf-8")
+        built = project / ".vellum/build/web"
+        built.mkdir(parents=True)
+        (built / "build-manifest.json").write_text("{}", encoding="utf-8")
+        (built / "vellum_components.json").write_text(json.dumps({
+            "schema": "vellum.web-components.v1", "components": [],
+        }), encoding="utf-8")
+        BACKEND_MODULE["write_source_digest"](built, project)
+        return {"root": project}, built
+
+    def test_a_fresh_build_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, built = self.built_project(Path(temporary))
+            self.assertEqual(
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)["root"],
+                built)
+
+    def test_an_edited_source_without_a_rebuild_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, _ = self.built_project(Path(temporary))
+            (context["root"] / "src/main.tsx").write_text("export const a = 1;\n", encoding="utf-8")
+            with self.assertRaisesRegex(BackendFailure, "stale.*source digest") as caught:
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)
+            self.assertEqual(caught.exception.status, "build_stale")
+
+    def test_a_build_with_no_recorded_digest_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, built = self.built_project(Path(temporary))
+            (built / "source-digest.json").unlink()
+            with self.assertRaisesRegex(BackendFailure, "records no source digest") as caught:
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)
+            self.assertEqual(caught.exception.status, "build_stale")
+            (built / "source-digest.json").write_text("not json", encoding="utf-8")
+            with self.assertRaises(BackendFailure):
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)
+
+
 class WebScenarioEvidenceTests(unittest.TestCase):
     def test_sdk_path_detector_catches_absolute_and_relative_install_names(self) -> None:
         prefix = Path("/private/tmp/vellum-sdk")

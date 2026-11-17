@@ -26,6 +26,7 @@ import time
 from typing import Any, Iterable
 from urllib.parse import quote, unquote_to_bytes
 
+from vellum_build_digest import staleness, write_source_digest
 from vellum_manifest import (
     LOCK_NAME, LOCK_SCHEMA, ManifestError, imported_materialized_design,
     load_app_manifest, load_components_manifest,
@@ -386,6 +387,7 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
             path.read_bytes(), install_prefix,
         ):
             raise BackendFailure(f"Web output leaked an SDK install path: {path.name}", status="non_relocatable_output")
+    write_source_digest(staging, project)
     import hashlib
     files = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
              for path in sorted(staging.iterdir()) if path.is_file()}
@@ -419,6 +421,9 @@ def ensure_build(context: dict[str, Any], sdk: Path, no_build: bool = False) -> 
                 "Built web component manifest is malformed",
                 status="build_missing",
             )
+        problem = staleness(root, context["root"])
+        if problem:
+            raise BackendFailure(problem, status="build_stale")
         return {
             "root": root, "bundle": "app.js",
             "files": sorted(path.name for path in root.iterdir()),
