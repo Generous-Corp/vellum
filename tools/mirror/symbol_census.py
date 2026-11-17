@@ -37,6 +37,7 @@ PULP = re.compile(r"(?<![\w])pulp::")
 VELLUM = re.compile(r"(?<![\w])vellum::")
 # `nm -m`: "<value> (<segment,section>) <attributes> <name>"
 _NM_LINE = re.compile(r"^\s*(?:[0-9a-fA-F]+\s+)?\((?P<section>[^)]*)\)\s+(?P<attrs>.*?)\s*(?P<name>\S+)$")
+_ANNOTATION = re.compile(r"\[[^\]]*\]")
 _OBJC_CLASS = re.compile(r"^[0-9a-f]+\s+0x[0-9a-f]+\s+_OBJC_CLASS_\$_(\S+)$")
 
 Nm = Callable[[Path], str]
@@ -51,7 +52,9 @@ def exported_strong(listing: str) -> set[str]:
         match = _NM_LINE.match(line)
         if not match or match["section"] == "undefined":
             continue
-        if match["attrs"].split() == ["external"]:
+        # `nm -m` may annotate a definition ("[referenced dynamically]",
+        # "[no dead-strip]"); the annotation does not change what it exports.
+        if _ANNOTATION.sub("", match["attrs"]).split() == ["external"]:
             names.add(match["name"])
     return names
 

@@ -145,6 +145,19 @@ class SymbolCensusTest(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             sc.census([good, bad], nm=lambda p: nm[str(p)], otool=lambda p: "", demangle=flaky)
 
+    def test_annotated_strong_duplicate_is_still_a_duplicate(self) -> None:
+        annotated = sym(FN, "external [referenced dynamically]")
+        nm = {"a.dylib": listing(annotated, sym("_a")), "b.dylib": listing(annotated, sym("_b"))}
+        _, findings = run(nm)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("exported by 2 images", findings[0])
+
+    def test_annotated_weak_or_private_copy_is_still_not_a_duplicate(self) -> None:
+        nm = {"a.dylib": listing(sym(FN)),
+              "b.dylib": listing(sym(FN, "weak external [referenced dynamically]")),
+              "c.dylib": listing(sym(FN, "private external [no dead-strip]"))}
+        self.assertEqual(run(nm)[1], [])
+
     def test_same_export_in_two_images_fails(self) -> None:
         _, findings = run({"a.dylib": listing(sym(FN)), "b.dylib": listing(sym(FN))})
         self.assertEqual(len(findings), 1)
