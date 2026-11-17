@@ -356,6 +356,26 @@ class PlatformScopeTest(unittest.TestCase):
         self.assertEqual(fp.parse(json.dumps({"schema": fp.SCHEMA_V1, "rows": [row()]}))[1], [])
         self.assertEqual(fp.parse(ledger([row(platforms=["linux-x64"])]))[1], [])
 
+    def test_the_committed_ledger_reads_the_same_as_v1_and_v2(self) -> None:
+        # The ledger moved from v1 to v2 with its rows unchanged: every
+        # unscoped row reads identically under both schemas, and a scope is
+        # refused only under v1.
+        repo = HERE.parent.parent
+        committed = json.loads((repo / fp.LEDGER).read_text(encoding="utf-8"))
+        self.assertEqual(committed["schema"], fp.SCHEMA)
+        unscoped = [r for r in committed["rows"] if "platforms" not in r and r["change"] != "scoped"]
+        self.assertGreaterEqual(len(unscoped), 29)
+        as_v1 = fp.parse(json.dumps({"schema": fp.SCHEMA_V1, "rows": unscoped}))
+        as_v2 = fp.parse(json.dumps({"schema": fp.SCHEMA, "rows": unscoped}))
+        self.assertEqual(as_v1[1], [])
+        self.assertEqual(as_v1, as_v2)
+        self.assertEqual(as_v2[0], unscoped)
+        # Control: a v1 document carrying a scoped row is refused, so the equality
+        # above is not the parser accepting anything.
+        scoped = [dict(unscoped[0], platforms=["linux-x64"])] if fp.compiled(unscoped[0]["framework_path"]) else \
+            [row(platforms=["linux-x64"])]
+        self.assertTrue(fp.parse(json.dumps({"schema": fp.SCHEMA_V1, "rows": scoped}))[1])
+
     def test_replay_scopes_each_added_source(self) -> None:
         header = row("framework/core/a/include/vellum/a/new.hpp")
         added, _, scopes, errors = fp.replay_scoped([row(), header], set())

@@ -1,5 +1,5 @@
 {
-  "schema": "vellum.framework-ports.v1",
+  "schema": "vellum.framework-ports.v2",
   "rows": [
     {
       "framework_path": "framework/core/platform/include/vellum/platform/alert.hpp",
