@@ -904,6 +904,15 @@ bool digest_covers_fields() {
         {"effects", [&](Command& c) { c.effects = {effect}; }},
         {"plot", [&](Command& c) { c.plot = plot; }},
         {"plot background", [](Command& c) { c.plot_background = true; }},
+        {"text layout", [](Command& c) { c.text_layout = TextLayout{}; }},
+        {"text layout align",
+         [](Command& c) { c.text_layout = TextLayout{.align = TextAlign::center}; }},
+        {"text layout line height",
+         [](Command& c) { c.text_layout = TextLayout{.line_height = 1.5F}; }},
+        {"text layout max lines", [](Command& c) { c.text_layout = TextLayout{.max_lines = 2U}; }},
+        {"text layout ellipsis", [](Command& c) {
+             c.text_layout = TextLayout{.max_lines = 1U, .ellipsis = true};
+         }},
     };
     for (const auto& [name, change] : changes) {
         Command changed = base;
@@ -1308,8 +1317,63 @@ bool plot_lowering() {
                    vellum::graphics::kSceneVersionMismatchCode, "spectrum");
 }
 
+bool text_layout_lowering() {
+    using vellum::graphics::PaintCommand;
+    using vellum::graphics::TextAlign;
+    using vellum::graphics::TextLayout;
+    Scene scene;
+    scene.width = 64.0F;
+    scene.height = 32.0F;
+    scene.root.id = "root";
+    scene.root.children.push_back({
+        .id = "para",
+        .kind = SceneNode::Kind::text,
+        .bounds = {0.0F, 0.0F, 40.0F, 20.0F},
+        .text = "wrapped words",
+        .text_layout = TextLayout{.align = TextAlign::center, .max_lines = 2U},
+    });
+    const auto lowering = vellum::web::lower_for_canvas_shell(scene);
+    const auto reported = std::count_if(
+        lowering.diagnostics.begin(), lowering.diagnostics.end(), [](const auto& diagnostic) {
+            return diagnostic.code == vellum::web::kTextLayoutNotDrawnCode &&
+                   diagnostic.node_id == "para" &&
+                   diagnostic.severity == LoweringDiagnostic::Severity::warning;
+        });
+    if (!lowering.accepted || reported != 1 || lowering.losses != 1) {
+        std::cerr << "laid-out text was not reported as drawn on one line: accepted="
+                  << lowering.accepted << " reported=" << reported
+                  << " losses=" << lowering.losses << '\n';
+        return false;
+    }
+    PaintCommand text{.kind = PaintCommand::Kind::text, .node_id = "t", .text = "a"};
+    PaintCommand boxed = text;
+    boxed.missing_glyph_box = true;
+    if (vellum::web::command_digest({text}) != vellum::web::command_digest({boxed})) {
+        std::cerr << "the shell digest changed with the native missing-glyph policy\n";
+        return false;
+    }
+    auto plain = scene;
+    plain.root.children[0].text_layout.reset();
+    if (!vellum::web::lower_for_canvas_shell(plain).diagnostics.empty() ||
+        vellum::web::lower_for_canvas_shell(plain).losses != 0) {
+        std::cerr << "text without a layout was reported as a loss\n";
+        return false;
+    }
+    auto unbounded = scene;
+    unbounded.root.children[0].text_layout = TextLayout{.ellipsis = true};
+    if (!refused(unbounded,
+                 "the text layout of para cannot be drawn: an ellipsis needs max_lines",
+                 vellum::graphics::kInvalidTextLayoutCode, "para")) {
+        return false;
+    }
+    scene.scene_version = 12U;
+    return refused(scene, "scene version 12 cannot carry the text layout of para",
+                   vellum::graphics::kSceneVersionMismatchCode, "para");
+}
+
 int main() {
     if (!image_refusals()) return 1;
+    if (!text_layout_lowering()) return 1;
     if (!vector_plans()) return 1;
     bool vector_regressions = vector_large_coordinate_geometry_round_trips();
     vector_regressions &= vector_nearly_singular_matrices_round_trip();
