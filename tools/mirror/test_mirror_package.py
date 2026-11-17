@@ -917,6 +917,40 @@ class SourceCompileOptionsTest(unittest.TestCase):
         with self.assertRaises(mp.source_compile_options.SourceOptionsError):
             self.evaluate(text, dict(self.RELEASE, CMAKE_SYSTEM_NAME="Haiku"))
 
+    # The compiler facts Pulp's exporter records (vellum_closure.py
+    # cxx_compiler_options): ids copied from CMakeCXXCompiler.cmake, the
+    # simulate id "" when there is none, and MSVC "1" when either id is MSVC,
+    # else "0". A closure with no compiler file records none of the three.
+    COMPILERS = {
+        "cl": {"CMAKE_CXX_COMPILER_ID": "MSVC", "CMAKE_CXX_SIMULATE_ID": "", "MSVC": "1"},
+        "clang-cl": {"CMAKE_CXX_COMPILER_ID": "Clang", "CMAKE_CXX_SIMULATE_ID": "MSVC", "MSVC": "1"},
+        "clang": {"CMAKE_CXX_COMPILER_ID": "Clang", "CMAKE_CXX_SIMULATE_ID": "", "MSVC": "0"},
+        "gnu": {"CMAKE_CXX_COMPILER_ID": "GNU", "CMAKE_CXX_SIMULATE_ID": "", "MSVC": "0"},
+    }
+    NOT_MSVC = ('if(NOT MSVC)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")\n'
+                'endif()\n')
+
+    def test_a_recorded_compiler_decides_msvc_conditions(self) -> None:
+        windows = dict(self.RELEASE, CMAKE_SYSTEM_NAME="Windows")
+        self.assertEqual(self.evaluate(self.NOT_MSVC, {**windows, **self.COMPILERS["cl"]}), {})
+        self.assertEqual(self.evaluate(self.NOT_MSVC, {**windows, **self.COMPILERS["clang-cl"]}), {})
+        self.assertEqual(self.evaluate(self.NOT_MSVC, {**windows, **self.COMPILERS["clang"]}),
+                         {"core/x/src/a.cpp": ["-fno-rtti"]})
+        # Control: with no compiler recorded, Windows still fails closed.
+        with self.assertRaises(mp.source_compile_options.SourceOptionsError):
+            self.evaluate(self.NOT_MSVC, windows)
+
+    def test_a_recorded_compiler_decides_compiler_id_conditions_off_darwin(self) -> None:
+        text = ('if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")\n'
+                '  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-O1")\nendif()\n')
+        linux = dict(self.RELEASE, CMAKE_SYSTEM_NAME="Linux")
+        self.assertEqual(self.evaluate(text, {**linux, **self.COMPILERS["gnu"]}), {"core/x/src/a.cpp": ["-O1"]})
+        self.assertEqual(self.evaluate(text, {**dict(self.RELEASE, CMAKE_SYSTEM_NAME="Windows"),
+                                              **self.COMPILERS["cl"]}), {})
+        # On Linux MSVC is false whatever the record says, as CMake sets it.
+        self.assertEqual(self.evaluate(self.NOT_MSVC, {**linux, **self.COMPILERS["gnu"]}),
+                         {"core/x/src/a.cpp": ["-fno-rtti"]})
+
     def test_debug_only_option_follows_the_build_type(self) -> None:
         text = ('get_property(_multi GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)\n'
                 'if(NOT _multi AND CMAKE_BUILD_TYPE STREQUAL "Debug" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")\n'
