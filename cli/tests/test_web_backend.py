@@ -526,7 +526,7 @@ class WebNoBuildFreshnessTests(unittest.TestCase):
         (built / "vellum_components.json").write_text(json.dumps({
             "schema": "vellum.web-components.v1", "components": [],
         }), encoding="utf-8")
-        BACKEND_MODULE["write_source_digest"](built, project)
+        BACKEND_MODULE["write_source_digest"](built, BACKEND_MODULE["build_input_digest"](project))
         return {"root": project}, built
 
     def test_a_fresh_build_runs(self) -> None:
@@ -543,6 +543,53 @@ class WebNoBuildFreshnessTests(unittest.TestCase):
             with self.assertRaisesRegex(BackendFailure, "stale.*source digest") as caught:
                 BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)
             self.assertEqual(caught.exception.status, "build_stale")
+
+    def test_an_edited_input_outside_the_watched_directories_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, _ = self.built_project(Path(temporary))
+            helper = context["root"] / "helper.ts"
+            helper.write_text("export const a = 1;\n", encoding="utf-8")
+            BACKEND_MODULE["write_source_digest"](
+                context["root"] / ".vellum/build/web",
+                BACKEND_MODULE["build_input_digest"](context["root"]))
+            helper.write_text("export const a = 2;\n", encoding="utf-8")
+            with self.assertRaisesRegex(BackendFailure, "stale.*source digest") as caught:
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)
+            self.assertEqual(caught.exception.status, "build_stale")
+
+    def test_a_source_edited_during_the_build_is_not_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            context, _ = self.built_project(root)
+            project = context["root"]
+            shutil.rmtree(project / ".vellum")
+            sdk = root / "sdk"
+            (sdk / "web").mkdir(parents=True)
+            for name in ("vellum_web_core.js", "vellum_web_core.wasm", "vellum_host.js",
+                         "text_semantics.js", "style.css", "check_wasm_no_engine.py"):
+                (sdk / "web" / name).write_text("x", encoding="utf-8")
+            (sdk / "web/index.html").write_text("{{APP_NAME}}", encoding="utf-8")
+            context.update({
+                "entry": project / "src/main.tsx", "slug": "x", "components": [],
+                "manifest": {"app": {"name": "x"}},
+            })
+
+            def bundle_while_editing(arguments: list[str], **_kwargs: object) -> object:
+                if len(arguments) == 4 and arguments[-1].endswith("app.js"):
+                    Path(arguments[-1]).write_text("void 0;\n", encoding="utf-8")
+                    Path(arguments[-1] + ".map").write_text("{}", encoding="utf-8")
+                    (project / "src/main.tsx").write_text("export const b = 1;\n", encoding="utf-8")
+                return object()
+
+            with mock.patch.dict(BACKEND_MODULE["build_app"].__globals__, {
+                "validate_web_payload": lambda _sdk: {},
+                "sdk_node": lambda _sdk: Path("node"),
+                "run_checked": bundle_while_editing,
+            }):
+                with self.assertRaises(BackendFailure) as caught:
+                    BACKEND_MODULE["build_app"](context, sdk)
+            self.assertEqual(caught.exception.status, "source_changed")
+            self.assertFalse((project / ".vellum/build/web").exists())
 
     def test_a_build_with_no_recorded_digest_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

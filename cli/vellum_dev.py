@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import queue
 import sys
@@ -74,13 +75,34 @@ def snapshot(root: Path) -> tuple[str, dict[str, str]]:
 
 # The digest a build records and `--no-build` checks it against. Kept here, in
 # a module every install already ships, beside the fingerprint it records.
+# Unlike the watcher's allowlist, it covers every file under the project: both
+# backends accept any project-relative entry and component manifest path, and
+# the bundler follows imports anywhere, so an allowlist would miss inputs.
 SOURCE_DIGEST_NAME = "source-digest.json"
 SOURCE_DIGEST_SCHEMA = "vellum.build-source-digest.v1"
+BUILD_INPUT_EXCLUDED_DIRECTORIES = {".git", ".vellum", "node_modules"}
 
 
-def write_source_digest(directory: Path, project: Path) -> None:
+def build_input_digest(project: Path) -> str:
+    digest = hashlib.sha256()
+    for directory, names, files in os.walk(project):
+        names[:] = sorted(
+            name for name in names if name not in BUILD_INPUT_EXCLUDED_DIRECTORIES
+        )
+        for name in sorted(files):
+            path = Path(directory) / name
+            try:
+                content = path.read_bytes()
+            except OSError:
+                continue
+            digest.update(path.relative_to(project).as_posix().encode("utf-8") + b"\0")
+            digest.update(hashlib.sha256(content).hexdigest().encode("ascii") + b"\n")
+    return digest.hexdigest()
+
+
+def write_source_digest(directory: Path, digest: str) -> None:
     (directory / SOURCE_DIGEST_NAME).write_text(json.dumps({
-        "schema": SOURCE_DIGEST_SCHEMA, "digest": snapshot(project)[0],
+        "schema": SOURCE_DIGEST_SCHEMA, "digest": digest,
     }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -96,7 +118,7 @@ def staleness(directory: Path, project: Path) -> str | None:
     if not valid:
         return ("Build records no source digest, so its freshness cannot be proven; "
                 "run vellum build")
-    current = snapshot(project)[0]
+    current = build_input_digest(project)
     if built != current:
         return (f"Build is stale: it was built from source digest {built[:12]} but the "
                 f"project is now {current[:12]}; run vellum build")
