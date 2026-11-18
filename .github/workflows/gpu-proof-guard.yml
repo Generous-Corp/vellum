@@ -1,0 +1,78 @@
+name: GPU proof guard
+
+# Watches the cheap pull-request lane (gpu-macos.yml): a pull request proves
+# release-source, the build and `ctest -L pr-fast`, and the merge group proves
+# the full GPU proof. Two jobs, both outside the proof: one retry of a proof
+# run that died on infrastructure, and the alarms that say when the lane is
+# letting defects reach the queue. Neither job can satisfy or skip a proof.
+on:
+  workflow_run:
+    workflows:
+      - Locked macOS GPU proof
+    types: [completed]
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  retry-infrastructure-failure:
+    name: retry-infrastructure-failure
+    # One automatic retry, for a pull request or queue run of this repository
+    # whose first attempt failed. The script re-checks every one of these and
+    # re-runs only when each failed job failed on infrastructure.
+    if: >-
+      github.event_name == 'workflow_run'
+      && github.event.workflow_run.conclusion == 'failure'
+      && github.event.workflow_run.run_attempt == 1
+      && (github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'merge_group')
+      && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Check out the guard script without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/gpu_proof_guard.py
+          sparse-checkout-cone-mode: false
+
+      - name: Retry the failed jobs once when they failed on infrastructure
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          python3 -I scripts/gpu_proof_guard.py retry \
+            --repository "$GITHUB_REPOSITORY" --run-id "$RUN_ID"
+
+  alarms:
+    name: alarms
+    # More than one queue ejection a day, any GPU-only failure in the queue or
+    # on main, or more than one in ten queue runs failing, opens (or updates)
+    # one tracking issue and closes it when the alarms clear.
+    if: github.event_name != 'workflow_run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      issues: write
+      contents: read
+    steps:
+      - name: Check out the guard script without credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/gpu_proof_guard.py
+          sparse-checkout-cone-mode: false
+
+      - name: Evaluate the alarms over the last day
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I scripts/gpu_proof_guard.py alarms \
+            --repository "$GITHUB_REPOSITORY" --hours 24 --issue || [ "$?" = 1 ]

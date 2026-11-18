@@ -52,6 +52,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # A pull request must class every test it adds in scripts/ctest_classes.json.
+  # A merge group or main run, where a test added by a sibling PR may not be
+  # listed yet, runs an unlisted test as gpu and warns instead of failing.
+  VELLUM_UNLISTED_TEST_POLICY: ${{ github.event_name == 'pull_request' && 'fail' || 'gpu' }}
+
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('vellum-windows-pr-{0}', github.ref) || format('vellum-windows-run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
