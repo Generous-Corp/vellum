@@ -92,6 +92,29 @@ const SceneNode* find_blended_mask(const SceneNode& node) {
     }
     return nullptr;
 }
+// The first node, in depth-first order, whose text layout cannot be drawn.
+const SceneNode* find_invalid_text_layout(const SceneNode& node, std::string& reason) {
+    if (node.text_layout) {
+        const auto& layout = *node.text_layout;
+        if (node.kind != SceneNode::Kind::text) {
+            reason = "only a text node carries a text layout";
+        } else if (!is_known_text_align(layout.align)) {
+            reason = "its alignment is not one this build knows";
+        } else if (!std::isfinite(layout.line_height) || layout.line_height < 0.0F) {
+            reason = "its line height is negative or not finite";
+        } else if (layout.ellipsis && layout.max_lines == 0U) {
+            reason = "an ellipsis needs max_lines";
+        }
+        if (!reason.empty()) return &node;
+    }
+    for (const auto& child : node.children) {
+        if (const auto* found = find_invalid_text_layout(child, reason); found != nullptr) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
 struct EffectRefusal final {
     std::string node_id;
     std::string_view code;
@@ -99,16 +122,19 @@ struct EffectRefusal final {
 
 std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_node,
                           std::string& vector_node, std::optional<EffectRefusal>& effect,
-                          std::optional<std::string>& plot_node);
+                          std::optional<std::string>& plot_node,
+                          std::optional<std::string>& text_node);
 
 // Why `scene` is refused, or empty. `image_node` is set to the refused
 // image's id, and `image` to true, for an image or image-table refusal;
 // `vector_node` is set for a vector refusal, `token_refusal` for a token
-// refusal, `effect` for an effect refusal and `plot_node` for a plot refusal.
+// refusal, `effect` for an effect refusal, `plot_node` for a plot refusal and
+// `text_node` for a text layout refusal.
 std::string refusal(const Scene& scene, bool& image, std::string& image_node,
                     std::string& vector_node, std::optional<TokenRefusal>& token_refusal,
                     std::optional<EffectRefusal>& effect,
-                    std::optional<std::string>& plot_node) {
+                    std::optional<std::string>& plot_node,
+                    std::optional<std::string>& text_node) {
     if (!scene_version_is_supported(scene.scene_version)) {
         return "scene version " + std::to_string(scene.scene_version) +
                " is not supported by this renderer";
@@ -147,13 +173,14 @@ std::string refusal(const Scene& scene, bool& image, std::string& image_node,
         evaluated.emplace(evaluate_tracks(scene));
     }
     return drawn_refusal(evaluated ? *evaluated : scene, image, image_node, vector_node, effect,
-                         plot_node);
+                         plot_node, text_node);
 }
 
 // Why the scene as drawn, with its tracks evaluated, is refused, or empty.
 std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_node,
                           std::string& vector_node, std::optional<EffectRefusal>& effect,
-                          std::optional<std::string>& plot_node) {
+                          std::optional<std::string>& plot_node,
+                          std::optional<std::string>& text_node) {
     if (const auto* invalid = find_non_finite_compositing(scene.root); invalid != nullptr) {
         return "scene node " + invalid->id +
                " has a non-finite transform, opacity, or corner radius";
@@ -194,6 +221,10 @@ std::string drawn_refusal(const Scene& scene, bool& image, std::string& image_no
         plot_node = plot->id;
         return "plot " + plot->id + " cannot be drawn: " + reason;
     }
+    if (const auto* text = find_invalid_text_layout(scene.root, reason); text != nullptr) {
+        text_node = text->id;
+        return "the text layout of " + text->id + " cannot be drawn: " + reason;
+    }
     return {};
 }
 
@@ -208,7 +239,9 @@ SceneAcceptance accept_scene(const Scene& scene) {
     std::optional<TokenRefusal> token;
     std::optional<EffectRefusal> effect;
     std::optional<std::string> plot_node;
-    result.reason = refusal(scene, image, image_node, vector_node, token, effect, plot_node);
+    std::optional<std::string> text_node;
+    result.reason =
+        refusal(scene, image, image_node, vector_node, token, effect, plot_node, text_node);
     result.accepted = result.reason.empty();
     if (result.accepted) return result;
 
@@ -252,6 +285,16 @@ SceneAcceptance accept_scene(const Scene& scene) {
             .code = std::string(kInvalidPlotCode),
             .node_id = std::move(*plot_node),
             .property = "plot",
+            .message = result.reason,
+        });
+    }
+    if (text_node) {
+        result.diagnostics.push_back({
+            .severity = LoweringDiagnostic::Severity::error,
+            .disposition = LoweringDiagnostic::Disposition::unsupported,
+            .code = std::string(kInvalidTextLayoutCode),
+            .node_id = std::move(*text_node),
+            .property = "text_layout",
             .message = result.reason,
         });
     }

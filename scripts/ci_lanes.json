@@ -287,6 +287,9 @@
         "script": "scripts/test_classify_gpu_proof.py"
       },
       {
+        "script": "scripts/test_gpu_proof_guard.py"
+      },
+      {
         "script": "scripts/test_check_renderer_lock.py",
         "isolated": true
       },
@@ -378,6 +381,10 @@
       {
         "script": "scripts/test_embed_wgsl.py",
         "isolated": true
+      },
+      {
+        "script": "scripts/test_ctest_classes.py",
+        "isolated": true
       }
     ]
   },
@@ -412,6 +419,7 @@
     "tools/provenance/test_verify_pulp_tooling_disposition.py": "workflow:provenance.yml",
     "tools/provenance/test_verify_renderer_dependency.py": "workflow:provenance.yml",
     "tools/provenance/test_verify_renderer_eligibility.py": "workflow:provenance.yml",
+    "tools/tracing/test_check_tracing.py": "cmake:CMakeLists.txt",
     "web/tests/test_browser_process_cleanup.py": "cmake:web/CMakeLists.txt",
     "web/tests/test_browser_proof_wait.py": "cmake:web/CMakeLists.txt",
     "web/tests/test_layout_contract.py": "cmake:web/CMakeLists.txt"
