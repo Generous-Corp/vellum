@@ -207,16 +207,23 @@ vellum_add_framework_test(widget-bridge-param-model
 # click left out).
 set(_vellum_linux_host_sources linux_atspi_tree_test.cpp linux_sdl_window_x11_test.cpp)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET Vellum::MirrorView_core)
-    find_package(X11 REQUIRED COMPONENTS Xtest)
+    find_package(X11 REQUIRED COMPONENTS Xtst)
     vellum_add_framework_test(linux-atspi-tree
         SOURCES linux_atspi_tree_test.cpp
         UNITS Vellum::MirrorView_core)
     vellum_add_framework_test(linux-sdl-window-x11
         SOURCES linux_sdl_window_x11_test.cpp
         UNITS Vellum::MirrorView_core)
-    target_link_libraries(vellum-framework-linux-sdl-window-x11-test PRIVATE X11::X11 X11::Xtest)
+    target_link_libraries(vellum-framework-linux-sdl-window-x11-test PRIVATE X11::X11 X11::Xtst)
     add_test(NAME vellum.framework.linux-sdl-window-x11-control
         COMMAND vellum-framework-linux-sdl-window-x11-test --control)
+    # The AT-SPI test's client call is bounded: a call that never returns ends the
+    # process with a named failure instead of hanging. This control runs such a
+    # call and passes only when the bound fires.
+    add_test(NAME vellum.framework.linux-atspi-tree-hang-control
+        COMMAND vellum-framework-linux-atspi-tree-test --control-hang)
+    set_tests_properties(vellum.framework.linux-atspi-tree-hang-control PROPERTIES
+        PASS_REGULAR_EXPRESSION "bounded client call expired" LABELS "framework;linux-host" TIMEOUT 90)
     foreach(_linux_host_test IN ITEMS linux-atspi-tree linux-sdl-window-x11
             linux-sdl-window-x11-control)
         set_tests_properties(vellum.framework.${_linux_host_test} PROPERTIES

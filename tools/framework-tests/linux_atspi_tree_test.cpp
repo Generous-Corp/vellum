@@ -23,6 +23,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <thread>
@@ -61,8 +63,16 @@ bool run_client_call(void* provider_handle, CallFn&& call_fn) {
         view::accessibility_pump(provider_handle);
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
+    if (!done.load()) {
+        // The call never returned. Joining would hang the run, and the worker
+        // holds references into this frame, so it cannot be detached either:
+        // end the process with a named failure instead.
+        std::fprintf(stderr, "FAIL bounded client call expired: an AT-SPI client call did not return\n");
+        std::fflush(stderr);
+        std::_Exit(3);
+    }
     worker.join();
-    return done.load() && ok.load();
+    return ok.load();
 }
 
 bool read_node(const std::string& server, const std::string& path, WireNode& out) {
@@ -173,7 +183,7 @@ FRAMEWORK_TEST(exported_tree_has_the_roles_and_nesting_of_the_view_tree) {
             return false;
         return client.call_method(
             server, gain.path, kIfaceComponent, "GetExtents",
-            [](DBus::Writer& writer) { writer.append_uint32(0u); },
+            [](DBus::Writer& writer) { writer.append_uint32(1u); },  // window coordinates
             [&](DBus::Reader& r) {
                 DBus::Reader fields;
                 if (r.recurse(fields)) {
@@ -186,6 +196,83 @@ FRAMEWORK_TEST(exported_tree_has_the_roles_and_nesting_of_the_view_tree) {
     });
     CHECK(extents);
     CHECK(x == 35 && y == 75 && w == 200 && h == 24);
+
+    view::shutdown_accessibility(handle);
+}
+
+struct Extents {
+    bool ok = false;
+    int x = 0, y = 0, w = 0, h = 0;
+};
+
+Extents get_extents(void* handle, const std::string& server, const std::string& path,
+                    unsigned coord_type) {
+    Extents out;
+    out.ok = run_client_call(handle, [&] {
+        DBus client;
+        if (!client.connect_session())
+            return false;
+        return client.call_method(
+            server, path, kIfaceComponent, "GetExtents",
+            [&](DBus::Writer& writer) { writer.append_uint32(coord_type); },
+            [&](DBus::Reader& r) {
+                DBus::Reader fields;
+                if (r.recurse(fields)) {
+                    fields.read_int32(out.x);
+                    fields.read_int32(out.y);
+                    fields.read_int32(out.w);
+                    fields.read_int32(out.h);
+                }
+            });
+    });
+    return out;
+}
+
+// The slider's wire path: the root's second child is Panel, whose only child is Gain.
+bool find_gain(void* handle, const std::string& server, std::string& gain_path) {
+    WireNode root_node, panel;
+    return run_client_call(handle, [&] {
+        if (!read_node(server, kRootPath, root_node) || root_node.child_paths.size() != 3)
+            return false;
+        if (!read_node(server, root_node.child_paths[1], panel) || panel.child_paths.size() != 1)
+            return false;
+        gain_path = panel.child_paths[0];
+        return true;
+    });
+}
+
+// A screen request is refused until the host reports where the window sits, and
+// the geometry it reports decides every answer after that.
+FRAMEWORK_TEST(screen_coordinates_need_the_window_origin_and_follow_the_viewport) {
+    Tree tree;
+    std::string server;
+    void* handle = view::init_accessibility_on_session_bus_for_test(tree.root, &server);
+    CHECK(handle != nullptr);
+    if (!handle)
+        return;
+    std::string gain;
+    CHECK(find_gain(handle, server, gain));
+
+    // No origin reported: the screen space is refused; window space still works.
+    CHECK(!get_extents(handle, server, gain, 0u).ok);
+    const Extents window = get_extents(handle, server, gain, 1u);
+    CHECK(window.ok);
+    CHECK(window.x == 35 && window.y == 75 && window.w == 200 && window.h == 24);
+
+    // A window at (100,200) whose root fills it.
+    view::accessibility_set_window_geometry(handle, 100, 200, 1.0f, 0.0f, 0.0f);
+    const Extents screen = get_extents(handle, server, gain, 0u);
+    CHECK(screen.ok);
+    CHECK(screen.x == 135 && screen.y == 275 && screen.w == 200 && screen.h == 24);
+
+    // The same window showing the root at 2x, centred (offset 100,50).
+    view::accessibility_set_window_geometry(handle, 100, 200, 2.0f, 100.0f, 50.0f);
+    const Extents scaled = get_extents(handle, server, gain, 1u);
+    CHECK(scaled.ok);
+    CHECK(scaled.x == 170 && scaled.y == 200 && scaled.w == 400 && scaled.h == 48);
+    const Extents scaled_screen = get_extents(handle, server, gain, 0u);
+    CHECK(scaled_screen.ok);
+    CHECK(scaled_screen.x == 270 && scaled_screen.y == 400);
 
     view::shutdown_accessibility(handle);
 }
@@ -279,7 +366,17 @@ FRAMEWORK_TEST(control_one_more_accessible_widget_adds_one_child) {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc > 1 && std::strcmp(argv[1], "--control-hang") == 0) {
+        // A client call that never returns must end the run with the bounded-call
+        // failure, not hang it. No provider and no bus are needed.
+        run_client_call(nullptr, [] {
+            std::this_thread::sleep_for(std::chrono::seconds(60));
+            return true;
+        });
+        std::printf("the call returned: the bound did not fire\n");
+        return 1;
+    }
     if (!DBus::library_available()) {
         std::printf("SKIP libdbus is not available\n");
         return 77;
