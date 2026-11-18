@@ -111,13 +111,8 @@ message(STATUS "symbol census control: ok")
 # name they define. The Pulp side must define something (the run is blind
 # otherwise), and a planted shared name must fail the same check.
 if(DEFINED VELLUM_PULP_CENSUS_LIBRARIES AND NOT VELLUM_PULP_CENSUS_LIBRARIES STREQUAL "")
-    # The three pulp_ C names are transferred code not yet respelled to vellum_;
-    # drop each from this list when its respell lands.
     set(_pulp_census "${Python3_EXECUTABLE}" "-I" "${VELLUM_SOURCE_DIR}/tools/mirror/symbol_census.py"
         --allow _vellum_mirror_forwarding_anchor
-        --allow _pulp_gpu_runtime_hooks_anchor
-        --allow _pulp_mac_text_input_client_category_anchor
-        --allow _pulp_text_accessibility_lookup_macos
         ${_libraries} ${_installed_libraries}
         --pulp-library ${VELLUM_PULP_CENSUS_LIBRARIES})
     _run("installed dylibs against a Pulp build" ${_pulp_census})
