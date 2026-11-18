@@ -8,6 +8,14 @@ import * as limits from '../src/limits.generated.js';
 
 const schema = JSON.parse(readFileSync(
     fileURLToPath(new URL('../schema/design-ir-v1.schema.json', import.meta.url)), 'utf8'));
+const fixture = JSON.parse(readFileSync(
+    fileURLToPath(new URL('../../../tools/limits/limits.fixture.json', import.meta.url)), 'utf8'));
+
+test('the shared limits header matches the committed limits fixture', () => {
+    const header = parseHeader(readFileSync(
+        fileURLToPath(new URL('../../../graphics/include/vellum/graphics/limits.hpp', import.meta.url)), 'utf8'));
+    assert.deepEqual(Object.fromEntries(header), fixture);
+});
 
 test('the generated limits modules match graphics/include/vellum/graphics/limits.hpp', () => {
     for (const [path, text] of expectedOutputs()) {
