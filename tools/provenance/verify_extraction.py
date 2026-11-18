@@ -1534,7 +1534,7 @@ def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[
         if respell:
             try:
                 data = respeller.apply_bytes(data, respell, row["framework_path"], ported=True)
-            except respeller.RespellError as error:
+            except ValueError as error:  # RespellError, or bytes that are not UTF-8
                 errors.append(f"{where}: Pulp {commit[:12]}:{pulp_path} cannot be respelled: {error}")
                 continue
         through = "the transfer's rename" + (" and the port respell" if data != renamed else "")
@@ -1771,7 +1771,13 @@ def framework_respell_errors(root: Path, table: list[dict], ported: dict[str, st
     undo = {entry["new"]: entry["old"] for entry in table}
     pulp_added = {path for path, row in added.items() if row["origin"] == "pulp"}
     pulp_evidence = set(ported or {})
-    as_pulp = {path: respeller.apply(text, undo) for path, text in current.items()}
+    as_pulp: dict[str, str] = {}
+    for path, text in current.items():
+        try:
+            as_pulp[path] = respeller.apply(text, undo)
+        except ValueError as error:
+            errors.append(f"{FRAMEWORK_RESPELL}: {path} cannot be read with the respell undone: {error}")
+            as_pulp[path] = text
     authoritative_paths = (set(ported) if ported is not None else pulp_added)
     ported_now = {path: as_pulp[path] for path in authoritative_paths if path in as_pulp}
     others = {path: text for path, text in as_pulp.items() if path not in authoritative_paths}
@@ -1798,9 +1804,9 @@ def framework_respell_errors(root: Path, table: list[dict], ported: dict[str, st
                 or (ported is not None and evidence not in pulp_evidence)):
             errors.append(f"{where}: a {kind} entry's evidence is a ported Pulp source, not {evidence}")
         elif ported is not None and evidence in ported:
-            recognised = {"file-macro": respeller.self_defined_macros, "extern-c": respeller.extern_c_definitions,
-                          "opt-in-switch": respeller.opt_in_switches}[kind](ported[evidence])
-            if old not in recognised:
+            recogniser = {"file-macro": respeller.self_defined_macros, "extern-c": respeller.extern_c_definitions,
+                          "opt-in-switch": respeller.opt_in_switches}.get(kind)
+            if recogniser is not None and old not in recogniser(ported[evidence]):
                 errors.append(f"{where}: Pulp's {evidence} does not show {old} as a {kind}")
     # Without Pulp, an entry whose only evidence is a transferred source cannot
     # be re-derived or kind-checked; the transfer record names the file, and the
@@ -1820,7 +1826,11 @@ def framework_respell_errors(root: Path, table: list[dict], ported: dict[str, st
     errors += respeller.consistency_errors(table, current)
     if any(entry["kind"] == "opt-in-switch" for entry in table):
         errors += respeller.switch_errors(table, current, macros, framework_respell_repo_texts(root))
-    derived = respeller.derive(ported_now, others, macros, exports, as_pulp)
+    try:
+        derived = respeller.derive(ported_now, others, macros, exports, as_pulp)
+    except ValueError as error:
+        errors.append(f"{FRAMEWORK_RESPELL}: the table cannot be derived from the bytes: {error}")
+        derived = []
 
     def key(entry: dict) -> tuple:
         return entry["old"], entry["kind"], entry["evidence"]

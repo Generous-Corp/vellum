@@ -475,6 +475,11 @@ def derive(ported: dict[str, str], transferred: dict[str, str], closure_macros: 
     for text in [*current.values(), *transferred.values(), *ported.values()]:
         defined_anywhere |= {"PULP_" + name[len("VELLUM_"):] if name.startswith("VELLUM_") else name
                              for name in ANY_DEFINE.findall(blanked(text))}
+    # (b) a link export is respelled in every framework/ file, so any source that spells one shows it.
+    for path, text in sorted({**transferred, **ported}.items()):
+        for name in sorted(pulp_tokens(text) & link_exports):
+            if name not in defined_c:
+                add(name, "link-export", None)
     for path, text in sorted(ported.items()):
         used = pulp_tokens(text)
         for name in sorted(used):

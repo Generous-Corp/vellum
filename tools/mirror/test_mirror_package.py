@@ -1593,6 +1593,13 @@ class RespellAliasPlanTest(unittest.TestCase):
             with self.assertRaisesRegex(mp.PlanError, "different respell alias definitions"):
                 mp.shared_alias_conflicts(rows, executables)
 
+    def test_an_unreadable_ported_source_is_a_plan_error_not_a_crash(self) -> None:
+        self.fixture.write(self.NEW, b"int a; // \xff\xfe\n")
+        self.fixture.write_ledger([self.fixture.row(self.NEW, target="pulp-runtime")])
+        self.fixture.write(mp.port_respell.TABLE, mp.port_respell.render([self.alias("PULP_FLAG")]).encode())
+        with self.assertRaisesRegex(mp.PlanError, "cannot read the ported source"):
+            self.fixture.plan()
+
     def test_a_malformed_table_is_refused(self) -> None:
         self.fixture.write(mp.port_respell.TABLE, b"[]")
         with self.assertRaises(mp.PlanError) as caught:

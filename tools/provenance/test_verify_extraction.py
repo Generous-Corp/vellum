@@ -1143,14 +1143,16 @@ class VerifyExtractionTests(unittest.TestCase):
         new = ("VELLUM_" + old[5:]) if old.startswith("PULP_") else ("vellum_" + old[5:])
         return {"old": old, "new": new, "kind": kind, "evidence": evidence}
 
-    def write_closures(self, root: Path, definitions: list[str]) -> None:
+    def write_closures(self, root: Path, definitions: list[str], link_exports: list[str] | None = None) -> None:
         """Give the fixture's transfer an export receipt whose one closure defines these macros."""
         record = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
         record.write_text(json.dumps(dict(json.loads(record.read_text(encoding="utf-8")),
                                           export_receipt="provenance/mirror/receipts/r.json")), encoding="utf-8")
         closure = root / "provenance/mirror/closures/r/a.json"
         closure.parent.mkdir(parents=True, exist_ok=True)
-        closure.write_text(json.dumps({"compile_definitions": definitions, "targets": []}), encoding="utf-8")
+        closure.write_text(json.dumps({"compile_definitions": definitions, "targets": [],
+                                       "link_exports": [{"name": name} for name in link_exports or []]}),
+                           encoding="utf-8")
         receipt = root / "provenance/mirror/receipts/r.json"
         receipt.parent.mkdir(parents=True, exist_ok=True)
         receipt.write_text(json.dumps({"units": [{"closure_manifest": "provenance/mirror/closures/r/a.json"}]}),
@@ -1295,6 +1297,57 @@ class VerifyExtractionTests(unittest.TestCase):
                             nested.append(f"{path.name}:{node.lineno}")
         self.assertGreater(checked, 10)  # control: the scan read the scripts
         self.assertEqual(nested, [])
+
+    # Each kind, evidenced by a transferred file: the table the bytes imply passes with and without Pulp.
+    KIND_CASES = {
+        "closure-macro": (b"#if VELLUM_RT\nint a;\n#endif\nint t;\n", "#if PULP_RT\nint a;\n#endif\nint t;\n",
+                          ("PULP_RT", None)),
+        "link-export": (b'int x = vellum_exp(1);\n', "int x = pulp_exp(1);\n", ("pulp_exp", None)),
+        "file-macro": (b"#define VELLUM_TAG 1\nint t = VELLUM_TAG;\n", "#define PULP_TAG 1\nint t = PULP_TAG;\n",
+                       ("PULP_TAG", "framework/core/a/src/t.cpp")),
+        "extern-c": (b'extern "C" void vellum_anchor() {}\n', 'extern "C" void pulp_anchor() {}\n',
+                     ("pulp_anchor", "framework/core/a/src/t.cpp")),
+        "opt-in-switch": (b"#ifdef VELLUM_SW\nint s;\n#endif\n", "#ifdef PULP_SW\nint s;\n#endif\n",
+                          ("PULP_SW", "framework/core/a/src/t.cpp")),
+    }
+
+    def test_every_respell_kind_is_derived_or_deferred_with_and_without_pulp(self) -> None:
+        self.hide_ci_git_base()
+        path = "framework/core/a/src/t.cpp"
+        for kind, (current, pulp_bytes, (old, evidence)) in self.KIND_CASES.items():
+            for with_pulp in (False, True):
+                with self.subTest(kind=kind, with_pulp=with_pulp), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    self.framework_fixture(root, {path: current})
+                    self.write_closures(root, ["PULP_RT=1"], ["pulp_exp"])
+                    entry = self.respell_entry(old, kind, evidence)
+                    ported = {path: pulp_bytes} if with_pulp else None
+                    errors, _ = verify_extraction.framework_respell_errors(root, [entry], ported, {})
+                    self.assertEqual(errors, [])
+                    # Control: the same kind with the name absent from every byte is refused in both modes.
+                    self.framework_fixture(root, {path: b"int nothing;\n"})
+                    errors, _ = verify_extraction.framework_respell_errors(
+                        root, [entry], {path: "int nothing;\n"} if with_pulp else None, {})
+                    self.assertTrue(errors, (kind, with_pulp))
+
+    def test_a_malformed_or_mixed_file_is_a_recorded_error_not_a_crash(self) -> None:
+        self.hide_ci_git_base()
+        path = "framework/core/a/src/t.cpp"
+        entry = self.respell_entry("pulp_anchor", "extern-c", path)
+        for label, body in (("mixed", b'extern "C" void vellum_anchor() {}\nvoid g() { pulp_anchor(); }\n'),
+                            ("not utf-8", b'extern "C" void vellum_anchor() {}\n// \xff\xfe\n'),
+                            ("unterminated", b'extern "C" void vellum_anchor() {}\n/* "\n')):
+            for with_pulp in (False, True):
+                with self.subTest(label=label, with_pulp=with_pulp), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    self.framework_fixture(root, {path: body})
+                    self.write_closures(root, [])
+                    ported = {path: body.decode("utf-8", errors="replace").replace("vellum_", "pulp_")} \
+                        if with_pulp else None
+                    errors, _ = verify_extraction.framework_respell_errors(root, [entry], ported, {})
+                    self.assertIsInstance(errors, list)
+                    if label == "mixed":
+                        self.assertTrue(any("still spells pulp_anchor" in e for e in errors), errors)
 
     def test_a_transferred_respell_entry_uses_authoritative_pulp_bytes(self) -> None:
         self.hide_ci_git_base()

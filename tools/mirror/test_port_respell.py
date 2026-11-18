@@ -263,5 +263,17 @@ class TableTest(unittest.TestCase):
         self.assertEqual(self.errors([m1, m2]), [])
 
 
+class LinkExportDerivationTest(unittest.TestCase):
+    def test_a_link_export_in_a_transferred_source_is_derived_without_a_ported_one(self) -> None:
+        derived = pr.derive({}, {"framework/a.cpp": "int x = pulp_exp(1);\n"}, set(), {"pulp_exp"}, {})
+        self.assertEqual(derived, [entry("pulp_exp", "link-export")])
+        # Control: a name the closures do not list is not derived.
+        self.assertEqual(pr.derive({}, {"framework/a.cpp": "int x = pulp_exp(1);\n"}, set(), set(), {}), [])
+
+    def test_non_utf8_bytes_are_a_value_error_the_verifier_records(self) -> None:
+        with self.assertRaises(ValueError):
+            pr.apply_bytes(b"\xff", [entry("PULP_A", "closure-macro")], "framework/a.cpp", ported=True)
+
+
 if __name__ == "__main__":
     unittest.main()

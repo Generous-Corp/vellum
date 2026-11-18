@@ -342,7 +342,10 @@ def alias_definitions(repo: Path, paths: list[str], definitions: list[str],
     for path in paths:
         if not port_respell.respells(path):
             continue
-        used = port_respell.tokens((repo / path).read_text(encoding="utf-8"), keep_comments=False)
+        try:
+            used = port_respell.tokens((repo / path).read_text(encoding="utf-8"), keep_comments=False)
+        except (OSError, UnicodeDecodeError) as exc:
+            raise PlanError(f"{path}: cannot read the ported source for its respell aliases: {exc}") from exc
         added = []
         for entry in aliases:
             if entry["new"] in used and entry["old"] in by_name:
