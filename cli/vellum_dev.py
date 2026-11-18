@@ -81,13 +81,25 @@ def snapshot(root: Path) -> tuple[str, dict[str, str]]:
 SOURCE_DIGEST_NAME = "source-digest.json"
 SOURCE_DIGEST_SCHEMA = "vellum.build-source-digest.v1"
 BUILD_INPUT_EXCLUDED_DIRECTORIES = {".git", ".vellum", "node_modules"}
+# Directories the CLI itself writes into the project (`package` defaults to
+# dist, a second package to e.g. dist-b; `capture` to artifacts). They are
+# outputs, not inputs: hashing them made the digest move after every package
+# or capture, which broke reproducible packaging and flagged fresh builds stale.
+BUILD_OUTPUT_DIRECTORIES = {"dist", "artifacts"}
+BUILD_OUTPUT_DIRECTORY_PREFIXES = ("dist-", "dist_")
+
+
+def is_build_output_directory(name: str) -> bool:
+    return name in BUILD_OUTPUT_DIRECTORIES or name.startswith(BUILD_OUTPUT_DIRECTORY_PREFIXES)
 
 
 def build_input_digest(project: Path) -> str:
     digest = hashlib.sha256()
     for directory, names, files in os.walk(project):
         names[:] = sorted(
-            name for name in names if name not in BUILD_INPUT_EXCLUDED_DIRECTORIES
+            name for name in names
+            if name not in BUILD_INPUT_EXCLUDED_DIRECTORIES
+            and not is_build_output_directory(name)
         )
         for name in sorted(files):
             path = Path(directory) / name

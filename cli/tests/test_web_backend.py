@@ -529,6 +529,19 @@ class WebNoBuildFreshnessTests(unittest.TestCase):
         BACKEND_MODULE["write_source_digest"](built, BACKEND_MODULE["build_input_digest"](project))
         return {"root": project}, built
 
+    def test_package_and_capture_outputs_do_not_move_the_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, built = self.built_project(Path(temporary))
+            project = context["root"]
+            before = BACKEND_MODULE["build_input_digest"](project)
+            for name in ("dist-a", "dist-b", "dist", "artifacts"):
+                (project / name).mkdir()
+                (project / name / "out.bin").write_bytes(b"x")
+            self.assertEqual(BACKEND_MODULE["build_input_digest"](project), before)
+            self.assertEqual(
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)["root"],
+                built)
+
     def test_a_fresh_build_runs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             context, built = self.built_project(Path(temporary))
