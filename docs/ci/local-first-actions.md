@@ -131,6 +131,22 @@ required context, which would read as passing.
 To roll back, delete `VELLUM_GPU_PREDECIDE` or set it to anything but `on`.
 `decide` is then skipped and `gpu-macos-arm64` starts at once on the fleet
 selector, as before.
+`VELLUM_LOCAL_MACOS_STERILE_RUNS_ON_JSON` is optional and applies to
+`sterile-consumer` only, and only while `VELLUM_LOCAL_MACOS_RUNS_ON_JSON` is
+set. When the proof was built (not reused, uncovered or the cheap lane), the
+journey then selects it for every event, so a VM booted for the journey can
+take only a journey and never another run's proof. TartCI's Vellum lanes serve
+this class ahead of both proof classes; the journey runs about 1.4 minutes.
+All events share this one class, so a `main` or tag journey can queue
+ahead of a merge-group journey; the proof job keeps its own selection, so a
+push re-proof still never queues ahead of a merge-queue proof.
+The only reviewed value is
+`["self-hosted","macOS","ARM64","vellum-sterile-consumer"]`. Set it only once
+the TartCI release that adds the tier is deployed on every fleet host: a label
+no lane serves queues forever. Unset it to roll back; the journey then selects
+exactly what the proof job selects. The job name, its `needs`, its steps and
+its artifact do not change, so `sdk-release.yml`, `authority-release.yml` and
+`release-tag.yml` read the same `sterile-consumer` result.
 
 `VELLUM_MACOS_RUNS_ON_JSON` remains the hosted selector used by
 `readme-quick-start.yml` and the hosted portion of `sdk-release.yml`; it is not
