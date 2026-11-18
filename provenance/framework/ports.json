@@ -708,9 +708,12 @@
       "origin": "pulp",
       "pulp_path": "core/view/platform/win/drag_drop_win.cpp",
       "pulp_commits": [
-        "6a45501dc407644b34033c2d1ae691034233d6e2"
+        "6a45501dc407644b34033c2d1ae691034233d6e2",
+        "be915a27ae295db0591ffd3436ffa69d1fe9063a",
+        "a47436537a3c9ce4beecbbfe24aac3f19387a7c2",
+        "4d7d71c052bdc6646a72c9afb68c0908ab173990"
       ],
-      "framework_blob": "80e21886d408bd4ec9db218a77adbe2b55dbba60",
+      "framework_blob": "66e93e1ac82e65bb9d172f379896fae34d72357a",
       "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility.",
       "platforms": [
         "windows-x64",
@@ -788,14 +791,44 @@
       "origin": "pulp",
       "pulp_path": "core/platform/platform/win/child_process_win.cpp",
       "pulp_commits": [
-        "32f8c737701a9f4e18ed2752e19b5289c6c64251"
+        "32f8c737701a9f4e18ed2752e19b5289c6c64251",
+        "ff2df2782e7685e25228bb10627b8880f05912df",
+        "be915a27ae295db0591ffd3436ffa69d1fe9063a",
+        "a47436537a3c9ce4beecbbfe24aac3f19387a7c2"
       ],
-      "framework_blob": "b1796dba42ac6af20d2c85b76bfa00c1241cc8d8",
+      "framework_blob": "afd713de1380e10270f1f1b0eeee5ba76d38b89d",
       "reason": "Windows host files for the platform and events layers.",
       "platforms": [
         "windows-x64",
         "windows-arm64"
       ]
+    },
+    {
+      "framework_path": "framework/core/platform/include/vellum/platform/win/text_convert.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/platform/include/pulp/platform/win/text_convert.hpp",
+      "pulp_commits": [
+        "be915a27ae295db0591ffd3436ffa69d1fe9063a",
+        "a47436537a3c9ce4beecbbfe24aac3f19387a7c2"
+      ],
+      "framework_blob": "79fe73ec206043b04b37af9514b0bce37d6ef2f4",
+      "reason": "Windows host files for the platform and events layers."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/win/duplex_channel_win.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/win/duplex_channel_win.hpp",
+      "pulp_commits": [
+        "ff2df2782e7685e25228bb10627b8880f05912df",
+        "c1f3799a7e1c53a0ac98327a59990197dbe5db08",
+        "be915a27ae295db0591ffd3436ffa69d1fe9063a"
+      ],
+      "framework_blob": "fcdf5bdb4f959ed813878a98c779c860098467a3",
+      "reason": "Windows host files for the platform and events layers."
     },
     {
       "framework_path": "framework/core/platform/platform/win/clipboard_win.cpp",
@@ -836,9 +869,11 @@
       "origin": "pulp",
       "pulp_path": "core/platform/platform/win/file_dialog_win.cpp",
       "pulp_commits": [
-        "198c5affe531501a3542d94dd1d4c45f06ee6536"
+        "198c5affe531501a3542d94dd1d4c45f06ee6536",
+        "be915a27ae295db0591ffd3436ffa69d1fe9063a",
+        "a47436537a3c9ce4beecbbfe24aac3f19387a7c2"
       ],
-      "framework_blob": "30762676d20334b656c9b3709e873e42e3599d5b",
+      "framework_blob": "d9ec5764eba1ce1969b298c4017c116e628cbcd9",
       "reason": "Windows host files for the platform and events layers.",
       "platforms": [
         "windows-x64",
