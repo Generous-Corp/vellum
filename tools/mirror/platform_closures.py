@@ -88,7 +88,8 @@ def platform_of(system: str, processor: str, apple_sdk: str = "") -> str:
     matches = [key for key, identity in IDENTITIES.items() if identity == (system, processor)
                and not key.startswith("ios-")]
     if len(matches) != 1:
-        raise RecordError(f"no platform key for {system} {processor}")
+        raise RecordError(f"no platform key for {system} {processor}: the mirror builds only macOS "
+                          "and the platforms with a verified closure record")
     return matches[0]
 
 
@@ -135,6 +136,51 @@ def _check_options_platform(at: str, key: str, options: dict[str, Any]) -> None:
         if not sdk or simulator != (key == "ios-simulator-arm64"):
             raise RecordError(f"{at}: CMAKE_OSX_SYSROOT {options.get('CMAKE_OSX_SYSROOT')!r} "
                               f"is not the {key} SDK")
+
+
+def _strings(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _rows(value: Any) -> bool:
+    """A list of objects, each with a string path when it names one."""
+    return isinstance(value, list) and all(
+        isinstance(row, dict) and isinstance(row.get("path", ""), str) for row in value)
+
+
+# The graph fields the mirror planner reads from a closure, and the shape each must have.
+CLOSURE_LISTS = {"external_inputs": (_rows, "a list of objects with string paths"),
+                 "generated_inputs": (_rows, "a list of objects with string paths"),
+                 "compile_definitions": (_strings, "a list of strings")}
+TARGET_LISTS = {"sources": _strings, "include_dirs": _strings, "link_targets": _strings,
+                "compile_definitions": _strings}
+
+
+def _check_graph_shape(at: str, closure: dict[str, Any]) -> None:
+    """Every graph field the planner reads has the shape it reads it as, so a
+    malformed manifest fails here rather than deep inside planning."""
+    for field, (check, shape) in CLOSURE_LISTS.items():
+        if field in closure and not check(closure[field]):
+            raise RecordError(f"{at}: {field} must be {shape}")
+    targets = closure.get("targets", [])
+    if not isinstance(targets, list):
+        raise RecordError(f"{at}: targets must be a list")
+    names: set[str] = set()
+    for position, target in enumerate(targets):
+        if not isinstance(target, dict):
+            raise RecordError(f"{at}: targets[{position}] is not an object")
+        name = target.get("name")
+        if not isinstance(name, str) or not name or name in names:
+            raise RecordError(f"{at}: targets[{position}] name {name!r} is missing, malformed or repeated")
+        names.add(name)
+        if not isinstance(target.get("type"), str):
+            raise RecordError(f"{at}: {name} type must be a string")
+        for field, check in TARGET_LISTS.items():
+            if field in target and not check(target[field]):
+                raise RecordError(f"{at}: {name} {field} must be a list of strings")
+        rows = target.get("external_link_inputs", [])
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            raise RecordError(f"{at}: {name} external_link_inputs must be a list of objects")
 
 
 def load_record(repo: Path, key: str) -> tuple[dict[str, Any], list[tuple[str, dict[str, Any]]]]:
@@ -219,16 +265,9 @@ def load_record(repo: Path, key: str) -> tuple[dict[str, Any], list[tuple[str, d
         if not isinstance(options, dict) or options_sha256(options) != configure["options_sha256"]:
             raise RecordError(f"{at}: {manifest}'s configure options do not match the record's digest")
         _check_options_platform(at, key, options)
-        targets = closure.get("targets", [])
-        if not isinstance(targets, list):
-            raise RecordError(f"{at}: {manifest} targets must be a list")
-        for target in targets:
-            if not isinstance(target, dict):
-                raise RecordError(f"{at}: {manifest} has a target that is not an object")
-            rows = target.get("external_link_inputs", [])
-            if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
-                raise RecordError(f"{at}: {target.get('name')} external_link_inputs must be a list of objects")
-            for row in rows:
+        _check_graph_shape(f"{at}: {manifest}", closure)
+        for target in closure.get("targets", []):
+            for row in target.get("external_link_inputs", []):
                 if row.get("dependency") == "skia" and row.get("asset_sha256") != asset["sha256"]:
                     raise RecordError(f"{at}: {target.get('name')} links skia asset {row.get('asset_sha256')}, "
                                       f"not the record's {asset['sha256']}")

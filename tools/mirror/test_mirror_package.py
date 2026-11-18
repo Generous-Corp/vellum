@@ -8,9 +8,11 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -1762,6 +1764,47 @@ class PlatformRecordPlanTest(unittest.TestCase):
                     self.plan("linux-x64")
                 self.assertTrue(mp.platform_closures.errors(self.fixture.repo))
 
+    def test_malformed_graph_fields_are_record_errors_before_planning(self) -> None:
+        def target(**fields):
+            return lambda c: c["targets"][0].update(fields)
+
+        def drop_name(c):
+            del c["targets"][0]["name"]
+
+        for name, mutate, fragment in (
+            ("name missing", drop_name, "name None is missing"),
+            ("name not a string", target(name=5), "name 5 is missing"),
+            ("name repeated", lambda c: c["targets"].append(dict(c["targets"][0])), "is missing, malformed or repeated"),
+            ("type not a string", target(type=["STATIC_LIBRARY"]), "type must be a string"),
+            ("sources a string", target(sources="a.cpp"), "sources must be a list of strings"),
+            ("sources hold a non-string", target(sources=[1]), "sources must be a list of strings"),
+            ("link_targets an object", target(link_targets={"a": 1}), "link_targets must be a list of strings"),
+            ("include_dirs hold a list", target(include_dirs=[["x"]]), "include_dirs must be a list of strings"),
+            ("compile_definitions a string", target(compile_definitions="X=1"),
+             "compile_definitions must be a list of strings"),
+            ("external_inputs an object", lambda c: c.update(external_inputs={"a": 1}),
+             "external_inputs must be a list of objects"),
+            ("external_inputs row a string", lambda c: c.update(external_inputs=["x"]),
+             "external_inputs must be a list of objects"),
+            ("external_inputs path an object", lambda c: c.update(external_inputs=[{"path": {"a": 1}}]),
+             "external_inputs must be a list of objects"),
+            ("generated_inputs path a list", lambda c: c.update(generated_inputs=[{"path": ["x"]}]),
+             "generated_inputs must be a list of objects"),
+        ):
+            with self.subTest(name):
+                self.rewrite_closure(mutate)
+                with self.assertRaises(mp.platform_closures.RecordError) as caught:
+                    mp.platform_closures.load_record(self.fixture.repo, "linux-x64")
+                self.assertIn(fragment, str(caught.exception))
+                with self.assertRaises(mp.PlanError) as planned:
+                    self.plan("linux-x64")
+                self.assertIn(fragment, str(planned.exception))
+                self.assertTrue(any(fragment in e for e in mp.platform_closures.errors(self.fixture.repo)))
+        # Control: the well-formed closure loads and plans.
+        self.write_record()
+        mp.platform_closures.load_record(self.fixture.repo, "linux-x64")
+        self.plan("linux-x64")
+
     def test_a_platform_without_a_record_is_refused_before_any_other_work(self) -> None:
         # framework/ is broken too; the missing record is still what is reported.
         self.fixture.write("framework/core/runtime/src/stray.cpp", b"int stray;\n")
@@ -1794,6 +1837,40 @@ class PlatformRecordPlanTest(unittest.TestCase):
         self.assertEqual(pc.platform_of("iOS", "arm64", "/x/iPhoneOS.sdk"), "ios-device-arm64")
         with self.assertRaises(pc.RecordError):
             pc.platform_of("Haiku", "x86_64")
+        for system in ("tvOS", "visionOS", "watchOS"):
+            with self.subTest(system=system), self.assertRaises(pc.RecordError) as caught:
+                pc.platform_of(system, "arm64", "/x/Some.sdk")
+            self.assertIn("verified closure record", str(caught.exception))
+
+    @unittest.skipUnless(shutil.which("cmake"), "no cmake")
+    def test_only_macos_configures_plan_from_the_receipt(self) -> None:
+        """VellumMirrorPlatform.cmake sends only Darwin to the receipt's macOS closures."""
+        def platform_args(system: str, processor: str = "arm64", sysroot: str = "") -> list[str]:
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td) / "args.txt"
+                script = Path(td) / "probe.cmake"
+                module = Path(mp.__file__).resolve().parent / "VellumMirrorPlatform.cmake"
+                script.write_text(textwrap.dedent(f"""\
+                    include("{module.as_posix()}")
+                    vellum_mirror_platform_args(args)
+                    file(WRITE "{out.as_posix()}" "${{args}}")
+                    """), encoding="utf-8")
+                subprocess.run(["cmake", "-DAPPLE=1", f"-DCMAKE_SYSTEM_NAME={system}",
+                                f"-DCMAKE_SYSTEM_PROCESSOR={processor}", f"-DCMAKE_OSX_SYSROOT={sysroot}",
+                                "-P", str(script)], check=True, capture_output=True)
+                return out.read_text(encoding="utf-8").split(";")
+
+        self.assertEqual(platform_args("Darwin"), ["--platform", "macos-arm64"])
+        self.assertEqual(platform_args("iOS", sysroot="iphonesimulator"),
+                         ["--system", "iOS", "--processor", "arm64", "--apple-sdk", "iphonesimulator"])
+        for system in ("tvOS", "visionOS", "watchOS"):
+            with self.subTest(system=system):
+                args = platform_args(system, sysroot="appletvos")
+                self.assertEqual(args[:2], ["--system", system])
+                # The configure reaches the record path, which refuses a system with no record.
+                self.assertEqual(mp.main(["--repo", "/nonexistent", "--deps-dir", "/nonexistent",
+                                          "--generated-dir", "/nonexistent", "--cmake-output", "/nonexistent",
+                                          *args]), 1)
 
 
 def render_snapshot_in(fixture: "TransferredFixture", module) -> dict:

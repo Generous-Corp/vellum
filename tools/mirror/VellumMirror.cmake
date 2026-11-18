@@ -13,25 +13,22 @@
 # mirrored implementation objects and pinned Skia/Dawn definitions.
 
 # macOS plans from the export receipt's Darwin arm64 closures. Every other
-# platform plans from its own closure record (tools/mirror/platform_closures.py)
-# and its renderer lock entry; mirror_package.py refuses a platform without a
-# verified record, so a platform is enabled only by landing one.
-if(APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
-    set(_vellum_mirror_platform_args --platform macos-arm64)
+# platform, the other Apple systems included, plans from its own closure record
+# (tools/mirror/platform_closures.py) and its renderer lock entry;
+# mirror_package.py refuses a platform without a verified record, so a platform
+# is enabled only by landing one.
+include("${CMAKE_CURRENT_LIST_DIR}/VellumMirrorPlatform.cmake")
+vellum_mirror_platform_args(_vellum_mirror_platform_args)
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     if(NOT VELLUM_HAS_SKIA_DAWN)
         message(FATAL_ERROR
             "Vellum: the landed mirror was exported from the Darwin arm64 Skia/Dawn "
             "configuration; VELLUM_ENABLE_MIRROR needs the locked Skia/Dawn archive")
     endif()
-else()
-    set(_vellum_mirror_platform_args
-        --system "${CMAKE_SYSTEM_NAME}" --processor "${CMAKE_SYSTEM_PROCESSOR}"
-        --apple-sdk "${CMAKE_OSX_SYSROOT}")
-    if(NOT VELLUM_HAS_SKIA_DAWN)
-        message(FATAL_ERROR
-            "Vellum: VELLUM_ENABLE_MIRROR on ${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_PROCESSOR} needs a "
-            "verified platform closure record and a renderer lock entry for this platform")
-    endif()
+elseif(NOT VELLUM_HAS_SKIA_DAWN)
+    message(FATAL_ERROR
+        "Vellum: VELLUM_ENABLE_MIRROR on ${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_PROCESSOR} needs a "
+        "verified platform closure record and a renderer lock entry for this platform")
 endif()
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     message(FATAL_ERROR
