@@ -5,21 +5,6 @@ import {
     registerEffect,
     scheduleCommittedEffects,
 } from './effects.js';
-import {
-    MAX_FLOAT32,
-    MAX_DESIGN_TOKENS as MAXIMUM_TOKENS,
-    MAX_PATH_DASHES as MAXIMUM_PATH_DASHES,
-    MAX_PATH_DATA_BYTES as MAXIMUM_PATH_DATA_LENGTH,
-    MAX_PLOT_AUDIO_CHANNEL as MAXIMUM_PLOT_AUDIO_CHANNEL,
-    MAX_PLOT_SLOTS as MAXIMUM_PLOT_SLOTS,
-    MAX_PLOT_STROKE as MAXIMUM_PLOT_STROKE,
-    MAX_GRADIENT_STOPS,
-    MAX_SOURCE_ANCHOR_BYTES,
-    MAX_SOURCE_FILE_BYTES,
-    MAX_TEXT_INPUT_BYTES as MAXIMUM_TEXT_INPUT_LENGTH,
-    MAX_VECTOR_GROUP_DEPTH as MAXIMUM_VECTOR_GROUP_DEPTH,
-    MAX_VECTOR_OPS as MAXIMUM_VECTOR_OPS,
-} from './limits.generated.js';
 
 const ELEMENT = Symbol.for('vellum.element');
 const FRAGMENT = Symbol.for('vellum.fragment');
@@ -27,12 +12,22 @@ const PROTOCOL = 'vellum.authoring-host.v1';
 const ASYNC_HOST_PROTOCOL = 'vellum.authoring-host.v2';
 const SNAPSHOT_SCHEMA = 'vellum.authoring-state.v1';
 const TEXT_INPUT_PRIMITIVE_VERSION = 1;
+const MAXIMUM_TEXT_INPUT_LENGTH = 65536;
 const MAXIMUM_TEXT_INPUT_PLACEHOLDER_LENGTH = 1024;
+const MAXIMUM_PATH_DATA_LENGTH = 65536;
+const MAXIMUM_PATH_DASHES = 64;
 const HEX_COLOR = /^#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$/;
 const INTRINSIC_TYPES = new Set([
     'view', 'stack', 'text', 'text-run', 'text-input', 'button', 'image', 'canvas', 'custom',
     'path', 'vector', 'plot',
 ]);
+const MAXIMUM_VECTOR_OPS = 16384;
+const MAXIMUM_VECTOR_GROUP_DEPTH = 64;
+const MAXIMUM_PLOT_SLOTS = 4194304;
+const PLOT_FLOAT_MAX = 3.4028234663852886e38;
+const MAXIMUM_PLOT_AUDIO_CHANNEL = 1024;
+// Native kMaxPlotStroke: the widest line, bar gap or peak tick in logical pixels.
+const MAXIMUM_PLOT_STROKE = 4096;
 
 let renderingRuntime = null;
 
@@ -360,8 +355,8 @@ function validateLinearGradient(value, path, { coincidentStops = false } = {}) {
         finitePaintNumber(gradient[name], `${path}.${name}`, { optional: true, nonNegative: true });
     }
     if (!Array.isArray(gradient.stops) ||
-        gradient.stops.length < 2 || gradient.stops.length > MAX_GRADIENT_STOPS) {
-        throw new TypeError(`${path}.stops must contain between 2 and ${MAX_GRADIENT_STOPS} stops`);
+        gradient.stops.length < 2 || gradient.stops.length > 64) {
+        throw new TypeError(`${path}.stops must contain between 2 and 64 stops`);
     }
     let previous = -1;
     for (let index = 0; index < gradient.stops.length; index += 1) {
@@ -659,7 +654,7 @@ function validatePlot(properties, path) {
         const value = properties[name];
         if (value === undefined) continue;
         finitePaintNumber(value, `${path}.${name}`);
-        if (Math.abs(value) > MAX_FLOAT32) {
+        if (Math.abs(value) > PLOT_FLOAT_MAX) {
             throw new TypeError(`${path}.${name} must be within float range`);
         }
     }
@@ -750,6 +745,7 @@ function validateStyle(style, path) {
 }
 
 const TOKEN_COLOR = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const MAXIMUM_TOKENS = 65536;
 
 function canonicalTokenColor(value) {
     if (typeof value !== 'string' || !TOKEN_COLOR.test(value)) return undefined;
@@ -987,12 +983,12 @@ function materialize(value, runtime, path) {
     else if (typeof value.props.text === 'string') node.text = value.props.text;
     if (typeof value.props.source === 'string') node.source = value.props.source;
     if (typeof value.props.anchor === 'string' && value.props.anchor.length > 0 &&
-        value.props.anchor.length <= MAX_SOURCE_ANCHOR_BYTES) {
+        value.props.anchor.length <= 1024) {
         node.anchor = value.props.anchor;
     }
     const where = value.props.sourceLocation;
     if (where !== null && typeof where === 'object' && typeof where.file === 'string' &&
-        where.file.length > 0 && where.file.length <= MAX_SOURCE_FILE_BYTES) {
+        where.file.length > 0 && where.file.length <= 4096) {
         node.sourceLocation = { file: where.file };
         for (const key of ['line', 'column']) {
             if (Number.isInteger(where[key]) && where[key] >= 0) {

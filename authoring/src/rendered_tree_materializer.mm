@@ -40,11 +40,11 @@ bool protocol_integer(double number, std::uint64_t limit, std::uint64_t& output)
 namespace {
 
 constexpr std::size_t kMaximumJsonBytes = 16U * 1024U * 1024U;
-constexpr std::size_t kMaximumNodes = vellum::graphics::kMaxDesignNodes;
-constexpr std::size_t kMaximumDepth = vellum::graphics::kMaxDesignDepth;
-constexpr NSUInteger kMaximumGradientStops = vellum::graphics::kMaxGradientStops;
-constexpr NSUInteger kMaximumTokens = vellum::graphics::kMaxDesignTokens;
-constexpr NSUInteger kMaximumTextInputBytes = vellum::graphics::kMaxTextInputBytes;
+constexpr std::size_t kMaximumNodes = 100000U;
+constexpr std::size_t kMaximumDepth = 256U;
+constexpr NSUInteger kMaximumGradientStops = 64U;
+constexpr NSUInteger kMaximumTokens = 65536U;
+constexpr NSUInteger kMaximumTextInputBytes = 64U * 1024U;
 constexpr NSUInteger kMaximumPlaceholderBytes = 4U * 1024U;
 // Retained-tree consumers share these defaults across native and web. Controls
 // retain the established 44-point density; zero keeps an unspecified generic
@@ -702,8 +702,8 @@ struct MaterializeContext final {
     std::optional<std::uint32_t> root_background_token;
 };
 
-constexpr std::size_t kMaximumSourceFileBytes = vellum::graphics::kMaxSourceFileBytes;
-constexpr std::size_t kMaximumAnchorBytes = vellum::graphics::kMaxSourceAnchorBytes;
+constexpr std::size_t kMaximumSourceFileBytes = 4096U;
+constexpr std::size_t kMaximumAnchorBytes = 1024U;
 
 // Reads the optional `source` ({file, line, column}) and `anchor` fields of an
 // authored node. Malformed values are ignored: source is diagnostic metadata
@@ -1851,8 +1851,8 @@ bool materialize_image(
 // "ease-in-out"), or an object with `type` "cubicBezier" (x1, y1, x2, y2),
 // "steps" (steps, position "start", "end", "none" or "both") or "spring"
 // (stiffness, damping, mass, velocity).
-constexpr std::size_t kMaximumTracksPerNode = vellum::graphics::kMaxTracksPerNode;
-constexpr std::size_t kMaximumKeyframesPerTrack = vellum::graphics::kMaxKeyframesPerTrack;
+constexpr std::size_t kMaximumTracksPerNode = 32U;
+constexpr std::size_t kMaximumKeyframesPerTrack = 256U;
 
 std::optional<vellum::graphics::AnimatedProperty> animated_property(id value) {
     using vellum::graphics::AnimatedProperty;
