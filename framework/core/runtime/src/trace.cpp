@@ -71,12 +71,12 @@ PERFETTO_TRACK_EVENT_STATIC_STORAGE();
 // it keeps the bytes past dead-strip so `pulp ship`'s scanner can still find
 // them, which is the entire point of the sentinel.
 #if defined(_MSC_VER)
-#  define VELLUM_TRACING_KEEP_SYMBOL __declspec(dllexport)
+#  define PULP_TRACING_KEEP_SYMBOL __declspec(dllexport)
 #else
-#  define VELLUM_TRACING_KEEP_SYMBOL __attribute__((used, visibility("default")))
+#  define PULP_TRACING_KEEP_SYMBOL __attribute__((used, visibility("default")))
 #endif
-extern "C" VELLUM_TRACING_KEEP_SYMBOL
-const char vellum_tracing_ship_sentinel[] = "PULP_TRACING_COMPILED_IN__DO_NOT_SHIP";
+extern "C" PULP_TRACING_KEEP_SYMBOL
+const char pulp_tracing_ship_sentinel[] = "PULP_TRACING_COMPILED_IN__DO_NOT_SHIP";
 
 namespace vellum::runtime {
 

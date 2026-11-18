@@ -1629,7 +1629,9 @@ def framework_ports_state(root: Path, transferred: set[str], pulp_root: Path | N
         # No Pulp checkout means the authoritative check is deferred, even
         # when the ledger has no later Pulp-origin rows.
         ported = None
-    if not table_errors:
+    # With no table the respell is not in force, so there is nothing to prove
+    # and the tree is judged exactly as it was before the rule existed.
+    if (root / respeller.TABLE).exists() and not table_errors:
         respell_errors, respell_checks = framework_respell_errors(root, table, ported, added)
         errors.extend(respell_errors)
         checks.update(respell_checks)

@@ -1202,6 +1202,22 @@ class VerifyExtractionTests(unittest.TestCase):
             errors, _ = self.respell_verdict(root)
             self.assertTrue(any("imply pulp_anchor" in e and "does not list" in e for e in errors), errors)
 
+    def test_without_a_respell_table_the_rule_is_inert(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            hooks = "framework/core/a/src/hooks.cpp"
+            self.framework_fixture(root, {hooks: b'extern "C" void pulp_anchor() {}\n#define PULP_TAG 1\n'})
+            self.assertFalse((root / verify_extraction.FRAMEWORK_RESPELL).exists())
+            errors, checks = self.respell_verdict(root)
+            # Pulp-spelled bytes that a table would have to list raise nothing, and no respell check is reported.
+            self.assertEqual(errors, [])
+            self.assertFalse([key for key in checks if key.startswith("framework_respell")], checks)
+            # Once a table exists, the same bytes are judged by it.
+            self.write_respell(root, [])
+            errors, _ = self.respell_verdict(root)
+            self.assertTrue(any("imply pulp_anchor" in e for e in errors), errors)
+
     def test_a_transferred_respell_entry_uses_authoritative_pulp_bytes(self) -> None:
         self.hide_ci_git_base()
         with tempfile.TemporaryDirectory() as temporary:

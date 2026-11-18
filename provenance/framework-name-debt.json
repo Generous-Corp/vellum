@@ -102,7 +102,7 @@
       "framework/core/render/include/vellum/render/render_loop.hpp": 1,
       "framework/core/render/include/vellum/render/skp_capture.hpp": 1,
       "framework/core/render/src/draco_decoder.cpp": 2,
-      "framework/core/render/src/gpu_runtime_hooks.cpp": 10,
+      "framework/core/render/src/gpu_runtime_hooks.cpp": 11,
       "framework/core/render/src/graphite_image_provider.hpp": 2,
       "framework/core/render/src/headless_surface.cpp": 12,
       "framework/core/render/src/ktx2_decoder.cpp": 1,
@@ -130,7 +130,7 @@
       "framework/core/runtime/src/model_store.cpp": 42,
       "framework/core/runtime/src/runtime.cpp": 1,
       "framework/core/runtime/src/temporary_file.cpp": 1,
-      "framework/core/runtime/src/trace.cpp": 27,
+      "framework/core/runtime/src/trace.cpp": 28,
       "framework/core/simd/include/vellum/simd/lanes.hpp": 5,
       "framework/core/simd/include/vellum/simd/scalar_kernels.hpp": 1,
       "framework/core/simd/include/vellum/simd/simd.hpp": 21,
@@ -180,8 +180,8 @@
       "framework/core/view/platform/mac/mac_gpu_host_config.h": 6,
       "framework/core/view/platform/mac/pulp_mac_objc_names.h": 24,
       "framework/core/view/platform/mac/screenshot_mac.mm": 5,
-      "framework/core/view/platform/mac/text_accessibility_macos.mm": 3,
-      "framework/core/view/platform/mac/window_host_mac.mm": 28,
+      "framework/core/view/platform/mac/text_accessibility_macos.mm": 4,
+      "framework/core/view/platform/mac/window_host_mac.mm": 30,
       "framework/core/view/platform/mac/window_host_mac_capture.h": 2,
       "framework/core/view/platform/mac/window_host_mac_capture.mm": 1,
       "framework/core/view/platform/mac/window_host_mac_geometry.mm": 1,
@@ -190,7 +190,7 @@
       "framework/core/view/platform/mac/window_host_mac_metal_view.h": 2,
       "framework/core/view/platform/mac/window_host_mac_metal_view.mm": 2,
       "framework/core/view/platform/mac/window_host_mac_open_documents.h": 3,
-      "framework/core/view/platform/mac/window_host_mac_text_input.mm": 1,
+      "framework/core/view/platform/mac/window_host_mac_text_input.mm": 2,
       "framework/core/view/platform/mac/window_host_mac_view.h": 2,
       "framework/core/view/src/anchor_strategy.cpp": 1,
       "framework/core/view/src/appearance_tracker.cpp": 3,
@@ -261,7 +261,7 @@
   "schema": "vellum.framework-name-debt.v1",
   "totals": {
     "audio-plugin-sdk": 73,
-    "pulp-package-or-target": 1348,
+    "pulp-package-or-target": 1354,
     "pulp-public-namespace": 1
   }
 }

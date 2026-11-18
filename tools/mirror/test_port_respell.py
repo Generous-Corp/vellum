@@ -5,12 +5,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import subprocess
 import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-REPO = HERE.parents[1]
 spec = importlib.util.spec_from_file_location("port_respell", HERE / "port_respell.py")
 assert spec and spec.loader
 pr = importlib.util.module_from_spec(spec)
@@ -263,46 +261,6 @@ class TableTest(unittest.TestCase):
         # A file macro may be defined in several files.
         m1, m2 = entry("PULP_TAG", "file-macro", "framework/a.cpp"), entry("PULP_TAG", "file-macro", "framework/b.cpp")
         self.assertEqual(self.errors([m1, m2]), [])
-
-
-class LandedTableTest(unittest.TestCase):
-    """The landed table and framework/ as they are in this checkout."""
-
-    def test_the_landed_table_is_the_transferred_c_linkage_definitions(self) -> None:
-        table, errors = pr.load(REPO)
-        self.assertEqual(errors, [])
-        self.assertEqual(
-            {(e["old"], e["kind"]) for e in table if e["evidence"] and e["kind"] == "extern-c"},
-            {("pulp_gpu_runtime_hooks_anchor", "extern-c"),
-             ("pulp_mac_text_input_client_category_anchor", "extern-c"),
-             ("pulp_text_accessibility_lookup_macos", "extern-c"),
-             ("pulp_tracing_ship_sentinel", "extern-c")})
-
-    def test_the_ship_sentinel_string_is_unchanged(self) -> None:
-        # pulp ship's scanner looks for the string's bytes, not the symbol.
-        text = (REPO / "framework/core/runtime/src/trace.cpp").read_text(encoding="utf-8")
-        self.assertIn('vellum_tracing_ship_sentinel[] = "PULP_TRACING_COMPILED_IN__DO_NOT_SHIP";', text)
-        self.assertNotIn("pulp_tracing_ship_sentinel", text)
-
-    def test_the_transferred_bytes_imply_exactly_the_landed_extern_c_entries(self) -> None:
-        # Read the transfer record's blobs: the evidence as transferred, before any respell.
-        records = json.loads((REPO / "provenance/framework/transfer.json").read_text(encoding="utf-8"))["records"]
-        wanted = [(r["framework_path"], r["framework_git_blob_sha"]) for r in records
-                  if pr.respells(r["framework_path"]) and not r["framework_path"].startswith("framework/external/")]
-        batch = subprocess.run(["git", "-C", str(REPO), "cat-file", "--batch"],
-                               input="".join(f"{blob}\n" for _, blob in wanted).encode(), capture_output=True)
-        if batch.returncode != 0 or b" missing" in batch.stdout[:200]:
-            self.skipTest("the transfer's objects are not in this clone")
-        texts, data, i = {}, batch.stdout, 0
-        for path, _ in wanted:
-            end = data.index(b"\n", i)
-            size = int(data[i:end].split()[2])
-            texts[path] = data[end + 1:end + 1 + size].decode("utf-8", errors="replace")
-            i = end + 1 + size + 1
-        self.assertGreater(len(texts), 800)  # control: the instrument read the tree
-        derived = pr.derive({}, texts, set(), set(), texts)
-        table, _ = pr.load(REPO)
-        self.assertEqual(derived, [e for e in table if e["kind"] == "extern-c" and e["evidence"] in texts])
 
 
 if __name__ == "__main__":

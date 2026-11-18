@@ -1567,6 +1567,16 @@ class RespellAliasPlanTest(unittest.TestCase):
         mp.write_cmake(plan, output)
         self.assertNotIn("DEFINITION_SOURCE", output.read_text())
 
+    def test_without_a_table_the_plan_is_unchanged(self) -> None:
+        self.fixture.write(self.NEW, b"#if VELLUM_HAS_SKIA\nint a;\n#endif\n")
+        self.fixture.write_ledger([self.fixture.row(self.NEW, target="pulp-runtime")])
+        self.assertFalse((self.fixture.repo / mp.port_respell.TABLE).exists())
+        plan = self.fixture.plan()
+        self.assertNotIn("source_compile_definitions", plan["units"][0]["targets"][0])
+        output = Path(self.temporary.name) / "plan.cmake"
+        mp.write_cmake(plan, output)
+        self.assertNotIn("DEFINITION_SOURCE", output.read_text())
+
     def test_a_malformed_table_is_refused(self) -> None:
         self.fixture.write(mp.port_respell.TABLE, b"[]")
         with self.assertRaises(mp.PlanError) as caught:

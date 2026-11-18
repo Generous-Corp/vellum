@@ -74,10 +74,10 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${PROJECT_SOURCE_DIR}/tools/mirror/port_respell.py"
     "${PROJECT_SOURCE_DIR}/tools/mirror/source_compile_options.py"
     "${PROJECT_SOURCE_DIR}/tools/mirror/verify_mirror_rename_identity.py"
-    "${PROJECT_SOURCE_DIR}/provenance/framework/respell.json"
     "${PROJECT_SOURCE_DIR}/provenance/framework/transfer.json")
-# The ports ledger and the unit manifest decide what is compiled.
-foreach(_vellum_mirror_manifest IN ITEMS provenance/framework/ports.json provenance/framework/units.json)
+# The ports ledger, the unit manifest and the respell table decide what is compiled.
+foreach(_vellum_mirror_manifest IN ITEMS provenance/framework/ports.json provenance/framework/units.json
+        provenance/framework/respell.json)
     if(EXISTS "${PROJECT_SOURCE_DIR}/${_vellum_mirror_manifest}")
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
             "${PROJECT_SOURCE_DIR}/${_vellum_mirror_manifest}")

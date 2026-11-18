@@ -94,6 +94,6 @@ const InstallHooks install_hooks;
 
 // Referenced by name from pulp-gpu-device's link interface so the linker loads
 // this object, and with it the initializer above, into every consumer.
-extern "C" const void* vellum_gpu_runtime_hooks_anchor() {
+extern "C" const void* pulp_gpu_runtime_hooks_anchor() {
     return &vellum::render::detail::install_hooks;
 }
