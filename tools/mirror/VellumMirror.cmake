@@ -90,6 +90,8 @@ include("${_vellum_mirror_plan_cmake}")
 # A ported source that spells a closure macro PULP_<X> as VELLUM_<X> (the port
 # respell, tools/mirror/port_respell.py) gets VELLUM_<X> with its target's
 # value. The plan lists these only for sources that use one.
+# A source's definitions are shared by every target that compiles it, so the
+# plan refuses a source whose alias sets differ between targets.
 function(_vellum_mirror_alias_definitions tkey)
     if(NOT DEFINED VELLUM_MIRROR_TARGET_${tkey}_DEFINITION_SOURCE_COUNT)
         return()

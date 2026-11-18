@@ -353,6 +353,26 @@ def alias_definitions(repo: Path, paths: list[str], definitions: list[str],
     return rows
 
 
+def shared_alias_conflicts(unit_rows: list[dict[str, Any]], executables: list[dict[str, Any]]) -> None:
+    """Refuse a source that two targets compile with different alias definitions.
+
+    CMake keeps a source file's COMPILE_DEFINITIONS per source, not per
+    target, so the aliases one target gives would reach the other's compile of
+    the same file. Targets that give the same set are consistent.
+    """
+    seen: dict[str, tuple[str, tuple[str, ...]]] = {}
+    rows = [(row.get("name", "?"), row) for unit in unit_rows for row in unit.get("targets", [])]
+    rows += [(row.get("name", "?"), row) for row in executables]
+    for name, row in rows:
+        for entry in row.get("source_compile_definitions", []):
+            definitions = tuple(sorted(entry["definitions"]))
+            first = seen.setdefault(entry["source"], (name, definitions))
+            if first[1] != definitions:
+                raise PlanError(f"{entry['source']} is compiled by {first[0]} and {name} with different "
+                                f"respell alias definitions ({list(first[1])} and {list(definitions)}); "
+                                "a source's definitions are shared by every target that compiles it")
+
+
 def respell_aliases(repo: Path) -> list[dict[str, Any]]:
     """The table's closure-macro entries; a malformed table is refused."""
     entries, errors = port_respell.load(repo)
@@ -1548,6 +1568,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     if uncompiled:
         raise PlanError("the ports ledger adds sources to targets no closure builds and "
                         f"{framework_ports.UNITS} does not declare: {uncompiled[:5]}")
+    shared_alias_conflicts(unit_rows, executables)
     unattached = sorted(set(source_options) - attached)
     if unattached:
         raise PlanError(f"per-source compile options name sources no mirrored target compiles: {unattached}")

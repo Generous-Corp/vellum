@@ -1577,6 +1577,22 @@ class RespellAliasPlanTest(unittest.TestCase):
         mp.write_cmake(plan, output)
         self.assertNotIn("DEFINITION_SOURCE", output.read_text())
 
+    def test_a_source_in_two_targets_with_different_aliases_is_refused(self) -> None:
+        # CMake keeps a source's definitions per source, so one target's aliases would reach the other.
+        src = "/r/framework/a.cpp"
+
+        def target(name: str, defs: list[str]) -> dict:
+            return {"name": name, "source_compile_definitions": [{"source": src, "definitions": defs}]}
+
+        rows = [{"name": "u", "targets": [target("t1", ["VELLUM_A=1"]), target("t2", ["VELLUM_A=1"])]}]
+        mp.shared_alias_conflicts(rows, [])  # the same set in both is consistent
+        mp.shared_alias_conflicts(rows, [{"name": "e", "sources": [src]}])  # an unaliased row is no conflict
+        for rows, executables in (
+                ([{"name": "u", "targets": [target("t1", ["VELLUM_A=1"]), target("t2", ["VELLUM_B"])]}], []),
+                ([{"name": "u", "targets": [target("t1", ["VELLUM_A=1"])]}], [target("exe", ["VELLUM_A=2"])])):
+            with self.assertRaisesRegex(mp.PlanError, "different respell alias definitions"):
+                mp.shared_alias_conflicts(rows, executables)
+
     def test_a_malformed_table_is_refused(self) -> None:
         self.fixture.write(mp.port_respell.TABLE, b"[]")
         with self.assertRaises(mp.PlanError) as caught:
