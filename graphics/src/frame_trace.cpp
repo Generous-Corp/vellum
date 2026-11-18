@@ -1,5 +1,7 @@
 #include "frame_trace.hpp"
 
+#include "native_trace_bridge.hpp"
+
 #include <unistd.h>
 
 #include <atomic>
@@ -57,14 +59,19 @@ bool install_frame_trace_sink_if_none(const FrameTraceSink& sink) {
     return true;
 }
 
+}  // namespace detail
+
 void clear_frame_trace_sink_for(void* context) noexcept {
-    const auto* active = active_frame_trace_sink_storage.load(std::memory_order_acquire);
+    const auto* active = detail::active_frame_trace_sink_storage.load(std::memory_order_acquire);
     if (active == nullptr || active->context != context) return;
-    active_frame_trace_sink_storage.compare_exchange_strong(
+    detail::active_frame_trace_sink_storage.compare_exchange_strong(
         active, nullptr, std::memory_order_acq_rel);
 }
 
-}  // namespace detail
+void* frame_trace_sink_context() noexcept {
+    const auto* active = detail::active_frame_trace_sink();
+    return active != nullptr ? active->context : nullptr;
+}
 
 void clear_frame_trace_sink() noexcept {
     detail::active_frame_trace_sink_storage.store(nullptr, std::memory_order_release);
@@ -72,6 +79,40 @@ void clear_frame_trace_sink() noexcept {
 
 bool frame_trace_enabled() noexcept {
     return detail::active_frame_trace_sink() != nullptr;
+}
+
+namespace {
+
+char native_sink_tag = 0;
+
+}  // namespace
+
+#if defined(VELLUM_NATIVE_TRACE_BRIDGE) && VELLUM_NATIVE_TRACE_BRIDGE
+bool install_native_frame_trace() noexcept {
+    if (!vellum_native_trace_enabled()) return false;
+    FrameTraceSink sink;
+    sink.slice_begin = [](const char* name, void*) { vellum_native_trace_slice_begin(name); };
+    sink.slice_end = [](void*) { vellum_native_trace_slice_end(); };
+    sink.counter = [](const char* name, double value, void*) {
+        vellum_native_trace_counter(name, value);
+    };
+    sink.instant = [](const char* name, const char* detail, void*) {
+        vellum_native_trace_instant(name, detail);
+    };
+    sink.context = &native_sink_tag;
+    set_frame_trace_sink(sink);
+    return true;
+}
+#else
+// Without VELLUM_ENABLE_TRACING the framework adapter is not linked, so no
+// vellum_native_trace_* symbol may be referenced from this object.
+bool install_native_frame_trace() noexcept { return false; }
+#endif
+
+void remove_native_frame_trace() noexcept { clear_frame_trace_sink_for(&native_sink_tag); }
+
+bool native_frame_trace_installed() noexcept {
+    return frame_trace_sink_context() == &native_sink_tag;
 }
 
 namespace {
@@ -163,7 +204,7 @@ bool FrameTraceRecorder::start_if_idle() {
     return detail::install_frame_trace_sink_if_none(state_->sink);
 }
 
-void FrameTraceRecorder::stop() noexcept { detail::clear_frame_trace_sink_for(state_.get()); }
+void FrameTraceRecorder::stop() noexcept { clear_frame_trace_sink_for(state_.get()); }
 
 std::size_t FrameTraceRecorder::event_count() const {
     std::lock_guard lock(state_->mutex);

@@ -1,0 +1,64 @@
+# Names a mirror image must not export: third-party code and data the mirror
+# compiles into its own objects, so a Pulp build that defines the same names
+# cannot interpose or coalesce them. ld reads one pattern per line; `*` and `?`
+# match. The recipe's third-party archives are listed by
+# third_party_unexports.py from the archives themselves, so this file covers
+# only what the mirror's own objects define. The installed-dylib census
+# (tools/mirror/symbol_census.py --pulp-library) is the check that nothing
+# else leaks.
+
+# Vendored runtime code: miniz, TweetNaCl.
+_mz_*
+_miniz_*
+_tdefl_*
+_tinfl_*
+_crypto_*
+_randombytes
+
+# C++ namespaces the mirror compiles from source it carries (pugixml,
+# cpp-httplib, woff2, the bundled font data): functions, const members, vtables,
+# typeinfo, typeinfo names, function-local statics and their guards.
+__ZN4pugi*
+__ZNK4pugi*
+__ZTVN4pugi*
+__ZTIN4pugi*
+__ZTSN4pugi*
+__ZZN4pugi*
+__ZZNK4pugi*
+__ZGVZN4pugi*
+__ZGVN4pugi*
+__ZN7httplib*
+__ZNK7httplib*
+__ZTVN7httplib*
+__ZTIN7httplib*
+__ZTSN7httplib*
+__ZZN7httplib*
+__ZZNK7httplib*
+__ZGVZN7httplib*
+__ZGVN7httplib*
+__ZN5woff2*
+__ZNK5woff2*
+__ZTVN5woff2*
+__ZTIN5woff2*
+__ZTSN5woff2*
+__ZZN5woff2*
+__ZZNK5woff2*
+__ZGVZN5woff2*
+__ZGVN5woff2*
+__ZN18pulp_bundled_fonts*
+__ZNK18pulp_bundled_fonts*
+__ZTVN18pulp_bundled_fonts*
+__ZTIN18pulp_bundled_fonts*
+__ZTSN18pulp_bundled_fonts*
+__ZZN18pulp_bundled_fonts*
+__ZZNK18pulp_bundled_fonts*
+__ZGVZN18pulp_bundled_fonts*
+__ZGVN18pulp_bundled_fonts*
+
+# Brotli, nanosvg and ICU data, which the GPU provider carries without a recipe
+# archive.
+_Brotli*
+__kBrotli*
+_nsvg*
+__Z*nsvg__*
+_icudt*
