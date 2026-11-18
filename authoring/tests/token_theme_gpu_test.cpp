@@ -1,4 +1,5 @@
 #include "rendered_tree_materializer.hpp"
+#include "support/gpu_test_environment.hpp"
 #include "support/scene_capture_harness.hpp"
 #include "token_slot_tree.hpp"
 
@@ -137,11 +138,8 @@ void theme_switch_per_slot() {
 }  // namespace
 
 int main() {
-    std::string error;
-    if (!harness::prepare_device(&error)) {
-        std::cerr << "SKIP no GPU device: " << error << '\n';
-        return 77;
-    }
+    const auto environment = harness::prepare_gpu_environment();
+    if (!environment.ready()) return harness::report_gpu_status(environment);
     try {
         theme_switch_per_slot();
     } catch (const std::exception& exception) {

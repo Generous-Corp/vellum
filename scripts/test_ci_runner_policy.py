@@ -48,6 +48,10 @@ EXPECTED_RUNNERS = {
     "gpu-proof-guard.yml": ("__hosted__", "ubuntu-latest"),
     "pulp-observatory-watchdog.yml": ("__hosted__", "ubuntu-latest"),
     "review-verdict.yml": ("__hosted__", "ubuntu-24.04"),
+    "rule-data-split.yml": (
+        "VELLUM_LINUX_RUNS_ON_JSON",
+        '["ubuntu-latest"]',
+    ),
     "rmlui.yml": (
         "VELLUM_RMLUI_MACOS_RUNS_ON_JSON",
         '["macos-15"]',
