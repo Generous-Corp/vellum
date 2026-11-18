@@ -526,7 +526,7 @@ class WebNoBuildFreshnessTests(unittest.TestCase):
         (built / "vellum_components.json").write_text(json.dumps({
             "schema": "vellum.web-components.v1", "components": [],
         }), encoding="utf-8")
-        BACKEND_MODULE["write_source_digest"](built, project)
+        BACKEND_MODULE["write_source_digest"](built, BACKEND_MODULE["build_input_digest"](project))
         return {"root": project}, built
 
     def test_a_fresh_build_runs(self) -> None:
