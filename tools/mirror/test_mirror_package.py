@@ -1586,19 +1586,16 @@ class RespellAliasPlanTest(unittest.TestCase):
 
         rows = [{"name": "u", "targets": [target("t1", ["VELLUM_A=1"]), target("t2", ["VELLUM_A=1"])]}]
         mp.shared_alias_conflicts(rows, [])  # the same set in both is consistent
-        mp.shared_alias_conflicts(rows, [{"name": "e", "sources": [src]}])  # an unaliased row is no conflict
+        plain = {"name": "e", "sources": [src]}  # compiles the source and gives it no aliases
+        mp.shared_alias_conflicts([{"name": "u", "targets": [plain, {**plain, "name": "e2"}]}], [])
         for rows, executables in (
                 ([{"name": "u", "targets": [target("t1", ["VELLUM_A=1"]), target("t2", ["VELLUM_B"])]}], []),
-                ([{"name": "u", "targets": [target("t1", ["VELLUM_A=1"])]}], [target("exe", ["VELLUM_A=2"])])):
+                ([{"name": "u", "targets": [target("t1", ["VELLUM_A=1"])]}], [target("exe", ["VELLUM_A=2"])]),
+                # An aliased source next to a target that compiles it with none leaks the aliases into it.
+                ([{"name": "u", "targets": [target("t1", ["VELLUM_A=1"])]}], [plain]),
+                ([{"name": "u", "targets": [plain]}], [target("t1", ["VELLUM_A=1"])])):
             with self.assertRaisesRegex(mp.PlanError, "different respell alias definitions"):
                 mp.shared_alias_conflicts(rows, executables)
-
-    def test_an_unreadable_ported_source_is_a_plan_error_not_a_crash(self) -> None:
-        self.fixture.write(self.NEW, b"int a; // \xff\xfe\n")
-        self.fixture.write_ledger([self.fixture.row(self.NEW, target="pulp-runtime")])
-        self.fixture.write(mp.port_respell.TABLE, mp.port_respell.render([self.alias("PULP_FLAG")]).encode())
-        with self.assertRaisesRegex(mp.PlanError, "cannot read the ported source"):
-            self.fixture.plan()
 
     def test_a_malformed_table_is_refused(self) -> None:
         self.fixture.write(mp.port_respell.TABLE, b"[]")

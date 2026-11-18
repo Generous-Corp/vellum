@@ -361,18 +361,23 @@ def shared_alias_conflicts(unit_rows: list[dict[str, Any]], executables: list[di
 
     CMake keeps a source file's COMPILE_DEFINITIONS per source, not per
     target, so the aliases one target gives would reach the other's compile of
-    the same file. Targets that give the same set are consistent.
+    the same file. A target that gives none counts as the empty set, so only
+    targets that give the same set (possibly none) are consistent.
     """
-    seen: dict[str, tuple[str, tuple[str, ...]]] = {}
     rows = [(row.get("name", "?"), row) for unit in unit_rows for row in unit.get("targets", [])]
     rows += [(row.get("name", "?"), row) for row in executables]
+    per_source: dict[str, list[tuple[str, tuple[str, ...]]]] = {}
     for name, row in rows:
-        for entry in row.get("source_compile_definitions", []):
-            definitions = tuple(sorted(entry["definitions"]))
-            first = seen.setdefault(entry["source"], (name, definitions))
-            if first[1] != definitions:
-                raise PlanError(f"{entry['source']} is compiled by {first[0]} and {name} with different "
-                                f"respell alias definitions ({list(first[1])} and {list(definitions)}); "
+        given = {entry["source"]: tuple(sorted(entry["definitions"]))
+                 for entry in row.get("source_compile_definitions", [])}
+        for source in {*row.get("sources", []), *given}:
+            per_source.setdefault(source, []).append((name, given.get(source, ())))
+    for source, users in sorted(per_source.items()):
+        first = users[0]
+        for other in users[1:]:
+            if other[1] != first[1]:
+                raise PlanError(f"{source} is compiled by {first[0]} and {other[0]} with different "
+                                f"respell alias definitions ({list(first[1])} and {list(other[1])}); "
                                 "a source's definitions are shared by every target that compiles it")
 
 
