@@ -288,7 +288,7 @@ curl -fL \
   https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/skia-build-mac-universal-gpu-release.zip \
   -o /tmp/vellum-skia-m158.zip
 printf '%s  %s\n' \
-  dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250 \
+  e9736bff576ab7a6c56b2f224266ba0fde2dcb5c13a88a4bf8f324d1cf93c9cc \
   /tmp/vellum-skia-m158.zip | shasum -a 256 -c -
 cmake -S . -B build-gpu \
   -DCMAKE_BUILD_TYPE=Release \
