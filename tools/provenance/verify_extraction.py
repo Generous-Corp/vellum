@@ -1778,6 +1778,7 @@ def framework_respell_errors(root: Path, table: list[dict], ported: dict[str, st
         macros, exports, closure_errors = framework_closure_names(root)
         if closure_errors:
             return closure_errors, checks
+    transferred_paths = framework_transfer_paths(root)
     for index, entry in enumerate(table):
         where, kind, old, evidence = f"{FRAMEWORK_RESPELL} entries[{index}]", entry["kind"], entry["old"], entry["evidence"]
         if kind == "closure-macro" and old not in macros:
@@ -1785,7 +1786,9 @@ def framework_respell_errors(root: Path, table: list[dict], ported: dict[str, st
         elif kind == "link-export" and old not in exports:
             errors.append(f"{where}: {old} is not a name the closures list as a link export")
         elif kind in ("file-macro", "opt-in-switch") and (
-                (ported is None and evidence not in pulp_added)
+                (ported is None and evidence not in pulp_added
+                 and not (evidence in transferred_paths and evidence in as_pulp
+                          and old in respeller.pulp_tokens(as_pulp[evidence])))
                 or (ported is not None and evidence not in pulp_evidence)):
             errors.append(f"{where}: a {kind} entry's evidence is a ported Pulp source, not {evidence}")
         elif ported is not None and evidence in ported:
@@ -1793,6 +1796,21 @@ def framework_respell_errors(root: Path, table: list[dict], ported: dict[str, st
                           "opt-in-switch": respeller.opt_in_switches}[kind](ported[evidence])
             if old not in recognised:
                 errors.append(f"{where}: Pulp's {evidence} does not show {old} as a {kind}")
+    # Without Pulp, an entry whose only evidence is a transferred source cannot
+    # be re-derived or kind-checked; the transfer record names the file, and the
+    # file's bytes with the respell undone must still show the name. These
+    # checks stay deferred until a Pulp checkout is supplied.
+    deferred_keys: set[tuple] = set()
+    if ported is None:
+        transferred_now = transferred_paths & set(as_pulp)
+        for entry in table:
+            name, kind, evidence = entry["old"], entry["kind"], entry["evidence"]
+            if kind in ("file-macro", "opt-in-switch"):
+                if evidence in transferred_now and name in respeller.pulp_tokens(as_pulp[evidence]):
+                    deferred_keys.add((name, kind, evidence))
+            elif kind == "closure-macro" and name in macros:
+                if any(name in respeller.pulp_tokens(as_pulp[path]) for path in transferred_now):
+                    deferred_keys.add((name, kind, evidence))
     errors += respeller.consistency_errors(table, current)
     if any(entry["kind"] == "opt-in-switch" for entry in table):
         errors += respeller.switch_errors(table, current, macros, framework_respell_repo_texts(root))
@@ -1802,16 +1820,25 @@ def framework_respell_errors(root: Path, table: list[dict], ported: dict[str, st
         return entry["old"], entry["kind"], entry["evidence"]
 
     stored, implied = {key(e) for e in table}, {key(e) for e in derived}
-    for extra in sorted(stored - implied, key=str):
+    for extra in sorted(stored - implied - deferred_keys, key=str):
         errors.append(f"{FRAMEWORK_RESPELL}: {extra[0]} ({extra[1]}, {extra[2]}) is not implied by the bytes; "
                       "the table is derived, not written by hand")
     for absent in sorted(implied - stored, key=str):
         errors.append(f"{FRAMEWORK_RESPELL}: the bytes imply {absent[0]} ({absent[1]}, {absent[2]}), "
                       "which the table does not list")
     errors += framework_respell_edit_errors(root, table, set(current) - pulp_added)
-    checks["framework_respell_proved"] = (not errors) if ported is not None or not ported_now else \
+    checks["framework_respell_proved"] = (not errors) if ported is not None or not (ported_now or deferred_keys) else \
         "deferred: no Pulp checkout for the ported entries"
     return errors, checks
+
+
+def framework_transfer_paths(root: Path) -> set[str]:
+    """The framework/ paths the transfer record names as transferred."""
+    try:
+        transfer = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
+        return {row["framework_path"] for row in transfer["records"] if isinstance(row.get("framework_path"), str)}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return set()
 
 
 def framework_respell_repo_texts(root: Path) -> dict[str, str]:

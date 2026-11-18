@@ -1221,6 +1221,33 @@ class VerifyExtractionTests(unittest.TestCase):
             self.assertEqual(errors, [])
             self.assertIs(checks["framework_respell_proved"], True)
 
+    def test_deferred_verification_accepts_transferred_evidence_and_defers_its_kind(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            trace = "framework/core/a/src/trace.cpp"
+            gpu = "framework/core/a/src/gpu.cpp"
+            self.framework_fixture(root, {trace: b'#define VELLUM_KEEP 1\nint t = VELLUM_KEEP;\n',
+                                          gpu: b'#if VELLUM_GPU_RUNTIME\nint g;\n#endif\n'})
+            self.write_closures(root, ["PULP_GPU_RUNTIME=1"])
+            keep = self.respell_entry("PULP_KEEP", "file-macro", trace)
+            runtime = self.respell_entry("PULP_GPU_RUNTIME", "closure-macro", None)
+            errors, checks = verify_extraction.framework_respell_errors(root, [keep, runtime], None, {})
+            self.assertEqual(errors, [])
+            self.assertEqual(checks["framework_respell_proved"], "deferred: no Pulp checkout for the ported entries")
+            # With a Pulp checkout the same entries are checked authoritatively: a wrong kind fails.
+            errors, _ = verify_extraction.framework_respell_errors(
+                root, [keep, runtime], {trace: "int t = 0;\n"}, {})
+            self.assertTrue(any("does not show PULP_KEEP as a file-macro" in e for e in errors), errors)
+            # Deferred, an entry whose evidence the transfer record does not name still fails.
+            elsewhere = self.respell_entry("PULP_KEEP", "file-macro", "framework/core/a/src/other.cpp")
+            errors, _ = verify_extraction.framework_respell_errors(root, [elsewhere, runtime], None, {})
+            self.assertTrue(any("evidence is a ported Pulp source" in e for e in errors), errors)
+            # Deferred, a name no transferred bytes show still fails.
+            invented = self.respell_entry("PULP_INVENTED", "file-macro", trace)
+            errors, _ = verify_extraction.framework_respell_errors(root, [invented, keep, runtime], None, {})
+            self.assertTrue(any("PULP_INVENTED" in e for e in errors), errors)
+
     def test_malformed_closure_shapes_are_reported_without_crashing(self) -> None:
         self.hide_ci_git_base()
         cases = (
