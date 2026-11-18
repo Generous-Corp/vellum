@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-17T21:20:02Z",
+  "disposition": "superseded",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-87abc26e57b522bbb29d6b29d28a4ba94aac2134",
+  "kind": "resolution",
+  "linked_commits": [
+    "87abc26e57b522bbb29d6b29d28a4ba94aac2134"
+  ],
+  "linked_pull_requests": [
+    "Generous-Corp/vellum#549"
+  ],
+  "owner": "@claude-observatory-agent",
+  "rationale": "Merge of the PR's remote head into the branch; its mapped paths are exactly those of f16fda196, which carries its own event and resolution. Superseded by that event. Classified by the Vellum lead.",
+  "resolves": "vellum-87abc26e57b522bbb29d6b29d28a4ba94aac2134",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
