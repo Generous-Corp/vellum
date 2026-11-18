@@ -10,8 +10,11 @@ other test changes one thing and must be refused for that reason.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import io
 import json
+import os
+import subprocess
 from pathlib import Path
 import sys
 import tarfile
@@ -144,6 +147,68 @@ class RmlUiSdkArtifactTest(unittest.TestCase):
         self.assertEqual(written["schema"], "vellum.rmlui-sdk-verification.v1")
         self.assertEqual(written["source_commit"], "0" * 40)
 
+    def test_binding_accepts_the_validated_bytes_and_refuses_others(self) -> None:
+        archive = self.archive()
+        record = self.root / "record.json"
+        with open(self.root / "stdout", "w") as sink:
+            stdout, sys.stdout = sys.stdout, sink
+            try:
+                self.assertEqual(verifier.main(["--archive", str(archive), "--source-commit", "0" * 40,
+                                                "--output", str(record)]), 0)
+            finally:
+                sys.stdout = stdout
+        checksum = self.root / "vellum-rmlui-sdk.sha256"
+        args = ["--archive", str(archive), "--bind-record", str(record), "--source-commit", "0" * 40,
+                "--checksum-output", str(checksum)]
+        self.assertEqual(verifier.main(args), 0)
+        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        self.assertEqual(checksum.read_text(encoding="utf-8"), f"{digest}  {archive.name}\n")
+        # Another commit, other bytes, or another record shape is refused.
+        with self.assertRaises(verifier.VerificationError):
+            verifier.bind(archive, record, "1" * 40)
+        archive.write_bytes(archive.read_bytes() + b"\0")
+        with self.assertRaises(verifier.VerificationError) as caught:
+            verifier.bind(archive, record, "0" * 40)
+        self.assertIn("bytes differ", str(caught.exception))
+        record.write_text(json.dumps({"schema": "something-else"}), encoding="utf-8")
+        with self.assertRaises(verifier.VerificationError):
+            verifier.bind(archive, record, "0" * 40)
+
+    def test_the_release_workflow_steps_validate_and_bind_an_archive(self) -> None:
+        # The sdk-release.yml steps themselves, as the release runs them.
+        from test_release_dry_run import step_script
+        hold = step_script("sdk-release.yml", "Hold the RmlUi SDK archive to the release source")
+        bind = step_script("sdk-release.yml", "Bind the RmlUi SDK archive to its validated record")
+        temp = self.root / "runner-temp"
+        for directory in ("gpu", "trusted"):
+            (temp / directory).mkdir(parents=True)
+        archive = self.archive()
+        published = temp / "gpu" / archive.name
+        published.write_bytes(archive.read_bytes())
+        repo = Path(__file__).resolve().parents[1]
+        env = dict(os.environ, RUNNER_TEMP=str(temp), SOURCE_COMMIT="0" * 40,
+                   RELEASE_ARCHIVE=f"vellum-sdk-{VERSION}-darwin-arm64.tar.gz")
+
+        def run(script: str, **extra: str) -> subprocess.CompletedProcess:
+            return subprocess.run(["bash", "-eo", "pipefail", "-c", script], cwd=repo,
+                                  env={**env, **extra}, capture_output=True, text=True, check=False)
+
+        done = run(hold)
+        self.assertEqual(done.returncode, 0, done.stderr[-2000:])
+        record = temp / "trusted-rmlui-sdk-verification.json"
+        self.assertEqual(json.loads(record.read_text(encoding="utf-8"))["archive"], archive.name)
+        (temp / "trusted" / record.name).write_bytes(record.read_bytes())
+        done = run(bind)
+        self.assertEqual(done.returncode, 0, done.stderr[-2000:])
+        digest = hashlib.sha256(published.read_bytes()).hexdigest()
+        self.assertEqual((temp / "trusted/vellum-rmlui-sdk.sha256").read_text(encoding="utf-8"),
+                         f"{digest}  {archive.name}\n")
+        # The release commit must be the one the archive was built from, and
+        # the bytes published must be the bytes validated.
+        self.assertNotEqual(run(hold, SOURCE_COMMIT="1" * 40).returncode, 0)
+        published.write_bytes(published.read_bytes() + b"\0")
+        self.assertNotEqual(run(bind).returncode, 0)
+
     def test_a_name_that_disagrees_with_the_metadata_is_refused(self) -> None:
         self.assert_refused(self.archive(version="0.2.1"), "differs from the archive name")
 
@@ -210,6 +275,19 @@ class RmlUiSdkArtifactTest(unittest.TestCase):
             builder.check_payload(files | {"lib/libvellum-rmlui-core.dylib"})
         with self.assertRaises(ArtifactError):
             builder.check_payload(files - {"lib/libvellum-rmlui-native.a"})
+
+    def test_the_builder_accepts_rmlui_container_headers_and_refuses_its_package(self) -> None:
+        # RmlUi bundles header-only containers with their licence under its
+        # headers, which the archive carries; its own CMake package is not
+        # part of the archive.
+        files = set(builder.required_files())
+        files |= {"include/RmlUi/Core/Containers/itlib/flat_map.hpp",
+                  "include/RmlUi/Core/Containers/LICENSE.txt"}
+        builder.check_payload(files)
+        with self.assertRaises(ArtifactError):
+            builder.check_payload(files | {"lib/cmake/RmlUi/RmlUiConfig.cmake"})
+        with self.assertRaises(ArtifactError):
+            builder.check_payload(files | {"include/RmlUi/Core/Other.txt"})
 
 
 if __name__ == "__main__":
