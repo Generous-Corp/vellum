@@ -1,6 +1,7 @@
 #include "../src/plot_testing.hpp"
 #include "../src/skia_dawn_surface_test_access.hpp"
 #include "../src/skia_dawn_surface_testing.hpp"
+#include "support/gpu_test_environment.hpp"
 #include "support/scene_capture_harness.hpp"
 
 #include <vellum/graphics/damage.hpp>
@@ -29,7 +30,7 @@ using vellum::value::ChannelShape;
 using vellum::value::InMemoryValueFeed;
 
 int failures = 0;
-bool gpu_missing = false;
+bool surface_failed = false;
 
 bool expect(bool condition, const std::string& what, const std::string& detail = {}) {
     std::cout << (condition ? "PASS " : "FAIL ") << what;
@@ -57,17 +58,16 @@ std::string describe(const FrameStats& stats) {
 }
 
 std::unique_ptr<SkiaDawnSurface> make_surface(float scale, bool layer_cache = false) {
-    std::string error;
-    auto surface = SkiaDawnSurface::create(
+    auto created = harness::create_gpu_surface(
         {.width = static_cast<std::uint32_t>(kWidth),
          .height = static_cast<std::uint32_t>(kHeight),
-         .scale = scale},
-        &error);
-    if (!surface) {
-        gpu_missing = true;
-        std::cout << "SKIP no GPU surface: " << error << '\n';
+         .scale = scale});
+    if (!created.surface) {
+        surface_failed = true;
+        expect(false, "GPU surface", created.status.message);
         return nullptr;
     }
+    auto surface = std::move(created.surface);
     if (!layer_cache) {
         LayerCachePolicy policy;
         policy.enabled = false;
@@ -300,7 +300,13 @@ void pixel_oracles() {
             spec->value_max = 0.0F;
             node->plot = spec;
         }
-        if (!surface->render(reversed, &error)) return;
+        hooks::fail_plot_draws(1);
+        expect(!surface->render(reversed, &error),
+               at + "a reversed-range plot draw failure fails the render", error);
+        hooks::fail_plot_draws(0);
+        if (!expect(surface->render(reversed, &error), at + "the reversed range renders", error)) {
+            return;
+        }
         const auto flipped = capture(*surface);
         const std::uint32_t quarter = top + rows / 4U;
         expect(flipped.ok && is(flipped.at(left + quiet, quarter), kLine) &&
@@ -309,7 +315,14 @@ void pixel_oracles() {
                at + "a reversed range draws its line mirrored", text(flipped.at(left + quiet, quarter)));
 
         PlotOverride off(hooks::PlotDecimation::first_sample, {});
-        if (!surface->render(oracle_scene(), &error)) return;
+        hooks::fail_plot_draws(1);
+        expect(!surface->render(oracle_scene(), &error),
+               at + "an oracle plot draw failure fails the render", error);
+        hooks::fail_plot_draws(0);
+        if (!expect(surface->render(oracle_scene(), &error),
+                    at + "the oracle scene renders after the failure control", error)) {
+            return;
+        }
         const auto lossy = capture(*surface);
         expect(lossy.ok && is(lossy.at(left + spike, top), kPlotFill),
                at + "negative control: first-sample decimation loses the spike's pixels",
@@ -465,7 +478,7 @@ void sweeps() {
             const std::string label = std::string(cached ? "cache on @" : "cache off @") +
                                       std::to_string(static_cast<int>(scale)) + " ";
             const auto count = sweep_damage_edges(scene, scale, cached);
-            if (count.differing < 0 && gpu_missing) return;
+            if (count.differing < 0 && surface_failed) return;
             expect(count.differing == 0 && count.partial > 0,
                    label + "a damage edge swept across every plot kind leaves every frame "
                            "byte-identical",
@@ -997,13 +1010,13 @@ void unresolved_binding() {
 }  // namespace
 
 int main() {
-    std::string error;
-    if (!harness::prepare_device(&error)) {
-        std::cerr << "FAIL device bootstrap: " << error << '\n';
+    const auto environment = harness::prepare_gpu_environment();
+    if (!environment.ready()) return harness::report_gpu_status(environment);
+    pixel_oracles();
+    if (surface_failed) {
+        std::cerr << failures << " plot GPU check(s) failed\n";
         return 1;
     }
-    pixel_oracles();
-    if (gpu_missing) return 77;
     sweeps();
     gradient_plot();
     plot_under_blur();
