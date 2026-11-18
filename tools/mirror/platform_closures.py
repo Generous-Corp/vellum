@@ -121,6 +121,25 @@ def index(repo: Path) -> dict[str, str]:
     return out
 
 
+# CMake's true constants; the closures record cache values such as ON and 1.
+CMAKE_TRUE = {"ON", "1", "TRUE", "YES", "Y"}
+# The configure options each claim of the identity must be backed by, and the
+# value that backs it. A missing option is a mismatch.
+IDENTITY_OPTIONS = {"build_type": "CMAKE_BUILD_TYPE", "gpu": "PULP_ENABLE_GPU", "skia": "PULP_HAS_SKIA"}
+
+
+def _check_options_claims(at: str, options: dict[str, Any]) -> None:
+    """The recorded options must configure the Release GPU Skia build the identity claims."""
+    build = options.get(IDENTITY_OPTIONS["build_type"])
+    if build != "Release":
+        raise RecordError(f"{at}: {IDENTITY_OPTIONS['build_type']} is {build!r}, but the record claims Release")
+    for claim in ("gpu", "skia"):
+        name = IDENTITY_OPTIONS[claim]
+        value = options.get(name)
+        if not isinstance(value, str) or value.upper() not in CMAKE_TRUE:
+            raise RecordError(f"{at}: {name} is {value!r}, but the record claims {claim}")
+
+
 def _check_options_platform(at: str, key: str, options: dict[str, Any]) -> None:
     """The recorded options must configure the platform the index files the record under."""
     system, processor = IDENTITIES[key]
@@ -265,6 +284,7 @@ def load_record(repo: Path, key: str) -> tuple[dict[str, Any], list[tuple[str, d
         if not isinstance(options, dict) or options_sha256(options) != configure["options_sha256"]:
             raise RecordError(f"{at}: {manifest}'s configure options do not match the record's digest")
         _check_options_platform(at, key, options)
+        _check_options_claims(at, options)
         _check_graph_shape(f"{at}: {manifest}", closure)
         for target in closure.get("targets", []):
             for row in target.get("external_link_inputs", []):

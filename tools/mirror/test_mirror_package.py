@@ -1605,12 +1605,14 @@ class PlatformRecordPlanTest(unittest.TestCase):
         mp.BUILD_INFO_INPUTS.pop(EXPORT_ID, None)
         self.temporary.cleanup()
 
-    def write_record(self, extra_sources: list[str] | None = None, **overrides) -> dict:
+    def write_record(self, extra_sources: list[str] | None = None, edit_options=None, **overrides) -> dict:
         closure = json.loads(json.dumps(self.fixture.closure))
         options = {"CMAKE_SYSTEM_NAME": "Linux", "CMAKE_SYSTEM_PROCESSOR": "x86_64", "CMAKE_BUILD_TYPE": "Release",
                    "PULP_ENABLE_GPU": "ON", "PULP_HAS_SKIA": "1"}
         identity = {"gpu": True, "skia": True, "text_shaping": True, "build_type": "Release",
                     "system": "Linux", "processor": "x86_64"}
+        if edit_options:
+            edit_options(options)
         closure["configure"] = {"options": options, "identity": identity}
         closure["targets"][0]["sources"] += extra_sources or []
         root = self.fixture.repo / "provenance/framework/platforms/linux-x64"
@@ -1677,6 +1679,24 @@ class PlatformRecordPlanTest(unittest.TestCase):
         self.assertIn("must have exactly", str(caught.exception))
         # macOS has no record at all, so it needs no export: its plan still loads.
         self.assertNotIn("platform", self.plan("macos-arm64"))
+
+    def refused_options(self, edit, fragment: str) -> None:
+        self.write_record(edit_options=edit)
+        with self.assertRaises(mp.PlanError) as caught:
+            self.plan("linux-x64")
+        self.assertIn(fragment, str(caught.exception))
+
+    def test_recorded_options_must_back_the_release_gpu_skia_identity(self) -> None:
+        self.refused_options(lambda o: o.update(CMAKE_BUILD_TYPE="Debug"), "claims Release")
+        self.refused_options(lambda o: o.pop("CMAKE_BUILD_TYPE"), "claims Release")
+        self.refused_options(lambda o: o.update(PULP_ENABLE_GPU="OFF"), "claims gpu")
+        self.refused_options(lambda o: o.pop("PULP_ENABLE_GPU"), "claims gpu")
+        self.refused_options(lambda o: o.update(PULP_HAS_SKIA="FALSE"), "claims skia")
+        self.refused_options(lambda o: o.pop("PULP_HAS_SKIA"), "claims skia")
+
+    def test_a_matching_release_record_passes_the_option_check(self) -> None:
+        self.write_record(edit_options=lambda o: o.update(PULP_HAS_SKIA="ON"))
+        self.assertTrue(self.sources(self.plan("linux-x64")))
 
     def test_no_record_or_a_broken_record_is_refused(self) -> None:
         with self.assertRaises(mp.PlanError) as caught:
