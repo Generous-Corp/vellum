@@ -107,6 +107,30 @@ if(NOT _census_planted EQUAL 1)
 endif()
 message(STATUS "symbol census control: ok")
 
+# With a Pulp build's static libraries supplied, no installed dylib may export a
+# name they define. The Pulp side must define something (the run is blind
+# otherwise), and a planted shared name must fail the same check.
+if(DEFINED VELLUM_PULP_CENSUS_LIBRARIES AND NOT VELLUM_PULP_CENSUS_LIBRARIES STREQUAL "")
+    # The three pulp_ C names are transferred code not yet respelled to vellum_;
+    # drop each from this list when its respell lands.
+    set(_pulp_census "${Python3_EXECUTABLE}" "-I" "${VELLUM_SOURCE_DIR}/tools/mirror/symbol_census.py"
+        --allow _vellum_mirror_forwarding_anchor
+        --allow _pulp_gpu_runtime_hooks_anchor
+        --allow _pulp_mac_text_input_client_category_anchor
+        --allow _pulp_text_accessibility_lookup_macos
+        ${_libraries} ${_installed_libraries}
+        --pulp-library ${VELLUM_PULP_CENSUS_LIBRARIES})
+    _run("installed dylibs against a Pulp build" ${_pulp_census})
+    execute_process(COMMAND ${_pulp_census} --plant-pulp
+        RESULT_VARIABLE _pulp_planted OUTPUT_QUIET ERROR_QUIET)
+    if(NOT _pulp_planted EQUAL 1)
+        message(FATAL_ERROR "Pulp intersection control: a planted shared name gave ${_pulp_planted}, not 1")
+    endif()
+    message(STATUS "Pulp intersection control: ok")
+else()
+    message(STATUS "installed dylibs against a Pulp build: skipped (no VELLUM_PULP_CENSUS_LIBRARIES)")
+endif()
+
 set(_generator)
 find_program(_ninja ninja)
 if(_ninja)

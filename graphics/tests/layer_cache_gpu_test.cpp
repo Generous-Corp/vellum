@@ -1,4 +1,5 @@
 #include "skia_dawn_surface_test_access.hpp"
+#include "support/gpu_test_environment.hpp"
 #include "support/scene_capture_harness.hpp"
 
 #include <vellum/graphics/damage.hpp>
@@ -788,11 +789,8 @@ void partial_redraw_rejects_version_zero() {
 }  // namespace
 
 int main() {
-    std::string error;
-    if (!harness::prepare_device(&error)) {
-        std::cerr << "SKIP no GPU device: " << error << '\n';
-        return 77;
-    }
+    const auto environment = harness::prepare_gpu_environment();
+    if (!environment.ready()) return harness::report_gpu_status(environment);
     equality_with_and_without_caching();
     default_policy_is_exact();
     inexact_error_grows_with_overlap();

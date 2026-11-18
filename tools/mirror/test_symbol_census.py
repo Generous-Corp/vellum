@@ -168,6 +168,75 @@ class SymbolCensusTest(unittest.TestCase):
               "c.dylib": listing(sym(FN, "private external [no dead-strip]"))}
         self.assertEqual(run(nm)[1], [])
 
+    def test_name_a_pulp_library_also_defines_fails(self) -> None:
+        nm = {"a.dylib": listing(sym(FN), sym("_mbedtls_ssl_init"))}
+        images = [Path("a.dylib")]
+        report, findings = sc.census(images, nm=lambda p: nm[str(p)], otool=lambda p: "", demangle=demangle,
+                                     pulp_names=frozenset({"_mbedtls_ssl_init"}))
+        self.assertEqual(report["exported_names_pulp_also_defines"], 1)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("a Pulp build also defines", findings[0])
+
+    def test_private_overlap_with_pulp_is_not_a_leak(self) -> None:
+        nm = {"a.dylib": listing(sym(FN), sym("_sdl", "private external"))}
+        _, findings = sc.census([Path("a.dylib")], nm=lambda p: nm[str(p)], otool=lambda p: "", demangle=demangle,
+                                pulp_names=frozenset({"_sdl"}))
+        self.assertEqual(findings, [])
+
+    def test_weak_pulp_overlaps_fail_in_both_directions(self) -> None:
+        for image_attrs, pulp_attrs in (("weak external", "weak external"),
+                                        ("external", "weak external"),
+                                        ("weak external", "external")):
+            with self.subTest(image_attrs=image_attrs, pulp_attrs=pulp_attrs):
+                image = listing(sym(FN), sym("_shared", image_attrs))
+                pulp = listing(sym("_shared", pulp_attrs))
+                pulp_names = frozenset(sc.pulp_defined([Path("libp.a")], nm=lambda _: pulp))
+                _, findings = sc.census([Path("a.dylib")], nm=lambda _: image, otool=lambda _: "",
+                                        demangle=demangle, pulp_names=pulp_names)
+                self.assertEqual(len(findings), 1)
+                self.assertIn("a Pulp build also defines", findings[0])
+
+    def test_pulp_overlap_check_off_without_a_pulp_set(self) -> None:
+        nm = {"a.dylib": listing(sym(FN), sym("_mbedtls_ssl_init"))}
+        report, findings = sc.census([Path("a.dylib")], nm=lambda p: nm[str(p)], otool=lambda p: "", demangle=demangle)
+        self.assertEqual(findings, [])
+        self.assertNotIn("pulp_library_symbols", report)
+
+    def test_pulp_defined_reads_exported_strong_names_across_libraries(self) -> None:
+        lib = {"a.a": listing(sym("_x"), sym("_hidden", "private external")), "b.a": listing(sym("_y", "weak external"), sym("_z"))}
+        self.assertEqual(sc.pulp_defined([Path("a.a"), Path("b.a")], nm=lambda p: lib[str(p)]), {"_x", "_y", "_z"})
+
+    def _run_main(self, pulp_listing: str, *extra: str) -> int:
+        image_listing = listing(sym(FN), sym("_shared_c"))
+
+        def fake(cmd, **kw):
+            if cmd[0] == "nm":
+                return mock.Mock(returncode=0, stdout=pulp_listing if cmd[-1].endswith(".a") else image_listing, stderr="")
+            if cmd[0] == "otool":
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            return mock.Mock(returncode=0, stdout="\n".join("vellum::" + n for n in kw["input"].splitlines()), stderr="")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "a.dylib"
+            image.write_bytes(b"x")
+            archive = Path(tmp) / "libp.a"
+            archive.write_bytes(b"y")
+            with mock.patch.object(sc.subprocess, "run", fake), contextlib.redirect_stderr(io.StringIO()):
+                return sc.main([str(image), "--pulp-library", str(archive), *extra])
+
+    def test_main_clean_when_pulp_defines_other_names(self) -> None:
+        self.assertEqual(self._run_main(listing(sym("_only_in_pulp"))), 0)
+
+    def test_main_fails_when_pulp_defines_an_exported_name(self) -> None:
+        self.assertEqual(self._run_main(listing(sym("_shared_c"))), 1)
+
+    def test_main_is_blind_when_the_pulp_side_defines_nothing(self) -> None:
+        self.assertEqual(self._run_main(listing()), 3)
+
+    def test_plant_pulp_control_makes_a_clean_run_fail(self) -> None:
+        self.assertEqual(self._run_main(listing(sym("_only_in_pulp"))), 0)
+        self.assertEqual(self._run_main(listing(sym("_only_in_pulp")), "--plant-pulp"), 1)
+
     def test_same_export_in_two_images_fails(self) -> None:
         _, findings = run({"a.dylib": listing(sym(FN)), "b.dylib": listing(sym(FN))})
         self.assertEqual(len(findings), 1)
