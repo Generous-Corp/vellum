@@ -100,7 +100,7 @@ push to `main` that reuses its merge-queue proof. On the fleet such a run
 waited 20 to 40 minutes for a lease to print a notice.
 
 When the repository variable `VELLUM_GPU_PREDECIDE` is exactly `on`, the
-`decide` job runs first, on `VELLUM_DECIDE_RUNNER` (a JSON label list;
+`decide` job runs first, on `VELLUM_DECIDE_RUNS_ON_JSON` (a JSON label list;
 unset, hosted `["ubuntu-24.04"]`). It runs the proof job's own checkout,
 classify and reuse steps, copied byte for byte and held equal by
 `scripts/test_ci_runner_policy.py`, and outputs `unaffected` and
@@ -109,8 +109,8 @@ The proof job repeats both decisions itself, and "Agree with the early
 decision" fails the job on any difference, before any step that builds, and
 "Refuse to build off a Mac" fails any build that would run on a non-Mac
 runner, whatever routed it. `decide` is first-party only, like the proof
-jobs. A runner named in `VELLUM_DECIDE_RUNNER` needs `git`, `tar`, a current
-`python3` and a `gh` with `attestation verify`.
+jobs. A runner named in `VELLUM_DECIDE_RUNS_ON_JSON` needs `git`, `tar`, a
+current `python3` and a `gh` with `attestation verify`.
 
 Before setting the variable to `on`: cancel one run while `decide` is in
 progress and confirm `gpu-macos-arm64` and `sterile-consumer` conclude

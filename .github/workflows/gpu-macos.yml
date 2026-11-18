@@ -49,13 +49,13 @@ jobs:
     # this workflow already proved) then takes this job's runner instead of
     # waiting 20 to 40 minutes for a fleet Mac lease to print a notice.
     # gpu-macos-arm64 repeats both decisions itself and fails on any
-    # disagreement. VELLUM_DECIDE_RUNNER (a JSON label list) moves this job,
-    # and the reporting runs it routes, to another runner class, such as a
-    # local Linux lane; unset, it is hosted ubuntu-24.04.
-    # First-party only, like the proof jobs: VELLUM_DECIDE_RUNNER may name a
-    # local lane, which must never check out a fork's head.
+    # disagreement. VELLUM_DECIDE_RUNS_ON_JSON (a JSON label list) moves
+    # this job, and the reporting runs it routes, to another Linux runner
+    # class, such as a local lane; unset, it is hosted ubuntu-24.04.
+    # First-party only, like the proof jobs: VELLUM_DECIDE_RUNS_ON_JSON may
+    # name a local lane, which must never check out a fork's head.
     if: vars.VELLUM_GPU_PREDECIDE == 'on' && (github.event_name == 'pull_request' || github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ${{ fromJSON(vars.VELLUM_DECIDE_RUNNER || '["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(vars.VELLUM_DECIDE_RUNS_ON_JSON || '["ubuntu-24.04"]') }}
     timeout-minutes: 15
     # A failure here only loses the early decision: gpu-macos-arm64 runs on
     # its usual runner and proves as before. It must not redden the run,
@@ -148,7 +148,7 @@ jobs:
     # (main, release tags) stays on the generic class: a push re-proof must
     # never queue ahead of a merge-queue entry. Unset, every event selects
     # exactly what it did before.
-    runs-on: ${{ fromJSON((vars.VELLUM_GPU_PREDECIDE == 'on' && needs.decide.result == 'success' && (needs.decide.outputs.unaffected == 'true' || needs.decide.outputs.reused_run != '') && (vars.VELLUM_DECIDE_RUNNER || '["ubuntu-24.04"]')) || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    runs-on: ${{ fromJSON((vars.VELLUM_GPU_PREDECIDE == 'on' && needs.decide.result == 'success' && (needs.decide.outputs.unaffected == 'true' || needs.decide.outputs.reused_run != '') && (vars.VELLUM_DECIDE_RUNS_ON_JSON || '["ubuntu-24.04"]')) || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     # $GITHUB_ENV does not cross jobs; dependent jobs read the validated
     # release identity through these outputs.
     outputs:

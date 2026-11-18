@@ -123,7 +123,7 @@ GPU_RUNS_ON = (
 FLEET_EXPRESSION = GPU_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")]
 # decide's runner: a repository variable holding a JSON label list, so it can
 # move to a local Linux lane without a workflow change, defaulting to hosted.
-DECIDE_RUNNER = "(vars.VELLUM_DECIDE_RUNNER || '[\"ubuntu-24.04\"]')"
+DECIDE_RUNNER = "(vars.VELLUM_DECIDE_RUNS_ON_JSON || '[\"ubuntu-24.04\"]')"
 DECIDE_RUNS_ON = "runs-on: ${{ fromJSON(" + DECIDE_RUNNER[1:-1] + ") }}"
 # Only exactly `on` turns the early decision on.
 PREDECIDE_ON = "vars.VELLUM_GPU_PREDECIDE == 'on'"
@@ -1363,7 +1363,7 @@ class RunnerPolicyTests(unittest.TestCase):
         unaffected = "needs.decide.outputs.unaffected"
         reused = "needs.decide.outputs.reused_run"
         switch = "vars.VELLUM_GPU_PREDECIDE"
-        runner = "vars.VELLUM_DECIDE_RUNNER"
+        runner = "vars.VELLUM_DECIDE_RUNS_ON_JSON"
         reporting = ({unaffected: "true"}, {reused: "44038041246"},
                      {unaffected: "true", reused: "44038041246"})
         building = ({}, {unaffected: ""}, {reused: ""})
@@ -1411,10 +1411,10 @@ class RunnerPolicyTests(unittest.TestCase):
         expression = DECIDE_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")]
         self.assertEqual(evaluate_actions_expression(expression, {"event_name": "push"}), '["ubuntu-24.04"]')
         self.assertEqual(evaluate_actions_expression(
-            expression, {"event_name": "push", "vars.VELLUM_DECIDE_RUNNER": ""}), '["ubuntu-24.04"]')
+            expression, {"event_name": "push", "vars.VELLUM_DECIDE_RUNS_ON_JSON": ""}), '["ubuntu-24.04"]')
         linux = '["self-hosted","Linux","X64","macpro"]'
         self.assertEqual(evaluate_actions_expression(
-            expression, {"event_name": "push", "vars.VELLUM_DECIDE_RUNNER": linux}), linux)
+            expression, {"event_name": "push", "vars.VELLUM_DECIDE_RUNS_ON_JSON": linux}), linux)
         # The default is a hosted label, never a self-hosted one.
         self.assertIn('ubuntu-24.04', DECIDE_RUNS_ON)
         self.assertNotIn("self-hosted", DECIDE_RUNS_ON)
