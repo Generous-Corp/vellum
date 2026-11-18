@@ -26,7 +26,7 @@ import time
 from typing import Any, Iterable
 from urllib.parse import quote, unquote_to_bytes
 
-from vellum_dev import staleness, write_source_digest
+from vellum_dev import build_input_digest, staleness, write_source_digest
 from vellum_manifest import (
     LOCK_NAME, LOCK_SCHEMA, ManifestError, imported_materialized_design,
     load_app_manifest, load_components_manifest,
@@ -339,6 +339,7 @@ def contains_sdk_install_path(payload: bytes, install_prefix: Path) -> bool:
 
 def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     project: Path = context["root"]
+    source_digest = build_input_digest(project)
     destination = project / ".vellum/build/web"
     staging = project / ".vellum/build/.web-staging"
     if staging.exists():
@@ -387,7 +388,7 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
             path.read_bytes(), install_prefix,
         ):
             raise BackendFailure(f"Web output leaked an SDK install path: {path.name}", status="non_relocatable_output")
-    write_source_digest(staging, project)
+    write_source_digest(staging, source_digest)
     import hashlib
     files = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
              for path in sorted(staging.iterdir()) if path.is_file()}

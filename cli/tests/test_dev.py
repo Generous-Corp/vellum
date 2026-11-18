@@ -197,6 +197,68 @@ class DevLoopTests(unittest.TestCase):
             self.assertNotEqual(first_digest, third_digest)
             self.assertEqual(vellum_dev.changed(first_files, third_files), ["src/main.tsx"])
 
+    def test_staleness_covers_inputs_outside_the_watch_allowlist(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "project"
+            build = root / "build"
+            project.mkdir()
+            build.mkdir()
+            entry = project / "main.tsx"
+            entry.write_text("export default 1;\n", encoding="utf-8")
+            (project / "lib").mkdir()
+            helper = project / "lib/helper.ts"
+            helper.write_text("export const a = 1;\n", encoding="utf-8")
+            vellum_dev.write_source_digest(build, vellum_dev.build_input_digest(project))
+            self.assertIsNone(vellum_dev.staleness(build, project))
+            (project / ".DS_Store").write_bytes(b"noise")
+            (project / ".vellum/build").mkdir(parents=True)
+            (project / ".vellum/build/out.js").write_text("generated", encoding="utf-8")
+            self.assertIsNone(vellum_dev.staleness(build, project))
+            entry.write_text("export default 2;\n", encoding="utf-8")
+            self.assertIn("stale", vellum_dev.staleness(build, project) or "")
+            vellum_dev.write_source_digest(build, vellum_dev.build_input_digest(project))
+            helper.write_text("export const a = 2;\n", encoding="utf-8")
+            self.assertIn("stale", vellum_dev.staleness(build, project) or "")
+
+    def test_web_build_records_digest_taken_before_the_build(self) -> None:
+        sys.path.insert(0, str(CLI.parent))
+        try:
+            import vellum_web_backend as web
+        finally:
+            sys.path.pop(0)
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "project"
+            project.mkdir()
+            entry = project / "main.tsx"
+            entry.write_text("export default 1;\n", encoding="utf-8")
+            sdk = root / "sdk/a/b/sdk"
+            (sdk / "web").mkdir(parents=True)
+            for name in ("vellum_web_core.js", "vellum_web_core.wasm", "vellum_host.js",
+                         "text_semantics.js", "style.css"):
+                (sdk / "web" / name).write_text("x", encoding="utf-8")
+            (sdk / "web/index.html").write_text("{{APP_NAME}}", encoding="utf-8")
+            context = {
+                "root": project, "entry": entry, "slug": "app", "components": [],
+                "manifest": {"app": {"name": "App"}},
+                "lock": {"framework": {"artifact": {}}},
+            }
+
+            def bundler_then_edit(arguments, **_kwargs):
+                if arguments and str(arguments[-1]).endswith("app.js"):
+                    Path(arguments[-1]).write_text("bundle", encoding="utf-8")
+                    Path(arguments[-1] + ".map").write_text("{}", encoding="utf-8")
+                    entry.write_text("export default 2;\n", encoding="utf-8")
+
+            with mock.patch.object(web, "validate_web_payload"), \
+                 mock.patch.object(web, "sdk_node", return_value=Path("node")), \
+                 mock.patch.object(web, "imported_materialized_design", return_value=None), \
+                 mock.patch.object(web, "run_checked", side_effect=bundler_then_edit):
+                built = web.build_app(context, sdk)
+            self.assertIn("stale", vellum_dev.staleness(built["root"], project) or "")
+
     def test_web_adapter_injects_reload_client_without_editing_build(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             build = Path(temporary)

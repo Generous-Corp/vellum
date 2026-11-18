@@ -78,9 +78,40 @@ SOURCE_DIGEST_NAME = "source-digest.json"
 SOURCE_DIGEST_SCHEMA = "vellum.build-source-digest.v1"
 
 
-def write_source_digest(directory: Path, project: Path) -> None:
+IGNORED_FILE_NAMES = {".DS_Store"}
+
+
+def build_input_digest(project: Path) -> str:
+    """Digest of every project file a build could read.
+
+    The backends accept any project-relative entry, component manifest path,
+    component source and import, so the digest covers the whole project tree
+    (minus build output and tool scratch directories) rather than the watch
+    allowlist in `source_files`.
+    """
+    digest = hashlib.sha256()
+    for path in sorted(project.rglob("*")):
+        relative = path.relative_to(project)
+        if any(part in EXCLUDED_DIRECTORIES for part in relative.parts):
+            continue
+        if path.name in IGNORED_FILE_NAMES:
+            continue
+        try:
+            if not path.is_file():
+                continue
+            content = path.read_bytes()
+        except OSError:
+            continue
+        digest.update(relative.as_posix().encode("utf-8") + b"\0")
+        digest.update(hashlib.sha256(content).hexdigest().encode("ascii") + b"\n")
+    return digest.hexdigest()
+
+
+def write_source_digest(directory: Path, digest: str) -> None:
+    """Record `digest`, which the caller captured BEFORE it started building,
+    so an edit made during the build is never recorded as fresh."""
     (directory / SOURCE_DIGEST_NAME).write_text(json.dumps({
-        "schema": SOURCE_DIGEST_SCHEMA, "digest": snapshot(project)[0],
+        "schema": SOURCE_DIGEST_SCHEMA, "digest": digest,
     }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -96,7 +127,7 @@ def staleness(directory: Path, project: Path) -> str | None:
     if not valid:
         return ("Build records no source digest, so its freshness cannot be proven; "
                 "run vellum build")
-    current = snapshot(project)[0]
+    current = build_input_digest(project)
     if built != current:
         return (f"Build is stale: it was built from source digest {built[:12]} but the "
                 f"project is now {current[:12]}; run vellum build")

@@ -15,7 +15,7 @@ import sys
 import tempfile
 from typing import Any, Iterable
 
-from vellum_dev import staleness, write_source_digest
+from vellum_dev import build_input_digest, staleness, write_source_digest
 from vellum_manifest import (
     LOCK_NAME, LOCK_SCHEMA, ManifestError, imported_materialized_design,
     load_app_manifest, load_components_manifest,
@@ -347,6 +347,7 @@ def build_component_modules(
 
 def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     project: Path = context["root"]
+    source_digest = build_input_digest(project)
     build_root = project / ".vellum/build/macos"
     app = build_root / f"{context['slug']}.app"
     staging = build_root / f".{context['slug']}.app.staging"
@@ -403,7 +404,7 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     }
     with (contents / "Info.plist").open("wb") as output:
         plistlib.dump(info, output, sort_keys=True)
-    write_source_digest(resources, project)
+    write_source_digest(resources, source_digest)
     if app.exists():
         shutil.rmtree(app)
     os.replace(staging, app)
