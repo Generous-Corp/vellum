@@ -335,12 +335,13 @@ jobs:
             echo "::notice::Running the full proof"
           fi
 
-      # The second check on decide: this job reaches both decisions itself.
-      # When decide routed the run (said unaffected or reused), any
-      # difference fails the job before any step that builds. When decide
-      # said build, the job is on its usual Mac and its own answer is the one
-      # main always trusted; a proof that finished in between can make it
-      # reuse, so that difference only warns (the rollout's stop signal).
+      # The second check on decide: this job reaches both decisions itself,
+      # and its own answer is the one that counts, as it always was. When
+      # decide routed the run (said unaffected or reused) and this job would
+      # build, it fails before any step that builds. Any other difference
+      # only warns (the rollout's stop signal): a proof that finished in
+      # between can turn a build into a reuse on the usual Mac, or select a
+      # newer proof of the same tree, and both are valid reports.
       - name: Agree with the early decision
         if: needs.decide.result == 'success'
         shell: bash
@@ -353,11 +354,11 @@ jobs:
           set -euo pipefail
           if [ "$DECIDED_UNAFFECTED" != "$UNAFFECTED" ] || [ "$DECIDED_REUSED" != "$REUSED" ]; then
             detail="decide said unaffected='$DECIDED_UNAFFECTED' reused='$DECIDED_REUSED'; this job says unaffected='$UNAFFECTED' reused='$REUSED'"
-            if [ -n "$DECIDED_UNAFFECTED$DECIDED_REUSED" ]; then
-              echo "::error::$detail"
+            if [ -n "$DECIDED_UNAFFECTED$DECIDED_REUSED" ] && [ -z "$UNAFFECTED$REUSED" ]; then
+              echo "::error::$detail: decide routed a run that this job would build"
               exit 1
             fi
-            echo "::warning::$detail (decide said build; this job keeps its own answer on its usual runner)"
+            echo "::warning::$detail (this job keeps its own answer)"
             exit 0
           fi
           echo "decide and this job agree: unaffected='$UNAFFECTED' reused='$REUSED'"

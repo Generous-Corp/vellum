@@ -1447,8 +1447,12 @@ class RunnerPolicyTests(unittest.TestCase):
             # answer (a proof may have finished in between) and warns.
             "decide builds, job reuses": ({"REUSED": "7"}, 0),
             "decide builds, job skips": ({"UNAFFECTED": "true"}, 0),
-            "decide reused, job skips": ({"DECIDED_REUSED": "7", "UNAFFECTED": "true"}, 1),
-            "different runs": ({"DECIDED_REUSED": "7", "REUSED": "8"}, 1),
+            # Both still report: a newer proof of the same tree, or the other
+            # kind of report. The job's own answer counts; it warns.
+            "decide reused, job skips": ({"DECIDED_REUSED": "7", "UNAFFECTED": "true"}, 0),
+            "decide skips, job reuses": ({"DECIDED_UNAFFECTED": "true", "REUSED": "7"}, 0),
+            "different runs": ({"DECIDED_REUSED": "7", "REUSED": "8"}, 0),
+            "decide both, job builds": ({"DECIDED_REUSED": "7", "DECIDED_UNAFFECTED": "true"}, 1),
         }
         for name, (values, expected) in cases.items():
             with self.subTest(case=name):

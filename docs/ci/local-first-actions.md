@@ -105,10 +105,10 @@ unset, hosted `["ubuntu-24.04"]`). It runs the proof job's own checkout,
 classify and reuse steps, copied byte for byte and held equal by
 `scripts/test_ci_runner_policy.py`, and outputs `unaffected` and
 `reused_run`. When either is set, `gpu-macos-arm64` runs on decide's runner.
-The proof job repeats both decisions itself. "Agree with the early decision"
-fails the job, before any step that builds, when decide routed it and the job
-answers differently; when decide said build, the job is on its usual Mac,
-keeps its own answer (a proof may have finished in between) and warns.
+The proof job repeats both decisions itself, and its own answer counts.
+"Agree with the early decision" fails the job, before any step that builds,
+when decide routed it and the job would build; any other difference (a proof
+that finished in between, a newer proof of the same tree) only warns.
 "Refuse to build off a Mac" fails any build that would run on a non-Mac
 runner, whatever routed it. `decide` is first-party only, like the proof
 jobs. A runner named in `VELLUM_DECIDE_RUNS_ON_JSON` needs `git`, `tar`, a
