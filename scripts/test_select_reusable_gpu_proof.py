@@ -321,6 +321,13 @@ def job_steps(text: str, job: str) -> list[tuple[str, str]]:
     return steps
 
 
+def in_proof_job(text: str, old: str, new: str) -> str:
+    """Replace the first `old` inside gpu-macos-arm64, not in decide's copy."""
+    start = text.index("\n  gpu-macos-arm64:\n")
+    position = text.index(old, start)
+    return text[:position] + new + text[position + len(old):]
+
+
 REUSE_IF = (
     "(github.event_name == 'merge_group' && steps.classify.outputs.unaffected != 'true') "
     "|| (github.event_name == 'push' && github.ref == 'refs/heads/main')"
@@ -354,6 +361,7 @@ UNGATED_GPU_STEPS = {"Fetch and verify the pinned Pulp view-audio archive"}
 # Runs only when a proof is reused: the external-state checks the reused run
 # performed against the world as it was then.
 RECHECK_STEP = "Re-check the external state a reused proof read"
+AGREE_STEP = "Agree with the early decision"
 STERILE_GATE = (
     "needs.gpu-macos-arm64.outputs.unaffected != 'true' && "
     "needs.gpu-macos-arm64.outputs.cheap != 'true' && "
@@ -389,6 +397,15 @@ def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
         if name == RECHECK_STEP:
             test.assertEqual(condition, "steps.reuse.outputs.run_id != ''", name)
             continue
+        if name == "Refuse to build off a Mac":
+            # Fails a build that would run off a Mac; it proves nothing.
+            test.assertEqual(condition, "runner.os != 'macOS' && steps.classify.outputs.unaffected != 'true' "
+                             "&& steps.reuse.outputs.run_id == ''", name)
+            continue
+        if name == AGREE_STEP:
+            # Compares the early decision with this job's; it proves nothing.
+            test.assertEqual(condition, "needs.decide.result == 'success'", name)
+            continue
         if name in SKIP_RECEIPT_STEPS:
             test.assertEqual(condition, SKIP_RECEIPT_IF, name)
             continue
@@ -409,7 +426,8 @@ def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
             ),
             f"gpu-macos-arm64 {name!r} runs in a reused queue run: if: {condition!r}",
         )
-    test.assertEqual(names[reuse + 1], RECHECK_STEP)
+    # The agreement check sits between the decision and the re-check.
+    test.assertEqual(names[reuse + 1:reuse + 4], [AGREE_STEP, "Refuse to build off a Mac", RECHECK_STEP])
     test.assertIn("verify_extraction.py", text)
     receipt = dict(steps)["Record the tree this pull-request proof covered"]
     test.assertEqual(receipt, f"{GPU_GATE} && github.event_name == 'pull_request'")
@@ -449,13 +467,13 @@ class WorkflowWiringTests(unittest.TestCase):
                 f"      - name: Build the release GPU slice\n        if: {GPU_GATE}\n",
                 "      - name: Build the release GPU slice\n", 1,
             ),
-            "reuse on pull requests": text.replace(
-                f"        if: {REUSE_IF}\n",
-                "        if: github.event_name != 'push'\n", 1,
+            "reuse on pull requests": in_proof_job(
+                text, f"        if: {REUSE_IF}\n",
+                "        if: github.event_name != 'push'\n",
             ),
-            "reuse on tags and dispatches": text.replace(
-                f"        if: {REUSE_IF}\n",
-                "        if: github.event_name != 'pull_request'\n", 1,
+            "reuse on tags and dispatches": in_proof_job(
+                text, f"        if: {REUSE_IF}\n",
+                "        if: github.event_name != 'pull_request'\n",
             ),
             "ungated sterile journey": text.replace(
                 "      - name: Run the complete installed journey without a framework checkout\n"
@@ -492,8 +510,8 @@ class WorkflowWiringTests(unittest.TestCase):
             for word in ("reuse", "unaffected", "classify"):
                 self.assertNotIn(word, conditions, job)
         # Negative control: a reuse decision in sterile-consumer's guard is caught.
-        guard = "    needs: gpu-macos-arm64\n    # Keep the dependent job on the same first-party-only policy.\n    if: "
-        self.assertIn(guard, text)
+        guard = "    if: ${{ !cancelled() && needs.gpu-macos-arm64.result == 'success' && "
+        self.assertEqual(text.count(guard), 1)
         mutated = text.replace(guard, guard + "needs.gpu-macos-arm64.outputs.reused_run == '' && ", 1)
         self.assertIn("reuse", job_conditions(mutated, "sterile-consumer"))
 

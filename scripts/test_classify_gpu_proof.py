@@ -322,8 +322,10 @@ class WorkflowStepTests(StepHarness):
         # The canonical view-audio fetch is pinned byte for byte by
         # test_ci_runner_policy.py and reads only a digest-pinned archive; the
         # re-check runs only with a reused proof, which an unaffected run never has.
+        # The agreement check only compares decisions; it never proves.
         exempt = {"Fetch and verify the pinned Pulp view-audio archive",
-                  "Re-check the external state a reused proof read"}
+                  "Re-check the external state a reused proof read",
+                  "Agree with the early decision"}
         for name, condition in gpu[start:]:
             if name in exempt:
                 continue
@@ -465,7 +467,7 @@ class CheapLaneWorkflowTests(unittest.TestCase):
 
     def test_the_required_contexts_keep_their_names(self) -> None:
         self.assertEqual(sorted(self.workflow["jobs"]),
-                         ["cancel-destroyed-groups", "gpu-macos-arm64", "sterile-consumer"])
+                         ["cancel-destroyed-groups", "decide", "gpu-macos-arm64", "sterile-consumer"])
         for job in ("gpu-macos-arm64", "sterile-consumer"):
             self.assertEqual(self.workflow["jobs"][job]["name"], job)
 
@@ -480,6 +482,7 @@ class CheapLaneWorkflowTests(unittest.TestCase):
         CLASSIFY_STEP, DEPTH_STEP, "Derive the release identity from CMakeLists.txt",
         "Check out full preserved Vellum history without credentials",
         "Reuse an identical-tree proof", "Re-check the external state a reused proof read",
+        "Agree with the early decision", "Refuse to build off a Mac",
         "Size builds to this runner", "Download and verify the locked Skia and Dawn archive",
         "Set up the authoring toolchain", "Verify the exact release source contract",
         "Build the installed TypeScript and JSX Phase 3 fixture",
