@@ -11303,6 +11303,18 @@
     },
     {
       "class": "rendering",
+      "deadline": "2026-11-20T05:21:15Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-b38e4e067f0478f3855582852a8007f94f67625c",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "b38e4e067f0478f3855582852a8007f94f67625c",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
       "deadline": "2026-11-20T06:11:20Z",
       "direction": "framework-to-Pulp",
       "disposition": "framework-only",
@@ -11312,6 +11324,30 @@
         "render-skia-dawn"
       ],
       "source_commit": "8108789552958e6a55e38113a4dd16e7177cfb80",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-20T06:57:37Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-78a8f30bf4775959a6d87d6b542002c0ae3df903",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "78a8f30bf4775959a6d87d6b542002c0ae3df903",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-20T06:57:37Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-ea1dfadd66fa2771abe2250933b2d6039846dc8b",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "ea1dfadd66fa2771abe2250933b2d6039846dc8b",
       "source_repository": "Generous-Corp/vellum"
     },
     {
@@ -11340,11 +11376,23 @@
       ],
       "source_commit": "dd745ad287183e2c30637e7807de038d215a0c77",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-20T10:32:26Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "framework-only",
+      "event_id": "vellum-6fc713dc917904984c5b55690a9efbb7d1221c70",
+      "mapped_contracts": [
+        "canvas-kernel"
+      ],
+      "source_commit": "6fc713dc917904984c5b55690a9efbb7d1221c70",
+      "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-11-17T23:18:01Z",
+  "generated_at": "2026-11-18T01:10:44Z",
   "health": "pass",
-  "maximum_pending_age_days": 2.271,
+  "maximum_pending_age_days": 2.349,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
   "pending": 5,
