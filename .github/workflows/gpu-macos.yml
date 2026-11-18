@@ -754,6 +754,48 @@ jobs:
             --output "$RUNNER_TEMP/gpu-runtime-verification.json"
           (cd "$RUNNER_TEMP" && shasum -a 256 "$archive" > vellum-gpu-runtime.sha256)
 
+      - name: Prove the RmlUi SDK archive is reproducible and consumable
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          # vellum-rmlui-sdk-<version>-darwin-arm64.tar.gz, the optional
+          # VellumRmlUiNative package, is published beside the SDK. Two builds
+          # of this commit must match byte for byte, and a consumer must build
+          # and run Native+Metal and Core against it and the installed SDK.
+          for build in first second; do
+            python3 scripts/build_rmlui_sdk_artifact.py \
+              --source-commit "$GITHUB_SHA" \
+              --jobs "$VELLUM_BUILD_JOBS" \
+              --output-dir "$RUNNER_TEMP/rmlui-sdk-$build" \
+              --json > "$RUNNER_TEMP/rmlui-sdk-$build.json"
+          done
+          archive="vellum-rmlui-sdk-$VELLUM_RELEASE_VERSION-darwin-arm64.tar.gz"
+          cmp "$RUNNER_TEMP/rmlui-sdk-first/$archive" "$RUNNER_TEMP/rmlui-sdk-second/$archive"
+          cp "$RUNNER_TEMP/rmlui-sdk-first/$archive" "$RUNNER_TEMP/$archive"
+          python3 scripts/verify_rmlui_sdk_artifact.py \
+            --archive "$RUNNER_TEMP/$archive" \
+            --source-commit "$GITHUB_SHA" --version "$VELLUM_RELEASE_VERSION" \
+            --output "$RUNNER_TEMP/rmlui-sdk-verification.json"
+          (cd "$RUNNER_TEMP" && shasum -a 256 "$archive" > vellum-rmlui-sdk.sha256)
+          sdk="$RUNNER_TEMP/rmlui-consumer-sdk"
+          rmlui="$RUNNER_TEMP/rmlui-consumer-rmlui-sdk"
+          sh "$RUNNER_TEMP/install.sh" \
+            --archive "$RUNNER_TEMP/$VELLUM_RELEASE_ARCHIVE" \
+            --checksums "$RUNNER_TEMP/SHA256SUMS" \
+            --install-dir "$sdk"
+          mkdir -p "$rmlui"
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$rmlui"
+          build="$RUNNER_TEMP/rmlui-consumer-build"
+          cmake -S rmlui/tests/native_package_consumer -B "$build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_PREFIX_PATH=$rmlui;$sdk/lib/vellum/sdk" \
+            -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE \
+            -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE
+          cmake --build "$build" --parallel "$VELLUM_BUILD_JOBS"
+          "$build/vellum-rmlui-native-metal-consumer"
+          "$build/vellum-rmlui-core-consumer"
+
       - name: Verify the binary deployment boundary
         if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
@@ -1176,6 +1218,11 @@ jobs:
             ${{ runner.temp }}/gpu-runtime-first.json
             ${{ runner.temp }}/gpu-runtime-second.json
             ${{ runner.temp }}/gpu-runtime-verification.json
+            ${{ runner.temp }}/vellum-rmlui-sdk-${{ env.VELLUM_RELEASE_VERSION }}-darwin-arm64.tar.gz
+            ${{ runner.temp }}/vellum-rmlui-sdk.sha256
+            ${{ runner.temp }}/rmlui-sdk-first.json
+            ${{ runner.temp }}/rmlui-sdk-second.json
+            ${{ runner.temp }}/rmlui-sdk-verification.json
             ${{ runner.temp }}/templates-smoke.json
             ${{ runner.temp }}/templates-smoke.stdout.json
             ${{ runner.temp }}/vellum-sterile-acceptance.tar.gz
@@ -1197,14 +1244,20 @@ jobs:
     # When gpu-macos-arm64 reported a reused proof or a change the proof does
     # not cover, every step below but a notice is skipped, so the job runs on
     # a hosted runner rather than waiting for a scarce Mac to print it. It
-    # still runs and reports exactly as before. Otherwise merge-group runs
-    # select their own runner class when
+    # still runs and reports exactly as before. Otherwise, while the local
+    # selector is set, the journey takes its own fleet runner class when
+    # VELLUM_LOCAL_MACOS_STERILE_RUNS_ON_JSON is set, for every event: a VM
+    # booted for it can then only take a journey, never another run's
+    # 30-minute proof, and TartCI's Vellum lanes serve that class first. The
+    # journey runs about 1.4 min. gpu-macos-arm64 keeps its own selection, so
+    # a push re-proof still never queues ahead of a merge-queue entry; a push
+    # journey can queue ahead of a merge-group journey in the shared class.
+    # Without it, merge-group runs select their own runner class when
     # VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a merge-queue
-    # proof is not handed to whichever PR-head or push job GitHub picks. Push
-    # (main, release tags) stays on the generic class: a push re-proof must
-    # never queue ahead of a merge-queue entry. Unset, every event selects
-    # exactly what it did before.
-    runs-on: ${{ fromJSON(((needs.gpu-macos-arm64.outputs.reused_run != '' || needs.gpu-macos-arm64.outputs.unaffected == 'true' || needs.gpu-macos-arm64.outputs.cheap == 'true') && '["ubuntu-24.04"]') || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    # proof is not handed to whichever PR-head or push job GitHub picks, and
+    # push (main, release tags) stays on the generic class. Unset, every event
+    # selects exactly what it did before.
+    runs-on: ${{ fromJSON(((needs.gpu-macos-arm64.outputs.reused_run != '' || needs.gpu-macos-arm64.outputs.unaffected == 'true' || needs.gpu-macos-arm64.outputs.cheap == 'true') && '["ubuntu-24.04"]') || (vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON != '' && vars.VELLUM_LOCAL_MACOS_STERILE_RUNS_ON_JSON) || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     env:
       VELLUM_RELEASE_ARCHIVE: ${{ needs.gpu-macos-arm64.outputs.release_archive }}
     steps:

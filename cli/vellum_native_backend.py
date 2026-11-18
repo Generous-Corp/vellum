@@ -15,6 +15,7 @@ import sys
 import tempfile
 from typing import Any, Iterable
 
+from vellum_dev import build_input_digest, staleness, write_source_digest
 from vellum_manifest import (
     LOCK_NAME, LOCK_SCHEMA, ManifestError, imported_materialized_design,
     load_app_manifest, load_components_manifest,
@@ -346,6 +347,7 @@ def build_component_modules(
 
 def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     project: Path = context["root"]
+    source_digest = build_input_digest(project)
     build_root = project / ".vellum/build/macos"
     app = build_root / f"{context['slug']}.app"
     staging = build_root / f".{context['slug']}.app.staging"
@@ -402,6 +404,12 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     }
     with (contents / "Info.plist").open("wb") as output:
         plistlib.dump(info, output, sort_keys=True)
+    if build_input_digest(project) != source_digest:
+        raise BackendFailure(
+            "Project sources changed during the build; run vellum build again",
+            status="source_changed",
+        )
+    write_source_digest(resources, source_digest)
     if app.exists():
         shutil.rmtree(app)
     os.replace(staging, app)
@@ -417,6 +425,12 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
         "frameworks": framework_names,
         "components": installed_components,
     }
+
+
+def require_fresh_build(context: dict[str, Any], app: Path) -> None:
+    problem = staleness(app / "Contents/Resources", context["root"])
+    if problem:
+        raise BackendFailure(problem, status="build_stale")
 
 
 def ensure_app(context: dict[str, Any], sdk: Path, no_build: bool = False) -> dict[str, Any]:
@@ -435,6 +449,7 @@ def ensure_app(context: dict[str, Any], sdk: Path, no_build: bool = False) -> di
         } for item in context["components"]]
         if any(not Path(item["path"]).is_file() for item in components):
             raise BackendFailure("Built app is missing a declared custom component module", status="build_missing")
+        require_fresh_build(context, app)
         return {
             "app": app, "bundle": bundle, "executable": executable,
             "source_map": source_map, "frameworks": [], "components": components,

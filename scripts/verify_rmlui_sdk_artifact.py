@@ -23,6 +23,13 @@ Checks, without building anything:
 
 --source-commit and --version hold the archive to the release it is published
 in; --output writes the verification record the release carries.
+
+    verify_rmlui_sdk_artifact.py --archive <file> --bind-record <record.json>
+        --source-commit <sha> --checksum-output <file>
+
+binds the bytes about to be published to the record the validation job wrote:
+the record must name this archive, its SHA-256 and the release commit. It then
+writes the archive's checksum line.
 """
 
 from __future__ import annotations
@@ -208,21 +215,52 @@ def verify(archive: Path, source_commit: str | None = None,
     }
 
 
+RECORD_SCHEMA = "vellum.rmlui-sdk-verification.v1"
+
+
+def bind(archive: Path, record_path: Path, source_commit: str) -> str:
+    """The checksum line for `archive`, once it matches the validated record."""
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise VerificationError(f"cannot read the verification record: {error}") from error
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    require(record.get("schema") == RECORD_SCHEMA, "the record is not an RmlUi SDK verification record")
+    require(record.get("archive") == archive.name, f"the record names {record.get('archive')}, not {archive.name}")
+    require(record.get("sha256") == digest, "the archive's bytes differ from the validated record")
+    require(record.get("source_commit") == source_commit,
+            f"the record was validated for {record.get('source_commit')}, not {source_commit}")
+    return f"{digest}  {archive.name}\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--source-commit")
     parser.add_argument("--version")
     parser.add_argument("--output", type=Path, help="write the verification record here")
+    parser.add_argument("--bind-record", type=Path,
+                        help="bind the archive to this verification record instead of verifying it")
+    parser.add_argument("--checksum-output", type=Path, help="with --bind-record: write the checksum line here")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
+    if args.bind_record:
+        if not args.source_commit or not args.checksum_output:
+            parser.error("--bind-record needs --source-commit and --checksum-output")
+        try:
+            line = bind(args.archive, args.bind_record, args.source_commit)
+        except (VerificationError, OSError) as error:
+            print(f"vellum-rmlui-sdk-verify: {error}", file=sys.stderr)
+            return 1
+        args.checksum_output.write_text(line, encoding="utf-8")
+        return 0
     try:
         result = verify(args.archive, args.source_commit, args.version)
     except (VerificationError, OSError, tarfile.TarError) as error:
         print(f"vellum-rmlui-sdk-verify: {error}", file=sys.stderr)
         return 1
     if args.output:
-        record = {"schema": "vellum.rmlui-sdk-verification.v1", **result}
+        record = {"schema": RECORD_SCHEMA, **result}
         args.output.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2, sort_keys=True) if args.json
           else f"{result['archive']}: verified ({result['files']} files)")

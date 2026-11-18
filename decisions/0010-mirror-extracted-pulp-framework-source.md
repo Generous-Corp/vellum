@@ -260,6 +260,10 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
   object store holds, so Pulp content copied as it is cannot pass as native.
   A row that
   adds a compilable source names the mirrored target that compiles it.
+  A row that gives a Pulp-origin or transferred file another origin fails the
+  provenance lane on every event, judged against the event's base; there is no
+  label waiver, and an owner-approved exception needs an owner decision with a
+  ruleset bypass.
 - **Platform scope.** The closures say what each platform compiles; a
   ledger-added source is compiled only on the platforms its scope lists. In
   schema v2 a row that adds a compilable source may carry `platforms`, a list

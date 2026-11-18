@@ -293,6 +293,22 @@ class BaseCopyTests(GateCase):
             if "/statuses/" in block:
                 self.assertNotIn("python", block)
 
+    def test_a_refusal_never_fails_the_head_check_run(self) -> None:
+        # Only the pull_request_target run's `judge` check run sits on the
+        # pull request's head; the comment and review runs that later post
+        # `success` leave theirs on the default branch's tip. A job that
+        # failed on the refusal at open would stay red after both approvals,
+        # and the steward admits no head with a red check. The verdict is the
+        # status alone: no step may turn the decided state into a failure.
+        text = (ROOT / WORKFLOW).read_text(encoding="utf-8")
+        blocks = [block for block in re.split(r"\n(?=      - name:)", text.split("    steps:", 1)[1])
+                  if block.strip()]
+        for block in blocks:
+            title = block.strip().splitlines()[0]
+            self.assertNotIn("outputs.state", block.split("env:", 1)[0], title)
+            self.assertIsNone(re.search(r"\bexit\s+(?!0\b)\S", block), title)
+        self.assertEqual(blocks[-1].strip().splitlines()[0], "- name: Post release-path-review")
+
     def test_the_gate_says_it_is_an_accident_guard(self) -> None:
         for path in (ROOT / WORKFLOW, ROOT / "scripts" / "release_path_review.py"):
             text = " ".join(path.read_text(encoding="utf-8").replace("#", " ").split())

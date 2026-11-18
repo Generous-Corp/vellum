@@ -123,14 +123,20 @@ GPU_RUNS_ON = (
 
 # sterile-consumer selects a hosted runner when gpu-macos-arm64 reported a
 # reused proof, a change the proof does not cover or a cheap pull-request lane
-# (the job then only prints a notice), and otherwise exactly the GPU selector.
+# (the job then only prints a notice). Otherwise, while the local selector is
+# set, it takes its own fleet class from VELLUM_LOCAL_MACOS_STERILE_RUNS_ON_JSON
+# when that is set, for every event; unset, exactly the GPU selector.
+STERILE_CLASS_WHEN = (
+    "(vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON != '' && "
+    "vars.VELLUM_LOCAL_MACOS_STERILE_RUNS_ON_JSON)"
+)
 STERILE_HOSTED_WHEN = (
     "(needs.gpu-macos-arm64.outputs.reused_run != '' || "
     "needs.gpu-macos-arm64.outputs.unaffected == 'true' || "
     "needs.gpu-macos-arm64.outputs.cheap == 'true') && '[\"ubuntu-24.04\"]'"
 )
 STERILE_RUNS_ON = (
-    "runs-on: ${{ fromJSON((" + STERILE_HOSTED_WHEN + ") || "
+    "runs-on: ${{ fromJSON((" + STERILE_HOSTED_WHEN + ") || " + STERILE_CLASS_WHEN + " || "
     + GPU_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")] + ") }}"
 )
 # Hosted helper jobs in gpu-macos.yml, by name, with their exact runner. They
@@ -1282,6 +1288,45 @@ class RunnerPolicyTests(unittest.TestCase):
                             '["ubuntu-24.04"]')
         # Control: the evaluator reads needs outputs at all.
         self.assertEqual(evaluate_actions_expression(reused, {"event_name": "push", reused: "7"}), "7")
+
+    def test_sterile_consumer_takes_its_own_class_only_when_both_variables_are_set(self) -> None:
+        gpu_expression = GPU_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")]
+        # Read from the workflow itself, not the pinned constant.
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        (line,) = [line.strip() for line in workflow_jobs(gpu)["sterile-consumer"].splitlines()
+                   if line.strip().startswith("runs-on:")]
+        sterile_expression = line[len("runs-on: ${{ fromJSON("):-len(") }}")]
+        local = '["self-hosted","macOS","ARM64","vellum-build-macos"]'
+        merge = '["self-hosted","macOS","ARM64","vellum-build-macos-merge-group"]'
+        sterile = '["self-hosted","macOS","ARM64","vellum-sterile-consumer"]'
+        reused = "needs.gpu-macos-arm64.outputs.reused_run"
+        cheap = "needs.gpu-macos-arm64.outputs.cheap"
+        for event in ("pull_request", "merge_group", "push", "workflow_dispatch"):
+            for merge_value in ("", merge):
+                base = {"event_name": event,
+                        "vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON": merge_value}
+                with self.subTest(event=event, merge=bool(merge_value)):
+                    # Set with the local selector: every event's built journey
+                    # takes the sterile class, and the proof keeps its own.
+                    context = {**base, "vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local,
+                               "vars.VELLUM_LOCAL_MACOS_STERILE_RUNS_ON_JSON": sterile}
+                    self.assertEqual(evaluate_actions_expression(sterile_expression, context), sterile)
+                    self.assertNotEqual(evaluate_actions_expression(gpu_expression, context), sterile)
+                    # A notice-only journey stays on the hosted Linux runner.
+                    for reported in ({reused: "43671219549"}, {cheap: "true"}):
+                        self.assertEqual(evaluate_actions_expression(
+                            sterile_expression, {**context, **reported}), '["ubuntu-24.04"]')
+                    # Without the local selector (the fleet rollback, and the
+                    # only state in which a fork pull request runs this job) it
+                    # never reaches the fleet through the sterile class.
+                    context = {**base, "vars.VELLUM_LOCAL_MACOS_STERILE_RUNS_ON_JSON": sterile}
+                    self.assertEqual(evaluate_actions_expression(sterile_expression, context),
+                                     evaluate_actions_expression(gpu_expression, context))
+                    self.assertNotEqual(evaluate_actions_expression(sterile_expression, context), sterile)
+                    # Unset: exactly the GPU selector, as before.
+                    context = {**base, "vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local}
+                    self.assertEqual(evaluate_actions_expression(sterile_expression, context),
+                                     evaluate_actions_expression(gpu_expression, context))
 
     def test_destroyed_group_cancellation_cannot_skip_or_satisfy_a_proof(self) -> None:
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
