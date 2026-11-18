@@ -1270,6 +1270,32 @@ class VerifyExtractionTests(unittest.TestCase):
             errors, _ = self.respell_verdict(root)
             self.assertEqual(errors, [])
 
+    def test_provenance_and_mirror_scripts_parse_before_python_3_12(self) -> None:
+        """No f-string reuses its own quote inside a replacement field (PEP 701, 3.12 only).
+
+        CI pins 3.12 for some steps but runs bare `python3` in others, so the
+        scripts must stay valid on older interpreters. The check reads the
+        source of each field, which a 3.12 parser accepts.
+        """
+        import ast
+        tools = Path(__file__).resolve().parents[1]
+        checked, nested = 0, []
+        for path in sorted([*(tools / "provenance").glob("*.py"), *(tools / "mirror").glob("*.py")]):
+            source = path.read_text(encoding="utf-8")
+            checked += 1
+            for node in ast.walk(ast.parse(source)):
+                if not isinstance(node, ast.JoinedStr):
+                    continue
+                literal = (ast.get_source_segment(source, node) or "").lstrip("fFrRbB")
+                quote = literal[:3] if literal[:3] in ('"""', "'''") else literal[:1]
+                for part in node.values:
+                    if isinstance(part, ast.FormattedValue):
+                        field = ast.get_source_segment(source, part.value) or ""
+                        if quote in field:
+                            nested.append(f"{path.name}:{node.lineno}")
+        self.assertGreater(checked, 10)  # control: the scan read the scripts
+        self.assertEqual(nested, [])
+
     def test_a_transferred_respell_entry_uses_authoritative_pulp_bytes(self) -> None:
         self.hide_ci_git_base()
         with tempfile.TemporaryDirectory() as temporary:

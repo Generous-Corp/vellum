@@ -1952,7 +1952,7 @@ def framework_respell_edit_errors(root: Path, table: list[dict], transferred: se
             errors.append(f"{FRAMEWORK_RESPELL}: {path} at the history base cannot be respelled: {error}")
             continue
         if head.read_text(encoding="utf-8", errors="replace") != expected:
-            errors.append(f"{FRAMEWORK_RESPELL}: {path} changed by more than the respell of {sorted(e["old"] for e in applicable)}; "
+            errors.append(f"{FRAMEWORK_RESPELL}: {path} changed by more than the respell of {sorted(e['old'] for e in applicable)}; "
                           "land the respell on its own")
     return errors
 
