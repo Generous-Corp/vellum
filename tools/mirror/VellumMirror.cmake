@@ -85,7 +85,19 @@ message(STATUS "${_vellum_mirror_plan_output}")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${PROJECT_SOURCE_DIR}/tools/mirror/mirror_package.py"
     "${PROJECT_SOURCE_DIR}/provenance/mirror/receipts/index.json"
-    "${PROJECT_SOURCE_DIR}/tools/mirror/framework_ports.py")
+    "${PROJECT_SOURCE_DIR}/tools/mirror/framework_ports.py"
+    "${PROJECT_SOURCE_DIR}/tools/mirror/platform_closures.py"
+    "${PROJECT_SOURCE_DIR}/tools/mirror/source_compile_options.py"
+    "${PROJECT_SOURCE_DIR}/tools/mirror/gpu_surface_guard.py"
+    "${PROJECT_SOURCE_DIR}/tools/mirror/VellumMirrorPlatform.cmake")
+# Planning reads the platform index, each platform's record and its closure
+# manifests; editing any of them must retrigger mirror_package.py.
+file(GLOB_RECURSE _vellum_mirror_platform_records
+    "${PROJECT_SOURCE_DIR}/provenance/framework/platforms/*.json")
+foreach(_vellum_mirror_platform_record IN LISTS _vellum_mirror_platform_records)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${_vellum_mirror_platform_record}")
+endforeach()
 # The ports ledger and the unit manifest decide what is compiled.
 foreach(_vellum_mirror_manifest IN ITEMS provenance/framework/ports.json provenance/framework/units.json)
     if(EXISTS "${PROJECT_SOURCE_DIR}/${_vellum_mirror_manifest}")

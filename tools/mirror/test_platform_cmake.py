@@ -62,5 +62,26 @@ class PlatformCmakeTests(unittest.TestCase):
         self.assertEqual(self.prefix_flags("Clang", "Clang", "MSVC"), "")
 
 
+class ConfigureDependsTest(unittest.TestCase):
+    """Editing anything the plan is derived from must retrigger configure."""
+
+    def test_every_local_module_mirror_package_imports_is_a_configure_dependency(self) -> None:
+        import re
+        directory = MODULE.parent
+        source = (directory / "mirror_package.py").read_text(encoding="utf-8")
+        imported = {name for name in re.findall(r"^import (\w+)", source, re.M)
+                    if (directory / f"{name}.py").is_file()}
+        self.assertIn("platform_closures", imported)
+        cmake = (directory / "VellumMirror.cmake").read_text(encoding="utf-8")
+        listed = set(re.findall(r'\$\{PROJECT_SOURCE_DIR\}/tools/mirror/(\w+)\.py"', cmake))
+        for name in {"mirror_package"} | imported:
+            self.assertIn(name, listed, f"{name}.py is not in CMAKE_CONFIGURE_DEPENDS")
+
+    def test_platform_rule_and_records_are_configure_dependencies(self) -> None:
+        cmake = (MODULE.parent / "VellumMirror.cmake").read_text(encoding="utf-8")
+        self.assertIn("tools/mirror/VellumMirrorPlatform.cmake", cmake)
+        self.assertIn("provenance/framework/platforms/*.json", cmake)
+
+
 if __name__ == "__main__":
     unittest.main()
