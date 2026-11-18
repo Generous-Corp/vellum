@@ -369,9 +369,11 @@
         "ccbbc32aa6d82469c9e37136b86f76f24174b5c1",
         "6dcd52c7dd98c6fd07e198b47ba05fd24f1a3e9e",
         "d42b36757edc8fb31fbc58e1f032e2f7d21dc600",
-        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c",
+        "dea26646879007087943a8429241799836535bf2",
+        "17a4ba368b6eaacd25443c50cc7b3440dfa7c611"
       ],
-      "framework_blob": "3f6ab6ab6aa68eb73c230e2f08156e4e462b613f",
+      "framework_blob": "43045f78e6dd9c4c6dfca6230bfe0780320dd797",
       "platforms": [
         "linux-x64"
       ],
@@ -565,6 +567,19 @@
       ],
       "framework_blob": "cd6ab78a4ff5208cec031990f112f52a8ab3ad86",
       "reason": "AT-SPI geometry helpers shared by the Linux accessibility provider."
+    },
+    {
+      "framework_path": "framework/core/view/platform/linux/atspi_property_policy.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/linux/atspi_property_policy.hpp",
+      "pulp_commits": [
+        "dea26646879007087943a8429241799836535bf2",
+        "17a4ba368b6eaacd25443c50cc7b3440dfa7c611"
+      ],
+      "framework_blob": "f6ba3b8f407c36f3b4b4df251335d95e264969c2",
+      "reason": "AT-SPI Properties.Get and Properties.Set error policy for the Linux accessibility provider."
     },
     {
       "framework_path": "framework/core/view/platform/linux/atspi_text_offsets.hpp",
