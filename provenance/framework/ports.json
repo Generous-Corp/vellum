@@ -604,6 +604,297 @@
       ],
       "framework_blob": "98b3fbea1c7d0cb88e0203c77dc03e621c2adf89",
       "reason": "XDND selection parsing for the Linux drag and drop backend."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/accessibility_win_events.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/accessibility_win_events.cpp",
+      "pulp_commits": [
+        "d42b36757edc8fb31fbc58e1f032e2f7d21dc600"
+      ],
+      "framework_blob": "59880307734e84d77210532f33b54049a8d8bed3",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/accessibility_win_fragment_lifecycle.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/accessibility_win_fragment_lifecycle.cpp",
+      "pulp_commits": [
+        "d42b36757edc8fb31fbc58e1f032e2f7d21dc600"
+      ],
+      "framework_blob": "f85743cd5950dd299a778b89e483e0fdfc60b450",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/accessibility_win_fragment_lifecycle.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/accessibility_win_fragment_lifecycle.hpp",
+      "pulp_commits": [
+        "d42b36757edc8fb31fbc58e1f032e2f7d21dc600"
+      ],
+      "framework_blob": "69972dc2efa8fc7e8558deb84a21cfd4ecc0d3dd",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/accessibility_win_internal.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/accessibility_win_internal.hpp",
+      "pulp_commits": [
+        "d42b36757edc8fb31fbc58e1f032e2f7d21dc600"
+      ],
+      "framework_blob": "3f6a634c7ffbca829f66d6955aea89edbdbac727",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/accessibility_win_providers.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/accessibility_win_providers.hpp",
+      "pulp_commits": [
+        "d42b36757edc8fb31fbc58e1f032e2f7d21dc600"
+      ],
+      "framework_blob": "c5e66fdb5b46cc3c201214788df5085fbcdcaeae",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/accessibility_win_util.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/accessibility_win_util.hpp",
+      "pulp_commits": [
+        "d42b36757edc8fb31fbc58e1f032e2f7d21dc600"
+      ],
+      "framework_blob": "74a526c9733dc14e84a3fe5cd9d50da38533caeb",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/appearance_win.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/appearance_win.cpp",
+      "pulp_commits": [
+        "128963148254baca63322422b235b05534c25a65"
+      ],
+      "framework_blob": "f552d644a1e1da5132b4f25186e0e9b0774d3e6a",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/drag_drop_win.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/drag_drop_win.cpp",
+      "pulp_commits": [
+        "6a45501dc407644b34033c2d1ae691034233d6e2",
+        "be915a27ae295db0591ffd3436ffa69d1fe9063a",
+        "a47436537a3c9ce4beecbbfe24aac3f19387a7c2",
+        "4d7d71c052bdc6646a72c9afb68c0908ab173990"
+      ],
+      "framework_blob": "66e93e1ac82e65bb9d172f379896fae34d72357a",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/motion_preferences_win.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/motion_preferences_win.cpp",
+      "pulp_commits": [
+        "322126790548baa8d193dfdad11361b503da1f7b"
+      ],
+      "framework_blob": "bcd30f68320c26b99e60a018edf4516eb27f6dc2",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/software_adapter_policy.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/software_adapter_policy.hpp",
+      "pulp_commits": [
+        "58074eb057d855d665725e1898d355a0a8a94049"
+      ],
+      "framework_blob": "d293d62aab614f2da936aaf307f2c6f9adfdebd7",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility."
+    },
+    {
+      "framework_path": "framework/core/view/platform/win/win_file_drag.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/win/win_file_drag.hpp",
+      "pulp_commits": [
+        "2c260fbbc2c9b3aefdd2730519310dfd9e11d264"
+      ],
+      "framework_blob": "d0ff3b53eb3fd31ea99ab5551aba01414832a201",
+      "reason": "Windows host for the view layer: UI Automation accessibility, appearance, drag and drop, motion preferences and text accessibility."
+    },
+    {
+      "framework_path": "framework/core/view/include/vellum/view/platform/uia_mapping.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/include/pulp/view/platform/uia_mapping.hpp",
+      "pulp_commits": [
+        "6dcd52c7dd98c6fd07e198b47ba05fd24f1a3e9e"
+      ],
+      "framework_blob": "f71efedffd638bf630595d14096e4ff3d2cbf89a",
+      "reason": "Headers the Windows view host includes: the UI Automation role mapping and Windows pointer input."
+    },
+    {
+      "framework_path": "framework/core/view/include/vellum/view/platform/win_pointer_input.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/include/pulp/view/platform/win_pointer_input.hpp",
+      "pulp_commits": [
+        "f5ebc1a5e20217b594ee2e71aefba73ba3f464cc"
+      ],
+      "framework_blob": "fc2adfff208a3118de9e633195d7c5926aac3ebf",
+      "reason": "Headers the Windows view host includes: the UI Automation role mapping and Windows pointer input."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/win/child_process_win.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/win/child_process_win.cpp",
+      "pulp_commits": [
+        "32f8c737701a9f4e18ed2752e19b5289c6c64251",
+        "ff2df2782e7685e25228bb10627b8880f05912df",
+        "be915a27ae295db0591ffd3436ffa69d1fe9063a",
+        "a47436537a3c9ce4beecbbfe24aac3f19387a7c2"
+      ],
+      "framework_blob": "afd713de1380e10270f1f1b0eeee5ba76d38b89d",
+      "reason": "Windows host files for the platform and events layers.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/platform/include/vellum/platform/win/text_convert.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/platform/include/pulp/platform/win/text_convert.hpp",
+      "pulp_commits": [
+        "be915a27ae295db0591ffd3436ffa69d1fe9063a",
+        "a47436537a3c9ce4beecbbfe24aac3f19387a7c2"
+      ],
+      "framework_blob": "79fe73ec206043b04b37af9514b0bce37d6ef2f4",
+      "reason": "Windows host files for the platform and events layers."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/win/duplex_channel_win.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/win/duplex_channel_win.hpp",
+      "pulp_commits": [
+        "ff2df2782e7685e25228bb10627b8880f05912df",
+        "c1f3799a7e1c53a0ac98327a59990197dbe5db08",
+        "be915a27ae295db0591ffd3436ffa69d1fe9063a"
+      ],
+      "framework_blob": "fcdf5bdb4f959ed813878a98c779c860098467a3",
+      "reason": "Windows host files for the platform and events layers."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/win/clipboard_win.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/win/clipboard_win.cpp",
+      "pulp_commits": [
+        "ff925f05f654f65798bf3d95642b692ce0a84e7c"
+      ],
+      "framework_blob": "3044c97994e146cbdf2621b2a4a04f246eae7b15",
+      "reason": "Windows host files for the platform and events layers.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/platform/platform/win/environment_win.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/win/environment_win.cpp",
+      "pulp_commits": [
+        "ff925f05f654f65798bf3d95642b692ce0a84e7c"
+      ],
+      "framework_blob": "187d9cbb07fd034708c747d58f1ec7c2c8cee3a6",
+      "reason": "Windows host files for the platform and events layers.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/platform/platform/win/file_dialog_win.cpp",
+      "change": "added",
+      "target": "pulp-platform",
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/win/file_dialog_win.cpp",
+      "pulp_commits": [
+        "198c5affe531501a3542d94dd1d4c45f06ee6536",
+        "be915a27ae295db0591ffd3436ffa69d1fe9063a",
+        "a47436537a3c9ce4beecbbfe24aac3f19387a7c2"
+      ],
+      "framework_blob": "d9ec5764eba1ce1969b298c4017c116e628cbcd9",
+      "reason": "Windows host files for the platform and events layers.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
+    },
+    {
+      "framework_path": "framework/core/events/platform/win/winrt_toast_backend.cpp",
+      "change": "added",
+      "target": "pulp-events",
+      "origin": "pulp",
+      "pulp_path": "core/events/platform/win/winrt_toast_backend.cpp",
+      "pulp_commits": [
+        "ff925f05f654f65798bf3d95642b692ce0a84e7c"
+      ],
+      "framework_blob": "844e2fb1b9aaafff98d258b9dedee00777cdf488",
+      "reason": "Windows host files for the platform and events layers.",
+      "platforms": [
+        "windows-x64",
+        "windows-arm64"
+      ]
     }
   ]
 }
