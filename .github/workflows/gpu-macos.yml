@@ -755,7 +755,7 @@ jobs:
           (cd "$RUNNER_TEMP" && shasum -a 256 "$archive" > vellum-gpu-runtime.sha256)
 
       - name: Prove the RmlUi SDK archive is reproducible and consumable
-        if: steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        if: steps.classify.outputs.unaffected != 'true' && steps.depth.outputs.cheap != 'true' && steps.reuse.outputs.run_id == ''
         shell: bash
         run: |
           set -euo pipefail
