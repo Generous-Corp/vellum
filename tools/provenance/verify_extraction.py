@@ -1630,11 +1630,15 @@ def framework_ports_state(root: Path, transferred: set[str], pulp_root: Path | N
         # when the ledger has no later Pulp-origin rows.
         ported = None
     # With no table the respell is not in force, so there is nothing to prove
-    # and the tree is judged exactly as it was before the rule existed.
-    if (root / respeller.TABLE).exists() and not table_errors:
-        respell_errors, respell_checks = framework_respell_errors(root, table, ported, added)
-        errors.extend(respell_errors)
-        checks.update(respell_checks)
+    # and the tree is judged exactly as it was before the rule existed, unless
+    # the table was in force and has been removed.
+    if (root / respeller.TABLE).exists():
+        if not table_errors:
+            respell_errors, respell_checks = framework_respell_errors(root, table, ported, added)
+            errors.extend(respell_errors)
+            checks.update(respell_checks)
+    else:
+        errors.extend(framework_respell_removal_errors(root))
     return expected, errors, checks
 
 
@@ -1841,6 +1845,48 @@ def framework_transfer_paths(root: Path) -> set[str]:
         return {row["framework_path"] for row in transfer["records"] if isinstance(row.get("framework_path"), str)}
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return set()
+
+
+def framework_respell_removal_errors(root: Path) -> list[str]:
+    """The respell rule cannot be switched off by deleting its table.
+
+    Called only when the table is absent. It is an error when the history base
+    held the table, and when a transferred file spells a name the Vellum way
+    that the transfer recorded in its Pulp spelling. Neither can happen on a
+    tree that never had a table.
+    """
+    respeller = load_port_respell()
+    errors: list[str] = []
+    base, _ = load_mirror_export_verifier().history_base(root)
+    if base is not None and subprocess.run(
+            ["git", "-C", str(root), "cat-file", "-e", f"{base}:{FRAMEWORK_RESPELL}"],
+            capture_output=True, check=False).returncode == 0:
+        errors.append(f"{FRAMEWORK_RESPELL}: the respell table cannot be removed while transferred files carry "
+                      "its names; restore it or revert the respells")
+    try:
+        records = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))["records"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return errors
+    for row in records if isinstance(records, list) else []:
+        path, blob = row.get("framework_path"), row.get("framework_git_blob_sha")
+        if not (isinstance(path, str) and isinstance(blob, str) and respeller.respells(path)):
+            continue
+        head = root / path
+        shown = subprocess.run(["git", "-C", str(root), "cat-file", "blob", blob], capture_output=True, check=False)
+        if shown.returncode != 0 or not head.is_file():
+            continue
+        recorded = shown.stdout.decode("utf-8", errors="replace")
+        now = head.read_text(encoding="utf-8", errors="replace")
+        if recorded == now:
+            continue
+        before, after = respeller.tokens(recorded), respeller.tokens(now)
+        names = sorted(name for name in respeller.pulp_tokens(recorded)
+                       if name not in after and respeller.respelled(name) in after
+                       and respeller.respelled(name) not in before)
+        if names:
+            errors.append(f"{FRAMEWORK_RESPELL}: {path} spells {names} the Vellum way but there is no respell "
+                          "table; restore it or revert the respells")
+    return errors
 
 
 def framework_respell_repo_texts(root: Path) -> dict[str, str]:

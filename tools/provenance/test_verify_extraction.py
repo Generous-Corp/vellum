@@ -1218,6 +1218,58 @@ class VerifyExtractionTests(unittest.TestCase):
             errors, _ = self.respell_verdict(root)
             self.assertTrue(any("imply pulp_anchor" in e for e in errors), errors)
 
+    def removal_fixture(self, root: Path, recorded: bytes, current: bytes) -> str:
+        """A transferred file whose record names `recorded`'s blob and whose tree holds `current`."""
+        path = "framework/core/a/src/hooks.cpp"
+        self.framework_fixture(root, {path: current})
+        subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+        blob = subprocess.run(["git", "-C", str(root), "hash-object", "-w", "--stdin"], input=recorded,
+                              capture_output=True, check=True).stdout.decode().strip()
+        record = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+        data = json.loads(record.read_text(encoding="utf-8"))
+        data["records"][0]["framework_git_blob_sha"] = blob
+        record.write_text(json.dumps(data), encoding="utf-8")
+        return path
+
+    def test_deleting_the_respell_table_does_not_switch_the_rule_off(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            hooks = "framework/core/a/src/hooks.cpp"
+            self.framework_fixture(root, {hooks: b'extern "C" void vellum_anchor() {}\n'})
+            self.write_respell(root, [self.respell_entry("pulp_anchor", "extern-c", hooks)])
+            os.environ["VELLUM_GIT_BASE"] = self.git_commit_all(root, "with the table")
+            (root / verify_extraction.FRAMEWORK_RESPELL).unlink()
+            errors, _ = self.respell_verdict(root)
+            self.assertTrue(any("cannot be removed while transferred files carry its names" in e for e in errors),
+                            errors)
+            # Control: the same base with the table kept raises nothing.
+            self.write_respell(root, [self.respell_entry("pulp_anchor", "extern-c", hooks)])
+            errors, _ = self.respell_verdict(root)
+            self.assertEqual(errors, [])
+
+    def test_a_respelled_transferred_file_without_a_table_is_refused(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = self.removal_fixture(root, b'extern "C" void pulp_anchor() {}\n',
+                                        b'extern "C" void vellum_anchor() {}\n')
+            errors, _ = self.respell_verdict(root)
+            self.assertTrue(any(path in e and "pulp_anchor" in e and "no respell table" in e for e in errors), errors)
+
+    def test_without_a_table_or_respells_the_removal_guard_is_quiet(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            same = b'extern "C" void pulp_anchor() {}\nvoid vellum_native() {}\n'
+            self.removal_fixture(root, same, same)
+            errors, _ = self.respell_verdict(root)
+            self.assertEqual(errors, [])
+            # An unrelated edit that adds a native vellum_ name is not a respell.
+            self.removal_fixture(root, same, same + b"void vellum_extra() {}\n")
+            errors, _ = self.respell_verdict(root)
+            self.assertEqual(errors, [])
+
     def test_a_transferred_respell_entry_uses_authoritative_pulp_bytes(self) -> None:
         self.hide_ci_git_base()
         with tempfile.TemporaryDirectory() as temporary:
