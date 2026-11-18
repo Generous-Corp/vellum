@@ -156,7 +156,8 @@ GPU_HOSTED_JOBS = {
 # variable is `off`, so the proof job then starts exactly as it did before.
 PROOF_ROUTE_IF = (
     "    if: " + HOSTED_SHORT_JOBS_OFF + " && (github.event_name == 'pull_request' || "
-    "github.event_name == 'merge_group' || github.ref == 'refs/heads/main')"
+    "github.event_name == 'merge_group' || "
+    "(github.event_name == 'push' && github.ref == 'refs/heads/main'))"
 )
 PROOF_ROUTE_OUTPUT = (
     "      report_only: ${{ steps.classify.outputs.unaffected == 'true' || "
@@ -249,6 +250,13 @@ GPU_GUARD = (
 # proof-route concluded.
 GPU_JOB_GUARD = (
     "    if: ${{ !cancelled() && (" + GPU_GUARD[len("    if: "):] + ") }}"
+)
+# A skip carries down the whole needs chain unless a job names its own status
+# check, so sterile-consumer, below proof-route, names one too: it runs exactly
+# when the proof job succeeded.
+STERILE_GUARD = (
+    "    if: ${{ !cancelled() && needs.gpu-macos-arm64.result == 'success' && ("
+    + GPU_GUARD[len("    if: "):] + ") }}"
 )
 
 PULP_REPOSITORY = "Generous-Corp/pulp"
@@ -908,7 +916,7 @@ def assert_privileged_release_coordinate_isolation(text: str) -> None:
 
 def assert_gpu_local_runner_policy(text: str) -> None:
     jobs = workflow_jobs(text)
-    for job_name, guard in (("gpu-macos-arm64", GPU_JOB_GUARD), ("sterile-consumer", GPU_GUARD)):
+    for job_name, guard in (("gpu-macos-arm64", GPU_JOB_GUARD), ("sterile-consumer", STERILE_GUARD)):
         body = jobs.get(job_name)
         if body is None:
             raise AssertionError(f"gpu-macos.yml: {job_name} is missing")
@@ -1400,6 +1408,48 @@ class RunnerPolicyTests(unittest.TestCase):
         self.assertNotEqual(steps(workflow_jobs(drifted)["proof-route"])[PROOF_ROUTE_STEPS[1]],
                             proof_steps[PROOF_ROUTE_STEPS[1]])
 
+    def test_no_skippable_ancestor_can_skip_a_required_context(self) -> None:
+        # GitHub skips every job below a skipped or failed one, through the
+        # whole needs chain, unless the job names its own status check; a
+        # skipped required check reads as passing. So a required context with
+        # any ancestor that has its own `if:` must name a status check itself.
+        def ancestors_and_guards(text: str) -> tuple[dict[str, set[str]], dict[str, str]]:
+            jobs = workflow_jobs(text)
+            needs, guards = {}, {}
+            for job, body in jobs.items():
+                found = re.search(r"(?m)^    needs: \[?([A-Za-z0-9_, -]+)\]?$", body)
+                needs[job] = {name.strip() for name in found.group(1).split(",")} if found else set()
+                guard = [line for line in body.splitlines() if line.startswith("    if:")]
+                guards[job] = guard[0] if guard else ""
+            closure = {}
+            for job in jobs:
+                seen, todo = set(), list(needs[job])
+                while todo:
+                    name = todo.pop()
+                    if name not in seen:
+                        seen.add(name)
+                        todo.extend(needs.get(name, ()))
+                closure[job] = seen
+            return closure, guards
+
+        def problems(text: str) -> list[str]:
+            closure, guards = ancestors_and_guards(text)
+            found = []
+            for job in ("gpu-macos-arm64", "sterile-consumer"):
+                if any(guards[ancestor] for ancestor in closure[job]) and not re.search(
+                        r"\b(?:cancelled|always|success|failure)\(\)", guards[job]):
+                    found.append(job)
+            return found
+
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        self.assertEqual(problems(gpu), [])
+        closure, _ = ancestors_and_guards(gpu)
+        self.assertEqual(closure["sterile-consumer"], {"gpu-macos-arm64", "proof-route"})
+        # Control: the bare guard on either proof job is caught.
+        self.assertEqual(problems(gpu.replace(STERILE_GUARD, GPU_GUARD)), ["sterile-consumer"])
+        self.assertEqual(problems(gpu.replace(GPU_JOB_GUARD, GPU_GUARD)),
+                         ["gpu-macos-arm64"])
+
     def test_destroyed_group_cancellation_cannot_skip_or_satisfy_a_proof(self) -> None:
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
         jobs = workflow_jobs(gpu)
@@ -1432,15 +1482,19 @@ class RunnerPolicyTests(unittest.TestCase):
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
         assert_gpu_local_runner_policy(gpu)
         mutations = {
-            "truthy": gpu.replace(GPU_GUARD, GPU_GUARD + " || true"),
+            "truthy": gpu.replace(STERILE_GUARD, STERILE_GUARD[:-len(") }}")] + " || true) }}"),
             "truthy proof job": gpu.replace(GPU_JOB_GUARD, GPU_JOB_GUARD[:-len(") }}")] + " || true) }}"),
             "missing event clause": gpu.replace(
                 "github.event_name != 'pull_request' || ", "", 2
             ),
-            "commented guard": gpu.replace(GPU_GUARD, "    # " + GPU_GUARD.lstrip()),
+            "commented guard": gpu.replace(STERILE_GUARD, "    # " + STERILE_GUARD.lstrip()),
             "commented proof job guard": gpu.replace(GPU_JOB_GUARD, "    # " + GPU_JOB_GUARD.lstrip()),
             # Without !cancelled() a failed proof-route skips the required context.
             "skippable proof job": gpu.replace(GPU_JOB_GUARD, GPU_GUARD),
+            # Without its own status check a skipped proof-route skips it.
+            "skippable sterile job": gpu.replace(STERILE_GUARD, GPU_GUARD),
+            "sterile after a failed proof": gpu.replace(
+                STERILE_GUARD, STERILE_GUARD.replace(" && needs.gpu-macos-arm64.result == 'success'", "")),
         }
         for name, mutated in mutations.items():
             self.assertNotEqual(mutated, gpu, name)

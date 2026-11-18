@@ -52,7 +52,7 @@ jobs:
     # reviewed hosted fallback, never skipped. Setting the repository variable
     # VELLUM_HOSTED_SHORT_JOBS to `off` skips this job and restores the
     # previous runner selection for both proof jobs.
-    if: vars.VELLUM_HOSTED_SHORT_JOBS != 'off' && (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.ref == 'refs/heads/main')
+    if: vars.VELLUM_HOSTED_SHORT_JOBS != 'off' && (github.event_name == 'pull_request' || github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     # A failure here only loses the hosted placement: gpu-macos-arm64 runs
@@ -1287,8 +1287,12 @@ jobs:
   sterile-consumer:
     name: sterile-consumer
     needs: gpu-macos-arm64
-    # Keep the dependent job on the same first-party-only policy.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''
+    # Keep the dependent job on the same first-party-only policy. A skip
+    # carries down the whole needs chain unless a job names its own status
+    # check, so with proof-route skipped (tags, dispatches, the rollback) the
+    # implicit success() would skip this required context, which reads as
+    # passing. Run exactly when the proof job succeeded, as before.
+    if: ${{ !cancelled() && needs.gpu-macos-arm64.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == '') }}
     # When gpu-macos-arm64 reported a reused proof or a change the proof does
     # not cover, every step below but a notice is skipped, so the job runs on
     # a hosted runner rather than waiting for a scarce Mac to print it. It

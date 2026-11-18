@@ -499,8 +499,8 @@ class WorkflowWiringTests(unittest.TestCase):
             for word in ("reuse", "unaffected", "classify"):
                 self.assertNotIn(word, conditions, job)
         # Negative control: a reuse decision in sterile-consumer's guard is caught.
-        guard = "    needs: gpu-macos-arm64\n    # Keep the dependent job on the same first-party-only policy.\n    if: "
-        self.assertIn(guard, text)
+        guard = "    if: ${{ !cancelled() && needs.gpu-macos-arm64.result == 'success' && "
+        self.assertEqual(text.count(guard), 1)
         mutated = text.replace(guard, guard + "needs.gpu-macos-arm64.outputs.reused_run == '' && ", 1)
         self.assertIn("reuse", job_conditions(mutated, "sterile-consumer"))
 

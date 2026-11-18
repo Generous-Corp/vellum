@@ -106,8 +106,10 @@ minutes for a fleet Mac lease (the Vellum lanes are capped at one VM each):
   The proof job still makes its own decision; if it ever disagrees, it builds
   the full proof on `macos-15`, as it does whenever the local selector is
   unset. A failed or skipped `proof-route` leaves the proof job on its usual
-  runner: the job's guard is wrapped in `!cancelled()` so it can never be
-  skipped, and a skipped required check would read as passing.
+  runner: the guards of both proof jobs name their own status check
+  (`!cancelled()`, and for `sterile-consumer` the proof job's result), so
+  `proof-route` can never skip a required context, which would read as
+  passing.
 - The real `sterile-consumer` journey. It needs a clean Apple Silicon machine
   with no framework checkout, not a fleet Mac: `sdk-release.yml` already runs
   the same validator with `--require-gpu-claims` on hosted `macos-15`. It now
