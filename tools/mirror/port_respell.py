@@ -72,6 +72,28 @@ def respells(path: str) -> bool:
 
 # -- lexing -------------------------------------------------------------------
 
+ENCODING_PREFIXES = frozenset({"u8", "u", "U", "L"})
+RAW_PREFIXES = frozenset({"R"} | {p + "R" for p in ENCODING_PREFIXES})
+
+
+def _ident_run_before(text: str, i: int) -> str:
+    """The identifier characters immediately before offset i."""
+    j = i
+    while j > 0 and (text[j - 1].isalnum() or text[j - 1] == "_"):
+        j -= 1
+    return text[j:i]
+
+
+def _opens_char_literal(text: str, i: int) -> bool:
+    """Whether the quote at i opens a character literal rather than being a digit separator.
+
+    A quote glued to a numeric literal or identifier is a separator, except
+    after a whole-token encoding prefix (u8, u, U, L).
+    """
+    run = _ident_run_before(text, i)
+    return not run or run in ENCODING_PREFIXES
+
+
 def segments(text: str) -> list[tuple[str, int, int]]:
     """Split C-family text into ("code" | "comment" | "literal", start, end) spans.
 
@@ -99,10 +121,8 @@ def segments(text: str) -> list[tuple[str, int, int]]:
             end = n if end < 0 else end + 2
             flush("comment", i, end)
             i = start = end
-        elif c == '"' or (c == "'" and not (i > 0 and text[i - 1].isalnum())):
-            raw = (c == '"' and i > 0 and text[i - 1] == "R"
-                   and not (i > 1 and (text[i - 2].isalnum() or text[i - 2] == "_")
-                            and text[i - 2] not in "uUL8"))
+        elif c == '"' or (c == "'" and _opens_char_literal(text, i)):
+            raw = c == '"' and _ident_run_before(text, i) in RAW_PREFIXES
             flush("code", start, i)
             if raw:
                 open_paren = text.find("(", i)

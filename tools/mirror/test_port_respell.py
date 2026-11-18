@@ -31,6 +31,32 @@ class LexingTest(unittest.TestCase):
         self.assertIn("vellum_f(); // vellum_f in a comment", out)  # code and comments are
         self.assertNotIn("pulp_f()", out)
 
+    def test_prefixed_literals_are_never_respelled(self) -> None:
+        m = {"pulp_name": "vellum_name", "PULP_NAME": "VELLUM_NAME",
+             "pulp_x": "vellum_x", "pulp_y": "vellum_y"}
+        for lit in ("u8'pulp_name'", "L'PULP_NAME'", 'u"pulp_x"', 'U"pulp_x"',
+                    'L"pulp_x"', 'u8"pulp_x"', 'R"(pulp_y)"', 'u8R"(pulp_y)"',
+                    'LR"d(pulp_y)d"', "u'pulp_x'", "U'pulp_x'"):
+            text = f"auto v = {lit}; pulp_x();"
+            self.assertEqual(pr.apply(text, m), f"auto v = {lit}; vellum_x();", lit)
+
+    def test_digit_separators_stay_numbers(self) -> None:
+        m = {"pulp_f": "vellum_f"}
+        text = "int a = 1'000'000; int b = 0xFF'FF; int c = 0xAu'1; pulp_f();"
+        self.assertEqual(pr.apply(text, m), text.replace("pulp_f", "vellum_f"))
+        self.assertEqual([k for k, *_ in pr.segments(text)], ["code"])
+
+    def test_identifier_before_quote_is_not_a_prefix(self) -> None:
+        m = {"pulp_f": "vellum_f"}
+        # myL / fooU are identifiers, so a spaced string is an ordinary literal
+        self.assertIn('myL "pulp_f"', pr.apply('myL "pulp_f"; pulp_f();', m))
+        # an identifier that merely ends in R is not a raw-string prefix
+        kinds = [k for k, *_ in pr.segments('fooR"(a)"')]
+        self.assertEqual(kinds, ["code", "literal"])
+        self.assertEqual(pr.segments('fooR"(a)"')[1][1:], (4, 9))
+        # identifier ending in u/L glued to a quote is not a char literal
+        self.assertEqual([k for k, *_ in pr.segments("valu'x")], ["code"])
+
     def test_only_whole_tokens_change(self) -> None:
         out = pr.apply("pulp_fx(); xpulp_f(); pulp_f();", {"pulp_f": "vellum_f"})
         self.assertEqual(out, "pulp_fx(); xpulp_f(); vellum_f();")
