@@ -20,6 +20,7 @@
 // below are from the freedesktop AT-SPI2 enumeration (xml/Accessible role list).
 
 #include <vellum/view/accessibility.hpp>
+#include <vellum/view/platform/atspi_geometry.hpp>
 #include <vellum/view/view.hpp>
 
 #include <cstdint>

@@ -368,9 +368,10 @@
         "b255fba1ce8fe22ac1745814ba57822bc8d416df",
         "ccbbc32aa6d82469c9e37136b86f76f24174b5c1",
         "6dcd52c7dd98c6fd07e198b47ba05fd24f1a3e9e",
-        "d42b36757edc8fb31fbc58e1f032e2f7d21dc600"
+        "d42b36757edc8fb31fbc58e1f032e2f7d21dc600",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
       ],
-      "framework_blob": "9c7139c0887db0ff5600f2b29b17fac900ca44b7",
+      "framework_blob": "3f6ab6ab6aa68eb73c230e2f08156e4e462b613f",
       "platforms": [
         "linux-x64"
       ],
@@ -396,9 +397,10 @@
       "origin": "pulp",
       "pulp_path": "core/view/platform/linux/drag_drop_linux.cpp",
       "pulp_commits": [
-        "815869c11cf2693b638faac3bf965b82ceebeae9"
+        "815869c11cf2693b638faac3bf965b82ceebeae9",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
       ],
-      "framework_blob": "6f91c5ca3dc492e9668bbb5278c5909992d8427b",
+      "framework_blob": "4217fe5411a3dcfed552de4be043be7be9146705",
       "platforms": [
         "linux-x64"
       ],
@@ -412,9 +414,10 @@
       "pulp_path": "core/view/platform/linux/xdnd_parse.hpp",
       "pulp_commits": [
         "50797f71c72db4cd94cf76c6c1604252a3c53e3b",
-        "18d9d4cf26128f3853b415645a8549f5706bfe02"
+        "18d9d4cf26128f3853b415645a8549f5706bfe02",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
       ],
-      "framework_blob": "597efd643ebb01731fcd3134c79d0263ab11b93a",
+      "framework_blob": "deecb99854e7dc56e80c7d181c3149d6119e7170",
       "reason": "XDND message and URI-list parsing shared by the X11 host and drag source."
     },
     {
@@ -424,9 +427,10 @@
       "origin": "pulp",
       "pulp_path": "core/view/platform/linux/xdnd_source.hpp",
       "pulp_commits": [
-        "815869c11cf2693b638faac3bf965b82ceebeae9"
+        "815869c11cf2693b638faac3bf965b82ceebeae9",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
       ],
-      "framework_blob": "0d8bb1fecb9da19ada03cdac6ecef56c05744a3d",
+      "framework_blob": "b654f401fa0494cb68b524a28e208a295a74937c",
       "reason": "XDND drag-source state machine for outbound file drags."
     },
     {
@@ -442,9 +446,10 @@
         "b255fba1ce8fe22ac1745814ba57822bc8d416df",
         "ccbbc32aa6d82469c9e37136b86f76f24174b5c1",
         "6dcd52c7dd98c6fd07e198b47ba05fd24f1a3e9e",
-        "f5c94010569725c790d66c856aadf9d1d9396811"
+        "f5c94010569725c790d66c856aadf9d1d9396811",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
       ],
-      "framework_blob": "f1ebbfb20b15fe3d373fc602cd2e4229a28cf2aa",
+      "framework_blob": "1b9e99fbf5575e8cfe71f0a0f45a8115072ca173",
       "reason": "AT-SPI2 role, state and interface constants the Linux accessibility provider maps onto."
     },
     {
@@ -458,9 +463,10 @@
         "727559be1ef72ec58b4c8936476afbe713bff805",
         "7a9a6d443e185e2a6bac546ca9f71020e3901ab0",
         "dafe11558009958c1d2180230b540069185185fd",
-        "ff925f05f654f65798bf3d95642b692ce0a84e7c"
+        "ff925f05f654f65798bf3d95642b692ce0a84e7c",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
       ],
-      "framework_blob": "49127f59018dbd771ebe44ab91fe106660ff6126",
+      "framework_blob": "a2e7c8d2653d7f0244210eace857e2b5e2940790",
       "platforms": [
         "linux-x64"
       ],
@@ -475,9 +481,10 @@
       "pulp_commits": [
         "48e95d54c5d5c2e6c7a03b568577a5c47b43b784",
         "436c5ed2e8ed7c1380a8173def8ae3d10dac43ab",
-        "ff925f05f654f65798bf3d95642b692ce0a84e7c"
+        "ff925f05f654f65798bf3d95642b692ce0a84e7c",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
       ],
-      "framework_blob": "225b3cb96cbe96785e71c46021bcdf223378dc7a",
+      "framework_blob": "78db0b9c68cfd2865331ae7c54db4c158f4bf8dd",
       "platforms": [
         "linux-x64"
       ],
@@ -510,9 +517,10 @@
       "pulp_commits": [
         "39728e3fd6adce1f970d72b2cbe1932e7b2727bf",
         "79b67c1ca1f7cbb38b9740b9ed409cdc3d7a9ca9",
-        "d31069d8e3c641ea7943991427b1275f76cc2a56"
+        "d31069d8e3c641ea7943991427b1275f76cc2a56",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
       ],
-      "framework_blob": "07f3c0dc39bebb468ce040d819acd791f6aa75e4",
+      "framework_blob": "99fbd76250261ce204f5a77fde29abfa5e776d65",
       "platforms": [
         "linux-x64"
       ],
@@ -525,13 +533,62 @@
       "origin": "pulp",
       "pulp_path": "core/events/platform/linux/libnotify_backend.cpp",
       "pulp_commits": [
-        "087981c90b6833fe78cd894574089a703e981a35"
+        "087981c90b6833fe78cd894574089a703e981a35",
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
       ],
-      "framework_blob": "58ce6ea83bb9f1b87493b92ac134e472e8dc7ee6",
+      "framework_blob": "a30be33ce322574177d91b82d268024169587207",
       "platforms": [
         "linux-x64"
       ],
       "reason": "Push notification backend that loads libnotify at run time on Linux."
+    },
+    {
+      "framework_path": "framework/core/platform/platform/linux/meminfo_pressure.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/platform/platform/linux/meminfo_pressure.hpp",
+      "pulp_commits": [
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+      ],
+      "framework_blob": "8822e2f0944800c1fc96de92b8d3c607bae1986d",
+      "reason": "Memory-pressure parsing for the Linux environment backend."
+    },
+    {
+      "framework_path": "framework/core/view/include/vellum/view/platform/atspi_geometry.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/include/pulp/view/platform/atspi_geometry.hpp",
+      "pulp_commits": [
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+      ],
+      "framework_blob": "cd6ab78a4ff5208cec031990f112f52a8ab3ad86",
+      "reason": "AT-SPI geometry helpers shared by the Linux accessibility provider."
+    },
+    {
+      "framework_path": "framework/core/view/platform/linux/atspi_text_offsets.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/linux/atspi_text_offsets.hpp",
+      "pulp_commits": [
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+      ],
+      "framework_blob": "b5dd7f15bfd3d375e2a1ae707b17d7b0b69123e8",
+      "reason": "AT-SPI text offset helpers for the Linux accessibility provider."
+    },
+    {
+      "framework_path": "framework/core/view/platform/linux/xdnd_selection.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/platform/linux/xdnd_selection.hpp",
+      "pulp_commits": [
+        "70dcb51394e80cba9f65c53d95cc61c021a06c5c"
+      ],
+      "framework_blob": "98b3fbea1c7d0cb88e0203c77dc03e621c2adf89",
+      "reason": "XDND selection parsing for the Linux drag and drop backend."
     }
   ]
 }
