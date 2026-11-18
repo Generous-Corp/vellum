@@ -176,6 +176,12 @@ if(VELLUM_BUILD_TESTS)
         foundation/tests/foundation_test.cpp)
     target_link_libraries(vellum-foundation-test PRIVATE Vellum::Foundation)
     add_test(NAME vellum.foundation COMMAND vellum-foundation-test)
+    find_program(VELLUM_NODE_EXECUTABLE NAMES node)
+    if(VELLUM_NODE_EXECUTABLE)
+        add_test(NAME vellum.feature-versions-drift
+            COMMAND "${VELLUM_NODE_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/versions/generate_feature_versions.mjs" --check)
+    endif()
 
     add_executable(vellum-value-param-model-test
         foundation/tests/value/param_model_test.cpp)
@@ -288,6 +294,10 @@ if(VELLUM_BUILD_TESTS)
         target_include_directories(vellum-animation-test PRIVATE graphics/src)
         target_link_libraries(vellum-animation-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.animation COMMAND vellum-animation-test)
+        add_executable(vellum-feature-versions-test
+            graphics/tests/feature_versions_test.cpp)
+        target_link_libraries(vellum-feature-versions-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.feature-versions COMMAND vellum-feature-versions-test)
 
         add_executable(vellum-frame-pump-test
             foundation/tests/frame_pump_test.cpp)

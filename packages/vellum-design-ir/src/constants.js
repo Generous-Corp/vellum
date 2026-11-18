@@ -1,3 +1,5 @@
+import { DESIGN_IR_SCHEMA_VERSIONS, designIrVersionOf } from './feature-versions.generated.js';
+
 export const DESIGN_IR_SCHEMA = 'https://vellum.dev/schemas/design-ir/v1';
 export const AUTHORED_OVERLAY_SCHEMA =
     'https://vellum.dev/schemas/design-ir/authored-overlay/v1';
@@ -9,27 +11,27 @@ export const DESIGN_IR_VERSION = 1;
  * The schema version that adds the node `compositing` object. A document
  * carries it only when a node uses the object.
  */
-export const DESIGN_IR_COMPOSITING_VERSION = 2;
+export const DESIGN_IR_COMPOSITING_VERSION = designIrVersionOf('compositing');
 /**
  * The schema version that adds node material references. A document carries
  * it only when a node uses one.
  */
-export const DESIGN_IR_MATERIALS_VERSION = 3;
+export const DESIGN_IR_MATERIALS_VERSION = designIrVersionOf('effects');
 /** The schema version that adds animation tracks on nodes. */
-export const DESIGN_IR_TRACKS_VERSION = 4;
+export const DESIGN_IR_TRACKS_VERSION = designIrVersionOf('tracks');
 /**
  * The schema version that adds plot bindings on nodes. Each version keeps
  * every field of the ones before it: a document is written at the oldest
  * version that carries every field it uses, and a field stays illegal below
  * the version that introduced it.
  */
-export const DESIGN_IR_PLOTS_VERSION = 5;
+export const DESIGN_IR_PLOTS_VERSION = designIrVersionOf('plots');
 /**
  * The schema version that adds compiled vector assets, `properties.vector`,
  * `properties.image.source`, and the paint keys transform, clipPath and
  * overflow. Path nodes and their geometry use the version 1-5 contract.
  */
-export const DESIGN_IR_VECTOR_ASSET_VERSION = 6;
+export const DESIGN_IR_VECTOR_ASSET_VERSION = designIrVersionOf('vectors');
 /**
  * Every version this build reads. A document is written at the oldest
  * version that carries every field it uses, each version keeps every field of
@@ -46,7 +48,7 @@ export const DESIGN_IR_VERSIONS = Object.freeze([
 ]);
 // Compatibility name for supported schema versions.
 export const SUPPORTED_DESIGN_IR_VERSIONS = DESIGN_IR_VERSIONS;
-export const DESIGN_IR_LATEST_VERSION = 6;
+export const DESIGN_IR_LATEST_VERSION = DESIGN_IR_SCHEMA_VERSIONS.at(-1);
 export const DESIGN_IR_VECTOR_PAINT_KEYS = Object.freeze(['transform', 'clipPath', 'overflow']);
 export const AUTHORED_OVERLAY_VERSION = 1;
 export const REIMPORT_REPORT_VERSION = 1;
