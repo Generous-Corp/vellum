@@ -1718,6 +1718,14 @@ class PlatformRecordPlanTest(unittest.TestCase):
                          "artifact_sha256": "e" * 64}}, "is not a https://github.com/Generous-Corp/pulp/actions/runs"),
             ({"export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/1", "artifact_sha256": "E" * 64}},
              "export.artifact_sha256 is not a lowercase SHA-256"),
+            # JSON numbers whose digits spell a valid-looking hash are refused, not coerced.
+            ({"pulp_sha": int("1" * 40)}, "pulp_sha is not a full commit id"),
+            ({"tool": {"path": "tools/scripts/vellum_closure.py", "pulp_blob": int("2" * 40)}},
+             "tool names tools/scripts/vellum_closure.py"),
+            ({"export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/1",
+                         "artifact_sha256": int("3" * 64)}}, "export.artifact_sha256 is not a lowercase SHA-256"),
+            ({"renderer_asset": {"name": "skia-build-linux-x64-gpu-release.zip", "sha256": int("4" * 64)}},
+             "renderer_asset names the locked asset"),
         ):
             with self.subTest(overrides=overrides):
                 self.write_record(**overrides)

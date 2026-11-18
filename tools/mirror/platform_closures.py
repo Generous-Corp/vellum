@@ -202,6 +202,14 @@ def _check_graph_shape(at: str, closure: dict[str, Any]) -> None:
             raise RecordError(f"{at}: {name} external_link_inputs must be a list of objects")
 
 
+def _hex(pattern: re.Pattern[str], value: Any) -> bool:
+    """True when value is a string the hash pattern matches.
+
+    JSON numbers are refused before matching: a 40-digit integer would
+    otherwise stringify into a valid-looking commit id and reach git argv.
+    """
+    return isinstance(value, str) and pattern.match(value) is not None
+
 def load_record(repo: Path, key: str) -> tuple[dict[str, Any], list[tuple[str, dict[str, Any]]]]:
     """(record, [(unit, closure)]) for a platform the index lists, every pin checked."""
     listed = index(repo)
@@ -218,11 +226,11 @@ def load_record(repo: Path, key: str) -> tuple[dict[str, Any], list[tuple[str, d
         raise RecordError(f"{where}: names platform {record['platform']!r}, not {key}")
     if record["pulp_repository"] != PULP_REPOSITORY:
         raise RecordError(f"{where}: pulp_repository must be {PULP_REPOSITORY}")
-    if not SHA40.match(str(record["pulp_sha"])):
+    if not _hex(SHA40, record["pulp_sha"]):
         raise RecordError(f"{where}: pulp_sha is not a full commit id")
     tool = record["tool"]
     if not isinstance(tool, dict) or set(tool) != {"path", "pulp_blob"} or tool["path"] != EXPORTER \
-            or not SHA40.match(str(tool["pulp_blob"])):
+            or not _hex(SHA40, tool["pulp_blob"]):
         raise RecordError(f"{where}: tool names {EXPORTER} and the git blob that wrote the manifests")
     image = record["runner_image"]
     if not isinstance(image, dict) or set(image) != {"name", "version"} \
@@ -234,15 +242,15 @@ def load_record(repo: Path, key: str) -> tuple[dict[str, Any], list[tuple[str, d
     if not isinstance(export["run_url"], str) or not EXPORT_RUN.match(export["run_url"]):
         raise RecordError(f"{where}: export.run_url {export['run_url']!r} is not a "
                           "https://github.com/Generous-Corp/pulp/actions/runs/<id> URL")
-    if not SHA256.match(str(export["artifact_sha256"])):
+    if not _hex(SHA256, export["artifact_sha256"]):
         raise RecordError(f"{where}: export.artifact_sha256 is not a lowercase SHA-256")
     asset = record["renderer_asset"]
     if not isinstance(asset, dict) or set(asset) != {"name", "sha256"} or not isinstance(asset["name"], str) \
-            or not SHA256.match(str(asset["sha256"])):
+            or not _hex(SHA256, asset["sha256"]):
         raise RecordError(f"{where}: renderer_asset names the locked asset and its sha256")
     configure = record["configure"]
     if not isinstance(configure, dict) or set(configure) != {"identity", "options_sha256"} \
-            or not isinstance(configure["identity"], dict) or not SHA256.match(str(configure["options_sha256"])):
+            or not isinstance(configure["identity"], dict) or not _hex(SHA256, configure["options_sha256"]):
         raise RecordError(f"{where}: configure carries the identity and the options digest")
     identity = configure["identity"]
     system, processor = IDENTITIES[key]
