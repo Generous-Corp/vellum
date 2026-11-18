@@ -2,6 +2,18 @@
   "schema": "vellum.framework-respell.v1",
   "entries": [
     {
+      "old": "PULP_GPU_RUNTIME",
+      "new": "VELLUM_GPU_RUNTIME",
+      "kind": "closure-macro",
+      "evidence": null
+    },
+    {
+      "old": "PULP_TRACING_KEEP_SYMBOL",
+      "new": "VELLUM_TRACING_KEEP_SYMBOL",
+      "kind": "file-macro",
+      "evidence": "framework/core/runtime/src/trace.cpp"
+    },
+    {
       "old": "pulp_gpu_runtime_hooks_anchor",
       "new": "vellum_gpu_runtime_hooks_anchor",
       "kind": "extern-c",

@@ -1277,6 +1277,32 @@ class VerifyExtractionTests(unittest.TestCase):
             errors, _ = self.respell_verdict(root)
             self.assertTrue(any("changed by more than the respell" in e for e in errors), errors)
 
+    def test_a_file_macro_edits_only_its_own_evidence_file(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            own, other = "framework/core/a/src/own.cpp", "framework/core/a/src/other.cpp"
+            body = b'#define PULP_KEEP 1\nint v = PULP_KEEP;\nint other = 1;\n'
+            self.framework_fixture(root, {own: body, other: body})
+            os.environ["VELLUM_GIT_BASE"] = self.git_commit_all(root, "before the respell")
+            self.write_respell(root, [self.respell_entry("PULP_KEEP", "file-macro", own)])
+            respelled = b'#define VELLUM_KEEP 1\nint v = VELLUM_KEEP;\nint other = 1;\n'
+            (root / own).write_bytes(respelled)
+            self.track(root)
+            errors, _ = self.respell_verdict(root)
+            self.assertFalse(any("changed by more than" in e for e in errors), errors)
+            # An unrelated byte change in the evidence file is refused.
+            (root / own).write_bytes(respelled.replace(b"other = 1", b"other = 2"))
+            self.track(root)
+            errors, _ = self.respell_verdict(root)
+            self.assertTrue(any("changed by more than" in e for e in errors), errors)
+            # An entry for another file cannot excuse this file's edit.
+            (root / own).write_bytes(body)
+            (root / other).write_bytes(respelled)
+            self.track(root)
+            errors, _ = self.respell_verdict(root)
+            self.assertTrue(any(other in e and "changed by more than" in e for e in errors), errors)
+
     def test_a_ported_row_is_proved_through_the_respell(self) -> None:
         self.hide_ci_git_base()
         with tempfile.TemporaryDirectory() as temporary:

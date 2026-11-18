@@ -1835,8 +1835,9 @@ def framework_respell_edit_errors(root: Path, table: list[dict], transferred: se
     """A table entry this change adds edits a transferred file by exactly its respell.
 
     Each transferred file that changed from the history base, and whose base
-    bytes spell a newly added framework-wide name, must equal its base bytes
-    respelled by the added entries alone.
+    bytes spell a newly added name that applies to it, must equal its base
+    bytes respelled by those entries alone. A framework-wide entry applies to
+    every file; a file-macro entry applies only to its own evidence file.
     """
     respeller = load_port_respell()
     base, base_error = load_mirror_export_verifier().history_base(root)
@@ -1848,10 +1849,10 @@ def framework_respell_edit_errors(root: Path, table: list[dict], transferred: se
                            capture_output=True, check=False)
     landed, _ = respeller.parse(shown.stdout.decode("utf-8", errors="replace")) if shown.returncode == 0 else ([], [])
     before = {(e["old"], e["kind"]) for e in landed}
-    new_entries = [e for e in table if (e["old"], e["kind"]) not in before and e["kind"] in respeller.FRAMEWORK_WIDE]
+    new_entries = [e for e in table if (e["old"], e["kind"]) not in before
+                   and e["kind"] in (*respeller.FRAMEWORK_WIDE, "file-macro")]
     if not new_entries:
         return []
-    olds = {e["old"] for e in new_entries}
     errors = []
     changed = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "-z", base, "--", FRAMEWORK_ROOT.rstrip("/")],
                              capture_output=True, check=False)
@@ -1864,18 +1865,19 @@ def framework_respell_edit_errors(root: Path, table: list[dict], transferred: se
         if old_bytes.returncode != 0:
             continue
         text = old_bytes.stdout.decode("utf-8", errors="replace")
-        if not (olds & respeller.pulp_tokens(text)):
+        applicable = [e for e in new_entries if e["kind"] != "file-macro" or e["evidence"] == path]
+        if not ({e["old"] for e in new_entries} & respeller.pulp_tokens(text)):
             continue
         head = root / path
         if not head.is_file():
             continue
         try:
-            expected = respeller.apply(text, {e["old"]: e["new"] for e in new_entries})
+            expected = respeller.apply(text, {e["old"]: e["new"] for e in applicable})
         except respeller.RespellError as error:
             errors.append(f"{FRAMEWORK_RESPELL}: {path} at the history base cannot be respelled: {error}")
             continue
         if head.read_text(encoding="utf-8", errors="replace") != expected:
-            errors.append(f"{FRAMEWORK_RESPELL}: {path} changed by more than the respell of {sorted(olds)}; "
+            errors.append(f"{FRAMEWORK_RESPELL}: {path} changed by more than the respell of {sorted(e["old"] for e in applicable)}; "
                           "land the respell on its own")
     return errors
 
