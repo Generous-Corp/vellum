@@ -1,7 +1,7 @@
 #pragma once
 
 #include <vellum/graphics/color.hpp>
-#include <vellum/graphics/limits.hpp>
+#include <vellum/graphics/feature_versions.hpp>
 
 #include <algorithm>
 #include <array>
@@ -468,6 +468,11 @@ struct VectorOp final {
     std::shared_ptr<const PathGeometry> clip;
 };
 
+/// The most operations one compiled vector asset may hold.
+inline constexpr std::size_t kMaxVectorOps = 16384U;
+/// The deepest nesting of groups in a compiled vector asset.
+inline constexpr std::size_t kMaxVectorGroupDepth = 64U;
+
 /// A compiled vector asset: one display list drawn by a single `vector`
 /// node. `view_box` is the asset's coordinate box; it is stretched onto the
 /// node's box, so a producer that wants an aspect-preserving fit sizes the
@@ -908,6 +913,13 @@ struct PlotSpec final {
     std::vector<float> samples;
 };
 
+/// The largest `PlotSpec::slot_count` a scene may carry.
+inline constexpr std::uint32_t kMaxPlotSlots = 1U << 22U;
+/// The largest `PlotSpec::audio_channel`.
+inline constexpr std::uint32_t kMaxPlotAudioChannel = 1024U;
+/// The largest line width, bar gap and peak width, in logical pixels.
+inline constexpr float kMaxPlotStroke = 4096.0F;
+
 /// The scene schema version this build produces.
 ///
 /// The version is a single integer. Bump it when a change can alter rendered
@@ -972,12 +984,13 @@ struct PlotSpec final {
 /// scenes keep drawing it as `?`.
 ///
 /// Claimed versions, in order:
+/// version 2: transform, opacity and corner radii; version 3: path nodes;
 /// version 4: image nodes; version 5: clip, mask and isolation on groups;
 /// version 6: blend modes and DesignIR compositing fields; version 7: interned
 /// token receipts; version 8: gradient vocabulary; version 9: vector assets;
 /// version 10: effects and materials; version 11: animation tracks; version
 /// 12: plot nodes; version 13: text layout.
-inline constexpr std::uint32_t kSceneVersion = 13U;
+inline constexpr std::uint32_t kSceneVersion = latest_scene_version();
 
 /// The oldest scene schema version this build still consumes.
 inline constexpr std::uint32_t kMinSupportedSceneVersion = 1U;

@@ -286,6 +286,7 @@ inline constexpr float kTextNaturalLineHeightBound = 2.5F;
 /// versions the damage model understands; a newer scene repaints fully until
 /// the damage model learns its fields and this constant is raised.
 inline constexpr std::uint32_t kDamageModelSceneVersion = 13U;
+static_assert(kDamageModelSceneVersion <= kSceneVersion);
 
 /// Whether a scene of `version` may be redrawn from its damage alone: a
 /// version from `kMinSupportedSceneVersion` to `kDamageModelSceneVersion`.
