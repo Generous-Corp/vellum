@@ -1565,6 +1565,11 @@ def framework_landed_respell(data: bytes, entries: list[dict], path: str, blob: 
 
     The empty subset is tried first. When none gives it, the bytes respelled
     by every applicable entry are returned, so the caller reports a mismatch.
+
+    Accepting a subset is safe only because the row's blob is not the file:
+    framework_respell_errors' stale-spelling check (port_respell.
+    consistency_errors) still requires the file itself to carry every table
+    entry's respell, so a landed port left partly respelled fails there.
     Raises ValueError (RespellError included) for bytes that cannot be read
     or too many candidate names.
     """

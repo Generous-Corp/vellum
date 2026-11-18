@@ -1327,6 +1327,36 @@ class VerifyExtractionTests(unittest.TestCase):
             errors, _ = self.respell_verdict(root, pulp_root=pulp, defer=False)
             self.assertEqual((ports_errors, errors), ([], []))
 
+    def test_a_landed_port_left_partly_respelled_fails_the_stale_spelling_check(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root, pulp = Path(temporary) / "vellum", Path(temporary) / "pulp"
+            root.mkdir()
+            source = 'extern "C" void pulp_anchor();\nextern "C" void pulp_anchor2();\nvoid g() { pulp_anchor(); pulp_anchor2(); }\n'
+            sha = self.pulp_checkout(pulp, {"core/a/src/new.cpp": source})
+            hooks = self.HOOKS_PULP + b'extern "C" void pulp_anchor2() {}\n'
+            self.transfer_fixture(root, {self.HOOKS: hooks})
+            self.record_rename(root)
+            (root / self.PORTED).write_text(source, encoding="utf-8")
+            self.write_ports(root, [self.ports_row(self.PORTED, commits=[sha],
+                                                   blob=verify_extraction.git_blob_sha(source.encode()))])
+            os.environ["VELLUM_GIT_BASE"] = self.git_commit_all(root, "the port landed")
+            self.write_respell(root, [self.respell_entry("pulp_anchor", self.HOOKS),
+                                      self.respell_entry("pulp_anchor2", self.HOOKS)])
+            (root / self.HOOKS).write_bytes(self.vellum(hooks, "pulp_anchor2", "pulp_anchor"))
+            # The landed port takes only one of the two respells.
+            (root / self.PORTED).write_bytes(self.vellum(source.encode(), "pulp_anchor2"))
+            self.track(root)
+            ports_errors, _ = self.ports_verdict(root, pulp_root=pulp, defer=False)
+            errors, _ = self.respell_verdict(root, pulp_root=pulp, defer=False)
+            self.assertEqual(ports_errors, [])  # the row's blob, as it landed, is still provable
+            self.assertTrue(any(self.PORTED in e and "still spells pulp_anchor;" in e for e in errors), errors)
+            # Control: the full respell passes.
+            (root / self.PORTED).write_bytes(self.vellum(source.encode(), "pulp_anchor2", "pulp_anchor"))
+            self.track(root)
+            errors, _ = self.respell_verdict(root, pulp_root=pulp, defer=False)
+            self.assertEqual(errors, [])
+
     def test_an_appended_port_is_proved_through_the_current_table(self) -> None:
         self.hide_ci_git_base()
         with tempfile.TemporaryDirectory() as temporary:
@@ -1366,7 +1396,8 @@ class VerifyExtractionTests(unittest.TestCase):
             root = Path(temporary)
             native = "framework/core/a/src/native.cpp"
             origin = self.HOOKS_PULP + b"int other = 1;\n"
-            self.transfer_fixture(root, {self.HOOKS: origin})
+            other = "framework/core/a/src/other.cpp"
+            self.transfer_fixture(root, {self.HOOKS: origin, other: b"void pulp_other();\nint o = 1;\n"})
             (root / native).write_bytes(b"void n() { pulp_anchor(); }\nint n2 = 1;\n")
             self.write_ports(root, [self.ports_row(native)])
             base = self.git_commit_all(root, "before the respell")
@@ -1383,6 +1414,13 @@ class VerifyExtractionTests(unittest.TestCase):
             self.track(root)
             errors, _ = self.respell_verdict(root)
             self.assertTrue(any(self.HOOKS in e and "changed by more than the respell" in e for e in errors), errors)
+            # An entry cannot excuse a hand respell in another transferred file, evidence or not.
+            (root / self.HOOKS).write_bytes(self.vellum(origin))
+            (root / other).write_bytes(b"void vellum_other();\nint o = 1;\n")
+            self.track(root)
+            errors, _ = self.respell_verdict(root)
+            self.assertTrue(any(other in e and "spells ['pulp_other'] the Vellum way" in e for e in errors), errors)
+            (root / other).write_bytes(b"void pulp_other();\nint o = 1;\n")
             # A base that spells both the old and the new name cannot be respelled.
             self.write_respell(root, [])
             (root / self.HOOKS).write_bytes(origin + b"void vellum_anchor();\n")
