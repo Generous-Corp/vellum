@@ -463,6 +463,10 @@ def entry_errors(entry: Any, where: str) -> list[str]:
         return [f"{where}: must have exactly {sorted(ENTRY_KEYS)}"]
     errors: list[str] = []
     old, new, kind, evidence = entry["old"], entry["new"], entry["kind"], entry["evidence"]
+    # Every field is a string; checking that first keeps a malformed entry a refusal, never an exception.
+    wrong = sorted(key for key in ENTRY_KEYS if not isinstance(entry[key], str))
+    if wrong:
+        return [f"{where}: {', '.join(wrong)} must be {'a string' if len(wrong) == 1 else 'strings'}"]
     if kind not in KINDS:
         return [f"{where}: kind must be extern-c, not {kind!r}; macro names are name debt, not respelled"]
     if not isinstance(old, str) or not C_NAME.match(old):

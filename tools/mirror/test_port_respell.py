@@ -240,7 +240,7 @@ class TableTest(unittest.TestCase):
             ({**ok, "new": "vellum_g"}, "respells to vellum_f"),
             ({**ok, "kind": "renamed"}, "kind must be extern-c"),
             ({**ok, "extra": 1}, "must have exactly"),
-            ({**ok, "evidence": None}, "names the framework/ source"),
+            ({**ok, "evidence": None}, "evidence must be a string"),
             ({**ok, "evidence": "framework/a.json"}, "names the framework/ source"),
             (entry("PULP_X", "framework/a.cpp"), "respells a pulp_ name"),
         ):
@@ -252,6 +252,22 @@ class TableTest(unittest.TestCase):
             errors = self.errors([entry(old, "framework/a.cpp", kind)])
             self.assertTrue(any(f"kind must be extern-c, not '{kind}'" in e for e in errors), (kind, errors))
             self.assertEqual(pr.parse(json.dumps({"schema": pr.SCHEMA, "entries": [entry(old, None, kind)]}))[0], [])
+
+    def test_a_malformed_field_is_a_refusal_not_an_exception(self) -> None:
+        ok = entry("pulp_f", "framework/a.cpp")
+        for key in sorted(pr.ENTRY_KEYS):
+            for bad in ([], {}, ["extern-c"], {"kind": "extern-c"}, 3, None):
+                with self.subTest(key=key, bad=bad):
+                    errors = self.errors([{**ok, key: bad}])
+                    self.assertTrue(any(f"{key} must be a string" in e for e in errors), errors)
+        # Unhashable kinds stay refusals even where KINDS is a set.
+        original = pr.KINDS
+        try:
+            pr.KINDS = frozenset(original)
+            self.assertTrue(any("kind must be a string" in e for e in self.errors([{**ok, "kind": []}])))
+            self.assertEqual(self.errors([ok]), [])
+        finally:
+            pr.KINDS = original
 
     def test_order_and_duplicates(self) -> None:
         a, b = entry("pulp_a", "framework/a.cpp"), entry("pulp_b", "framework/b.cpp")

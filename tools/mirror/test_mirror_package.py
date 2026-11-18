@@ -2329,6 +2329,15 @@ class ConfigureDependsTest(unittest.TestCase):
                         missing.append(data)
         self.assertEqual(missing, [], "edits to these leave plan.cmake stale")
 
+    def test_the_respell_rule_and_table_are_configure_dependencies(self) -> None:
+        # mirror_package.py does not read them, but they change framework/ sources' bytes.
+        cmake = (self.HERE / "VellumMirror.cmake").read_text(encoding="utf-8")
+        dependencies = cmake[cmake.index("CMAKE_CONFIGURE_DEPENDS"):cmake.index("set(VELLUM_MIRROR_BINARY_DATA_DIR")]
+        # The directory is listed so that adding the table, which an EXISTS-gated entry cannot see, retriggers.
+        for path in ("tools/mirror/port_respell.py", "provenance/framework/respell.json",
+                     '"${PROJECT_SOURCE_DIR}/provenance/framework")'):
+            self.assertIn(path, dependencies)
+
 
 if __name__ == "__main__":
     unittest.main()
