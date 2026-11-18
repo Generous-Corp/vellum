@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-17T21:20:00Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-6c96c2faa2c514af490a518a50753e2babe50381",
+  "kind": "resolution",
+  "linked_commits": [
+    "6c96c2faa2c514af490a518a50753e2babe50381"
+  ],
+  "linked_pull_requests": [
+    "Generous-Corp/vellum#549"
+  ],
+  "owner": "@claude-observatory-agent",
+  "rationale": "Vellum graphics text-layout GPU test moved onto the shared skip helper (skip only without an adapter); test-only, no API, schema or version change, no Pulp counterpart. Classified by the Vellum lead.",
+  "resolves": "vellum-6c96c2faa2c514af490a518a50753e2babe50381",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

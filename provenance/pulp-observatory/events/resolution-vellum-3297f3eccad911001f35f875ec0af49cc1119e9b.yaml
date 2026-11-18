@@ -1,0 +1,24 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-17T19:05:00Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-3297f3eccad911001f35f875ec0af49cc1119e9b",
+  "kind": "resolution",
+  "linked_commits": [
+    "3297f3eccad911001f35f875ec0af49cc1119e9b"
+  ],
+  "linked_pull_requests": [
+    "Generous-Corp/vellum#549"
+  ],
+  "owner": "@claude-observatory-agent",
+  "rationale": "Vellum graphics GPU tests now skip only when no adapter exists; test code plus a non-installed test hook in graphics/src. No public API, schema or version change, no Pulp counterpart. Classified by the Vellum lead.",
+  "resolves": "vellum-3297f3eccad911001f35f875ec0af49cc1119e9b",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
