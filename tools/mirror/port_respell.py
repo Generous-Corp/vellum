@@ -1,33 +1,27 @@
 #!/usr/bin/env python3
-"""The port respell: Pulp names a framework/ file may carry under a Vellum spelling.
+"""The port respell: Pulp C-linkage names a framework/ file carries under a Vellum spelling.
 
 A file ported into framework/ joins as Pulp's bytes put through the transfer's
-rename, and it must carry no name debt. Some Pulp names survive that rename:
-`PULP_*` macros and `pulp_*` C names. The respell table,
+rename. Some Pulp names survive that rename, and a `pulp_*` function or object
+defined with C linkage is the one that matters: Pulp's copy and Vellum's copy
+would share a linker-visible name in one process. The respell table,
 `provenance/framework/respell.json`, lists each such name and its Vellum
-spelling, and every entry is one of five kinds, each recognised from bytes,
-never chosen by hand:
+spelling. Every entry is of the one kind the rule recognises, `extern-c`: a
+`pulp_<x>` its evidence file defines with C linkage, recognised from bytes and
+never chosen by hand. It is respelled in every framework/ file, so callers and
+the definition agree.
 
-- `closure-macro` (a): a `PULP_<X>` macro the landed closures define. A ported
-  source uses `VELLUM_<X>`, and the build plan gives that source `VELLUM_<X>`
-  with the closure's value. Transferred files keep the `PULP_` spelling.
-- `link-export` (b): a `pulp_<x>` name a closure lists in `link_exports`.
-- `file-macro` (c): a `PULP_<X>` macro its evidence file `#define`s itself. It
-  is respelled in that file only.
-- `extern-c` (d): a `pulp_<x>` function or object its evidence file defines
-  with C linkage. It is respelled in every framework/ file, so callers and the
-  definition agree, and so Pulp's and Vellum's copies no longer share a
-  linker-visible name.
-- `opt-in-switch` (e): a `PULP_<X>` that its evidence file only tests
-  (`defined()`, `#ifdef`, `#ifndef`), and that no framework/ file and no
-  closure defines. It is respelled in every framework/ file that tests it.
+`PULP_*` macro names clash with nothing; they stay as counted name debt, and a
+table entry of any other kind is refused.
 
 The respell replaces identifier tokens in code and comments and never touches
-string or character literals, so a string's bytes are never changed.
+string or character literals or `#include <...>` header names, so a string's
+bytes are never changed. A file that builds a table name by token pasting
+(`pulp_ ## x`) is refused, since no token respell can follow it.
 
 This module is pure: it reads bytes it is given and runs no git.
 tools/provenance/verify_extraction.py proves the table against Pulp and the
-transfer record, and tools/mirror/mirror_package.py plans the aliases.
+transfer record.
 """
 
 from __future__ import annotations
@@ -40,12 +34,7 @@ from typing import Any, Iterable
 TABLE = "provenance/framework/respell.json"
 SCHEMA = "vellum.framework-respell.v1"
 ENTRY_KEYS = {"old", "new", "kind", "evidence"}
-KINDS = ("closure-macro", "link-export", "file-macro", "extern-c", "opt-in-switch")
-# Kinds whose name is respelled in every framework/ file, not only in ported ones.
-FRAMEWORK_WIDE = ("link-export", "extern-c", "opt-in-switch")
-MACRO_KINDS = ("closure-macro", "file-macro", "opt-in-switch")
-C_NAME_KINDS = ("link-export", "extern-c")
-MACRO = re.compile(r"PULP_[A-Za-z0-9_]+\Z")
+KINDS = ("extern-c",)
 C_NAME = re.compile(r"pulp_[A-Za-z0-9_]+\Z")
 TEXT_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".m", ".mm", ".h", ".hh", ".hpp", ".hxx", ".inc", ".ipp"}
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -74,6 +63,10 @@ def respells(path: str) -> bool:
 
 ENCODING_PREFIXES = frozenset({"u8", "u", "U", "L"})
 RAW_PREFIXES = frozenset({"R"} | {p + "R" for p in ENCODING_PREFIXES})
+# A header name in angle brackets: `#include <...>`, `#include_next <...>`,
+# `#import <...>` and `__has_include(<...>)`. The `<` that opens it.
+HEADER_NAME = re.compile(r"(?:^[ \t]*#[ \t]*(?:include|include_next|import)[ \t]*|"
+                         r"\b__has_include(?:_next)?[ \t]*\([ \t]*)<\Z", re.M)
 
 
 def _ident_run_before(text: str, i: int) -> str:
@@ -94,11 +87,17 @@ def _opens_char_literal(text: str, i: int) -> bool:
     return not run or run in ENCODING_PREFIXES
 
 
+def _opens_header_name(text: str, i: int) -> bool:
+    line_start = text.rfind("\n", 0, i) + 1
+    return HEADER_NAME.search(text[line_start:i + 1]) is not None
+
+
 def segments(text: str) -> list[tuple[str, int, int]]:
     """Split C-family text into ("code" | "comment" | "literal", start, end) spans.
 
-    Literals are string and character literals, raw strings included. A
-    quote that follows a digit is a digit separator, not a character literal.
+    Literals are string and character literals, raw strings included, and
+    header names in angle brackets. A quote that follows a digit is a digit
+    separator, not a character literal.
     """
     out: list[tuple[str, int, int]] = []
     i, n, start = 0, len(text), 0
@@ -120,6 +119,14 @@ def segments(text: str) -> list[tuple[str, int, int]]:
             end = text.find("*/", i + 2)
             end = n if end < 0 else end + 2
             flush("comment", i, end)
+            i = start = end
+        elif c == "<" and _opens_header_name(text, i):
+            flush("code", start, i)
+            j = i + 1
+            while j < n and text[j] not in ">\n":
+                j += 1
+            end = j + 1 if j < n and text[j] == ">" else j
+            flush("literal", i, end)
             i = start = end
         elif c == '"' or (c == "'" and _opens_char_literal(text, i)):
             raw = c == '"' and _ident_run_before(text, i) in RAW_PREFIXES
@@ -163,17 +170,26 @@ def pulp_tokens(text: str) -> set[str]:
     return set(PULP_TOKEN.findall(blanked(text, keep_comments=True)))
 
 
-# -- recognising each kind ------------------------------------------------------
-
-DEFINE = re.compile(r"^[ \t]*#[ \t]*define[ \t]+(PULP_[A-Za-z0-9_]+)", re.M)
+PASTE = re.compile(r"(?<![A-Za-z0-9_])((?:PULP_|pulp_)[A-Za-z0-9_]*)[ \t]*##|##[ \t]*((?:PULP_|pulp_)[A-Za-z0-9_]*)")
 
 
-def self_defined_macros(text: str) -> set[str]:
-    """PULP_ macros the text #defines itself (kind c)."""
-    return set(DEFINE.findall(blanked(text)))
+def pasted_pulp_fragments(text: str) -> set[str]:
+    """PULP_/pulp_ fragments the text glues to another token with `##`, in code.
 
+    A name built by pasting never appears as one token, so the respell could
+    not follow it. A fragment passed to a pasting macro as an argument
+    (`CAT(pulp_, x)`) is not seen.
+    """
+    return {left or right for left, right in PASTE.findall(blanked(text))}
+
+
+# -- recognising C-linkage definitions --------------------------------------------
 
 EXTERN_C = re.compile(r"\bextern\s*\Z")
+# Attribute groups a declaration may carry anywhere: GNU, MSVC and standard.
+ATTRIBUTE_HEADS = re.compile(r"\b(?:__attribute__|__declspec|alignas|__asm__|__asm|asm)\s*\(|\[\[")
+TRAILING_WORDS = re.compile(r"\b(?:const|volatile|noexcept|override|final|throw)\s*\Z")
+NOT_A_DEFINITION = re.compile(r"^\s*(?:extern|typedef|using|static|friend|template)\b")
 
 
 def _extern_c_starts(text: str) -> list[int]:
@@ -201,8 +217,47 @@ def _match(code: str, i: int, opener: str, closer: str) -> int:
     return len(code)
 
 
+def _match_back(code: str, i: int, opener: str, closer: str) -> int:
+    """The index of the opener matching the closer at i, scanning backwards; -1 when unbalanced."""
+    depth = 0
+    while i >= 0:
+        if code[i] == closer:
+            depth += 1
+        elif code[i] == opener:
+            depth -= 1
+            if depth == 0:
+                return i
+        i -= 1
+    return -1
+
+
+def _without_preprocessor_lines(code: str) -> str:
+    """Code with each preprocessor directive (and its continuation lines) blanked, offsets kept."""
+    out, continued = [], False
+    for line in code.split("\n"):
+        directive = continued or line.lstrip().startswith("#")
+        continued = directive and line.rstrip().endswith("\\")
+        out.append(" " * len(line) if directive else line)
+    return "\n".join(out)
+
+
+def _without_attributes(declaration: str) -> str:
+    """The declaration with attribute groups (`__attribute__((...))`, `__declspec(...)`, `[[...]]`) blanked."""
+    text = declaration
+    while True:
+        found = ATTRIBUTE_HEADS.search(text)
+        if found is None:
+            return text
+        if found.group(0) == "[[":
+            close = text.find("]]", found.end())
+            end = len(text) if close < 0 else close + 2
+        else:
+            end = _match(text, found.end() - 1, "(", ")") + 1
+        text = text[:found.start()] + " " * (end - found.start()) + text[end:]
+
+
 def _declarations(code: str, start: int, end: int) -> list[tuple[str, bool]]:
-    """Top-level declarations in code[start:end]: (text before its body or ;, is_definition)."""
+    """Top-level declarations in code[start:end]: (text before its body or ;, has a body)."""
     out: list[tuple[str, bool]] = []
     i, head = start, start
     while i < end:
@@ -221,8 +276,7 @@ def _declarations(code: str, start: int, end: int) -> list[tuple[str, bool]]:
             head = i
             continue
         if c == ";":
-            decl = code[head:i]
-            out.append((decl, "=" in decl or re.search(r"\]\s*\Z", decl) is not None))
+            out.append((code[head:i], False))
             i += 1
             head = i
             continue
@@ -230,69 +284,98 @@ def _declarations(code: str, start: int, end: int) -> list[tuple[str, bool]]:
     return out
 
 
-def _declared_name(declaration: str) -> str | None:
-    """The name a declaration declares: the identifier before its first top-level ( [ or =."""
+def declarator(declaration: str) -> tuple[str | None, bool, bool]:
+    """(declared name, declares a function, has an initializer) for one declaration's text.
+
+    Attribute groups are skipped, then trailing parameter lists, array bounds
+    and qualifiers are peeled off and a parenthesized declarator such as
+    `(*pulp_fp)` is unwrapped; the name is the last identifier left. A name
+    followed by a parameter list declares a function; a pointer to one is an
+    object.
+    """
+    text = _without_attributes(declaration)
+    initializer = False
     depth = 0
-    for index, c in enumerate(declaration):
-        if c in "([=" and depth == 0:
-            names = IDENT.findall(declaration[:index])
-            return names[-1] if names else None
-        if c in "<":
+    for index, c in enumerate(text):
+        if c in "(<[":
             depth += 1
-        elif c in ">" and depth:
+        elif c in ")>]" and depth:
             depth -= 1
-    return None
+        elif depth == 0 and (c == "=" or text.startswith("->", index)):
+            initializer = c == "="
+            text = text[:index]
+            break
+    function: bool | None = None
+    while True:
+        text = text.rstrip()
+        trailing = TRAILING_WORDS.search(text)
+        if trailing:
+            text = text[:trailing.start()]
+            continue
+        if text.endswith("]"):
+            opener = _match_back(text, len(text) - 1, "[", "]")
+            if opener < 0:
+                return None, False, initializer
+            text = text[:opener]
+            function = False if function is None else function
+            continue
+        if text.endswith(")"):
+            opener = _match_back(text, len(text) - 1, "(", ")")
+            if opener < 0:
+                return None, False, initializer
+            before = text[:opener].rstrip()
+            inner = text[opener + 1:-1]
+            names_before = IDENT.findall(before)
+            if names_before and names_before[-1] in ("noexcept", "throw") and before.endswith(names_before[-1]):
+                text = before[:-len(names_before[-1])]
+                continue
+            pointer = inner.lstrip().startswith(("*", "&", "^"))
+            if not pointer and before and (before[-1].isalnum() or before[-1] in "_)>"):
+                # A parameter list after the declarator.
+                function = True if function is None else function
+                text = before
+                continue
+            # A parenthesized declarator: `(*name)`, `(&name)`, `(name)`. A
+            # pointer or reference to a function or array is an object.
+            if pointer:
+                function = False
+            text = inner
+            continue
+        break
+    names = IDENT.findall(text)
+    return (names[-1] if names else None), bool(function), initializer
 
 
 def extern_c_definitions(text: str) -> set[str]:
-    """pulp_ functions and objects the text defines with C linkage (kind d).
+    """pulp_ functions and objects the text defines with C linkage.
 
     Both the single-declaration form (`extern "C" T pulp_f(...) {...}`) and
-    the block form (`extern "C" { ... }`) count. A declaration without a
-    body or initializer is a use, not a definition.
+    the block form (`extern "C" { ... }`) count. In the single form a
+    declaration is a definition only with a body or an initializer. In the
+    block form an object declared without `extern` is a definition too
+    (`extern "C" { int pulp_obj; }`), while a function without a body, a
+    typedef and a `static` (internal linkage) name are not.
     """
-    code = blanked(text)
+    code = _without_preprocessor_lines(blanked(text))
     names: set[str] = set()
     for start in _extern_c_starts(text):
         i = start
         while i < len(code) and code[i].isspace():
             i += 1
-        if i < len(code) and code[i] == "{":
-            close = _match(code, i, "{", "}")
-            declarations = _declarations(code, i + 1, close)
+        block = i < len(code) and code[i] == "{"
+        if block:
+            declarations = _declarations(code, i + 1, _match(code, i, "{", "}"))
         else:
             declarations = _declarations(code, i, len(code))[:1]
-        for declaration, is_definition in declarations:
-            name = _declared_name(declaration)
-            if is_definition and name and C_NAME.match(name):
+        for declaration, body in declarations:
+            if NOT_A_DEFINITION.match(_without_attributes(declaration)):
+                continue
+            name, function, initializer = declarator(declaration)
+            if not name or not C_NAME.match(name):
+                continue
+            if body or initializer or (block and not function):
                 names.add(name)
     return names
-
-
-TEST_CONTEXTS = (
-    r"\bdefined\s*\(\s*{name}\s*\)",
-    r"\bdefined\s+{name}(?![A-Za-z0-9_])",
-    r"^[ \t]*#[ \t]*if(?:n)?def[ \t]+{name}(?![A-Za-z0-9_])",
-)
-ANY_DEFINE = re.compile(r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_][A-Za-z0-9_]*)", re.M)
-
-
-def macro_uses(text: str, name: str) -> tuple[int, int]:
-    """(tested, other) counts of a macro in code: tested only by defined/#ifdef/#ifndef, or used otherwise."""
-    code = blanked(text)
-    total = len(re.findall(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])", code))
-    tested = sum(len(re.findall(pattern.format(name=re.escape(name)), code, re.M)) for pattern in TEST_CONTEXTS)
-    return tested, total - tested
-
-
-def opt_in_switches(text: str) -> set[str]:
-    """PULP_ macros the text only tests and never uses for a value or defines (candidates for kind e)."""
-    found = set()
-    for name in {t for t in tokens(text, keep_comments=False) if MACRO.match(t)}:
-        tested, other = macro_uses(text, name)
-        if tested and not other:
-            found.add(name)
-    return found
 
 
 # -- applying -------------------------------------------------------------------
@@ -359,23 +442,15 @@ def reapply(text: str, mapping: dict[str, str]) -> str:
     return apply(apply(text, {new: old for old, new in mapping.items()}), mapping)
 
 
-def mapping_for(entries: list[dict[str, Any]], path: str, ported: bool) -> dict[str, str]:
-    """The old -> new names respelled in one framework/ file."""
-    out = {}
-    for entry in entries:
-        kind = entry["kind"]
-        if kind == "file-macro" and entry["evidence"] != path:
-            continue
-        if kind == "closure-macro" and not ported:
-            continue
-        out[entry["old"]] = entry["new"]
-    return out
-
-
-def apply_bytes(data: bytes, entries: list[dict[str, Any]], path: str, ported: bool) -> bytes:
+def mapping_for(entries: list[dict[str, Any]], path: str) -> dict[str, str]:
+    """The old -> new names respelled in one framework/ file: every entry applies to every file."""
     if not respells(path):
-        return data
-    mapping = mapping_for(entries, path, ported)
+        return {}
+    return {entry["old"]: entry["new"] for entry in entries}
+
+
+def apply_bytes(data: bytes, entries: list[dict[str, Any]], path: str) -> bytes:
+    mapping = mapping_for(entries, path)
     if not mapping:
         return data
     return apply(data.decode("utf-8"), mapping).encode("utf-8")
@@ -389,18 +464,13 @@ def entry_errors(entry: Any, where: str) -> list[str]:
     errors: list[str] = []
     old, new, kind, evidence = entry["old"], entry["new"], entry["kind"], entry["evidence"]
     if kind not in KINDS:
-        return [f"{where}: kind must be one of {list(KINDS)}"]
-    pattern = MACRO if kind in MACRO_KINDS else C_NAME
-    if not isinstance(old, str) or not pattern.match(old):
-        errors.append(f"{where}: a {kind} entry respells a {'PULP_' if kind in MACRO_KINDS else 'pulp_'} name, "
-                      f"not {old!r}")
+        return [f"{where}: kind must be extern-c, not {kind!r}; macro names are name debt, not respelled"]
+    if not isinstance(old, str) or not C_NAME.match(old):
+        errors.append(f"{where}: an extern-c entry respells a pulp_ name, not {old!r}")
     elif new != respelled(old):
         errors.append(f"{where}: {old} respells to {respelled(old)}, not {new!r}")
-    if kind in ("closure-macro", "link-export"):
-        if evidence is not None:
-            errors.append(f"{where}: a {kind} entry's evidence is the closures; evidence is null")
-    elif not (isinstance(evidence, str) and evidence.startswith("framework/") and respells(evidence)):
-        errors.append(f"{where}: a {kind} entry names the framework/ source whose bytes prove it")
+    if not (isinstance(evidence, str) and evidence.startswith("framework/") and respells(evidence)):
+        errors.append(f"{where}: an extern-c entry names the framework/ source whose bytes prove it")
     return errors
 
 
@@ -415,17 +485,14 @@ def parse(text: str) -> tuple[list[dict[str, Any]], list[str]]:
     entries = document["entries"]
     errors = [e for index, entry in enumerate(entries) for e in entry_errors(entry, f"{TABLE} entries[{index}]")]
     if not errors:
-        keys = [(entry["old"], entry["kind"], entry["evidence"] or "") for entry in entries]
+        keys = [(entry["old"], entry["kind"], entry["evidence"]) for entry in entries]
         if keys != sorted(keys):
             errors.append(f"{TABLE}: entries are sorted by old name, kind and evidence")
-        seen: dict[str, str] = {}
+        seen: set[str] = set()
         for entry in entries:
-            other = seen.get(entry["old"])
-            # A file macro may be defined in several files, each its own entry;
-            # any other name has one kind.
-            if other is not None and not (other == entry["kind"] == "file-macro"):
+            if entry["old"] in seen:
                 errors.append(f"{TABLE}: {entry['old']} is listed twice")
-            seen[entry["old"]] = entry["kind"]
+            seen.add(entry["old"])
     return ([] if errors else entries), errors
 
 
@@ -443,109 +510,54 @@ def load(repo: Path) -> tuple[list[dict[str, Any]], list[str]]:
 
 
 def render(entries: Iterable[dict[str, Any]]) -> str:
-    rows = sorted(entries, key=lambda e: (e["old"], e["kind"], e["evidence"] or ""))
+    rows = sorted(entries, key=lambda e: (e["old"], e["kind"], e["evidence"]))
     return json.dumps({"schema": SCHEMA, "entries": rows}, indent=2) + "\n"
 
 
 # -- derivation -----------------------------------------------------------------
 
-def derive(ported: dict[str, str], transferred: dict[str, str], closure_macros: set[str],
-           link_exports: set[str], current: dict[str, str]) -> list[dict[str, Any]]:
-    """The table the evidence implies.
+def derive(evidence: dict[str, str]) -> list[dict[str, Any]]:
+    """The table the evidence implies: one entry per pulp_ name some file defines with C linkage.
 
-    `ported`: each Pulp-origin ledger-added source's Pulp bytes, after the
-    transfer rename and before any respell, by framework path.
-    `transferred`: each transferred source's bytes as the transfer recorded
-    them, by framework path. `current`: every framework/ source as it is now.
-    `closure_macros`: the PULP_ names the closures define. `link_exports`: the
-    pulp_ names the closures list as link exports.
+    `evidence` holds each framework/ source's origin bytes by path: a
+    transferred file as the transfer recorded it, a ported file as Pulp has
+    it after the rename. A name defined in several files keeps the first path.
     """
-    entries: dict[tuple[str, str, str | None], dict[str, Any]] = {}
-
-    def add(old: str, kind: str, evidence: str | None) -> None:
-        entries[(old, kind, evidence)] = {"old": old, "new": respelled(old), "kind": kind, "evidence": evidence}
-
-    # (d) from every source: a C-linkage definition anywhere in framework/.
-    for path, text in sorted({**transferred, **ported}.items()):
-        for name in extern_c_definitions(text):
-            add(name, "extern-c", path)
-    defined_c = {key[0] for key in entries}
-    # Every file that #defines a PULP_ macro, as framework/ holds it now or as Pulp had it.
-    defined_anywhere = set(closure_macros)
-    for text in [*current.values(), *transferred.values(), *ported.values()]:
-        defined_anywhere |= {"PULP_" + name[len("VELLUM_"):] if name.startswith("VELLUM_") else name
-                             for name in ANY_DEFINE.findall(blanked(text))}
-    # (b) a link export is respelled in every framework/ file, so any source that spells one shows it.
-    for path, text in sorted({**transferred, **ported}.items()):
-        for name in sorted(pulp_tokens(text) & link_exports):
-            if name not in defined_c:
-                add(name, "link-export", None)
-    for path, text in sorted(ported.items()):
-        used = pulp_tokens(text)
-        for name in sorted(used):
-            if name in defined_c:
-                continue
-            if name in link_exports:
-                add(name, "link-export", None)
-            elif name in self_defined_macros(text):
-                add(name, "file-macro", path)
-            elif name in closure_macros:
-                add(name, "closure-macro", None)
-            elif MACRO.match(name) and name in opt_in_switches(text) and name not in defined_anywhere:
-                add(name, "opt-in-switch", path)
-    # A name that several kinds would claim keeps the one entry per name the
-    # table allows: the first kind found above. A name with two evidence
-    # files of the same framework-wide kind keeps the first path.
     chosen: dict[str, dict[str, Any]] = {}
-    for key in sorted(entries):
-        entry = entries[key]
-        if entry["kind"] == "file-macro":
-            chosen[f"{entry['old']}\0{entry['evidence']}"] = entry
-        elif entry["old"] not in chosen:
-            chosen[entry["old"]] = entry
-    return sorted(chosen.values(), key=lambda e: (e["old"], e["kind"], e["evidence"] or ""))
+    for path, text in sorted(evidence.items()):
+        for name in sorted(extern_c_definitions(text)):
+            chosen.setdefault(name, {"old": name, "new": respelled(name), "kind": "extern-c", "evidence": path})
+    return sorted(chosen.values(), key=lambda e: (e["old"], e["kind"], e["evidence"]))
 
 
 def consistency_errors(entries: list[dict[str, Any]], current: dict[str, str]) -> list[str]:
-    """No framework/ file still spells a respelled name the old way.
+    """No framework/ file still spells a respelled name the old way, so a caller and its definition agree."""
+    errors = []
+    for entry in entries:
+        old = entry["old"]
+        for path in sorted(path for path, text in current.items() if old in pulp_tokens(text)):
+            errors.append(f"{TABLE}: {path} still spells {old}; an extern-c name is respelled in every "
+                          "framework/ file")
+    return errors
 
-    A framework-wide name is respelled everywhere, so a caller and its
-    definition agree; a file macro is respelled in its own file.
+
+def paste_errors(entries: list[dict[str, Any]], current: dict[str, str]) -> list[str]:
+    """A table in force refuses a framework/ file that builds a PULP_/pulp_ name by token pasting."""
+    if not entries:
+        return []
+    return [f"{TABLE}: {path} pastes {sorted(fragments)} with ##; a pasted Pulp name cannot be respelled"
+            for path, text in sorted(current.items()) if (fragments := pasted_pulp_fragments(text))]
+
+
+def hand_respells(origin: str, current: str, entries: list[dict[str, Any]]) -> list[str]:
+    """Names the current bytes spell the Vellum way that the respell of the origin bytes does not.
+
+    `origin` is the file as it joined framework/. A Pulp name the origin
+    spells, that the current bytes spell the Vellum way, must be one the
+    table's respell of the origin gives (a comment prefix included).
+    Raises RespellError when the origin cannot be respelled.
     """
-    errors = []
-    for entry in entries:
-        kind, old = entry["kind"], entry["old"]
-        if kind in FRAMEWORK_WIDE:
-            stale = sorted(path for path, text in current.items() if old in pulp_tokens(text))
-        elif kind == "file-macro":
-            text = current.get(entry["evidence"])
-            stale = [entry["evidence"]] if text is not None and old in pulp_tokens(text) else []
-        else:
-            continue
-        for path in stale:
-            errors.append(f"{TABLE}: {path} still spells {old}; a {kind} name is respelled "
-                          f"{'in every framework/ file' if kind in FRAMEWORK_WIDE else 'in its own file'}")
-    return errors
-
-
-def switch_errors(entries: list[dict[str, Any]], current: dict[str, str], closure_macros: set[str],
-                  repo_texts: dict[str, str]) -> list[str]:
-    """An opt-in switch stays one: nothing defines it under either spelling, and nothing sets the old one."""
-    errors = []
-    for entry in entries:
-        if entry["kind"] != "opt-in-switch":
-            continue
-        old, new = entry["old"], entry["new"]
-        if old in closure_macros:
-            errors.append(f"{TABLE}: {old} is defined by a closure, so it is not an opt-in switch")
-        for path, text in sorted(current.items()):
-            if {old, new} & set(ANY_DEFINE.findall(blanked(text))):
-                errors.append(f"{TABLE}: {path} defines {old} or {new}, so it is not an opt-in switch")
-            if new in tokens(text, keep_comments=False):
-                tested, other = macro_uses(text, new)
-                if other:
-                    errors.append(f"{TABLE}: {path} uses {new} for its value; an opt-in switch is only tested")
-        for path, text in sorted(repo_texts.items()):
-            if re.search(rf"(?<![A-Za-z0-9_]){re.escape(old)}(?![A-Za-z0-9_])", text):
-                errors.append(f"{TABLE}: {path} still sets or names {old}; the switch is now {new}")
-    return errors
+    expected = tokens(apply(origin, {entry["old"]: entry["new"] for entry in entries}), keep_comments=True)
+    before, after = tokens(origin, keep_comments=True), tokens(current, keep_comments=True)
+    return sorted(name for name in pulp_tokens(origin)
+                  if (new := respelled(name)) in after and new not in before and new not in expected)

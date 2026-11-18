@@ -1522,94 +1522,6 @@ class MacosPlanSnapshotTest(unittest.TestCase):
         self.assertNotEqual(scoped.replace(str(Path(directory).resolve()), "<tmp>"), plan_json)
 
 
-class RespellAliasPlanTest(unittest.TestCase):
-    """A ported source spelling a closure macro VELLUM_<X> gets VELLUM_<X> with the target's PULP_<X> value."""
-
-    NEW = "framework/core/runtime/src/ported.cpp"
-
-    def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
-        self.fixture = TransferredFixture(Path(self.temporary.name))
-        mp.BUILD_INFO_INPUTS[EXPORT_ID] = {"version": "1.2.3"}
-        self.fixture.closure["targets"][0]["compile_definitions"] = ["PULP_HAS_SKIA=1", "PULP_FLAG"]
-        self.fixture.write_receipt()
-
-    def tearDown(self) -> None:
-        mp.BUILD_INFO_INPUTS.pop(EXPORT_ID, None)
-        self.temporary.cleanup()
-
-    def port(self, body: bytes, entries: list[dict]) -> dict:
-        self.fixture.write(self.NEW, body)
-        self.fixture.write_ledger([self.fixture.row(self.NEW, target="pulp-runtime")])
-        self.fixture.write(mp.port_respell.TABLE, mp.port_respell.render(entries).encode())
-        return self.fixture.plan()
-
-    @staticmethod
-    def alias(old: str) -> dict:
-        return {"old": old, "new": mp.port_respell.respelled(old), "kind": "closure-macro", "evidence": None}
-
-    def test_a_ported_source_using_an_alias_gets_it(self) -> None:
-        plan = self.port(b"#if VELLUM_HAS_SKIA && defined(VELLUM_FLAG)\nint a;\n#endif\n",
-                         [self.alias("PULP_FLAG"), self.alias("PULP_HAS_SKIA")])
-        target = plan["units"][0]["targets"][0]
-        self.assertEqual(target["source_compile_definitions"],
-                         [{"source": str(self.fixture.repo.resolve() / self.NEW),
-                           "definitions": ["VELLUM_FLAG", "VELLUM_HAS_SKIA=1"]}])
-        output = Path(self.temporary.name) / "plan.cmake"
-        mp.write_cmake(plan, output)
-        self.assertIn("VELLUM_MIRROR_TARGET_PULP_RUNTIME_DEFINITION_SOURCE_0_DEFINITIONS", output.read_text())
-        self.assertIn('"VELLUM_HAS_SKIA=1"', output.read_text())
-
-    def test_a_source_using_no_alias_gets_nothing_and_the_plan_is_unchanged(self) -> None:
-        plan = self.port(b"int a;  // mentions VELLUM_HAS_SKIA only in a comment\n", [self.alias("PULP_HAS_SKIA")])
-        self.assertNotIn("source_compile_definitions", plan["units"][0]["targets"][0])
-        output = Path(self.temporary.name) / "plan.cmake"
-        mp.write_cmake(plan, output)
-        self.assertNotIn("DEFINITION_SOURCE", output.read_text())
-
-    def test_without_a_table_the_plan_is_unchanged(self) -> None:
-        self.fixture.write(self.NEW, b"#if VELLUM_HAS_SKIA\nint a;\n#endif\n")
-        self.fixture.write_ledger([self.fixture.row(self.NEW, target="pulp-runtime")])
-        self.assertFalse((self.fixture.repo / mp.port_respell.TABLE).exists())
-        plan = self.fixture.plan()
-        self.assertNotIn("source_compile_definitions", plan["units"][0]["targets"][0])
-        output = Path(self.temporary.name) / "plan.cmake"
-        mp.write_cmake(plan, output)
-        self.assertNotIn("DEFINITION_SOURCE", output.read_text())
-
-    def test_a_source_in_two_targets_with_different_aliases_is_refused(self) -> None:
-        # CMake keeps a source's definitions per source, so one target's aliases would reach the other.
-        src = "/r/framework/a.cpp"
-
-        def target(name: str, defs: list[str]) -> dict:
-            return {"name": name, "source_compile_definitions": [{"source": src, "definitions": defs}]}
-
-        rows = [{"name": "u", "targets": [target("t1", ["VELLUM_A=1"]), target("t2", ["VELLUM_A=1"])]}]
-        mp.shared_alias_conflicts(rows, [])  # the same set in both is consistent
-        plain = {"name": "e", "sources": [src]}  # compiles the source and gives it no aliases
-        mp.shared_alias_conflicts([{"name": "u", "targets": [plain, {**plain, "name": "e2"}]}], [])
-        for rows, executables in (
-                ([{"name": "u", "targets": [target("t1", ["VELLUM_A=1"]), target("t2", ["VELLUM_B"])]}], []),
-                ([{"name": "u", "targets": [target("t1", ["VELLUM_A=1"])]}], [target("exe", ["VELLUM_A=2"])]),
-                # An aliased source next to a target that compiles it with none leaks the aliases into it.
-                ([{"name": "u", "targets": [target("t1", ["VELLUM_A=1"])]}], [plain]),
-                ([{"name": "u", "targets": [plain]}], [target("t1", ["VELLUM_A=1"])])):
-            with self.assertRaisesRegex(mp.PlanError, "different respell alias definitions"):
-                mp.shared_alias_conflicts(rows, executables)
-
-    def test_a_malformed_table_is_refused(self) -> None:
-        self.fixture.write(mp.port_respell.TABLE, b"[]")
-        with self.assertRaises(mp.PlanError) as caught:
-            self.fixture.plan()
-        self.assertIn("must be an object with schema", str(caught.exception))
-
-    def test_a_macro_the_target_does_not_define_is_not_aliased(self) -> None:
-        plan = self.port(b"#ifdef VELLUM_OTHER\n#endif\nint b = VELLUM_HAS_SKIA;\n",
-                         [self.alias("PULP_HAS_SKIA"), self.alias("PULP_OTHER")])
-        rows = plan["units"][0]["targets"][0]["source_compile_definitions"]
-        self.assertEqual(rows[0]["definitions"], ["VELLUM_HAS_SKIA=1"])
-
-
 class PlatformScopePlanTest(unittest.TestCase):
     """A ledger-added source or declared target is planned only on the platforms its scope lists."""
 
@@ -1805,25 +1717,6 @@ class DeclaredUnitPlanTest(unittest.TestCase):
         for item in ("VELLUM_MIRROR_BUILD=1", "GPU_RUNTIME_BENCHMARK=1"):
             self.declare([{**self.library, "compile_definitions": [item]}, self.tool])
             self.assertRefused("is reserved")
-
-    def test_a_source_cannot_reach_two_targets_so_aliases_cannot_leak_between_them(self) -> None:
-        # Each added source belongs to the one target its ledger row names, so a plan never gives
-        # one source to two targets with different aliases; shared_alias_conflicts backs that up.
-        self.fixture.write(self.LIB, b'#include "vellum/example/example.hpp"\n'
-                                     b'#if VELLUM_A && defined(VELLUM_B)\nint both;\n#endif\n'
-                                     b'int example() { return 3; }\n')
-        entries = [{"old": old, "new": mp.port_respell.respelled(old), "kind": "closure-macro", "evidence": None}
-                   for old in ("PULP_A", "PULP_B")]
-        self.fixture.write(mp.port_respell.TABLE, mp.port_respell.render(entries).encode())
-        library = {**self.library, "compile_definitions": ["PULP_A=1"]}
-        tool = {**self.tool, "sources": [self.TOOL, self.LIB], "compile_definitions": ["PULP_B"]}
-        self.declare([library, tool])
-        self.assertRefused("is added by its ledger row to vellum-example, not vellum-example-tool")
-        # Control: each source in its own target plans, and only the library's source is aliased.
-        self.declare([library, {**tool, "sources": [self.TOOL]}])
-        plan = self.fixture.plan()
-        [row] = plan["units"][1]["targets"][0]["source_compile_definitions"]
-        self.assertEqual(row["definitions"], ["VELLUM_A=1"])
 
     def test_undeclared_targets_are_refused_and_declared_ones_build(self) -> None:
         # The rows name targets no closure builds: refused while nothing declares them.

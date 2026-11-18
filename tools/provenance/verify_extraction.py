@@ -20,6 +20,7 @@ import tempfile
 import contextlib
 import hashlib
 import importlib.util
+import itertools
 import json
 import os
 import re
@@ -1455,7 +1456,8 @@ def framework_ports_joining_errors(root: Path, rows: list[dict], added: dict[str
 
 def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[dict],
                                 rename: dict | None = None, respell: list[dict] | None = None,
-                                collect: dict[str, str] | None = None) -> list[str]:
+                                collect: dict[str, str] | None = None, landed: int = 0,
+                                landed_respell: list[dict] | None = None) -> list[str]:
     """Prove every Pulp claim a row makes against the Pulp checkout, never from the row's text.
 
     Each commit must be a commit object in the checkout and an ancestor of
@@ -1467,6 +1469,15 @@ def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[
     itself applies), then through the port respell table
     (port_respell.apply_bytes) when one is given. A removed row's pulp_path is
     not looked up: the file may be gone from every commit it names.
+
+    The first `landed` rows are the ones the history base already holds. Each
+    was proved through the table in force when it landed, and a later table
+    entry respells its file by a reviewed edit the respell edit check judges,
+    never by rewriting the append-only row. The table at landing is the base
+    table less the entries added since, so a landed row's blob may be the
+    renamed bytes respelled by any subset of `landed_respell` (the base
+    table). Deleting an entry after a port it respelled has landed leaves
+    that row unprovable; restore the entry instead.
 
     `collect`, when given, receives each added row's Pulp bytes after the
     rename and before the respell, by framework path: the evidence the
@@ -1531,12 +1542,15 @@ def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[
         if collect is not None and respeller.respells(row["framework_path"]):
             collect[row["framework_path"]] = data.decode("utf-8", errors="replace")
         renamed = data
-        if respell:
-            try:
-                data = respeller.apply_bytes(data, respell, row["framework_path"], ported=True)
-            except ValueError as error:  # RespellError, or bytes that are not UTF-8
-                errors.append(f"{where}: Pulp {commit[:12]}:{pulp_path} cannot be respelled: {error}")
-                continue
+        try:
+            if index < landed:
+                data = framework_landed_respell(data, landed_respell or [], row["framework_path"],
+                                                row["framework_blob"])
+            elif respell:
+                data = respeller.apply_bytes(data, respell, row["framework_path"])
+        except ValueError as error:  # RespellError, or bytes that are not UTF-8
+            errors.append(f"{where}: Pulp {commit[:12]}:{pulp_path} cannot be respelled: {error}")
+            continue
         through = "the transfer's rename" + (" and the port respell" if data != renamed else "")
         renamed_blob = git_blob_sha(data)
         if renamed_blob != row["framework_blob"]:
@@ -1544,6 +1558,32 @@ def framework_ports_pulp_errors(pulp_root: Path, pulp_main_ref: str, rows: list[
                           f"put through {through} ({renamed_blob[:12]}); a port that differs from Pulp is a native "
                           "row")
     return errors
+
+
+def framework_landed_respell(data: bytes, entries: list[dict], path: str, blob: str) -> bytes:
+    """A landed row's renamed Pulp bytes respelled by the subset of `entries` that gives `blob`.
+
+    The empty subset is tried first. When none gives it, the bytes respelled
+    by every applicable entry are returned, so the caller reports a mismatch.
+    Raises ValueError (RespellError included) for bytes that cannot be read
+    or too many candidate names.
+    """
+    respeller = load_port_respell()
+    mapping = respeller.mapping_for(list({entry["old"]: entry for entry in entries}.values()), path)
+    if not mapping:
+        return data
+    text = data.decode("utf-8")
+    names = sorted(old for old in mapping if old in respeller.pulp_tokens(text))
+    if len(names) > 8:
+        raise respeller.RespellError(f"{len(names)} table names to try in {path}; at most 8")
+    full = data
+    for size in range(len(names) + 1):
+        for subset in itertools.combinations(names, size):
+            out = respeller.apply(text, {name: mapping[name] for name in subset}).encode("utf-8")
+            if git_blob_sha(out) == blob:
+                return out
+            full = out
+    return full
 
 
 def framework_ports_native_errors(root: Path, added: dict[str, dict], pulp_root: Path | None) -> list[str]:
@@ -1606,93 +1646,35 @@ def framework_ports_state(root: Path, transferred: set[str], pulp_root: Path | N
     respeller = load_port_respell()
     table, table_errors = respeller.load(root)
     errors.extend(table_errors)
+    base, base_table, base_errors = framework_respell_base_table(root)
+    errors.extend(base_errors)
+    landed = framework_ports_landed(root, ports) if not row_errors else 0
+    landed_rows = [row for row in rows[:landed] if row["origin"] == "pulp" and row["change"] == "added"]
+    appended_rows = [row for row in rows[landed:] if row["origin"] == "pulp" and row["change"] == "added"]
+    # Each ported source's Pulp bytes after the rename, when a Pulp checkout
+    # proves them; None when there is none, so the respell proof is deferred.
     ported: dict[str, str] | None = None
-    if pulp_rows and pulp_root is not None:
+    if pulp_root is not None:
         ported = {}
-        proof = framework_ports_pulp_errors(pulp_root, pulp_main_ref, rows, rename, table, ported)
-        checks["framework_ports_proved"] = not proof
-        errors.extend(proof)
-        transfer_texts, transfer_errors = framework_transfer_pulp_texts(
-            pulp_root, pulp_main_ref, root, table)
-        errors.extend(transfer_errors)
-        ported.update(transfer_texts)
-    elif pulp_root is not None:
-        # The transferred tree can be the only authoritative source for a
-        # respell entry; keep an empty map here so the respell checker knows
-        # that Pulp proof was requested and available.
-        ported = {}
-        transfer_texts, transfer_errors = framework_transfer_pulp_texts(
-            pulp_root, pulp_main_ref, root, table)
-        errors.extend(transfer_errors)
-        ported.update(transfer_texts)
-    elif not pulp_rows:
-        # No Pulp checkout means the authoritative check is deferred, even
-        # when the ledger has no later Pulp-origin rows.
-        ported = None
+        if pulp_rows:
+            proof = framework_ports_pulp_errors(pulp_root, pulp_main_ref, rows, rename, table, ported,
+                                                landed, base_table)
+            checks["framework_ports_proved"] = not proof
+            errors.extend(proof)
     # With no table the respell is not in force, so there is nothing to prove
     # and the tree is judged exactly as it was before the rule existed, unless
-    # the table was in force and has been removed.
+    # a table was in force and has been removed.
     if (root / respeller.TABLE).exists():
         if not table_errors:
-            respell_errors, respell_checks = framework_respell_errors(root, table, ported, added)
+            respell_errors, respell_checks = framework_respell_errors(
+                root, table, ported, added, base, base_table,
+                landed={row["framework_path"] for row in landed_rows},
+                appended={row["framework_path"] for row in appended_rows})
             errors.extend(respell_errors)
             checks.update(respell_checks)
     else:
-        errors.extend(framework_respell_removal_errors(root))
+        errors.extend(framework_respell_removal_errors(root, base_table))
     return expected, errors, checks
-
-
-def framework_transfer_pulp_texts(pulp_root: Path, pulp_main_ref: str, root: Path,
-                                  table: list[dict]) -> tuple[dict[str, str], list[str]]:
-    """Collect authoritative Pulp bytes for respell evidence in the transfer.
-
-    The ports ledger only contains files added after the framework transfer.
-    Respells may also cite a file that landed in the transferred tree, so its
-    Pulp bytes must remain available for the same kind proof.
-    """
-    try:
-        transfer = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError) as exc:
-        return {}, [f"{FRAMEWORK_RESPELL}: cannot read the transfer record for Pulp evidence: {exc}"]
-    records = transfer.get("records")
-    if not isinstance(records, list):
-        return {}, [f"{FRAMEWORK_RESPELL}: transfer records must be a list"]
-    evidence = {entry.get("evidence") for entry in table
-                if isinstance(entry, dict) and isinstance(entry.get("evidence"), str)}
-    records = [record for record in records
-               if isinstance(record, dict) and record.get("framework_path") in evidence]
-    if not records:
-        return {}, []
-    identity = load_rename_identity_verifier()
-    raw, errors = identity.raw_from_records(
-        pulp_root, records, transfer.get("pulp_sha", ""), pulp_main_ref)
-    if errors:
-        return {}, [f"{FRAMEWORK_RESPELL}: {error}" for error in errors]
-    rename = transfer.get("rename")
-    if not isinstance(rename, dict):
-        return {}, [f"{FRAMEWORK_RESPELL}: transfer rename must be an object"]
-    edge = rename.get("edge_table")
-    if not isinstance(edge, dict):
-        return {}, [f"{FRAMEWORK_RESPELL}: transfer rename edge_table must be an object"]
-    suffixes = {str(value).lower() for value in edge.get("suffixes", [])}
-    binary_suffixes = {str(value).lower() for value in edge.get("binary_suffixes", [])}
-    exclusions = rename.get("literal_exclusions", [])
-    if not isinstance(exclusions, list):
-        return {}, [f"{FRAMEWORK_RESPELL}: transfer rename literal_exclusions must be a list"]
-    out: dict[str, str] = {}
-    for record in records:
-        framework_path = record["framework_path"]
-        blob = raw.get(record.get("pulp_path"))
-        if blob is None:
-            continue
-        data = blob.read_bytes()
-        if identity.is_text(record["pulp_path"], data, suffixes, binary_suffixes):
-            protected = [item["literal"].encode() for item in exclusions
-                         if isinstance(item, dict) and item.get("path") == record["pulp_path"]
-                         and isinstance(item.get("literal"), str)]
-            data, _ = identity.forward_bytes(data, rename, protected)
-        out[framework_path] = data.decode("utf-8", errors="replace")
-    return out, []
 
 
 def framework_sources(root: Path) -> dict[str, str]:
@@ -1707,127 +1689,125 @@ def framework_sources(root: Path) -> dict[str, str]:
     return out
 
 
-def framework_closure_names(root: Path) -> tuple[set[str], set[str], list[str]]:
-    """(PULP_ macros the transfer's closures define, pulp_ names they list as link exports, errors)."""
+def framework_transfer_records(root: Path) -> tuple[list[dict], list[str]]:
+    """The transfer record's rows, each with a framework_path and framework_git_blob_sha; a bad record is an error."""
     try:
         transfer = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
-        receipt = json.loads((root / transfer["export_receipt"]).read_text(encoding="utf-8"))
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        return set(), set(), [f"{FRAMEWORK_RESPELL}: cannot read the transfer's closures: {exc}"]
-    if not isinstance(receipt, dict):
-        return set(), set(), [f"{FRAMEWORK_RESPELL}: transfer receipt must be an object"]
-    units = receipt.get("units")
-    if not isinstance(units, list):
-        return set(), set(), [f"{FRAMEWORK_RESPELL}: transfer receipt units must be a list"]
-    macros: set[str] = set()
-    exports: set[str] = set()
-    for index, unit in enumerate(units):
-        if not isinstance(unit, dict) or not isinstance(unit.get("closure_manifest"), str):
-            return set(), set(), [f"{FRAMEWORK_RESPELL}: receipt units[{index}] closure_manifest must be a string"]
-        try:
-            closure = json.loads((root / unit["closure_manifest"]).read_text(encoding="utf-8"))
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            return set(), set(), [f"{FRAMEWORK_RESPELL}: cannot read closure {unit.get('closure_manifest')}: {exc}"]
-        if not isinstance(closure, dict):
-            return set(), set(), [f"{FRAMEWORK_RESPELL}: closure {unit['closure_manifest']} must be an object"]
-        definitions = closure.get("compile_definitions", [])
-        targets = closure.get("targets", [])
-        link_exports = closure.get("link_exports", [])
-        if not isinstance(definitions, list) or not all(isinstance(item, str) for item in definitions):
-            return set(), set(), [f"{FRAMEWORK_RESPELL}: closure {unit['closure_manifest']} compile_definitions must be a list of strings"]
-        if not isinstance(targets, list) or not all(isinstance(target, dict) for target in targets):
-            return set(), set(), [f"{FRAMEWORK_RESPELL}: closure {unit['closure_manifest']} targets must be a list of objects"]
-        if not isinstance(link_exports, list) or not all(isinstance(row, dict) for row in link_exports):
-            return set(), set(), [f"{FRAMEWORK_RESPELL}: closure {unit['closure_manifest']} link_exports must be a list of objects"]
-        definitions = list(definitions)
-        for target in targets:
-            target_definitions = target.get("compile_definitions", [])
-            if not isinstance(target_definitions, list) or not all(isinstance(item, str) for item in target_definitions):
-                return set(), set(), [f"{FRAMEWORK_RESPELL}: closure {unit['closure_manifest']} target compile_definitions must be a list of strings"]
-            definitions += target_definitions
-        macros |= {item.split("=", 1)[0] for item in definitions if item.startswith("PULP_")}
-        exports |= {row["name"] for row in link_exports
-                    if isinstance(row.get("name"), str) and row["name"].startswith("pulp_")}
-    return macros, exports, []
+    except (OSError, ValueError) as exc:
+        return [], [f"{FRAMEWORK_RESPELL}: cannot read {FRAMEWORK_TRANSFER_RECORD}: {exc}"]
+    records = transfer.get("records") if isinstance(transfer, dict) else None
+    if not isinstance(records, list) or not all(
+            isinstance(row, dict) and isinstance(row.get("framework_path"), str)
+            and isinstance(row.get("framework_git_blob_sha"), str) for row in records):
+        return [], [f"{FRAMEWORK_RESPELL}: {FRAMEWORK_TRANSFER_RECORD} records must be a list of objects with "
+                    "framework_path and framework_git_blob_sha strings"]
+    return records, []
+
+
+def framework_record_texts(root: Path, records: list[dict], paths: set[str]) -> tuple[dict[str, str], list[str]]:
+    """The transfer-recorded bytes of each record whose framework_path is in `paths`, read from this repository.
+
+    These are the bytes the transfer proof ties to Pulp, so they are each
+    transferred file's origin. A blob this repository does not hold is an
+    error, never skipped.
+    """
+    wanted = sorted((row["framework_path"], row["framework_git_blob_sha"]) for row in records
+                    if row["framework_path"] in paths)
+    if not wanted:
+        return {}, []
+    batch = subprocess.run(["git", "-C", str(root), "cat-file", "--batch"],
+                           input="".join(f"{blob}\n" for _, blob in wanted).encode(), capture_output=True, check=False)
+    if batch.returncode != 0:
+        return {}, [f"{FRAMEWORK_RESPELL}: cannot read the transfer record's blobs"]
+    out: dict[str, str] = {}
+    errors: list[str] = []
+    data, offset = batch.stdout, 0
+    for path, blob in wanted:
+        end = data.find(b"\n", offset)
+        header = data[offset:end].split() if end >= 0 else []
+        if len(header) != 3 or header[1] != b"blob":
+            errors.append(f"{FRAMEWORK_RESPELL}: {path}'s transfer-record blob {blob[:12]} is not in this repository")
+            offset = end + 1
+            continue
+        size = int(header[2])
+        out[path] = data[end + 1:end + 1 + size].decode("utf-8", errors="replace")
+        offset = end + 1 + size + 1
+    return out, errors
+
+
+def framework_respell_base_table(root: Path) -> tuple[str | None, list[dict], list[str]]:
+    """(history base, the respell table it holds or [], errors)."""
+    respeller = load_port_respell()
+    base, base_error = load_mirror_export_verifier().history_base(root)
+    if base_error:
+        return None, [], [f"{FRAMEWORK_RESPELL}: {base_error}"]
+    if base is None:
+        return None, [], []
+    shown = subprocess.run(["git", "-C", str(root), "show", f"{base}:{FRAMEWORK_RESPELL}"],
+                           capture_output=True, check=False)
+    if shown.returncode != 0:
+        return base, [], []
+    entries, errors = respeller.parse(shown.stdout.decode("utf-8", errors="replace"))
+    return base, entries, [f"{FRAMEWORK_RESPELL}: unreadable at {base}: {error}" for error in errors]
 
 
 def framework_respell_errors(root: Path, table: list[dict], ported: dict[str, str] | None,
-                             added: dict[str, dict]) -> tuple[list[str], dict[str, object]]:
+                             added: dict[str, dict], base: str | None = None,
+                             base_table: list[dict] | None = None, landed: set[str] | None = None,
+                             appended: set[str] | None = None) -> tuple[list[str], dict[str, object]]:
     """Prove the port respell table (tools/mirror/port_respell.py).
 
-    The table must be exactly what the bytes imply. framework/ is read as it
-    is now with the table's respell undone, so a respelled definition still
-    counts as evidence and a name left in its Pulp spelling counts as a
-    missing entry; an entry nothing implies is refused as hand-written. With
-    a Pulp checkout (`ported`: each ported source's Pulp bytes after the
-    rename), a ported entry's kind must also show in Pulp's own bytes. No
-    framework/ file may still spell a respelled name the old way, and an
-    entry this change adds may edit a transferred file only by that respell.
+    The table must be exactly the extern-c definitions the origin bytes
+    imply: each transferred file as its transfer record holds it, each ported
+    file as Pulp has it after the rename (`ported`, from a Pulp checkout), and
+    each native file as it is now with the table's respell undone. An entry
+    nothing implies is refused as hand-written, and a missing one fails. No
+    framework/ file may still spell a respelled name the old way or paste a
+    Pulp name with ##. A transferred or ported file may spell a Pulp name the
+    Vellum way only where the table's respell of its origin bytes does. A
+    table entry this change adds edits a transferred or landed ported file
+    only by its respell (framework_respell_edit_errors).
+
+    Without a Pulp checkout (`ported` is None), a ported file's evidence is
+    its current bytes with the respell undone, and every entry that rests on
+    transferred or ported evidence is reported as deferred, never proved.
     """
     respeller = load_port_respell()
     checks: dict[str, object] = {"framework_respell_entries": len(table)}
     errors: list[str] = []
+    landed, appended = landed or set(), appended or set()
     current = framework_sources(root)
+    records, record_errors = framework_transfer_records(root)
+    if record_errors:
+        checks["framework_respell_proved"] = False
+        return record_errors, checks
+    transferred = {row["framework_path"] for row in records} & set(current)
+    recorded, blob_errors = framework_record_texts(root, records, transferred)
+    errors += blob_errors
     undo = {entry["new"]: entry["old"] for entry in table}
-    pulp_added = {path for path, row in added.items() if row["origin"] == "pulp"}
-    pulp_evidence = set(ported or {})
-    as_pulp: dict[str, str] = {}
-    for path, text in current.items():
+
+    def undone(path: str) -> str:
         try:
-            as_pulp[path] = respeller.apply(text, undo)
+            return respeller.apply(current[path], undo)
         except ValueError as error:
             errors.append(f"{FRAMEWORK_RESPELL}: {path} cannot be read with the respell undone: {error}")
-            as_pulp[path] = text
-    authoritative_paths = (set(ported) if ported is not None else pulp_added)
-    ported_now = {path: as_pulp[path] for path in authoritative_paths if path in as_pulp}
-    others = {path: text for path, text in as_pulp.items() if path not in authoritative_paths}
-    # The closures are read only when a name could depend on them.
-    needs_closures = (any(entry["kind"] in ("closure-macro", "link-export", "opt-in-switch") for entry in table)
-                      or any(respeller.pulp_tokens(text) for text in ported_now.values()))
-    macros: set[str] = set()
-    exports: set[str] = set()
-    if needs_closures:
-        macros, exports, closure_errors = framework_closure_names(root)
-        if closure_errors:
-            return closure_errors, checks
-    transferred_paths = framework_transfer_paths(root)
-    for index, entry in enumerate(table):
-        where, kind, old, evidence = f"{FRAMEWORK_RESPELL} entries[{index}]", entry["kind"], entry["old"], entry["evidence"]
-        if kind == "closure-macro" and old not in macros:
-            errors.append(f"{where}: {old} is not a macro the closures define")
-        elif kind == "link-export" and old not in exports:
-            errors.append(f"{where}: {old} is not a name the closures list as a link export")
-        elif kind in ("file-macro", "opt-in-switch") and (
-                (ported is None and evidence not in pulp_added
-                 and not (evidence in transferred_paths and evidence in as_pulp
-                          and old in respeller.pulp_tokens(as_pulp[evidence])))
-                or (ported is not None and evidence not in pulp_evidence)):
-            errors.append(f"{where}: a {kind} entry's evidence is a ported Pulp source, not {evidence}")
-        elif ported is not None and evidence in ported:
-            recogniser = {"file-macro": respeller.self_defined_macros, "extern-c": respeller.extern_c_definitions,
-                          "opt-in-switch": respeller.opt_in_switches}.get(kind)
-            if recogniser is not None and old not in recogniser(ported[evidence]):
-                errors.append(f"{where}: Pulp's {evidence} does not show {old} as a {kind}")
-    # Without Pulp, an entry whose only evidence is a transferred source cannot
-    # be re-derived or kind-checked; the transfer record names the file, and the
-    # file's bytes with the respell undone must still show the name. These
-    # checks stay deferred until a Pulp checkout is supplied.
-    deferred_keys: set[tuple] = set()
-    if ported is None:
-        transferred_now = transferred_paths & set(as_pulp)
-        for entry in table:
-            name, kind, evidence = entry["old"], entry["kind"], entry["evidence"]
-            if kind in ("file-macro", "opt-in-switch"):
-                if evidence in transferred_now and name in respeller.pulp_tokens(as_pulp[evidence]):
-                    deferred_keys.add((name, kind, evidence))
-            elif kind == "closure-macro" and name in macros:
-                if any(name in respeller.pulp_tokens(as_pulp[path]) for path in transferred_now):
-                    deferred_keys.add((name, kind, evidence))
-    errors += respeller.consistency_errors(table, current)
-    if any(entry["kind"] == "opt-in-switch" for entry in table):
-        errors += respeller.switch_errors(table, current, macros, framework_respell_repo_texts(root))
+            return current[path]
+
+    evidence = dict(recorded)
+    unproved: set[str] = set()  # evidence paths a Pulp checkout would prove
+    for path, row in sorted(added.items()):
+        if path not in current:
+            continue
+        if row["origin"] == "native":
+            evidence[path] = undone(path)
+        elif ported is not None:
+            if path in ported:
+                evidence[path] = ported[path]
+        else:
+            evidence[path] = undone(path)
+            unproved.add(path)
     try:
-        derived = respeller.derive(ported_now, others, macros, exports, as_pulp)
+        derived = respeller.derive(evidence)
     except ValueError as error:
         errors.append(f"{FRAMEWORK_RESPELL}: the table cannot be derived from the bytes: {error}")
         derived = []
@@ -1836,133 +1816,113 @@ def framework_respell_errors(root: Path, table: list[dict], ported: dict[str, st
         return entry["old"], entry["kind"], entry["evidence"]
 
     stored, implied = {key(e) for e in table}, {key(e) for e in derived}
-    for extra in sorted(stored - implied - deferred_keys, key=str):
+    deferred = {k for k in stored ^ implied if k[2] in unproved}
+    for extra in sorted(stored - implied - deferred, key=str):
         errors.append(f"{FRAMEWORK_RESPELL}: {extra[0]} ({extra[1]}, {extra[2]}) is not implied by the bytes; "
                       "the table is derived, not written by hand")
-    for absent in sorted(implied - stored, key=str):
+    for absent in sorted(implied - stored - deferred, key=str):
         errors.append(f"{FRAMEWORK_RESPELL}: the bytes imply {absent[0]} ({absent[1]}, {absent[2]}), "
                       "which the table does not list")
-    errors += framework_respell_edit_errors(root, table, (set(current) & transferred_paths) - pulp_added)
-    checks["framework_respell_proved"] = (not errors) if ported is not None or not (ported_now or deferred_keys) else \
-        "deferred: no Pulp checkout for the ported entries"
+    errors += respeller.consistency_errors(table, current)
+    errors += respeller.paste_errors(table, current)
+    origins = {path: ("its transfer record", text) for path, text in recorded.items()}
+    if ported is not None:
+        origins.update({path: ("Pulp", ported[path]) for path, row in added.items()
+                        if row["origin"] == "pulp" and path in ported and path in current})
+    for path, (where, origin) in sorted(origins.items()):
+        try:
+            hand = respeller.hand_respells(origin, current[path], table)
+        except ValueError as error:
+            errors.append(f"{FRAMEWORK_RESPELL}: {path} as {where} has it cannot be respelled: {error}")
+            continue
+        if hand:
+            errors.append(f"{FRAMEWORK_RESPELL}: {path} spells {hand} the Vellum way, which the table's respell "
+                          f"of {where}'s bytes does not give")
+    errors += framework_respell_edit_errors(root, table, base, base_table or [], (transferred | landed) - appended)
+    rests_on_origin = any(k[2] in transferred or k[2] in unproved for k in stored | implied)
+    if errors:
+        checks["framework_respell_proved"] = False
+    elif ported is None and rests_on_origin:
+        checks["framework_respell_proved"] = "deferred: no Pulp checkout proved the transferred and ported evidence"
+    else:
+        checks["framework_respell_proved"] = True
     return errors, checks
 
 
-def framework_transfer_paths(root: Path) -> set[str]:
-    """The framework/ paths the transfer record names as transferred."""
-    try:
-        transfer = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
-        return {row["framework_path"] for row in transfer["records"] if isinstance(row.get("framework_path"), str)}
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        return set()
-
-
-def framework_respell_removal_errors(root: Path) -> list[str]:
+def framework_respell_removal_errors(root: Path, base_table: list[dict]) -> list[str]:
     """The respell rule cannot be switched off by deleting its table.
 
-    Called only when the table is absent. It is an error when the history base
-    held the table, and when a transferred file spells a name the Vellum way
-    that the transfer recorded in its Pulp spelling. Neither can happen on a
-    tree that never had a table.
+    Called only when the table is absent. Deleting it is refused while some
+    framework/ file still spells a base-table name the Vellum way; once every
+    respell is reverted it is allowed. And with no table, a transferred file
+    may not spell the Vellum way a Pulp name its transfer record spells the
+    Pulp way. Neither can happen on a tree that never had a table.
     """
     respeller = load_port_respell()
     errors: list[str] = []
-    base, _ = load_mirror_export_verifier().history_base(root)
-    if base is not None and subprocess.run(
-            ["git", "-C", str(root), "cat-file", "-e", f"{base}:{FRAMEWORK_RESPELL}"],
-            capture_output=True, check=False).returncode == 0:
-        errors.append(f"{FRAMEWORK_RESPELL}: the respell table cannot be removed while transferred files carry "
-                      "its names; restore it or revert the respells")
-    try:
-        records = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))["records"]
-    except (OSError, ValueError, KeyError, TypeError):
-        return errors
-    for row in records if isinstance(records, list) else []:
-        path, blob = row.get("framework_path"), row.get("framework_git_blob_sha")
-        if not (isinstance(path, str) and isinstance(blob, str) and respeller.respells(path)):
-            continue
-        head = root / path
-        shown = subprocess.run(["git", "-C", str(root), "cat-file", "blob", blob], capture_output=True, check=False)
-        if shown.returncode != 0 or not head.is_file():
-            continue
-        recorded = shown.stdout.decode("utf-8", errors="replace")
-        now = head.read_text(encoding="utf-8", errors="replace")
-        if recorded == now:
-            continue
-        before, after = respeller.tokens(recorded), respeller.tokens(now)
-        names = sorted(name for name in respeller.pulp_tokens(recorded)
-                       if name not in after and respeller.respelled(name) in after
-                       and respeller.respelled(name) not in before)
-        if names:
-            errors.append(f"{FRAMEWORK_RESPELL}: {path} spells {names} the Vellum way but there is no respell "
-                          "table; restore it or revert the respells")
+    current = framework_sources(root)
+    names = {entry["new"] for entry in base_table}
+    still = sorted(path for path, text in current.items() if names & respeller.tokens(text))
+    if still:
+        errors.append(f"{FRAMEWORK_RESPELL}: the respell table cannot be removed while {still[:5]} spell its "
+                      "names the Vellum way; restore it or revert the respells")
+    records, record_errors = framework_transfer_records(root)
+    if record_errors:
+        return errors + record_errors
+    recorded, blob_errors = framework_record_texts(root, records, set(current))
+    errors += blob_errors
+    for path, origin in sorted(recorded.items()):
+        if origin != current[path]:
+            hand = respeller.hand_respells(origin, current[path], [])
+            if hand:
+                errors.append(f"{FRAMEWORK_RESPELL}: {path} spells {hand} the Vellum way but there is no respell "
+                              "table; restore it or revert the respells")
     return errors
 
 
-def framework_respell_repo_texts(root: Path) -> dict[str, str]:
-    """Tracked text outside framework/ and provenance/, where an opt-in switch could still be set."""
-    listed = subprocess.run(["git", "-C", str(root), "ls-files", "-z"], capture_output=True, check=False)
-    out = {}
-    for relative in listed.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
-        if not relative or relative.startswith((FRAMEWORK_ROOT, "provenance/")):
-            continue
-        path = root / relative
-        if not path.is_file() or path.is_symlink() or path.stat().st_size > 2_000_000:
-            continue
-        try:
-            out[relative] = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-    return out
+def framework_respell_edit_errors(root: Path, table: list[dict], base: str | None, base_table: list[dict],
+                                  candidates: set[str]) -> list[str]:
+    """A table entry this change adds edits a transferred or landed ported file by exactly its respell.
 
-
-def framework_respell_edit_errors(root: Path, table: list[dict], transferred: set[str]) -> list[str]:
-    """A table entry this change adds edits a transferred file by exactly its respell.
-
-    Each transferred file that changed from the history base, and whose base
-    bytes spell a newly added name that applies to it, must equal its base
-    bytes respelled by those entries alone. A framework-wide entry applies to
-    every file; a file-macro entry applies only to its own evidence file.
+    `candidates` are the transferred files and the ported files whose rows
+    the history base already holds (a row this change appends is proved
+    against Pulp instead). Each candidate that changed from the base, and
+    whose base bytes spell a newly added name, must equal its base bytes
+    respelled by the new entries alone. An entry is new when its (old, kind,
+    evidence) is not in the base table.
     """
     respeller = load_port_respell()
-    base, base_error = load_mirror_export_verifier().history_base(root)
-    if base_error:
-        return [f"{FRAMEWORK_RESPELL}: {base_error}"]
     if base is None:
         return []
-    shown = subprocess.run(["git", "-C", str(root), "show", f"{base}:{FRAMEWORK_RESPELL}"],
-                           capture_output=True, check=False)
-    landed, _ = respeller.parse(shown.stdout.decode("utf-8", errors="replace")) if shown.returncode == 0 else ([], [])
-    before = {(e["old"], e["kind"]) for e in landed}
-    new_entries = [e for e in table if (e["old"], e["kind"]) not in before
-                   and e["kind"] in (*respeller.FRAMEWORK_WIDE, "file-macro")]
+    before = {(e["old"], e["kind"], e["evidence"]) for e in base_table}
+    new_entries = [e for e in table if (e["old"], e["kind"], e["evidence"]) not in before]
     if not new_entries:
         return []
-    errors = []
-    changed = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "-z", base, "--", FRAMEWORK_ROOT.rstrip("/")],
-                             capture_output=True, check=False)
+    changed = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "-z", base, "--",
+                              FRAMEWORK_ROOT.rstrip("/")], capture_output=True, check=False)
     if changed.returncode != 0:
         return [f"{FRAMEWORK_RESPELL}: cannot diff framework/ against {base}"]
     edited = set(changed.stdout.decode("utf-8", errors="surrogateescape").split("\0"))
-    for path in sorted(set(transferred) & edited):
+    mapping = {e["old"]: e["new"] for e in new_entries}
+    errors = []
+    for path in sorted(candidates & edited):
+        head = root / path
+        if not respeller.respells(path) or not head.is_file():
+            continue
         old_bytes = subprocess.run(["git", "-C", str(root), "show", f"{base}:{path}"],
                                    capture_output=True, check=False)
         if old_bytes.returncode != 0:
             continue
         text = old_bytes.stdout.decode("utf-8", errors="replace")
-        applicable = [e for e in new_entries if e["kind"] != "file-macro" or e["evidence"] == path]
-        if not ({e["old"] for e in applicable} & respeller.pulp_tokens(text)):
-            continue
-        head = root / path
-        if not head.is_file():
+        if not (set(mapping) & respeller.pulp_tokens(text)):
             continue
         try:
-            expected = respeller.apply(text, {e["old"]: e["new"] for e in applicable})
+            expected = respeller.apply(text, mapping)
         except respeller.RespellError as error:
             errors.append(f"{FRAMEWORK_RESPELL}: {path} at the history base cannot be respelled: {error}")
             continue
         if head.read_text(encoding="utf-8", errors="replace") != expected:
-            errors.append(f"{FRAMEWORK_RESPELL}: {path} changed by more than the respell of {sorted(e['old'] for e in applicable)}; "
+            errors.append(f"{FRAMEWORK_RESPELL}: {path} changed by more than the respell of {sorted(mapping)}; "
                           "land the respell on its own")
     return errors
 
@@ -2114,8 +2074,12 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
     except (OSError, ValueError) as exc:
         errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: unreadable: {exc}")
         return errors, checks
-    if transfer.get("schema") != FRAMEWORK_TRANSFER_SCHEMA:
+    if not isinstance(transfer, dict) or transfer.get("schema") != FRAMEWORK_TRANSFER_SCHEMA:
         errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: schema must be {FRAMEWORK_TRANSFER_SCHEMA}")
+        return errors, checks
+    if not isinstance(transfer.get("records", []), list) or not all(isinstance(r, dict)
+                                                                    for r in transfer.get("records", [])):
+        errors.append(f"{FRAMEWORK_TRANSFER_RECORD}: records must be a list of objects")
         return errors, checks
     transfer_bytes = (root / FRAMEWORK_TRANSFER_RECORD).read_bytes()
     base = state["base"]

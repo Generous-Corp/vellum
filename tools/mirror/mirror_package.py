@@ -47,7 +47,6 @@ sys.path.append(str(Path(__file__).resolve().parent))
 import source_compile_options  # noqa: E402
 import framework_ports  # noqa: E402
 import gpu_surface_guard  # noqa: E402
-import port_respell  # noqa: E402
 
 
 RECEIPT_SCHEMA = "pulp.vellum.export-receipt.v2"
@@ -325,68 +324,6 @@ def newest_receipt(repo: Path) -> tuple[str, dict[str, Any]]:
     if receipt.get("rename") != {"from_prefix": "", "to_prefix": f"{MIRROR_DIR}/"}:
         raise PlanError(f"{relative}: unsupported rename")
     return relative, receipt
-
-
-def alias_definitions(repo: Path, paths: list[str], definitions: list[str],
-                      aliases: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Per-source VELLUM_<X> definitions for ported sources that use a closure macro's Vellum spelling.
-
-    A ported source spells a closure-defined PULP_<X> as VELLUM_<X>
-    (port_respell kind closure-macro), so it gets VELLUM_<X> with the value
-    its target gives PULP_<X>. A source that uses no alias gets nothing, and a
-    macro the target does not define is not aliased, as it was undefined for
-    that source in Pulp's build too.
-    """
-    by_name = {item.split("=", 1)[0]: item for item in definitions}
-    rows = []
-    for path in paths:
-        if not port_respell.respells(path):
-            continue
-        try:
-            used = port_respell.tokens((repo / path).read_text(encoding="utf-8"), keep_comments=False)
-        except (OSError, UnicodeDecodeError) as exc:
-            raise PlanError(f"{path}: cannot read the ported source for its respell aliases: {exc}") from exc
-        added = []
-        for entry in aliases:
-            if entry["new"] in used and entry["old"] in by_name:
-                old = by_name[entry["old"]]
-                added.append(entry["new"] + old[len(entry["old"]):])
-        if added:
-            rows.append({"source": str(repo / path), "definitions": sorted(added)})
-    return rows
-
-
-def shared_alias_conflicts(unit_rows: list[dict[str, Any]], executables: list[dict[str, Any]]) -> None:
-    """Refuse a source that two targets compile with different alias definitions.
-
-    CMake keeps a source file's COMPILE_DEFINITIONS per source, not per
-    target, so the aliases one target gives would reach the other's compile of
-    the same file. A target that gives none counts as the empty set, so only
-    targets that give the same set (possibly none) are consistent.
-    """
-    rows = [(row.get("name", "?"), row) for unit in unit_rows for row in unit.get("targets", [])]
-    rows += [(row.get("name", "?"), row) for row in executables]
-    per_source: dict[str, list[tuple[str, tuple[str, ...]]]] = {}
-    for name, row in rows:
-        given = {entry["source"]: tuple(sorted(entry["definitions"]))
-                 for entry in row.get("source_compile_definitions", [])}
-        for source in {*row.get("sources", []), *given}:
-            per_source.setdefault(source, []).append((name, given.get(source, ())))
-    for source, users in sorted(per_source.items()):
-        first = users[0]
-        for other in users[1:]:
-            if other[1] != first[1]:
-                raise PlanError(f"{source} is compiled by {first[0]} and {other[0]} with different "
-                                f"respell alias definitions ({list(first[1])} and {list(other[1])}); "
-                                "a source's definitions are shared by every target that compiles it")
-
-
-def respell_aliases(repo: Path) -> list[dict[str, Any]]:
-    """The table's closure-macro entries; a malformed table is refused."""
-    entries, errors = port_respell.load(repo)
-    if errors:
-        raise PlanError(errors[0])
-    return [entry for entry in entries if entry["kind"] == "closure-macro"]
 
 
 def framework_file_set(repo: Path) -> tuple[set[str], dict[str, dict[str, Any]], set[str]]:
@@ -1296,8 +1233,7 @@ def plan_declared_targets(repo: Path, declared: list[dict[str, Any]], units: lis
                           provided: dict[str, str], closure_pinned: set[str],
                           declared_deps: dict[str, dict[str, Any]], source_options: dict[str, list[str]],
                           unit_rows: list[dict[str, Any]], attached: set[str],
-                          compiled_paths: set[str],
-                          aliases: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+                          compiled_paths: set[str]) -> list[dict[str, Any]]:
     """Plan the targets provenance/framework/units.json declares; returns the executables.
 
     Static libraries are appended to `unit_rows` as new units, after the
@@ -1309,7 +1245,6 @@ def plan_declared_targets(repo: Path, declared: list[dict[str, Any]], units: lis
     and its unit's interface definitions: what an installed consumer of that
     unit is given. Nothing about it is read from the sources.
     """
-    aliases = aliases or []
     closure_units = {unit for unit, _ in units}
     declared_units: dict[str, list[dict[str, Any]]] = {}
     executables: list[dict[str, Any]] = []
@@ -1368,9 +1303,6 @@ def plan_declared_targets(repo: Path, declared: list[dict[str, Any]], units: lis
             "skia_asset_sha256": None,
             "in_tree_interfaces": interfaces,
         }
-        definition_sources = alias_definitions(repo, list(target["sources"]), sorted(definitions), aliases)
-        if definition_sources:
-            row["source_compile_definitions"] = definition_sources
         if kind == "EXECUTABLE":
             executables.append(row)
             planned[name] = ("", row)
@@ -1400,7 +1332,6 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                   else verify_mirror_identity(repo, receipt))
     _, ports_added, ports_removed, scopes = (framework_file_set_scoped(repo) if transferred(repo)
                                              else (set(), {}, set(), {}))
-    aliases = respell_aliases(repo) if transferred(repo) else []
     declared, declared_errors = (framework_ports.declared_units(repo, ports_added, scopes) if transferred(repo)
                                  else ([], []))
     if declared_errors:
@@ -1548,10 +1479,6 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                 "skia_asset_sha256": skia[0].get("asset_sha256") if skia else None,
                 "in_tree_interfaces": in_tree_interfaces,
             })
-            # Only when a ported source needs one, so a plan without aliases is unchanged.
-            definition_sources = alias_definitions(repo, ported, target.get("compile_definitions", []), aliases)
-            if definition_sources:
-                targets[-1]["source_compile_definitions"] = definition_sources
             planned[name] = (unit, targets[-1])
         # VellumMirror.cmake links a unit's third-party targets into
         # vellum-skia-dawn-provider when any of its targets uses Skia, and into
@@ -1570,13 +1497,12 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     unit_definitions = {row["name"]: row["compile_definitions"] for row in unit_rows}
     executables = plan_declared_targets(repo, declared, units, planned, unit_definitions, provided,
                                         closure_pinned, declared_deps, source_options, unit_rows, attached,
-                                        ported_targets, aliases)
+                                        ported_targets)
     uncompiled = sorted(f"{path} (target {row['target']})" for path, row in ports_added.items()
                         if row["target"] is not None and path not in ported_targets)
     if uncompiled:
         raise PlanError("the ports ledger adds sources to targets no closure builds and "
                         f"{framework_ports.UNITS} does not declare: {uncompiled[:5]}")
-    shared_alias_conflicts(unit_rows, executables)
     unattached = sorted(set(source_options) - attached)
     if unattached:
         raise PlanError(f"per-source compile options name sources no mirrored target compiles: {unattached}")
@@ -1725,14 +1651,6 @@ def write_cmake(build_plan: dict[str, Any], output: Path) -> None:
             for index, entry in enumerate(option_sources):
                 lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_OPTION_SOURCE_{index} {cmake_quote(entry['source'])})")
                 lines += cmake_list(f"VELLUM_MIRROR_TARGET_{tkey}_OPTION_SOURCE_{index}_OPTIONS", entry["options"])
-            definition_sources = target.get("source_compile_definitions", [])
-            if definition_sources:
-                lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_DEFINITION_SOURCE_COUNT {len(definition_sources)})")
-                for index, entry in enumerate(definition_sources):
-                    lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_DEFINITION_SOURCE_{index} "
-                                 f"{cmake_quote(entry['source'])})")
-                    lines += cmake_list(f"VELLUM_MIRROR_TARGET_{tkey}_DEFINITION_SOURCE_{index}_DEFINITIONS",
-                                        entry["definitions"])
             lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_UNIT {cmake_quote(unit_name)})")
             lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_TYPE {cmake_quote(target.get('type', 'STATIC_LIBRARY'))})")
             lines.append(f"set(VELLUM_MIRROR_TARGET_{tkey}_DECLARED {'ON' if target.get('declared') else 'OFF'})")

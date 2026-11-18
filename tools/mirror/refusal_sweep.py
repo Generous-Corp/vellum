@@ -21,7 +21,9 @@ only = {int(x) for x in sys.argv[3:]}
 M = "tools/mirror/mirror_package.py"; F = "tools/mirror/framework_ports.py"; R = "tools/mirror/port_respell.py"; V = "tools/provenance/verify_extraction.py"
 VF = {"derive_framework_transfer","load_framework_ports","framework_ports_history_errors","framework_ports_landed",
  "framework_ports_joining_errors","framework_ports_pulp_errors","framework_ports_native_errors","framework_ports_state",
- "framework_transfer_state","framework_introduction_errors","framework_closure_names",
+ "framework_transfer_state","framework_introduction_errors","framework_landed_respell",
+ "framework_transfer_records","framework_record_texts","framework_respell_base_table",
+ "framework_respell_removal_errors",
  "framework_respell_errors","framework_respell_edit_errors"}
 def sites(path, funcs=None, all_raise=False):
     src = (repo/path).read_text(); tree = ast.parse(src); out = []
