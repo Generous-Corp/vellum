@@ -1,3 +1,4 @@
+#include "support/gpu_test_environment.hpp"
 #include "support/scene_capture_harness.hpp"
 
 #include <vellum/graphics/animation.hpp>
@@ -18,7 +19,7 @@ using namespace vellum::graphics;
 namespace harness = vellum::graphics::capture_harness;
 
 int failures = 0;
-bool gpu_missing = false;
+bool surface_failed = false;
 
 bool expect(bool condition, const std::string& what, const std::string& detail = {}) {
     std::cout << (condition ? "PASS " : "FAIL ") << what;
@@ -32,17 +33,16 @@ constexpr float kWidth = 200.0F;
 constexpr float kHeight = 120.0F;
 
 std::unique_ptr<SkiaDawnSurface> make_surface(float scale) {
-    std::string error;
-    auto surface = SkiaDawnSurface::create(
+    auto created = harness::create_gpu_surface(
         {.width = static_cast<std::uint32_t>(kWidth),
          .height = static_cast<std::uint32_t>(kHeight),
-         .scale = scale},
-        &error);
-    if (!surface) {
-        gpu_missing = true;
-        std::cout << "SKIP no GPU surface: " << error << '\n';
+         .scale = scale});
+    if (!created.surface) {
+        surface_failed = true;
+        expect(false, "GPU surface", created.status.message);
         return nullptr;
     }
+    auto surface = std::move(created.surface);
     LayerCachePolicy policy;
     policy.enabled = false;
     surface->set_layer_cache_policy(policy);
@@ -190,7 +190,7 @@ Totals run(float scale, bool reduced_motion) {
 void animates_and_matches_full_redraw(float scale) {
     const std::string label = "scale " + std::to_string(static_cast<int>(scale)) + ": ";
     const auto totals = run(scale, false);
-    if (gpu_missing) return;
+    if (surface_failed) return;
     expect(totals.render_failures == 0, label + "every driven frame renders");
     expect(totals.frames >= 20, label + "the track and the feed produce a run of frames",
            std::to_string(totals.frames));
@@ -238,13 +238,13 @@ void reduced_motion_draws_the_end_state() {
 }  // namespace
 
 int main() {
-    std::string error;
-    if (!harness::prepare_device(&error)) {
-        std::cerr << "FAIL device bootstrap: " << error << '\n';
+    const auto environment = harness::prepare_gpu_environment();
+    if (!environment.ready()) return harness::report_gpu_status(environment);
+    animates_and_matches_full_redraw(1.0F);
+    if (surface_failed) {
+        std::cout << failures << " frame driver GPU checks failed\n";
         return 1;
     }
-    animates_and_matches_full_redraw(1.0F);
-    if (gpu_missing) return 77;
     animates_and_matches_full_redraw(2.0F);
     reduced_motion_draws_the_end_state();
     if (failures != 0) {

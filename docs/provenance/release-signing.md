@@ -269,7 +269,9 @@ promotion attestation and prove full-matrix parity.
   two jobs and `release-policy.yml`), it comes from `scripts/release_policy_requirements.txt` with
   `pip --require-hashes` into a venv whose `python3` is called by path. Nothing goes on `GITHUB_PATH`, and no
   reviewed job may name `GITHUB_PATH` or `GITHUB_ENV`, so no earlier step can change which `git`, `gh` or
-  `ssh-keygen` a later step runs.
+  `ssh-keygen` a later step runs. Locally, `scripts/gates.sh` builds the same pinned venv once per requirements
+  digest and interpreter under its cache and runs the release-policy checks with it, so they never depend on a
+  user site that `python3 -I` ignores.
 - **Every job of a release workflow runs only reviewed steps.** An action can receive the Actions token through a
   default input without the workflow naming it, so no job of the three release workflows is classified: each runs exactly
   one of the step sequences `RUN_ALLOWLIST` in `scripts/check_release_policy.py` lists for it: every step in order,
