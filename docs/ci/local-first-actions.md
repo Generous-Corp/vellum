@@ -91,6 +91,63 @@ never queue ahead of a merge-queue entry. The only reviewed value is
 label TartCI's Vellum lanes register for their merge-group tier. Unset it to
 roll back; every event then selects the generic class again.
 
+### Deciding reporting runs before a Mac is leased
+
+A `gpu-macos-arm64` run that only reports needs no Mac. That covers three
+cases: a change the base's classifier says the proof does not cover, a
+merge-queue run that reuses its pull request's identical-tree proof, and the
+push to `main` that reuses its merge-queue proof. On the fleet such a run
+waited 20 to 40 minutes for a lease to print a notice.
+
+When the repository variable `VELLUM_GPU_PREDECIDE` is exactly `on`, the
+`decide` job runs first, on `VELLUM_DECIDE_RUNS_ON_JSON` (a JSON label list;
+unset, hosted `["ubuntu-24.04"]`). It runs the proof job's own checkout,
+classify and reuse steps, copied byte for byte and held equal by
+`scripts/test_ci_runner_policy.py`, and outputs `unaffected` and
+`reused_run`. When either is set, `gpu-macos-arm64` runs on decide's runner.
+The proof job repeats both decisions itself, and its own answer counts.
+"Agree with the early decision" fails the job, before any step that builds,
+when decide routed it and the job would build; any other difference (a proof
+that finished in between, a newer proof of the same tree) only warns.
+"Refuse to build off a Mac" fails any build that would run on a non-Mac
+runner, whatever routed it. `decide` is first-party only, like the proof
+jobs. A runner named in `VELLUM_DECIDE_RUNS_ON_JSON` needs `git`, `tar`, a
+current `python3` and a `gh` with `attestation verify`.
+
+Before setting the variable to `on`: cancel one run while `decide` is in
+progress and confirm `gpu-macos-arm64` and `sterile-consumer` conclude
+`cancelled`, not `skipped`; then watch the first routed run of each kind
+(an unaffected pull request, a reused merge group, a reused push).
+
+What still runs on a real Mac GPU is unchanged: the full pull-request proof,
+the cheap pull-request lane, the full merge-group proof, push and tag proofs
+that build, and the real `sterile-consumer` journey.
+
+A failed or skipped `decide` leaves the proof job on its usual runner. The
+guards of both proof jobs name their own status check (`!cancelled()`, and
+for `sterile-consumer` the proof job's result), so `decide` can never skip a
+required context, which would read as passing.
+
+To roll back, delete `VELLUM_GPU_PREDECIDE` or set it to anything but `on`.
+`decide` is then skipped and `gpu-macos-arm64` starts at once on the fleet
+selector, as before.
+`VELLUM_LOCAL_MACOS_STERILE_RUNS_ON_JSON` is optional and applies to
+`sterile-consumer` only, and only while `VELLUM_LOCAL_MACOS_RUNS_ON_JSON` is
+set. When the proof was built (not reused, uncovered or the cheap lane), the
+journey then selects it for every event, so a VM booted for the journey can
+take only a journey and never another run's proof. TartCI's Vellum lanes serve
+this class ahead of both proof classes; the journey runs about 1.4 minutes.
+All events share this one class, so a `main` or tag journey can queue
+ahead of a merge-group journey; the proof job keeps its own selection, so a
+push re-proof still never queues ahead of a merge-queue proof.
+The only reviewed value is
+`["self-hosted","macOS","ARM64","vellum-sterile-consumer"]`. Set it only once
+the TartCI release that adds the tier is deployed on every fleet host: a label
+no lane serves queues forever. Unset it to roll back; the journey then selects
+exactly what the proof job selects. The job name, its `needs`, its steps and
+its artifact do not change, so `sdk-release.yml`, `authority-release.yml` and
+`release-tag.yml` read the same `sterile-consumer` result.
+
 `VELLUM_MACOS_RUNS_ON_JSON` remains the hosted selector used by
 `readme-quick-start.yml` and the hosted portion of `sdk-release.yml`; it is not
 the selector for these two required GPU jobs.
@@ -121,8 +178,8 @@ A pull request runs the full proof now, as it did before, when any of these hold
 
 The cheap lane runs on the same runner class as the old pull-request proof
 (`VELLUM_LOCAL_MACOS_RUNS_ON_JSON`). No separate build-only class is
-registered with TartCI yet, and the lane's runner is chosen before its depth
-is known, so moving it needs a depth job ahead of it.
+registered with TartCI yet. `decide` routes only runs that report, so the
+cheap lane still builds on the fleet.
 
 ### Roll back
 

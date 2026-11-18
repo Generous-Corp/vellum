@@ -2,7 +2,7 @@
 
 - State: `active`
 - Health: `pass`
-- Pending events: 5
+- Pending events: 12
 - Overdue events: 0
 - Release blockers: 0
 - Observatory effort: 0.0% of framework effort
@@ -876,6 +876,18 @@
 | `vellum-a4f5e7cbfce3ec788114378f0fa20c75057917e0` | framework-to-Pulp | rendering | framework-only | 2026-11-20T09:57:53Z |
 | `vellum-dd745ad287183e2c30637e7807de038d215a0c77` | framework-to-Pulp | rendering | framework-only | 2026-11-20T09:57:53Z |
 | `vellum-6fc713dc917904984c5b55690a9efbb7d1221c70` | framework-to-Pulp | rendering | framework-only | 2026-11-20T10:32:26Z |
+| `vellum-3297f3eccad911001f35f875ec0af49cc1119e9b` | framework-to-Pulp | rendering | framework-only | 2026-11-20T10:35:33Z |
+| `vellum-8303689e145fd7bccc0740029819d2c52554ee21` | framework-to-Pulp | schema | pending | 2026-11-20T18:27:01Z |
+| `vellum-6c96c2faa2c514af490a518a50753e2babe50381` | framework-to-Pulp | rendering | framework-only | 2026-11-20T19:11:13Z |
+| `vellum-87abc26e57b522bbb29d6b29d28a4ba94aac2134` | framework-to-Pulp | rendering | superseded | 2026-11-20T20:41:12Z |
+| `vellum-f16fda196b9bbcc3167d3d47fed8bc5925d790fd` | framework-to-Pulp | rendering | framework-only | 2026-11-20T20:41:12Z |
+| `vellum-ea28367a28b8e30c279ad518cfbae2ce7df1afbd` | framework-to-Pulp | rendering | framework-only | 2026-11-20T23:08:17Z |
+| `vellum-1d53f6f4d0717475810cc3ae9585bcf5cb020d98` | framework-to-Pulp | correctness | pending | 2026-11-23T00:24:38Z |
+| `vellum-2f6e71fdb77fd6ad7ddf23a75c35474657645ee9` | framework-to-Pulp | correctness | pending | 2026-11-23T00:24:38Z |
+| `vellum-bc2a7413c25d41ebd377469c3a4cca4802dcbc70` | framework-to-Pulp | correctness | pending | 2026-11-23T00:24:38Z |
+| `vellum-2980df3a1fbb4eb3b2b75d17cf58cd1e664383a9` | framework-to-Pulp | correctness | pending | 2026-11-23T08:03:55Z |
+| `vellum-4253b7c1cfbf53ff38b46d855107853fefdd2275` | framework-to-Pulp | correctness | pending | 2026-11-23T10:16:51Z |
+| `vellum-85288912d4b233c85094a9118fec3a8691290843` | framework-to-Pulp | rendering | pending | 2026-11-23T10:16:51Z |
 
 ## Release blockers
 

@@ -1,0 +1,74 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel",
+    "capture-primitives",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-18T10:16:51Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-85288912d4b233c85094a9118fec3a8691290843",
+  "include_dependency_deltas": [
+    "graphics/CMakeLists.txt",
+    "graphics/include/vellum/graphics/frame_trace.hpp",
+    "graphics/src/frame_trace.hpp",
+    "graphics/src/native_trace_bridge.hpp",
+    "graphics/src/skia_dawn_surface_testing.hpp",
+    "graphics/tests/CMakeLists.txt",
+    "graphics/tests/support/gpu_test_environment.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "capture-primitives",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/tests/token_theme_gpu_test.cpp",
+    "cli/vellum_native_backend.py",
+    "graphics/CMakeLists.txt",
+    "graphics/include/vellum/graphics/frame_trace.hpp",
+    "graphics/src/frame_trace.cpp",
+    "graphics/src/frame_trace.hpp",
+    "graphics/src/native_trace_bridge.hpp",
+    "graphics/src/skia_dawn_surface.mm",
+    "graphics/src/skia_dawn_surface_testing.hpp",
+    "graphics/tests/CMakeLists.txt",
+    "graphics/tests/frame_driver_gpu_test.cpp",
+    "graphics/tests/gpu_test_environment_test.cpp",
+    "graphics/tests/layer_cache_gpu_test.cpp",
+    "graphics/tests/partial_present_bench.mm",
+    "graphics/tests/plot_gpu_test.cpp",
+    "graphics/tests/support/gpu_test_environment.cpp",
+    "graphics/tests/support/gpu_test_environment.hpp",
+    "graphics/tests/text_layout_gpu_test.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": null,
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "2d3ea7f9851153c9c6636f3cf372b4d37a62c966",
+    "to_commit": "56855f35bd8564e389e47c0a7220b1c14cc1b092"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "85288912d4b233c85094a9118fec3a8691290843",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

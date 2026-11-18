@@ -73,6 +73,8 @@ GPU_ONLY_STEPS = frozenset({
     "Run the complete installed journey without a framework checkout",
 })
 GPU_ONLY_JOBS = frozenset({"sterile-consumer"})
+# The required proof jobs; the only jobs whose failure the retry judges.
+PROOF_JOBS = frozenset({"gpu-macos-arm64", "sterile-consumer"})
 
 Api = Callable[[str], Any]
 Post = Callable[[str, dict[str, Any] | None], Any]
@@ -119,7 +121,9 @@ def retry(*, repository: str, run_id: int, api: Api, text: Text, post: Post) -> 
     if run.get("run_attempt") != 1:
         return "declined: a retry was already used"
     jobs = api(f"repos/{repository}/actions/runs/{run_id}/jobs?per_page=100").get("jobs", [])
-    failed = [job for job in jobs if job.get("conclusion") == "failure"]
+    # Only the proof jobs: a failed helper (decide is continue-on-error and
+    # changes nothing a proof concludes) must not decline the one retry.
+    failed = [job for job in jobs if job.get("conclusion") == "failure" and job.get("name") in PROOF_JOBS]
     if not failed:
         return "declined: no failed job"
     for job in failed:

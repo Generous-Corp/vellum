@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import os
 import re
 import subprocess
 import sys
@@ -270,6 +271,33 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("persist-credentials: false", text)
         self.assertNotIn("secrets.", text)
         self.assertNotIn("github.token", text)
+
+    def run_step(self, repo: Repo, base: str, head: str) -> subprocess.CompletedProcess[str]:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        body = text.split("        run: |\n", 1)[1]
+        script = "\n".join(line[10:] for line in body.splitlines())
+        env = {"PATH": os.environ["PATH"], "BASE_SHA": base, "HEAD_SHA": head,
+               "RUNNER_TEMP": str(repo.path / ".tmp"), "GITHUB_WORKSPACE": str(repo.path)}
+        (repo.path / ".tmp").mkdir(exist_ok=True)
+        return subprocess.run(["bash", "-c", script], cwd=repo.path, env=env,
+                              capture_output=True, text=True)
+
+    def test_a_branch_that_predates_the_check_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Repo(Path(tmp))
+            head = repo.commit("a change with no check anywhere")
+            result = self.run_step(repo, repo.base, head)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("::notice::rule-data-split is skipped", result.stdout)
+            self.assertIn("merge main", result.stdout)
+
+    def test_a_missing_base_object_still_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Repo(Path(tmp))
+            head = repo.commit("a change")
+            result = self.run_step(repo, "0" * 40, head)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("is skipped", result.stdout)
 
 
 if __name__ == "__main__":

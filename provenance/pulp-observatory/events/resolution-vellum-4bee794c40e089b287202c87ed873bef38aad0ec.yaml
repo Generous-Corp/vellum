@@ -1,0 +1,24 @@
+{
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-18T08:20:00Z",
+  "disposition": "framework-only",
+  "effort_minutes": 10,
+  "event_id": "resolution-vellum-4bee794c40e089b287202c87ed873bef38aad0ec",
+  "kind": "resolution",
+  "linked_commits": [
+    "4bee794c40e089b287202c87ed873bef38aad0ec"
+  ],
+  "linked_pull_requests": [],
+  "owner": "@claude-observatory-agent",
+  "rationale": "Vellum-native feature version table (graphics/feature_versions.hpp) with generated JS copies and C++/JS drift and coverage tests; kSceneVersion stays 13 and no DesignIR version changes or bumps. The schema/API deltas are vellum-design-ir and vellum-ui reading the same version numbers from the generated table. Pulp consumers receive these packages from Vellum, so this meets the owner's 2026-11-16 04:45Z criterion for framework-only schema events. Classified by the Vellum lead.",
+  "resolves": "vellum-4bee794c40e089b287202c87ed873bef38aad0ec",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

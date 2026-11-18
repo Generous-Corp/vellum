@@ -7,6 +7,13 @@
 # build reaches it through the permission-less "Release path review trigger"
 # workflow's completion.
 #
+# The job fails only when it cannot decide or post; a refusal is the status's
+# `failure`, never a failed job. Only the pull_request_target run leaves its
+# `judge` check run on the pull request's head (a comment or review run leaves
+# its own on the default branch's tip), so a head refused at open and
+# approved later would keep a red `judge` after the status turned green, and
+# the merge steward admits only a head with no red check.
+#
 # This is an accident guard, not a security boundary (pulp-planning
 # architecture/2026-11-05-release-path-gate.md, option A). The status is
 # posted with the Actions token and the ruleset binds it to GitHub Actions, so
@@ -86,7 +93,3 @@ jobs:
             -f state="$STATE" -f context=release-path-review \
             -f description="$DESCRIPTION" -f target_url="$TARGET_URL" > /dev/null
           echo "release-path-review: $STATE on $SHA: $DESCRIPTION"
-
-      - name: Fail a refused pull request run
-        if: github.event_name == 'pull_request_target' && steps.decide.outputs.state != '' && steps.decide.outputs.state != 'success'
-        run: exit 1

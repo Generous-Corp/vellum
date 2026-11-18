@@ -87,8 +87,8 @@
       "name": "FreeType",
       "version": "2.13.3",
       "license": "FTL",
-      "source": "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.gz",
-      "sha256": "5c3a8e78f7b24c20b25b54ee575d6daa40007a5f4eea2845861c3409b3021747",
+      "source": "https://codeload.github.com/freetype/freetype/tar.gz/refs/tags/VER-2-13-3",
+      "sha256": "bc5c898e4756d373e0d991bab053036c5eb2aa7c0d5c67e8662ddc6da40c4103",
       "surface": "optional rmlui/ module only (VELLUM_ENABLE_RMLUI or a standalone rmlui build); built from source as a static hidden-visibility archive linked privately into VellumRmlUi::Core when VELLUM_RMLUI_FONTS=ON, and redistributed as an archive in the opt-in VellumRmlUi::Native package and the optional vellum-rmlui-sdk release archive (VellumRmlUiNative) under FTL; PNG, zlib, bzip2, Brotli and HarfBuzz disabled"
     },
     {
