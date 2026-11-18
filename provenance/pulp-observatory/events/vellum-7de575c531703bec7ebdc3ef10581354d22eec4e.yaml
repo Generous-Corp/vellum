@@ -1,0 +1,66 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-18T19:33:13Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-7de575c531703bec7ebdc3ef10581354d22eec4e",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/damage.hpp",
+    "graphics/include/vellum/graphics/feature_versions.hpp",
+    "graphics/include/vellum/graphics/scene.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "graphics/include/vellum/graphics/damage.hpp",
+    "graphics/include/vellum/graphics/feature_versions.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "graphics/tests/feature_versions_test.cpp",
+    "packages/vellum-design-ir/src/constants.js",
+    "packages/vellum-design-ir/src/feature-versions.generated.js",
+    "packages/vellum-design-ir/test/feature-versions.test.js",
+    "packages/vellum-ui/src/design.js",
+    "packages/vellum-ui/src/feature-versions.generated.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "454e2b76e6fdf755783856fd57ead88ce63143c1",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "95522d9fdaeb6d26a91f7adffe2bb0a134c5dbdb",
+    "to_commit": "b4f18c7c14b4ca1de2b3f2dbf03b9f7d5306ce6a"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-design-ir/src/constants.js",
+    "packages/vellum-design-ir/src/feature-versions.generated.js",
+    "packages/vellum-design-ir/test/feature-versions.test.js"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "7de575c531703bec7ebdc3ef10581354d22eec4e",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}
