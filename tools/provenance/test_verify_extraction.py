@@ -1202,6 +1202,50 @@ class VerifyExtractionTests(unittest.TestCase):
             errors, _ = self.respell_verdict(root)
             self.assertTrue(any("imply pulp_anchor" in e and "does not list" in e for e in errors), errors)
 
+    def test_a_transferred_respell_entry_uses_authoritative_pulp_bytes(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = "framework/core/a/src/hooks.cpp"
+            self.framework_fixture(root, {path: b'#define VELLUM_TAG "x"\n'})
+            transfer = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+            transfer_data = json.loads(transfer.read_text(encoding="utf-8"))
+            transfer_data["export_receipt"] = "provenance/receipt.json"
+            transfer.write_text(json.dumps(transfer_data), encoding="utf-8")
+            receipt = root / "provenance/receipt.json"
+            receipt.parent.mkdir(parents=True, exist_ok=True)
+            receipt.write_text(json.dumps({"units": []}), encoding="utf-8")
+            entry = self.respell_entry("PULP_TAG", "file-macro", path)
+            errors, checks = verify_extraction.framework_respell_errors(
+                root, [entry], {path: '#define PULP_TAG "x"\n'}, {})
+            self.assertEqual(errors, [])
+            self.assertIs(checks["framework_respell_proved"], True)
+
+    def test_malformed_closure_shapes_are_reported_without_crashing(self) -> None:
+        self.hide_ci_git_base()
+        cases = (
+            ({"units": {}}, None, "transfer receipt units must be a list"),
+            ({"units": [{"closure_manifest": "provenance/closure.json"}]},
+             {"compile_definitions": {}},
+             "closure provenance/closure.json compile_definitions must be a list of strings"),
+        )
+        for receipt, closure_data, expected in cases:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+                transfer = root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
+                transfer_data = json.loads(transfer.read_text(encoding="utf-8"))
+                transfer_data["export_receipt"] = "provenance/receipt.json"
+                transfer.write_text(json.dumps(transfer_data), encoding="utf-8")
+                receipt_path = root / "provenance/receipt.json"
+                receipt_path.parent.mkdir(parents=True, exist_ok=True)
+                receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+                closure = root / "provenance/closure.json"
+                if closure_data is not None:
+                    closure.write_text(json.dumps(closure_data), encoding="utf-8")
+                _, _, errors = verify_extraction.framework_closure_names(root)
+                self.assertTrue(any(expected in error for error in errors), errors)
+
     def test_a_new_entry_edits_a_transferred_file_only_by_its_respell(self) -> None:
         self.hide_ci_git_base()
         with tempfile.TemporaryDirectory() as temporary:

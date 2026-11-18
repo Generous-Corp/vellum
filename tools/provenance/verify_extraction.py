@@ -1612,14 +1612,81 @@ def framework_ports_state(root: Path, transferred: set[str], pulp_root: Path | N
         proof = framework_ports_pulp_errors(pulp_root, pulp_main_ref, rows, rename, table, ported)
         checks["framework_ports_proved"] = not proof
         errors.extend(proof)
-        ported = {path: text for path, text in ported.items() if path in added}
-    elif not pulp_rows:
+        transfer_texts, transfer_errors = framework_transfer_pulp_texts(
+            pulp_root, pulp_main_ref, root, table)
+        errors.extend(transfer_errors)
+        ported.update(transfer_texts)
+    elif pulp_root is not None:
+        # The transferred tree can be the only authoritative source for a
+        # respell entry; keep an empty map here so the respell checker knows
+        # that Pulp proof was requested and available.
         ported = {}
+        transfer_texts, transfer_errors = framework_transfer_pulp_texts(
+            pulp_root, pulp_main_ref, root, table)
+        errors.extend(transfer_errors)
+        ported.update(transfer_texts)
+    elif not pulp_rows:
+        # No Pulp checkout means the authoritative check is deferred, even
+        # when the ledger has no later Pulp-origin rows.
+        ported = None
     if not table_errors:
         respell_errors, respell_checks = framework_respell_errors(root, table, ported, added)
         errors.extend(respell_errors)
         checks.update(respell_checks)
     return expected, errors, checks
+
+
+def framework_transfer_pulp_texts(pulp_root: Path, pulp_main_ref: str, root: Path,
+                                  table: list[dict]) -> tuple[dict[str, str], list[str]]:
+    """Collect authoritative Pulp bytes for respell evidence in the transfer.
+
+    The ports ledger only contains files added after the framework transfer.
+    Respells may also cite a file that landed in the transferred tree, so its
+    Pulp bytes must remain available for the same kind proof.
+    """
+    try:
+        transfer = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError) as exc:
+        return {}, [f"{FRAMEWORK_RESPELL}: cannot read the transfer record for Pulp evidence: {exc}"]
+    records = transfer.get("records")
+    if not isinstance(records, list):
+        return {}, [f"{FRAMEWORK_RESPELL}: transfer records must be a list"]
+    evidence = {entry.get("evidence") for entry in table
+                if isinstance(entry, dict) and isinstance(entry.get("evidence"), str)}
+    records = [record for record in records
+               if isinstance(record, dict) and record.get("framework_path") in evidence]
+    if not records:
+        return {}, []
+    identity = load_rename_identity_verifier()
+    raw, errors = identity.raw_from_records(
+        pulp_root, records, transfer.get("pulp_sha", ""), pulp_main_ref)
+    if errors:
+        return {}, [f"{FRAMEWORK_RESPELL}: {error}" for error in errors]
+    rename = transfer.get("rename")
+    if not isinstance(rename, dict):
+        return {}, [f"{FRAMEWORK_RESPELL}: transfer rename must be an object"]
+    edge = rename.get("edge_table")
+    if not isinstance(edge, dict):
+        return {}, [f"{FRAMEWORK_RESPELL}: transfer rename edge_table must be an object"]
+    suffixes = {str(value).lower() for value in edge.get("suffixes", [])}
+    binary_suffixes = {str(value).lower() for value in edge.get("binary_suffixes", [])}
+    exclusions = rename.get("literal_exclusions", [])
+    if not isinstance(exclusions, list):
+        return {}, [f"{FRAMEWORK_RESPELL}: transfer rename literal_exclusions must be a list"]
+    out: dict[str, str] = {}
+    for record in records:
+        framework_path = record["framework_path"]
+        blob = raw.get(record.get("pulp_path"))
+        if blob is None:
+            continue
+        data = blob.read_bytes()
+        if identity.is_text(record["pulp_path"], data, suffixes, binary_suffixes):
+            protected = [item["literal"].encode() for item in exclusions
+                         if isinstance(item, dict) and item.get("path") == record["pulp_path"]
+                         and isinstance(item.get("literal"), str)]
+            data, _ = identity.forward_bytes(data, rename, protected)
+        out[framework_path] = data.decode("utf-8", errors="replace")
+    return out, []
 
 
 def framework_sources(root: Path) -> dict[str, str]:
@@ -1641,19 +1708,40 @@ def framework_closure_names(root: Path) -> tuple[set[str], set[str], list[str]]:
         receipt = json.loads((root / transfer["export_receipt"]).read_text(encoding="utf-8"))
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return set(), set(), [f"{FRAMEWORK_RESPELL}: cannot read the transfer's closures: {exc}"]
+    if not isinstance(receipt, dict):
+        return set(), set(), [f"{FRAMEWORK_RESPELL}: transfer receipt must be an object"]
+    units = receipt.get("units")
+    if not isinstance(units, list):
+        return set(), set(), [f"{FRAMEWORK_RESPELL}: transfer receipt units must be a list"]
     macros: set[str] = set()
     exports: set[str] = set()
-    for unit in receipt.get("units", []):
+    for index, unit in enumerate(units):
+        if not isinstance(unit, dict) or not isinstance(unit.get("closure_manifest"), str):
+            return set(), set(), [f"{FRAMEWORK_RESPELL}: receipt units[{index}] closure_manifest must be a string"]
         try:
             closure = json.loads((root / unit["closure_manifest"]).read_text(encoding="utf-8"))
         except (OSError, ValueError, KeyError, TypeError) as exc:
             return set(), set(), [f"{FRAMEWORK_RESPELL}: cannot read closure {unit.get('closure_manifest')}: {exc}"]
-        definitions = list(closure.get("compile_definitions", []))
-        for target in closure.get("targets", []):
-            definitions += target.get("compile_definitions", [])
+        if not isinstance(closure, dict):
+            return set(), set(), [f"{FRAMEWORK_RESPELL}: closure {unit['closure_manifest']} must be an object"]
+        definitions = closure.get("compile_definitions", [])
+        targets = closure.get("targets", [])
+        link_exports = closure.get("link_exports", [])
+        if not isinstance(definitions, list) or not all(isinstance(item, str) for item in definitions):
+            return set(), set(), [f"{FRAMEWORK_RESPELL}: closure {unit['closure_manifest']} compile_definitions must be a list of strings"]
+        if not isinstance(targets, list) or not all(isinstance(target, dict) for target in targets):
+            return set(), set(), [f"{FRAMEWORK_RESPELL}: closure {unit['closure_manifest']} targets must be a list of objects"]
+        if not isinstance(link_exports, list) or not all(isinstance(row, dict) for row in link_exports):
+            return set(), set(), [f"{FRAMEWORK_RESPELL}: closure {unit['closure_manifest']} link_exports must be a list of objects"]
+        definitions = list(definitions)
+        for target in targets:
+            target_definitions = target.get("compile_definitions", [])
+            if not isinstance(target_definitions, list) or not all(isinstance(item, str) for item in target_definitions):
+                return set(), set(), [f"{FRAMEWORK_RESPELL}: closure {unit['closure_manifest']} target compile_definitions must be a list of strings"]
+            definitions += target_definitions
         macros |= {item.split("=", 1)[0] for item in definitions if item.startswith("PULP_")}
-        exports |= {row.get("name") for row in closure.get("link_exports", []) or []
-                    if isinstance(row, dict) and str(row.get("name", "")).startswith("pulp_")}
+        exports |= {row["name"] for row in link_exports
+                    if isinstance(row.get("name"), str) and row["name"].startswith("pulp_")}
     return macros, exports, []
 
 
@@ -1676,9 +1764,11 @@ def framework_respell_errors(root: Path, table: list[dict], ported: dict[str, st
     current = framework_sources(root)
     undo = {entry["new"]: entry["old"] for entry in table}
     pulp_added = {path for path, row in added.items() if row["origin"] == "pulp"}
+    pulp_evidence = set(ported or {})
     as_pulp = {path: respeller.apply(text, undo) for path, text in current.items()}
-    ported_now = {path: as_pulp[path] for path in pulp_added if path in as_pulp}
-    others = {path: text for path, text in as_pulp.items() if path not in pulp_added}
+    authoritative_paths = (set(ported) if ported is not None else pulp_added)
+    ported_now = {path: as_pulp[path] for path in authoritative_paths if path in as_pulp}
+    others = {path: text for path, text in as_pulp.items() if path not in authoritative_paths}
     # The closures are read only when a name could depend on them.
     needs_closures = (any(entry["kind"] in ("closure-macro", "link-export", "opt-in-switch") for entry in table)
                       or any(respeller.pulp_tokens(text) for text in ported_now.values()))
@@ -1694,7 +1784,9 @@ def framework_respell_errors(root: Path, table: list[dict], ported: dict[str, st
             errors.append(f"{where}: {old} is not a macro the closures define")
         elif kind == "link-export" and old not in exports:
             errors.append(f"{where}: {old} is not a name the closures list as a link export")
-        elif kind in ("file-macro", "opt-in-switch") and evidence not in pulp_added:
+        elif kind in ("file-macro", "opt-in-switch") and (
+                (ported is None and evidence not in pulp_added)
+                or (ported is not None and evidence not in pulp_evidence)):
             errors.append(f"{where}: a {kind} entry's evidence is a ported Pulp source, not {evidence}")
         elif ported is not None and evidence in ported:
             recognised = {"file-macro": respeller.self_defined_macros, "extern-c": respeller.extern_c_definitions,
