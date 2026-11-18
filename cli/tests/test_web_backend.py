@@ -512,6 +512,110 @@ class WebCaptureArtifactTests(unittest.TestCase):
         self.assertEqual(pixel(viewport["width"] // 2, viewport["height"] // 2), (10, 100, 200, 255))
 
 
+class WebNoBuildFreshnessTests(unittest.TestCase):
+    """`--no-build` drives only a build whose recorded source digest matches."""
+
+    def built_project(self, root: Path) -> tuple[dict, Path]:
+        project = root / "application"
+        (project / "src").mkdir(parents=True)
+        (project / "src/main.tsx").write_text("export {};\n", encoding="utf-8")
+        (project / "app.toml").write_text("name = 'x'\n", encoding="utf-8")
+        built = project / ".vellum/build/web"
+        built.mkdir(parents=True)
+        (built / "build-manifest.json").write_text("{}", encoding="utf-8")
+        (built / "vellum_components.json").write_text(json.dumps({
+            "schema": "vellum.web-components.v1", "components": [],
+        }), encoding="utf-8")
+        BACKEND_MODULE["write_source_digest"](built, BACKEND_MODULE["build_input_digest"](project))
+        return {"root": project}, built
+
+    def test_package_and_capture_outputs_do_not_move_the_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, built = self.built_project(Path(temporary))
+            project = context["root"]
+            before = BACKEND_MODULE["build_input_digest"](project)
+            for name in ("dist-a", "dist-b", "dist", "artifacts"):
+                (project / name).mkdir()
+                (project / name / "out.bin").write_bytes(b"x")
+            self.assertEqual(BACKEND_MODULE["build_input_digest"](project), before)
+            self.assertEqual(
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)["root"],
+                built)
+
+    def test_a_fresh_build_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, built = self.built_project(Path(temporary))
+            self.assertEqual(
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)["root"],
+                built)
+
+    def test_an_edited_source_without_a_rebuild_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, _ = self.built_project(Path(temporary))
+            (context["root"] / "src/main.tsx").write_text("export const a = 1;\n", encoding="utf-8")
+            with self.assertRaisesRegex(BackendFailure, "stale.*source digest") as caught:
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)
+            self.assertEqual(caught.exception.status, "build_stale")
+
+    def test_an_edited_input_outside_the_watched_directories_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, _ = self.built_project(Path(temporary))
+            helper = context["root"] / "helper.ts"
+            helper.write_text("export const a = 1;\n", encoding="utf-8")
+            BACKEND_MODULE["write_source_digest"](
+                context["root"] / ".vellum/build/web",
+                BACKEND_MODULE["build_input_digest"](context["root"]))
+            helper.write_text("export const a = 2;\n", encoding="utf-8")
+            with self.assertRaisesRegex(BackendFailure, "stale.*source digest") as caught:
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)
+            self.assertEqual(caught.exception.status, "build_stale")
+
+    def test_a_source_edited_during_the_build_is_not_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            context, _ = self.built_project(root)
+            project = context["root"]
+            shutil.rmtree(project / ".vellum")
+            sdk = root / "sdk"
+            (sdk / "web").mkdir(parents=True)
+            for name in ("vellum_web_core.js", "vellum_web_core.wasm", "vellum_host.js",
+                         "text_semantics.js", "style.css", "check_wasm_no_engine.py"):
+                (sdk / "web" / name).write_text("x", encoding="utf-8")
+            (sdk / "web/index.html").write_text("{{APP_NAME}}", encoding="utf-8")
+            context.update({
+                "entry": project / "src/main.tsx", "slug": "x", "components": [],
+                "manifest": {"app": {"name": "x"}},
+            })
+
+            def bundle_while_editing(arguments: list[str], **_kwargs: object) -> object:
+                if len(arguments) == 4 and arguments[-1].endswith("app.js"):
+                    Path(arguments[-1]).write_text("void 0;\n", encoding="utf-8")
+                    Path(arguments[-1] + ".map").write_text("{}", encoding="utf-8")
+                    (project / "src/main.tsx").write_text("export const b = 1;\n", encoding="utf-8")
+                return object()
+
+            with mock.patch.dict(BACKEND_MODULE["build_app"].__globals__, {
+                "validate_web_payload": lambda _sdk: {},
+                "sdk_node": lambda _sdk: Path("node"),
+                "run_checked": bundle_while_editing,
+            }):
+                with self.assertRaises(BackendFailure) as caught:
+                    BACKEND_MODULE["build_app"](context, sdk)
+            self.assertEqual(caught.exception.status, "source_changed")
+            self.assertFalse((project / ".vellum/build/web").exists())
+
+    def test_a_build_with_no_recorded_digest_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            context, built = self.built_project(Path(temporary))
+            (built / "source-digest.json").unlink()
+            with self.assertRaisesRegex(BackendFailure, "records no source digest") as caught:
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)
+            self.assertEqual(caught.exception.status, "build_stale")
+            (built / "source-digest.json").write_text("not json", encoding="utf-8")
+            with self.assertRaises(BackendFailure):
+                BACKEND_MODULE["ensure_build"](context, Path("/unused"), no_build=True)
+
+
 class WebScenarioEvidenceTests(unittest.TestCase):
     def test_sdk_path_detector_catches_absolute_and_relative_install_names(self) -> None:
         prefix = Path("/private/tmp/vellum-sdk")

@@ -1,0 +1,222 @@
+#pragma once
+
+// Pure (X11-free) helpers for the Linux XDND target on the plugin-host child
+// window. The XDND protocol machinery (atoms, ClientMessage handshake,
+// XConvertSelection) lives in plugin_view_host_linux.cpp and needs Xlib; the
+// payload parsing and coordinate mapping below are pure arithmetic / string
+// work, so they live here as header-only free functions that compile on every
+// platform. That lets the cross-platform drag-drop test suite exercise them
+// without an X server or Xlib link — the handshake itself needs xvfb (see
+// test_plugin_view_host_factory.cpp).
+
+#include <vellum/view/geometry.hpp>
+
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace vellum::view::xdnd {
+
+// Decode percent-encoded octets in a `file://` URI path component (RFC 3986).
+// XDND `text/uri-list` payloads percent-encode reserved + non-ASCII bytes, so a
+// path with a space arrives as `%20`. Unknown / malformed `%` escapes are left
+// verbatim rather than dropped, so a stray `%` never silently truncates a path.
+inline std::string percent_decode(const std::string& in) {
+    std::string out;
+    out.reserve(in.size());
+    auto hex_val = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    for (size_t i = 0; i < in.size(); ++i) {
+        if (in[i] == '%' && i + 2 < in.size()) {
+            int hi = hex_val(in[i + 1]);
+            int lo = hex_val(in[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(in[i]);
+    }
+    return out;
+}
+
+// Convert a single `file://` URI to a filesystem path. Mirrors the macOS
+// producer's [[url path] UTF8String] result: the local path with the scheme +
+// (optional) authority stripped and percent-escapes decoded. Forms handled:
+//   file:///abs/path        -> /abs/path           (empty authority)
+//   file://host/abs/path    -> /abs/path           (named authority dropped)
+//   file:/abs/path          -> /abs/path           (no `//`, lenient)
+//   /abs/path               -> /abs/path           (bare path, passthrough)
+// A non-file scheme (http://, data:) returns empty — XDND file drops should
+// only ever carry file URIs, and we refuse to hand a URL to a file consumer.
+inline std::string file_uri_to_path(const std::string& uri) {
+    constexpr const char* kScheme = "file:";
+    constexpr size_t kSchemeLen = 5;  // strlen("file:")
+    std::string s = uri;
+    if (s.rfind(kScheme, 0) == 0) {
+        s = s.substr(kSchemeLen);
+        if (s.rfind("//", 0) == 0) {
+            // Strip the authority component up to the first '/' of the path.
+            size_t path_start = s.find('/', 2);
+            if (path_start == std::string::npos) return {};  // authority only
+            s = s.substr(path_start);
+        }
+        // else `file:/abs` (no authority) — s already begins with '/'.
+    } else if (!s.empty() && s.front() == '/') {
+        // Bare absolute path (tolerated; some sources omit the scheme).
+    } else {
+        return {};  // non-file scheme or relative junk
+    }
+    return percent_decode(s);
+}
+
+// Encode a filesystem path as a `file://` URI for an XDND `text/uri-list`
+// payload — the inverse of file_uri_to_path(), used by the XDND drag SOURCE.
+// Percent-encodes every byte that is not an RFC 3986 unreserved character,
+// leaving '/' as the path separator, and prefixes the empty-authority `file://`
+// form (an absolute path yields `file:///abs/path`). Round-trips with
+// file_uri_to_path() for any absolute path.
+inline std::string path_to_file_uri(const std::string& path) {
+    if (path.empty()) return {};
+    auto is_unreserved = [](unsigned char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+               (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+               c == '.' || c == '~' || c == '/';
+    };
+    static const char kHex[] = "0123456789ABCDEF";
+    std::string out = "file://";
+    for (unsigned char c : path) {
+        if (is_unreserved(c)) {
+            out.push_back(static_cast<char>(c));
+        } else {
+            out.push_back('%');
+            out.push_back(kHex[c >> 4]);
+            out.push_back(kHex[c & 0x0F]);
+        }
+    }
+    return out;
+}
+
+// Build a full XDND `text/uri-list` payload (CRLF-separated file URIs) from a
+// set of absolute paths. Empty paths are skipped.
+inline std::string build_uri_list(const std::vector<std::string>& paths) {
+    std::string out;
+    for (const auto& p : paths) {
+        if (p.empty()) continue;
+        out += path_to_file_uri(p);
+        out += "\r\n";
+    }
+    return out;
+}
+
+// Parse an XDND `text/uri-list` payload into filesystem paths. The format
+// (RFC 2483) is CRLF-separated URIs; lines beginning with '#' are comments and
+// blank lines are ignored. Lenient on the line ending: handles CRLF, lone LF,
+// and a missing trailing newline. Non-file URIs are skipped (see
+// file_uri_to_path), so a mixed payload keeps only the droppable files.
+inline std::vector<std::string> parse_uri_list(const std::string& payload) {
+    std::vector<std::string> paths;
+    size_t start = 0;
+    const size_t n = payload.size();
+    while (start <= n) {
+        size_t end = payload.find('\n', start);
+        std::string line = payload.substr(
+            start, end == std::string::npos ? std::string::npos : end - start);
+        // Trim a trailing '\r' (CRLF) and any surrounding whitespace.
+        while (!line.empty() &&
+               (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
+            line.pop_back();
+        size_t first = line.find_first_not_of(" \t");
+        if (first != std::string::npos) line = line.substr(first);
+
+        if (!line.empty() && line.front() != '#') {
+            std::string path = file_uri_to_path(line);
+            if (!path.empty()) paths.push_back(std::move(path));
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return paths;
+}
+
+// Map an XDND root-space drop point to the plugin-host child window's local
+// coordinates. XDND XdndPosition carries the pointer position in ROOT-window
+// coordinates; the host knows the child window's absolute origin on the root
+// (from XTranslateCoordinates). Subtracting it yields the child-local point that
+// then feeds window_to_root_point() (the design-viewport inverse) before
+// dispatch — exactly mirroring how the mac producer converts draggingLocation.
+inline Point root_to_child_local(int root_x, int root_y, int child_origin_x,
+                                 int child_origin_y) {
+    return {static_cast<float>(root_x - child_origin_x),
+            static_cast<float>(root_y - child_origin_y)};
+}
+
+// ── Source-side reply validation ─────────────────────────────────────────
+//
+// A drag source hears XdndStatus and XdndFinished from whatever target it last
+// addressed. A reply is the current target's only when data.l[0] names that
+// target; a delayed reply from a target the pointer already left, or any reply
+// before a target exists, must not change the drag.
+
+// The oldest XDND version the source drives; older targets are treated as not
+// XDND-aware, since they predate XdndFinished.
+inline constexpr int kMinSourceVersion = 3;
+// The newest version the source speaks.
+inline constexpr int kMaxSourceVersion = 5;
+
+// The version to negotiate with a target that advertises `advertised`, or 0
+// when the target is too old to drive.
+/// One reading of the pointer: its root-space position and whether the primary
+/// button is down.
+struct PointerSample {
+    int x = 0;
+    int y = 0;
+    bool primary_down = false;
+};
+
+/// What a new pointer reading means for a drag in progress.
+enum class PointerChange { none, moved, released };
+
+/// Compares two readings of the pointer. A drag follows the pointer by polling
+/// it, because the pointer cannot be grabbed here: the button press that starts
+/// a drag leaves SDL's connection holding the implicit grab, and a grab asked
+/// for on any other connection fails. Release wins over movement, so the drop
+/// goes to the target the last position reached.
+inline PointerChange pointer_change(const PointerSample& previous, const PointerSample& now) {
+    if (previous.primary_down && !now.primary_down)
+        return PointerChange::released;
+    if (now.x != previous.x || now.y != previous.y)
+        return PointerChange::moved;
+    return PointerChange::none;
+}
+
+inline int negotiated_version(int advertised) {
+    if (advertised < kMinSourceVersion)
+        return 0;
+    return advertised < kMaxSourceVersion ? advertised : kMaxSourceVersion;
+}
+
+// True when an XdndStatus from `sender` is the current target's.
+inline bool status_is_from_target(unsigned long sender, unsigned long target) {
+    return target != 0 && sender == target;
+}
+
+// The drop outcome carried by an XdndFinished, or nullopt when the message
+// must be ignored (no drop sent yet, or not from the current target). Only
+// version 5 and later define the success bit in data.l[1]; an earlier target
+// finishing the transfer is a success.
+inline std::optional<bool> finished_outcome(unsigned long sender, unsigned long target,
+                                            bool dropped, int version, long flags) {
+    if (!dropped || !status_is_from_target(sender, target))
+        return std::nullopt;
+    if (version >= 5)
+        return (flags & 1L) != 0;
+    return true;
+}
+
+}  // namespace vellum::view::xdnd

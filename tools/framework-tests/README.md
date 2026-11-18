@@ -26,3 +26,15 @@ and so is any file whose exact bytes are a Pulp-origin blob: a recorded one
 always, and any blob of the Pulp checkout the provenance lane reads. Nothing
 here ships: an `install()` in this directory, or one elsewhere that names it,
 is refused, and the SDK builder configures with tests off.
+
+## Linux host tests
+
+`linux_sdl_window_x11_test.cpp` (the SDL window host on an X server: create,
+resize, a server-generated click) and `linux_atspi_tree_test.cpp` (the AT-SPI
+tree over a D-Bus session) register only on Linux, under the label
+`linux-host`. Run them with
+`xvfb-run -a dbus-run-session -- ctest -L linux-host --output-on-failure`; a
+missing display, session bus or XTest extension is a skip (exit 77). Each has a
+control: the window test's `--control` run leaves out the resize and the click
+and must see neither, and the AT-SPI test must fail to read a path the provider
+never exported and must stop answering once the provider is shut down.

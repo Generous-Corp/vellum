@@ -33,6 +33,7 @@ Three layers agree, so a lane cannot drift back to a paid runner by accident:
    | `VELLUM_MACOS_RUNS_ON_JSON` | `["self-hosted","macOS","ARM64","vellum-build-macos"]` | `gpu-macos.yml`, `readme-quick-start.yml` |
    | `VELLUM_AUTHORITY_RUNS_ON_JSON` | `["self-hosted","Linux","ARM64","vellum-authority-linux"]` | `authority-activation.yml`, `authority-release.yml` |
    | `VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON` | none: unset, merge-group runs use the local variable and fallback above | `gpu-macos.yml` (merge-group runs only) |
+   | `VELLUM_LOCAL_MACOS_STERILE_RUNS_ON_JSON` | none: unset, `sterile-consumer` uses the proof job's selection | `gpu-macos.yml` (`sterile-consumer` only, while `VELLUM_LOCAL_MACOS_RUNS_ON_JSON` is set) |
 
 2. `scripts/test_ci_runner_policy.py` asserts the exact variable and fallback
    for every workflow, and rejects the GitHub-hosted labels outright through

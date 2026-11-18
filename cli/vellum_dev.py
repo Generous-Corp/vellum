@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import queue
 import sys
@@ -70,6 +71,70 @@ def snapshot(root: Path) -> tuple[str, dict[str, str]]:
         digest.update(relative.encode("utf-8") + b"\0")
         digest.update(file_digest.encode("ascii") + b"\n")
     return digest.hexdigest(), records
+
+
+# The digest a build records and `--no-build` checks it against. Kept here, in
+# a module every install already ships, beside the fingerprint it records.
+# Unlike the watcher's allowlist, it covers every file under the project: both
+# backends accept any project-relative entry and component manifest path, and
+# the bundler follows imports anywhere, so an allowlist would miss inputs.
+SOURCE_DIGEST_NAME = "source-digest.json"
+SOURCE_DIGEST_SCHEMA = "vellum.build-source-digest.v1"
+BUILD_INPUT_EXCLUDED_DIRECTORIES = {".git", ".vellum", "node_modules"}
+# Directories the CLI itself writes into the project (`package` defaults to
+# dist, a second package to e.g. dist-b; `capture` to artifacts). They are
+# outputs, not inputs: hashing them made the digest move after every package
+# or capture, which broke reproducible packaging and flagged fresh builds stale.
+BUILD_OUTPUT_DIRECTORIES = {"dist", "artifacts"}
+BUILD_OUTPUT_DIRECTORY_PREFIXES = ("dist-", "dist_")
+
+
+def is_build_output_directory(name: str) -> bool:
+    return name in BUILD_OUTPUT_DIRECTORIES or name.startswith(BUILD_OUTPUT_DIRECTORY_PREFIXES)
+
+
+def build_input_digest(project: Path) -> str:
+    digest = hashlib.sha256()
+    for directory, names, files in os.walk(project):
+        names[:] = sorted(
+            name for name in names
+            if name not in BUILD_INPUT_EXCLUDED_DIRECTORIES
+            and not is_build_output_directory(name)
+        )
+        for name in sorted(files):
+            path = Path(directory) / name
+            try:
+                content = path.read_bytes()
+            except OSError:
+                continue
+            digest.update(path.relative_to(project).as_posix().encode("utf-8") + b"\0")
+            digest.update(hashlib.sha256(content).hexdigest().encode("ascii") + b"\n")
+    return digest.hexdigest()
+
+
+def write_source_digest(directory: Path, digest: str) -> None:
+    (directory / SOURCE_DIGEST_NAME).write_text(json.dumps({
+        "schema": SOURCE_DIGEST_SCHEMA, "digest": digest,
+    }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def staleness(directory: Path, project: Path) -> str | None:
+    """Why the build in `directory` cannot be proven fresh for `project`, or
+    None when its recorded digest matches the current sources."""
+    try:
+        recorded = json.loads((directory / SOURCE_DIGEST_NAME).read_text(encoding="utf-8"))
+        built = recorded["digest"]
+        valid = recorded["schema"] == SOURCE_DIGEST_SCHEMA and isinstance(built, str)
+    except (OSError, ValueError, KeyError, TypeError):
+        valid = False
+    if not valid:
+        return ("Build records no source digest, so its freshness cannot be proven; "
+                "run vellum build")
+    current = build_input_digest(project)
+    if built != current:
+        return (f"Build is stale: it was built from source digest {built[:12]} but the "
+                f"project is now {current[:12]}; run vellum build")
+    return None
 
 
 def changed(previous: dict[str, str], current: dict[str, str]) -> list[str]:
