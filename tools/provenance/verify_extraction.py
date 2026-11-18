@@ -1459,6 +1459,46 @@ def framework_ports_history_errors(root: Path, ports) -> list[str]:
     return []
 
 
+# A change that gives a Pulp-origin file another origin fails on every event, judged against the event's base
+# (VELLUM_GIT_BASE: a pull request's base, a merge group's base_sha). There is no waiver label: a genuine
+# owner-approved change goes through an owner decision with a ruleset bypass. The one exception is the push
+# that lands such a change on main itself, which this check already judged as a pull request and a merge group.
+def landing_on_main() -> bool:
+    return os.environ.get("GITHUB_EVENT_NAME") == "push" and os.environ.get("GITHUB_REF") == "refs/heads/main"
+
+
+def framework_ports_origin_errors(root: Path, ports, transferred: set[str]) -> list[str]:
+    """A file of Pulp origin stays Pulp's: no row this change adds or edits may give it another origin.
+
+    A Pulp-origin path is one the transfer record carries or a row at the history base gives origin `pulp`. A
+    row this change adds or edits that names such a path with origin `native` moves it.
+    """
+    if landing_on_main():
+        return []
+    base, base_error = load_mirror_export_verifier().history_base(root)
+    if base_error or base is None:
+        return []  # the history check reports an unavailable base
+    try:
+        rows = json.loads((root / FRAMEWORK_PORTS).read_text(encoding="utf-8"))["rows"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []  # reported by the ledger's own reading
+    shown = subprocess.run(["git", "-C", str(root), "show", f"{base}:{FRAMEWORK_PORTS}"],
+                           capture_output=True, check=False)
+    landed = ports.parse(shown.stdout.decode("utf-8", errors="replace"))[0] if shown.returncode == 0 else []
+    pulp_paths = set(transferred) | {row["framework_path"] for row in landed if row.get("origin") == "pulp"}
+    # Only a row this change adds or edits can move a file; a removal row
+    # changes the file set while leaving the removed file's origin intact.
+    moved = sorted({row["framework_path"] for row in rows if isinstance(row, dict) and row not in landed
+                    and row.get("change") != "removed"
+                    and row.get("origin") != "pulp" and isinstance(row.get("framework_path"), str)
+                    and row["framework_path"] in pulp_paths})
+    if not moved:
+        return []
+    return [f"{FRAMEWORK_PORTS}: origin is not `pulp` for {len(moved)} path(s) that came from Pulp ({moved[:5]}); "
+            "a Pulp-origin file stays Pulp's and is changed in Pulp; an owner-approved exception needs an owner "
+            "decision with a ruleset bypass"]
+
+
 def framework_ports_landed(root: Path, ports) -> int:
     """How many ledger rows the history base already holds; 0 when there is no base or no ledger there."""
     base, base_error = load_mirror_export_verifier().history_base(root)
@@ -1609,6 +1649,7 @@ def framework_ports_state(root: Path, transferred: set[str], pulp_root: Path | N
     ports = load_framework_ports()
     expected, added, removed, errors = ports.file_set(root, transferred)
     errors = errors + framework_ports_history_errors(root, ports)
+    errors = errors + framework_ports_origin_errors(root, ports, transferred)
     errors = errors + framework_ports_native_errors(root, added, pulp_root)
     checks: dict[str, object] = {"framework_ports_added": sorted(added), "framework_ports_removed": sorted(removed)}
     # Targets no closure builds are declared in the unit manifest, each source
