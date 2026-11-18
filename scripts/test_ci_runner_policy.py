@@ -131,7 +131,7 @@ PREDECIDE_ON = "vars.VELLUM_GPU_PREDECIDE == 'on'"
 # only report a reused or uncovered proof, and otherwise exactly the fleet
 # selector.
 GPU_JOB_RUNS_ON = (
-    "runs-on: ${{ fromJSON((" + PREDECIDE_ON + " && "
+    "runs-on: ${{ fromJSON((" + PREDECIDE_ON + " && needs.decide.result == 'success' && "
     "(needs.decide.outputs.unaffected == 'true' || needs.decide.outputs.reused_run != '') && "
     + DECIDE_RUNNER + ") || " + FLEET_EXPRESSION + ") }}"
 )
@@ -159,7 +159,9 @@ GPU_HOSTED_JOBS = {
 DECIDE_IF = (
     "    if: " + PREDECIDE_ON + " && (github.event_name == 'pull_request' || "
     "github.event_name == 'merge_group' || "
-    "(github.event_name == 'push' && github.ref == 'refs/heads/main'))"
+    "(github.event_name == 'push' && github.ref == 'refs/heads/main')) && "
+    "(github.event_name != 'pull_request' || "
+    "github.event.pull_request.head.repo.full_name == github.repository)"
 )
 DECIDE_OUTPUTS = (
     "      unaffected: ${{ steps.classify.outputs.unaffected }}\n"
@@ -173,6 +175,7 @@ DECIDE_STEPS = (
     "Reuse an identical-tree proof",
 )
 AGREE_STEP = "Agree with the early decision"
+OFF_MAC_STEP = "Refuse to build off a Mac"
 
 def evaluate_actions_expression(expression: str, context: dict[str, str]) -> str:
     """Evaluate the GitHub Actions expression subset a runs-on selector uses.
@@ -1378,7 +1381,12 @@ class RunnerPolicyTests(unittest.TestCase):
                             self.assertEqual(
                                 evaluate_actions_expression(expression, {**context, **off, **answer}),
                                 fleet)
-                    on = {**context, switch: "on"}
+                    on = {**context, switch: "on", "needs.decide.result": "success"}
+                    # A decide that set an output but did not succeed routes nothing.
+                    for result in ("", "failure", "skipped", "cancelled"):
+                        for answer in reporting:
+                            self.assertEqual(evaluate_actions_expression(
+                                expression, {**on, **answer, "needs.decide.result": result}), fleet)
                     # On: a full proof (decide skipped, failed or building)
                     # keeps the fleet selector ...
                     for answer in building:
@@ -1421,6 +1429,11 @@ class RunnerPolicyTests(unittest.TestCase):
         self.assertLess(names.index(AGREE_STEP), names.index("Size builds to this runner"))
         block = steps[AGREE_STEP]
         self.assertIn("        if: needs.decide.result == 'success'\n", block)
+        # The backstop: whatever routed the job, it builds only on a Mac.
+        self.assertEqual(names.index(OFF_MAC_STEP), names.index(AGREE_STEP) + 1)
+        self.assertIn("        if: runner.os != 'macOS' && steps.classify.outputs.unaffected != 'true' "
+                      "&& steps.reuse.outputs.run_id == ''\n", steps[OFF_MAC_STEP])
+        self.assertIn("exit 1", steps[OFF_MAC_STEP])
         script = block.split("        run: |\n", 1)[1]
         script = "\n".join(line[10:] for line in script.splitlines())
         env = {"DECIDED_UNAFFECTED": "", "DECIDED_REUSED": "", "UNAFFECTED": "", "REUSED": ""}
@@ -1448,6 +1461,8 @@ class RunnerPolicyTests(unittest.TestCase):
         self.assertEqual([line for line in decide.splitlines() if line.startswith("    if:")],
                          [DECIDE_IF])
         self.assertIn("\n    continue-on-error: true\n", decide)
+        # The job outlives its two step timeouts plus a full-history checkout.
+        self.assertIn("\n    timeout-minutes: 15\n", decide)
         self.assertIn("\n    outputs:\n" + DECIDE_OUTPUTS + "\n    steps:\n", decide)
         # Read-only: no write permission, no credentials left in the checkout.
         self.assertNotIn("permissions:", decide)

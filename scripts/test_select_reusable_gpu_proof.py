@@ -397,6 +397,11 @@ def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
         if name == RECHECK_STEP:
             test.assertEqual(condition, "steps.reuse.outputs.run_id != ''", name)
             continue
+        if name == "Refuse to build off a Mac":
+            # Fails a build that would run off a Mac; it proves nothing.
+            test.assertEqual(condition, "runner.os != 'macOS' && steps.classify.outputs.unaffected != 'true' "
+                             "&& steps.reuse.outputs.run_id == ''", name)
+            continue
         if name == AGREE_STEP:
             # Compares the early decision with this job's; it proves nothing.
             test.assertEqual(condition, "needs.decide.result == 'success'", name)
@@ -422,7 +427,7 @@ def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
             f"gpu-macos-arm64 {name!r} runs in a reused queue run: if: {condition!r}",
         )
     # The agreement check sits between the decision and the re-check.
-    test.assertEqual(names[reuse + 1:reuse + 3], [AGREE_STEP, RECHECK_STEP])
+    test.assertEqual(names[reuse + 1:reuse + 4], [AGREE_STEP, "Refuse to build off a Mac", RECHECK_STEP])
     test.assertIn("verify_extraction.py", text)
     receipt = dict(steps)["Record the tree this pull-request proof covered"]
     test.assertEqual(receipt, f"{GPU_GATE} && github.event_name == 'pull_request'")

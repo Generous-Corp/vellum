@@ -52,7 +52,9 @@ jobs:
     # disagreement. VELLUM_DECIDE_RUNNER (a JSON label list) moves this job,
     # and the reporting runs it routes, to another runner class, such as a
     # local Linux lane; unset, it is hosted ubuntu-24.04.
-    if: vars.VELLUM_GPU_PREDECIDE == 'on' && (github.event_name == 'pull_request' || github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    # First-party only, like the proof jobs: VELLUM_DECIDE_RUNNER may name a
+    # local lane, which must never check out a fork's head.
+    if: vars.VELLUM_GPU_PREDECIDE == 'on' && (github.event_name == 'pull_request' || github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ fromJSON(vars.VELLUM_DECIDE_RUNNER || '["ubuntu-24.04"]') }}
     timeout-minutes: 15
     # A failure here only loses the early decision: gpu-macos-arm64 runs on
@@ -146,7 +148,7 @@ jobs:
     # (main, release tags) stays on the generic class: a push re-proof must
     # never queue ahead of a merge-queue entry. Unset, every event selects
     # exactly what it did before.
-    runs-on: ${{ fromJSON((vars.VELLUM_GPU_PREDECIDE == 'on' && (needs.decide.outputs.unaffected == 'true' || needs.decide.outputs.reused_run != '') && (vars.VELLUM_DECIDE_RUNNER || '["ubuntu-24.04"]')) || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    runs-on: ${{ fromJSON((vars.VELLUM_GPU_PREDECIDE == 'on' && needs.decide.result == 'success' && (needs.decide.outputs.unaffected == 'true' || needs.decide.outputs.reused_run != '') && (vars.VELLUM_DECIDE_RUNNER || '["ubuntu-24.04"]')) || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     # $GITHUB_ENV does not cross jobs; dependent jobs read the validated
     # release identity through these outputs.
     outputs:
@@ -352,6 +354,13 @@ jobs:
             exit 1
           fi
           echo "decide and this job agree: unaffected='$UNAFFECTED' reused='$REUSED'"
+
+      # Whatever routed this job, it builds only on a Mac.
+      - name: Refuse to build off a Mac
+        if: runner.os != 'macOS' && steps.classify.outputs.unaffected != 'true' && steps.reuse.outputs.run_id == ''
+        run: |
+          echo "::error::this job would build the proof, but it runs on $RUNNER_OS, not a Mac"
+          exit 1
 
       # The reused build, render and test steps are a pure function of the
       # tree. These checks read state outside it (Pulp's history here, the

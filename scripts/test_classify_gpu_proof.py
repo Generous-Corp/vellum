@@ -482,7 +482,7 @@ class CheapLaneWorkflowTests(unittest.TestCase):
         CLASSIFY_STEP, DEPTH_STEP, "Derive the release identity from CMakeLists.txt",
         "Check out full preserved Vellum history without credentials",
         "Reuse an identical-tree proof", "Re-check the external state a reused proof read",
-        "Agree with the early decision",
+        "Agree with the early decision", "Refuse to build off a Mac",
         "Size builds to this runner", "Download and verify the locked Skia and Dawn archive",
         "Set up the authoring toolchain", "Verify the exact release source contract",
         "Build the installed TypeScript and JSX Phase 3 fixture",

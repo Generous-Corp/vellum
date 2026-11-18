@@ -106,7 +106,16 @@ classify and reuse steps, copied byte for byte and held equal by
 `scripts/test_ci_runner_policy.py`, and outputs `unaffected` and
 `reused_run`. When either is set, `gpu-macos-arm64` runs on decide's runner.
 The proof job repeats both decisions itself, and "Agree with the early
-decision" fails the job on any difference, before any step that builds.
+decision" fails the job on any difference, before any step that builds, and
+"Refuse to build off a Mac" fails any build that would run on a non-Mac
+runner, whatever routed it. `decide` is first-party only, like the proof
+jobs. A runner named in `VELLUM_DECIDE_RUNNER` needs `git`, `tar`, a current
+`python3` and a `gh` with `attestation verify`.
+
+Before setting the variable to `on`: cancel one run while `decide` is in
+progress and confirm `gpu-macos-arm64` and `sterile-consumer` conclude
+`cancelled`, not `skipped`; then watch the first routed run of each kind
+(an unaffected pull request, a reused merge group, a reused push).
 
 What still runs on a real Mac GPU is unchanged: the full pull-request proof,
 the cheap pull-request lane, the full merge-group proof, push and tag proofs
