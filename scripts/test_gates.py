@@ -3,15 +3,19 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
+import zipfile
 
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -282,6 +286,181 @@ class GatesTest(unittest.TestCase):
         self.assertNotIn("fake-secret", result.stdout + result.stderr)
         self.assertNotIn(secret_url, result.stdout + result.stderr)
         self.assertIn("cannot clone", result.stderr)
+
+
+class PolicyVenvTest(unittest.TestCase):
+    """The release-policy checks run with a hash-pinned venv gates.sh builds,
+    not with whatever the user site holds. A local wheel stands in for PyYAML,
+    so no test reaches a package index."""
+
+    STUB = ("import sys\nimport vellumprobe\n"
+            "print('probe', vellumprobe.VALUE, sys.prefix, sys.flags.isolated)\n")
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.repo = root / "repo"
+        self.home = root / "home"
+        self.wheels = root / "wheels"
+        self.empty = root / "no-wheels"
+        for directory in (self.repo / "scripts", self.home, self.wheels, self.empty):
+            directory.mkdir(parents=True)
+        git(self.repo, "init", "-q", "-b", "main")
+        git(self.repo, "config", "user.email", "test@example.com")
+        git(self.repo, "config", "user.name", "Test")
+        shutil.copy(SCRIPTS / "gates.sh", self.repo / "scripts" / "gates.sh")
+        # The base branch's policy check and the release-policy lane, each
+        # importing the package only the venv holds.
+        (self.repo / "scripts" / "check_release_policy.py").write_text("# --from-base\n" + self.STUB)
+        (self.repo / "scripts" / "run_ci_lane.py").write_text(self.STUB)
+        digest = self.make_wheel()
+        self.requirements = root / "requirements.txt"
+        self.requirements.write_text(f"vellumprobe==1.0 --hash=sha256:{digest}\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "base")
+        git(self.repo, "tag", "base")
+        self.worktrees = self.repo / ".worktrees"
+        self.cache = self.worktrees / "cache"
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def make_wheel(self) -> str:
+        files = {
+            "vellumprobe.py": "VALUE = 'from-the-venv'\n",
+            "vellumprobe-1.0.dist-info/METADATA": "Metadata-Version: 2.1\nName: vellumprobe\nVersion: 1.0\n",
+            "vellumprobe-1.0.dist-info/WHEEL": ("Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\n"
+                                                "Tag: py3-none-any\n"),
+        }
+        record = []
+        for name, text in files.items():
+            data = text.encode()
+            hashed = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+            record.append(f"{name},sha256={hashed},{len(data)}")
+        files["vellumprobe-1.0.dist-info/RECORD"] = "\n".join([*record, "vellumprobe-1.0.dist-info/RECORD,,"]) + "\n"
+        wheel = self.wheels / "vellumprobe-1.0-py3-none-any.whl"
+        with zipfile.ZipFile(wheel, "w") as archive:
+            for name, text in files.items():
+                archive.writestr(name, text)
+        return hashlib.sha256(wheel.read_bytes()).hexdigest()
+
+    def gates(self, wheels: Path | None = None) -> subprocess.CompletedProcess[str]:
+        env = {"PATH": os.environ["PATH"], "HOME": str(self.home), "PULP_WORKTREES_ROOT": str(self.worktrees),
+               "VELLUM_GATES_CACHE": str(self.cache), "GATES_ONLY": "release-policy,release-policy-base",
+               "VELLUM_GATES_POLICY_REQUIREMENTS": str(self.requirements),
+               "PIP_NO_INDEX": "1", "PIP_FIND_LINKS": str(wheels or self.wheels),
+               "VELLUM_GATES_POLICY_PYTHON": sys.executable}
+        return subprocess.run(["bash", "scripts/gates.sh", "base"], cwd=self.repo, env=env,
+                              capture_output=True, text=True, check=False)
+
+    def venvs(self) -> list[Path]:
+        return sorted((self.cache / "policy-venv").glob("*")) if (self.cache / "policy-venv").exists() else []
+
+    def test_the_policy_checks_pass_with_no_user_site(self) -> None:
+        self.assertEqual(list(self.home.iterdir()), [])
+        result = self.gates()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("gates: PASS release-policy (", result.stdout)
+        self.assertIn("gates: PASS release-policy-base (", result.stdout)
+        [venv] = [path for path in self.venvs() if not path.name.startswith(".")]
+        marker = (venv / ".requirements-sha256").read_text().strip()
+        self.assertEqual(marker, hashlib.sha256(self.requirements.read_bytes()).hexdigest())
+        self.assertTrue(venv.name.startswith(marker[:16] + "-py"))
+        # pip wrote nothing to HOME (its cache is under the gates cache), and no
+        # build directory is left behind. A Python framework build may still
+        # create HOME/Library/Caches/com.apple.python for bytecode.
+        self.assertEqual([path for path in self.home.rglob("*") if "pip" in path.name], [])
+        self.assertEqual([path for path in self.venvs() if path.name.startswith(".")], [])
+
+    def test_the_checks_run_with_the_venv_interpreter_isolated(self) -> None:
+        # Each check fails unless it runs from the cached venv, in isolated mode.
+        guard = ("import sys\nif '/policy-venv/' not in sys.prefix or not sys.flags.isolated:\n"
+                 "    sys.exit(f'not the policy venv: {sys.prefix} isolated={sys.flags.isolated}')\n")
+        for name in ("check_release_policy.py", "run_ci_lane.py"):
+            path = self.repo / "scripts" / name
+            path.write_text(path.read_text().replace("import sys\n", guard, 1))
+        git(self.repo, "commit", "-q", "-am", "require the venv")
+        git(self.repo, "tag", "-f", "base")
+        result = self.gates()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # The control: the same guard fails under the plain interpreter.
+        plain = subprocess.run([sys.executable, "-I", str(self.repo / "scripts" / "run_ci_lane.py")],
+                               capture_output=True, text=True, check=False)
+        self.assertIn("not the policy venv", plain.stderr)
+
+    def test_an_interpreter_without_a_wheel_falls_through_to_the_next(self) -> None:
+        # The pin is wheels only; an interpreter that cannot install it is
+        # skipped, and the next one builds the venv.
+        shim = self.home.parent / "shim"
+        shim.mkdir()
+        (shim / "python-no-wheel").write_text("#!/bin/sh\nexit 3\n")
+        (shim / "python-no-wheel").chmod(0o755)
+        env_python = f"{shim / 'python-no-wheel'} {sys.executable}"
+        env = {"PATH": os.environ["PATH"], "HOME": str(self.home), "PULP_WORKTREES_ROOT": str(self.worktrees),
+               "VELLUM_GATES_CACHE": str(self.cache), "GATES_ONLY": "release-policy,release-policy-base",
+               "VELLUM_GATES_POLICY_REQUIREMENTS": str(self.requirements), "PIP_NO_INDEX": "1",
+               "PIP_FIND_LINKS": str(self.wheels), "VELLUM_GATES_POLICY_PYTHON": env_python}
+        result = subprocess.run(["bash", "scripts/gates.sh", "base"], cwd=self.repo, env=env,
+                                capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("python-no-wheel cannot install", result.stdout + result.stderr)
+        self.assertEqual(len(self.venvs()), 1)
+        # The next run reuses that venv without trying the first interpreter again.
+        again = subprocess.run(["bash", "scripts/gates.sh", "base"], cwd=self.repo, env=env,
+                               capture_output=True, text=True, check=False)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("policy venv reused", again.stderr)
+        self.assertNotIn("cannot install", again.stderr)
+
+    def test_a_tampered_hash_fails_closed(self) -> None:
+        self.requirements.write_text("vellumprobe==1.0 --hash=sha256:" + "0" * 64 + "\n")
+        result = self.gates()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("gates: FAIL release-policy (", result.stdout)
+        self.assertIn("gates: FAIL release-policy-base (", result.stdout)
+        self.assertIn("could not be built", result.stdout + result.stderr)
+        self.assertIn("THESE PACKAGES DO NOT MATCH THE HASHES", result.stdout + result.stderr)
+        # Nothing is left in the cache for a later run to reuse.
+        self.assertEqual(self.venvs(), [])
+
+    def test_a_second_run_reuses_the_venv_without_installing(self) -> None:
+        first = self.gates()
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertIn("gates: building the policy venv", first.stderr)
+        [venv] = self.venvs()
+        marker = venv / ".requirements-sha256"
+        built = marker.stat().st_mtime_ns
+        # With no wheel to install from, a reinstall would fail.
+        second = self.gates(wheels=self.empty)
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertIn(f"gates: policy venv reused: {venv}", second.stderr)
+        self.assertNotIn("building the policy venv", second.stdout + second.stderr)
+        self.assertEqual(marker.stat().st_mtime_ns, built)
+
+    def test_a_venv_without_its_marker_is_rebuilt_not_reused(self) -> None:
+        # An interrupted or foreign directory at the venv's path has no marker
+        # naming the requirements digest, so it is replaced, never run.
+        first = self.gates()
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        [venv] = self.venvs()
+        shutil.rmtree(venv)
+        (venv / "bin").mkdir(parents=True)
+        (venv / "bin" / "python3").write_text("#!/bin/sh\nexit 7\n")
+        (venv / "bin" / "python3").chmod(0o755)
+        result = self.gates()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("gates: building the policy venv", result.stderr)
+        self.assertTrue((venv / ".requirements-sha256").is_file())
+        self.assertEqual([path.name for path in venv.iterdir() if path.name.startswith(".build")], [])
+        self.assertEqual(self.venvs(), [venv])
+
+    def test_a_changed_requirements_file_builds_a_new_venv(self) -> None:
+        self.assertEqual(self.gates().returncode, 0)
+        self.requirements.write_text(self.requirements.read_text() + "# a reviewed change\n")
+        result = self.gates()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("gates: building the policy venv", result.stderr)
+        self.assertEqual(len(self.venvs()), 2)
 
 
 if __name__ == "__main__":
