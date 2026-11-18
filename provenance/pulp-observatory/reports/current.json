@@ -11469,14 +11469,89 @@
       ],
       "source_commit": "ea28367a28b8e30c279ad518cfbae2ce7df1afbd",
       "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "correctness",
+      "deadline": "2026-11-23T00:24:38Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-1d53f6f4d0717475810cc3ae9585bcf5cb020d98",
+      "mapped_contracts": [
+        "capture-primitives"
+      ],
+      "source_commit": "1d53f6f4d0717475810cc3ae9585bcf5cb020d98",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "correctness",
+      "deadline": "2026-11-23T00:24:38Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-2f6e71fdb77fd6ad7ddf23a75c35474657645ee9",
+      "mapped_contracts": [
+        "capture-primitives"
+      ],
+      "source_commit": "2f6e71fdb77fd6ad7ddf23a75c35474657645ee9",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "correctness",
+      "deadline": "2026-11-23T00:24:38Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-bc2a7413c25d41ebd377469c3a4cca4802dcbc70",
+      "mapped_contracts": [
+        "capture-primitives"
+      ],
+      "source_commit": "bc2a7413c25d41ebd377469c3a4cca4802dcbc70",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "correctness",
+      "deadline": "2026-11-23T08:03:55Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-2980df3a1fbb4eb3b2b75d17cf58cd1e664383a9",
+      "mapped_contracts": [
+        "capture-primitives"
+      ],
+      "source_commit": "2980df3a1fbb4eb3b2b75d17cf58cd1e664383a9",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "correctness",
+      "deadline": "2026-11-23T10:16:51Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-4253b7c1cfbf53ff38b46d855107853fefdd2275",
+      "mapped_contracts": [
+        "capture-primitives"
+      ],
+      "source_commit": "4253b7c1cfbf53ff38b46d855107853fefdd2275",
+      "source_repository": "Generous-Corp/vellum"
+    },
+    {
+      "class": "rendering",
+      "deadline": "2026-11-23T10:16:51Z",
+      "direction": "framework-to-Pulp",
+      "disposition": "pending",
+      "event_id": "vellum-85288912d4b233c85094a9118fec3a8691290843",
+      "mapped_contracts": [
+        "canvas-kernel",
+        "capture-primitives",
+        "render-skia-dawn",
+        "retained-ui-kernel"
+      ],
+      "source_commit": "85288912d4b233c85094a9118fec3a8691290843",
+      "source_repository": "Generous-Corp/vellum"
     }
   ],
-  "generated_at": "2026-11-18T12:43:52Z",
+  "generated_at": "2026-11-18T16:37:15Z",
   "health": "pass",
-  "maximum_pending_age_days": 2.83,
+  "maximum_pending_age_days": 2.993,
   "observatory_effort_percent": 0.0,
   "overdue": 0,
-  "pending": 6,
+  "pending": 12,
   "release_blockers": [],
   "repeated_generic_fixes": {
     "canvas-kernel": 2,
