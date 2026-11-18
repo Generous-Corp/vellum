@@ -27,6 +27,8 @@
       "vellum.downstream-consumer-registry",
       "vellum.downstream-consumer-registry-unit",
       "vellum.effects",
+      "vellum.feature-versions",
+      "vellum.feature-versions-drift",
       "vellum.foundation",
       "vellum.frame-driver",
       "vellum.frame-pump",
