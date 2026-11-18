@@ -2337,5 +2337,56 @@ class PlanTargetRefusalTest(unittest.TestCase):
         self.assertRefused("needs #pragma once to carry the guard")
 
 
+class ConfigureDependsTest(unittest.TestCase):
+    """Whatever mirror_package.py reads must retrigger configure when edited."""
+
+    HERE = Path(__file__).resolve().parent
+    REPO = HERE.parents[1]
+
+    def _sources(self) -> list[Path]:
+        import ast
+        seen: list[Path] = []
+        todo = [self.HERE / "mirror_package.py"]
+        while todo:
+            path = todo.pop()
+            if path in seen:
+                continue
+            seen.append(path)
+            text = path.read_text(encoding="utf-8")
+            for node in ast.walk(ast.parse(text)):
+                names: list[str] = []
+                if isinstance(node, ast.Import):
+                    names = [a.name for a in node.names]
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    names = [node.module]
+                elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                        and node.func.attr == "with_name":
+                    names = [arg.value[:-3] for arg in node.args
+                             if isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+                             and arg.value.endswith(".py")]
+                for name in names:
+                    sibling = self.HERE / f"{name}.py"
+                    if sibling.is_file():
+                        todo.append(sibling)
+        return seen
+
+    def test_every_read_module_and_data_file_is_a_configure_dependency(self) -> None:
+        import ast
+        cmake = (self.HERE / "VellumMirror.cmake").read_text(encoding="utf-8")
+        missing: list[str] = []
+        for path in self._sources():
+            rel = path.relative_to(self.REPO).as_posix()
+            if rel not in cmake:
+                missing.append(rel)
+            for node in ast.parse(path.read_text(encoding="utf-8")).body:
+                if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) \
+                        and isinstance(node.value.value, str) \
+                        and re.fullmatch(r"provenance/[A-Za-z0-9_./-]+\.json", node.value.value):
+                    data = node.value.value
+                    if data not in cmake and data not in missing:
+                        missing.append(data)
+        self.assertEqual(missing, [], "edits to these leave plan.cmake stale")
+
+
 if __name__ == "__main__":
     unittest.main()
