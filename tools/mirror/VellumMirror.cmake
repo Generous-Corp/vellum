@@ -240,6 +240,15 @@ add_custom_command(OUTPUT "${VELLUM_MIRROR_UNEXPORTS}"
     VERBATIM)
 add_custom_target(vellum-mirror-third-party-unexports DEPENDS "${VELLUM_MIRROR_UNEXPORTS}")
 
+# VELLUM_ENABLE_TRACING: the switch the framework's trace header reads rides on
+# the same compile usage every mirrored target and framework test takes.
+if(VELLUM_ENABLE_TRACING)
+    target_compile_definitions(vellum-tracing INTERFACE PULP_TRACING_ENABLED=1)
+    # Perfetto's objects reach the foundation library, which must not carry the
+    # build host's paths either.
+    target_compile_options(vellum-perfetto PRIVATE ${_vellum_mirror_prefix_maps})
+endif()
+
 # Mirrored targets, exactly as the closures and units.json describe them.
 foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     _vellum_mirror_key(_vellum_mirror_unit_key "${_vellum_mirror_unit}")
@@ -269,6 +278,13 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         # installed choke headers is lifted (gpu_surface_guard.py). PRIVATE,
         # so it never reaches an installed consumer.
         target_compile_definitions("${_vellum_mirror_target}" PRIVATE VELLUM_MIRROR_BUILD=1)
+        # VELLUM_ENABLE_TRACING: every mirrored target compiles with the same
+        # trace switch and Perfetto header, so no two objects disagree on
+        # kTracingEnabled. Compile usage only; the one Perfetto library is
+        # linked into the foundation unit below.
+        if(VELLUM_ENABLE_TRACING)
+            target_link_libraries("${_vellum_mirror_target}" PRIVATE vellum-tracing)
+        endif()
         # Per-source options Pulp's own CMake sets on these sources (the plan
         # reads them from the mirrored CMake; source_compile_options.py).
         if(VELLUM_MIRROR_TARGET_${_tkey}_OPTION_SOURCE_COUNT GREATER 0)
@@ -488,6 +504,13 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         if(_unit_links)
             target_link_libraries("${_library}" PUBLIC ${_unit_links})
         endif()
+    endif()
+    # VELLUM_ENABLE_TRACING: the runtime target holds the Perfetto track-event
+    # storage, so its unit's library carries the one Perfetto in the process.
+    # Later units reach it through their link on this library.
+    if(VELLUM_ENABLE_TRACING AND "pulp-runtime" IN_LIST _whole)
+        target_link_libraries("${_library}" PRIVATE
+            "$<LINK_LIBRARY:WHOLE_ARCHIVE,vellum-perfetto>")
     endif()
     set_target_properties("${_library}" PROPERTIES
         VELLUM_MIRROR_CARRIED_ARCHIVES "${_third_party}")
