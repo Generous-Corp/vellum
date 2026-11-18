@@ -140,8 +140,8 @@ jobs:
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == '') }}
     # With VELLUM_GPU_PREDECIDE `on`, a run decide says will only report a
     # reused or uncovered proof takes decide's runner; it builds nothing, and
-    # "Agree with the early decision" fails it before any build step should
-    # it decide otherwise. Every other run selects exactly what it did
+    # "Agree with the early decision" and "Refuse to build off a Mac" fail it
+    # before any build step should it decide otherwise. Every other run selects exactly what it did
     # before: merge-group runs select their own runner class when
     # VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a merge-queue
     # proof is not handed to whichever PR-head or push job GitHub picks. Push
@@ -335,10 +335,12 @@ jobs:
             echo "::notice::Running the full proof"
           fi
 
-      # The second check on decide: this job reaches both decisions itself
-      # and fails on any difference, before any step that builds, so a run
-      # sent to decide's runner never builds there and an early decision
-      # that would have changed what is proved never passes.
+      # The second check on decide: this job reaches both decisions itself.
+      # When decide routed the run (said unaffected or reused), any
+      # difference fails the job before any step that builds. When decide
+      # said build, the job is on its usual Mac and its own answer is the one
+      # main always trusted; a proof that finished in between can make it
+      # reuse, so that difference only warns (the rollout's stop signal).
       - name: Agree with the early decision
         if: needs.decide.result == 'success'
         shell: bash
@@ -350,8 +352,13 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$DECIDED_UNAFFECTED" != "$UNAFFECTED" ] || [ "$DECIDED_REUSED" != "$REUSED" ]; then
-            echo "::error::decide said unaffected='$DECIDED_UNAFFECTED' reused='$DECIDED_REUSED'; this job says unaffected='$UNAFFECTED' reused='$REUSED'"
-            exit 1
+            detail="decide said unaffected='$DECIDED_UNAFFECTED' reused='$DECIDED_REUSED'; this job says unaffected='$UNAFFECTED' reused='$REUSED'"
+            if [ -n "$DECIDED_UNAFFECTED$DECIDED_REUSED" ]; then
+              echo "::error::$detail"
+              exit 1
+            fi
+            echo "::warning::$detail (decide said build; this job keeps its own answer on its usual runner)"
+            exit 0
           fi
           echo "decide and this job agree: unaffected='$UNAFFECTED' reused='$REUSED'"
 

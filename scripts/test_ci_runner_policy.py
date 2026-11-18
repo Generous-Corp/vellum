@@ -1443,8 +1443,11 @@ class RunnerPolicyTests(unittest.TestCase):
             "agree reused": ({"DECIDED_REUSED": "7", "REUSED": "7"}, 0),
             "decide reused, job builds": ({"DECIDED_REUSED": "7"}, 1),
             "decide unaffected, job builds": ({"DECIDED_UNAFFECTED": "true"}, 1),
-            "decide builds, job reuses": ({"REUSED": "7"}, 1),
-            "decide builds, job skips": ({"UNAFFECTED": "true"}, 1),
+            # decide said build: the job is on its usual Mac, keeps its own
+            # answer (a proof may have finished in between) and warns.
+            "decide builds, job reuses": ({"REUSED": "7"}, 0),
+            "decide builds, job skips": ({"UNAFFECTED": "true"}, 0),
+            "decide reused, job skips": ({"DECIDED_REUSED": "7", "UNAFFECTED": "true"}, 1),
             "different runs": ({"DECIDED_REUSED": "7", "REUSED": "8"}, 1),
         }
         for name, (values, expected) in cases.items():
@@ -1452,6 +1455,10 @@ class RunnerPolicyTests(unittest.TestCase):
                 result = subprocess.run(["bash", "-c", script], env={**os.environ, **env, **values},
                                         capture_output=True, text=True)
                 self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                differs = values.get("DECIDED_UNAFFECTED", "") != values.get("UNAFFECTED", "") or \
+                    values.get("DECIDED_REUSED", "") != values.get("REUSED", "")
+                if differs:
+                    self.assertIn("::error::" if expected else "::warning::", result.stdout)
 
 
     def test_decide_reaches_the_answer_the_proof_job_reaches(self) -> None:
