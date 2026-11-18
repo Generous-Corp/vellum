@@ -14,3 +14,37 @@ function(vellum_mirror_platform_args out_var)
             --apple-sdk "${CMAKE_OSX_SYSROOT}" PARENT_SCOPE)
     endif()
 endfunction()
+
+# Packaging and linking the mirror libraries uses Apple-only properties and
+# linker flags (frameworks, exported and unexported symbol lists, reexport,
+# dead-strip). The platform record plans and verifies every system, but only
+# Darwin has packaging rules; any other system stops here with a clear error
+# instead of failing in the linker.
+function(vellum_mirror_require_packaging)
+    if(APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        return()
+    endif()
+    message(FATAL_ERROR
+        "Vellum: mirror packaging for ${CMAKE_SYSTEM_NAME} is not implemented yet; "
+        "it arrives with that platform's record PR")
+endfunction()
+
+# -ffile-prefix-map is a GNU and Clang front-end option. MSVC and clang-cl do
+# not accept it, so there the paths are left unmapped and the flag is not
+# emitted. Arguments are <from>=<to> pairs.
+function(vellum_mirror_prefix_map_options out_var)
+    set(_ok TRUE)
+    foreach(_lang IN ITEMS C CXX)
+        if(NOT CMAKE_${_lang}_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$"
+                OR CMAKE_${_lang}_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+            set(_ok FALSE)
+        endif()
+    endforeach()
+    set(_options)
+    if(_ok)
+        foreach(_pair IN LISTS ARGN)
+            list(APPEND _options "-ffile-prefix-map=${_pair}")
+        endforeach()
+    endif()
+    set(${out_var} "${_options}" PARENT_SCOPE)
+endfunction()

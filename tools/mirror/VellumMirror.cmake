@@ -99,11 +99,11 @@ include("${_vellum_mirror_plan_cmake}")
 
 # Object paths and __FILE__ must not carry the host's checkout or build path:
 # the SDK is built twice in different directories and compared byte for byte.
-set(_vellum_mirror_prefix_maps
-    "-ffile-prefix-map=${PROJECT_SOURCE_DIR}=vellum"
-    "-ffile-prefix-map=${CMAKE_BINARY_DIR}=vellum-build"
-    "-ffile-prefix-map=${VELLUM_MIRROR_DEPS_DIR}=vellum-mirror-deps"
-    "-ffile-prefix-map=${VELLUM_SKIA_DIR}=vellum-skia")
+vellum_mirror_prefix_map_options(_vellum_mirror_prefix_maps
+    "${PROJECT_SOURCE_DIR}=vellum"
+    "${CMAKE_BINARY_DIR}=vellum-build"
+    "${VELLUM_MIRROR_DEPS_DIR}=vellum-mirror-deps"
+    "${VELLUM_SKIA_DIR}=vellum-skia")
 
 function(_vellum_mirror_key out value)
     string(MAKE_C_IDENTIFIER "${value}" _key)
@@ -392,6 +392,9 @@ if(TARGET pulp-view-core)
     target_compile_definitions(vellum-mirror-value-include-probe PRIVATE
         "$<TARGET_PROPERTY:pulp-view-core,COMPILE_DEFINITIONS>")
 endif()
+
+# Everything below packages and links with Apple-only rules.
+vellum_mirror_require_packaging()
 
 # ── Package libraries ──────────────────────────────────────────────────────
 # One shared library per unit, each holding every object of its mirrored
