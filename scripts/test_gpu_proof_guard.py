@@ -74,6 +74,20 @@ class RetryTests(unittest.TestCase):
                 self.assertTrue(outcome.startswith("declined"), outcome)
                 self.assertEqual(posted, [])
 
+    def test_a_failed_helper_job_does_not_decline_the_retry(self) -> None:
+        # decide is continue-on-error and changes nothing a proof concludes;
+        # its own failure must not make an infrastructure retry look like a
+        # failure on the change.
+        jobs = [{"id": 1, "name": "gpu-macos-arm64", "conclusion": "failure", **FAILED_STEP},
+                {"id": 2, "name": "decide", "conclusion": "failure", **FAILED_STEP}]
+        outcome, posted = self.attempt(run(), jobs, {"1": NETWORK, "2": REAL})
+        self.assertTrue(outcome.startswith("retried: 1 "), outcome)
+        self.assertEqual(posted, [f"repos/{REPO}/actions/runs/9/rerun-failed-jobs"])
+        # A failed helper alone is no failed proof job.
+        outcome, posted = self.attempt(run(), jobs[1:], {"2": NETWORK})
+        self.assertTrue(outcome.startswith("declined: no failed job"), outcome)
+        self.assertEqual(posted, [])
+
     def test_an_unreadable_log_is_not_evidence(self) -> None:
         jobs = [{"id": 1, "name": "gpu-macos-arm64", "conclusion": "failure", **FAILED_STEP}]
         outcome, posted = self.attempt(run(), jobs, {})

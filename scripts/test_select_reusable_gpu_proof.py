@@ -322,7 +322,7 @@ def job_steps(text: str, job: str) -> list[tuple[str, str]]:
 
 
 def in_proof_job(text: str, old: str, new: str) -> str:
-    """Replace the first `old` inside gpu-macos-arm64, not in proof-route's copy."""
+    """Replace the first `old` inside gpu-macos-arm64, not in decide's copy."""
     start = text.index("\n  gpu-macos-arm64:\n")
     position = text.index(old, start)
     return text[:position] + new + text[position + len(old):]
@@ -361,6 +361,7 @@ UNGATED_GPU_STEPS = {"Fetch and verify the pinned Pulp view-audio archive"}
 # Runs only when a proof is reused: the external-state checks the reused run
 # performed against the world as it was then.
 RECHECK_STEP = "Re-check the external state a reused proof read"
+AGREE_STEP = "Agree with the early decision"
 STERILE_GATE = (
     "needs.gpu-macos-arm64.outputs.unaffected != 'true' && "
     "needs.gpu-macos-arm64.outputs.cheap != 'true' && "
@@ -396,6 +397,10 @@ def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
         if name == RECHECK_STEP:
             test.assertEqual(condition, "steps.reuse.outputs.run_id != ''", name)
             continue
+        if name == AGREE_STEP:
+            # Compares the early decision with this job's; it proves nothing.
+            test.assertEqual(condition, "needs.decide.result == 'success'", name)
+            continue
         if name in SKIP_RECEIPT_STEPS:
             test.assertEqual(condition, SKIP_RECEIPT_IF, name)
             continue
@@ -416,7 +421,8 @@ def assert_reuse_wiring(test: unittest.TestCase, text: str) -> None:
             ),
             f"gpu-macos-arm64 {name!r} runs in a reused queue run: if: {condition!r}",
         )
-    test.assertEqual(names[reuse + 1], RECHECK_STEP)
+    # The agreement check sits between the decision and the re-check.
+    test.assertEqual(names[reuse + 1:reuse + 3], [AGREE_STEP, RECHECK_STEP])
     test.assertIn("verify_extraction.py", text)
     receipt = dict(steps)["Record the tree this pull-request proof covered"]
     test.assertEqual(receipt, f"{GPU_GATE} && github.event_name == 'pull_request'")

@@ -38,29 +38,30 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  proof-route:
-    name: proof-route
-    # Decides, on a hosted runner, whether gpu-macos-arm64 will only report:
-    # a change the base's classifier says the proof does not cover, or a tree
-    # an earlier run of this workflow already proved. Such a run takes a few
-    # minutes, but on the fleet it waited a median of 20 to 40 minutes for a
-    # Mac lease, so it runs on a hosted runner instead. The checkout, classify
-    # and reuse steps are byte-for-byte copies of gpu-macos-arm64's own
-    # (scripts/test_ci_runner_policy.py holds them equal). This job only
-    # chooses where gpu-macos-arm64 runs: that job still decides for itself
-    # what to prove, so if the two ever disagree the proof is built on the
-    # reviewed hosted fallback, never skipped. Setting the repository variable
-    # VELLUM_HOSTED_SHORT_JOBS to `off` skips this job and restores the
-    # previous runner selection for both proof jobs.
-    if: vars.VELLUM_HOSTED_SHORT_JOBS != 'off' && (github.event_name == 'pull_request' || github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    # A failure here only loses the hosted placement: gpu-macos-arm64 runs
-    # on its usual runner and proves as before. It must not redden the run,
+  decide:
+    name: decide
+    # Off unless the repository variable VELLUM_GPU_PREDECIDE is exactly
+    # `on`. When on, this job runs gpu-macos-arm64's own checkout, classify
+    # and reuse steps (byte-for-byte copies, held equal by
+    # scripts/test_ci_runner_policy.py) on a non-Mac runner, before any Mac
+    # is asked for. A run that will only report (a change the base's
+    # classifier says the proof does not cover, or a tree an earlier run of
+    # this workflow already proved) then takes this job's runner instead of
+    # waiting 20 to 40 minutes for a fleet Mac lease to print a notice.
+    # gpu-macos-arm64 repeats both decisions itself and fails on any
+    # disagreement. VELLUM_DECIDE_RUNNER (a JSON label list) moves this job,
+    # and the reporting runs it routes, to another runner class, such as a
+    # local Linux lane; unset, it is hosted ubuntu-24.04.
+    if: vars.VELLUM_GPU_PREDECIDE == 'on' && (github.event_name == 'pull_request' || github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    runs-on: ${{ fromJSON(vars.VELLUM_DECIDE_RUNNER || '["ubuntu-24.04"]') }}
+    timeout-minutes: 15
+    # A failure here only loses the early decision: gpu-macos-arm64 runs on
+    # its usual runner and proves as before. It must not redden the run,
     # which a later push reads before it may reuse this run's proof.
     continue-on-error: true
     outputs:
-      report_only: ${{ steps.classify.outputs.unaffected == 'true' || steps.reuse.outputs.run_id != '' }}
+      unaffected: ${{ steps.classify.outputs.unaffected }}
+      reused_run: ${{ steps.reuse.outputs.run_id }}
     steps:
       - name: Check out full preserved Vellum history without credentials
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -71,6 +72,7 @@ jobs:
       - name: Classify the change against the base's rules
         id: classify
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        timeout-minutes: 5
         shell: bash
         env:
           # A queue entry's first parent is the entry ahead of it in a batch;
@@ -98,6 +100,7 @@ jobs:
       - name: Reuse an identical-tree proof
         id: reuse
         if: (github.event_name == 'merge_group' && steps.classify.outputs.unaffected != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        timeout-minutes: 5
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -127,24 +130,23 @@ jobs:
 
   gpu-macos-arm64:
     name: gpu-macos-arm64
-    needs: proof-route
+    needs: decide
     # Only first-party PRs may use the private local fleet. Fork PRs are
     # intentionally skipped while the local selector is enabled.
-    # !cancelled(): a failed or skipped proof-route must never skip this
-    # required context, because a skipped required check reads as passing.
-    # Without proof-route's answer the job runs where it always did.
+    # !cancelled(): a failed or skipped decide must never skip this required
+    # context, because a skipped required check reads as passing.
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == '') }}
-    # A run proof-route says will only report a reused or uncovered proof
-    # takes the reviewed hosted fallback, macos-15, instead of a fleet Mac:
-    # every step it runs already runs there, and should the job decide to
-    # build after all it builds the same proof it builds whenever the local
-    # selector is unset. Otherwise merge-group runs select their own runner
-    # class when VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a
-    # merge-queue proof is not handed to whichever PR-head or push job GitHub
-    # picks. Push (main, release tags) stays on the generic class: a push
-    # re-proof must never queue ahead of a merge-queue entry. Unset, every
-    # event selects exactly what it did before.
-    runs-on: ${{ fromJSON((needs.proof-route.outputs.report_only == 'true' && '["macos-15"]') || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    # With VELLUM_GPU_PREDECIDE `on`, a run decide says will only report a
+    # reused or uncovered proof takes decide's runner; it builds nothing, and
+    # "Agree with the early decision" fails it before any build step should
+    # it decide otherwise. Every other run selects exactly what it did
+    # before: merge-group runs select their own runner class when
+    # VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a merge-queue
+    # proof is not handed to whichever PR-head or push job GitHub picks. Push
+    # (main, release tags) stays on the generic class: a push re-proof must
+    # never queue ahead of a merge-queue entry. Unset, every event selects
+    # exactly what it did before.
+    runs-on: ${{ fromJSON((vars.VELLUM_GPU_PREDECIDE == 'on' && (needs.decide.outputs.unaffected == 'true' || needs.decide.outputs.reused_run != '') && (vars.VELLUM_DECIDE_RUNNER || '["ubuntu-24.04"]')) || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     # $GITHUB_ENV does not cross jobs; dependent jobs read the validated
     # release identity through these outputs.
     outputs:
@@ -200,6 +202,7 @@ jobs:
       - name: Classify the change against the base's rules
         id: classify
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        timeout-minutes: 5
         shell: bash
         env:
           # A queue entry's first parent is the entry ahead of it in a batch;
@@ -302,6 +305,7 @@ jobs:
       - name: Reuse an identical-tree proof
         id: reuse
         if: (github.event_name == 'merge_group' && steps.classify.outputs.unaffected != 'true') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        timeout-minutes: 5
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -328,6 +332,26 @@ jobs:
           else
             echo "::notice::Running the full proof"
           fi
+
+      # The second check on decide: this job reaches both decisions itself
+      # and fails on any difference, before any step that builds, so a run
+      # sent to decide's runner never builds there and an early decision
+      # that would have changed what is proved never passes.
+      - name: Agree with the early decision
+        if: needs.decide.result == 'success'
+        shell: bash
+        env:
+          DECIDED_UNAFFECTED: ${{ needs.decide.outputs.unaffected }}
+          DECIDED_REUSED: ${{ needs.decide.outputs.reused_run }}
+          UNAFFECTED: ${{ steps.classify.outputs.unaffected }}
+          REUSED: ${{ steps.reuse.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "$DECIDED_UNAFFECTED" != "$UNAFFECTED" ] || [ "$DECIDED_REUSED" != "$REUSED" ]; then
+            echo "::error::decide said unaffected='$DECIDED_UNAFFECTED' reused='$DECIDED_REUSED'; this job says unaffected='$UNAFFECTED' reused='$REUSED'"
+            exit 1
+          fi
+          echo "decide and this job agree: unaffected='$UNAFFECTED' reused='$REUSED'"
 
       # The reused build, render and test steps are a pure function of the
       # tree. These checks read state outside it (Pulp's history here, the
@@ -1289,26 +1313,21 @@ jobs:
     needs: gpu-macos-arm64
     # Keep the dependent job on the same first-party-only policy. A skip
     # carries down the whole needs chain unless a job names its own status
-    # check, so with proof-route skipped (tags, dispatches, the rollback) the
-    # implicit success() would skip this required context, which reads as
+    # check, so with decide skipped (its variable unset, tags, dispatches)
+    # the implicit success() would skip this required context, which reads as
     # passing. Run exactly when the proof job succeeded, as before.
     if: ${{ !cancelled() && needs.gpu-macos-arm64.result == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == '') }}
     # When gpu-macos-arm64 reported a reused proof or a change the proof does
     # not cover, every step below but a notice is skipped, so the job runs on
     # a hosted runner rather than waiting for a scarce Mac to print it. It
-    # still runs and reports exactly as before. The journey itself runs on a
-    # fresh hosted macos-15, the runner sdk-release.yml's release validation
-    # already runs the same validator on: it needs a clean Apple Silicon
-    # machine with no framework checkout, not a fleet Mac, and on the fleet
-    # its 90-second run waited for a second lease after the proof released
-    # the first. Setting VELLUM_HOSTED_SHORT_JOBS to `off` restores the
-    # previous selection: merge-group runs select their own runner class when
+    # still runs and reports exactly as before. Otherwise merge-group runs
+    # select their own runner class when
     # VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a merge-queue
     # proof is not handed to whichever PR-head or push job GitHub picks. Push
     # (main, release tags) stays on the generic class: a push re-proof must
     # never queue ahead of a merge-queue entry. Unset, every event selects
     # exactly what it did before.
-    runs-on: ${{ fromJSON(((needs.gpu-macos-arm64.outputs.reused_run != '' || needs.gpu-macos-arm64.outputs.unaffected == 'true' || needs.gpu-macos-arm64.outputs.cheap == 'true') && '["ubuntu-24.04"]') || (vars.VELLUM_HOSTED_SHORT_JOBS != 'off' && '["macos-15"]') || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    runs-on: ${{ fromJSON(((needs.gpu-macos-arm64.outputs.reused_run != '' || needs.gpu-macos-arm64.outputs.unaffected == 'true' || needs.gpu-macos-arm64.outputs.cheap == 'true') && '["ubuntu-24.04"]') || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     env:
       VELLUM_RELEASE_ARCHIVE: ${{ needs.gpu-macos-arm64.outputs.release_archive }}
     steps:

@@ -91,37 +91,35 @@ never queue ahead of a merge-queue entry. The only reviewed value is
 label TartCI's Vellum lanes register for their merge-group tier. Unset it to
 roll back; every event then selects the generic class again.
 
-### Short jobs run on hosted runners
+### Deciding reporting runs before a Mac is leased
 
-Two kinds of proof-job run take a few minutes of work but waited 20 to 40
-minutes for a fleet Mac lease (the Vellum lanes are capped at one VM each):
+A `gpu-macos-arm64` run that only reports needs no Mac. That covers three
+cases: a change the base's classifier says the proof does not cover, a
+merge-queue run that reuses its pull request's identical-tree proof, and the
+push to `main` that reuses its merge-queue proof. On the fleet such a run
+waited 20 to 40 minutes for a lease to print a notice.
 
-- `gpu-macos-arm64` runs that only report: a change the base's classifier
-  says the proof does not cover, a merge-queue run reusing its pull request's
-  identical-tree proof, and the push to `main` reusing its merge-queue proof.
-  The hosted `proof-route` job runs the proof job's own checkout, classify and
-  reuse steps (copied byte for byte, held equal by
-  `scripts/test_ci_runner_policy.py`) and outputs `report_only`. When it is
-  `true`, `gpu-macos-arm64` runs on the reviewed hosted fallback, `macos-15`.
-  The proof job still makes its own decision; if it ever disagrees, it builds
-  the full proof on `macos-15`, as it does whenever the local selector is
-  unset. A failed or skipped `proof-route` leaves the proof job on its usual
-  runner: the guards of both proof jobs name their own status check
-  (`!cancelled()`, and for `sterile-consumer` the proof job's result), so
-  `proof-route` can never skip a required context, which would read as
-  passing.
-- The real `sterile-consumer` journey. It needs a clean Apple Silicon machine
-  with no framework checkout, not a fleet Mac: `sdk-release.yml` already runs
-  the same validator with `--require-gpu-claims` on hosted `macos-15`. It now
-  runs there instead of queueing for a second lease after the proof released
-  the first.
+When the repository variable `VELLUM_GPU_PREDECIDE` is exactly `on`, the
+`decide` job runs first, on `VELLUM_DECIDE_RUNNER` (a JSON label list;
+unset, hosted `["ubuntu-24.04"]`). It runs the proof job's own checkout,
+classify and reuse steps, copied byte for byte and held equal by
+`scripts/test_ci_runner_policy.py`, and outputs `unaffected` and
+`reused_run`. When either is set, `gpu-macos-arm64` runs on decide's runner.
+The proof job repeats both decisions itself, and "Agree with the early
+decision" fails the job on any difference, before any step that builds.
 
-Required context names, the receipts and what each run proves are unchanged.
+What still runs on a real Mac GPU is unchanged: the full pull-request proof,
+the cheap pull-request lane, the full merge-group proof, push and tag proofs
+that build, and the real `sterile-consumer` journey.
 
-To roll back, set the repository variable `VELLUM_HOSTED_SHORT_JOBS` to `off`.
-`proof-route` is then skipped, so `gpu-macos-arm64` starts at once on the
-fleet selector, and `sterile-consumer`'s journey returns to the fleet selector.
-Delete the variable to restore the hosted placement.
+A failed or skipped `decide` leaves the proof job on its usual runner. The
+guards of both proof jobs name their own status check (`!cancelled()`, and
+for `sterile-consumer` the proof job's result), so `decide` can never skip a
+required context, which would read as passing.
+
+To roll back, delete `VELLUM_GPU_PREDECIDE` or set it to anything but `on`.
+`decide` is then skipped and `gpu-macos-arm64` starts at once on the fleet
+selector, as before.
 
 `VELLUM_MACOS_RUNS_ON_JSON` remains the hosted selector used by
 `readme-quick-start.yml` and the hosted portion of `sdk-release.yml`; it is not
@@ -153,7 +151,7 @@ A pull request runs the full proof now, as it did before, when any of these hold
 
 The cheap lane runs on the same runner class as the old pull-request proof
 (`VELLUM_LOCAL_MACOS_RUNS_ON_JSON`). No separate build-only class is
-registered with TartCI yet. `proof-route` routes only runs that report, so the
+registered with TartCI yet. `decide` routes only runs that report, so the
 cheap lane still builds on the fleet.
 
 ### Roll back
