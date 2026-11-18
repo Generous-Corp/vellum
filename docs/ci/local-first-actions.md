@@ -97,6 +97,9 @@ set. When the proof was built (not reused, uncovered or the cheap lane), the
 journey then selects it for every event, so a VM booted for the journey can
 take only a journey and never another run's proof. TartCI's Vellum lanes serve
 this class ahead of both proof classes; the journey runs about 1.4 minutes.
+All events share this one class, so a `main` or tag journey can queue
+ahead of a merge-group journey; the proof job keeps its own selection, so a
+push re-proof still never queues ahead of a merge-queue proof.
 The only reviewed value is
 `["self-hosted","macOS","ARM64","vellum-sterile-consumer"]`. Set it only once
 the TartCI release that adds the tier is deployed on every fleet host: a label

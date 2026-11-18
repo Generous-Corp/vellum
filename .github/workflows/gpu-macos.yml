@@ -1202,8 +1202,9 @@ jobs:
     # VELLUM_LOCAL_MACOS_STERILE_RUNS_ON_JSON is set, for every event: a VM
     # booted for it can then only take a journey, never another run's
     # 30-minute proof, and TartCI's Vellum lanes serve that class first. The
-    # journey runs about 1.4 min; the proofs keep their own selection below,
-    # so a push re-proof still never queues ahead of a merge-queue entry.
+    # journey runs about 1.4 min. gpu-macos-arm64 keeps its own selection, so
+    # a push re-proof still never queues ahead of a merge-queue entry; a push
+    # journey can queue ahead of a merge-group journey in the shared class.
     # Without it, merge-group runs select their own runner class when
     # VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a merge-queue
     # proof is not handed to whichever PR-head or push job GitHub picks, and
