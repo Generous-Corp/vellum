@@ -120,6 +120,23 @@ def index(repo: Path) -> dict[str, str]:
     return out
 
 
+def _check_options_platform(at: str, key: str, options: dict[str, Any]) -> None:
+    """The recorded options must configure the platform the index files the record under."""
+    system, processor = IDENTITIES[key]
+    if options.get("CMAKE_SYSTEM_NAME") != system:
+        raise RecordError(f"{at}: configure options target {options.get('CMAKE_SYSTEM_NAME')!r}, "
+                          f"but {key} is {system}")
+    if options.get("CMAKE_SYSTEM_PROCESSOR") != processor:
+        raise RecordError(f"{at}: configure options target processor {options.get('CMAKE_SYSTEM_PROCESSOR')!r}, "
+                          f"but {key} is {processor}")
+    if system == "iOS":
+        sdk = str(options.get("CMAKE_OSX_SYSROOT", "")).lower()
+        simulator = "simulator" in sdk
+        if not sdk or simulator != (key == "ios-simulator-arm64"):
+            raise RecordError(f"{at}: CMAKE_OSX_SYSROOT {options.get('CMAKE_OSX_SYSROOT')!r} "
+                              f"is not the {key} SDK")
+
+
 def load_record(repo: Path, key: str) -> tuple[dict[str, Any], list[tuple[str, dict[str, Any]]]]:
     """(record, [(unit, closure)]) for a platform the index lists, every pin checked."""
     listed = index(repo)
@@ -194,13 +211,24 @@ def load_record(repo: Path, key: str) -> tuple[dict[str, Any], list[tuple[str, d
         if not isinstance(closure, dict) or closure.get("schema") not in CLOSURE_SCHEMAS:
             raise RecordError(f"{at}: {manifest} is not a {' or '.join(CLOSURE_SCHEMAS)} manifest")
         recorded = closure.get("configure") or {}
+        if not isinstance(recorded, dict):
+            raise RecordError(f"{at}: {manifest} configure must be an object")
         if recorded.get("identity") != identity:
             raise RecordError(f"{at}: {manifest} was exported under another configure identity than the record's")
         options = recorded.get("options")
         if not isinstance(options, dict) or options_sha256(options) != configure["options_sha256"]:
             raise RecordError(f"{at}: {manifest}'s configure options do not match the record's digest")
-        for target in closure.get("targets", []):
-            for row in target.get("external_link_inputs", []):
+        _check_options_platform(at, key, options)
+        targets = closure.get("targets", [])
+        if not isinstance(targets, list):
+            raise RecordError(f"{at}: {manifest} targets must be a list")
+        for target in targets:
+            if not isinstance(target, dict):
+                raise RecordError(f"{at}: {manifest} has a target that is not an object")
+            rows = target.get("external_link_inputs", [])
+            if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+                raise RecordError(f"{at}: {target.get('name')} external_link_inputs must be a list of objects")
+            for row in rows:
                 if row.get("dependency") == "skia" and row.get("asset_sha256") != asset["sha256"]:
                     raise RecordError(f"{at}: {target.get('name')} links skia asset {row.get('asset_sha256')}, "
                                       f"not the record's {asset['sha256']}")

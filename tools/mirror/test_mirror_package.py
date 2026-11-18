@@ -1710,6 +1710,58 @@ class PlatformRecordPlanTest(unittest.TestCase):
             self.plan("linux-x64")
         self.assertIn("does not match the record's digest", str(caught.exception))
 
+    def rewrite_closure(self, mutate) -> None:
+        self.write_record()
+        root = self.fixture.repo / "provenance/framework/platforms/linux-x64"
+        closure = json.loads((root / "foundation.json").read_text())
+        mutate(closure)
+        (root / "foundation.json").write_text(json.dumps(closure), encoding="utf-8")
+        record = json.loads((root / "record.json").read_text())
+        record["units"][0]["closure_sha256"] = mp.sha256_file(root / "foundation.json")
+        if "options" in closure.get("configure", {}) if isinstance(closure.get("configure"), dict) else False:
+            record["configure"]["options_sha256"] = mp.platform_closures.options_sha256(closure["configure"]["options"])
+        (root / "record.json").write_text(json.dumps(record), encoding="utf-8")
+
+    def test_options_that_configure_another_platform_are_refused(self) -> None:
+        for change, fragment in (({"CMAKE_SYSTEM_NAME": "Windows"}, "but linux-x64 is Linux"),
+                                 ({"CMAKE_SYSTEM_PROCESSOR": "aarch64"}, "but linux-x64 is x86_64")):
+            with self.subTest(change=change):
+                self.rewrite_closure(lambda c: c["configure"]["options"].update(change))
+                with self.assertRaises(mp.PlanError) as caught:
+                    self.plan("linux-x64")
+                self.assertIn(fragment, str(caught.exception))
+        # Control: untouched options plan.
+        self.write_record()
+        self.plan("linux-x64")
+
+    def test_ios_options_must_name_the_indexed_sdk(self) -> None:
+        pc = mp.platform_closures
+        pc._check_options_platform("at", "ios-device-arm64", {
+            "CMAKE_SYSTEM_NAME": "iOS", "CMAKE_SYSTEM_PROCESSOR": "arm64", "CMAKE_OSX_SYSROOT": "iphoneos"})
+        pc._check_options_platform("at", "ios-simulator-arm64", {
+            "CMAKE_SYSTEM_NAME": "iOS", "CMAKE_SYSTEM_PROCESSOR": "arm64", "CMAKE_OSX_SYSROOT": "iphonesimulator"})
+        for key, sdk in (("ios-device-arm64", "iphonesimulator"), ("ios-simulator-arm64", "iphoneos"),
+                         ("ios-device-arm64", None)):
+            options = {"CMAKE_SYSTEM_NAME": "iOS", "CMAKE_SYSTEM_PROCESSOR": "arm64"}
+            if sdk:
+                options["CMAKE_OSX_SYSROOT"] = sdk
+            with self.subTest(key=key, sdk=sdk), self.assertRaises(pc.RecordError):
+                pc._check_options_platform("at", key, options)
+
+    def test_malformed_closure_shapes_are_record_errors(self) -> None:
+        for name, mutate in (
+            ("targets not a list", lambda c: c.update(targets={"a": 1})),
+            ("target not an object", lambda c: c.update(targets=["x"])),
+            ("rows not a list", lambda c: c["targets"][0].update(external_link_inputs=5)),
+            ("row not an object", lambda c: c["targets"][0].update(external_link_inputs=["x"])),
+            ("configure not an object", lambda c: c.update(configure=[1])),
+        ):
+            with self.subTest(name):
+                self.rewrite_closure(mutate)
+                with self.assertRaises(mp.PlanError):
+                    self.plan("linux-x64")
+                self.assertTrue(mp.platform_closures.errors(self.fixture.repo))
+
     def test_a_platform_without_a_record_is_refused_before_any_other_work(self) -> None:
         # framework/ is broken too; the missing record is still what is reported.
         self.fixture.write("framework/core/runtime/src/stray.cpp", b"int stray;\n")
