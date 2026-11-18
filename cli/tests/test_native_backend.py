@@ -163,7 +163,9 @@ class NativeBackendTests(unittest.TestCase):
         self.assertIn('application id "dev.vellum.reload-proof"', stop.call_args.args[0][2])
 
     def built_project(self, root: Path) -> tuple[dict, Path, Path]:
-        project = self.create_project(root)
+        return self.rebuilt(root, self.create_project(root))
+
+    def rebuilt(self, root: Path, project: Path) -> tuple[dict, Path, Path]:
         sdk = fake_build_sdk(root)
         context = BACKEND_MODULE["project_context"](str(project))
 
@@ -190,6 +192,39 @@ class NativeBackendTests(unittest.TestCase):
             with self.assertRaisesRegex(BackendFailure, "stale.*source digest") as caught:
                 ensure_app(context, sdk, no_build=True)
             self.assertEqual(caught.exception.status, "build_stale")
+
+    def test_no_build_refuses_an_edited_input_outside_the_watched_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.create_project(root)
+            helper = project / "helper.ts"
+            helper.write_text("export const a = 1;\n", encoding="utf-8")
+            context, sdk, _ = self.rebuilt(root, project)
+            helper.write_text("export const a = 2;\n", encoding="utf-8")
+            with self.assertRaisesRegex(BackendFailure, "stale.*source digest") as caught:
+                ensure_app(context, sdk, no_build=True)
+            self.assertEqual(caught.exception.status, "build_stale")
+
+    def test_a_source_edited_during_the_build_is_not_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = self.create_project(root)
+            sdk = fake_build_sdk(root)
+            context = BACKEND_MODULE["project_context"](str(project))
+
+            def bundle_while_editing(arguments: list[str], *, cwd: Path | None = None):
+                bundle = Path(arguments[3])
+                bundle.write_text("void 0;\n", encoding="utf-8")
+                bundle.with_suffix(f"{bundle.suffix}.map").write_text('{"version":3}\n', encoding="utf-8")
+                entry = project / "src/main.tsx"
+                entry.write_text(entry.read_text(encoding="utf-8") + "\n// mid-build\n", encoding="utf-8")
+                return subprocess.CompletedProcess(arguments, 0, "", "")
+
+            with mock.patch.dict(build_app.__globals__, {"run_checked": bundle_while_editing}):
+                with self.assertRaises(BackendFailure) as caught:
+                    build_app(context, sdk)
+            self.assertEqual(caught.exception.status, "source_changed")
+            self.assertFalse((project / ".vellum/build/macos" / f"{context['slug']}.app").exists())
 
     def test_no_build_refuses_a_build_with_no_recorded_digest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -17,9 +17,6 @@ extern std::atomic<const FrameTraceSink*> active_frame_trace_sink_storage;
 /// Installs `sink` only when none is installed. Returns whether it did.
 [[nodiscard]] bool install_frame_trace_sink_if_none(const FrameTraceSink& sink);
 
-/// Removes the sink only when it is the one installed for `context`.
-void clear_frame_trace_sink_for(void* context) noexcept;
-
 /// Starts the process-wide recorder named by `VELLUM_FRAME_TRACE`, once, when
 /// no sink is installed yet.
 void start_frame_trace_from_environment();

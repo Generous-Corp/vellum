@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "created_at": "2026-11-17T07:41:00Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-b38e4e067f0478f3855582852a8007f94f67625c",
+  "kind": "resolution",
+  "linked_commits": [
+    "b38e4e067f0478f3855582852a8007f94f67625c"
+  ],
+  "linked_pull_requests": [
+    "Generous-Corp/vellum#543"
+  ],
+  "owner": "@claude-observatory-agent",
+  "rationale": "Vellum-native graphics trace wiring (graphics/ frame_trace and native_trace_bridge) for the opt-in Perfetto lane; no Pulp counterpart or consumer. Classified by the Vellum lead.",
+  "resolves": "vellum-b38e4e067f0478f3855582852a8007f94f67625c",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

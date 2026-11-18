@@ -404,6 +404,11 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
     }
     with (contents / "Info.plist").open("wb") as output:
         plistlib.dump(info, output, sort_keys=True)
+    if build_input_digest(project) != source_digest:
+        raise BackendFailure(
+            "Project sources changed during the build; run vellum build again",
+            status="source_changed",
+        )
     write_source_digest(resources, source_digest)
     if app.exists():
         shutil.rmtree(app)

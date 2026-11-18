@@ -6,6 +6,10 @@ Three questions, answered per image set:
 * no image defines a `pulp::` symbol (the rename left nothing behind);
 * the images do define `vellum::` symbols (the control that the census can
   see the names it counts, so a zero above is not a blind reader);
+* with --pulp-library, no image exports a name that a Pulp build's static
+  libraries also define (a Pulp plug-in that loads the Vellum SDK would carry
+  both). The Pulp side must define something, or the run is blind, and
+  --plant-pulp is the control that the intersection can see a shared name;
 * no exported symbol and no Objective-C class is defined by two images, apart
   from names listed with --allow. Two images that both export a name give a
   process two definitions, and a class registered twice is a runtime warning
@@ -14,7 +18,9 @@ Three questions, answered per image set:
 The `pulp::` and `vellum::` counts read the full symbol table (`nm -m`), local
 and hidden definitions included. Only exported strong definitions count for the
 duplicate check ("external", not weak and not "private external"): a hidden or
-weak copy cannot be bound from another image. Objective-C classes come from class metadata (`otool -oV`), because a
+weak copy cannot be bound from another image. The Pulp overlap check includes
+externally visible weak definitions, because macOS can coalesce those across
+images. Objective-C classes come from class metadata (`otool -oV`), because a
 class is one per process whatever its symbols' visibility. Images with
 identical content (versioned dylib names) are read once.
 
@@ -57,6 +63,19 @@ def exported_strong(listing: str) -> set[str]:
         # `nm -m` may annotate a definition ("[referenced dynamically]",
         # "[no dead-strip]"); the annotation does not change what it exports.
         if _ANNOTATION.sub("", match["attrs"]).split() == ["external"]:
+            names.add(match["name"])
+    return names
+
+
+def exported_external(listing: str) -> set[str]:
+    """Defined names visible outside an image, including weak definitions."""
+    names: set[str] = set()
+    for line in listing.splitlines():
+        match = _NM_LINE.match(line)
+        if not match or match["section"] == "undefined":
+            continue
+        words = _ANNOTATION.sub("", match["attrs"]).split()
+        if "external" in words and "private" not in words and "hidden" not in words:
             names.add(match["name"])
     return names
 
@@ -152,8 +171,17 @@ def distinct_images(images: Iterable[Path]) -> list[Path]:
     return result
 
 
+def pulp_defined(libraries: list[Path], nm: Nm | None = None) -> set[str]:
+    """Externally visible names a Pulp build's static libraries define."""
+    nm = nm or run_nm
+    names: set[str] = set()
+    for library in libraries:
+        names |= exported_external(nm(library))
+    return names
+
+
 def census(images: list[Path], allow: frozenset[str] = frozenset(), nm: Nm | None = None, otool: Otool | None = None,
-           demangle: Demangle | None = None) -> tuple[dict, list[str]]:
+           demangle: Demangle | None = None, pulp_names: frozenset[str] | None = None) -> tuple[dict, list[str]]:
     """(report, findings). `images` may repeat an image to plant a duplicate.
 
     The readers are looked up here, not bound at definition, so a caller or test
@@ -163,6 +191,7 @@ def census(images: list[Path], allow: frozenset[str] = frozenset(), nm: Nm | Non
     pulp_defs: list[str] = []
     vellum_count = 0
     symbol_owners: dict[str, list[str]] = {}
+    pulp_leaks: dict[str, set[str]] = {}
     class_owners: dict[str, list[str]] = {}
     for position, image in enumerate(images):
         listing = nm(image)
@@ -173,6 +202,10 @@ def census(images: list[Path], allow: frozenset[str] = frozenset(), nm: Nm | Non
         tag = f"{image}#{position}"
         for name in exported_strong(listing):
             symbol_owners.setdefault(name, []).append(tag)
+        if pulp_names is not None:
+            for name in exported_external(listing):
+                if name in pulp_names and name not in allow:
+                    pulp_leaks.setdefault(str(image), set()).add(name)
         for cls in objc_classes(otool(image)):
             class_owners.setdefault(cls, []).append(tag)
     duplicate_symbols = {n: o for n, o in symbol_owners.items() if len(o) > 1 and n not in allow}
@@ -185,11 +218,17 @@ def census(images: list[Path], allow: frozenset[str] = frozenset(), nm: Nm | Non
         "duplicate_symbols": len(duplicate_symbols),
         "duplicate_classes": len(duplicate_classes),
     }
+    if pulp_names is not None:
+        report["pulp_library_symbols"] = len(pulp_names)
+        report["exported_names_pulp_also_defines"] = sum(len(v) for v in pulp_leaks.values())
     findings = [f"pulp:: is defined {len(pulp_defs)} times, e.g. {pulp_defs[0]}"] if pulp_defs else []
     for name, owners in sorted(duplicate_symbols.items())[:20]:
         findings.append(f"{readable.get(name, name)} is exported by {len(owners)} images: {owners}")
     if len(duplicate_symbols) > 20:
         findings.append(f"... and {len(duplicate_symbols) - 20} more duplicated symbols")
+    for image, leaked in sorted(pulp_leaks.items()):
+        sample = sorted(demangle(sorted(leaked)[:3]).values())
+        findings.append(f"{image} exports {len(leaked)} names a Pulp build also defines, e.g. {sample}")
     for cls, owners in sorted(duplicate_classes.items()):
         findings.append(f"Objective-C class {cls} is defined by {len(owners)} images: {owners}")
     return report, findings
@@ -202,12 +241,26 @@ def main(argv: list[str] | None = None) -> int:
                         help="a mangled name several images may define on purpose (repeatable)")
     parser.add_argument("--plant", action="store_true",
                         help="control: list the largest image twice; the run must fail")
+    parser.add_argument("--pulp-library", nargs="+", type=Path, default=[], metavar="ARCHIVE",
+                        help="static libraries of a Pulp build; no image may export a name they define")
+    parser.add_argument("--plant-pulp", action="store_true",
+                        help="control: add one exported image name to the Pulp set; the run must fail")
     args = parser.parse_args(argv)
     images = distinct_images(args.images)
     if args.plant and images:
         images = images + [max(images, key=lambda p: p.stat().st_size)]
     try:
-        report, findings = census(images, frozenset(args.allow))
+        pulp_names = frozenset(pulp_defined(args.pulp_library)) if args.pulp_library else None
+        if pulp_names is not None and not pulp_names:
+            raise RuntimeError("the Pulp libraries define no exported symbol")
+        if args.plant_pulp:
+            if pulp_names is None:
+                raise RuntimeError("--plant-pulp needs --pulp-library")
+            exported = sorted({n for image in images for n in exported_external(run_nm(image))})
+            if not exported:
+                raise RuntimeError("no exported name to plant")
+            pulp_names = pulp_names | {exported[0]}
+        report, findings = census(images, frozenset(args.allow), pulp_names=pulp_names)
     except RuntimeError as error:
         print(f"symbol census: blind, {error}", file=sys.stderr)
         return 3

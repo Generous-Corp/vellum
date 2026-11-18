@@ -388,6 +388,11 @@ def build_app(context: dict[str, Any], sdk: Path) -> dict[str, Any]:
             path.read_bytes(), install_prefix,
         ):
             raise BackendFailure(f"Web output leaked an SDK install path: {path.name}", status="non_relocatable_output")
+    if build_input_digest(project) != source_digest:
+        raise BackendFailure(
+            "Project sources changed during the build; run vellum build again",
+            status="source_changed",
+        )
     write_source_digest(staging, source_digest)
     import hashlib
     files = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()

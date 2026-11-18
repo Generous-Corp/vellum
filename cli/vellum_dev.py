@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import queue
 import sys
@@ -74,42 +75,32 @@ def snapshot(root: Path) -> tuple[str, dict[str, str]]:
 
 # The digest a build records and `--no-build` checks it against. Kept here, in
 # a module every install already ships, beside the fingerprint it records.
+# Unlike the watcher's allowlist, it covers every file under the project: both
+# backends accept any project-relative entry and component manifest path, and
+# the bundler follows imports anywhere, so an allowlist would miss inputs.
 SOURCE_DIGEST_NAME = "source-digest.json"
 SOURCE_DIGEST_SCHEMA = "vellum.build-source-digest.v1"
-
-
-IGNORED_FILE_NAMES = {".DS_Store"}
+BUILD_INPUT_EXCLUDED_DIRECTORIES = {".git", ".vellum", "node_modules"}
 
 
 def build_input_digest(project: Path) -> str:
-    """Digest of every project file a build could read.
-
-    The backends accept any project-relative entry, component manifest path,
-    component source and import, so the digest covers the whole project tree
-    (minus build output and tool scratch directories) rather than the watch
-    allowlist in `source_files`.
-    """
     digest = hashlib.sha256()
-    for path in sorted(project.rglob("*")):
-        relative = path.relative_to(project)
-        if any(part in EXCLUDED_DIRECTORIES for part in relative.parts):
-            continue
-        if path.name in IGNORED_FILE_NAMES:
-            continue
-        try:
-            if not path.is_file():
+    for directory, names, files in os.walk(project):
+        names[:] = sorted(
+            name for name in names if name not in BUILD_INPUT_EXCLUDED_DIRECTORIES
+        )
+        for name in sorted(files):
+            path = Path(directory) / name
+            try:
+                content = path.read_bytes()
+            except OSError:
                 continue
-            content = path.read_bytes()
-        except OSError:
-            continue
-        digest.update(relative.as_posix().encode("utf-8") + b"\0")
-        digest.update(hashlib.sha256(content).hexdigest().encode("ascii") + b"\n")
+            digest.update(path.relative_to(project).as_posix().encode("utf-8") + b"\0")
+            digest.update(hashlib.sha256(content).hexdigest().encode("ascii") + b"\n")
     return digest.hexdigest()
 
 
 def write_source_digest(directory: Path, digest: str) -> None:
-    """Record `digest`, which the caller captured BEFORE it started building,
-    so an edit made during the build is never recorded as fresh."""
     (directory / SOURCE_DIGEST_NAME).write_text(json.dumps({
         "schema": SOURCE_DIGEST_SCHEMA, "digest": digest,
     }, indent=2, sort_keys=True) + "\n", encoding="utf-8")

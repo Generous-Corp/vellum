@@ -36,6 +36,13 @@
 # When the diff touches release-path files and the planning directory variable is set, the tag
 # pipeline rehearsal also runs; without it that step is skipped with a notice.
 #
+# The release-policy checks need PyYAML, which `python3 -I` cannot load from a
+# user site. They run with a venv this script builds once per requirements
+# digest and interpreter version, under the cache, from
+# scripts/release_policy_requirements.txt with `pip --require-hashes` (the pin
+# the release workflows use). The venv's python3 is called by path; nothing
+# else runs from it and it never goes on PATH.
+#
 # GATES_ONLY=name[,name] runs just those checks (the self-test uses it).
 #
 # Exit status: 0 only when every check passed. No check's status passes through
@@ -116,6 +123,8 @@ if ! path_under_root "$UPSTREAM_SRC"; then
   exit 2
 fi
 UPSTREAM_URL="${VELLUM_GATES_UPSTREAM_URL:-https://github.com/Generous-Corp/pulp.git}"
+POLICY_REQUIREMENTS="${VELLUM_GATES_POLICY_REQUIREMENTS:-$ROOT/scripts/release_policy_requirements.txt}"
+POLICY_PYTHON=""
 POLICY_WORKTREE=""
 
 cleanup() {
@@ -282,8 +291,95 @@ check_product_ui() {
 }
 
 # ---- release-policy --------------------------------------------------------
+# policy_python: build or reuse the hash-pinned venv and set POLICY_PYTHON to
+# its interpreter. A venv is used only when its marker names the requirements
+# digest it was built from; a new one is built in a temporary directory and
+# moved into place only after every hash has verified, so a failed or tampered
+# install leaves nothing behind to reuse. The pin installs wheels only, so an
+# interpreter newer than the pinned release's wheels cannot build it: the next
+# python3.N on PATH is tried. VELLUM_GATES_POLICY_PYTHON names one instead.
+POLICY_PYTHONS="${VELLUM_GATES_POLICY_PYTHON:-python3 python3.14 python3.13 python3.12 python3.11}"
+
+policy_venv_dir() { # policy_venv_dir <interpreter> <digest>: the cache directory for that pair
+  local version
+  version="$("$1" -I -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])')" || return 1
+  printf '%s\n' "$CACHE/policy-venv/${2:0:16}-py$version"
+}
+
+policy_venv_with() { # policy_venv_with <interpreter> <digest> <reuse|build>: prints the venv's python3
+  local interpreter="$1" digest="$2" dir build
+  dir="$(policy_venv_dir "$interpreter" "$digest")" || return 1
+  if [[ -x "$dir/bin/python3" && "$(cat "$dir/.requirements-sha256" 2>/dev/null)" == "$digest" ]]; then
+    echo "gates: policy venv reused: $dir" >&2
+    printf '%s\n' "$dir/bin/python3"
+    return 0
+  fi
+  [[ "$3" == build ]] || return 1
+  mkdir -p "$CACHE/policy-venv" || return 1
+  build="$(mktemp -d "$CACHE/policy-venv/.build.XXXXXX")" || return 1
+  echo "gates: building the policy venv: $dir" >&2
+  # No user or site pip.conf can change the install, and pip's cache stays
+  # under the gates cache, never in HOME.
+  if ! "$interpreter" -I -m venv "$build" \
+      || ! PIP_CONFIG_FILE=/dev/null PIP_CACHE_DIR="$CACHE/pip" "$build/bin/python3" -I -m pip install --quiet \
+        --disable-pip-version-check --no-input --only-binary=:all: --require-hashes -r "$POLICY_REQUIREMENTS" >&2; then
+    rm -rf "$build"
+    return 1
+  fi
+  printf '%s\n' "$digest" > "$build/.requirements-sha256"
+  # mv onto an existing directory would nest the build inside it. A complete
+  # venv there came from a concurrent run and is used; anything else (an
+  # interrupted or foreign directory) is replaced.
+  if [[ -e "$dir" ]]; then
+    if [[ -x "$dir/bin/python3" && "$(cat "$dir/.requirements-sha256" 2>/dev/null)" == "$digest" ]]; then
+      rm -rf "$build"
+      printf '%s\n' "$dir/bin/python3"
+      return 0
+    fi
+    rm -rf "$dir"
+  fi
+  mv "$build" "$dir" || { rm -rf "$build"; return 1; }
+  printf '%s\n' "$dir/bin/python3"
+}
+
+policy_python() {
+  local digest interpreter found
+  if [[ ! -f "$POLICY_REQUIREMENTS" ]]; then
+    echo "gates: $POLICY_REQUIREMENTS is missing" >&2
+    return 1
+  fi
+  digest="$(python3 -I -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
+    "$POLICY_REQUIREMENTS")" || return 1
+  # A venv already built for any candidate is reused before anything installs.
+  for interpreter in $POLICY_PYTHONS; do
+    command -v "$interpreter" >/dev/null || continue
+    if found="$(policy_venv_with "$interpreter" "$digest" reuse)"; then
+      POLICY_PYTHON="$found"
+      return 0
+    fi
+  done
+  for interpreter in $POLICY_PYTHONS; do
+    command -v "$interpreter" >/dev/null || continue
+    if found="$(policy_venv_with "$interpreter" "$digest" build)"; then
+      POLICY_PYTHON="$found"
+      return 0
+    fi
+    echo "gates: $interpreter cannot install $POLICY_REQUIREMENTS; trying the next interpreter" >&2
+  done
+  echo "gates: the policy venv could not be built from $POLICY_REQUIREMENTS with any of: $POLICY_PYTHONS" >&2
+  return 1
+}
+
+policy_python_or_fail() {
+  if [[ -z "$POLICY_PYTHON" ]]; then
+    echo "the hash-pinned policy venv is unavailable; see the policy venv lines above"
+    return 1
+  fi
+}
+
 check_release_policy_lane() {
-  python3 -I scripts/run_ci_lane.py --lane release-policy
+  policy_python_or_fail
+  "$POLICY_PYTHON" -I scripts/run_ci_lane.py --lane release-policy
 }
 
 check_release_policy_base() {
@@ -295,7 +391,8 @@ check_release_policy_base() {
     echo "base check_release_policy.py predates --from-base; nothing to run"
     return 0
   fi
-  python3 -I "$base_dir/scripts/check_release_policy.py" --root "$ROOT" --from-base check
+  policy_python_or_fail
+  "$POLICY_PYTHON" -I "$base_dir/scripts/check_release_policy.py" --root "$ROOT" --from-base check
 }
 
 # ---- prose lint (runs inside the product-quality lane; named for a clear verdict) ----
@@ -496,6 +593,13 @@ check_release_rehearsal() {
 
 # ---- run -------------------------------------------------------------------
 printf 'gates: base=%s merge-base=%s head=%s mode=%s\n' "$BASE" "$GIT_BASE" "$HEAD_SHA" "$([[ $FULL -eq 1 ]] && echo full || echo fast)"
+
+wants_check() { [[ -z "${GATES_ONLY:-}" || ",$GATES_ONLY," == *",$1,"* ]]; }
+if wants_check release-policy || wants_check release-policy-base; then
+  # Built once, here, before any check runs in parallel. A failure fails both
+  # checks, never the run as a whole.
+  policy_python || POLICY_PYTHON=""
+fi
 
 if [[ $FULL -eq 0 ]]; then PARALLEL=1; fi
 run_check prose-lint check_prose_lint
