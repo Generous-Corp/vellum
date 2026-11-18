@@ -44,8 +44,11 @@ jobs:
           check="$RUNNER_TEMP/rule_data_split_check.py"
           if git cat-file -e "$BASE_SHA:tools/ci/rule_data_split_check.py" 2>/dev/null; then
             git show "$BASE_SHA:tools/ci/rule_data_split_check.py" > "$check"
-          else
+          elif git cat-file -e "$HEAD_SHA:tools/ci/rule_data_split_check.py" 2>/dev/null; then
             echo "::notice::the base has no rule_data_split_check.py; running the pull request head's copy"
             git show "$HEAD_SHA:tools/ci/rule_data_split_check.py" > "$check"
+          else
+            echo "::notice::rule-data-split is skipped: neither the base nor this branch has rule_data_split_check.py, so the branch predates it (merge main to enable it)"
+            exit 0
           fi
           python3 -I "$check" --repo "$GITHUB_WORKSPACE" --base "$BASE_SHA" --head "$HEAD_SHA"
