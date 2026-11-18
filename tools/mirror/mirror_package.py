@@ -88,11 +88,18 @@ def renamed_path(relative: str) -> str:
     return "/".join(parts)
 
 
-def mirrored(repo: Path, relative: str) -> Path:
+def mirrored(repo: Path, relative: str, *, confined: bool = False) -> Path:
     """Where a Pulp-relative exported path lives in this checkout."""
-    if transferred(repo):
-        return repo / FRAMEWORK_DIR / renamed_path(relative)
-    return repo / MIRROR_DIR / relative
+    if confined and not platform_closures.safe_relative_path(relative):
+        raise PlanError(f"closure source {relative!r} is not a safe relative path")
+    root = repo / (FRAMEWORK_DIR if transferred(repo) else MIRROR_DIR)
+    candidate = root / (renamed_path(relative) if transferred(repo) else relative)
+    if confined:
+        try:
+            candidate.resolve().relative_to(root.resolve())
+        except ValueError as error:
+            raise PlanError(f"closure source {relative!r} escapes the landed mirror") from error
+    return candidate
 
 
 def inverse_renamed(data: bytes) -> bytes:
@@ -1409,7 +1416,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                 raise PlanError(f"{unit}/{name}: only static mirrored targets are packaged")
             sources = []
             for source in target.get("sources", []):
-                candidate = mirrored(repo, source)
+                candidate = mirrored(repo, source, confined=platform != RECEIPT_PLATFORM)
                 generated_source = None
                 if source == "@build/core/view/web_compat_preludes_gen.cpp":
                     generated_source = generated["prelude_dir"] / "web_compat_preludes_gen.cpp"
@@ -1490,7 +1497,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
             for source in target.get("sources", []):
                 if source in source_options:
                     if not ledger_removed(repo, source, ports_removed):
-                        option_sources.append({"source": str(mirrored(repo, source)),
+                        option_sources.append({"source": str(mirrored(repo, source, confined=platform != RECEIPT_PLATFORM)),
                                                "options": source_options[source]})
                     attached.add(source)
             for path in ported:

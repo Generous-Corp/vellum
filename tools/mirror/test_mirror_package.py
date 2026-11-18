@@ -1618,18 +1618,20 @@ class PlatformRecordPlanTest(unittest.TestCase):
         root = self.fixture.repo / "provenance/framework/platforms/linux-x64"
         root.mkdir(parents=True, exist_ok=True)
         (root / "foundation.json").write_text(json.dumps(closure), encoding="utf-8")
+        units = [{"name": "foundation",
+                  "closure_manifest": "provenance/framework/platforms/linux-x64/foundation.json",
+                  "closure_sha256": mp.sha256_file(root / "foundation.json")}]
         record = {
             "schema": "vellum.framework-platform-closure.v1", "platform": "linux-x64",
             "pulp_repository": "Generous-Corp/pulp", "pulp_sha": PULP_SHA,
             "tool": {"path": "tools/scripts/vellum_closure.py", "pulp_blob": "f" * 40},
             "configure": {"identity": identity, "options_sha256": mp.platform_closures.options_sha256(options)},
             "export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/123456789",
-                       "artifact_sha256": "e" * 64},
+                       "artifact_sha256": "e" * 64,
+                       "manifest_sha256": mp.platform_closures.manifest_binding_sha256("e" * 64, units)},
             "runner_image": {"name": "ubuntu-26.04", "version": "20261111.196.1"},
             "renderer_asset": {"name": "skia-build-linux-x64-gpu-release.zip", "sha256": "c" * 64},
-            "units": [{"name": "foundation",
-                       "closure_manifest": "provenance/framework/platforms/linux-x64/foundation.json",
-                       "closure_sha256": mp.sha256_file(root / "foundation.json")}],
+            "units": units,
         }
         record.update(overrides)
         (root / "record.json").write_text(json.dumps(record), encoding="utf-8")
@@ -1724,6 +1726,9 @@ class PlatformRecordPlanTest(unittest.TestCase):
              "tool names tools/scripts/vellum_closure.py"),
             ({"export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/1",
                          "artifact_sha256": int("3" * 64)}}, "export.artifact_sha256 is not a lowercase SHA-256"),
+            ({"export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/1",
+                         "artifact_sha256": "e" * 64, "manifest_sha256": "E" * 64}},
+             "export.manifest_sha256 is not a lowercase SHA-256"),
             ({"renderer_asset": {"name": "skia-build-linux-x64-gpu-release.zip", "sha256": int("4" * 64)}},
              "renderer_asset names the locked asset"),
         ):
@@ -1739,6 +1744,23 @@ class PlatformRecordPlanTest(unittest.TestCase):
         with self.assertRaises(mp.PlanError) as caught:
             self.plan("linux-x64")
         self.assertIn("does not match the record's digest", str(caught.exception))
+
+    def test_platform_closure_sources_cannot_escape_the_landed_mirror(self) -> None:
+        for source in ("../outside.cpp", "/tmp/outside.cpp", "core/../outside.cpp", "core//outside.cpp"):
+            with self.subTest(source=source):
+                self.write_record([source])
+                with self.assertRaises(mp.PlanError) as caught:
+                    self.plan("linux-x64")
+                self.assertIn("safe relative path", str(caught.exception))
+
+    def test_export_binding_must_match_the_recorded_manifests(self) -> None:
+        record = self.write_record()
+        record["export"]["manifest_sha256"] = "f" * 64
+        (self.fixture.repo / "provenance/framework/platforms/linux-x64/record.json").write_text(
+            json.dumps(record), encoding="utf-8")
+        with self.assertRaises(mp.PlanError) as caught:
+            self.plan("linux-x64")
+        self.assertIn("does not bind the artifact to the recorded manifests", str(caught.exception))
 
     def rewrite_closure(self, mutate) -> None:
         self.write_record()

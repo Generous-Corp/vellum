@@ -78,7 +78,9 @@ and the mirror build compiles each added source into the target its row names,
 on the platforms the row's scope lists (`macos-arm64` when it names none).
 A platform other than macOS builds only from its closure record in
 [`provenance/framework/platforms/`](../provenance/framework/platforms), Pulp's
-build graph for that platform, with no file content.
+build graph for that platform, with no file content. The record's export
+metadata binds the uploaded artifact digest to the complete set of closure
+manifest digests before the build accepts it.
 A `pulp_*` name a file defines with C linkage survives the rename and would clash
 with Pulp's copy at link time, so it is spelled the Vellum way through
 [`provenance/framework/respell.json`](../provenance/framework/respell.json),

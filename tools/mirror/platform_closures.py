@@ -16,7 +16,10 @@ The record names the Pulp commit and the exporter blob that wrote the
 manifests, the configure (identity and options digest), the runner image the
 manifests were produced on, the renderer asset they link, each manifest's
 digest, and the Pulp workflow run that exported them with the digest of the
-artifact it uploaded. This module reads and checks a record; it runs no git. The mirror
+artifact it uploaded. Its export metadata also carries a digest over that
+artifact digest and the complete manifest set, so the record cannot pair a
+manifest set with a different artifact. This module reads and checks a record;
+it runs no git. The mirror
 build (tools/mirror/mirror_package.py) plans a platform only from a record
 that passes, and the provenance lane checks every record.
 
@@ -71,6 +74,20 @@ class RecordError(ValueError):
 
 def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def manifest_binding_sha256(artifact_sha256: str, units: list[dict[str, Any]]) -> str:
+    """Bind the exported artifact digest to the exact closure manifest set.
+
+    The platform artifact carries this digest in its export metadata. Including
+    the artifact digest in the signed input prevents a record from pairing a
+    manifest set with a different uploaded artifact after the export.
+    """
+    listing = "".join(
+        f"{unit['name']} {unit['closure_sha256']}\n"
+        for unit in sorted(units, key=lambda item: item["name"])
+    )
+    return hashlib.sha256(f"artifact-sha256:{artifact_sha256}\n{listing}".encode("utf-8")).hexdigest()
 
 
 def options_sha256(options: dict[str, Any]) -> str:
@@ -161,6 +178,18 @@ def _strings(value: Any) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
+def safe_relative_path(value: Any) -> bool:
+    """Whether a closure path stays inside the landed mirror tree."""
+    if not isinstance(value, str) or not value or value.startswith(('/', '~')) or '\\' in value:
+        return False
+    parts = value.split('/')
+    return all(part not in {'', '.', '..'} for part in parts) and ':' not in parts[0]
+
+
+def _source_strings(value: Any) -> bool:
+    return isinstance(value, list) and all(safe_relative_path(item) for item in value)
+
+
 def _rows(value: Any) -> bool:
     """A list of objects, each with a string path when it names one."""
     return isinstance(value, list) and all(
@@ -171,7 +200,7 @@ def _rows(value: Any) -> bool:
 CLOSURE_LISTS = {"external_inputs": (_rows, "a list of objects with string paths"),
                  "generated_inputs": (_rows, "a list of objects with string paths"),
                  "compile_definitions": (_strings, "a list of strings")}
-TARGET_LISTS = {"sources": _strings, "include_dirs": _strings, "link_targets": _strings,
+TARGET_LISTS = {"sources": _source_strings, "include_dirs": _strings, "link_targets": _strings,
                 "compile_definitions": _strings}
 
 
@@ -196,7 +225,8 @@ def _check_graph_shape(at: str, closure: dict[str, Any]) -> None:
             raise RecordError(f"{at}: {name} type must be a string")
         for field, check in TARGET_LISTS.items():
             if field in target and not check(target[field]):
-                raise RecordError(f"{at}: {name} {field} must be a list of strings")
+                shape = "a list of strings with safe relative paths" if field == "sources" else "a list of strings"
+                raise RecordError(f"{at}: {name} {field} must be {shape}")
         rows = target.get("external_link_inputs", [])
         if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
             raise RecordError(f"{at}: {name} external_link_inputs must be a list of objects")
@@ -237,13 +267,19 @@ def load_record(repo: Path, key: str) -> tuple[dict[str, Any], list[tuple[str, d
             or not all(isinstance(image[k], str) and image[k].strip() for k in ("name", "version")):
         raise RecordError(f"{where}: runner_image names the image and version the manifests were produced on")
     export = record["export"]
-    if not isinstance(export, dict) or set(export) != {"run_url", "artifact_sha256"}:
-        raise RecordError(f"{where}: export names the Pulp run (run_url) and its artifact's sha256 (artifact_sha256)")
+    if not isinstance(export, dict):
+        raise RecordError(f"{where}: export names the Pulp run, artifact sha256 and manifest binding sha256")
+    if "run_url" not in export or "artifact_sha256" not in export:
+        raise RecordError(f"{where}: export names the Pulp run, artifact sha256 and manifest binding sha256")
     if not isinstance(export["run_url"], str) or not EXPORT_RUN.match(export["run_url"]):
         raise RecordError(f"{where}: export.run_url {export['run_url']!r} is not a "
                           "https://github.com/Generous-Corp/pulp/actions/runs/<id> URL")
     if not _hex(SHA256, export["artifact_sha256"]):
         raise RecordError(f"{where}: export.artifact_sha256 is not a lowercase SHA-256")
+    if set(export) != {"run_url", "artifact_sha256", "manifest_sha256"}:
+        raise RecordError(f"{where}: export names the Pulp run, artifact sha256 and manifest binding sha256")
+    if not _hex(SHA256, export["manifest_sha256"]):
+        raise RecordError(f"{where}: export.manifest_sha256 is not a lowercase SHA-256")
     asset = record["renderer_asset"]
     if not isinstance(asset, dict) or set(asset) != {"name", "sha256"} or not isinstance(asset["name"], str) \
             or not _hex(SHA256, asset["sha256"]):
@@ -300,6 +336,8 @@ def load_record(repo: Path, key: str) -> tuple[dict[str, Any], list[tuple[str, d
                     raise RecordError(f"{at}: {target.get('name')} links skia asset {row.get('asset_sha256')}, "
                                       f"not the record's {asset['sha256']}")
         closures.append((name, closure))
+    if export["manifest_sha256"] != manifest_binding_sha256(export["artifact_sha256"], units):
+        raise RecordError(f"{where}: export.manifest_sha256 does not bind the artifact to the recorded manifests")
     return record, closures
 
 

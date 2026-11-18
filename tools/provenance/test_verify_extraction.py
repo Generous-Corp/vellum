@@ -1146,16 +1146,18 @@ class VerifyExtractionTests(unittest.TestCase):
         (base / "foundation.json").write_text(json.dumps({
             "schema": "pulp.vellum.closure.v1", "configure": {"options": options, "identity": identity},
             "targets": []}), encoding="utf-8")
+        units = [{"name": "foundation", "closure_manifest": f"{records.ROOT}/linux-x64/foundation.json",
+                  "closure_sha256": records.sha256_file(base / "foundation.json")}]
         (base / "record.json").write_text(json.dumps({
             "schema": records.RECORD_SCHEMA, "platform": "linux-x64", "pulp_repository": "Generous-Corp/pulp",
             "pulp_sha": pulp_sha, "tool": {"path": records.EXPORTER, "pulp_blob": blob},
             "configure": {"identity": identity, "options_sha256": records.options_sha256(options)},
             "export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/123456789",
-                       "artifact_sha256": "e" * 64},
+                       "artifact_sha256": "e" * 64,
+                       "manifest_sha256": records.manifest_binding_sha256("e" * 64, units)},
             "runner_image": {"name": "ubuntu-26.04", "version": "1"},
             "renderer_asset": {"name": "skia-build-linux-x64-gpu-release.zip", "sha256": "c" * 64},
-            "units": [{"name": "foundation", "closure_manifest": f"{records.ROOT}/linux-x64/foundation.json",
-                       "closure_sha256": records.sha256_file(base / "foundation.json")}]}), encoding="utf-8")
+            "units": units}), encoding="utf-8")
         (root / records.INDEX).write_text(json.dumps({"schema": records.INDEX_SCHEMA, "platforms": {
             "linux-x64": f"{records.ROOT}/linux-x64/record.json"}}), encoding="utf-8")
 

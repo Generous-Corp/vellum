@@ -289,7 +289,10 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
   record and the ports ledger. The record pins each manifest's digest, the
   Pulp commit and exporter blob that wrote them, the configure identity and
   options digest, the runner image, the renderer asset, and the Pulp workflow
-  run that exported them with the digest of the artifact it uploaded. The provenance
+  run that exported them with the digest of the artifact it uploaded. Its export
+  metadata also binds that artifact digest to the complete set of closure
+  manifest digests, which prevents a record from pairing those manifests with
+  another artifact. The provenance
   lane proves the commit is on Pulp's main and the blob is Pulp's exporter at
   that commit. The mirror build refuses a platform with no record, a record
   whose pins do not hold, a closure source `framework/` lacks, and a ledger
