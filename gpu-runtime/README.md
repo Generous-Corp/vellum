@@ -70,7 +70,9 @@ record that still has to follow.
 `GPU_RUNTIME_BUILD_GRAPHITE_HOST_TESTS=ON`, together with
 `GPU_RUNTIME_BUILD_TESTS=ON`, builds an opt-in renderer consumer and registers
 `gpu-runtime.graphite-old-sdk-host`. It needs the full locked renderer provider,
-including Skia, rather than the device-only package. This adds no Skia dependency
+including Skia, rather than the device-only package. Both linked provider archives
+are configure dependencies, so replacing either one in place reruns its digest
+check before an incremental relink. This adds no Skia dependency
 to the production device library.
 
 Run this test on physical Intel macOS with a hardware Metal adapter. It rejects

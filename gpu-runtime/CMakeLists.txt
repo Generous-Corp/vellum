@@ -214,6 +214,9 @@ if(GPU_RUNTIME_BUILD_TESTS)
         if(NOT _gpu_runtime_graphite_actual STREQUAL _gpu_runtime_graphite_SHA256_libskia.a)
             message(FATAL_ERROR "Graphite host qualification Skia library differs from renderer lock")
         endif()
+        # Recheck identities before relinking if a provider is replaced in place.
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${_gpu_runtime_dawn_library}" "${_gpu_runtime_renderer_libdir}/libskia.a")
         add_executable(gpu-runtime-graphite-host-probe tests/graphite_host_smoke.cpp)
         target_compile_definitions(gpu-runtime-graphite-host-probe PRIVATE SK_GRAPHITE SK_DAWN)
         target_link_libraries(gpu-runtime-graphite-host-probe PRIVATE
