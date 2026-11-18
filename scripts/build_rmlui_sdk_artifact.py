@@ -27,6 +27,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 import tempfile
 from typing import Iterable
@@ -99,6 +100,13 @@ DOC_FILES = (
 )
 # RmlUi's own public headers, whatever their names, all under one root.
 RMLUI_HEADER_ROOT = "include/RmlUi/"
+# The licence of the third-party container headers RmlUi bundles under its
+# headers; it travels with them.
+RMLUI_HEADER_LICENSES = frozenset({f"{RMLUI_HEADER_ROOT}Core/Containers/LICENSE.txt"})
+# RmlUi installs its own CMake package here. The archive's package exports the
+# same targets as VellumRmlUiRmlUiTargets, so the upstream copy, whose
+# targets file is not installed from a subproject, is left out.
+RMLUI_UPSTREAM_PACKAGE_DIR = "lib/cmake/RmlUi"
 
 
 def archive_name(version: str, target: str) -> str:
@@ -144,7 +152,7 @@ def pins(repo: Path) -> dict[str, str]:
 def is_allowed(relative: str) -> bool:
     """Whether an installed path belongs in the RmlUi SDK."""
     if relative.startswith(RMLUI_HEADER_ROOT):
-        return relative.endswith((".h", ".inl"))
+        return relative.endswith((".h", ".hpp", ".inl")) or relative in RMLUI_HEADER_LICENSES
     return relative in {*NATIVE_HEADERS, *SHARED_HEADERS, *LIBRARIES, *PACKAGE_FILES, *DOC_FILES,
                         METADATA_NAME}
 
@@ -195,6 +203,9 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         if toolchain["cmake"] != cmake_version:
             raise ArtifactError(f"the build was configured by CMake {toolchain['cmake']}, "
                                 f"not the pinned {cmake_version}")
+        upstream_package = payload / RMLUI_UPSTREAM_PACKAGE_DIR
+        if upstream_package.is_dir():
+            shutil.rmtree(upstream_package)
         for relative in LIBRARIES:
             normalize_library(payload / relative)
 
