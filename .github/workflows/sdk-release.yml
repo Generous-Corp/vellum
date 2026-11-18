@@ -296,6 +296,22 @@ jobs:
             --output "$RUNNER_TEMP/trusted-gpu-runtime-verification.json"
           git worktree remove --force "$source_root"
 
+      - name: Hold the RmlUi SDK archive to the release source
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          # The optional RmlUi SDK ships beside the SDK under the same version.
+          # main's verifier holds it to the release commit and version: its
+          # files, manifest digests, notices and canonical archive stream. The
+          # record is the one the release publishes.
+          rmlui_archive="${RELEASE_ARCHIVE/vellum-sdk-/vellum-rmlui-sdk-}"
+          version="${rmlui_archive#vellum-rmlui-sdk-}"
+          version="${version%-darwin-arm64.tar.gz}"
+          python3 scripts/verify_rmlui_sdk_artifact.py \
+            --archive "$RUNNER_TEMP/gpu/$rmlui_archive" \
+            --source-commit "$SOURCE_COMMIT" --version "$version" \
+            --output "$RUNNER_TEMP/trusted-rmlui-sdk-verification.json"
+
       - name: Retain trusted SDK validation
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -309,6 +325,7 @@ jobs:
             ${{ runner.temp }}/trusted-release-source.json
             ${{ runner.temp }}/pulp-view-audio-archive.json
             ${{ runner.temp }}/trusted-gpu-runtime-verification.json
+            ${{ runner.temp }}/trusted-rmlui-sdk-verification.json
           if-no-files-found: error
           retention-days: 90
 
@@ -584,6 +601,18 @@ jobs:
             --version "$gpu_version" --source-commit "$SOURCE_COMMIT" \
             --output "$RUNNER_TEMP/trusted/vellum-gpu-runtime.sha256"
 
+      - name: Bind the RmlUi SDK archive to its validated record
+        run: |
+          set -euo pipefail
+          # Published with its own checksum file, written from the bytes this
+          # job publishes once they match the record the validation job wrote.
+          rmlui_archive="${RELEASE_ARCHIVE/vellum-sdk-/vellum-rmlui-sdk-}"
+          python3 -I scripts/verify_rmlui_sdk_artifact.py \
+            --archive "$RUNNER_TEMP/gpu/$rmlui_archive" \
+            --bind-record "$RUNNER_TEMP/trusted/trusted-rmlui-sdk-verification.json" \
+            --source-commit "$SOURCE_COMMIT" \
+            --checksum-output "$RUNNER_TEMP/trusted/vellum-rmlui-sdk.sha256"
+
       - name: Require exact provenance readiness
         env:
           GH_TOKEN: ${{ steps.finalizer-token.outputs.token }}
@@ -762,6 +791,7 @@ jobs:
             cp "$protection" "$RUNNER_TEMP/release-tag-protection.json"
           }
           GPU_RUNTIME_ARCHIVE="${RELEASE_ARCHIVE/vellum-sdk-/vellum-gpu-runtime-}"
+          RMLUI_SDK_ARCHIVE="${RELEASE_ARCHIVE/vellum-sdk-/vellum-rmlui-sdk-}"
           allowed=(
             "$RELEASE_ARCHIVE=$RUNNER_TEMP/gpu/$RELEASE_ARCHIVE"
             "install.sh=$RUNNER_TEMP/trusted/install.sh"
@@ -773,6 +803,9 @@ jobs:
             "$GPU_RUNTIME_ARCHIVE=$RUNNER_TEMP/gpu/$GPU_RUNTIME_ARCHIVE"
             "vellum-gpu-runtime.sha256=$RUNNER_TEMP/trusted/vellum-gpu-runtime.sha256"
             "gpu-runtime-verification.json=$RUNNER_TEMP/trusted/trusted-gpu-runtime-verification.json"
+            "$RMLUI_SDK_ARCHIVE=$RUNNER_TEMP/gpu/$RMLUI_SDK_ARCHIVE"
+            "vellum-rmlui-sdk.sha256=$RUNNER_TEMP/trusted/vellum-rmlui-sdk.sha256"
+            "rmlui-sdk-verification.json=$RUNNER_TEMP/trusted/trusted-rmlui-sdk-verification.json"
             "release-trust.json=$RUNNER_TEMP/release-trust.json"
             "immutable-release-preflight.json=$RUNNER_TEMP/immutable-release-preflight.json"
             "release-tag-protection.json=$RUNNER_TEMP/release-tag-protection.json"
@@ -900,6 +933,8 @@ jobs:
           gh release verify-asset "$RELEASE_TAG" "$RUNNER_TEMP/gpu/$RELEASE_ARCHIVE" \
             --repo "$GITHUB_REPOSITORY"
           gh release verify-asset "$RELEASE_TAG" "$RUNNER_TEMP/gpu/$GPU_RUNTIME_ARCHIVE" \
+            --repo "$GITHUB_REPOSITORY"
+          gh release verify-asset "$RELEASE_TAG" "$RUNNER_TEMP/gpu/$RMLUI_SDK_ARCHIVE" \
             --repo "$GITHUB_REPOSITORY"
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
             > "$RUNNER_TEMP/release-published.json"

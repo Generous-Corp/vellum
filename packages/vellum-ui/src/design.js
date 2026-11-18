@@ -1,3 +1,4 @@
+import { DESIGN_IR_SCHEMA_VERSIONS, designIrVersionOf } from './feature-versions.generated.js';
 import { Button, Canvas, Image, Path, Plot, Stack, Text, TextRun, Vector, View, jsx } from './runtime.js';
 
 const MAXIMUM_NODES = 100_000;
@@ -12,10 +13,10 @@ const EVENT_PROPERTIES = Object.freeze({
 // `compositing` object, 3 adds material references, 4 adds tracks, and 5
 // adds plot bindings and 6 adds compiled vector assets; a document without
 // `schemaVersion` is version 1.
-const DESIGN_SCHEMA_VERSIONS = Object.freeze([1, 2, 3, 4, 5, 6]);
-const COMPOSITING_VERSION = 2;
-const PLOTS_VERSION = 5;
-const VECTOR_ASSET_VERSION = 6;
+const DESIGN_SCHEMA_VERSIONS = DESIGN_IR_SCHEMA_VERSIONS;
+const COMPOSITING_VERSION = designIrVersionOf('compositing');
+const PLOTS_VERSION = designIrVersionOf('plots');
+const VECTOR_ASSET_VERSION = designIrVersionOf('vectors');
 const VECTOR_PAINT_KEYS = Object.freeze(['transform', 'clipPath', 'overflow']);
 const PLOT_BINDING_KEYS = Object.freeze([
     'channel', 'source', 'slots', 'history', 'orientation', 'audioChannel', 'min', 'max',

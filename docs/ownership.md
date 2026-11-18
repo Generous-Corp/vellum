@@ -70,7 +70,9 @@ only through the append-only
 row adds or removes one `framework/` path and names the Pulp path and commits
 the content came from, or `native` for a file Vellum wrote. A file of Pulp
 origin joins as Pulp's bytes at the named commit put through the transfer's
-rename; a port that differs from Pulp is a `native` row. The provenance lane
+rename; a port that differs from Pulp is a `native` row. A change that gives a
+Pulp-origin or transferred file another origin fails the provenance lane on
+every event; only an owner decision with a ruleset bypass overrides it. The provenance lane
 proves the rows append-only and the Pulp commits and bytes against a Pulp checkout,
 and the mirror build compiles each added source into the target its row names,
 on the platforms the row's scope lists (`macos-arm64` when it names none).

@@ -221,6 +221,41 @@ vellum_add_framework_test(widget-bridge-param-model
     SOURCES widget_bridge_param_model_test.cpp
     UNITS Vellum::MirrorView_script Vellum::Value)
 
+# Linux host tests: the SDL window host on an X server and the AT-SPI tree over
+# a D-Bus session. They need the framework units compiled for Linux, so they
+# register only there; their sources count as registered everywhere. Run them
+# under `xvfb-run -a dbus-run-session -- ctest -L linux-host`: without a display
+# or a session bus a case exits 77 and ctest reports a skip. Each has a control
+# that must also pass (an unexported path, and a run with the resize and the
+# click left out).
+set(_vellum_linux_host_sources linux_atspi_tree_test.cpp linux_sdl_window_x11_test.cpp)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND TARGET Vellum::MirrorView_core)
+    find_package(X11 REQUIRED COMPONENTS Xtst)
+    vellum_add_framework_test(linux-atspi-tree
+        SOURCES linux_atspi_tree_test.cpp
+        UNITS Vellum::MirrorView_core)
+    vellum_add_framework_test(linux-sdl-window-x11
+        SOURCES linux_sdl_window_x11_test.cpp
+        UNITS Vellum::MirrorView_core)
+    target_link_libraries(vellum-framework-linux-sdl-window-x11-test PRIVATE X11::X11 X11::Xtst)
+    add_test(NAME vellum.framework.linux-sdl-window-x11-control
+        COMMAND vellum-framework-linux-sdl-window-x11-test --control)
+    # The AT-SPI test's client call is bounded: a call that never returns ends the
+    # process with a named failure instead of hanging. This control runs such a
+    # call and passes only when the bound fires.
+    add_test(NAME vellum.framework.linux-atspi-tree-hang-control
+        COMMAND vellum-framework-linux-atspi-tree-test --control-hang)
+    set_tests_properties(vellum.framework.linux-atspi-tree-hang-control PROPERTIES
+        PASS_REGULAR_EXPRESSION "bounded client call expired" LABELS "framework;linux-host" TIMEOUT 90)
+    foreach(_linux_host_test IN ITEMS linux-atspi-tree linux-sdl-window-x11
+            linux-sdl-window-x11-control)
+        set_tests_properties(vellum.framework.${_linux_host_test} PROPERTIES
+            SKIP_RETURN_CODE 77 LABELS "framework;linux-host" TIMEOUT 90)
+    endforeach()
+else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES ${_vellum_linux_host_sources})
+endif()
+
 vellum_add_framework_test(scripted-ui-param-model
     SOURCES scripted_ui_param_model_test.cpp
     UNITS Vellum::MirrorView_script Vellum::Value)
