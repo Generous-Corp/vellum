@@ -76,6 +76,10 @@ every event; only an owner decision with a ruleset bypass overrides it. The prov
 proves the rows append-only and the Pulp commits and bytes against a Pulp checkout,
 and the mirror build compiles each added source into the target its row names,
 on the platforms the row's scope lists (`macos-arm64` when it names none).
+A `pulp_*` name a file defines with C linkage survives the rename and would clash
+with Pulp's copy at link time, so it is spelled the Vellum way through
+`provenance/framework/respell.json`,
+whose every entry is derived from bytes, never written by hand.
 A target no closure builds, a new library unit or an executable, is declared
 with its sources, include directories, definitions and links in
 `provenance/framework/units.json`, and
