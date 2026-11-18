@@ -869,9 +869,13 @@
 | `vellum-ba33d1a8ecfacbe9190fe50bbdc0cd5deccbe114` | framework-to-Pulp | rendering | framework-only | 2026-11-20T00:47:19Z |
 | `vellum-182e7e05f6a4509f4042023b65db1329cb54834c` | framework-to-Pulp | schema | framework-only | 2026-11-20T03:26:14Z |
 | `vellum-eb7dc835d37d72851a9c69d7efb55f0cf8de7bc7` | framework-to-Pulp | rendering | framework-only | 2026-11-20T04:55:28Z |
+| `vellum-b38e4e067f0478f3855582852a8007f94f67625c` | framework-to-Pulp | rendering | framework-only | 2026-11-20T05:21:15Z |
 | `vellum-8108789552958e6a55e38113a4dd16e7177cfb80` | framework-to-Pulp | rendering | framework-only | 2026-11-20T06:11:20Z |
+| `vellum-78a8f30bf4775959a6d87d6b542002c0ae3df903` | framework-to-Pulp | rendering | framework-only | 2026-11-20T06:57:37Z |
+| `vellum-ea1dfadd66fa2771abe2250933b2d6039846dc8b` | framework-to-Pulp | rendering | framework-only | 2026-11-20T06:57:37Z |
 | `vellum-a4f5e7cbfce3ec788114378f0fa20c75057917e0` | framework-to-Pulp | rendering | framework-only | 2026-11-20T09:57:53Z |
 | `vellum-dd745ad287183e2c30637e7807de038d215a0c77` | framework-to-Pulp | rendering | framework-only | 2026-11-20T09:57:53Z |
+| `vellum-6fc713dc917904984c5b55690a9efbb7d1221c70` | framework-to-Pulp | rendering | framework-only | 2026-11-20T10:32:26Z |
 
 ## Release blockers
 
