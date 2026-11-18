@@ -1802,6 +1802,25 @@ class DeclaredUnitPlanTest(unittest.TestCase):
             self.declare([{**self.library, "compile_definitions": [item]}, self.tool])
             self.assertRefused("is reserved")
 
+    def test_a_source_cannot_reach_two_targets_so_aliases_cannot_leak_between_them(self) -> None:
+        # Each added source belongs to the one target its ledger row names, so a plan never gives
+        # one source to two targets with different aliases; shared_alias_conflicts backs that up.
+        self.fixture.write(self.LIB, b'#include "vellum/example/example.hpp"\n'
+                                     b'#if VELLUM_A && defined(VELLUM_B)\nint both;\n#endif\n'
+                                     b'int example() { return 3; }\n')
+        entries = [{"old": old, "new": mp.port_respell.respelled(old), "kind": "closure-macro", "evidence": None}
+                   for old in ("PULP_A", "PULP_B")]
+        self.fixture.write(mp.port_respell.TABLE, mp.port_respell.render(entries).encode())
+        library = {**self.library, "compile_definitions": ["PULP_A=1"]}
+        tool = {**self.tool, "sources": [self.TOOL, self.LIB], "compile_definitions": ["PULP_B"]}
+        self.declare([library, tool])
+        self.assertRefused("is added by its ledger row to vellum-example, not vellum-example-tool")
+        # Control: each source in its own target plans, and only the library's source is aliased.
+        self.declare([library, {**tool, "sources": [self.TOOL]}])
+        plan = self.fixture.plan()
+        [row] = plan["units"][1]["targets"][0]["source_compile_definitions"]
+        self.assertEqual(row["definitions"], ["VELLUM_A=1"])
+
     def test_undeclared_targets_are_refused_and_declared_ones_build(self) -> None:
         # The rows name targets no closure builds: refused while nothing declares them.
         self.assertRefused("adds sources to targets no closure builds")
