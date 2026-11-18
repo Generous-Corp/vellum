@@ -11,6 +11,7 @@ export const FEATURE_VERSIONS = Object.freeze([
     Object.freeze({ name: 'effects', sceneVersion: 10, designIrVersion: 3 }),
     Object.freeze({ name: 'tracks', sceneVersion: 11, designIrVersion: 4 }),
     Object.freeze({ name: 'plots', sceneVersion: 12, designIrVersion: 5 }),
+    Object.freeze({ name: 'text-layout', sceneVersion: 13, designIrVersion: 0 }),
     Object.freeze({ name: 'compositing', sceneVersion: 0, designIrVersion: 2 }),
 ]);
 

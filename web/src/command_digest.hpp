@@ -257,6 +257,13 @@ inline void hash_extras(std::uint32_t& hash, const vellum::graphics::PaintComman
         hash_plot(hash, *command.plot);
     }
     if (command.plot_background) hash_u32(hash, 0x70626B67U);
+    if (command.text_layout) {
+        hash_u32(hash, 0x6C61796FU);
+        hash_u32(hash, static_cast<std::uint32_t>(command.text_layout->align));
+        hash_float(hash, command.text_layout->line_height);
+        hash_u32(hash, command.text_layout->max_lines);
+        hash_u32(hash, command.text_layout->ellipsis ? 1U : 0U);
+    }
 }
 
 }  // namespace digest_detail

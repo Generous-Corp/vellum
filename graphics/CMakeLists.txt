@@ -4,11 +4,13 @@ add_library(vellum-graphics
     src/damage.cpp
     src/effect.cpp
     src/frame_driver.cpp
+    src/hit_test.cpp
     src/image_asset.cpp
     src/image_decode_queue.cpp
     src/layer_cache.cpp
     src/paint_command.cpp
     src/path_geometry.cpp
+    src/pointer_router.cpp
     src/vector_asset.cpp
     src/plot.cpp
     src/plot_feed.cpp
@@ -54,7 +56,8 @@ if(VELLUM_HAS_SKIA_DAWN)
         src/dawn_bootstrap.cpp
         src/frame_trace.cpp
         src/image_decode.mm
-        src/skia_dawn_surface.mm)
+        src/skia_dawn_surface.mm
+        src/text_paragraph.cpp)
     target_include_directories(vellum-skia-dawn-provider PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
     target_compile_features(vellum-skia-dawn-provider PRIVATE cxx_std_20)
@@ -62,6 +65,13 @@ if(VELLUM_HAS_SKIA_DAWN)
         VELLUM_HAS_SKIA_DAWN=1
         VELLUM_DATADIR_FROM_LIBDIR="${_vellum_datadir_from_libdir}"
         VELLUM_BUILD_DATADIR_FROM_PROVIDER_DIR="${_vellum_build_datadir_from_provider_dir}")
+    # The frame trace bridge calls the framework adapter's vellum_native_trace_*
+    # emitters, which exist only in a tracing build (it requires the mirror).
+    # Without the option the object references none of them.
+    if(VELLUM_ENABLE_TRACING AND VELLUM_ENABLE_MIRROR)
+        target_compile_definitions(vellum-skia-dawn-provider PRIVATE
+            VELLUM_NATIVE_TRACE_BRIDGE=1)
+    endif()
     target_link_libraries(vellum-skia-dawn-provider PUBLIC Vellum::Graphics)
     # gpu-runtime's coordinator is the image's one Dawn proc-table installer;
     # Vellum's ABI v1 bootstrap forwards to it (src/dawn_bootstrap.cpp). It is

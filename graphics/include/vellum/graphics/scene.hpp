@@ -114,6 +114,47 @@ struct TextRun final {
     bool inherits_color = true;
 };
 
+/// Where a text node's lines sit within its box. The paragraph's base
+/// direction is left to right, so `start` is the left edge.
+enum class TextAlign : std::uint8_t {
+    start,
+    center,
+    end,
+    /// Stretches every line but the last to the box width.
+    justify,
+};
+
+[[nodiscard]] constexpr bool is_known_text_align(TextAlign align) noexcept {
+    switch (align) {
+    case TextAlign::start:
+    case TextAlign::center:
+    case TextAlign::end:
+    case TextAlign::justify:
+        return true;
+    }
+    return false;
+}
+
+/// How a text node lays its paragraph out over several lines.
+///
+/// A text node without a layout draws as before version 13: one unwrapped
+/// line from the top-left corner of its box. With one, the paragraph wraps at
+/// the box width and each line is aligned within that width. Lines that do not
+/// fit the box's height continue below it; nothing is clipped.
+struct TextLayout final {
+    TextAlign align = TextAlign::start;
+    /// Each line's height as a multiple of its largest font size, the extra
+    /// space split evenly above and below the glyphs. Zero keeps the fonts'
+    /// own line spacing.
+    float line_height = 0.0F;
+    /// The most lines drawn; zero draws every line. Text past the last line
+    /// is not drawn.
+    std::uint32_t max_lines = 0;
+    /// Ends the last line with an ellipsis (U+2026) when `max_lines` cuts the
+    /// text. It needs `max_lines`; without it the scene is refused.
+    bool ellipsis = false;
+};
+
 /// Premultiplied RGBA8 texels, row-major, top row first.
 struct MeshTexture final {
     std::uint32_t width = 0;
@@ -935,13 +976,20 @@ inline constexpr float kMaxPlotStroke = 4096.0F;
 /// still accepted when it has no plot node; one that does fails
 /// `scene_fields_match_version` and is refused.
 ///
+/// Version 13 adds `SceneNode::text_layout`: wrapping, alignment, line
+/// height, a line limit and an ellipsis. A scene of an earlier version is
+/// still accepted when no node sets it; one that does fails
+/// `scene_fields_match_version` and is refused. From version 13 a character
+/// no packaged face covers draws as the font's missing-glyph box; earlier
+/// scenes keep drawing it as `?`.
+///
 /// Claimed versions, in order:
 /// version 2: transform, opacity and corner radii; version 3: path nodes;
 /// version 4: image nodes; version 5: clip, mask and isolation on groups;
 /// version 6: blend modes and DesignIR compositing fields; version 7: interned
 /// token receipts; version 8: gradient vocabulary; version 9: vector assets;
 /// version 10: effects and materials; version 11: animation tracks; version
-/// 12: plot nodes.
+/// 12: plot nodes; version 13: text layout.
 inline constexpr std::uint32_t kSceneVersion = latest_scene_version();
 
 /// The oldest scene schema version this build still consumes.
@@ -1099,6 +1147,9 @@ struct SceneNode final {
     /// What a `plot` node draws. A plot node without it, or with children,
     /// is refused.
     std::shared_ptr<const PlotSpec> plot;
+    /// How a `text` node wraps and aligns its lines; absent keeps one
+    /// unwrapped, left-aligned line. Only a text node may carry it.
+    std::optional<TextLayout> text_layout;
 };
 
 /// The corner radii a node is drawn with: `corner_radii` when present,
@@ -1451,6 +1502,26 @@ struct Scene final {
     return nullptr;
 }
 
+/// Whether a node sets a field version 13 introduced: a text layout.
+[[nodiscard]] inline bool uses_version_13_fields(const SceneNode& node) noexcept {
+    return node.text_layout.has_value();
+}
+
+/// The first node, in depth-first order, that `uses_version_13_fields`.
+[[nodiscard]] inline const SceneNode* find_version_13_fields(const SceneNode& node) noexcept {
+    if (uses_version_13_fields(node)) return &node;
+    for (const auto& child : node.children) {
+        if (const auto* found = find_version_13_fields(child); found != nullptr) return found;
+    }
+    return nullptr;
+}
+
+/// Whether a scene draws a character no packaged face covers as the font's
+/// missing-glyph box, as every scene from version 13 does, rather than as `?`.
+[[nodiscard]] constexpr bool draws_missing_glyph_box(std::uint32_t scene_version) noexcept {
+    return scene_version >= 13U;
+}
+
 /// Whether a node sets a field version 3 introduced: the `path` kind or path
 /// geometry on a node of any kind.
 [[nodiscard]] inline bool uses_version_3_fields(const SceneNode& node) noexcept {
@@ -1473,7 +1544,7 @@ struct SceneVersionMismatch final {
     /// The property that carries it: `kind`, `transform`, `path`, `image`,
     /// `images`, `clip`, `mask`, `isolate`, `blend_mode`, `fill_token`,
     /// `color_tokens`, `background_token`, `tokens`, `fill_gradients`,
-    /// `stroke_gradient`, `vector`, `effects` or `tracks`.
+    /// `stroke_gradient`, `vector`, `effects`, `tracks` or `text_layout`.
     std::string_view property;
 };
 
@@ -1559,6 +1630,11 @@ template <typename Predicate>
             return SceneVersionMismatch{found, 12U, "kind"};
         }
     }
+    if (version < 13U) {
+        if (const auto* found = find_version_13_fields(scene.root)) {
+            return SceneVersionMismatch{found, 13U, "text_layout"};
+        }
+    }
     return std::nullopt;
 }
 
@@ -1573,9 +1649,11 @@ template <typename Predicate>
 /// that `uses_version_6_fields` reports, and a scene before version 7 has no
 /// token table and no node that `uses_version_7_fields` reports, a scene
 /// before version 8 has no node that `find_version_8_fields` reports, a
-/// scene before version 9 has no node that `uses_version_9_fields` reports, and a
+/// scene before version 9 has no node that `uses_version_9_fields` reports, a
 /// scene before version 10 sets no field that `uses_version_10_fields`
-/// reports.
+/// reports, a scene before version 11 has no tracks, a scene before version 12
+/// has no plot node, and a scene before version 13 has no node that
+/// `uses_version_13_fields` reports.
 [[nodiscard]] inline bool scene_fields_match_version(const Scene& scene) noexcept {
     return !detail::find_version_field_mismatch(scene).has_value();
 }

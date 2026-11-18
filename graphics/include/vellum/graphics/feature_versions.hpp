@@ -35,6 +35,7 @@ inline constexpr std::array kFeatureVersions{
     FeatureVersion{"effects", 10U, 3U},
     FeatureVersion{"tracks", 11U, 4U},
     FeatureVersion{"plots", 12U, 5U},
+    FeatureVersion{"text-layout", 13U, 0U},
     FeatureVersion{"compositing", 0U, 2U},
     // vellum-feature-versions-end
 };

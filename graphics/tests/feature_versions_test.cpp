@@ -37,6 +37,9 @@ Builder builder_for(std::string_view feature) {
     if (feature == "effects") return [](SceneNode& node) { node.effects.emplace_back(); };
     if (feature == "tracks") return [](SceneNode& node) { node.tracks.emplace_back(); };
     if (feature == "plots") return [](SceneNode& node) { node.kind = SceneNode::Kind::plot; };
+    if (feature == "text-layout") {
+        return [](SceneNode& node) { node.text_layout = TextLayout{}; };
+    }
     return {};
 }
 

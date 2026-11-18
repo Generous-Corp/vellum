@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(Vellum
-    VERSION 0.2.0
+    VERSION 0.2.1
     DESCRIPTION "Experimental audio-free native application kernel"
     LANGUAGES CXX)
 
@@ -28,8 +28,12 @@ set(VELLUM_V8_ARCHIVE "" CACHE FILEPATH
     "Local copy of the pinned sealed V8 archive; digest-checked like a download")
 option(VELLUM_ENABLE_ADDRESS_SANITIZER
     "Instrument Vellum targets with AddressSanitizer" OFF)
+option(VELLUM_ENABLE_TRACING
+    "Compile development-only native Perfetto tracing into the mirrored framework units (needs VELLUM_ENABLE_MIRROR; never ship enabled)" OFF)
 option(VELLUM_ENABLE_RMLUI
     "Build the optional RmlUi module (rmlui/; fetches its pinned RmlUi source)" OFF)
+set(VELLUM_PULP_CENSUS_LIBRARIES "" CACHE STRING
+    "Static libraries of a Pulp build (a list); the install census then requires that no installed dylib exports a name they define")
 set(VELLUM_AUTHORING_TEST_BUNDLE "" CACHE FILEPATH
     "Optional @vellum/ui classic-script bundle for the real JavaScriptCore integration test")
 set(VELLUM_PHASE3_TEST_BUNDLE "" CACHE FILEPATH
@@ -68,6 +72,7 @@ if(APPLE AND VELLUM_ENABLE_GPU AND
 endif()
 
 include(cmake/VellumThreeJsPayload.cmake)
+include(cmake/VellumTracing.cmake)
 add_subdirectory(foundation)
 add_subdirectory(runtime)
 add_subdirectory(components)
@@ -107,8 +112,8 @@ if(VELLUM_ENABLE_GRAPHICS)
     if(VELLUM_BUILD_TESTS AND TARGET vellum-gpu)
         foreach(_vellum_graphics_test IN ITEMS
                 vellum-layer-cache-gpu-test vellum-render-cache-gpu-test
-                vellum-partial-present-test vellum-scene-capture-harness-test
-                vellum-frame-debug-test)
+                vellum-device-recovery-gpu-test vellum-partial-present-test
+                vellum-scene-capture-harness-test vellum-frame-debug-test)
             if(NOT TARGET ${_vellum_graphics_test})
                 message(FATAL_ERROR
                     "Vellum: VELLUM_BUILD_TESTS is on and the GPU backend is built, "
@@ -226,6 +231,16 @@ if(VELLUM_BUILD_TESTS)
             graphics/tests/paint_command_test.cpp)
         target_link_libraries(vellum-paint-command-test PRIVATE Vellum::Graphics)
         add_test(NAME vellum.paint-command COMMAND vellum-paint-command-test)
+        add_executable(vellum-hit-test-test
+            graphics/tests/hit_test_test.cpp)
+        target_link_libraries(vellum-hit-test-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.hit-test COMMAND vellum-hit-test-test)
+
+        add_executable(vellum-pointer-router-test
+            graphics/tests/pointer_router_test.cpp)
+        target_link_libraries(vellum-pointer-router-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.pointer-router COMMAND vellum-pointer-router-test)
+
         add_executable(vellum-image-node-test
             graphics/tests/image_node_test.cpp)
         target_link_libraries(vellum-image-node-test PRIVATE Vellum::Graphics)
@@ -259,6 +274,11 @@ if(VELLUM_BUILD_TESTS)
             graphics/tests/plot_test.cpp)
         target_link_libraries(vellum-plot-test PRIVATE Vellum::Graphics Threads::Threads)
         add_test(NAME vellum.plot COMMAND vellum-plot-test)
+
+        add_executable(vellum-text-layout-test
+            graphics/tests/text_layout_test.cpp)
+        target_link_libraries(vellum-text-layout-test PRIVATE Vellum::Graphics)
+        add_test(NAME vellum.text-layout COMMAND vellum-text-layout-test)
 
         add_executable(vellum-damage-test
             graphics/tests/damage_test.cpp)
@@ -555,6 +575,67 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.rmlui-sdk-artifact-unit
         COMMAND "${Python3_EXECUTABLE}" -I scripts/test_verify_rmlui_sdk_artifact.py
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # Native Perfetto tracing stays out of a default build and is wired once
+    # in a tracing build: the source and pin checks, then the built tree
+    # against the option it was configured with.
+    if(VELLUM_ENABLE_TRACING)
+        set(_vellum_tracing_expect on)
+    else()
+        set(_vellum_tracing_expect off)
+    endif()
+    add_test(NAME vellum.tracing-source
+        COMMAND "${Python3_EXECUTABLE}" -I tools/tracing/check_tracing.py
+            source "${CMAKE_CURRENT_SOURCE_DIR}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME vellum.tracing-check-unit
+        COMMAND "${Python3_EXECUTABLE}" -I tools/tracing/test_check_tracing.py
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    # The guard reads CMake's own system variables. Each probe sets them as a
+    # cross-compile would; the VELLUM_TRACING_SYSTEM and VELLUM_TRACING_ARCH
+    # cache entries the guard once read are passed too, to prove they no longer
+    # bypass it.
+    set(_vellum_tracing_probes
+        "Linux|x86_64|"
+        "Windows|AMD64|"
+        "Darwin|x86_64|"
+        "Linux|x86_64|bypass"
+        "Darwin|x86_64|bypass"
+        "Darwin|arm64|x86_64"
+        "Darwin|arm64|arm64$<SEMICOLON>x86_64")
+    foreach(_vellum_probe IN LISTS _vellum_tracing_probes)
+        string(REPLACE "|" ";" _vellum_probe_parts "${_vellum_probe}")
+        list(GET _vellum_probe_parts 0 _vellum_probe_system)
+        list(GET _vellum_probe_parts 1 _vellum_probe_arch)
+        list(LENGTH _vellum_probe_parts _vellum_probe_length)
+        set(_vellum_probe_extra)
+        set(_vellum_probe_tag "")
+        if(_vellum_probe_length GREATER 2)
+            list(GET _vellum_probe_parts 2 _vellum_probe_tag)
+        endif()
+        if(_vellum_probe_tag STREQUAL "bypass")
+            set(_vellum_probe_extra -DVELLUM_TRACING_SYSTEM=Darwin -DVELLUM_TRACING_ARCH=arm64)
+        elseif(_vellum_probe_tag)
+            set(_vellum_probe_extra "-DCMAKE_OSX_ARCHITECTURES=${_vellum_probe_tag}")
+        endif()
+        string(REGEX REPLACE "[^A-Za-z0-9]" "-"
+            _vellum_probe_name "${_vellum_probe_system}-${_vellum_probe_arch}-${_vellum_probe_tag}")
+        add_test(NAME vellum.tracing-refused-${_vellum_probe_name}
+            COMMAND "${CMAKE_COMMAND}" -S tools/tracing/platform-probe
+                -B "${CMAKE_CURRENT_BINARY_DIR}/tracing-probe-${_vellum_probe_name}"
+                "-DVELLUM_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+                -DVELLUM_ENABLE_TRACING=ON -DVELLUM_ENABLE_MIRROR=ON
+                -DCMAKE_SYSTEM_NAME=${_vellum_probe_system}
+                -DCMAKE_SYSTEM_PROCESSOR=${_vellum_probe_arch}
+                ${_vellum_probe_extra}
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        set_tests_properties(vellum.tracing-refused-${_vellum_probe_name} PROPERTIES
+            PASS_REGULAR_EXPRESSION "supported only on macos-arm64")
+    endforeach()
+    add_test(NAME vellum.tracing-build-state
+        COMMAND "${Python3_EXECUTABLE}" -I tools/tracing/check_tracing.py
+            build "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}"
+            --expect ${_vellum_tracing_expect}
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME vellum.provenance-unit
         COMMAND "${Python3_EXECUTABLE}"
             tools/provenance/test_verify_extraction.py
@@ -599,6 +680,7 @@ if(VELLUM_BUILD_TESTS)
                 "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
                 "-DVELLUM_ENABLE_V8=${VELLUM_MIRROR_HAS_V8}"
                 "-DVELLUM_V8_VERSION=${VELLUM_V8_VERSION}"
+                "-DVELLUM_PULP_CENSUS_LIBRARIES=${VELLUM_PULP_CENSUS_LIBRARIES}"
                 ${_vellum_view_audio_archive_arg}
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
         # An installed consumer reaches Vellum's value model through the view
@@ -660,6 +742,10 @@ endif()
 if(TARGET vellum-authoring)
     install(DIRECTORY authoring/include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 endif()
+
+# Every test carries one of the pr-fast, gpu or slow class labels.
+include(cmake/VellumTestClasses.cmake)
+vellum_apply_test_classes("${CMAKE_CURRENT_SOURCE_DIR}/scripts/ctest_classes.json")
 
 # The system and architectures the installed binaries are built for. The
 # package config reports "not found" to a consumer that targets others.

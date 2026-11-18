@@ -129,6 +129,13 @@ function(_vellum_mirror_add_dependency name)
     set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
     set(_binary "${CMAKE_BINARY_DIR}/_deps/vellum-mirror-build/${name}")
     add_subdirectory("${VELLUM_MIRROR_DEP_${_key}_DIR}" "${_binary}" EXCLUDE_FROM_ALL SYSTEM)
+    _vellum_mirror_targets_in(_dep_targets "${VELLUM_MIRROR_DEP_${_key}_DIR}")
+    foreach(_dep_target IN LISTS _dep_targets)
+        get_target_property(_dep_type "${_dep_target}" TYPE)
+        if(_dep_type STREQUAL "STATIC_LIBRARY")
+            set_property(GLOBAL APPEND PROPERTY VELLUM_MIRROR_DEP_ARCHIVES "${_dep_target}")
+        endif()
+    endforeach()
     foreach(_name IN LISTS _vellum_mirror_option_names)
         if(DEFINED _vellum_mirror_saved_${_name})
             set(${_name} "${_vellum_mirror_saved_${_name}}"
@@ -206,6 +213,42 @@ function(_vellum_mirror_declared_recipe_usage target)
     endforeach()
 endfunction()
 
+# Names the mirror images must not export. Third-party code is linked normally
+# (one image may need another's copy of nothing: each image carries its own),
+# and every symbol the recipe's third-party archives define is left unexported
+# at link time, so a mirror dylib exports the vellum:: namespace and the
+# documented C entry points and a Pulp build that defines the same names cannot
+# interpose or coalesce them. The list is generated from the archives
+# (tools/mirror/third_party_unexports.py), so a dependency bump needs no edit;
+# tools/mirror/third_party_unexports.txt adds names from the mirror's own
+# vendored objects, which are not archives of their own.
+get_property(_vellum_dep_archives GLOBAL PROPERTY VELLUM_MIRROR_DEP_ARCHIVES)
+list(REMOVE_DUPLICATES _vellum_dep_archives)
+set(_vellum_dep_archive_files)
+foreach(_archive IN LISTS _vellum_dep_archives)
+    list(APPEND _vellum_dep_archive_files "$<TARGET_FILE:${_archive}>")
+endforeach()
+set(VELLUM_MIRROR_UNEXPORTS "${CMAKE_CURRENT_BINARY_DIR}/vellum-mirror-third-party.unexports")
+add_custom_command(OUTPUT "${VELLUM_MIRROR_UNEXPORTS}"
+    COMMAND "${Python3_EXECUTABLE}" -I "${PROJECT_SOURCE_DIR}/tools/mirror/third_party_unexports.py"
+        --extra "${PROJECT_SOURCE_DIR}/tools/mirror/third_party_unexports.txt"
+        --out "${VELLUM_MIRROR_UNEXPORTS}" ${_vellum_dep_archive_files}
+    DEPENDS ${_vellum_dep_archives}
+        "${PROJECT_SOURCE_DIR}/tools/mirror/third_party_unexports.py"
+        "${PROJECT_SOURCE_DIR}/tools/mirror/third_party_unexports.txt"
+    COMMAND_EXPAND_LISTS
+    VERBATIM)
+add_custom_target(vellum-mirror-third-party-unexports DEPENDS "${VELLUM_MIRROR_UNEXPORTS}")
+
+# VELLUM_ENABLE_TRACING: the switch the framework's trace header reads rides on
+# the same compile usage every mirrored target and framework test takes.
+if(VELLUM_ENABLE_TRACING)
+    target_compile_definitions(vellum-tracing INTERFACE PULP_TRACING_ENABLED=1)
+    # Perfetto's objects reach the foundation library, which must not carry the
+    # build host's paths either.
+    target_compile_options(vellum-perfetto PRIVATE ${_vellum_mirror_prefix_maps})
+endif()
+
 # Mirrored targets, exactly as the closures and units.json describe them.
 foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     _vellum_mirror_key(_vellum_mirror_unit_key "${_vellum_mirror_unit}")
@@ -235,6 +278,13 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         # installed choke headers is lifted (gpu_surface_guard.py). PRIVATE,
         # so it never reaches an installed consumer.
         target_compile_definitions("${_vellum_mirror_target}" PRIVATE VELLUM_MIRROR_BUILD=1)
+        # VELLUM_ENABLE_TRACING: every mirrored target compiles with the same
+        # trace switch and Perfetto header, so no two objects disagree on
+        # kTracingEnabled. Compile usage only; the one Perfetto library is
+        # linked into the foundation unit below.
+        if(VELLUM_ENABLE_TRACING)
+            target_link_libraries("${_vellum_mirror_target}" PRIVATE vellum-tracing)
+        endif()
         # Per-source options Pulp's own CMake sets on these sources (the plan
         # reads them from the mirrored CMake; source_compile_options.py).
         if(VELLUM_MIRROR_TARGET_${_tkey}_OPTION_SOURCE_COUNT GREATER 0)
@@ -384,14 +434,8 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
             list(APPEND _third_party "${_link}")
         endif()
     endforeach()
-    # Third-party archives an earlier unit already carries are resolved
-    # through that unit, never linked a second time.
-    foreach(_earlier IN LISTS _unit_links)
-        get_target_property(_carried "${_earlier}" VELLUM_MIRROR_CARRIED_ARCHIVES)
-        if(_carried)
-            list(REMOVE_ITEM _third_party ${_carried})
-        endif()
-    endforeach()
+    # Each image links its own copy of the third-party archives it needs: their
+    # symbols are unexported, so no image can resolve them from another.
     # Publish the closure shape before a later Skia unit resolves an internal
     # dependency on this library.  The provider must consume the static
     # objects of earlier Skia units, rather than their shared frontends: those
@@ -421,6 +465,11 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         list(REMOVE_DUPLICATES _provider_unit_links)
         target_link_libraries(vellum-skia-dawn-provider PRIVATE
             "$<LINK_LIBRARY:WHOLE_ARCHIVE,${_provider_whole}>")
+        target_link_options(vellum-skia-dawn-provider PRIVATE
+            "LINKER:-unexported_symbols_list,${VELLUM_MIRROR_UNEXPORTS}")
+        set_property(TARGET vellum-skia-dawn-provider APPEND PROPERTY LINK_DEPENDS
+            "${VELLUM_MIRROR_UNEXPORTS}")
+        add_dependencies(vellum-skia-dawn-provider vellum-mirror-third-party-unexports)
         if(_provider_unit_links)
             target_link_libraries(vellum-skia-dawn-provider PRIVATE
                 ${_provider_unit_links})
@@ -455,6 +504,13 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         if(_unit_links)
             target_link_libraries("${_library}" PUBLIC ${_unit_links})
         endif()
+    endif()
+    # VELLUM_ENABLE_TRACING: the runtime target holds the Perfetto track-event
+    # storage, so its unit's library carries the one Perfetto in the process.
+    # Later units reach it through their link on this library.
+    if(VELLUM_ENABLE_TRACING AND "pulp-runtime" IN_LIST _whole)
+        target_link_libraries("${_library}" PRIVATE
+            "$<LINK_LIBRARY:WHOLE_ARCHIVE,vellum-perfetto>")
     endif()
     set_target_properties("${_library}" PROPERTIES
         VELLUM_MIRROR_CARRIED_ARCHIVES "${_third_party}")
@@ -491,6 +547,14 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         target_link_options("${_library}" PRIVATE
             "LINKER:-exported_symbols_list,${_exports}")
         set_property(TARGET "${_library}" APPEND PROPERTY LINK_DEPENDS "${_exports}")
+    else()
+        # ld takes an export list or an unexport list, not both: the units
+        # that have no export list leave the third-party names out.
+        target_link_options("${_library}" PRIVATE
+            "LINKER:-unexported_symbols_list,${VELLUM_MIRROR_UNEXPORTS}")
+        set_property(TARGET "${_library}" APPEND PROPERTY LINK_DEPENDS
+            "${VELLUM_MIRROR_UNEXPORTS}")
+        add_dependencies("${_library}" vellum-mirror-third-party-unexports)
     endif()
     target_link_options("${_library}" PRIVATE "LINKER:-dead_strip_dylibs")
     target_compile_definitions("${_library}" INTERFACE
@@ -540,15 +604,9 @@ foreach(_vellum_mirror_executable IN LISTS VELLUM_MIRROR_EXECUTABLES)
         list(APPEND _vellum_executable_units "vellum-mirror-${VELLUM_MIRROR_TARGET_${_lkey}_UNIT}")
     endforeach()
     list(REMOVE_DUPLICATES _vellum_executable_units)
-    # Third-party archives a linked unit library already carries come through
-    # that library, never linked a second time.
+    # The unit libraries do not export their third-party code, so an executable
+    # links its own copy.
     set(_vellum_executable_third_party ${VELLUM_MIRROR_TARGET_${_tkey}_EXTERNAL_LINKS})
-    foreach(_library IN LISTS _vellum_executable_units)
-        get_target_property(_carried "${_library}" VELLUM_MIRROR_CARRIED_ARCHIVES)
-        if(_carried)
-            list(REMOVE_ITEM _vellum_executable_third_party ${_carried})
-        endif()
-    endforeach()
     target_link_libraries("${_vellum_mirror_executable}" PRIVATE
         ${_vellum_executable_units} ${_vellum_executable_third_party}
         ${VELLUM_MIRROR_TARGET_${_tkey}_IN_TREE_INTERFACES})

@@ -45,8 +45,13 @@ EXPECTED_RUNNERS = {
         "VELLUM_LINUX_RUNS_ON_JSON",
         '["ubuntu-latest"]',
     ),
+    "gpu-proof-guard.yml": ("__hosted__", "ubuntu-latest"),
     "pulp-observatory-watchdog.yml": ("__hosted__", "ubuntu-latest"),
     "review-verdict.yml": ("__hosted__", "ubuntu-24.04"),
+    "rule-data-split.yml": (
+        "VELLUM_LINUX_RUNS_ON_JSON",
+        '["ubuntu-latest"]',
+    ),
     "rmlui.yml": (
         "VELLUM_RMLUI_MACOS_RUNS_ON_JSON",
         '["macos-15"]',
@@ -117,11 +122,12 @@ GPU_RUNS_ON = (
 )
 
 # sterile-consumer selects a hosted runner when gpu-macos-arm64 reported a
-# reused proof or a change the proof does not cover (the job then only prints
-# a notice), and otherwise exactly the GPU selector.
+# reused proof, a change the proof does not cover or a cheap pull-request lane
+# (the job then only prints a notice), and otherwise exactly the GPU selector.
 STERILE_HOSTED_WHEN = (
     "(needs.gpu-macos-arm64.outputs.reused_run != '' || "
-    "needs.gpu-macos-arm64.outputs.unaffected == 'true') && '[\"ubuntu-24.04\"]'"
+    "needs.gpu-macos-arm64.outputs.unaffected == 'true' || "
+    "needs.gpu-macos-arm64.outputs.cheap == 'true') && '[\"ubuntu-24.04\"]'"
 )
 STERILE_RUNS_ON = (
     "runs-on: ${{ fromJSON((" + STERILE_HOSTED_WHEN + ") || "
@@ -1257,17 +1263,18 @@ class RunnerPolicyTests(unittest.TestCase):
         merge = '["self-hosted","macOS","ARM64","vellum-build-macos-merge-group"]'
         reused = "needs.gpu-macos-arm64.outputs.reused_run"
         unaffected = "needs.gpu-macos-arm64.outputs.unaffected"
+        cheap = "needs.gpu-macos-arm64.outputs.cheap"
         for event in ("pull_request", "merge_group", "push", "workflow_dispatch"):
             for variables in ({}, {"vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local},
                               {"vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local,
                                "vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON": merge}):
                 context = {"event_name": event, **variables}
                 with self.subTest(event=event, variables=sorted(variables), proof="built"):
-                    for built in ({}, {unaffected: "false"}, {reused: ""}):
+                    for built in ({}, {unaffected: "false"}, {reused: ""}, {cheap: ""}):
                         self.assertEqual(
                             evaluate_actions_expression(sterile_expression, {**context, **built}),
                             evaluate_actions_expression(gpu_expression, context))
-                for reported in ({reused: "43671219549"}, {unaffected: "true"},
+                for reported in ({reused: "43671219549"}, {unaffected: "true"}, {cheap: "true"},
                                  {reused: "43671219549", unaffected: "true"}):
                     with self.subTest(event=event, variables=sorted(variables), proof=sorted(reported)):
                         self.assertEqual(
