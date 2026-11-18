@@ -69,9 +69,19 @@ message(STATUS "${_vellum_mirror_plan_output}")
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${PROJECT_SOURCE_DIR}/tools/mirror/mirror_package.py"
     "${PROJECT_SOURCE_DIR}/provenance/mirror/receipts/index.json"
-    "${PROJECT_SOURCE_DIR}/tools/mirror/framework_ports.py")
-# The ports ledger and the unit manifest decide what is compiled.
-foreach(_vellum_mirror_manifest IN ITEMS provenance/framework/ports.json provenance/framework/units.json)
+    "${PROJECT_SOURCE_DIR}/tools/mirror/framework_ports.py"
+    "${PROJECT_SOURCE_DIR}/tools/mirror/gpu_surface_guard.py"
+    "${PROJECT_SOURCE_DIR}/tools/mirror/port_respell.py"
+    "${PROJECT_SOURCE_DIR}/tools/mirror/source_compile_options.py"
+    "${PROJECT_SOURCE_DIR}/tools/mirror/verify_mirror_rename_identity.py"
+    "${PROJECT_SOURCE_DIR}/provenance/framework/transfer.json"
+    # Its mtime moves when a manifest below is added, which an absent file cannot signal.
+    "${PROJECT_SOURCE_DIR}/provenance/framework")
+# The ports ledger and the unit manifest decide what is compiled. The respell
+# rule and its table change the bytes of framework/ sources, so they
+# retrigger configure too.
+foreach(_vellum_mirror_manifest IN ITEMS provenance/framework/ports.json provenance/framework/units.json
+        provenance/framework/respell.json)
     if(EXISTS "${PROJECT_SOURCE_DIR}/${_vellum_mirror_manifest}")
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
             "${PROJECT_SOURCE_DIR}/${_vellum_mirror_manifest}")

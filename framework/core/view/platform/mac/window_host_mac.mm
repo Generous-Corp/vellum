@@ -63,7 +63,7 @@
 // window_host_mac_geometry.mm; use them via vellum::view::mac_geometry.
 using namespace vellum::view::mac_geometry;
 
-extern "C" void pulp_mac_text_input_client_category_anchor();
+extern "C" void vellum_mac_text_input_client_category_anchor();
 
 // ── VellumMirrorView: CoreGraphics NSView (CPU rendering path) ───────────────────────
 
@@ -108,7 +108,7 @@ extern "C" void pulp_mac_text_input_client_category_anchor();
 - (instancetype)initWithFrame:(NSRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
-        pulp_mac_text_input_client_category_anchor();
+        vellum_mac_text_input_client_category_anchor();
         // Ensure the content view tracks the window's content rect
         // so AppKit resizes our frame when the user drags the window edge.
         // Without this, the view's bounds stay at the original frame and Yoga

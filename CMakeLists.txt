@@ -178,6 +178,9 @@ if(VELLUM_BUILD_TESTS)
     add_test(NAME vellum.foundation COMMAND vellum-foundation-test)
     find_program(VELLUM_NODE_EXECUTABLE NAMES node)
     if(VELLUM_NODE_EXECUTABLE)
+        add_test(NAME vellum.limits-drift
+            COMMAND "${VELLUM_NODE_EXECUTABLE}" --test
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/limits/test/limits.test.mjs")
         add_test(NAME vellum.feature-versions-drift
             COMMAND "${VELLUM_NODE_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/versions/generate_feature_versions.mjs" --check)
