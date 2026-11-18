@@ -433,9 +433,9 @@ class PlatformScopeTest(unittest.TestCase):
         # Control: the adding row's origin, Pulp path and commits.
         self.assertEqual(fp.replay_scoped([adding, self.scoped(["windows-x64"])], set())[3], [])
 
-    def test_the_landed_ledger_compiles_everything_on_macos_only(self) -> None:
-        # Today's ports.json names no scope, so every source it adds keeps
-        # compiling exactly where it did: on macOS.
+    def test_the_landed_ledger_scopes_only_windows_rows_off_macos(self) -> None:
+        # Rows that name no scope keep compiling exactly where they did, on
+        # macOS; only the Windows host rows are scoped to a Windows platform.
         repo = HERE.parents[1]
         rows, errors = fp.load(repo)
         self.assertEqual(errors, [])
@@ -443,7 +443,14 @@ class PlatformScopeTest(unittest.TestCase):
         self.assertTrue(compiled, "the landed ledger adds no compiled source; this check sees nothing")
         _, _, scopes, replay_errors = fp.replay_scoped(rows, set())
         self.assertEqual(replay_errors, [])
-        self.assertEqual({scopes[path] for path in compiled}, {frozenset({"macos-arm64"})})
+        windows = {"windows-x64", "windows-arm64"}
+        by_scope = {scopes[path] for path in compiled}
+        self.assertIn(frozenset({"macos-arm64"}), by_scope)
+        for scope in by_scope - {frozenset({"macos-arm64"})}:
+            self.assertTrue(scope <= windows, scope)
+        for path in compiled:
+            if "/win/" not in path and "windows" not in path:
+                self.assertEqual(scopes[path], frozenset({"macos-arm64"}), path)
 
     def test_scopes_reads_the_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
