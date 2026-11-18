@@ -1,0 +1,29 @@
+{
+  "schema": "vellum.framework-respell.v1",
+  "entries": [
+    {
+      "old": "pulp_gpu_runtime_hooks_anchor",
+      "new": "vellum_gpu_runtime_hooks_anchor",
+      "kind": "extern-c",
+      "evidence": "framework/core/render/src/gpu_runtime_hooks.cpp"
+    },
+    {
+      "old": "pulp_mac_text_input_client_category_anchor",
+      "new": "vellum_mac_text_input_client_category_anchor",
+      "kind": "extern-c",
+      "evidence": "framework/core/view/platform/mac/window_host_mac_text_input.mm"
+    },
+    {
+      "old": "pulp_text_accessibility_lookup_macos",
+      "new": "vellum_text_accessibility_lookup_macos",
+      "kind": "extern-c",
+      "evidence": "framework/core/view/platform/mac/text_accessibility_macos.mm"
+    },
+    {
+      "old": "pulp_tracing_ship_sentinel",
+      "new": "vellum_tracing_ship_sentinel",
+      "kind": "extern-c",
+      "evidence": "framework/core/runtime/src/trace.cpp"
+    }
+  ]
+}
