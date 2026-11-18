@@ -1470,12 +1470,30 @@ class VerifyExtractionTests(unittest.TestCase):
             self.track(root)
             errors, _ = self.respell_verdict(root)
             self.assertTrue(any("changed by more than" in e for e in errors), errors)
-            # An entry for another file cannot excuse this file's edit.
-            (root / own).write_bytes(body)
-            (root / other).write_bytes(respelled)
+
+    def test_the_edit_check_reads_only_files_an_entry_applies_to(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            own, other = "framework/core/a/src/own.cpp", "framework/core/a/src/other.cpp"
+            native = "framework/core/a/src/native.cpp"
+            body = b'#define PULP_KEEP 1\nint v = PULP_KEEP;\nint other = 1;\n'
+            self.framework_fixture(root, {own: body, other: body})
+            (root / native).write_bytes(body)  # not in the transfer record
+            os.environ["VELLUM_GIT_BASE"] = self.git_commit_all(root, "before the respell")
+            self.write_respell(root, [self.respell_entry("PULP_KEEP", "file-macro", own)])
+            (root / own).write_bytes(b'#define VELLUM_KEEP 1\nint v = VELLUM_KEEP;\nint other = 1;\n')
+            # Unrelated edits to a transferred file the file-macro does not name, and to a native file.
+            (root / other).write_bytes(body.replace(b"other = 1", b"other = 2"))
+            (root / native).write_bytes(body.replace(b"other = 1", b"other = 3"))
             self.track(root)
             errors, _ = self.respell_verdict(root)
-            self.assertTrue(any(other in e and "changed by more than" in e for e in errors), errors)
+            self.assertFalse(any("changed by more than" in e for e in errors), errors)
+            # Control: the same unrelated edit to the evidence file is flagged.
+            (root / own).write_bytes(b'#define VELLUM_KEEP 1\nint v = VELLUM_KEEP;\nint other = 9;\n')
+            self.track(root)
+            errors, _ = self.respell_verdict(root)
+            self.assertTrue(any(own in e and "changed by more than" in e for e in errors), errors)
 
     def test_a_ported_row_is_proved_through_the_respell(self) -> None:
         self.hide_ci_git_base()

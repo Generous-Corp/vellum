@@ -1842,7 +1842,7 @@ def framework_respell_errors(root: Path, table: list[dict], ported: dict[str, st
     for absent in sorted(implied - stored, key=str):
         errors.append(f"{FRAMEWORK_RESPELL}: the bytes imply {absent[0]} ({absent[1]}, {absent[2]}), "
                       "which the table does not list")
-    errors += framework_respell_edit_errors(root, table, set(current) - pulp_added)
+    errors += framework_respell_edit_errors(root, table, (set(current) & transferred_paths) - pulp_added)
     checks["framework_respell_proved"] = (not errors) if ported is not None or not (ported_now or deferred_keys) else \
         "deferred: no Pulp checkout for the ported entries"
     return errors, checks
@@ -1951,7 +1951,7 @@ def framework_respell_edit_errors(root: Path, table: list[dict], transferred: se
             continue
         text = old_bytes.stdout.decode("utf-8", errors="replace")
         applicable = [e for e in new_entries if e["kind"] != "file-macro" or e["evidence"] == path]
-        if not ({e["old"] for e in new_entries} & respeller.pulp_tokens(text)):
+        if not ({e["old"] for e in applicable} & respeller.pulp_tokens(text)):
             continue
         head = root / path
         if not head.is_file():
