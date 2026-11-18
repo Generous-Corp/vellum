@@ -356,6 +356,26 @@ class PlatformScopeTest(unittest.TestCase):
         self.assertEqual(fp.parse(json.dumps({"schema": fp.SCHEMA_V1, "rows": [row()]}))[1], [])
         self.assertEqual(fp.parse(ledger([row(platforms=["linux-x64"])]))[1], [])
 
+    def test_the_committed_ledger_reads_the_same_as_v1_and_v2(self) -> None:
+        # The ledger moved from v1 to v2 with its rows unchanged: every
+        # unscoped row reads identically under both schemas, and a scope is
+        # refused only under v1.
+        repo = HERE.parent.parent
+        committed = json.loads((repo / fp.LEDGER).read_text(encoding="utf-8"))
+        self.assertEqual(committed["schema"], fp.SCHEMA)
+        unscoped = [r for r in committed["rows"] if "platforms" not in r and r["change"] != "scoped"]
+        self.assertGreaterEqual(len(unscoped), 29)
+        as_v1 = fp.parse(json.dumps({"schema": fp.SCHEMA_V1, "rows": unscoped}))
+        as_v2 = fp.parse(json.dumps({"schema": fp.SCHEMA, "rows": unscoped}))
+        self.assertEqual(as_v1[1], [])
+        self.assertEqual(as_v1, as_v2)
+        self.assertEqual(as_v2[0], unscoped)
+        # Control: a v1 document carrying a scoped row is refused, so the equality
+        # above is not the parser accepting anything.
+        scoped = [dict(unscoped[0], platforms=["linux-x64"])] if fp.compiled(unscoped[0]["framework_path"]) else \
+            [row(platforms=["linux-x64"])]
+        self.assertTrue(fp.parse(json.dumps({"schema": fp.SCHEMA_V1, "rows": scoped}))[1])
+
     def test_replay_scopes_each_added_source(self) -> None:
         header = row("framework/core/a/include/vellum/a/new.hpp")
         added, _, scopes, errors = fp.replay_scoped([row(), header], set())
@@ -433,17 +453,24 @@ class PlatformScopeTest(unittest.TestCase):
         # Control: the adding row's origin, Pulp path and commits.
         self.assertEqual(fp.replay_scoped([adding, self.scoped(["windows-x64"])], set())[3], [])
 
-    def test_the_landed_ledger_compiles_everything_on_macos_only(self) -> None:
-        # Today's ports.json names no scope, so every source it adds keeps
-        # compiling exactly where it did: on macOS.
+    def test_the_landed_ledger_scopes_only_rows_that_name_a_platform(self) -> None:
+        # A row that names no scope keeps compiling exactly where it did, on
+        # macOS; a source compiles elsewhere only when its adding row says so.
         repo = HERE.parents[1]
         rows, errors = fp.load(repo)
         self.assertEqual(errors, [])
-        compiled = [r["framework_path"] for r in rows if r["change"] == "added" and fp.compiled(r["framework_path"])]
-        self.assertTrue(compiled, "the landed ledger adds no compiled source; this check sees nothing")
+        added = {r["framework_path"]: r for r in rows
+                 if r["change"] == "added" and fp.compiled(r["framework_path"])}
+        self.assertTrue(added, "the landed ledger adds no compiled source; this check sees nothing")
         _, _, scopes, replay_errors = fp.replay_scoped(rows, set())
         self.assertEqual(replay_errors, [])
-        self.assertEqual({scopes[path] for path in compiled}, {frozenset({"macos-arm64"})})
+        unscoped = [path for path, r in added.items() if "platforms" not in r]
+        self.assertTrue(unscoped, "no unscoped compiled row; this check sees nothing")
+        self.assertEqual({scopes[path] for path in unscoped}, {frozenset({"macos-arm64"})})
+        for path, r in added.items():
+            if "platforms" in r:
+                self.assertEqual(scopes[path], frozenset(r["platforms"]))
+                self.assertNotIn("macos-arm64", scopes[path], path)
 
     def test_scopes_reads_the_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
