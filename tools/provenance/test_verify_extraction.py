@@ -2511,18 +2511,20 @@ class VerifyExtractionTests(unittest.TestCase):
     def test_a_change_cannot_move_a_pulp_origin_file_to_another_origin(self) -> None:
         landed_pulp = self.ports_row("framework/core/a/src/p.cpp", commits=["a" * 40])
         flipped = dict(landed_pulp, origin="native", pulp_path=None, pulp_commits=[], framework_blob=None)
-        # A new native row for a file the transfer carried.
-        errors = self.origin_guard([self.ports_row(self.TRANSFERRED, "removed")], [])
-        self.assertEqual(len(errors), 1, errors)
-        self.assertIn("origin is not `pulp`", errors[0])
-        self.assertIn(self.TRANSFERRED, errors[0])
+        # A removal row does not rewrite the file's origin.
+        self.assertEqual(self.origin_guard([self.ports_row(self.TRANSFERRED, "removed")], []), [])
         # A landed Pulp row edited to native.
         self.assertEqual(len(self.origin_guard([flipped], [landed_pulp])), 1)
         # A new native row for a path the base's ledger took from Pulp.
-        self.assertEqual(len(self.origin_guard([landed_pulp, dict(flipped, change="removed")], [landed_pulp])), 1)
+        self.assertEqual(self.origin_guard([landed_pulp, dict(flipped, change="removed")], [landed_pulp]), [])
+
+    def test_a_new_removal_of_a_transferred_file_does_not_move_its_origin(self) -> None:
+        # Removing the file is a valid ledger operation; it does not rewrite
+        # the file's origin and therefore must not trip the origin guard.
+        self.assertEqual(self.origin_guard([self.ports_row(self.TRANSFERRED, "removed")], [], through_verify=True), [])
 
     def test_the_origin_guard_judges_every_event_but_the_push_that_lands_on_main(self) -> None:
-        row = self.ports_row(self.TRANSFERRED, "removed")
+        row = self.ports_row(self.TRANSFERRED)
         for event, ref in (("pull_request", "refs/pull/1/merge"), ("merge_group", "refs/heads/gh-readonly-queue/main/pr-1-x"),
                            ("workflow_dispatch", "refs/heads/feature"), ("schedule", "refs/heads/main"),
                            ("push", "refs/tags/v1.0.0"), ("push", "refs/heads/feature")):
@@ -2532,7 +2534,7 @@ class VerifyExtractionTests(unittest.TestCase):
 
     def test_verify_framework_runs_the_origin_guard(self) -> None:
         # Through the call site CI runs: removing the hook in framework_ports_state fails this test.
-        row = self.ports_row(self.TRANSFERRED, "removed")
+        row = self.ports_row(self.TRANSFERRED)
         for event in ("pull_request", "merge_group"):
             with self.subTest(event=event):
                 self.assertEqual(len(self.origin_guard([row], [], event=event, through_verify=True)), 1)

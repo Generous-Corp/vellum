@@ -1430,8 +1430,10 @@ def framework_ports_origin_errors(root: Path, ports, transferred: set[str]) -> l
                            capture_output=True, check=False)
     landed = ports.parse(shown.stdout.decode("utf-8", errors="replace"))[0] if shown.returncode == 0 else []
     pulp_paths = set(transferred) | {row["framework_path"] for row in landed if row.get("origin") == "pulp"}
-    # Only a row this change adds or edits can move a file; a landed row stands as it is.
+    # Only a row this change adds or edits can move a file; a removal row
+    # changes the file set while leaving the removed file's origin intact.
     moved = sorted({row["framework_path"] for row in rows if isinstance(row, dict) and row not in landed
+                    and row.get("change") != "removed"
                     and row.get("origin") != "pulp" and isinstance(row.get("framework_path"), str)
                     and row["framework_path"] in pulp_paths})
     if not moved:
