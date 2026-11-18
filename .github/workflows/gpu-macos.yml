@@ -1197,14 +1197,19 @@ jobs:
     # When gpu-macos-arm64 reported a reused proof or a change the proof does
     # not cover, every step below but a notice is skipped, so the job runs on
     # a hosted runner rather than waiting for a scarce Mac to print it. It
-    # still runs and reports exactly as before. Otherwise merge-group runs
-    # select their own runner class when
+    # still runs and reports exactly as before. Otherwise, while the local
+    # selector is set, the journey takes its own fleet runner class when
+    # VELLUM_LOCAL_MACOS_STERILE_RUNS_ON_JSON is set, for every event: a VM
+    # booted for it can then only take a journey, never another run's
+    # 30-minute proof, and TartCI's Vellum lanes serve that class first. The
+    # journey runs about 1.4 min; the proofs keep their own selection below,
+    # so a push re-proof still never queues ahead of a merge-queue entry.
+    # Without it, merge-group runs select their own runner class when
     # VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON is set, so a merge-queue
-    # proof is not handed to whichever PR-head or push job GitHub picks. Push
-    # (main, release tags) stays on the generic class: a push re-proof must
-    # never queue ahead of a merge-queue entry. Unset, every event selects
-    # exactly what it did before.
-    runs-on: ${{ fromJSON(((needs.gpu-macos-arm64.outputs.reused_run != '' || needs.gpu-macos-arm64.outputs.unaffected == 'true' || needs.gpu-macos-arm64.outputs.cheap == 'true') && '["ubuntu-24.04"]') || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
+    # proof is not handed to whichever PR-head or push job GitHub picks, and
+    # push (main, release tags) stays on the generic class. Unset, every event
+    # selects exactly what it did before.
+    runs-on: ${{ fromJSON(((needs.gpu-macos-arm64.outputs.reused_run != '' || needs.gpu-macos-arm64.outputs.unaffected == 'true' || needs.gpu-macos-arm64.outputs.cheap == 'true') && '["ubuntu-24.04"]') || (vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON != '' && vars.VELLUM_LOCAL_MACOS_STERILE_RUNS_ON_JSON) || (github.event_name == 'merge_group' && vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) || vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '["macos-15"]') }}
     env:
       VELLUM_RELEASE_ARCHIVE: ${{ needs.gpu-macos-arm64.outputs.release_archive }}
     steps:
