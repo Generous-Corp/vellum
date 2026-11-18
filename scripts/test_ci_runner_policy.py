@@ -111,19 +111,31 @@ BROWSER_JOBS = {
     "sdk-release.yml": ("validate-sdk-artifacts",),
 }
 
-# Both gpu-macos.yml jobs select their runner with exactly this expression:
-# merge-group runs take the merge-group class variable when it is set, and
-# everything else (push included, so a main re-proof never queues ahead of a
-# merge-queue entry) is the reviewed local variable with a hosted fallback.
+# The fleet selector both gpu-macos.yml proof jobs fall back to: merge-group
+# runs take the merge-group class variable when it is set, and everything else
+# (push included, so a main re-proof never queues ahead of a merge-queue entry)
+# is the reviewed local variable with a hosted fallback.
 GPU_RUNS_ON = (
     "runs-on: ${{ fromJSON((github.event_name == 'merge_group' && "
     "vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) "
     "|| vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '[\"macos-15\"]') }}"
 )
+FLEET_EXPRESSION = GPU_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")]
+# gpu-macos-arm64 takes the reviewed hosted fallback when proof-route, a hosted
+# pre-job, says the run will only report a reused or uncovered proof, and
+# otherwise exactly the fleet selector.
+GPU_JOB_RUNS_ON = (
+    "runs-on: ${{ fromJSON((needs.proof-route.outputs.report_only == 'true' && "
+    "'[\"macos-15\"]') || " + FLEET_EXPRESSION + ") }}"
+)
+# The one variable that restores the fleet placement of both proof jobs.
+HOSTED_SHORT_JOBS_OFF = "vars.VELLUM_HOSTED_SHORT_JOBS != 'off'"
 
 # sterile-consumer selects a hosted runner when gpu-macos-arm64 reported a
 # reused proof, a change the proof does not cover or a cheap pull-request lane
-# (the job then only prints a notice), and otherwise exactly the GPU selector.
+# (the job then only prints a notice). Otherwise the journey runs on a hosted
+# macos-15, unless VELLUM_HOSTED_SHORT_JOBS is `off`, which restores exactly the
+# fleet selector.
 STERILE_HOSTED_WHEN = (
     "(needs.gpu-macos-arm64.outputs.reused_run != '' || "
     "needs.gpu-macos-arm64.outputs.unaffected == 'true' || "
@@ -131,11 +143,32 @@ STERILE_HOSTED_WHEN = (
 )
 STERILE_RUNS_ON = (
     "runs-on: ${{ fromJSON((" + STERILE_HOSTED_WHEN + ") || "
-    + GPU_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")] + ") }}"
+    "(" + HOSTED_SHORT_JOBS_OFF + " && '[\"macos-15\"]') || "
+    + FLEET_EXPRESSION + ") }}"
 )
 # Hosted helper jobs in gpu-macos.yml, by name, with their exact runner. They
 # never run a proof, so they are not held to the GPU selector.
-GPU_HOSTED_JOBS = {"cancel-destroyed-groups": "runs-on: ubuntu-24.04"}
+GPU_HOSTED_JOBS = {
+    "cancel-destroyed-groups": "runs-on: ubuntu-24.04",
+    "proof-route": "runs-on: ubuntu-24.04",
+}
+# proof-route runs only where it can route, and never once the rollback
+# variable is `off`, so the proof job then starts exactly as it did before.
+PROOF_ROUTE_IF = (
+    "    if: " + HOSTED_SHORT_JOBS_OFF + " && (github.event_name == 'pull_request' || "
+    "github.event_name == 'merge_group' || github.ref == 'refs/heads/main')"
+)
+PROOF_ROUTE_OUTPUT = (
+    "      report_only: ${{ steps.classify.outputs.unaffected == 'true' || "
+    "steps.reuse.outputs.run_id != '' }}"
+)
+# The steps proof-route copies from gpu-macos-arm64, byte for byte, so its
+# placement answer is the answer the proof job itself reaches.
+PROOF_ROUTE_STEPS = (
+    "Check out full preserved Vellum history without credentials",
+    "Classify the change against the base's rules",
+    "Reuse an identical-tree proof",
+)
 
 
 def evaluate_actions_expression(expression: str, context: dict[str, str]) -> str:
@@ -209,6 +242,13 @@ GPU_GUARD = (
     "    if: github.event_name != 'pull_request' || "
     "github.event.pull_request.head.repo.full_name == github.repository || "
     "vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''"
+)
+# gpu-macos-arm64 needs proof-route. A job whose need failed or was skipped is
+# itself skipped, and a skipped required check reads as passing, so the proof
+# job's guard is the same guard behind !cancelled(): it runs whatever
+# proof-route concluded.
+GPU_JOB_GUARD = (
+    "    if: ${{ !cancelled() && (" + GPU_GUARD[len("    if: "):] + ") }}"
 )
 
 PULP_REPOSITORY = "Generous-Corp/pulp"
@@ -868,12 +908,12 @@ def assert_privileged_release_coordinate_isolation(text: str) -> None:
 
 def assert_gpu_local_runner_policy(text: str) -> None:
     jobs = workflow_jobs(text)
-    for job_name in ("gpu-macos-arm64", "sterile-consumer"):
+    for job_name, guard in (("gpu-macos-arm64", GPU_JOB_GUARD), ("sterile-consumer", GPU_GUARD)):
         body = jobs.get(job_name)
         if body is None:
             raise AssertionError(f"gpu-macos.yml: {job_name} is missing")
         guards = [line for line in body.splitlines() if line.startswith("    if:")]
-        if guards != [GPU_GUARD]:
+        if guards != [guard]:
             raise AssertionError(
                 f"gpu-macos.yml: {job_name} must have exactly the reviewed guard"
             )
@@ -1229,7 +1269,7 @@ class RunnerPolicyTests(unittest.TestCase):
 
     def test_gpu_jobs_select_the_merge_group_class_only_when_it_is_set(self) -> None:
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
-        for job, selector in (("gpu-macos-arm64", GPU_RUNS_ON), ("sterile-consumer", STERILE_RUNS_ON)):
+        for job, selector in (("gpu-macos-arm64", GPU_JOB_RUNS_ON), ("sterile-consumer", STERILE_RUNS_ON)):
             lines = [line.strip() for line in workflow_jobs(gpu)[job].splitlines()
                      if line.strip().startswith("runs-on:")]
             self.assertEqual(lines, [selector], job)
@@ -1257,13 +1297,14 @@ class RunnerPolicyTests(unittest.TestCase):
             local)
 
     def test_sterile_consumer_reports_a_reused_or_uncovered_proof_on_a_hosted_runner(self) -> None:
-        gpu_expression = GPU_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")]
+        gpu_expression = FLEET_EXPRESSION
         sterile_expression = STERILE_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")]
         local = '["self-hosted","macOS","ARM64","vellum-build-macos"]'
         merge = '["self-hosted","macOS","ARM64","vellum-build-macos-merge-group"]'
         reused = "needs.gpu-macos-arm64.outputs.reused_run"
         unaffected = "needs.gpu-macos-arm64.outputs.unaffected"
         cheap = "needs.gpu-macos-arm64.outputs.cheap"
+        rollback = "vars.VELLUM_HOSTED_SHORT_JOBS"
         for event in ("pull_request", "merge_group", "push", "workflow_dispatch"):
             for variables in ({}, {"vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local},
                               {"vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local,
@@ -1271,28 +1312,109 @@ class RunnerPolicyTests(unittest.TestCase):
                 context = {"event_name": event, **variables}
                 with self.subTest(event=event, variables=sorted(variables), proof="built"):
                     for built in ({}, {unaffected: "false"}, {reused: ""}, {cheap: ""}):
+                        # The journey runs on a fresh hosted macos-15 ...
+                        for switch in ({}, {rollback: ""}, {rollback: "on"}):
+                            self.assertEqual(
+                                evaluate_actions_expression(
+                                    sterile_expression, {**context, **built, **switch}),
+                                '["macos-15"]')
+                        # ... and the rollback restores exactly the fleet selector.
                         self.assertEqual(
-                            evaluate_actions_expression(sterile_expression, {**context, **built}),
+                            evaluate_actions_expression(
+                                sterile_expression, {**context, **built, rollback: "off"}),
                             evaluate_actions_expression(gpu_expression, context))
                 for reported in ({reused: "43671219549"}, {unaffected: "true"}, {cheap: "true"},
                                  {reused: "43671219549", unaffected: "true"}):
                     with self.subTest(event=event, variables=sorted(variables), proof=sorted(reported)):
-                        self.assertEqual(
-                            evaluate_actions_expression(sterile_expression, {**context, **reported}),
-                            '["ubuntu-24.04"]')
+                        for switch in ({}, {rollback: "off"}):
+                            self.assertEqual(
+                                evaluate_actions_expression(
+                                    sterile_expression, {**context, **reported, **switch}),
+                                '["ubuntu-24.04"]')
         # Control: the evaluator reads needs outputs at all.
         self.assertEqual(evaluate_actions_expression(reused, {"event_name": "push", reused: "7"}), "7")
+
+    def test_proof_route_only_moves_a_reporting_proof_job_to_the_hosted_fallback(self) -> None:
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        lines = [line.strip() for line in workflow_jobs(gpu)["gpu-macos-arm64"].splitlines()
+                 if line.strip().startswith("runs-on:")]
+        self.assertEqual(lines, [GPU_JOB_RUNS_ON])
+        expression = GPU_JOB_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")]
+        local = '["self-hosted","macOS","ARM64","vellum-build-macos"]'
+        merge = '["self-hosted","macOS","ARM64","vellum-build-macos-merge-group"]'
+        route = "needs.proof-route.outputs.report_only"
+        for event in ("pull_request", "merge_group", "push", "workflow_dispatch"):
+            for variables in ({}, {"vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local},
+                              {"vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local,
+                               "vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON": merge}):
+                context = {"event_name": event, **variables}
+                with self.subTest(event=event, variables=sorted(variables)):
+                    # Skipped (rollback, tag, dispatch), failed or building:
+                    # exactly the fleet selector.
+                    for answer in ({}, {route: ""}, {route: "false"}):
+                        self.assertEqual(
+                            evaluate_actions_expression(expression, {**context, **answer}),
+                            evaluate_actions_expression(FLEET_EXPRESSION, context))
+                    self.assertEqual(
+                        evaluate_actions_expression(expression, {**context, route: "true"}),
+                        '["macos-15"]')
+        # Control: with the local selector set, the fleet answer is not the fallback.
+        self.assertEqual(
+            evaluate_actions_expression(expression, {"event_name": "push",
+                                                     "vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local}),
+            local)
+
+    def test_proof_route_reaches_the_answer_the_proof_job_reaches(self) -> None:
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        jobs = workflow_jobs(gpu)
+        route = jobs["proof-route"]
+        self.assertEqual([line for line in route.splitlines() if line.startswith("    if:")],
+                         [PROOF_ROUTE_IF])
+        self.assertIn("\n    continue-on-error: true\n", route)
+        self.assertIn("\n    outputs:\n" + PROOF_ROUTE_OUTPUT + "\n    steps:\n", route)
+        # Read-only: no write permission, no credentials left in the checkout.
+        self.assertNotIn("permissions:", route)
+        self.assertNotIn("write", route)
+
+        def steps(body: str) -> dict[str, str]:
+            blocks = re.split(r"(?m)^(?=      - name: )", body.split("\n    steps:\n", 1)[1])
+            found = {}
+            for block in blocks:
+                match = re.match(r"      - name: (.*)\n", block)
+                if match:
+                    # A step's text ends at its last line; drop the blank
+                    # lines and comments that introduce the next step.
+                    lines = block.splitlines()
+                    while lines and (not lines[-1].strip() or lines[-1].lstrip().startswith("#")):
+                        lines.pop()
+                    found[match.group(1)] = "\n".join(lines) + "\n"
+            return found
+
+        route_steps, proof_steps = steps(route), steps(jobs["gpu-macos-arm64"])
+        self.assertEqual(list(route_steps), list(PROOF_ROUTE_STEPS))
+        for name in PROOF_ROUTE_STEPS:
+            with self.subTest(step=name):
+                self.assertEqual(route_steps[name], proof_steps[name])
+        # Control: the comparison sees a one-character drift.
+        drifted = gpu.replace("verdict=\"\"\n", "verdict=\"x\"\n", 1)
+        self.assertNotEqual(steps(workflow_jobs(drifted)["proof-route"])[PROOF_ROUTE_STEPS[1]],
+                            proof_steps[PROOF_ROUTE_STEPS[1]])
 
     def test_destroyed_group_cancellation_cannot_skip_or_satisfy_a_proof(self) -> None:
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
         jobs = workflow_jobs(gpu)
-        self.assertEqual(sorted(jobs), ["cancel-destroyed-groups", "gpu-macos-arm64", "sterile-consumer"])
+        self.assertEqual(sorted(jobs), ["cancel-destroyed-groups", "gpu-macos-arm64",
+                                        "proof-route", "sterile-consumer"])
         # A job skipped because a job it needs failed reports a passing required
-        # check, so neither proof job may depend on the helper.
+        # check, so neither proof job may depend on the helper. The proof job
+        # needs only proof-route, and runs whatever it concluded.
         needs = {job: [line.strip() for line in body.splitlines() if line.startswith("    needs:")]
                  for job, body in jobs.items()}
-        self.assertEqual(needs["gpu-macos-arm64"], [])
+        self.assertEqual(needs["gpu-macos-arm64"], ["needs: proof-route"])
         self.assertEqual(needs["sterile-consumer"], ["needs: gpu-macos-arm64"])
+        self.assertEqual(needs["proof-route"], [])
+        self.assertEqual([line for line in jobs["gpu-macos-arm64"].splitlines()
+                          if line.startswith("    if:")], [GPU_JOB_GUARD])
         for job in ("gpu-macos-arm64", "sterile-consumer"):
             self.assertNotIn("cancel-destroyed-groups", jobs[job], job)
         helper = jobs["cancel-destroyed-groups"]
@@ -1311,11 +1433,17 @@ class RunnerPolicyTests(unittest.TestCase):
         assert_gpu_local_runner_policy(gpu)
         mutations = {
             "truthy": gpu.replace(GPU_GUARD, GPU_GUARD + " || true"),
+            "truthy proof job": gpu.replace(GPU_JOB_GUARD, GPU_JOB_GUARD[:-len(") }}")] + " || true) }}"),
             "missing event clause": gpu.replace(
                 "github.event_name != 'pull_request' || ", "", 2
             ),
-            "commented guard": gpu.replace("    if: github.event_name", "    # if: github.event_name", 2),
+            "commented guard": gpu.replace(GPU_GUARD, "    # " + GPU_GUARD.lstrip()),
+            "commented proof job guard": gpu.replace(GPU_JOB_GUARD, "    # " + GPU_JOB_GUARD.lstrip()),
+            # Without !cancelled() a failed proof-route skips the required context.
+            "skippable proof job": gpu.replace(GPU_JOB_GUARD, GPU_GUARD),
         }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, gpu, name)
         for name, mutated in mutations.items():
             with self.subTest(mutation=name):
                 with self.assertRaises(AssertionError):

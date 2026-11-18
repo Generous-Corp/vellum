@@ -91,6 +91,36 @@ never queue ahead of a merge-queue entry. The only reviewed value is
 label TartCI's Vellum lanes register for their merge-group tier. Unset it to
 roll back; every event then selects the generic class again.
 
+### Short jobs run on hosted runners
+
+Two kinds of proof-job run take a few minutes of work but waited 20 to 40
+minutes for a fleet Mac lease (the Vellum lanes are capped at one VM each):
+
+- `gpu-macos-arm64` runs that only report: a change the base's classifier
+  says the proof does not cover, a merge-queue run reusing its pull request's
+  identical-tree proof, and the push to `main` reusing its merge-queue proof.
+  The hosted `proof-route` job runs the proof job's own checkout, classify and
+  reuse steps (copied byte for byte, held equal by
+  `scripts/test_ci_runner_policy.py`) and outputs `report_only`. When it is
+  `true`, `gpu-macos-arm64` runs on the reviewed hosted fallback, `macos-15`.
+  The proof job still makes its own decision; if it ever disagrees, it builds
+  the full proof on `macos-15`, as it does whenever the local selector is
+  unset. A failed or skipped `proof-route` leaves the proof job on its usual
+  runner: the job's guard is wrapped in `!cancelled()` so it can never be
+  skipped, and a skipped required check would read as passing.
+- The real `sterile-consumer` journey. It needs a clean Apple Silicon machine
+  with no framework checkout, not a fleet Mac: `sdk-release.yml` already runs
+  the same validator with `--require-gpu-claims` on hosted `macos-15`. It now
+  runs there instead of queueing for a second lease after the proof released
+  the first.
+
+Required context names, the receipts and what each run proves are unchanged.
+
+To roll back, set the repository variable `VELLUM_HOSTED_SHORT_JOBS` to `off`.
+`proof-route` is then skipped, so `gpu-macos-arm64` starts at once on the
+fleet selector, and `sterile-consumer`'s journey returns to the fleet selector.
+Delete the variable to restore the hosted placement.
+
 `VELLUM_MACOS_RUNS_ON_JSON` remains the hosted selector used by
 `readme-quick-start.yml` and the hosted portion of `sdk-release.yml`; it is not
 the selector for these two required GPU jobs.
@@ -121,8 +151,8 @@ A pull request runs the full proof now, as it did before, when any of these hold
 
 The cheap lane runs on the same runner class as the old pull-request proof
 (`VELLUM_LOCAL_MACOS_RUNS_ON_JSON`). No separate build-only class is
-registered with TartCI yet, and the lane's runner is chosen before its depth
-is known, so moving it needs a depth job ahead of it.
+registered with TartCI yet. `proof-route` routes only runs that report, so the
+cheap lane still builds on the fleet.
 
 ### Roll back
 

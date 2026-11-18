@@ -321,6 +321,13 @@ def job_steps(text: str, job: str) -> list[tuple[str, str]]:
     return steps
 
 
+def in_proof_job(text: str, old: str, new: str) -> str:
+    """Replace the first `old` inside gpu-macos-arm64, not in proof-route's copy."""
+    start = text.index("\n  gpu-macos-arm64:\n")
+    position = text.index(old, start)
+    return text[:position] + new + text[position + len(old):]
+
+
 REUSE_IF = (
     "(github.event_name == 'merge_group' && steps.classify.outputs.unaffected != 'true') "
     "|| (github.event_name == 'push' && github.ref == 'refs/heads/main')"
@@ -449,13 +456,13 @@ class WorkflowWiringTests(unittest.TestCase):
                 f"      - name: Build the release GPU slice\n        if: {GPU_GATE}\n",
                 "      - name: Build the release GPU slice\n", 1,
             ),
-            "reuse on pull requests": text.replace(
-                f"        if: {REUSE_IF}\n",
-                "        if: github.event_name != 'push'\n", 1,
+            "reuse on pull requests": in_proof_job(
+                text, f"        if: {REUSE_IF}\n",
+                "        if: github.event_name != 'push'\n",
             ),
-            "reuse on tags and dispatches": text.replace(
-                f"        if: {REUSE_IF}\n",
-                "        if: github.event_name != 'pull_request'\n", 1,
+            "reuse on tags and dispatches": in_proof_job(
+                text, f"        if: {REUSE_IF}\n",
+                "        if: github.event_name != 'pull_request'\n",
             ),
             "ungated sterile journey": text.replace(
                 "      - name: Run the complete installed journey without a framework checkout\n"

@@ -465,7 +465,7 @@ class CheapLaneWorkflowTests(unittest.TestCase):
 
     def test_the_required_contexts_keep_their_names(self) -> None:
         self.assertEqual(sorted(self.workflow["jobs"]),
-                         ["cancel-destroyed-groups", "gpu-macos-arm64", "sterile-consumer"])
+                         ["cancel-destroyed-groups", "gpu-macos-arm64", "proof-route", "sterile-consumer"])
         for job in ("gpu-macos-arm64", "sterile-consumer"):
             self.assertEqual(self.workflow["jobs"][job]["name"], job)
 
