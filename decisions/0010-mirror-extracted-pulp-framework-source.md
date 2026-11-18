@@ -295,6 +295,29 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
   whose pins do not hold, a closure source `framework/` lacks, and a ledger
   source whose scope leaves out the platform whose closure compiles it.
   macOS keeps the receipt's closures and needs no record.
+- **The port respell.** Some Pulp names survive the transfer's rename. A
+  `pulp_*` function or object defined with C linkage is linker-visible, so
+  Pulp's copy and Vellum's would clash in one process.
+  `provenance/framework/respell.json` lists each such name and its Vellum
+  spelling (only the prefix changes). Its one kind, `extern-c`, is recognised
+  from bytes and never chosen by hand: a name a file defines with C linkage,
+  respelled in every `framework/` file so callers and the definition agree.
+  `PULP_*` macro names clash with nothing and stay as counted name debt.
+
+  The respell changes identifier tokens in code and comments, never a string
+  or character literal or an `#include <...>` header name. The table must be
+  exactly the definitions the origin bytes imply: each transferred file as
+  its transfer record holds it, each ported file as Pulp has it after the
+  rename. A hand-written or missing entry fails, and without a Pulp checkout
+  the proof is reported deferred, never proved. No `framework/` file may keep
+  a respelled name's old spelling or paste a Pulp name with `##`, and a
+  transferred or ported file may spell a Pulp name the Vellum way only where
+  the table's respell of its origin does. An appended Pulp-origin row's blob
+  is Pulp's bytes put through the rename and then the respell. A later entry
+  respells a transferred or landed ported file by an edit that must be
+  exactly that respell, and the landed row's blob stays as it landed. The
+  table cannot be deleted while a file still carries one of its Vellum
+  spellings.
 - **The file set.** `framework/` holds exactly the transfer record's paths,
   minus the ledger's removals, plus its additions. A file with neither a
   transfer record nor a ledger row fails, and so does a listed file that is

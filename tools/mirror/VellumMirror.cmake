@@ -86,10 +86,15 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${PROJECT_SOURCE_DIR}/tools/mirror/mirror_package.py"
     "${PROJECT_SOURCE_DIR}/provenance/mirror/receipts/index.json"
     "${PROJECT_SOURCE_DIR}/tools/mirror/framework_ports.py"
-    "${PROJECT_SOURCE_DIR}/tools/mirror/platform_closures.py"
-    "${PROJECT_SOURCE_DIR}/tools/mirror/source_compile_options.py"
     "${PROJECT_SOURCE_DIR}/tools/mirror/gpu_surface_guard.py"
-    "${PROJECT_SOURCE_DIR}/tools/mirror/VellumMirrorPlatform.cmake")
+    "${PROJECT_SOURCE_DIR}/tools/mirror/platform_closures.py"
+    "${PROJECT_SOURCE_DIR}/tools/mirror/port_respell.py"
+    "${PROJECT_SOURCE_DIR}/tools/mirror/source_compile_options.py"
+    "${PROJECT_SOURCE_DIR}/tools/mirror/verify_mirror_rename_identity.py"
+    "${PROJECT_SOURCE_DIR}/tools/mirror/VellumMirrorPlatform.cmake"
+    "${PROJECT_SOURCE_DIR}/provenance/framework/transfer.json"
+    # Its mtime moves when a manifest below is added, which an absent file cannot signal.
+    "${PROJECT_SOURCE_DIR}/provenance/framework")
 # Planning reads the platform index, each platform's record and its closure
 # manifests; editing any of them must retrigger mirror_package.py.
 file(GLOB_RECURSE _vellum_mirror_platform_records
@@ -98,8 +103,11 @@ foreach(_vellum_mirror_platform_record IN LISTS _vellum_mirror_platform_records)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${_vellum_mirror_platform_record}")
 endforeach()
-# The ports ledger and the unit manifest decide what is compiled.
-foreach(_vellum_mirror_manifest IN ITEMS provenance/framework/ports.json provenance/framework/units.json)
+# The ports ledger and the unit manifest decide what is compiled. The respell
+# rule and its table change the bytes of framework/ sources, so they
+# retrigger configure too.
+foreach(_vellum_mirror_manifest IN ITEMS provenance/framework/ports.json provenance/framework/units.json
+        provenance/framework/respell.json)
     if(EXISTS "${PROJECT_SOURCE_DIR}/${_vellum_mirror_manifest}")
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
             "${PROJECT_SOURCE_DIR}/${_vellum_mirror_manifest}")
