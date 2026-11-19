@@ -59,7 +59,6 @@
       "vellum.layer-text-extent",
       "vellum.legacy-config-caller",
       "vellum.limits-drift",
-      "vellum.limits-production-drift",
       "vellum.mirror-export-unit",
       "vellum.mirror-package-unit",
       "vellum.mirror-value-consumer",
