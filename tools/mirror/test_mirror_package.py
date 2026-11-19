@@ -919,6 +919,15 @@ class SourceCompileOptionsTest(unittest.TestCase):
         with self.assertRaises(mp.source_compile_options.SourceOptionsError):
             self.evaluate(text, dict(self.RELEASE, CMAKE_SYSTEM_NAME="Haiku"))
 
+    def test_non_windows_target_is_not_msvc(self) -> None:
+        # `if(NOT MSVC)` guards a real Pulp source option; a Darwin/Linux closure
+        # must decide it rather than fail closed on an unrecorded MSVC.
+        text = 'if(NOT MSVC)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")\nendif()\n'
+        for system in ("Darwin", "Linux"):
+            self.assertEqual(self.evaluate(text, dict(self.RELEASE, CMAKE_SYSTEM_NAME=system)),
+                             {"core/x/src/a.cpp": ["-fno-rtti"]}, system)
+        self.assertEqual(self.evaluate(text, dict(self.RELEASE, MSVC="1")), {})
+
     def test_recorded_options_cannot_override_derived_platform_variables(self) -> None:
         text = ('if(UNIX)\n'
                 '  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-fPIC")\n'

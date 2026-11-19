@@ -334,6 +334,10 @@ def configure_environment(options: dict[str, str]) -> dict[str, object]:
     env.update({name: value for name, value in SYSTEM_VARIABLES[system].items()
                 if name != "MSVC"})
     env["CMAKE_SYSTEM_NAME"] = system
+    # A probe-recorded MSVC wins; otherwise a non-Windows target is not MSVC.
+    # Windows stays undecidable without a recorded compiler.
+    if "MSVC" in SYSTEM_VARIABLES[system]:
+        env.setdefault("MSVC", SYSTEM_VARIABLES[system]["MSVC"])
     if system == "Darwin":
         env.setdefault("CMAKE_CXX_COMPILER_ID", "AppleClang")
         env.setdefault("CMAKE_C_COMPILER_ID", "AppleClang")
