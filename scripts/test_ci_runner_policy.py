@@ -1146,6 +1146,9 @@ class RunnerPolicyTests(unittest.TestCase):
             "foreign repository": ("builder", "repository", "https://github.com/evil/skia-builder"),
             "milestone traversal": (None, "milestone", "../../evil"),
             "milestone suffix": (None, "milestone", "chrome/m158/../x"),
+            "release tag of another milestone": (None, "release_tag", "chrome/m157-attested.1"),
+            "bare milestone as release tag": (None, "release_tag", "chrome/m158"),
+            "release tag traversal": (None, "release_tag", "chrome/m158-x/../../evil"),
             "asset option": ("asset", "asset", "-o/tmp/x"),
             "asset path": ("asset", "asset", "../evil.zip"),
             "uppercase digest": ("asset", "sha256", source["platforms"]["macos-arm64"]["sha256"].upper()),
@@ -1163,6 +1166,14 @@ class RunnerPolicyTests(unittest.TestCase):
                                        capture_output=True, text=True, check=False)
                 self.assertNotEqual(probe.returncode, 0, f"{label} reached curl: {probe.stdout}")
                 self.assertEqual(probe.stdout, "")
+
+    def test_renderer_record_readers_accept_only_the_locked_milestones_release_tag(self) -> None:
+        for name in ("provenance.yml", "sdk-release.yml"):
+            text = (WORKFLOWS / name).read_text(encoding="utf-8")
+            with self.subTest(workflow=name):
+                self.assertIn('re.fullmatch(r"chrome/m[0-9]+-[A-Za-z0-9][A-Za-z0-9.-]*", str(tag))', text)
+                self.assertNotIn('re.fullmatch(r"chrome/m[0-9]+", str(tag))', text)
+                self.assertIn('str(tag).startswith(milestone + "-")', text)
 
     def test_locked_gpu_archive_step_runs_under_the_runner_shell(self) -> None:
         # Run the step's own `run:` text the way Actions does (bash with

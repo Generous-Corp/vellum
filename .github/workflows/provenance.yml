@@ -305,8 +305,11 @@ jobs:
               record = json.load(open("provenance/renderer-attestation.json"))
               artifact = record["artifact"]
               tag = artifact.get("release_tag")
-              if artifact.get("repository") != builder or not re.fullmatch(r"chrome/m[0-9]+", str(tag)):
-                  sys.exit("the renderer record does not name a danielraffel/skia-builder chrome/mNNN release")
+              if artifact.get("repository") != builder or not re.fullmatch(r"chrome/m[0-9]+-[A-Za-z0-9][A-Za-z0-9.-]*", str(tag)):
+                  sys.exit("the renderer record does not name a danielraffel/skia-builder chrome/mNNN-* release")
+              milestone = json.load(open("gpu-runtime/renderer-lock.json", encoding="utf-8"))["milestone"]
+              if not str(tag).startswith(milestone + "-"):
+                  sys.exit("the renderer record release tag is not a tag of the locked milestone")
               for flag, name in (("archive", artifact.get("name")),
                                  ("legal-manifest", record["legal_inventory"]["manifest"]["name"]),
                                  ("toolchain-receipt", record["build_identity"]["toolchain_receipt"]["name"]),

@@ -155,7 +155,10 @@ def check_third_party_lock(root: Path, lock: dict, problems: list[str]) -> None:
             problems.append(f"{relative}: {name} source commit differs from the lock")
     if identities.get("skia", {}).get("ref") != f"refs/heads/{lock['milestone']}":
         problems.append(f"{relative}: skia source ref is not refs/heads/{lock['milestone']}")
-    attested = json.loads((root / RECORDS[1]).read_text(encoding="utf-8"))
+    try:
+        attested = json.loads((root / RECORDS[1]).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        attested = {}  # check_attestation reports the unreadable record
     run_id = str(attested.get("build_provenance", {}).get("run", {}).get("run_id"))
     evidence = identities.get("builder", {}).get("evidence", "")
     if not re.search(rf"\brun {re.escape(run_id)}\b", evidence):
