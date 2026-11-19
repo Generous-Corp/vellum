@@ -2680,6 +2680,37 @@ class IncludeDirectoryRefusalTest(unittest.TestCase):
         self.assertIn("is outside vellum-gpu-runtime's interface tree",
                       self.refused(f"@external/vellum-gpu-runtime/{self.PIN}/gpu-runtime/src"))
 
+    ESCAPES = ("..\\x", "a\\..\\..\\x", "C:/x", "C:\\x", "\\\\server\\x", "//x", "/x", "a//b",
+               "./x", "a/..", "a/b/..", "~/x", "a\0b")
+
+    def test_every_escaping_form_is_refused_at_the_dependency_site(self) -> None:
+        for form in self.ESCAPES:
+            for path in (f"@external/highway/{self.PIN}/{form}",
+                         f"@external/vellum-gpu-runtime/{self.PIN}/{form}"):
+                with self.subTest(path=path):
+                    self.assertIn("is not confined to its dependency", self.refused(path))
+
+    def test_every_escaping_form_is_refused_at_the_mirror_site(self) -> None:
+        for form in self.ESCAPES:
+            with self.subTest(form=form):
+                self.assertIn("is not a mirror-relative path", self.refused(form))
+
+    def test_a_symlink_out_of_the_mirror_is_refused(self) -> None:
+        outside = self.repo / "outside"
+        outside.mkdir()
+        (self.repo / "mirror/link").symlink_to(outside, target_is_directory=True)
+        self.assertIn("escapes the landed mirror", self.refused("link"))
+
+    def test_a_symlink_out_of_a_dependency_checkout_is_refused(self) -> None:
+        checkout = self.repo / "dep"
+        (checkout / "inc").mkdir(parents=True)
+        (checkout / "link").symlink_to(self.repo / "mirror", target_is_directory=True)
+        with self.assertRaises(mp.PlanError) as caught:
+            self.map(f"@external/highway/{self.PIN}/link", roots={"highway": checkout})
+        self.assertIn("is not confined to its dependency", str(caught.exception))
+        self.assertEqual(self.map(f"@external/highway/{self.PIN}/inc", roots={"highway": checkout}),
+                         str(checkout / "inc"))
+
     def test_an_external_include_with_no_prepared_source_is_refused(self) -> None:
         self.assertIn("names a dependency with no prepared source",
                       self.refused(f"@external/lonely/{self.PIN}/include"))

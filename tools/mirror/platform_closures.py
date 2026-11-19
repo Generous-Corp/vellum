@@ -179,11 +179,32 @@ def _strings(value: Any) -> bool:
 
 
 def safe_relative_path(value: Any) -> bool:
-    """Whether a closure path stays inside the landed mirror tree."""
-    if not isinstance(value, str) or not value or value.startswith(('/', '~')) or '\\' in value:
+    """Whether a path is relative and cannot leave its root on any platform.
+
+    Checked with POSIX and Windows semantics alike, so a path that is harmless
+    on one host cannot escape on another: no backslash or NUL, no leading '/'
+    or '~', no drive or UNC prefix, and no empty, '.' or '..' segment.
+    """
+    if not isinstance(value, str) or not value or '\\' in value or '\0' in value:
         return False
+    if value.startswith(('/', '~')):
+        return False
+    from pathlib import PurePosixPath, PureWindowsPath
+    for flavour in (PurePosixPath, PureWindowsPath):
+        pure = flavour(value)
+        if pure.is_absolute() or getattr(pure, 'drive', '') or getattr(pure, 'root', ''):
+            return False
     parts = value.split('/')
-    return all(part not in {'', '.', '..'} for part in parts) and ':' not in parts[0]
+    return all(part not in {'', '.', '..'} and ':' not in part for part in parts)
+
+
+def contained_under(root: Path, candidate: Path) -> bool:
+    """Whether candidate, with symlinks resolved, sits inside root."""
+    try:
+        candidate.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def _source_strings(value: Any) -> bool:

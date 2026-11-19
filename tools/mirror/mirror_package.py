@@ -94,11 +94,8 @@ def mirrored(repo: Path, relative: str, *, confined: bool = False) -> Path:
         raise PlanError(f"closure source {relative!r} is not a safe relative path")
     root = repo / (FRAMEWORK_DIR if transferred(repo) else MIRROR_DIR)
     candidate = root / (renamed_path(relative) if transferred(repo) else relative)
-    if confined:
-        try:
-            candidate.resolve().relative_to(root.resolve())
-        except ValueError as error:
-            raise PlanError(f"closure source {relative!r} escapes the landed mirror") from error
+    if confined and not platform_closures.contained_under(root, candidate):
+        raise PlanError(f"closure source {relative!r} escapes the landed mirror")
     return candidate
 
 
@@ -1167,8 +1164,8 @@ def in_tree_include_dependency(path: str) -> tuple[str, str, str | None] | None:
 
 
 def confined_relative(path: str, relative: str) -> str:
-    """Refuse a dependency-relative directory that is absolute or has an empty, '.' or '..' segment."""
-    if relative and (relative.startswith("/") or any(part in ("", ".", "..") for part in relative.split("/"))):
+    """Refuse a dependency-relative directory that could leave its dependency on any platform."""
+    if relative and not platform_closures.safe_relative_path(relative):
         raise PlanError(f"include directory {path} is not confined to its dependency")
     return relative
 
@@ -1197,7 +1194,10 @@ def map_include(path: str, repo: Path, roots: dict[str, Path], generated: dict[s
         if relative != abi_tree and not relative.startswith(abi_tree + "/"):
             # The ABI tree is the only part of this repository bound to the pin.
             raise PlanError(f"include directory {path} is outside {name}'s interface tree {abi_tree}")
-        return str(roots[name] / relative)
+        joined = roots[name] / relative
+        if not platform_closures.contained_under(roots[name], joined):
+            raise PlanError(f"include directory {path} is not confined to its dependency")
+        return str(joined)
     if path.startswith("@build/"):
         raise PlanError(f"closure names an unmapped build-tree include directory: {path}")
     match = re.match(r"@external/(?P<name>[A-Za-z0-9_.-]+)/(?P<root>[^/]+)(?:/(?P<rel>.*))?\Z", path)
@@ -1208,10 +1208,13 @@ def map_include(path: str, repo: Path, roots: dict[str, Path], generated: dict[s
         entry = deps.get(match.group("name"))
         if entry is None or match.group("root") != entry["root"]:
             raise PlanError(f"include directory {path} is not at the root the closures pin")
-        return str(root / confined_relative(path, match.group("rel") or ""))
-    if path.startswith("@") or path.startswith("/") or ".." in Path(path).parts:
+        joined = root / confined_relative(path, match.group("rel") or "")
+        if not platform_closures.contained_under(root, joined):
+            raise PlanError(f"include directory {path} is not confined to its dependency")
+        return str(joined)
+    if path.startswith("@") or not platform_closures.safe_relative_path(path):
         raise PlanError(f"include directory is not a mirror-relative path: {path}")
-    candidate = mirrored(repo, path)
+    candidate = mirrored(repo, path, confined=True)
     if not candidate.is_dir():
         raise PlanError(f"include directory {path} is not in the landed mirror")
     return str(candidate)
