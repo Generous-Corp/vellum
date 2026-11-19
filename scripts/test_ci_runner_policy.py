@@ -1139,7 +1139,7 @@ class RunnerPolicyTests(unittest.TestCase):
         # pinned builder's chrome/mNNN asset, so none reaches curl as an option
         # or a different path; the shell regex is a second fence on the URL.
         self.assertIn("[[ \"$url\" =~ ^https://github\\.com/danielraffel/skia-builder/"
-                      "releases/download/chrome/m[0-9]+/", step)
+                      "releases/download/chrome/m[0-9]+-[A-Za-z0-9][A-Za-z0-9.-]*/", step)
         source = json.loads((ROOT / "gpu-runtime/renderer-lock.json").read_text(encoding="utf-8"))
         probes = {
             "repository option": ("builder", "repository", "-K/etc/passwd"),
