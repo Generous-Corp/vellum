@@ -371,7 +371,7 @@
       "bundled_components_completeness": {
         "claim": "exhaustive",
         "method": "the builder's content-addressed legal manifest, re-derived against every zip member and every static-archive member and symbol table of the locked archive",
-        "legal_manifest_sha256": "c46884c40b15e870a916b41299c5671d03e87fe0bcbb557203019b3f2d36bd6c"
+        "legal_manifest_sha256": "643f174033e44a2a317320f7012a77278e927c27ce70d6d8ca7d4e8f0059caaf"
       },
       "identity_limits": [
         "Release eligibility rests on skia-builder's own records: the build-provenance attestation, the legal manifest and the toolchain receipt. No Vellum-side signature is added.",
