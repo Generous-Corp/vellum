@@ -16,10 +16,10 @@ The record names the Pulp commit and the exporter blob that wrote the
 manifests, the configure (identity and options digest), the runner image the
 manifests were produced on, the renderer asset they link, each manifest's
 digest, and the Pulp workflow run that exported them with the digest of the
-artifact it uploaded. Its export metadata also carries a digest over that
-artifact digest and the complete manifest set, so the record cannot pair a
-manifest set with a different artifact. This module reads and checks a record;
-it runs no git. The mirror
+artifact it uploaded. The record carries a consistency digest over that
+artifact digest and the complete manifest set; the provenance lane separately
+downloads the artifact and checks its bytes. This module reads and checks a
+record; it runs no git. The mirror
 build (tools/mirror/mirror_package.py) plans a platform only from a record
 that passes, and the provenance lane checks every record.
 
@@ -29,8 +29,10 @@ macOS needs no record: the receipt's closures are its closures.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import re
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -76,12 +78,70 @@ def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def manifest_binding_sha256(artifact_sha256: str, units: list[dict[str, Any]]) -> str:
-    """Bind the exported artifact digest to the exact closure manifest set.
+def verify_export_artifact(key: str, record: dict[str, Any], archive: bytes) -> None:
+    """Prove a downloaded Pulp closure artifact is the one named by ``record``.
 
-    The platform artifact carries this digest in its export metadata. Including
-    the artifact digest in the signed input prevents a record from pairing a
-    manifest set with a different uploaded artifact after the export.
+    The record is Vellum-controlled, so its hashes are not evidence by
+    themselves. The workflow artifact is the authority: its bytes, export
+    metadata, and closure manifests must all agree with the record before the
+    provenance lane accepts the platform.
+    """
+    export = record["export"]
+    if hashlib.sha256(archive).hexdigest() != export["artifact_sha256"]:
+        raise RecordError(f"{ROOT}/{key}/record.json: downloaded Pulp artifact digest differs from the record")
+    try:
+        handle = zipfile.ZipFile(io.BytesIO(archive))
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise RecordError(f"{ROOT}/{key}/record.json: downloaded Pulp artifact is not a ZIP: {exc}") from exc
+    with handle:
+        members = handle.infolist()
+        names = [member.filename for member in members]
+        if len(names) != len(set(names)):
+            raise RecordError(f"{ROOT}/{key}/record.json: downloaded Pulp artifact has duplicate members")
+        expected = {"export.json", *(f"{unit['name']}.json" for unit in record["units"])}
+        if set(names) != expected:
+            raise RecordError(f"{ROOT}/{key}/record.json: downloaded Pulp artifact members {sorted(names)!r} "
+                              f"do not equal {sorted(expected)!r}")
+        if any(not name or name.startswith(("/", "\\")) or ".." in Path(name).parts
+               for name in names):
+            raise RecordError(f"{ROOT}/{key}/record.json: downloaded Pulp artifact contains an unsafe member")
+        try:
+            export_meta = json.loads(handle.read("export.json"))
+        except (UnicodeDecodeError, ValueError, KeyError) as exc:
+            raise RecordError(f"{ROOT}/{key}/record.json: downloaded export.json is unreadable: {exc}") from exc
+        expected_meta = {
+            "platform": key,
+            "pulp_sha": record["pulp_sha"],
+            "runner_image": record["runner_image"],
+            "renderer_asset_name": record["renderer_asset"]["name"],
+        }
+        if not isinstance(export_meta, dict) or any(export_meta.get(name) != value
+                                                    for name, value in expected_meta.items()):
+            raise RecordError(f"{ROOT}/{key}/record.json: downloaded export.json does not match the record")
+        units = []
+        downloaded_units = []
+        for unit in record["units"]:
+            name = f"{unit['name']}.json"
+            data = handle.read(name)
+            digest = hashlib.sha256(data).hexdigest()
+            if digest != unit["closure_sha256"]:
+                raise RecordError(f"{ROOT}/{key}/record.json: downloaded {name} differs from the record")
+            try:
+                json.loads(data)
+            except (UnicodeDecodeError, ValueError) as exc:
+                raise RecordError(f"{ROOT}/{key}/record.json: downloaded {name} is not JSON: {exc}") from exc
+            units.append(unit)
+            downloaded_units.append({"name": unit["name"], "closure_sha256": digest})
+        downloaded_binding = manifest_binding_sha256(export["artifact_sha256"], downloaded_units)
+        if export["manifest_sha256"] != downloaded_binding:
+            raise RecordError(f"{ROOT}/{key}/record.json: downloaded manifests do not match the export binding")
+
+
+def manifest_binding_sha256(artifact_sha256: str, units: list[dict[str, Any]]) -> str:
+    """Compute the record's consistency digest for an artifact and manifests.
+
+    This value is not trusted evidence by itself: the provenance lane verifies
+    the downloaded artifact bytes and re-derives each manifest digest.
     """
     listing = "".join(
         f"{unit['name']} {unit['closure_sha256']}\n"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import importlib.util
 import json
 import os
@@ -11,6 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -1205,6 +1207,59 @@ class VerifyExtractionTests(unittest.TestCase):
             (root / "provenance/framework/platforms/wasm32").mkdir()
             errors, _ = verdict(on_main, blob)
             self.assertTrue(any("wasm32/ is not listed" in e for e in errors), errors)
+
+    def test_platform_record_must_match_the_downloaded_pulp_artifact(self) -> None:
+        records = verify_extraction.load_platform_closures()
+        with tempfile.TemporaryDirectory() as temporary:
+            root, pulp = Path(temporary) / "vellum", Path(temporary) / "pulp"
+            root.mkdir(); pulp.mkdir()
+            run = lambda *args: subprocess.check_output(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                cwd=pulp, text=True).strip()
+            run("init", "-q", "-b", "main")
+            (pulp / "tools/scripts").mkdir(parents=True)
+            (pulp / "tools/scripts/vellum_closure.py").write_text("# exporter\n")
+            run("add", "-A"); run("commit", "-q", "-m", "exporter")
+            pulp_sha = run("rev-parse", "HEAD")
+            tool_blob = run("rev-parse", f"{pulp_sha}:tools/scripts/vellum_closure.py")
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            self.write_platform_record(root, pulp_sha, tool_blob)
+            record_path = root / records.ROOT / "linux-x64/record.json"
+            record = json.loads(record_path.read_text())
+            manifest = root / records.ROOT / "linux-x64/foundation.json"
+            export_meta = {"platform": "linux-x64", "pulp_sha": pulp_sha,
+                           "runner_image": record["runner_image"],
+                           "renderer_asset_name": record["renderer_asset"]["name"]}
+            output = io.BytesIO()
+            with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("export.json", json.dumps(export_meta, sort_keys=True))
+                archive.writestr("foundation.json", manifest.read_bytes())
+            artifact = output.getvalue()
+            record["export"]["artifact_sha256"] = hashlib.sha256(artifact).hexdigest()
+            units = record["units"]
+            record["export"]["manifest_sha256"] = records.manifest_binding_sha256(
+                record["export"]["artifact_sha256"], units)
+            record_path.write_text(json.dumps(record))
+            api = lambda path: (
+                {"id": 123456789, "head_sha": pulp_sha, "status": "completed", "conclusion": "success",
+                 "head_repository": {"full_name": records.PULP_REPOSITORY},
+                 "path": ".github/workflows/vellum-platform-closure.yml"}
+                if path.endswith("/actions/runs/123456789") else
+                {"artifacts": [{"id": 7, "name": "vellum-closure-linux-x64", "expired": False,
+                                "workflow_run": {"id": 123456789}}]})
+            with mock.patch.object(verify_extraction, "gh_api", side_effect=api), \
+                    mock.patch.object(verify_extraction, "gh_download", return_value=artifact):
+                verify_extraction.verify_platform_export_artifact(records, "linux-x64", record)
+                run("update-ref", "refs/remotes/origin/main", pulp_sha)
+                with mock.patch.dict(os.environ, {"GH_TOKEN": "test-token"}, clear=False):
+                    errors, checks = verify_extraction.framework_platform_errors(
+                        root, pulp, "origin/main", defer_identity=False)
+                self.assertEqual(errors, [])
+                self.assertIs(checks["framework_platform_artifact_proved"], True)
+                with self.assertRaisesRegex(records.RecordError, "downloaded foundation.json differs"):
+                    verify_extraction.verify_platform_export_artifact(records, "linux-x64",
+                                                                       {**record, "units": [{**units[0],
+                                                                                              "closure_sha256": "0" * 64}]})
 
     def write_respell(self, root: Path, entries: list[dict]) -> None:
         path = root / verify_extraction.FRAMEWORK_RESPELL

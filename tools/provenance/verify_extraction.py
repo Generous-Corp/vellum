@@ -1387,6 +1387,48 @@ def load_platform_closures():
     return module
 
 
+def gh_api(path: str) -> object:
+    """Read one GitHub API resource with the workflow's read-only token."""
+    result = subprocess.run(["gh", "api", "--method", "GET", path],
+                            capture_output=True, check=True, text=True)
+    return json.loads(result.stdout)
+
+
+def gh_download(path: str) -> bytes:
+    """Download one GitHub API binary resource with the workflow's read-only token."""
+    return subprocess.run(["gh", "api", "--method", "GET", path],
+                          capture_output=True, check=True).stdout
+
+
+def verify_platform_export_artifact(records, key: str, record: dict) -> None:
+    """Download and verify the exact successful Pulp closure artifact for a record."""
+    match = re.fullmatch(records.EXPORT_RUN, record["export"]["run_url"])
+    if match is None:
+        raise records.RecordError(f"{records.ROOT}/{key}/record.json: malformed export run URL")
+    run_id = record["export"]["run_url"].rsplit("/", 1)[-1]
+    run = gh_api(f"repos/{records.PULP_REPOSITORY}/actions/runs/{run_id}")
+    if not isinstance(run, dict) or run.get("id") != int(run_id) or run.get("head_sha") != record["pulp_sha"] \
+            or run.get("status") != "completed" or run.get("conclusion") != "success" \
+            or (run.get("head_repository") or {}).get("full_name") != records.PULP_REPOSITORY \
+            or run.get("path") != ".github/workflows/vellum-platform-closure.yml":
+        raise records.RecordError(f"{records.ROOT}/{key}/record.json: export run is not the successful "
+                                  "Pulp closure workflow at the pinned commit")
+    listing = gh_api(f"repos/{records.PULP_REPOSITORY}/actions/runs/{run_id}/artifacts?per_page=100")
+    if not isinstance(listing, dict):
+        raise records.RecordError(f"{records.ROOT}/{key}/record.json: Pulp artifact listing is malformed")
+    expected_name = f"vellum-closure-{key}"
+    artifacts = [artifact for artifact in listing.get("artifacts", [])
+                 if isinstance(artifact, dict) and artifact.get("name") == expected_name
+                 and artifact.get("expired") is False
+                 and (artifact.get("workflow_run") or {}).get("id") == int(run_id)
+                 and isinstance(artifact.get("id"), int)]
+    if len(artifacts) != 1:
+        raise records.RecordError(f"{records.ROOT}/{key}/record.json: Pulp run has {len(artifacts)} "
+                                  f"unexpired {expected_name} artifacts")
+    verify = getattr(records, "verify_export_artifact")
+    verify(key, record, gh_download(f"repos/{records.PULP_REPOSITORY}/actions/artifacts/{artifacts[0]['id']}/zip"))
+
+
 def load_port_respell():
     spec = importlib.util.spec_from_file_location("port_respell", PORT_RESPELL_TOOL)
     if spec is None or spec.loader is None:
@@ -1436,6 +1478,17 @@ def framework_platform_errors(root: Path, pulp_root: Path | None, pulp_main_ref:
         tool = pulp("rev-parse", "--verify", "--quiet", f"{sha}:{records.EXPORTER}")
         if tool.returncode != 0 or tool.stdout.decode().strip() != blob:
             errors.append(f"{listed[key]}: tool.pulp_blob {blob[:12]} is not Pulp {sha[:12]}:{records.EXPORTER}")
+        if not errors and (os.environ.get("GH_TOKEN") or os.environ.get("VELLUM_REQUIRE_PLATFORM_EXPORT_ARTIFACT")):
+            try:
+                verify_platform_export_artifact(records, key, record)
+            except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+                errors.append(f"{listed[key]}: could not verify the Pulp export artifact: {exc}")
+            except records.RecordError as exc:
+                errors.append(str(exc))
+    if listed and not (os.environ.get("GH_TOKEN") or os.environ.get("VELLUM_REQUIRE_PLATFORM_EXPORT_ARTIFACT")):
+        checks["framework_platform_artifact_proved"] = "deferred: no GitHub artifact verifier"
+    else:
+        checks["framework_platform_artifact_proved"] = not errors
     checks["framework_platform_records_proved"] = not errors
     return errors, checks
 
