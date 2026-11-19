@@ -1198,7 +1198,11 @@ class VerifyExtractionTests(unittest.TestCase):
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
             for name, data in files.items():
                 if data is not None:
-                    bundle.writestr(name, data)
+                    # Keep the archive digest stable when the fixture is rebuilt after
+                    # a landed record; ZipFile otherwise stamps each entry with now.
+                    entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                    entry.compress_type = zipfile.ZIP_DEFLATED
+                    bundle.writestr(entry, data)
         archive = buffer.getvalue()
         digest = hashlib.sha256(archive).hexdigest()
         claimed = claimed_sha256 or digest
