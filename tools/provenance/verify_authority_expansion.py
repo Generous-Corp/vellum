@@ -208,10 +208,10 @@ RELEASE_PIPELINE_ATTESTER = "release-pipeline:Generous-Corp/vellum"
 # (owner decision 2026-11-01, ruling 1). The parity re-freeze gates every later
 # release.
 # Exceptions: the owner also waived v0.2.0, which carries the same parity
-# state v0.1.11 was waived for, and v0.2.1 (owner decision 2026-11-18), which
-# ships the same way while the parity re-freeze is still open. The set is exact
-# names, never a pattern, and every release after v0.2.1 needs
-# parity-completion-1.json at its release commit.
+# state v0.1.11 was waived for, and v0.2.1, which ships the same way while the
+# parity re-freeze remains open. The set is exact names, never a pattern, and
+# every release after v0.2.1 needs parity-completion-1.json at its release
+# commit.
 AUTHORITY_PROMOTION_KIND = "vellum-authority-promotion-attestation"
 MIRROR_PROMOTION_KIND = "vellum-mirror-promotion-attestation"
 MIRROR_PROMOTION_ATTESTATION_ID = "full-design-import-render-v1-mirror-promotion-1"
