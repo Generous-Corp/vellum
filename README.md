@@ -83,7 +83,7 @@ Its authorship and exact blobs remain auditable in Git history and immutable
 
 The following is the exact published, immutable `v0.1.6` tagged-release flow
 from `Generous-Corp/vellum`. `v0.1.6` is the current published release; the
-source tree on `main` identifies as `0.2.2`, the next release, and is
+source tree on `main` identifies as `0.2.1`, the next release, and is
 unreleased. The name `v0.1.7` is retired and is never reused: it was published
 only on a deleted incubation repository (see
 [`provenance/retired-release-tags.json`](provenance/retired-release-tags.json)).
@@ -285,10 +285,10 @@ root:
 <!-- readme-exec: id=source-sdk-build manual=source-build-not-release-quick-start -->
 ```sh
 curl -fL \
-  https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/skia-build-mac-universal-gpu-release.zip \
+  https://github.com/danielraffel/skia-builder/releases/download/chrome/m158-attested.1/skia-build-mac-universal-gpu-release.zip \
   -o /tmp/vellum-skia-m158.zip
 printf '%s  %s\n' \
-  e9736bff576ab7a6c56b2f224266ba0fde2dcb5c13a88a4bf8f324d1cf93c9cc \
+  1779c7d1ba5c73a0d6a1f33b77fbf30774bbd9f7542c1c42cc5129f57e99fbd4 \
   /tmp/vellum-skia-m158.zip | shasum -a 256 -c -
 cmake -S . -B build-gpu \
   -DCMAKE_BUILD_TYPE=Release \
@@ -303,7 +303,7 @@ python3 scripts/build_sdk_artifact.py \
   --node-provenance /path/to/node-provenance.json \
   --output-dir dist --json
 ./scripts/install.sh \
-  --archive dist/vellum-sdk-0.2.2-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.2.1-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS
 
 app_dir="$(mktemp -d)/palette-board"
@@ -408,10 +408,10 @@ python3 scripts/build_sdk_artifact.py \
   --node-provenance /path/to/node-provenance.json \
   --output-dir dist --json
 python3 scripts/verify_sdk_artifact.py \
-  --archive dist/vellum-sdk-0.2.2-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.2.1-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS --json
 ./scripts/install.sh \
-  --archive dist/vellum-sdk-0.2.2-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.2.1-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS
 ```
 
@@ -503,12 +503,12 @@ proves the imported design is embedded in the application bundle, exercises
 build/run/test/capture/package, and builds/tests a sterile CMake consumer
 without a Vellum or Pulp checkout.
 
-An exact release is consumed without a moving `latest` pointer. Once `v0.2.2`
+An exact release is consumed without a moving `latest` pointer. Once `v0.2.1`
 is published, the checkout installer installs it with:
 
 <!-- readme-exec: id=version-install-only manual=subset-of-release-quick-start -->
 ```sh
-./scripts/install.sh --version 0.2.2
+./scripts/install.sh --version 0.2.1
 ```
 
 The release `SHA256SUMS` covers the SDK archive, `install.sh`, and

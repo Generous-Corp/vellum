@@ -4,9 +4,9 @@
   "dependencies": [
     {
       "name": "Skia Graphite and Dawn renderer toolchain",
-      "version": "chrome/m158",
+      "version": "chrome/m158-attested.1",
       "license": "multiple; see NOTICE.md and runtime_toolchain_dependencies",
-      "sha256": "e9736bff576ab7a6c56b2f224266ba0fde2dcb5c13a88a4bf8f324d1cf93c9cc",
+      "sha256": "1779c7d1ba5c73a0d6a1f33b77fbf30774bbd9f7542c1c42cc5129f57e99fbd4",
       "surface": "byte-locked build input statically linked into the optional installed Vellum::SkiaDawnProvider shared library used by Vellum::Gpu and Vellum::MirrorCanvas; release eligibility rests on the builder's build-provenance attestation, legal manifest and toolchain receipt"
     },
     {
@@ -162,11 +162,11 @@
       "consumer_boundary": "selected static archive members are linked into the installed Vellum::SkiaDawnProvider shared library used by Vellum::Gpu and Vellum::MirrorCanvas; the prebuilt archive is not installed",
       "artifact": {
         "repository": "https://github.com/danielraffel/skia-builder",
-        "release_tag": "chrome/m158",
+        "release_tag": "chrome/m158-attested.1",
         "name": "skia-build-mac-universal-gpu-release.zip",
-        "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/skia-build-mac-universal-gpu-release.zip",
-        "sha256": "e9736bff576ab7a6c56b2f224266ba0fde2dcb5c13a88a4bf8f324d1cf93c9cc",
-        "builder_commit": "28ebc22430ecceaf0a00ef9c94e15ebfb54171dc",
+        "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158-attested.1/skia-build-mac-universal-gpu-release.zip",
+        "sha256": "1779c7d1ba5c73a0d6a1f33b77fbf30774bbd9f7542c1c42cc5129f57e99fbd4",
+        "builder_commit": "1b97010d2f025b4331a9c0db9481c440d1f33042",
         "target": "macos-arm64",
         "configuration": "Release",
         "archive_root": "build/mac-gpu/lib/Release",
@@ -208,8 +208,8 @@
         },
         "builder": {
           "repository": "https://github.com/danielraffel/skia-builder",
-          "commit": "28ebc22430ecceaf0a00ef9c94e15ebfb54171dc",
-          "evidence": "The build-provenance attestation for the archive was signed by build-skia.yml on refs/heads/main at this commit (skia-builder run 44387834315, attempt 1, GitHub-hosted)."
+          "commit": "1b97010d2f025b4331a9c0db9481c440d1f33042",
+          "evidence": "The build-provenance attestation for the archive was signed by build-skia.yml on refs/heads/main at this commit (skia-builder run 40626447857, attempt 1, GitHub-hosted)."
         }
       },
       "headers": {
@@ -222,47 +222,47 @@
       "archives": [
         {
           "name": "libdawn_combined.a",
-          "sha256": "861ad55e1a7af89cb93760946bf47639b6f5203a8bb3a910b3639442edf83193"
+          "sha256": "337d3beff192f51c0905ac0cc25fc268f9be94cfce58f868a2ede0ad4683c168"
         },
         {
           "name": "libjsonreader.a",
-          "sha256": "5776a803e21afa302a283d9999a1f81f540016d873ca0cc070d5bd760ca8e014"
+          "sha256": "6d0847dc6cce63f6d63c3e7b227ef43a09eb8b6c7153716740acfa5a236cfbb6"
         },
         {
           "name": "libskia.a",
-          "sha256": "1ab2ab83cee5ad6205f9ac1fe4f5b6892dd4d83cf64f6320f0d224af76fef1a1"
+          "sha256": "8a12c2cb1a09d309f8f2a81cbf73eaf8f02958dd9aa7d5ee8041773d539a2e33"
         },
         {
           "name": "libskottie.a",
-          "sha256": "25f596e8c9e6ad6ba69d949f54fa5fb8b81b14699078f7bdbeb9528903148bfd"
+          "sha256": "295ae67fa74a7d040aeee43cd549a5b20dac41a1e0ac3d07ac12be18081ae68d"
         },
         {
           "name": "libskparagraph.a",
-          "sha256": "3fc727469f28518e5777ad7421734dd5ce098b1888144a21b2185df371fb947d"
+          "sha256": "564385a6f9c46076136ce1999349e8757cac01556ab3199bb9428522de8130b8"
         },
         {
           "name": "libskresources.a",
-          "sha256": "22dbf160daeaf537a3907205acd80ab3691ef47e9e141a9cb9728184371954ce"
+          "sha256": "9d5b144d35577cf04f4a43e57f62c1f4bcba9063ba82469690cf2a610d72353d"
         },
         {
           "name": "libsksg.a",
-          "sha256": "78559c9001ffd12334ad022cfcf7de420c53a1ca6df0fa8fccc8735e8d2c6d9c"
+          "sha256": "eff1618bb013afde59cb2e874c0fbcecbba338b95c578570688399e7bcd10753"
         },
         {
           "name": "libskshaper.a",
-          "sha256": "d6f4b5074b1d4666133306c2b7d52584d4285538a6844b8267aa6b7bf1a40aca"
+          "sha256": "b717dd30d71a6cb5cf1841d5b7ffc09f90b19bad5792c982fbd6af644cea0e7d"
         },
         {
           "name": "libskunicode_core.a",
-          "sha256": "b5be95c19b3efdfcde128c317b68ff33c126249158f29886ad69fc49de5cb566"
+          "sha256": "90a12de6bcb5c8528e956d127f67b715b75ba1d67e2b19ff5b59584de04ba942"
         },
         {
           "name": "libskunicode_icu.a",
-          "sha256": "255d5ef5f868b159bab2488125d6507d709a40eba75f0a90186728310a80ff63"
+          "sha256": "e1425daf2b20cab865424bc3f20c46ee10a69c53385a0a979a008039b9913531"
         },
         {
           "name": "libsvg.a",
-          "sha256": "94059ddc4663ae1bb28825a4ff136d09270235eede64657fc8134cd63912fa94"
+          "sha256": "144d8fef510d38d6313cb398cf1863e6c5f2e1f58d41f75968a234389ba47f80"
         }
       ],
       "observed_macho": {
@@ -371,7 +371,7 @@
       "bundled_components_completeness": {
         "claim": "exhaustive",
         "method": "the builder's content-addressed legal manifest, re-derived against every zip member and every static-archive member and symbol table of the locked archive",
-        "legal_manifest_sha256": "9ce3d56a0eb53eba20a3135bb074e118292d83778db7cfdd8d25c1237403e8e9"
+        "legal_manifest_sha256": "c46884c40b15e870a916b41299c5671d03e87fe0bcbb557203019b3f2d36bd6c"
       },
       "identity_limits": [
         "Release eligibility rests on skia-builder's own records: the build-provenance attestation, the legal manifest and the toolchain receipt. No Vellum-side signature is added.",

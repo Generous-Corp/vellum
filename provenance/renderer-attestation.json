@@ -3,9 +3,9 @@
   "state": "builder-attested",
   "artifact": {
     "repository": "https://github.com/danielraffel/skia-builder",
-    "release_tag": "chrome/m158",
+    "release_tag": "chrome/m158-attested.1",
     "name": "skia-build-mac-universal-gpu-release.zip",
-    "sha256": "e9736bff576ab7a6c56b2f224266ba0fde2dcb5c13a88a4bf8f324d1cf93c9cc"
+    "sha256": "1779c7d1ba5c73a0d6a1f33b77fbf30774bbd9f7542c1c42cc5129f57e99fbd4"
   },
   "source_identities": {
     "skia": {
@@ -18,7 +18,7 @@
     },
     "builder": {
       "repository": "https://github.com/danielraffel/skia-builder",
-      "commit": "28ebc22430ecceaf0a00ef9c94e15ebfb54171dc"
+      "commit": "1b97010d2f025b4331a9c0db9481c440d1f33042"
     }
   },
   "build_identity": {
@@ -45,18 +45,18 @@
       "libcpp_version": "190102"
     },
     "toolchain_receipt": {
-      "name": "skia-build-mac-universal-gpu-release.apple-toolchain.sha256-1ab37a74b9c73f38d72b92790b9ce51b7b04135b9d45568b3186b3f4ac686d6d.json",
-      "sha256": "1ab37a74b9c73f38d72b92790b9ce51b7b04135b9d45568b3186b3f4ac686d6d",
-      "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/skia-build-mac-universal-gpu-release.apple-toolchain.sha256-1ab37a74b9c73f38d72b92790b9ce51b7b04135b9d45568b3186b3f4ac686d6d.json"
+      "name": "skia-build-mac-universal-gpu-release.apple-toolchain.sha256-931658c309d6e88b00969a336db164a938d8929c60d87d55fc337886c4712ccf.json",
+      "sha256": "931658c309d6e88b00969a336db164a938d8929c60d87d55fc337886c4712ccf",
+      "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158-attested.1/skia-build-mac-universal-gpu-release.apple-toolchain.sha256-931658c309d6e88b00969a336db164a938d8929c60d87d55fc337886c4712ccf.json"
     }
   },
   "legal_inventory": {
     "state": "exhaustive",
-    "manifest_sha256": "9ce3d56a0eb53eba20a3135bb074e118292d83778db7cfdd8d25c1237403e8e9",
+    "manifest_sha256": "643f174033e44a2a317320f7012a77278e927c27ce70d6d8ca7d4e8f0059caaf",
     "manifest": {
-      "name": "skia-build-mac-universal-gpu-release.legal-manifest.sha256-9ce3d56a0eb53eba20a3135bb074e118292d83778db7cfdd8d25c1237403e8e9.json",
-      "sha256": "9ce3d56a0eb53eba20a3135bb074e118292d83778db7cfdd8d25c1237403e8e9",
-      "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/skia-build-mac-universal-gpu-release.legal-manifest.sha256-9ce3d56a0eb53eba20a3135bb074e118292d83778db7cfdd8d25c1237403e8e9.json"
+      "name": "skia-build-mac-universal-gpu-release.legal-manifest.sha256-643f174033e44a2a317320f7012a77278e927c27ce70d6d8ca7d4e8f0059caaf.json",
+      "sha256": "643f174033e44a2a317320f7012a77278e927c27ce70d6d8ca7d4e8f0059caaf",
+      "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158-attested.1/skia-build-mac-universal-gpu-release.legal-manifest.sha256-643f174033e44a2a317320f7012a77278e927c27ce70d6d8ca7d4e8f0059caaf.json"
     }
   },
   "build_provenance": {
@@ -65,13 +65,13 @@
     "source_ref": "refs/heads/main",
     "predicate_type": "https://slsa.dev/provenance/v1",
     "run": {
-      "run_id": 44387834315,
+      "run_id": 44427178277,
       "run_attempt": 1
     },
     "bundle": {
-      "name": "skia-build-mac-universal-gpu-release.provenance-attestation.sha256-b93ed49d264964487116e48ce72d4d6e554937068677d8fba8398dea93266e51.sigstore.json",
-      "sha256": "b93ed49d264964487116e48ce72d4d6e554937068677d8fba8398dea93266e51",
-      "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/skia-build-mac-universal-gpu-release.provenance-attestation.sha256-b93ed49d264964487116e48ce72d4d6e554937068677d8fba8398dea93266e51.sigstore.json"
+      "name": "skia-build-mac-universal-gpu-release.provenance-attestation.sha256-3e1421a9e9d081f4636e6fa4332928a75f11703b8895a81ebeb6c2d5a49689ab.sigstore.json",
+      "sha256": "3e1421a9e9d081f4636e6fa4332928a75f11703b8895a81ebeb6c2d5a49689ab",
+      "url": "https://github.com/danielraffel/skia-builder/releases/download/chrome/m158-attested.1/skia-build-mac-universal-gpu-release.provenance-attestation.sha256-3e1421a9e9d081f4636e6fa4332928a75f11703b8895a81ebeb6c2d5a49689ab.sigstore.json"
     }
   }
 }

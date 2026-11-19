@@ -134,6 +134,7 @@ class Validate(Fixture):
 class Renderer(unittest.TestCase):
     def lock(self, **overrides):
         lock = {"builder": {"repository": release.BUILDER}, "milestone": "chrome/m147",
+                "release_tag": "chrome/m147-attested.1",
                 "platforms": {"macos-arm64": {"asset": "skia.zip", "sha256": hashlib.sha256(b"zip").hexdigest()}}}
         for key, value in overrides.items():
             if key in ("asset", "sha256"):
@@ -148,8 +149,9 @@ class Renderer(unittest.TestCase):
 
     def test_only_the_pinned_builder_asset_is_fetched(self):
         url, asset, _ = release.renderer_asset(self.lock())
-        self.assertEqual(url, f"{release.BUILDER}/releases/download/chrome/m147/skia.zip")
+        self.assertEqual(url, f"{release.BUILDER}/releases/download/chrome/m147-attested.1/skia.zip")
         for bad in ({"repository": "https://evil.example/skia-builder"}, {"milestone": "chrome/m147/../x"},
+                    {"release_tag": "chrome/m147/../x"},
                     {"asset": "--output=/etc/x"}, {"sha256": "nope"}):
             with self.subTest(bad=bad), self.assertRaises(release.ReleaseError):
                 release.renderer_asset(self.lock(**bad))
