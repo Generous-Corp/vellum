@@ -289,12 +289,16 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
   record and the ports ledger. The record pins each manifest's digest, the
   Pulp commit and exporter blob that wrote them, the configure identity and
   options digest, the runner image, the renderer asset, and the Pulp workflow
-  run that exported them with the digest of the artifact it uploaded. Its export
-  metadata also binds that artifact digest to the complete set of closure
-  manifest digests, which prevents a record from pairing those manifests with
-  another artifact. The provenance
-  lane proves the commit is on Pulp's main and the blob is Pulp's exporter at
-  that commit. The mirror build refuses a platform with no record, a record
+  run that exported them with the digest of the artifact it uploaded. Every
+  value in the record is written by the pull request, so the provenance lane
+  proves it against GitHub instead: the commit is on Pulp's main, the blob is
+  Pulp's exporter at that commit, and the run is Pulp's
+  `vellum-platform-closure.yml` at that commit and succeeded. The artifact it
+  uploaded hashes to the record's digest and holds exactly the record's
+  manifests and an `export.json` that names the record's platform, commit,
+  runner image and renderer asset. A record that is unchanged since the base
+  was proved when it landed, so the artifact's expiry does not fail it later.
+  The mirror build refuses a platform with no record, a record
   whose pins do not hold, a closure source `framework/` lacks, and a ledger
   source whose scope leaves out the platform whose closure compiles it.
   macOS keeps the receipt's closures and needs no record.
