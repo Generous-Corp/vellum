@@ -319,6 +319,10 @@ SYSTEM_VARIABLES = {
 }
 
 
+# Targets whose MSVC value depends on the compiler, never on the platform.
+NO_MSVC_DEFAULT_SYSTEMS = frozenset({"Windows"})
+
+
 def configure_environment(options: dict[str, str]) -> dict[str, object]:
     """The variables a closure's configure fixes, plus what CMake sets for its target system."""
     system = options.get("CMAKE_SYSTEM_NAME")
@@ -335,8 +339,9 @@ def configure_environment(options: dict[str, str]) -> dict[str, object]:
                 if name != "MSVC"})
     env["CMAKE_SYSTEM_NAME"] = system
     # A probe-recorded MSVC wins; otherwise a non-Windows target is not MSVC.
-    # Windows stays undecidable without a recorded compiler.
-    if "MSVC" in SYSTEM_VARIABLES[system]:
+    # Windows is excluded from that default: without a recorded compiler MSVC
+    # stays absent (UNKNOWN), so MSVC and NOT MSVC both fail closed.
+    if system not in NO_MSVC_DEFAULT_SYSTEMS:
         env.setdefault("MSVC", SYSTEM_VARIABLES[system]["MSVC"])
     if system == "Darwin":
         env.setdefault("CMAKE_CXX_COMPILER_ID", "AppleClang")

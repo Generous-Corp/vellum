@@ -963,6 +963,25 @@ class SourceCompileOptionsTest(unittest.TestCase):
         with self.assertRaises(mp.source_compile_options.SourceOptionsError):
             self.evaluate(self.NOT_MSVC, windows)
 
+    IS_MSVC = ('if(MSVC)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "/GR-")\n'
+               'endif()\n')
+
+    def test_windows_msvc_conditions_cover_both_branches_for_every_compiler(self) -> None:
+        windows = dict(self.RELEASE, CMAKE_SYSTEM_NAME="Windows")
+        expected = {"cl": (True, False), "clang-cl": (True, False),
+                    "clang": (False, True), "gnu": (False, True)}
+        for name, (is_msvc, not_msvc) in expected.items():
+            env = {**windows, **self.COMPILERS[name]}
+            self.assertEqual(self.evaluate(self.IS_MSVC, env),
+                             {"core/x/src/a.cpp": ["/GR-"]} if is_msvc else {}, name)
+            self.assertEqual(self.evaluate(self.NOT_MSVC, env),
+                             {"core/x/src/a.cpp": ["-fno-rtti"]} if not_msvc else {}, name)
+        # With no compiler facts MSVC is unknown, so neither branch may be decided.
+        self.assertNotIn("MSVC", mp.source_compile_options.configure_environment(windows))
+        for text in (self.IS_MSVC, self.NOT_MSVC):
+            with self.assertRaises(mp.source_compile_options.SourceOptionsError):
+                self.evaluate(text, windows)
+
     def test_a_recorded_compiler_decides_compiler_id_conditions_off_darwin(self) -> None:
         text = ('if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")\n'
                 '  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-O1")\nendif()\n')
