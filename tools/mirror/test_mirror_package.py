@@ -559,7 +559,7 @@ class InTreeGpuRuntimeTest(unittest.TestCase):
 
     def test_other_repository_source_is_refused(self) -> None:
         self.use_pin(self.pin, source="https://github.com/someone/vellum.git")
-        self.assertRefused("not this repository")
+        self.assertRefused("not an allowlisted dependency source")
 
     def test_recorded_file_outside_the_subtree_is_refused(self) -> None:
         self.use_pin(self.pin, relative="runtime/include/vellum/x.hpp")
@@ -2278,7 +2278,7 @@ class DeclaredUnitPlanTest(unittest.TestCase):
         git("add", "-A")
         git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "dep")
         pin = git("rev-parse", "HEAD")
-        recipe = {"kind": "cmake", "provides": ["fixture-dep"], "options": {"X": "OFF"}, "pin": pin,
+        recipe = {"kind": "cmake", "sources": [source.as_uri()], "provides": ["fixture-dep"], "options": {"X": "OFF"}, "pin": pin,
                   "source": source.as_uri()}
         self.declare([dict(self.library, link_targets=["pulp-runtime", "fixture-dep"]), self.tool])
         with mock.patch.dict(mp.DEPENDENCIES, {"fixture-dep": recipe}):
@@ -2395,7 +2395,7 @@ class ExternalDependencyRefusalTest(unittest.TestCase):
     PIN = "b" * 40
 
     def row(self, **overrides) -> dict:
-        row = {"path": f"@external/skia/{self.PIN}/include/a.h", "pin": self.PIN, "source": "https://example.invalid/skia.git",
+        row = {"path": f"@external/skia/{self.PIN}/include/a.h", "pin": self.PIN, "source": "https://skia.googlesource.com/skia.git",
                "asset_sha256": "c" * 64, "sha256": "d" * 64}
         row.update(overrides)
         return row
@@ -2412,13 +2412,23 @@ class ExternalDependencyRefusalTest(unittest.TestCase):
     def test_a_malformed_external_path_is_refused(self) -> None:
         self.assertIn("external input path is malformed", self.refused(self.row(path="@external/skia")))
 
+    def test_an_external_source_must_match_the_dependency_recipe(self) -> None:
+        self.assertIn("not an allowlisted dependency source",
+                      self.refused(self.row(source="https://attacker.example/skia.git")))
+
+    def test_an_external_path_cannot_escape_the_dependency_checkout(self) -> None:
+        for relative in ("/absolute.h", "./dot.h", "../outside.h", "include/../outside.h", "include\\outside.h"):
+            with self.subTest(relative=relative):
+                path = f"@external/skia/{self.PIN}/{relative}"
+                self.assertIn("not a safe dependency-relative path", self.refused(self.row(path=path)))
+
     def test_an_input_pinned_to_a_short_id_is_refused(self) -> None:
         self.assertIn("is not pinned to a full commit", self.refused(self.row(pin="abc123")))
 
     def test_closures_that_disagree_on_a_pin_are_refused(self) -> None:
         self.assertIn("closures disagree on the pin of skia",
-                      self.refused(self.row(), self.row(path=f"@external/skia/{self.PIN}/include/b.h",
-                                                        source="https://example.invalid/other.git")))
+                      self.refused(self.row(), self.row(path=f"@external/skia/{self.PIN[:-1]}a/include/b.h",
+                                                        pin=self.PIN[:-1] + "a")))
 
     def test_an_input_with_no_digest_is_refused(self) -> None:
         self.assertIn("has no recorded digest", self.refused(self.row(sha256=None)))
@@ -2489,6 +2499,20 @@ class DependencyPreparationRefusalTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(mp.PlanError, "has no include/absent.h"):
                 mp.prepare_dependencies({"skia": entry}, Path(tmp), Path(tmp), "c" * 64)
+
+    def test_a_dependency_symlink_cannot_escape_before_hashing(self) -> None:
+        entry = {"pin": "a" * 40, "source": "https://skia.googlesource.com/skia.git",
+                 "asset_sha256": "c" * 64, "root": "a" * 40,
+                 "files": {"include/a.h": "d" * 64}}
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "skia"
+            (root / "include").mkdir(parents=True)
+            outside = base / "outside.h"
+            outside.write_bytes(b"outside\n")
+            (root / "include/a.h").symlink_to(outside)
+            with self.assertRaisesRegex(mp.PlanError, "escapes the dependency checkout"):
+                mp.prepare_dependencies({"skia": entry}, base / "deps", root, "c" * 64)
 
     def test_a_template_naming_an_unknown_value_is_refused(self) -> None:
         with self.assertRaisesRegex(mp.PlanError, "unknown value @NOT_A_VALUE@"):

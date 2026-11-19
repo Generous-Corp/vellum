@@ -153,6 +153,7 @@ BUILD_TIMESTAMP_PLACEHOLDER = "<build-timestamp>"
 DEPENDENCIES: dict[str, dict[str, Any]] = {
     "highway": {
         "kind": "cmake",
+        "sources": ["https://github.com/google/highway.git"],
         "provides": ["hwy"],
         "options": {
             "HWY_ENABLE_EXAMPLES": "OFF",
@@ -164,6 +165,7 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
     },
     "mbed-tls": {
         "kind": "cmake",
+        "sources": ["https://github.com/Mbed-TLS/mbedtls.git"],
         "submodules": True,
         "provides": ["mbedtls", "mbedx509", "mbedcrypto", "everest", "p256m"],
         "options": {
@@ -175,6 +177,7 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
     },
     "sheenbidi": {
         "kind": "cmake",
+        "sources": ["https://github.com/Tehreer/SheenBidi.git"],
         "provides": ["SheenBidi"],
         "options": {
             "SB_CONFIG_UNITY": "ON",
@@ -184,18 +187,19 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
     },
     "choc": {
         "kind": "headers",
+        "sources": ["https://github.com/danielraffel/choc.git"],
         "patches": ["v8-compatibility", "json-positive-exponent", "file-watcher-lifetime"],
         "post_patches": ["v8-module-resolution"],
     },
-    "brotli": {"kind": "sources"},
-    "woff2": {"kind": "sources"},
-    "skia": {"kind": "archive"},
-    "sdl3": {"kind": "cmake", "provides": ["SDL3-static"], "options": {"SDL_SHARED": "OFF", "SDL_STATIC": "ON", "SDL_TEST": "OFF", "CMAKE_DISABLE_PRECOMPILE_HEADERS": "ON"}},
+    "brotli": {"kind": "sources", "sources": ["https://github.com/google/brotli.git"]},
+    "woff2": {"kind": "sources", "sources": ["https://github.com/google/woff2.git"]},
+    "skia": {"kind": "archive", "sources": ["https://skia.googlesource.com/skia.git"]},
+    "sdl3": {"kind": "cmake", "sources": ["https://github.com/libsdl-org/SDL.git"], "provides": ["SDL3-static"], "options": {"SDL_SHARED": "OFF", "SDL_STATIC": "ON", "SDL_TEST": "OFF", "CMAKE_DISABLE_PRECOMPILE_HEADERS": "ON"}},
     # Yoga's project defaults compile with -fno-rtti, which gives yogacore its
     # own hidden copy of std::exception's typeinfo; a catch elsewhere in the
     # image can then miss an exception thrown through it. Pulp re-enables RTTI
     # on yogacore (PulpDependencies.cmake), and the mirror build does the same.
-    "yoga": {"kind": "cmake", "source_subdir": "yoga", "provides": ["yogacore"], "options": {},
+    "yoga": {"kind": "cmake", "sources": ["https://github.com/facebook/yoga.git"], "source_subdir": "yoga", "provides": ["yogacore"], "options": {},
              "cxx_options": ["-frtti"]},
     # Pulp's device layer forwards to gpu-runtime, which lives in this
     # repository. A second, fetched copy would put two Dawn proc tables and two
@@ -239,7 +243,7 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
         "provides": ["gpu-runtime-bootstrap", "gpu-runtime-device", "gpu-runtime-skia-log-bridge"],
         "build_include_dirs": {"@build/_deps/vellum_gpu_runtime-src/gpu-runtime/include": "gpu-runtime/include"},
     },
-    "yaml-cpp": {"kind": "cmake", "provides": ["yaml-cpp"], "options": {"YAML_CPP_BUILD_TESTS": "OFF", "YAML_CPP_BUILD_TOOLS": "OFF", "YAML_CPP_BUILD_CONTRIB": "OFF", "YAML_BUILD_SHARED_LIBS": "OFF", "YAML_CPP_INSTALL": "OFF", "CMAKE_POLICY_VERSION_MINIMUM": "3.5"}},
+    "yaml-cpp": {"kind": "cmake", "sources": ["https://github.com/jbeder/yaml-cpp.git"], "provides": ["yaml-cpp"], "options": {"YAML_CPP_BUILD_TESTS": "OFF", "YAML_CPP_BUILD_TOOLS": "OFF", "YAML_CPP_BUILD_CONTRIB": "OFF", "YAML_BUILD_SHARED_LIBS": "OFF", "YAML_CPP_INSTALL": "OFF", "CMAKE_POLICY_VERSION_MINIMUM": "3.5"}},
 }
 
 # The build-tree include directories a closure may name, by the generated
@@ -545,21 +549,29 @@ def external_dependencies(units: list[tuple[str, dict[str, Any]]]) -> dict[str, 
             name = match.group("name")
             if name not in DEPENDENCIES:
                 raise PlanError(f"{unit}: closure names dependency {name!r}, which has no Vellum build recipe")
+            recipe = DEPENDENCIES[name]
+            source = row.get("source")
+            if source not in recipe.get("sources", ()):
+                raise PlanError(f"{unit}: {name} source {source!r} is not an allowlisted dependency source")
+            root = match.group("root")
+            relative = match.group("rel")
+            if not platform_closures.safe_relative_path(root) or not platform_closures.safe_relative_path(relative):
+                raise PlanError(f"{unit}: external input path is not a safe dependency-relative path: {path}")
             pin = row.get("pin")
             if not SHA40.match(str(pin)):
                 raise PlanError(f"{unit}: {name} is not pinned to a full commit")
             entry = deps.setdefault(name, {
-                "pin": pin, "source": row.get("source"), "asset_sha256": row.get("asset_sha256"),
-                "root": match.group("root"), "files": {},
+                "pin": pin, "source": source, "asset_sha256": row.get("asset_sha256"),
+                "root": root, "files": {},
             })
-            if (entry["pin"], entry["source"], entry["root"]) != (pin, row.get("source"), match.group("root")):
+            if (entry["pin"], entry["source"], entry["root"]) != (pin, source, root):
                 raise PlanError(f"closures disagree on the pin of {name}")
             if not SHA256.match(str(row.get("sha256"))):
                 raise PlanError(f"{unit}: {path} has no recorded digest")
             previous = entry["files"].get(match.group("rel"))
             if previous and previous != row["sha256"]:
                 raise PlanError(f"closures disagree on the digest of {path}")
-            entry["files"][match.group("rel")] = row["sha256"]
+            entry["files"][relative] = row["sha256"]
     return deps
 
 
@@ -912,6 +924,10 @@ def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_d
                 apply_patch(name, patch, root)
         for relative, digest in sorted(entry["files"].items()):
             candidate = root / relative
+            try:
+                candidate.resolve().relative_to(root.resolve())
+            except ValueError:
+                raise PlanError(f"{name}@{entry['pin'][:12]}:{relative} escapes the dependency checkout")
             if not candidate.is_file():
                 raise PlanError(f"{name}@{entry['pin'][:12]} has no {relative}")
             if sha256_file(candidate) != digest:
