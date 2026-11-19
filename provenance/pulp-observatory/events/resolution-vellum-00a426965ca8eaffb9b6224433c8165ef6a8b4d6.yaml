@@ -1,0 +1,24 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "created_at": "2026-11-18T19:55:52Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-00a426965ca8eaffb9b6224433c8165ef6a8b4d6",
+  "kind": "resolution",
+  "linked_commits": [
+    "00a426965ca8eaffb9b6224433c8165ef6a8b4d6"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/490"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Merge of main into the compiled vector nodes branch. Its own changes are Vellum-only: vellum-ui's design materializer skips source nodes laid out as display: none, and app-host registers its HTML import geometry test (skip code 77 when no browser is named). Pulp main has no vellum-ui package, no materializer and no app-host, so no port is owed.",
+  "resolves": "vellum-00a426965ca8eaffb9b6224433c8165ef6a8b4d6",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

@@ -1,0 +1,23 @@
+{
+  "contract_tests": [
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "created_at": "2026-11-18T19:55:52Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-ddcbc99c4ad397b95d2f44949eebb6ba6ca346c7",
+  "kind": "resolution",
+  "linked_commits": [
+    "ddcbc99c4ad397b95d2f44949eebb6ba6ca346c7"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/504"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Vellum's CLI and app-host tests skip their live-browser cases unless a pinned Chrome is named. The live_browser helper, the web backend tests and the app-host geometry test exist only in Vellum, so no port is owed.",
+  "resolves": "vellum-ddcbc99c4ad397b95d2f44949eebb6ba6ca346c7",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

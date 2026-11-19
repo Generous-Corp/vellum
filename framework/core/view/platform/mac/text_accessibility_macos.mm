@@ -294,7 +294,7 @@ std::vector<TextAccessibilityNode> snapshot_accessibility_nodes() {
 // NSAccessibilityElement*)` cast on the test side; the registry
 // continues to own the +1 retain.
 #if TARGET_OS_OSX
-extern "C" void* pulp_text_accessibility_lookup_macos(const char* id_utf8) {
+extern "C" void* vellum_text_accessibility_lookup_macos(const char* id_utf8) {
     if (!id_utf8) return nullptr;
     auto& r = registry();
     std::lock_guard<std::mutex> lock(r.mu);

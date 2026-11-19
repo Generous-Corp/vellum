@@ -1,0 +1,23 @@
+{
+  "contract_tests": [
+    "vellum.authoring",
+    "vellum.capture-stats",
+    "vellum.gpu-native"
+  ],
+  "created_at": "2026-11-18T19:55:52Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-2604df299782ff2ffd0f55da125820f64d15f00c",
+  "kind": "resolution",
+  "linked_commits": [
+    "2604df299782ff2ffd0f55da125820f64d15f00c"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/504"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "A pinned browser that is named but unusable now fails the Vellum live-browser tests instead of skipping them. The helper, tests and app-host CMake are Vellum-only, so no port is owed.",
+  "resolves": "vellum-2604df299782ff2ffd0f55da125820f64d15f00c",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

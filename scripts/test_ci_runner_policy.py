@@ -111,14 +111,29 @@ BROWSER_JOBS = {
     "sdk-release.yml": ("validate-sdk-artifacts",),
 }
 
-# Both gpu-macos.yml jobs select their runner with exactly this expression:
-# merge-group runs take the merge-group class variable when it is set, and
-# everything else (push included, so a main re-proof never queues ahead of a
-# merge-queue entry) is the reviewed local variable with a hosted fallback.
+# The fleet selector both gpu-macos.yml proof jobs fall back to: merge-group
+# runs take the merge-group class variable when it is set, and everything else
+# (push included, so a main re-proof never queues ahead of a merge-queue entry)
+# is the reviewed local variable with a hosted fallback.
 GPU_RUNS_ON = (
     "runs-on: ${{ fromJSON((github.event_name == 'merge_group' && "
     "vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON) "
     "|| vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON || '[\"macos-15\"]') }}"
+)
+FLEET_EXPRESSION = GPU_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")]
+# decide's runner: a repository variable holding a JSON label list, so it can
+# move to a local Linux lane without a workflow change, defaulting to hosted.
+DECIDE_RUNNER = "(vars.VELLUM_DECIDE_RUNS_ON_JSON || '[\"ubuntu-24.04\"]')"
+DECIDE_RUNS_ON = "runs-on: ${{ fromJSON(" + DECIDE_RUNNER[1:-1] + ") }}"
+# Only exactly `on` turns the early decision on.
+PREDECIDE_ON = "vars.VELLUM_GPU_PREDECIDE == 'on'"
+# gpu-macos-arm64 takes decide's runner when decide ran and says the run will
+# only report a reused or uncovered proof, and otherwise exactly the fleet
+# selector.
+GPU_JOB_RUNS_ON = (
+    "runs-on: ${{ fromJSON((" + PREDECIDE_ON + " && needs.decide.result == 'success' && "
+    "(needs.decide.outputs.unaffected == 'true' || needs.decide.outputs.reused_run != '') && "
+    + DECIDE_RUNNER + ") || " + FLEET_EXPRESSION + ") }}"
 )
 
 # sterile-consumer selects a hosted runner when gpu-macos-arm64 reported a
@@ -139,10 +154,34 @@ STERILE_RUNS_ON = (
     "runs-on: ${{ fromJSON((" + STERILE_HOSTED_WHEN + ") || " + STERILE_CLASS_WHEN + " || "
     + GPU_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")] + ") }}"
 )
-# Hosted helper jobs in gpu-macos.yml, by name, with their exact runner. They
-# never run a proof, so they are not held to the GPU selector.
-GPU_HOSTED_JOBS = {"cancel-destroyed-groups": "runs-on: ubuntu-24.04"}
-
+# Helper jobs in gpu-macos.yml, by name, with their exact runner. They never
+# run a proof, so they are not held to the GPU selector.
+GPU_HOSTED_JOBS = {
+    "cancel-destroyed-groups": "runs-on: ubuntu-24.04",
+    "decide": DECIDE_RUNS_ON,
+}
+# decide runs only when switched on and only where it can decide, so with the
+# variable unset the proof job starts exactly as it did before.
+DECIDE_IF = (
+    "    if: " + PREDECIDE_ON + " && (github.event_name == 'pull_request' || "
+    "github.event_name == 'merge_group' || "
+    "(github.event_name == 'push' && github.ref == 'refs/heads/main')) && "
+    "(github.event_name != 'pull_request' || "
+    "github.event.pull_request.head.repo.full_name == github.repository)"
+)
+DECIDE_OUTPUTS = (
+    "      unaffected: ${{ steps.classify.outputs.unaffected }}\n"
+    "      reused_run: ${{ steps.reuse.outputs.run_id }}"
+)
+# The steps decide copies from gpu-macos-arm64, byte for byte, so its answer
+# is the answer the proof job itself reaches.
+DECIDE_STEPS = (
+    "Check out full preserved Vellum history without credentials",
+    "Classify the change against the base's rules",
+    "Reuse an identical-tree proof",
+)
+AGREE_STEP = "Agree with the early decision"
+OFF_MAC_STEP = "Refuse to build off a Mac"
 
 def evaluate_actions_expression(expression: str, context: dict[str, str]) -> str:
     """Evaluate the GitHub Actions expression subset a runs-on selector uses.
@@ -215,6 +254,20 @@ GPU_GUARD = (
     "    if: github.event_name != 'pull_request' || "
     "github.event.pull_request.head.repo.full_name == github.repository || "
     "vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON == ''"
+)
+# gpu-macos-arm64 needs decide. A job whose need failed or was skipped is
+# itself skipped, and a skipped required check reads as passing, so the proof
+# job's guard is the same guard behind !cancelled(): it runs whatever
+# decide concluded.
+GPU_JOB_GUARD = (
+    "    if: ${{ !cancelled() && (" + GPU_GUARD[len("    if: "):] + ") }}"
+)
+# A skip carries down the whole needs chain unless a job names its own status
+# check, so sterile-consumer, below decide, names one too: it runs exactly
+# when the proof job succeeded.
+STERILE_GUARD = (
+    "    if: ${{ !cancelled() && needs.gpu-macos-arm64.result == 'success' && ("
+    + GPU_GUARD[len("    if: "):] + ") }}"
 )
 
 PULP_REPOSITORY = "Generous-Corp/pulp"
@@ -874,12 +927,12 @@ def assert_privileged_release_coordinate_isolation(text: str) -> None:
 
 def assert_gpu_local_runner_policy(text: str) -> None:
     jobs = workflow_jobs(text)
-    for job_name in ("gpu-macos-arm64", "sterile-consumer"):
+    for job_name, guard in (("gpu-macos-arm64", GPU_JOB_GUARD), ("sterile-consumer", STERILE_GUARD)):
         body = jobs.get(job_name)
         if body is None:
             raise AssertionError(f"gpu-macos.yml: {job_name} is missing")
         guards = [line for line in body.splitlines() if line.startswith("    if:")]
-        if guards != [GPU_GUARD]:
+        if guards != [guard]:
             raise AssertionError(
                 f"gpu-macos.yml: {job_name} must have exactly the reviewed guard"
             )
@@ -915,6 +968,21 @@ def release_identity_problems(text: str) -> list[str]:
             if not re.search(rf"(?m)^      {output}:", jobs.get(producer, "")):
                 problems.append(f"{producer}: no output {output}")
     return problems
+
+
+def job_step_blocks(body: str) -> dict[str, str]:
+    """Each named step of one job's body, by name, without the trailing blank
+    lines and comments that introduce the next step."""
+    blocks = re.split(r"(?m)^(?=      - name: )", body.split("\n    steps:\n", 1)[1])
+    found = {}
+    for block in blocks:
+        match = re.match(r"      - name: (.*)\n", block)
+        if match:
+            lines = block.splitlines()
+            while lines and (not lines[-1].strip() or lines[-1].lstrip().startswith("#")):
+                lines.pop()
+            found[match.group(1)] = "\n".join(lines) + "\n"
+    return found
 
 
 class RunnerPolicyTests(unittest.TestCase):
@@ -1235,7 +1303,7 @@ class RunnerPolicyTests(unittest.TestCase):
 
     def test_gpu_jobs_select_the_merge_group_class_only_when_it_is_set(self) -> None:
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
-        for job, selector in (("gpu-macos-arm64", GPU_RUNS_ON), ("sterile-consumer", STERILE_RUNS_ON)):
+        for job, selector in (("gpu-macos-arm64", GPU_JOB_RUNS_ON), ("sterile-consumer", STERILE_RUNS_ON)):
             lines = [line.strip() for line in workflow_jobs(gpu)[job].splitlines()
                      if line.strip().startswith("runs-on:")]
             self.assertEqual(lines, [selector], job)
@@ -1289,6 +1357,189 @@ class RunnerPolicyTests(unittest.TestCase):
         # Control: the evaluator reads needs outputs at all.
         self.assertEqual(evaluate_actions_expression(reused, {"event_name": "push", reused: "7"}), "7")
 
+    def test_decide_only_moves_a_reporting_proof_job_off_the_fleet(self) -> None:
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        lines = [line.strip() for line in workflow_jobs(gpu)["gpu-macos-arm64"].splitlines()
+                 if line.strip().startswith("runs-on:")]
+        self.assertEqual(lines, [GPU_JOB_RUNS_ON])
+        expression = GPU_JOB_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")]
+        local = '["self-hosted","macOS","ARM64","vellum-build-macos"]'
+        merge = '["self-hosted","macOS","ARM64","vellum-build-macos-merge-group"]'
+        linux = '["self-hosted","Linux","ARM64","vellum-decide"]'
+        unaffected = "needs.decide.outputs.unaffected"
+        reused = "needs.decide.outputs.reused_run"
+        switch = "vars.VELLUM_GPU_PREDECIDE"
+        runner = "vars.VELLUM_DECIDE_RUNS_ON_JSON"
+        reporting = ({unaffected: "true"}, {reused: "44038041246"},
+                     {unaffected: "true", reused: "44038041246"})
+        building = ({}, {unaffected: ""}, {reused: ""})
+        for event in ("pull_request", "merge_group", "push", "workflow_dispatch"):
+            for variables in ({}, {"vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local},
+                              {"vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local,
+                               "vars.VELLUM_LOCAL_MACOS_MERGE_GROUP_RUNS_ON_JSON": merge}):
+                context = {"event_name": event, **variables}
+                fleet = evaluate_actions_expression(FLEET_EXPRESSION, context)
+                with self.subTest(event=event, variables=sorted(variables)):
+                    # Unset, or anything but exactly `on`: today's selector,
+                    # whatever decide's outputs say.
+                    for off in ({}, {switch: ""}, {switch: "off"}, {switch: "On"}, {switch: "true"}):
+                        for answer in (*building, *reporting):
+                            self.assertEqual(
+                                evaluate_actions_expression(expression, {**context, **off, **answer}),
+                                fleet)
+                    on = {**context, switch: "on", "needs.decide.result": "success"}
+                    # A decide that set an output but did not succeed routes nothing.
+                    for result in ("", "failure", "skipped", "cancelled"):
+                        for answer in reporting:
+                            self.assertEqual(evaluate_actions_expression(
+                                expression, {**on, **answer, "needs.decide.result": result}), fleet)
+                    # On: a full proof (decide skipped, failed or building)
+                    # keeps the fleet selector ...
+                    for answer in building:
+                        self.assertEqual(evaluate_actions_expression(expression, {**on, **answer}), fleet)
+                    # ... and a reused or unaffected run takes decide's runner.
+                    for answer in reporting:
+                        self.assertEqual(evaluate_actions_expression(expression, {**on, **answer}),
+                                         '["ubuntu-24.04"]')
+                        self.assertEqual(
+                            evaluate_actions_expression(expression, {**on, **answer, runner: linux}), linux)
+        # Control: with the local selector set, the fleet answer is not the fallback.
+        self.assertEqual(
+            evaluate_actions_expression(expression, {"event_name": "push",
+                                                     "vars.VELLUM_LOCAL_MACOS_RUNS_ON_JSON": local}),
+            local)
+
+    def test_decide_runner_reads_its_variable_with_a_hosted_default(self) -> None:
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        lines = [line.strip() for line in workflow_jobs(gpu)["decide"].splitlines()
+                 if line.strip().startswith("runs-on:")]
+        self.assertEqual(lines, [DECIDE_RUNS_ON])
+        expression = DECIDE_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")]
+        self.assertEqual(evaluate_actions_expression(expression, {"event_name": "push"}), '["ubuntu-24.04"]')
+        self.assertEqual(evaluate_actions_expression(
+            expression, {"event_name": "push", "vars.VELLUM_DECIDE_RUNS_ON_JSON": ""}), '["ubuntu-24.04"]')
+        linux = '["self-hosted","Linux","X64","macpro"]'
+        self.assertEqual(evaluate_actions_expression(
+            expression, {"event_name": "push", "vars.VELLUM_DECIDE_RUNS_ON_JSON": linux}), linux)
+        # The default is a hosted label, never a self-hosted one.
+        self.assertIn('ubuntu-24.04', DECIDE_RUNS_ON)
+        self.assertNotIn("self-hosted", DECIDE_RUNS_ON)
+
+    def test_the_proof_job_fails_when_it_disagrees_with_decide(self) -> None:
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        steps = job_step_blocks(workflow_jobs(gpu)["gpu-macos-arm64"])
+        names = list(steps)
+        # The check runs after both in-job decisions and before any step that
+        # builds or re-checks, so a run on decide's runner never builds there.
+        self.assertEqual(names.index(AGREE_STEP), names.index("Reuse an identical-tree proof") + 1)
+        self.assertLess(names.index(AGREE_STEP), names.index("Size builds to this runner"))
+        block = steps[AGREE_STEP]
+        self.assertIn("        if: needs.decide.result == 'success'\n", block)
+        # The backstop: whatever routed the job, it builds only on a Mac.
+        self.assertEqual(names.index(OFF_MAC_STEP), names.index(AGREE_STEP) + 1)
+        self.assertIn("        if: runner.os != 'macOS' && steps.classify.outputs.unaffected != 'true' "
+                      "&& steps.reuse.outputs.run_id == ''\n", steps[OFF_MAC_STEP])
+        self.assertIn("exit 1", steps[OFF_MAC_STEP])
+        script = block.split("        run: |\n", 1)[1]
+        script = "\n".join(line[10:] for line in script.splitlines())
+        env = {"DECIDED_UNAFFECTED": "", "DECIDED_REUSED": "", "UNAFFECTED": "", "REUSED": ""}
+        cases = {
+            "agree full": ({}, 0),
+            "agree unaffected": ({"DECIDED_UNAFFECTED": "true", "UNAFFECTED": "true"}, 0),
+            "agree reused": ({"DECIDED_REUSED": "7", "REUSED": "7"}, 0),
+            "decide reused, job builds": ({"DECIDED_REUSED": "7"}, 1),
+            "decide unaffected, job builds": ({"DECIDED_UNAFFECTED": "true"}, 1),
+            # decide said build: the job is on its usual Mac, keeps its own
+            # answer (a proof may have finished in between) and warns.
+            "decide builds, job reuses": ({"REUSED": "7"}, 0),
+            "decide builds, job skips": ({"UNAFFECTED": "true"}, 0),
+            # Both still report: a newer proof of the same tree, or the other
+            # kind of report. The job's own answer counts; it warns.
+            "decide reused, job skips": ({"DECIDED_REUSED": "7", "UNAFFECTED": "true"}, 0),
+            "decide skips, job reuses": ({"DECIDED_UNAFFECTED": "true", "REUSED": "7"}, 0),
+            "different runs": ({"DECIDED_REUSED": "7", "REUSED": "8"}, 0),
+            "decide both, job builds": ({"DECIDED_REUSED": "7", "DECIDED_UNAFFECTED": "true"}, 1),
+        }
+        for name, (values, expected) in cases.items():
+            with self.subTest(case=name):
+                result = subprocess.run(["bash", "-c", script], env={**os.environ, **env, **values},
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                differs = values.get("DECIDED_UNAFFECTED", "") != values.get("UNAFFECTED", "") or \
+                    values.get("DECIDED_REUSED", "") != values.get("REUSED", "")
+                if differs:
+                    self.assertIn("::error::" if expected else "::warning::", result.stdout)
+
+
+    def test_decide_reaches_the_answer_the_proof_job_reaches(self) -> None:
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        jobs = workflow_jobs(gpu)
+        decide = jobs["decide"]
+        self.assertEqual([line for line in decide.splitlines() if line.startswith("    if:")],
+                         [DECIDE_IF])
+        self.assertIn("\n    continue-on-error: true\n", decide)
+        # The job outlives its two step timeouts plus a full-history checkout.
+        self.assertIn("\n    timeout-minutes: 15\n", decide)
+        self.assertIn("\n    outputs:\n" + DECIDE_OUTPUTS + "\n    steps:\n", decide)
+        # Read-only: no write permission, no credentials left in the checkout.
+        self.assertNotIn("permissions:", decide)
+        self.assertNotIn("write", decide)
+        decide_steps = job_step_blocks(decide)
+        proof_steps = job_step_blocks(jobs["gpu-macos-arm64"])
+        self.assertEqual(list(decide_steps), list(DECIDE_STEPS))
+        for name in DECIDE_STEPS:
+            with self.subTest(step=name):
+                self.assertEqual(decide_steps[name], proof_steps[name])
+        # A hung API read fails its step, not the job's timeout.
+        for name in DECIDE_STEPS[1:]:
+            self.assertIn("        timeout-minutes: 5\n", decide_steps[name], name)
+        # Control: the comparison sees a one-character drift.
+        drifted = gpu.replace("verdict=\"\"\n", "verdict=\"x\"\n", 1)
+        self.assertNotEqual(job_step_blocks(workflow_jobs(drifted)["decide"])[DECIDE_STEPS[1]],
+                            proof_steps[DECIDE_STEPS[1]])
+
+    def test_no_skippable_ancestor_can_skip_a_required_context(self) -> None:
+        # GitHub skips every job below a skipped or failed one, through the
+        # whole needs chain, unless the job names its own status check; a
+        # skipped required check reads as passing. So a required context with
+        # any ancestor that has its own `if:` must name a status check itself.
+        def ancestors_and_guards(text: str) -> tuple[dict[str, set[str]], dict[str, str]]:
+            jobs = workflow_jobs(text)
+            needs, guards = {}, {}
+            for job, body in jobs.items():
+                found = re.search(r"(?m)^    needs: \[?([A-Za-z0-9_, -]+)\]?$", body)
+                needs[job] = {name.strip() for name in found.group(1).split(",")} if found else set()
+                guard = [line for line in body.splitlines() if line.startswith("    if:")]
+                guards[job] = guard[0] if guard else ""
+            closure = {}
+            for job in jobs:
+                seen, todo = set(), list(needs[job])
+                while todo:
+                    name = todo.pop()
+                    if name not in seen:
+                        seen.add(name)
+                        todo.extend(needs.get(name, ()))
+                closure[job] = seen
+            return closure, guards
+
+        def problems(text: str) -> list[str]:
+            closure, guards = ancestors_and_guards(text)
+            found = []
+            for job in ("gpu-macos-arm64", "sterile-consumer"):
+                if any(guards[ancestor] for ancestor in closure[job]) and not re.search(
+                        r"\b(?:cancelled|always|success|failure)\(\)", guards[job]):
+                    found.append(job)
+            return found
+
+        gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
+        self.assertEqual(problems(gpu), [])
+        closure, _ = ancestors_and_guards(gpu)
+        self.assertEqual(closure["sterile-consumer"], {"gpu-macos-arm64", "decide"})
+        # Control: the bare guard on either proof job is caught.
+        self.assertEqual(problems(gpu.replace(STERILE_GUARD, GPU_GUARD)), ["sterile-consumer"])
+        self.assertEqual(problems(gpu.replace(GPU_JOB_GUARD, GPU_GUARD)),
+                         ["gpu-macos-arm64"])
+
     def test_sterile_consumer_takes_its_own_class_only_when_both_variables_are_set(self) -> None:
         gpu_expression = GPU_RUNS_ON[len("runs-on: ${{ fromJSON("):-len(") }}")]
         # Read from the workflow itself, not the pinned constant.
@@ -1331,13 +1582,18 @@ class RunnerPolicyTests(unittest.TestCase):
     def test_destroyed_group_cancellation_cannot_skip_or_satisfy_a_proof(self) -> None:
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
         jobs = workflow_jobs(gpu)
-        self.assertEqual(sorted(jobs), ["cancel-destroyed-groups", "gpu-macos-arm64", "sterile-consumer"])
+        self.assertEqual(sorted(jobs), ["cancel-destroyed-groups", "decide",
+                                        "gpu-macos-arm64", "sterile-consumer"])
         # A job skipped because a job it needs failed reports a passing required
-        # check, so neither proof job may depend on the helper.
+        # check, so neither proof job may depend on the helper. The proof job
+        # needs only decide, and runs whatever it concluded.
         needs = {job: [line.strip() for line in body.splitlines() if line.startswith("    needs:")]
                  for job, body in jobs.items()}
-        self.assertEqual(needs["gpu-macos-arm64"], [])
+        self.assertEqual(needs["gpu-macos-arm64"], ["needs: decide"])
         self.assertEqual(needs["sterile-consumer"], ["needs: gpu-macos-arm64"])
+        self.assertEqual(needs["decide"], [])
+        self.assertEqual([line for line in jobs["gpu-macos-arm64"].splitlines()
+                          if line.startswith("    if:")], [GPU_JOB_GUARD])
         for job in ("gpu-macos-arm64", "sterile-consumer"):
             self.assertNotIn("cancel-destroyed-groups", jobs[job], job)
         helper = jobs["cancel-destroyed-groups"]
@@ -1355,12 +1611,22 @@ class RunnerPolicyTests(unittest.TestCase):
         gpu = (WORKFLOWS / "gpu-macos.yml").read_text(encoding="utf-8")
         assert_gpu_local_runner_policy(gpu)
         mutations = {
-            "truthy": gpu.replace(GPU_GUARD, GPU_GUARD + " || true"),
+            "truthy": gpu.replace(STERILE_GUARD, STERILE_GUARD[:-len(") }}")] + " || true) }}"),
+            "truthy proof job": gpu.replace(GPU_JOB_GUARD, GPU_JOB_GUARD[:-len(") }}")] + " || true) }}"),
             "missing event clause": gpu.replace(
                 "github.event_name != 'pull_request' || ", "", 2
             ),
-            "commented guard": gpu.replace("    if: github.event_name", "    # if: github.event_name", 2),
+            "commented guard": gpu.replace(STERILE_GUARD, "    # " + STERILE_GUARD.lstrip()),
+            "commented proof job guard": gpu.replace(GPU_JOB_GUARD, "    # " + GPU_JOB_GUARD.lstrip()),
+            # Without !cancelled() a failed decide skips the required context.
+            "skippable proof job": gpu.replace(GPU_JOB_GUARD, GPU_GUARD),
+            # Without its own status check a skipped decide skips it.
+            "skippable sterile job": gpu.replace(STERILE_GUARD, GPU_GUARD),
+            "sterile after a failed proof": gpu.replace(
+                STERILE_GUARD, STERILE_GUARD.replace(" && needs.gpu-macos-arm64.result == 'success'", "")),
         }
+        for name, mutated in mutations.items():
+            self.assertNotEqual(mutated, gpu, name)
         for name, mutated in mutations.items():
             with self.subTest(mutation=name):
                 with self.assertRaises(AssertionError):
