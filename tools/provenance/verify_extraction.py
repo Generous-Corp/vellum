@@ -1004,11 +1004,15 @@ def renderer_pin_errors(
     exported under; it keeps its identity, origin and blob checks.
     """
     lock = json.loads((root / "provenance/third-party-lock.json").read_text(encoding="utf-8"))
+    renderer_lock = json.loads((root / "gpu-runtime/renderer-lock.json").read_text(encoding="utf-8"))
     renderer = lock["runtime_toolchain_dependencies"]["renderer"]
     artifact = renderer["artifact"]
     identities = renderer["source_identities"]
     expected = {
-        "skia_branch": artifact["release_tag"],
+        # Pulp's source pin names the Skia milestone/ref.  The builder release
+        # tag may carry an attestation suffix (for example -attested.1), so
+        # keep that immutable release identity separate from the source ref.
+        "skia_branch": renderer_lock["milestone"],
         "skia_commit": identities["skia"]["commit"],
         "built_dawn": identities["dawn"]["commit"],
         "skia_builder_ref": identities["builder"]["commit"],

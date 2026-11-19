@@ -3149,10 +3149,15 @@ class RendererPinTests(unittest.TestCase):
         (self.root / "provenance/mirror/receipts").mkdir(parents=True)
         lock = json.loads((MODULE_PATH.parents[2] / "provenance/third-party-lock.json").read_text())
         (self.root / "provenance/third-party-lock.json").write_text(json.dumps(lock))
+        renderer_lock_path = MODULE_PATH.parents[2] / "gpu-runtime/renderer-lock.json"
+        (self.root / "gpu-runtime").mkdir(parents=True, exist_ok=True)
+        (self.root / "gpu-runtime/renderer-lock.json").write_text(renderer_lock_path.read_text())
         renderer = lock["runtime_toolchain_dependencies"]["renderer"]
         artifact, identities = renderer["artifact"], renderer["source_identities"]
         self.matching_pin = {
-            "skia_branch": artifact["release_tag"],
+            "skia_branch": json.loads(
+                (MODULE_PATH.parents[2] / "gpu-runtime/renderer-lock.json").read_text()
+            )["milestone"],
             "skia_commit": identities["skia"]["commit"],
             "built_dawn": identities["dawn"]["commit"],
             "skia_builder_ref": identities["builder"]["commit"],

@@ -1036,6 +1036,11 @@ class RunnerPolicyTests(unittest.TestCase):
             'git show "$SOURCE_COMMIT:provenance/third-party-lock.json"',
             eligibility_step,
         )
+        self.assertIn(
+            'git show "$SOURCE_COMMIT:gpu-runtime/renderer-lock.json"',
+            eligibility_step,
+        )
+        self.assertIn('json.load(open(f"{root}/renderer-lock.json"', eligibility_step)
         for proof in ("archive", "legal-manifest", "toolchain-receipt",
                       "provenance-bundle"):
             self.assertIn(f'("{proof}"', eligibility_step)
