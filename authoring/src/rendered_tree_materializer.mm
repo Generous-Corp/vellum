@@ -381,7 +381,7 @@ bool parse_linear_gradient_value(
         return false;
     }
     if (stops.count > kMaximumGradientStops) {
-        set_error(error, name + " exceeds the 64-stop limit");
+        set_error(error, name + " exceeds the " + std::to_string(kMaximumGradientStops) + "-stop limit");
         return false;
     }
     float previous = -1.0F;
@@ -1714,7 +1714,8 @@ bool materialize_plot(
             std::to_string(vellum::graphics::kMaxPlotSlots));
     }
     if (!count(@"audioChannel", spec.audio_channel, vellum::graphics::kMaxPlotAudioChannel)) {
-        return reject("audioChannel", "audioChannel must be a whole number of at most 1024");
+        return reject("audioChannel", "audioChannel must be a whole number of at most " +
+                                          std::to_string(vellum::graphics::kMaxPlotAudioChannel));
     }
     const auto number = [&](NSString* key, float& value) {
         id raw = source[key];
@@ -1993,7 +1994,7 @@ bool parse_tracks(id raw, const std::string& identity, vellum::graphics::SceneNo
     };
     if (![raw isKindOfClass:NSArray.class]) return fail("must be an array");
     NSArray* tracks = raw;
-    if (tracks.count > kMaximumTracksPerNode) return fail("a node has at most 32 tracks");
+    if (tracks.count > kMaximumTracksPerNode) return fail("a node has at most " + std::to_string(kMaximumTracksPerNode) + " tracks");
     for (id track_value in tracks) {
         if (![track_value isKindOfClass:NSDictionary.class]) return fail("a track must be an object");
         NSDictionary* source = track_value;
@@ -2024,7 +2025,8 @@ bool parse_tracks(id raw, const std::string& identity, vellum::graphics::SceneNo
         }
         NSArray* keyframes = source[@"keyframes"];
         if (keyframes.count > kMaximumKeyframesPerTrack) {
-            return fail("a track has at most 256 keyframes");
+            return fail("a track has at most " + std::to_string(kMaximumKeyframesPerTrack) +
+                        " keyframes");
         }
         const bool color = vellum::graphics::is_color_property(track.property);
         for (id key_value in keyframes) {

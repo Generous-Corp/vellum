@@ -1,4 +1,5 @@
 import { services } from './services.js';
+import { utf8ByteLength } from './utf8.js';
 import {
     adoptLiveEffects,
     cloneEffect,
@@ -404,10 +405,10 @@ function pathKeyword(value, path, names) {
 }
 
 function validatePath(properties, path) {
-    if (typeof properties.d !== 'string' || properties.d.length > MAXIMUM_PATH_DATA_LENGTH) {
+    if (typeof properties.d !== 'string' || utf8ByteLength(properties.d) > MAXIMUM_PATH_DATA_LENGTH) {
         throw new TypeError(
             `${path}.Path d must be SVG path data of at most ` +
-            `${MAXIMUM_PATH_DATA_LENGTH} characters`,
+            `${MAXIMUM_PATH_DATA_LENGTH} UTF-8 bytes`,
         );
     }
     const output = { d: properties.d };
@@ -472,9 +473,9 @@ function vectorMatrix(value, path) {
 }
 
 function vectorPathData(value, path) {
-    if (typeof value !== 'string' || value.length > MAXIMUM_PATH_DATA_LENGTH) {
+    if (typeof value !== 'string' || utf8ByteLength(value) > MAXIMUM_PATH_DATA_LENGTH) {
         throw new TypeError(
-            `${path} must be SVG path data of at most ${MAXIMUM_PATH_DATA_LENGTH} characters`);
+            `${path} must be SVG path data of at most ${MAXIMUM_PATH_DATA_LENGTH} UTF-8 bytes`);
     }
 }
 
@@ -880,10 +881,10 @@ function materialize(value, runtime, path) {
             throw new Error(`${path}.TextInput requires an explicit stable id`);
         }
         if (typeof value.props.value !== 'string' ||
-            value.props.value.length > MAXIMUM_TEXT_INPUT_LENGTH) {
+            utf8ByteLength(value.props.value) > MAXIMUM_TEXT_INPUT_LENGTH) {
             throw new TypeError(
                 `${path}.TextInput value must be a string of at most ` +
-                `${MAXIMUM_TEXT_INPUT_LENGTH} code units`,
+                `${MAXIMUM_TEXT_INPUT_LENGTH} UTF-8 bytes`,
             );
         }
         if (value.props.placeholder !== undefined &&
@@ -987,12 +988,12 @@ function materialize(value, runtime, path) {
     else if (typeof value.props.text === 'string') node.text = value.props.text;
     if (typeof value.props.source === 'string') node.source = value.props.source;
     if (typeof value.props.anchor === 'string' && value.props.anchor.length > 0 &&
-        value.props.anchor.length <= MAX_SOURCE_ANCHOR_BYTES) {
+        utf8ByteLength(value.props.anchor) <= MAX_SOURCE_ANCHOR_BYTES) {
         node.anchor = value.props.anchor;
     }
     const where = value.props.sourceLocation;
     if (where !== null && typeof where === 'object' && typeof where.file === 'string' &&
-        where.file.length > 0 && where.file.length <= MAX_SOURCE_FILE_BYTES) {
+        where.file.length > 0 && utf8ByteLength(where.file) <= MAX_SOURCE_FILE_BYTES) {
         node.sourceLocation = { file: where.file };
         for (const key of ['line', 'column']) {
             if (Number.isInteger(where[key]) && where[key] >= 0) {
