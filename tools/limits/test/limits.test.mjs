@@ -95,3 +95,15 @@ test('the generator exits with a usage error when arguments are missing', () => 
     assert.equal(runGenerator([]).status, 2);
     assert.equal(runGenerator(['--header', fixtureHeader]).status, 2);
 });
+
+test('--check with several outputs fails when any one drifts and names it', () => {
+    withTemporaryDirectory((directory) => {
+        const drifted = join(directory, 'drifted.generated.js');
+        writeFileSync(drifted, readFileSync(fixtureExpected, 'utf8').replace('= 64;', '= 65;'));
+        const result = runGenerator(['--header', fixtureHeader, '--label', label,
+            '--out', fixtureExpected, '--out', drifted, '--check']);
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /drifted\.generated\.js/);
+        assert.doesNotMatch(result.stderr, /limits_fixture\.generated\.js/);
+    });
+});
