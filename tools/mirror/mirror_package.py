@@ -500,8 +500,22 @@ def source_compile_options_for(repo: Path, receipt: dict[str, Any],
     options = json.loads(configures.pop())
     if not isinstance(options, dict):
         raise PlanError("the landed closures record no configure options")
-    exported = {str(row.get("mirror_path", "")).removeprefix(f"{MIRROR_DIR}/")
-                for row in receipt.get("files", [])}
+    # The selected platform closures, rather than the Darwin receipt, define
+    # the source set for a non-macOS plan. A platform record may carry sources
+    # absent from the macOS export, and those sources still need their CMake
+    # per-source options evaluated. Keep the receipt file set for macOS so
+    # exported files that are not compiled by a closure still fail closed.
+    if platform == RECEIPT_PLATFORM:
+        exported = {str(row.get("mirror_path", "")).removeprefix(f"{MIRROR_DIR}/")
+                    for row in receipt.get("files", [])}
+    else:
+        exported = {
+            str(source)
+            for _, closure in units
+            for target in closure.get("targets", [])
+            for source in target.get("sources", [])
+            if isinstance(source, str) and not source.startswith("@")
+        }
     if transferred(repo):
         # A ledger-added source is compiled like an exported one, so the
         # framework's CMake may set its per-source options the same way.

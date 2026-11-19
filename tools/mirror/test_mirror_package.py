@@ -919,6 +919,18 @@ class SourceCompileOptionsTest(unittest.TestCase):
         with self.assertRaises(mp.source_compile_options.SourceOptionsError):
             self.evaluate(text, dict(self.RELEASE, CMAKE_SYSTEM_NAME="Haiku"))
 
+    def test_recorded_options_cannot_override_derived_platform_variables(self) -> None:
+        text = ('if(UNIX)\n'
+                '  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-fPIC")\n'
+                'elseif(WIN32)\n'
+                '  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "/W4")\n'
+                'else()\n'
+                '  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-unknown")\n'
+                'endif()\n')
+        linux = dict(self.RELEASE, CMAKE_SYSTEM_NAME="Linux", APPLE="1", UNIX="",
+                     WIN32="1", ANDROID="1", IOS="1", EMSCRIPTEN="1", LINUX="")
+        self.assertEqual(self.evaluate(text, linux), {"core/x/src/a.cpp": ["-fPIC"]})
+
     # The compiler facts Pulp's exporter records (vellum_closure.py
     # cxx_compiler_options): ids copied from CMakeCXXCompiler.cmake, the
     # simulate id "" when there is none, and MSVC "1" when either id is MSVC,
@@ -1664,6 +1676,22 @@ class PlatformRecordPlanTest(unittest.TestCase):
         self.assertEqual(plan["closures"], ["provenance/framework/platforms/linux-x64/foundation.json"])
         sources = self.sources(plan)
         self.assertEqual(sources.count(self.planned(self.LINUX_HOST)), 1)  # once, though closure and row both name it
+
+    def test_platform_only_closure_source_gets_its_recorded_compile_options(self) -> None:
+        source = "framework/core/runtime/src/linux_only.cpp"
+        cmake = "framework/core/runtime/CMakeLists.txt"
+        self.fixture.write(source, b"int linux_only() { return 5; }\n")
+        self.fixture.write(cmake, (b"add_library(pulp-runtime STATIC src/a.cpp src/linux_only.cpp)\n"
+                                   b"set_source_files_properties(src/linux_only.cpp PROPERTIES COMPILE_OPTIONS \"-O3\")\n"))
+        transfer = json.loads((self.fixture.repo / mp.FRAMEWORK_TRANSFER).read_text())
+        transfer["records"].extend([
+            {"framework_path": source, "framework_git_blob_sha": mp.git_blob_sha((self.fixture.repo / source).read_bytes())},
+            {"framework_path": cmake, "framework_git_blob_sha": mp.git_blob_sha((self.fixture.repo / cmake).read_bytes())},
+        ])
+        self.fixture.write(mp.FRAMEWORK_TRANSFER, json.dumps(transfer).encode())
+        self.write_record(["core/runtime/src/linux_only.cpp"])
+        plan = self.plan("linux-x64")
+        self.assertEqual(plan["source_compile_options"]["core/runtime/src/linux_only.cpp"], ["-O3"])
 
     def test_the_macos_plan_is_unchanged_by_another_platforms_record(self) -> None:
         before = render_snapshot(mp, "no-ledger")

@@ -324,13 +324,20 @@ def configure_environment(options: dict[str, str]) -> dict[str, object]:
     system = options.get("CMAKE_SYSTEM_NAME")
     if system not in SYSTEM_VARIABLES:
         raise SourceOptionsError(f"no CMake platform variables are known for {system!r}")
-    # Platform defaults come first; anything the configure recorded wins, so a
-    # recorded compiler fact is never replaced by what the platform usually has.
-    env: dict[str, object] = dict(SYSTEM_VARIABLES[system])
+    # Recorded cache values provide compiler facts and project options, but
+    # they cannot override the platform facts CMake derives from the target
+    # system. Import the recorded values first, then restore those derived
+    # variables below.
+    env: dict[str, object] = dict(options)
+    # MSVC is recorded from the compiler probe and must be allowed to override
+    # the platform's usual default, unlike the target-system variables.
+    env.update({name: value for name, value in SYSTEM_VARIABLES[system].items()
+                if name != "MSVC"})
+    env["CMAKE_SYSTEM_NAME"] = system
     if system == "Darwin":
-        env.update({"CMAKE_CXX_COMPILER_ID": "AppleClang", "CMAKE_C_COMPILER_ID": "AppleClang",
-                    "CMAKE_OBJCXX_COMPILER_ID": "AppleClang"})
-    env.update({name: value for name, value in options.items()})
+        env.setdefault("CMAKE_CXX_COMPILER_ID", "AppleClang")
+        env.setdefault("CMAKE_C_COMPILER_ID", "AppleClang")
+        env.setdefault("CMAKE_OBJCXX_COMPILER_ID", "AppleClang")
     env.update({
         "CMAKE_C_FLAGS": "", "CMAKE_CXX_FLAGS": "",
         "CMAKE_SOURCE_DIR": SOURCE_ROOT, "PROJECT_SOURCE_DIR": SOURCE_ROOT,
