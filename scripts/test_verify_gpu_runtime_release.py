@@ -151,7 +151,7 @@ class Renderer(unittest.TestCase):
         url, asset, _ = release.renderer_asset(self.lock())
         self.assertEqual(url, f"{release.BUILDER}/releases/download/chrome/m147-attested.1/skia.zip")
         for bad in ({"repository": "https://evil.example/skia-builder"}, {"milestone": "chrome/m147/../x"},
-                    {"release_tag": "chrome/m147/../x"},
+                    {"release_tag": "chrome/m147/../x"}, {"release_tag": "chrome/m146-attested.1"},
                     {"asset": "--output=/etc/x"}, {"sha256": "nope"}):
             with self.subTest(bad=bad), self.assertRaises(release.ReleaseError):
                 release.renderer_asset(self.lock(**bad))

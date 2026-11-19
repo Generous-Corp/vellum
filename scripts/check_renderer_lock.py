@@ -71,6 +71,9 @@ def load_lock(root: Path, problems: list[str]) -> dict | None:
         problems.append(f"{LOCK}: milestone is not chrome/mNNN")
     if not isinstance(lock.get("release_tag"), str) or not RELEASE_TAG.fullmatch(lock["release_tag"]):
         problems.append(f"{LOCK}: release_tag is not an immutable chrome/mNNN-* tag")
+    elif isinstance(lock.get("milestone"), str) and \
+            not lock["release_tag"].startswith(lock["milestone"] + "-"):
+        problems.append(f"{LOCK}: release_tag {lock['release_tag']} is not a tag of milestone {lock['milestone']}")
     builder = lock.get("builder") or {}
     sources = lock.get("sources") or {}
     for label, value in (("builder.commit", builder.get("commit")),
@@ -152,6 +155,11 @@ def check_third_party_lock(root: Path, lock: dict, problems: list[str]) -> None:
             problems.append(f"{relative}: {name} source commit differs from the lock")
     if identities.get("skia", {}).get("ref") != f"refs/heads/{lock['milestone']}":
         problems.append(f"{relative}: skia source ref is not refs/heads/{lock['milestone']}")
+    attested = json.loads((root / RECORDS[1]).read_text(encoding="utf-8"))
+    run_id = str(attested.get("build_provenance", {}).get("run", {}).get("run_id"))
+    evidence = identities.get("builder", {}).get("evidence", "")
+    if not re.search(rf"\brun {re.escape(run_id)}\b", evidence):
+        problems.append(f"{relative}: builder evidence does not name attestation run {run_id}")
     rows = [row for row in data["dependencies"]
             if row.get("name") == "Skia Graphite and Dawn renderer toolchain"]
     if len(rows) != 1 or rows[0].get("version") != lock["release_tag"] \

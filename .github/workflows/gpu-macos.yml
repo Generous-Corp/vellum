@@ -420,6 +420,7 @@ jobs:
           if (repository != "https://github.com/danielraffel/skia-builder"
                   or not re.fullmatch(r"chrome/m[0-9]+", milestone)
                   or not re.fullmatch(r"chrome/m[0-9]+-[A-Za-z0-9][A-Za-z0-9.-]*", release_tag)
+                  or not release_tag.startswith(milestone + "-")
                   or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", asset)
                   or not re.fullmatch(r"[0-9a-f]{64}", sha256)):
               sys.exit("renderer lock names an unexpected skia-builder asset")
