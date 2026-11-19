@@ -15,6 +15,15 @@ import { compositingProblems } from './compositing.js';
 import { DesignIRValidationError } from './errors.js';
 import { indexTree } from './identity.js';
 import { jsonEqual } from './stable-json.js';
+import {
+    MAX_FLOAT32,
+    MAX_KEYFRAMES_PER_TRACK,
+    MAX_PLOT_AUDIO_CHANNEL,
+    MAX_PLOT_SLOTS,
+    MAX_PLOT_STROKE,
+    MAX_TRACKS_PER_NODE,
+    SPRING_REST_THRESHOLD,
+} from './limits.generated.js';
 import { designIRVersionProblem } from './versions.js';
 
 export function validateDesignIR(value, options = {}) {
@@ -356,8 +365,6 @@ const PLOT_FIELDS = new Set([
 const PLOT_SOURCES = new Map([
     ['line', ['scalar', 'vector']], ['area', ['scalar', 'vector']], ['bar', ['vector']], ['meter', ['meter']],
 ]);
-const MAX_PLOT_SLOTS = 4194304;
-const PLOT_FLOAT_MAX = 3.4028234663852886e38;
 
 // A plot binding names a value-feed channel and how to draw it, under the
 // rules the renderer's `plot_is_valid` applies; samples arrive at run time.
@@ -395,21 +402,21 @@ function validatePlotBinding(plot, path, issues) {
         }
     };
     integer('slots', 1, MAX_PLOT_SLOTS);
-    integer('audioChannel', 0, 1024);
+    integer('audioChannel', 0, MAX_PLOT_AUDIO_CHANNEL);
     if (plot.style !== 'meter' && plot.slots === undefined) {
         issues.push(issue(`${path}.slots`, 'type', 'a line, area or bar plot declares its slots'));
     }
     // The renderer holds these as single-precision floats, so a value must
     // fit one, and limits and the range compare the rounded values.
     const finite = (value) => typeof value === 'number' && Number.isFinite(value) &&
-        Math.abs(value) <= PLOT_FLOAT_MAX;
+        Math.abs(value) <= MAX_FLOAT32;
     for (const key of ['min', 'max', 'baseline', 'lineWidth', 'barGap', 'peakWidth']) {
         if (plot[key] === undefined) continue;
         if (!finite(plot[key])) {
             issues.push(issue(`${path}.${key}`, 'type', `${key} must be a finite number within float range`));
         } else if (['lineWidth', 'barGap', 'peakWidth'].includes(key) &&
-            (Math.fround(plot[key]) < 0 || Math.fround(plot[key]) > 4096)) {
-            issues.push(issue(`${path}.${key}`, 'range', `${key} must be from 0 to 4096`));
+            (Math.fround(plot[key]) < 0 || Math.fround(plot[key]) > MAX_PLOT_STROKE)) {
+            issues.push(issue(`${path}.${key}`, 'range', `${key} must be from 0 to ${MAX_PLOT_STROKE}`));
         }
     }
     const low = plot.min === undefined ? 0 : plot.min;
@@ -434,8 +441,6 @@ const COLOR_PROPERTIES = new Set([
     'fill', 'strokeColor', 'shadowColor', 'gradientStopColor', 'textRunColor',
 ]);
 const INDEXED_PROPERTIES = new Set(['shadowColor', 'gradientStopColor', 'textRunColor']);
-const FLOAT_MAX = 3.4028234663852886e38;
-const SPRING_REST_THRESHOLD = 1e-4;
 const EASING_KEYWORDS = new Set(['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out']);
 const HEX_COLOR = /^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/;
 
@@ -446,7 +451,9 @@ function validateTracks(tracks, path, issues) {
         issues.push(issue(path, 'type', 'tracks must be an array'));
         return;
     }
-    if (tracks.length > 32) issues.push(issue(path, 'range', 'a node has at most 32 tracks'));
+    if (tracks.length > MAX_TRACKS_PER_NODE) {
+        issues.push(issue(path, 'range', `a node has at most ${MAX_TRACKS_PER_NODE} tracks`));
+    }
     const seen = new Set();
     tracks.forEach((track, index) => {
         const trackPath = `${path}[${index}]`;
@@ -475,8 +482,8 @@ function validateTracks(tracks, path, issues) {
             issues.push(issue(trackPath, 'duplicate', 'two tracks animate the same property'));
         }
         seen.add(address);
-        if (!Array.isArray(track.keyframes) || track.keyframes.length === 0 || track.keyframes.length > 256) {
-            issues.push(issue(`${trackPath}.keyframes`, 'type', 'keyframes must be an array of 1 to 256 keyframes'));
+        if (!Array.isArray(track.keyframes) || track.keyframes.length === 0 || track.keyframes.length > MAX_KEYFRAMES_PER_TRACK) {
+            issues.push(issue(`${trackPath}.keyframes`, 'type', `keyframes must be an array of 1 to ${MAX_KEYFRAMES_PER_TRACK} keyframes`));
             return;
         }
         const color = COLOR_PROPERTIES.has(track.property);
@@ -490,7 +497,7 @@ function validateTracks(tracks, path, issues) {
                     issues.push(issue(`${keyPath}.${key}`, 'unknown-field', 'a keyframe carries time, value and easing'));
                 }
             }
-            if (typeof keyframe.time !== 'number' || !Number.isFinite(keyframe.time) || Math.abs(keyframe.time) > FLOAT_MAX) {
+            if (typeof keyframe.time !== 'number' || !Number.isFinite(keyframe.time) || Math.abs(keyframe.time) > MAX_FLOAT32) {
                 issues.push(issue(`${keyPath}.time`, 'type', 'keyframe time must be a finite number of seconds within float range'));
             } else if (!(keyframe.time > previous)) {
                 issues.push(issue(`${keyPath}.time`, 'order', 'keyframe times must strictly increase'));
@@ -498,7 +505,7 @@ function validateTracks(tracks, path, issues) {
             if (typeof keyframe.time === 'number') previous = keyframe.time;
             const valid = color
                 ? typeof keyframe.value === 'string' && HEX_COLOR.test(keyframe.value)
-                : typeof keyframe.value === 'number' && Number.isFinite(keyframe.value) && Math.abs(keyframe.value) <= FLOAT_MAX;
+                : typeof keyframe.value === 'number' && Number.isFinite(keyframe.value) && Math.abs(keyframe.value) <= MAX_FLOAT32;
             if (!valid) {
                 issues.push(issue(
                     `${keyPath}.value`,
@@ -565,7 +572,7 @@ function validateEasing(easing, path, issues) {
     }
     requireObject(easing, path, issues);
     if (!isObject(easing)) return;
-    const finite = (value) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= FLOAT_MAX;
+    const finite = (value) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= MAX_FLOAT32;
     const fields = {
         cubicBezier: ['type', 'x1', 'y1', 'x2', 'y2'],
         steps: ['type', 'steps', 'position'],

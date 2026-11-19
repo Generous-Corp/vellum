@@ -40,11 +40,11 @@ bool protocol_integer(double number, std::uint64_t limit, std::uint64_t& output)
 namespace {
 
 constexpr std::size_t kMaximumJsonBytes = 16U * 1024U * 1024U;
-constexpr std::size_t kMaximumNodes = 100000U;
-constexpr std::size_t kMaximumDepth = 256U;
-constexpr NSUInteger kMaximumGradientStops = 64U;
-constexpr NSUInteger kMaximumTokens = 65536U;
-constexpr NSUInteger kMaximumTextInputBytes = 64U * 1024U;
+constexpr std::size_t kMaximumNodes = vellum::graphics::kMaxDesignNodes;
+constexpr std::size_t kMaximumDepth = vellum::graphics::kMaxDesignDepth;
+constexpr NSUInteger kMaximumGradientStops = vellum::graphics::kMaxGradientStops;
+constexpr NSUInteger kMaximumTokens = vellum::graphics::kMaxDesignTokens;
+constexpr NSUInteger kMaximumTextInputBytes = vellum::graphics::kMaxTextInputBytes;
 constexpr NSUInteger kMaximumPlaceholderBytes = 4U * 1024U;
 // Retained-tree consumers share these defaults across native and web. Controls
 // retain the established 44-point density; zero keeps an unspecified generic
@@ -381,7 +381,7 @@ bool parse_linear_gradient_value(
         return false;
     }
     if (stops.count > kMaximumGradientStops) {
-        set_error(error, name + " exceeds the 64-stop limit");
+        set_error(error, name + " exceeds the " + std::to_string(kMaximumGradientStops) + "-stop limit");
         return false;
     }
     float previous = -1.0F;
@@ -702,8 +702,8 @@ struct MaterializeContext final {
     std::optional<std::uint32_t> root_background_token;
 };
 
-constexpr std::size_t kMaximumSourceFileBytes = 4096U;
-constexpr std::size_t kMaximumAnchorBytes = 1024U;
+constexpr std::size_t kMaximumSourceFileBytes = vellum::graphics::kMaxSourceFileBytes;
+constexpr std::size_t kMaximumAnchorBytes = vellum::graphics::kMaxSourceAnchorBytes;
 
 // Reads the optional `source` ({file, line, column}) and `anchor` fields of an
 // authored node. Malformed values are ignored: source is diagnostic metadata
@@ -1714,7 +1714,8 @@ bool materialize_plot(
             std::to_string(vellum::graphics::kMaxPlotSlots));
     }
     if (!count(@"audioChannel", spec.audio_channel, vellum::graphics::kMaxPlotAudioChannel)) {
-        return reject("audioChannel", "audioChannel must be a whole number of at most 1024");
+        return reject("audioChannel", "audioChannel must be a whole number of at most " +
+                                          std::to_string(vellum::graphics::kMaxPlotAudioChannel));
     }
     const auto number = [&](NSString* key, float& value) {
         id raw = source[key];
@@ -1851,8 +1852,8 @@ bool materialize_image(
 // "ease-in-out"), or an object with `type` "cubicBezier" (x1, y1, x2, y2),
 // "steps" (steps, position "start", "end", "none" or "both") or "spring"
 // (stiffness, damping, mass, velocity).
-constexpr std::size_t kMaximumTracksPerNode = 32U;
-constexpr std::size_t kMaximumKeyframesPerTrack = 256U;
+constexpr std::size_t kMaximumTracksPerNode = vellum::graphics::kMaxTracksPerNode;
+constexpr std::size_t kMaximumKeyframesPerTrack = vellum::graphics::kMaxKeyframesPerTrack;
 
 std::optional<vellum::graphics::AnimatedProperty> animated_property(id value) {
     using vellum::graphics::AnimatedProperty;
@@ -1993,7 +1994,7 @@ bool parse_tracks(id raw, const std::string& identity, vellum::graphics::SceneNo
     };
     if (![raw isKindOfClass:NSArray.class]) return fail("must be an array");
     NSArray* tracks = raw;
-    if (tracks.count > kMaximumTracksPerNode) return fail("a node has at most 32 tracks");
+    if (tracks.count > kMaximumTracksPerNode) return fail("a node has at most " + std::to_string(kMaximumTracksPerNode) + " tracks");
     for (id track_value in tracks) {
         if (![track_value isKindOfClass:NSDictionary.class]) return fail("a track must be an object");
         NSDictionary* source = track_value;
@@ -2024,7 +2025,8 @@ bool parse_tracks(id raw, const std::string& identity, vellum::graphics::SceneNo
         }
         NSArray* keyframes = source[@"keyframes"];
         if (keyframes.count > kMaximumKeyframesPerTrack) {
-            return fail("a track has at most 256 keyframes");
+            return fail("a track has at most " + std::to_string(kMaximumKeyframesPerTrack) +
+                        " keyframes");
         }
         const bool color = vellum::graphics::is_color_property(track.property);
         for (id key_value in keyframes) {
