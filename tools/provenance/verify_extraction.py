@@ -231,6 +231,7 @@ RENAMED_MIRROR_EXEMPT_PATHS = {
     "tools/mirror/consumer/direct_gpu_main.cpp",
     "tools/mirror/consumer/direct_main.cpp",
     "tools/mirror/consumer/main.cpp",
+    "tools/mirror/consumer/plugin_view_host_main.cpp",
     "tools/mirror/consumer/runtime_image_census_main.cpp",
     "tools/mirror/consumer/v8_main.cpp",
     # The mirror package's own build glue: the provider anchor compiled into

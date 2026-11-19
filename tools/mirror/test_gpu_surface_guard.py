@@ -14,9 +14,20 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parent))
 import gpu_surface_guard as guard  # noqa: E402
 
-FWD = "#pragma once\n#if defined(PULP_GPU_RUNTIME)\nnamespace gpu_runtime {\nclass GpuSurface;\n}\n#endif\n"
+FWD = ("#pragma once\n#if defined(PULP_GPU_RUNTIME)\n"
+       "// Forward declarations only.\n"
+       "namespace gpu_runtime {\nclass GpuSurface;\nnamespace bench {\nstruct PerfCounters;\n}\n}\n"
+       "namespace render {\nusing gpu_runtime::GpuSurface;\n}\n#endif\n")
 SURFACE = "// surface\n#pragma once\n#include <gpu_runtime/gpu_surface.hpp>\n"
 WINDOW_HOST = "#pragma once\n#include <pulp/platform/gpu_fwd.hpp>\nstruct WindowHost {};\n"
+# A header that holds the device type by pointer only, as view/plugin_view_host.hpp does.
+PLUGIN_VIEW_HOST = ("#pragma once\n#include <pulp/platform/gpu_fwd.hpp>\n"
+                    "struct PluginViewHost {\n"
+                    "    virtual ~PluginViewHost() = default;\n"
+                    "    virtual render::GpuSurface* gpu_surface() const { return nullptr; }\n"
+                    "};\n")
+# A header that reaches the definition, as render/skia_surface.hpp does.
+SKIA_SURFACE = "#pragma once\n#include <pulp/render/gpu_surface.hpp>\nstruct SkiaSurface {};\n"
 CANVAS = "#pragma once\nstruct Canvas {};\n"
 
 
@@ -27,6 +38,8 @@ class Mirror:
             "mirror/core/platform/include/pulp/platform/gpu_fwd.hpp": FWD,
             "mirror/core/render/include/pulp/render/gpu_surface.hpp": SURFACE,
             "mirror/core/view/include/pulp/view/window_host.hpp": WINDOW_HOST,
+            "mirror/core/view/include/pulp/view/plugin_view_host.hpp": PLUGIN_VIEW_HOST,
+            "mirror/core/render/include/pulp/render/skia_surface.hpp": SKIA_SURFACE,
             "mirror/core/canvas/include/pulp/canvas/canvas.hpp": CANVAS,
             "mirror/core/render/src/gpu_surface.cpp": "#include <gpu_runtime/gpu_surface.hpp>\n",
         }
@@ -58,16 +71,41 @@ class GuardTest(unittest.TestCase):
         self.temporary.cleanup()
 
     def test_choke_headers_are_computed_not_listed(self) -> None:
+        # A forward-declaration-only header is not a choke; the header that
+        # includes <gpu_runtime/...> is. A source file is not a header, and a
+        # header that only includes a choke header is guarded through it.
         self.assertEqual([h["relative"] for h in self.plan["headers"]],
-                         ["pulp/platform/gpu_fwd.hpp", "pulp/render/gpu_surface.hpp"])
-        # A source file is not a header, and a header that only includes a
-        # choke header is guarded through it rather than itself.
-        self.assertNotIn("pulp/view/window_host.hpp", [h["relative"] for h in self.plan["headers"]])
+                         ["pulp/render/gpu_surface.hpp"])
         self.assertEqual((self.root / "generated/gpu-guarded-headers.txt").read_text(),
-                         "pulp/platform/gpu_fwd.hpp\npulp/render/gpu_surface.hpp\n")
+                         "pulp/render/gpu_surface.hpp\n")
+
+    def test_forward_declarations_alone_are_not_a_choke(self) -> None:
+        self.assertFalse(guard.is_choke_header(FWD))
+        self.assertFalse(guard.is_choke_header(
+            "namespace gpu_runtime { class A; struct B; namespace bench { struct C; } }"))
+        self.assertFalse(guard.is_choke_header(PLUGIN_VIEW_HOST))
+
+    def test_anything_beyond_a_forward_declaration_is_a_choke(self) -> None:
+        for text in (
+            SURFACE,
+            '#include "gpu_runtime/gpu_surface.hpp"\n',
+            "namespace gpu_runtime { class GpuSurface { int x; }; }",
+            "namespace gpu_runtime { class GpuSurface; int frames(); }",
+            "namespace gpu_runtime { using Id = int; }",
+            "namespace gpu_runtime::bench { struct PerfCounters; }",
+            "namespace gpu_runtime { class GpuSurface;",  # unbalanced: fail closed
+            "namespace gr = gpu_runtime;\nnamespace gpu_runtime;",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(guard.is_choke_header(text))
+        # A commented-out definition does not count, nor hide a real one.
+        self.assertFalse(guard.is_choke_header(
+            "namespace gpu_runtime { class A; /* class B { }; */ // int f();\n}"))
+        self.assertTrue(guard.is_choke_header(
+            "/* namespace gpu_runtime { class A; } */ namespace gpu_runtime { int f(); }"))
 
     def test_guard_line_goes_right_after_pragma_once(self) -> None:
-        copy = Path(self.plan["headers"][1]["copy"]).read_text()
+        copy = Path(self.plan["headers"][0]["copy"]).read_text()
         self.assertEqual(copy, "// surface\n#pragma once\n" + guard.GUARD_LINE + "\n"
                                "#include <gpu_runtime/gpu_surface.hpp>\n")
 
@@ -148,8 +186,16 @@ class GuardCompileTest(unittest.TestCase):
              "-I", str(self.include), "-I", str(self.root / "gpu_runtime_stub"), str(source)],
             capture_output=True, text=True)
 
-    def test_consumer_including_window_host_fails_with_the_guard(self) -> None:
-        result = self.compile("pulp/view/window_host.hpp")
+    def test_consumer_including_plugin_view_host_compiles(self) -> None:
+        # Holding a GpuSurface* through the forward declaration is supported.
+        for header in ("pulp/view/plugin_view_host.hpp", "pulp/view/window_host.hpp",
+                       "pulp/platform/gpu_fwd.hpp"):
+            with self.subTest(header=header):
+                result = self.compile(header)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_consumer_reaching_the_definition_fails_with_the_guard(self) -> None:
+        result = self.compile("pulp/render/skia_surface.hpp")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(guard.UNSUPPORTED_MESSAGE, result.stderr)
 
@@ -163,7 +209,7 @@ class GuardCompileTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_mirror_build_definition_lifts_the_guard(self) -> None:
-        result = self.compile("pulp/view/window_host.hpp", "-DVELLUM_MIRROR_BUILD=1")
+        result = self.compile("pulp/render/skia_surface.hpp", "-DVELLUM_MIRROR_BUILD=1")
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
