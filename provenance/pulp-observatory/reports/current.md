@@ -894,6 +894,8 @@
 | `vellum-b88d929b9b13d5193125fd2350ecf464f56dcfe0` | framework-to-Pulp | schema | framework-only | 2026-11-23T13:23:47Z |
 | `vellum-7de575c531703bec7ebdc3ef10581354d22eec4e` | framework-to-Pulp | schema | framework-only | 2026-11-23T19:33:13Z |
 | `vellum-b4f18c7c14b4ca1de2b3f2dbf03b9f7d5306ce6a` | framework-to-Pulp | schema | framework-only | 2026-11-23T19:33:13Z |
+| `vellum-be944753dc99f32eee984b5dd700ed620cabee4a` | framework-to-Pulp | schema | framework-only | 2026-11-24T01:16:39Z |
+| `vellum-834614e4c96add6a256601241f8cbfbabd5cb4b1` | framework-to-Pulp | rendering | framework-only | 2026-11-24T04:17:58Z |
 
 ## Release blockers
 
