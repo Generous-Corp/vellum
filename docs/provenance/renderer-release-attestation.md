@@ -84,7 +84,7 @@ Then set the lock's `release_eligibility` to `eligible`, its status to
 ## Where it is checked
 
 - `provenance.yml` runs the contract tests, including the real Sigstore tests
-  against the published chrome/m158-attested.1 bundle (`VELLUM_REQUIRE_REAL_SIGSTORE=1`
+  against the published chrome/m158 bundle (`VELLUM_REQUIRE_REAL_SIGSTORE=1`
   makes them mandatory), and, when the lock is eligible, downloads the
   builder's records and runs `--require-release-eligible` on every commit.
 - `sdk-release.yml` runs `--require-release-eligible` against the lock and
