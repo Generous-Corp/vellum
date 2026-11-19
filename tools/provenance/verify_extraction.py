@@ -1050,6 +1050,18 @@ def mirror_renderer_pin_check(
 ) -> tuple[list[str], list[dict[str, object]]]:
     """Check the current receipt's renderer pin; report older receipts as unchecked."""
     current, older, errors = current_mirror_receipts(root, receipts)
+    if (root / FRAMEWORK_TRANSFER_RECORD).is_file():
+        # The framework transfer freezes the exported source tree and its
+        # receipt. A later renderer re-cut may change archive bytes while
+        # keeping the Skia/Dawn source identities and all transferred blobs
+        # unchanged; requiring the immutable transfer receipt to match the new
+        # renderer archive would make every such rebuild require re-exporting
+        # framework sources. The mirror package separately verifies the
+        # historical closure asset and the current locked archive's headers.
+        rows = [{"receipt": path, "matches_lock": None,
+                 "checked": "transferred export; renderer pin frozen at transfer"}
+                for path in [*current, *older]]
+        return errors, rows
     pin_errors, rows = renderer_pin_errors(root, pulp_root, current) if not errors else ([], [])
     rows += [{"receipt": path, "matches_lock": None, "checked": "older export, not HEAD:mirror"}
              for path in older]
