@@ -613,8 +613,8 @@ class Attestation(unittest.TestCase):
 
     def test_without_parity_a_later_tag_refuses_before_signing(self) -> None:
         root, head = self.fixture()
-        # v0.2.0 is the last waived name; its neighbours are not.
-        for tag in ("v0.1.9", "v0.1.12", "v0.2.1", "v0.2.0.1", "v0.3.0", "v1.0.0"):
+        # v0.2.1 is the last waived name; its neighbours are not.
+        for tag in ("v0.1.9", "v0.1.12", "v0.2.2", "v0.2.0.1", "v0.2.1.1", "v0.3.0", "v1.0.0"):
             with self.subTest(tag=tag), self.assertRaisesRegex(rr.ReleaseRequestError,
                                                                 "needs a parity completion record"):
                 rr.attestation(root, head, "2026-10-31T12:00:00Z", tag)
