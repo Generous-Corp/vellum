@@ -1,9 +1,9 @@
 {
-  "schema": "gpu-runtime.renderer-lock.v1",
+  "schema": "gpu-runtime.renderer-lock.v2",
   "milestone": "chrome/m158",
   "builder": {
     "repository": "https://github.com/danielraffel/skia-builder",
-    "commit": "312f05e24a5d5a45d4a3e70ca70ff3ccff1b4d97"
+    "commit": "1b97010d2f025b4331a9c0db9481c440d1f33042"
   },
   "sources": {
     "skia": "be7d7c3e996e567eda7dc9774274f7a0103cdb8c",
@@ -12,22 +12,23 @@
   "platforms": {
     "macos-arm64": {
       "asset": "skia-build-mac-universal-gpu-release.zip",
-      "sha256": "dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250",
+      "sha256": "1779c7d1ba5c73a0d6a1f33b77fbf30774bbd9f7542c1c42cc5129f57e99fbd4",
       "configuration": "Release",
       "archive_root": "build/mac-gpu/lib/Release",
       "archives": {
-        "libdawn_combined.a": "6c6c5535e3b004ca260f388536c1baa737c11479d0a95865d174888d7d3077f3",
-        "libjsonreader.a": "5ee1e3e660e19dd3f34458aad6a0b3c1f90815d274c40a709e28a6e933be5927",
-        "libskia.a": "4f5e148866dab6f260a80ee6da006539b8f47885daece28489972726295fde1c",
-        "libskottie.a": "b19184f4a82c401be3fb4e37d552bdf9dafc10940f2a8c04a3195702cbbbc5bc",
-        "libskparagraph.a": "4144a0a4d1ce6dadd2c53d379bf21a56f59d16922b2eeac3bff4a0c0768abf53",
-        "libskresources.a": "af723156c3896a5d3a51f09f7bcf464795c5cedb2672cf07e646e2ecdba84024",
-        "libsksg.a": "1e927792c47ee2b6c7e80f0e5b6a33894568f5657fd6f7b69e1bb3ea0e1fe067",
-        "libskshaper.a": "a6a16bedd0bf001f813f03517a919f7c6932128537c60721c1c1be8f151a1e74",
-        "libskunicode_core.a": "e3026eedb11a9af0c245e8f3e227f0ce92e383271e3da8b55e87fdefe89f93cb",
-        "libskunicode_icu.a": "ea7352e2ebab5734852924be28ffba61e99db578f4b065a302cbff9dcae484cb",
-        "libsvg.a": "651c113ade708034b19461016b219a216ef8b2f451e83e60931c9eae1aed594b"
+        "libdawn_combined.a": "337d3beff192f51c0905ac0cc25fc268f9be94cfce58f868a2ede0ad4683c168",
+        "libjsonreader.a": "6d0847dc6cce63f6d63c3e7b227ef43a09eb8b6c7153716740acfa5a236cfbb6",
+        "libskia.a": "8a12c2cb1a09d309f8f2a81cbf73eaf8f02958dd9aa7d5ee8041773d539a2e33",
+        "libskottie.a": "295ae67fa74a7d040aeee43cd549a5b20dac41a1e0ac3d07ac12be18081ae68d",
+        "libskparagraph.a": "564385a6f9c46076136ce1999349e8757cac01556ab3199bb9428522de8130b8",
+        "libskresources.a": "9d5b144d35577cf04f4a43e57f62c1f4bcba9063ba82469690cf2a610d72353d",
+        "libsksg.a": "eff1618bb013afde59cb2e874c0fbcecbba338b95c578570688399e7bcd10753",
+        "libskshaper.a": "b717dd30d71a6cb5cf1841d5b7ffc09f90b19bad5792c982fbd6af644cea0e7d",
+        "libskunicode_core.a": "90a12de6bcb5c8528e956d127f67b715b75ba1d67e2b19ff5b59584de04ba942",
+        "libskunicode_icu.a": "e1425daf2b20cab865424bc3f20c46ee10a69c53385a0a979a008039b9913531",
+        "libsvg.a": "144d8fef510d38d6313cb398cf1863e6c5f2e1f58d41f75968a234389ba47f80"
       }
     }
-  }
+  },
+  "release_tag": "chrome/m158-attested.1"
 }
