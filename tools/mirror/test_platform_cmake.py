@@ -81,6 +81,12 @@ class ConfigureDependsTest(unittest.TestCase):
         cmake = (MODULE.parent / "VellumMirror.cmake").read_text(encoding="utf-8")
         self.assertIn("tools/mirror/VellumMirrorPlatform.cmake", cmake)
         self.assertIn("provenance/framework/platforms/*.json", cmake)
+        self.assertRegex(
+            cmake,
+            r"file\(GLOB_RECURSE\s+_vellum_mirror_platform_records\s+"
+            r"CONFIGURE_DEPENDS\s+",
+            "the platform-record glob must retrigger configure when a record is added",
+        )
 
 
 if __name__ == "__main__":

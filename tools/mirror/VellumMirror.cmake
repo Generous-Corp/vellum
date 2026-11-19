@@ -97,7 +97,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${PROJECT_SOURCE_DIR}/provenance/framework")
 # Planning reads the platform index, each platform's record and its closure
 # manifests; editing any of them must retrigger mirror_package.py.
-file(GLOB_RECURSE _vellum_mirror_platform_records
+file(GLOB_RECURSE _vellum_mirror_platform_records CONFIGURE_DEPENDS
     "${PROJECT_SOURCE_DIR}/provenance/framework/platforms/*.json")
 foreach(_vellum_mirror_platform_record IN LISTS _vellum_mirror_platform_records)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
