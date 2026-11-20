@@ -907,7 +907,7 @@
       "reason": "Vellum's plug-in view host factory: PluginViewHost::create and the factory registry, exported from the SDK so a plug-in editor can embed a Vellum view (owner decision 2026-11-20: Vellum owns the GPU plug-in editor host). Written for Vellum, not taken from Pulp's plugin_view_host sources."
     },
     {
-      "framework_path": "framework/core/view/platform/mac/plugin_view_host_mac.mm",
+      "framework_path": "framework/core/view/platform/mac/gpu_plugin_editor_host_mac.mm",
       "change": "added",
       "target": "pulp-view-core",
       "origin": "native",
