@@ -190,6 +190,7 @@
       "vellum.gpu.per_corner_radii",
       "vellum.gpu.plots",
       "vellum.gpu.radii_overflow_scaling",
+      "vellum.gpu.rectangle-batches",
       "vellum.gpu.render-cache",
       "vellum.gpu.repeating_linear_gradient_non_square",
       "vellum.gpu.scene_version_refusal",
