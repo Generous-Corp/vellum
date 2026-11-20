@@ -431,6 +431,7 @@ class VerifyTest(unittest.TestCase):
             "pulp::view::PluginViewHost::has_factory()",
             "pulp::view::register_platform_plugin_view_host()",
         ]
+        self.undefined: dict[Path, set[str]] = {}
         self.symbols = {self.image: CLEAN_SYMBOLS["consumer"],
                         mirror / "lib/libvellum-mirror-canvas.dylib": CLEAN_SYMBOLS["libvellum-mirror-canvas.dylib"],
                         self.provider: ["SkFont::setSize(float)", *host_exports]}
@@ -441,6 +442,9 @@ class VerifyTest(unittest.TestCase):
     def run_verify(self, floor: set[str] | None = None,
                    install_libdir: str = "lib") -> dict:
         with mock.patch.object(vi, "image_symbols", side_effect=lambda path: self.symbols[path]), \
+                mock.patch.object(vi, "image_defined_symbols",
+                                  side_effect=lambda path: [s for s in self.symbols[path]
+                                                            if s not in self.undefined.get(path, ())]), \
                 mock.patch.object(vi, "view_audio_floor", side_effect=lambda archive: floor):
             return vi.verify(self.prefix, self.build, self.image,
                              Path("libpulp-view-audio.a") if floor is not None else None,
@@ -481,6 +485,31 @@ class VerifyTest(unittest.TestCase):
         self.symbols[self.provider] = [*self.symbols[self.provider],
                                        "pulp::view::PluginViewHost::WaveformView::paint()"]
         self.assertFalse(self.run_verify()["inert"])
+
+    FLOOR = {"pulp::view::Meter::~Meter()"}
+
+    def test_a_non_export_host_reference_fails_under_a_floor(self) -> None:
+        reference = "pulp::view::PluginViewHost::create(pulp::view::View&, pulp::view::Size)"
+        self.symbols[self.provider] = [*self.symbols[self.provider], reference]
+        proof = self.run_verify(floor=self.FLOOR)
+        self.assertFalse(proof["checks"]["no-pulp-kept-references"])
+        self.assertFalse(proof["inert"])
+        self.assertTrue(self.run_verify(floor=self.FLOOR)["checks"]["plugin-view-host-exports"])
+
+    def test_host_nested_audio_symbols_fail_under_a_floor(self) -> None:
+        self.symbols[self.provider] = [*self.symbols[self.provider],
+                                       "pulp::view::PluginViewHost::WaveformView::paint()"]
+        proof = self.run_verify(floor=self.FLOOR)
+        self.assertFalse(proof["checks"]["no-audio-symbols"])
+        self.assertFalse(proof["inert"])
+
+    def test_exports_that_are_only_referenced_are_not_provided(self) -> None:
+        self.undefined[self.provider] = set(self.symbols[self.provider][1:])
+        proof = self.run_verify()
+        self.assertFalse(proof["checks"]["plugin-view-host-exports"])
+        self.assertFalse(proof["inert"])
+        self.undefined[self.provider] = {self.symbols[self.provider][1]}
+        self.assertFalse(self.run_verify()["checks"]["plugin-view-host-exports"])
 
     def test_the_consumer_may_reference_plugin_view_host(self) -> None:
         reference = "pulp::view::register_platform_plugin_view_host()"
