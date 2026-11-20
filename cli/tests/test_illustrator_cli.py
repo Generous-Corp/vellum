@@ -10,11 +10,14 @@ import sys
 import tempfile
 import unittest
 
-from cli.vellum_illustrator import ConversionError, SCHEMA, convert
-
 
 REPO = Path(__file__).resolve().parents[2]
 CLI = REPO / "cli" / "vellum_cli.py"
+sys.path.insert(0, str(CLI.parent))
+try:
+    from vellum_illustrator import ConversionError, SCHEMA, convert
+finally:
+    sys.path.pop(0)
 FAKE_CONVERTER = f"""#!{sys.executable}
 import os
 import pathlib
