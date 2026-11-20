@@ -32,7 +32,7 @@
 #include <vellum/rmlui/backend.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <bit>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -43,6 +43,17 @@
 #include <vector>
 
 namespace vellum::rmlui {
+
+namespace detail {
+
+// Inline settings code inherits the consumer's floating-point flags. Check the
+// IEEE 754 exponent in integer space so finite-math cannot erase validation.
+inline bool is_finite_setting(double value) {
+    constexpr std::uint64_t exponent_mask = 0x7ff0000000000000;
+    return (std::bit_cast<std::uint64_t>(value) & exponent_mask) != exponent_mask;
+}
+
+} // namespace detail
 
 enum class SettingScope : std::uint8_t { instance, global };
 enum class SettingKind : std::uint8_t { toggle, choice, number, text, action };
@@ -253,7 +264,7 @@ class SettingsModel final {
     // the default.
     double window_scale() {
         const auto saved = store_.read(options_.window_scale_scope, kWindowScaleKey);
-        if (saved && saved->kind == ModelValue::Kind::number && std::isfinite(saved->number))
+        if (saved && saved->kind == ModelValue::Kind::number && detail::is_finite_setting(saved->number))
             return std::clamp(saved->number, options_.window_scale_min, options_.window_scale_max);
         return options_.window_scale_default;
     }
@@ -262,7 +273,7 @@ class SettingsModel final {
     // DAW's own zoom) is not, so it never becomes the remembered choice.
     // rejected for a value that is not finite.
     Status set_window_scale(double scale, bool chosen_by_user) {
-        if (!std::isfinite(scale))
+        if (!detail::is_finite_setting(scale))
             return Status::rejected;
         if (!chosen_by_user)
             return Status::ok;
@@ -284,7 +295,7 @@ class SettingsModel final {
         case SettingKind::toggle:
             return value.kind == ModelValue::Kind::boolean;
         case SettingKind::number:
-            return value.kind == ModelValue::Kind::number && std::isfinite(value.number);
+            return value.kind == ModelValue::Kind::number && detail::is_finite_setting(value.number);
         case SettingKind::choice:
         case SettingKind::text:
             return value.kind == ModelValue::Kind::string;
