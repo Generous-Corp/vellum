@@ -40,7 +40,7 @@ set_tests_properties(vellum.scene-capture-harness.compare PROPERTIES
     FIXTURES_REQUIRED vellum_scene_capture_goldens)
 
 add_executable(vellum-partial-present-test
-    partial_present_test.cpp)
+    partial_present_test.cpp rectangle_batch_gpu_test.cpp)
 target_link_libraries(vellum-partial-present-test PRIVATE
     vellum-scene-capture-harness)
 set_target_properties(vellum-partial-present-test PROPERTIES

@@ -26,6 +26,19 @@ struct PartialRedrawRules final {
 void set_partial_redraw_rules(const PartialRedrawRules& rules) noexcept;
 [[nodiscard]] PartialRedrawRules partial_redraw_rules() noexcept;
 
+/// Enables solid rectangle batches in full frames. Partial frames and
+/// commands inside clips, masks or layers always use individual draws.
+void set_rectangle_batching(bool enabled) noexcept;
+[[nodiscard]] bool rectangle_batching_enabled() noexcept;
+
+struct RectangleBatchCounters final {
+    std::uint64_t batches = 0;
+    std::uint64_t rectangles = 0;
+};
+
+/// Process-lifetime recording counters, including frames that fail to submit.
+[[nodiscard]] RectangleBatchCounters rectangle_batch_counters() noexcept;
+
 /// Sets Graphite's internal multisample count for surfaces created afterwards.
 /// Production uses 1.
 void set_internal_sample_count(std::uint32_t count) noexcept;
