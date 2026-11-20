@@ -21,10 +21,12 @@ std::optional<std::string> read_file(const std::filesystem::path& path) {
 }
 
 int main(int argc, char** argv) {
-    if (argc != 2) return 2;
-    const std::filesystem::path root = argv[1];
+    (void)argv;
+    if (argc != 1) return 2;
+    const std::filesystem::path root = VELLUM_THREEJS_ROOT;
     try {
-        if (!std::filesystem::is_regular_file(root / "build/three.webgpu.js") ||
+        if (!std::filesystem::is_regular_file(root / "payload-manifest.json") ||
+            !std::filesystem::is_regular_file(root / "build/three.module.js") ||
             !std::filesystem::is_regular_file(root / "build/three.core.js"))
             throw std::runtime_error("installed Three.js payload is incomplete");
         vellum::view::ScriptEngine engine(vellum::view::JsEngineType::v8);

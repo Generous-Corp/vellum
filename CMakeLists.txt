@@ -795,6 +795,12 @@ install(FILES
 install(FILES LICENSE.md NOTICE.md DEPENDENCIES.md
     DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/Vellum")
 if(VELLUM_INSTALL_THREEJS)
+    if(NOT IS_DIRECTORY "${VELLUM_THREEJS_DIR}"
+       OR NOT EXISTS "${VELLUM_THREEJS_DIR}/payload-manifest.json")
+        message(FATAL_ERROR
+            "Vellum: VELLUM_INSTALL_THREEJS needs a verified Three.js payload; "
+            "VELLUM_THREEJS_DIR='${VELLUM_THREEJS_DIR}' has no payload-manifest.json")
+    endif()
     install(DIRECTORY "${VELLUM_THREEJS_DIR}/"
         DESTINATION "${CMAKE_INSTALL_DATADIR}/vellum/threejs"
         COMPONENT threejs)
