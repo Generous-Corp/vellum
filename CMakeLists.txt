@@ -24,6 +24,13 @@ option(VELLUM_ENABLE_MIRROR
     "Package the landed mirror's units (needs the locked Skia/Dawn archive)" OFF)
 option(VELLUM_ENABLE_V8
     "Compile the mirror's view-script unit with the sealed V8 provider and install libv8 (needs VELLUM_ENABLE_MIRROR)" OFF)
+option(VELLUM_INSTALL_THREEJS
+    "Install the pinned Three.js runtime payload for native scripted consumers" ON)
+if(VELLUM_INSTALL_THREEJS)
+    set(VELLUM_THREEJS_PACKAGE_ROOT "${CMAKE_INSTALL_DATADIR}/vellum/threejs")
+else()
+    set(VELLUM_THREEJS_PACKAGE_ROOT "")
+endif()
 set(VELLUM_V8_ARCHIVE "" CACHE FILEPATH
     "Local copy of the pinned sealed V8 archive; digest-checked like a download")
 option(VELLUM_ENABLE_ADDRESS_SANITIZER
@@ -787,3 +794,8 @@ install(FILES
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/Vellum")
 install(FILES LICENSE.md NOTICE.md DEPENDENCIES.md
     DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/Vellum")
+if(VELLUM_INSTALL_THREEJS)
+    install(DIRECTORY "${VELLUM_THREEJS_DIR}/"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/vellum/threejs"
+        COMPONENT threejs)
+endif()
