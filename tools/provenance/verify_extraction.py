@@ -1414,11 +1414,27 @@ def verify_platform_export_artifact(records, key: str, record: dict) -> None:
             or run.get("path") != ".github/workflows/vellum-platform-closure.yml":
         raise records.RecordError(f"{records.ROOT}/{key}/record.json: export run is not the successful "
                                   "Pulp closure workflow at the pinned commit")
-    listing = gh_api(f"repos/{records.PULP_REPOSITORY}/actions/runs/{run_id}/artifacts?per_page=100")
-    if not isinstance(listing, dict):
-        raise records.RecordError(f"{records.ROOT}/{key}/record.json: Pulp artifact listing is malformed")
+    # The REST endpoint is paginated; a valid closure artifact can be beyond the
+    # first 100 artifacts uploaded by a busy run. Read every page, bounded by the
+    # server-reported total, before applying the exact-name/run filters.
+    artifacts_listing: list[object] = []
+    page = 1
+    total_count: int | None = None
+    while True:
+        suffix = "?per_page=100" if page == 1 else f"?per_page=100&page={page}"
+        listing = gh_api(f"repos/{records.PULP_REPOSITORY}/actions/runs/{run_id}/artifacts{suffix}")
+        if not isinstance(listing, dict) or not isinstance(listing.get("artifacts"), list):
+            raise records.RecordError(f"{records.ROOT}/{key}/record.json: Pulp artifact listing is malformed")
+        if total_count is None:
+            total_count = listing.get("total_count", len(listing["artifacts"]))
+            if not isinstance(total_count, int) or total_count < 0:
+                raise records.RecordError(f"{records.ROOT}/{key}/record.json: Pulp artifact listing is malformed")
+        artifacts_listing.extend(listing["artifacts"])
+        if len(artifacts_listing) >= total_count or len(listing["artifacts"]) == 0:
+            break
+        page += 1
     expected_name = f"vellum-closure-{key}"
-    artifacts = [artifact for artifact in listing.get("artifacts", [])
+    artifacts = [artifact for artifact in artifacts_listing
                  if isinstance(artifact, dict) and artifact.get("name") == expected_name
                  and artifact.get("expired") is False
                  and (artifact.get("workflow_run") or {}).get("id") == int(run_id)

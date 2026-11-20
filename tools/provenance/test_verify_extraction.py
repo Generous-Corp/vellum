@@ -1331,6 +1331,30 @@ class VerifyExtractionTests(unittest.TestCase):
                 self.assertFalse(verify_extraction.gh_api.called)
             self.assertTrue(any("export.run_url" in e and "is not a" in e for e in errors), errors)
 
+    def test_platform_export_artifact_listing_is_paginated(self) -> None:
+        records = verify_extraction.load_platform_closures()
+        with tempfile.TemporaryDirectory() as temporary:
+            root, pulp = Path(temporary) / "vellum", Path(temporary) / "pulp"
+            root.mkdir(); pulp.mkdir()
+            sha, blob = self.platform_pulp(pulp)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            patch = self.write_platform_export(root, sha, blob)
+            with patch:
+                record = json.loads((root / records.ROOT / "linux-x64/record.json").read_text())
+                original = verify_extraction.gh_api.side_effect
+                expected = original("repos/Generous-Corp/pulp/actions/runs/123456789/artifacts?per_page=100")["artifacts"][0]
+                filler = [{"id": i, "name": "other", "expired": False,
+                            "workflow_run": {"id": 123456789}} for i in range(1, 101)]
+                def api(path: str) -> object:
+                    if path.endswith("/artifacts?per_page=100"):
+                        return {"total_count": 101, "artifacts": filler}
+                    if path.endswith("/artifacts?per_page=100&page=2"):
+                        return {"total_count": 101, "artifacts": [expected]}
+                    return original(path)
+                verify_extraction.gh_api.side_effect = api
+                verify_extraction.verify_platform_export_artifact(records, "linux-x64", record)
+                self.assertIn("page=2", " ".join(c.args[0] for c in verify_extraction.gh_api.call_args_list))
+
     def test_without_github_a_platform_record_is_never_proved(self) -> None:
         self.hide_ci_git_base()
         self.platform_github(token=False)
