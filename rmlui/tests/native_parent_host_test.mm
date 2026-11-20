@@ -21,10 +21,11 @@ class Assets final : public AssetProvider {
         // One 20x20 box bound to the model's `on` field: red when off, blue
         // when on. A click toggles the field through the data model.
         out.bytes = "<rml><head><style>"
-                    "#box { display:block; width:20px; height:20px; background-color:#ff0000; }"
+                    "#box { display:block; width:20dp; height:20dp; background-color:#ff0000; }"
                     "#box.on { background-color:#0000ff; }"
                     "</style></head><body data-model='part' "
                     "data-event-keydown='key = ev.key_identifier; shift = ev.shift_key' "
+                    "data-event-mouseover='hover = true' data-event-mouseout='hover = false' "
                     "data-event-textinput='text = ev.text'>"
                     "<div id='box' data-class-on='on' data-event-click='on = !on'/>"
                     "</body></rml>";
@@ -38,6 +39,7 @@ struct Toggle final : ModelHost {
         else if (field == "shift") out = ModelValue::number_value(shift);
         else if (field == "key") out = ModelValue::number_value(key);
         else if (field == "text") out = ModelValue::string_value(text);
+        else if (field == "hover") out = ModelValue::boolean_value(hover);
         else return Status::rejected;
         return Status::ok;
     }
@@ -47,6 +49,7 @@ struct Toggle final : ModelHost {
         else if (field == "shift" && value.kind == ModelValue::Kind::number) shift = value.number;
         else if (field == "key" && value.kind == ModelValue::Kind::number) key = value.number;
         else if (field == "text" && value.kind == ModelValue::Kind::string) text = value.string;
+        else if (field == "hover" && value.kind == ModelValue::Kind::boolean) hover = value.boolean;
         else return Status::rejected;
         ++writes;
         return Status::ok;
@@ -55,6 +58,7 @@ struct Toggle final : ModelHost {
     double shift = 0;
     double key = 0;
     std::string text;
+    bool hover = false;
     int writes = 0;
 };
 
@@ -93,6 +97,15 @@ std::uint32_t rgb_at(const NativeParentHost& host, std::uint32_t x, std::uint32_
     return (std::uint32_t(px[i]) << 16) | (std::uint32_t(px[i + 1]) << 8) | px[i + 2];
 }
 
+std::size_t count_rgb(const NativeParentHost& host, std::uint32_t rgb) {
+    const auto* soft = host.default_renderer();
+    std::size_t count = 0;
+    for (std::uint32_t y = 0; y < soft->height(); ++y)
+        for (std::uint32_t x = 0; x < soft->width(); ++x)
+            count += rgb_at(host, x, y) == rgb;
+    return count;
+}
+
 } // namespace
 
 int main() {
@@ -101,7 +114,7 @@ int main() {
         auto model = std::make_shared<Toggle>();
         NativeParentHost host(assets);
         VELLUM_RMLUI_CHECK(host.open(32, 32) == Status::ok);
-        VELLUM_RMLUI_CHECK(host.bind_model("part", model, {"on", "shift", "key", "text"}) == Status::ok);
+        VELLUM_RMLUI_CHECK(host.bind_model("part", model, {"on", "shift", "key", "text", "hover"}) == Status::ok);
         VELLUM_RMLUI_CHECK(host.load_document("editor.rml") == Status::ok);
 
         // A parent view that belongs to no window: nothing is ordered on screen.
@@ -130,6 +143,8 @@ int main() {
         host.idle();
         VELLUM_RMLUI_CHECK(model->writes >= 1);
         VELLUM_RMLUI_CHECK(!model->on);
+        VELLUM_RMLUI_CHECK(host.process_mouse_move(30, 30) == Status::ok);
+        host.idle();
         VELLUM_RMLUI_CHECK(rgb_at(host, 5, 5) == 0xff0000u);
 
         // The same input through the view's own AppKit handlers. The pointer
@@ -150,10 +165,39 @@ int main() {
         VELLUM_RMLUI_CHECK(model->shift == 1.0);
         VELLUM_RMLUI_CHECK(model->text == "A");
 
+        [child keyDown:key(NSEventTypeKeyDown, 0x7A, @"", 0)];
+        VELLUM_RMLUI_CHECK(static_cast<int>(model->key) == Rml::Input::KI_F1);
+        [child keyDown:key(NSEventTypeKeyDown, 0x59, @"7", 0)];
+        VELLUM_RMLUI_CHECK(static_cast<int>(model->key) == Rml::Input::KI_NUMPAD7);
+
+        // AppKit's tracking-area exit clears RmlUi's hover state.
+        VELLUM_RMLUI_CHECK(host.process_mouse_move(5, 5) == Status::ok);
+        host.idle();
+        VELLUM_RMLUI_CHECK(model->hover);
+        [child mouseExited:mouse(NSEventTypeMouseMoved, child, 30, 30)];
+        host.idle();
+        VELLUM_RMLUI_CHECK(!model->hover);
+
         // The presented layer owns its frame and carries the host's scale.
         VELLUM_RMLUI_CHECK(host.set_size({32, 32, 2.0}));
         host.idle();
+        VELLUM_RMLUI_CHECK(host.default_renderer()->width() == 64);
+        VELLUM_RMLUI_CHECK(host.default_renderer()->height() == 64);
+        VELLUM_RMLUI_CHECK(count_rgb(host, 0x0000ffu) == 40u * 40u);
         VELLUM_RMLUI_CHECK(child.layer.contentsScale == 2.0);
+
+        // At scale 2 a view point is half a context pixel: (25,25) lies outside
+        // the 20pt box, though as an unscaled pixel it would fall inside the
+        // 40px one. Only the click at (5,5) toggles the model.
+        const bool before = model->on;
+        [child mouseDown:mouse(NSEventTypeLeftMouseDown, child, 25, 25)];
+        [child mouseUp:mouse(NSEventTypeLeftMouseUp, child, 25, 25)];
+        host.idle();
+        VELLUM_RMLUI_CHECK(model->on == before);
+        [child mouseDown:mouse(NSEventTypeLeftMouseDown, child, 5, 5)];
+        [child mouseUp:mouse(NSEventTypeLeftMouseUp, child, 5, 5)];
+        host.idle();
+        VELLUM_RMLUI_CHECK(model->on != before);
 
         host.detach();
         VELLUM_RMLUI_CHECK(child.superview == nil);

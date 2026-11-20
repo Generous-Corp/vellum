@@ -19,10 +19,12 @@ Class host_class();
 
 class MacPluginViewHost final : public PluginViewHost {
 public:
-    MacPluginViewHost(View& root, const Options& o) : root_(root), size_(o.size) {
+    MacPluginViewHost(View& root, const Options& o)
+        : root_(root), size_(o.size), background_rgb_(o.background_rgb) {
         mark_gpu_surface_pending();
         view_ = [[host_class() alloc] initWithFrame:NSMakeRect(0, 0, size_.width, size_.height)];
         view_.rootView = &root_;
+        view_.backgroundRGB = background_rgb_;
         view_.hostOwnsRootLayout = YES;
         view_.repaintBlock = ^{ this->paint(); };
         view_.backingChangedBlock = ^{ this->handle_backing_change(); };
@@ -81,7 +83,7 @@ public:
         if (!gpu_ready_ || !gpu_->begin_frame()) return {};
         auto* c = skia_->begin_frame();
         if (!c) { gpu_->end_frame(); return {}; }
-        c->set_fill_color(canvas::Color::rgba8(kEditorHostClearR,kEditorHostClearG,kEditorHostClearB,255));
+        c->set_fill_color(canvas::Color::hex(background_rgb_));
         c->fill_rect(0,0,size_.width,size_.height); root_.paint_all(*c);
         skia_->end_frame(); std::vector<uint8_t> px; uint32_t w=0,h=0;
         const bool ok = skia_->read_current_rgba(px,w,h); gpu_->end_frame();
@@ -93,7 +95,7 @@ public:
         if (!gpu_ready_ || !gpu_->begin_frame()) return false;
         auto* c = skia_->begin_frame();
         if (!c) { gpu_->end_frame(); return false; }
-        c->set_fill_color(canvas::Color::rgba8(kEditorHostClearR,kEditorHostClearG,kEditorHostClearB,255));
+        c->set_fill_color(canvas::Color::hex(background_rgb_));
         c->fill_rect(0,0,size_.width,size_.height); root_.paint_all(*c);
         const auto outcome = skia_->end_frame();
         gpu_->end_frame();
@@ -113,7 +115,8 @@ public:
             skia_->resize(size_.width, size_.height, static_cast<float>(scale));
     }
 private:
-    View& root_; VellumMirrorMetalView* view_ = nil; Size size_{}; bool gpu_ready_ = false;
+    View& root_; VellumMirrorMetalView* view_ = nil; Size size_{};
+    uint32_t background_rgb_ = kEditorHostClearRgb; bool gpu_ready_ = false;
     std::unique_ptr<render::GpuSurface> gpu_; std::unique_ptr<render::SkiaSurface> skia_;
 };
 

@@ -7,6 +7,8 @@
 #include <RmlUi/Core/Input.h>
 
 #include <cstdio>
+#include <cmath>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -66,15 +68,31 @@ int rml_key(unsigned short code) {
     case 0x75: return KI_DELETE; case 0x73: return KI_HOME; case 0x77: return KI_END;
     case 0x74: return KI_PRIOR; case 0x79: return KI_NEXT;
     case 0x7B: return KI_LEFT; case 0x7C: return KI_RIGHT; case 0x7D: return KI_DOWN; case 0x7E: return KI_UP;
+    case 0x7A: return KI_F1; case 0x78: return KI_F2; case 0x63: return KI_F3; case 0x76: return KI_F4;
+    case 0x60: return KI_F5; case 0x61: return KI_F6; case 0x62: return KI_F7; case 0x64: return KI_F8;
+    case 0x65: return KI_F9; case 0x6D: return KI_F10; case 0x67: return KI_F11; case 0x6F: return KI_F12;
+    case 0x52: return KI_NUMPAD0; case 0x53: return KI_NUMPAD1; case 0x54: return KI_NUMPAD2;
+    case 0x55: return KI_NUMPAD3; case 0x56: return KI_NUMPAD4; case 0x57: return KI_NUMPAD5;
+    case 0x58: return KI_NUMPAD6; case 0x59: return KI_NUMPAD7; case 0x5B: return KI_NUMPAD8;
+    case 0x5C: return KI_NUMPAD9; case 0x43: return KI_MULTIPLY; case 0x45: return KI_ADD;
+    case 0x4E: return KI_SUBTRACT; case 0x41: return KI_DECIMAL; case 0x4B: return KI_DIVIDE;
+    case 0x51: return KI_OEM_NEC_EQUAL;
+    case 0x29: return KI_OEM_1; case 0x18: return KI_OEM_PLUS; case 0x2B: return KI_OEM_COMMA;
+    case 0x1B: return KI_OEM_MINUS; case 0x2F: return KI_OEM_PERIOD; case 0x2C: return KI_OEM_2;
+    case 0x32: return KI_OEM_3; case 0x21: return KI_OEM_4; case 0x2A: return KI_OEM_5;
+    case 0x1E: return KI_OEM_6; case 0x27: return KI_OEM_7;
     default: return KI_UNKNOWN;
     }
 }
 
 // The pointer position in the context's top-left coordinates.
+// The context is sized in physical pixels, so a view point (logical) is
+// scaled by the host's scale before it reaches RmlUi.
 void move_to_event(NSView* view, NativeParentHost* host, NSEvent* event) {
     const NSPoint p = [view convertPoint:event.locationInWindow fromView:nil];
-    host->process_mouse_move(static_cast<int>(p.x),
-                             static_cast<int>(view.bounds.size.height - p.y),
+    const double scale = host->size().scale > 0 ? host->size().scale : 1.0;
+    host->process_mouse_move(static_cast<int>(std::lround(p.x * scale)),
+                             static_cast<int>(std::lround((view.bounds.size.height - p.y) * scale)),
                              rml_modifiers(event.modifierFlags));
 }
 
@@ -123,6 +141,9 @@ Class host_view_class() {
         add_event_method(created, @selector(mouseDragged:), move);
         add_event_method(created, @selector(rightMouseDragged:), move);
         add_event_method(created, @selector(otherMouseDragged:), move);
+        add_event_method(created, @selector(mouseExited:), [](NSView*, NativeParentHost* host, NSEvent*) {
+            host->process_mouse_leave();
+        });
         add_event_method(created, @selector(scrollWheel:), [](NSView* view, NativeParentHost* host, NSEvent* event) {
             move_to_event(view, host, event);
             // RmlUi scrolls down for a positive delta; AppKit reports the opposite.
@@ -208,7 +229,7 @@ NativeParentHost::NativeParentHost(AssetProvider& assets, RenderInterface* rende
 NativeParentHost::~NativeParentHost() { invalidate(); }
 
 Status NativeParentHost::open(std::uint32_t width, std::uint32_t height) {
-    size_.width = width; size_.height = height;
+    size_.width = width; size_.height = height; size_.scale = 1.0;
     return impl_->backend.open(width, height);
 }
 Status NativeParentHost::load_document(std::string_view path) { return impl_->backend.load_document(path); }
@@ -229,7 +250,8 @@ bool NativeParentHost::attach(const NativeParent& parent) {
         // Hover needs mouseMoved:, which AppKit sends only through a tracking area.
         [impl_->view addTrackingArea:[[NSTrackingArea alloc]
             initWithRect:NSZeroRect
-                 options:NSTrackingMouseMoved | NSTrackingActiveAlways | NSTrackingInVisibleRect
+                 options:NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited |
+                         NSTrackingActiveAlways | NSTrackingInVisibleRect
                    owner:impl_->view
                 userInfo:nil]];
     }
@@ -246,8 +268,18 @@ void NativeParentHost::invalidate() {
     impl_->backend.close();
 }
 bool NativeParentHost::set_size(const NativeHostSize& s) {
-    if (!s.width || !s.height || s.scale <= 0) return false;
-    size_ = s; impl_->backend.set_dimensions(s.width, s.height); // logical host size is the context size
+    if (!s.width || !s.height || !std::isfinite(s.scale) || s.scale <= 0) return false;
+    const auto physical = [](std::uint32_t value, double scale) {
+        const double result = std::round(static_cast<double>(value) * scale);
+        return result <= static_cast<double>(std::numeric_limits<std::uint32_t>::max())
+                   ? static_cast<std::uint32_t>(result) : 0u;
+    };
+    const auto physical_width = physical(s.width, s.scale);
+    const auto physical_height = physical(s.height, s.scale);
+    if (!physical_width || !physical_height) return false;
+    size_ = s;
+    impl_->backend.set_density_ratio(static_cast<float>(s.scale));
+    impl_->backend.set_dimensions(physical_width, physical_height);
     if (impl_->view) [impl_->view setFrameSize:NSMakeSize(s.width, s.height)];
     return true;
 }
@@ -262,6 +294,7 @@ Status NativeParentHost::process_mouse_move(int x, int y, int modifiers) { retur
 Status NativeParentHost::process_mouse_button_down(int button, int modifiers) { return impl_->backend.process_mouse_button_down(button, modifiers); }
 Status NativeParentHost::process_mouse_button_up(int button, int modifiers) { return impl_->backend.process_mouse_button_up(button, modifiers); }
 Status NativeParentHost::process_mouse_wheel(float x, float y, int modifiers) { return impl_->backend.process_mouse_wheel(x, y, modifiers); }
+Status NativeParentHost::process_mouse_leave() { return impl_->backend.process_mouse_leave(); }
 Status NativeParentHost::process_key_down(int key, int modifiers) { return impl_->backend.process_key_down(key, modifiers); }
 Status NativeParentHost::process_key_up(int key, int modifiers) { return impl_->backend.process_key_up(key, modifiers); }
 Status NativeParentHost::process_text_input(std::string_view text) { return impl_->backend.process_text_input(text); }

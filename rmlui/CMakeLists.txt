@@ -312,7 +312,7 @@ if(VELLUM_RMLUI_INSTALL)
             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/vellum/rmlui
             COMPONENT VellumRmlUi)
     endif()
-    set(_vellum_rmlui_native_header_excludes)
+    set(_vellum_rmlui_native_header_excludes PATTERN native_parent_host.hpp EXCLUDE)
     foreach(_header IN LISTS _vellum_rmlui_native_headers)
         list(APPEND _vellum_rmlui_native_header_excludes PATTERN "${_header}" EXCLUDE)
     endforeach()

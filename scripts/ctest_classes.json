@@ -7,6 +7,7 @@
       "gpu-runtime.device-api-closure-unit",
       "gpu-runtime.device-api-consumer",
       "gpu-runtime.renderer-lock-reader",
+      "vellum-notices-manifest",
       "vellum.animation",
       "vellum.authoring",
       "vellum.authoring-illustrator-to-svg",

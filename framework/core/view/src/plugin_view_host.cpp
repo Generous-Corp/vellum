@@ -28,7 +28,10 @@ std::unique_ptr<PluginViewHost> PluginViewHost::create(View& root, const Options
     Factory f;
     { std::lock_guard lock(factory_mutex()); f = factory_slot(); }
     auto host = f ? f(root, options) : detail::make_platform_plugin_view_host(root, options);
-    if (host) root.set_plugin_view_host(host.get());
+    if (host) {
+        root.set_plugin_view_host(host.get());
+        host->root_view_ = &root;
+    }
     return host;
 }
 } // namespace vellum::view
