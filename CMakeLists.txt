@@ -700,6 +700,7 @@ if(VELLUM_BUILD_TESTS)
                 "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
                 "-DVELLUM_ENABLE_V8=${VELLUM_MIRROR_HAS_V8}"
                 "-DVELLUM_V8_VERSION=${VELLUM_V8_VERSION}"
+                "-DVELLUM_INSTALL_THREEJS=${VELLUM_INSTALL_THREEJS}"
                 "-DVELLUM_PULP_CENSUS_LIBRARIES=${VELLUM_PULP_CENSUS_LIBRARIES}"
                 ${_vellum_view_audio_archive_arg}
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")

@@ -526,6 +526,7 @@ target_link_libraries(vellum-v8-consumer PRIVATE Vellum::MirrorView_script)
 ]=])
     file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/v8_main.cpp"
         DESTINATION "${_work}/v8-consumer")
+    if(VELLUM_INSTALL_THREEJS)
     file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/threejs_v8_main.cpp"
         DESTINATION "${_work}/v8-consumer")
     file(APPEND "${_work}/v8-consumer/CMakeLists.txt" [=[
@@ -537,6 +538,7 @@ endif()
 target_compile_definitions(vellum-threejs-v8-consumer PRIVATE
     "VELLUM_THREEJS_ROOT=\"${VELLUM_THREEJS_ROOT}\"")
 ]=])
+    endif()
     _run("V8 consumer configure" "${CMAKE_COMMAND}"
         -S "${_work}/v8-consumer" -B "${_work}/v8-consumer-build"
         ${_generator} -DCMAKE_BUILD_TYPE=Release
@@ -546,7 +548,9 @@ target_compile_definitions(vellum-threejs-v8-consumer PRIVATE
     _run("V8 consumer build" "${CMAKE_COMMAND}" --build "${_work}/v8-consumer-build")
     _run("V8 consumer run" "${_work}/v8-consumer-build/vellum-v8-consumer" "${VELLUM_V8_VERSION}")
     message(STATUS "${_last_stdout}")
-    _run("installed Three.js payload consumer run"
-        "${_work}/v8-consumer-build/vellum-threejs-v8-consumer")
-    message(STATUS "${_last_stdout}")
+    if(VELLUM_INSTALL_THREEJS)
+        _run("installed Three.js payload consumer run"
+            "${_work}/v8-consumer-build/vellum-threejs-v8-consumer")
+        message(STATUS "${_last_stdout}")
+    endif()
 endif()
