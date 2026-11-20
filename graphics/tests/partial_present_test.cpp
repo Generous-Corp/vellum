@@ -2497,7 +2497,13 @@ void faded_group_shadow_tails() {
 
 }  // namespace
 
-int main() {
+int rectangle_batch_checks(bool run_benchmark);
+
+int main(int argc, char** argv) {
+    if (argc > 1 && (std::string(argv[1]) == "--rectangle-batches" ||
+                     std::string(argv[1]) == "--rectangle-batches-bench")) {
+        return rectangle_batch_checks(std::string(argv[1]) == "--rectangle-batches-bench");
+    }
     try {
         std::string error;
         if (!harness::prepare_device(&error)) {
