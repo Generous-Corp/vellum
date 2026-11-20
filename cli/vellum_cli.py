@@ -560,7 +560,7 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
     import_request: tuple[str, Path, str] | None = None
     if args.import_source:
         source_type, source_value = args.import_source
-        if source_type not in {"figma", "design-ir", "html", "claude-design"}:
+        if source_type not in {"fig", "figma", "design-ir", "html", "claude-design"}:
             raise CliFailure(
                 f"Unsupported create source type: {source_type}",
                 status="unsupported_source_type", exit_code=EXIT_USAGE,
@@ -1442,7 +1442,7 @@ def parser() -> argparse.ArgumentParser:
     backend_specs = {
         "import": [
             ("source", {}),
-            ("--source-type", {"choices": ["figma", "design-ir", "html", "claude-design"], "default": "figma"}),
+            ("--source-type", {"choices": ["fig", "figma", "design-ir", "html", "claude-design"], "default": "figma"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
         ],
