@@ -153,6 +153,10 @@ if(VELLUM_RMLUI_NATIVE_HOST)
     target_compile_options(vellum-rmlui-native-parent-host-test PRIVATE -fobjc-arc)
     target_link_libraries(vellum-rmlui-native-parent-host-test PRIVATE
         "-framework Cocoa" "-framework QuartzCore")
+    # The test names RmlUi key identifiers to check the AppKit key mapping.
+    FetchContent_GetProperties(vellum_rmlui_rmlui SOURCE_DIR _vellum_rmlui_host_test_rmlui_src)
+    target_include_directories(vellum-rmlui-native-parent-host-test PRIVATE
+        "${_vellum_rmlui_host_test_rmlui_src}/Include")
     add_test(NAME vellum.rmlui.native-parent-host
         COMMAND vellum-rmlui-native-parent-host-test)
 endif()

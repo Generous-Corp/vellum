@@ -176,6 +176,11 @@ if(VELLUM_RMLUI_NATIVE_HOST)
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
     target_link_libraries(vellum-rmlui-native-host PUBLIC
         vellum-rmlui-soft-renderer "-framework Cocoa" "-framework QuartzCore")
+    # RmlUi's key and modifier identifiers, which AppKit events are mapped to.
+    # Header-only use: the host still reaches RmlUi only through Core.
+    FetchContent_GetProperties(vellum_rmlui_rmlui SOURCE_DIR _vellum_rmlui_native_host_rmlui_src)
+    target_include_directories(vellum-rmlui-native-host PRIVATE
+        $<BUILD_INTERFACE:${_vellum_rmlui_native_host_rmlui_src}/Include>)
     list(APPEND VELLUM_RMLUI_COMPONENTS NativeHost)
     list(APPEND _vellum_rmlui_install_targets vellum-rmlui-native-host)
 endif()

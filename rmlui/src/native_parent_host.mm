@@ -4,28 +4,13 @@
 
 #include <vellum/rmlui/native_parent_host.hpp>
 
+#include <RmlUi/Core/Input.h>
+
 #include <cstdio>
 #include <memory>
 #include <string>
 #include <utility>
 
-@interface VellumRmlUiHostView : NSView
-@property(nonatomic, assign) void* owner;
-@end
-
-@implementation VellumRmlUiHostView
-- (BOOL)acceptsFirstResponder { return YES; }
-- (void)mouseDown:(NSEvent*)event { auto* host = static_cast<vellum::rmlui::NativeParentHost*>(self.owner); [self.window makeFirstResponder:self]; host->process_mouse_button_down(0); }
-- (void)mouseUp:(NSEvent*)event { auto* host = static_cast<vellum::rmlui::NativeParentHost*>(self.owner); host->process_mouse_button_up(0); }
-- (void)mouseMoved:(NSEvent*)event { auto* host = static_cast<vellum::rmlui::NativeParentHost*>(self.owner); NSPoint p = [self convertPoint:event.locationInWindow fromView:nil]; host->process_mouse_move((int)p.x, (int)(self.bounds.size.height - p.y)); }
-- (void)mouseDragged:(NSEvent*)event { [self mouseMoved:event]; }
-- (void)rightMouseDown:(NSEvent*)event { auto* host = static_cast<vellum::rmlui::NativeParentHost*>(self.owner); host->process_mouse_button_down(1); }
-- (void)rightMouseUp:(NSEvent*)event { auto* host = static_cast<vellum::rmlui::NativeParentHost*>(self.owner); host->process_mouse_button_up(1); }
-- (void)scrollWheel:(NSEvent*)event { auto* host = static_cast<vellum::rmlui::NativeParentHost*>(self.owner); host->process_mouse_wheel(event.scrollingDeltaX, event.scrollingDeltaY); }
-- (void)keyDown:(NSEvent*)event { auto* host = static_cast<vellum::rmlui::NativeParentHost*>(self.owner); host->process_key_down((int)event.keyCode, 0); }
-- (void)keyUp:(NSEvent*)event { auto* host = static_cast<vellum::rmlui::NativeParentHost*>(self.owner); host->process_key_up((int)event.keyCode, 0); }
-- (void)insertText:(id)text { if ([text isKindOfClass:[NSString class]]) static_cast<vellum::rmlui::NativeParentHost*>(self.owner)->process_text_input([text UTF8String]); }
-@end
 
 namespace vellum::rmlui {
 namespace {
@@ -36,13 +21,138 @@ class NullLua final : public LuaInterface {
     Status dispatch(std::string_view) override { return Status::rejected; }
 };
 
+// The host a view forwards to, held as an associated pointer so it can be
+// cleared when the host invalidates while the view is still retained.
+char kOwnerKey;
+
+NativeParentHost* owner_of(id view) {
+    NSValue* value = objc_getAssociatedObject(view, &kOwnerKey);
+    return value ? static_cast<NativeParentHost*>(value.pointerValue) : nullptr;
+}
+
+void set_owner(id view, NativeParentHost* host) {
+    objc_setAssociatedObject(view, &kOwnerKey, host ? [NSValue valueWithPointer:host] : nil,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+int rml_modifiers(NSEventModifierFlags flags) {
+    int state = 0;
+    if (flags & NSEventModifierFlagControl) state |= Rml::Input::KM_CTRL;
+    if (flags & NSEventModifierFlagShift) state |= Rml::Input::KM_SHIFT;
+    if (flags & NSEventModifierFlagOption) state |= Rml::Input::KM_ALT;
+    if (flags & NSEventModifierFlagCommand) state |= Rml::Input::KM_META;
+    if (flags & NSEventModifierFlagCapsLock) state |= Rml::Input::KM_CAPSLOCK;
+    return state;
+}
+
+// macOS virtual key codes (the ANSI layout's physical keys) to RmlUi key
+// identifiers. Keys without an entry map to KI_UNKNOWN; their text still
+// arrives through insertText:.
+int rml_key(unsigned short code) {
+    using namespace Rml::Input;
+    switch (code) {
+    case 0x00: return KI_A; case 0x0B: return KI_B; case 0x08: return KI_C; case 0x02: return KI_D;
+    case 0x0E: return KI_E; case 0x03: return KI_F; case 0x05: return KI_G; case 0x04: return KI_H;
+    case 0x22: return KI_I; case 0x26: return KI_J; case 0x28: return KI_K; case 0x25: return KI_L;
+    case 0x2E: return KI_M; case 0x2D: return KI_N; case 0x1F: return KI_O; case 0x23: return KI_P;
+    case 0x0C: return KI_Q; case 0x0F: return KI_R; case 0x01: return KI_S; case 0x11: return KI_T;
+    case 0x20: return KI_U; case 0x09: return KI_V; case 0x0D: return KI_W; case 0x07: return KI_X;
+    case 0x10: return KI_Y; case 0x06: return KI_Z;
+    case 0x1D: return KI_0; case 0x12: return KI_1; case 0x13: return KI_2; case 0x14: return KI_3;
+    case 0x15: return KI_4; case 0x17: return KI_5; case 0x16: return KI_6; case 0x1A: return KI_7;
+    case 0x1C: return KI_8; case 0x19: return KI_9;
+    case 0x24: return KI_RETURN; case 0x4C: return KI_NUMPADENTER; case 0x30: return KI_TAB;
+    case 0x31: return KI_SPACE; case 0x33: return KI_BACK; case 0x35: return KI_ESCAPE;
+    case 0x75: return KI_DELETE; case 0x73: return KI_HOME; case 0x77: return KI_END;
+    case 0x74: return KI_PRIOR; case 0x79: return KI_NEXT;
+    case 0x7B: return KI_LEFT; case 0x7C: return KI_RIGHT; case 0x7D: return KI_DOWN; case 0x7E: return KI_UP;
+    default: return KI_UNKNOWN;
+    }
+}
+
+// The pointer position in the context's top-left coordinates.
+void move_to_event(NSView* view, NativeParentHost* host, NSEvent* event) {
+    const NSPoint p = [view convertPoint:event.locationInWindow fromView:nil];
+    host->process_mouse_move(static_cast<int>(p.x),
+                             static_cast<int>(view.bounds.size.height - p.y),
+                             rml_modifiers(event.modifierFlags));
+}
+
+template <typename Body> void add_event_method(Class klass, SEL selector, Body body) {
+    id block = ^(id self, NSEvent* event) {
+        if (NativeParentHost* host = owner_of(self)) body((NSView*)self, host, event);
+    };
+    class_addMethod(klass, selector, imp_implementationWithBlock(block), "v@:@");
+}
+
+// The view class, built at run time under a name unique to this image: many
+// plug-ins share one Objective-C runtime, and two images defining the same
+// class name would bind either one's methods.
 Class host_view_class() {
     static Class klass = [] {
         char name[96];
-        std::snprintf(name, sizeof(name), "VellumRmlUiNativeHost_%p", reinterpret_cast<void*>(&host_view_class));
-        if (Class existing = objc_getClass(name))
-            return existing;
-        Class created = objc_allocateClassPair([VellumRmlUiHostView class], name, 0);
+        std::snprintf(name, sizeof(name), "VellumRmlUiNativeHostView_%p",
+                      reinterpret_cast<void*>(&host_view_class));
+        if (Class existing = objc_getClass(name)) return existing;
+        Class created = objc_allocateClassPair([NSView class], name, 0);
+
+        class_addMethod(created, @selector(acceptsFirstResponder),
+                        imp_implementationWithBlock(^BOOL(id) { return YES; }), "c@:");
+        class_addMethod(created, @selector(acceptsFirstMouse:),
+                        imp_implementationWithBlock(^BOOL(id, NSEvent*) { return YES; }), "c@:@");
+
+        auto button = [](int index, bool down) {
+            return [index, down](NSView* view, NativeParentHost* host, NSEvent* event) {
+                if (down) [view.window makeFirstResponder:view];
+                move_to_event(view, host, event);
+                const int mods = rml_modifiers(event.modifierFlags);
+                if (down) host->process_mouse_button_down(index, mods);
+                else host->process_mouse_button_up(index, mods);
+            };
+        };
+        add_event_method(created, @selector(mouseDown:), button(0, true));
+        add_event_method(created, @selector(mouseUp:), button(0, false));
+        add_event_method(created, @selector(rightMouseDown:), button(1, true));
+        add_event_method(created, @selector(rightMouseUp:), button(1, false));
+        add_event_method(created, @selector(otherMouseDown:), button(2, true));
+        add_event_method(created, @selector(otherMouseUp:), button(2, false));
+        auto move = [](NSView* view, NativeParentHost* host, NSEvent* event) {
+            move_to_event(view, host, event);
+        };
+        add_event_method(created, @selector(mouseMoved:), move);
+        add_event_method(created, @selector(mouseDragged:), move);
+        add_event_method(created, @selector(rightMouseDragged:), move);
+        add_event_method(created, @selector(otherMouseDragged:), move);
+        add_event_method(created, @selector(scrollWheel:), [](NSView* view, NativeParentHost* host, NSEvent* event) {
+            move_to_event(view, host, event);
+            // RmlUi scrolls down for a positive delta; AppKit reports the opposite.
+            const double scale = event.hasPreciseScrollingDeltas ? 1.0 / 10.0 : 1.0;
+            host->process_mouse_wheel(static_cast<float>(-event.scrollingDeltaX * scale),
+                                      static_cast<float>(-event.scrollingDeltaY * scale),
+                                      rml_modifiers(event.modifierFlags));
+        });
+        add_event_method(created, @selector(keyDown:), [](NSView* view, NativeParentHost* host, NSEvent* event) {
+            host->process_key_down(rml_key(event.keyCode), rml_modifiers(event.modifierFlags));
+            // Text goes through the input system, which calls insertText:.
+            if (!(event.modifierFlags & (NSEventModifierFlagCommand | NSEventModifierFlagControl)))
+                [view interpretKeyEvents:@[event]];
+        });
+        add_event_method(created, @selector(keyUp:), [](NSView*, NativeParentHost* host, NSEvent* event) {
+            host->process_key_up(rml_key(event.keyCode), rml_modifiers(event.modifierFlags));
+        });
+        class_addMethod(created, @selector(insertText:),
+                        imp_implementationWithBlock(^(id self, id text) {
+                            NativeParentHost* host = owner_of(self);
+                            NSString* string = [text isKindOfClass:[NSAttributedString class]]
+                                                   ? [text string] : text;
+                            if (host && [string isKindOfClass:[NSString class]] && string.length)
+                                host->process_text_input(string.UTF8String);
+                        }),
+                        "v@:@");
+        // Editing commands (arrows, delete, return) arrive as key identifiers
+        // through keyDown:, so the command selectors need no action here.
+        class_addMethod(created, @selector(doCommandBySelector:),
+                        imp_implementationWithBlock(^(id, SEL) {}), "v@::");
         objc_registerClassPair(created);
         return created;
     }();
@@ -61,26 +171,32 @@ struct NativeParentHost::Impl {
     std::unique_ptr<SoftRenderer> owned_soft;
     NullLua lua;
     Backend backend;
-    VellumRmlUiHostView* view = nil;
+    NSView* view = nil;
     CGImageRef image = nil;
     bool visible = true;
     bool focused = false;
 
-    void present(const SoftRenderer& soft) {
+    void present(const SoftRenderer& soft, double scale) {
         if (!view || soft.width() == 0 || soft.height() == 0)
             return;
-        CGDataProviderRef provider = CGDataProviderCreateWithData(nullptr, soft.pixels().data(),
-                                                                  soft.pixels().size(), nullptr);
+        // The image owns a copy of the frame: Core Animation reads it while
+        // compositing, after the renderer may already have redrawn or resized
+        // its own buffer.
+        CFDataRef pixels = CFDataCreate(nullptr, soft.pixels().data(),
+                                        static_cast<CFIndex>(soft.pixels().size()));
+        CGDataProviderRef provider = CGDataProviderCreateWithCFData(pixels);
+        CFRelease(pixels);
         CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
         CGImageRef next = CGImageCreate(soft.width(), soft.height(), 8, 32, soft.width() * 4,
                                         space, kCGImageAlphaPremultipliedLast | kCGBitmapByteOrderDefault,
                                         provider, nullptr, false, kCGRenderingIntentDefault);
+        CGColorSpaceRelease(space);
+        CGDataProviderRelease(provider);
         if (image)
             CGImageRelease(image);
         image = next;
+        view.layer.contentsScale = scale;
         view.layer.contents = (__bridge id)image;
-        CGColorSpaceRelease(space);
-        CGDataProviderRelease(provider);
     }
 };
 
@@ -107,9 +223,15 @@ bool NativeParentHost::attach(const NativeParent& parent) {
     NSView* p = (__bridge NSView*)parent.handle;
     if (!impl_->view) {
         impl_->view = [[host_view_class() alloc] initWithFrame:NSMakeRect(0, 0, size_.width, size_.height)];
-        [impl_->view setOwner:this];
+        set_owner(impl_->view, this);
         impl_->view.wantsLayer = YES;
         impl_->view.layer.opaque = NO;
+        // Hover needs mouseMoved:, which AppKit sends only through a tracking area.
+        [impl_->view addTrackingArea:[[NSTrackingArea alloc]
+            initWithRect:NSZeroRect
+                 options:NSTrackingMouseMoved | NSTrackingActiveAlways | NSTrackingInVisibleRect
+                   owner:impl_->view
+                userInfo:nil]];
     }
     if (impl_->view.superview != p) { [impl_->view removeFromSuperview]; [p addSubview:impl_->view]; }
     return true;
@@ -119,6 +241,7 @@ void NativeParentHost::invalidate() {
     if (!impl_) return;
     detach();
     if (impl_->image) { CGImageRelease(impl_->image); impl_->image = nil; }
+    if (impl_->view) set_owner(impl_->view, nullptr);
     impl_->view = nil;
     impl_->backend.close();
 }
@@ -131,7 +254,7 @@ bool NativeParentHost::set_size(const NativeHostSize& s) {
 void NativeParentHost::idle() {
     if (!impl_->backend.is_open() || !impl_->visible) return;
     impl_->backend.render();
-    if (soft_) impl_->present(*soft_);
+    if (soft_) impl_->present(*soft_, size_.scale);
 }
 void NativeParentHost::visibility_changed(bool visible) { impl_->visible = visible; if (impl_->view) impl_->view.hidden = !visible; }
 void NativeParentHost::focus_changed(bool focused) { impl_->focused = focused; }
