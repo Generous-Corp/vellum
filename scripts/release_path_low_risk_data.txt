@@ -1,0 +1,2 @@
+# Exact data paths eligible for release-path shadow tiering.
+tools/mirror/third_party_unexports.txt

@@ -57,12 +57,19 @@ def files(*names: str) -> list[dict[str, Any]]:
     return [{"filename": name} for name in names]
 
 
+def api_file(name: str, additions: int = 1, deletions: int = 0, **extra: Any) -> dict[str, Any]:
+    return {"filename": name, "status": "modified", "additions": additions, "deletions": deletions,
+            "changes": additions + deletions, **extra}
+
+
 def make_root(codeowners: str = CODEOWNERS, config: str = CONFIG) -> Path:
     root = Path(tempfile.mkdtemp(prefix="release-path-review-"))
     (root / ".github").mkdir()
     (root / ".shipyard").mkdir()
     (root / ".github" / "CODEOWNERS").write_text(codeowners, encoding="utf-8")
     (root / ".shipyard" / "config.toml").write_text(config, encoding="utf-8")
+    (root / gate.LOW_RISK_DATA_LIST).parent.mkdir(parents=True, exist_ok=True)
+    (root / gate.LOW_RISK_DATA_LIST).write_text("tools/mirror/third_party_unexports.txt\n", encoding="utf-8")
     return root
 
 
@@ -239,6 +246,83 @@ class ProtectedPathTests(GateCase):
         state, description = self.judge([], [], routes=routes)
         self.assertEqual(state, "failure")
         self.assertIn("PR #8", description)
+
+
+class ShadowTierTests(GateCase):
+    """The shadow classifier is advisory; the two-approval gate remains in force."""
+
+    def test_real_593_files_are_low(self) -> None:
+        changed = [api_file("tools/mirror/test_third_party_unexports.py", additions=11),
+                   api_file("tools/mirror/test_unexports_relink.py", additions=29),
+                   api_file("tools/mirror/third_party_unexports.txt", additions=25)]
+        self.assertEqual(gate.low_risk_tier(changed, self.root)[0], True)
+
+    def test_real_597_files_are_low(self) -> None:
+        changed = [api_file("DEPENDENCIES.md", additions=11), api_file("NOTICE.md", additions=24)]
+        self.assertEqual(gate.low_risk_tier(changed, self.root)[0], True)
+
+    def test_shipyard_config_fixtures_412_and_526_are_high(self) -> None:
+        for number in (412, 526):
+            with self.subTest(pr=number):
+                low, reason = gate.low_risk_tier([api_file(".shipyard/config.toml", additions=9)], self.root)
+                self.assertFalse(low)
+                self.assertIn("protected", reason)
+
+    def test_docs_data_and_additions_only_tests_are_low(self) -> None:
+        changed = [api_file("docs/notes.md"), api_file("assets/catalog.json"),
+                   api_file("tests/test_catalog.py", additions=4)]
+        # The data file is low only when explicitly listed on main.
+        (self.root / gate.LOW_RISK_DATA_LIST).parent.mkdir(parents=True, exist_ok=True)
+        (self.root / gate.LOW_RISK_DATA_LIST).write_text("assets/catalog.json\n", encoding="utf-8")
+        self.assertEqual(gate.low_risk_tier(changed, self.root), (True, "would need 1"))
+
+    def test_every_non_low_rule_is_fail_closed(self) -> None:
+        cases = [
+            ([api_file("tests/test_x.py", additions=2, deletions=1)], "deletion"),
+            ([api_file("src/x.py")], "file type"),
+            ([api_file("src/x.sh")], "protected"),
+            ([api_file("src/x.cmake")], "protected"),
+            ([api_file("CMakeLists.txt")], "protected"),
+            ([api_file("docs/x.yml")], "protected"),
+            ([api_file("docs/x.toml")], "protected"),
+            ([api_file("CODEOWNERS")], "protected"),
+            ([api_file(".github/workflows/example.yml")], "protected"),
+            ([api_file("docs/signing-notes.md")], "release logic"),
+            ([api_file("docs/release-notes.md")], "release logic"),
+            ([api_file("docs/verify.md")], "release logic"),
+            ([api_file("docs/provenance.md")], "release logic"),
+            ([api_file("docs/x.md", previous_filename="docs/y.md")], "rename"),
+            ([api_file("docs/x.md", mode_changed=True)], "mode"),
+            ([api_file("docs/x.md", type="symlink")], "symlink"),
+            ([api_file("scripts/release_path_low_risk_data.txt")], "list"),
+        ]
+        for changed, expected in cases:
+            with self.subTest(changed=changed):
+                low, reason = gate.low_risk_tier(changed, self.root)
+                self.assertFalse(low)
+                self.assertIn(expected, reason)
+
+    def test_unknown_truncated_or_oversized_list_is_high(self) -> None:
+        self.assertEqual(gate.low_risk_tier([], self.root, complete=False)[0], False)
+        self.assertEqual(gate.low_risk_tier([{}], self.root)[0], False)
+        self.assertEqual(gate.low_risk_tier([api_file("docs/x.md")] * 21, self.root)[0], False)
+
+    def test_shadow_is_logged_and_does_not_reduce_two_approval_requirement(self) -> None:
+        changed = [api_file("DEPENDENCIES.md")]
+        routes = pull_routes(7, HEAD, changed, [])
+        logged: list[str] = []
+        decision = gate.decide("pull_request_target", pull_event(), REPO, FakeApi(routes), self.root,
+                               log=logged.append)
+        self.assertEqual(decision[1], "success")  # unprotected fixture still passes the existing gate
+        self.assertIn("tier-shadow: low (would need 1)", decision[2])
+        self.assertIn("tier-shadow: low (would need 1)", " ".join(logged))
+
+    def test_release_path_still_requires_two_even_when_shadow_low(self) -> None:
+        changed = [api_file("tools/mirror/third_party_unexports.txt", additions=1)]
+        routes = pull_routes(7, HEAD, changed, [])
+        decision = gate.decide("pull_request_target", pull_event(), REPO, FakeApi(routes), self.root, log=lambda _: None)
+        self.assertEqual(decision[1], "failure")
+        self.assertIn("tier-shadow: low", decision[2])
 
 
 class UnprotectedTests(GateCase):

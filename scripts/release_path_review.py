@@ -83,6 +83,8 @@ REQUIRED_APPROVALS = 2
 # GitHub lists at most 3000 files of a pull request.
 FILE_LIST_LIMIT = 3000
 PAGE = 100
+LOW_RISK_FILE_LIMIT = 20
+LOW_RISK_DATA_LIST = Path("scripts/release_path_low_risk_data.txt")
 # Every workflow and local action, and the mirror tooling the framework
 # transfer is derived and censused with (rename_mirror_namespace.py and the
 # collision and symbol censuses that verify_extraction.py runs).
@@ -177,6 +179,84 @@ def touched(files: Iterable[dict[str, Any]], protected: frozenset[str]) -> list[
     return sorted(hits)
 
 
+def _is_test_path(path: str) -> bool:
+    parts = path.lower().split("/")
+    name = parts[-1]
+    return "test" in parts or name.startswith("test_") or "_test." in name
+
+
+def low_risk_tier(files: list[dict[str, Any]], root: Path = ROOT, complete: bool = True) -> tuple[bool, str]:
+    """Classify a complete trusted files-API listing for shadow tiering.
+
+    This is deliberately fail-closed and advisory: the caller still applies the
+    two-approval rule regardless of the result.
+    """
+    if not complete:
+        return False, "file listing is incomplete"
+    if not isinstance(files, list):
+        return False, "file listing is unreadable"
+    if len(files) > LOW_RISK_FILE_LIMIT:
+        return False, f"more than {LOW_RISK_FILE_LIMIT} files"
+    try:
+        allowed_data = {
+            line.strip() for line in (root / LOW_RISK_DATA_LIST).read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+    except (OSError, UnicodeError):
+        return False, "low-risk data list is unreadable"
+    if not allowed_data:
+        return False, "low-risk data list is empty"
+    for entry in files:
+        if not isinstance(entry, dict):
+            return False, "file entry is unreadable"
+        path = entry.get("filename")
+        if not isinstance(path, str) or not path or path.startswith("/") or "\\" in path:
+            return False, "file path is unreadable"
+        status = str(entry.get("status") or "").lower()
+        if status in ("removed", "renamed") or entry.get("previous_filename"):
+            return False, f"deletion or rename: {path}"
+        if any(entry.get(key) is not None and entry.get(key) != entry.get("mode")
+               for key in ("old_mode", "new_mode", "previous_mode")):
+            return False, f"mode change: {path}"
+        if entry.get("mode_changed") or entry.get("symlink") or str(entry.get("type") or "").lower() == "symlink":
+            return False, f"mode or symlink: {path}"
+        mode = str(entry.get("mode") or "")
+        if mode.startswith("12"):
+            return False, f"symlink: {path}"
+        additions, deletions = entry.get("additions"), entry.get("deletions")
+        if not isinstance(additions, int) or not isinstance(deletions, int):
+            return False, f"file change counts are unreadable: {path}"
+        lower = path.lower()
+        if deletions:
+            return False, f"deletion in {path}"
+        if path == str(LOW_RISK_DATA_LIST):
+            return False, f"low-risk data list changed: {path}"
+        if (lower.startswith((".github/", ".shipyard/", "scripts/", "cmake/"))
+                or lower.endswith((".sh", ".cmake", ".yml", ".yaml", ".toml"))
+                or lower == "cmakelists.txt" or lower.endswith("/cmakelists.txt")
+                or lower.endswith("/codeowners") or lower == "codeowners"):
+            return False, f"protected path or configuration: {path}"
+        if any(word in lower for word in ("signing", "release", "verify", "provenance")):
+            return False, f"release logic path: {path}"
+        base = path.rsplit("/", 1)[-1]
+        text_name = bool(re.fullmatch(r"(?:NOTICE|DEPENDENCIES)(?:\.[a-z0-9]+)?", base, re.I))
+        is_text = lower.endswith(".md") or text_name
+        is_data = path in allowed_data
+        if _is_test_path(path):
+            continue
+        if not (is_text or is_data):
+            return False, f"file type is not low risk: {path}"
+    return True, "would need 1"
+
+
+def with_shadow(why: str, files: list[dict[str, Any]], root: Path = ROOT) -> str:
+    low, reason = low_risk_tier(files, root)
+    shadow = "tier-shadow: low (would need 1)" if low else f"tier-shadow: high ({reason})"
+    # Keep the shadow result visible within GitHub's 140-character limit.
+    suffix = f"; {shadow}"
+    return (why[: max(0, DESCRIPTION_LIMIT - len(suffix))] + suffix)
+
+
 def judge(head: str, files: list[dict[str, Any]], comments: list[dict[str, Any]],
           reviews: list[dict[str, Any]], policy: Policy) -> tuple[bool, str]:
     """`(allowed, why)` for one pull request at `head`."""
@@ -268,7 +348,8 @@ def judge_pull(api: Api, repo: str, number: int, head: str, policy: Policy) -> t
         raise GateError(f"PR #{number} lists {len(files)} files but changes {pull.get('changed_files')}")
     comments = api.pages(f"repos/{repo}/issues/{number}/comments", limit=10**6)
     reviews = api.pages(f"repos/{repo}/pulls/{number}/reviews", limit=10**6)
-    return judge(head, files, comments, reviews, policy)
+    allowed, why = judge(head, files, comments, reviews, policy)
+    return allowed, with_shadow(why, files)
 
 
 def open_pulls_on(api: Api, repo: str, head: str) -> list[int]:
@@ -495,6 +576,8 @@ def decide(event_name: str, event: dict[str, Any], repo: str, api: Api, root: Pa
         if head is None:
             raise error
         return head, "error", describe(one_line(f"cannot judge: {error}"))
+    if "tier-shadow:" in why:
+        log(why[why.index("tier-shadow:"):])
     state = "success" if allowed else "failure"
     log(f"release-path-review: {state} on {head}: {why}")
     return head, state, describe(one_line(why))
