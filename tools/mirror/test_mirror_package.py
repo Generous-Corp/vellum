@@ -1848,8 +1848,14 @@ class PlatformRecordPlanTest(unittest.TestCase):
             "CMAKE_SYSTEM_NAME": "iOS", "CMAKE_SYSTEM_PROCESSOR": "arm64", "CMAKE_OSX_SYSROOT": "iphoneos"})
         pc._check_options_platform("at", "ios-simulator-arm64", {
             "CMAKE_SYSTEM_NAME": "iOS", "CMAKE_SYSTEM_PROCESSOR": "arm64", "CMAKE_OSX_SYSROOT": "iphonesimulator"})
+        for key, sdk in (("ios-device-arm64", "/X/iPhoneOS17.5.sdk"),):
+            pc._check_options_platform("at", key, {
+                "CMAKE_SYSTEM_NAME": "iOS", "CMAKE_SYSTEM_PROCESSOR": "arm64", "CMAKE_OSX_SYSROOT": sdk})
         for key, sdk in (("ios-device-arm64", "iphonesimulator"), ("ios-simulator-arm64", "iphoneos"),
-                         ("ios-device-arm64", None)):
+                         ("ios-device-arm64", None), ("ios-device-arm64", "macosx"),
+                         ("ios-device-arm64", "/SDKs/MacOSX.sdk"), ("ios-device-arm64", "appletvos"),
+                         ("ios-simulator-arm64", "watchsimulator"), ("ios-simulator-arm64", "xrsimulator"),
+                         ("ios-device-arm64", "/x/iPhoneSimulator17.5.sdk"), ("ios-device-arm64", 7)):
             options = {"CMAKE_SYSTEM_NAME": "iOS", "CMAKE_SYSTEM_PROCESSOR": "arm64"}
             if sdk:
                 options["CMAKE_OSX_SYSROOT"] = sdk

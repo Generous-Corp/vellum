@@ -227,11 +227,26 @@ def _check_options_platform(at: str, key: str, options: dict[str, Any]) -> None:
         raise RecordError(f"{at}: configure options target processor {options.get('CMAKE_SYSTEM_PROCESSOR')!r}, "
                           f"but {key} is {processor}")
     if system == "iOS":
-        sdk = str(options.get("CMAKE_OSX_SYSROOT", "")).lower()
-        simulator = "simulator" in sdk
-        if not sdk or simulator != (key == "ios-simulator-arm64"):
+        sdk = _apple_sdk_family(options.get("CMAKE_OSX_SYSROOT"))
+        wanted = "iphonesimulator" if key == "ios-simulator-arm64" else "iphoneos"
+        if sdk != wanted:
             raise RecordError(f"{at}: CMAKE_OSX_SYSROOT {options.get('CMAKE_OSX_SYSROOT')!r} "
-                              f"is not the {key} SDK")
+                              f"is not the {wanted} SDK that {key} needs")
+
+
+def _apple_sdk_family(value: Any) -> str:
+    """The SDK family of a CMAKE_OSX_SYSROOT: 'iphoneos', 'iphonesimulator', 'macosx', ...
+
+    The value is an SDK name (iphoneos, iphoneos17.5) or a path ending in
+    <Family><version>.sdk; anything else has no family.
+    """
+    import re
+    if not isinstance(value, str) or not value:
+        return ""
+    base = value.rstrip("/").rsplit("/", 1)[-1].lower()
+    if base.endswith(".sdk"):
+        base = base[:-4]
+    return re.sub(r"[0-9.]+$", "", base)
 
 
 def _strings(value: Any) -> bool:
