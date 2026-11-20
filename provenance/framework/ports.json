@@ -895,6 +895,26 @@
         "windows-x64",
         "windows-arm64"
       ]
+    },
+    {
+      "framework_path": "framework/core/view/src/plugin_view_host.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Vellum's plug-in view host factory: PluginViewHost::create and the factory registry, exported from the SDK so a plug-in editor can embed a Vellum view (owner decision 2026-11-20: Vellum owns the GPU plug-in editor host). Written for Vellum, not taken from Pulp's plugin_view_host sources."
+    },
+    {
+      "framework_path": "framework/core/view/platform/mac/plugin_view_host_mac.mm",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "The macOS plug-in view host: a per-image Metal view that renders the View tree with Skia on Dawn into its CAMetalLayer and routes mouse, wheel, key and focus input. Written for Vellum on its own Metal view, not taken from Pulp's plugin_view_host_mac sources."
     }
   ]
 }
