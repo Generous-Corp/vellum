@@ -87,11 +87,16 @@ int main() {
         int keys = 0;
     } probe;
     probe.set_bounds({0, 0, 64, 64});
-    // The process owns Dawn's proc table: a plug-in registers the native
-    // bootstrap before its editor creates a GPU host, as this consumer does.
+    // The plug-in owns a bundle registration. This records the gpu-runtime
+    // version alongside the process-wide Dawn identity before creating a GPU
+    // host, so another bundle built against a different runtime is refused.
     std::string bootstrap_error;
-    if (!vellum::app_host::register_native_dawn_bootstrap(&bootstrap_error))
+    if (!vellum::app_host::register_native_dawn_bootstrap_for_bundle(
+            "com.example.vellum.plugin-view-host", &bootstrap_error))
         return fail(("Dawn bootstrap registration failed: " + bootstrap_error).c_str());
+    if (!vellum::app_host::register_native_dawn_bootstrap_for_bundle(
+            "com.example.vellum.plugin-view-host-second", &bootstrap_error))
+        return fail(("same-runtime bundle registration failed: " + bootstrap_error).c_str());
     constexpr uint32_t background_rgb = 0x2359A1;
     Host::Options options;
     options.size = {64, 64};

@@ -218,6 +218,65 @@ _run("plug-in view host consumer configure" "${CMAKE_COMMAND}"
     -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
 _run("plug-in view host consumer build" "${CMAKE_COMMAND}" --build "${_pvh_dir}/build")
 _run("plug-in view host consumer run" "${_pvh_dir}/build/vellum-plugin-view-host-consumer")
+
+# The native bootstrap entry points are provider-owned. The installed mirror
+# consumer must resolve them from that dylib, and must not carry the Dawn proc
+# table calls that the old inline header emitted into plug-in objects. The
+# installed SDK intentionally does not ship libdawn_combined.a, so a consumer
+# cannot link a second pinned Dawn archive through this package boundary. The
+# no-proc-reference check below is the strongest installed-consumer proof, while
+# the provider's own whole-archive link remains the sole Dawn definition.
+set(_provider "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib")
+find_program(_nm nm REQUIRED)
+execute_process(COMMAND "${_nm}" -gU "${_provider}"
+    RESULT_VARIABLE _provider_nm_result OUTPUT_VARIABLE _provider_nm ERROR_VARIABLE _provider_nm_error)
+if(NOT _provider_nm_result EQUAL 0 OR
+   NOT _provider_nm MATCHES "register_native_dawn_bootstrap" OR
+   NOT _provider_nm MATCHES "register_native_dawn_bootstrap_for_bundle")
+    message(FATAL_ERROR
+        "the installed provider does not export both native Dawn bootstrap entry points:\n"
+        "${_provider_nm}\n${_provider_nm_error}")
+endif()
+message(STATUS "provider exports native Dawn bootstrap entry points: ok")
+# nm prints C++ names mangled (__ZN4dawn6native8GetProcsEv), so the pattern
+# matches the mangled spelling as well as the demangled one and the C entry
+# points. A planted reference proves the pattern sees what nm really prints.
+set(_dawn_proc_ref_pattern "dawnProc(Set|Get)|dawn6native8GetProcs|dawn::native::GetProcs")
+set(_proc_control_dir "${_work}/dawn-proc-ref-control")
+file(MAKE_DIRECTORY "${_proc_control_dir}")
+file(WRITE "${_proc_control_dir}/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.24)
+project(VellumDawnProcRefControl LANGUAGES CXX)
+add_library(dawn_proc_ref_control STATIC control.cpp)
+]=])
+file(WRITE "${_proc_control_dir}/control.cpp" [=[
+namespace dawn::native { const void* GetProcs(); }
+const void* vellum_dawn_proc_ref_control() { return dawn::native::GetProcs(); }
+]=])
+_run("Dawn proc-table reference control configure" "${CMAKE_COMMAND}"
+    -S "${_proc_control_dir}" -B "${_proc_control_dir}/build" ${_generator}
+    -DCMAKE_BUILD_TYPE=Release)
+_run("Dawn proc-table reference control build" "${CMAKE_COMMAND}"
+    --build "${_proc_control_dir}/build")
+execute_process(COMMAND "${_nm}" -u "${_proc_control_dir}/build/libdawn_proc_ref_control.a"
+    RESULT_VARIABLE _control_nm_result OUTPUT_VARIABLE _control_nm ERROR_VARIABLE _control_nm_error)
+if(NOT _control_nm_result EQUAL 0 OR NOT _control_nm MATCHES "${_dawn_proc_ref_pattern}")
+    message(FATAL_ERROR
+        "negative control: the Dawn proc-table check does not see a planted "
+        "dawn::native::GetProcs reference, so a clean result would prove nothing:\n"
+        "${_control_nm}\n${_control_nm_error}")
+endif()
+message(STATUS "Dawn proc-table check sees a planted reference: ok")
+execute_process(COMMAND "${_nm}" -u "${_pvh_dir}/build/vellum-plugin-view-host-consumer"
+    RESULT_VARIABLE _consumer_nm_result OUTPUT_VARIABLE _consumer_nm ERROR_VARIABLE _consumer_nm_error)
+if(NOT _consumer_nm_result EQUAL 0)
+    message(FATAL_ERROR "installed plug-in consumer nm failed: ${_consumer_nm_error}")
+endif()
+if(_consumer_nm MATCHES "${_dawn_proc_ref_pattern}")
+    message(FATAL_ERROR
+        "installed plug-in consumer still references Dawn proc-table symbols:\n${_consumer_nm}")
+endif()
+message(STATUS "installed plug-in consumer has no Dawn proc-table references: ok")
 _run("debt probe" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/tools/mirror/verify_mirror_inertness.py"
     --prefix "${_prefix}" --install-libdir "${VELLUM_INSTALL_LIBDIR}"
