@@ -133,19 +133,24 @@ NAME_DEBTS = {
         "owner": "Phase 6",
     },
 }
-# Declared Phase-6 reference debts (owner ruling 2026-10-14 item 1). The
-# declaration ships in a mirrored header, but its definition lives only in a
-# Pulp-kept target, so no packaged library may reference it, defined or not.
-# A consumer image may: it is the consumer's own link, not the package.
+# The plug-in host used to be a Pulp-kept definition. The 2026-11-20 owner
+# decision moves its factories into Vellum, so the installed package must now
+# export both create overloads and the registry functions.
 REFERENCE_DEBTS = {
     "view-core-plugin-view-host-declarations": {
-        "rules": ["no-pulp-kept-references"],
+        "rules": ["plugin-view-host-exports"],
         "pattern": rf"^{_NS}::view::(?:PluginViewHost::(?:create|set_factory|clear_factory|has_factory)"
                    r"|register_platform_plugin_view_host)\(",
         "file": "core/view/include/pulp/view/plugin_view_host.hpp",
         "owner": "Phase 6",
     },
 }
+PLUGIN_VIEW_HOST_EXPORTS = (
+    rf"^{_NS}::view::PluginViewHost::create\({ _NS}::view::View&, { _NS}::view::PluginViewHost::Size\)$",
+    rf"^{_NS}::view::PluginViewHost::create\({ _NS}::view::View&, { _NS}::view::PluginViewHost::Options const&\)$",
+    rf"^{_NS}::view::PluginViewHost::(?:set_factory|clear_factory|has_factory)\(",
+    rf"^{_NS}::view::register_platform_plugin_view_host\(\)",
+)
 # Headers of Pulp's view-audio target and its Pulp-kept siblings: the
 # audio/ subtree, the meter/waveform/spectrum family and the named widgets.
 AUDIO_HEADER = re.compile(
@@ -158,7 +163,7 @@ AUDIO_HEADER = re.compile(
 VIEW_HEADER = re.compile(rf"(?:^|/){_INC}/view/")
 # Demangled view-audio symbols: the widget classes and their registration.
 AUDIO_SYMBOL = re.compile(
-    rf"\b{_NS}::view::(?:\w+::)*(?:"
+    rf"\b{_NS}::view::(?!(?:PluginViewHost)(?:::|$))(?:\w+::)*(?:"
     r"Meter|LevelDisplay|WaveformView|Waveform\w*|Spectrum\w*|Visualiz\w*"
     r"|EqCurveView|AudioBridge|AudioInspector\w*|MidiBinding|MidiKeyboard\w*"
     r"|MusicalTypingKeyboard\w*|StepGridView|GraphEditorView|PluginManagerPanel"
@@ -385,6 +390,8 @@ def symbol_report(symbols: dict[str, list[str]], *, view_unit_packaged: bool,
     for image, names in sorted(symbols.items()):
         for name in names:
             label = f"{image}: {name}"
+            if "::view::PluginViewHost::" in name or "::view::register_platform_plugin_view_host" in name:
+                continue
             if floor is not None:
                 if floor_hit(name, floor):
                     audio.append(label)
@@ -567,16 +574,21 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
     audio_symbols, forward_symbols = report["audio"], report["forward"]
     referenced = {
         debt: [f"{name}: {symbol}" for name, names in sorted(symbols.items()) if name != image.name
-               for symbol in names if re.search(entry["pattern"], symbol)]
+               for symbol in names if re.search(entry["pattern"], symbol)
+               and not any(re.search(pattern, symbol) for pattern in PLUGIN_VIEW_HOST_EXPORTS)]
         for debt, entry in REFERENCE_DEBTS.items()
     }
     pulp_kept_references = [hit for hits in referenced.values() for hit in hits]
+    packaged_symbols = [symbol for name, names in symbols.items() if name != image.name for symbol in names]
+    host_exports = [symbol for symbol in packaged_symbols
+                    if any(re.search(pattern, symbol) for pattern in PLUGIN_VIEW_HOST_EXPORTS)]
+    host_exports_ok = len(host_exports) >= 6
     checks = {
         "no-widgets-gate-definition": not definition,
         "no-audio-headers": not headers,
         "no-audio-symbols": not audio_symbols,
         "name-only-forward-declarations": not forward_symbols,
-        "no-pulp-kept-references": not pulp_kept_references,
+        "plugin-view-host-exports": host_exports_ok,
     }
     return {
         "schema": SCHEMA,
@@ -611,7 +623,7 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
             "no-audio-headers": headers,
             "no-audio-symbols": audio_symbols,
             "name-only-forward-declarations": forward_symbols,
-            "no-pulp-kept-references": pulp_kept_references,
+        "plugin-view-host-exports": host_exports,
         },
     }
 

@@ -336,6 +336,17 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
     endforeach()
 endforeach()
 
+# Vellum owns the installed GPU plug-in editor host.  It is deliberately an
+# addition to the mirrored view-core package, not a copied Pulp-kept source:
+# the public header is mirrored, while this implementation is authored here.
+if(TARGET pulp-view-core AND APPLE)
+    target_sources(pulp-view-core PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/view/src/plugin_view_host.cpp"
+        "${PROJECT_SOURCE_DIR}/framework/core/view/platform/mac/plugin_view_host_mac.mm")
+    target_include_directories(pulp-view-core PRIVATE
+        "${PROJECT_SOURCE_DIR}/framework/core/view/include")
+endif()
+
 # Optional V8 (VELLUM_ENABLE_V8). The closures build view-script with QuickJS
 # only, so its V8 backend compiles as a stub. This is the one native addition
 # to that unit's compile: the backend's PULP_HAS_V8 switch, the provider

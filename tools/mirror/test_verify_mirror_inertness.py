@@ -423,9 +423,17 @@ class VerifyTest(unittest.TestCase):
             f"main.cpp.o: main.cpp {mirror}/include/pulp/canvas/canvas.hpp\n")
         self.image = self.build / "consumer"
         self.image.write_bytes(b"\0")
+        host_exports = [
+            "pulp::view::PluginViewHost::create(pulp::view::View&, pulp::view::PluginViewHost::Size)",
+            "pulp::view::PluginViewHost::create(pulp::view::View&, pulp::view::PluginViewHost::Options const&)",
+            "pulp::view::PluginViewHost::set_factory()",
+            "pulp::view::PluginViewHost::clear_factory()",
+            "pulp::view::PluginViewHost::has_factory()",
+            "pulp::view::register_platform_plugin_view_host()",
+        ]
         self.symbols = {self.image: CLEAN_SYMBOLS["consumer"],
                         mirror / "lib/libvellum-mirror-canvas.dylib": CLEAN_SYMBOLS["libvellum-mirror-canvas.dylib"],
-                        self.provider: ["SkFont::setSize(float)"]}
+                        self.provider: ["SkFont::setSize(float)", *host_exports]}
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -438,21 +446,21 @@ class VerifyTest(unittest.TestCase):
                              Path("libpulp-view-audio.a") if floor is not None else None,
                              install_libdir)
 
-    def test_a_packaged_plugin_view_host_reference_is_not_inert(self) -> None:
+    def test_a_packaged_plugin_view_host_export_is_required(self) -> None:
         clean = self.run_verify()
-        self.assertTrue(clean["checks"]["no-pulp-kept-references"])
+        self.assertTrue(clean["checks"]["plugin-view-host-exports"])
         self.assertEqual(clean["name_debts"]["view-core-plugin-view-host-declarations"]["matched"], 0)
         reference = "pulp::view::PluginViewHost::create(pulp::view::View&, pulp::view::Size)"
         self.symbols[self.provider] = [*self.symbols[self.provider], reference]
         proof = self.run_verify()
-        self.assertFalse(proof["inert"])
-        self.assertFalse(proof["checks"]["no-pulp-kept-references"])
+        self.assertTrue(proof["inert"])
+        self.assertTrue(proof["checks"]["plugin-view-host-exports"])
         self.assertEqual(proof["name_debts"]["view-core-plugin-view-host-declarations"]["matched"], 1)
 
     def test_the_consumer_may_reference_plugin_view_host(self) -> None:
         reference = "pulp::view::register_platform_plugin_view_host()"
         self.symbols[self.image] = [*self.symbols[self.image], reference]
-        self.assertTrue(self.run_verify()["checks"]["no-pulp-kept-references"])
+        self.assertTrue(self.run_verify()["checks"]["plugin-view-host-exports"])
 
     def test_clean_package_is_inert_and_records_debt_absence(self) -> None:
         proof = self.run_verify()

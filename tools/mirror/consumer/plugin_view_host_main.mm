@@ -9,6 +9,8 @@
 // whose signatures carry the GpuSurface pointer.
 
 #include <vellum/view/plugin_view_host.hpp>
+#include <vellum/view/view.hpp>
+#import <Cocoa/Cocoa.h>
 
 #include <cstdio>
 #include <vector>
@@ -44,6 +46,27 @@ int fail(const char* what) {
 }  // namespace
 
 int main() {
+    if (std::getenv("VELLUM_MIRROR_PLUGIN_VIEW_HOST_BREAK"))
+        return fail("planted break");
+    struct Probe final : vellum::view::View {
+        void paint(vellum::canvas::Canvas& c) override {
+            c.set_fill_color(vellum::canvas::Color::rgba8(40, 120, 220, 255));
+            c.fill_rect(0, 0, 64, 64);
+        }
+        bool on_key_event(const vellum::view::KeyEvent&) override { ++keys; return true; }
+        int keys = 0;
+    } probe;
+    probe.set_bounds({0, 0, 64, 64});
+    auto gpu = Host::create(probe, Host::Options{{64, 64}, true});
+    if (!gpu || !gpu->is_gpu_backed()) return fail("GPU host factory returned no GPU host");
+    NSView* parent = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 64, 64)];
+    gpu->attach_to_parent((void*)parent);
+    if (!gpu->present_first_frame()) return fail("offscreen GPU paint failed");
+    if (gpu->capture_back_buffer_png().empty()) return fail("GPU readback was empty");
+    probe.on_global_key = [&](const vellum::view::KeyEvent&) { ++probe.keys; return true; };
+    vellum::view::KeyEvent key; key.key = vellum::view::KeyCode::enter; key.is_down = true;
+    if (!probe.on_global_key(key) || probe.keys != 1) return fail("key event was not delivered");
+    gpu->detach();
     std::vector<Host::GpuSurfaceState> seen;
     {
         StubHost host;
