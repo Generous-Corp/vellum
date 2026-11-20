@@ -481,6 +481,16 @@ class VerifyTest(unittest.TestCase):
         self.symbols[self.provider] = ["SkFont::setSize(float)", *exports[:-1], exports[0]]
         self.assertFalse(self.run_verify()["checks"]["plugin-view-host-exports"])
 
+    def test_cold_split_outlines_of_the_exports_stay_exports(self) -> None:
+        options = "pulp::view::PluginViewHost::create(pulp::view::View&, pulp::view::PluginViewHost::Options const&)"
+        size = "pulp::view::PluginViewHost::create(pulp::view::View&, pulp::view::PluginViewHost::Size)"
+        self.symbols[self.provider] = [*self.symbols[self.provider],
+                                       f"{options} (.cold.1)", f"{options} (.cold.2)",
+                                       f"{size} (.cold.1)"]
+        proof = self.run_verify()
+        self.assertTrue(proof["checks"]["no-pulp-kept-references"])
+        self.assertTrue(proof["checks"]["plugin-view-host-exports"])
+
     def test_other_plugin_view_host_audio_symbols_are_still_judged(self) -> None:
         self.symbols[self.provider] = [*self.symbols[self.provider],
                                        "pulp::view::PluginViewHost::WaveformView::paint()"]

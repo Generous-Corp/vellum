@@ -76,6 +76,12 @@ every event; only an owner decision with a ruleset bypass overrides it. The prov
 proves the rows append-only and the Pulp commits and bytes against a Pulp checkout,
 and the mirror build compiles each added source into the target its row names,
 on the platforms the row's scope lists (`macos-arm64` when it names none).
+A platform other than macOS builds only from its closure record in
+[`provenance/framework/platforms/`](../provenance/framework/platforms), Pulp's
+build graph for that platform, with no file content. The provenance lane
+accepts a new or changed record only when its manifests are the bytes of the
+artifact Pulp's `vellum-platform-closure.yml` run uploaded at the record's
+Pulp commit, as GitHub serves that artifact.
 A `pulp_*` name a file defines with C linkage survives the rename and would clash
 with Pulp's copy at link time, so it is spelled the Vellum way through
 [`provenance/framework/respell.json`](../provenance/framework/respell.json),
