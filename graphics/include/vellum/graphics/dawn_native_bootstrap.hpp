@@ -111,6 +111,12 @@ inline bool register_native_dawn_bootstrap(std::string* error = nullptr) {
         native_dawn_bootstrap(), native_dawn_revision(), error);
 }
 
+inline bool register_native_dawn_bootstrap_for_bundle(std::string_view bundle,
+                                                       std::string* error = nullptr) {
+    return graphics::register_dawn_bootstrap_for_bundle(
+        bundle, native_dawn_bootstrap(), native_dawn_revision(), error);
+}
+
 /// Testable host-local state: a failed identity check must leave this false.
 inline bool native_dawn_bootstrap_installed() {
     auto& state = detail::native_bootstrap_state();

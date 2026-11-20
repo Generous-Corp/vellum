@@ -1,4 +1,5 @@
 #include <vellum/graphics/dawn_bootstrap.hpp>
+#include <vellum/graphics/dawn_native_bootstrap.hpp>
 
 #include <gpu_runtime/dawn_bootstrap.hpp>
 
@@ -49,6 +50,28 @@ bool register_dawn_bootstrap(const DawnBootstrap& bootstrap,
         .context = const_cast<DawnBootstrap*>(&bootstrap),
     };
     return gpu_runtime::register_dawn_bootstrap(adapted, expected_dawn_revision, error);
+}
+
+bool register_dawn_bootstrap_for_bundle(std::string_view bundle,
+                                        const DawnBootstrap& bootstrap,
+                                        std::string_view expected_dawn_revision,
+                                        std::string* error) {
+    if (bootstrap.abi_version != kDawnBootstrapAbiVersion || bootstrap.callback == nullptr) {
+        if (error != nullptr)
+            *error = "a versioned host Dawn bootstrap and expected revision are required";
+        return false;
+    }
+    const gpu_runtime::DawnBootstrap adapted{
+        .abi_version = gpu_runtime::kDawnBootstrapAbiVersion,
+        .callback = &adapt,
+        .context = const_cast<DawnBootstrap*>(&bootstrap),
+    };
+    return gpu_runtime::register_dawn_bootstrap_for_bundle(
+        gpu_runtime::DawnBundleIdentity{
+            .bundle = bundle,
+            .runtime_version = gpu_runtime::runtime_version(),
+        },
+        adapted, expected_dawn_revision, error);
 }
 
 bool dawn_bootstrap_is_registered(std::string* error) {
