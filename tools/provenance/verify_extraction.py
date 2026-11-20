@@ -233,6 +233,7 @@ RENAMED_MIRROR_EXEMPT_PATHS = {
     "tools/mirror/consumer/main.cpp",
     "tools/mirror/consumer/plugin_view_host_main.mm",
     "tools/mirror/consumer/runtime_image_census_main.cpp",
+    "tools/mirror/consumer/threejs_v8_main.cpp",
     "tools/mirror/consumer/v8_main.cpp",
     # The mirror package's own build glue: the provider anchor compiled into
     # the canvas unit, and the GPU guard whose #error names the guarded header.

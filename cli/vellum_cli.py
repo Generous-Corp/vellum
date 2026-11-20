@@ -159,7 +159,7 @@ def selected_template(requested: str | None, has_import: bool) -> str:
         return "imported-app" if has_import else "blank"
     if requested == "imported-app" and not has_import:
         raise CliFailure(
-            "The imported-app template requires --from figma/design-ir/html/claude-design FILE.",
+            "The imported-app template requires --from figma/design-ir/html/claude-design/fig FILE.",
             status="template_requires_source",
             exit_code=EXIT_USAGE,
         )
@@ -560,7 +560,7 @@ def create_project(args: argparse.Namespace) -> dict[str, Any]:
     import_request: tuple[str, Path, str] | None = None
     if args.import_source:
         source_type, source_value = args.import_source
-        if source_type not in {"figma", "design-ir", "html", "claude-design"}:
+        if source_type not in {"fig", "figma", "design-ir", "html", "claude-design"}:
             raise CliFailure(
                 f"Unsupported create source type: {source_type}",
                 status="unsupported_source_type", exit_code=EXIT_USAGE,
@@ -1374,7 +1374,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument(
         "--from", dest="import_source", nargs=2, metavar=("SOURCE_TYPE", "SOURCE"),
         choices=None,
-        help="create from an initial source: --from figma/design-ir/html/claude-design FILE",
+        help="create from an initial source: --from figma/design-ir/html/claude-design/fig FILE",
     )
     create.add_argument("--as", dest="source_key", default="main", help="permanent source key for --from")
     create.add_argument("--interaction-plan", help="bounded browser interaction plan for an HTML import")
@@ -1442,7 +1442,7 @@ def parser() -> argparse.ArgumentParser:
     backend_specs = {
         "import": [
             ("source", {}),
-            ("--source-type", {"choices": ["figma", "design-ir", "html", "claude-design"], "default": "figma"}),
+            ("--source-type", {"choices": ["fig", "figma", "design-ir", "html", "claude-design"], "default": "figma"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
         ],
