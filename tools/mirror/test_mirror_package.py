@@ -395,8 +395,8 @@ class MirrorPackagePlanTest(unittest.TestCase):
 
 VELLUM_SOURCE = "https://github.com/Generous-Corp/vellum.git"
 GPU_RUNTIME_HEADER = "gpu-runtime/include/gpu_runtime/gpu_surface.hpp"
-MIRRORED_CHOKE_HEADER = "mirror/core/runtime/include/pulp/runtime/gpu_fwd.hpp"
-MIRRORED_CHOKE_BYTES = b"#pragma once\nnamespace gpu_runtime { class GpuSurface; }\n"
+MIRRORED_CHOKE_HEADER = "mirror/core/runtime/include/pulp/runtime/gpu_surface.hpp"
+MIRRORED_CHOKE_BYTES = b"#pragma once\n#include <gpu_runtime/gpu_surface.hpp>\n"
 GPU_RUNTIME_BUILD_INCLUDE = "@build/_deps/vellum_gpu_runtime-src/gpu-runtime/include"
 
 
@@ -570,18 +570,18 @@ class InTreeGpuRuntimeTest(unittest.TestCase):
     def test_mirrored_choke_header_is_guarded_in_the_plan(self) -> None:
         plan = self.plan()
         headers = plan["gpu_guard"]["headers"]
-        self.assertEqual([h["relative"] for h in headers], ["pulp/runtime/gpu_fwd.hpp"])
+        self.assertEqual([h["relative"] for h in headers], ["pulp/runtime/gpu_surface.hpp"])
         copy = Path(headers[0]["copy"]).read_text()
         self.assertEqual(copy, "#pragma once\n#include <vellum/mirror/gpu_surface_unsupported.hpp>\n"
-                               "namespace gpu_runtime { class GpuSurface; }\n")
+                               "#include <gpu_runtime/gpu_surface.hpp>\n")
         # The mirrored file itself is untouched.
         self.assertEqual((self.fixture.repo / MIRRORED_CHOKE_HEADER).read_bytes(), MIRRORED_CHOKE_BYTES)
         output = Path(self.temporary.name) / "plan.cmake"
         mp.write_cmake(plan, output)
         text = output.read_text()
         self.assertIn("set(VELLUM_MIRROR_GPU_GUARD_COUNT 1)", text)
-        # cmake_quote escapes the backslash and the dollar; CMake reads /pulp/runtime/gpu_fwd\\.hpp$.
-        self.assertIn('set(VELLUM_MIRROR_GPU_GUARD_0_EXCLUDE "/pulp/runtime/gpu_fwd\\\\.hpp\\$")', text)
+        # cmake_quote escapes the backslash and the dollar; CMake reads /pulp/runtime/gpu_surface\\.hpp$.
+        self.assertIn('set(VELLUM_MIRROR_GPU_GUARD_0_EXCLUDE "/pulp/runtime/gpu_surface\\\\.hpp\\$")', text)
 
     def test_pinned_gpu_runtime_with_no_header_to_guard_is_refused(self) -> None:
         self.fixture.remove_mirror_file(MIRRORED_CHOKE_HEADER)
@@ -2274,8 +2274,7 @@ class PlanTargetRefusalTest(unittest.TestCase):
             self.fixture.plan()
 
     def test_a_choke_header_the_guard_cannot_carry_is_refused(self) -> None:
-        self.fixture.add_mirror_file("mirror/core/runtime/include/pulp/runtime/gpu_fwd.hpp",
-                                     b"namespace gpu_runtime { class GpuSurface; }\n")
+        self.fixture.add_mirror_file(MIRRORED_CHOKE_HEADER, b"#include <gpu_runtime/gpu_surface.hpp>\n")
         self.assertRefused("needs #pragma once to carry the guard")
 
 
