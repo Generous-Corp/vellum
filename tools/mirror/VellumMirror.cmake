@@ -12,10 +12,23 @@
 # libraries forward their public namespace, while the provider owns the
 # mirrored implementation objects and pinned Skia/Dawn definitions.
 
-if(NOT APPLE OR NOT VELLUM_HAS_SKIA_DAWN)
+# macOS plans from the export receipt's Darwin arm64 closures. Every other
+# platform, the other Apple systems included, plans from its own closure record
+# (tools/mirror/platform_closures.py) and its renderer lock entry;
+# mirror_package.py refuses a platform without a verified record, so a platform
+# is enabled only by landing one.
+include("${CMAKE_CURRENT_LIST_DIR}/VellumMirrorPlatform.cmake")
+vellum_mirror_platform_args(_vellum_mirror_platform_args)
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    if(NOT VELLUM_HAS_SKIA_DAWN)
+        message(FATAL_ERROR
+            "Vellum: the landed mirror was exported from the Darwin arm64 Skia/Dawn "
+            "configuration; VELLUM_ENABLE_MIRROR needs the locked Skia/Dawn archive")
+    endif()
+elseif(NOT VELLUM_HAS_SKIA_DAWN)
     message(FATAL_ERROR
-        "Vellum: the landed mirror was exported from the Darwin arm64 Skia/Dawn "
-        "configuration; VELLUM_ENABLE_MIRROR needs the locked Skia/Dawn archive")
+        "Vellum: VELLUM_ENABLE_MIRROR on ${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_PROCESSOR} needs a "
+        "verified platform closure record and a renderer lock entry for this platform")
 endif()
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
     message(FATAL_ERROR
@@ -23,7 +36,9 @@ if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
         "configure with -DCMAKE_BUILD_TYPE=Release")
 endif()
 enable_language(C)
-enable_language(OBJCXX)
+if(APPLE)
+    enable_language(OBJCXX)
+endif()
 find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
 
 set(VELLUM_MIRROR_DEPS_DIR "${CMAKE_BINARY_DIR}/_deps/vellum-mirror" CACHE PATH
@@ -52,6 +67,7 @@ execute_process(
         "${PROJECT_SOURCE_DIR}/tools/mirror/mirror_package.py"
         "--in-tree-definitions=vellum-gpu-runtime=${_vellum_mirror_gpu_runtime_definitions_arg}"
         --repo "${PROJECT_SOURCE_DIR}"
+        ${_vellum_mirror_platform_args}
         --deps-dir "${VELLUM_MIRROR_DEPS_DIR}"
         --generated-dir "${_vellum_mirror_generated}"
         --skia-dir "${VELLUM_SKIA_DIR}"
@@ -71,12 +87,22 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${PROJECT_SOURCE_DIR}/provenance/mirror/receipts/index.json"
     "${PROJECT_SOURCE_DIR}/tools/mirror/framework_ports.py"
     "${PROJECT_SOURCE_DIR}/tools/mirror/gpu_surface_guard.py"
+    "${PROJECT_SOURCE_DIR}/tools/mirror/platform_closures.py"
     "${PROJECT_SOURCE_DIR}/tools/mirror/port_respell.py"
     "${PROJECT_SOURCE_DIR}/tools/mirror/source_compile_options.py"
     "${PROJECT_SOURCE_DIR}/tools/mirror/verify_mirror_rename_identity.py"
+    "${PROJECT_SOURCE_DIR}/tools/mirror/VellumMirrorPlatform.cmake"
     "${PROJECT_SOURCE_DIR}/provenance/framework/transfer.json"
     # Its mtime moves when a manifest below is added, which an absent file cannot signal.
     "${PROJECT_SOURCE_DIR}/provenance/framework")
+# Planning reads the platform index, each platform's record and its closure
+# manifests; editing any of them must retrigger mirror_package.py.
+file(GLOB_RECURSE _vellum_mirror_platform_records CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/provenance/framework/platforms/*.json")
+foreach(_vellum_mirror_platform_record IN LISTS _vellum_mirror_platform_records)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+        "${_vellum_mirror_platform_record}")
+endforeach()
 # The ports ledger and the unit manifest decide what is compiled. The respell
 # rule and its table change the bytes of framework/ sources, so they
 # retrigger configure too.
@@ -93,11 +119,11 @@ include("${_vellum_mirror_plan_cmake}")
 
 # Object paths and __FILE__ must not carry the host's checkout or build path:
 # the SDK is built twice in different directories and compared byte for byte.
-set(_vellum_mirror_prefix_maps
-    "-ffile-prefix-map=${PROJECT_SOURCE_DIR}=vellum"
-    "-ffile-prefix-map=${CMAKE_BINARY_DIR}=vellum-build"
-    "-ffile-prefix-map=${VELLUM_MIRROR_DEPS_DIR}=vellum-mirror-deps"
-    "-ffile-prefix-map=${VELLUM_SKIA_DIR}=vellum-skia")
+vellum_mirror_prefix_map_options(_vellum_mirror_prefix_maps
+    "${PROJECT_SOURCE_DIR}=vellum"
+    "${CMAKE_BINARY_DIR}=vellum-build"
+    "${VELLUM_MIRROR_DEPS_DIR}=vellum-mirror-deps"
+    "${VELLUM_SKIA_DIR}=vellum-skia")
 
 function(_vellum_mirror_key out value)
     string(MAKE_C_IDENTIFIER "${value}" _key)
@@ -386,6 +412,9 @@ if(TARGET pulp-view-core)
     target_compile_definitions(vellum-mirror-value-include-probe PRIVATE
         "$<TARGET_PROPERTY:pulp-view-core,COMPILE_DEFINITIONS>")
 endif()
+
+# Everything below packages and links with Apple-only rules.
+vellum_mirror_require_packaging()
 
 # ── Package libraries ──────────────────────────────────────────────────────
 # One shared library per unit, each holding every object of its mirrored
