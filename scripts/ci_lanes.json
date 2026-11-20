@@ -389,6 +389,10 @@
       {
         "script": "scripts/test_ctest_classes.py",
         "isolated": true
+      },
+      {
+        "script": "scripts/test_web_compat_packaging.py",
+        "isolated": true
       }
     ]
   },

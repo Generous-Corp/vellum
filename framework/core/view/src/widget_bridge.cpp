@@ -357,7 +357,6 @@ WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore* 
     };
     eval_prelude("css_colors", preludes::css_colors);
     eval_prelude("css_parser", preludes::css_parser);
-    eval_prelude("web_compat", preludes::web_compat);
     eval_prelude("web_compat_element", preludes::web_compat_element);
     // Events + pointer-capture helpers must eval after web_compat_element so
     // the Element constructor and prototype exist before overrides install.
@@ -397,7 +396,6 @@ WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore* 
     // selector helpers are resolvable when document.querySelector /
     // .querySelectorAll dispatch into them.
     eval_prelude("web_compat_document_selectors", preludes::web_compat_document_selectors);
-    eval_prelude("web_compat_selector", preludes::web_compat_selector);
     // WebGPU mock factories must eval after document so GPU* usage constants
     // are in scope when factory bodies resolve them lazily at call time.
     eval_prelude("web_compat_document_gpu_mock", preludes::web_compat_document_gpu_mock);
@@ -414,10 +412,6 @@ WidgetBridge::WidgetBridge(ScriptEngine& engine, View& root, state::StateStore* 
     // finds the constructors it expects on the global.
     eval_prelude("web_compat_observers", preludes::web_compat_observers);
     eval_prelude("web_compat_scheduler", preludes::web_compat_scheduler);
-    eval_prelude("web_compat_runtime_apis", preludes::web_compat_runtime_apis);
-#if VELLUM_ENABLE_V8
-    eval_prelude("web_compat_three_shim", preludes::web_compat_three_shim);
-#endif
     // DOM construction and walker for the Claude Design `--execute-bundle`
     // import lane. Hides itself behind `globalThis.__pulpImportRuntime__` so
     // non-import scripts do not see new globals.

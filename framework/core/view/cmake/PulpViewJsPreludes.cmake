@@ -2,9 +2,6 @@
 set(PULP_JS_PRELUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/js/css-colors.js
     ${CMAKE_CURRENT_SOURCE_DIR}/js/css-parser.js
-    # Legacy web-compat DOM bundle retained for scripted UI consumers. The
-    # split preludes below extend and replace its individual surfaces.
-    ${CMAKE_CURRENT_SOURCE_DIR}/js/web-compat.js
     ${CMAKE_CURRENT_SOURCE_DIR}/js/web-compat-element.js
     # Events + pointer-capture prototype overrides. Loaded AFTER the
     # parent so the Element constructor + prototype are already defined
@@ -58,10 +55,6 @@ set(PULP_JS_PRELUDES
     # are in scope when underscore-prefixed selector helpers are
     # dispatched from document.querySelector / .querySelectorAll.
     ${CMAKE_CURRENT_SOURCE_DIR}/js/web-compat-document-selectors.js
-    # Harness-compatible selector helpers are loaded after the native
-    # selector bridge so the shared helper names resolve to the complete
-    # selector implementation.
-    ${CMAKE_CURRENT_SOURCE_DIR}/js/web-compat-selector.js
     # WebGPU mock factories. Loaded AFTER the parent so GPU* usage
     # constants installed by document.js (GPUTextureUsage etc.) are in
     # scope when the factory bodies resolve them at call time.
@@ -70,8 +63,6 @@ set(PULP_JS_PRELUDES
     ${CMAKE_CURRENT_SOURCE_DIR}/js/web-compat-gpu-buffered.js
     ${CMAKE_CURRENT_SOURCE_DIR}/js/web-compat-observers.js
     ${CMAKE_CURRENT_SOURCE_DIR}/js/web-compat-scheduler.js
-    ${CMAKE_CURRENT_SOURCE_DIR}/js/web-compat-runtime-apis.js
-    ${CMAKE_CURRENT_SOURCE_DIR}/js/web-compat-three-shim.js
     ${CMAKE_CURRENT_SOURCE_DIR}/js/import-runtime.js
 )
 set(PULP_JS_EMBEDDED_HEADER ${CMAKE_CURRENT_BINARY_DIR}/web_compat_preludes_gen.hpp)

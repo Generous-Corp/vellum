@@ -43,23 +43,6 @@ FRAMEWORK_TEST(script_creates_a_label_and_sets_its_text) {
     CHECK(h.js_string("getText('title')") == "hello");
 }
 
-FRAMEWORK_TEST(scripted_ui_has_the_complete_web_compat_dom_layer) {
-    Harness h;
-    h.bridge.load_script(
-        "var card = document.createElement('div');"
-        "card.className = 'card';"
-        "document.body.appendChild(card);"
-        "globalThis.webCompatProbe = {"
-        "  dom: typeof document.createElement === 'function' && document.body.children.length === 1,"
-        "  runtime: btoa('Vellum') === 'VmVsbHVt' && typeof TextEncoder === 'function',"
-        "  selector: typeof _parseSelector === 'function' && document.querySelector('.card') === card"
-        "};");
-
-    CHECK(h.js_string("webCompatProbe.dom") == "true");
-    CHECK(h.js_string("webCompatProbe.runtime") == "true");
-    CHECK(h.js_string("webCompatProbe.selector") == "true");
-}
-
 FRAMEWORK_TEST(native_click_reaches_the_script_toggle_handler) {
     Harness h;
     h.bridge.load_script("globalThis.flips = [];"
