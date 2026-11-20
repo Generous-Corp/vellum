@@ -57,9 +57,9 @@ def files(*names: str) -> list[dict[str, Any]]:
     return [{"filename": name} for name in names]
 
 
-def api_file(name: str, additions: int = 1, deletions: int = 0, **extra: Any) -> dict[str, Any]:
-    return {"filename": name, "status": "modified", "additions": additions, "deletions": deletions,
-            "changes": additions + deletions, **extra}
+def api_file(name: str, additions: int = 1, deletions: int = 0, status: str = "modified") -> dict[str, Any]:
+    return {"filename": name, "status": status, "additions": additions, "deletions": deletions,
+            "changes": additions + deletions}
 
 
 def make_root(codeowners: str = CODEOWNERS, config: str = CONFIG) -> Path:
@@ -251,11 +251,13 @@ class ProtectedPathTests(GateCase):
 class ShadowTierTests(GateCase):
     """The shadow classifier is advisory; the two-approval gate remains in force."""
 
-    def test_real_593_files_are_low(self) -> None:
+    def test_real_593_files_are_high_because_existing_tests_are_modified(self) -> None:
         changed = [api_file("tools/mirror/test_third_party_unexports.py", additions=11),
                    api_file("tools/mirror/test_unexports_relink.py", additions=29),
                    api_file("tools/mirror/third_party_unexports.txt", additions=25)]
-        self.assertEqual(gate.low_risk_tier(changed, self.root)[0], True)
+        low, reason = gate.low_risk_tier(changed, self.root)
+        self.assertFalse(low)
+        self.assertIn("new Python test", reason)
 
     def test_real_597_files_are_low(self) -> None:
         changed = [api_file("DEPENDENCIES.md", additions=11), api_file("NOTICE.md", additions=24)]
@@ -270,7 +272,7 @@ class ShadowTierTests(GateCase):
 
     def test_docs_data_and_additions_only_tests_are_low(self) -> None:
         changed = [api_file("docs/notes.md"), api_file("assets/catalog.json"),
-                   api_file("tests/test_catalog.py", additions=4)]
+                   api_file("tests/test_catalog.py", additions=4, status="added")]
         # The data file is low only when explicitly listed on main.
         (self.root / gate.LOW_RISK_DATA_LIST).parent.mkdir(parents=True, exist_ok=True)
         (self.root / gate.LOW_RISK_DATA_LIST).write_text("assets/catalog.json\n", encoding="utf-8")
@@ -278,7 +280,7 @@ class ShadowTierTests(GateCase):
 
     def test_every_non_low_rule_is_fail_closed(self) -> None:
         cases = [
-            ([api_file("tests/test_x.py", additions=2, deletions=1)], "deletion"),
+            ([api_file("tests/test_x.py", additions=2, deletions=1, status="added")], "deletion"),
             ([api_file("src/x.py")], "file type"),
             ([api_file("src/x.sh")], "protected"),
             ([api_file("src/x.cmake")], "protected"),
@@ -291,9 +293,10 @@ class ShadowTierTests(GateCase):
             ([api_file("docs/release-notes.md")], "release logic"),
             ([api_file("docs/verify.md")], "release logic"),
             ([api_file("docs/provenance.md")], "release logic"),
-            ([api_file("docs/x.md", previous_filename="docs/y.md")], "rename"),
-            ([api_file("docs/x.md", mode_changed=True)], "mode"),
-            ([api_file("docs/x.md", type="symlink")], "symlink"),
+            ([dict(api_file("docs/x.md"), status="renamed")], "status"),
+            ([api_file("tests/helper.py", status="added")], "file type"),
+            ([api_file("tests/test_x.py", status="modified")], "new Python test"),
+            ([api_file("tests/test_x.txt", status="added")], "new Python test"),
             ([api_file("scripts/release_path_low_risk_data.txt")], "list"),
         ]
         for changed, expected in cases:
@@ -307,22 +310,37 @@ class ShadowTierTests(GateCase):
         self.assertEqual(gate.low_risk_tier([{}], self.root)[0], False)
         self.assertEqual(gate.low_risk_tier([api_file("docs/x.md")] * 21, self.root)[0], False)
 
-    def test_shadow_is_logged_and_does_not_reduce_two_approval_requirement(self) -> None:
+    def test_shadow_is_logged_without_modifying_the_status_description(self) -> None:
         changed = [api_file("DEPENDENCIES.md")]
         routes = pull_routes(7, HEAD, changed, [])
         logged: list[str] = []
         decision = gate.decide("pull_request_target", pull_event(), REPO, FakeApi(routes), self.root,
                                log=logged.append)
         self.assertEqual(decision[1], "success")  # unprotected fixture still passes the existing gate
-        self.assertIn("tier-shadow: low (would need 1)", decision[2])
+        self.assertEqual(decision[2], "no release-path file changed")
         self.assertIn("tier-shadow: low (would need 1)", " ".join(logged))
 
-    def test_release_path_still_requires_two_even_when_shadow_low(self) -> None:
-        changed = [api_file("tools/mirror/third_party_unexports.txt", additions=1)]
+    def test_release_path_description_keeps_the_approval_count(self) -> None:
+        changed = [api_file(".github/workflows/" + "x" * 15 + ".yml", additions=1)]
         routes = pull_routes(7, HEAD, changed, [])
         decision = gate.decide("pull_request_target", pull_event(), REPO, FakeApi(routes), self.root, log=lambda _: None)
+        expected = gate.judge(HEAD, changed, [], [], gate.load_policy(self.root))[1]
+        self.assertGreater(len(expected), 120)
+        self.assertLessEqual(len(expected), gate.DESCRIPTION_LIMIT)
         self.assertEqual(decision[1], "failure")
-        self.assertIn("tier-shadow: low", decision[2])
+        self.assertIn("needs 2 counted APPROVEs", decision[2])
+        self.assertIn("has 0", decision[2])
+        self.assertNotIn("tier-shadow:", decision[2])
+
+    def test_classifier_uses_the_root_passed_to_decide(self) -> None:
+        changed = [api_file("assets/catalog.json")]
+        (self.root / gate.LOW_RISK_DATA_LIST).write_text("assets/catalog.json\n", encoding="utf-8")
+        routes = pull_routes(7, HEAD, changed, [])
+        logged: list[str] = []
+        decision = gate.decide("pull_request_target", pull_event(), REPO, FakeApi(routes), self.root,
+                               log=logged.append)
+        self.assertEqual(decision[1], "success")
+        self.assertIn("tier-shadow: low (would need 1)", " ".join(logged))
 
 
 class UnprotectedTests(GateCase):

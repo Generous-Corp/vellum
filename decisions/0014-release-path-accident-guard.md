@@ -60,13 +60,15 @@ here says otherwise.
 The gate now classifies release-path file lists in shadow mode while still
 requiring the two counted approvals above. A low shadow tier is reported only
 when every changed file is a Markdown, NOTICE or DEPENDENCIES text file, an
-exact data path listed by `scripts/release_path_low_risk_data.txt`, or a test
-file with additions only. The trusted base-side classifier rejects deletions,
-renames, mode changes and symlinks; incomplete or oversized listings; changes
+exact data path listed by `scripts/release_path_low_risk_data.txt`, or a newly
+added `test_*.py` or `*_test.py` file. The trusted base-side classifier rejects
+deletions,
+renames, unsupported file statuses; incomplete or oversized listings; changes
 under `.github/`, `.shipyard/`, `scripts/` or `cmake/`; executable/configuration
 types; signing, release, verify or provenance paths; and changes to its own
 data list. The status and log say `tier-shadow: low (would need 1)` or
-`tier-shadow: high (...)`; this does not alter the required count.
+`tier-shadow: high (...)`; this does not alter the required count. The
+classifier does not infer file modes or symlinks from the files listing.
 
 Shadow runs for two weeks and at least 50 heads. Enforcement may be proposed
 only after the shadow tier agrees with the adversary on those heads and no

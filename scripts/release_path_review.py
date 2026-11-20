@@ -213,16 +213,10 @@ def low_risk_tier(files: list[dict[str, Any]], root: Path = ROOT, complete: bool
         if not isinstance(path, str) or not path or path.startswith("/") or "\\" in path:
             return False, "file path is unreadable"
         status = str(entry.get("status") or "").lower()
-        if status in ("removed", "renamed") or entry.get("previous_filename"):
-            return False, f"deletion or rename: {path}"
-        if any(entry.get(key) is not None and entry.get(key) != entry.get("mode")
-               for key in ("old_mode", "new_mode", "previous_mode")):
-            return False, f"mode change: {path}"
-        if entry.get("mode_changed") or entry.get("symlink") or str(entry.get("type") or "").lower() == "symlink":
-            return False, f"mode or symlink: {path}"
-        mode = str(entry.get("mode") or "")
-        if mode.startswith("12"):
-            return False, f"symlink: {path}"
+        if status not in ("added", "modified"):
+            return False, f"unsupported file status: {path} ({status or 'unknown'})"
+        if entry.get("previous_filename"):
+            return False, f"rename: {path}"
         additions, deletions = entry.get("additions"), entry.get("deletions")
         if not isinstance(additions, int) or not isinstance(deletions, int):
             return False, f"file change counts are unreadable: {path}"
@@ -243,18 +237,17 @@ def low_risk_tier(files: list[dict[str, Any]], root: Path = ROOT, complete: bool
         is_text = lower.endswith(".md") or text_name
         is_data = path in allowed_data
         if _is_test_path(path):
+            if status != "added" or not re.fullmatch(r"(?:test_[^/]+\.py|[^/]+_test\.py)", base, re.I):
+                return False, f"test file is not a new Python test: {path}"
             continue
         if not (is_text or is_data):
             return False, f"file type is not low risk: {path}"
     return True, "would need 1"
 
 
-def with_shadow(why: str, files: list[dict[str, Any]], root: Path = ROOT) -> str:
+def shadow_tier_line(files: list[dict[str, Any]], root: Path = ROOT) -> str:
     low, reason = low_risk_tier(files, root)
-    shadow = "tier-shadow: low (would need 1)" if low else f"tier-shadow: high ({reason})"
-    # Keep the shadow result visible within GitHub's 140-character limit.
-    suffix = f"; {shadow}"
-    return (why[: max(0, DESCRIPTION_LIMIT - len(suffix))] + suffix)
+    return "tier-shadow: low (would need 1)" if low else f"tier-shadow: high ({reason})"
 
 
 def judge(head: str, files: list[dict[str, Any]], comments: list[dict[str, Any]],
@@ -336,7 +329,8 @@ class Api:
             page += 1
 
 
-def judge_pull(api: Api, repo: str, number: int, head: str, policy: Policy) -> tuple[bool, str]:
+def judge_pull(api: Api, repo: str, number: int, head: str, policy: Policy, root: Path,
+               shadow_log: Callable[[str], None] | None = None) -> tuple[bool, str]:
     pull = api.get(f"repos/{repo}/pulls/{number}")
     if not isinstance(pull, dict):
         raise GateError(f"PR #{number} is unreadable")
@@ -348,8 +342,9 @@ def judge_pull(api: Api, repo: str, number: int, head: str, policy: Policy) -> t
         raise GateError(f"PR #{number} lists {len(files)} files but changes {pull.get('changed_files')}")
     comments = api.pages(f"repos/{repo}/issues/{number}/comments", limit=10**6)
     reviews = api.pages(f"repos/{repo}/pulls/{number}/reviews", limit=10**6)
-    allowed, why = judge(head, files, comments, reviews, policy)
-    return allowed, with_shadow(why, files)
+    if shadow_log is not None:
+        shadow_log(shadow_tier_line(files, root))
+    return judge(head, files, comments, reviews, policy)
 
 
 def open_pulls_on(api: Api, repo: str, head: str) -> list[int]:
@@ -362,7 +357,8 @@ def open_pulls_on(api: Api, repo: str, head: str) -> list[int]:
                   and str((p.get("head") or {}).get("sha") or "").lower() == head.lower())
 
 
-def judge_head(api: Api, repo: str, head: str, numbers: Iterable[int], policy: Policy) -> tuple[bool, str] | None:
+def judge_head(api: Api, repo: str, head: str, numbers: Iterable[int], policy: Policy, root: Path,
+               shadow_log: Callable[[str], None] | None = None) -> tuple[bool, str] | None:
     """The decision for a pull request head, or None when no open pull request has it.
 
     A status belongs to a commit, so it is `success` only when every open pull
@@ -370,7 +366,7 @@ def judge_head(api: Api, repo: str, head: str, numbers: Iterable[int], policy: P
     judged = sorted(set(numbers) | set(open_pulls_on(api, repo, head)))
     if not judged:
         return None
-    verdicts = [(n, *judge_pull(api, repo, n, head, policy)) for n in judged]
+    verdicts = [(n, *judge_pull(api, repo, n, head, policy, root, shadow_log)) for n in judged]
     refused = [(n, why) for n, ok, why in verdicts if not ok]
     if refused:
         return False, (f"PR #{refused[0][0]}: " if len(judged) > 1 else "") + refused[0][1]
@@ -564,7 +560,7 @@ def decide(event_name: str, event: dict[str, Any], repo: str, api: Api, root: Pa
                 raise GateError("the event names no default branch")
             allowed, why = judge_queue(api, repo, branch, head, policy, git or Git(root))
         else:
-            result = judge_head(api, repo, head, numbers, policy)
+            result = judge_head(api, repo, head, numbers, policy, root, log)
             if result is None:
                 log(f"release-path-review: no open pull request has head {head}")
                 return None
@@ -576,8 +572,6 @@ def decide(event_name: str, event: dict[str, Any], repo: str, api: Api, root: Pa
         if head is None:
             raise error
         return head, "error", describe(one_line(f"cannot judge: {error}"))
-    if "tier-shadow:" in why:
-        log(why[why.index("tier-shadow:"):])
     state = "success" if allowed else "failure"
     log(f"release-path-review: {state} on {head}: {why}")
     return head, state, describe(one_line(why))
