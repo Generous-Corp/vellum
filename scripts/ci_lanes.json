@@ -322,6 +322,10 @@
         "isolated": true
       },
       {
+        "script": "scripts/test_build_notices_manifest.py",
+        "isolated": true
+      },
+      {
         "script": "scripts/test_verify_rmlui_sdk_artifact.py",
         "isolated": true
       },
