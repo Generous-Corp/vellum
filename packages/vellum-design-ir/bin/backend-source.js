@@ -7,6 +7,7 @@ import {
     normalizeSha256ContentHash,
     parseDesignIR,
 } from '../src/index.js';
+import { decodeFigFile } from '../src/figma/import.js';
 import {
     fail,
     isSafeRelativeAsset,
@@ -22,7 +23,7 @@ const MAX_NODE_COUNT = 100_000;
 const MAX_TREE_DEPTH = 512;
 
 export async function loadSource(sourcePath, { captureEnvelope, sourceArchive, sourceKey, sourceType }) {
-    if (!['figma', 'design-ir', 'html', 'claude-design'].includes(sourceType)) {
+    if (!['fig', 'figma', 'design-ir', 'html', 'claude-design'].includes(sourceType)) {
         fail('unsupported_source_type', `Unsupported source type '${sourceType}'`);
     }
     const file = resolve(sourcePath);
@@ -34,7 +35,7 @@ export async function loadSource(sourcePath, { captureEnvelope, sourceArchive, s
         fail('source_too_large', `Import source exceeds ${MAX_SOURCE_BYTES} bytes`);
     }
     const sourceBytes = await readFile(file);
-    if (sourceArchive === null && (
+    if (sourceArchive === null && !basename(file).toLowerCase().endsWith('.fig') && (
         basename(file).toLowerCase().endsWith('.pulp.zip') || hasZipMagic(sourceBytes)
     )) {
         fail(
@@ -95,6 +96,21 @@ export async function loadSource(sourcePath, { captureEnvelope, sourceArchive, s
             sourceBytes,
             sourceHash,
             sourceName: sourceArtifact.name,
+        };
+    }
+    if (sourceType === 'fig' || (sourceType === 'figma' && basename(file).toLowerCase().endsWith('.fig'))) {
+        let document;
+        try {
+            document = decodeFigFile(sourceBytes, { sourceKey });
+        } catch (error) {
+            fail('invalid_fig', `Figma .fig source could not be decoded: ${error.message}`);
+        }
+        const sourceHash = `sha256:${sha256(sourceBytes)}`;
+        const revision = validateRevision(document.source.revision);
+        return {
+            archiveBytes: null, backendDiagnostics: [], document, revision,
+            sourceArtifact: { kind: 'fig', name: basename(file), sha256: sourceHash },
+            sourceBytes, sourceHash, sourceName: basename(file),
         };
     }
     let input;

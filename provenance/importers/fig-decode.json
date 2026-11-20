@@ -1,0 +1,40 @@
+{
+  "schema": "vellum.importer-origin.v1",
+  "importer": "fig",
+  "origin_repository": "Generous-Corp/pulp",
+  "origin_commit": "d4bf36a8e0055edbf2146605cc3995d32813917e",
+  "license": "MIT",
+  "policy": "Vellum-owned port. Future edits are made in Vellum and do not synchronize back to Pulp.",
+  "files": [
+    {
+      "pulp_path": "tools/import-design/fig/container.mjs",
+      "pulp_sha256": "e03366b19068b45daa68b65c330d0344e6da910b49c5d2909eed7c6c5645a2d8",
+      "vellum_path": "packages/vellum-design-ir/src/figma/container.mjs"
+    },
+    {
+      "pulp_path": "tools/import-design/fig/kiwi.mjs",
+      "pulp_sha256": "4ef2d5445cd70d6011a53139dd104131d424acaa6227b8d8e4eca2d19b1747f0",
+      "vellum_path": "packages/vellum-design-ir/src/figma/kiwi.mjs"
+    },
+    {
+      "pulp_path": "tools/import-design/fig/scene.mjs",
+      "pulp_sha256": "59085b854a7a63069d01b645b14b7822534487012d9e38bf1b720bc5d53a69b6",
+      "vellum_path": "packages/vellum-design-ir/src/figma/scene.mjs"
+    },
+    {
+      "pulp_path": "tools/import-design/fig/fonts.mjs",
+      "pulp_sha256": "5f2f1db6bad6b37bc615531332ccd3784c88ba8ff5a9e8b8e04bfc8aff996ceb",
+      "vellum_path": "packages/vellum-design-ir/src/figma/fonts.mjs"
+    },
+    {
+      "pulp_path": "tools/import-design/fig/paths.mjs",
+      "pulp_sha256": "e49f462750c08621c51d9bd8b93aca40da7242d9bca5d9d3ed2d3435c4c3e579",
+      "vellum_path": "packages/vellum-design-ir/src/figma/paths.mjs"
+    },
+    {
+      "pulp_path": "tools/import-design/fig_decode.mjs",
+      "pulp_sha256": "dae61b6cce4886207d6e9a2158781824b4daf0ec1494a9e06e94d8265cad93a1",
+      "vellum_path": "packages/vellum-design-ir/src/figma/fig_decode.mjs"
+    }
+  ]
+}
