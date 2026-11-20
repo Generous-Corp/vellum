@@ -146,9 +146,11 @@ REFERENCE_DEBTS = {
         "owner": "Phase 6",
     },
 }
+# The compiler may split a cold path out of a function as `name (.cold.N)`.
+_COLD = r"(?: \(\.cold\.\d+\))?"
 PLUGIN_VIEW_HOST_EXPORTS = (
-    rf"^{_NS}::view::PluginViewHost::create\({ _NS}::view::View&, { _NS}::view::PluginViewHost::Size\)$",
-    rf"^{_NS}::view::PluginViewHost::create\({ _NS}::view::View&, { _NS}::view::PluginViewHost::Options const&\)$",
+    rf"^{_NS}::view::PluginViewHost::create\({ _NS}::view::View&, { _NS}::view::PluginViewHost::Size\){_COLD}$",
+    rf"^{_NS}::view::PluginViewHost::create\({ _NS}::view::View&, { _NS}::view::PluginViewHost::Options const&\){_COLD}$",
     rf"^{_NS}::view::PluginViewHost::set_factory\(",
     rf"^{_NS}::view::PluginViewHost::clear_factory\(",
     rf"^{_NS}::view::PluginViewHost::has_factory\(",
