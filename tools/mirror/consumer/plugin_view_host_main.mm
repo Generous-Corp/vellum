@@ -50,9 +50,14 @@ bool png_pixel_matches(const std::vector<uint8_t>& png, NSInteger x, NSInteger y
                        uint32_t rgb) {
     // Compare the raw samples the host wrote: converting through NSColor
     // colour-manages them and shifts every channel.
+    // A negative coordinate counts back from the far edge, so a corner probe
+    // stays outside the 32-point View paint at any backing scale (a 2x
+    // surface doubles the painted rect to 64 pixels).
     NSData* data = [NSData dataWithBytes:png.data() length:png.size()];
     NSBitmapImageRep* image = [[NSBitmapImageRep alloc] initWithData:data];
-    if (!image || x >= image.pixelsWide || y >= image.pixelsHigh || image.bitsPerSample != 8 ||
+    if (image && x < 0) x += image.pixelsWide;
+    if (image && y < 0) y += image.pixelsHigh;
+    if (!image || x < 0 || y < 0 || x >= image.pixelsWide || y >= image.pixelsHigh || image.bitsPerSample != 8 ||
         image.samplesPerPixel < 3)
         return false;
     NSUInteger px[5] = {};
@@ -100,7 +105,7 @@ int main() {
     if (!gpu->present_first_frame()) return fail("offscreen GPU paint failed");
     const auto png = gpu->capture_back_buffer_png();
     if (png.empty()) return fail("GPU readback was empty");
-    if (!png_pixel_matches(png, 60, 60, background_rgb))
+    if (!png_pixel_matches(png, -4, -4, background_rgb))
         return fail("unpainted readback corner did not use the requested background");
     if (!png_pixel_matches(png, 8, 8, 0x2878DC))
         return fail("GPU readback did not contain the View paint");
