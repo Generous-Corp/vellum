@@ -73,6 +73,9 @@
         "pattern": "test_*.py"
       },
       {
+        "script": "cli/tests/test_illustrator_cli.py"
+      },
+      {
         "module": "tools.agent_instructions.test_verify"
       },
       {

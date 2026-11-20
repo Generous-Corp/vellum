@@ -17,6 +17,7 @@
       "vellum.blend-mode",
       "vellum.capture-stats",
       "vellum.ci-runner-policy",
+      "vellum.cli-illustrator-to-svg",
       "vellum.clock-and-source",
       "vellum.component-registry-bounds",
       "vellum.damage",
