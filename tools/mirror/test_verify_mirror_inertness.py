@@ -453,9 +453,34 @@ class VerifyTest(unittest.TestCase):
         reference = "pulp::view::PluginViewHost::create(pulp::view::View&, pulp::view::Size)"
         self.symbols[self.provider] = [*self.symbols[self.provider], reference]
         proof = self.run_verify()
-        self.assertTrue(proof["inert"])
+        # A PluginViewHost symbol that is not one of the exports is judged like
+        # any other view symbol, not skipped.
+        self.assertFalse(proof["inert"])
+        self.assertFalse(proof["checks"]["no-audio-symbols"])
         self.assertTrue(proof["checks"]["plugin-view-host-exports"])
         self.assertEqual(proof["name_debts"]["view-core-plugin-view-host-declarations"]["matched"], 1)
+
+    def test_missing_plugin_view_host_exports_are_not_inert(self) -> None:
+        exports = self.symbols[self.provider][1:]
+        for index, dropped in enumerate(exports):
+            with self.subTest(dropped=dropped):
+                self.symbols[self.provider] = ["SkFont::setSize(float)",
+                                               *exports[:index], *exports[index + 1:]]
+                proof = self.run_verify()
+                self.assertFalse(proof["checks"]["plugin-view-host-exports"])
+                self.assertFalse(proof["inert"])
+        self.symbols[self.provider] = ["SkFont::setSize(float)"]
+        self.assertFalse(self.run_verify()["inert"])
+
+    def test_a_duplicated_export_does_not_stand_in_for_a_missing_one(self) -> None:
+        exports = self.symbols[self.provider][1:]
+        self.symbols[self.provider] = ["SkFont::setSize(float)", *exports[:-1], exports[0]]
+        self.assertFalse(self.run_verify()["checks"]["plugin-view-host-exports"])
+
+    def test_other_plugin_view_host_audio_symbols_are_still_judged(self) -> None:
+        self.symbols[self.provider] = [*self.symbols[self.provider],
+                                       "pulp::view::PluginViewHost::WaveformView::paint()"]
+        self.assertFalse(self.run_verify()["inert"])
 
     def test_the_consumer_may_reference_plugin_view_host(self) -> None:
         reference = "pulp::view::register_platform_plugin_view_host()"

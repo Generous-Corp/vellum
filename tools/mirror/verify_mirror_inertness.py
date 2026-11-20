@@ -148,7 +148,9 @@ REFERENCE_DEBTS = {
 PLUGIN_VIEW_HOST_EXPORTS = (
     rf"^{_NS}::view::PluginViewHost::create\({ _NS}::view::View&, { _NS}::view::PluginViewHost::Size\)$",
     rf"^{_NS}::view::PluginViewHost::create\({ _NS}::view::View&, { _NS}::view::PluginViewHost::Options const&\)$",
-    rf"^{_NS}::view::PluginViewHost::(?:set_factory|clear_factory|has_factory)\(",
+    rf"^{_NS}::view::PluginViewHost::set_factory\(",
+    rf"^{_NS}::view::PluginViewHost::clear_factory\(",
+    rf"^{_NS}::view::PluginViewHost::has_factory\(",
     rf"^{_NS}::view::register_platform_plugin_view_host\(\)",
 )
 # Headers of Pulp's view-audio target and its Pulp-kept siblings: the
@@ -390,7 +392,7 @@ def symbol_report(symbols: dict[str, list[str]], *, view_unit_packaged: bool,
     for image, names in sorted(symbols.items()):
         for name in names:
             label = f"{image}: {name}"
-            if "::view::PluginViewHost::" in name or "::view::register_platform_plugin_view_host" in name:
+            if any(re.search(pattern, name) for pattern in PLUGIN_VIEW_HOST_EXPORTS):
                 continue
             if floor is not None:
                 if floor_hit(name, floor):
@@ -582,7 +584,11 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
     packaged_symbols = [symbol for name, names in symbols.items() if name != image.name for symbol in names]
     host_exports = [symbol for symbol in packaged_symbols
                     if any(re.search(pattern, symbol) for pattern in PLUGIN_VIEW_HOST_EXPORTS)]
-    host_exports_ok = len(host_exports) >= 6
+    # Every required export must be packaged: one match per pattern, so a
+    # duplicated overload cannot stand in for a missing one.
+    host_exports_ok = all(
+        any(re.search(pattern, symbol) for symbol in host_exports)
+        for pattern in PLUGIN_VIEW_HOST_EXPORTS)
     checks = {
         "no-widgets-gate-definition": not definition,
         "no-audio-headers": not headers,
@@ -623,7 +629,7 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
             "no-audio-headers": headers,
             "no-audio-symbols": audio_symbols,
             "name-only-forward-declarations": forward_symbols,
-        "plugin-view-host-exports": host_exports,
+            "plugin-view-host-exports": host_exports,
         },
     }
 
