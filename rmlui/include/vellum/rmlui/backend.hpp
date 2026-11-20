@@ -180,6 +180,7 @@ class VELLUM_RMLUI_API Backend {
     Backend& operator=(const Backend&) = delete;
 
     Status open(std::uint32_t width, std::uint32_t height);
+    void set_dimensions(std::uint32_t width, std::uint32_t height);
     // Sets how many context pixels make one RmlUi density-independent pixel
     // (dp). Lengths in dp, font sizes included, lay out and rasterize at that
     // many pixels per dp; lengths in px are unchanged. For text that is crisp
