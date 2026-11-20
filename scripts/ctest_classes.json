@@ -64,6 +64,7 @@
       "vellum.mirror-package-unit",
       "vellum.mirror-value-consumer",
       "vellum.mirror-yoga-shared-exception-typeinfo",
+      "vellum-notices-manifest",
       "vellum.paint-command",
       "vellum.parity-frames-lane-unit",
       "vellum.parity-harness-unit",

@@ -756,6 +756,33 @@ if(TARGET vellum-authoring)
     install(DIRECTORY authoring/include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 endif()
 
+# Keep the SDK's notice index and its per-dependency texts together.  Generate
+# at configure time so an incomplete lock or NOTICE.md stops the install.
+find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+set(_vellum_notices_dir "${CMAKE_CURRENT_BINARY_DIR}/share/vellum/notices")
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_notices_manifest.py"
+            --repo "${CMAKE_CURRENT_SOURCE_DIR}" --output "${_vellum_notices_dir}"
+    RESULT_VARIABLE _vellum_notices_result
+    OUTPUT_VARIABLE _vellum_notices_stdout
+    ERROR_VARIABLE _vellum_notices_stderr)
+# A changed lock, NOTICE.md or generator reconfigures, so the index never goes
+# stale in an existing build tree.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/provenance/third-party-lock.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/NOTICE.md"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_notices_manifest.py")
+if(NOT _vellum_notices_result EQUAL 0)
+    message(FATAL_ERROR "Vellum notices manifest generation failed:\n${_vellum_notices_stdout}${_vellum_notices_stderr}")
+endif()
+install(DIRECTORY "${_vellum_notices_dir}/"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/vellum/notices")
+if(BUILD_TESTING)
+    add_test(NAME vellum-notices-manifest
+        COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_build_notices_manifest.py")
+    set_tests_properties(vellum-notices-manifest PROPERTIES LABELS "pr-fast")
+endif()
+
 # Every test carries one of the pr-fast, gpu or slow class labels.
 include(cmake/VellumTestClasses.cmake)
 vellum_apply_test_classes("${CMAKE_CURRENT_SOURCE_DIR}/scripts/ctest_classes.json")
