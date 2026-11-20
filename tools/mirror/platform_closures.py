@@ -249,7 +249,8 @@ def _apple_sdk_family(value: Any) -> str:
     base = value.rstrip("/").rsplit("/", 1)[-1].lower()
     if base.endswith(".sdk"):
         base = base[:-4]
-    return re.sub(r"[0-9.]+$", "", base)
+    match = re.fullmatch(r"([a-z]+)(?:[0-9]+(?:\.[0-9]+)*)?", base)
+    return match.group(1) if match else ""
 
 
 def _strings(value: Any) -> bool:

@@ -1855,7 +1855,9 @@ class PlatformRecordPlanTest(unittest.TestCase):
                          ("ios-device-arm64", None), ("ios-device-arm64", "macosx"),
                          ("ios-device-arm64", "/SDKs/MacOSX.sdk"), ("ios-device-arm64", "appletvos"),
                          ("ios-simulator-arm64", "watchsimulator"), ("ios-simulator-arm64", "xrsimulator"),
-                         ("ios-device-arm64", "/x/iPhoneSimulator17.5.sdk"), ("ios-device-arm64", 7)):
+                         ("ios-device-arm64", "/x/iPhoneSimulator17.5.sdk"),
+                         ("ios-device-arm64", "iphoneos."), ("ios-device-arm64", "iphoneos17..5"),
+                         ("ios-device-arm64", "iphoneos-evil"), ("ios-device-arm64", "iphoneos17.5.beta"), ("ios-device-arm64", 7)):
             options = {"CMAKE_SYSTEM_NAME": "iOS", "CMAKE_SYSTEM_PROCESSOR": "arm64"}
             if sdk:
                 options["CMAKE_OSX_SYSROOT"] = sdk
