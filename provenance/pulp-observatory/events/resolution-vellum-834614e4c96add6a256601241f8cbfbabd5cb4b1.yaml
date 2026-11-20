@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum-ui",
+    "vellum.authoring"
+  ],
+  "created_at": "2026-11-19T04:31:00Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-834614e4c96add6a256601241f8cbfbabd5cb4b1",
+  "kind": "resolution",
+  "linked_commits": [
+    "834614e4c96add6a256601241f8cbfbabd5cb4b1"
+  ],
+  "linked_pull_requests": [
+    "Generous-Corp/vellum#587"
+  ],
+  "owner": "@claude-observatory-agent",
+  "rationale": "vellum-ui's JavaScript validators now measure the shared byte limits (path data, vector path data, text input, anchor and source file) in UTF-8 bytes through a new utf8ByteLength helper, matching the native checks that already count UTF-8 bytes; before this, JavaScript counted UTF-16 code units, so a value could pass JavaScript and fail natively. The rendered-tree materializer's native diagnostics now read their numbers from the shared limits constants instead of repeating them. No limit value changes. vellum-ui and the rendered-tree materializer exist only in Vellum, so no port is owed. Classified by the Vellum lead.",
+  "resolves": "vellum-834614e4c96add6a256601241f8cbfbabd5cb4b1",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}

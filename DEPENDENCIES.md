@@ -21,6 +21,17 @@ Their exact npm tarball integrities are locked by
 packages into the payload, and inventories the resulting installed bytes by
 SHA-256 in `metadata.json`.
 
+The same payload also redistributes TypeScript 7.0.2 and its matching
+`@typescript/typescript-darwin-arm64` 7.0.2 binary (Apache-2.0; npm
+`typescript`, locked in `packages/vellum-ui/package-lock.json`) under
+`ui/node_modules/`, and a Node.js 20.20.2 runtime executable under `node/`
+(MIT with bundled third-party notices; `node/provenance.json` records the
+source archive and digests). Each ships its own upstream license file
+(`ui/node_modules/typescript/LICENSE` and `NOTICE.txt`,
+`ui/node_modules/@typescript/typescript-darwin-arm64/LICENSE` and
+`NOTICE.txt`, and `node/LICENSE`) beside the code, and `NOTICE.md` points to
+them.
+
 ## Active renderer dependency
 
 The macOS arm64 GPU proof uses one byte-locked prebuilt renderer artifact:

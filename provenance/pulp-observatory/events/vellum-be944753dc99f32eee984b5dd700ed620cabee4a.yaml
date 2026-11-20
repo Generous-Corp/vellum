@@ -1,0 +1,69 @@
+{
+  "class": "schema",
+  "contract_keys": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "contract_tests": [
+    "vellum-design-ir",
+    "vellum-design-ir-sterile-consumer",
+    "vellum-ui",
+    "vellum.authoring",
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-19T01:16:39Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-be944753dc99f32eee984b5dd700ed620cabee4a",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/animation.hpp",
+    "graphics/include/vellum/graphics/limits.hpp",
+    "graphics/include/vellum/graphics/path_geometry.hpp",
+    "graphics/include/vellum/graphics/scene.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel",
+    "design-schema-compiler",
+    "render-skia-dawn",
+    "retained-ui-kernel"
+  ],
+  "mapped_paths": [
+    "authoring/src/rendered_tree_materializer.mm",
+    "graphics/include/vellum/graphics/animation.hpp",
+    "graphics/include/vellum/graphics/limits.hpp",
+    "graphics/include/vellum/graphics/path_geometry.hpp",
+    "graphics/include/vellum/graphics/scene.hpp",
+    "packages/vellum-design-ir/src/limits.generated.js",
+    "packages/vellum-design-ir/src/validate.js",
+    "packages/vellum-design-ir/test/limits-drift.test.js",
+    "packages/vellum-ui/src/design.js",
+    "packages/vellum-ui/src/limits.generated.js",
+    "packages/vellum-ui/src/runtime.js"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "6d9f8a1e137aa353b6c53faa5a92e73e9e518997",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "3a0ae54563029cec7051f4c9c99f149423e21e2e",
+    "to_commit": "cb60be89de2e4da605ec77d832e544cae3043639"
+  },
+  "schema_api_deltas": [
+    "packages/vellum-design-ir/src/limits.generated.js",
+    "packages/vellum-design-ir/src/validate.js",
+    "packages/vellum-design-ir/test/limits-drift.test.js"
+  ],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "be944753dc99f32eee984b5dd700ed620cabee4a",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

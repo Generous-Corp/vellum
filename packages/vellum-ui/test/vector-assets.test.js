@@ -182,3 +182,14 @@ test('gradient geometry is accepted and refused as the native materializer does'
         else assert.throws(render, TypeError, name);
     }
 });
+test('vector op path data is limited in UTF-8 bytes, not code units', () => {
+    const asset = (d) => ({ contentHash: `sha256:${'a'.repeat(64)}`, viewBox: [0, 0, 10, 10],
+        ops: [{ op: 'path', d, fill: '#000000' }] });
+    const render = (d) => () => mount(createApp({
+        render: () => ({ $$typeof: Symbol.for('vellum.element'), type: 'vector',
+            props: { id: 'v', asset: asset(d), style: { width: 10, height: 10 } } }),
+    })).renderJSON();
+    const threeByte = '\u4e2d'.repeat(21846); // 65538 bytes, 21846 code units
+    assert.throws(render(threeByte), /at most 65536 UTF-8 bytes/);
+    assert.doesNotThrow(render('\u4e2d'.repeat(21845) + 'M'));
+});

@@ -8,9 +8,11 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -395,8 +397,8 @@ class MirrorPackagePlanTest(unittest.TestCase):
 
 VELLUM_SOURCE = "https://github.com/Generous-Corp/vellum.git"
 GPU_RUNTIME_HEADER = "gpu-runtime/include/gpu_runtime/gpu_surface.hpp"
-MIRRORED_CHOKE_HEADER = "mirror/core/runtime/include/pulp/runtime/gpu_fwd.hpp"
-MIRRORED_CHOKE_BYTES = b"#pragma once\nnamespace gpu_runtime { class GpuSurface; }\n"
+MIRRORED_CHOKE_HEADER = "mirror/core/runtime/include/pulp/runtime/gpu_surface.hpp"
+MIRRORED_CHOKE_BYTES = b"#pragma once\n#include <gpu_runtime/gpu_surface.hpp>\n"
 GPU_RUNTIME_BUILD_INCLUDE = "@build/_deps/vellum_gpu_runtime-src/gpu-runtime/include"
 
 
@@ -557,7 +559,7 @@ class InTreeGpuRuntimeTest(unittest.TestCase):
 
     def test_other_repository_source_is_refused(self) -> None:
         self.use_pin(self.pin, source="https://github.com/someone/vellum.git")
-        self.assertRefused("not this repository")
+        self.assertRefused("not an allowlisted dependency source")
 
     def test_recorded_file_outside_the_subtree_is_refused(self) -> None:
         self.use_pin(self.pin, relative="runtime/include/vellum/x.hpp")
@@ -570,18 +572,18 @@ class InTreeGpuRuntimeTest(unittest.TestCase):
     def test_mirrored_choke_header_is_guarded_in_the_plan(self) -> None:
         plan = self.plan()
         headers = plan["gpu_guard"]["headers"]
-        self.assertEqual([h["relative"] for h in headers], ["pulp/runtime/gpu_fwd.hpp"])
+        self.assertEqual([h["relative"] for h in headers], ["pulp/runtime/gpu_surface.hpp"])
         copy = Path(headers[0]["copy"]).read_text()
         self.assertEqual(copy, "#pragma once\n#include <vellum/mirror/gpu_surface_unsupported.hpp>\n"
-                               "namespace gpu_runtime { class GpuSurface; }\n")
+                               "#include <gpu_runtime/gpu_surface.hpp>\n")
         # The mirrored file itself is untouched.
         self.assertEqual((self.fixture.repo / MIRRORED_CHOKE_HEADER).read_bytes(), MIRRORED_CHOKE_BYTES)
         output = Path(self.temporary.name) / "plan.cmake"
         mp.write_cmake(plan, output)
         text = output.read_text()
         self.assertIn("set(VELLUM_MIRROR_GPU_GUARD_COUNT 1)", text)
-        # cmake_quote escapes the backslash and the dollar; CMake reads /pulp/runtime/gpu_fwd\\.hpp$.
-        self.assertIn('set(VELLUM_MIRROR_GPU_GUARD_0_EXCLUDE "/pulp/runtime/gpu_fwd\\\\.hpp\\$")', text)
+        # cmake_quote escapes the backslash and the dollar; CMake reads /pulp/runtime/gpu_surface\\.hpp$.
+        self.assertIn('set(VELLUM_MIRROR_GPU_GUARD_0_EXCLUDE "/pulp/runtime/gpu_surface\\\\.hpp\\$")', text)
 
     def test_pinned_gpu_runtime_with_no_header_to_guard_is_refused(self) -> None:
         self.fixture.remove_mirror_file(MIRRORED_CHOKE_HEADER)
@@ -902,6 +904,95 @@ class SourceCompileOptionsTest(unittest.TestCase):
             'if(APPLE)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")\nendif()\n'),
             {"core/x/src/a.cpp": ["-fno-rtti"]})
 
+    def test_each_target_system_sets_its_own_platform_variables(self) -> None:
+        text = ('if(APPLE)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-fobjc-arc")\n'
+                'elseif(UNIX)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-fPIC")\nendif()\n')
+        linux = dict(self.RELEASE, CMAKE_SYSTEM_NAME="Linux")
+        self.assertEqual(self.evaluate(text), {"core/x/src/a.cpp": ["-fobjc-arc"]})
+        self.assertEqual(self.evaluate(text, linux), {"core/x/src/a.cpp": ["-fPIC"]})
+        self.assertEqual(self.evaluate('if(WIN32)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "/W4")\nendif()\n',
+                                       dict(self.RELEASE, CMAKE_SYSTEM_NAME="Windows")), {"core/x/src/a.cpp": ["/W4"]})
+        # Off Darwin the compiler is not recorded, so a condition on it fails closed.
+        with self.assertRaises(mp.source_compile_options.SourceOptionsError):
+            self.evaluate('if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")\n'
+                          '  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-O1")\nendif()\n', linux)
+        with self.assertRaises(mp.source_compile_options.SourceOptionsError):
+            self.evaluate(text, dict(self.RELEASE, CMAKE_SYSTEM_NAME="Haiku"))
+
+    def test_non_windows_target_is_not_msvc(self) -> None:
+        # `if(NOT MSVC)` guards a real Pulp source option; a Darwin/Linux closure
+        # must decide it rather than fail closed on an unrecorded MSVC.
+        text = 'if(NOT MSVC)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")\nendif()\n'
+        for system in ("Darwin", "Linux"):
+            self.assertEqual(self.evaluate(text, dict(self.RELEASE, CMAKE_SYSTEM_NAME=system)),
+                             {"core/x/src/a.cpp": ["-fno-rtti"]}, system)
+        self.assertEqual(self.evaluate(text, dict(self.RELEASE, MSVC="1")), {})
+
+    def test_recorded_options_cannot_override_derived_platform_variables(self) -> None:
+        text = ('if(UNIX)\n'
+                '  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-fPIC")\n'
+                'elseif(WIN32)\n'
+                '  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "/W4")\n'
+                'else()\n'
+                '  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-unknown")\n'
+                'endif()\n')
+        linux = dict(self.RELEASE, CMAKE_SYSTEM_NAME="Linux", APPLE="1", UNIX="",
+                     WIN32="1", ANDROID="1", IOS="1", EMSCRIPTEN="1", LINUX="")
+        self.assertEqual(self.evaluate(text, linux), {"core/x/src/a.cpp": ["-fPIC"]})
+
+    # The compiler facts Pulp's exporter records (vellum_closure.py
+    # cxx_compiler_options): ids copied from CMakeCXXCompiler.cmake, the
+    # simulate id "" when there is none, and MSVC "1" when either id is MSVC,
+    # else "0". A closure with no compiler file records none of the three.
+    COMPILERS = {
+        "cl": {"CMAKE_CXX_COMPILER_ID": "MSVC", "CMAKE_CXX_SIMULATE_ID": "", "MSVC": "1"},
+        "clang-cl": {"CMAKE_CXX_COMPILER_ID": "Clang", "CMAKE_CXX_SIMULATE_ID": "MSVC", "MSVC": "1"},
+        "clang": {"CMAKE_CXX_COMPILER_ID": "Clang", "CMAKE_CXX_SIMULATE_ID": "", "MSVC": "0"},
+        "gnu": {"CMAKE_CXX_COMPILER_ID": "GNU", "CMAKE_CXX_SIMULATE_ID": "", "MSVC": "0"},
+    }
+    NOT_MSVC = ('if(NOT MSVC)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-fno-rtti")\n'
+                'endif()\n')
+
+    def test_a_recorded_compiler_decides_msvc_conditions(self) -> None:
+        windows = dict(self.RELEASE, CMAKE_SYSTEM_NAME="Windows")
+        self.assertEqual(self.evaluate(self.NOT_MSVC, {**windows, **self.COMPILERS["cl"]}), {})
+        self.assertEqual(self.evaluate(self.NOT_MSVC, {**windows, **self.COMPILERS["clang-cl"]}), {})
+        self.assertEqual(self.evaluate(self.NOT_MSVC, {**windows, **self.COMPILERS["clang"]}),
+                         {"core/x/src/a.cpp": ["-fno-rtti"]})
+        # Control: with no compiler recorded, Windows still fails closed.
+        with self.assertRaises(mp.source_compile_options.SourceOptionsError):
+            self.evaluate(self.NOT_MSVC, windows)
+
+    IS_MSVC = ('if(MSVC)\n  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "/GR-")\n'
+               'endif()\n')
+
+    def test_windows_msvc_conditions_cover_both_branches_for_every_compiler(self) -> None:
+        windows = dict(self.RELEASE, CMAKE_SYSTEM_NAME="Windows")
+        expected = {"cl": (True, False), "clang-cl": (True, False),
+                    "clang": (False, True), "gnu": (False, True)}
+        for name, (is_msvc, not_msvc) in expected.items():
+            env = {**windows, **self.COMPILERS[name]}
+            self.assertEqual(self.evaluate(self.IS_MSVC, env),
+                             {"core/x/src/a.cpp": ["/GR-"]} if is_msvc else {}, name)
+            self.assertEqual(self.evaluate(self.NOT_MSVC, env),
+                             {"core/x/src/a.cpp": ["-fno-rtti"]} if not_msvc else {}, name)
+        # With no compiler facts MSVC is unknown, so neither branch may be decided.
+        self.assertNotIn("MSVC", mp.source_compile_options.configure_environment(windows))
+        for text in (self.IS_MSVC, self.NOT_MSVC):
+            with self.assertRaises(mp.source_compile_options.SourceOptionsError):
+                self.evaluate(text, windows)
+
+    def test_a_recorded_compiler_decides_compiler_id_conditions_off_darwin(self) -> None:
+        text = ('if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")\n'
+                '  set_source_files_properties(src/a.cpp PROPERTIES COMPILE_OPTIONS "-O1")\nendif()\n')
+        linux = dict(self.RELEASE, CMAKE_SYSTEM_NAME="Linux")
+        self.assertEqual(self.evaluate(text, {**linux, **self.COMPILERS["gnu"]}), {"core/x/src/a.cpp": ["-O1"]})
+        self.assertEqual(self.evaluate(text, {**dict(self.RELEASE, CMAKE_SYSTEM_NAME="Windows"),
+                                              **self.COMPILERS["cl"]}), {})
+        # On Linux MSVC is false whatever the record says, as CMake sets it.
+        self.assertEqual(self.evaluate(self.NOT_MSVC, {**linux, **self.COMPILERS["gnu"]}),
+                         {"core/x/src/a.cpp": ["-fno-rtti"]})
+
     def test_debug_only_option_follows_the_build_type(self) -> None:
         text = ('get_property(_multi GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)\n'
                 'if(NOT _multi AND CMAKE_BUILD_TYPE STREQUAL "Debug" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")\n'
@@ -979,6 +1070,24 @@ class SourceCompileOptionsTest(unittest.TestCase):
                      'function(f)\n  set_source_files_properties(${ARGV0} PROPERTIES COMPILE_OPTIONS "-O1")\nendfunction()\nf(src/a.cpp)\n'):
             with self.subTest(text=text), self.assertRaises(mp.source_compile_options.SourceOptionsError):
                 self.evaluate(text)
+
+
+class SourceOptionVectorsTest(unittest.TestCase):
+    """The shared decision vectors in fixtures/source-option-vectors.json, each evaluated as written."""
+
+    def test_every_vector_decides_as_expected(self) -> None:
+        document = json.loads((HERE / "fixtures/source-option-vectors.json").read_text(encoding="utf-8"))
+        self.assertEqual(document["schema"], "vellum.source-option-vectors.v1")
+        self.assertGreater(len(document["vectors"]), 10)  # control: the file was read
+        for vector in document["vectors"]:
+            with self.subTest(vector=vector["name"]):
+                files = {"core/x/CMakeLists.txt": vector["cmake"]}
+                if vector["expect"] == "refused":
+                    with self.assertRaises(mp.source_compile_options.SourceOptionsError):
+                        mp.source_compile_options.evaluate(files, vector["options"], {"core/x/src/a.cpp"})
+                else:
+                    result = mp.source_compile_options.evaluate(files, vector["options"], {"core/x/src/a.cpp"})
+                    self.assertEqual(result.get("core/x/src/a.cpp", []), vector["expect"])
 
 
 class SourceCompileOptionsBypassTest(unittest.TestCase):
@@ -1522,6 +1631,376 @@ class MacosPlanSnapshotTest(unittest.TestCase):
         self.assertNotEqual(scoped.replace(str(Path(directory).resolve()), "<tmp>"), plan_json)
 
 
+class PlatformRecordPlanTest(unittest.TestCase):
+    """A platform other than macOS plans only from its own verified closure record."""
+
+    LINUX_HOST = "framework/core/runtime/src/linux_host.cpp"
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.fixture = TransferredFixture(Path(self.temporary.name))
+        mp.BUILD_INFO_INPUTS[EXPORT_ID] = {"version": "1.2.3"}
+
+    def tearDown(self) -> None:
+        mp.BUILD_INFO_INPUTS.pop(EXPORT_ID, None)
+        self.temporary.cleanup()
+
+    def write_record(self, extra_sources: list[str] | None = None, edit_options=None, **overrides) -> dict:
+        closure = json.loads(json.dumps(self.fixture.closure))
+        options = {"CMAKE_SYSTEM_NAME": "Linux", "CMAKE_SYSTEM_PROCESSOR": "x86_64", "CMAKE_BUILD_TYPE": "Release",
+                   "PULP_ENABLE_GPU": "ON", "PULP_HAS_SKIA": "1"}
+        identity = {"gpu": True, "skia": True, "text_shaping": True, "build_type": "Release",
+                    "system": "Linux", "processor": "x86_64"}
+        if edit_options:
+            edit_options(options)
+        closure["configure"] = {"options": options, "identity": identity}
+        closure["targets"][0]["sources"] += extra_sources or []
+        root = self.fixture.repo / "provenance/framework/platforms/linux-x64"
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "foundation.json").write_text(json.dumps(closure), encoding="utf-8")
+        units = [{"name": "foundation",
+                  "closure_manifest": "provenance/framework/platforms/linux-x64/foundation.json",
+                  "closure_sha256": mp.sha256_file(root / "foundation.json")}]
+        record = {
+            "schema": "vellum.framework-platform-closure.v1", "platform": "linux-x64",
+            "pulp_repository": "Generous-Corp/pulp", "pulp_sha": PULP_SHA,
+            "tool": {"path": "tools/scripts/vellum_closure.py", "pulp_blob": "f" * 40},
+            "configure": {"identity": identity, "options_sha256": mp.platform_closures.options_sha256(options)},
+            "export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/123456789",
+                       "artifact_sha256": "e" * 64,
+                       "manifest_sha256": mp.platform_closures.manifest_binding_sha256("e" * 64, units)},
+            "runner_image": {"name": "ubuntu-26.04", "version": "20261111.196.1"},
+            "renderer_asset": {"name": "skia-build-linux-x64-gpu-release.zip", "sha256": "c" * 64},
+            "units": units,
+        }
+        record.update(overrides)
+        (root / "record.json").write_text(json.dumps(record), encoding="utf-8")
+        (root.parent / "index.json").write_text(json.dumps({
+            "schema": "vellum.framework-platform-index.v1",
+            "platforms": {"linux-x64": "provenance/framework/platforms/linux-x64/record.json"}}), encoding="utf-8")
+        return record
+
+    def plan(self, platform: str) -> dict:
+        return mp.plan(self.fixture.repo, self.fixture.deps, self.fixture.generated, self.fixture.skia,
+                       self.fixture.skia_asset, platform=platform)
+
+    def sources(self, plan: dict) -> list[str]:
+        return [s for unit in plan["units"] for t in unit["targets"] for s in t["sources"]]
+
+    def planned(self, relative: str) -> str:
+        return str(self.fixture.repo.resolve() / relative)
+
+    def port_linux_host(self, platforms: list[str]) -> None:
+        self.fixture.write(self.LINUX_HOST, b"int linux_host() { return 4; }\n")
+        row = self.fixture.row(self.LINUX_HOST, target="pulp-runtime")
+        row["platforms"] = platforms
+        self.fixture.write_ledger([row])
+
+    def test_a_platform_with_a_record_plans_from_it(self) -> None:
+        self.port_linux_host(["linux-x64"])
+        self.write_record(["core/runtime/src/linux_host.cpp"])
+        plan = self.plan("linux-x64")
+        self.assertEqual(plan["platform"], "linux-x64")
+        self.assertEqual(plan["closures"], ["provenance/framework/platforms/linux-x64/foundation.json"])
+        sources = self.sources(plan)
+        self.assertEqual(sources.count(self.planned(self.LINUX_HOST)), 1)  # once, though closure and row both name it
+
+    def test_platform_only_closure_source_gets_its_recorded_compile_options(self) -> None:
+        source = "framework/core/runtime/src/linux_only.cpp"
+        cmake = "framework/core/runtime/CMakeLists.txt"
+        self.fixture.write(source, b"int linux_only() { return 5; }\n")
+        self.fixture.write(cmake, (b"add_library(pulp-runtime STATIC src/a.cpp src/linux_only.cpp)\n"
+                                   b"set_source_files_properties(src/linux_only.cpp PROPERTIES COMPILE_OPTIONS \"-O3\")\n"))
+        transfer = json.loads((self.fixture.repo / mp.FRAMEWORK_TRANSFER).read_text())
+        transfer["records"].extend([
+            {"framework_path": source, "framework_git_blob_sha": mp.git_blob_sha((self.fixture.repo / source).read_bytes())},
+            {"framework_path": cmake, "framework_git_blob_sha": mp.git_blob_sha((self.fixture.repo / cmake).read_bytes())},
+        ])
+        self.fixture.write(mp.FRAMEWORK_TRANSFER, json.dumps(transfer).encode())
+        self.write_record(["core/runtime/src/linux_only.cpp"])
+        plan = self.plan("linux-x64")
+        self.assertEqual(plan["source_compile_options"]["core/runtime/src/linux_only.cpp"], ["-O3"])
+
+    def test_the_macos_plan_is_unchanged_by_another_platforms_record(self) -> None:
+        before = render_snapshot(mp, "no-ledger")
+        mp.BUILD_INFO_INPUTS[EXPORT_ID] = {"version": "1.2.3"}  # render_snapshot clears it
+        self.write_record()
+        self.assertEqual(render_snapshot_in(self.fixture, mp), json.loads(before[0]))
+
+    def test_a_record_without_its_export_is_refused(self) -> None:
+        record = self.write_record()
+        del record["export"]
+        (self.fixture.repo / "provenance/framework/platforms/linux-x64/record.json").write_text(
+            json.dumps(record), encoding="utf-8")
+        with self.assertRaises(mp.PlanError) as caught:
+            self.plan("linux-x64")
+        self.assertIn("must have exactly", str(caught.exception))
+        # macOS has no record at all, so it needs no export: its plan still loads.
+        self.assertNotIn("platform", self.plan("macos-arm64"))
+
+    def refused_options(self, edit, fragment: str) -> None:
+        self.write_record(edit_options=edit)
+        with self.assertRaises(mp.PlanError) as caught:
+            self.plan("linux-x64")
+        self.assertIn(fragment, str(caught.exception))
+
+    def test_recorded_options_must_back_the_release_gpu_skia_identity(self) -> None:
+        self.refused_options(lambda o: o.update(CMAKE_BUILD_TYPE="Debug"), "claims Release")
+        self.refused_options(lambda o: o.pop("CMAKE_BUILD_TYPE"), "claims Release")
+        self.refused_options(lambda o: o.update(PULP_ENABLE_GPU="OFF"), "claims gpu")
+        self.refused_options(lambda o: o.pop("PULP_ENABLE_GPU"), "claims gpu")
+        self.refused_options(lambda o: o.update(PULP_HAS_SKIA="FALSE"), "claims skia")
+        self.refused_options(lambda o: o.pop("PULP_HAS_SKIA"), "claims skia")
+
+    def test_a_matching_release_record_passes_the_option_check(self) -> None:
+        self.write_record(edit_options=lambda o: o.update(PULP_HAS_SKIA="ON"))
+        self.assertTrue(self.sources(self.plan("linux-x64")))
+
+    def test_no_record_or_a_broken_record_is_refused(self) -> None:
+        with self.assertRaises(mp.PlanError) as caught:
+            self.plan("linux-x64")
+        self.assertIn("lists no record for it", str(caught.exception))
+        for overrides, fragment in (
+            ({"platform": "windows-x64"}, "names platform"),
+            ({"pulp_sha": "x"}, "pulp_sha is not a full commit id"),
+            ({"renderer_asset": {"name": "a", "sha256": "d" * 64}}, "links skia asset"),
+            ({"configure": {"identity": {"system": "Darwin", "processor": "arm64"}, "options_sha256": "0" * 64}},
+             "is built for Linux x86_64"),
+            ({"units": []}, "one or more closure manifests"),
+            ({"export": None}, "export names the Pulp run"),
+            ({"export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/1"}},
+             "export names the Pulp run"),
+            ({"export": {"run_url": "https://github.com/someone/pulp/actions/runs/1", "artifact_sha256": "e" * 64}},
+             "is not a https://github.com/Generous-Corp/pulp/actions/runs/<id> URL"),
+            ({"export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/1/job/2",
+                         "artifact_sha256": "e" * 64}}, "is not a https://github.com/Generous-Corp/pulp/actions/runs"),
+            ({"export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/1", "artifact_sha256": "E" * 64}},
+             "export.artifact_sha256 is not a lowercase SHA-256"),
+            # JSON numbers whose digits spell a valid-looking hash are refused, not coerced.
+            ({"pulp_sha": int("1" * 40)}, "pulp_sha is not a full commit id"),
+            ({"tool": {"path": "tools/scripts/vellum_closure.py", "pulp_blob": int("2" * 40)}},
+             "tool names tools/scripts/vellum_closure.py"),
+            ({"export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/1",
+                         "artifact_sha256": int("3" * 64)}}, "export.artifact_sha256 is not a lowercase SHA-256"),
+            ({"export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/1",
+                         "artifact_sha256": "e" * 64, "manifest_sha256": "E" * 64}},
+             "export.manifest_sha256 is not a lowercase SHA-256"),
+            ({"renderer_asset": {"name": "skia-build-linux-x64-gpu-release.zip", "sha256": int("4" * 64)}},
+             "renderer_asset names the locked asset"),
+        ):
+            with self.subTest(overrides=overrides):
+                self.write_record(**overrides)
+                with self.assertRaises(mp.PlanError) as caught:
+                    self.plan("linux-x64")
+                self.assertIn(fragment, str(caught.exception))
+        # A manifest edited after the record pinned it is refused.
+        self.write_record()
+        path = self.fixture.repo / "provenance/framework/platforms/linux-x64/foundation.json"
+        path.write_text(path.read_text() + " ", encoding="utf-8")
+        with self.assertRaises(mp.PlanError) as caught:
+            self.plan("linux-x64")
+        self.assertIn("does not match the record's digest", str(caught.exception))
+
+    def test_platform_closure_sources_cannot_escape_the_landed_mirror(self) -> None:
+        for source in ("../outside.cpp", "/tmp/outside.cpp", "core/../outside.cpp", "core//outside.cpp"):
+            with self.subTest(source=source):
+                self.write_record([source])
+                with self.assertRaises(mp.PlanError) as caught:
+                    self.plan("linux-x64")
+                self.assertIn("safe relative path", str(caught.exception))
+
+    def test_export_binding_must_match_the_recorded_manifests(self) -> None:
+        record = self.write_record()
+        record["export"]["manifest_sha256"] = "f" * 64
+        (self.fixture.repo / "provenance/framework/platforms/linux-x64/record.json").write_text(
+            json.dumps(record), encoding="utf-8")
+        with self.assertRaises(mp.PlanError) as caught:
+            self.plan("linux-x64")
+        self.assertIn("does not bind the artifact to the recorded manifests", str(caught.exception))
+
+    def rewrite_closure(self, mutate) -> None:
+        self.write_record()
+        root = self.fixture.repo / "provenance/framework/platforms/linux-x64"
+        closure = json.loads((root / "foundation.json").read_text())
+        mutate(closure)
+        (root / "foundation.json").write_text(json.dumps(closure), encoding="utf-8")
+        record = json.loads((root / "record.json").read_text())
+        record["units"][0]["closure_sha256"] = mp.sha256_file(root / "foundation.json")
+        if "options" in closure.get("configure", {}) if isinstance(closure.get("configure"), dict) else False:
+            record["configure"]["options_sha256"] = mp.platform_closures.options_sha256(closure["configure"]["options"])
+        (root / "record.json").write_text(json.dumps(record), encoding="utf-8")
+
+    def test_options_that_configure_another_platform_are_refused(self) -> None:
+        for change, fragment in (({"CMAKE_SYSTEM_NAME": "Windows"}, "but linux-x64 is Linux"),
+                                 ({"CMAKE_SYSTEM_PROCESSOR": "aarch64"}, "but linux-x64 is x86_64")):
+            with self.subTest(change=change):
+                self.rewrite_closure(lambda c: c["configure"]["options"].update(change))
+                with self.assertRaises(mp.PlanError) as caught:
+                    self.plan("linux-x64")
+                self.assertIn(fragment, str(caught.exception))
+        # Control: untouched options plan.
+        self.write_record()
+        self.plan("linux-x64")
+
+    def test_ios_options_must_name_the_indexed_sdk(self) -> None:
+        pc = mp.platform_closures
+        pc._check_options_platform("at", "ios-device-arm64", {
+            "CMAKE_SYSTEM_NAME": "iOS", "CMAKE_SYSTEM_PROCESSOR": "arm64", "CMAKE_OSX_SYSROOT": "iphoneos"})
+        pc._check_options_platform("at", "ios-simulator-arm64", {
+            "CMAKE_SYSTEM_NAME": "iOS", "CMAKE_SYSTEM_PROCESSOR": "arm64", "CMAKE_OSX_SYSROOT": "iphonesimulator"})
+        for key, sdk in (("ios-device-arm64", "/X/iPhoneOS17.5.sdk"),):
+            pc._check_options_platform("at", key, {
+                "CMAKE_SYSTEM_NAME": "iOS", "CMAKE_SYSTEM_PROCESSOR": "arm64", "CMAKE_OSX_SYSROOT": sdk})
+        for key, sdk in (("ios-device-arm64", "iphonesimulator"), ("ios-simulator-arm64", "iphoneos"),
+                         ("ios-device-arm64", None), ("ios-device-arm64", "macosx"),
+                         ("ios-device-arm64", "/SDKs/MacOSX.sdk"), ("ios-device-arm64", "appletvos"),
+                         ("ios-simulator-arm64", "watchsimulator"), ("ios-simulator-arm64", "xrsimulator"),
+                         ("ios-device-arm64", "/x/iPhoneSimulator17.5.sdk"),
+                         ("ios-device-arm64", "iphoneos."), ("ios-device-arm64", "iphoneos17..5"),
+                         ("ios-device-arm64", "iphoneos-evil"), ("ios-device-arm64", "iphoneos17.5.beta"), ("ios-device-arm64", 7)):
+            options = {"CMAKE_SYSTEM_NAME": "iOS", "CMAKE_SYSTEM_PROCESSOR": "arm64"}
+            if sdk:
+                options["CMAKE_OSX_SYSROOT"] = sdk
+            with self.subTest(key=key, sdk=sdk), self.assertRaises(pc.RecordError):
+                pc._check_options_platform("at", key, options)
+
+    def test_malformed_closure_shapes_are_record_errors(self) -> None:
+        for name, mutate in (
+            ("targets not a list", lambda c: c.update(targets={"a": 1})),
+            ("target not an object", lambda c: c.update(targets=["x"])),
+            ("rows not a list", lambda c: c["targets"][0].update(external_link_inputs=5)),
+            ("row not an object", lambda c: c["targets"][0].update(external_link_inputs=["x"])),
+            ("configure not an object", lambda c: c.update(configure=[1])),
+        ):
+            with self.subTest(name):
+                self.rewrite_closure(mutate)
+                with self.assertRaises(mp.PlanError):
+                    self.plan("linux-x64")
+                self.assertTrue(mp.platform_closures.errors(self.fixture.repo))
+
+    def test_malformed_graph_fields_are_record_errors_before_planning(self) -> None:
+        def target(**fields):
+            return lambda c: c["targets"][0].update(fields)
+
+        def drop_name(c):
+            del c["targets"][0]["name"]
+
+        for name, mutate, fragment in (
+            ("name missing", drop_name, "name None is missing"),
+            ("name not a string", target(name=5), "name 5 is missing"),
+            ("name repeated", lambda c: c["targets"].append(dict(c["targets"][0])), "is missing, malformed or repeated"),
+            ("type not a string", target(type=["STATIC_LIBRARY"]), "type must be a string"),
+            ("sources a string", target(sources="a.cpp"), "sources must be a list of strings"),
+            ("sources hold a non-string", target(sources=[1]), "sources must be a list of strings"),
+            ("link_targets an object", target(link_targets={"a": 1}), "link_targets must be a list of strings"),
+            ("include_dirs hold a list", target(include_dirs=[["x"]]), "include_dirs must be a list of strings"),
+            ("compile_definitions a string", target(compile_definitions="X=1"),
+             "compile_definitions must be a list of strings"),
+            ("external_inputs an object", lambda c: c.update(external_inputs={"a": 1}),
+             "external_inputs must be a list of objects"),
+            ("external_inputs row a string", lambda c: c.update(external_inputs=["x"]),
+             "external_inputs must be a list of objects"),
+            ("external_inputs path an object", lambda c: c.update(external_inputs=[{"path": {"a": 1}}]),
+             "external_inputs must be a list of objects"),
+            ("generated_inputs path a list", lambda c: c.update(generated_inputs=[{"path": ["x"]}]),
+             "generated_inputs must be a list of objects"),
+        ):
+            with self.subTest(name):
+                self.rewrite_closure(mutate)
+                with self.assertRaises(mp.platform_closures.RecordError) as caught:
+                    mp.platform_closures.load_record(self.fixture.repo, "linux-x64")
+                self.assertIn(fragment, str(caught.exception))
+                with self.assertRaises(mp.PlanError) as planned:
+                    self.plan("linux-x64")
+                self.assertIn(fragment, str(planned.exception))
+                self.assertTrue(any(fragment in e for e in mp.platform_closures.errors(self.fixture.repo)))
+        # Control: the well-formed closure loads and plans.
+        self.write_record()
+        mp.platform_closures.load_record(self.fixture.repo, "linux-x64")
+        self.plan("linux-x64")
+
+    def test_a_platform_without_a_record_is_refused_before_any_other_work(self) -> None:
+        # framework/ is broken too; the missing record is still what is reported.
+        self.fixture.write("framework/core/runtime/src/stray.cpp", b"int stray;\n")
+        with self.assertRaises(mp.PlanError) as caught:
+            self.plan("linux-x64")
+        self.assertIn("lists no record for it", str(caught.exception))
+
+    def test_a_closure_source_framework_lacks_must_be_ported_first(self) -> None:
+        self.write_record(["core/runtime/src/linux_host.cpp"])
+        with self.assertRaises(mp.PlanError) as caught:
+            self.plan("linux-x64")
+        self.assertIn("port it through the ledger first", str(caught.exception))
+
+    def test_a_closure_source_scoped_away_from_the_platform_is_refused(self) -> None:
+        self.port_linux_host(["macos-arm64"])
+        self.write_record(["core/runtime/src/linux_host.cpp"])
+        with self.assertRaises(mp.PlanError) as caught:
+            self.plan("linux-x64")
+        self.assertIn("scope it to linux-x64", str(caught.exception))
+        # Control: scoped to Linux, it plans.
+        self.port_linux_host(["linux-x64"])
+        self.assertIn(self.planned(self.LINUX_HOST), self.sources(self.plan("linux-x64")))
+
+    def test_the_platform_key_comes_from_the_configure(self) -> None:
+        pc = mp.platform_closures
+        self.assertEqual(pc.platform_of("Linux", "x86_64"), "linux-x64")
+        self.assertEqual(pc.platform_of("Windows", "AMD64"), "windows-x64")
+        self.assertEqual(pc.platform_of("Emscripten", "wasm32"), "wasm32")
+        self.assertEqual(pc.platform_of("iOS", "arm64", "/x/iPhoneSimulator.sdk"), "ios-simulator-arm64")
+        self.assertEqual(pc.platform_of("iOS", "arm64", "/x/iPhoneOS.sdk"), "ios-device-arm64")
+        self.assertEqual(pc.platform_of("iOS", "arm64", "iphoneos17.5"), "ios-device-arm64")
+        for sdk in ("", "macosx", "/x/MacOSX.sdk", "appletvos", "/x/Simulator-not-iphone.sdk", "watchsimulator"):
+            with self.subTest(sdk=sdk), self.assertRaises(pc.RecordError):
+                pc.platform_of("iOS", "arm64", sdk)
+        with self.assertRaises(pc.RecordError):
+            pc.platform_of("Haiku", "x86_64")
+        for system in ("tvOS", "visionOS", "watchOS"):
+            with self.subTest(system=system), self.assertRaises(pc.RecordError) as caught:
+                pc.platform_of(system, "arm64", "/x/Some.sdk")
+            self.assertIn("verified closure record", str(caught.exception))
+
+    @unittest.skipUnless(shutil.which("cmake"), "no cmake")
+    def test_only_macos_configures_plan_from_the_receipt(self) -> None:
+        """VellumMirrorPlatform.cmake sends only Darwin to the receipt's macOS closures."""
+        def platform_args(system: str, processor: str = "arm64", sysroot: str = "") -> list[str]:
+            with tempfile.TemporaryDirectory() as td:
+                out = Path(td) / "args.txt"
+                script = Path(td) / "probe.cmake"
+                module = Path(mp.__file__).resolve().parent / "VellumMirrorPlatform.cmake"
+                script.write_text(textwrap.dedent(f"""\
+                    include("{module.as_posix()}")
+                    vellum_mirror_platform_args(args)
+                    file(WRITE "{out.as_posix()}" "${{args}}")
+                    """), encoding="utf-8")
+                subprocess.run(["cmake", "-DAPPLE=1", f"-DCMAKE_SYSTEM_NAME={system}",
+                                f"-DCMAKE_SYSTEM_PROCESSOR={processor}", f"-DCMAKE_OSX_SYSROOT={sysroot}",
+                                "-P", str(script)], check=True, capture_output=True)
+                return out.read_text(encoding="utf-8").split(";")
+
+        self.assertEqual(platform_args("Darwin"), ["--platform", "macos-arm64"])
+        self.assertEqual(platform_args("iOS", sysroot="iphonesimulator"),
+                         ["--system", "iOS", "--processor", "arm64", "--apple-sdk", "iphonesimulator"])
+        for system in ("tvOS", "visionOS", "watchOS"):
+            with self.subTest(system=system):
+                args = platform_args(system, sysroot="appletvos")
+                self.assertEqual(args[:2], ["--system", system])
+                # The configure reaches the record path, which refuses a system with no record.
+                self.assertEqual(mp.main(["--repo", "/nonexistent", "--deps-dir", "/nonexistent",
+                                          "--generated-dir", "/nonexistent", "--cmake-output", "/nonexistent",
+                                          *args]), 1)
+
+
+def render_snapshot_in(fixture: "TransferredFixture", module) -> dict:
+    """The macOS plan of an existing fixture, normalized like render_snapshot."""
+    plan = module.plan(fixture.repo, fixture.deps, fixture.generated, fixture.skia, fixture.skia_asset)
+    text = json.dumps(plan, indent=2, sort_keys=True) + "\n"
+    root = fixture.repo.parent
+    for prefix in (str(root.resolve()), str(root)):
+        text = text.replace(prefix, "<tmp>")
+    return json.loads(text)
+
+
 class PlatformScopePlanTest(unittest.TestCase):
     """A ledger-added source or declared target is planned only on the platforms its scope lists."""
 
@@ -1830,7 +2309,7 @@ class DeclaredUnitPlanTest(unittest.TestCase):
         git("add", "-A")
         git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "dep")
         pin = git("rev-parse", "HEAD")
-        recipe = {"kind": "cmake", "provides": ["fixture-dep"], "options": {"X": "OFF"}, "pin": pin,
+        recipe = {"kind": "cmake", "sources": [source.as_uri()], "provides": ["fixture-dep"], "options": {"X": "OFF"}, "pin": pin,
                   "source": source.as_uri()}
         self.declare([dict(self.library, link_targets=["pulp-runtime", "fixture-dep"]), self.tool])
         with mock.patch.dict(mp.DEPENDENCIES, {"fixture-dep": recipe}):
@@ -1947,7 +2426,7 @@ class ExternalDependencyRefusalTest(unittest.TestCase):
     PIN = "b" * 40
 
     def row(self, **overrides) -> dict:
-        row = {"path": f"@external/skia/{self.PIN}/include/a.h", "pin": self.PIN, "source": "https://example.invalid/skia.git",
+        row = {"path": f"@external/skia/{self.PIN}/include/a.h", "pin": self.PIN, "source": "https://skia.googlesource.com/skia.git",
                "asset_sha256": "c" * 64, "sha256": "d" * 64}
         row.update(overrides)
         return row
@@ -1964,13 +2443,23 @@ class ExternalDependencyRefusalTest(unittest.TestCase):
     def test_a_malformed_external_path_is_refused(self) -> None:
         self.assertIn("external input path is malformed", self.refused(self.row(path="@external/skia")))
 
+    def test_an_external_source_must_match_the_dependency_recipe(self) -> None:
+        self.assertIn("not an allowlisted dependency source",
+                      self.refused(self.row(source="https://attacker.example/skia.git")))
+
+    def test_an_external_path_cannot_escape_the_dependency_checkout(self) -> None:
+        for relative in ("/absolute.h", "./dot.h", "../outside.h", "include/../outside.h", "include\\outside.h"):
+            with self.subTest(relative=relative):
+                path = f"@external/skia/{self.PIN}/{relative}"
+                self.assertIn("not a safe dependency-relative path", self.refused(self.row(path=path)))
+
     def test_an_input_pinned_to_a_short_id_is_refused(self) -> None:
         self.assertIn("is not pinned to a full commit", self.refused(self.row(pin="abc123")))
 
     def test_closures_that_disagree_on_a_pin_are_refused(self) -> None:
         self.assertIn("closures disagree on the pin of skia",
-                      self.refused(self.row(), self.row(path=f"@external/skia/{self.PIN}/include/b.h",
-                                                        source="https://example.invalid/other.git")))
+                      self.refused(self.row(), self.row(path=f"@external/skia/{self.PIN[:-1]}a/include/b.h",
+                                                        pin=self.PIN[:-1] + "a")))
 
     def test_an_input_with_no_digest_is_refused(self) -> None:
         self.assertIn("has no recorded digest", self.refused(self.row(sha256=None)))
@@ -2048,6 +2537,20 @@ class DependencyPreparationRefusalTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(mp.PlanError, "has no include/absent.h"):
                 mp.prepare_dependencies({"skia": entry}, Path(tmp), Path(tmp), "c" * 64)
+
+    def test_a_dependency_symlink_cannot_escape_before_hashing(self) -> None:
+        entry = {"pin": "a" * 40, "source": "https://skia.googlesource.com/skia.git",
+                 "asset_sha256": "c" * 64, "root": "a" * 40,
+                 "files": {"include/a.h": "d" * 64}}
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "skia"
+            (root / "include").mkdir(parents=True)
+            outside = base / "outside.h"
+            outside.write_bytes(b"outside\n")
+            (root / "include/a.h").symlink_to(outside)
+            with self.assertRaisesRegex(mp.PlanError, "escapes the dependency checkout"):
+                mp.prepare_dependencies({"skia": entry}, base / "deps", root, "c" * 64)
 
     def test_a_template_naming_an_unknown_value_is_refused(self) -> None:
         with self.assertRaisesRegex(mp.PlanError, "unknown value @NOT_A_VALUE@"):
@@ -2215,6 +2718,37 @@ class IncludeDirectoryRefusalTest(unittest.TestCase):
         self.assertIn("is outside vellum-gpu-runtime's interface tree",
                       self.refused(f"@external/vellum-gpu-runtime/{self.PIN}/gpu-runtime/src"))
 
+    ESCAPES = ("..\\x", "a\\..\\..\\x", "C:/x", "C:\\x", "\\\\server\\x", "//x", "/x", "a//b",
+               "./x", "a/..", "a/b/..", "~/x", "a\0b")
+
+    def test_every_escaping_form_is_refused_at_the_dependency_site(self) -> None:
+        for form in self.ESCAPES:
+            for path in (f"@external/highway/{self.PIN}/{form}",
+                         f"@external/vellum-gpu-runtime/{self.PIN}/{form}"):
+                with self.subTest(path=path):
+                    self.assertIn("is not confined to its dependency", self.refused(path))
+
+    def test_every_escaping_form_is_refused_at_the_mirror_site(self) -> None:
+        for form in self.ESCAPES:
+            with self.subTest(form=form):
+                self.assertIn("is not a mirror-relative path", self.refused(form))
+
+    def test_a_symlink_out_of_the_mirror_is_refused(self) -> None:
+        outside = self.repo / "outside"
+        outside.mkdir()
+        (self.repo / "mirror/link").symlink_to(outside, target_is_directory=True)
+        self.assertIn("escapes the landed mirror", self.refused("link"))
+
+    def test_a_symlink_out_of_a_dependency_checkout_is_refused(self) -> None:
+        checkout = self.repo / "dep"
+        (checkout / "inc").mkdir(parents=True)
+        (checkout / "link").symlink_to(self.repo / "mirror", target_is_directory=True)
+        with self.assertRaises(mp.PlanError) as caught:
+            self.map(f"@external/highway/{self.PIN}/link", roots={"highway": checkout})
+        self.assertIn("is not confined to its dependency", str(caught.exception))
+        self.assertEqual(self.map(f"@external/highway/{self.PIN}/inc", roots={"highway": checkout}),
+                         str(checkout / "inc"))
+
     def test_an_external_include_with_no_prepared_source_is_refused(self) -> None:
         self.assertIn("names a dependency with no prepared source",
                       self.refused(f"@external/lonely/{self.PIN}/include"))
@@ -2281,8 +2815,7 @@ class PlanTargetRefusalTest(unittest.TestCase):
             self.fixture.plan()
 
     def test_a_choke_header_the_guard_cannot_carry_is_refused(self) -> None:
-        self.fixture.add_mirror_file("mirror/core/runtime/include/pulp/runtime/gpu_fwd.hpp",
-                                     b"namespace gpu_runtime { class GpuSurface; }\n")
+        self.fixture.add_mirror_file(MIRRORED_CHOKE_HEADER, b"#include <gpu_runtime/gpu_surface.hpp>\n")
         self.assertRefused("needs #pragma once to carry the guard")
 
 

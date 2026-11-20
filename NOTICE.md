@@ -663,6 +663,30 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 Vellum's own source is licensed under the MIT terms in `LICENSE.md`.
+
+## TypeScript
+
+The optional macOS arm64 GPU SDK redistributes TypeScript 7.0.2 and its
+matching `@typescript/typescript-darwin-arm64` binary under `ui/node_modules/`
+for installed type checking of application code.
+
+Copyright (c) Microsoft Corporation. Licensed under the Apache License,
+Version 2.0, reproduced in the "Apache License, Version 2.0" section above.
+Each package keeps its upstream `LICENSE` and `NOTICE.txt` beside the code,
+and the `NOTICE.txt` files carry the notices of the third-party material
+TypeScript incorporates.
+
+## Node.js runtime
+
+The optional macOS arm64 GPU SDK redistributes the unmodified official
+Node.js 20.20.2 darwin-arm64 executable at `node/`, so authoring tools do not
+depend on the developer's Node.js installation.
+
+Copyright Node.js contributors. Node.js is released under the MIT License
+and bundles third-party components under their own licenses. The complete
+upstream license text, including those bundled notices, ships beside the
+executable as `node/LICENSE`; `node/provenance.json` records the source
+archive and the license file's SHA-256.
 ## Three.js
 
 The repository carries the Three.js 0.183.1 runtime payload (`assets/threejs`)

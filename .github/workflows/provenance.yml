@@ -115,14 +115,20 @@ jobs:
           git -C .mirror-pulp checkout --detach "$pulp_ref"
           test "$(git -C .mirror-pulp rev-parse HEAD)" = "$pulp_ref"
 
+      - name: Test active-source quarantine and forbidden dependencies
+        if: steps.classify.outputs.unaffected != 'true'
+        run: |
+          python3 -I tools/provenance/test_verify_extraction.py
+          python3 -I tools/provenance/test_verify_mirror_export.py
+
       - name: Verify active-source quarantine and forbidden dependencies
         if: steps.classify.outputs.unaffected != 'true'
         env:
           MIRROR_PULP_ROOT: ${{ steps.mirror-receipts.outputs.present == 'true' && '.mirror-pulp' || '' }}
           VELLUM_REQUIRE_PULP_IDENTITY: '1'
+          VELLUM_REQUIRE_PLATFORM_EXPORT_ARTIFACT: '1'
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python3 -I tools/provenance/test_verify_extraction.py
-          python3 -I tools/provenance/test_verify_mirror_export.py
           python3 -I tools/provenance/verify_extraction.py \
             ${MIRROR_PULP_ROOT:+--pulp-root "$MIRROR_PULP_ROOT"} \
             --output "$RUNNER_TEMP/forbidden-deps-report.json"
@@ -254,13 +260,18 @@ jobs:
           git -C "$pulp_git" update-ref --no-deref HEAD "$pin_commit"
           test "$(git -C "$pulp_git" rev-parse HEAD)" = "$pin_commit"
 
+      - name: Test extraction and active-source quarantine
+        run: |
+          python3 -I tools/provenance/test_verify_extraction.py
+          python3 -I tools/provenance/test_verify_mirror_export.py
+
       - name: Verify extraction and active-source quarantine
         env:
           MIRROR_PULP_ROOT: ${{ steps.mirror-receipts.outputs.present == 'true' && '.mirror-pulp' || '' }}
           VELLUM_REQUIRE_PULP_IDENTITY: '1'
+          VELLUM_REQUIRE_PLATFORM_EXPORT_ARTIFACT: '1'
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python3 -I tools/provenance/test_verify_extraction.py
-          python3 -I tools/provenance/test_verify_mirror_export.py
           python3 -I tools/provenance/verify_extraction.py \
             ${MIRROR_PULP_ROOT:+--pulp-root "$MIRROR_PULP_ROOT"} \
             --mirror-edge-pulp-root "$RUNNER_TEMP/mirror-edge-pulp.git" \

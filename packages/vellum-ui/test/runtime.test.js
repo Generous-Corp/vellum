@@ -426,7 +426,7 @@ test('serializes a path node with SVG paint properties', () => {
         () => mount(() => jsx(Path, { id: 'bad', d: 'M0 0', ...properties })).renderJSON(),
         pattern);
     rejects({ d: undefined }, /Path d must be SVG path data/);
-    rejects({ d: 'M'.repeat(65537) }, /at most 65536 characters/);
+    rejects({ d: 'M'.repeat(65537) }, /at most 65536 UTF-8 bytes/);
     rejects({ fillRule: 'winding' }, /fillRule must be one of nonzero, evenodd/);
     rejects({ fill: 'red' }, /fill must be a hex color, none, or a linear gradient/);
     rejects({ fill: { angle: 0, stops: [] } }, /between 2 and 64 stops/);
@@ -709,7 +709,7 @@ test('TextInput v1 rejects unversioned, uncontrolled, and oversized payloads', (
         () => mount(() => jsx(TextInput, {
             id: 'too-long', value: 'x'.repeat(65537), onChange() {},
         })).renderJSON(),
-        /at most 65536 code units/,
+        /at most 65536 UTF-8 bytes/,
     );
     assert.throws(
         () => mount(() => jsx(TextInput, {
@@ -1483,4 +1483,35 @@ test('a no-op command is not credited with a state update that was pending befor
     // The pending update is visible in the tree, but the command caused none of it.
     assert.equal(result.tree.children[0].text, 'updated elsewhere');
     assert.equal(result.changed, false);
+});
+
+// Each value below is under its limit by .length and over it by UTF-8 bytes.
+const renderTree = (element) => JSON.parse(mount(() => element).renderJSON()).tree;
+
+test('TextInput value limit is counted in UTF-8 bytes', () => {
+    const input = (value) => renderTree(jsx(TextInput, { id: 't', value, onChange() {} }));
+    const twoByte = '\u00e9'.repeat(32769);    // 65538 bytes, 32769 code units
+    const fourByte = '\u{1F600}'.repeat(16385); // 65540 bytes, 32770 code units
+    assert.ok(twoByte.length <= 65536 && fourByte.length <= 65536);
+    assert.throws(() => input(twoByte), /at most 65536 UTF-8 bytes/);
+    assert.throws(() => input(fourByte), /at most 65536 UTF-8 bytes/);
+    assert.doesNotThrow(() => input('\u00e9'.repeat(32768)));
+});
+
+test('Path data limit is counted in UTF-8 bytes', () => {
+    const path = (d) => renderTree(jsx(Path, { id: 'p', d }));
+    const threeByte = '\u4e2d'.repeat(21846); // 65538 bytes, 21846 code units
+    assert.ok(threeByte.length <= 65536);
+    assert.throws(() => path(threeByte), /at most 65536 UTF-8 bytes/);
+    assert.doesNotThrow(() => path('\u4e2d'.repeat(21845) + 'M')); // exactly 65536 bytes
+});
+
+test('anchor and source file limits are counted in UTF-8 bytes', () => {
+    const view = (props) => renderTree(jsx('view', { id: 'a', ...props }));
+    const atLimit = '\u00e9'.repeat(512);
+    assert.equal(view({ anchor: atLimit }).anchor, atLimit);
+    assert.equal(view({ anchor: '\u00e9'.repeat(513) }).anchor, undefined);
+    const fileAtLimit = '\u00e9'.repeat(2048);
+    assert.equal(view({ sourceLocation: { file: fileAtLimit } }).sourceLocation?.file, fileAtLimit);
+    assert.equal(view({ sourceLocation: { file: '\u00e9'.repeat(2049) } }).sourceLocation, undefined);
 });
