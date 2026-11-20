@@ -36,6 +36,7 @@ int main(int argc, char** argv) {
             "__scene.add(__mesh);",
             [&](std::string_view specifier) -> std::optional<std::string> {
                 if (specifier == "three") return read_file(root / "build/three.module.js");
+                if (specifier.ends_with("three.core.js")) return read_file(root / "build/three.core.js");
                 return std::nullopt;
             },
             [&](const std::string& message, const choc::value::Value&) {
