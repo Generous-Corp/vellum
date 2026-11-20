@@ -1947,6 +1947,10 @@ class PlatformRecordPlanTest(unittest.TestCase):
         self.assertEqual(pc.platform_of("Emscripten", "wasm32"), "wasm32")
         self.assertEqual(pc.platform_of("iOS", "arm64", "/x/iPhoneSimulator.sdk"), "ios-simulator-arm64")
         self.assertEqual(pc.platform_of("iOS", "arm64", "/x/iPhoneOS.sdk"), "ios-device-arm64")
+        self.assertEqual(pc.platform_of("iOS", "arm64", "iphoneos17.5"), "ios-device-arm64")
+        for sdk in ("", "macosx", "/x/MacOSX.sdk", "appletvos", "/x/Simulator-not-iphone.sdk", "watchsimulator"):
+            with self.subTest(sdk=sdk), self.assertRaises(pc.RecordError):
+                pc.platform_of("iOS", "arm64", sdk)
         with self.assertRaises(pc.RecordError):
             pc.platform_of("Haiku", "x86_64")
         for system in ("tvOS", "visionOS", "watchOS"):

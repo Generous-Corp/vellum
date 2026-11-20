@@ -158,7 +158,10 @@ def options_sha256(options: dict[str, Any]) -> str:
 def platform_of(system: str, processor: str, apple_sdk: str = "") -> str:
     """The platform key a configure's target system and processor name, or refuse."""
     if system == "iOS":
-        key = "ios-simulator-arm64" if "simulator" in apple_sdk.lower() else "ios-device-arm64"
+        family = _apple_sdk_family(apple_sdk)
+        key = {"iphoneos": "ios-device-arm64", "iphonesimulator": "ios-simulator-arm64"}.get(family)
+        if key is None:
+            raise RecordError(f"CMAKE_OSX_SYSROOT {apple_sdk!r} is not an iphoneos or iphonesimulator SDK")
         if processor != "arm64":
             raise RecordError(f"no platform key for iOS on {processor}")
         return key
