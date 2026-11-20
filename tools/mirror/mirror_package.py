@@ -47,6 +47,7 @@ sys.path.append(str(Path(__file__).resolve().parent))
 import source_compile_options  # noqa: E402
 import framework_ports  # noqa: E402
 import gpu_surface_guard  # noqa: E402
+import platform_closures  # noqa: E402
 
 
 RECEIPT_SCHEMA = "pulp.vellum.export-receipt.v2"
@@ -87,11 +88,15 @@ def renamed_path(relative: str) -> str:
     return "/".join(parts)
 
 
-def mirrored(repo: Path, relative: str) -> Path:
+def mirrored(repo: Path, relative: str, *, confined: bool = False) -> Path:
     """Where a Pulp-relative exported path lives in this checkout."""
-    if transferred(repo):
-        return repo / FRAMEWORK_DIR / renamed_path(relative)
-    return repo / MIRROR_DIR / relative
+    if confined and not platform_closures.safe_relative_path(relative):
+        raise PlanError(f"closure source {relative!r} is not a safe relative path")
+    root = repo / (FRAMEWORK_DIR if transferred(repo) else MIRROR_DIR)
+    candidate = root / (renamed_path(relative) if transferred(repo) else relative)
+    if confined and not platform_closures.contained_under(root, candidate):
+        raise PlanError(f"closure source {relative!r} escapes the landed mirror")
+    return candidate
 
 
 def inverse_renamed(data: bytes) -> bytes:
@@ -145,6 +150,7 @@ BUILD_TIMESTAMP_PLACEHOLDER = "<build-timestamp>"
 DEPENDENCIES: dict[str, dict[str, Any]] = {
     "highway": {
         "kind": "cmake",
+        "sources": ["https://github.com/google/highway.git"],
         "provides": ["hwy"],
         "options": {
             "HWY_ENABLE_EXAMPLES": "OFF",
@@ -156,6 +162,7 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
     },
     "mbed-tls": {
         "kind": "cmake",
+        "sources": ["https://github.com/Mbed-TLS/mbedtls.git"],
         "submodules": True,
         "provides": ["mbedtls", "mbedx509", "mbedcrypto", "everest", "p256m"],
         "options": {
@@ -167,6 +174,7 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
     },
     "sheenbidi": {
         "kind": "cmake",
+        "sources": ["https://github.com/Tehreer/SheenBidi.git"],
         "provides": ["SheenBidi"],
         "options": {
             "SB_CONFIG_UNITY": "ON",
@@ -176,18 +184,19 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
     },
     "choc": {
         "kind": "headers",
+        "sources": ["https://github.com/danielraffel/choc.git"],
         "patches": ["v8-compatibility", "json-positive-exponent", "file-watcher-lifetime"],
         "post_patches": ["v8-module-resolution"],
     },
-    "brotli": {"kind": "sources"},
-    "woff2": {"kind": "sources"},
-    "skia": {"kind": "archive"},
-    "sdl3": {"kind": "cmake", "provides": ["SDL3-static"], "options": {"SDL_SHARED": "OFF", "SDL_STATIC": "ON", "SDL_TEST": "OFF", "CMAKE_DISABLE_PRECOMPILE_HEADERS": "ON"}},
+    "brotli": {"kind": "sources", "sources": ["https://github.com/google/brotli.git"]},
+    "woff2": {"kind": "sources", "sources": ["https://github.com/google/woff2.git"]},
+    "skia": {"kind": "archive", "sources": ["https://skia.googlesource.com/skia.git"]},
+    "sdl3": {"kind": "cmake", "sources": ["https://github.com/libsdl-org/SDL.git"], "provides": ["SDL3-static"], "options": {"SDL_SHARED": "OFF", "SDL_STATIC": "ON", "SDL_TEST": "OFF", "CMAKE_DISABLE_PRECOMPILE_HEADERS": "ON"}},
     # Yoga's project defaults compile with -fno-rtti, which gives yogacore its
     # own hidden copy of std::exception's typeinfo; a catch elsewhere in the
     # image can then miss an exception thrown through it. Pulp re-enables RTTI
     # on yogacore (PulpDependencies.cmake), and the mirror build does the same.
-    "yoga": {"kind": "cmake", "source_subdir": "yoga", "provides": ["yogacore"], "options": {},
+    "yoga": {"kind": "cmake", "sources": ["https://github.com/facebook/yoga.git"], "source_subdir": "yoga", "provides": ["yogacore"], "options": {},
              "cxx_options": ["-frtti"]},
     # Pulp's device layer forwards to gpu-runtime, which lives in this
     # repository. A second, fetched copy would put two Dawn proc tables and two
@@ -231,7 +240,7 @@ DEPENDENCIES: dict[str, dict[str, Any]] = {
         "provides": ["gpu-runtime-bootstrap", "gpu-runtime-device", "gpu-runtime-skia-log-bridge"],
         "build_include_dirs": {"@build/_deps/vellum_gpu_runtime-src/gpu-runtime/include": "gpu-runtime/include"},
     },
-    "yaml-cpp": {"kind": "cmake", "provides": ["yaml-cpp"], "options": {"YAML_CPP_BUILD_TESTS": "OFF", "YAML_CPP_BUILD_TOOLS": "OFF", "YAML_CPP_BUILD_CONTRIB": "OFF", "YAML_BUILD_SHARED_LIBS": "OFF", "YAML_CPP_INSTALL": "OFF", "CMAKE_POLICY_VERSION_MINIMUM": "3.5"}},
+    "yaml-cpp": {"kind": "cmake", "sources": ["https://github.com/jbeder/yaml-cpp.git"], "provides": ["yaml-cpp"], "options": {"YAML_CPP_BUILD_TESTS": "OFF", "YAML_CPP_BUILD_TOOLS": "OFF", "YAML_CPP_BUILD_CONTRIB": "OFF", "YAML_BUILD_SHARED_LIBS": "OFF", "YAML_CPP_INSTALL": "OFF", "CMAKE_POLICY_VERSION_MINIMUM": "3.5"}},
 }
 
 # The build-tree include directories a closure may name, by the generated
@@ -492,8 +501,22 @@ def source_compile_options_for(repo: Path, receipt: dict[str, Any],
     options = json.loads(configures.pop())
     if not isinstance(options, dict):
         raise PlanError("the landed closures record no configure options")
-    exported = {str(row.get("mirror_path", "")).removeprefix(f"{MIRROR_DIR}/")
-                for row in receipt.get("files", [])}
+    # The selected platform closures, rather than the Darwin receipt, define
+    # the source set for a non-macOS plan. A platform record may carry sources
+    # absent from the macOS export, and those sources still need their CMake
+    # per-source options evaluated. Keep the receipt file set for macOS so
+    # exported files that are not compiled by a closure still fail closed.
+    if platform == RECEIPT_PLATFORM:
+        exported = {str(row.get("mirror_path", "")).removeprefix(f"{MIRROR_DIR}/")
+                    for row in receipt.get("files", [])}
+    else:
+        exported = {
+            str(source)
+            for _, closure in units
+            for target in closure.get("targets", [])
+            for source in target.get("sources", [])
+            if isinstance(source, str) and not source.startswith("@")
+        }
     if transferred(repo):
         # A ledger-added source is compiled like an exported one, so the
         # framework's CMake may set its per-source options the same way.
@@ -523,21 +546,29 @@ def external_dependencies(units: list[tuple[str, dict[str, Any]]]) -> dict[str, 
             name = match.group("name")
             if name not in DEPENDENCIES:
                 raise PlanError(f"{unit}: closure names dependency {name!r}, which has no Vellum build recipe")
+            recipe = DEPENDENCIES[name]
+            source = row.get("source")
+            if source not in recipe.get("sources", ()):
+                raise PlanError(f"{unit}: {name} source {source!r} is not an allowlisted dependency source")
+            root = match.group("root")
+            relative = match.group("rel")
+            if not platform_closures.safe_relative_path(root) or not platform_closures.safe_relative_path(relative):
+                raise PlanError(f"{unit}: external input path is not a safe dependency-relative path: {path}")
             pin = row.get("pin")
             if not SHA40.match(str(pin)):
                 raise PlanError(f"{unit}: {name} is not pinned to a full commit")
             entry = deps.setdefault(name, {
-                "pin": pin, "source": row.get("source"), "asset_sha256": row.get("asset_sha256"),
-                "root": match.group("root"), "files": {},
+                "pin": pin, "source": source, "asset_sha256": row.get("asset_sha256"),
+                "root": root, "files": {},
             })
-            if (entry["pin"], entry["source"], entry["root"]) != (pin, row.get("source"), match.group("root")):
+            if (entry["pin"], entry["source"], entry["root"]) != (pin, source, root):
                 raise PlanError(f"closures disagree on the pin of {name}")
             if not SHA256.match(str(row.get("sha256"))):
                 raise PlanError(f"{unit}: {path} has no recorded digest")
             previous = entry["files"].get(match.group("rel"))
             if previous and previous != row["sha256"]:
                 raise PlanError(f"closures disagree on the digest of {path}")
-            entry["files"][match.group("rel")] = row["sha256"]
+            entry["files"][relative] = row["sha256"]
     return deps
 
 
@@ -864,8 +895,7 @@ def restore_patched(name: str, root: Path, paths: list[str]) -> None:
 
 
 def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_dir: Path | None,
-                         skia_asset_sha256: str | None, repo: Path | None = None,
-                         accepted_skia_assets: set[str] | None = None) -> dict[str, Path]:
+                         skia_asset_sha256: str | None, repo: Path | None = None) -> dict[str, Path]:
     roots: dict[str, Path] = {}
     for name, entry in sorted(deps.items()):
         recipe = DEPENDENCIES[name]
@@ -876,8 +906,7 @@ def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_d
         elif recipe["kind"] == "archive":
             if skia_dir is None or not skia_asset_sha256:
                 raise PlanError(f"closure needs {name} but no extracted Skia/Dawn archive was given")
-            accepted = accepted_skia_assets or set()
-            if entry["asset_sha256"] != skia_asset_sha256 and entry["asset_sha256"] not in accepted:
+            if entry["asset_sha256"] != skia_asset_sha256:
                 raise PlanError(
                     f"closure was exported against {name} archive {entry['asset_sha256']}, "
                     f"but Vellum locks {skia_asset_sha256}")
@@ -892,6 +921,10 @@ def prepare_dependencies(deps: dict[str, dict[str, Any]], deps_dir: Path, skia_d
                 apply_patch(name, patch, root)
         for relative, digest in sorted(entry["files"].items()):
             candidate = root / relative
+            try:
+                candidate.resolve().relative_to(root.resolve())
+            except ValueError:
+                raise PlanError(f"{name}@{entry['pin'][:12]}:{relative} escapes the dependency checkout")
             if not candidate.is_file():
                 raise PlanError(f"{name}@{entry['pin'][:12]} has no {relative}")
             if sha256_file(candidate) != digest:
@@ -1131,8 +1164,8 @@ def in_tree_include_dependency(path: str) -> tuple[str, str, str | None] | None:
 
 
 def confined_relative(path: str, relative: str) -> str:
-    """Refuse a dependency-relative directory that is absolute or has an empty, '.' or '..' segment."""
-    if relative and (relative.startswith("/") or any(part in ("", ".", "..") for part in relative.split("/"))):
+    """Refuse a dependency-relative directory that could leave its dependency on any platform."""
+    if relative and not platform_closures.safe_relative_path(relative):
         raise PlanError(f"include directory {path} is not confined to its dependency")
     return relative
 
@@ -1161,7 +1194,10 @@ def map_include(path: str, repo: Path, roots: dict[str, Path], generated: dict[s
         if relative != abi_tree and not relative.startswith(abi_tree + "/"):
             # The ABI tree is the only part of this repository bound to the pin.
             raise PlanError(f"include directory {path} is outside {name}'s interface tree {abi_tree}")
-        return str(roots[name] / relative)
+        joined = roots[name] / relative
+        if not platform_closures.contained_under(roots[name], joined):
+            raise PlanError(f"include directory {path} is not confined to its dependency")
+        return str(joined)
     if path.startswith("@build/"):
         raise PlanError(f"closure names an unmapped build-tree include directory: {path}")
     match = re.match(r"@external/(?P<name>[A-Za-z0-9_.-]+)/(?P<root>[^/]+)(?:/(?P<rel>.*))?\Z", path)
@@ -1172,10 +1208,13 @@ def map_include(path: str, repo: Path, roots: dict[str, Path], generated: dict[s
         entry = deps.get(match.group("name"))
         if entry is None or match.group("root") != entry["root"]:
             raise PlanError(f"include directory {path} is not at the root the closures pin")
-        return str(root / confined_relative(path, match.group("rel") or ""))
-    if path.startswith("@") or path.startswith("/") or ".." in Path(path).parts:
+        joined = root / confined_relative(path, match.group("rel") or "")
+        if not platform_closures.contained_under(root, joined):
+            raise PlanError(f"include directory {path} is not confined to its dependency")
+        return str(joined)
+    if path.startswith("@") or not platform_closures.safe_relative_path(path):
         raise PlanError(f"include directory is not a mirror-relative path: {path}")
-    candidate = mirrored(repo, path)
+    candidate = mirrored(repo, path, confined=True)
     if not candidate.is_dir():
         raise PlanError(f"include directory {path} is not in the landed mirror")
     return str(candidate)
@@ -1326,9 +1365,15 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     repo = repo.resolve()
     if platform not in framework_ports.PLATFORMS:
         raise PlanError(f"unknown platform {platform!r}; known: {list(framework_ports.PLATFORMS)}")
+    # Every platform but the receipt's needs a record; refuse before any other work.
     if platform != RECEIPT_PLATFORM:
-        raise PlanError(f"no verified closure for platform {platform}: the landed closures describe "
-                        f"{RECEIPT_PLATFORM}")
+        try:
+            listed = platform_closures.index(repo)
+        except platform_closures.RecordError as error:
+            raise PlanError(str(error)) from error
+        if platform not in listed:
+            raise PlanError(f"no verified closure for platform {platform}: the landed closures describe "
+                            f"{RECEIPT_PLATFORM}, and {platform_closures.INDEX} lists no record for it")
     receipt_path, receipt = newest_receipt(repo)
     file_count = (verify_framework_identity(repo, receipt_path, receipt) if transferred(repo)
                   else verify_mirror_identity(repo, receipt))
@@ -1338,7 +1383,20 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                                  else ([], []))
     if declared_errors:
         raise PlanError(declared_errors[0])
-    units = load_closures(repo, receipt)
+    record: dict[str, Any] | None = None
+    if platform == RECEIPT_PLATFORM:
+        units = load_closures(repo, receipt)
+        build_receipt = receipt
+    else:
+        try:
+            record, units = platform_closures.load_record(repo, platform)
+        except platform_closures.RecordError as error:
+            raise PlanError(str(error)) from error
+        if skia_asset_sha256 is not None and record["renderer_asset"]["sha256"] != skia_asset_sha256:
+            raise PlanError(f"the {platform} record links renderer asset {record['renderer_asset']['sha256']}, "
+                            f"but Vellum locks {skia_asset_sha256}")
+        # The build-info header Pulp generated names the commit the platform was exported at.
+        build_receipt = {**receipt, "pulp_sha": record["pulp_sha"]}
     # Every compiled row names a target some closure builds or units.json
     # declares, whatever its scope: a row scoped away from this platform is
     # still checked here, since no other lane builds it yet.
@@ -1350,6 +1408,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         raise PlanError("the ports ledger adds sources to targets no closure builds and "
                         f"{framework_ports.UNITS} does not declare: {unknown[:5]}")
     ledger = (ports_added, scopes)
+    all_ledger_added = set(ports_added)
     # A ledger-added source or declared target is planned only on its platforms.
     ports_added = {path: row for path, row in ports_added.items()
                    if not framework_ports.compiled(path) or framework_ports.compiled_on(scopes, path, platform)}
@@ -1360,15 +1419,8 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
     deps = external_dependencies(units)
     closure_pinned = set(deps)
     declared_deps = declared_dependencies(declared, units, closure_pinned)
-    all_deps = {**deps, **declared_deps}
-    historical_skia_assets = set()
-    if transferred(repo) and isinstance(all_deps.get("skia"), dict):
-        historical = all_deps["skia"].get("asset_sha256")
-        if isinstance(historical, str):
-            historical_skia_assets.add(historical)
-    roots = prepare_dependencies(all_deps, deps_dir, skia_dir, skia_asset_sha256, repo,
-                                  historical_skia_assets)
-    generated = prepare_generated(repo, receipt, units, generated_dir)
+    roots = prepare_dependencies({**deps, **declared_deps}, deps_dir, skia_dir, skia_asset_sha256, repo)
+    generated = prepare_generated(repo, build_receipt, units, generated_dir)
     # GPU device types are not part of the installed surface: the installed
     # copy of each choke header carries an #error guard (gpu_surface_guard.py).
     try:
@@ -1397,7 +1449,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                 raise PlanError(f"{unit}/{name}: only static mirrored targets are packaged")
             sources = []
             for source in target.get("sources", []):
-                candidate = mirrored(repo, source)
+                candidate = mirrored(repo, source, confined=platform != RECEIPT_PLATFORM)
                 generated_source = None
                 if source == "@build/core/view/web_compat_preludes_gen.cpp":
                     generated_source = generated["prelude_dir"] / "web_compat_preludes_gen.cpp"
@@ -1409,7 +1461,17 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
                 if ledger_removed(repo, source, ports_removed):
                     continue
                 if not candidate.is_file():
-                    raise PlanError(f"{unit}/{name}: source {source} is not in the landed mirror")
+                    raise PlanError(f"{unit}/{name}: source {source} is not in the landed mirror; "
+                                    "port it through the ledger first")
+                ledger_path = candidate.relative_to(repo).as_posix() if transferred(repo) else None
+                if ledger_path in all_ledger_added and ledger_path not in ports_added:
+                    raise PlanError(f"{unit}/{name}: {platform}'s closure compiles {ledger_path}, whose ledger "
+                                    f"scope leaves out {platform}; scope it to {platform}")
+                if ledger_path in ports_added:
+                    if ports_added[ledger_path]["target"] not in (name, None):
+                        raise PlanError(f"{unit}/{name}: {platform}'s closure compiles {ledger_path} in {name}, "
+                                        f"but its ledger row adds it to {ports_added[ledger_path]['target']}")
+                    continue  # the ledger row adds it to this target below
                 if candidate.suffix in SOURCE_SUFFIXES:
                     sources.append(str(candidate))
             # Sources the ports ledger added to this target: the closures do
@@ -1445,9 +1507,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
             for row in skia:
                 # The target links the archive Vellum locks, not merely one
                 # whose headers happen to match.
-                accepted = historical_skia_assets
-                if (row.get("asset_sha256") != skia_asset_sha256
-                        and row.get("asset_sha256") not in accepted):
+                if row.get("asset_sha256") != skia_asset_sha256:
                     raise PlanError(
                         f"{unit}/{name} links skia archive {row.get('asset_sha256')}, "
                         f"but Vellum locks {skia_asset_sha256}")
@@ -1470,7 +1530,7 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
             for source in target.get("sources", []):
                 if source in source_options:
                     if not ledger_removed(repo, source, ports_removed):
-                        option_sources.append({"source": str(mirrored(repo, source)),
+                        option_sources.append({"source": str(mirrored(repo, source, confined=platform != RECEIPT_PLATFORM)),
                                                "options": source_options[source]})
                     attached.add(source)
             for path in ported:
@@ -1552,7 +1612,8 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         "framework_ports": {"added": sorted(ports_added), "removed": sorted(ports_removed)},
         "framework_units": [target["name"] for target in declared],
         "native_preludes": generated["native_preludes"],
-        "closures": [unit["closure_manifest"] for unit in receipt["units"]],
+        "closures": ([unit["closure_manifest"] for unit in receipt["units"]] if record is None
+                     else [unit["closure_manifest"] for unit in record["units"]]),
         "dependencies": {name: {"pin": entry["pin"], "source": entry["source"],
                                  "files_verified": len(entry["files"])}
                           for name, entry in sorted({**deps, **declared_deps}.items())},
@@ -1568,6 +1629,10 @@ def plan(repo: Path, deps_dir: Path, generated_dir: Path, skia_dir: Path | None,
         "units": unit_rows,
         "executables": executables,
         "gpu_guard": gpu_guard,
+        # Only a platform with its own record names it, so the receipt platform's plan is unchanged.
+        **({} if record is None else {"platform": platform,
+                                      "platform_record": f"{platform_closures.ROOT}/{platform}/record.json",
+                                      "platform_pulp_sha": record["pulp_sha"]}),
     }
 
 
@@ -1680,12 +1745,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skia-asset-sha256", help="digest of the Skia/Dawn archive Vellum locks")
     parser.add_argument("--cmake-output", type=Path, required=True)
     parser.add_argument("--json-output", type=Path)
-    parser.add_argument("--platform", default=RECEIPT_PLATFORM,
-                        help="the platform key to plan for; it needs a verified closure")
+    parser.add_argument("--platform", help="the platform key to plan for (default: from --system and "
+                        "--processor, else macos-arm64); it needs a verified closure")
+    parser.add_argument("--system", help="the target's CMAKE_SYSTEM_NAME")
+    parser.add_argument("--processor", help="the target's CMAKE_SYSTEM_PROCESSOR")
+    parser.add_argument("--apple-sdk", default="", help="the target's CMAKE_OSX_SYSROOT, for iOS")
     parser.add_argument(
         "--in-tree-definitions", action="append", default=[], metavar="NAME=DEF|DEF",
         help="an in-tree dependency's INTERFACE_COMPILE_DEFINITIONS, from the configured targets")
     args = parser.parse_args(argv)
+    platform = args.platform
+    if platform is None and args.system:
+        try:
+            platform = platform_closures.platform_of(args.system, args.processor or "", args.apple_sdk)
+        except platform_closures.RecordError as error:
+            print(f"vellum-mirror-package: {error}", file=sys.stderr)
+            return 1
+    platform = platform or RECEIPT_PLATFORM
     in_tree_definitions: dict[str, list[str]] = {}
     for item in args.in_tree_definitions:
         name, _, values = item.partition("=")
@@ -1693,7 +1769,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         build_plan = plan(args.repo, args.deps_dir.resolve(), args.generated_dir.resolve(),
                           args.skia_dir.resolve() if args.skia_dir else None,
-                          args.skia_asset_sha256, in_tree_definitions, args.platform)
+                          args.skia_asset_sha256, in_tree_definitions, platform)
     except PlanError as error:
         print(f"vellum-mirror-package: {error}", file=sys.stderr)
         return 1
