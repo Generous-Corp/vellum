@@ -96,11 +96,23 @@ function installedStems() {
  * better outcome than outlining every label on the machine because the weights
  * are named unusually.
  */
+// What may follow a family name in a face-file stem: weights, styles, and
+// variable or file-format markers. Anything else ("condensed", "mono",
+// "slab") names a different family whose metrics differ.
+const FACE_SUFFIX = /^(?:(?:thin|hairline|extralight|ultralight|light|regular|book|normal|medium|semibold|demibold|bold|extrabold|ultrabold|black|heavy|italic|oblique|variable|vf|var|\[.*\]|[0-9]+))*$/;
+
+/** Whether an installed face-file stem is a face of this family (both normalized). */
+export function familyMatchesStem(family, stem) {
+  const want = normalize(family);
+  const have = normalize(stem);
+  return have === want || (have.startsWith(want) && FACE_SUFFIX.test(have.slice(want.length)));
+}
+
 export function isFontAvailable(family) {
   const want = normalize(family);
   if (!want) return true; // no family named: nothing to be missing
   for (const stem of installedStems()) {
-    if (stem.startsWith(want)) return true;
+    if (familyMatchesStem(want, stem)) return true;
   }
   return false;
 }

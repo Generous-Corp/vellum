@@ -161,6 +161,7 @@ defs[D.NodeChange] = { name: 'NodeChange', kind: 2, fields: [
   { name: 'stackCounterAlignItems', type: T.STRING, isArray: false, value: 14 },
   { name: 'stackHorizontalPadding', type: T.FLOAT, isArray: false, value: 15 },
   { name: 'stackVerticalPadding', type: T.FLOAT, isArray: false, value: 16 },
+  { name: 'fontSize', type: T.FLOAT, isArray: false, value: 17 },
 ]};
 defs[D.Message] = { name: 'Message', kind: 2, fields: [
   { name: 'nodeChanges', type: D.NodeChange, isArray: true, value: 1 },
@@ -233,6 +234,7 @@ function writeNode(w, n) {
   if (n.radius !== undefined) { w.varUint(7); w.float(n.radius); }
   if (n.text !== undefined) { w.varUint(8); w.varUint(1); w.string(n.text); w.varUint(0); }
   if (n.at) { w.varUint(10); matrix(w, n.at[0], n.at[1]); }
+  if (n.fontSize !== undefined) { w.varUint(17); w.float(n.fontSize); }
   if (n.stack) {
     w.varUint(11); w.string(n.stack);
     if (n.gap !== undefined) { w.varUint(12); w.float(n.gap); }
@@ -265,7 +267,7 @@ const NODES = [
   { s: 0, l: 3, type: 2, name: 'Knob — Cutoff', parent: [0, 2], pos: 'a',
     size: [64, 64], radius: 32, fills: [{ image: IMAGE_HASH }], at: [16, 16] },
   { s: 0, l: 4, type: 3, name: 'Label', parent: [0, 2], pos: 'b',
-    size: [80, 16], text: 'CUTOFF', fills: [{ color: [1, 1, 1, 1] }], at: [16, 96] },
+    size: [80, 16], text: 'CUTOFF', fontSize: 12.5, fills: [{ color: [1, 1, 1, 1] }], at: [16, 96] },
   // An auto-layout row with a NON-MIN counter alignment. CENTER matters: MIN is
   // Yoga's default, so a fixture that only used MIN would still pass with the
   // alignment dropped entirely — testing nothing, exactly the bug this catches.

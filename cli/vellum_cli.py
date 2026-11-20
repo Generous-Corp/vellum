@@ -159,7 +159,7 @@ def selected_template(requested: str | None, has_import: bool) -> str:
         return "imported-app" if has_import else "blank"
     if requested == "imported-app" and not has_import:
         raise CliFailure(
-            "The imported-app template requires --from figma/design-ir/html/claude-design FILE.",
+            "The imported-app template requires --from figma/design-ir/html/claude-design/fig FILE.",
             status="template_requires_source",
             exit_code=EXIT_USAGE,
         )
@@ -1374,7 +1374,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument(
         "--from", dest="import_source", nargs=2, metavar=("SOURCE_TYPE", "SOURCE"),
         choices=None,
-        help="create from an initial source: --from figma/design-ir/html/claude-design FILE",
+        help="create from an initial source: --from figma/design-ir/html/claude-design/fig FILE",
     )
     create.add_argument("--as", dest="source_key", default="main", help="permanent source key for --from")
     create.add_argument("--interaction-plan", help="bounded browser interaction plan for an HTML import")

@@ -1837,7 +1837,8 @@ export function materializeFrame(scene, frame, ctx) {
     // the family lets the importer SAY so instead of leaving mystery text.
     const out = {};
     const fs = node.fontSize;
-    if (typeof fs === 'number') out.font_size = Math.round(fs);
+    // Keep fractional sizes (12.5 stays 12.5); rounding renders them at the wrong size.
+    if (typeof fs === 'number') out.font_size = round2(fs);
     const tracking = figLetterSpacingPx(node.letterSpacing, fs);
     if (tracking !== null) out.letter_spacing = tracking;
     const family = node.fontName && node.fontName.family;

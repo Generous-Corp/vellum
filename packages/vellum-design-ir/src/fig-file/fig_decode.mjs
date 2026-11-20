@@ -13,13 +13,13 @@
 //       `vellum import --from figma-plugin --file <dir>/scene.vellum.json`.
 //
 // No Figma account, MCP, or network access is used; everything comes from the
-// local file. Requires Node >= 22 (native zstd).
+// local file. Deflate chunks decode on any Node; zstd chunks need Node 22.15.
 
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { unpackFig } from './fig/container.mjs';
-import { ByteReader, readSchema, makeDecoder } from './fig/kiwi.mjs';
-import { buildScene, outline, findFrame, materializeFrame, framesByName, nodesByName } from './fig/scene.mjs';
+import { unpackFig } from './container.mjs';
+import { ByteReader, readSchema, makeDecoder } from './kiwi.mjs';
+import { buildScene, outline, findFrame, materializeFrame, framesByName, nodesByName } from './scene.mjs';
 
 const PARSER_VERSION = '0.1.0-fig';
 const COMPAT_SCHEMA_VERSION = '1';
