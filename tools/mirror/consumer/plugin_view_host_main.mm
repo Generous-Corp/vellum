@@ -8,9 +8,13 @@
 // destructor, observe_gpu_surface() and publish_gpu_surface(), the members
 // whose signatures carry the GpuSurface pointer.
 
+#include <vellum/graphics/dawn_native_bootstrap.hpp>
 #include <vellum/view/plugin_view_host.hpp>
+#include <vellum/view/view.hpp>
+#import <Cocoa/Cocoa.h>
 
 #include <cstdio>
+#include <string>
 #include <vector>
 
 namespace {
@@ -44,6 +48,40 @@ int fail(const char* what) {
 }  // namespace
 
 int main() {
+    if (std::getenv("VELLUM_MIRROR_PLUGIN_VIEW_HOST_BREAK"))
+        return fail("planted break");
+    struct Probe final : vellum::view::View {
+        void paint(vellum::canvas::Canvas& c) override {
+            c.set_fill_color(vellum::canvas::Color::rgba8(40, 120, 220, 255));
+            c.fill_rect(0, 0, 64, 64);
+        }
+        bool on_key_event(const vellum::view::KeyEvent&) override { ++keys; return true; }
+        int keys = 0;
+    } probe;
+    probe.set_bounds({0, 0, 64, 64});
+    // The process owns Dawn's proc table: a plug-in registers the native
+    // bootstrap before its editor creates a GPU host, as this consumer does.
+    std::string bootstrap_error;
+    if (!vellum::app_host::register_native_dawn_bootstrap(&bootstrap_error))
+        return fail(("Dawn bootstrap registration failed: " + bootstrap_error).c_str());
+    auto gpu = Host::create(probe, Host::Options{{64, 64}, true});
+    if (!gpu || !gpu->is_gpu_backed()) return fail("GPU host factory returned no GPU host");
+    NSView* parent = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 64, 64)];
+    gpu->attach_to_parent((void*)parent);
+    if (!gpu->present_first_frame()) return fail("offscreen GPU paint failed");
+    if (gpu->capture_back_buffer_png().empty()) return fail("GPU readback was empty");
+    // A real AppKit key event sent to the host's own view must reach the
+    // View tree (calling the View's handler directly would prove nothing).
+    int global_keys = 0;
+    probe.on_global_key = [&](const vellum::view::KeyEvent&) { ++global_keys; return true; };
+    NSView* host_view = parent.subviews.firstObject;
+    if (host_view == nil) return fail("the host attached no view to its parent");
+    NSEvent* ev = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0
+                                  timestamp:0 windowNumber:0 context:nil characters:@"\r"
+                charactersIgnoringModifiers:@"\r" isARepeat:NO keyCode:36];
+    [host_view keyDown:ev];
+    if (probe.keys + global_keys < 1) return fail("an AppKit key event did not reach the View");
+    gpu->detach();
     std::vector<Host::GpuSurfaceState> seen;
     {
         StubHost host;
