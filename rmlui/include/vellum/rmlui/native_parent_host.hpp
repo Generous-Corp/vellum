@@ -29,6 +29,9 @@ struct NativeHostSize {
 // owned by this object and are serialized by the caller's UI thread. Text
 // arrives as committed text through the input system; IME composition
 // (marked text) is not supported.
+// When constructed with an external RenderInterface, idle() submits the frame
+// to that interface and does not update the Cocoa layer. The owner of that
+// interface is responsible for presenting its draw commands.
 class VELLUM_RMLUI_API NativeParentHost final {
   public:
     explicit NativeParentHost(AssetProvider&, RenderInterface* renderer = nullptr);
@@ -55,6 +58,7 @@ class VELLUM_RMLUI_API NativeParentHost final {
     Status process_mouse_button_down(int button, int modifiers = 0);
     Status process_mouse_button_up(int button, int modifiers = 0);
     Status process_mouse_wheel(float x, float y, int modifiers = 0);
+    Status process_mouse_leave();
     Status process_key_down(int key, int modifiers = 0);
     Status process_key_up(int key, int modifiers = 0);
     Status process_text_input(std::string_view text);
