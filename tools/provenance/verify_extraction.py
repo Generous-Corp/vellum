@@ -231,7 +231,9 @@ RENAMED_MIRROR_EXEMPT_PATHS = {
     "tools/mirror/consumer/direct_gpu_main.cpp",
     "tools/mirror/consumer/direct_main.cpp",
     "tools/mirror/consumer/main.cpp",
+    "tools/mirror/consumer/plugin_view_host_main.mm",
     "tools/mirror/consumer/runtime_image_census_main.cpp",
+    "tools/mirror/consumer/threejs_v8_main.cpp",
     "tools/mirror/consumer/v8_main.cpp",
     # The mirror package's own build glue: the provider anchor compiled into
     # the canvas unit, and the GPU guard whose #error names the guarded header.
@@ -1375,6 +1377,77 @@ def load_framework_ports():
     return module
 
 
+PLATFORM_CLOSURES_TOOL = Path(__file__).resolve().parents[1] / "mirror" / "platform_closures.py"
+
+
+def load_platform_closures():
+    spec = importlib.util.spec_from_file_location("platform_closures", PLATFORM_CLOSURES_TOOL)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {PLATFORM_CLOSURES_TOOL}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def gh_api(path: str) -> object:
+    """Read one GitHub API resource with the workflow's read-only token."""
+    result = subprocess.run(["gh", "api", "--method", "GET", path],
+                            capture_output=True, check=True, text=True)
+    return json.loads(result.stdout)
+
+
+def gh_download(path: str) -> bytes:
+    """Download one GitHub API binary resource with the workflow's read-only token."""
+    return subprocess.run(["gh", "api", "--method", "GET", path],
+                          capture_output=True, check=True).stdout
+
+
+def verify_platform_export_artifact(records, key: str, record: dict) -> None:
+    """Download and verify the exact successful Pulp closure artifact for a record."""
+    match = re.fullmatch(records.EXPORT_RUN, record["export"]["run_url"])
+    if match is None:
+        raise records.RecordError(f"{records.ROOT}/{key}/record.json: malformed export run URL")
+    run_id = record["export"]["run_url"].rsplit("/", 1)[-1]
+    run = gh_api(f"repos/{records.PULP_REPOSITORY}/actions/runs/{run_id}")
+    if not isinstance(run, dict) or run.get("id") != int(run_id) or run.get("head_sha") != record["pulp_sha"] \
+            or run.get("status") != "completed" or run.get("conclusion") != "success" \
+            or (run.get("repository") or {}).get("full_name") != records.PULP_REPOSITORY \
+            or (run.get("head_repository") or {}).get("full_name") != records.PULP_REPOSITORY \
+            or run.get("path") != ".github/workflows/vellum-platform-closure.yml":
+        raise records.RecordError(f"{records.ROOT}/{key}/record.json: export run is not the successful "
+                                  "Pulp closure workflow at the pinned commit")
+    # The REST endpoint is paginated; a valid closure artifact can be beyond the
+    # first 100 artifacts uploaded by a busy run. Read every page, bounded by the
+    # server-reported total, before applying the exact-name/run filters.
+    artifacts_listing: list[object] = []
+    page = 1
+    total_count: int | None = None
+    while True:
+        suffix = "?per_page=100" if page == 1 else f"?per_page=100&page={page}"
+        listing = gh_api(f"repos/{records.PULP_REPOSITORY}/actions/runs/{run_id}/artifacts{suffix}")
+        if not isinstance(listing, dict) or not isinstance(listing.get("artifacts"), list):
+            raise records.RecordError(f"{records.ROOT}/{key}/record.json: Pulp artifact listing is malformed")
+        if total_count is None:
+            total_count = listing.get("total_count", len(listing["artifacts"]))
+            if not isinstance(total_count, int) or total_count < 0:
+                raise records.RecordError(f"{records.ROOT}/{key}/record.json: Pulp artifact listing is malformed")
+        artifacts_listing.extend(listing["artifacts"])
+        if len(artifacts_listing) >= total_count or len(listing["artifacts"]) == 0:
+            break
+        page += 1
+    expected_name = f"vellum-closure-{key}"
+    artifacts = [artifact for artifact in artifacts_listing
+                 if isinstance(artifact, dict) and artifact.get("name") == expected_name
+                 and artifact.get("expired") is False
+                 and (artifact.get("workflow_run") or {}).get("id") == int(run_id)
+                 and isinstance(artifact.get("id"), int)]
+    if len(artifacts) != 1:
+        raise records.RecordError(f"{records.ROOT}/{key}/record.json: Pulp run has {len(artifacts)} "
+                                  f"unexpired {expected_name} artifacts")
+    verify = getattr(records, "verify_export_artifact")
+    verify(key, record, gh_download(f"repos/{records.PULP_REPOSITORY}/actions/artifacts/{artifacts[0]['id']}/zip"))
+
+
 def load_port_respell():
     spec = importlib.util.spec_from_file_location("port_respell", PORT_RESPELL_TOOL)
     if spec is None or spec.loader is None:
@@ -1382,6 +1455,128 @@ def load_port_respell():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def platform_record_unchanged(root: Path, records, key: str, base: str | None) -> bool:
+    """Whether a platform's record directory is byte for byte the base's, and the base indexed it.
+
+    Compared by git blob ids over the working files, so an untracked or edited
+    file counts as a change. A record unchanged since the base was proved when
+    it landed; only a new or changed record must prove its export again, since
+    the artifact Pulp uploads expires after its retention period.
+    """
+    if base is None:
+        return False
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False)
+
+    shown = git("show", f"{base}:{records.INDEX}")
+    try:
+        listed = json.loads(shown.stdout.decode("utf-8")).get("platforms", {}) if shown.returncode == 0 else {}
+    except (UnicodeDecodeError, ValueError, AttributeError):
+        return False
+    if not isinstance(listed, dict) or listed.get(key) != f"{records.ROOT}/{key}/record.json":
+        return False
+    directory = f"{records.ROOT}/{key}"
+    tree = git("ls-tree", "-r", "-z", base, "--", f"{directory}/")
+    if tree.returncode != 0:
+        return False
+    at_base = {}
+    for entry in tree.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
+        if entry:
+            meta, path = entry.split("\t", 1)
+            at_base[path] = meta.split()[2]
+    here = {}
+    for path in sorted((root / directory).rglob("*")):
+        if path.is_symlink() or not path.is_dir():
+            relative = path.relative_to(root).as_posix()
+            hashed = git("hash-object", "--no-filters", "--", relative)
+            if hashed.returncode != 0:
+                return False
+            here[relative] = hashed.stdout.decode().strip()
+    return bool(at_base) and here == at_base
+
+
+def framework_platform_errors(root: Path, pulp_root: Path | None, pulp_main_ref: str,
+                              defer_identity: bool) -> tuple[list[str], dict[str, object]]:
+    """Every platform closure record (tools/mirror/platform_closures.py), and its Pulp claims.
+
+    The record's pins and shape need no Pulp checkout. Its Pulp commit must be
+    a commit on Pulp main, and the exporter blob it names must be Pulp's
+    tools/scripts/vellum_closure.py at that commit; that part fails closed
+    without a checkout unless the lane defers to the required provenance lane.
+
+    A record that is new or changed since the history base must also prove its
+    manifests are the bytes Pulp's export run uploaded
+    (verify_platform_export_artifact). Without GitHub access that proof is
+    refused, or deferred in a lane that defers, and the records are never
+    reported proved. A record unchanged since the base was proved when it
+    landed, so the artifact's expiry does not fail it later.
+    """
+    records = load_platform_closures()
+    errors = list(records.errors(root))
+    try:
+        listed = records.index(root)
+    except records.RecordError:
+        listed = {}
+    checks: dict[str, object] = {"framework_platform_records": sorted(listed)}
+    if errors or not listed:
+        checks["framework_platform_records_proved"] = not errors
+        return errors, checks
+    if pulp_root is None:
+        checks["framework_platform_records_proved"] = "deferred: no Pulp checkout"
+        if not defer_identity:
+            errors.append(f"{records.INDEX}: no Pulp checkout proved the records' Pulp commits; pass --pulp-root")
+        return errors, checks
+
+    def pulp(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(pulp_root), *args], capture_output=True, check=False)
+
+    main = pulp("rev-parse", "--verify", "--quiet", f"{pulp_main_ref}^{{commit}}")
+    if main.returncode != 0:
+        return [f"{records.INDEX}: Pulp checkout {pulp_root} has no {pulp_main_ref}"], checks
+    base, base_error = load_mirror_export_verifier().history_base(root)
+    can_fetch = bool(os.environ.get("GH_TOKEN") or os.environ.get("VELLUM_REQUIRE_PLATFORM_EXPORT_ARTIFACT"))
+    exports: dict[str, str] = {}
+    deferred = False
+    for key in listed:
+        record, _ = records.load_record(root, key)
+        sha, blob = record["pulp_sha"], record["tool"]["pulp_blob"]
+        if pulp("merge-base", "--is-ancestor", sha, main.stdout.decode().strip()).returncode != 0:
+            errors.append(f"{listed[key]}: Pulp commit {sha} is not a commit on Pulp {pulp_main_ref}")
+            continue
+        tool = pulp("rev-parse", "--verify", "--quiet", f"{sha}:{records.EXPORTER}")
+        if tool.returncode != 0 or tool.stdout.decode().strip() != blob:
+            errors.append(f"{listed[key]}: tool.pulp_blob {blob[:12]} is not Pulp {sha[:12]}:{records.EXPORTER}")
+            continue
+        if base_error is None and platform_record_unchanged(root, records, key, base):
+            exports[key] = f"unchanged since {base}"
+            continue
+        if not can_fetch:
+            exports[key] = "deferred: no fetched Pulp export"
+            deferred = True
+            if not defer_identity:
+                errors.append(f"{listed[key]}: no fetched Pulp export proved the record's manifests; "
+                              "set GH_TOKEN or VELLUM_REQUIRE_PLATFORM_EXPORT_ARTIFACT")
+            continue
+        try:
+            verify_platform_export_artifact(records, key, record)
+            exports[key] = "proved"
+        except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+            exports[key] = "refused"
+            errors.append(f"{listed[key]}: could not verify the Pulp export artifact: {exc}")
+        except records.RecordError as exc:
+            exports[key] = "refused"
+            errors.append(str(exc))
+    checks["framework_platform_exports"] = exports
+    if deferred and not errors:
+        checks["framework_platform_artifact_proved"] = "deferred: no fetched Pulp export"
+        checks["framework_platform_records_proved"] = "deferred: no fetched Pulp export"
+    else:
+        checks["framework_platform_artifact_proved"] = not errors
+        checks["framework_platform_records_proved"] = not errors
+    return errors, checks
 
 
 FRAMEWORK_PORTS = load_framework_ports().LEDGER
@@ -2154,6 +2349,9 @@ def verify_framework(root: Path, pulp_root: Path | None, pulp_main_ref: str,
         pulp_root, pulp_main_ref, defer_identity, transfer.get("rename"))
     errors.extend(ports_errors)
     checks.update(ports_checks)
+    platform_errors, platform_checks = framework_platform_errors(root, pulp_root, pulp_main_ref, defer_identity)
+    errors.extend(platform_errors)
+    checks.update(platform_checks)
     # What git tracks (every entry, gitlinks included) and what the checkout
     # holds: a submodule or other non-file entry under framework/ is an extra.
     staged = subprocess.run(["git", "-C", str(root), "ls-files", "-s", "-z", "--", FRAMEWORK_ROOT.rstrip("/")],

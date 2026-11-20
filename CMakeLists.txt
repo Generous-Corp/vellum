@@ -24,6 +24,13 @@ option(VELLUM_ENABLE_MIRROR
     "Package the landed mirror's units (needs the locked Skia/Dawn archive)" OFF)
 option(VELLUM_ENABLE_V8
     "Compile the mirror's view-script unit with the sealed V8 provider and install libv8 (needs VELLUM_ENABLE_MIRROR)" OFF)
+option(VELLUM_INSTALL_THREEJS
+    "Install the pinned Three.js runtime payload for native scripted consumers" ON)
+if(VELLUM_INSTALL_THREEJS)
+    set(VELLUM_THREEJS_PACKAGE_ROOT "${CMAKE_INSTALL_DATADIR}/vellum/threejs")
+else()
+    set(VELLUM_THREEJS_PACKAGE_ROOT "")
+endif()
 set(VELLUM_V8_ARCHIVE "" CACHE FILEPATH
     "Local copy of the pinned sealed V8 archive; digest-checked like a download")
 option(VELLUM_ENABLE_ADDRESS_SANITIZER
@@ -693,6 +700,7 @@ if(VELLUM_BUILD_TESTS)
                 "-DPython3_EXECUTABLE=${Python3_EXECUTABLE}"
                 "-DVELLUM_ENABLE_V8=${VELLUM_MIRROR_HAS_V8}"
                 "-DVELLUM_V8_VERSION=${VELLUM_V8_VERSION}"
+                "-DVELLUM_INSTALL_THREEJS=${VELLUM_INSTALL_THREEJS}"
                 "-DVELLUM_PULP_CENSUS_LIBRARIES=${VELLUM_PULP_CENSUS_LIBRARIES}"
                 ${_vellum_view_audio_archive_arg}
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/tools/mirror/RunMirrorConsumer.cmake")
@@ -756,6 +764,33 @@ if(TARGET vellum-authoring)
     install(DIRECTORY authoring/include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 endif()
 
+# Keep the SDK's notice index and its per-dependency texts together.  Generate
+# at configure time so an incomplete lock or NOTICE.md stops the install.
+find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+set(_vellum_notices_dir "${CMAKE_CURRENT_BINARY_DIR}/share/vellum/notices")
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_notices_manifest.py"
+            --repo "${CMAKE_CURRENT_SOURCE_DIR}" --output "${_vellum_notices_dir}"
+    RESULT_VARIABLE _vellum_notices_result
+    OUTPUT_VARIABLE _vellum_notices_stdout
+    ERROR_VARIABLE _vellum_notices_stderr)
+# A changed lock, NOTICE.md or generator reconfigures, so the index never goes
+# stale in an existing build tree.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/provenance/third-party-lock.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/NOTICE.md"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_notices_manifest.py")
+if(NOT _vellum_notices_result EQUAL 0)
+    message(FATAL_ERROR "Vellum notices manifest generation failed:\n${_vellum_notices_stdout}${_vellum_notices_stderr}")
+endif()
+install(DIRECTORY "${_vellum_notices_dir}/"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/vellum/notices")
+if(BUILD_TESTING)
+    add_test(NAME vellum-notices-manifest
+        COMMAND "${Python3_EXECUTABLE}" -I "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_build_notices_manifest.py")
+    set_tests_properties(vellum-notices-manifest PROPERTIES LABELS "pr-fast")
+endif()
+
 # Every test carries one of the pr-fast, gpu or slow class labels.
 include(cmake/VellumTestClasses.cmake)
 vellum_apply_test_classes("${CMAKE_CURRENT_SOURCE_DIR}/scripts/ctest_classes.json")
@@ -787,3 +822,14 @@ install(FILES
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/Vellum")
 install(FILES LICENSE.md NOTICE.md DEPENDENCIES.md
     DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/Vellum")
+if(VELLUM_INSTALL_THREEJS)
+    if(NOT IS_DIRECTORY "${VELLUM_THREEJS_DIR}"
+       OR NOT EXISTS "${VELLUM_THREEJS_DIR}/payload-manifest.json")
+        message(FATAL_ERROR
+            "Vellum: VELLUM_INSTALL_THREEJS needs a verified Three.js payload; "
+            "VELLUM_THREEJS_DIR='${VELLUM_THREEJS_DIR}' has no payload-manifest.json")
+    endif()
+    install(DIRECTORY "${VELLUM_THREEJS_DIR}/"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/vellum/threejs"
+        COMPONENT threejs)
+endif()

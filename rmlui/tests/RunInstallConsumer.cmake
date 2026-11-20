@@ -49,12 +49,19 @@ if(NOT EXISTS "${_prefix}/share/doc/VellumRmlUi/RmlUi-LICENSE.txt")
     message(FATAL_ERROR "the VellumRmlUi package did not install RmlUi's licence file")
 endif()
 # Headers that include RmlUi's belong to Native, which carries RmlUi.
-foreach(_native_header native.hpp element_classes_native.hpp midi_learn_native.hpp
-        cpu_render_interface.hpp metal_render_interface.hpp)
+set(_native_headers native.hpp element_classes_native.hpp midi_learn_native.hpp
+    cpu_render_interface.hpp metal_render_interface.hpp)
+if(NOT VELLUM_RMLUI_NATIVE_HOST)
+    list(APPEND _native_headers native_parent_host.hpp)
+endif()
+foreach(_native_header IN LISTS _native_headers)
     if(EXISTS "${_prefix}/include/vellum/rmlui/${_native_header}")
         message(FATAL_ERROR "the VellumRmlUi package installed the Native-only header ${_native_header}")
     endif()
 endforeach()
+if(VELLUM_RMLUI_NATIVE_HOST AND NOT EXISTS "${_prefix}/include/vellum/rmlui/native_parent_host.hpp")
+    message(FATAL_ERROR "the NativeHost option did not install native_parent_host.hpp")
+endif()
 if(_native)
     _run("${CMAKE_COMMAND}" --install "${VELLUM_RMLUI_BUILD_DIR}"
          --prefix "${_prefix}" --component VellumRmlUiNative ${_config_args})

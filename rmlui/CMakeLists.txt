@@ -63,6 +63,8 @@ option(VELLUM_RMLUI_METAL
     "Build VellumRmlUi::Metal, an Rml::RenderInterface on Metal (Apple only; needs VELLUM_RMLUI_NATIVE)" OFF)
 option(VELLUM_RMLUI_CPU
     "Build VellumRmlUi::Cpu, an Rml::RenderInterface on the CPU into an RGBA8 buffer (needs VELLUM_RMLUI_NATIVE)" OFF)
+option(VELLUM_RMLUI_NATIVE_HOST
+    "Build VellumRmlUi::NativeHost, a native-parent editor host" ${APPLE})
 if(VELLUM_RMLUI_CPU AND NOT VELLUM_RMLUI_NATIVE)
     message(FATAL_ERROR "VELLUM_RMLUI_CPU needs VELLUM_RMLUI_NATIVE=ON, which packages RmlUi for it")
 endif()
@@ -158,6 +160,30 @@ target_link_libraries(vellum-rmlui-dev-assets PUBLIC vellum-rmlui-core)
 set(VELLUM_RMLUI_COMPONENTS Core SoftRenderer DevAssets)
 set(_vellum_rmlui_install_targets
     vellum-rmlui-core vellum-rmlui-soft-renderer vellum-rmlui-dev-assets)
+
+if(VELLUM_RMLUI_NATIVE_HOST)
+    if(NOT APPLE)
+        message(FATAL_ERROR "VELLUM_RMLUI_NATIVE_HOST is currently supported on macOS only")
+    endif()
+    add_library(vellum-rmlui-native-host STATIC src/native_parent_host.mm)
+    add_library(VellumRmlUi::NativeHost ALIAS vellum-rmlui-native-host)
+    set_target_properties(vellum-rmlui-native-host PROPERTIES
+        EXPORT_NAME NativeHost POSITION_INDEPENDENT_CODE ON)
+    target_compile_features(vellum-rmlui-native-host PUBLIC cxx_std_20)
+    target_compile_options(vellum-rmlui-native-host PRIVATE -fobjc-arc)
+    target_include_directories(vellum-rmlui-native-host PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    target_link_libraries(vellum-rmlui-native-host PUBLIC
+        vellum-rmlui-soft-renderer "-framework Cocoa" "-framework QuartzCore")
+    # RmlUi's key and modifier identifiers, which AppKit events are mapped to.
+    # Header-only use: the host still reaches RmlUi only through Core.
+    FetchContent_GetProperties(vellum_rmlui_rmlui SOURCE_DIR _vellum_rmlui_native_host_rmlui_src)
+    target_include_directories(vellum-rmlui-native-host PRIVATE
+        $<BUILD_INTERFACE:${_vellum_rmlui_native_host_rmlui_src}/Include>)
+    list(APPEND VELLUM_RMLUI_COMPONENTS NativeHost)
+    list(APPEND _vellum_rmlui_install_targets vellum-rmlui-native-host)
+endif()
 
 if(VELLUM_RMLUI_LUA)
     add_library(vellum-rmlui-lua STATIC
@@ -281,7 +307,12 @@ if(VELLUM_RMLUI_INSTALL)
     set(_vellum_rmlui_native_headers
         native.hpp element_classes_native.hpp midi_learn_native.hpp
         cpu_render_interface.hpp metal_render_interface.hpp)
-    set(_vellum_rmlui_native_header_excludes)
+    if(VELLUM_RMLUI_NATIVE_HOST)
+        install(FILES include/vellum/rmlui/native_parent_host.hpp
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/vellum/rmlui
+            COMPONENT VellumRmlUi)
+    endif()
+    set(_vellum_rmlui_native_header_excludes PATTERN native_parent_host.hpp EXCLUDE)
     foreach(_header IN LISTS _vellum_rmlui_native_headers)
         list(APPEND _vellum_rmlui_native_header_excludes PATTERN "${_header}" EXCLUDE)
     endforeach()

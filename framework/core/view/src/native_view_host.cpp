@@ -265,6 +265,9 @@ void PluginViewHost::unregister_native_view(NativeViewHost* view) {
 }
 
 PluginViewHost::~PluginViewHost() {
+    if (root_view_ && root_view_->plugin_view_host() == this)
+        root_view_->set_plugin_view_host(nullptr);
+
     // Announce the surface teardown while `this` is still a valid object.
     // Derived destructors have already released their GpuSurface by the time
     // they chain here, so a consumer still holding the raw pointer learns it is

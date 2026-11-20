@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import importlib.util
 import json
 import os
@@ -11,6 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -639,7 +641,9 @@ class VerifyExtractionTests(unittest.TestCase):
             "tools/mirror/consumer/direct_gpu_main.cpp",
             "tools/mirror/consumer/direct_main.cpp",
             "tools/mirror/consumer/main.cpp",
+            "tools/mirror/consumer/plugin_view_host_main.mm",
             "tools/mirror/consumer/runtime_image_census_main.cpp",
+            "tools/mirror/consumer/threejs_v8_main.cpp",
             "tools/mirror/consumer/v8_main.cpp",
             "tools/mirror/canvas_provider_anchor.cpp",
             "tools/mirror/gpu_surface_guard.py",
@@ -1134,6 +1138,386 @@ class VerifyExtractionTests(unittest.TestCase):
             self.write_ports_v2(root, [dict(added, pulp_commits=["d" * 40]), dict(scoped, pulp_commits=["d" * 40])])
             errors, _ = self.ports_verdict(root, pulp_root=pulp, defer=False)
             self.assertEqual(sum(f"is not a commit on Pulp origin/main" in e for e in errors), 2, errors)
+
+    def write_platform_record(self, root: Path, pulp_sha: str, blob: str) -> None:
+        records = verify_extraction.load_platform_closures()
+        options = {"CMAKE_SYSTEM_NAME": "Linux", "CMAKE_SYSTEM_PROCESSOR": "x86_64", "CMAKE_BUILD_TYPE": "Release",
+                   "PULP_ENABLE_GPU": "ON", "PULP_HAS_SKIA": "ON", "PULP_TEXT_SHAPING": "ON"}
+        identity = {"gpu": True, "skia": True, "text_shaping": True, "build_type": "Release",
+                    "system": "Linux", "processor": "x86_64"}
+        base = root / records.ROOT / "linux-x64"
+        base.mkdir(parents=True, exist_ok=True)
+        (base / "foundation.json").write_text(json.dumps({
+            "schema": "pulp.vellum.closure.v1", "configure": {"options": options, "identity": identity},
+            "targets": []}), encoding="utf-8")
+        units = [{"name": "foundation", "closure_manifest": f"{records.ROOT}/linux-x64/foundation.json",
+                  "closure_sha256": records.sha256_file(base / "foundation.json")}]
+        (base / "record.json").write_text(json.dumps({
+            "schema": records.RECORD_SCHEMA, "platform": "linux-x64", "pulp_repository": "Generous-Corp/pulp",
+            "pulp_sha": pulp_sha, "tool": {"path": records.EXPORTER, "pulp_blob": blob},
+            "configure": {"identity": identity, "options_sha256": records.options_sha256(options)},
+            "export": {"run_url": "https://github.com/Generous-Corp/pulp/actions/runs/123456789",
+                       "artifact_sha256": "e" * 64,
+                       "manifest_sha256": records.manifest_binding_sha256("e" * 64, units)},
+            "runner_image": {"name": "ubuntu-26.04", "version": "1"},
+            "renderer_asset": {"name": "skia-build-linux-x64-gpu-release.zip", "sha256": "c" * 64},
+            "units": units}), encoding="utf-8")
+        (root / records.INDEX).write_text(json.dumps({"schema": records.INDEX_SCHEMA, "platforms": {
+            "linux-x64": f"{records.ROOT}/linux-x64/record.json"}}), encoding="utf-8")
+
+    def platform_github(self, *, token: bool) -> None:
+        """Set the platform export proof's GitHub access for this test: a token, or none at all."""
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("VELLUM_REQUIRE_PLATFORM_EXPORT_ARTIFACT", None)
+        if token:
+            os.environ["GH_TOKEN"] = "test-token"
+        else:
+            os.environ.pop("GH_TOKEN", None)
+
+    def write_platform_export(self, root: Path, pulp_sha: str, blob: str, *,
+                              run: dict | None = None, artifact: dict | None = None,
+                              members: dict[str, bytes | None] | None = None,
+                              claimed_sha256: str | None = None) -> mock._patch:
+        """A linux-x64 record and GitHub's view of the export run that made it.
+
+        Returns a patch of verify_extraction's gh_api and gh_download serving
+        the run (actions/runs/<id>), its artifact listing and the artifact zip
+        in the shapes GitHub's REST API serves; `run`, `artifact` and
+        `members` override fields, and a None member is left out of the zip.
+        """
+        records = verify_extraction.load_platform_closures()
+        self.write_platform_record(root, pulp_sha, blob)
+        base = root / records.ROOT / "linux-x64"
+        record = json.loads((base / "record.json").read_text(encoding="utf-8"))
+        meta = {"platform": "linux-x64", "pulp_sha": pulp_sha, "runner_image": record["runner_image"],
+                "renderer_asset_name": record["renderer_asset"]["name"], "image_os": "ubuntu26"}
+        files: dict[str, bytes | None] = {"export.json": json.dumps(meta, indent=2, sort_keys=True).encode(),
+                                          "foundation.json": (base / "foundation.json").read_bytes()}
+        files.update(members or {})
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+            for name, data in files.items():
+                if data is not None:
+                    # Keep the archive digest stable when the fixture is rebuilt after
+                    # a landed record; ZipFile otherwise stamps each entry with now.
+                    entry = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                    entry.compress_type = zipfile.ZIP_DEFLATED
+                    bundle.writestr(entry, data)
+        archive = buffer.getvalue()
+        digest = hashlib.sha256(archive).hexdigest()
+        claimed = claimed_sha256 or digest
+        record["export"]["artifact_sha256"] = claimed
+        record["export"]["manifest_sha256"] = records.manifest_binding_sha256(claimed, record["units"])
+        (base / "record.json").write_text(json.dumps(record), encoding="utf-8")
+        run_doc = {"id": 123456789, "name": "Vellum platform closure",
+                   "path": ".github/workflows/vellum-platform-closure.yml",
+                   "head_sha": pulp_sha, "head_branch": "main", "event": "workflow_dispatch",
+                   "status": "completed", "conclusion": "success",
+                   "repository": {"full_name": "Generous-Corp/pulp"},
+                   "head_repository": {"full_name": "Generous-Corp/pulp"}}
+        run_doc.update(run or {})
+        row = {"id": 4242, "name": "vellum-closure-linux-x64", "size_in_bytes": len(archive),
+               "expired": False, "digest": f"sha256:{digest}",
+               "workflow_run": {"id": 123456789, "head_sha": pulp_sha}}
+        row.update(artifact or {})
+        served = {"repos/Generous-Corp/pulp/actions/runs/123456789": run_doc,
+                  "repos/Generous-Corp/pulp/actions/runs/123456789/artifacts?per_page=100":
+                      {"total_count": 1, "artifacts": [row]}}
+
+        def api(path: str) -> object:
+            if path not in served:
+                raise subprocess.CalledProcessError(1, ["gh", "api", path])
+            return served[path]
+
+        def download(path: str) -> bytes:
+            if path != "repos/Generous-Corp/pulp/actions/artifacts/4242/zip":
+                raise subprocess.CalledProcessError(1, ["gh", "api", path])
+            return archive
+
+        return mock.patch.multiple(verify_extraction, gh_api=mock.Mock(side_effect=api),
+                                   gh_download=mock.Mock(side_effect=download))
+
+    def platform_pulp(self, pulp: Path) -> tuple[str, str]:
+        """A Pulp repository whose main holds the exporter: (commit, exporter blob)."""
+        run = lambda *args: subprocess.check_output(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=pulp, text=True).strip()
+        run("init", "-q", "-b", "main")
+        (pulp / "tools/scripts").mkdir(parents=True)
+        (pulp / "tools/scripts/vellum_closure.py").write_text("# exporter\n")
+        run("add", "-A"); run("commit", "-q", "-m", "exporter")
+        on_main = run("rev-parse", "HEAD")
+        run("update-ref", "refs/remotes/origin/main", on_main)
+        return on_main, run("rev-parse", f"{on_main}:tools/scripts/vellum_closure.py")
+
+    def test_a_platform_record_is_proved_by_the_bytes_pulps_export_run_uploaded(self) -> None:
+        self.hide_ci_git_base()
+        self.platform_github(token=True)
+        records = verify_extraction.load_platform_closures()
+        with tempfile.TemporaryDirectory() as temporary:
+            root, pulp = Path(temporary) / "vellum", Path(temporary) / "pulp"
+            root.mkdir()
+            pulp.mkdir()
+            sha, blob = self.platform_pulp(pulp)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            base = root / records.ROOT / "linux-x64"
+
+            def verdict(defer: bool = False, **fixture):
+                with self.write_platform_export(root, sha, blob, **fixture):
+                    errors, checks = verify_extraction.verify_framework(root, pulp, "origin/main",
+                                                                        defer_identity=defer)
+                return [e for e in errors if "platforms" in e], checks
+
+            errors, checks = verdict()
+            self.assertEqual(errors, [])
+            self.assertEqual(checks["framework_platform_exports"], {"linux-x64": "proved"})
+            self.assertIs(checks["framework_platform_records_proved"], True)
+
+            # Manifests swapped after the export, every record digest recomputed: the record is
+            # consistent with itself, but its manifest is not the one the artifact holds.
+            with self.write_platform_export(root, sha, blob):
+                swapped = json.loads((base / "foundation.json").read_text(encoding="utf-8"))
+                swapped["compile_definitions"] = ["FORGED=1"]
+                (base / "foundation.json").write_text(json.dumps(swapped), encoding="utf-8")
+                record = json.loads((base / "record.json").read_text(encoding="utf-8"))
+                record["units"][0]["closure_sha256"] = records.sha256_file(base / "foundation.json")
+                record["export"]["manifest_sha256"] = records.manifest_binding_sha256(
+                    record["export"]["artifact_sha256"], record["units"])
+                (base / "record.json").write_text(json.dumps(record), encoding="utf-8")
+                records.load_record(root, "linux-x64")
+                errors, _ = verify_extraction.verify_framework(root, pulp, "origin/main")
+            self.assertTrue(any("downloaded foundation.json differs" in e for e in errors), errors)
+
+            # An artifact digest the run's artifact does not have.
+            errors, _ = verdict(claimed_sha256="a" * 64)
+            self.assertTrue(any("downloaded Pulp artifact digest differs" in e for e in errors), errors)
+
+            # A run outside Generous-Corp/pulp, from another workflow, at another commit,
+            # unsuccessful, or another run than the record names.
+            for run in ({"repository": {"full_name": "attacker/pulp"}},
+                        {"head_repository": {"full_name": "attacker/pulp"}},
+                        {"path": ".github/workflows/build.yml"},
+                        {"head_sha": "d" * 40},
+                        {"conclusion": "failure"},
+                        {"id": 99}):
+                errors, checks = verdict(run=run)
+                self.assertTrue(any("export run is not the successful Pulp closure workflow" in e
+                                    for e in errors), (run, errors))
+                self.assertIs(checks["framework_platform_records_proved"], False)
+
+            # An artifact uploaded by another run, expired, or named for another platform.
+            for artifact in ({"workflow_run": {"id": 1}}, {"expired": True},
+                             {"name": "vellum-closure-linux-arm64"}):
+                errors, _ = verdict(artifact=artifact)
+                self.assertTrue(any("0 unexpired vellum-closure-linux-x64 artifacts" in e for e in errors),
+                                (artifact, errors))
+
+            # The artifact holds exactly export.json and the record's manifests, and export.json
+            # names the record's platform and commit.
+            errors, _ = verdict(members={"canvas.json": b"{}"})
+            self.assertTrue(any("do not equal" in e for e in errors), errors)
+            errors, _ = verdict(members={"foundation.json": None})
+            self.assertTrue(any("do not equal" in e for e in errors), errors)
+            errors, _ = verdict(members={"export.json": json.dumps({
+                "platform": "linux-x64", "pulp_sha": "d" * 40, "renderer_asset_name": "skia-build-linux-x64-gpu-release.zip",
+                "runner_image": {"name": "ubuntu-26.04", "version": "1"}}).encode()})
+            self.assertTrue(any("downloaded export.json does not match the record" in e for e in errors), errors)
+
+            # A run_url outside Generous-Corp/pulp never reaches GitHub.
+            with self.write_platform_export(root, sha, blob):
+                record = json.loads((base / "record.json").read_text(encoding="utf-8"))
+                record["export"]["run_url"] = "https://github.com/attacker/pulp/actions/runs/123456789"
+                (base / "record.json").write_text(json.dumps(record), encoding="utf-8")
+                errors, _ = verify_extraction.verify_framework(root, pulp, "origin/main")
+                self.assertFalse(verify_extraction.gh_api.called)
+            self.assertTrue(any("export.run_url" in e and "is not a" in e for e in errors), errors)
+
+    def test_platform_export_artifact_listing_is_paginated(self) -> None:
+        records = verify_extraction.load_platform_closures()
+        with tempfile.TemporaryDirectory() as temporary:
+            root, pulp = Path(temporary) / "vellum", Path(temporary) / "pulp"
+            root.mkdir(); pulp.mkdir()
+            sha, blob = self.platform_pulp(pulp)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            patch = self.write_platform_export(root, sha, blob)
+            with patch:
+                record = json.loads((root / records.ROOT / "linux-x64/record.json").read_text())
+                original = verify_extraction.gh_api.side_effect
+                expected = original("repos/Generous-Corp/pulp/actions/runs/123456789/artifacts?per_page=100")["artifacts"][0]
+                filler = [{"id": i, "name": "other", "expired": False,
+                            "workflow_run": {"id": 123456789}} for i in range(1, 101)]
+                def api(path: str) -> object:
+                    if path.endswith("/artifacts?per_page=100"):
+                        return {"total_count": 101, "artifacts": filler}
+                    if path.endswith("/artifacts?per_page=100&page=2"):
+                        return {"total_count": 101, "artifacts": [expected]}
+                    return original(path)
+                verify_extraction.gh_api.side_effect = api
+                verify_extraction.verify_platform_export_artifact(records, "linux-x64", record)
+                self.assertIn("page=2", " ".join(c.args[0] for c in verify_extraction.gh_api.call_args_list))
+
+    def test_without_github_a_platform_record_is_never_proved(self) -> None:
+        self.hide_ci_git_base()
+        self.platform_github(token=False)
+        with tempfile.TemporaryDirectory() as temporary:
+            root, pulp = Path(temporary) / "vellum", Path(temporary) / "pulp"
+            root.mkdir()
+            pulp.mkdir()
+            sha, blob = self.platform_pulp(pulp)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            with self.write_platform_export(root, sha, blob):
+                errors, checks = verify_extraction.verify_framework(root, pulp, "origin/main")
+                self.assertTrue(any("no fetched Pulp export proved the record's manifests" in e for e in errors),
+                                errors)
+                self.assertIs(checks["framework_platform_records_proved"], False)
+                errors, checks = verify_extraction.verify_framework(root, pulp, "origin/main", defer_identity=True)
+                self.assertEqual([e for e in errors if "platforms" in e], [])
+                self.assertEqual(checks["framework_platform_records_proved"], "deferred: no fetched Pulp export")
+                self.assertEqual(checks["framework_platform_exports"], {"linux-x64": "deferred: no fetched Pulp export"})
+                self.assertFalse(verify_extraction.gh_api.called)
+
+    def test_an_unchanged_platform_record_was_proved_when_it_landed(self) -> None:
+        self.hide_ci_git_base()
+        self.platform_github(token=True)
+        records = verify_extraction.load_platform_closures()
+        with tempfile.TemporaryDirectory() as temporary:
+            root, pulp = Path(temporary) / "vellum", Path(temporary) / "pulp"
+            root.mkdir()
+            pulp.mkdir()
+            sha, blob = self.platform_pulp(pulp)
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            with self.write_platform_export(root, sha, blob):
+                pass
+            self.track(root)
+            landed = self.git_commit_all(root, "land the record")
+            os.environ["VELLUM_GIT_BASE"] = landed
+            # The export has expired; the record is the base's, byte for byte.
+            with self.write_platform_export(root, sha, blob, artifact={"expired": True}):
+                errors, checks = verify_extraction.verify_framework(root, pulp, "origin/main")
+                self.assertFalse(verify_extraction.gh_api.called)
+            self.assertEqual([e for e in errors if "platforms" in e], [])
+            self.assertEqual(checks["framework_platform_exports"], {"linux-x64": f"unchanged since {landed}"})
+            self.assertIs(checks["framework_platform_records_proved"], True)
+            # One byte in a manifest, digests recomputed: the record changed, so it must prove
+            # its export again, and the expired artifact cannot.
+            base = root / records.ROOT / "linux-x64"
+            (base / "foundation.json").write_bytes((base / "foundation.json").read_bytes() + b" ")
+            record = json.loads((base / "record.json").read_text(encoding="utf-8"))
+            record["units"][0]["closure_sha256"] = records.sha256_file(base / "foundation.json")
+            record["export"]["manifest_sha256"] = records.manifest_binding_sha256(
+                record["export"]["artifact_sha256"], record["units"])
+            (base / "record.json").write_text(json.dumps(record), encoding="utf-8")
+            os.environ.pop("GH_TOKEN")
+            errors, _ = verify_extraction.verify_framework(root, pulp, "origin/main")
+            self.assertTrue(any("no fetched Pulp export proved the record's manifests" in e for e in errors), errors)
+            # An untracked file in the record directory is a change too.
+            subprocess.run(["git", "-C", str(root), "checkout", "--", records.ROOT], check=True)
+            (base / "extra.json").write_text("{}", encoding="utf-8")
+            _, checks = verify_extraction.verify_framework(root, pulp, "origin/main")
+            self.assertNotEqual(checks.get("framework_platform_exports"),
+                                {"linux-x64": f"unchanged since {landed}"})
+
+    def test_a_platform_record_names_pulps_exporter_at_a_commit_on_main(self) -> None:
+        self.hide_ci_git_base()
+        with tempfile.TemporaryDirectory() as temporary:
+            root, pulp = Path(temporary) / "vellum", Path(temporary) / "pulp"
+            root.mkdir()
+            pulp.mkdir()
+            run = lambda *args: subprocess.check_output(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args], cwd=pulp, text=True).strip()
+            run("init", "-q", "-b", "main")
+            (pulp / "tools/scripts").mkdir(parents=True)
+            (pulp / "tools/scripts/vellum_closure.py").write_text("# exporter\n")
+            run("add", "-A"); run("commit", "-q", "-m", "exporter")
+            on_main = run("rev-parse", "HEAD")
+            run("update-ref", "refs/remotes/origin/main", on_main)
+            blob = run("rev-parse", f"{on_main}:tools/scripts/vellum_closure.py")
+            run("checkout", "-q", "-b", "side")
+            (pulp / "tools/scripts/vellum_closure.py").write_text("# side\n")
+            run("add", "-A"); run("commit", "-q", "-m", "side")
+            off_main = run("rev-parse", "HEAD")
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+
+            self.platform_github(token=True)
+
+            def verdict(sha: str, tool_blob: str, pulp_root: Path | None = pulp, defer: bool = False):
+                with self.write_platform_export(root, sha, tool_blob):
+                    errors, checks = verify_extraction.verify_framework(root, pulp_root, "origin/main",
+                                                                        defer_identity=defer)
+                return [e for e in errors if "platforms" in e], checks
+
+            errors, checks = verdict(on_main, blob)
+            self.assertEqual(errors, [])
+            self.assertEqual(checks["framework_platform_records"], ["linux-x64"])
+            self.assertIs(checks["framework_platform_records_proved"], True)
+            errors, _ = verdict(off_main, blob)
+            self.assertTrue(any("is not a commit on Pulp origin/main" in e for e in errors), errors)
+            errors, _ = verdict(on_main, "d" * 40)
+            self.assertTrue(any("is not Pulp" in e and "vellum_closure.py" in e for e in errors), errors)
+            errors, _ = verdict(on_main, blob, pulp_root=None)
+            self.assertTrue(any("no Pulp checkout proved the records' Pulp commits" in e for e in errors), errors)
+            errors, checks = verdict(on_main, blob, pulp_root=None, defer=True)
+            self.assertEqual(errors, [])
+            self.assertEqual(checks["framework_platform_records_proved"], "deferred: no Pulp checkout")
+            # A record directory the index does not list is refused.
+            (root / "provenance/framework/platforms/wasm32").mkdir()
+            errors, _ = verdict(on_main, blob)
+            self.assertTrue(any("wasm32/ is not listed" in e for e in errors), errors)
+
+    def test_platform_record_must_match_the_downloaded_pulp_artifact(self) -> None:
+        records = verify_extraction.load_platform_closures()
+        with tempfile.TemporaryDirectory() as temporary:
+            root, pulp = Path(temporary) / "vellum", Path(temporary) / "pulp"
+            root.mkdir(); pulp.mkdir()
+            run = lambda *args: subprocess.check_output(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+                cwd=pulp, text=True).strip()
+            run("init", "-q", "-b", "main")
+            (pulp / "tools/scripts").mkdir(parents=True)
+            (pulp / "tools/scripts/vellum_closure.py").write_text("# exporter\n")
+            run("add", "-A"); run("commit", "-q", "-m", "exporter")
+            pulp_sha = run("rev-parse", "HEAD")
+            tool_blob = run("rev-parse", f"{pulp_sha}:tools/scripts/vellum_closure.py")
+            self.framework_fixture(root, {"framework/core/a/src/a.cpp": b"int a;\n"})
+            self.write_platform_record(root, pulp_sha, tool_blob)
+            record_path = root / records.ROOT / "linux-x64/record.json"
+            record = json.loads(record_path.read_text())
+            manifest = root / records.ROOT / "linux-x64/foundation.json"
+            export_meta = {"platform": "linux-x64", "pulp_sha": pulp_sha,
+                           "runner_image": record["runner_image"],
+                           "renderer_asset_name": record["renderer_asset"]["name"]}
+            output = io.BytesIO()
+            with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("export.json", json.dumps(export_meta, sort_keys=True))
+                archive.writestr("foundation.json", manifest.read_bytes())
+            artifact = output.getvalue()
+            record["export"]["artifact_sha256"] = hashlib.sha256(artifact).hexdigest()
+            units = record["units"]
+            record["export"]["manifest_sha256"] = records.manifest_binding_sha256(
+                record["export"]["artifact_sha256"], units)
+            record_path.write_text(json.dumps(record))
+            api = lambda path: (
+                {"id": 123456789, "head_sha": pulp_sha, "status": "completed", "conclusion": "success",
+                 "repository": {"full_name": records.PULP_REPOSITORY},
+                 "head_repository": {"full_name": records.PULP_REPOSITORY},
+                 "path": ".github/workflows/vellum-platform-closure.yml"}
+                if path.endswith("/actions/runs/123456789") else
+                {"artifacts": [{"id": 7, "name": "vellum-closure-linux-x64", "expired": False,
+                                "workflow_run": {"id": 123456789}}]})
+            with mock.patch.object(verify_extraction, "gh_api", side_effect=api), \
+                    mock.patch.object(verify_extraction, "gh_download", return_value=artifact):
+                verify_extraction.verify_platform_export_artifact(records, "linux-x64", record)
+                run("update-ref", "refs/remotes/origin/main", pulp_sha)
+                with mock.patch.dict(os.environ, {"GH_TOKEN": "test-token"}, clear=False):
+                    errors, checks = verify_extraction.framework_platform_errors(
+                        root, pulp, "origin/main", defer_identity=False)
+                self.assertEqual(errors, [])
+                self.assertIs(checks["framework_platform_artifact_proved"], True)
+                with self.assertRaisesRegex(records.RecordError, "downloaded foundation.json differs"):
+                    verify_extraction.verify_platform_export_artifact(records, "linux-x64",
+                                                                       {**record, "units": [{**units[0],
+                                                                                              "closure_sha256": "0" * 64}]})
 
     def write_respell(self, root: Path, entries: list[dict]) -> None:
         path = root / verify_extraction.FRAMEWORK_RESPELL

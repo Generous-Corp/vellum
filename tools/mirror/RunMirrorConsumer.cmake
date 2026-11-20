@@ -135,7 +135,9 @@ endif()
 # GPU device types are not part of the installed surface (gpu_surface_guard.py).
 # Installed headers equal their mirror sources byte for byte, except that each
 # choke header carries one guard line; a consumer that includes one fails with
-# the guard's message, and the consumers above and below still build.
+# the guard's message, and the consumers above and below still build. Naming
+# the types through the forward declaration is supported: a plug-in editor
+# includes view/plugin_view_host.hpp without VELLUM_MIRROR_BUILD.
 set(_gpu_guard_manifest "${_prefix}/mirror/share/provenance/gpu-guarded-headers.txt")
 if(NOT EXISTS "${_gpu_guard_manifest}")
     message(FATAL_ERROR "the install carries no GPU guard manifest")
@@ -155,7 +157,7 @@ if(_gpu_guarded)
     if(EXISTS "${_prefix}/mirror/include/vellum/view/window_host.hpp")
         set(_units_root "vellum")
     endif()
-    foreach(_case "${_units_root}/view/window_host.hpp" "${_units_root}/render/gpu_surface.hpp")
+    foreach(_case "${_units_root}/render/skia_surface.hpp" "${_units_root}/render/gpu_surface.hpp")
         string(MAKE_C_IDENTIFIER "${_case}" _case_key)
         set(_case_dir "${_work}/gpu-guard-${_case_key}")
         file(MAKE_DIRECTORY "${_case_dir}")
@@ -187,6 +189,35 @@ target_link_libraries(gpu-guard-consumer PRIVATE Vellum::MirrorCanvas)
         message(STATUS "GPU guard refuses <${_case}>: ok")
     endforeach()
 endif()
+
+# A plug-in editor's view of the host: plugin_view_host.hpp reaches the GPU
+# device type only through platform/gpu_fwd.hpp, so it builds, links and runs
+# against the installed package without VELLUM_MIRROR_BUILD.
+set(_pvh_dir "${_work}/plugin-view-host")
+file(MAKE_DIRECTORY "${_pvh_dir}")
+file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/plugin_view_host_main.mm"
+    DESTINATION "${_pvh_dir}")
+file(WRITE "${_pvh_dir}/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.24)
+project(VellumPluginViewHostConsumer LANGUAGES CXX OBJCXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(Vellum CONFIG REQUIRED)
+add_executable(vellum-plugin-view-host-consumer plugin_view_host_main.mm)
+target_link_libraries(vellum-plugin-view-host-consumer PRIVATE Vellum::MirrorView_core)
+target_link_libraries(vellum-plugin-view-host-consumer PRIVATE "-framework AppKit")
+get_target_property(_defs vellum-plugin-view-host-consumer COMPILE_DEFINITIONS)
+if(_defs MATCHES "VELLUM_MIRROR_BUILD")
+    message(FATAL_ERROR "the plug-in view host consumer must not define VELLUM_MIRROR_BUILD")
+endif()
+]=])
+_run("plug-in view host consumer configure" "${CMAKE_COMMAND}"
+    -S "${_pvh_dir}" -B "${_pvh_dir}/build" ${_generator} -DCMAKE_BUILD_TYPE=Release
+    "-DCMAKE_PREFIX_PATH=${_prefix}"
+    -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+    -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
+_run("plug-in view host consumer build" "${CMAKE_COMMAND}" --build "${_pvh_dir}/build")
+_run("plug-in view host consumer run" "${_pvh_dir}/build/vellum-plugin-view-host-consumer")
 _run("debt probe" "${Python3_EXECUTABLE}"
     "${VELLUM_SOURCE_DIR}/tools/mirror/verify_mirror_inertness.py"
     --prefix "${_prefix}" --install-libdir "${VELLUM_INSTALL_LIBDIR}"
@@ -495,6 +526,19 @@ target_link_libraries(vellum-v8-consumer PRIVATE Vellum::MirrorView_script)
 ]=])
     file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/v8_main.cpp"
         DESTINATION "${_work}/v8-consumer")
+    if(VELLUM_INSTALL_THREEJS)
+    file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/threejs_v8_main.cpp"
+        DESTINATION "${_work}/v8-consumer")
+    file(APPEND "${_work}/v8-consumer/CMakeLists.txt" [=[
+add_executable(vellum-threejs-v8-consumer threejs_v8_main.cpp)
+target_link_libraries(vellum-threejs-v8-consumer PRIVATE Vellum::MirrorView_script)
+if(VELLUM_THREEJS_ROOT STREQUAL "")
+    message(FATAL_ERROR "find_package(Vellum) did not export VELLUM_THREEJS_ROOT")
+endif()
+target_compile_definitions(vellum-threejs-v8-consumer PRIVATE
+    "VELLUM_THREEJS_ROOT=\"${VELLUM_THREEJS_ROOT}\"")
+]=])
+    endif()
     _run("V8 consumer configure" "${CMAKE_COMMAND}"
         -S "${_work}/v8-consumer" -B "${_work}/v8-consumer-build"
         ${_generator} -DCMAKE_BUILD_TYPE=Release
@@ -504,4 +548,9 @@ target_link_libraries(vellum-v8-consumer PRIVATE Vellum::MirrorView_script)
     _run("V8 consumer build" "${CMAKE_COMMAND}" --build "${_work}/v8-consumer-build")
     _run("V8 consumer run" "${_work}/v8-consumer-build/vellum-v8-consumer" "${VELLUM_V8_VERSION}")
     message(STATUS "${_last_stdout}")
+    if(VELLUM_INSTALL_THREEJS)
+        _run("installed Three.js payload consumer run"
+            "${_work}/v8-consumer-build/vellum-threejs-v8-consumer")
+        message(STATUS "${_last_stdout}")
+    endif()
 endif()
