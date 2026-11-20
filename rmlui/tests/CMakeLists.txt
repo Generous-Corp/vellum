@@ -147,6 +147,20 @@ if(VELLUM_RMLUI_NATIVE)
     set_tests_properties(vellum.rmlui.native-text-input PROPERTIES SKIP_RETURN_CODE 77)
 endif()
 
+if(VELLUM_RMLUI_NATIVE_HOST)
+    vellum_rmlui_add_test(vellum-rmlui-native-parent-host-test native_parent_host_test.mm
+        VellumRmlUi::NativeHost)
+    target_compile_options(vellum-rmlui-native-parent-host-test PRIVATE -fobjc-arc)
+    target_link_libraries(vellum-rmlui-native-parent-host-test PRIVATE
+        "-framework Cocoa" "-framework QuartzCore")
+    # The test names RmlUi key identifiers to check the AppKit key mapping.
+    FetchContent_GetProperties(vellum_rmlui_rmlui SOURCE_DIR _vellum_rmlui_host_test_rmlui_src)
+    target_include_directories(vellum-rmlui-native-parent-host-test PRIVATE
+        "${_vellum_rmlui_host_test_rmlui_src}/Include")
+    add_test(NAME vellum.rmlui.native-parent-host
+        COMMAND vellum-rmlui-native-parent-host-test)
+endif()
+
 # The Metal renderer drawn headless and compared with the soft renderer. The
 # reference and the Metal frames come from separate processes (Core and Native
 # each carry their own RmlUi), joined by a ctest fixture. The blend control is
