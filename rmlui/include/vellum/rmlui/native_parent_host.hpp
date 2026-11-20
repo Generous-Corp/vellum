@@ -26,7 +26,9 @@ struct NativeHostSize {
 // A small native-parent editor host. On macOS the parent is an NSView; the
 // host adds one child view and presents the renderer's premultiplied RGBA
 // frame in that view's layer. The RmlUi context and all input calls remain
-// owned by this object and are serialized by the caller's UI thread.
+// owned by this object and are serialized by the caller's UI thread. Text
+// arrives as committed text through the input system; IME composition
+// (marked text) is not supported.
 class VELLUM_RMLUI_API NativeParentHost final {
   public:
     explicit NativeParentHost(AssetProvider&, RenderInterface* renderer = nullptr);
