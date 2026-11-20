@@ -3681,8 +3681,9 @@ class RendererPinTests(unittest.TestCase):
         record.parent.mkdir(parents=True, exist_ok=True)
         record.write_text(json.dumps({"export_receipt": newest, "mirror_tree": new_tree}), encoding="utf-8")
         errors, rows = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
-        self.assertEqual(errors, [])
-        self.assertEqual({row["receipt"]: row["matches_lock"] for row in rows}, {newest: None, older: None})
+        self.assertEqual(len(errors), 1)
+        self.assertIn("skia_branch", errors[0])
+        self.assertEqual({row["receipt"]: row["matches_lock"] for row in rows}, {newest: False, older: None})
         # The record must name a landed receipt.
         record.write_text(json.dumps({"export_receipt": "provenance/mirror/receipts/x.json",
                                       "mirror_tree": new_tree}), encoding="utf-8")
