@@ -213,20 +213,25 @@ class IllustratorCliTests(unittest.TestCase):
         self.assertEqual(receipt.read_bytes(), b"old receipt")
 
     def test_receipt_publication_failure_invalidates_old_receipt(self) -> None:
-        output = self.root / "out.svg"
-        receipt = self.root / "out.json"
-        output.write_bytes(b"old svg")
-        receipt.write_bytes(b"old receipt")
-        real_replace = os.replace
-        def replace(src, dst):
-            if dst == receipt:
-                raise OSError("receipt publication failed")
-            return real_replace(src, dst)
-        with mock.patch.object(vellum_illustrator.os, "replace", side_effect=replace):
-            with self.assertRaisesRegex(ConversionError, "receipt publication failed"):
-                convert(self.source, output, receipt)
-        self.assertIn(b"<svg", output.read_bytes())
-        self.assertFalse(receipt.exists())
+        alias = self.root / "alias"
+        alias.symlink_to(self.root.resolve(), target_is_directory=True)
+        for parent in (self.root.resolve(), alias):
+            with self.subTest(parent=parent):
+                output = parent / "out.svg"
+                receipt = parent / "out.json"
+                output.write_bytes(b"old svg")
+                receipt.write_bytes(b"old receipt")
+                resolved_receipt = receipt.resolve()
+                real_replace = os.replace
+                def replace(src, dst):
+                    if Path(dst).resolve() == resolved_receipt:
+                        raise OSError("receipt publication failed")
+                    return real_replace(src, dst)
+                with mock.patch.object(vellum_illustrator.os, "replace", side_effect=replace):
+                    with self.assertRaisesRegex(ConversionError, "receipt publication failed"):
+                        convert(self.source, output, receipt)
+                self.assertIn(b"<svg", output.read_bytes())
+                self.assertFalse(receipt.exists())
 
     def test_filesystem_errors_are_structured(self) -> None:
         with mock.patch.object(vellum_illustrator, "sha256_file", side_effect=OSError("read denied")):
