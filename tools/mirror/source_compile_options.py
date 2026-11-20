@@ -14,7 +14,7 @@ kept by hand. Source-file properties are directory-scoped in CMake, so each
 CMakeLists.txt is read as one scope with the modules it include()s inlined,
 and only a scope that creates an exported target is judged. Each call's
 enclosing if()/elseif()/else() chain is evaluated against the configure the
-closure recorded (its Pulp options, the Darwin system, a single-config
+closure recorded (its Pulp options, its target system, a single-config
 generator, AppleClang and no extra CMAKE_<LANG>_FLAGS) with three-valued
 logic: a branch that cannot be decided, including one that reads a variable
 the configure does not record, is "unknown". In a judged scope, an option
@@ -300,16 +300,54 @@ class Condition:
         return truthy(text)
 
 
+# The platform variables CMake sets for each target system a closure records.
+# Only Darwin's compiler is known (the receipt's closures were exported with
+# AppleClang); elsewhere the compiler is not in the closure's configure, so a
+# condition on it is undecidable and an affected source fails closed.
+SYSTEM_VARIABLES = {
+    "Darwin": {"APPLE": "1", "UNIX": "1", "WIN32": "", "MSVC": "", "ANDROID": "", "IOS": "",
+               "EMSCRIPTEN": "", "LINUX": "", "CMAKE_HOST_APPLE": "1"},
+    "iOS": {"APPLE": "1", "UNIX": "1", "WIN32": "", "MSVC": "", "ANDROID": "", "IOS": "1",
+            "EMSCRIPTEN": "", "LINUX": ""},
+    "Linux": {"APPLE": "", "UNIX": "1", "WIN32": "", "MSVC": "", "ANDROID": "", "IOS": "",
+              "EMSCRIPTEN": "", "LINUX": "1"},
+    "Android": {"APPLE": "", "UNIX": "1", "WIN32": "", "MSVC": "", "ANDROID": "1", "IOS": "",
+                "EMSCRIPTEN": "", "LINUX": ""},
+    "Windows": {"APPLE": "", "UNIX": "", "WIN32": "1", "ANDROID": "", "IOS": "", "EMSCRIPTEN": "", "LINUX": ""},
+    "Emscripten": {"APPLE": "", "UNIX": "1", "WIN32": "", "MSVC": "", "ANDROID": "", "IOS": "",
+                   "EMSCRIPTEN": "1", "LINUX": ""},
+}
+
+
+# Targets whose MSVC value depends on the compiler, never on the platform.
+NO_MSVC_DEFAULT_SYSTEMS = frozenset({"Windows"})
+
+
 def configure_environment(options: dict[str, str]) -> dict[str, object]:
-    """The variables a closure's configure fixes, plus the Darwin toolchain facts."""
-    if options.get("CMAKE_SYSTEM_NAME") != "Darwin":
-        raise SourceOptionsError(f"only a Darwin configure is evaluated, not {options.get('CMAKE_SYSTEM_NAME')!r}")
-    env: dict[str, object] = {name: value for name, value in options.items()}
+    """The variables a closure's configure fixes, plus what CMake sets for its target system."""
+    system = options.get("CMAKE_SYSTEM_NAME")
+    if system not in SYSTEM_VARIABLES:
+        raise SourceOptionsError(f"no CMake platform variables are known for {system!r}")
+    # Recorded cache values provide compiler facts and project options, but
+    # they cannot override the platform facts CMake derives from the target
+    # system. Import the recorded values first, then restore those derived
+    # variables below.
+    env: dict[str, object] = dict(options)
+    # MSVC is recorded from the compiler probe and must be allowed to override
+    # the platform's usual default, unlike the target-system variables.
+    env.update({name: value for name, value in SYSTEM_VARIABLES[system].items()
+                if name != "MSVC"})
+    env["CMAKE_SYSTEM_NAME"] = system
+    # A probe-recorded MSVC wins; otherwise a non-Windows target is not MSVC.
+    # Windows is excluded from that default: without a recorded compiler MSVC
+    # stays absent (UNKNOWN), so MSVC and NOT MSVC both fail closed.
+    if system not in NO_MSVC_DEFAULT_SYSTEMS:
+        env.setdefault("MSVC", SYSTEM_VARIABLES[system]["MSVC"])
+    if system == "Darwin":
+        env.setdefault("CMAKE_CXX_COMPILER_ID", "AppleClang")
+        env.setdefault("CMAKE_C_COMPILER_ID", "AppleClang")
+        env.setdefault("CMAKE_OBJCXX_COMPILER_ID", "AppleClang")
     env.update({
-        "APPLE": "1", "UNIX": "1", "WIN32": "", "MSVC": "", "ANDROID": "", "IOS": "",
-        "EMSCRIPTEN": "", "LINUX": "", "CMAKE_HOST_APPLE": "1",
-        "CMAKE_CXX_COMPILER_ID": "AppleClang", "CMAKE_C_COMPILER_ID": "AppleClang",
-        "CMAKE_OBJCXX_COMPILER_ID": "AppleClang",
         "CMAKE_C_FLAGS": "", "CMAKE_CXX_FLAGS": "",
         "CMAKE_SOURCE_DIR": SOURCE_ROOT, "PROJECT_SOURCE_DIR": SOURCE_ROOT,
         "CMAKE_HOME_DIRECTORY": SOURCE_ROOT, "PULP_ROOT_DIR": SOURCE_ROOT,

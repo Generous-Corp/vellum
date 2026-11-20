@@ -280,6 +280,28 @@ the rule in force. No export follows the transfer, so a Pulp change reaches
   path and Pulp commits. A brand-new source scoped only to other platforms is
   compiled nowhere until a verified closure for one of them lands; that is
   intended, and the plan still checks that its target exists.
+- **Platform closure records.** The receipt's closures describe the Darwin
+  arm64 Skia build. Every other platform plans from its own record under
+  `provenance/framework/platforms/<platform>/`. It holds one closure manifest
+  per unit, written by Pulp's exporter from Pulp's own configure for that
+  platform. The manifests carry the build graph and no file content, so they
+  are not an export: files still enter `framework/` only through the transfer
+  record and the ports ledger. The record pins each manifest's digest, the
+  Pulp commit and exporter blob that wrote them, the configure identity and
+  options digest, the runner image, the renderer asset, and the Pulp workflow
+  run that exported them with the digest of the artifact it uploaded. Every
+  value in the record is written by the pull request, so the provenance lane
+  proves it against GitHub instead: the commit is on Pulp's main, the blob is
+  Pulp's exporter at that commit, and the run is Pulp's
+  `vellum-platform-closure.yml` at that commit and succeeded. The artifact it
+  uploaded hashes to the record's digest and holds exactly the record's
+  manifests and an `export.json` that names the record's platform, commit,
+  runner image and renderer asset. A record that is unchanged since the base
+  was proved when it landed, so the artifact's expiry does not fail it later.
+  The mirror build refuses a platform with no record, a record
+  whose pins do not hold, a closure source `framework/` lacks, and a ledger
+  source whose scope leaves out the platform whose closure compiles it.
+  macOS keeps the receipt's closures and needs no record.
 - **The port respell.** Some Pulp names survive the transfer's rename. A
   `pulp_*` function or object defined with C linkage is linker-visible, so
   Pulp's copy and Vellum's would clash in one process.
