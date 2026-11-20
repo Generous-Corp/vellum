@@ -4,7 +4,7 @@ The repository builds a reproducible local artifact, and the installer supports
 local development, verified local archive, and an exact-version release mode.
 The commands below install the published, immutable `v0.1.6` tagged release
 from `Generous-Corp/vellum`, the current published release. The source tree
-identifies as `0.2.1`, the next release, and is unreleased.
+identifies as `0.2.2`, the next release, and is unreleased.
 The name `v0.1.7` is retired and is never reused; [`provenance/retired-release-tags.json`](../../provenance/retired-release-tags.json)
 records why, and `scripts/verify_release_tag.py` refuses any retired tag.
 `v0.1.8` and `v0.1.9` are retired too: their tags stay in place, frozen, but no
@@ -257,10 +257,10 @@ Build and validate the artifact:
 ```sh
 python3 scripts/build_sdk_artifact.py --output-dir dist --json
 python3 scripts/verify_sdk_artifact.py \
-  --archive dist/vellum-sdk-0.2.1-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.2.2-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS --json
 python3 scripts/validate_installed_sdk.py \
-  --archive dist/vellum-sdk-0.2.1-darwin-arm64.tar.gz \
+  --archive dist/vellum-sdk-0.2.2-darwin-arm64.tar.gz \
   --checksums dist/SHA256SUMS \
   --output dist/installed-validation.json --json
 ```
@@ -323,52 +323,62 @@ release attestation is required and verified. See
 [Immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
 and [GitHub security features](https://docs.github.com/en/code-security/getting-started/github-security-features#artifact-attestations).
 
-These are release gates, not claims that `v0.2.1` exists before the tag workflow
+These are release gates, not claims that `v0.2.2` exists before the tag workflow
 has completed. The local artifact flow exercises the same archive verification
 and transactional installation logic but cannot claim hosted release
 immutability or GitHub asset digests.
 
 ## Unsupported surface
 
-The installed mirror (`sdk/mirror/`) does not support Pulp's GPU device types.
-Installed consumers may not use `pulp::render::GpuSurface`,
-`pulp::render::GpuCompute`, or any mirrored header that exposes them. The reason:
-after Pulp's GPU device layer forwards to Vellum's gpu-runtime, these are
-`gpu_runtime` types whose symbols the package does not export.
+The installed mirror (`sdk/mirror/`) does not support using the GPU device
+types `vellum::render::GpuSurface` and `vellum::render::GpuCompute`. These are
+`gpu_runtime` types whose symbols the package does not export, so no installed
+consumer may include a header that defines them or includes
+`<gpu_runtime/...>`.
 
-This fails at compile time. A *choke header* declares the `gpu_runtime` types or
-includes `<gpu_runtime/...>`. The installed copy of each one includes
+Naming them is supported. `vellum/platform/gpu_fwd.hpp` only forward-declares
+the types, and an incomplete type reaches none of their symbols. A header that
+holds a `GpuSurface*` through it compiles for an installed consumer, so a
+plug-in editor can include `<vellum/view/plugin_view_host.hpp>` and subclass or
+hold a `PluginViewHost` without `VELLUM_MIRROR_BUILD`. The installed targets
+define `PULP_GPU_RUNTIME`, so the forward declaration names the same
+`gpu_runtime` class the libraries were built with.
+
+The unsupported part fails at compile time. A *choke header* defines a
+`gpu_runtime` type or includes `<gpu_runtime/...>`. A `namespace gpu_runtime`
+that holds only forward declarations does not make a header a choke. The
+installed copy of each choke header includes
 `vellum/mirror/gpu_surface_unsupported.hpp`, which is an `#error`:
 
-> pulp::render::GpuSurface / GpuCompute and the mirrored headers that expose them
-> (for example <pulp/view/window_host.hpp>) are not part of the installed
-> mirror's supported surface.
+> the render unit's GpuSurface / GpuCompute definitions and the mirrored headers
+> that include them (for example render/gpu_surface.hpp, render/skia_surface.hpp)
+> are not part of the installed mirror's supported surface.
 
 The guard is lifted only by `VELLUM_MIRROR_BUILD`, a private definition on the
 mirror's own targets. A consumer that defines it itself is outside the supported
 surface.
 
 **Which headers are guarded.** `tools/mirror/gpu_surface_guard.py` computes the
-guarded set from the landed mirror; nobody lists it by hand. The package records
-it in `mirror/share/provenance/gpu-guarded-headers.txt`. Every header that
-reaches a choke header through its includes is unsupported too.
+guarded set from `framework/`; nobody lists it by hand. The package records it
+in `mirror/share/provenance/gpu-guarded-headers.txt`. Every header that reaches
+a choke header through its includes is unsupported too.
 
-At export `20261107-f0ac0a4ff392`, 6 choke headers are guarded:
-- `pulp/platform/gpu_fwd.hpp`;
-- `pulp/render/gpu_surface.hpp`, `gpu_diagnostics.hpp`, `gpu_render_time.hpp`,
-  `gpu_startup_report.hpp` and `bench/perf_counters.hpp`.
+5 choke headers are guarded: `vellum/render/gpu_surface.hpp`,
+`gpu_diagnostics.hpp`, `gpu_render_time.hpp`, `gpu_startup_report.hpp` and
+`bench/perf_counters.hpp`. `vellum/render/headless_surface.hpp` and
+`skia_surface.hpp` reach them.
 
-9 more headers reach them:
-- `pulp/view/window_host.hpp`, `window_classes.hpp`, `window_manager.hpp`,
-  `widget_bridge.hpp`, `scripted_ui.hpp`, `scripted_editor_session.hpp` and
-  `plugin_view_host.hpp`;
-- `pulp/render/headless_surface.hpp` and `skia_surface.hpp`.
+These reach the types only through `gpu_fwd.hpp` and are supported:
+`vellum/view/plugin_view_host.hpp`, `window_host.hpp`, `window_classes.hpp`,
+`window_manager.hpp`, `widget_bridge.hpp`, `scripted_ui.hpp` and
+`scripted_editor_session.hpp`.
 
 **What stays byte for byte.** Apart from the one guard line in each choke header,
-every installed mirror header equals its `mirror/` source. The
-`vellum.mirror-install-consumer` test checks this, and checks that a consumer
-including `<pulp/view/window_host.hpp>` or `<pulp/render/gpu_surface.hpp>` fails
-with the guard's message.
+every installed mirror header equals its `framework/` source. The
+`vellum.mirror-install-consumer` test checks this. It checks that a consumer
+including `<vellum/render/skia_surface.hpp>` or `<vellum/render/gpu_surface.hpp>`
+fails with the guard's message, and that a consumer subclassing `PluginViewHost`
+builds, links and runs without `VELLUM_MIRROR_BUILD`.
 
 **Not yet supported.** Exposing the GPU API to installed consumers through the
 Skia/Dawn provider is a named, unscheduled follow-up: "installed GPU API through

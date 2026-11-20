@@ -2,6 +2,7 @@
 
 #include <vellum/graphics/color.hpp>
 #include <vellum/graphics/feature_versions.hpp>
+#include <vellum/graphics/limits.hpp>
 
 #include <algorithm>
 #include <array>
@@ -468,11 +469,6 @@ struct VectorOp final {
     std::shared_ptr<const PathGeometry> clip;
 };
 
-/// The most operations one compiled vector asset may hold.
-inline constexpr std::size_t kMaxVectorOps = 16384U;
-/// The deepest nesting of groups in a compiled vector asset.
-inline constexpr std::size_t kMaxVectorGroupDepth = 64U;
-
 /// A compiled vector asset: one display list drawn by a single `vector`
 /// node. `view_box` is the asset's coordinate box; it is stretched onto the
 /// node's box, so a producer that wants an aspect-preserving fit sizes the
@@ -912,13 +908,6 @@ struct PlotSpec final {
     /// (a level meter). Missing slots draw nothing.
     std::vector<float> samples;
 };
-
-/// The largest `PlotSpec::slot_count` a scene may carry.
-inline constexpr std::uint32_t kMaxPlotSlots = 1U << 22U;
-/// The largest `PlotSpec::audio_channel`.
-inline constexpr std::uint32_t kMaxPlotAudioChannel = 1024U;
-/// The largest line width, bar gap and peak width, in logical pixels.
-inline constexpr float kMaxPlotStroke = 4096.0F;
 
 /// The scene schema version this build produces.
 ///

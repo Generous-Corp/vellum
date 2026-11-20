@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(Vellum
-    VERSION 0.2.1
+    VERSION 0.2.2
     DESCRIPTION "Experimental audio-free native application kernel"
     LANGUAGES CXX)
 
@@ -184,6 +184,16 @@ if(VELLUM_BUILD_TESTS)
         add_test(NAME vellum.feature-versions-drift
             COMMAND "${VELLUM_NODE_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/versions/generate_feature_versions.mjs" --check)
+        # Inert until the shared limits header and its generated copies exist.
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/graphics/include/vellum/graphics/limits.hpp")
+            add_test(NAME vellum.limits-production-drift
+                COMMAND "${VELLUM_NODE_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/limits/generate_limits.mjs" --check
+                    --header "${CMAKE_CURRENT_SOURCE_DIR}/graphics/include/vellum/graphics/limits.hpp"
+                    --label graphics/include/vellum/graphics/limits.hpp
+                    --out "${CMAKE_CURRENT_SOURCE_DIR}/packages/vellum-design-ir/src/limits.generated.js"
+                    --out "${CMAKE_CURRENT_SOURCE_DIR}/packages/vellum-ui/src/limits.generated.js")
+        endif()
     endif()
 
     add_executable(vellum-value-param-model-test

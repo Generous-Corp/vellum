@@ -1,8 +1,10 @@
 import { DESIGN_IR_SCHEMA_VERSIONS, designIrVersionOf } from './feature-versions.generated.js';
+import {
+    MAX_DESIGN_DEPTH as MAXIMUM_DEPTH,
+    MAX_DESIGN_NODES as MAXIMUM_NODES,
+} from './limits.generated.js';
 import { Button, Canvas, Image, Path, Plot, Stack, Text, TextRun, Vector, View, jsx } from './runtime.js';
 
-const MAXIMUM_NODES = 100_000;
-const MAXIMUM_DEPTH = 256;
 const EVENT_PROPERTIES = Object.freeze({
     press: 'onPress',
     change: 'onChange',

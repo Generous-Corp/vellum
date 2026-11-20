@@ -1,16 +1,12 @@
 #pragma once
 
+#include <vellum/graphics/limits.hpp>
 #include <vellum/graphics/scene.hpp>
 
 #include <optional>
 #include <string>
 
 namespace vellum::graphics {
-
-/// The displacement and speed, in progress and progress per second, below
-/// which a spring counts as settled. From `spring_settle_time` on it is
-/// exactly at its target.
-inline constexpr double kSpringRestThreshold = 1.0e-4;
 
 /// Whether any node of `scene` has a track.
 [[nodiscard]] bool scene_has_tracks(const Scene& scene) noexcept;
