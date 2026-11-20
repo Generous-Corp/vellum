@@ -211,6 +211,21 @@ def convert(
     page: int = 1,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
+    """Convert artwork, reporting filesystem failures as conversion errors."""
+    try:
+        return _convert(source, output, receipt_path, page=page, timeout=timeout)
+    except OSError as exc:
+        raise ConversionError(f"illustrator conversion filesystem error: {exc}") from exc
+
+
+def _convert(
+    source: Path,
+    output: Path | None = None,
+    receipt_path: Path | None = None,
+    *,
+    page: int = 1,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
     """Convert one page of a PDF-compatible ``.ai``/``.pdf`` file; return the receipt.
 
     ``output`` defaults to the source path with an ``.svg`` suffix, and
@@ -286,44 +301,46 @@ def convert(
             raise ConversionError("pdftocairo produced no SVG output")
         if not looks_like_svg(temporary):
             raise ConversionError("pdftocairo output does not look like an SVG")
-        _move_into_place(temporary, output, "SVG")
+        receipt: dict[str, Any] = {
+            "schema": SCHEMA,
+            "source": {
+                "path": str(source),
+                "format": suffix[1:],
+                "sha256": source_hash,
+                "bytes": source_bytes,
+            },
+            "output": {
+                "path": str(output),
+                "format": "svg",
+                "sha256": sha256_file(temporary),
+                "bytes": temporary.stat().st_size,
+            },
+            "converter": {
+                "name": "pdftocairo",
+                "path": str(tool),
+                "version": version,
+                "page": page,
+            },
+            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        # Write through the descriptor mkstemp returns, so the bytes land in the file it
+        # created and not in whatever a path lookup finds later.
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{receipt_path.name}.", suffix=".tmp", dir=str(receipt_path.parent))
+        temporary_receipt = Path(temporary_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+            # Invalidate any old receipt before replacing its SVG. If publication
+            # fails, no stale receipt may describe the newly published bytes.
+            _remove_if_present(receipt_path)
+            _move_into_place(temporary, output, "SVG")
+            _move_into_place(temporary_receipt, receipt_path, "receipt")
+        finally:
+            _remove_if_present(temporary_receipt)
+        return receipt
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
-
-    receipt: dict[str, Any] = {
-        "schema": SCHEMA,
-        "source": {
-            "path": str(source),
-            "format": suffix[1:],
-            "sha256": source_hash,
-            "bytes": source_bytes,
-        },
-        "output": {
-            "path": str(output),
-            "format": "svg",
-            "sha256": sha256_file(output),
-            "bytes": output.stat().st_size,
-        },
-        "converter": {
-            "name": "pdftocairo",
-            "path": str(tool),
-            "version": version,
-            "page": page,
-        },
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-    }
-    # Write through the descriptor mkstemp returns, so the bytes land in the file it
-    # created and not in whatever a path lookup finds later.
-    fd, temporary_name = tempfile.mkstemp(
-        prefix=f".{receipt_path.name}.", suffix=".tmp", dir=str(receipt_path.parent))
-    temporary_receipt = Path(temporary_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            stream.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
-        _move_into_place(temporary_receipt, receipt_path, "receipt")
-    finally:
-        _remove_if_present(temporary_receipt)
-    return receipt
 
 
 def _parser() -> argparse.ArgumentParser:

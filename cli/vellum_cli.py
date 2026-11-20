@@ -1306,7 +1306,7 @@ def compare_command(args: argparse.Namespace) -> dict[str, Any]:
 
 def illustrator_command(args: argparse.Namespace) -> dict[str, Any]:
     """Convert a PDF-compatible Illustrator file without requiring the SDK backend."""
-    if args.source != "illustrator" or not args.illustrator_input:
+    if args.source != "illustrator" or not getattr(args, "illustrator_input", None):
         raise CliFailure(
             "import illustrator requires an .ai or .pdf input.",
             status="invalid_arguments", exit_code=EXIT_USAGE,
