@@ -195,16 +195,17 @@ endif()
 # against the installed package without VELLUM_MIRROR_BUILD.
 set(_pvh_dir "${_work}/plugin-view-host")
 file(MAKE_DIRECTORY "${_pvh_dir}")
-file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/plugin_view_host_main.cpp"
+file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/plugin_view_host_main.mm"
     DESTINATION "${_pvh_dir}")
 file(WRITE "${_pvh_dir}/CMakeLists.txt" [=[
 cmake_minimum_required(VERSION 3.24)
-project(VellumPluginViewHostConsumer LANGUAGES CXX)
+project(VellumPluginViewHostConsumer LANGUAGES CXX OBJCXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Vellum CONFIG REQUIRED)
-add_executable(vellum-plugin-view-host-consumer plugin_view_host_main.cpp)
+add_executable(vellum-plugin-view-host-consumer plugin_view_host_main.mm)
 target_link_libraries(vellum-plugin-view-host-consumer PRIVATE Vellum::MirrorView_core)
+target_link_libraries(vellum-plugin-view-host-consumer PRIVATE "-framework AppKit")
 get_target_property(_defs vellum-plugin-view-host-consumer COMPILE_DEFINITIONS)
 if(_defs MATCHES "VELLUM_MIRROR_BUILD")
     message(FATAL_ERROR "the plug-in view host consumer must not define VELLUM_MIRROR_BUILD")

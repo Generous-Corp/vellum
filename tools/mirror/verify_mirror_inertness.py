@@ -133,10 +133,10 @@ NAME_DEBTS = {
         "owner": "Phase 6",
     },
 }
-# Declared Phase-6 reference debts (owner ruling 2026-10-14 item 1). The
-# declaration ships in a mirrored header, but its definition lives only in a
-# Pulp-kept target, so no packaged library may reference it, defined or not.
-# A consumer image may: it is the consumer's own link, not the package.
+# The plug-in host used to be a Pulp-kept definition. The 2026-11-20 owner
+# decision moves its factories into Vellum, so the installed package must now
+# export both create overloads and the registry functions. Any other packaged
+# reference to those names still fails no-pulp-kept-references.
 REFERENCE_DEBTS = {
     "view-core-plugin-view-host-declarations": {
         "rules": ["no-pulp-kept-references"],
@@ -146,6 +146,16 @@ REFERENCE_DEBTS = {
         "owner": "Phase 6",
     },
 }
+# The compiler may split a cold path out of a function as `name (.cold.N)`.
+_COLD = r"(?: \(\.cold\.\d+\))?"
+PLUGIN_VIEW_HOST_EXPORTS = (
+    rf"^{_NS}::view::PluginViewHost::create\({ _NS}::view::View&, { _NS}::view::PluginViewHost::Size\){_COLD}$",
+    rf"^{_NS}::view::PluginViewHost::create\({ _NS}::view::View&, { _NS}::view::PluginViewHost::Options const&\){_COLD}$",
+    rf"^{_NS}::view::PluginViewHost::set_factory\(",
+    rf"^{_NS}::view::PluginViewHost::clear_factory\(",
+    rf"^{_NS}::view::PluginViewHost::has_factory\(",
+    rf"^{_NS}::view::register_platform_plugin_view_host\(\)",
+)
 # Headers of Pulp's view-audio target and its Pulp-kept siblings: the
 # audio/ subtree, the meter/waveform/spectrum family and the named widgets.
 AUDIO_HEADER = re.compile(
@@ -385,6 +395,8 @@ def symbol_report(symbols: dict[str, list[str]], *, view_unit_packaged: bool,
     for image, names in sorted(symbols.items()):
         for name in names:
             label = f"{image}: {name}"
+            if any(re.search(pattern, name) for pattern in PLUGIN_VIEW_HOST_EXPORTS):
+                continue
             if floor is not None:
                 if floor_hit(name, floor):
                     audio.append(label)
@@ -436,6 +448,22 @@ def image_symbols(path: Path) -> list[str]:
     if listed.returncode:
         raise EvidenceError(f"nm failed on {path}: {listed.stderr.strip()}")
     names = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+    return [line for line in demangle(names) if line]
+
+
+def image_defined_symbols(path: Path) -> list[str]:
+    """Demangled symbols `path` defines: its symbols minus the undefined ones."""
+    nm = shutil.which("nm")
+    if not nm:
+        raise EvidenceError("nm is required")
+    runs = [subprocess.run([nm, *flags, str(path)], capture_output=True, text=True, check=False)
+            for flags in (["-j"], ["-j", "-u"])]
+    for run in runs:
+        if run.returncode:
+            raise EvidenceError(f"nm failed on {path}: {run.stderr.strip()}")
+    undefined = {line.strip() for line in runs[1].stdout.splitlines() if line.strip()}
+    names = [line.strip() for line in runs[0].stdout.splitlines()
+             if line.strip() and line.strip() not in undefined]
     return [line for line in demangle(names) if line]
 
 
@@ -530,11 +558,14 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
         if (path := prefix / install_libdir / name).is_file()
     )
     symbols = {}
+    defined_symbols = {}
     for path in [image, *libraries]:
         names = image_symbols(path)
         if not names:
             raise EvidenceError(f"{path} lists no symbols")
         symbols[path.name] = names
+        if path != image:
+            defined_symbols[path.name] = image_defined_symbols(path)
     if not any(PACKAGE_SYMBOL.search(name) for name in symbols[image.name]):
         raise EvidenceError("the consumer image references no packaged symbol")
 
@@ -567,16 +598,28 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
     audio_symbols, forward_symbols = report["audio"], report["forward"]
     referenced = {
         debt: [f"{name}: {symbol}" for name, names in sorted(symbols.items()) if name != image.name
-               for symbol in names if re.search(entry["pattern"], symbol)]
+               for symbol in names if re.search(entry["pattern"], symbol)
+               and not any(re.search(pattern, symbol) for pattern in PLUGIN_VIEW_HOST_EXPORTS)]
         for debt, entry in REFERENCE_DEBTS.items()
     }
     pulp_kept_references = [hit for hits in referenced.values() for hit in hits]
+    # An export counts only where a packaged library defines it: a library
+    # that merely references the symbol does not provide it.
+    packaged_symbols = [symbol for names in defined_symbols.values() for symbol in names]
+    host_exports = [symbol for symbol in packaged_symbols
+                    if any(re.search(pattern, symbol) for pattern in PLUGIN_VIEW_HOST_EXPORTS)]
+    # Every required export must be packaged: one match per pattern, so a
+    # duplicated overload cannot stand in for a missing one.
+    host_exports_ok = all(
+        any(re.search(pattern, symbol) for symbol in host_exports)
+        for pattern in PLUGIN_VIEW_HOST_EXPORTS)
     checks = {
         "no-widgets-gate-definition": not definition,
         "no-audio-headers": not headers,
         "no-audio-symbols": not audio_symbols,
         "name-only-forward-declarations": not forward_symbols,
         "no-pulp-kept-references": not pulp_kept_references,
+        "plugin-view-host-exports": host_exports_ok,
     }
     return {
         "schema": SCHEMA,
@@ -612,6 +655,7 @@ def verify(prefix: Path, consumer_build: Path, image: Path,
             "no-audio-symbols": audio_symbols,
             "name-only-forward-declarations": forward_symbols,
             "no-pulp-kept-references": pulp_kept_references,
+            "plugin-view-host-exports": host_exports,
         },
     }
 
