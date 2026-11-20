@@ -1476,8 +1476,7 @@ def parser() -> argparse.ArgumentParser:
 
     backend_specs = {
         "import": [
-            ("source", {"nargs": "?"}),
-            ("illustrator_input", {"nargs": "?", "metavar": "INPUT"}),
+            ("source", {"nargs": "+"}),
             ("--source-type", {"choices": ["fig", "figma", "design-ir", "html", "claude-design"], "default": "figma"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
@@ -1542,6 +1541,16 @@ def main(argv: Iterable[str] | None = None) -> int:
     command = next((item for item in raw if not item.startswith("-")), "unknown")
     try:
         args = parser().parse_args(raw)
+        if args.command == "import" and isinstance(args.source, list):
+            if len(args.source) == 2 and args.source[0] == "illustrator":
+                args.source, args.illustrator_input = args.source
+            elif len(args.source) == 1:
+                args.source = args.source[0]
+            else:
+                raise CliFailure(
+                    "import accepts one source path, or 'illustrator INPUT'.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
         if args.command == "create":
             payload = create_project(args)
         elif args.command == "doctor":
