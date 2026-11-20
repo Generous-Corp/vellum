@@ -372,6 +372,16 @@ Status Backend::open(std::uint32_t width, std::uint32_t height) {
     return Status::ok;
 }
 
+void Backend::set_dimensions(std::uint32_t width, std::uint32_t height) {
+    if (!open_ || !runtime_ || !runtime_->context || width == 0 || height == 0 ||
+        width > INT_MAX || height > INT_MAX)
+        return;
+    detail::AssetScope scope(&assets_, runtime_->scope_prefix, runtime_.get());
+    runtime_->context->SetDimensions({static_cast<int>(width), static_cast<int>(height)});
+    width_ = width;
+    height_ = height;
+}
+
 Status Backend::set_density_ratio(float ratio) {
     if (!std::isfinite(ratio) || ratio <= 0.0f)
         return Status::rejected;
