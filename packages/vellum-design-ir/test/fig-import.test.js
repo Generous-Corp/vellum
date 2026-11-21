@@ -29,6 +29,17 @@ test('backend accepts .fig as a local source without archive dispatch', async ()
     assert.equal(loaded.document.source.key, 'main');
 });
 
+test('a default import persists the resolved frame GUID so reimport pins it', async () => {
+    const loaded = await loadSource(fixture.pathname, { sourceArchive: null, sourceKey: 'main', sourceType: 'fig' });
+    assert.match(loaded.sourceArtifact.frame, /^\d+:\d+$/);
+    assert.equal(Object.hasOwn(loaded, 'frame'), false);
+    const pinned = await loadSource(fixture.pathname, {
+        figFrame: loaded.sourceArtifact.frame, sourceArchive: null, sourceKey: 'main', sourceType: 'fig',
+    });
+    assert.deepEqual(pinned.document, loaded.document);
+    assert.equal(pinned.sourceArtifact.frame, loaded.sourceArtifact.frame);
+});
+
 test('a zstd-compressed .fig decodes where Node has zstd, and is refused clearly where it does not', () => {
     if (typeof zlib.zstdCompressSync === 'function') {
         const document = decodeFigFile(makeSyntheticFig({ compression: 'zstd' }), { sourceKey: 'main', frame: '0:2' });

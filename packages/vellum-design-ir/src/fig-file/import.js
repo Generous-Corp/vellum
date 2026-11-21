@@ -41,7 +41,7 @@ export function decodeFigSource(bytes, { sourceKey = 'main', frame, page } = {})
     const embeddedAssets = new Map(envelope.asset_manifest.assets
         .filter((asset) => container.images.has(asset.hash))
         .map((asset) => [asset.local_path, container.images.get(asset.hash)]));
-    return { document, embeddedAssets };
+    return { document, embeddedAssets, frame: selector };
 }
 
 function firstFrame(scene) {
