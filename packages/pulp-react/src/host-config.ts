@@ -38,7 +38,7 @@ type Type = IntrinsicElementName;
 type Props = Record<string, unknown>;
 type Container = PulpContainer;
 type Instance = PulpInstance;
-type TextInstance = never; // No text-node type, see shouldSetTextContent.
+type TextInstance = Instance; // Loose text is represented by a synthetic Label.
 type SuspenseInstance = Instance;
 type HydratableInstance = Instance;
 type PublicInstance = Instance;
@@ -1182,9 +1182,18 @@ export const PulpHostConfig: HostConfig<
         }
     },
 
-    commitTextUpdate(_textInstance, _oldText, _newText) {
-        markMaterializedTreeDirty();
-        // Unreachable, see createTextInstance.
+    commitTextUpdate(textInstance, _oldText, newText) {
+        const instance = textInstance as unknown as Instance;
+        markMaterializedTreeDirty(instance.id);
+        instance.props = { ...instance.props, text: newText, children: newText };
+        if (instance.onBridge) call('setText', instance.id, newText);
+        const dom = instance._dom as Record<string, unknown> | undefined;
+        if (dom) dom._textContent = newText;
+        const parentDom = domRegistry().get(instance.parentId ?? '');
+        const targets = parentDom?.__pulpAnonymousTextTargets as
+            Array<{ id: string; text: string }> | undefined;
+        const target = targets?.find(entry => entry.id === instance.id);
+        if (target) target.text = newText;
     },
 
     // React's mutation reconciler calls resetTextContent when
@@ -1323,7 +1332,12 @@ function attach(parent: Instance, child: Instance, index?: number): void {
 
     // Bookkeeping (always runs, regardless of bridge state)
     child.parentId = parent.id;
-    const insertIdx = index !== undefined && index >= 0 ? index : parent.childIds.length;
+    const oldIndex = parent.childIds.indexOf(child.id);
+    if (oldIndex >= 0) parent.childIds.splice(oldIndex, 1);
+    const requestedIndex = index !== undefined && index >= 0 ? index : parent.childIds.length;
+    const insertIdx = index !== undefined && oldIndex >= 0 && oldIndex < index
+        ? requestedIndex - 1 : requestedIndex;
+    parent.pendingChildren = parent.pendingChildren.filter(entry => entry.child !== child);
     if (insertIdx === parent.childIds.length) {
         parent.childIds.push(child.id);
     } else {
@@ -1372,6 +1386,12 @@ function attach(parent: Instance, child: Instance, index?: number): void {
         const existing = children.indexOf(childDom);
         if (existing >= 0) children.splice(existing, 1);
         children.splice(Math.min(insertIdx, children.length), 0, childDom);
+    }
+
+    if (!wasAttachedElsewhere && child.onBridge) {
+        if (typeof g.insertChild === 'function') call('insertChild', parent.id, child.id, insertIdx);
+        else if (typeof g.moveWidget === 'function') call('moveWidget', child.id, parent.id, insertIdx);
+        return;
     }
 
     if (wasAttachedElsewhere && child.onBridge) {
@@ -1592,8 +1612,11 @@ function unregisterDomSubtree(instance: Instance): void {
 }
 
 // ── Auto-ID generation ─────────────────────────────────────────────
+let nextDefaultId = 0;
 function autoId(container: Container): string {
-    const n = ++container.nextId;
+    const localId = ++container.nextId;
+    // Native widget IDs share one registry even across roots and portals.
+    const n = container.idPrefix === undefined ? ++nextDefaultId : localId;
     return `${container.idPrefix ?? 'pr_'}${n.toString(36)}`;
 }
 

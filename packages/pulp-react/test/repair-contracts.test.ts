@@ -197,3 +197,62 @@ it('keeps native Button text on the widget when createButton exists', () => {
     expect(captions.get('button')).toBe('new');
     expect(captions.has('button_l')).toBe(false);
 });
+
+it('moves an existing nested child to the end without duplicate bookkeeping', () => {
+    const root = { rootId: '', nextId: 0 };
+    const parent = instance('Panel', { id: 'parent' }, root);
+    host.appendChildToContainer(root, parent);
+    const [a, b, c] = ['a', 'b', 'c'].map(id => instance('Label', { id }, root));
+    for (const child of [a, b, c]) host.appendChild(parent, child);
+    host.appendChild(parent, a);
+    expect(tree.get('parent')).toEqual(['b', 'c', 'a']);
+    expect(parent.childIds).toEqual(['b', 'c', 'a']);
+    host.insertBefore(parent, a, c);
+    expect(tree.get('parent')).toEqual(['b', 'a', 'c']);
+});
+
+it('reorders deferred children without duplicating their pending entries', () => {
+    const root = { rootId: '', nextId: 0 };
+    const parent = instance('Panel', { id: 'parent' }, root);
+    const [a, b, c] = ['a', 'b', 'c'].map(id => instance('Label', { id }, root));
+    for (const child of [a, b, c]) host.appendInitialChild(parent, child);
+    host.appendChild(parent, a);
+    host.insertBefore(parent, b, a);
+    host.appendChildToContainer(root, parent);
+    expect(tree.get('parent')).toEqual(['c', 'b', 'a']);
+    expect(parent.childIds).toEqual(['c', 'b', 'a']);
+});
+
+it('commits synthetic text to native captions and anonymous-text metadata', () => {
+    const root = { rootId: '', nextId: 0 };
+    const parent = instance('Panel', { id: 'parent' }, root);
+    parent._dom = { _children: [] };
+    const text = host.createTextInstance('one', root, {}, {});
+    host.appendInitialChild(parent, text);
+    host.appendChildToContainer(root, parent);
+    (globalThis as any).__pulpReactDomRegistry__.set('parent', parent._dom);
+    host.commitTextUpdate(text, 'one', 'two');
+    expect(captions.get(text.id)).toBe('two');
+    expect(text.props).toMatchObject({ text: 'two', children: 'two' });
+    expect((parent._dom as any).__pulpAnonymousTextTargets).toEqual([{ id: text.id, text: 'two' }]);
+    host.commitTextUpdate(text, 'two', '');
+    expect(captions.get(text.id)).toBe('');
+    expect((parent._dom as any).__pulpAnonymousTextTargets[0].text).toBe('');
+});
+
+it('gives anonymous widgets distinct bridge IDs across default roots', () => {
+    const first = createRoot('first');
+    const second = createRoot('second');
+    const a = instance('Label', {}, first);
+    const b = instance('Label', {}, second);
+    const text = host.createTextInstance('caption', createRoot('third'), {}, {});
+    expect(new Set([a.id, b.id, text.id]).size).toBe(3);
+    host.appendChildToContainer(first, a);
+    host.appendChildToContainer(second, b);
+    update(a, { text: 'first' });
+    update(b, { text: 'second' });
+    expect(captions.get(a.id)).toBe('first');
+    expect(captions.get(b.id)).toBe('second');
+    const explicit = instance('Label', {}, createRoot('custom', 'app_'));
+    expect(explicit.id).toBe('app_1');
+});
