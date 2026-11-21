@@ -53,7 +53,11 @@ READINESS_EXPRESSION = (
     "document.readyState === 'complete' && "
     "(!document.fonts || document.fonts.status === 'loaded')"
 )
-FIXED_EXPRESSIONS = {READINESS_EXPRESSION}
+CANVAS_DATA_URLS_EXPRESSION = (
+    "Array.from(document.querySelectorAll('canvas')).map(canvas => "
+    "canvas.toDataURL('image/png'))"
+)
+FIXED_EXPRESSIONS = {READINESS_EXPRESSION, CANVAS_DATA_URLS_EXPRESSION}
 
 
 class CdpClientError(RuntimeError):
@@ -319,6 +323,28 @@ class CdpClient:
             "format": "png", "fromSurface": True, "captureBeyondViewport": False,
             "clip": {"x": x, "y": y, "width": width, "height": height, "scale": 1},
         }))
+
+    def capture_canvas_data_urls(self) -> list[dict[str, Any]]:
+        """Capture each canvas's own RGBA pixels without the page behind it."""
+        result = self.command("Runtime.evaluate", {
+            "expression": CANVAS_DATA_URLS_EXPRESSION, "returnByValue": True,
+        }).get("result")
+        values = result.get("value") if isinstance(result, dict) else None
+        if not isinstance(values, list) or len(values) > 128:
+            raise CdpClientError("CDP canvas capture response is malformed or unbounded")
+        captures: list[dict[str, Any]] = []
+        for value in values:
+            if not isinstance(value, str) or not value.startswith("data:image/png;base64,"):
+                raise CdpClientError("CDP canvas capture did not return a PNG data URL")
+            encoded = value[len("data:image/png;base64,"):]
+            try:
+                data = base64.b64decode(encoded, validate=True)
+            except (ValueError, base64.binascii.Error) as error:
+                raise CdpClientError("CDP canvas capture returned invalid base64") from error
+            if not data.startswith(b"\x89PNG\r\n\x1a\n") or len(data) > MAX_SCREENSHOT_BYTES:
+                raise CdpClientError("CDP canvas capture returned an invalid or oversized PNG")
+            captures.append({"mimeType": "image/png", "data": encoded})
+        return captures
 
     @staticmethod
     def _decode_screenshot(result: dict[str, Any]) -> dict[str, Any]:

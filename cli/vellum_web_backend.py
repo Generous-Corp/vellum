@@ -1281,10 +1281,7 @@ def run_chrome_interaction_capture(
                         capture_nodes = capture_document.get("nodes", {})
                         capture_types = capture_nodes.get("nodeType", [])
                         capture_names = capture_nodes.get("nodeName", [])
-                        capture_layout = capture_document.get("layout", {})
-                        capture_indices = capture_layout.get("nodeIndex", [])
-                        capture_boxes = capture_layout.get("bounds", [])
-                        capture_boxes_by_node = dict(zip(capture_indices, capture_boxes))
+                        canvas_indices = []
                         for node_index, node_type in enumerate(capture_types):
                             if node_type != 1 or node_index >= len(capture_names):
                                 continue
@@ -1292,14 +1289,15 @@ def run_chrome_interaction_capture(
                                 settled_snapshot, capture_names[node_index],
                                 f"nodeName[{node_index}]", allow_absent=True,
                             ).lower()
-                            box = capture_boxes_by_node.get(node_index)
-                            if node_name != "canvas" or not isinstance(box, list) or len(box) != 4:
-                                continue
-                            if not all(isinstance(value, (int, float)) and not isinstance(value, bool)
-                                       and math.isfinite(value) for value in box):
-                                raise BackendFailure("canvas layout bounds are malformed", status="test_failed")
-                            if box[2] > 0 and box[3] > 0:
-                                canvas_captures[node_index] = client.capture_screenshot_clip(*box)
+                            if node_name == "canvas":
+                                canvas_indices.append(node_index)
+                        canvas_pixels = client.capture_canvas_data_urls()
+                        if len(canvas_pixels) != len(canvas_indices):
+                            raise BackendFailure(
+                                "browser returned a different number of canvas captures",
+                                status="test_failed",
+                            )
+                        canvas_captures = dict(zip(canvas_indices, canvas_pixels))
                     except CdpClientError as error:
                         raise BackendFailure(
                             f"Browser capture failed: {error}", status="test_failed",

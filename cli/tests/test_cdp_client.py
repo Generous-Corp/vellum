@@ -323,6 +323,28 @@ class CdpClientTests(unittest.TestCase):
         with self.assertRaisesRegex(CdpClientError, "positive dimensions"):
             client.capture_screenshot_clip(0, 0, 0, 10)
 
+    def test_canvas_capture_reads_uncomposited_rgba_data_urls(self) -> None:
+        client = object.__new__(CdpClient)
+        calls = []
+        encoded = base64.b64encode(b"\x89PNG\r\n\x1a\n").decode("ascii")
+        client.command = lambda method, params=None: (
+            calls.append((method, params)) or {
+                "result": {"value": [f"data:image/png;base64,{encoded}"]},
+            }
+        )  # type: ignore[method-assign]
+        captures = client.capture_canvas_data_urls()
+        self.assertEqual(captures, [{"mimeType": "image/png", "data": encoded}])
+        self.assertEqual(calls[0][0], "Runtime.evaluate")
+        self.assertTrue(calls[0][1]["returnByValue"])
+
+    def test_canvas_capture_rejects_non_png_data_urls(self) -> None:
+        client = object.__new__(CdpClient)
+        client.command = lambda method, params=None: {
+            "result": {"value": ["data:image/png;base64,bm90LXB u".replace(" ", "")]},
+        }  # type: ignore[method-assign]
+        with self.assertRaisesRegex(CdpClientError, "invalid or oversized PNG"):
+            client.capture_canvas_data_urls()
+
     def test_settle_idle_uses_real_time_and_returns_stable_snapshot(self) -> None:
         client = object.__new__(CdpClient)
         client._events = []
