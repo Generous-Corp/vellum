@@ -190,6 +190,19 @@ target_link_libraries(gpu-guard-consumer PRIVATE Vellum::MirrorCanvas)
     endforeach()
 endif()
 
+# The hosted GPU proof opts into live rendering. The installed host can
+# exercise viewport geometry and input even without a native GPU adapter.
+set(_run_live_gpu FALSE)
+if(DEFINED ENV{VELLUM_MIRROR_LIVE_GPU})
+    set(_live_gpu "$ENV{VELLUM_MIRROR_LIVE_GPU}")
+    if(_live_gpu MATCHES "^(1|ON|TRUE|YES)$")
+        set(_run_live_gpu TRUE)
+    elseif(NOT _live_gpu MATCHES "^(0|OFF|FALSE|NO)?$")
+        message(FATAL_ERROR
+            "VELLUM_MIRROR_LIVE_GPU must be one of 1/0, ON/OFF, TRUE/FALSE, or YES/NO")
+    endif()
+endif()
+
 # A plug-in editor's view of the host: plugin_view_host.hpp reaches the GPU
 # device type only through platform/gpu_fwd.hpp, so it builds, links and runs
 # against the installed package without VELLUM_MIRROR_BUILD.
@@ -217,7 +230,12 @@ _run("plug-in view host consumer configure" "${CMAKE_COMMAND}"
     -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
     -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
 _run("plug-in view host consumer build" "${CMAKE_COMMAND}" --build "${_pvh_dir}/build")
-_run("plug-in view host consumer run" "${_pvh_dir}/build/vellum-plugin-view-host-consumer")
+set(_pvh_args)
+if(_run_live_gpu)
+    set(_pvh_args --live-gpu)
+endif()
+_run("plug-in view host consumer run" "${_pvh_dir}/build/vellum-plugin-view-host-consumer" ${_pvh_args})
+message(STATUS "${_last_stdout}")
 
 # The native bootstrap entry points are provider-owned. The installed mirror
 # consumer must resolve them from that dylib, and must not carry the Dawn proc
@@ -385,17 +403,7 @@ _run("direct GPU consumer build" "${CMAKE_COMMAND}" --build "${_work}/direct-gpu
 # runtime probe so an unavailable device is reported as such rather than being
 # mistaken for a passing consumer test. The hosted GPU proof sets this variable
 # around ctest; an opted-in runtime failure remains fatal through _run().
-set(_run_direct_gpu FALSE)
-if(DEFINED ENV{VELLUM_MIRROR_LIVE_GPU})
-    set(_live_gpu "$ENV{VELLUM_MIRROR_LIVE_GPU}")
-    if(_live_gpu MATCHES "^(1|ON|TRUE|YES)$")
-        set(_run_direct_gpu TRUE)
-    elseif(NOT _live_gpu MATCHES "^(0|OFF|FALSE|NO)?$")
-        message(FATAL_ERROR
-            "VELLUM_MIRROR_LIVE_GPU must be one of 1/0, ON/OFF, TRUE/FALSE, or YES/NO")
-    endif()
-endif()
-if(_run_direct_gpu)
+if(_run_live_gpu)
     _run("direct GPU consumer run" "${_work}/direct-gpu-build/vellum-gpu-direct-consumer")
 else()
     message(STATUS
@@ -585,19 +593,6 @@ target_link_libraries(vellum-v8-consumer PRIVATE Vellum::MirrorView_script)
 ]=])
     file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/v8_main.cpp"
         DESTINATION "${_work}/v8-consumer")
-    if(VELLUM_INSTALL_THREEJS)
-    file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/threejs_v8_main.cpp"
-        DESTINATION "${_work}/v8-consumer")
-    file(APPEND "${_work}/v8-consumer/CMakeLists.txt" [=[
-add_executable(vellum-threejs-v8-consumer threejs_v8_main.cpp)
-target_link_libraries(vellum-threejs-v8-consumer PRIVATE Vellum::MirrorView_script)
-if(VELLUM_THREEJS_ROOT STREQUAL "")
-    message(FATAL_ERROR "find_package(Vellum) did not export VELLUM_THREEJS_ROOT")
-endif()
-target_compile_definitions(vellum-threejs-v8-consumer PRIVATE
-    "VELLUM_THREEJS_ROOT=\"${VELLUM_THREEJS_ROOT}\"")
-]=])
-    endif()
     _run("V8 consumer configure" "${CMAKE_COMMAND}"
         -S "${_work}/v8-consumer" -B "${_work}/v8-consumer-build"
         ${_generator} -DCMAKE_BUILD_TYPE=Release
@@ -608,8 +603,15 @@ target_compile_definitions(vellum-threejs-v8-consumer PRIVATE
     _run("V8 consumer run" "${_work}/v8-consumer-build/vellum-v8-consumer" "${VELLUM_V8_VERSION}")
     message(STATUS "${_last_stdout}")
     if(VELLUM_INSTALL_THREEJS)
-        _run("installed Three.js payload consumer run"
-            "${_work}/v8-consumer-build/vellum-threejs-v8-consumer")
+        _run("Three.js demo configure" "${CMAKE_COMMAND}"
+            -S "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/threejs-demo"
+            -B "${_work}/threejs-demo" ${_generator} -DCMAKE_BUILD_TYPE=Release
+            "-DVellum_DIR=${_prefix}/${VELLUM_INSTALL_LIBDIR}/cmake/Vellum"
+            -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+            -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
+        _run("Three.js demo build" "${CMAKE_COMMAND}" --build "${_work}/threejs-demo")
+        _run("Three.js demo tests" "${CMAKE_CTEST_COMMAND}"
+            --test-dir "${_work}/threejs-demo" --no-tests=error --verbose)
         message(STATUS "${_last_stdout}")
     endif()
 endif()

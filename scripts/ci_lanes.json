@@ -392,6 +392,10 @@
       {
         "script": "scripts/test_ctest_classes.py",
         "isolated": true
+      },
+      {
+        "script": "scripts/test_web_compat_packaging.py",
+        "isolated": true
       }
     ]
   },
@@ -409,6 +413,11 @@
     "graphics/tests/test_dawn_provider_topology.py": "cmake:CMakeLists.txt",
     "packages/vellum-swift/scripts/test_run_sterile_proof.py": "cmake:packages/vellum-swift/CMakeLists.txt",
     "tools/android/test_check_android_objects.py": "workflow:android.yml",
+    "tools/mirror/consumer/threejs-demo/asset_cleanup_test.cmake": "cmake:tools/mirror/consumer/threejs-demo/CMakeLists.txt",
+    "tools/mirror/consumer/threejs-demo/asset_cleanup_negative_test.cmake": "cmake:tools/mirror/consumer/threejs-demo/CMakeLists.txt",
+    "tools/mirror/consumer/threejs-demo/asset_failure_test.cmake": "cmake:tools/mirror/consumer/threejs-demo/CMakeLists.txt",
+    "tools/mirror/consumer/threejs-demo/texture_capture_test.py": "cmake:tools/mirror/consumer/threejs-demo/capture_test.cmake",
+    "tools/mirror/consumer/threejs-demo/texture_capture_negative_test.cmake": "cmake:tools/mirror/consumer/threejs-demo/CMakeLists.txt",
     "tools/provenance/test_collect_release_evidence.py": "workflow:provenance.yml",
     "tools/provenance/test_deadline_warning.py": "workflow:provenance.yml",
     "tools/provenance/test_finalize_authority_reconciliation.py": "workflow:provenance.yml",
