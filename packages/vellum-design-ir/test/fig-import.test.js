@@ -68,3 +68,16 @@ test('a font family matches its own faces, not a different family that shares it
     assert.equal(familyMatchesStem('Roboto', 'RobotoCondensed-Regular'), false);
     assert.equal(familyMatchesStem('Roboto', 'RobotoMono'), false);
 });
+
+test('offline instance text overrides render as text without audio metadata', () => {
+    const document = decodeFigFile(makeSyntheticFig({ instance: true }));
+    const instance = document.root.children.find((node) => node.name === 'Badge instance');
+    assert.equal(instance.children[0].text, 'Ready');
+});
+
+test('offline loss diagnostics keep the source code and message', async () => {
+    const document = decodeFigFile(await readFile(fixture), { frame: '0:10' });
+    const diagnostic = document.diagnostics.find(({ code }) => code === 'unsupported-paint-type');
+    assert.equal(diagnostic?.disposition, 'unsupported');
+    assert.match(diagnostic.message, /VIDEO/);
+});

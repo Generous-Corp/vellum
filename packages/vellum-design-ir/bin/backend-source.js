@@ -7,7 +7,7 @@ import {
     normalizeSha256ContentHash,
     parseDesignIR,
 } from '../src/index.js';
-import { decodeFigFile } from '../src/fig-file/import.js';
+import { decodeFigSource } from '../src/fig-file/import.js';
 import {
     fail,
     isSafeRelativeAsset,
@@ -22,7 +22,7 @@ const MAX_ASSET_COUNT = 10_000;
 const MAX_NODE_COUNT = 100_000;
 const MAX_TREE_DEPTH = 512;
 
-export async function loadSource(sourcePath, { captureEnvelope, sourceArchive, sourceKey, sourceType }) {
+export async function loadSource(sourcePath, { captureEnvelope, figFrame, sourceArchive, sourceKey, sourceType }) {
     if (!['fig', 'figma', 'design-ir', 'html', 'claude-design'].includes(sourceType)) {
         fail('unsupported_source_type', `Unsupported source type '${sourceType}'`);
     }
@@ -31,11 +31,16 @@ export async function loadSource(sourcePath, { captureEnvelope, sourceArchive, s
     if (!metadata?.isFile() || metadata.isSymbolicLink()) {
         fail('invalid_source', `Import source must be a regular file: ${file}`);
     }
-    if (metadata.size > MAX_SOURCE_BYTES) {
-        fail('source_too_large', `Import source exceeds ${MAX_SOURCE_BYTES} bytes`);
+    const isFig = sourceType === 'fig' || (sourceType === 'figma' && basename(file).toLowerCase().endsWith('.fig'));
+    if (figFrame !== undefined && (!isFig || !/^\d+:\d+$/.test(figFrame))) {
+        fail('invalid_fig_frame', '--frame requires a local Figma .fig source and a frame GUID');
+    }
+    const maxSourceBytes = isFig ? MAX_ARCHIVE_BYTES : MAX_SOURCE_BYTES;
+    if (metadata.size > maxSourceBytes) {
+        fail('source_too_large', `Import source exceeds ${maxSourceBytes} bytes`);
     }
     const sourceBytes = await readFile(file);
-    if (sourceArchive === null && !basename(file).toLowerCase().endsWith('.fig') && (
+    if (sourceArchive === null && !isFig && (
         basename(file).toLowerCase().endsWith('.pulp.zip') || hasZipMagic(sourceBytes)
     )) {
         fail(
@@ -98,18 +103,21 @@ export async function loadSource(sourcePath, { captureEnvelope, sourceArchive, s
             sourceName: sourceArtifact.name,
         };
     }
-    if (sourceType === 'fig' || (sourceType === 'figma' && basename(file).toLowerCase().endsWith('.fig'))) {
-        let document;
+    if (isFig) {
+        let decoded;
         try {
-            document = decodeFigFile(sourceBytes, { sourceKey });
+            decoded = decodeFigSource(sourceBytes, { sourceKey, frame: figFrame });
         } catch (error) {
             fail('invalid_fig', `Figma .fig source could not be decoded: ${error.message}`);
         }
         const sourceHash = `sha256:${sha256(sourceBytes)}`;
-        const revision = validateRevision(document.source.revision);
+        const revision = validateRevision(decoded.document.source.revision);
         return {
-            archiveBytes: null, backendDiagnostics: [], document, revision,
-            sourceArtifact: { kind: 'fig', name: basename(file), sha256: sourceHash },
+            archiveBytes: null, backendDiagnostics: [], ...decoded, revision,
+            sourceArtifact: {
+                kind: 'fig', name: basename(file), sha256: sourceHash,
+                ...(figFrame === undefined ? {} : { frame: figFrame }),
+            },
             sourceBytes, sourceHash, sourceName: basename(file),
         };
     }
@@ -181,21 +189,20 @@ export async function loadSource(sourcePath, { captureEnvelope, sourceArchive, s
     };
 }
 
-export async function planAssets(sourcePath, document, paths) {
+export async function planAssets(sourcePath, { document, embeddedAssets }, paths) {
     const manifest = [];
     const copies = [];
     const diagnostics = [];
     for (const asset of document.assets) {
         const receipt = { ...asset, status: 'declared' };
         if (typeof asset.uri === 'string' && isSafeRelativeAsset(asset.uri)) {
-            const sourceAsset = resolve(dirname(resolve(sourcePath)), asset.uri);
-            await assertSafeSourceAsset(dirname(resolve(sourcePath)), sourceAsset);
-            const metadata = await lstat(sourceAsset).catch(() => null);
-            if (metadata?.isFile() && !metadata.isSymbolicLink()) {
-                if (metadata.size > MAX_ASSET_BYTES) {
+            const bytes = embeddedAssets
+                ? embeddedAssets.get(asset.uri)
+                : await readSourceAsset(sourcePath, asset);
+            if (bytes !== undefined) {
+                if (bytes.length > MAX_ASSET_BYTES) {
                     fail('asset_too_large', `Asset '${asset.id}' exceeds ${MAX_ASSET_BYTES} bytes`);
                 }
-                const bytes = await readFile(sourceAsset);
                 const digest = `sha256:${sha256(bytes)}`;
                 let declaredHash;
                 if (asset.contentHash !== undefined) {
@@ -237,6 +244,18 @@ export async function planAssets(sourcePath, document, paths) {
     }
     manifest.sort((left, right) => left.id.localeCompare(right.id));
     return { copies, diagnostics, manifest };
+}
+
+async function readSourceAsset(sourcePath, asset) {
+    const directory = dirname(resolve(sourcePath));
+    const sourceAsset = resolve(directory, asset.uri);
+    await assertSafeSourceAsset(directory, sourceAsset);
+    const metadata = await lstat(sourceAsset).catch(() => null);
+    if (!metadata?.isFile() || metadata.isSymbolicLink()) return undefined;
+    if (metadata.size > MAX_ASSET_BYTES) {
+        fail('asset_too_large', `Asset '${asset.id}' exceeds ${MAX_ASSET_BYTES} bytes`);
+    }
+    return readFile(sourceAsset);
 }
 
 function hasZipMagic(bytes) {

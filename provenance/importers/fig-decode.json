@@ -36,5 +36,20 @@
       "pulp_sha256": "dae61b6cce4886207d6e9a2158781824b4daf0ec1494a9e06e94d8265cad93a1",
       "vellum_path": "packages/vellum-design-ir/src/fig-file/fig_decode.mjs"
     }
-  ]
+  ],
+  "test_port": {
+    "origin_commit": "9fa7e5cbd3343fcaea1b0f355dda4a05a1593f6a",
+    "files": [
+      {
+        "pulp_path": "tools/import-design/fig/fig.test.mjs",
+        "pulp_sha256": "b66d6dcfde96c30ef84e83eed92abf65b056457182bdb22217897437755debf5",
+        "vellum_path": "packages/vellum-design-ir/test/fig-decoder.test.js"
+      },
+      {
+        "pulp_path": "tools/import-design/fig/paths.test.mjs",
+        "pulp_sha256": "90fec450c1a973336d4c420b44d90b91846dc2626e45fc8496aa97ff97521ff2",
+        "vellum_path": "packages/vellum-design-ir/test/fig-paths.test.js"
+      }
+    ]
+  }
 }
