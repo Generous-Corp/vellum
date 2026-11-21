@@ -23,7 +23,7 @@ import tarfile
 import tempfile
 import threading
 import time
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from urllib.parse import quote, unquote_to_bytes
 
 from vellum_dev import build_input_digest, staleness, write_source_digest
@@ -438,6 +438,15 @@ def ensure_build(context: dict[str, Any], sdk: Path, no_build: bool = False) -> 
     return build_app(context, sdk)
 
 
+SANDBOX_ENV = "CODEX_SANDBOX"
+
+
+def sandboxed_without_window_server(environ: Mapping[str, str] | None = None) -> bool:
+    """True inside an agent sandbox (Codex seatbelt) that cannot reach the window server."""
+    env = os.environ if environ is None else environ
+    return bool(env.get(SANDBOX_ENV))
+
+
 def chrome_path() -> str:
     # A pinned browser is named through the environment, the same way the
     # web/tests harnesses accept it. Reject an override that does not resolve
@@ -462,6 +471,15 @@ def chrome_path() -> str:
     chrome = shutil.which("google-chrome")
     application = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
     if not chrome and application.is_file():
+        if sandboxed_without_window_server():
+            # The installed app registers with the window server even when
+            # headless. A sandbox denies that, so it aborts at launch and
+            # macOS files a crash report for the user's own browser.
+            raise BackendFailure(
+                "The installed Google Chrome cannot start inside a sandbox; name a pinned "
+                "headless browser with VELLUM_CHROME_PATH",
+                status="prerequisite_missing", exit_code=4,
+            )
         chrome = str(application)
     if not chrome:
         raise BackendFailure("Google Chrome is required for web scenarios", status="prerequisite_missing", exit_code=4)
