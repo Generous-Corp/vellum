@@ -45,6 +45,10 @@ vellum_add_framework_test(widget-bridge
     SOURCES widget_bridge_test.cpp
     UNITS Vellum::MirrorView_script)
 
+vellum_add_framework_test(react-materialization
+    SOURCES react_materialization_test.cpp
+    UNITS Vellum::MirrorView_script)
+
 vellum_add_framework_test(param-model-binding
     SOURCES param_model_binding_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
@@ -263,6 +267,16 @@ vellum_add_framework_test(scripted-ui-param-model
 vellum_add_framework_test(host-param-surface-model
     SOURCES host_param_surface_model_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    vellum_add_framework_test(native-dialog-delivery
+        SOURCES native_dialog_delivery_test.cpp
+        UNITS Vellum::MirrorFoundation)
+    target_link_libraries(vellum-framework-native-dialog-delivery-test PRIVATE "-framework CoreFoundation")
+    set_tests_properties(vellum.framework.native-dialog-delivery PROPERTIES TIMEOUT 15)
+else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES native_dialog_delivery_test.cpp)
+endif()
 
 # Every test file here must be registered above. A test file that no
 # vellum_add_framework_test() names would build nothing and run nothing while

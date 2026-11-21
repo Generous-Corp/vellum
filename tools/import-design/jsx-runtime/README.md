@@ -1,0 +1,131 @@
+# JSX runtime
+
+Self-contained Node + esbuild environment that compiles a single-file React
+JSX instrument into a self-mounting IIFE bundle suitable for Pulp's existing
+Claude-style runtime-import harness.
+
+See `planning/2026-05-17-jsx-instrument-import.md` for the full design.
+
+Vellum's `Vellum::MirrorView_script` SDK target provides the runtime import,
+native JSX snapshots and the verified materialized-document cache. The shared
+`@pulp/react` package keeps its import name and JavaScript bridge contract.
+
+## Install (first run)
+
+```bash
+cd tools/import-design/jsx-runtime
+npm install
+```
+
+Pulls React 18.3.1, ReactDOM 18.3.1, react-reconciler 0.29.2, scheduler
+0.23.2, esbuild 0.25.12, `@babel/parser` 7.29.7, and `css-tree` 3.2.1 into
+the local `node_modules/`. Not committed (see `.gitignore`);
+`package-lock.json` IS committed for reproducible installs.
+The transform aliases `@pulp/react` to the repo's `packages/pulp-react/src`
+entrypoint so a fresh checkout can bundle the native React host without
+publishing or linking the package first.
+
+## Usage
+
+```bash
+node jsx-transform.mjs \
+  --in path/to/MyInstrument.jsx \
+  --out /tmp/my-instrument-bundle.js \
+  [--verbose]
+```
+
+Produces:
+- `<out>`, the IIFE bundle (~1 MB, React + @pulp/react native bridge + user JSX + nav shims)
+- `<out>.manifest.json`, `{ componentName, sourceFile, outputBytes, ... }`
+
+The bundle is then consumable by:
+- `pulp import-design --from jsx --file <out> --mode live --emit js`
+- `pulp import-design --from jsx --file <out> --mode baked --emit ir-json --snapshot-semantics accept`
+- `pulp import-design --from jsx --file <out> --mode baked --emit cpp --snapshot-semantics accept`
+- `pulp-screenshot --script <out> --output render.png` (works today)
+- `parse_jsx_react()` in C++ via the test harness
+
+The default bundle routes `react-dom` through `pulp-react-dom-shim.mjs`, which
+renders through `@pulp/react` into the native bridge. Baked snapshots first try
+the DOM walker, then freeze the native `WidgetBridge` tree when the bundle has
+no expanded DOM; those IR envelopes record `runtime_native_snapshot` and
+`root.attributes.snapshotSource = "native-view"`.
+
+## Source-contract audit
+
+```bash
+node jsx-contract-audit.mjs \
+  --in path/to/MyInstrument.jsx \
+  --json /tmp/my-instrument-contract.json \
+  --markdown /tmp/my-instrument-contract.md \
+  --fail-on-weak-proof
+```
+
+This is a static evidence pass, not visual inference. `@babel/parser` extracts
+JSX elements, props, handler closures, `.map()` rows, source spans, and inline
+SVG/vector nodes. `css-tree` parses and validates style values so the importer
+can normalize radius, border, color, size, overflow, and related style
+contracts into Pulp-owned native attributes. The live runtime remains the
+fallback when a source contract is too dynamic to lower safely.
+
+## End-to-end smoke
+
+```bash
+tools/import-validation/jsx-roundtrip.sh
+```
+
+Runs source-contract audit → transform → smoke test → headless render against
+`planning/fixtures/jsx/chainer-instrument.jsx`.
+
+## Why a Node preprocessor
+
+Per Codex high-reasoning consult (2026-05-17):
+
+> Use esbuild from a Node preprocessor, not Babel in C++. Adding a large
+> embedded compiler blob inside QuickJS puts parsing/transform stack risk
+> inside the runtime-import path, which already has JS size limits and
+> settling complexity. Embedded esbuild-wasm/sucrase is the right long-term
+> answer if "no Node required" becomes a product requirement, but it's not
+> the smallest first PR.
+
+## Canonicalization conformance probe
+
+The reusable WP-0 probe runs a representative messy materialized document through
+canonicalization repeatedly, reports a content digest and median elapsed time,
+and exercises a planted vendor-tag negative control:
+
+```bash
+node materialized_runtime_conformance.mjs --json
+```
+
+The probe fails if repeated outputs differ byte-for-byte, if the pinned fixture
+digest changes, if browser-only payloads survive, or if the negative control is
+not rejected. CTest registers it as
+`pulp-materialized-runtime-conformance` when the locked Node dependencies are
+available.
+
+Browser vendor removal is opt-in metadata. A capture adapter that owns a
+React, ReactDOM, or Babel payload must mark the corresponding empty script
+reference with `data-pulp-vendor="react"`, `"react-dom"`, or `"babel"`; the
+sidecar copies that role into `asset.vendor_kind`. The canonicalizer refuses
+unknown roles, authored script bodies, mixed references, and marker-only
+content. Older sidecars without this metadata remain loadable and retain their
+assets until an adapter re-captures them with the explicit role.
+
+## Stable source ids
+
+`materialized_ids_map.mjs` owns the persistent `ids.map.json` contract used by
+the materialized emitter. Each entry maps a source tuple, `component`,
+`local_path`, and lowercase SHA-256 `content_hash`, to one source id. Entries
+are sorted before serialization, and prior keys are retained as `aliases` when
+one unambiguous content or component-local-path match carries an id through a
+source edit. A repeated candidate is rejected instead of guessed; structural
+capture paths are never used as a replacement source identity.
+
+The module is intentionally separate from the v2 runtime binding map: one
+source id may be projected into multiple binding streams, where
+`materialized_binding_contract.mjs` adds the stream-specific prefix. Source
+emitters should call `assignMaterializedSourceIds()` and persist
+`serializeMaterializedIdsMap()` before schema-v2 normalization. Bindings that
+lack all three source fields remain positional and must be reported by the
+emitter rather than silently receiving a guessed id.

@@ -1,0 +1,1100 @@
+// prop-applier, turns React prop names into bridge setX calls.
+//
+// Used by both:
+//   - host-config.appendChild / appendInitialChild (apply ALL props at first attach)
+//   - host-config.commitUpdate (apply ONLY changed props)
+//
+// Each prop knows which bridge setter receives it. Centralizing the
+// mapping here keeps the host config small and lets tests assert the
+// emitted setX sequence with one diff helper.
+
+import type { PulpInstance } from './types.js';
+import { makeSyntheticEvent } from './synthetic-event.js';
+import { call, _resolveVar } from './prop-applier-internal.js';
+import { applyLayoutProp } from './prop-applier-layout.js';
+import { applyPaintProp } from './prop-applier-paint.js';
+import { applyTypographyProp } from './prop-applier-typography.js';
+import { resolveTypographyLength } from './prop-applier-typography.js';
+import { applyTransformProp } from './prop-applier-transform.js';
+import { applyEventProp, reclaimOverlayForMovedParent } from './prop-applier-events.js';
+import { resetRemovedStyleKeys } from './prop-applier-reset.js';
+import {
+    forgetControlled,
+    noteControlledProps,
+    noteDiscreteEdit,
+    writeControlledValue,
+} from './prop-applier-controlled.js';
+
+// Per-domain handler modules own layout, paint, typography, transform,
+// and declarative event-routing props. `applyOne` below is the thin
+// dispatcher that calls each handler in sequence until one claims the
+// key. The bridge `call` helper and shared `_resolveVar` resolver live
+// in prop-applier-internal.ts so every domain shares one logging
+// counter.
+//
+// The optional logging hook is looked up through globalThis at call time.
+// Bridge setters dispatch through `call()` in prop-applier-internal.ts.
+type AnyFn = (...args: unknown[]) => unknown;
+const g = globalThis as unknown as Record<string, AnyFn | undefined>;
+type EventCallbackRegistry = Map<string, (...args: unknown[]) => unknown>;
+function eventCallbackRegistry(): EventCallbackRegistry {
+    const host = globalThis as unknown as Record<string, unknown>;
+    const windowProxy = host.window as Record<string, unknown> | undefined;
+    const hostRegistry = host.__pulpReactEventCallbacks__ instanceof Map
+        ? host.__pulpReactEventCallbacks__ as EventCallbackRegistry : null;
+    const proxyRegistry = windowProxy?.__pulpReactEventCallbacks__ instanceof Map
+        ? windowProxy.__pulpReactEventCallbacks__ as EventCallbackRegistry : null;
+    const registry = hostRegistry ?? proxyRegistry
+        ?? new Map<string, (...args: unknown[]) => unknown>();
+    if (hostRegistry && proxyRegistry && hostRegistry !== proxyRegistry) {
+        for (const [key, callback] of proxyRegistry) {
+            if (!hostRegistry.has(key)) hostRegistry.set(key, callback);
+        }
+    }
+    host.__pulpReactEventCallbacks__ = registry;
+    if (windowProxy) windowProxy.__pulpReactEventCallbacks__ = registry;
+    return registry;
+}
+
+export function clearMaterializedEventCallbacks(id: string): void {
+    const prefix = `${id}:`;
+    const registry = eventCallbackRegistry();
+    for (const key of registry.keys()) {
+        if (key.startsWith(prefix)) registry.delete(key);
+    }
+    forgetNativeListeners(id);
+    forgetControlled(id);
+}
+
+/// Native listeners this module has armed and installed, per widget id, by
+/// the event name the bridge dispatches. A listener installed here is a
+/// trampoline that reads the registry at dispatch time, so while it stays
+/// installed a handler whose identity changes (every inline arrow function,
+/// every render) needs a registry write and no bridge call. The record
+/// belongs to one native widget and one installed bridge: a widget created
+/// again under the same id (applyAllProps), a detached subtree
+/// (clearMaterializedEventCallbacks) or a replaced bridge starts it over.
+const nativeListeners = new Map<string, Set<string>>();
+let nativeListenersBridge: unknown = null;
+
+function nativeListenerSet(id: string): Set<string> {
+    if (g.on !== nativeListenersBridge) {
+        nativeListeners.clear();
+        nativeListenersBridge = g.on;
+    }
+    let set = nativeListeners.get(id);
+    if (!set) {
+        set = new Set<string>();
+        nativeListeners.set(id, set);
+    }
+    return set;
+}
+
+function forgetNativeListeners(id: string): void {
+    nativeListeners.delete(id);
+}
+
+let _aap_count = 0;
+function logApply(stage: string, id: string, type: string, propCount: number): void {
+    _aap_count++;
+    if (_aap_count <= 60) {
+        const lg = (g as Record<string, AnyFn | undefined>).__spectrLog;
+        if (typeof lg === 'function') {
+            lg('[applyAll#' + _aap_count + '] ' + stage + ' ' + type + '/' + id + ' props=' + propCount);
+        }
+    }
+}
+
+/// Returns true if the prop is purely React-internal (not a bridge setter).
+function isReactInternal(key: string): boolean {
+    return (
+        key === 'children' ||
+        key === 'key' ||
+        key === 'ref' ||
+        key === 'id'
+    );
+}
+
+/// Returns true if the prop is an event handler (onX) that we route
+/// through the bridge's global `on(id, eventName, fn)` registrar.
+///
+/// Exported because the commit-time metadata gate needs the same answer: React
+/// recreates every inline handler on every render, so a handler-only diff is
+/// the most common commit there is, and its payload is a function identity --
+/// never geometry.
+export function isEventHandler(key: string): boolean {
+    return key.startsWith('on') && key.length > 2 && key[2] === key[2]?.toUpperCase();
+}
+
+function virtualListPropRank(key: string): number {
+    if (isEventHandler(key)) return -1;
+    switch (key) {
+        case 'rowCount': return 0;
+        case 'rowHeight': return 1;
+        case 'overscan': return 2;
+        case 'selectionMode': return 3;
+        case 'selected': return 4;
+        case 'renderRow': return 5;
+        case 'scrollToRow': return 6;
+        default: return 100;
+    }
+}
+
+function orderedPropKeys(type: string, props: Record<string, unknown>): string[] {
+    const keys = Object.keys(props);
+    if (type !== 'VirtualList' && type !== 'virtuallist' && type !== 'virtual-list') return keys;
+    return keys
+        .map((key, index) => ({ key, index }))
+        .sort((a, b) => virtualListPropRank(a.key) - virtualListPropRank(b.key) || a.index - b.index)
+        .map((item) => item.key);
+}
+
+/// A prop that is missing, or present with nothing to apply.
+function isAbsent(props: Record<string, unknown>, key: string): boolean {
+    return !(key in props) || props[key] === undefined || props[key] === null;
+}
+
+function isVirtualListType(type: string): boolean {
+    return type === 'VirtualList' || type === 'virtuallist' || type === 'virtual-list';
+}
+
+function isSvgPathType(type: string): boolean {
+    // host-config maps both the typed component and the supported lowercase
+    // SVG intrinsic to createSvgPath, so both share this compound paint state.
+    return type === 'SvgPath' || type === 'path';
+}
+
+function isSvgRectType(type: string): boolean {
+    return type === 'SvgRect' || type === 'rect';
+}
+
+function isSvgLineType(type: string): boolean {
+    return type === 'SvgLine' || type === 'line';
+}
+
+function hasProp(props: Record<string, unknown>, key: string): boolean {
+    return Object.prototype.hasOwnProperty.call(props, key)
+        && props[key] !== undefined && props[key] !== null;
+}
+
+/// `setSvgStroke` deliberately clears an old gradient so a solid stroke wins.
+/// Treat the solid fallback and gradient override as one compound state:
+/// always apply the fallback first, then the gradient, independent of JSX key
+/// order. On updates this same ordering preserves an unchanged gradient when
+/// its fallback changes and restores the fallback when the gradient disappears.
+function applySvgPathStrokeState(id: string, props: Record<string, unknown>, clearing = false): void {
+    const hasStroke = hasProp(props, 'stroke');
+    const hasGradient = hasProp(props, 'strokeGradient')
+        && String(props.strokeGradient).length > 0;
+    if (hasStroke) {
+        call('setSvgStroke', id, String(props.stroke));
+    } else if (clearing) {
+        // Removing an authored fallback must not leave its old color behind:
+        // an invalid retained gradient falls back to the widget's SVG-default
+        // black, while removing the whole stroke disables stroking.
+        call('setSvgStroke', id, hasGradient ? '#000000' : 'none');
+    }
+    if (hasGradient) {
+        call('setSvgStrokeGradient', id, String(props.strokeGradient));
+    }
+}
+
+/// Map a React-style on* prop to the bridge event name. The bridge
+/// dispatches:
+///   on_click → 'click'        (Button, Panel, etc.)
+///   on_change → 'change'      (Knob, Fader, Checkbox, TextEditor)
+///   on_toggle → 'toggle'      (Toggle, ToggleButton)
+///   mouseenter / mouseleave   (Hover)
+///   dismiss                   (Modal close)
+function eventNameFor(propName: string): string {
+    const eventName = propName.slice(2);
+    switch (eventName) {
+        case 'Pan':
+            return 'panchange';
+        case 'Pinch':
+            return 'pinchchange';
+        case 'Rotate':
+            return 'rotatechange';
+        default:
+            return eventName.toLowerCase();
+    }
+}
+
+/// Hover/pointer events the bridge gates behind registerHover(id).
+/// onMouseEnter/onMouseLeave + their pointer-event aliases all map to
+/// the bridge's mouseenter/mouseleave dispatch path; without
+/// registerHover, the C++ side never fires the events even when the JS
+/// listener is installed.
+function isHoverEvent(eventName: string): boolean {
+    return (
+        eventName === 'mouseenter' ||
+        eventName === 'mouseleave' ||
+        eventName === 'pointerenter' ||
+        eventName === 'pointerleave'
+    );
+}
+
+/// The WidgetBridge only ever dispatches `mouseenter` / `mouseleave` for
+/// hover (see `registerHover` in `widget_bridge/event_api.cpp`, which
+/// installs `on_hover_enter` / `on_hover_leave` lambdas hard-coded to
+/// those two names). React's pointer-event spelling therefore has no
+/// native dispatch of its own: an `onPointerEnter` prop registered under
+/// `pointerenter` is never called, silently, because `registerHover`
+/// succeeds and the listener installs, it just listens for a name the
+/// C++ side never emits. Map the pointer spelling onto the name the
+/// bridge actually dispatches. The DOM path already does the equivalent
+/// in `core/view/js/web-compat-element-events.js`, which fires both
+/// synthetic events off the single native `mouseenter`.
+function nativeHoverNameFor(eventName: string): string {
+    if (eventName === 'pointerenter') return 'mouseenter';
+    if (eventName === 'pointerleave') return 'mouseleave';
+    return eventName;
+}
+
+/// React event names that share one native hover dispatch, in the order
+/// their handlers run. A node may carry both spellings (`onMouseEnter`
+/// and `onPointerEnter`); the bridge's listener table is replace-only,
+/// so registering each under the native name directly would drop one.
+/// Fan out from a single native listener instead.
+function hoverAliasesFor(nativeName: string): string[] {
+    if (nativeName === 'mouseenter') return ['mouseenter', 'pointerenter'];
+    if (nativeName === 'mouseleave') return ['mouseleave', 'pointerleave'];
+    return [nativeName];
+}
+
+/// Install one native hover listener that invokes every React handler
+/// registered for the spellings that share it. Returns the aggregate
+/// propagation decision (the strongest stop wins) so a handler on either
+/// spelling can still halt the native ancestor walk.
+function installHoverFanout(id: string, nativeName: string): void {
+    const aliases = hoverAliasesFor(nativeName);
+    const registry = eventCallbackRegistry();
+    if (!aliases.some((alias) => registry.has(`${id}:${alias}`))) {
+        call('on', id, nativeName, () => ({ __pulpEventPropagation: 0 }));
+        return;
+    }
+    call('on', id, nativeName, (...rawArgs: unknown[]) => {
+        let propagation = 0;
+        for (const alias of aliases) {
+            const callback = eventCallbackRegistry().get(`${id}:${alias}`);
+            if (!callback) continue;
+            const result = callback(...rawArgs) as
+                { __pulpEventPropagation?: number } | undefined;
+            const code = typeof result?.__pulpEventPropagation === 'number'
+                ? result.__pulpEventPropagation : 0;
+            if (code > propagation) propagation = code;
+        }
+        return { __pulpEventPropagation: propagation };
+    });
+}
+
+/// Pointer events the bridge gates behind registerPointer(id).
+/// onPointerDown / onPointerUp / onPointerCancel / onPointerMove map
+/// to the bridge's `on_pointer_event` callback path; without
+/// `registerPointer`, the C++ side never wires the callback into the
+/// View even though the JS listener is installed via
+/// `on(id, 'pointerdown', fn)`. This mirrors hover gating: installing
+/// the JS listener and arming the native dispatch path are separate
+/// bridge operations.
+function isPointerEvent(eventName: string): boolean {
+    return (
+        eventName === 'pointerdown' ||
+        eventName === 'pointerup' ||
+        eventName === 'pointercancel' ||
+        eventName === 'pointermove'
+    );
+}
+
+/// Wheel events go through a separate `registerWheel(id)` bridge call
+/// because the C++ dispatch lambda for wheel filters on `me.is_wheel`
+/// (`registerPointer`'s lambda early-returns on `is_wheel`, and
+/// `registerWheel`'s lambda early-returns on `!is_wheel`). Both can
+/// coexist on the same widget since each chains to the previous
+/// `on_pointer_event` lambda. Wheel handlers need this separate gate
+/// because pointer registration alone intentionally ignores wheel
+/// events.
+function isWheelEvent(eventName: string): boolean {
+    return eventName === 'wheel';
+}
+
+function gestureRegistrarFor(eventName: string): string | null {
+    switch (eventName) {
+        case 'tap':
+            return 'registerTapGesture';
+        case 'doubletap':
+            return 'registerDoubleTapGesture';
+        case 'longpress':
+            return 'registerLongPressGesture';
+        case 'panstart':
+        case 'panchange':
+        case 'panend':
+            return 'registerPanGesture';
+        case 'swipe':
+            return 'registerSwipeGesture';
+        case 'fling':
+            return 'registerFlingGesture';
+        case 'pinchstart':
+        case 'pinchchange':
+        case 'pinchend':
+            return 'registerPinchGesture';
+        case 'rotatestart':
+        case 'rotatechange':
+        case 'rotateend':
+            return 'registerRotateGesture';
+        default:
+            return null;
+    }
+}
+
+/// Arm the native dispatch path an event needs. Each registrar is idempotent
+/// on the bridge; it runs once when the listener is first installed.
+function armNativeEvent(id: string, eventName: string): void {
+    if (isHoverEvent(eventName)) {
+        // Arm the native hover dispatchers (re-registers replace the
+        // lambdas, same shape).
+        call('registerHover', id);
+    }
+    if (eventName === 'click') {
+        // Generic DOM-styled controls (lowercase <button>, role=button
+        // containers) do not have a stock widget subclass to pre-install an
+        // on_click callback. Arm the shared click-on-release seam explicitly.
+        // This is idempotent for native TextButton and keeps the whole owning
+        // rectangle,not its generated text child,as the action target.
+        call('registerClick', id);
+    }
+    if (isPointerEvent(eventName)) {
+        // Without this call the bridge keeps the JS listener in its
+        // dispatch table but the View's on_pointer_event callback is
+        // never armed. Idempotent on the bridge side.
+        call('registerPointer', id);
+    }
+    // Also arm the pointer dispatch path for mouse events. Do not do
+    // this for onClick: that is the W3C click-on-release semantic and
+    // routes through on_click; onClick alone intentionally does not arm
+    // pointer dispatch.
+    // Imported JSX bundles install onMouseDown / onMouseMove / onMouseUp
+    // handlers that need to fire on press, not release. Without pointer
+    // registration, hit_test returns the widget with has_pointer=no and
+    // the bridge's pointer event lambda never fires for mouse* event types.
+    if (eventName === 'mousedown' || eventName === 'mouseup' ||
+        eventName === 'mousemove') {
+        call('registerPointer', id);
+    }
+    if (isWheelEvent(eventName)) {
+        // Wheel dispatch is separately armed from pointer dispatch.
+        call('registerWheel', id);
+    }
+    const gestureRegistrar = gestureRegistrarFor(eventName);
+    if (gestureRegistrar) {
+        call(gestureRegistrar, id);
+    }
+}
+
+/// Wrap the React handler in a synthetic-event factory so JSX
+/// consumers receive a React-DOM-shaped event object (with
+/// `currentTarget`, `target`, `preventDefault`, `nativeEvent.rawArgs`,
+/// and event-type-specific fields) instead of the bridge's raw
+/// positional args. Without this, idiomatic handlers like
+///   onMouseEnter={e => e.currentTarget.style.background = 'rgba(...)'}
+/// crash with `Cannot read property 'style' of undefined`. See the
+/// synthetic-event module header for the full surface and the
+/// event-type → field-extraction routing.
+function syntheticEventCallback(id: string, eventName: string,
+                                handler: (e: unknown) => void): (...rawArgs: unknown[]) => unknown {
+    return (...rawArgs: unknown[]) => {
+        const evt = makeSyntheticEvent(id, eventName, rawArgs);
+        handler(evt);
+        // The native pointer router walks registered View ancestors after the
+        // target dispatch. Return a branded result so the JS bridge can carry
+        // React's propagation decision across those separate callbacks while
+        // preserving stopPropagation vs stopImmediatePropagation at target.
+        return {
+            __pulpEventPropagation: evt.isImmediatePropagationStopped() ? 2
+                : evt.isPropagationStopped() ? 1
+                : 0,
+        };
+    };
+}
+
+const INERT_EVENT_RESULT = () => ({ __pulpEventPropagation: 0 });
+
+function applyEventHandler(id: string, key: string, value: unknown): void {
+    const eventName = eventNameFor(key);
+    const registryKey = `${id}:${eventName}`;
+    const hover = isHoverEvent(eventName);
+    const nativeName = hover ? nativeHoverNameFor(eventName) : eventName;
+    const installed = nativeListenerSet(id);
+    if (typeof value !== 'function') {
+        const registry = eventCallbackRegistry();
+        registry.delete(registryKey);
+        // Nothing was installed for this event, so nothing can stay live.
+        if (!installed.has(nativeName)) return;
+        // The other hover spelling still owns the shared native listener,
+        // which reads the registry at dispatch and now skips this one.
+        if (hover && hoverAliasesFor(nativeName).some(
+            (alias) => registry.has(`${id}:${alias}`))) return;
+        // WidgetBridge's listener table is replace-only. Install an inert
+        // callback so a conditional React handler cannot remain live after
+        // its prop disappears. This is intentionally different from leaving
+        // the old closure registered: dynamic imported controls frequently
+        // change ownership while a menu/modal mounts or unmounts.
+        call('on', id, nativeName, INERT_EVENT_RESULT);
+        installed.delete(nativeName);
+        return;
+    }
+    eventCallbackRegistry().set(registryKey,
+        syntheticEventCallback(id, eventName, value as (e: unknown) => void));
+    // A new closure for an installed listener is a registry write only.
+    if (installed.has(nativeName)) return;
+    armNativeEvent(id, eventName);
+    installed.add(nativeName);
+    if (hover) {
+        // Both hover spellings route through one native dispatch name.
+        installHoverFanout(id, nativeName);
+        return;
+    }
+    call('on', id, nativeName, (...rawArgs: unknown[]) => {
+        noteDiscreteEdit(id, nativeName, rawArgs[0]);
+        const callback = eventCallbackRegistry().get(registryKey);
+        return callback ? callback(...rawArgs) : INERT_EVENT_RESULT();
+    });
+}
+
+/// Emit one setSvgRect call carrying the full geometry (x, y, width,
+/// height). Driven by applyOne when any geometry prop changes so the
+/// bridge never sees a partial update that would clobber unset axes
+/// back to zero. Reads current values from `props` (the live React
+/// props snapshot) and falls back to 0 for unset axes, matching SVG
+/// `<rect>` defaults.
+function emitSvgRectGeometry(id: string, props: Record<string, unknown>): void {
+    const x = typeof props.x === 'number' ? props.x as number : 0;
+    const y = typeof props.y === 'number' ? props.y as number : 0;
+    const w = typeof props.width === 'number' ? props.width as number : 0;
+    const h = typeof props.height === 'number' ? props.height as number : 0;
+    call('setSvgRect', id, x, y, w, h);
+}
+
+/// Emit one setSvgLine call carrying the full geometry (x1, y1, x2,
+/// y2). Same partial-update guard as emitSvgRectGeometry.
+function emitSvgLineGeometry(id: string, props: Record<string, unknown>): void {
+    const x1 = typeof props.x1 === 'number' ? props.x1 as number : 0;
+    const y1 = typeof props.y1 === 'number' ? props.y1 as number : 0;
+    const x2 = typeof props.x2 === 'number' ? props.x2 as number : 0;
+    const y2 = typeof props.y2 === 'number' ? props.y2 as number : 0;
+    call('setSvgLine', id, x1, y1, x2, y2);
+}
+
+const shaderUniformSnapshots = new Map<string, string>();
+
+function scrollNumber(value: unknown): number {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+}
+
+/// ScrollView's native scrollTo replaces both axes. Coalesce the two React
+/// props into one call and retain the last authored value for the axis that a
+/// later render leaves unchanged. These are authored offsets, not native
+/// readback: wheel scrolling cannot be preserved on an uncontrolled axis.
+function applyScrollOffsets(
+    id: string,
+    type: string,
+    props: Record<string, unknown>,
+    previous?: Record<string, unknown>,
+): boolean {
+    if (type !== 'ScrollView') return false;
+    const hasTop = Object.prototype.hasOwnProperty.call(props, 'scrollTop')
+        && props.scrollTop !== null && props.scrollTop !== undefined;
+    const hasLeft = Object.prototype.hasOwnProperty.call(props, 'scrollLeft')
+        && props.scrollLeft !== null && props.scrollLeft !== undefined;
+    const changed = previous
+        ? previous.scrollTop !== props.scrollTop || previous.scrollLeft !== props.scrollLeft
+        : hasTop || hasLeft;
+    if (!changed || (!hasTop && !hasLeft && previous)) return false;
+    const prior = { x: scrollNumber(previous?.scrollLeft), y: scrollNumber(previous?.scrollTop) };
+    const next = {
+        x: hasLeft ? scrollNumber(props.scrollLeft) : prior.x,
+        y: hasTop ? scrollNumber(props.scrollTop) : prior.y,
+    };
+    call('scrollTo', id, next.x, next.y);
+    return true;
+}
+
+function isFontSizeDependentTypography(
+    key: string,
+    oldValue: unknown,
+    newValue: unknown,
+    oldProps: Record<string, unknown>,
+    newProps: Record<string, unknown>,
+): boolean {
+    if (oldValue !== newValue || (key !== 'lineHeight' && key !== 'letterSpacing')) return false;
+    return resolveTypographyLength(key, oldValue, oldProps)
+        !== resolveTypographyLength(key, newValue, newProps);
+}
+
+function applyShaderProp(id: string, type: string, value: unknown): boolean {
+    if (type !== 'Knob' && type !== 'Fader' && type !== 'Toggle') return false;
+    if (value === null || value === undefined) {
+        call('clearWidgetShader', id);
+        shaderUniformSnapshots.delete(id);
+        return true;
+    }
+    if (typeof value !== 'object') return true;
+    const shader = value as {
+        sksl?: unknown;
+        geometry?: unknown;
+        uniforms?: Record<string, number | number[]>;
+        reach?: unknown;
+    };
+    if (typeof shader.sksl !== 'string' || shader.sksl.length === 0) return true;
+    call('setWidgetShader', id, shader.sksl, {
+        geometry: shader.geometry,
+        reach: typeof shader.reach === 'number' ? shader.reach : 0,
+    });
+    const uniforms = shader.uniforms ?? {};
+    const encoded = JSON.stringify(uniforms);
+    if (shaderUniformSnapshots.get(id) !== encoded) {
+        call('setWidgetShaderUniforms', id, uniforms);
+        shaderUniformSnapshots.set(id, encoded);
+    }
+    return true;
+}
+
+/// Apply a single prop to its corresponding bridge setter.
+///
+/// Thin dispatcher over the per-domain handler modules. Each
+/// `applyXProp` returns true if it claimed the key. Domain keys are
+/// mutually exclusive, so the call order does not change which handler
+/// runs. The type-dispatched widget/SVG props (`data` / `level` /
+/// `value` / `d` / `viewBox` / `fill` / `stroke` / `strokeWidth`) stay
+/// inline below because they route on `type`, not purely on `key`, and
+/// do not fit the layout/paint/typography/transform/events taxonomy.
+function applyOne(id: string, type: string, key: string, value: unknown, props?: Record<string, unknown>): void {
+    if (value === undefined || value === null) {
+        if (isVirtualListType(type)) {
+            if (key === 'selectionMode') call('setVirtualListSelectionMode', id, 'single');
+            if (key === 'selected') call('setVirtualListSelected', id, -1);
+        }
+        // Nothing to write; applyChangedProps resets the slots of a prop
+        // whose value became null or undefined (prop-applier-reset.ts).
+        return;
+    }
+
+    if (key === 'shader' && applyShaderProp(id, type, value)) return;
+
+    // SvgRect / SvgLine geometry props collide with View flex props
+    // (width/height) and event/positioning props (x/y), so dispatch on
+    // `type` BEFORE the generic flex routing. The geometry setters are
+    // atomic: one bridge call per rect/line carries the full quad of
+    // coords to avoid partial updates clobbering unset axes back to zero.
+    if (isSvgRectType(type)) {
+        if (key === 'x' || key === 'y' || key === 'width' || key === 'height') {
+            if (props) emitSvgRectGeometry(id, props);
+            return;
+        }
+    }
+    if (isSvgLineType(type)) {
+        if (key === 'x1' || key === 'y1' || key === 'x2' || key === 'y2') {
+            if (props) emitSvgLineGeometry(id, props);
+            return;
+        }
+    }
+
+    // Per-domain dispatch. The first handler that claims the key wins;
+    // since domain keys are disjoint this is deterministic.
+    if (applyLayoutProp(id, key, value, props)) return;
+    if (applyPaintProp(id, key, value)) return;
+    if (applyTypographyProp(id, key, value, props)) return;
+    if (applyTransformProp(id, key, value)) return;
+    if (applyEventProp(id, key, value, props)) return;
+
+    // `<img src="…">` / `<Image src="…">` must forward to the ImageView
+    // bridge via setImageSource, mirroring the non-React web-compat path
+    // in core/view/js/web-compat-element.js. Without this, the
+    // prop-applier creates the Image widget but never dispatches `src`,
+    // so the emitted bundle has zero setImageSource calls and every
+    // <img> renders as the empty "IMG" placeholder. Gate on the Image
+    // element types: host-config maps both the lowercase `'img'`
+    // intrinsic and the `'Image'` component to createImage, so accept
+    // both; a stray `src` on any other widget cannot hit the
+    // ImageView-only setter. The path is forwarded verbatim; C++
+    // setImageSource -> ImageView::set_image_path resolves the rest,
+    // exactly as the web-compat path does.
+    if ((type === 'img' || type === 'Image') && key === 'src') {
+        call('setImageSource', id, String(value));
+        return;
+    }
+
+    if (isVirtualListType(type)) {
+        switch (key) {
+            case 'rowCount':      return call('setVirtualListRowCount', id, value as number);
+            case 'rowHeight':     return call('setListRowHeight', id, value as number);
+            case 'overscan':      return call('setVirtualListOverscan', id, value as number);
+            case 'selectionMode': return call('setVirtualListSelectionMode', id, value as string);
+            case 'selected':      return call('setVirtualListSelected', id, value as number);
+            case 'scrollToRow':   return call('scrollVirtualListToRow', id, value as number);
+            case 'renderRow':     return call('refreshVirtualListRows', id);
+        }
+    }
+
+    // Type-dispatched widget / SVG props, these route on the widget
+    // `type`, not purely on the prop key, so they stay in the
+    // dispatcher rather than a key-keyed domain module.
+    switch (key) {
+        // Widget-specific data
+        case 'data':
+            // <Spectrum data={...}> + <Waveform data={...}> share the prop
+            // name; we route based on widget type at the call site.
+            if (type === 'Spectrum') return call('setSpectrumData', id, value as number[] | Float32Array);
+            if (type === 'Waveform') return call('setWaveformData', id, value as number[] | Float32Array);
+            return;
+        // A ScrollView's offset. Wheel, trackpad and scrollbar drag are
+        // handled natively and never come through here; this exists for
+        // PROGRAMMATIC scrolling -- keyboard paging over a long document,
+        // scroll-into-view, restoring a saved position. Without it a scripted
+        // UI could create a ScrollView and size its content but not move it,
+        // so any surface wanting keyboard scrolling had to hand-roll scrolling
+        // in React, re-rendering the subtree on every input sample.
+        //
+        // Named for the DOM property it mirrors, so `scrollTop` on a
+        // ScrollView means what a web author expects.
+        case 'scrollTop':
+            if (type === 'ScrollView') return call('scrollTo', id, 0, Number(value));
+            return;
+        case 'scrollLeft':
+            if (type === 'ScrollView') return call('scrollTo', id, Number(value), 0);
+            return;
+        case 'level':    return call('setMeterLevel', id, value as number);
+        case 'value':
+            // Type-aware routing: the bridge has separate setters per
+            // widget type. setValue only handles knob/fader/toggle/
+            // checkbox; Progress wants setProgress, and Spectrum /
+            // Waveform use the 'data' prop handled above.
+            if (type === 'Progress')   return call('setProgress', id, value as number);
+            if (type === 'Meter')      return call('setMeterLevel', id, value as number);
+            return writeControlledValue(id, value as number);
+        // A Toggle or Checkbox position, as the 0/1 setValue takes.
+        case 'checked':     return writeControlledValue(id, value ? 1 : 0);
+        case 'min':         return call('setMin', id, Number(value));
+        case 'max':         return call('setMax', id, Number(value));
+        case 'step':        return call('setStep', id, Number(value));
+        case 'accentColor': return call('setAccentColor', id, String(_resolveVar(value)));
+        case 'placeholder':
+            if (type === 'input' || type === 'textarea' || type === 'TextEditor') {
+                return call('setPlaceholder', id, String(value));
+            }
+            return;
+        // HTML's boolean `disabled` prop is semantic state, not paint-only
+        // opacity.  Forward its inverse to View::enabled() so native controls
+        // both reject input and can select their disabled platform skin.
+        case 'disabled':    return call('setEnabled', id, !Boolean(value));
+        case 'orientation': return call('setOrientation', id, String(value));
+
+        // SvgPath wires the SvgPathWidget bridge surface through a
+        // typed JSX intrinsic.
+        case 'd':            return call('setSvgPath', id, value as string);
+        case 'viewBox': {
+            // A lowercase raw-SVG `<svg>` is represented by a generic layout
+            // container. Its descendants receive the viewport transform from
+            // host-config when they materialize; sending this setter to the
+            // container is a no-op and previously made the metadata appear to
+            // be applied while paths still painted in unscaled coordinates.
+            if (String(type).toLowerCase() === 'svg') return;
+            // Array form `[w, h]`, the original wiring.
+            if (Array.isArray(value) && value.length >= 2) {
+                return call('setSvgViewBox', id, value[0] as number, value[1] as number);
+            }
+            // SVG-spec string form `'min-x min-y w h'` (or `'w h'`).
+            // The bridge consumes width + height only today
+            // (the SvgPathWidget doesn't yet honor the min-x / min-y
+            // origin offset, tracked as a separate paint-side gap),
+            // so we extract the trailing two tokens as w/h. This makes
+            // `<svg viewBox="0 0 24 24">` exports from Figma / Lucide
+            // / Heroicons / etc. flow through without the consumer
+            // having to re-shape the value into a tuple.
+            if (typeof value === 'string') {
+                const tokens = value.trim().split(/[\s,]+/).map(parseFloat).filter(Number.isFinite);
+                if (tokens.length === 4) {
+                    return call('setSvgViewBox', id, tokens[2], tokens[3]);
+                }
+                if (tokens.length === 2) {
+                    return call('setSvgViewBox', id, tokens[0], tokens[1]);
+                }
+            }
+            return;
+        }
+        case 'fill':         return call('setSvgFill', id, value as string);
+        case 'fillRule':     return call('setSvgFillRule', id, value as string);
+        case 'fillGradient': return call('setSvgFillGradient', id, value as string);
+        case 'stroke':       return call('setSvgStroke', id, value as string);
+        case 'strokeGradient': return call('setSvgStrokeGradient', id, value as string);
+        case 'strokeWidth':  return call('setSvgStrokeWidth', id, value as number);
+
+        default:
+            // Unknown prop, silently ignore. We could warn here in DEV
+            // builds, but staying chatty in prod is annoying. The
+            // typed JSX intrinsics in types.ts already gate this.
+            return;
+    }
+}
+
+// ── normalizeHostProps ───────────────────────────────────────────────
+//
+// Imported React apps (design-tool or runtime-import bundles) use
+// HTML-style JSX:
+//   <div style={{ width: 100, color: 'red' }} className="card">
+// This flattens that to the shape applyAllProps/applyChangedProps
+// expect (flat `width: 100, color: 'red'` props).
+//
+// Merge precedence: className rules < inline style < explicit flat
+// props. Later overrides earlier.
+
+/// Non-enumerable slot on prop sets produced by style/className flattening,
+/// holding the keys that came from the style source. Distinguishes DERIVED
+/// props from author-written ones.
+const DERIVED_STYLE_MARKER = '__pulpDerivedStyle';
+
+/// True when `props` was produced by normalizeHostProps' flattening path.
+function isDerivedStyleProps(props: Record<string, unknown>): boolean {
+    return props[DERIVED_STYLE_MARKER] instanceof Set;
+}
+
+/// Whether `key` was hoisted out of `style`/`className` into `props`.
+function isDerivedKey(props: Record<string, unknown>, key: string): boolean {
+    const keys = props[DERIVED_STYLE_MARKER];
+    return keys instanceof Set && keys.has(key);
+}
+
+type ClassRulesProvider = (className: string) => Record<string, unknown> | null;
+
+let _classRulesProvider: ClassRulesProvider | null = null;
+
+/// Install a class-rules resolver. runtime-import wires this from the
+/// classnames.json that the source bundle ships. Pass null to clear.
+export function setClassRulesProvider(fn: ClassRulesProvider | null): void {
+    _classRulesProvider = fn;
+}
+
+/// Returns the active provider (test helper).
+export function getClassRulesProvider(): ClassRulesProvider | null {
+    return _classRulesProvider;
+}
+
+/// Flatten raw HTML/JSX props with `style` object + `className` string
+/// into the flat-prop shape prop-applier consumes. Idempotent on
+/// already-flat input.
+export function normalizeHostProps(
+    _type: string,
+    rawProps: Record<string, unknown>,
+): Record<string, unknown> {
+    const hasStyle = rawProps.style !== undefined && rawProps.style !== null
+        && typeof rawProps.style === 'object';
+    const hasClassName = typeof rawProps.className === 'string'
+        && (rawProps.className as string).length > 0;
+    // A render WITHOUT a style/className source yields a differently SHAPED
+    // prop set than one with it: the flattened keys are simply absent rather
+    // than removed. The removal walk in applyChangedProps must not read that
+    // absence as a deletion, or the element is erased instead of restyled.
+    // Mark which shape a prop set came from so the two are separable.
+    //
+    // A source that is present but empty (`style={hidden ? s : undefined}`,
+    // `className=""`) is the author clearing it, not a render that left it
+    // out, so it keeps the flattened shape and its removals still reset.
+    if (!hasStyle && !hasClassName
+        && !('style' in rawProps) && !('className' in rawProps)) return rawProps;
+
+    // Use a null-prototype prop map so malformed CSS rules or hostile
+    // class-rules JSON carrying `__proto__` / `constructor` /
+    // `prototype` keys cannot poison Object.prototype through merges.
+    // The applier later iterates `Object.keys(out)`, which is safe on a
+    // null-prototype object.
+    const out: Record<string, unknown> = Object.create(null);
+
+    // Filter dangerous keys when merging untrusted provider output. The
+    // inline `style` and flat-prop paths trust the JSX author (React
+    // already strips these at element-construction time), but the
+    // class-rules provider returns JSON parsed from a bundle asset ,
+    // that's untrusted input.
+    const isSafeKey = (k: string): boolean =>
+        k !== '__proto__' && k !== 'constructor' && k !== 'prototype';
+
+    const derived = new Set<string>();
+    if (hasClassName && _classRulesProvider) {
+        const tokens = (rawProps.className as string)
+            .split(/\s+/).filter(t => t.length > 0);
+        for (const tok of tokens) {
+            const rules = _classRulesProvider(tok);
+            if (!rules) continue;
+            for (const k of Object.keys(rules)) {
+                if (!isSafeKey(k)) continue;
+                out[k] = (rules as Record<string, unknown>)[k];
+                derived.add(k);
+            }
+        }
+    }
+
+    if (hasStyle) {
+        const style = rawProps.style as Record<string, unknown>;
+        for (const k of Object.keys(style)) {
+            out[k] = style[k];
+            derived.add(k);
+        }
+    }
+
+    for (const k of Object.keys(rawProps)) {
+        if (k === 'style' || k === 'className') continue;
+        out[k] = rawProps[k];
+    }
+
+    // Non-enumerable so the marker never reaches a bridge setter, a key
+    // walk, or a shallow diff.
+    Object.defineProperty(out, DERIVED_STYLE_MARKER, {
+        value: derived, enumerable: false,
+    });
+    return out;
+}
+
+/// Apply a style object to a widget the host config is creating, through the
+/// same per-key setters an authored prop uses.
+export function applyStyleProps(id: string, type: string, style: Record<string, unknown>): void {
+    for (const key of Object.keys(style)) applyOne(id, type, key, style[key], style);
+}
+
+// These native values are compound state, independent of layout x/y or
+// generic style resets. Apply options before selection and both pad axes at once.
+function isWidgetValueProp(type: string, key: string): boolean {
+    return ((type === 'Combo' || type === 'ListBox') && (key === 'options' || key === 'selected'))
+        || (type === 'XYPad' && (key === 'x' || key === 'y'));
+}
+
+function applyWidgetValues(id: string, type: string, props: Record<string, unknown>,
+                           previous: Record<string, unknown> = {}): boolean {
+    if (type === 'XYPad' && (props.x !== previous.x || props.y !== previous.y)) {
+        call('setXY', id, props.x ?? 0.5, props.y ?? 0.5);
+        return true;
+    }
+    if (type !== 'Combo' && type !== 'ListBox') return false;
+    const optionsChanged = props.options !== previous.options;
+    const selectionChanged = props.selected !== previous.selected;
+    if (optionsChanged) call(type === 'Combo' ? 'setItems' : 'setListItems', id, props.options ?? []);
+    if (selectionChanged || (optionsChanged && props.selected != null)) {
+        call(type === 'Combo' ? 'setSelected' : 'setListSelected', id,
+            props.selected ?? (type === 'Combo' ? 0 : -1));
+    }
+    return optionsChanged || selectionChanged;
+}
+
+/// Apply ALL props for first-attach. Called from appendInitialChild /
+/// appendChild after the instance lands on the bridge.
+export function applyAllProps(instance: PulpInstance): void {
+    const { id, type, props } = instance;
+    logApply('applyAll', id, type, Object.keys(props).length);
+    applyWidgetValues(id, type, props);
+    const scrollOffsetsApplied = applyScrollOffsets(id, type, props);
+    // A first attach is a new native widget: nothing is installed on it yet,
+    // whatever an earlier widget under this id had.
+    forgetNativeListeners(id);
+    noteControlledProps(id, props);
+    // For SvgRect / SvgLine, emit the geometry call once up-front from
+    // the full props snapshot, then skip the per-prop dispatch for the
+    // four geometry keys. Otherwise we'd issue four identical
+    // setSvgRect / setSvgLine calls during the loop.
+    let svgGeometryEmitted = false;
+    if (isSvgRectType(type)) {
+        if (('x' in props) || ('y' in props) || ('width' in props) || ('height' in props)) {
+            emitSvgRectGeometry(id, props);
+            svgGeometryEmitted = true;
+        }
+    } else if (isSvgLineType(type)) {
+        if (('x1' in props) || ('y1' in props) || ('x2' in props) || ('y2' in props)) {
+            emitSvgLineGeometry(id, props);
+            svgGeometryEmitted = true;
+        }
+    }
+    for (const key of orderedPropKeys(type, props)) {
+        if (isReactInternal(key)) continue;
+        if (isWidgetValueProp(type, key)) continue;
+        if (key === 'children') continue;  // text children handled by caller
+        if (scrollOffsetsApplied && type === 'ScrollView'
+            && (key === 'scrollTop' || key === 'scrollLeft')) continue;
+        if (isSvgPathType(type) && (key === 'stroke' || key === 'strokeGradient')) continue;
+        if (isEventHandler(key)) {
+            applyEventHandler(id, key, props[key]);
+            continue;
+        }
+        if (svgGeometryEmitted) {
+            if (isSvgRectType(type) && (key === 'x' || key === 'y' || key === 'width' || key === 'height')) continue;
+            if (isSvgLineType(type) && (key === 'x1' || key === 'y1' || key === 'x2' || key === 'y2')) continue;
+        }
+        applyOne(id, type, key, props[key], props);
+    }
+    if (isSvgPathType(type)
+        && (hasProp(props, 'stroke') || hasProp(props, 'strokeGradient'))) {
+        applySvgPathStrokeState(id, props);
+    }
+}
+
+/// Apply ONLY changed props for commitUpdate.
+/// Returns true if any setter was called (caller can use for repaint hints).
+export function applyChangedProps(
+    instance: PulpInstance,
+    oldProps: Record<string, unknown>,
+    newProps: Record<string, unknown>,
+): boolean {
+    const { id, type } = instance;
+    let mutated = applyWidgetValues(id, type, newProps, oldProps);
+    const scrollOffsetsApplied = applyScrollOffsets(id, type, newProps, oldProps);
+    mutated = scrollOffsetsApplied || mutated;
+    noteControlledProps(id, newProps);
+    const selectionModeChanged = isVirtualListType(type) &&
+        oldProps.selectionMode !== newProps.selectionMode;
+    const rowCountChanged = isVirtualListType(type) &&
+        oldProps.rowCount !== newProps.rowCount;
+    const svgPathStrokeChanged = isSvgPathType(type) && (
+        oldProps.stroke !== newProps.stroke
+        || oldProps.strokeGradient !== newProps.strokeGradient
+    );
+
+    // Coalesce SvgRect / SvgLine geometry changes into a single
+    // setSvgRect / setSvgLine call sourced from the post-update props
+    // snapshot. Without this, four separate prop diffs would each try
+    // to emit a partial geometry update.
+    const svgRectGeoChanged = isSvgRectType(type) && (
+        oldProps.x !== newProps.x ||
+        oldProps.y !== newProps.y ||
+        oldProps.width !== newProps.width ||
+        oldProps.height !== newProps.height
+    );
+    const svgLineGeoChanged = isSvgLineType(type) && (
+        oldProps.x1 !== newProps.x1 ||
+        oldProps.y1 !== newProps.y1 ||
+        oldProps.x2 !== newProps.x2 ||
+        oldProps.y2 !== newProps.y2
+    );
+    if (svgRectGeoChanged) {
+        emitSvgRectGeometry(id, newProps);
+        mutated = true;
+    }
+    if (svgLineGeoChanged) {
+        emitSvgLineGeometry(id, newProps);
+        mutated = true;
+    }
+
+    // Walk new props, set anything that changed value
+    for (const key of orderedPropKeys(type, newProps)) {
+        if (isReactInternal(key)) continue;
+        if (isWidgetValueProp(type, key)) continue;
+        if (key === 'children') continue;
+        if (scrollOffsetsApplied && type === 'ScrollView'
+            && (key === 'scrollTop' || key === 'scrollLeft')) continue;
+        if (svgPathStrokeChanged && (key === 'stroke' || key === 'strokeGradient')) continue;
+        // SvgRect / SvgLine geometry already emitted above; skip the
+        // per-prop dispatch so we don't double-fire bridge calls.
+        if (svgRectGeoChanged && isSvgRectType(type) && (key === 'x' || key === 'y' || key === 'width' || key === 'height')) continue;
+        if (svgLineGeoChanged && isSvgLineType(type) && (key === 'x1' || key === 'y1' || key === 'x2' || key === 'y2')) continue;
+        if (oldProps[key] !== newProps[key]) {
+            if (isEventHandler(key)) {
+                applyEventHandler(id, key, newProps[key]);
+            } else {
+                applyOne(id, type, key, newProps[key], newProps);
+            }
+            mutated = true;
+        }
+    }
+    if (oldProps.fontSize !== newProps.fontSize) {
+        for (const key of ['lineHeight', 'letterSpacing']) {
+            if (Object.prototype.hasOwnProperty.call(newProps, key)
+                && isFontSizeDependentTypography(
+                    key, oldProps[key], newProps[key], oldProps, newProps)) {
+                applyOne(id, type, key, newProps[key], newProps);
+                mutated = true;
+            }
+        }
+    }
+    if (svgPathStrokeChanged) {
+        applySvgPathStrokeState(id, newProps, true);
+        mutated = true;
+    }
+
+    // An overlay's declared parent and the props that claim it are one
+    // compound state, and only the claim reaches the bridge. A re-pointed
+    // declaration whose claiming key did not move would otherwise change
+    // nothing, leaving a lifted submenu nested on the menu it just left.
+    if (reclaimOverlayForMovedParent(id, oldProps, newProps)) mutated = true;
+
+    // Props hoisted out of `style`/`className` are DERIVED, not authored.
+    // When a render arrives with no style source at all, the derived keys
+    // are ABSENT rather than deleted, so resetting them here erases the
+    // element (a chip loses fill, border, padding and text in one frame and
+    // reads as "disappeared on hover"). Only honour a removal when both prop
+    // sets came from the same shape. An author-removed style, a key dropped
+    // from a style object, or a style prop set to undefined, still resets.
+    const derivedShapeChanged =
+        isDerivedStyleProps(oldProps) && !isDerivedStyleProps(newProps);
+
+    // Walk old props, every key that disappeared hands its native slots back
+    // to the widget's starting value (prop-applier-reset.ts). A key whose
+    // value became null or undefined is gone too: the walk above skips it,
+    // because applyOne has nothing to write for an absent value.
+    const removed: Array<{ key: string; oldValue: unknown }> = [];
+    for (const key of Object.keys(oldProps)) {
+        if (isReactInternal(key)) continue;
+        if (isWidgetValueProp(type, key)) continue;
+        if (key === 'children') continue;
+        if (scrollOffsetsApplied && type === 'ScrollView'
+            && (key === 'scrollTop' || key === 'scrollLeft')) continue;
+        if (svgPathStrokeChanged && (key === 'stroke' || key === 'strokeGradient')) continue;
+        if (derivedShapeChanged && isDerivedKey(oldProps, key)) continue;
+        if (isEventHandler(key)) {
+            if (key in newProps) continue;
+            applyEventHandler(id, key, undefined);
+            mutated = true;
+            continue;
+        }
+        if (!isAbsent(newProps, key) || isAbsent(oldProps, key)) continue;
+        // `<Image>` whose `src` is removed clears the ImageView back to the
+        // empty placeholder, matching the web-compat removeAttribute('src')
+        // reset semantics. Empty string is the bridge-side "no source"
+        // sentinel. `type` is typed as keyof IntrinsicElementMap (which lists
+        // 'Image' but not the lowercase 'img' intrinsic); cast for the 'img'
+        // compare so the clear-on-removal seam matches the set seam.
+        if (key === 'src' && ((type as string) === 'img' || type === 'Image')) {
+            call('setImageSource', id, '');
+            mutated = true;
+            continue;
+        }
+        // A null selection value was already reset by applyOne above.
+        if (isVirtualListType(type) && (key === 'selectionMode' || key === 'selected')
+            && key in newProps) continue;
+        if (isVirtualListType(type) && key === 'selectionMode') {
+            call('setVirtualListSelectionMode', id, 'single');
+            mutated = true;
+            continue;
+        }
+        if (isVirtualListType(type) && key === 'selected') {
+            call('setVirtualListSelected', id, -1);
+            mutated = true;
+            continue;
+        }
+        removed.push({ key, oldValue: oldProps[key] });
+    }
+    if (removed.length > 0) {
+        const survivors = orderedPropKeys(type, newProps).filter((key) =>
+            !isReactInternal(key) && key !== 'children' && !isEventHandler(key)
+            && !isAbsent(newProps, key));
+        const creationStyle = instance.creationStyle;
+        if (resetRemovedStyleKeys(id, type, removed, survivors, creationStyle,
+            (key, value, fromCreation) => {
+                if (fromCreation) applyOne(id, type, key, value, creationStyle);
+                else applyOne(id, type, key, newProps[key], newProps);
+            })) {
+            mutated = true;
+        }
+    }
+
+    if ((selectionModeChanged || rowCountChanged) && Object.prototype.hasOwnProperty.call(newProps, 'selected')) {
+        applyOne(id, type, 'selected', newProps.selected, newProps);
+        mutated = true;
+    }
+
+    return mutated;
+}
