@@ -118,6 +118,13 @@ public:
         /// feature.
         bool enable_gpu_timing = false;
 
+        /// Keep the native backing layer visible until resume_presentation().
+        /// The host still attaches, initializes GPU state, and services idle
+        /// and frame callbacks. macOS GPU hosts paint only background_rgb
+        /// while deferred. Other platform hosts may treat this as unsupported
+        /// and present normally.
+        bool defer_presentation = false;
+
         /// The editor's own background, 0xRRGGBB. The host paints it wherever
         /// the view tree does not: the native layer before the first frame,
         /// every frame before the editor's document has mounted, and the
@@ -221,6 +228,15 @@ public:
         return false;
     }
 
+    /// Allow the root view to be painted after a deferred open. UI thread
+    /// only. Idempotent. Platform hosts that support deferral schedule their
+    /// first root frame here. Base-class hosts simply request a repaint.
+    virtual void resume_presentation() {
+        if (presentation_resumed_) return;
+        presentation_resumed_ = true;
+        repaint();
+    }
+
     // ── Bounded repaint damage ──────────────────────────────────────────
     //
     // Mirrors WindowHost's pending-damage surface so `View::request_repaint(Rect)`
@@ -252,6 +268,13 @@ public:
 
 protected:
     PendingDamage damage_;
+
+    /// Concrete hosts use this to keep their backing-layer paint background
+    /// only while Options::defer_presentation is active. Hosts that do not
+    /// support deferral can ignore it and continue presenting normally.
+    bool root_presentation_allowed() const noexcept {
+        return !presentation_deferred_ || presentation_resumed_;
+    }
 
 public:
 
@@ -601,6 +624,9 @@ public:
     virtual float scale_factor() const { return 1.0f; }
 
 private:
+    bool presentation_deferred_ = false;
+    bool presentation_resumed_ = false;
+
     // Set by create() only after the host has been installed on the tree.
     // The View tree must outlive its host, as concrete hosts also retain it.
     View* root_view_ = nullptr;
