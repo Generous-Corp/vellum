@@ -8,7 +8,15 @@ the Vellum renderer lock. The scene calls live in
 [canvas_raster_scene.hpp](../../tools/framework-tests/canvas_raster_scene.hpp).
 The fixture covers a fractional round-capped arc, an even-odd SVG icon, a
 translucent gradient stroke, and a shallow translucent graded rounded
-rectangle blended over an opaque background. The test
+rectangle blended over an opaque background. Pulp dithers gradient shader
+paints (`set_paint_shader` in `skia_gradient_compat.hpp`), so both gradient
+draws are dithered in the fixture. Rows 28–36 (the graded rectangle) were
+added after the original Pulp capture. They were rendered with Vellum's
+canvas, whose `skia_canvas.cpp` and `skia_gradient_compat.hpp` match Pulp
+at the revision above apart from renames and explicit `setDither(false)`
+calls on solid paints, which change nothing because SkPaint defaults to no
+dither. Every other row is byte-identical to the original Pulp capture.
+Regenerating with the Pulp SDK below must reproduce the file exactly. The test
 compares every RGBA channel at zero tolerance. It also checks the internal
 sample count passed to the editor's Graphite context.
 
