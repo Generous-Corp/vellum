@@ -611,7 +611,9 @@
                             gltfTextureCount += 1;
                         }
                     }
-                    const textureMap = materials.find((material) => material && material.map)?.map || null;
+                    const textureMap = __DISABLE_GLTF_TEXTURE__
+                        ? null
+                        : (materials.find((material) => material && material.map)?.map || null);
                     if (textureMap) {
                         textureMap.needsUpdate = true;
                     }

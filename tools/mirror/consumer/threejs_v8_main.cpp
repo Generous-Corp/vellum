@@ -239,9 +239,11 @@ public:
 
     ~GltfBoxAsset() {
         if (directory_.empty()) return;
+#ifndef VELLUM_THREEJS_DISABLE_ASSET_CLEANUP
         std::error_code ec;
         std::filesystem::remove(directory_ / filename, ec);
         std::filesystem::remove(directory_, ec);
+#endif
     }
 
     bool stage(const std::filesystem::path& root) {
@@ -340,7 +342,9 @@ std::string make_threejs_demo_module(int width, int height, std::string_view mod
     };
     replace_all("__WIDTH__", std::to_string(width));
     replace_all("__HEIGHT__", std::to_string(height));
-    replace_all("__MODE__", std::string(mode));
+    const bool untextured_gltf_box = mode == "gltf-box-untextured";
+    replace_all("__MODE__", untextured_gltf_box ? "gltf-box" : std::string(mode));
+    replace_all("__DISABLE_GLTF_TEXTURE__", untextured_gltf_box ? "true" : "false");
     replace_all("__PARTICLE_COUNT__", "480");
     replace_all("__GLTF_BOX_URL__", js_single_quoted_string(gltf_box_url));
 
@@ -454,7 +458,7 @@ int main(int argc, char* argv[]) try {
             }
         } else if (std::strcmp(argv[i], "--demo") == 0 && i + 1 < argc) {
             mode = argv[++i];
-            if (mode != "cube" && mode != "gltf-box") {
+            if (mode != "cube" && mode != "gltf-box" && mode != "gltf-box-untextured") {
                 std::cerr << "Unknown demo mode: " << mode << '\n';
                 return 1;
             }
@@ -469,7 +473,8 @@ int main(int argc, char* argv[]) try {
 
     std::string error;
     GltfBoxAsset asset;
-    if (mode == "gltf-box" && !asset.stage(VELLUM_THREEJS_DEMO_ASSET_DIR)) return 1;
+    if ((mode == "gltf-box" || mode == "gltf-box-untextured") &&
+        !asset.stage(VELLUM_THREEJS_DEMO_ASSET_DIR)) return 1;
 
     if (!vellum::app_host::register_native_dawn_bootstrap(&error)) {
         std::cerr << "Dawn bootstrap registration failed: " << error << '\n';

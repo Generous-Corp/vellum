@@ -16,6 +16,9 @@ endif()
 file(READ "${_v8_manifest}" _v8)
 string(JSON _v8_version GET "${_v8}" v8_version)
 
+include(CTest)
+option(VELLUM_THREEJS_REQUIRE_CAPTURE "Fail capture tests when no real GPU adapter is available" OFF)
+
 add_executable(vellum-threejs-native-demo ../threejs_v8_main.cpp)
 target_compile_features(vellum-threejs-native-demo PRIVATE cxx_std_20)
 target_link_libraries(vellum-threejs-native-demo PRIVATE
@@ -30,9 +33,22 @@ target_compile_definitions(vellum-threejs-native-demo PRIVATE
     VELLUM_THREEJS_DEMO_ASSET_DIR="${CMAKE_CURRENT_BINARY_DIR}/assets"
     VELLUM_THREEJS_V8_VERSION="${_v8_version}")
 
-include(CTest)
-option(VELLUM_THREEJS_REQUIRE_CAPTURE "Fail capture tests when no real GPU adapter is available" OFF)
 if(BUILD_TESTING)
+    add_executable(vellum-threejs-native-demo-no-cleanup ../threejs_v8_main.cpp)
+    target_compile_features(vellum-threejs-native-demo-no-cleanup PRIVATE cxx_std_20)
+    target_link_libraries(vellum-threejs-native-demo-no-cleanup PRIVATE
+        Vellum::MirrorView_script
+        Vellum::MirrorView_core
+        Vellum::MirrorState_core
+        Vellum::DawnHeaders)
+    target_link_options(vellum-threejs-native-demo-no-cleanup PRIVATE -Wl,-stack_size,0x2000000)
+    target_compile_definitions(vellum-threejs-native-demo-no-cleanup PRIVATE
+        VELLUM_THREEJS_ROOT="${VELLUM_THREEJS_ROOT}"
+        VELLUM_THREEJS_DEMO_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+        VELLUM_THREEJS_DEMO_ASSET_DIR="${CMAKE_CURRENT_BINARY_DIR}/assets-no-cleanup"
+        VELLUM_THREEJS_V8_VERSION="${_v8_version}"
+        VELLUM_THREEJS_DISABLE_ASSET_CLEANUP)
+
     add_test(NAME vellum.threejs-native-demo-v8-identity
         COMMAND vellum-threejs-native-demo --print-engine-identity)
     add_test(NAME vellum.threejs-native-demo-module
@@ -48,9 +64,16 @@ if(BUILD_TESTING)
             "-DDEMO_BIN=$<TARGET_FILE:vellum-threejs-native-demo>"
             "-DSTAGING_ROOT=${CMAKE_CURRENT_BINARY_DIR}/asset-cleanup-root"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/asset_cleanup_test.cmake")
+    add_test(NAME vellum.threejs-native-demo-gltf-asset-cleanup-negative
+        COMMAND "${CMAKE_COMMAND}"
+            "-DDEMO_BIN=$<TARGET_FILE:vellum-threejs-native-demo-no-cleanup>"
+            "-DSTAGING_ROOT=${CMAKE_CURRENT_BINARY_DIR}/asset-cleanup-negative-root"
+            "-DASSERT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/asset_cleanup_test.cmake"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/asset_cleanup_negative_test.cmake")
     set_tests_properties(vellum.threejs-native-demo-gltf-asset
         vellum.threejs-native-demo-gltf-asset-failure
-        vellum.threejs-native-demo-gltf-asset-cleanup PROPERTIES TIMEOUT 30)
+        vellum.threejs-native-demo-gltf-asset-cleanup
+        vellum.threejs-native-demo-gltf-asset-cleanup-negative PROPERTIES TIMEOUT 30)
     foreach(_mode IN ITEMS cube gltf-box)
         set(_test "vellum.threejs-native-demo-${_mode}-capture")
         add_test(NAME "${_test}"
@@ -65,6 +88,15 @@ if(BUILD_TESTING)
             TIMEOUT 60
             SKIP_REGULAR_EXPRESSION "SKIP: No real Dawn adapter available")
     endforeach()
+    add_test(NAME vellum.threejs-native-demo-gltf-box-capture-negative
+        COMMAND "${CMAKE_COMMAND}"
+            "-DDEMO_BIN=$<TARGET_FILE:vellum-threejs-native-demo>"
+            "-DCAPTURE_PATH=${CMAKE_CURRENT_BINARY_DIR}/gltf-box-untextured.png"
+            "-DPYTHON3_EXECUTABLE=${Python3_EXECUTABLE}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/texture_capture_negative_test.cmake")
+    set_tests_properties(vellum.threejs-native-demo-gltf-box-capture-negative PROPERTIES
+        TIMEOUT 60
+        SKIP_REGULAR_EXPRESSION "SKIP: No real Dawn adapter available")
     include(../../../../cmake/VellumTestClasses.cmake)
     vellum_apply_test_classes("${CMAKE_CURRENT_SOURCE_DIR}/../../../../scripts/ctest_classes.json")
 endif()
