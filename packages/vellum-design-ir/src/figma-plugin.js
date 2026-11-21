@@ -32,11 +32,21 @@ const AUDIO_ATTRIBUTE_FIELDS = new Set(['binding', 'binding_y', 'units']);
 
 const MATERIALIZED_STYLE_FIELDS = Object.freeze({
     background_color: Object.freeze({ group: 'paint', target: 'backgroundColor' }),
+    border: Object.freeze({ group: 'paint', target: 'border', decode: decodeBorder }),
     border_radius: Object.freeze({ group: 'paint', target: 'borderRadius' }),
+    border_top_left_radius: Object.freeze({ group: 'paint', target: 'borderTopLeftRadius', decode: decodeRadius }),
+    border_top_right_radius: Object.freeze({ group: 'paint', target: 'borderTopRightRadius', decode: decodeRadius }),
+    border_bottom_left_radius: Object.freeze({ group: 'paint', target: 'borderBottomLeftRadius', decode: decodeRadius }),
+    border_bottom_right_radius: Object.freeze({ group: 'paint', target: 'borderBottomRightRadius', decode: decodeRadius }),
+    box_shadow: Object.freeze({ group: 'paint', target: 'boxShadow', decode: decodeBoxShadow }),
     color: Object.freeze({ group: 'text', target: 'color' }),
     font_family: Object.freeze({ group: 'text', target: 'fontFamily' }),
     font_size: Object.freeze({ group: 'text', target: 'fontSize' }),
+    font_style: Object.freeze({ group: 'text', target: 'fontStyle', decode: decodeFontStyle }),
+    font_weight: Object.freeze({ group: 'text', target: 'fontWeight', decode: decodeFontWeight }),
     letter_spacing: Object.freeze({ group: 'text', target: 'letterSpacing' }),
+    text_align: Object.freeze({ group: 'text', target: 'textAlign', decode: decodeTextAlign }),
+    vertical_align: Object.freeze({ group: 'text', target: 'verticalAlign', decode: decodeVerticalAlign }),
     overflow: Object.freeze({ group: 'paint', target: 'overflow' }),
     height: Object.freeze({ group: 'layout', target: 'height' }),
     left: Object.freeze({ group: 'layout', target: 'x' }),
@@ -349,8 +359,11 @@ function decodeProperties(node, path, diagnostics, imageAsset) {
     if (typeof style.mix_blend_mode === 'string') consumedStyle.add('mix_blend_mode');
     for (const [source, rule] of Object.entries(MATERIALIZED_STYLE_FIELDS)) {
         if (style[source] !== undefined) {
-            properties[rule.group][rule.target] = style[source];
-            consumedStyle.add(source);
+            const decoded = rule.decode === undefined ? style[source] : rule.decode(style[source]);
+            if (decoded !== null) {
+                properties[rule.group][rule.target] = decoded;
+                consumedStyle.add(source);
+            }
         }
     }
     const clip = typeof style.clip_path === 'string'
@@ -363,6 +376,12 @@ function decodeProperties(node, path, diagnostics, imageAsset) {
     if (gradient) {
         properties.paint.backgroundLinearGradient = gradient;
         consumedStyle.add('background_gradient');
+    } else {
+        const radialGradient = decodeRadialGradient(style.background_gradient);
+        if (radialGradient !== null) {
+            properties.paint.backgroundGradient = radialGradient;
+            consumedStyle.add('background_gradient');
+        }
     }
     const layout = node.layout === undefined ? {} : object(node.layout, `${path}.layout`);
     const consumedLayout = new Set();
@@ -389,6 +408,59 @@ function decodeProperties(node, path, diagnostics, imageAsset) {
         unmaterializedLayout: canonicalize(unmaterializedLayout),
         unmaterializedStyle: canonicalize(unmaterializedStyle),
     };
+}
+
+const CSS_COLOR = /#[0-9a-f]{6}(?:[0-9a-f]{2})?/i;
+const CSS_LENGTH = '-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?px';
+
+function decodeBorder(value) {
+    if (typeof value !== 'string') return null;
+    return new RegExp(`^(?:${CSS_LENGTH}) (?:solid|dashed|dotted|double) ${CSS_COLOR.source}$`, 'i').test(value)
+        ? value : null;
+}
+
+function decodeBoxShadow(value) {
+    if (typeof value !== 'string' || value === '' || value === 'none') return null;
+    const layers = value.split(', ');
+    if (layers.length > 8) return null;
+    const layer = new RegExp(`^(?:inset )?${CSS_LENGTH} ${CSS_LENGTH}(?: ${CSS_LENGTH})?(?: ${CSS_LENGTH})? ${CSS_COLOR.source}$`, 'i');
+    return layers.length > 0 && layers.every((item) => layer.test(item)) ? value : null;
+}
+
+function decodeFontWeight(value) {
+    return Number.isInteger(value) && value >= 1 && value <= 1000 ? value : null;
+}
+
+function decodeRadius(value) {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100000
+        ? value : null;
+}
+
+function decodeFontStyle(value) {
+    return typeof value === 'string' && /^(?:normal|italic|oblique)$/.test(value) ? value : null;
+}
+
+function decodeTextAlign(value) {
+    return typeof value === 'string' && /^(?:left|right|center|justify|start|end)$/.test(value) ? value : null;
+}
+
+function decodeVerticalAlign(value) {
+    return typeof value === 'string' && /^(?:top|middle|bottom)$/.test(value) ? value : null;
+}
+
+function decodeRadialGradient(value) {
+    if (typeof value !== 'string') return null;
+    const match = /^radial-gradient\(circle at ([0-9]+(?:\.[0-9]+)?)% ([0-9]+(?:\.[0-9]+)?)%, (.+)\)$/.exec(value);
+    if (!match || Number(match[1]) > 100 || Number(match[2]) > 100) return null;
+    const stops = match[3].split(', ');
+    if (stops.length < 2 || stops.length > 32) return null;
+    let previous = -1;
+    for (const item of stops) {
+        const stop = new RegExp(`^(${CSS_COLOR.source}) ([0-9]+(?:\\.[0-9]+)?)%$`, 'i').exec(item);
+        if (!stop || Number(stop[2]) < 0 || Number(stop[2]) > 100 || Number(stop[2]) <= previous) return null;
+        previous = Number(stop[2]);
+    }
+    return value;
 }
 
 // The extractor emits explicit angles and percent-positioned hex stops.

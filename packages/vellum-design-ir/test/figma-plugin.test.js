@@ -127,6 +127,69 @@ test('lowers Figma layer blend modes into native compositing', () => {
         diagnostic.property === 'mix_blend_mode'), false);
 });
 
+test('materializes native paint and text fields with strict decoding', () => {
+    const input = genericExport();
+    input.root.style = {
+        border: '1px solid #313234',
+        border_bottom_left_radius: 3,
+        border_bottom_right_radius: 4,
+        border_top_left_radius: 5,
+        border_top_right_radius: 6,
+        box_shadow: '0px 16px 6px 0px #0000001a, 0px 4px 4px 0px #00000040',
+        background_gradient: 'radial-gradient(circle at 50% 50%, #00000000 0%, #0000003d 100%)',
+        font_style: 'italic',
+        font_weight: 400,
+        text_align: 'center',
+        vertical_align: 'middle',
+    };
+    const document = normalizeImport(decodeFigmaPluginExport(input, {
+        sourceHash: `sha256:${'1'.repeat(64)}`,
+        sourceKey: 'main',
+    }));
+    const { paint, text } = document.root.properties;
+    assert.equal(paint.border, '1px solid #313234');
+    assert.deepEqual(
+        [paint.borderTopLeftRadius, paint.borderTopRightRadius,
+            paint.borderBottomLeftRadius, paint.borderBottomRightRadius],
+        [5, 6, 3, 4],
+    );
+    assert.equal(paint.boxShadow, '0px 16px 6px 0px #0000001a, 0px 4px 4px 0px #00000040');
+    assert.equal(paint.backgroundGradient, input.root.style.background_gradient);
+    assert.equal(text.fontWeight, 400);
+    assert.equal(text.fontStyle, 'italic');
+    assert.equal(text.textAlign, 'center');
+    assert.equal(text.verticalAlign, 'middle');
+    for (const property of Object.keys(input.root.style)) {
+        assert.equal(document.diagnostics.some((diagnostic) =>
+            diagnostic.property === property &&
+            diagnostic.code === 'figma-property-preserved-not-materialized'), false);
+    }
+});
+
+test('keeps malformed paint and text fields unmaterialized', () => {
+    const cases = {
+        border: '1px solid nope',
+        border_top_left_radius: -1,
+        box_shadow: '0px #000000',
+        background_gradient: 'radial-gradient(circle, #000000 0%, #ffffff 100%)',
+        font_style: 'slanted',
+        font_weight: 400.5,
+        text_align: 'diagonal',
+        vertical_align: 'baseline',
+    };
+    for (const [property, value] of Object.entries(cases)) {
+        const input = genericExport();
+        input.root.style = { [property]: value };
+        const document = normalizeImport(decodeFigmaPluginExport(input, {
+            sourceHash: `sha256:${'2'.repeat(64)}`,
+            sourceKey: 'main',
+        }));
+        assert.equal(document.diagnostics.some((diagnostic) =>
+            diagnostic.property === property &&
+            diagnostic.code === 'figma-property-preserved-not-materialized'), true, property);
+    }
+});
+
 test('retains flex wrapping and grid placement in the native style contract', () => {
     const input = genericExport();
     input.root.layout = {
