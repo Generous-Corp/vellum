@@ -31,6 +31,7 @@ std::unique_ptr<PluginViewHost> PluginViewHost::create(View& root, const Options
     if (host) {
         root.set_plugin_view_host(host.get());
         host->root_view_ = &root;
+        host->presentation_deferred_ = options.defer_presentation;
     }
     return host;
 }
