@@ -1,3 +1,4 @@
+import { inflateSync } from 'node:zlib';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -491,13 +492,15 @@ it('resets omitted React styles from a complete host prop snapshot', () => {
     unmount(root);
 });
 
-it('clears an image with a supported transparent URI rather than an ignored empty path', () => {
+it.each([undefined, null, ''])('clears an image with a supported transparent URI for src=%s', src => {
     let image = 'old-image';
     vi.stubGlobal('setImageSource', (_id: string, source: string) => { if (source) image = source; });
     const root = createRoot();
     const node = instance('Image', { id: 'clear-image', src: 'old-image' }, root);
-    applyChangedProps(node, { src: 'old-image' }, {});
+    applyChangedProps(node, { src: 'old-image' }, { src });
     expect(image).toMatch(/^data:image\/png;base64,/);
+    const png = Buffer.from(image.split(',')[1], 'base64');
+    expect([...inflateSync(png.subarray(41, 52))]).toEqual([0, 0, 0, 0, 0]);
 });
 
 it.each(['input', 'textarea', 'TextEditor'])('routes controlled %s strings through setText', type => {
@@ -507,6 +510,8 @@ it.each(['input', 'textarea', 'TextEditor'])('routes controlled %s strings throu
     applyAllProps(node);
     expect(setText).toHaveBeenCalledWith('controlled-text', 'hello');
     expect(setValue).not.toHaveBeenCalled();
+    applyChangedProps(node, { value: 'hello' }, {});
+    expect(setText).toHaveBeenLastCalledWith('controlled-text', '');
 });
 
 it('gives nested inline markup a caption target for later direct text', () => {
