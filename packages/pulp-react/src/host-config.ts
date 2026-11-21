@@ -1063,26 +1063,10 @@ export const PulpHostConfig: HostConfig<
         // contains.
         markMaterializedTreeDirty(parentInstance.id);
         markMaterializedTreeDirty(child.id);
-        let beforeIdx = parentInstance.childIds.indexOf(beforeChild.id);
-        const sameParent = child.parentId === parentInstance.id && child.onBridge;
-        if (sameParent) {
-            // Same-parent reorder: React shuffled keyed siblings. Update
-            // childIds and use the bridge's indexed insert path to keep
-            // native order in sync.
-            const oldIdx = parentInstance.childIds.indexOf(child.id);
-            if (child === beforeChild) return;
-            if (oldIdx >= 0) parentInstance.childIds.splice(oldIdx, 1);
-            beforeIdx = parentInstance.childIds.indexOf(beforeChild.id);
-            const insertIdx = beforeIdx >= 0 ? beforeIdx : parentInstance.childIds.length;
-            parentInstance.childIds.splice(insertIdx, 0, child.id);
-            if (typeof g.insertChild === 'function') {
-                call('insertChild', parentInstance.id, child.id, insertIdx);
-            } else if (typeof g.moveWidget === 'function') {
-                // Older bridges: moveWidget within same parent works.
-                call('moveWidget', child.id, parentInstance.id, insertIdx);
-            }
-            return;
-        }
+        if (child === beforeChild) return;
+        const beforeIdx = parentInstance.childIds.indexOf(beforeChild.id);
+        // Share bookkeeping with append: native order, DOM order and deferred
+        // children must all observe the same removal and insertion.
         attach(parentInstance, child, beforeIdx >= 0 ? beforeIdx : undefined);
     },
     insertInContainerBefore(container, child, beforeChild) {

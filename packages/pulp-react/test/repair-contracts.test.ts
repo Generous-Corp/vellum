@@ -256,3 +256,18 @@ it('gives anonymous widgets distinct bridge IDs across default roots', () => {
     const explicit = instance('Label', {}, createRoot('custom', 'app_'));
     expect(explicit.id).toBe('app_1');
 });
+
+it('keeps nested DOM children in native order after insertBefore', () => {
+    const root = { rootId: '', nextId: 0 };
+    const parent = instance('Panel', { id: 'parent' }, root);
+    parent._dom = { _children: [] };
+    host.appendChildToContainer(root, parent);
+    const [a, b, c] = ['a', 'b', 'c'].map(id => instance('Label', { id }, root));
+    for (const child of [a, b, c]) {
+        child._dom = { id: child.id };
+        host.appendChild(parent, child);
+    }
+    host.insertBefore(parent, a, c);
+    expect(tree.get('parent')).toEqual(['b', 'a', 'c']);
+    expect((parent._dom as any)._children.map((child: any) => child.id)).toEqual(['b', 'a', 'c']);
+});

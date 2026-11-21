@@ -803,7 +803,7 @@ export interface PulpInstance {
 export interface PulpContainer {
     rootId: string;
     idPrefix?: string;
-    /// Auto-incrementing counter for generating widget IDs. Per-container
-    /// so multiple roots in the same engine don't collide.
+    /// Counter for IDs under an explicit idPrefix. Default IDs use a
+    /// renderer-wide counter because the native registry spans all roots.
     nextId: number;
 }
