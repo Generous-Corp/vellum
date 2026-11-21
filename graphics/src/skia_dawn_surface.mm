@@ -98,6 +98,9 @@ namespace vellum::graphics {
 namespace {
 
 std::atomic<std::uint32_t> internal_samples{1U};
+std::atomic<bool> rectangle_batching{true};
+std::atomic<std::uint64_t> rectangle_batches{0U};
+std::atomic<std::uint64_t> rectangle_batch_commands{0U};
 std::atomic<bool> enclose_paths{true};
 std::atomic<bool> enclose_own_layers{true};
 std::atomic<bool> enclose_interpolated_fills{true};
@@ -577,6 +580,61 @@ bool draw_rectangle(SkCanvas& canvas, const PaintCommand& command, float opacity
             return false;
         }
     }
+    return true;
+}
+
+// Triangle edges have no coverage antialiasing. Only device-aligned opaque
+// boxes can share a draw without changing the rectangle path's edge pixels.
+bool batchable_rectangle(const PaintCommand& command, float scale) {
+    if (command.kind != PaintCommand::Kind::rectangle ||
+        !is_identity(command.transform) || command.opacity != 1.0F ||
+        command.fill.alpha != 1.0F || !command.fill_gradients.empty() ||
+        !command.box_shadows.empty() || is_rounded(command.corner_radii) ||
+        command.corner_radius != 0.0F || command.bounds.width <= 0.0F ||
+        command.bounds.height <= 0.0F) {
+        return false;
+    }
+    const auto rect = SkRect::MakeXYWH(command.bounds.x, command.bounds.y,
+                                     command.bounds.width, command.bounds.height);
+    for (const float edge : {rect.left(), rect.top(), rect.right(), rect.bottom()}) {
+        const float pixel = edge * scale;
+        // Keep triangle arithmetic in a conservative, exactly representable
+        // device-coordinate range as well as excluding nonfinite bounds.
+        if (!std::isfinite(pixel) || std::abs(pixel) > 1048576.0F ||
+            std::floor(pixel) != pixel) {
+            return false;
+        }
+    }
+    return true;
+}
+
+constexpr std::size_t kRectangleBatchLimit = 256U;
+
+bool draw_rectangle_batch(SkCanvas& canvas, const std::vector<PaintCommand>& commands,
+                          std::size_t begin, std::size_t end) {
+    std::array<SkPoint, kRectangleBatchLimit * 6U> positions;
+    std::size_t count = 0;
+    for (auto index = begin; index < end; ++index) {
+        const auto& box = commands[index].bounds;
+        const float right = box.x + box.width;
+        const float bottom = box.y + box.height;
+        positions[count++] = {box.x, box.y};
+        positions[count++] = {right, box.y};
+        positions[count++] = {right, bottom};
+        positions[count++] = {box.x, box.y};
+        positions[count++] = {right, bottom};
+        positions[count++] = {box.x, bottom};
+    }
+    const auto vertices = SkVertices::MakeCopy(SkVertices::kTriangles_VertexMode,
+                                               static_cast<int>(count), positions.data(),
+                                               nullptr, nullptr);
+    if (!vertices) return false;
+    SkPaint paint;
+    paint.setColor4f(sk_color(commands[begin].fill));
+    // No vertex colours or shader: the paint supplies the shared solid fill.
+    canvas.drawVertices(vertices, SkBlendMode::kModulate, paint);
+    ++rectangle_batches;
+    rectangle_batch_commands += end - begin;
     return true;
 }
 
@@ -3185,6 +3243,7 @@ private:
             canvas->clear(sk_color(scene.background));
             canvas->scale(config_.scale, config_.scale);
             std::size_t recorded = 0;
+            const bool batch_rectangles = rectangle_batching.load();
             for (std::size_t index = 0; index < commands.size(); ++index) {
                 if (const auto* layer = layer_at[index]; layer != nullptr) {
                     composite_layer(*canvas, *layer, config_.scale, resources);
@@ -3199,6 +3258,23 @@ private:
                     }
                     index = end - 1U;
                     continue;
+                }
+                // Leave clips, masks, layers, cached images and partial
+                // damage on their existing replay paths.
+                if (batch_rectangles && canvas->getSaveCount() == saved + 1 &&
+                    batchable_rectangle(commands[index], config_.scale)) {
+                    auto end = index + 1U;
+                    while (end < commands.size() && end - index < kRectangleBatchLimit &&
+                           layer_at[end] == nullptr &&
+                           batchable_rectangle(commands[end], config_.scale) &&
+                           same_color(commands[index].fill, commands[end].fill)) {
+                        ++end;
+                    }
+                    if (end - index > 1U && draw_rectangle_batch(*canvas, commands, index, end)) {
+                        recorded += end - index;
+                        index = end - 1U;
+                        continue;
+                    }
                 }
                 if (!paint_command(*canvas, commands[index], config_.font_directory,
                                    resources, error, &paragraphs[index])) {
@@ -3994,6 +4070,14 @@ PartialRedrawRules partial_redraw_rules() noexcept {
             .enclose_vector_assets = enclose_vector_assets,
             .enclose_effects = enclose_effects,
             .enclose_backdrops = enclose_backdrops};
+}
+
+void set_rectangle_batching(bool enabled) noexcept { rectangle_batching = enabled; }
+
+bool rectangle_batching_enabled() noexcept { return rectangle_batching; }
+
+RectangleBatchCounters rectangle_batch_counters() noexcept {
+    return {.batches = rectangle_batches.load(), .rectangles = rectangle_batch_commands.load()};
 }
 
 void set_internal_sample_count(std::uint32_t count) noexcept { internal_samples = count; }

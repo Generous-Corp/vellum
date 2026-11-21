@@ -40,7 +40,7 @@ set_tests_properties(vellum.scene-capture-harness.compare PROPERTIES
     FIXTURES_REQUIRED vellum_scene_capture_goldens)
 
 add_executable(vellum-partial-present-test
-    partial_present_test.cpp)
+    partial_present_test.cpp rectangle_batch_gpu_test.cpp)
 target_link_libraries(vellum-partial-present-test PRIVATE
     vellum-scene-capture-harness)
 set_target_properties(vellum-partial-present-test PROPERTIES
@@ -49,6 +49,12 @@ set_target_properties(vellum-partial-present-test PROPERTIES
     BUILD_RPATH "$<TARGET_FILE_DIR:vellum-gpu>")
 add_test(NAME vellum.gpu.partial-present
     COMMAND vellum-partial-present-test)
+# The rectangle-batch parity, eligibility and fallback checks run only
+# under --rectangle-batches; without this registration CI never runs them.
+add_test(NAME vellum.gpu.rectangle-batches
+    COMMAND vellum-partial-present-test --rectangle-batches)
+set_tests_properties(vellum.gpu.rectangle-batches PROPERTIES
+    SKIP_RETURN_CODE 77)
 
 add_executable(vellum-animation-gpu-test
     animation_gpu_test.cpp)
