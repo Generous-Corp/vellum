@@ -25,4 +25,18 @@ file(READ "${CAPTURE_PATH}" _signature LIMIT 8 HEX)
 if(_size LESS_EQUAL 8 OR NOT _signature STREQUAL "89504e470d0a1a0a")
     message(FATAL_ERROR "The demo did not write a non-empty PNG")
 endif()
+if(DEMO_MODE STREQUAL "gltf-box")
+    if(NOT DEFINED PYTHON3_EXECUTABLE)
+        message(FATAL_ERROR "Python3 is required for the textured capture assertion")
+    endif()
+    execute_process(
+        COMMAND "${PYTHON3_EXECUTABLE}" -I
+            "${CMAKE_CURRENT_LIST_DIR}/texture_capture_test.py" "${CAPTURE_PATH}"
+        RESULT_VARIABLE _texture_result OUTPUT_VARIABLE _texture_stdout
+        ERROR_VARIABLE _texture_stderr)
+    if(NOT _texture_result STREQUAL "0")
+        message(FATAL_ERROR "Textured glTF capture assertion failed\n${_texture_stdout}\n${_texture_stderr}")
+    endif()
+    message(STATUS "${_texture_stdout}")
+endif()
 message(STATUS "${DEMO_MODE} capture wrote ${_size} bytes")

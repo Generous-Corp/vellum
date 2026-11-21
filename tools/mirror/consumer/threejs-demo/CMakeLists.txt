@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 project(VellumThreeJsNativeDemo LANGUAGES CXX)
 
+find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
 find_package(Vellum CONFIG REQUIRED)
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     message(FATAL_ERROR "The native Three.js demo requires the macOS SDK")
@@ -42,8 +43,14 @@ if(BUILD_TESTING)
         COMMAND "${CMAKE_COMMAND}"
             "-DDEMO_BIN=$<TARGET_FILE:vellum-threejs-native-demo>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/asset_failure_test.cmake")
+    add_test(NAME vellum.threejs-native-demo-gltf-asset-cleanup
+        COMMAND "${CMAKE_COMMAND}"
+            "-DDEMO_BIN=$<TARGET_FILE:vellum-threejs-native-demo>"
+            "-DSTAGING_ROOT=${CMAKE_CURRENT_BINARY_DIR}/asset-cleanup-root"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/asset_cleanup_test.cmake")
     set_tests_properties(vellum.threejs-native-demo-gltf-asset
-        vellum.threejs-native-demo-gltf-asset-failure PROPERTIES TIMEOUT 30)
+        vellum.threejs-native-demo-gltf-asset-failure
+        vellum.threejs-native-demo-gltf-asset-cleanup PROPERTIES TIMEOUT 30)
     foreach(_mode IN ITEMS cube gltf-box)
         set(_test "vellum.threejs-native-demo-${_mode}-capture")
         add_test(NAME "${_test}"
@@ -52,6 +59,7 @@ if(BUILD_TESTING)
                 "-DDEMO_MODE=${_mode}"
                 "-DCAPTURE_PATH=${CMAKE_CURRENT_BINARY_DIR}/${_mode}.png"
                 "-DREQUIRE_CAPTURE=${VELLUM_THREEJS_REQUIRE_CAPTURE}"
+                "-DPYTHON3_EXECUTABLE=${Python3_EXECUTABLE}"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/capture_test.cmake")
         set_tests_properties("${_test}" PROPERTIES
             TIMEOUT 60
