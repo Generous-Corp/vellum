@@ -243,6 +243,9 @@ jobs:
 
       - name: Configure
         shell: bash
+        env:
+          # Exercise idle scheduling and settings validation under inherited finite-math.
+          CXXFLAGS: ${{ matrix.name == 'Linux' && '-ffinite-math-only' || '' }}
         run: |
           set -euo pipefail
           cmake -S rmlui -B build-rmlui-cpu \
@@ -252,14 +255,15 @@ jobs:
             -DVELLUM_RMLUI_FONTS=OFF \
             -DVELLUM_RMLUI_CPU=ON
 
-      - name: Build the CPU tests
+      - name: Build the headless tests
         shell: bash
         run: |
           cmake --build build-rmlui-cpu --config Release --parallel 4 \
-            --target vellum-rmlui-cpu-render-test vellum-rmlui-cpu-hash-test
+            --target vellum-rmlui-cpu-render-test vellum-rmlui-cpu-hash-test \
+              vellum-rmlui-idle-update-test vellum-rmlui-settings-test vellum-rmlui-settings-bridge-test
 
       - name: Test
         shell: bash
         run: |
           ctest --test-dir build-rmlui-cpu -C Release --output-on-failure \
-            -R '^vellum\.rmlui\.cpu-(render|hash)$' --no-tests=error
+            -R '^vellum\.rmlui\.(cpu-(render|hash)|idle-update|settings(-bridge)?)$' --no-tests=error
