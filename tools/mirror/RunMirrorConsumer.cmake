@@ -211,7 +211,7 @@ set(_provider_census "${Python3_EXECUTABLE}" -I
 _run("provider export and bind census" ${_provider_census})
 execute_process(COMMAND ${_provider_census} --plant
     RESULT_VARIABLE _plant_result OUTPUT_VARIABLE _plant_stdout ERROR_VARIABLE _plant_stderr)
-if(NOT _plant_result EQUAL 1 OR NOT _plant_stderr MATCHES "5 unexpected exports")
+if(NOT _plant_result EQUAL 1 OR NOT _plant_stderr MATCHES "provider has 5 unexpected exports:")
     message(FATAL_ERROR "provider census did not catch the planted exports:\n${_plant_stdout}\n${_plant_stderr}")
 endif()
 message(STATUS "provider export census negative control: ok")

@@ -24,6 +24,8 @@
 #include <string>
 #include <string_view>
 
+#include <gpu_runtime/export.h>
+
 namespace gpu_runtime {
 
 inline constexpr std::uint32_t kDawnBootstrapAbiVersion = 1;
@@ -55,12 +57,12 @@ struct DawnBootstrap final {
 /// is rejected before the callback can mutate Dawn's process-global state. A
 /// callback that fails or throws leaves the coordinator idle, so a corrected
 /// registration may retry; one that re-enters the coordinator fails.
-[[nodiscard]] bool register_dawn_bootstrap(const DawnBootstrap& bootstrap,
-                                           std::string_view expected_dawn_revision,
-                                           std::string* error = nullptr);
+[[nodiscard]] GPU_RUNTIME_API bool register_dawn_bootstrap(
+    const DawnBootstrap& bootstrap, std::string_view expected_dawn_revision,
+    std::string* error = nullptr);
 
 /// Returns whether a bootstrap has completed in this coordinator.
-[[nodiscard]] bool dawn_bootstrap_is_registered(std::string* error = nullptr);
+[[nodiscard]] GPU_RUNTIME_API bool dawn_bootstrap_is_registered(std::string* error = nullptr);
 
 inline constexpr std::uint32_t kDawnBundleRegistrationVersion = 1;
 
@@ -80,10 +82,9 @@ struct DawnBundleIdentity final {
 /// recorded one, the same gpu-runtime version, whatever its bundle. Any other
 /// combination is refused, naming both bundles, and leaves the table
 /// untouched. The bundle and runtime version must be non-empty.
-[[nodiscard]] bool register_dawn_bootstrap_for_bundle(const DawnBundleIdentity& bundle,
-                                                      const DawnBootstrap& bootstrap,
-                                                      std::string_view expected_dawn_revision,
-                                                      std::string* error = nullptr);
+[[nodiscard]] GPU_RUNTIME_API bool register_dawn_bootstrap_for_bundle(
+    const DawnBundleIdentity& bundle, const DawnBootstrap& bootstrap,
+    std::string_view expected_dawn_revision, std::string* error = nullptr);
 
 /// What the coordinator has recorded once a bootstrap completed. An ABI v1
 /// registration records no bundle and no runtime version.
@@ -95,9 +96,9 @@ struct DawnBootstrapRecord final {
     std::uint32_t accepted_registrations = 0;
 };
 
-[[nodiscard]] std::optional<DawnBootstrapRecord> dawn_bootstrap_record();
+[[nodiscard]] GPU_RUNTIME_API std::optional<DawnBootstrapRecord> dawn_bootstrap_record();
 
 /// The gpu-runtime version this library was built as.
-[[nodiscard]] std::string_view runtime_version() noexcept;
+[[nodiscard]] GPU_RUNTIME_API std::string_view runtime_version() noexcept;
 
 }  // namespace gpu_runtime
