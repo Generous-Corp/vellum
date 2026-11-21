@@ -128,9 +128,10 @@ public:
         paint_scene(*c);
         const auto outcome = skia_->end_frame();
         gpu_->end_frame();
-        ++presented_frame_count_;
+        const bool reached = render::frame_reached_output(outcome);
+        if (reached) ++presented_frame_count_;
         clear_pending_dirty();
-        return render::frame_reached_output(outcome);
+        return reached;
     }
     void handle_backing_change() {
         resize_surfaces();
