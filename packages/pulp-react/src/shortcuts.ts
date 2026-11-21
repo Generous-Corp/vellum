@@ -92,33 +92,32 @@ export function parseShortcut(spec: string): ParsedShortcut {
         throw new Error(`[useShortcut] unrecognized key token "${keyToken}" in spec: ${spec}`);
     }
 
-    mods.sort();
-    const canonical = mods.length > 0 ? `${mods.join('+')}+${keyToken}` : keyToken;
+    const canonicalMods = [...new Set(mods)].sort();
+    const canonicalKey = keyToken === 'esc' ? 'escape' : keyToken === 'return' ? 'enter' : keyToken;
+    const canonical = canonicalMods.length > 0 ? `${canonicalMods.join('+')}+${canonicalKey}` : canonicalKey;
     return { canonical, keyCode, modMask };
 }
 
 function keyTokenToKeyCode(token: string): number | undefined {
-    // Single-char ASCII path, matches the same mapping space the
-    // platform host uses (NSEvent.charactersIgnoringModifiers
-    // returns the unmodified char, then PulpView casts it to
-    // KeyCode). 'a'..'z' and '0'..'9' are passed verbatim, plus a
+    // Printable characters use ASCII; navigation and editing keys below
+    // use vellum::view::KeyCode values from input_events.hpp. 'a'..'z' and '0'..'9' are passed verbatim, plus a
     // handful of punctuation that has a clean ASCII keycode.
     if (token.length === 1) return token.charCodeAt(0);
 
     switch (token) {
-        case 'escape':  case 'esc':       return 27;
-        case 'enter':   case 'return':    return 13;
-        case 'tab':                       return 9;
+        case 'escape':  case 'esc':       return 274;
+        case 'enter':   case 'return':    return 273;
+        case 'tab':                       return 272;
         case 'space':                     return 32;
-        case 'backspace':                 return 8;
-        case 'delete':                    return 127;
-        case 'arrowup':                   return 0x26;
-        case 'arrowdown':                 return 0x28;
-        case 'arrowleft':                 return 0x25;
-        case 'arrowright':                return 0x27;
+        case 'backspace':                 return 270;
+        case 'delete':                    return 271;
+        case 'arrowup':                   return 258;
+        case 'arrowdown':                 return 259;
+        case 'arrowleft':                 return 256;
+        case 'arrowright':                return 257;
     }
     if (/^f([1-9]|1[0-2])$/.test(token)) {
-        return 0x70 + (parseInt(token.slice(1), 10) - 1);
+        return 290 + (parseInt(token.slice(1), 10) - 1);
     }
     return undefined;
 }
@@ -179,8 +178,8 @@ function ensureDispatcher(parsed: ParsedShortcut): void {
         | undefined;
     if (typeof registerShortcut === 'function') {
         registerShortcut(parsed.keyCode, parsed.modMask, dispatcherName);
+        set.add(dispatcherName);
     }
-    set.add(dispatcherName);
 }
 
 /// Register a handler for the given shortcut spec. Returns an
