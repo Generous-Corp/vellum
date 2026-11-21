@@ -41,6 +41,11 @@ if(VELLUM_RMLUI_FONTS AND EXISTS "${_vellum_rmlui_test_font}")
 endif()
 add_test(NAME vellum.rmlui.backend COMMAND vellum-rmlui-backend-test)
 
+vellum_rmlui_add_test(vellum-rmlui-idle-update-test idle_update_test.cpp RmlUi::Core)
+target_compile_features(vellum-rmlui-idle-update-test PRIVATE cxx_std_20)
+vellum_rmlui_require_nonfinite(vellum-rmlui-idle-update-test PRIVATE)
+add_test(NAME vellum.rmlui.idle-update COMMAND vellum-rmlui-idle-update-test)
+
 vellum_rmlui_add_test(vellum-rmlui-image-compare-test image_compare_test.cpp VellumRmlUi::Core)
 add_test(NAME vellum.rmlui.image-compare COMMAND vellum-rmlui-image-compare-test)
 
