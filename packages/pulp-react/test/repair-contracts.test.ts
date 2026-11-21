@@ -499,3 +499,110 @@ it('clears an image with a supported transparent URI rather than an ignored empt
     applyChangedProps(node, { src: 'old-image' }, {});
     expect(image).toMatch(/^data:image\/png;base64,/);
 });
+
+it.each(['input', 'textarea', 'TextEditor'])('routes controlled %s strings through setText', type => {
+    const setText = vi.fn(); const setValue = vi.fn();
+    vi.stubGlobal('setText', setText); vi.stubGlobal('setValue', setValue);
+    const node = instance(type, { id: 'controlled-text', value: 'hello' }, createRoot());
+    applyAllProps(node);
+    expect(setText).toHaveBeenCalledWith('controlled-text', 'hello');
+    expect(setValue).not.toHaveBeenCalled();
+});
+
+it('gives nested inline markup a caption target for later direct text', () => {
+    const root = createRoot();
+    render(createElement('span', { id: 'inline-caption' }, createElement('em', {}, 'before')), root);
+    render(createElement('span', { id: 'inline-caption' }, 'after'), root);
+    expect(captions.get('inline-caption__text')).toBe('after');
+    unmount(root);
+});
+
+it('commits semantic class changes even without any class-rule provider', () => {
+    class Element {
+        _children: unknown[] = []; attributes = new Map<string, unknown>();
+        constructor(public tagName: string, public _id: string) {}
+        setAttribute(name: string, value: unknown) { this.attributes.set(name, value); }
+    }
+    vi.stubGlobal('Element', Element);
+    const root = createRoot();
+    render(createElement('div', { id: 'class-toggle', className: 'closed' }), root);
+    render(createElement('div', { id: 'class-toggle', className: 'open' }), root);
+    expect((globalThis as any).__pulpReactDomRegistry__.get('class-toggle').attributes.get('class')).toBe('open');
+    unmount(root);
+});
+
+it('releases only the last modal claim and honors explicit overlay false', () => {
+    const releaseOverlay = vi.fn(); const claimOverlay = vi.fn();
+    vi.stubGlobal('releaseOverlay', releaseOverlay); vi.stubGlobal('claimOverlay', claimOverlay);
+    const node = instance('View', { id: 'modal-role' }, createRoot());
+    applyChangedProps(node, { role: 'dialog' }, { role: 'region' });
+    expect(releaseOverlay).toHaveBeenCalledWith('modal-role');
+    releaseOverlay.mockClear();
+    applyChangedProps(node, { role: 'dialog', 'aria-modal': true }, { role: 'region', 'aria-modal': true });
+    expect(releaseOverlay).not.toHaveBeenCalled();
+    applyAllProps(instance('View', { id: 'not-modal', overlay: false, role: 'dialog' }, createRoot()));
+    expect(claimOverlay).not.toHaveBeenCalled();
+});
+
+it('does not delete callback keys belonging to a colon-prefixed sibling ID', () => {
+    const handler = vi.fn(); const root = createRoot();
+    const view = (show: boolean) => createElement(widgets.Row, { id: 'callback-root' },
+        show ? createElement(widgets.Button, { key: 'menu', id: 'menu', onClick: () => {} }) : null,
+        createElement(widgets.Button, { key: 'item', id: 'menu:item', onClick: handler }));
+    render(view(true), root); render(view(false), root);
+    listeners.get('menu:item:click')!();
+    expect(handler).toHaveBeenCalledOnce();
+    unmount(root);
+});
+
+it('clears native-only descendant callbacks when their container unmounts', () => {
+    vi.stubGlobal('Element', undefined);
+    const root = createRoot();
+    render(createElement(widgets.Col, { id: 'native-only-parent' },
+        createElement(widgets.Button, { id: 'native-only-child', onClick: () => {} })), root);
+    const registry = (globalThis as any).__pulpReactEventCallbacks__ as Map<string, unknown>;
+    expect(registry.has('native-only-child:click')).toBe(true);
+    unmount(root);
+    expect(registry.has('native-only-child:click')).toBe(false);
+});
+
+it('keeps element-only DOM ordering and anonymous metadata consistent with loose text', () => {
+    class Element { _children: unknown[] = []; constructor(public tagName: string, public _id: string) {} }
+    vi.stubGlobal('Element', Element);
+    const root = createRoot();
+    const view = (text: boolean, a: boolean) => createElement(widgets.Row, { id: 'loose-parent' },
+        text ? 'status' : null,
+        a ? createElement(widgets.Label, { id: 'loose-a', key: 'a' }, 'a') : null,
+        createElement(widgets.Label, { id: 'loose-b', key: 'b' }, 'b'));
+    render(view(true, false), root); render(view(true, true), root);
+    const parent = (globalThis as any).__pulpReactDomRegistry__.get('loose-parent');
+    expect(parent._children.map((n: any) => n.__pulpId)).toEqual(['loose-a', 'loose-b']);
+    expect(parent.__pulpAnonymousTextTargets).toHaveLength(1);
+    render(view(false, true), root);
+    expect(parent.__pulpAnonymousTextTargets).toHaveLength(0);
+    unmount(root);
+});
+
+it('initializes shader uniforms on each new native widget lifetime', () => {
+    const uniforms = vi.fn(); vi.stubGlobal('setWidgetShaderUniforms', uniforms);
+    vi.stubGlobal('setWidgetShader', vi.fn());
+    const props = { id: 'shader-remount', shader: { sksl: 'shader', uniforms: { gain: 0.5 } } };
+    applyAllProps(instance('Knob', props, createRoot()));
+    applyAllProps(instance('Knob', props, createRoot()));
+    expect(uniforms).toHaveBeenCalledTimes(2);
+});
+
+it('omits user content from both bridge diagnostic paths', async () => {
+    vi.resetModules();
+    const log = vi.fn(); vi.stubGlobal('__spectrLog', log);
+    const fresh = await import('../src/host-config.js');
+    const plumbing = await import('../src/prop-applier-internal.js');
+    const container = { rootId: 'log-root', nextId: 0 };
+    const node = (fresh.PulpHostConfig as any).createInstance('Label', { id: 'log-label', children: 'private-content' }, container, {}, {});
+    (fresh.PulpHostConfig as any).appendChildToContainer(container, node);
+    plumbing.call('setText', 'log-label', 'private-content');
+    expect(log).toHaveBeenCalled();
+    expect(log.mock.calls.some(args => String(args[0]).includes('createLabel'))).toBe(true);
+    expect(log.mock.calls.some(args => String(args[0]).includes('private-content'))).toBe(false);
+    (fresh.PulpHostConfig as any).clearContainer(container);
+});
