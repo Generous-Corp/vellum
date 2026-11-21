@@ -32,4 +32,12 @@ describe('style.backgroundColor', () => {
         host.commitUpdate(n, true, n.type, n.props, { style: { backgroundColor: '#00ff00' } }, {});
         expect(calls).toContainEqual(['setBackground', n.id, '#00ff00']);
     });
+    it('clears the background when the colour is removed', () => {
+        for (const next of [{}, { backgroundColor: null }]) {
+            const n = make('div', { style: { backgroundColor: '#ff0000' } });
+            calls = [];
+            host.commitUpdate(n, true, n.type, n.props, { style: next }, {});
+            expect(calls).toContainEqual(['setBackground', n.id, '']);
+        }
+    });
 });

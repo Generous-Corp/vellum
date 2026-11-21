@@ -249,6 +249,7 @@ export const STYLE_KEY_RULES: Readonly<Record<string, StyleKeyRule>> = {
 
     // ── paint ────────────────────────────────────────────────────────
     background: clearBackground,
+    backgroundColor: clearBackground,
     backgroundGradient: clearBackground,
     backgroundImage: clearBackground,
     experimental_backgroundImage: clearBackground,
