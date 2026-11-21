@@ -119,6 +119,7 @@ int main(int argc, char** argv) {
     options.size = {64, 64};
     options.use_gpu = true;
     options.background_rgb = background_rgb;
+    options.defer_presentation = true;
     auto gpu = Host::create(probe, options);
     if (!gpu || (live_gpu && !gpu->is_gpu_backed()))
         return fail("GPU host factory returned no GPU host");
@@ -131,8 +132,12 @@ int main(int argc, char** argv) {
         if (png.empty()) return fail("GPU readback was empty");
         if (!png_pixel_matches(png, -4, -4, background_rgb))
             return fail("unpainted readback corner did not use the requested background");
-        if (!png_pixel_matches(png, 8, 8, 0x2878DC))
-            return fail("GPU readback did not contain the View paint");
+        if (!png_pixel_matches(png, 8, 8, background_rgb))
+            return fail("deferred GPU readback painted the View before resume");
+        gpu->resume_presentation();
+        if (!gpu->present_first_frame()) return fail("resumed GPU paint failed");
+        if (!png_pixel_matches(gpu->capture_back_buffer_png(), 8, 8, 0x2878DC))
+            return fail("resumed GPU readback did not contain the View paint");
     }
     // A real AppKit key event sent to the host's own view must reach the
     // View tree (calling the View's handler directly would prove nothing).
@@ -215,6 +220,7 @@ int main(int argc, char** argv) {
     gpu = Host::create(probe, options);
     if (!gpu || (live_gpu && !gpu->is_gpu_backed()) || probe.plugin_view_host() != gpu.get())
         return fail("reopened GPU host was not installed");
+    gpu->resume_presentation();
     if (live_gpu && !gpu->present_first_frame()) return fail("reopened GPU host did not paint");
     gpu.reset();
     if (probe.plugin_view_host() != nullptr)

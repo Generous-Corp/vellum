@@ -826,6 +826,7 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/VellumConfig.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/VellumConfigVersion.cmake"
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/Vellum")
+include(cmake/VellumWebCompat.cmake)
 install(FILES LICENSE.md NOTICE.md DEPENDENCIES.md
     DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/Vellum")
 if(VELLUM_INSTALL_THREEJS)
