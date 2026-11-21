@@ -915,6 +915,42 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "The macOS plug-in view host: a per-image Metal view that renders the View tree with Skia on Dawn into its CAMetalLayer and routes mouse, wheel, key and focus input. Written for Vellum on its own Metal view, not taken from Pulp's plugin_view_host_mac sources."
+    },
+    {
+      "framework_path": "framework/core/view/include/vellum/view/waveform_editor.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/include/pulp/view/waveform_editor.hpp",
+      "pulp_commits": [
+        "9fa7e5cbd3343fcaea1b0f355dda4a05a1593f6a"
+      ],
+      "framework_blob": "a772953dba5f9c65872da53a7c5264b74fe4cc65",
+      "reason": "Shared waveform editor geometry, snapping, hit-testing and transaction primitives transferred to Vellum so Pulp editors can consume the framework-owned API."
+    },
+    {
+      "framework_path": "framework/core/view/include/vellum/view/waveform_editor_primitives.hpp",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/include/pulp/view/waveform_editor_primitives.hpp",
+      "pulp_commits": [
+        "9fa7e5cbd3343fcaea1b0f355dda4a05a1593f6a"
+      ],
+      "framework_blob": "f3afd4cc22f7d044a128c4a1598e493cd2654de8",
+      "reason": "Shared waveform editor geometry, snapping, hit-testing and transaction primitives transferred to Vellum so Pulp editors can consume the framework-owned API."
+    },
+    {
+      "framework_path": "framework/core/view/src/waveform_editor_primitives.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "pulp",
+      "pulp_path": "core/view/src/waveform_editor_primitives.cpp",
+      "pulp_commits": [
+        "9fa7e5cbd3343fcaea1b0f355dda4a05a1593f6a"
+      ],
+      "framework_blob": "dc16912608fa6fb697e071faf5b92d48066bda25",
+      "reason": "Shared waveform editor geometry, snapping, hit-testing and transaction primitives transferred to Vellum so Pulp editors can consume the framework-owned API."
     }
   ]
 }

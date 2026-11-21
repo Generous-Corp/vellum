@@ -45,6 +45,7 @@
       "vellum.framework.param-model-binding",
       "vellum.framework.render-pass",
       "vellum.framework.scripted-ui-param-model",
+      "vellum.framework.waveform-editor",
       "vellum.framework.widget-bridge",
       "vellum.framework.widget-bridge-param-model",
       "vellum.gpu-runtime-artifact-unit",
