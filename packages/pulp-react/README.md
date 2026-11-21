@@ -97,6 +97,18 @@ font-size multiplier, `'native'` as pixels, and the default `'auto'` reads
 values up to 8 as multipliers and larger ones as pixels. A value it cannot
 resolve, such as `calc()`, leaves the native value unchanged.
 
+## Scrolling
+
+`ScrollView` coalesces React `scrollTop` and `scrollLeft` props into one native
+`scrollTo(x, y)` call. Control both axes when preserving an authored position.
+These props do not read native offsets: wheel or trackpad movement on an
+uncontrolled axis can be reset by a later prop update. The native `scrollTo`
+(absolute, both axes) and `scrollBy` (relative) bridge behavior is unchanged.
+
+The DOM compatibility shim has a narrower contract: `Element.scrollTop` and
+`Element.scrollLeft` read as zero and ignore assignments. They cannot report or
+preserve native scrolling. Native per-axis offsets require a separate API.
+
 ## Architecture
 
 - Mutation mode (Ink/R3F pattern), `isPrimaryRenderer: true`

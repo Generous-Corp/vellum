@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PulpHostConfig } from '../src/host-config.js';
 import { applyAllProps, applyChangedProps } from '../src/prop-applier.js';
@@ -341,7 +343,7 @@ it('recalculates font-relative typography when fontSize changes or is removed', 
     expect(setLetterSpacing).toHaveBeenCalledWith('type', 1.4000000000000001);
 });
 
-it('coalesces ScrollView offsets so changing one axis preserves the other', () => {
+it('coalesces controlled ScrollView offsets using authored values, without native readback', () => {
     const scrollTo = vi.fn();
     vi.stubGlobal('scrollTo', scrollTo);
     const root = createRoot();
@@ -352,4 +354,27 @@ it('coalesces ScrollView offsets so changing one axis preserves the other', () =
     scrollTo.mockClear();
     applyChangedProps(node, initial, { ...initial, scrollTop: 30 });
     expect(scrollTo).toHaveBeenCalledExactlyOnceWith('scroll', 20, 30);
+});
+
+it('documents DOM scroll offsets as zero-valued stubs with ignored assignments', () => {
+    class Element {}
+    const context = { Element };
+    const shim = readFileSync(new URL('../../../framework/core/view/js/web-compat-observers.js', import.meta.url), 'utf8');
+    runInNewContext(shim, context);
+    const element = new Element() as Element & { scrollTop: number; scrollLeft: number };
+    element.scrollTop = 123;
+    element.scrollLeft = 456;
+    expect(element.scrollTop).toBe(0);
+    expect(element.scrollLeft).toBe(0);
+});
+
+it('does not claim to preserve native wheel movement on an uncontrolled scroll axis', () => {
+    let native = { x: 0, y: 0 };
+    vi.stubGlobal('scrollTo', (_id: string, x: number, y: number) => { native = { x, y }; });
+    const initial = { id: 'uncontrolled-scroll', scrollTop: 10 };
+    const node = instance('ScrollView', initial, createRoot());
+    applyAllProps(node);
+    native.x = 99; // Native wheel movement is not observable through the bridge.
+    applyChangedProps(node, initial, { ...initial, scrollTop: 30 });
+    expect(native).toEqual({ x: 0, y: 30 });
 });

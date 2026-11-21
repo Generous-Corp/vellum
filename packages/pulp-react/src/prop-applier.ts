@@ -486,8 +486,6 @@ function emitSvgLineGeometry(id: string, props: Record<string, unknown>): void {
 
 const shaderUniformSnapshots = new Map<string, string>();
 
-const scrollOffsetSnapshots = new Map<string, { x: number; y: number }>();
-
 function scrollNumber(value: unknown): number {
     const n = Number(value);
     return Number.isFinite(n) ? n : 0;
@@ -495,8 +493,8 @@ function scrollNumber(value: unknown): number {
 
 /// ScrollView's native scrollTo replaces both axes. Coalesce the two React
 /// props into one call and retain the last authored value for the axis that a
-/// later render leaves unchanged, so updating scrollTop cannot reset
-/// scrollLeft (or vice versa).
+/// later render leaves unchanged. These are authored offsets, not native
+/// readback: wheel scrolling cannot be preserved on an uncontrolled axis.
 function applyScrollOffsets(
     id: string,
     type: string,
@@ -512,12 +510,11 @@ function applyScrollOffsets(
         ? previous.scrollTop !== props.scrollTop || previous.scrollLeft !== props.scrollLeft
         : hasTop || hasLeft;
     if (!changed || (!hasTop && !hasLeft && previous)) return false;
-    const prior = scrollOffsetSnapshots.get(id) ?? { x: 0, y: 0 };
+    const prior = { x: scrollNumber(previous?.scrollLeft), y: scrollNumber(previous?.scrollTop) };
     const next = {
         x: hasLeft ? scrollNumber(props.scrollLeft) : prior.x,
         y: hasTop ? scrollNumber(props.scrollTop) : prior.y,
     };
-    scrollOffsetSnapshots.set(id, next);
     call('scrollTo', id, next.x, next.y);
     return true;
 }
