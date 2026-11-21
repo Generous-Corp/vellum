@@ -1,3 +1,4 @@
+import { rendererWrite } from './programmatic-events.js';
 // prop-applier-internal, shared plumbing for the per-domain prop
 // handlers.
 //
@@ -45,8 +46,9 @@ export function call(name: string, ...args: unknown[]): void {
             lg('[pa#' + _pa_count + '] ' + name + '(' + String(args[0] ?? '') + ')');
         }
     }
-    if (queueBridgeCall(name, fn, args)) return;
-    fn(...args);
+    const invoke = (...values: unknown[]) => rendererWrite(name, values[0], () => fn(...values));
+    if (queueBridgeCall(name, invoke, args)) return;
+    invoke(...args);
 }
 
 /// Forward to a bridge verb whose absence is a BUG, not a withheld capability.

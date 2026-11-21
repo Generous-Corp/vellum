@@ -104,6 +104,9 @@ The `XYPad` callback adapter accepts injected coordinate payloads, but the curre
 native factory does not emit change events for gestures. Payload tests do not
 establish native gesture delivery.
 
+`__pulpReactCaption_` is reserved for internal caption identities; authored widget
+IDs and root ID prefixes must use another namespace.
+
 React roots and portals keep their managed children in an ordered tail group;
 pre-existing native siblings retain their relative order ahead of that group.
 
