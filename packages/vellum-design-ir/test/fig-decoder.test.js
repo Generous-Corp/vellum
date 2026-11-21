@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import { deflateRawSync } from 'node:zlib';
 import { ByteReader, readSchema, makeDecoder } from '../src/fig-file/kiwi.mjs';
-import { unpackFig, isZip } from '../src/fig-file/container.mjs';
+import { unzip, unpackFig, isZip } from '../src/fig-file/container.mjs';
 import {
   buildScene, outline, findFrame, materializeFrame, countFramesByName, framesByName, nodesByName,
 } from '../src/fig-file/scene.mjs';
@@ -335,4 +336,24 @@ test('committed fixture decodes to the same input as the generator', () => {
   assert.deepEqual(generated.schemaBytes, committed.schemaBytes);
   assert.deepEqual(generated.messageBytes, committed.messageBytes);
   assert.deepEqual(generated.images, committed.images);
+});
+
+function localZipEntry(name, data) {
+  const raw = deflateRawSync(data);
+  const header = Buffer.alloc(30);
+  header.writeUInt32LE(0x04034b50, 0);
+  header.writeUInt16LE(8, 8);
+  header.writeUInt32LE(raw.length, 18);
+  header.writeUInt32LE(data.length, 22);
+  header.writeUInt16LE(Buffer.byteLength(name), 26);
+  return Buffer.concat([header, Buffer.from(name), raw]);
+}
+
+test('unzip bounds the cumulative decompressed size across entries', () => {
+  const zip = Buffer.concat([
+    localZipEntry('a.bin', Buffer.alloc(600)),
+    localZipEntry('b.bin', Buffer.alloc(600)),
+  ]);
+  assert.equal(Object.keys(unzip(zip, { remaining: 1200 })).length, 2);
+  assert.throws(() => unzip(zip, { remaining: 1000 }), RangeError);
 });
