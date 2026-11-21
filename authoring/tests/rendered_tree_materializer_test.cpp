@@ -590,6 +590,9 @@ bool image_nodes() {
             "children":[]},
           {"type":"image","id":"plain","source":"sha256:)JSON" + std::string(64, 'b') +
                              R"JSON(","style":{"width":10,"height":10}},
+          {"type":"image","id":"captured-canvas","source":"assets/)JSON" +
+                             std::string(64, 'c') +
+                             R"JSON(.png","fit":"fill","style":{"width":80,"height":50}},
           {"type":"image","id":"remote","source":"https://example.com/logo.png",
             "style":{"width":10,"height":10}},
           {"type":"image","id":"unsourced","style":{"width":10,"height":10}}
@@ -605,6 +608,8 @@ bool image_nodes() {
     }
     const auto* logo = vellum::graphics::find_node(rendered.scene, "logo");
     const auto* plain = vellum::graphics::find_node(rendered.scene, "plain");
+    const auto* captured_canvas =
+        vellum::graphics::find_node(rendered.scene, "captured-canvas");
     const auto* remote = vellum::graphics::find_node(rendered.scene, "remote");
     const auto* unsourced = vellum::graphics::find_node(rendered.scene, "unsourced");
     if (logo == nullptr || logo->kind != SceneNode::Kind::image || !logo->image ||
@@ -619,6 +624,9 @@ bool image_nodes() {
     if (plain == nullptr || plain->kind != SceneNode::Kind::image ||
         plain->image->fit != ImageFit::fill ||
         plain->image->sampling != ImageSampling::linear || plain->image->source_rect ||
+        captured_canvas == nullptr || captured_canvas->kind != SceneNode::Kind::image ||
+        !captured_canvas->image ||
+        captured_canvas->image->content_hash != "sha256:" + std::string(64, 'c') ||
         remote == nullptr || remote->kind == SceneNode::Kind::image ||
         unsourced == nullptr || unsourced->kind == SceneNode::Kind::image) {
         std::cerr << "image: defaults or non-hash sources were not handled\n";
@@ -651,8 +659,8 @@ bool image_nodes() {
     const auto refused = vellum::graphics::scene_loss_diagnostics(older);
     if (std::count_if(commands.begin(), commands.end(), [](const auto& command) {
             return command.kind == vellum::graphics::PaintCommand::Kind::image;
-        }) != 2 ||
-        missing.size() != 2U || missing[0].code != vellum::graphics::kImageAssetMissingCode ||
+        }) != 3 ||
+        missing.size() != 3U || missing[0].code != vellum::graphics::kImageAssetMissingCode ||
         refused.size() != 1U || refused[0].code != vellum::graphics::kSceneVersionMismatchCode ||
         refused[0].node_id != "logo") {
         std::cerr << "image: the materialized scene did not version as expected\n";
