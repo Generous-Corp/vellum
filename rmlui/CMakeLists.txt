@@ -288,6 +288,34 @@ if(VELLUM_RMLUI_VELLUM_RENDERER)
     list(APPEND VELLUM_RMLUI_COMPONENTS VellumRenderer)
 endif()
 
+# RmlUi uses infinity for an idle context's next update. Vellum also checks for
+# non-finite input. Target options follow inherited toolchain and directory flags.
+function(vellum_rmlui_require_nonfinite target scope)
+    if(MSVC)
+        target_compile_options(${target} ${scope} /fp:precise)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+            target_compile_options(${target} ${scope} /clang:-fno-finite-math-only)
+        endif()
+    else()
+        target_compile_options(${target} ${scope}
+            $<$<COMPILE_LANG_AND_ID:CXX,AppleClang,Clang,GNU>:-fno-finite-math-only>
+            $<$<COMPILE_LANG_AND_ID:OBJCXX,AppleClang,Clang,GNU>:-fno-finite-math-only>)
+    endif()
+endfunction()
+
+foreach(_target IN ITEMS rmlui_core vellum-rmlui-soft-renderer vellum-rmlui-native-host
+                         vellum-rmlui-cpu vellum-rmlui-vellum-renderer)
+    if(TARGET ${_target})
+        vellum_rmlui_require_nonfinite(${_target} PRIVATE)
+    endif()
+endforeach()
+# Core and Native consumers compile the inline settings validation in their own
+# translation units, so those targets carry the floating-point requirement.
+vellum_rmlui_require_nonfinite(vellum-rmlui-core PUBLIC)
+if(TARGET vellum-rmlui-native)
+    vellum_rmlui_require_nonfinite(vellum-rmlui-native PUBLIC)
+endif()
+
 # Only VellumRenderer may link Vellum; every other library here stays usable
 # without it.
 include(cmake/VellumRmlUiLinkBoundary.cmake)
