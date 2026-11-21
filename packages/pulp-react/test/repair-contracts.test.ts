@@ -7,7 +7,7 @@ import { applyAllProps, applyChangedProps } from '../src/prop-applier.js';
 import { applyTransformProp } from '../src/prop-applier-transform.js';
 import * as widgets from '../src/intrinsics.js';
 import { createElement } from 'react';
-import { createRoot, render, unmount } from '../src/index.js';
+import { createRoot, createPortal, render, unmount } from '../src/index.js';
 import type { PulpContainer, PulpInstance } from '../src/types.js';
 
 // Exercise host mutations with a stateful native tree, including native append
@@ -165,18 +165,18 @@ it('updates and clears the capital Button fallback caption', () => {
     const node = instance('Button', { id: 'button', children: 'old' }, root);
     host.appendChildToContainer(root, node);
     update(node, { id: 'button', children: 'new' });
-    expect(captions.get('button_l')).toBe('new');
+    expect(captions.get(node.textTargetId!)).toBe('new');
     update(node, { id: 'button' });
-    expect(captions.get('button_l')).toBe('');
+    expect(captions.get(node.textTargetId!)).toBe('');
 });
 
 it('keeps a caption target when an HTML container changes from nested markup to text', () => {
     const root = { rootId: '', nextId: 0 };
     const node = instance('div', { id: 'container', children: { type: 'span' } }, root);
     host.appendChildToContainer(root, node);
-    expect(captions.has('container__text')).toBe(true);
+    expect(captions.has(node.textTargetId!)).toBe(true);
     update(node, { id: 'container', children: 'ready' });
-    expect(captions.get('container__text')).toBe('ready');
+    expect(captions.get(node.textTargetId!)).toBe('ready');
 });
 
 it('uses moveWidget when the indexed insert function is unavailable', () => {
@@ -455,7 +455,7 @@ it.each(['div', 'span'])('updates an initially empty %s at its real caption targ
     const root = createRoot();
     render(createElement(tag, { id: 'empty-caption' }, ''), root);
     render(createElement(tag, { id: 'empty-caption' }, 'Ready'), root);
-    expect(captions.get(tag === 'div' ? 'empty-caption__text' : 'empty-caption')).toBe('Ready');
+    expect(captions.get(tag === 'div' ? tree.get('empty-caption')![0] : 'empty-caption')).toBe('Ready');
     unmount(root);
 });
 
@@ -466,7 +466,7 @@ it('accounts for the generated button caption when reordering keyed children', (
         ...ids.map(id => createElement('span', { id, key: id }, id)));
     render(view(['caption-a', 'caption-b']), root);
     render(view(['caption-b', 'caption-a']), root);
-    expect(tree.get('caption-order')).toEqual(['caption-order__text', 'caption-b', 'caption-a']);
+    expect(tree.get('caption-order')?.slice(1)).toEqual(['caption-b', 'caption-a']);
     unmount(root);
 });
 
@@ -518,7 +518,7 @@ it('gives nested inline markup a caption target for later direct text', () => {
     const root = createRoot();
     render(createElement('span', { id: 'inline-caption' }, createElement('em', {}, 'before')), root);
     render(createElement('span', { id: 'inline-caption' }, 'after'), root);
-    expect(captions.get('inline-caption__text')).toBe('after');
+    expect(captions.get(tree.get('inline-caption')![0])).toBe('after');
     unmount(root);
 });
 
@@ -636,4 +636,59 @@ it('restores initial ScrollView offsets after layout establishes content overflo
         createElement(widgets.Label, { id: 'scroll-content' }, 'content')), root);
     expect(offset).toEqual({ x: 30, y: 40 });
     unmount(root);
+});
+
+it('suppresses synchronous native change notifications from controlled text writes', () => {
+    const handler = vi.fn(); const root = createRoot();
+    vi.stubGlobal('createTextEditor', (id: string, parent: string) => insert(parent, id));
+    vi.stubGlobal('setText', (id: string, text: string) => listeners.get(`${id}:change`)?.(text));
+    render(createElement('input', { id: 'silent-text', value: 'saved', onChange: handler }), root);
+    expect(handler).not.toHaveBeenCalled();
+    render(createElement('input', { id: 'silent-text', value: 'restored', onChange: handler }), root);
+    expect(handler).not.toHaveBeenCalled();
+    listeners.get('silent-text:change')!('user edit');
+    expect(handler).toHaveBeenCalledOnce();
+    unmount(root);
+});
+
+it('suppresses synchronous native selection notifications before replacing or removing handlers', () => {
+    const oldHandler = vi.fn(); const newHandler = vi.fn();
+    vi.stubGlobal('setListSelected', (id: string, selected: number) => listeners.get(`${id}:select`)?.(selected));
+    const initial = widgets.ListBox({ id: 'silent-list', selected: 1, onChange: oldHandler }).props;
+    const node = instance('ListBox', initial, createRoot());
+    applyAllProps(node);
+    const updated = widgets.ListBox({ id: 'silent-list', selected: 2, onChange: newHandler }).props;
+    applyChangedProps(node, initial, updated);
+    expect(oldHandler).not.toHaveBeenCalled(); expect(newHandler).not.toHaveBeenCalled();
+    listeners.get('silent-list:select')!(3);
+    expect(newHandler).toHaveBeenCalledWith(3);
+    applyChangedProps(node, updated, { id: 'silent-list', selected: 4 });
+    expect(newHandler).toHaveBeenCalledOnce();
+});
+
+it.each(['div', 'button', 'Button'])('keeps internal %s captions distinct from authored suffix IDs', tag => {
+    for (const name of ['setPointerEvents', 'setAccessibilityRole', 'setAccessibilityLabel']) vi.stubGlobal(name, vi.fn());
+    const authoredChildId = tag === 'Button' ? 'collision-card_l' : 'collision-card__text';
+    const root = createRoot();
+    render(createElement(tag, { id: 'collision-card' },
+        createElement('span', { id: authoredChildId }, 'Child')), root);
+    const generated = tree.get('collision-card')![0];
+    expect(generated).not.toBe(authoredChildId);
+    render(createElement(tag, { id: 'collision-card' }, 'Ready'), root);
+    expect(captions.get(generated)).toBe('Ready');
+    expect(() => instance('Label', { id: '__pulpReactCaption_reserved' }, root)).toThrow(/reserved/);
+    unmount(root);
+});
+
+it('preserves live portal children when their destination becomes a rendered root', () => {
+    const source = createRoot(); const target = createRoot('portal-destination');
+    tree.set('portal-destination', []);
+    render(createElement(widgets.Col, { id: 'portal-source' },
+        createPortal(createElement(widgets.Label, { id: 'live-portal' }, 'portal'), target)), source);
+    render(createElement(widgets.Label, { id: 'target-root-body' }, 'root'), target);
+    expect(tree.get('portal-destination')).toEqual(['live-portal', 'target-root-body']);
+    unmount(target);
+    expect(tree.get('portal-destination')).toEqual(['live-portal']);
+    unmount(source);
+    expect(tree.get('portal-destination')).toEqual([]);
 });
