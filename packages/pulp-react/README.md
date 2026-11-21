@@ -100,6 +100,13 @@ resolve, such as `calc()`, leaves the native value unchanged.
 Password inputs are rejected because this bridge has no secure native text
 control. They never fall back to a plaintext editor.
 
+The `XYPad` callback adapter accepts injected coordinate payloads, but the current
+native factory does not emit change events for gestures. Payload tests do not
+establish native gesture delivery.
+
+React roots and portals keep their managed children in an ordered tail group;
+pre-existing native siblings retain their relative order ahead of that group.
+
 ## Scrolling
 
 `ScrollView` coalesces React `scrollTop` and `scrollLeft` props into one native
