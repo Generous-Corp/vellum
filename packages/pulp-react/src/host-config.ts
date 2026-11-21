@@ -59,6 +59,7 @@ let currentUpdatePriority: EventPriority = NoEventPriority;
 type AnyFn = (...args: unknown[]) => unknown;
 const g = globalThis as unknown as Record<string, AnyFn | undefined>;
 type DomRegistry = Map<string, Record<string, unknown>>;
+const nativeOwners = new Map<string, Instance>();
 const domRegistry = (): DomRegistry => {
     const host = globalThis as unknown as Record<string, unknown>;
     const windowProxy = host.window as Record<string, unknown> | undefined;
@@ -412,7 +413,7 @@ function createWidget(type: Type, id: string, parentId: string, props: Props): v
                         createHtmlLabel(id, txt, parentId);
                     } else {
                         call('createCol', id, parentId);
-                        if (txt === undefined) {
+                        if (txt === undefined || txt.length === 0) {
                             const textId = id + '__text';
                             call('createLabel', textId, '', id);
                             applyStyleProps(textId, 'label', TEXT_CREATION_STYLE);
@@ -936,6 +937,9 @@ export const PulpHostConfig: HostConfig<
         // Native intrinsics already use flat props, normalizeHostProps
         // is a no-op fast path for them. Runtime-import bundles reach
         // prop-applier through here.
+        if (String(type) === 'input' && String(props.type).toLowerCase() === 'password') {
+            throw new Error('Password inputs require a secure native control; this bridge cannot mask them');
+        }
         const normalizedProps = normalizeHostProps(type, props as Record<string, unknown>);
         const id = (normalizedProps.id as string) ?? autoId(rootContainer);
         // A new widget starts visible. An authored id can come back after its
@@ -969,16 +973,15 @@ export const PulpHostConfig: HostConfig<
                 // this DOM-shaped value to attach captured line boxes to the
                 // real native paint target after every commit.
                 shim._textContent = initialText ?? '';
-                shim._nativeCreated = true;
+                shim._nativeCreated = false;
                 shim.__pulpId = id;
                 shim.__pulpAuthoredLayout__ = normalizedProps;
                 // The Element constructor seeds internal `_id`, but the
                 // public `.id` getter returns an empty string until the
                 // setter marks it user-visible. Calling the setter keeps
                 // `ref.current.id` aligned with the native widget id.
-                shim.id = id;
+                // Publish identity at native placement, after old-instance cleanup.
                 domShim = shim;
-                domRegistry().set(id, shim);
             }
         } catch { /* Element shim not available, pure-JS test path */ }
         return {
@@ -993,7 +996,7 @@ export const PulpHostConfig: HostConfig<
             textTargetId: String(type) === 'button'
                 ? id + '__text'
                 : (DYNAMIC_TEXT_CONTAINERS.has(String(type))
-                    && asText(normalizedProps.children) === undefined)
+                    && !asText(normalizedProps.children))
                     ? id + '__text' : undefined,
             autoFocusRequested: wantsAutoFocus(props as Record<string, unknown>),
         };
@@ -1135,18 +1138,24 @@ export const PulpHostConfig: HostConfig<
         // Flatten both sides before diffing so style/className changes
         // surface as real prop deltas (and vice versa: a flat width:100
         // → style:{width:100} swap collapses to a no-op).
+        if (String(type) === 'input' && String((newProps as Props).type).toLowerCase() === 'password') {
+            throw new Error('Password inputs require a secure native control; this bridge cannot mask them');
+        }
         const oldN = normalizeHostProps(type, oldProps as Record<string, unknown>);
         const newN = normalizeHostProps(type, newProps as Record<string, unknown>);
         return shallowDiff(oldN, newN);
     },
 
     commitUpdate(instance, _updatePayload, type, oldProps, newProps, _internalHandle) {
+        if (String(type) === 'input' && String((newProps as Props).type).toLowerCase() === 'password') {
+            throw new Error('Password inputs require a secure native control; this bridge cannot mask them');
+        }
         const oldN = normalizeHostProps(type, oldProps as Record<string, unknown>);
         const newN = normalizeHostProps(type, newProps as Record<string, unknown>);
         const reapplies = !isFixedTextOnlyUpdate(type, oldN, newN)
             && !isPaintOnlyUpdate(oldN, newN);
         if (reapplies) markMaterializedTreeDirty(instance.id);
-        applyChangedProps(instance, oldN, newN);
+        applyChangedProps(instance, oldN, newN, true);
         // A paint-only commit skipped the metadata pass. Where it overwrote a
         // paint channel the capture owns on this node, let the importer put
         // that one property back (after React's setter, as the pass would).
@@ -1399,15 +1408,15 @@ function attach(parent: Instance, child: Instance, index?: number): void {
     }
 
     if (!wasAttachedElsewhere && child.onBridge) {
-        if (typeof g.insertChild === 'function') call('insertChild', parent.id, child.id, insertIdx);
-        else if (typeof g.moveWidget === 'function') call('moveWidget', child.id, parent.id, insertIdx);
+        if (typeof g.insertChild === 'function') call('insertChild', parent.id, child.id, nativeChildIndex(parent, insertIdx));
+        else if (typeof g.moveWidget === 'function') call('moveWidget', child.id, parent.id, nativeChildIndex(parent, insertIdx));
         return;
     }
 
     if (wasAttachedElsewhere && child.onBridge) {
         // Existing on-bridge widget being moved between parents.
         if (typeof g.moveWidget === 'function') {
-            call('moveWidget', child.id, parent.id, insertIdx);
+            call('moveWidget', child.id, parent.id, nativeChildIndex(parent, insertIdx));
         } else {
             // Fallback: remove + recreate. Loses any subtree state.
             if (typeof g.removeWidget === 'function') call('removeWidget', child.id);
@@ -1433,8 +1442,7 @@ function removeRootChild(container: Container, child: Instance): void {
     const children = rootChildren.get(container);
     const index = children?.indexOf(child) ?? -1;
     if (index >= 0) children!.splice(index, 1);
-    if (typeof g.removeWidget === 'function') call('removeWidget', child.id);
-    unregisterDomSubtree(child);
+    retireNativeSubtree(child);
     child.parentId = undefined;
     child.onBridge = false;
 }
@@ -1462,6 +1470,10 @@ function attachToRoot(container: Container, child: Instance, before?: Instance):
 
 /// Emit createX + applyAllProps for a single child whose parent is on
 /// the bridge, then recursively drain the child's pendingChildren.
+function nativeChildIndex(parent: Instance, index: number): number {
+    return index + (parent.textTargetId ? 1 : 0);
+}
+
 function materialize(parent: Instance, child: Instance, index?: number): void {
     child.inheritedSvgViewBox = svgViewportFor(parent);
     // Every createX call appends, so a child landing anywhere but last has to be
@@ -1474,7 +1486,7 @@ function materialize(parent: Instance, child: Instance, index?: number): void {
     // eagerly under a live parent and materializeUnder drains a deferred
     // parent's queue in authored order.
     const appendsLast = index === undefined || index >= parent.childIds.length - 1;
-    materializeUnder(parent.id, child, appendsLast ? undefined : index);
+    materializeUnder(parent.id, child, appendsLast ? undefined : nativeChildIndex(parent, index!));
 }
 
 function parseSvgViewBox(value: unknown): [number, number] | undefined {
@@ -1524,12 +1536,21 @@ function bindSourceLocation(child: Instance): void {
 
 function materializeUnder(parentId: string, child: Instance, index?: number): void {
     if (child.onBridge) return;
+    const previousOwner = nativeOwners.get(child.id);
+    if (previousOwner && previousOwner !== child) retireNativeSubtree(previousOwner);
     creationStyleSink = undefined;
     // Resolve the fallback when materializing, when native capabilities are known.
     if (child.type === 'Button') {
         child.textTargetId = typeof g.createButton === 'function' ? undefined : child.id + '_l';
     }
     createWidget(child.type, child.id, parentId, child.props);
+    nativeOwners.set(child.id, child);
+    if (child._dom && typeof child._dom === 'object') {
+        const shim = child._dom as Record<string, unknown>;
+        shim._nativeCreated = true;
+        shim.id = child.id;
+        domRegistry().set(child.id, shim);
+    }
     // An older native host has no indexed insert and can only append. Ordering
     // then degrades exactly as it did before this call existed, rather than
     // throwing, so one renderer bundle still runs on both.
@@ -1586,7 +1607,8 @@ function materializeUnder(parentId: string, child: Instance, index?: number): vo
 function detach(parent: Instance, child: Instance): void {
     const idx = parent.childIds.indexOf(child.id);
     if (idx >= 0) parent.childIds.splice(idx, 1);
-    if (typeof g.removeWidget === 'function') call('removeWidget', child.id);
+    retireNativeSubtree(child);
+    parent.pendingChildren = parent.pendingChildren.filter(entry => entry.child !== child);
     const parentDom = parent._dom as Record<string, unknown> | null | undefined;
     const childDom = child._dom as Record<string, unknown> | null | undefined;
     if (parentDom && childDom && Array.isArray(parentDom._children)) {
@@ -1598,6 +1620,23 @@ function detach(parent: Instance, child: Instance): void {
     child.parentId = undefined;
 }
 
+// Native IDs are global, while React may place a fresh same-ID descriptor
+// before deleting its predecessor. Only the current owner may retire that ID.
+function retireNativeSubtree(instance: Instance): void {
+    if (nativeOwners.get(instance.id) !== instance) return;
+    if (typeof g.removeWidget === 'function') call('removeWidget', instance.id);
+    const forget = (node: Instance): void => {
+        for (const id of node.childIds) {
+            const child = nativeOwners.get(id);
+            if (child && child.parentId === node.id) forget(child);
+        }
+        nativeOwners.delete(node.id);
+        node.onBridge = false;
+    };
+    forget(instance);
+    unregisterDomSubtree(instance);
+}
+
 function unregisterDomSubtree(instance: Instance): void {
     const registry = domRegistry();
     const rootDom = instance._dom as Record<string, unknown> | null | undefined;
@@ -1606,7 +1645,7 @@ function unregisterDomSubtree(instance: Instance): void {
             ? [...node._children] as Array<Record<string, unknown>> : [];
         for (const child of children) visit(child);
         const id = node.__pulpId ?? node.id;
-        if (typeof id === 'string' && id.length > 0) {
+        if (typeof id === 'string' && id.length > 0 && registry.get(id) === node) {
             registry.delete(id);
             clearMaterializedEventCallbacks(id);
             forgetVisibility(id);
@@ -1615,9 +1654,11 @@ function unregisterDomSubtree(instance: Instance): void {
     };
     if (rootDom) visit(rootDom);
     else {
-        registry.delete(instance.id);
-        clearMaterializedEventCallbacks(instance.id);
-        forgetVisibility(instance.id);
+        if (!nativeOwners.has(instance.id)) {
+            registry.delete(instance.id);
+            clearMaterializedEventCallbacks(instance.id);
+            forgetVisibility(instance.id);
+        }
     }
 }
 
