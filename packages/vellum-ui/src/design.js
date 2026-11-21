@@ -262,7 +262,7 @@ function retainedStyle(context, node, viewport, root) {
     }
     if (drawsBox && Array.isArray(paint.backgroundGradients)) {
         style.backgroundGradients = paint.backgroundGradients.map((gradient, index) =>
-            retainedGradient(context, Object.create(null), `backgroundGradients.${index}`, gradient));
+            retainedGradient(context, refs, `backgroundGradients.${index}`, gradient));
     }
     for (const property of [
         'borderRadius', 'borderTopLeftRadius', 'borderTopRightRadius',

@@ -770,14 +770,15 @@ function canonicalTokenColor(value) {
 // The colour each token slot names, by element type: `[property, colour]`, or
 // undefined when the slot does not exist on that element.
 function tokenSlotColor(slot, type, style, pathProperties) {
-    const stop = /^(backgroundLinearGradient|fill)\.stops\.(0|[1-9][0-9]*)$/.exec(slot);
+    const stop = /^(backgroundLinearGradient|backgroundGradients\.([0-7]))\.stops\.(0|[1-9][0-9]*)$/.exec(slot);
+    const pathStop = /^fill\.stops\.(0|[1-9][0-9]*)$/.exec(slot);
     if (type === 'path') {
         if (slot === 'fill' && typeof pathProperties?.fill === 'string') {
             return ['fill', pathProperties.fill];
         }
         if (slot === 'stroke') return ['stroke', pathProperties?.stroke];
-        if (stop && stop[1] === 'fill' && typeof pathProperties?.fill === 'object') {
-            return [slot, pathProperties.fill.stops?.[Number(stop[2])]?.color];
+        if (pathStop && typeof pathProperties?.fill === 'object') {
+            return [slot, pathProperties.fill.stops?.[Number(pathStop[1])]?.color];
         }
         return undefined;
     }
@@ -785,9 +786,11 @@ function tokenSlotColor(slot, type, style, pathProperties) {
     if (type === 'text-run') return undefined;
     if (slot === 'backgroundColor') return ['style.backgroundColor', style?.backgroundColor];
     if (slot === 'boxShadow') return ['style.boxShadow.color', style?.boxShadow?.color];
-    if (stop && stop[1] === 'backgroundLinearGradient') {
-        return [`style.${slot}`,
-            style?.backgroundLinearGradient?.stops?.[Number(stop[2])]?.color];
+    if (stop) {
+        const layer = stop[1] === 'backgroundLinearGradient'
+            ? style?.backgroundLinearGradient
+            : style?.backgroundGradients?.[Number(stop[2])];
+        return [`style.${slot}`, layer?.stops?.[Number(stop[3] ?? stop[2])]?.color];
     }
     return undefined;
 }
