@@ -403,3 +403,99 @@ it.each(['remount', 'reparent'])('creates new native subtrees for a React %s', (
     expect(captions.get('moving-caption')).toBe('caption');
     unmount(root);
 });
+
+it('retires a same-ID native predecessor before right-to-left placement', () => {
+    type Native = { id: string; children: Native[]; parent?: Native };
+    const widgets = new Map<string, Native>();
+    const make = (id: string, parentId: string) => {
+        const node: Native = { id, children: [], parent: widgets.get(parentId) };
+        node.parent?.children.push(node);
+        widgets.set(id, node); // Native factories overwrite lookup, not old ownership.
+    };
+    vi.stubGlobal('createCol', make);
+    vi.stubGlobal('createLabel', (id: string, _text: string, parent: string) => make(id, parent));
+    vi.stubGlobal('removeWidget', (id: string) => {
+        const node = widgets.get(id);
+        if (!node) return;
+        if (node.parent) node.parent.children = node.parent.children.filter(n => n !== node);
+        const erase = (n: Native) => { for (const c of n.children) erase(c); widgets.delete(n.id); };
+        erase(node);
+    });
+    const root = createRoot();
+    const child = () => createElement('div', { id: 'replacement', key: 'same' }, 'caption');
+    const view = (side: 'left' | 'right') => createElement('div', { id: 'replacement-root' },
+        createElement('div', { id: 'replacement-left' }, side === 'left' ? child() : null),
+        createElement('div', { id: 'replacement-right' }, side === 'right' ? child() : null));
+    render(view('right'), root);
+    render(view('left'), root);
+    expect(widgets.get('replacement')?.parent?.id).toBe('replacement-left');
+    expect(widgets.get('replacement-right')?.children.map(n => n.id)).not.toContain('replacement');
+    expect(widgets.get('replacement-left')?.children.map(n => n.id)).toContain('replacement');
+    unmount(root);
+});
+
+it('publishes a replacement DOM shim after deleting its keyed predecessor', () => {
+    class Element {
+        _children: unknown[] = [];
+        constructor(public tagName: string, public _id: string) {}
+    }
+    vi.stubGlobal('Element', Element);
+    const root = createRoot();
+    render(createElement('span', { id: 'same-dom-id', key: 'old' }, 'old'), root);
+    const registry = (globalThis as any).__pulpReactDomRegistry__ as Map<string, unknown>;
+    const previous = registry.get('same-dom-id');
+    render(createElement('span', { id: 'same-dom-id', key: 'new' }, 'new'), root);
+    expect(registry.get('same-dom-id')).toBeDefined();
+    expect(registry.get('same-dom-id')).not.toBe(previous);
+    unmount(root);
+});
+
+it('creates a caption when an initially empty HTML container gains text', () => {
+    const root = createRoot();
+    render(createElement('div', { id: 'empty-caption' }, ''), root);
+    render(createElement('div', { id: 'empty-caption' }, 'Ready'), root);
+    expect(captions.get('empty-caption__text')).toBe('Ready');
+    unmount(root);
+});
+
+it('accounts for the generated button caption when reordering keyed children', () => {
+    for (const name of ['setPointerEvents', 'setAccessibilityRole', 'setAccessibilityLabel']) vi.stubGlobal(name, vi.fn());
+    const root = createRoot();
+    const view = (ids: string[]) => createElement('button', { id: 'caption-order' },
+        ...ids.map(id => createElement('span', { id, key: id }, id)));
+    render(view(['caption-a', 'caption-b']), root);
+    render(view(['caption-b', 'caption-a']), root);
+    expect(tree.get('caption-order')).toEqual(['caption-order__text', 'caption-b', 'caption-a']);
+    unmount(root);
+});
+
+it('rejects password inputs instead of exposing plaintext through a normal editor', () => {
+    const createTextEditor = vi.fn();
+    vi.stubGlobal('createTextEditor', createTextEditor);
+    const root = createRoot();
+    expect(() => instance('input', { id: 'secret', type: 'password', value: 'secret' }, root))
+        .toThrow(/secure native control/);
+    const node = instance('input', { id: 'plain', type: 'text' }, root);
+    expect(() => update(node, { id: 'plain', type: 'password' })).toThrow(/secure native control/);
+    expect(createTextEditor).not.toHaveBeenCalled();
+});
+
+it('resets omitted React styles from a complete host prop snapshot', () => {
+    const setOpacity = vi.fn();
+    vi.stubGlobal('setOpacity', setOpacity);
+    const root = createRoot();
+    render(createElement('div', { id: 'omitted-style', style: { opacity: 0.5 } }), root);
+    setOpacity.mockClear();
+    render(createElement('div', { id: 'omitted-style' }), root);
+    expect(setOpacity).toHaveBeenCalledWith('omitted-style', 1);
+    unmount(root);
+});
+
+it('clears an image with a supported transparent URI rather than an ignored empty path', () => {
+    let image = 'old-image';
+    vi.stubGlobal('setImageSource', (_id: string, source: string) => { if (source) image = source; });
+    const root = createRoot();
+    const node = instance('Image', { id: 'clear-image', src: 'old-image' }, root);
+    applyChangedProps(node, { src: 'old-image' }, {});
+    expect(image).toMatch(/^data:image\/png;base64,/);
+});
