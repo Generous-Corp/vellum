@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { deflateRawSync } from 'node:zlib';
 import { ByteReader, readSchema, makeDecoder } from '../src/fig-file/kiwi.mjs';
-import { unzip, unpackFig, isZip } from '../src/fig-file/container.mjs';
+import { unzip, unpackFig, isZip, decompressChunk } from '../src/fig-file/container.mjs';
 import {
   buildScene, outline, findFrame, materializeFrame, countFramesByName, framesByName, nodesByName,
 } from '../src/fig-file/scene.mjs';
@@ -356,4 +356,11 @@ test('unzip bounds the cumulative decompressed size across entries', () => {
   ]);
   assert.equal(Object.keys(unzip(zip, { remaining: 1200 })).length, 2);
   assert.throws(() => unzip(zip, { remaining: 1000 }), RangeError);
+});
+
+test('inner chunks draw on the same cumulative decompression budget', () => {
+  const chunk = deflateRawSync(Buffer.alloc(600));
+  const budget = { remaining: 1000 };
+  assert.equal(decompressChunk(chunk, budget).length, 600);
+  assert.throws(() => decompressChunk(chunk, budget), RangeError);
 });
