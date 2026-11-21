@@ -9,6 +9,7 @@
 // VellumGpuRuntime::Device.
 
 #include <gpu_runtime/dawn_bootstrap.hpp>
+#include <gpu_runtime/export.h>
 
 #include <string>
 
