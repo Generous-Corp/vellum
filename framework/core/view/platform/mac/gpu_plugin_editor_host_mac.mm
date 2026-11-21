@@ -149,6 +149,8 @@ private:
         canvas.set_fill_color(canvas::Color::hex(background_rgb_));
         canvas.fill_rect(0, 0, size_.width, size_.height);
 
+        if (!root_presentation_allowed()) return;
+
         float sx, sy, tx, ty;
         if (!design_viewport_transform(sx, sy, tx, ty)) {
             root_.paint_all(canvas);

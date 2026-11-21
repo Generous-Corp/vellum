@@ -917,6 +917,46 @@
       "reason": "The macOS plug-in view host: a per-image Metal view that renders the View tree with Skia on Dawn into its CAMetalLayer and routes mouse, wheel, key and focus input. Written for Vellum on its own Metal view, not taken from Pulp's plugin_view_host_mac sources."
     },
     {
+      "framework_path": "framework/core/view/js/web-compat.js",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's web-compat authoring layer, with product names respelled for Vellum: header and comments name Vellum, and navigator.userAgent reports Vellum/1.0. The bytes are Pulp's file put through the transfer rename plus those edits."
+    },
+    {
+      "framework_path": "framework/core/view/js/web-compat-runtime-apis.js",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's web-compat runtime APIs, with the header comment pointing at Vellum's prelude chain (framework/core/view/cmake/PulpViewJsPreludes.cmake) instead of Pulp's CMake. The bytes are Pulp's file put through the transfer rename plus that comment."
+    },
+    {
+      "framework_path": "framework/core/view/js/web-compat-selector.js",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's web-compat selector engine, with the header comment describing how Vellum loads it (after the native selector prelude, read verbatim by scripted UI consumers) instead of Pulp's harness adapter. The bytes are Pulp's file put through the transfer rename plus that comment."
+    },
+    {
+      "framework_path": "framework/core/view/js/web-compat-three-shim.js",
+      "change": "added",
+      "target": null,
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's Three.js web-compat shim, with its print markers renamed from PULP_THREE_SHIM / PULP_THREEJS to VELLUM_THREE_SHIM / VELLUM_THREEJS to match Vellum's smoke tests. The bytes are Pulp's file put through the transfer rename plus those markers."
+    },
+    {
       "framework_path": "framework/core/view/include/vellum/view/waveform_editor.hpp",
       "change": "added",
       "target": null,

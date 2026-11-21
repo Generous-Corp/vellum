@@ -185,6 +185,39 @@ class BrowserCaptureLoweringTests(unittest.TestCase):
         )
         self.assertEqual(root["name"], "#document")
 
+    def test_dom_snapshot_omits_non_rendered_inline_source(self) -> None:
+        inline_source = "x" * (64 * 1024 + 1)
+        snapshot = {
+            "strings": ["#document", "SCRIPT", "STYLE", "P", "#text", inline_source, "Visible"],
+            "documents": [{
+                "nodes": {
+                    "nodeType": [9, 1, 3, 1, 3, 1, 3],
+                    "nodeName": [0, 1, 4, 2, 4, 3, 4],
+                    "nodeValue": [-1, -1, 5, -1, 5, -1, 6],
+                    "parentIndex": [-1, 0, 1, 0, 3, 0, 5],
+                },
+                "layout": {"nodeIndex": [0, 5, 6], "styles": [[], [], []]},
+            }],
+        }
+        root, _assets, evidence = lower_dom_snapshot(
+            snapshot, settled_snapshot=snapshot, screenshot={},
+        )
+        script, style, paragraph = root["children"]
+        self.assertEqual(script["children"], [])
+        self.assertEqual(style["children"], [])
+        self.assertEqual(paragraph["children"][0]["text"], "Visible")
+        self.assertEqual(evidence["settledSnapshot"]["strings"][5], inline_source)
+
+        snapshot["documents"][0]["nodes"]["nodeValue"][6] = 5
+        with self.assertRaisesRegex(BackendFailure, r"nodeValue\[6\].*invalid bounded string"):
+            lower_dom_snapshot(snapshot, settled_snapshot=snapshot, screenshot={})
+
+        layout = snapshot["documents"][0]["layout"]
+        layout["nodeIndex"].append(2)
+        layout["styles"].append([])
+        with self.assertRaisesRegex(BackendFailure, r"nodeValue\[2\].*invalid bounded string"):
+            lower_dom_snapshot(snapshot, settled_snapshot=snapshot, screenshot={})
+
     def test_dom_snapshot_treats_empty_attribute_value_as_empty(self) -> None:
         """Chrome sends alt="" as the -1 sentinel, not an index to an empty string."""
         snapshot = {
