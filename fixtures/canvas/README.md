@@ -6,9 +6,8 @@ revision matches the canvas tree at `0d6070c1d00999ae12abdaff549b50b6c89c4502`.
 The SDK uses Skia `be7d7c3e996e567eda7dc9774274f7a0103cdb8c`, which is also
 the Vellum renderer lock. The scene calls live in
 [canvas_raster_scene.hpp](../../tools/framework-tests/canvas_raster_scene.hpp).
-The fixture covers a fractional round-capped arc, an even-odd SVG icon, a
-translucent gradient stroke, and a shallow translucent graded rounded
-rectangle blended over an opaque background. The test
+The fixture covers a fractional round-capped arc, an even-odd SVG icon and a
+translucent gradient stroke blended over an opaque background. The test
 compares every RGBA channel at zero tolerance. It also checks the internal
 sample count passed to the editor's Graphite context.
 

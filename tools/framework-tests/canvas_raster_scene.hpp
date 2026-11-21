@@ -40,20 +40,6 @@ inline bool paint(Canvas& canvas) {
     canvas.set_blend_mode(Canvas::BlendMode::screen);
     canvas.set_stroke_gradient_linear(6.25f, 0, 90.75f, 0, stops, positions, 3);
     canvas.stroke_line(6.25f, 42.25f, 90.75f, 42.25f);
-
-    // A shallow translucent fill exercises the selected-segment background
-    // path, including rounded coverage, premultiplied interpolation and the
-    // source-over blend against the opaque scene.
-    const Color panel_stops[] = {
-        Color::rgba8(32, 40, 54, 184),
-        Color::rgba8(38, 44, 56, 188),
-    };
-    const float panel_positions[] = {0.0f, 1.0f};
-    canvas.set_blend_mode(Canvas::BlendMode::source_over);
-    canvas.set_fill_gradient_linear(28.25f, 28.5f, 68.75f, 28.5f,
-                                    panel_stops, panel_positions, 2);
-    canvas.fill_rounded_rect(28.25f, 28.5f, 40.5f, 8.0f, 3.0f);
-    canvas.clear_fill_gradient();
     return icon_painted;
 }
 

@@ -183,12 +183,15 @@ inline sk_sp<SkShader> make_two_point_conical(SkPoint start, float start_radius,
 #endif
 }
 
-/// Install a fill or stroke shader with the legacy canvas paint defaults.
-/// Pulp's Skia canvas leaves dithering disabled for shader paints. Keeping the
-/// same default is required for exact Graphite parity on shallow translucent
-/// gradients.
+/// Install a fill or stroke shader, dithering it when it is a gradient.
+///
+/// Chromium dithers CSS gradients, so a shallow gradient (a few code values
+/// across hundreds of pixels) reaches the screen as fine row noise rather than
+/// flat bands with hard steps. Undithered, the same gradient bands visibly and
+/// disagrees with every browser capture of it. Image patterns share the same
+/// shader slots and are left undithered, as Chromium leaves images.
 inline void set_paint_shader(SkPaint& paint, sk_sp<SkShader> shader) {
-    paint.setDither(false);
+    paint.setDither(shader != nullptr && !shader->isAImage());
     paint.setShader(std::move(shader));
 }
 
