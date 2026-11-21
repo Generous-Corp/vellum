@@ -64,6 +64,7 @@ export function clearMaterializedEventCallbacks(id: string): void {
     forgetNativeListeners(id);
     forgetControlled(id);
     shaderUniformSnapshots.delete(id);
+    pendingScrollOffsets.delete(id);
 }
 
 /// Native listeners this module has armed and installed, per widget id, by
@@ -494,6 +495,14 @@ function isTextValueWidget(type: string, props?: Record<string, unknown>): boole
         || (type === 'input' && inputType !== 'range' && inputType !== 'checkbox');
 }
 
+const pendingScrollOffsets = new Map<string, { x: number; y: number }>();
+
+export function flushPendingScrollOffsets(): void {
+    const pending = [...pendingScrollOffsets];
+    pendingScrollOffsets.clear();
+    for (const [id, { x, y }] of pending) call('scrollTo', id, x, y);
+}
+
 function scrollNumber(value: unknown): number {
     const n = Number(value);
     return Number.isFinite(n) ? n : 0;
@@ -508,6 +517,7 @@ function applyScrollOffsets(
     type: string,
     props: Record<string, unknown>,
     previous?: Record<string, unknown>,
+    defer = false,
 ): boolean {
     if (type !== 'ScrollView') return false;
     const hasTop = Object.prototype.hasOwnProperty.call(props, 'scrollTop')
@@ -517,13 +527,15 @@ function applyScrollOffsets(
     const changed = previous
         ? previous.scrollTop !== props.scrollTop || previous.scrollLeft !== props.scrollLeft
         : hasTop || hasLeft;
-    if (!changed || (!hasTop && !hasLeft && previous)) return false;
+    if (!changed) return false;
+    if (!hasTop && !hasLeft && previous) { pendingScrollOffsets.delete(id); return false; }
     const prior = { x: scrollNumber(previous?.scrollLeft), y: scrollNumber(previous?.scrollTop) };
     const next = {
         x: hasLeft ? scrollNumber(props.scrollLeft) : prior.x,
         y: hasTop ? scrollNumber(props.scrollTop) : prior.y,
     };
-    call('scrollTo', id, next.x, next.y);
+    if (defer) pendingScrollOffsets.set(id, next);
+    else call('scrollTo', id, next.x, next.y);
     return true;
 }
 
@@ -896,12 +908,12 @@ function applyWidgetValues(id: string, type: string, props: Record<string, unkno
 
 /// Apply ALL props for first-attach. Called from appendInitialChild /
 /// appendChild after the instance lands on the bridge.
-export function applyAllProps(instance: PulpInstance): void {
+export function applyAllProps(instance: PulpInstance, deferScroll = false): void {
     const { id, type, props } = instance;
     logApply('applyAll', id, type, Object.keys(props).length);
     shaderUniformSnapshots.delete(id);
     applyWidgetValues(id, type, props);
-    const scrollOffsetsApplied = applyScrollOffsets(id, type, props);
+    const scrollOffsetsApplied = applyScrollOffsets(id, type, props, undefined, deferScroll);
     applyOverlayTransition(id, {}, props);
     // A first attach is a new native widget: nothing is installed on it yet,
     // whatever an earlier widget under this id had.
@@ -957,7 +969,7 @@ export function applyChangedProps(
 ): boolean {
     const { id, type } = instance;
     let mutated = applyWidgetValues(id, type, newProps, oldProps);
-    const scrollOffsetsApplied = applyScrollOffsets(id, type, newProps, oldProps);
+    const scrollOffsetsApplied = applyScrollOffsets(id, type, newProps, oldProps, fullSnapshot);
     mutated = applyOverlayTransition(id, oldProps, newProps) || scrollOffsetsApplied || mutated;
     noteControlledProps(id, newProps);
     const selectionModeChanged = isVirtualListType(type) &&
