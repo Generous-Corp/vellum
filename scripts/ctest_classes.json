@@ -43,6 +43,7 @@
       "vellum.framework.linux-sdl-window-x11-control",
       "vellum.framework.native-dialog-delivery",
       "vellum.framework.param-model-binding",
+      "vellum.framework.react-materialization",
       "vellum.framework.render-pass",
       "vellum.framework.scripted-ui-param-model",
       "vellum.framework.widget-bridge",
