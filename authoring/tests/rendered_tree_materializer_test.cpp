@@ -627,6 +627,7 @@ bool image_nodes() {
         captured_canvas == nullptr || captured_canvas->kind != SceneNode::Kind::image ||
         !captured_canvas->image ||
         captured_canvas->image->content_hash != "sha256:" + std::string(64, 'c') ||
+        captured_canvas->image->sampling != ImageSampling::transparent_missing ||
         remote == nullptr || remote->kind == SceneNode::Kind::image ||
         unsourced == nullptr || unsourced->kind == SceneNode::Kind::image) {
         std::cerr << "image: defaults or non-hash sources were not handled\n";

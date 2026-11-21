@@ -149,7 +149,8 @@ bool image_reference_is_valid(const ImageReference& reference, std::string* reas
     }
     switch (reference.sampling) {
     case ImageSampling::nearest:
-    case ImageSampling::linear: break;
+    case ImageSampling::linear:
+    case ImageSampling::transparent_missing: break;
     default: return fail(reason, "the sampling is not nearest or linear");
     }
     return true;

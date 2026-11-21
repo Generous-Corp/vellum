@@ -276,6 +276,21 @@ void placeholder_and_refusals() {
                diagnostics[0].node_id == "missing",
            "the missing asset is reported");
 
+    auto captured_missing = scene;
+    captured_missing.root.children[0].fill = Color::rgba(0.0F, 0.0F, 0.0F, 0.0F);
+    captured_missing.root.children[0].image->sampling = ImageSampling::transparent_missing;
+    captured_missing.root.children.insert(captured_missing.root.children.begin(),
+        {.id = "panel", .kind = SceneNode::Kind::rectangle, .bounds = {4, 4, 24, 24},
+         .fill = Color::hex(0x304050)});
+    expect(surface->render(captured_missing, &error),
+           "a missing captured canvas still renders", error);
+    Capture captured_frame;
+    expect(surface->capture_rgba(captured_frame.rgba, captured_frame.width,
+                                 captured_frame.height, &error),
+           "the captured canvas frame captures", error);
+    probe(captured_frame, 16, 16, {0x30, 0x40, 0x50, 255},
+          "a missing captured canvas leaves its panel visible");
+
     const auto refused = [&](const Scene& candidate, const std::string& expected) {
         std::string why;
         Capture after;

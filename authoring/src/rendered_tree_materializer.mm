@@ -1828,6 +1828,12 @@ bool materialize_image(
         return reject("children", "does not accept children");
     }
     vellum::graphics::ImageReference reference{.content_hash = std::move(content_hash)};
+    if (const auto raw_source = source[@"source"];
+        [raw_source isKindOfClass:NSString.class]) {
+        const auto value = cpp_string(raw_source);
+        if (value.rfind("assets/", 0) == 0)
+            reference.sampling = vellum::graphics::ImageSampling::transparent_missing;
+    }
     if (source[@"fit"] != nil) {
         const auto fit = keyword(source[@"fit"],
             std::array<std::string_view, 4>{"fill", "contain", "cover", "none"});
