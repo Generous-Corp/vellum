@@ -1,0 +1,15 @@
+{
+  "name": "pulp-jsx-runtime",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Bundling environment for pulp import-design --from jsx",
+  "dependencies": {
+    "@babel/parser": "7.29.7",
+    "css-tree": "3.2.1",
+    "esbuild": "0.25.12",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-reconciler": "0.29.2",
+    "scheduler": "0.23.2"
+  }
+}

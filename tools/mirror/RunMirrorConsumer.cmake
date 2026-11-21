@@ -190,6 +190,19 @@ target_link_libraries(gpu-guard-consumer PRIVATE Vellum::MirrorCanvas)
     endforeach()
 endif()
 
+# The hosted GPU proof opts into live rendering. The installed host can
+# exercise viewport geometry and input even without a native GPU adapter.
+set(_run_live_gpu FALSE)
+if(DEFINED ENV{VELLUM_MIRROR_LIVE_GPU})
+    set(_live_gpu "$ENV{VELLUM_MIRROR_LIVE_GPU}")
+    if(_live_gpu MATCHES "^(1|ON|TRUE|YES)$")
+        set(_run_live_gpu TRUE)
+    elseif(NOT _live_gpu MATCHES "^(0|OFF|FALSE|NO)?$")
+        message(FATAL_ERROR
+            "VELLUM_MIRROR_LIVE_GPU must be one of 1/0, ON/OFF, TRUE/FALSE, or YES/NO")
+    endif()
+endif()
+
 # A plug-in editor's view of the host: plugin_view_host.hpp reaches the GPU
 # device type only through platform/gpu_fwd.hpp, so it builds, links and runs
 # against the installed package without VELLUM_MIRROR_BUILD.
@@ -217,7 +230,12 @@ _run("plug-in view host consumer configure" "${CMAKE_COMMAND}"
     -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
     -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
 _run("plug-in view host consumer build" "${CMAKE_COMMAND}" --build "${_pvh_dir}/build")
-_run("plug-in view host consumer run" "${_pvh_dir}/build/vellum-plugin-view-host-consumer")
+set(_pvh_args)
+if(_run_live_gpu)
+    set(_pvh_args --live-gpu)
+endif()
+_run("plug-in view host consumer run" "${_pvh_dir}/build/vellum-plugin-view-host-consumer" ${_pvh_args})
+message(STATUS "${_last_stdout}")
 
 # The native bootstrap entry points are provider-owned. The installed mirror
 # consumer must resolve them from that dylib, and must not carry the Dawn proc
@@ -385,17 +403,7 @@ _run("direct GPU consumer build" "${CMAKE_COMMAND}" --build "${_work}/direct-gpu
 # runtime probe so an unavailable device is reported as such rather than being
 # mistaken for a passing consumer test. The hosted GPU proof sets this variable
 # around ctest; an opted-in runtime failure remains fatal through _run().
-set(_run_direct_gpu FALSE)
-if(DEFINED ENV{VELLUM_MIRROR_LIVE_GPU})
-    set(_live_gpu "$ENV{VELLUM_MIRROR_LIVE_GPU}")
-    if(_live_gpu MATCHES "^(1|ON|TRUE|YES)$")
-        set(_run_direct_gpu TRUE)
-    elseif(NOT _live_gpu MATCHES "^(0|OFF|FALSE|NO)?$")
-        message(FATAL_ERROR
-            "VELLUM_MIRROR_LIVE_GPU must be one of 1/0, ON/OFF, TRUE/FALSE, or YES/NO")
-    endif()
-endif()
-if(_run_direct_gpu)
+if(_run_live_gpu)
     _run("direct GPU consumer run" "${_work}/direct-gpu-build/vellum-gpu-direct-consumer")
 else()
     message(STATUS

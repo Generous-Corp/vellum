@@ -1,0 +1,1479 @@
+// Build the executable @pulp/react entry for a validated materialized browser
+// document. CLI parsing, file I/O, and esbuild orchestration live in the
+// materialized-runtime-transform command.
+import {
+  materializedAbsoluteInsets,
+  materializedRuntimeFontStack,
+  materializedSvgRectGeometry,
+  materializedTextTargetGeometry,
+} from './materialized_metadata_contract.mjs';
+import {
+  MATERIALIZED_BACKGROUND_Z,
+  MATERIALIZED_STATE_ATLAS_Z,
+  MATERIALIZED_BEHAVIOR_Z,
+} from './materialized_layer_contract.mjs';
+import { materializedDynamicLayoutScope, restoreMaterializedLayout }
+  from './materialized_dynamic_layout.mjs';
+
+export function buildMaterializedRuntimeEntry({
+  capturedCssVariables,
+  presentationTime,
+  requestedState,
+  textBindings,
+  layoutBindings,
+  paintBindings,
+  pseudoBindings = [],
+  runtimeDocumentAsset,
+  sidecar,
+  productPrelude,
+  surfaceBackground,
+  authoredLeft,
+  authoredTop,
+  authoredWidth,
+  authoredHeight,
+  authoredTransform,
+  visualAuthority,
+  stateAtlas,
+  visualWidth,
+  visualHeight,
+  canvasBindings,
+  canvasAuthority,
+  behaviorCanvasAnchors,
+  capturedPaintAuthorityAnchors,
+}) {
+  const entry = `
+import * as React from 'react';
+import { createRoot as createPulpRoot, render as renderPulp, unmount as unmountPulp } from '@pulp/react';
+
+const g = globalThis;
+${materializedRuntimeFontStack.toString()}
+${materializedTextTargetGeometry.toString()}
+${materializedAbsoluteInsets.toString()}
+${materializedSvgRectGeometry.toString()}
+${materializedDynamicLayoutScope.toString()}
+${restoreMaterializedLayout.toString()}
+// Executable React styles retain authored var(--name) expressions. Restore the
+// exact computed custom-property values Chromium captured before React mounts,
+// so font families, colours, lengths and other string-valued props reach the
+// native prop applier as resolved values instead of silently falling back.
+const capturedCssVariables = JSON.parse(${JSON.stringify(
+  JSON.stringify(capturedCssVariables))});
+g.__pulpCssVars = Object.freeze(Object.assign(
+  Object.create(null), g.__pulpCssVars || {}, capturedCssVariables));
+// Snapshot the native renderer bridge before the captured browser document
+// installs DOM-shaped globals with overlapping names (notably createCanvas).
+// @pulp/react consults this immutable namespace first, while the authored
+// browser code continues to see the compatibility functions it expects.
+g.__pulpNativeBridgeFunctions__ = Object.freeze({
+  createCanvas: g.createCanvas,
+  setSvgRect: g.setSvgRect,
+});
+g.React = React;
+const behaviorRootId = '__pulp_materialized_behavior__';
+// Pseudo planes are a separate visual layer. The behavior root is intentionally
+// transparent in reference-authority imports so the captured DesignIR remains
+// visible; placing pseudo planes below that root would inherit opacity=0 and
+// silently drop authored ::before/::after paint.
+const pseudoRootId = '__pulp_materialized_pseudo_root__';
+const surfaceRootId = '__pulp_materialized_surface__';
+const stateAtlasRootId = '__pulp_materialized_state_atlas__';
+class NativeRoot {
+  constructor() { this.container = createPulpRoot(behaviorRootId, '__behavior_pr_'); }
+  render(element) { return renderPulp(element, this.container); }
+  unmount() { return unmountPulp(this.container); }
+}
+let capturedRootElement;
+let activeNativeRoot;
+function deferredRoot() {
+  return {
+    render: function (element) {
+      capturedRootElement = element;
+      if (activeNativeRoot) activeNativeRoot.render(element);
+    },
+    unmount: function () {
+      capturedRootElement = undefined;
+      if (activeNativeRoot) activeNativeRoot.unmount();
+    }
+  };
+}
+g.ReactDOM = {
+  // The captured document owns the application bootstrap. Defer its first
+  // render until runtime import has finished replacing document.body and the
+  // native behavior root exists. Mounting App again after import duplicates
+  // the complete UI and, more subtly, creates two independent state owners.
+  createRoot: () => deferredRoot(),
+  hydrateRoot: (_container, element) => {
+    const root = deferredRoot();
+    if (element !== undefined) root.render(element);
+    return root;
+  },
+  render: (element) => {
+    const root = deferredRoot();
+    root.render(element);
+    return root;
+  },
+  flushSync: (fn) => typeof fn === 'function' ? fn() : undefined
+};
+// Imported browser applications conventionally repaint a canvas by clearing
+// its full backing store at the start of every RAF. Opt this isolated runtime
+// into retained-frame replacement before any application canvas is created;
+// ordinary Pulp Canvas2D users keep browser command-history semantics.
+g.__pulpRetainedCanvasFrames__ = true;
+g.__pulpLogicalCanvasScale__ = true;
+// Bootstrap at the exact Chromium frame timestamp recorded beside the
+// accepted pixels. Starting an analyzer at an unrelated wall-clock phase
+// would make a correct executable canvas look different on its first frame.
+g.__pulpCapturedPresentationTime__ = ${JSON.stringify(presentationTime)};
+// Replay the executable document through the same bounded presentation-time
+// interval Chromium observed. This is deliberately a clock contract rather
+// than a captured bitmap or a product-specific animation offset: rAF-driven
+// canvases receive browser-compatible timestamps until they reach the accepted
+// frame. Product-owned live data can subsequently replace the captured demo
+// source; the canonical import proof itself stays frozen at the accepted frame
+// so repeated screenshots are byte-stable rather than wall-clock dependent.
+g.__pulpCapturedReplayClock__ = {
+  current: 0,
+  target: g.__pulpCapturedPresentationTime__
+};
+g.__pulpAnimationFrameTimestamp__ = function (_nativeNow) {
+  const clock = g.__pulpCapturedReplayClock__;
+  if (clock.current < clock.target) {
+    clock.current = Math.min(clock.target, clock.current + 50);
+  }
+  return clock.current;
+};
+// Keep deterministic capture activation visible to both halves of the
+// materialized runtime. The requested state is also injected into the
+// captured document before its application scripts, but some browser-compat
+// runtimes evaluate classic scripts through a document-owned global proxy.
+// Publishing the same immutable value on the native realm prevents that
+// proxy boundary from turning a requested dropdown/modal proof into the main
+// surface while preserving the original React handler as the activator.
+g.__pulpRequestedMaterializedState__ = ${JSON.stringify(requestedState)};
+g.performance = {
+  now: function () { return g.__pulpCapturedReplayClock__.current; }
+};
+function materializedDomRegistryValues() {
+  const values = [];
+  const seen = new Set();
+  const append = function (registry) {
+    if (!registry || typeof registry.values !== 'function') return;
+    for (const node of registry.values()) {
+      const id = node && (node.__pulpId || node.id);
+      if (id && seen.has(String(id))) continue;
+      if (id) seen.add(String(id));
+      values.push(node);
+    }
+  };
+  // Captured classic scripts may own a window proxy while @pulp/react host
+  // commits publish their public Element shims on the native realm. Read both
+  // views of the same registry so conditionally mounted menus and dialogs are
+  // observable immediately after React commits them.
+  append(g.__pulpReactDomRegistry__);
+  if (g !== globalThis) append(globalThis.__pulpReactDomRegistry__);
+  // The live React host and captured classic-script realm can be separated by
+  // a window proxy. Querying through a tiny callable avoids relying on proxy
+  // property mirroring for conditionally committed children.
+  const provider = g.__pulpReactDomRegistryValues__ ||
+    globalThis.__pulpReactDomRegistryValues__;
+  if (typeof provider === 'function') {
+    const provided = provider();
+    if (Array.isArray(provided)) {
+      append({ values: function () { return provided.values(); } });
+    }
+  }
+  return values;
+}
+const capturedTextBindings = ${JSON.stringify(textBindings)};
+const capturedLayoutBindings = ${JSON.stringify(layoutBindings)};
+const capturedPaintBindings = ${JSON.stringify(paintBindings)};
+const capturedPseudoBindings = ${JSON.stringify(pseudoBindings ?? [])};
+const capturedHomeMetadata = {
+  layout_bindings: capturedLayoutBindings,
+  text_bindings: capturedTextBindings,
+  paint_bindings: capturedPaintBindings,
+  pseudo_bindings: capturedPseudoBindings,
+};
+let activeCapturedState = '';
+// React may commit a conditionally-mounted state over more than one pass.
+// Keep the commit hook pointed at the active state's Chromium evidence so a
+// later modal/menu subtree commit converges its newly-registered descendants
+// instead of accidentally reapplying the home document.
+let activeMaterializedMetadata = capturedHomeMetadata;
+let activeMaterializedMatch = null;
+const capturedGeometryNodes = new WeakSet();
+// Filled after the generated canvas binding table is declared. Keeping this
+// callback in the same post-commit hook as captured layout/text evidence lets
+// React replace conditional behavior subtrees without leaving the visible
+// DesignIR canvas wired to an obsolete callback snapshot.
+let syncMaterializedCanvasBehaviorsAfterCommit = null;
+function materializedElementChildren(node, registrySet) {
+  const children = node && node._children;
+  return Array.isArray(children)
+    ? children.filter(child => child && registrySet.has(child)) : [];
+}
+function materializedNodeTag(node) {
+  return String(node && node.tagName || '').toLowerCase();
+}
+// The index also carries two per-snapshot memos. Captured paths share long
+// prefixes -- every control in a row walks through the same row and panel --
+// so without them each step of each binding re-filters that node's children
+// against the registry, and the dynamic-layout scan, the layout, paint and text
+// loops each walk a binding again. With them a pass filters each node's
+// children once and resolves each binding once, whichever loop asks first.
+function materializedPathIndex(values) {
+  const registrySet = new Set(values);
+  const roots = values.filter(node => {
+    const parent = node && (node.parentElement || node._parentElement);
+    return !parent || !registrySet.has(parent);
+  });
+  return { registrySet, roots, children: new Map(), nodes: new Map() };
+}
+function materializedIndexedChildren(node, index) {
+  let children = index.children.get(node);
+  if (!children) {
+    children = materializedElementChildren(node, index.registrySet);
+    index.children.set(node, children);
+  }
+  return children;
+}
+// The index is a pure projection of the registry snapshot, so it is rebuilt
+// once per metadata application rather than cached across commits: a retained
+// index would resolve stale paths after any reparent, and every binding in a
+// single application reads the same snapshot anyway.
+function materializedNodeAtPath(binding, values, pathIndex) {
+  const index = pathIndex || materializedPathIndex(values);
+  if (index.nodes.has(binding)) return index.nodes.get(binding);
+  let siblings = index.roots;
+  let node = null;
+  for (const step of binding.path) {
+    node = siblings[step.index] || null;
+    if (!node || materializedNodeTag(node) !== step.tag) {
+      node = null;
+      break;
+    }
+    siblings = materializedIndexedChildren(node, index);
+  }
+  index.nodes.set(binding, node);
+  return node;
+}
+function materializedOptionalTextNode(binding, values) {
+  const matches = values.filter(node => {
+    const anonymousTargets = Array.isArray(node && node.__pulpAnonymousTextTargets)
+      ? node.__pulpAnonymousTextTargets : [];
+    if (binding.anonymous_text_index !== undefined)
+      return anonymousTargets.some(target =>
+        String(target && target.text || '') === binding.text);
+    return String(node && node.textContent || '') === binding.text;
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+// A commit's dirty scope is a list of native ids whose subtrees may have
+// moved. A binding is in scope when its node is that node or a descendant of
+// it, which is exactly "walk up the parent chain until an id matches".
+//
+// The direction matters. Walking UP from the binding is O(depth) of pure JS;
+// the work it avoids is bridge traffic -- getLayoutBoxMetrics forces a whole
+// root layout pass, and setCapturedLineBoxes / setFontFamily re-shape text --
+// so a scope that skips one binding saves far more than the walk costs.
+function materializedScopeSet(scopeIds) {
+  if (!Array.isArray(scopeIds) || scopeIds.length === 0) return null;
+  const set = new Set();
+  for (const id of scopeIds) {
+    if (id === null || id === undefined) continue;
+    const text = String(id);
+    if (text) set.add(text);
+  }
+  return set.size > 0 ? set : null;
+}
+function materializedNodeInScope(node, scopeSet) {
+  let current = node;
+  // A detached-but-still-registered node can in principle cycle; bound the
+  // walk rather than hang the commit. The bound is far above any real DOM.
+  for (let depth = 0; current && depth < 4096; ++depth) {
+    const id = current.__pulpId || current.id;
+    if (id && scopeSet.has(String(id))) return true;
+    current = current.parentElement || current._parentElement || null;
+  }
+  return false;
+}
+// The paint channels the last pass wrote per native id: { node, owned } where
+// owned maps opacity / color / fill / stroke to the captured value.
+const materializedPaintOwners = new Map();
+// React props that land on a captured paint channel, and the setter that
+// channel is written through.
+const materializedPaintChannels = {
+  opacity: ['opacity', 'setOpacity'],
+  color: ['color', 'setTextColor'],
+  textColor: ['color', 'setTextColor'],
+  fill: ['fill', 'setSvgFill'],
+  stroke: ['stroke', 'setSvgStroke'],
+};
+// @pulp/react treats a colour/opacity-only commit as paint-only and calls this
+// with the node's changed values instead of re-applying captured metadata.
+// Where the capture owns a changed channel on that node, the frozen value is
+// the visual authority, exactly as the full pass would have made it: put that
+// one property back. Everything else keeps React's value. Returns the number
+// of bridge writes.
+g.__pulpReconcileMaterializedPaint__ = function (id, changes) {
+  const owner = materializedPaintOwners.get(String(id));
+  if (!owner || !changes || typeof changes !== 'object') return 0;
+  const written = new Set();
+  let writes = 0;
+  for (const key of Object.keys(changes)) {
+    const route = materializedPaintChannels[key];
+    if (!route || written.has(route[0]) ||
+        !Object.prototype.hasOwnProperty.call(owner.owned, route[0])) continue;
+    const captured = owner.owned[route[0]];
+    written.add(route[0]);
+    if (changes[key] === captured || typeof g[route[1]] !== 'function') continue;
+    g[route[1]](String(id), captured);
+    ++writes;
+  }
+  return writes;
+};
+// scopeIds is optional and null/empty means "apply everything". Every caller
+// that is not the per-commit hook -- bootstrap, and a captured-state change --
+// deliberately passes nothing: a state flip replaces the whole binding table,
+// so nothing about the previous commit's dirty set describes it.
+const materializedPseudoPlanes = new Map();
+let materializedPseudoRootReady = false;
+function ensureMaterializedPseudoRoot() {
+  if (materializedPseudoRootReady) return;
+  createCol(pseudoRootId, '');
+  setPosition(pseudoRootId, 'absolute');
+  setLeft(pseudoRootId, ${JSON.stringify(authoredLeft)});
+  setTop(pseudoRootId, ${JSON.stringify(authoredTop)});
+  setFlex(pseudoRootId, 'width', ${JSON.stringify(authoredWidth)});
+  setFlex(pseudoRootId, 'height', ${JSON.stringify(authoredHeight)});
+  ${authoredTransform ? `
+  setTransformOrigin(pseudoRootId, 0, 0);
+  setTransform(pseudoRootId,
+    ${JSON.stringify(authoredTransform.a)}, ${JSON.stringify(authoredTransform.b)},
+    ${JSON.stringify(authoredTransform.c)}, ${JSON.stringify(authoredTransform.d)},
+    ${JSON.stringify(authoredTransform.e)}, ${JSON.stringify(authoredTransform.f)});` : ''}
+  setVisible(pseudoRootId, true);
+  setOpacity(pseudoRootId, 1);
+  setPointerEvents(pseudoRootId, 'box-none');
+  setZIndex(pseudoRootId, ${MATERIALIZED_BEHAVIOR_Z - 1000});
+  materializedPseudoRootReady = true;
+}
+function applyMaterializedPseudoBindings(metadata) {
+  const bindings = Array.isArray(metadata && metadata.pseudo_bindings)
+    ? metadata.pseudo_bindings : [];
+  if (bindings.length > 0) ensureMaterializedPseudoRoot();
+  const live = new Set();
+  for (const binding of bindings) {
+    const id = "__pulp_materialized_pseudo_" + binding.index;
+    live.add(id);
+    if (!materializedPseudoPlanes.has(id)) {
+      createCol(id, pseudoRootId);
+      materializedPseudoPlanes.set(id, { gradient: false });
+    }
+    setPosition(id, 'absolute');
+    setLeft(id, Number(binding.box.left) - Number(${JSON.stringify(authoredLeft)}));
+    setTop(id, Number(binding.box.top) - Number(${JSON.stringify(authoredTop)}));
+    setFlex(id, 'width', binding.box.width);
+    setFlex(id, 'height', binding.box.height);
+    // CSS background layers paint from color into image; clear stale layers
+    // before applying the current state so state switches are deterministic.
+    setBackground(id, binding.background_color || '');
+    const plane = materializedPseudoPlanes.get(id);
+    if (typeof setBackgroundGradient === 'function') {
+      if (binding.background_gradient)
+        setBackgroundGradient(id, binding.background_gradient);
+      else if (plane && plane.gradient)
+        setBackgroundGradient(id, '');
+    }
+    if (plane) plane.gradient = Boolean(binding.background_gradient);
+    setOpacity(id, binding.opacity);
+    setPointerEvents(id, 'none');
+    setZIndex(id, ${MATERIALIZED_BEHAVIOR_Z - 1000} +
+      Math.max(-999, Math.min(999, binding.z_index)));
+    setVisible(id, true);
+  }
+  for (const id of materializedPseudoPlanes.keys()) {
+    if (live.has(id)) continue;
+    setVisible(id, false);
+    setBackground(id, '');
+    if (typeof setBackgroundGradient === 'function') setBackgroundGradient(id, '');
+  }
+}
+
+function applyMaterializedImportMetadata(metadata, scopeIds) {
+  applyMaterializedPseudoBindings(metadata);
+  const scopeSet = materializedScopeSet(scopeIds);
+  const values = materializedDomRegistryValues();
+  const pathIndex = materializedPathIndex(values);
+  const activeLayoutBindings = Array.isArray(metadata && metadata.layout_bindings)
+    ? metadata.layout_bindings : [];
+  const activeTextBindings = Array.isArray(metadata && metadata.text_bindings)
+    ? metadata.text_bindings : [];
+  const activePaintBindings = Array.isArray(metadata && metadata.paint_bindings)
+    ? metadata.paint_bindings : [];
+  const scope = activeMaterializedMatch
+    ? g.__pulpFindMaterializedElement__(activeMaterializedMatch.selector,
+        activeMaterializedMatch.ancestor) : null;
+  const dynamicNodes = materializedDynamicLayoutScope(scope, activeLayoutBindings,
+    values, pathIndex, materializedNodeAtPath,
+    node => materializedIndexedChildren(node, pathIndex), materializedNodeTag);
+  for (const node of dynamicNodes) {
+    if (!capturedGeometryNodes.has(node)) continue;
+    restoreMaterializedLayout(node, g);
+    capturedGeometryNodes.delete(node);
+  }
+  // Paint ownership is rebuilt for exactly the nodes this pass re-applies: all
+  // of them for a full pass, the scoped subtrees otherwise. A node that fell
+  // out of the captured shape (a dynamic subtree) no longer owns its paint.
+  if (!scopeSet) {
+    materializedPaintOwners.clear();
+  } else {
+    for (const [id, owner] of materializedPaintOwners) {
+      if (dynamicNodes.has(owner.node) ||
+          materializedNodeInScope(owner.node, scopeSet)) {
+        materializedPaintOwners.delete(id);
+      }
+    }
+  }
+  // Two text bindings can resolve to the same native Label (a runtime-optional
+  // binding found by its text, beside the one found by its path). Its
+  // typography is the same five setters either way; apply a given face to a
+  // given Label once per pass.
+  const typographyApplied = new Map();
+  let applied = 0;
+  const diagnostics = {
+    state_id: typeof activeCapturedState === 'string' ? activeCapturedState : '',
+    layout_expected: activeLayoutBindings.length,
+    layout_applied: 0,
+    layout_node_miss: 0,
+    layout_out_of_scope: 0,
+    layout_dynamic_nodes: dynamicNodes.size,
+    text_expected: activeTextBindings.filter(binding =>
+      !binding.runtime_optional).length,
+    text_applied: 0,
+    text_node_miss: 0,
+    text_content_mismatch: 0,
+    text_target_miss: 0,
+    text_out_of_scope: 0,
+    text_optional_expected: activeTextBindings.filter(binding =>
+      binding.runtime_optional).length,
+    text_optional_applied: 0,
+    text_optional_miss: 0,
+    paint_expected: activePaintBindings.length,
+    paint_applied: 0,
+    paint_node_miss: 0,
+    paint_out_of_scope: 0,
+    paint_unsupported: 0,
+    paint_nodes: [],
+  };
+  // Freeze captured elements to Chromium's resolved parent-relative boxes.
+  // This is generation evidence, not a screenshot at runtime: React remains
+  // executable and newly-created dynamic nodes still flow through Yoga until
+  // their captured state contributes an equivalent binding.
+  //
+  // getLayoutBoxMetrics lays out the whole root whenever a geometry or
+  // typography write has landed since the previous read, so the pass runs in
+  // phases: every layout-binding read, then every write, then one read per
+  // text target, then the captured line boxes. Alternating reads and writes
+  // per binding would lay the tree out once per binding instead of twice per
+  // pass. The layout-binding reads only consume borders and margins, which
+  // these writes do not change, so reading them up front is exact.
+  if (typeof g.setPosition === 'function' && typeof g.setFlex === 'function') {
+    const layoutTargets = [];
+    for (const binding of activeLayoutBindings) {
+      const node = materializedNodeAtPath(binding, values, pathIndex);
+      if (dynamicNodes.has(node)) continue;
+      const id = node && (node.__pulpId || node.id);
+      if (!id) {
+        ++diagnostics.layout_node_miss;
+        continue;
+      }
+      if (scopeSet && !materializedNodeInScope(node, scopeSet)) {
+        ++diagnostics.layout_out_of_scope;
+        continue;
+      }
+      layoutTargets.push({ binding, node, id });
+    }
+    // Browser capture stores each child border box relative to its parent's
+    // border box. Yoga resolves absolute left/top from the parent's padding
+    // edge, so replaying the browser number verbatim adds the parent's
+    // border a second time (a 1 CSS-px / 2 Retina-px shift in compact rails
+    // and segmented controls). Translate coordinate spaces explicitly.
+    if (typeof g.getLayoutBoxMetrics === 'function') {
+      for (const target of layoutTargets) {
+        const parent = target.node.parentElement || target.node._parentElement;
+        const parentId = parent && (parent.__pulpId || parent.id);
+        target.parentMetrics = parentId
+          ? g.getLayoutBoxMetrics(String(parentId)) : null;
+        target.targetMetrics = g.getLayoutBoxMetrics(String(target.id));
+      }
+    }
+    for (const { binding, node, id, parentMetrics, targetMetrics } of layoutTargets) {
+      const insets = materializedAbsoluteInsets(
+        binding.box, parentMetrics || null, targetMetrics || null);
+      const left = insets ? insets.left : binding.box.left;
+      const top = insets ? insets.top : binding.box.top;
+      g.setPosition(String(id), 'absolute');
+      g.setLeft(String(id), left);
+      g.setTop(String(id), top);
+      g.setFlex(String(id), 'width', binding.box.width);
+      g.setFlex(String(id), 'height', binding.box.height);
+      capturedGeometryNodes.add(node);
+      ++applied;
+      ++diagnostics.layout_applied;
+    }
+  }
+  // Apply Chromium's resolved SVG paint after React has committed authored
+  // attributes. This intentionally wins over currentColor and stylesheet
+  // tokens: the frozen computed value is the visual authority for this state.
+  for (const binding of activePaintBindings) {
+    const node = materializedNodeAtPath(binding, values, pathIndex);
+    if (dynamicNodes.has(node)) continue;
+    const id = node && (node.__pulpId || node.id);
+    if (!id) {
+      ++diagnostics.paint_node_miss;
+      continue;
+    }
+    if (scopeSet && !materializedNodeInScope(node, scopeSet)) {
+      ++diagnostics.paint_out_of_scope;
+      continue;
+    }
+    diagnostics.paint_nodes.push({
+      index: binding.index,
+      tag: binding.tag,
+      id: String(id),
+    });
+    // Record exactly the channels written here, with the values written, so
+    // a later paint-only React commit on this node can put back the one
+    // property it overwrote instead of re-running this pass.
+    const owned = {};
+    materializedPaintOwners.set(String(id), { node, owned });
+    if (typeof g.setOpacity === 'function') {
+      g.setOpacity(String(id), binding.paint.opacity);
+      owned.opacity = binding.paint.opacity;
+    }
+    if (typeof g.setTextColor === 'function' && binding.paint.color) {
+      g.setTextColor(String(id), binding.paint.color);
+      owned.color = binding.paint.color;
+    }
+    if (binding.tag !== 'svg') {
+      if (binding.paint.stroke_dasharray !== 'none') {
+        ++diagnostics.paint_unsupported;
+        continue;
+      }
+      if (typeof g.setSvgFill === 'function') {
+        g.setSvgFill(String(id), binding.paint.fill);
+        owned.fill = binding.paint.fill;
+      }
+      if (typeof g.setSvgStroke === 'function') {
+        g.setSvgStroke(String(id), binding.paint.stroke);
+        owned.stroke = binding.paint.stroke;
+      }
+      if (typeof g.setSvgStrokeWidth === 'function')
+        g.setSvgStrokeWidth(String(id), binding.paint.stroke_width);
+      // SVG primitives are excluded from Yoga layout replay. Apply the
+      // Chromium-resolved parent-local box directly as rect geometry; zeroing
+      // x/y here collapses repeated bars because no layout binding moves the
+      // primitive View back to its captured position.
+      if (binding.tag === 'rect' && binding.box &&
+          typeof g.__pulpNativeBridgeFunctions__.setSvgRect === 'function') {
+        const rect = materializedSvgRectGeometry(binding.box);
+        if (rect) g.__pulpNativeBridgeFunctions__.setSvgRect(String(id),
+          rect.x, rect.y, rect.width, rect.height);
+      }
+    }
+    ++applied;
+    ++diagnostics.paint_applied;
+  }
+  if (typeof g.setCapturedLineBoxes !== 'function') return applied;
+  const textTargets = [];
+  for (const binding of activeTextBindings) {
+    const optional = binding.runtime_optional === true;
+    const node = materializedNodeAtPath(binding, values, pathIndex)
+      || (optional ? materializedOptionalTextNode(binding, values) : null);
+    if (dynamicNodes.has(node)) continue;
+    if (!node) {
+      if (optional) ++diagnostics.text_optional_miss;
+      else ++diagnostics.text_node_miss;
+      continue;
+    }
+    if (scopeSet && !materializedNodeInScope(node, scopeSet)) {
+      ++diagnostics.text_out_of_scope;
+      continue;
+    }
+    // HTML controls remain semantic/styled containers in the native tree.
+    // Their text may be painted by a generated Label child; the React host
+    // publishes that renderer-neutral target without exposing it to authored
+    // DOM behavior or making the importer know widget-specific ids.
+    const anonymousTargets = Array.isArray(node.__pulpAnonymousTextTargets)
+      ? node.__pulpAnonymousTextTargets : [];
+    const anonymousTarget = binding.anonymous_text_index === undefined
+      ? null : anonymousTargets[binding.anonymous_text_index];
+    if (anonymousTarget) {
+      if (String(anonymousTarget.text || '') !== binding.text) {
+        if (optional) ++diagnostics.text_optional_miss;
+        else ++diagnostics.text_content_mismatch;
+        continue;
+      }
+      // Mixed-content text is represented by a synthetic Label. Make its
+      // captured coordinate space the complete owner box; it must not take a
+      // second Yoga slot beside authored inline children.
+      if (typeof g.setPosition === 'function' && typeof g.setFlex === 'function') {
+        g.setPosition(String(anonymousTarget.id), 'absolute');
+        g.setLeft(String(anonymousTarget.id), 0);
+        g.setTop(String(anonymousTarget.id), 0);
+        g.setFlex(String(anonymousTarget.id), 'width', binding.basis.width);
+        const maxBottom = binding.boxes.reduce((value, box) =>
+          Math.max(value, box.top + box.height), 0);
+        g.setFlex(String(anonymousTarget.id), 'height', maxBottom);
+      }
+    } else if (String(node.textContent || '') !== binding.text) {
+      if (optional) ++diagnostics.text_optional_miss;
+      else ++diagnostics.text_content_mismatch;
+      continue;
+    }
+    const id = anonymousTarget?.id ||
+      node.__pulpTextTargetId || node.__pulpId || node.id;
+    if (!id) {
+      if (optional) ++diagnostics.text_optional_miss;
+      else ++diagnostics.text_target_miss;
+      continue;
+    }
+    // Generated anonymous Labels do not participate in the authored DOM
+    // cascade. Reapply Chromium's computed typography to the actual native
+    // paint target rather than letting it inherit the bridge defaults.
+    // Pure Label owners receive the same resolved values, making this path
+    // deterministic for both HTML controls and ordinary text elements.
+    const requested = binding.basis.requested;
+    const fontStack = materializedRuntimeFontStack(binding);
+    const face = [fontStack, requested.font_size, requested.font_weight,
+      requested.font_slant, requested.letter_spacing].join('\u0000');
+    if (typographyApplied.get(String(id)) !== face) {
+      typographyApplied.set(String(id), face);
+      if (typeof g.setFontFamily === 'function')
+        g.setFontFamily(String(id), fontStack);
+      if (typeof g.setFontSize === 'function')
+        g.setFontSize(String(id), requested.font_size);
+      if (typeof g.setFontWeight === 'function')
+        g.setFontWeight(String(id), requested.font_weight);
+      if (typeof g.setFontStyle === 'function')
+        g.setFontStyle(String(id), requested.font_slant === 1
+          ? 'italic' : requested.font_slant === 2 ? 'oblique' : 'normal');
+      if (typeof g.setLetterSpacing === 'function' &&
+          Number.isFinite(requested.letter_spacing)) {
+        g.setLetterSpacing(String(id), requested.letter_spacing);
+      }
+    }
+    textTargets.push({ binding, node, id, anonymousTarget, optional });
+  }
+  // Generated text targets are measured only after every geometry and
+  // typography write above, so the first read lays the tree out once and the
+  // rest are served from it.
+  if (typeof g.getLayoutBoxMetrics === 'function') {
+    for (const target of textTargets) {
+      if (target.anonymousTarget || !target.node.__pulpTextTargetId) continue;
+      target.metrics = g.getLayoutBoxMetrics(String(target.id));
+      const ownerId = target.node.__pulpId || target.node.id;
+      target.ownerMetrics = ownerId
+        ? g.getLayoutBoxMetrics(String(ownerId)) : null;
+    }
+  }
+  for (const target of textTargets) {
+    const { binding, node, id, optional } = target;
+    let targetBoxes = binding.boxes;
+    let targetBasisWidth = binding.basis.width;
+    if (target.metrics !== undefined) {
+      const geometry = materializedTextTargetGeometry(
+        binding.basis.width, target.metrics, target.ownerMetrics);
+      if (geometry) {
+        targetBoxes = binding.boxes.map(box => ({
+          ...box,
+          left: box.left - geometry.localX,
+          top: box.top - geometry.localY,
+        }));
+        targetBasisWidth = geometry.basisWidth;
+      }
+    }
+    g.setCapturedLineBoxes(String(id), targetBoxes, targetBasisWidth,
+      binding.basis.resolved_face, false);
+    capturedGeometryNodes.add(node);
+    ++applied;
+    if (optional) ++diagnostics.text_optional_applied;
+    else ++diagnostics.text_applied;
+  }
+  // A scoped pass deliberately skips most of the document, so its counts are
+  // not comparable to a full one. Publishing them under the same key would
+  // make every import validator that reads applied-vs-expected report a mass
+  // miss on a pass that was correct by construction. Keep the shipped key
+  // holding the last FULL application and publish the scoped pass beside it.
+  if (scopeSet) {
+    diagnostics.scoped = true;
+    diagnostics.scope_size = scopeSet.size;
+    g.__pulpMaterializedScopedApplyDiagnostics__ = diagnostics;
+  } else {
+    g.__pulpMaterializedMetadataDiagnostics__ = diagnostics;
+  }
+  return applied;
+}
+g.__pulpApplyMaterializedImportMetadata__ = function (scopeIds) {
+  const applied = applyMaterializedImportMetadata(
+    activeMaterializedMetadata, scopeIds);
+  if (typeof syncMaterializedCanvasBehaviorsAfterCommit === 'function')
+    syncMaterializedCanvasBehaviorsAfterCommit();
+  return applied;
+};
+// A selector's parse is a pure function of its text, and the registry scan
+// re-tests one selector against every candidate node. Parse once per distinct
+// selector so a scan costs regex work proportional to the selector vocabulary
+// rather than to the number of nodes.
+const materializedSelectorParses = new Map();
+function materializedParseSelector(selector) {
+  const memo = materializedSelectorParses.get(selector);
+  if (memo) return memo;
+  let remaining = selector.trim();
+  const attributes = [];
+  remaining = remaining.replace(
+    /\\[([A-Za-z0-9_:-]+)(?:=(?:"([^"]*)"|'([^']*)'|([^\\]]+)))?\\]/g,
+    function (_all, name, doubleQuoted, singleQuoted, bare) {
+      attributes.push({ name: name, value: doubleQuoted !== undefined
+        ? doubleQuoted : singleQuoted !== undefined ? singleQuoted
+        : bare !== undefined ? String(bare).trim() : null });
+      return '';
+    });
+  const idMatch = remaining.match(/#([A-Za-z0-9_-]+)/);
+  const parsed = {
+    attributes: attributes,
+    id: idMatch ? idMatch[1] : null,
+    classes: Array.from(remaining.matchAll(/\\.([A-Za-z0-9_-]+)/g))
+      .map(function (match) { return match[1]; }),
+    tag: remaining.replace(/#[A-Za-z0-9_-]+/g, '')
+      .replace(/\\.[A-Za-z0-9_-]+/g, '').trim().toLowerCase(),
+  };
+  materializedSelectorParses.set(selector, parsed);
+  return parsed;
+}
+function materializedMatches(node, selector) {
+  if (!node || typeof selector !== 'string') return false;
+  // The web-compat Element shim intentionally supports only a bounded CSS
+  // selector subset. A false result is not authoritative for semantic
+  // data/ARIA attributes added by the native React host, so fall through to
+  // the deterministic fallback matcher.
+  if (typeof node.matches === 'function' && node.matches(selector)) return true;
+  const parsed = materializedParseSelector(selector);
+  const attributes = parsed.attributes;
+  const tag = parsed.tag;
+  if (tag && String(node.tagName || '').toLowerCase() !== tag) return false;
+  if (parsed.id && String(node.id || node.getAttribute?.('id') || '') !== parsed.id) {
+    return false;
+  }
+  const classes = String(node.className || node.getAttribute?.('class') || '')
+    .split(/\\s+/).filter(Boolean);
+  for (const wanted of parsed.classes) if (!classes.includes(wanted)) return false;
+  for (const attribute of attributes) {
+    if (typeof node.getAttribute !== 'function') return false;
+    const actual = node.getAttribute(attribute.name);
+    if (actual === null || (attribute.value !== null && actual !== attribute.value)) {
+      return false;
+    }
+  }
+  return true;
+}
+function materializedClosest(node, selector) {
+  let current = node;
+  while (current) {
+    if (materializedMatches(current, selector)) return current;
+    current = current.parentElement || current._parentElement || null;
+  }
+  return null;
+}
+function materializedLastDescendantSplit(selector) {
+  let bracketDepth = 0;
+  let quote = '';
+  let split = -1;
+  for (let index = 0; index < selector.length; ++index) {
+    const ch = selector[index];
+    if (quote) {
+      if (ch === quote) quote = '';
+      continue;
+    }
+    if ((ch === '"' || ch === "'") && bracketDepth > 0) {
+      quote = ch;
+    } else if (ch === '[') {
+      ++bracketDepth;
+    } else if (ch === ']' && bracketDepth > 0) {
+      --bracketDepth;
+    } else if (/\\s/.test(ch) && bracketDepth === 0) {
+      split = index;
+    }
+  }
+  return split;
+}
+// Misses from the registry scan, keyed by the epoch @pulp/react bumps on every
+// host mutation. A miss is the expensive answer: it reads and match-tests EVERY
+// registry node before returning null, while a hit stops at the first match.
+// Captured-state resolution asks one selector per state and takes the first
+// that answers, so every state ahead of the live one costs a full-registry miss
+// on every React commit.
+//
+// Only negative answers are retained. A node that matched is a live object
+// whose own attributes can be rewritten by a paint-only commit that does not
+// bump the epoch; "nothing in the registry matches this selector" cannot change
+// without the registry or a matched attribute changing, and both bump it.
+//
+// Caching is declined outright when no epoch has been published -- a plain
+// importer runtime with no @pulp/react host, or one running before the first
+// commit. Without a bumping epoch a retained miss would never be invalidated,
+// which is a stale answer rather than a cheap one.
+let materializedFindMissEpoch = null;
+const materializedFindMisses = new Set();
+function materializedFindMissKey(selector, ancestor) {
+  return selector + '\u0000' + (ancestor || '');
+}
+// Every attribute name a selector has named. @pulp/react reads this set to
+// decide whether a commit that changed only an attribute (a data-* hover
+// marker) or only a colour can have changed a selector's answer: if no
+// selector names it, it cannot, so the commit needs neither a metadata pass
+// nor an epoch bump. The names are recorded BEFORE the miss cache is
+// consulted, so an attribute is covered from the first query that could have
+// cached an answer depending on it. Captured-state selectors are recorded
+// up front as well (see below), because state resolution stops at the first
+// state that matches and would otherwise never ask about the rest.
+const materializedSelectorAttributes = new Set();
+g.__pulpMaterializedSelectorAttributes__ = materializedSelectorAttributes;
+function recordMaterializedSelectorAttributes(selector) {
+  if (typeof selector !== 'string') return;
+  for (const match of selector.matchAll(/\\[\\s*([A-Za-z0-9_:-]+)/g))
+    materializedSelectorAttributes.add(match[1]);
+}
+// The browser document's own answer, when it has one inside the ancestor.
+// Records the selector's attributes first (see above).
+function materializedFindBrowserNode(selector, ancestor) {
+  recordMaterializedSelectorAttributes(selector);
+  recordMaterializedSelectorAttributes(ancestor);
+  if (g.document && typeof g.document.querySelector === 'function') {
+    const browserNode = g.document.querySelector(selector);
+    if (browserNode && (!ancestor || materializedClosest(browserNode, ancestor))) {
+      return browserNode;
+    }
+  }
+  return null;
+}
+// true when this epoch already proved a miss; otherwise the key to retain a
+// miss under, or '' when misses cannot be retained.
+function materializedFindCachedMiss(selector, ancestor) {
+  const epoch = g.__pulpMaterializedTreeEpoch__;
+  if (typeof epoch !== 'number') return '';
+  if (epoch !== materializedFindMissEpoch) {
+    materializedFindMisses.clear();
+    materializedFindMissEpoch = epoch;
+  }
+  const missKey = materializedFindMissKey(selector, ancestor);
+  return materializedFindMisses.has(missKey) ? true : missKey;
+}
+// A selector split into the node it names, its direct parent and the
+// ancestor it must sit under.
+function materializedFindPlan(selector, ancestor) {
+  let target = selector.trim();
+  let effectiveAncestor = ancestor || '';
+  let directParent = '';
+  const directParts = target.split(/\\s*>\\s*/).filter(Boolean);
+  if (directParts.length > 1) {
+    target = directParts.pop();
+    directParent = directParts.pop();
+    if (!effectiveAncestor && directParts.length > 0) {
+      effectiveAncestor = directParts.join(' > ');
+    }
+  }
+  if (!effectiveAncestor) {
+    const split = materializedLastDescendantSplit(target);
+    if (split > 0) {
+      effectiveAncestor = target.slice(0, split).trim();
+      target = target.slice(split + 1).trim();
+    }
+  }
+  return { target: target, directParent: directParent,
+    ancestor: effectiveAncestor };
+}
+function materializedFindPlanMatches(plan, node) {
+  const parent = node && (node.parentElement || node._parentElement || null);
+  return materializedMatches(node, plan.target) &&
+    (!plan.directParent || materializedMatches(parent, plan.directParent)) &&
+    (!plan.ancestor || !!materializedClosest(
+      plan.directParent ? parent : node, plan.ancestor));
+}
+g.__pulpFindMaterializedElement__ = function (selector, ancestor) {
+  if (typeof selector !== 'string' || selector.length === 0) return null;
+  const browserNode = materializedFindBrowserNode(selector, ancestor);
+  if (browserNode) return browserNode;
+  const missKey = materializedFindCachedMiss(selector, ancestor);
+  if (missKey === true) return null;
+  const plan = materializedFindPlan(selector, ancestor);
+  for (const node of materializedDomRegistryValues()) {
+    if (materializedFindPlanMatches(plan, node)) return node;
+  }
+  if (missKey) materializedFindMisses.add(missKey);
+  return null;
+};
+// Several lookups against one unchanged registry, answered in ONE pass. Each
+// result is exactly what __pulpFindMaterializedElement__ returns for that
+// (selector, ancestor): the browser fast path and the miss cache are asked
+// per query first, then the rest share one registry walk in which every
+// query keeps the first node, in registry order, that passes its full test.
+// Captured-state resolution asks one selector per state on every React
+// commit, and each state that is not open was a miss that match-tested the
+// whole registry; batched, a node is match-tested against a query only when
+// it carries every attribute the query's target names, read once per node
+// per attribute.
+function materializedSelectorRequiredAttributes(selector) {
+  // A pseudo-class or a selector list can name an attribute a match does not
+  // require (:not([x])), so only a plain compound is prefiltered.
+  if (/[:,]/.test(selector)) return [];
+  return Array.from(new Set(materializedParseSelector(selector).attributes
+    .map(function (attribute) { return attribute.name; })));
+}
+g.__pulpFindMaterializedElements__ = function (queries) {
+  const results = new Array(queries.length).fill(null);
+  const stats = g.__pulpMaterializedFindBatchStats__ ||
+    (g.__pulpMaterializedFindBatchStats__ =
+      { passes: 0, matchTests: 0, attributeReads: 0 });
+  const pending = [];
+  queries.forEach(function (query, index) {
+    if (!query || typeof query.selector !== 'string' ||
+        query.selector.length === 0) return;
+    const browserNode = materializedFindBrowserNode(query.selector, query.ancestor);
+    if (browserNode) {
+      results[index] = browserNode;
+      return;
+    }
+    const missKey = materializedFindCachedMiss(query.selector, query.ancestor);
+    if (missKey === true) return;
+    const plan = materializedFindPlan(query.selector, query.ancestor);
+    pending.push({ index: index, plan: plan, missKey: missKey, found: false,
+      required: materializedSelectorRequiredAttributes(plan.target) });
+  });
+  if (pending.length === 0) return results;
+  stats.passes += 1;
+  let open = pending.length;
+  const presence = new Map();
+  for (const node of materializedDomRegistryValues()) {
+    if (open === 0) break;
+    presence.clear();
+    const has = function (name) {
+      let present = presence.get(name);
+      if (present === undefined) {
+        stats.attributeReads += 1;
+        present = !node || typeof node.getAttribute !== 'function' ||
+          node.getAttribute(name) !== null ||
+          (typeof node.hasAttribute === 'function' && node.hasAttribute(name));
+        presence.set(name, present);
+      }
+      return present;
+    };
+    for (const query of pending) {
+      if (query.found || !query.required.every(has)) continue;
+      stats.matchTests += 1;
+      if (materializedFindPlanMatches(query.plan, node)) {
+        query.found = true;
+        results[query.index] = node;
+        --open;
+      }
+    }
+  }
+  for (const query of pending) {
+    if (!query.found && query.missKey) materializedFindMisses.add(query.missKey);
+  }
+  return results;
+};
+g.__pulpActivateMaterializedElement__ = function (selector, eventName, eventData) {
+  const node = g.__pulpFindMaterializedElement__(selector);
+  if (!node) return false;
+  const event = eventName || 'click';
+  const callbacks = g.__pulpReactEventCallbacks__;
+  const callbackFor = function (candidate) {
+    const id = candidate && (candidate.__pulpId || candidate.id);
+    return callbacks && typeof callbacks.get === 'function'
+      ? callbacks.get(String(id) + ':' + event) : null;
+  };
+  let target = node;
+  let callback = callbackFor(target);
+  // DOM events bubble from a semantic leaf (for example an editor canvas)
+  // to a handler on its containing interaction surface. Preserve that
+  // authored relationship before looking for wrapper-owned descendants.
+  if (typeof callback !== 'function') {
+    let ancestor = node.parentElement || node._parentElement || null;
+    while (ancestor) {
+      const ancestorCallback = callbackFor(ancestor);
+      if (typeof ancestorCallback === 'function') {
+        target = ancestor;
+        callback = ancestorCallback;
+        break;
+      }
+      ancestor = ancestor.parentElement || ancestor._parentElement || null;
+    }
+  }
+  // Some DOM-compatible layouts place semantic identity on a wrapper while
+  // React's callback lives on a separately materialized child whose native
+  // attachment cannot express that browser-only wrapper relationship. This
+  // is still ordinary hit testing: use the semantic node's own centre point
+  // and choose the smallest callback-bearing surface under it. No generated
+  // widget id or product coordinate is involved.
+  if (typeof callback !== 'function' &&
+      typeof node.getBoundingClientRect === 'function') {
+    const rect = node.getBoundingClientRect();
+    const left = Number(rect && rect.left);
+    const top = Number(rect && rect.top);
+    const width = Number(rect && rect.width);
+    const height = Number(rect && rect.height);
+    if ([left, top, width, height].every(Number.isFinite) &&
+        width > 0 && height > 0) {
+      const centreX = left + width * 0.5;
+      const centreY = top + height * 0.5;
+      let bestArea = Infinity;
+      for (const candidate of materializedDomRegistryValues()) {
+        const candidateCallback = callbackFor(candidate);
+        if (typeof candidateCallback !== 'function' ||
+            typeof candidate.getBoundingClientRect !== 'function') continue;
+        const candidateRect = candidate.getBoundingClientRect();
+        const candidateLeft = Number(candidateRect && candidateRect.left);
+        const candidateTop = Number(candidateRect && candidateRect.top);
+        const candidateWidth = Number(candidateRect && candidateRect.width);
+        const candidateHeight = Number(candidateRect && candidateRect.height);
+        if (![candidateLeft, candidateTop, candidateWidth, candidateHeight]
+              .every(Number.isFinite) || candidateWidth <= 0 ||
+            candidateHeight <= 0 || centreX < candidateLeft ||
+            centreX > candidateLeft + candidateWidth || centreY < candidateTop ||
+            centreY > candidateTop + candidateHeight) continue;
+        const area = candidateWidth * candidateHeight;
+        if (area < bestArea) {
+          bestArea = area;
+          target = candidate;
+          callback = candidateCallback;
+        }
+      }
+    }
+  }
+  // Browser hit testing may route an event from a semantic canvas/SVG leaf
+  // to a React handler owned by an overlapping interaction surface even when
+  // the bounded public-element shim cannot reconstruct that DOM ancestry.
+  // Resolve that case geometrically from the authored event point, preferring
+  // the smallest handler-bearing surface that contains it. This stays generic
+  // and preserves the original React callback instead of teaching the importer
+  // about a product-specific context menu.
+  if (typeof callback !== 'function' && eventData &&
+      Number.isFinite(Number(eventData.clientX)) &&
+      Number.isFinite(Number(eventData.clientY))) {
+    const pointX = Number(eventData.clientX);
+    const pointY = Number(eventData.clientY);
+    let bestArea = Infinity;
+    for (const candidate of materializedDomRegistryValues()) {
+      const candidateCallback = callbackFor(candidate);
+      if (typeof candidateCallback !== 'function' ||
+          typeof candidate.getBoundingClientRect !== 'function') continue;
+      const rect = candidate.getBoundingClientRect();
+      const left = Number(rect && rect.left);
+      const top = Number(rect && rect.top);
+      const width = Number(rect && rect.width);
+      const height = Number(rect && rect.height);
+      if (![left, top, width, height].every(Number.isFinite) ||
+          width <= 0 || height <= 0 || pointX < left || pointX > left + width ||
+          pointY < top || pointY > top + height) continue;
+      const area = width * height;
+      if (area < bestArea) {
+        bestArea = area;
+        target = candidate;
+        callback = candidateCallback;
+      }
+    }
+  }
+  // Captured JSX frequently puts semantic identity on a wrapper (for
+  // example a span used to anchor a dropdown) and the handler on its child
+  // button. This is a last resort when neither ancestry nor authored point
+  // geometry identifies the handler: selecting the first descendant before
+  // hit testing can route a canvas gesture to an unrelated sibling control.
+  if (typeof callback !== 'function') {
+    for (const candidate of materializedDomRegistryValues()) {
+      let parent = candidate;
+      while (parent && parent !== node) {
+        parent = parent.parentElement || parent._parentElement || null;
+      }
+      if (parent !== node) continue;
+      const descendantCallback = callbackFor(candidate);
+      if (typeof descendantCallback === 'function') {
+        target = candidate;
+        callback = descendantCallback;
+        break;
+      }
+    }
+  }
+  if (typeof callback === 'function') {
+    callback(Object.assign({ type: event, target: node,
+      currentTarget: target }, eventData || {}));
+    return true;
+  }
+  if (event === 'click' && typeof node.click === 'function') {
+    node.click();
+    return true;
+  }
+  return false;
+};
+if (typeof g.__pulpRuntimeImport__ !== 'function') {
+  throw new Error('materialized runtime import capability is unavailable');
+}
+${runtimeDocumentAsset ? `
+if (typeof g.__loadAssetSync__ !== 'function') {
+  throw new Error('materialized runtime document asset loading is unavailable');
+}
+const runtimeDocumentAsset = g.__loadAssetSync__(
+  ${JSON.stringify(runtimeDocumentAsset)});
+if (!runtimeDocumentAsset || !runtimeDocumentAsset.ok ||
+    typeof runtimeDocumentAsset.text !== 'string') {
+  throw new Error('materialized runtime document asset could not be loaded');
+}
+g.__pulpRuntimeImport__(runtimeDocumentAsset.text, 'materialized-browser');
+` : `g.__pulpRuntimeImport__(${JSON.stringify(sidecar)}, 'materialized-browser');`}
+if (g.__pulpRuntimeImportErr__) throw new Error(String(g.__pulpRuntimeImportErr__));
+// The captured document may replace its browser-compatible window object
+// while materializing.  Re-run an explicitly supplied, idempotent service
+// prelude against that final realm so closures used by executable canvas
+// programs and event handlers resolve the same services they saw in Chromium.
+// This is deliberately a generic lifecycle seam: the transformer neither
+// knows nor enumerates any product-specific service names.
+${productPrelude ? `(function replayMaterializedProductPrelude(g) {
+  const globalThis = g;
+  const window = g.window || g;
+${productPrelude}
+})(g);` : ''}
+// Product preludes may publish browser-facing services before web-compat has
+// constructed the captured document's final window object. Rebind only the
+// explicitly exported service table after bootstrap; this is renderer-neutral
+// and avoids teaching the importer product-specific global names.
+if (g.window && g.__pulpMaterializedWindowGlobals__ &&
+    typeof g.__pulpMaterializedWindowGlobals__ === 'object') {
+  for (const [name, value] of Object.entries(g.__pulpMaterializedWindowGlobals__)) {
+    g.window[name] = value;
+  }
+}
+// Runtime import materializes the captured document, which is allowed to
+// replace document.body while bootstrapping. Create the native behavior root
+// only after that replacement so it cannot be detached by the original page.
+${surfaceBackground ? `
+createCol(surfaceRootId, '');
+setPosition(surfaceRootId, 'absolute');
+// Chromium paints the document background across the entire viewport, not
+// only inside a centered fixed-aspect application frame.  Preserve that
+// distinction so native letterbox/gutter pixels inherit the captured page
+// surface instead of the screenshot host's fallback color.
+setLeft(surfaceRootId, 0);
+setTop(surfaceRootId, 0);
+setFlex(surfaceRootId, 'width', '100%');
+setFlex(surfaceRootId, 'height', '100%');
+setBackground(surfaceRootId, ${JSON.stringify(surfaceBackground)});
+setPointerEvents(surfaceRootId, 'none');
+// This is only the captured page's background plane.  Keep it beneath both
+// the DesignIR reconstruction and any Chromium state-atlas paint authority;
+// placing it near the behavior plane silently hides the reference image while
+// leaving semantic state activation apparently successful.
+setZIndex(surfaceRootId, ${MATERIALIZED_BACKGROUND_Z});` : ''}
+createCol(behaviorRootId, '');
+// Canvas programs read their laid-out CSS boxes while drawing. display:none
+// collapses those boxes and produces the exact NaN/zero geometry this import
+// is designed to avoid. Reference mode keeps a real authored-size behavior
+// surface above the visible DesignIR sibling. Native mode makes this same
+// live tree the sole visual authority.
+setPosition(behaviorRootId, 'absolute');
+setLeft(behaviorRootId, ${JSON.stringify(authoredLeft)});
+setTop(behaviorRootId, ${JSON.stringify(authoredTop)});
+setFlex(behaviorRootId, 'width', ${JSON.stringify(authoredWidth)});
+setFlex(behaviorRootId, 'height', ${JSON.stringify(authoredHeight)});
+${authoredTransform ? `
+// Chromium resolved layout, typography, Canvas client dimensions, and border
+// widths in authored CSS pixels, then transformed the application surface.
+// Native must replay those spaces in that order as well. Applying this matrix
+// to already-transformed boxes is the clipping bug this contract prevents.
+setTransformOrigin(behaviorRootId, 0, 0);
+setTransform(behaviorRootId,
+  ${JSON.stringify(authoredTransform.a)}, ${JSON.stringify(authoredTransform.b)},
+  ${JSON.stringify(authoredTransform.c)}, ${JSON.stringify(authoredTransform.d)},
+  ${JSON.stringify(authoredTransform.e)}, ${JSON.stringify(authoredTransform.f)});` : ''}
+setVisible(behaviorRootId, true);
+setOpacity(behaviorRootId, ${visualAuthority === 'native' ? '1' : '0'});
+// The root itself never becomes a catch-all hit target. In reference mode its
+// transparent children receive the same pointer geometry over Chromium pixels;
+// in native mode those children also paint the complete UI.
+setPointerEvents(behaviorRootId, 'box-none');
+setZIndex(behaviorRootId, ${MATERIALIZED_BEHAVIOR_Z});
+applyMaterializedPseudoBindings(capturedHomeMetadata);
+// Commit exactly the element supplied by the captured document's own
+// ReactDOM.createRoot(...).render(...) call. A declaration-only export may
+// omit that call, so retain one bounded compatibility fallback to App, but
+// never mount both paths.
+if (capturedRootElement === undefined) {
+  if (typeof g.App !== 'function') {
+    throw new Error('materialized browser document did not bootstrap or define App');
+  }
+  capturedRootElement = React.createElement(g.App);
+}
+activeNativeRoot = new NativeRoot();
+activeNativeRoot.render(capturedRootElement);
+if (typeof g.__pulpRuntimeSettle__ === 'function') g.__pulpRuntimeSettle__(8);
+const capturedStates = ${JSON.stringify(stateAtlas)};
+const canvasAuthorityEnabled = ${JSON.stringify(Boolean(canvasAuthority))};
+for (const state of capturedStates) {
+  if (state.match) {
+    recordMaterializedSelectorAttributes(state.match.selector);
+    recordMaterializedSelectorAttributes(state.match.ancestor);
+  }
+}
+const capturedPaintStates = ${visualAuthority === 'reference'
+  ? 'capturedStates' : '[]'};
+if (capturedPaintStates.length > 0) {
+  createCol(stateAtlasRootId, '');
+  setPosition(stateAtlasRootId, 'absolute');
+  setLeft(stateAtlasRootId, 0);
+  setTop(stateAtlasRootId, 0);
+  setFlex(stateAtlasRootId, 'width', ${JSON.stringify(visualWidth)});
+  setFlex(stateAtlasRootId, 'height', ${JSON.stringify(visualHeight)});
+  setPointerEvents(stateAtlasRootId, 'none');
+  setZIndex(stateAtlasRootId, ${MATERIALIZED_STATE_ATLAS_Z});
+  for (const state of capturedPaintStates) {
+    const id = '__pulp_materialized_state_' + state.id;
+    createImage(id, stateAtlasRootId);
+    setPosition(id, 'absolute');
+    setLeft(id, 0);
+    setTop(id, 0);
+    setFlex(id, 'width', ${JSON.stringify(visualWidth)});
+    setFlex(id, 'height', ${JSON.stringify(visualHeight)});
+    setObjectFit(id, 'fill');
+    setPointerEvents(id, 'none');
+    setVisible(id, false);
+  }
+}
+const loadedCapturedStates = new Set();
+const requestedCapturedStateId = ${JSON.stringify(requestedState)};
+const requestedCapturedState = requestedCapturedStateId === '' ? null
+  : capturedStates.find(state => state.id === requestedCapturedStateId);
+if (requestedCapturedStateId !== '' && !requestedCapturedState) {
+  throw new Error('requested materialized state is unavailable');
+}
+let requestedActivationIndex = 0;
+let requestedActivationAttempts = 0;
+let requestedMatchAttempts = 0;
+g.__pulpRequestedMaterializedActivation__ = function () {
+  return { state: requestedCapturedStateId, index: requestedActivationIndex,
+    attempts: requestedActivationAttempts, matchAttempts: requestedMatchAttempts };
+};
+function driveRequestedCapturedState() {
+  if (!requestedCapturedState ||
+      requestedActivationIndex >= requestedCapturedState.activate.length) return;
+  const step = requestedCapturedState.activate[requestedActivationIndex];
+  const eventData = Object.assign({
+    type: step.event,
+    preventDefault: function () {},
+    stopPropagation: function () {},
+    stopImmediatePropagation: function () {},
+  }, step.data || {});
+  if (g.__pulpActivateMaterializedElement__(
+      step.selector, step.event, eventData)) {
+    ++requestedActivationIndex;
+    requestedActivationAttempts = 0;
+    if (typeof g.__pulpRuntimeSettle__ === 'function') g.__pulpRuntimeSettle__(8);
+  } else if (++requestedActivationAttempts > 128) {
+    throw new Error('could not activate materialized state ' +
+      requestedCapturedState.id + ' at step ' + requestedActivationIndex +
+      ' selector ' + step.selector);
+  }
+  requestAnimationFrame(driveRequestedCapturedState);
+}
+if (requestedCapturedState) requestAnimationFrame(driveRequestedCapturedState);
+function resolveCapturedStateFromAtlas() {
+  const usesCanvasAuthority = canvasAuthorityEnabled && capturedStates.some(
+    state => state.canvas_index !== null && state.canvas_index !== undefined);
+  const registeredCanvases = usesCanvasAuthority
+    ? materializedDomRegistryValues().filter(node =>
+      String(node && node.tagName || '').toLowerCase() === 'canvas')
+    : [];
+  // Every semantic selector lookup is answered in one registry pass. Canvas
+  // authority states carry the binding index validated by the transformer so
+  // multiple captured canvases cannot accidentally resolve to the first one.
+  const semanticMatches = g.__pulpFindMaterializedElements__(capturedStates.map(
+    state => canvasAuthorityEnabled &&
+      state.canvas_index !== null && state.canvas_index !== undefined
+      ? null
+      : state.match ? { selector: state.match.selector,
+        ancestor: state.match.ancestor } : null));
+  const matches = capturedStates.map((state, index) =>
+    canvasAuthorityEnabled && state.canvas_index !== null &&
+      state.canvas_index !== undefined
+      ? registeredCanvases[state.canvas_index] || null
+      : semanticMatches[index]);
+  for (let index = capturedStates.length - 1; index >= 0; --index) {
+    if (matches[index]) return capturedStates[index].id;
+  }
+  return '';
+}
+g.__pulpRefreshMaterializedState__ = function () {
+  let next = resolveCapturedStateFromAtlas();
+  if (requestedCapturedState && requestedActivationIndex >=
+      requestedCapturedState.activate.length &&
+      requestedCapturedState.match && next !== requestedCapturedState.id) {
+    if (++requestedMatchAttempts > 128) {
+      throw new Error('materialized state ' + requestedCapturedState.id +
+        ' activation completed without satisfying its semantic match');
+    }
+  } else {
+    requestedMatchAttempts = 0;
+  }
+  if (typeof g.__pulpMaterializedStateResolver__ === 'function') {
+    const resolved = g.__pulpMaterializedStateResolver__();
+    if (resolved != null) next = String(resolved);
+  }
+  if (next !== '' && !capturedStates.some((state) => state.id === next)) {
+    throw new Error('materialized state resolver returned unknown state ' + next);
+  }
+  if (next !== activeCapturedState) {
+    for (const state of capturedPaintStates) {
+      if (state.id === next && !loadedCapturedStates.has(state.id)) {
+        setImageSource('__pulp_materialized_state_' + state.id, state.image);
+        loadedCapturedStates.add(state.id);
+      }
+      setVisible('__pulp_materialized_state_' + state.id, state.id === next);
+    }
+    activeCapturedState = next;
+    const state = capturedStates.find(candidate => candidate.id === next);
+    activeMaterializedMetadata = state && state.metadata
+      ? state.metadata : capturedHomeMetadata;
+    activeMaterializedMatch = state && state.match || null;
+    applyMaterializedImportMetadata(activeMaterializedMetadata);
+  }
+  return activeCapturedState;
+};
+// Native visual authority deliberately has no captured paint planes, but its
+// semantic states can still carry Chromium-measured layout and text evidence.
+// Resolve once after bootstrap; @pulp/react refreshes again after every later
+// commit, when semantic state can actually have changed.
+if (capturedStates.length > 0) g.__pulpRefreshMaterializedState__();
+const canvasBindings = ${JSON.stringify(canvasBindings)};
+const behaviorCanvasAnchors = ${JSON.stringify(behaviorCanvasAnchors)};
+const capturedPaintAuthorityAnchors = ${JSON.stringify(capturedPaintAuthorityAnchors)};
+function materializedCanvasBehaviorOwnerId(index) {
+  const binding = canvasBindings[index];
+  const canvases = materializedDomRegistryValues().filter(node =>
+    String(node && node.tagName || '').toLowerCase() === 'canvas');
+  let candidate = canvases[index] || null;
+  const callbackMaps = [g.__pulpReactEventCallbacks__,
+    globalThis.__pulpReactEventCallbacks__].filter((map, index, maps) =>
+      map instanceof Map && maps.indexOf(map) === index);
+  while (candidate) {
+    const id = String(candidate.__pulpId || candidate.id || '');
+    if (id && callbackMaps.some(callbacks =>
+        [...callbacks.keys()].some(key => key.startsWith(id + ':pointer'))))
+      return id;
+    candidate = candidate.parentElement || candidate._parentElement || null;
+  }
+  const owners = new Set();
+  const eventsByOwner = new Map();
+  for (const callbacks of callbackMaps) {
+    for (const key of callbacks.keys()) {
+      const separator = String(key).lastIndexOf(':');
+      if (separator > 0) {
+        const id = String(key).slice(0, separator);
+        const event = String(key).slice(separator + 1);
+        if (!eventsByOwner.has(id)) eventsByOwner.set(id, new Set());
+        eventsByOwner.get(id).add(event);
+        // A materialized owner is not required to expose the Pointer Events
+        // spelling. React/native bridges may register click-only, mouse-only,
+        // wheel-only, or split-channel handlers. Treat every dispatch channel
+        // as evidence of ownership; the later geometry/ancestry checks still
+        // disambiguate unrelated chrome callbacks.
+        if (event === 'click' || event === 'wheel'
+            || event.startsWith('pointer') || event.startsWith('mouse'))
+          owners.add(id);
+      }
+    }
+  }
+  if (owners.size === 1) return [...owners][0];
+  const fullGestureOwners = [...eventsByOwner].filter(([, events]) =>
+    ['pointerdown', 'pointermove', 'pointerup', 'pointerleave', 'wheel']
+      .every(event => events.has(event))).map(([id]) => id);
+  if (fullGestureOwners.length === 1) return fullGestureOwners[0];
+  if (!binding || !binding.bounds) return '';
+  const centerX = binding.bounds.left + binding.bounds.width * 0.5;
+  const centerY = binding.bounds.top + binding.bounds.height * 0.5;
+  const nodesById = new Map(materializedDomRegistryValues().map(node =>
+    [String(node && (node.__pulpId || node.id) || ''), node]));
+  const candidates = [...owners].map(id => {
+    const node = nodesById.get(id);
+    const rect = typeof getLayoutRect === 'function'
+      ? getLayoutRect(id)
+      : node && typeof node.getBoundingClientRect === 'function'
+        ? node.getBoundingClientRect() : null;
+    return { id, rect };
+  }).filter(({ rect }) => {
+    return rect && [rect.left, rect.top, rect.width, rect.height]
+      .every(Number.isFinite) && rect.width > 0 && rect.height > 0 &&
+      centerX >= rect.left && centerX <= rect.left + rect.width &&
+      centerY >= rect.top && centerY <= rect.top + rect.height;
+  }).sort((a, b) =>
+    a.rect.width * a.rect.height - b.rect.width * b.rect.height ||
+    a.id.localeCompare(b.id));
+  if (candidates.length === 0) return '';
+  if (candidates.length > 1) {
+    const firstArea = candidates[0].rect.width * candidates[0].rect.height;
+    const secondArea = candidates[1].rect.width * candidates[1].rect.height;
+    if (Math.abs(firstArea - secondArea) < 0.01) return '';
+  }
+  return candidates[0].id;
+}
+g.__pulpApplyMaterializedVisualAuthority__ = function () {
+  if (${JSON.stringify(visualAuthority)} !== 'native') return 0;
+  for (const anchor of capturedPaintAuthorityAnchors) {
+    if (typeof setVisibleAtAnchor !== 'function' ||
+        !setVisibleAtAnchor(anchor, false)) {
+      throw new Error('could not retire captured paint authority ' + anchor);
+    }
+  }
+  return capturedPaintAuthorityAnchors.length;
+};
+g.__pulpBindMaterializedCanvases__ = function () {
+  const resolvedOwners = [];
+  for (const binding of canvasBindings) {
+    const visualAnchor = behaviorCanvasAnchors[binding.index];
+    if (!visualAnchor) {
+      throw new Error('missing visual anchor for live canvas ' + binding.index);
+    }
+    const bindType = typeof bindCanvasBehaviorAt;
+    const behaviorOwnerId = materializedCanvasBehaviorOwnerId(binding.index);
+    resolvedOwners[binding.index] = behaviorOwnerId;
+    const bound = bindType === 'function'
+      ? bindCanvasBehaviorAt(
+          visualAnchor, behaviorRootId, binding.index, behaviorOwnerId) : false;
+    if (!bound) {
+      throw new Error('could not bind live canvas ' + binding.index +
+        ' to ' + visualAnchor + ' bind=' + bindType);
+    }
+  }
+  g.__pulpMaterializedCanvasBehaviorOwners__ = resolvedOwners;
+  return canvasBindings.length;
+};
+syncMaterializedCanvasBehaviorsAfterCommit = function () {
+  const resolvedOwners = [];
+  const boundCanvases = [];
+  // The DesignIR sibling is attached by the product after the initial React
+  // commit, so absence here is expected and must not abort the realm. The
+  // product performs one strict __pulpBindMaterializedCanvases__ call after
+  // attach; subsequent React commits refresh callback snapshots here.
+  for (const binding of canvasBindings) {
+    const visualAnchor = behaviorCanvasAnchors[binding.index];
+    const behaviorOwnerId = materializedCanvasBehaviorOwnerId(binding.index);
+    resolvedOwners[binding.index] = behaviorOwnerId;
+    boundCanvases[binding.index] = Boolean(visualAnchor &&
+      typeof bindCanvasBehaviorAt === 'function' &&
+      bindCanvasBehaviorAt(visualAnchor, behaviorRootId, binding.index,
+        behaviorOwnerId));
+  }
+  g.__pulpMaterializedCanvasBehaviorOwners__ = resolvedOwners;
+  g.__pulpMaterializedCanvasBindingsReady__ = boundCanvases;
+};
+`;
+  return entry;
+}

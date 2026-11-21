@@ -790,12 +790,28 @@ def lower_dom_snapshot(
     if not node_types or len(node_types) > MAX_CAPTURE_NODES:
         raise BackendFailure("DOMSnapshot node count is outside the bounded range", status="test_failed")
     records, observed_urls = _localize_snapshot_data_urls(snapshot)
+    layout = document.get("layout")
+    layout_indices = layout.get("nodeIndex") if isinstance(layout, dict) else None
+    laid_out_nodes = (
+        {index for index in layout_indices if isinstance(index, int)}
+        if isinstance(layout_indices, list) else set()
+    )
     source_nodes: list[dict[str, Any] | None] = [None] * len(node_types)
     included: set[int] = set()
     for index, node_type in enumerate(node_types):
         if node_type not in {1, 3, 9, 11}:
             continue
         name = _snapshot_node_value(snapshot, nodes, "nodeName", index)
+        # Inline source without a layout row belongs in the raw capture evidence,
+        # not in the design's text nodes. A displayed script or style still
+        # goes through the same validation as other visible text.
+        if node_type == 3 and index not in laid_out_nodes:
+            parent = parents[index]
+            if (type(parent) is int and 0 <= parent < len(node_types) and
+                    node_types[parent] == 1 and
+                    _snapshot_node_value(snapshot, nodes, "nodeName", parent).lower()
+                    in {"script", "style"}):
+                continue
         value = _snapshot_node_value(snapshot, nodes, "nodeValue", index)
         properties: dict[str, Any] = {"domNodeIndex": index}
         if node_type == 1:
@@ -843,9 +859,7 @@ def lower_dom_snapshot(
                 raw["sourceId"] = f"dom-{index}"
         source_nodes[index] = raw
         included.add(index)
-    layout = document.get("layout")
     if isinstance(layout, dict):
-        layout_indices = layout.get("nodeIndex")
         layout_styles = layout.get("styles")
         if layout_indices is not None or layout_styles is not None:
             if not isinstance(layout_indices, list) or not isinstance(layout_styles, list) or len(layout_indices) != len(layout_styles):
