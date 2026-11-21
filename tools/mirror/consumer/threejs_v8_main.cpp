@@ -9,6 +9,7 @@
 #include <vellum/view/window_host.hpp>
 
 #include <array>
+#include <cerrno>
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -21,7 +22,10 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
+
+#include <unistd.h>
 
 using namespace vellum::view;
 
@@ -103,6 +107,7 @@ void write_binary_file(const std::filesystem::path& path, const std::vector<uint
     }
     out.write(reinterpret_cast<const char*>(bytes.data()),
               static_cast<std::streamsize>(bytes.size()));
+    out.close();
     if (!out.good()) {
         throw std::runtime_error("Failed to write file: " + path.string());
     }
@@ -226,13 +231,83 @@ std::vector<uint8_t> make_textured_box_glb() {
     return out;
 }
 
-std::string ensure_gltf_box_asset_url() {
-    const auto path = std::filesystem::temp_directory_path()
-        / "vellum-threejs-native-demo" / "BoxTextured.glb";
-    std::filesystem::create_directories(path.parent_path());
-    write_binary_file(path, make_textured_box_glb());
-    const auto generic = path.generic_string();
-    return std::string("file://") + (generic.empty() || generic.front() == '/' ? "" : "/") + generic;
+class GltfBoxAsset {
+public:
+    GltfBoxAsset() = default;
+    GltfBoxAsset(const GltfBoxAsset&) = delete;
+    GltfBoxAsset& operator=(const GltfBoxAsset&) = delete;
+
+    ~GltfBoxAsset() {
+        if (directory_.empty()) return;
+        std::error_code ec;
+        std::filesystem::remove(directory_ / filename, ec);
+        std::filesystem::remove(directory_, ec);
+    }
+
+    bool stage(const std::filesystem::path& root) {
+        std::error_code ec;
+        const auto absolute_root = std::filesystem::absolute(root, ec);
+        if (ec) return report_error(root, ec);
+        std::filesystem::create_directories(absolute_root, ec);
+        if (ec) return report_error(absolute_root, ec);
+
+        // Each process owns its fixture, including simultaneous captures.
+        auto pattern = (absolute_root / "gltf-box.XXXXXX").string();
+        if (!::mkdtemp(pattern.data())) {
+            return report_error(absolute_root, {errno, std::generic_category()});
+        }
+        directory_ = pattern;
+        write_binary_file(directory_ / filename, make_textured_box_glb());
+        return true;
+    }
+
+    std::string load_prelude(WidgetBridge& bridge) const {
+        if (!directory_.empty()) bridge.set_asset_roots({directory_});
+        bridge.load_script("");
+        if (directory_.empty()) return {};
+        return "file://" + (directory_ / filename).generic_string();
+    }
+
+private:
+    static bool report_error(const std::filesystem::path& root, const std::error_code& ec) {
+        std::cerr << "Cannot create glTF asset directory " << root << " (" << ec.message() << ")\n";
+        return false;
+    }
+
+    static constexpr auto filename = "BoxTextured.glb";
+    std::filesystem::path directory_;
+};
+
+int run_gltf_asset_smoke(const std::filesystem::path& root) {
+    GltfBoxAsset asset;
+    if (!asset.stage(root)) return 1;
+
+    View view;
+    ScriptEngine engine(JsEngineType::v8);
+    vellum::state::StateStore store;
+    WidgetBridge bridge(engine, view, store);
+    const auto url = asset.load_prelude(bridge);
+    engine.evaluate("globalThis.assetStatus = 'fetching';"
+                    "fetch('" + js_single_quoted_string(url) + "').then(async response => {"
+                    "  if (!response.ok) throw new Error('HTTP ' + response.status);"
+                    "  const bytes = await response.arrayBuffer();"
+                    "  if (bytes.byteLength <= 12 || new DataView(bytes).getUint32(0, true) !== 0x46546c67)"
+                    "    throw new Error('Invalid GLB');"
+                    "  assetStatus = 'ready';"
+                    "}).catch(error => { assetStatus = String(error); });");
+    for (int i = 0; i < 128; ++i) {
+        engine.pump_message_loop();
+        const auto status = eval_string(engine, "assetStatus");
+        if (status == "ready") {
+            std::cout << "Staged glTF asset fetched through WidgetBridge\n";
+            return 0;
+        }
+        if (status == "fetching") continue;
+        std::cerr << "Staged glTF asset fetch failed: " << status << '\n';
+        return 1;
+    }
+    std::cerr << "Staged glTF asset fetch did not complete\n";
+    return 1;
 }
 
 struct DemoEnvironment {
@@ -350,7 +425,7 @@ int print_engine_identity() {
 
 } // namespace
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[]) try {
     if (argc == 2 && std::strcmp(argv[1], "--module-smoke") == 0) {
         return run_module_smoke();
     }
@@ -360,6 +435,9 @@ int main(int argc, char* argv[]) {
     }
     if (argc == 2 && std::strcmp(argv[1], "--print-engine-identity") == 0) {
         return print_engine_identity();
+    }
+    if ((argc == 2 || argc == 3) && std::strcmp(argv[1], "--gltf-asset-smoke") == 0) {
+        return run_gltf_asset_smoke(argc == 3 ? argv[2] : VELLUM_THREEJS_DEMO_ASSET_DIR);
     }
 
     int width = 820;
@@ -390,6 +468,9 @@ int main(int argc, char* argv[]) {
     }
 
     std::string error;
+    GltfBoxAsset asset;
+    if (mode == "gltf-box" && !asset.stage(VELLUM_THREEJS_DEMO_ASSET_DIR)) return 1;
+
     if (!vellum::app_host::register_native_dawn_bootstrap(&error)) {
         std::cerr << "Dawn bootstrap registration failed: " << error << '\n';
         return 1;
@@ -411,7 +492,7 @@ int main(int argc, char* argv[]) {
 
     env.bridge = std::make_unique<WidgetBridge>(
         env.engine, env.root, env.store, env.window->gpu_surface());
-    env.bridge->load_script("");
+    const auto gltf_box_url = asset.load_prelude(*env.bridge);
     const auto backend = eval_string(env.engine, "String(getGPUInfo().backendType || '')");
     if (!env.window->gpu_surface() || backend == "Null" || backend.empty() || backend == "Unknown") {
         std::cerr << "No real Dawn adapter available (backend: "
@@ -431,7 +512,6 @@ int main(int argc, char* argv[]) {
         });
     }
 
-    const auto gltf_box_url = mode == "gltf-box" ? ensure_gltf_box_asset_url() : std::string();
     if (!load_demo(env, width, height, mode, error, gltf_box_url)) {
         std::cerr << error << '\n';
         return 1;
@@ -456,4 +536,7 @@ int main(int argc, char* argv[]) {
 
     env.window->run_event_loop();
     return 0;
+} catch (const std::exception& error) {
+    std::cerr << "Vellum Three.js demo: " << error.what() << '\n';
+    return 1;
 }

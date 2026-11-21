@@ -26,6 +26,7 @@ target_link_options(vellum-threejs-native-demo PRIVATE -Wl,-stack_size,0x2000000
 target_compile_definitions(vellum-threejs-native-demo PRIVATE
     VELLUM_THREEJS_ROOT="${VELLUM_THREEJS_ROOT}"
     VELLUM_THREEJS_DEMO_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    VELLUM_THREEJS_DEMO_ASSET_DIR="${CMAKE_CURRENT_BINARY_DIR}/assets"
     VELLUM_THREEJS_V8_VERSION="${_v8_version}")
 
 include(CTest)
@@ -35,6 +36,14 @@ if(BUILD_TESTING)
         COMMAND vellum-threejs-native-demo --print-engine-identity)
     add_test(NAME vellum.threejs-native-demo-module
         COMMAND vellum-threejs-native-demo --module-smoke)
+    add_test(NAME vellum.threejs-native-demo-gltf-asset
+        COMMAND vellum-threejs-native-demo --gltf-asset-smoke)
+    add_test(NAME vellum.threejs-native-demo-gltf-asset-failure
+        COMMAND "${CMAKE_COMMAND}"
+            "-DDEMO_BIN=$<TARGET_FILE:vellum-threejs-native-demo>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/asset_failure_test.cmake")
+    set_tests_properties(vellum.threejs-native-demo-gltf-asset
+        vellum.threejs-native-demo-gltf-asset-failure PROPERTIES TIMEOUT 30)
     foreach(_mode IN ITEMS cube gltf-box)
         set(_test "vellum.threejs-native-demo-${_mode}-capture")
         add_test(NAME "${_test}"
@@ -45,7 +54,6 @@ if(BUILD_TESTING)
                 "-DREQUIRE_CAPTURE=${VELLUM_THREEJS_REQUIRE_CAPTURE}"
                 -P "${CMAKE_CURRENT_SOURCE_DIR}/capture_test.cmake")
         set_tests_properties("${_test}" PROPERTIES
-            ENVIRONMENT "TMPDIR=${CMAKE_CURRENT_BINARY_DIR}"
             TIMEOUT 60
             SKIP_REGULAR_EXPRESSION "SKIP: No real Dawn adapter available")
     endforeach()

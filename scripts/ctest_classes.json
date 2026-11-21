@@ -111,6 +111,8 @@
       "vellum.swift-host-proof-prefix",
       "vellum.swift-host-proof-unit",
       "vellum.text-layout",
+      "vellum.threejs-native-demo-gltf-asset",
+      "vellum.threejs-native-demo-gltf-asset-failure",
       "vellum.threejs-native-demo-module",
       "vellum.threejs-native-demo-v8-identity",
       "vellum.threejs-payload",
