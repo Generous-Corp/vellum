@@ -25,6 +25,9 @@ class NoopRenderer final : public Rml::RenderInterface {
 
 int main() {
     NoopRenderer renderer;
+    // This document has no text; keep the test independent of optional font engines.
+    Rml::FontEngineInterface fonts;
+    Rml::SetFontEngineInterface(&fonts);
     VELLUM_RMLUI_CHECK(Rml::Initialise());
     auto* context = Rml::CreateContext("idle", {100, 100}, &renderer);
     VELLUM_RMLUI_CHECK(context);
