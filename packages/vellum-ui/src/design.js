@@ -239,13 +239,31 @@ function retainedStyle(context, node, viewport, root) {
     const typography = properties.text && typeof properties.text === 'object'
         ? properties.text : {};
     const style = Object.create(null);
-    for (const property of ['x', 'y', 'width', 'height', 'padding', 'gap']) {
+    for (const property of [
+        'x', 'y', 'width', 'height', 'padding', 'gap', 'columnGap', 'rowGap', 'flexGrow',
+    ]) {
         if (typeof layout[property] === 'number' && Number.isFinite(layout[property])) {
             style[property] = layout[property];
         }
     }
     if (layout.direction === 'row') style.direction = 'horizontal';
     else if (layout.direction === 'column') style.direction = 'vertical';
+    if (layout.display === 'grid') {
+        style.direction = 'horizontal';
+        style.wrap = true;
+        style.display = 'grid';
+        if (style.gap === undefined && typeof layout.columnGap === 'number') {
+            style.gap = layout.columnGap;
+        }
+    }
+    for (const property of [
+        'align', 'alignContent', 'alignSelf', 'gridColumn', 'gridRow',
+        'gridTemplateColumns', 'gridTemplateRows', 'justify', 'wrap',
+    ]) {
+        if (typeof layout[property] === 'string' || typeof layout[property] === 'boolean') {
+            style[property] = layout[property];
+        }
+    }
     const drawsBox = node.kind !== 'path' && node.kind !== 'text-run';
     if (drawsBox && typeof paint.backgroundColor === 'string') {
         style.backgroundColor = colorSlot(context, refs, 'backgroundColor', paint.backgroundColor);

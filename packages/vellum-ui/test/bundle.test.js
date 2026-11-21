@@ -100,6 +100,39 @@ test('bundles an external materialized design into the authored native path', ()
     assert.match(missingBindings.stderr, /main\.bindings\.json/);
 });
 
+test('keeps wrapped and grid layout fields in the native render tree', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'vellum-ui-layout-bundle-'));
+    const entry = join(directory, 'main.js');
+    const design = join(directory, 'main.materialized.json');
+    const bindings = join(directory, 'main.bindings.json');
+    const output = join(directory, 'layout.iife.js');
+    writeFileSync(entry, "import { Design, mount } from '@vellum/ui';\nimport { importedDesign } from '@vellum/imported';\nmount(() => Design({ document: importedDesign }));\n");
+    writeFileSync(design, JSON.stringify({
+        source: { key: 'main', revision: 'layout-b' },
+        root: {
+            id: 'main/root', kind: 'view', properties: {
+                layout: {
+                    display: 'grid', gridTemplateColumns: '1fr 1fr',
+                    gridTemplateRows: 'auto auto', columnGap: 8, rowGap: 12,
+                },
+            }, children: [],
+        },
+    }));
+    writeFileSync(bindings, '{}');
+    const build = spawnSync(
+        process.execPath, ['scripts/build-project.mjs', entry, output, design],
+        { cwd: new URL('..', import.meta.url), encoding: 'utf8' },
+    );
+    assert.equal(build.status, 0, build.stderr);
+    const context = vm.createContext({});
+    vm.runInContext(readFileSync(output, 'utf8'), context, { filename: output });
+    const tree = JSON.parse(context.__vellum.renderJSON()).tree;
+    assert.equal(tree.style.direction, 'horizontal');
+    assert.equal(tree.style.wrap, true);
+    assert.equal(tree.style.gridTemplateColumns, '1fr 1fr');
+    assert.equal(tree.style.rowGap, 12);
+});
+
 
 test('bundles referenced PNG bytes for the native host and verifies their digest', () => {
     const directory = mkdtempSync(join(tmpdir(), 'vellum-ui-native-png-'));

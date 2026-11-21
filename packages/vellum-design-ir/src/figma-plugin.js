@@ -45,9 +45,21 @@ const MATERIALIZED_STYLE_FIELDS = Object.freeze({
     width: Object.freeze({ group: 'layout', target: 'width' }),
 });
 const MATERIALIZED_LAYOUT_FIELDS = Object.freeze({
+    align: 'align',
+    alignContent: 'alignContent',
+    alignSelf: 'alignSelf',
+    columnGap: 'columnGap',
     direction: 'direction',
     display: 'display',
+    flexGrow: 'flexGrow',
+    gridColumn: 'gridColumn',
+    gridRow: 'gridRow',
+    gridTemplateColumns: 'gridTemplateColumns',
+    gridTemplateRows: 'gridTemplateRows',
     gap: 'gap',
+    justify: 'justify',
+    rowGap: 'rowGap',
+    wrap: 'wrap',
 });
 const NODE_FIELDS = new Set([
     'asset_ref', 'attributes', 'audio_widget', 'children', 'content', 'figma',

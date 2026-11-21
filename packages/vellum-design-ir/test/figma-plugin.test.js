@@ -114,6 +114,30 @@ test('decodes a generic Figma plugin export into deterministic DesignIR input', 
     ));
 });
 
+test('retains flex wrapping and grid placement in the native style contract', () => {
+    const input = genericExport();
+    input.root.layout = {
+        display: 'grid',
+        direction: 'row',
+        gridTemplateColumns: '1fr 1fr 1fr 1fr',
+        gridTemplateRows: 'auto auto',
+        gridColumn: '2',
+        gridRow: '1',
+        columnGap: 8,
+        rowGap: 12,
+        wrap: true,
+    };
+    const document = normalizeImport(decodeFigmaPluginExport(input, {
+        sourceHash: `sha256:${'f'.repeat(64)}`,
+        sourceKey: 'main',
+    }));
+    assert.equal(document.root.properties.layout.display, 'grid');
+    assert.equal(document.root.properties.layout.wrap, true);
+    assert.equal(document.root.properties.layout.gridTemplateColumns, '1fr 1fr 1fr 1fr');
+    assert.equal(document.root.properties.layout.columnGap, 8);
+    assert.equal(document.root.properties.layout.rowGap, 12);
+});
+
 test('fails closed on audio-widget kinds, fields, and binding attributes', () => {
     for (const mutation of [
         (input) => { input.root.type = 'knob'; },

@@ -102,8 +102,17 @@ bool style_key_consumed(std::string_view type, std::string_view key, const Style
         return key == "backgroundColor" || key == "borderRadius" ||
                contains(kCornerRadiusKeys, key);
     }
-    if (key == "padding" || key == "direction") return use.lays_out_children;
-    if (key == "gap") return type == "stack" && use.lays_out_children;
+    if (key == "padding" || key == "direction" || key == "display" ||
+        key == "wrap" || key == "align" || key == "alignContent" || key == "justify") {
+        return use.lays_out_children;
+    }
+    if (key == "gap" || key == "rowGap" || key == "columnGap") {
+        return type == "stack" && use.lays_out_children;
+    }
+    if (key == "flexGrow" || key == "alignSelf" || key == "gridColumn" || key == "gridRow" ||
+        key == "gridTemplateColumns" || key == "gridTemplateRows") {
+        return use.lays_out_children;
+    }
     if (key == "backgroundGradient" || key == "backgroundLinearGradient" || key == "boxShadow") return true;
     if (key == "backgroundColor") return !text;
     if (key == "borderRadius" || contains(kCornerRadiusKeys, key)) {
@@ -2559,6 +2568,9 @@ bool materialize_node(
     const bool horizontal = [style[@"direction"] isEqual:@"horizontal"];
     const float padding = std::max(0.0F, number_or(style, @"padding", 0.0F));
     const float gap = std::max(0.0F, number_or(style, @"gap", 0.0F));
+    const bool wrap = is_stack && [style[@"wrap"] boolValue];
+    const float cross_gap = std::max(0.0F, number_or(
+        style, horizontal ? @"rowGap" : @"columnGap", 0.0F));
     if ([type isEqualToString:@"button"]) {
         const std::string label_text = direct_text(source);
         if (!label_text.empty()) {
@@ -2613,6 +2625,8 @@ bool materialize_node(
         }
     }
     float cursor = padding;
+    float cross_cursor = padding;
+    float line_extent = 0.0F;
     for (id child_value in children) {
         if (![child_value isKindOfClass:NSDictionary.class]) {
             set_error(error, "authoring node children must be retained-tree objects");
@@ -2644,6 +2658,19 @@ bool materialize_node(
             child_style, @"height", default_height(child_type, child_style, child));
         float x = number_or(child_style, @"x", is_stack && horizontal ? cursor : padding);
         float y = number_or(child_style, @"y", is_stack && !horizontal ? cursor : padding);
+        if (wrap && horizontal && x + width > proposed.width - padding && cursor > padding) {
+            cursor = padding;
+            cross_cursor += line_extent + cross_gap;
+            line_extent = 0.0F;
+            x = cursor;
+            y = cross_cursor;
+        } else if (wrap && !horizontal && y + height > proposed.height - padding && cursor > padding) {
+            cursor = padding;
+            cross_cursor += line_extent + cross_gap;
+            line_extent = 0.0F;
+            y = cursor;
+            x = cross_cursor;
+        }
         if (width <= 0.0F && horizontal) width = std::max(0.0F, proposed.width - cursor - padding);
         if (height <= 0.0F && !horizontal) height = std::max(0.0F, proposed.height - cursor - padding);
         vellum::graphics::SceneNode child_output;
@@ -2654,7 +2681,10 @@ bool materialize_node(
             return false;
         }
         output.children.push_back(std::move(child_output));
-        if (is_stack) cursor += (horizontal ? width : height) + gap;
+        if (is_stack) {
+            cursor += (horizontal ? width : height) + gap;
+            line_extent = std::max(line_extent, horizontal ? height : width);
+        }
     }
     return parse_tracks(source[@"tracks"], identity, output, error);
 }
