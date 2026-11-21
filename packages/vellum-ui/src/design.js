@@ -186,7 +186,7 @@ function retainedGradient(context, refs, prefix, gradient) {
     return output;
 }
 
-const PATH_PAINT_FIELDS = new Set(['fill', 'stroke', ...PATH_STROKE_FIELDS]);
+const PATH_PAINT_FIELDS = new Set(['fill', 'stroke', ...PATH_STROKE_FIELDS, ...VECTOR_PAINT_KEYS]);
 const PATH_GEOMETRY_FIELDS = new Set(['d', 'fillRule']);
 
 function requirePathFields(node, name, value, allowed) {
@@ -213,7 +213,11 @@ function pathPaint(context, node, refs) {
             ? retainedGradient(context, refs, 'fill', paint.fill)
             : colorSlot(context, refs, 'fill', paint.fill);
     }
-    if (paint.stroke !== undefined) output.stroke = colorSlot(context, refs, 'stroke', paint.stroke);
+    if (paint.stroke !== undefined) {
+        output.stroke = paint.stroke && typeof paint.stroke === 'object'
+            ? retainedGradient(context, refs, 'stroke', paint.stroke)
+            : colorSlot(context, refs, 'stroke', paint.stroke);
+    }
     for (const field of PATH_STROKE_FIELDS) {
         const value = paint[field];
         if (value === undefined) continue;
@@ -267,9 +271,8 @@ function retainedStyle(context, node, viewport, root) {
     if (typeof typography.color === 'string' && node.kind !== 'path') {
         style.color = colorSlot(context, refs, 'color', typography.color);
     }
-    if (typeof typography.fontSize === 'number' && Number.isFinite(typography.fontSize)) {
-        style.fontSize = typography.fontSize;
-    }
+    Object.assign(style, paintNumbers(typography, ['fontSize', 'letterSpacing']));
+    if (typeof typography.fontFamily === 'string') style.fontFamily = typography.fontFamily;
     for (const property of VECTOR_PAINT_KEYS) {
         if (typeof paint[property] === 'string') style[property] = paint[property];
     }

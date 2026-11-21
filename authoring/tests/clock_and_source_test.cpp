@@ -1,7 +1,10 @@
 #include "rendered_tree_materializer.hpp"
 
 #include <vellum/authoring/js_application.hpp>
+#include <vellum/graphics/image_asset.hpp>
 #include <vellum/graphics/scene.hpp>
+
+#include <array>
 
 #include <chrono>
 #include <iostream>
@@ -118,6 +121,28 @@ bool manual_clock_is_deterministic() {
     return true;
 }
 
+bool scene_keeps_native_images_after_pump() {
+    constexpr auto hash =
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    constexpr std::array<std::uint8_t, 4> orange{255, 128, 0, 255};
+    std::string error;
+    auto image = vellum::graphics::make_image_asset(
+        hash, 1, 1, orange, vellum::graphics::ImageAlpha::premultiplied, &error);
+    if (!image) return false;
+    const JsApplicationOptions options{.manual_clock = true, .images = {image}};
+    auto application = JsApplication::create(kClockBundle, options, &error);
+    RenderedApplication rendered;
+    if (!application || !application->render(rendered, &error) ||
+        vellum::graphics::find_image_asset(rendered.scene, hash) != image ||
+        !advance(*application, 100U, rendered, &error) ||
+        vellum::graphics::find_image_asset(rendered.scene, hash) != image) {
+        std::cerr << "native image was lost while materializing an application scene: "
+                  << error << '\n';
+        return false;
+    }
+    return true;
+}
+
 constexpr const char* kSourceTree = R"JSON({
   "protocol":"vellum.authoring-host.v2","kind":"render-result",
   "tree":{"type":"stack","id":"root","style":{"width":200,"height":120},
@@ -184,6 +209,7 @@ bool source_dump_reports_source_and_box() {
 }  // namespace
 
 int main() {
-    return manual_clock_is_deterministic() && source_dump_reports_source_and_box()
+    return manual_clock_is_deterministic() && source_dump_reports_source_and_box() &&
+        scene_keeps_native_images_after_pump()
         ? 0 : 1;
 }

@@ -7,12 +7,8 @@ export const FIGMA_PLUGIN_COMPAT_SCHEMA_VERSION = '0.3';
 
 const FIGMA_PLUGIN_SCHEMA = 'https://pulp.dev/schemas/figma-plugin-export-v1.json';
 
-// The current Pulp extractor's audio-free output vocabulary is `frame`, `text`,
-// `ellipse`, `image`, and `vector`. Only the `frame` and `text` node kinds map
-// directly into Vellum's retained native host today; their individual fields
-// are still diagnosed when unsupported. Every other row is accepted only with
-// a conversion diagnostic. The additional control/layout spellings are legacy
-// compatibility inputs, not claims about current Pulp output.
+// Default mappings for the exporter vocabulary. Nodes carrying supported
+// path data or a content-addressed PNG get a more specific mapping.
 const NODE_RULES = Object.freeze({
     button: Object.freeze({ kind: 'button', disposition: 'lowered' }),
     col: Object.freeze({ kind: 'view', disposition: 'lowered' }),
@@ -38,10 +34,14 @@ const MATERIALIZED_STYLE_FIELDS = Object.freeze({
     background_color: Object.freeze({ group: 'paint', target: 'backgroundColor' }),
     border_radius: Object.freeze({ group: 'paint', target: 'borderRadius' }),
     color: Object.freeze({ group: 'text', target: 'color' }),
+    font_family: Object.freeze({ group: 'text', target: 'fontFamily' }),
     font_size: Object.freeze({ group: 'text', target: 'fontSize' }),
+    letter_spacing: Object.freeze({ group: 'text', target: 'letterSpacing' }),
+    overflow: Object.freeze({ group: 'paint', target: 'overflow' }),
     height: Object.freeze({ group: 'layout', target: 'height' }),
     left: Object.freeze({ group: 'layout', target: 'x' }),
     top: Object.freeze({ group: 'layout', target: 'y' }),
+    transform: Object.freeze({ group: 'paint', target: 'transform' }),
     width: Object.freeze({ group: 'layout', target: 'width' }),
 });
 const MATERIALIZED_LAYOUT_FIELDS = Object.freeze({
@@ -89,7 +89,11 @@ export function decodeFigmaPluginExport(input, options = {}) {
     if (rootEnvelope.name === '<multi-export>') {
         throw new TypeError('multi-selection Figma exports are not supported; export exactly one root frame');
     }
-    const root = decodeNode(rootEnvelope, '$.root', diagnostics);
+    const assets = decodeAssets(envelope.asset_manifest);
+    const pngAssets = new Map(assets.filter((asset) =>
+        asset.mimeType === 'image/png' && asset.contentHash && asset.uri)
+        .map((asset) => [asset.id, asset]));
+    const root = decodeNode(rootEnvelope, '$.root', diagnostics, pngAssets);
 
     if (envelope.diagnostics !== undefined && !Array.isArray(envelope.diagnostics)) {
         throw new TypeError('$.diagnostics must be an array');
@@ -138,7 +142,7 @@ export function decodeFigmaPluginExport(input, options = {}) {
     }
 
     return canonicalize({
-        assets: decodeAssets(envelope.asset_manifest),
+        assets,
         diagnostics,
         root,
         source: {
@@ -158,7 +162,7 @@ export function decodeFigmaPluginExport(input, options = {}) {
     });
 }
 
-function decodeNode(value, path, diagnostics) {
+function decodeNode(value, path, diagnostics, pngAssets) {
     const node = object(value, path);
     const sourceKind = requiredString(node.type, `${path}.type`).toLowerCase();
     if (AUDIO_NODE_KINDS.has(sourceKind)) rejectAudio(path);
@@ -194,14 +198,34 @@ function decodeNode(value, path, diagnostics) {
         if (attributes[field] !== undefined) rejectAudio(`${path}.attributes.${field}`);
     }
 
-    const rule = NODE_RULES[sourceKind];
+    const vectorPath = (sourceKind === 'vector' || sourceKind === 'path') &&
+        typeof node.path_data === 'string' && node.path_data.trim() !== '' &&
+        (node.children?.length ?? 0) === 0;
+    const imageAsset = ['frame', 'image', 'ellipse'].includes(sourceKind) &&
+        (node.children?.length ?? 0) === 0 ? pngAssets.get(node.asset_ref) : undefined;
+    let rule = NODE_RULES[sourceKind];
+    if (vectorPath) rule = { kind: 'path', disposition: 'portable' };
+    if (imageAsset) rule = { kind: 'image', disposition: 'portable' };
     if (!rule) throw new TypeError(`${path}.type '${sourceKind}' is not in the pinned Figma subset`);
     if (node.children !== undefined && !Array.isArray(node.children)) {
         throw new TypeError(`${path}.children must be an array`);
     }
 
     const { properties, unmaterializedLayout, unmaterializedStyle } =
-        decodeProperties(node, path, diagnostics);
+        decodeProperties(node, path, diagnostics, imageAsset);
+    if (imageAsset) {
+        properties.image = { source: imageAsset.contentHash, fit: node.style?.object_fit ?? 'fill' };
+    }
+    if (vectorPath) {
+        properties.path = { d: node.path_data };
+        if (node.fillRule !== undefined) properties.path.fillRule = node.fillRule;
+        const { clipPath, overflow, transform } = properties.paint ?? {};
+        properties.paint = Object.fromEntries(Object.entries({ clipPath, overflow, transform })
+            .filter(([, value]) => value !== undefined));
+        for (const key of ['fill', 'stroke', 'strokeWidth']) {
+            if (node[key] !== undefined) properties.paint[key] = node[key];
+        }
+    }
     if (
         sourceKind === 'ellipse' &&
         properties.paint?.borderRadius === undefined &&
@@ -231,7 +255,20 @@ function decodeNode(value, path, diagnostics) {
         });
     }
 
-    const sourceFields = preservedFields(node, NODE_FIELDS);
+    const consumedFields = new Set(NODE_FIELDS);
+    if (vectorPath) {
+        for (const key of ['path_data', 'fillRule', 'fill', 'stroke', 'strokeWidth']) {
+            consumedFields.add(key);
+        }
+        for (const key of ['fill', 'stroke']) {
+            const gradient = decodeGradient(node[`${key}Gradient`]);
+            if (gradient) {
+                properties.paint[key] = gradient;
+                consumedFields.add(`${key}Gradient`);
+            }
+        }
+    }
+    const sourceFields = preservedFields(node, consumedFields);
     for (const [field, fieldValue] of Object.entries({
         ...sourceFields,
         ...(Object.keys(attributes).length > 0 ? { attributes } : {}),
@@ -266,7 +303,7 @@ function decodeNode(value, path, diagnostics) {
     };
     const output = {
         children: (node.children ?? []).map((child, index) =>
-            decodeNode(child, `${path}.children[${index}]`, diagnostics),
+            decodeNode(child, `${path}.children[${index}]`, diagnostics, pngAssets),
         ),
         extensions: { 'dev.vellum.figma-plugin.v1': canonicalize(extension) },
         kind: rule.kind,
@@ -275,19 +312,36 @@ function decodeNode(value, path, diagnostics) {
         sourceId: requiredString(node.figma_node_id, `${path}.figma_node_id`),
     };
     if (typeof node.content === 'string') output.text = node.content;
+    const opacity = node.style?.opacity;
+    if (Number.isFinite(opacity) && opacity >= 0 && opacity <= 1) output.compositing = { opacity };
     if (rule.kind === 'button') output.role = 'button';
     return output;
 }
 
-function decodeProperties(node, path, diagnostics) {
+function decodeProperties(node, path, diagnostics, imageAsset) {
     const properties = { layout: {}, paint: {}, text: {} };
     const style = node.style === undefined ? {} : object(node.style, `${path}.style`);
     const consumedStyle = new Set();
+    if (imageAsset) consumedStyle.add('object_fit');
+    if (Number.isFinite(style.opacity) && style.opacity >= 0 && style.opacity <= 1) {
+        consumedStyle.add('opacity');
+    }
     for (const [source, rule] of Object.entries(MATERIALIZED_STYLE_FIELDS)) {
         if (style[source] !== undefined) {
             properties[rule.group][rule.target] = style[source];
             consumedStyle.add(source);
         }
+    }
+    const clip = typeof style.clip_path === 'string'
+        ? /^path\("([^"]+)"\)$/.exec(style.clip_path) : null;
+    if (clip) {
+        properties.paint.clipPath = clip[1];
+        consumedStyle.add('clip_path');
+    }
+    const gradient = decodeGradient(style.background_gradient);
+    if (gradient) {
+        properties.paint.backgroundLinearGradient = gradient;
+        consumedStyle.add('background_gradient');
     }
     const layout = node.layout === undefined ? {} : object(node.layout, `${path}.layout`);
     const consumedLayout = new Set();
@@ -314,6 +368,23 @@ function decodeProperties(node, path, diagnostics) {
         unmaterializedLayout: canonicalize(unmaterializedLayout),
         unmaterializedStyle: canonicalize(unmaterializedStyle),
     };
+}
+
+// The extractor emits explicit angles and percent-positioned hex stops.
+function decodeGradient(value) {
+    if (typeof value !== 'string') return null;
+    const match = /^linear-gradient\(([^,]+)deg, (.+)\)$/.exec(value);
+    if (!match || !Number.isFinite(Number(match[1]))) return null;
+    const stops = [];
+    for (const item of match[2].split(', ')) {
+        const stop = /^(#[0-9a-f]{6}(?:[0-9a-f]{2})?) (-?[0-9]+(?:\.[0-9]+)?)%$/i.exec(item);
+        if (!stop) return null;
+        const position = Number(stop[2]) / 100;
+        if (position < 0 || position > 1 ||
+            (stops.length > 0 && position <= stops.at(-1).position)) return null;
+        stops.push({ color: stop[1], position });
+    }
+    return stops.length >= 2 && stops.length <= 32 ? { angle: Number(match[1]), stops } : null;
 }
 
 function decodeUniformPadding(value) {
