@@ -120,7 +120,7 @@ elseif(GPU_RUNTIME_REQUIRE_DEVICE)
 endif()
 
 if(GPU_RUNTIME_HAS_DEVICE)
-    add_library(gpu-runtime-device STATIC
+    set(_gpu_runtime_device_sources
         src/dawn_native_bootstrap.cpp
         src/gpu_compute.cpp
         src/gpu_diagnostics.cpp
@@ -129,6 +129,7 @@ if(GPU_RUNTIME_HAS_DEVICE)
         src/gpu_surface_dawn.cpp
         src/host_hooks.cpp
         src/render_observer.cpp)
+    add_library(gpu-runtime-device STATIC ${_gpu_runtime_device_sources})
     if(APPLE AND NOT IOS)
         target_sources(gpu-runtime-device PRIVATE src/metal_surface_mac.mm)
     elseif(IOS)
@@ -159,6 +160,42 @@ if(GPU_RUNTIME_HAS_DEVICE)
     if(APPLE)
         target_link_libraries(gpu-runtime-device PRIVATE
             "-framework Cocoa" "-framework Metal" "-framework QuartzCore")
+    endif()
+
+    # The installed provider is the one image that intentionally exposes the
+    # gpu_runtime surface ABI. Keep the standalone static archive hidden so
+    # plug-ins retain their private runtime copy, while the provider variant
+    # gives its exported GpuSurface declarations real default visibility.
+    if(GPU_RUNTIME_BUILD_PROVIDER)
+        add_library(gpu-runtime-device-provider STATIC ${_gpu_runtime_device_sources})
+        add_library(VellumGpuRuntime::DeviceProvider ALIAS gpu-runtime-device-provider)
+        set_target_properties(gpu-runtime-device-provider PROPERTIES
+            OUTPUT_NAME gpu-runtime-device-provider
+            CXX_VISIBILITY_PRESET hidden
+            OBJCXX_VISIBILITY_PRESET hidden
+            VISIBILITY_INLINES_HIDDEN ON
+            POSITION_INDEPENDENT_CODE ON)
+        if(APPLE AND NOT IOS)
+            target_sources(gpu-runtime-device-provider PRIVATE src/metal_surface_mac.mm)
+        elseif(IOS)
+            target_sources(gpu-runtime-device-provider PRIVATE src/metal_surface_ios.mm)
+        endif()
+        target_include_directories(gpu-runtime-device-provider PRIVATE src)
+        target_compile_definitions(gpu-runtime-device-provider PRIVATE
+            GPU_RUNTIME_HAS_DAWN=1
+            GPU_RUNTIME_EXPORT_ABI=1
+            GPU_RUNTIME_SKIA_MILESTONE=${GPU_RUNTIME_SKIA_MILESTONE})
+        if(GPU_RUNTIME_HOST_OWNS_DAWN_PROCS)
+            target_compile_definitions(gpu-runtime-device-provider PRIVATE
+                GPU_RUNTIME_HOST_OWNS_DAWN_PROCS=1)
+        endif()
+        target_link_libraries(gpu-runtime-device-provider
+            PUBLIC VellumGpuRuntime::DeviceApi VellumGpuRuntime::Bootstrap
+            PRIVATE VellumGpuRuntime::Dawn)
+        if(APPLE)
+            target_link_libraries(gpu-runtime-device-provider PRIVATE
+                "-framework Cocoa" "-framework Metal" "-framework QuartzCore")
+        endif()
     endif()
 
     add_library(gpu-runtime-skia-log-bridge STATIC src/skia_log_bridge.cpp)
