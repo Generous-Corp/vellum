@@ -30,6 +30,40 @@ std::string wrap_tree(std::string_view children) {
       "children":[)JSON") + std::string(children) + "]}}";
 }
 
+bool box_material() {
+    using namespace vellum::graphics;
+    constexpr std::string_view content = R"JSON(
+      {"type":"view","id":"material","style":{"width":80,"height":40,
+        "backgroundColor":"#101928","borderRadius":6,
+        "borderTopWidth":1,"borderTopColor":"#112233",
+        "backgroundGradients":[
+          {"kind":"radial","radiusX":0.8,"radiusY":0.6,
+           "stops":[{"position":0,"color":"#00000000"},{"position":1,"color":"#ff0000"}]},
+          {"kind":"linear","angle":180,
+           "stops":[{"position":0,"color":"#00000000"},{"position":1,"color":"#0000ff"}]}]},
+        "children":[]},
+      {"type":"view","id":"control","style":{"width":80,"height":40},"children":[]}
+    )JSON";
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    if (!vellum::authoring::materialize_rendered_tree(wrap_tree(content), rendered, &error)) {
+        std::cerr << "box material: " << error << '\n';
+        return false;
+    }
+    const auto& box = rendered.scene.root.children[0];
+    const auto& control = rendered.scene.root.children[1];
+    const bool valid = box.kind == SceneNode::Kind::rectangle && box.fill.blue8() == 0x28 &&
+        box.corner_radius == 6.0F && box.fill_gradients.size() == 2U &&
+        box.fill_gradients[0].kind == GradientKind::radial &&
+        box.fill_gradients[1].kind == GradientKind::linear &&
+        box.children.size() == 1U && box.children[0].kind == SceneNode::Kind::path &&
+        box.children[0].fill.blue8() == 0x33 && box.children[0].clip.has_value() &&
+        control.kind == SceneNode::Kind::group && control.children.empty() &&
+        control.fill_gradients.empty();
+    if (!valid) std::cerr << "box material: scene dropped a gradient or border\n";
+    return valid;
+}
+
 // rotate(90deg) on a 40 by 20 box at (10, 20) inside a parent at (30, 40):
 // the absolute box (40, 60, 40, 20) turns about its own centre (60, 70) once,
 // to (50, 50, 20, 40). A second pivot would move it.
@@ -2483,7 +2517,7 @@ int main() {
 
 
 
-    return compositing_keys() && transform_pivots_once() && transform_ignores_locale() &&
+    return box_material() && compositing_keys() && transform_pivots_once() && transform_ignores_locale() &&
            image_nodes() && path_nodes() && plot_nodes() && grouping_keys() &&
            animation_tracks() && blend_mode_key() && token_receipts() && token_slots() &&
            scene_version_protocol() && protocol_numbers() && root_background_receipts() &&

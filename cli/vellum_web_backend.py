@@ -37,7 +37,7 @@ from vellum_scenario import (
     validate_scenario_document as validate_shared_scenario_document,
 )
 from vellum_cdp import CdpAdmission
-from vellum_cdp_client import CdpClient, CdpClientError
+from vellum_cdp_client import CAPTURE_STYLE_NAMES, CdpClient, CdpClientError
 from vellum_interaction import InteractionPlanError, validate_interaction_plan
 from vellum_browser import browser_version, configured_provenance
 
@@ -62,10 +62,7 @@ MAX_CAPTURE_NODES = 8192
 MAX_CAPTURE_ASSETS = 128
 MAX_CAPTURE_ASSET_BYTES = 8 * 1024 * 1024
 MAX_CAPTURE_ATTRIBUTE_BYTES = 64 * 1024
-CAPTURE_STYLE_NAMES = (
-    "display", "visibility", "color", "font-size", "background-image",
-    "list-style-image", "content",
-)
+
 
 
 class BackendFailure(RuntimeError):
@@ -702,6 +699,10 @@ def _snapshot_layout_boxes(layout: dict[str, Any], included: set[int]) -> dict[i
                 not all(isinstance(value, (int, float)) and not isinstance(value, bool) and
                         math.isfinite(value) for value in rect) or rect[2] < 0 or rect[3] < 0):
             raise BackendFailure("DOMSnapshot layout bounds are malformed", status="test_failed")
+        # Chromium can append an empty layout row after a painted pseudo-element.
+        previous = boxes.get(node_index)
+        if previous and previous[2] > 0 and previous[3] > 0 and (rect[2] == 0 or rect[3] == 0):
+            continue
         boxes[node_index] = tuple(float(value) for value in rect)
     return boxes
 
@@ -769,6 +770,194 @@ def _lower_layout_boxes(
             properties["layout"] = {"display": "none"}
             continue
         pending.extend((child, rect) for child in tree_children.get(index, []))
+
+
+_CSS_NUMBER = r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)"
+_CSS_RGB = re.compile(
+    rf"rgba?\(\s*({_CSS_NUMBER}),\s*({_CSS_NUMBER}),\s*({_CSS_NUMBER})"
+    rf"(?:,\s*({_CSS_NUMBER}))?\s*\)"
+)
+_BOX_CORNERS = (
+    ("top-left", "TopLeft"), ("top-right", "TopRight"),
+    ("bottom-right", "BottomRight"), ("bottom-left", "BottomLeft"),
+)
+
+
+def _computed_color(value: str) -> str | None:
+    match = _CSS_RGB.fullmatch(value)
+    if not match:
+        return None
+    channels = [float(value) for value in match.groups()[:3]]
+    alpha = float(match[4]) if match[4] else 1
+    channels.append(alpha * 255)
+    encoded = "".join(f"{int(min(255, max(0, channel)) + 0.5):02x}" for channel in channels)
+    return "#" + (encoded[:6] if encoded.endswith("ff") else encoded)
+
+
+def _computed_length(value: str, unit: str = "px") -> float | None:
+    if not re.fullmatch(_CSS_NUMBER + unit, value):
+        return None
+    length = float(value[:-len(unit)])
+    return length if math.isfinite(length) else None
+
+
+def _css_components(value: str) -> list[str]:
+    """Split Chrome's serialized CSS list at top-level commas."""
+    parts = []
+    depth = start = 0
+    quote_mark = None
+    escaped = False
+    for index, character in enumerate(value):
+        if escaped:
+            escaped = False
+        elif character == "\\":
+            escaped = True
+        elif quote_mark:
+            if character == quote_mark:
+                quote_mark = None
+        elif character in {"'", '"'}:
+            quote_mark = character
+        elif character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+        elif character == "," and depth == 0:
+            parts.append(value[start:index].strip())
+            start = index + 1
+    parts.append(value[start:].strip())
+    return parts
+
+
+def _computed_gradient(layer: str) -> dict[str, Any] | None:
+    match = re.fullmatch(r"(linear|radial)-gradient\((.*)\)", layer)
+    if not match:
+        return None
+    kind, value = match.groups()
+    parts = _css_components(value)
+    gradient: dict[str, Any] = {"kind": kind}
+    if kind == "linear":
+        directions = {"to top": 0, "to right": 90, "to bottom": 180, "to left": 270}
+        angle = directions.get(parts[0], _computed_length(parts[0], "deg"))
+        gradient["angle"] = 180 if angle is None else angle % 360
+        if angle is not None:
+            parts.pop(0)
+    else:
+        percent = rf"({_CSS_NUMBER})%"
+        shape = re.fullmatch(
+            rf"(?:ellipse )?{percent} {percent}(?: at {percent} {percent})?", parts[0])
+        if shape:
+            rx, ry, cx, cy = shape.groups()
+            radii = float(rx) / 100, float(ry) / 100
+            if not all(math.isfinite(r) and r > 0 for r in radii):
+                return None
+            gradient.update(radiusX=radii[0], radiusY=radii[1],
+                            centerX=float(cx or 50) / 100, centerY=float(cy or 50) / 100)
+            parts.pop(0)
+        else:
+            # The default centered farthest-corner ellipse.
+            gradient.update(radiusX=math.sqrt(0.5), radiusY=math.sqrt(0.5))
+    if not 2 <= len(parts) <= 64:
+        return None
+    stops = []
+    positions = []
+    for part in parts:
+        color_match = _CSS_RGB.match(part)
+        if color_match is None:
+            return None
+        color = _computed_color(color_match[0])
+        suffix = part[color_match.end():].strip()
+        position = _computed_length(suffix, "%")
+        if suffix and (position is None or not 0 <= position <= 100):
+            return None
+        stops.append({"color": color})
+        positions.append(position)
+    positions[0] = 0 if positions[0] is None else positions[0]
+    positions[-1] = 100 if positions[-1] is None else positions[-1]
+    previous = 0
+    for index in range(1, len(positions)):
+        if positions[index] is None:
+            continue
+        end = max(positions[previous], positions[index])
+        for step in range(previous + 1, index + 1):
+            positions[step] = positions[previous] + (end - positions[previous]) * (
+                (step - previous) / (index - previous))
+        previous = index
+    for stop, position in zip(stops, positions):
+        stop["position"] = position / 100
+    gradient["stops"] = stops
+    return gradient
+
+
+def _lower_computed_material(node: dict[str, Any], computed: dict[str, str],
+                             box: tuple[float, ...] | None) -> None:
+    properties = node["properties"]
+    if node["kind"] == "text":
+        typography: dict[str, Any] = {}
+        if color := _computed_color(computed.get("color", "")):
+            typography["color"] = color
+        if size := _computed_length(computed.get("font-size", "")):
+            typography["fontSize"] = size
+        if family := computed.get("font-family"):
+            typography["fontFamily"] = family
+        weight = computed.get("font-weight", "")
+        if re.fullmatch(r"[0-9]{1,4}", weight):
+            typography["fontWeight"] = int(weight)
+        if typography:
+            properties["text"] = typography
+        return
+    paint: dict[str, Any] = {}
+    background = _computed_color(computed.get("background-color", ""))
+    if background and (len(background) == 7 or not background.endswith("00")):
+        paint["backgroundColor"] = background
+    if box and box[2] > 0 and box[3] > 0:
+        # CSS lists the top layer first. Native paints back to front.
+        layers = _css_components(computed.get("background-image", "none"))
+        gradients = [gradient for layer in reversed(layers)
+                     if (gradient := _computed_gradient(layer)) is not None]
+        if gradients:
+            paint["backgroundGradients"] = gradients[-8:]
+    for side in ("Top", "Right", "Bottom", "Left"):
+        prefix = f"border-{side.lower()}-"
+        width = _computed_length(computed.get(prefix + "width", ""))
+        color = _computed_color(computed.get(prefix + "color", ""))
+        if width and width > 0 and color and computed.get(prefix + "style") == "solid":
+            paint[f"border{side}Width"] = width
+            paint[f"border{side}Color"] = color
+    radii = {}
+    for css, retained in _BOX_CORNERS:
+        value = computed.get(f"border-{css}-radius", "")
+        radius = _computed_length(value)
+        if radius is None and box:
+            percent = _computed_length(value, "%")
+            if percent is not None:
+                radius = min(box[2:]) * percent / 100
+        if radius and radius > 0:
+            radii[f"border{retained}Radius"] = radius
+    if len(radii) == 4 and len(set(radii.values())) == 1:
+        paint["borderRadius"] = next(iter(radii.values()))
+    else:
+        paint.update(radii)
+    if paint:
+        properties["paint"] = paint
+
+
+def _promote_page_background(root: dict[str, Any]) -> None:
+    html_node = next((child for child in root["children"] if child["name"] == "html"), None)
+    if html_node is None:
+        return
+    source = html_node["properties"]
+    computed = source.get("computedStyles", {})
+    color = _computed_color(computed.get("background-color", ""))
+    if (computed.get("background-image", "none") == "none" and
+            color and len(color) == 9 and color.endswith("00")):
+        body = next((child for child in html_node["children"] if child["name"] == "body"), None)
+        if body is not None:
+            source = body["properties"]
+    paint = source.get("paint", {})
+    background = {key: paint.pop(key) for key in ("backgroundColor", "backgroundGradients")
+                  if key in paint}
+    if background:
+        root["properties"]["paint"] = background
 
 
 def lower_dom_snapshot(
@@ -860,6 +1049,7 @@ def lower_dom_snapshot(
         source_nodes[index] = raw
         included.add(index)
     if isinstance(layout, dict):
+        boxes = _snapshot_layout_boxes(layout, included)
         layout_styles = layout.get("styles")
         if layout_indices is not None or layout_styles is not None:
             if not isinstance(layout_indices, list) or not isinstance(layout_styles, list) or len(layout_indices) != len(layout_styles):
@@ -879,11 +1069,13 @@ def lower_dom_snapshot(
                     replaced, found = _replace_data_urls(value, records)
                     computed[CAPTURE_STYLE_NAMES[style_index]] = replaced
                     refs.extend(found)
-                source_nodes[node_index]["properties"]["computedStyles"] = computed  # type: ignore[index]
+                node = source_nodes[node_index]
+                assert node is not None
+                node["properties"]["computedStyles"] = computed
+                _lower_computed_material(node, computed, boxes.get(node_index))
                 if refs:
                     existing = source_nodes[node_index]["properties"].get("assetRefs", [])  # type: ignore[index]
                     source_nodes[node_index]["properties"]["assetRefs"] = sorted(set(existing + refs))  # type: ignore[index]
-        boxes = _snapshot_layout_boxes(layout, included)
     else:
         boxes = {}
     if not included:
@@ -916,7 +1108,9 @@ def lower_dom_snapshot(
         "screenshot": screenshot,
     }
     root = source_nodes[root_index]
-    root["properties"]["captureEvidence"] = evidence  # type: ignore[index]
+    assert root is not None
+    _promote_page_background(root)
+    root["properties"]["captureEvidence"] = evidence
     return root, assets, evidence
 
 

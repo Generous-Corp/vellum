@@ -735,6 +735,14 @@ function validateStyle(style, path) {
             result[name] = validateLinearGradient(value, `${path}.style.${name}`);
             continue;
         }
+        if (name === 'backgroundGradients') {
+            if (!Array.isArray(value) || value.length > 8) {
+                throw new TypeError(`${path}.style.backgroundGradients requires up to eight layers`);
+            }
+            result[name] = value.map((layer, index) => validateLinearGradient(
+                layer, `${path}.style.backgroundGradients.${index}`, { coincidentStops: true }));
+            continue;
+        }
         if (name === 'boxShadow') {
             result[name] = validateBoxShadow(value, `${path}.style.${name}`);
             continue;

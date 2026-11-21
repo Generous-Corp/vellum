@@ -64,6 +64,12 @@ constexpr std::array<std::string_view, 4> kCornerRadiusKeys{
     "borderTopLeftRadius", "borderTopRightRadius",
     "borderBottomRightRadius", "borderBottomLeftRadius",
 };
+const std::array<NSString*, 4> kBorderWidths{
+    @"borderTopWidth", @"borderRightWidth", @"borderBottomWidth", @"borderLeftWidth",
+};
+const std::array<NSString*, 4> kBorderColors{
+    @"borderTopColor", @"borderRightColor", @"borderBottomColor", @"borderLeftColor",
+};
 constexpr std::size_t kMaximumTransformBytes = 1024U;
 constexpr std::size_t kMaximumTransformFunctions = 32U;
 
@@ -104,7 +110,15 @@ bool style_key_consumed(std::string_view type, std::string_view key, const Style
     }
     if (key == "padding" || key == "direction") return use.lays_out_children;
     if (key == "gap") return type == "stack" && use.lays_out_children;
-    if (key == "backgroundGradient" || key == "backgroundLinearGradient" || key == "boxShadow") return true;
+    if (key == "backgroundGradient" || key == "backgroundLinearGradient" ||
+        key == "backgroundGradients" || key == "boxShadow") return true;
+    if (!text) {
+        for (std::size_t side = 0; side < kBorderWidths.size(); ++side) {
+            if (key == kBorderWidths[side].UTF8String || key == kBorderColors[side].UTF8String) {
+                return true;
+            }
+        }
+    }
     if (key == "backgroundColor") return !text;
     if (key == "borderRadius" || contains(kCornerRadiusKeys, key)) {
         return !text || use.paints_text_background;
@@ -412,6 +426,19 @@ bool parse_linear_gradient(
     NSDictionary* style,
     std::vector<vellum::graphics::LinearGradient>& output,
     std::string* error) {
+    if (id layers = style[@"backgroundGradients"]; layers != nil) {
+        if (![layers isKindOfClass:NSArray.class] || [layers count] > 8U ||
+            style[@"backgroundGradient"] != nil || style[@"backgroundLinearGradient"] != nil) {
+            set_error(error, "backgroundGradients requires up to eight layers as the sole gradient style");
+            return false;
+        }
+        for (id layer in layers) {
+            if (!parse_linear_gradient_value(layer, "backgroundGradients", output, error, true)) {
+                return false;
+            }
+        }
+        return true;
+    }
     id raw = style[@"backgroundGradient"] ?: style[@"backgroundLinearGradient"];
     return parse_linear_gradient_value(raw, raw == style[@"backgroundGradient"] ?
         "backgroundGradient" : "backgroundLinearGradient", output, error);
@@ -2191,6 +2218,120 @@ bool validate_attributed_run(
     return true;
 }
 
+// A border occupies the area between the outer rounded rectangle and its
+// inset. A solid uniform border uses one even-odd path, so translucent
+// corners never blend twice. Individual sides share mitered edges.
+bool append_box_border(
+    NSDictionary* style, MaterializeContext& context,
+    vellum::graphics::SceneNode& output, std::string* error) {
+    using namespace vellum::graphics;
+    const float width = output.bounds.width;
+    const float height = output.bounds.height;
+    if (width <= 0.0F || height <= 0.0F) return true;
+
+    std::array<float, 4> widths{};
+    std::array<Color, 4> colors{};
+    for (std::size_t side = 0; side < widths.size(); ++side) {
+        if (style[kBorderWidths[side]] == nil && style[kBorderColors[side]] == nil) continue;
+        const auto color = parse_color(style[kBorderColors[side]]);
+        if (!finite_number(style[kBorderWidths[side]], widths[side]) ||
+            widths[side] < 0.0F || !color) {
+            set_error(error, "box border sides require a nonnegative width and hex color");
+            return false;
+        }
+        colors[side] = *color;
+    }
+    if (std::ranges::none_of(widths, [](float value) { return value > 0.0F; })) return true;
+    auto radii = resolved_corner_radii(output);
+    const auto scale_for = [](float available, float sum) {
+        return sum > available ? available / sum : 1.0F;
+    };
+    const float scale = std::min({
+        scale_for(width, radii.top_left + radii.top_right),
+        scale_for(width, radii.bottom_left + radii.bottom_right),
+        scale_for(height, radii.top_left + radii.bottom_left),
+        scale_for(height, radii.top_right + radii.bottom_right),
+    });
+    radii.top_left *= scale;
+    radii.top_right *= scale;
+    radii.bottom_right *= scale;
+    radii.bottom_left *= scale;
+    const auto append = [&](std::size_t side, PathGeometry path, bool clipped) {
+        SceneNode border;
+        border.id = output.id + "/border-" + std::to_string(side);
+        if (++context.nodes > kMaximumNodes || !context.identities.insert(border.id).second) {
+            set_error(error, "generated box border exceeds node limit or duplicates a node id");
+            return false;
+        }
+        border.kind = SceneNode::Kind::path;
+        border.bounds = {0.0F, 0.0F, width, height};
+        border.fill = colors[side];
+        border.path = std::make_shared<const PathGeometry>(std::move(path));
+        if (clipped && is_rounded(radii)) {
+            border.clip = NodeClip{.rect = border.bounds, .radii = radii, .clips_own_paint = true};
+        }
+        output.children.push_back(std::move(border));
+        return true;
+    };
+
+    auto [top, right, bottom, left] = widths;
+    const auto same_color = [&](Color color) {
+        const auto first = colors[0];
+        return color.red == first.red && color.green == first.green &&
+            color.blue == first.blue && color.alpha == first.alpha;
+    };
+    if (top == right && top == bottom && top == left &&
+        std::ranges::all_of(colors, same_color)) {
+        if (colors[0].alpha == 0.0F) return true;
+        PathGeometry ring;
+        ring.fill_rule = FillRule::evenodd;
+        const auto rounded_box = [&](float x, float y, float w, float h, float inset) {
+            const auto inner_radius = [inset](float radius) { return std::max(0.0F, radius - inset); };
+            const float tl = inner_radius(radii.top_left), tr = inner_radius(radii.top_right);
+            const float bl = inner_radius(radii.bottom_left), br = inner_radius(radii.bottom_right);
+            const auto add = [&](PathVerb verb, std::initializer_list<float> values) {
+                ring.verbs.push_back(verb);
+                ring.values.insert(ring.values.end(), values);
+            };
+            const auto arc = [&](float r, float end_x, float end_y) {
+                if (r > 0.0F) add(PathVerb::arc, {r, r, 0, 0, 1, end_x, end_y});
+            };
+            add(PathVerb::move, {x + tl, y});
+            add(PathVerb::line, {x + w - tr, y}); arc(tr, x + w, y + tr);
+            add(PathVerb::line, {x + w, y + h - br}); arc(br, x + w - br, y + h);
+            add(PathVerb::line, {x + bl, y + h}); arc(bl, x, y + h - bl);
+            add(PathVerb::line, {x, y + tl}); arc(tl, x + tl, y);
+            add(PathVerb::close, {});
+        };
+        rounded_box(0, 0, width, height, 0);
+        if (2 * top < width && 2 * top < height) {
+            rounded_box(top, top, width - 2 * top, height - 2 * top, top);
+        }
+        return append(0, std::move(ring), false);
+    }
+
+    const auto inset = [&](float available, float first, float second) {
+        const float factor = scale_for(available, first + second);
+        return std::pair{first * factor, available - second * factor};
+    };
+    const auto [x0, x1] = inset(width, left, right);
+    const auto [y0, y1] = inset(height, top, bottom);
+    const std::array<std::array<float, 8>, 4> sides{{
+        {0, 0, width, 0, x1, y0, x0, y0},
+        {width, 0, width, height, x1, y1, x1, y0},
+        {width, height, 0, height, x0, y1, x1, y1},
+        {0, height, 0, 0, x0, y0, x0, y1},
+    }};
+    for (std::size_t side = 0; side < sides.size(); ++side) {
+        if (widths[side] == 0.0F || colors[side].alpha == 0.0F) continue;
+        PathGeometry path;
+        path.verbs = {PathVerb::move, PathVerb::line, PathVerb::line, PathVerb::line, PathVerb::close};
+        path.values.assign(sides[side].begin(), sides[side].end());
+        if (!append(side, std::move(path), true)) return false;
+    }
+    return true;
+}
+
 bool materialize_node(
     NSDictionary* source,
     const vellum::graphics::Rect& proposed,
@@ -2453,6 +2594,11 @@ bool materialize_node(
     }
 
     if (!parse_grouping(style, identity, style_use, context, output, error)) return false;
+    if ((output.kind == vellum::graphics::SceneNode::Kind::rectangle ||
+         output.kind == vellum::graphics::SceneNode::Kind::group) &&
+        !append_box_border(style, context, output, error)) {
+        return false;
+    }
 
     for (NSString* event in events) {
         if (![event isKindOfClass:NSString.class] ||

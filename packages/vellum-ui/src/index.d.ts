@@ -163,7 +163,7 @@ export interface BoxShadowStyle {
     color: string;
 }
 export interface Style {
-    [property: string]: VellumScalar | LinearGradientStyle | BoxShadowStyle | undefined;
+    [property: string]: VellumScalar | LinearGradientStyle | readonly LinearGradientStyle[] | BoxShadowStyle | undefined;
     x?: number;
     y?: number;
     width?: number;
@@ -171,6 +171,14 @@ export interface Style {
     padding?: number;
     gap?: number;
     borderRadius?: number;
+    borderTopWidth?: number;
+    borderRightWidth?: number;
+    borderBottomWidth?: number;
+    borderLeftWidth?: number;
+    borderTopColor?: string;
+    borderRightColor?: string;
+    borderBottomColor?: string;
+    borderLeftColor?: string;
     borderTopLeftRadius?: number;
     borderTopRightRadius?: number;
     borderBottomRightRadius?: number;
@@ -208,6 +216,8 @@ export interface Style {
     letterSpacing?: number;
     textDecoration?: string;
     backgroundLinearGradient?: LinearGradientStyle;
+    /** Background gradient layers in paint order, from back to front. */
+    backgroundGradients?: readonly LinearGradientStyle[];
     backgroundGradient?: LinearGradientStyle;
     boxShadow?: BoxShadowStyle;
 }
