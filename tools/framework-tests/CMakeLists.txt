@@ -268,6 +268,16 @@ vellum_add_framework_test(host-param-surface-model
     SOURCES host_param_surface_model_test.cpp
     UNITS Vellum::MirrorView_core Vellum::Value)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    vellum_add_framework_test(native-dialog-delivery
+        SOURCES native_dialog_delivery_test.cpp
+        UNITS Vellum::MirrorFoundation)
+    target_link_libraries(vellum-framework-native-dialog-delivery-test PRIVATE "-framework CoreFoundation")
+    set_tests_properties(vellum.framework.native-dialog-delivery PROPERTIES TIMEOUT 15)
+else()
+    set_property(GLOBAL APPEND PROPERTY VELLUM_FRAMEWORK_TEST_SOURCES native_dialog_delivery_test.cpp)
+endif()
+
 # Every test file here must be registered above. A test file that no
 # vellum_add_framework_test() names would build nothing and run nothing while
 # the lane stays green, so configure refuses it.
