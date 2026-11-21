@@ -121,7 +121,7 @@ it.each([
     ['Knob', [0.5]], ['Fader', [0.3]], ['TextEditor', ['hello']],
     ['Checkbox', [1]], ['Toggle', [0]], ['XYPad', [0.2, 0.8]],
     ['Combo', [2]], ['Stepper', [3]], ['Pan', [-0.4]], ['ListBox', [1]],
-])('delivers %s onChange payloads through initial and replacement handlers', (type, args) => {
+])('adapts injected %s event payloads through initial and replacement handlers', (type, args) => {
     const root = { rootId: '', nextId: 0 };
     const first = vi.fn(); const second = vi.fn();
     const facade = (widgets as any)[type as string];
@@ -451,11 +451,11 @@ it('publishes a replacement DOM shim after deleting its keyed predecessor', () =
     unmount(root);
 });
 
-it('creates a caption when an initially empty HTML container gains text', () => {
+it.each(['div', 'span'])('updates an initially empty %s at its real caption target', tag => {
     const root = createRoot();
-    render(createElement('div', { id: 'empty-caption' }, ''), root);
-    render(createElement('div', { id: 'empty-caption' }, 'Ready'), root);
-    expect(captions.get('empty-caption__text')).toBe('Ready');
+    render(createElement(tag, { id: 'empty-caption' }, ''), root);
+    render(createElement(tag, { id: 'empty-caption' }, 'Ready'), root);
+    expect(captions.get(tag === 'div' ? 'empty-caption__text' : 'empty-caption')).toBe('Ready');
     unmount(root);
 });
 
@@ -470,11 +470,11 @@ it('accounts for the generated button caption when reordering keyed children', (
     unmount(root);
 });
 
-it('rejects password inputs instead of exposing plaintext through a normal editor', () => {
+it.each(['input', 'INPUT', 'Input'])('rejects %s password controls instead of exposing plaintext', tag => {
     const createTextEditor = vi.fn();
     vi.stubGlobal('createTextEditor', createTextEditor);
     const root = createRoot();
-    expect(() => instance('input', { id: 'secret', type: 'password', value: 'secret' }, root))
+    expect(() => instance(tag, { id: 'secret', type: 'password', value: 'secret' }, root))
         .toThrow(/secure native control/);
     const node = instance('input', { id: 'plain', type: 'text' }, root);
     expect(() => update(node, { id: 'plain', type: 'password' })).toThrow(/secure native control/);
@@ -610,4 +610,30 @@ it('omits user content from both bridge diagnostic paths', async () => {
     expect(log.mock.calls.some(args => String(args[0]).includes('createLabel'))).toBe(true);
     expect(log.mock.calls.some(args => String(args[0]).includes('private-content'))).toBe(false);
     (fresh.PulpHostConfig as any).clearContainer(container);
+});
+
+it('keeps pre-existing native siblings ahead of a root or portal tail group', () => {
+    const root = createRoot();
+    tree.set(root.rootId, ['foreign-native']);
+    const a = instance('Label', { id: 'portal-a' }, root);
+    const b = instance('Label', { id: 'portal-b' }, root);
+    host.appendChildToContainer(root, a); host.appendChildToContainer(root, b);
+    expect(tree.get(root.rootId)).toEqual(['foreign-native', 'portal-a', 'portal-b']);
+    host.insertInContainerBefore(root, b, a);
+    expect(tree.get(root.rootId)).toEqual(['foreign-native', 'portal-b', 'portal-a']);
+    host.clearContainer(root);
+});
+
+it('restores initial ScrollView offsets after layout establishes content overflow', () => {
+    let sized = false; let offset = { x: 0, y: 0 };
+    vi.stubGlobal('createScrollView', (id: string, parent: string) => insert(parent, id));
+    vi.stubGlobal('layout', () => { sized = true; });
+    vi.stubGlobal('scrollTo', (_id: string, x: number, y: number) => {
+        offset = { x: Math.min(x, sized ? 100 : 0), y: Math.min(y, sized ? 100 : 0) };
+    });
+    const root = createRoot();
+    render(createElement(widgets.ScrollView, { id: 'saved-scroll', scrollTop: 40, scrollLeft: 30 },
+        createElement(widgets.Label, { id: 'scroll-content' }, 'content')), root);
+    expect(offset).toEqual({ x: 30, y: 40 });
+    unmount(root);
 });
