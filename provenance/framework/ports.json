@@ -920,49 +920,41 @@
       "framework_path": "framework/core/view/js/web-compat.js",
       "change": "added",
       "target": null,
-      "origin": "pulp",
-      "pulp_path": "core/view/js/web-compat.js",
-      "pulp_commits": [
-        "6ab18e7fcbcb0af7166bfe858f6fa7ebb366aed4"
-      ],
-      "framework_blob": "cc029e7f6d966f7fbb34fe672c969c5433c19c3d",
-      "reason": "Complete the scripted UI web-compat DOM layer transferred from Pulp."
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's web-compat authoring layer, with product names respelled for Vellum: header and comments name Vellum, and navigator.userAgent reports Vellum/1.0. The bytes are Pulp's file put through the transfer rename plus those edits."
     },
     {
       "framework_path": "framework/core/view/js/web-compat-runtime-apis.js",
       "change": "added",
       "target": null,
-      "origin": "pulp",
-      "pulp_path": "core/view/js/web-compat-runtime-apis.js",
-      "pulp_commits": [
-        "ab398e3e2ab451289566075c524825b500d91e5f"
-      ],
-      "framework_blob": "b3979c39e5ced971561d0951e97fc6bccaf9a0ef",
-      "reason": "Complete the scripted UI web-compat DOM layer transferred from Pulp."
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's web-compat runtime APIs, with the header comment pointing at Vellum's prelude chain (framework/core/view/cmake/PulpViewJsPreludes.cmake) instead of Pulp's CMake. The bytes are Pulp's file put through the transfer rename plus that comment."
     },
     {
       "framework_path": "framework/core/view/js/web-compat-selector.js",
       "change": "added",
       "target": null,
-      "origin": "pulp",
-      "pulp_path": "core/view/js/web-compat-selector.js",
-      "pulp_commits": [
-        "982aa5701922a9f764cff0edeaa2dcc131bef40f"
-      ],
-      "framework_blob": "4f52a4fab923150c4206599f7916f56b92aaea6b",
-      "reason": "Complete the scripted UI web-compat DOM layer transferred from Pulp."
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's web-compat selector engine, with the header comment describing how Vellum loads it (after the native selector prelude, read verbatim by scripted UI consumers) instead of Pulp's harness adapter. The bytes are Pulp's file put through the transfer rename plus that comment."
     },
     {
       "framework_path": "framework/core/view/js/web-compat-three-shim.js",
       "change": "added",
       "target": null,
-      "origin": "pulp",
-      "pulp_path": "core/view/js/web-compat-three-shim.js",
-      "pulp_commits": [
-        "982aa5701922a9f764cff0edeaa2dcc131bef40f"
-      ],
-      "framework_blob": "ade190a2243272a1f657e332dfa2c2ca54b7f69a",
-      "reason": "Complete the scripted UI web-compat DOM layer transferred from Pulp."
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "Pulp's Three.js web-compat shim, with its print markers renamed from PULP_THREE_SHIM / PULP_THREEJS to VELLUM_THREE_SHIM / VELLUM_THREEJS to match Vellum's smoke tests. The bytes are Pulp's file put through the transfer rename plus those markers."
     }
   ]
 }
