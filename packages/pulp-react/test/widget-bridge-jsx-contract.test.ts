@@ -1,7 +1,7 @@
 // JSX-reachability contract.
 //
 // The C++ test_widget_bridge_api_contracts.cpp checks that every native
-// bridge fn in framework/core/view/src/react_widget_bridge_api_manifest.tsv is registered
+// bridge fn in packages/pulp-react/test/fixtures/widget_bridge_api_manifest.tsv is registered
 // in a registrar source, but it does NOT check the @pulp/react side. That
 // gap is exactly how `setSvgFillGradient` shipped half-wired: a real C++
 // bridge fn + widget slot that no JSX prop could reach.
@@ -25,7 +25,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../..');
 const read = (rel: string) => readFileSync(resolve(repoRoot, rel), 'utf8');
 
-const manifestText = read('framework/core/view/src/react_widget_bridge_api_manifest.tsv');
+const manifestText = read('packages/pulp-react/test/fixtures/widget_bridge_api_manifest.tsv');
 const propApplier = read('packages/pulp-react/src/prop-applier.ts');
 const bridgeMockFunctions = read('packages/pulp-react/src/bridge-mock-functions.generated.ts');
 const types = read('packages/pulp-react/src/types.ts');
