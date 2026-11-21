@@ -21,6 +21,7 @@ import type {
 import { requestLayoutFlush } from './layout-flush.js';
 import { beginBridgeBatch, endBridgeBatch, queueBridgeCall } from './bridge-batch.js';
 import {
+    flushPendingScrollOffsets,
     applyAllProps,
     applyChangedProps,
     applyStyleProps,
@@ -310,6 +311,10 @@ function applyButtonCaptionLayout(textId: string, hasText: boolean): void {
 // they contain nested markup (or no children). Keep a stable caption target so
 // a later update to plain text can paint through a Label instead of sending
 // setText to the container itself, which has no text surface.
+const BLOCK_TEXT_CONTAINERS: ReadonlySet<string> = new Set([
+    'div', 'section', 'article', 'aside', 'header', 'footer', 'nav', 'main',
+    'figure', 'figcaption', 'form', 'ul', 'ol', 'li', 'dl', 'dt', 'dd',
+]);
 const DYNAMIC_TEXT_CONTAINERS: ReadonlySet<string> = new Set([
     'div', 'section', 'article', 'aside', 'header', 'footer', 'nav', 'main',
     'figure', 'figcaption', 'form', 'ul', 'ol', 'li', 'dl', 'dt', 'dd',
@@ -941,7 +946,7 @@ export const PulpHostConfig: HostConfig<
         // Native intrinsics already use flat props, normalizeHostProps
         // is a no-op fast path for them. Runtime-import bundles reach
         // prop-applier through here.
-        if (String(type) === 'input' && String(props.type).toLowerCase() === 'password') {
+        if (String(type).toLowerCase() === 'input' && String(props.type).toLowerCase() === 'password') {
             throw new Error('Password inputs require a secure native control; this bridge cannot mask them');
         }
         const normalizedProps = normalizeHostProps(type, props as Record<string, unknown>);
@@ -1000,7 +1005,8 @@ export const PulpHostConfig: HostConfig<
             textTargetId: String(type) === 'button'
                 ? id + '__text'
                 : (DYNAMIC_TEXT_CONTAINERS.has(String(type))
-                    && !asText(normalizedProps.children))
+                    && (asText(normalizedProps.children) === undefined
+                        || (asText(normalizedProps.children) === '' && BLOCK_TEXT_CONTAINERS.has(String(type)))))
                     ? id + '__text' : undefined,
             autoFocusRequested: wantsAutoFocus(props as Record<string, unknown>),
         };
@@ -1142,7 +1148,7 @@ export const PulpHostConfig: HostConfig<
         // Flatten both sides before diffing so style/className changes
         // surface as real prop deltas (and vice versa: a flat width:100
         // → style:{width:100} swap collapses to a no-op).
-        if (String(type) === 'input' && String((newProps as Props).type).toLowerCase() === 'password') {
+        if (String(type).toLowerCase() === 'input' && String((newProps as Props).type).toLowerCase() === 'password') {
             throw new Error('Password inputs require a secure native control; this bridge cannot mask them');
         }
         const oldN = normalizeHostProps(type, oldProps as Record<string, unknown>);
@@ -1151,7 +1157,7 @@ export const PulpHostConfig: HostConfig<
     },
 
     commitUpdate(instance, _updatePayload, type, oldProps, newProps, _internalHandle) {
-        if (String(type) === 'input' && String((newProps as Props).type).toLowerCase() === 'password') {
+        if (String(type).toLowerCase() === 'input' && String((newProps as Props).type).toLowerCase() === 'password') {
             throw new Error('Password inputs require a secure native control; this bridge cannot mask them');
         }
         const oldN = normalizeHostProps(type, oldProps as Record<string, unknown>);
@@ -1315,6 +1321,7 @@ export const PulpHostConfig: HostConfig<
         if (shouldReapply) {
             requestLayoutFlush(() => {
                 if (typeof g.layout === 'function') call('layout');
+                flushPendingScrollOffsets();
             });
         }
     },
@@ -1466,14 +1473,14 @@ function attachToRoot(container: Container, child: Instance, before?: Instance):
     const index = beforeIndex >= 0 ? beforeIndex : children.length;
     children.splice(index, 0, child);
     child.parentId = container.rootId;
-    if (child.onBridge) {
-        if (typeof g.insertChild === 'function') {
-            call('insertChild', container.rootId, child.id, index);
-        } else if (typeof g.moveWidget === 'function') {
-            call('moveWidget', child.id, container.rootId, index);
-        }
-    } else {
-        materializeUnder(container.rootId, child, index);
+    if (!child.onBridge) materializeUnder(container.rootId, child);
+    // Native targets may already contain children outside this React container.
+    // Keep those siblings in place and order this container's children at the tail.
+    const ordered = before ? children : (oldIndex >= 0 ? [child] : []);
+    for (const sibling of ordered) {
+        if (!sibling.onBridge) continue;
+        if (typeof g.insertChild === 'function') call('insertChild', container.rootId, sibling.id, 2147483647);
+        else if (typeof g.moveWidget === 'function') call('moveWidget', sibling.id, container.rootId, 2147483647);
     }
 }
 
@@ -1580,7 +1587,7 @@ function materializeUnder(parentId: string, child: Instance, index?: number): vo
     if (child._dom && typeof child._dom === 'object' && child.textTargetId) {
         (child._dom as Record<string, unknown>).__pulpTextTargetId = child.textTargetId;
     }
-    applyAllProps(child);
+    applyAllProps(child, true);
     // Native SVG primitives own their viewBox transform. Raw JSX instead
     // places viewBox on the surrounding `<svg>`, so explicitly inherit it.
     // A primitive-authored viewBox remains authoritative.
