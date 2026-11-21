@@ -915,6 +915,18 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "The macOS plug-in view host: a per-image Metal view that renders the View tree with Skia on Dawn into its CAMetalLayer and routes mouse, wheel, key and focus input. Written for Vellum on its own Metal view, not taken from Pulp's plugin_view_host_mac sources."
+    },
+    {
+      "framework_path": "framework/core/view/src/react_widget_bridge_api_manifest.tsv",
+      "change": "added",
+      "target": null,
+      "origin": "pulp",
+      "pulp_path": "core/view/src/widget_bridge_api_manifest.tsv",
+      "pulp_commits": [
+        "af311339331cb1904320404135ec00ec78618498"
+      ],
+      "framework_blob": "d8efd34bfcabeafcbdac9ea5c491619ae3b972cf",
+      "reason": "Preserve the native bridge capability manifest used by the React JSX contract test."
     }
   ]
 }

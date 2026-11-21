@@ -1,0 +1,963 @@
+// Renderer-neutral import metadata must follow every React commit. This keeps
+// captured Chromium line boxes attached after dynamic text/menu/modal changes
+// without making the ordinary @pulp/react runtime depend on the importer.
+
+import { afterEach, describe, expect, it } from 'vitest';
+import { PulpHostConfig } from '../src/host-config.js';
+
+const resetAfterCommit = PulpHostConfig.resetAfterCommit as
+    ((container: unknown) => void) | undefined;
+
+afterEach(() => {
+    const host = globalThis as unknown as Record<string, unknown>;
+    delete host.__pulpApplyMaterializedImportMetadata__;
+    delete host.__pulpRefreshMaterializedState__;
+    delete host.__pulpMaterializedStateResolver__;
+    delete host.getRootSize;
+    delete host.layout;
+});
+
+// Drive the real host-config mutation methods rather than reaching for a
+// test-only reset. The gate's whole correctness claim is about WHICH methods
+// mark the tree dirty, so a test that set the flag directly would assert
+// nothing about the thing that can actually break.
+const instance = (id: string) => ({
+    id, type: 'view', props: {}, childIds: [] as string[],
+    onBridge: true, pendingChildren: [] as unknown[],
+}) as never;
+
+function mutate(): void {
+    const commitUpdate = PulpHostConfig.commitUpdate as
+        (...args: unknown[]) => void;
+    // A width change is geometric, so it always marks the tree dirty. Do not
+    // swap this for a paint-only prop: those are deliberately suppressed.
+    commitUpdate(instance('a'), null, 'view', { width: 10 }, { width: 20 }, null);
+}
+
+function updateText(oldProps: Record<string, unknown>,
+                    newProps: Record<string, unknown>): void {
+    const commitUpdate = PulpHostConfig.commitUpdate as
+        (...args: unknown[]) => void;
+    commitUpdate(instance('status'), null, 'span', oldProps, newProps, null);
+}
+
+function updateTypedText(type: string,
+                         oldProps: Record<string, unknown>,
+                         newProps: Record<string, unknown>): void {
+    const commitUpdate = PulpHostConfig.commitUpdate as
+        (...args: unknown[]) => void;
+    commitUpdate(instance('status'), null, type, oldProps, newProps, null);
+}
+
+function reorderSiblings(): void {
+    const parent = {
+        id: 'p', type: 'view', props: {}, childIds: ['x', 'y'],
+        onBridge: true, pendingChildren: [],
+    } as never;
+    const child = {
+        id: 'y', type: 'view', props: {}, childIds: [],
+        onBridge: true, parentId: 'p', pendingChildren: [],
+    } as never;
+    const before = {
+        id: 'x', type: 'view', props: {}, childIds: [],
+        onBridge: true, parentId: 'p', pendingChildren: [],
+    } as never;
+    const insertBefore = PulpHostConfig.insertBefore as
+        (parent: unknown, child: unknown, before: unknown) => void;
+    insertBefore(parent, child, before);
+}
+
+describe('host-config materialized metadata', () => {
+    it('re-applies captured metadata after a commit that mutated the host tree', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+
+        mutate();
+        resetAfterCommit?.({});
+        mutate();
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(2);
+    });
+
+    // The negative half, and the reason the gate exists. Without it this is 3,
+    // and each of those applications costs the importer roughly two full root
+    // layout passes per layout binding.
+    it('does not re-apply after a commit that mutated no host node', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        let layouts = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+        host.layout = () => ++layouts;
+
+        mutate();
+        resetAfterCommit?.({});   // structural commit: applies
+        resetAfterCommit?.({});   // state-only commit: must not
+        resetAfterCommit?.({});   // still nothing mutated
+
+        expect(applications).toBe(1);
+        expect(layouts).toBe(1);
+    });
+
+    it('does not re-apply metadata for fixed single-line text-only updates', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        let layouts = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+        host.layout = () => ++layouts;
+
+        mutate();
+        resetAfterCommit?.({});
+        updateText(
+            { children: 'BAND 1/64', width: '100%', height: '100%', whiteSpace: 'nowrap' },
+            { children: 'BAND 2/64', width: '100%', height: '100%', whiteSpace: 'nowrap' },
+        );
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(1);
+        expect(layouts).toBe(1);
+    });
+
+    // A nowrap label with a fixed line height is pinned vertically just as
+    // firmly as one with an explicit height: nowrap makes the native Label
+    // single-line, and a positive line height is returned verbatim without
+    // consulting the shaper. Demanding an explicit `height` here is what made
+    // a one-word status readout re-apply the whole captured document on every
+    // pointer move.
+    it('does not re-apply for fixed line-height text-only updates', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+
+        mutate();
+        resetAfterCommit?.({});
+        updateText(
+            { children: 'BAND 1/64', width: '100%',
+              lineHeight: '14px', whiteSpace: 'nowrap' },
+            { children: 'BAND 2/64', width: '100%',
+              lineHeight: '14px', whiteSpace: 'nowrap' },
+        );
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(1);
+    });
+
+    // A unitless line height is a font-size multiplier. It is still
+    // text-independent, because the gate separately requires every non-text
+    // prop -- fontSize included -- to be unchanged.
+    it('accepts a unitless line-height multiplier', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+
+        mutate();
+        resetAfterCommit?.({});
+        updateText(
+            { children: 'a', width: 240, fontSize: 10,
+              lineHeight: 1.4, whiteSpace: 'nowrap' },
+            { children: 'b', width: 240, fontSize: 10,
+              lineHeight: 1.4, whiteSpace: 'nowrap' },
+        );
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(1);
+    });
+
+    // Without nowrap the label is multi-line, so longer copy adds lines and
+    // grows the box. The vertical pin is not sufficient on its own.
+    it('re-applies when a fixed line height wraps', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+
+        mutate();
+        resetAfterCommit?.({});
+        updateText(
+            { children: 'a', width: 240, lineHeight: '14px' },
+            { children: 'a much longer string', width: 240, lineHeight: '14px' },
+        );
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(2);
+    });
+
+    // A free-width nowrap label grows horizontally with its text, so the
+    // captured geometry really is stale and must be re-applied.
+    it('re-applies when a fixed line height has no fixed width', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+
+        mutate();
+        resetAfterCommit?.({});
+        updateText(
+            { children: 'a', lineHeight: '14px', whiteSpace: 'nowrap' },
+            { children: 'bb', lineHeight: '14px', whiteSpace: 'nowrap' },
+        );
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(2);
+    });
+
+    // A percentage line height is rejected deliberately: the gate admits only
+    // the plain pixel and multiplier forms it parses itself.
+    it('rejects a percentage line height', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+
+        mutate();
+        resetAfterCommit?.({});
+        updateText(
+            { children: 'a', width: 240, lineHeight: '120%', whiteSpace: 'nowrap' },
+            { children: 'b', width: 240, lineHeight: '120%', whiteSpace: 'nowrap' },
+        );
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(2);
+    });
+
+    // button does not become a native Label: its props land on the owning
+    // Row/Panel/TextEditor while the copy goes to a separate caption child, so
+    // setLineHeight never reaches the Label that actually holds the glyphs.
+    it('re-applies for a delegating button whose text lives in a child label', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+
+        mutate();
+        resetAfterCommit?.({});
+        updateTypedText('button',
+            { children: 'a', width: 240, lineHeight: '14px', whiteSpace: 'nowrap' },
+            { children: 'b', width: 240, lineHeight: '14px', whiteSpace: 'nowrap' },
+        );
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(2);
+    });
+
+    // Button does not become a native Label: its props land on the owning
+    // Row/Panel/TextEditor while the copy goes to a separate caption child, so
+    // setLineHeight never reaches the Label that actually holds the glyphs.
+    it('re-applies for a delegating Button whose text lives in a child label', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+
+        mutate();
+        resetAfterCommit?.({});
+        updateTypedText('Button',
+            { children: 'a', width: 240, lineHeight: '14px', whiteSpace: 'nowrap' },
+            { children: 'b', width: 240, lineHeight: '14px', whiteSpace: 'nowrap' },
+        );
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(2);
+    });
+
+    // TextEditor does not become a native Label: its props land on the owning
+    // Row/Panel/TextEditor while the copy goes to a separate caption child, so
+    // setLineHeight never reaches the Label that actually holds the glyphs.
+    it('re-applies for a delegating TextEditor whose text lives in a child label', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+
+        mutate();
+        resetAfterCommit?.({});
+        updateTypedText('TextEditor',
+            { children: 'a', width: 240, lineHeight: '14px', whiteSpace: 'nowrap' },
+            { children: 'b', width: 240, lineHeight: '14px', whiteSpace: 'nowrap' },
+        );
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(2);
+    });
+
+    // A positive clamp puts the Label back into multi-line mode, where the
+    // measured height is lineHeight x min(shaped lines, clamp) -- text-dependent.
+    it('re-applies when a line clamp restores multi-line measurement', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+
+        mutate();
+        resetAfterCommit?.({});
+        updateText(
+            { children: 'a', width: 240, lineHeight: '14px',
+              lineClamp: 2, whiteSpace: 'nowrap' },
+            { children: 'b', width: 240, lineHeight: '14px',
+              lineClamp: 2, whiteSpace: 'nowrap' },
+        );
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(2);
+    });
+
+    // line_height_ <= 0 leaves the shaper in charge of the height.
+    it('rejects a zero line height', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+
+        mutate();
+        resetAfterCommit?.({});
+        updateText(
+            { children: 'a', width: 240, lineHeight: 0, whiteSpace: 'nowrap' },
+            { children: 'b', width: 240, lineHeight: 0, whiteSpace: 'nowrap' },
+        );
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(2);
+    });
+
+    // 'normal' is the font's own metric, resolved per string by the shaper.
+    it('rejects a normal line height', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+
+        mutate();
+        resetAfterCommit?.({});
+        updateText(
+            { children: 'a', width: 240, lineHeight: 'normal', whiteSpace: 'nowrap' },
+            { children: 'b', width: 240, lineHeight: 'normal', whiteSpace: 'nowrap' },
+        );
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(2);
+    });
+
+    // Neither vertical pin present: the box is free to grow.
+    it('re-applies when nothing pins the height', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+
+        mutate();
+        resetAfterCommit?.({});
+        updateText(
+            { children: 'a', width: 240, whiteSpace: 'nowrap' },
+            { children: 'b', width: 240, whiteSpace: 'nowrap' },
+        );
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(2);
+    });
+
+    it('re-applies metadata when changed text can affect geometry', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        let layouts = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+        host.layout = () => ++layouts;
+
+        mutate();
+        resetAfterCommit?.({});
+        updateText({ children: 'short' }, { children: 'a longer intrinsic label' });
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(2);
+        expect(layouts).toBe(2);
+    });
+
+    it('re-applies metadata when fixed text changes with another host prop', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+
+        mutate();
+        resetAfterCommit?.({});
+        updateText(
+            { children: 'BAND 1/64', width: 240, height: 26,
+              whiteSpace: 'nowrap', opacity: 0.5 },
+            { children: 'BAND 2/64', width: 240, height: 26,
+              whiteSpace: 'nowrap', opacity: 1 },
+        );
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(2);
+    });
+
+    // insertBefore's same-parent branch reorders childIds and returns WITHOUT
+    // reaching attach(), so a mark placed in the attach helper rather than on
+    // the method silently misses sibling reordering. That is how React swaps a
+    // list row for an inline editor, and skipping the re-apply leaves the
+    // replacement without its captured geometry -- invisible from the API, the
+    // return values and the rendered tree alike.
+    it('re-applies after a same-parent sibling reorder', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+
+        mutate();
+        resetAfterCommit?.({});
+        expect(applications).toBe(1);
+
+        reorderSiblings();
+        resetAfterCommit?.({});
+
+        expect(applications).toBe(2);
+    });
+
+    // A host resize never arrives as a React commit, but it moves every metric
+    // the captured insets are derived from. This is the case a mutation-only
+    // gate fails.
+    it('re-applies when the root box changed without a commit', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+        let size = { width: 400, height: 300 };
+        host.getRootSize = () => size;
+
+        mutate();
+        resetAfterCommit?.({});   // applies, and records 400x300
+        resetAfterCommit?.({});   // nothing changed
+        expect(applications).toBe(1);
+
+        size = { width: 800, height: 300 };
+        resetAfterCommit?.({});   // root box moved: must apply
+
+        expect(applications).toBe(2);
+    });
+
+    // The importer installs its hook during module init today, so this only
+    // matters if that ordering ever changes -- but before the gate existed a
+    // late hook simply ran on the next commit, and a gate that waits for the
+    // next host mutation instead would leave a materialized editor with no
+    // captured geometry at all until something happened to move.
+    it('applies a hook that is installed after earlier commits', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+
+        mutate();
+        resetAfterCommit?.({});   // commits before the importer is present
+        resetAfterCommit?.({});
+
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+        resetAfterCommit?.({});   // no mutation, but the hook is new
+
+        expect(applications).toBe(1);
+    });
+
+    it('is optional for ordinary native React applications', () => {
+        expect(() => resetAfterCommit?.({})).not.toThrow();
+    });
+
+    // The importer's captured-state matcher runs a selector per captured state
+    // on every commit, and a selector that matches nothing reads the whole
+    // registry before answering. The epoch lets it retain that answer until a
+    // mutation could have changed it. The boolean gate cannot serve this:
+    // resetAfterCommit clears it before the importer runtime ever runs.
+    it('publishes a monotonic mutation epoch for the importer runtime', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        mutate();
+        const first = host.__pulpMaterializedTreeEpoch__ as number;
+        expect(typeof first).toBe('number');
+
+        mutate();
+        expect(host.__pulpMaterializedTreeEpoch__ as number).toBeGreaterThan(first);
+    });
+
+    it('does not bump the mutation epoch for a paint-only commit', () => {
+        // This is the whole point: a pointer drag emits these by the hundred,
+        // and each one would otherwise force a full registry rescan per
+        // captured state.
+        const host = globalThis as unknown as Record<string, unknown>;
+        const commitUpdate = PulpHostConfig.commitUpdate as
+            (...args: unknown[]) => void;
+        mutate();
+        const before = host.__pulpMaterializedTreeEpoch__ as number;
+
+        commitUpdate(instance('a'), null, 'view',
+            { backgroundColor: '#111', cursor: 'grab' },
+            { backgroundColor: '#222', cursor: 'grabbing' }, null);
+
+        expect(host.__pulpMaterializedTreeEpoch__ as number).toBe(before);
+    });
+
+    it('bumps the mutation epoch when a structural mutation reorders siblings', () => {
+        // insertBefore's same-parent branch returns without reaching attach, so
+        // a mark placed in the helper would miss it -- and a captured-state
+        // selector that keys off sibling order would answer from a stale miss.
+        const host = globalThis as unknown as Record<string, unknown>;
+        mutate();
+        const before = host.__pulpMaterializedTreeEpoch__ as number;
+
+        reorderSiblings();
+
+        expect(host.__pulpMaterializedTreeEpoch__ as number).toBeGreaterThan(before);
+    });
+
+    // The captured-state matcher resolves selectors over the registry, so a
+    // commit that mutated no host node cannot have changed which state
+    // matches. It used to run outside the gate, once per commit -- meaning
+    // every pointer sample of a drag walked one selector per captured state
+    // across the whole registry for an answer that could not have moved.
+    it('refreshes captured semantic state only on a commit that mutated the tree', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let refreshes = 0;
+        host.__pulpRefreshMaterializedState__ = () => ++refreshes;
+
+        // A newly installed hook is itself a reason to run, so drain that.
+        resetAfterCommit?.({});
+        expect(refreshes).toBe(1);
+
+        resetAfterCommit?.({});
+        resetAfterCommit?.({});
+        expect(refreshes).toBe(1);
+
+        // CONTROL: a commit that did mutate the tree must still refresh. If
+        // this stays at 1 the hook is not wired and the zero above is vacuous.
+        mutate();
+        resetAfterCommit?.({});
+        expect(refreshes).toBe(2);
+    });
+
+    // The one input that is not a function of the registry. An embedder may
+    // drive the captured state from its own signal, which can change without
+    // any host mutation, so a runtime that installs a resolver keeps the
+    // unconditional refresh it had before.
+    it('refreshes captured semantic state on every commit when a resolver is installed', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let refreshes = 0;
+        host.__pulpRefreshMaterializedState__ = () => ++refreshes;
+        host.__pulpMaterializedStateResolver__ = () => null;
+
+        resetAfterCommit?.({});
+        resetAfterCommit?.({});
+        resetAfterCommit?.({});
+        expect(refreshes).toBe(3);
+
+        // CONTROL: removing the resolver must restore the gate, otherwise this
+        // case would pass against a build that never gated anything.
+        delete host.__pulpMaterializedStateResolver__;
+        resetAfterCommit?.({});
+        expect(refreshes).toBe(3);
+    });
+
+    // Gating the refresh introduced a new way to lose it entirely: an importer
+    // that installs its hook after the first commits would wait for a host
+    // mutation that may never come.
+    it('refreshes a captured-state hook installed after earlier commits', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        mutate();
+        resetAfterCommit?.({});
+        resetAfterCommit?.({});
+
+        let refreshes = 0;
+        host.__pulpRefreshMaterializedState__ = () => ++refreshes;
+        resetAfterCommit?.({});   // no mutation, but the hook is new
+
+        expect(refreshes).toBe(1);
+    });
+
+    // ── Re-apply scope ─────────────────────────────────────────────
+    //
+    // A commit that moved one node left every other captured node's geometry
+    // alone, so the re-apply is handed the subtree roots the commit touched.
+    // `null` means "blast radius unknown -- re-apply everything", which is the
+    // safe direction: slow, never wrong.
+    function armScopeSpy(): { calls: () => Array<readonly string[] | null> } {
+        const host = globalThis as unknown as Record<string, unknown>;
+        const calls: Array<readonly string[] | null> = [];
+        host.__pulpApplyMaterializedImportMetadata__ = (scope: unknown) => {
+            calls.push((scope as readonly string[] | null) ?? null);
+            return 0;
+        };
+        // Installing the spy is itself a hook-identity change, which arms one
+        // unconditional application. Drain it, and CONTROL on it: if the
+        // priming call did not land, every assertion below is vacuous.
+        resetAfterCommit?.({});
+        expect(calls).toHaveLength(1);
+        calls.length = 0;
+        return { calls: () => calls };
+    }
+
+    const sorted = (scope: readonly string[] | null) =>
+        scope === null ? null : [...scope].sort();
+
+    it('scopes a re-apply to the instance a commit updated', () => {
+        const spy = armScopeSpy();
+        const commitUpdate = PulpHostConfig.commitUpdate as
+            (...args: unknown[]) => void;
+
+        commitUpdate(instance('knob'), null, 'view',
+            { width: 10 }, { width: 20 }, null);
+        resetAfterCommit?.({});
+
+        expect(spy.calls()).toHaveLength(1);
+        expect(sorted(spy.calls()[0])).toEqual(['knob']);
+    });
+
+    it('accumulates every instance a single commit mutated', () => {
+        const spy = armScopeSpy();
+        const commitUpdate = PulpHostConfig.commitUpdate as
+            (...args: unknown[]) => void;
+
+        commitUpdate(instance('a'), null, 'view', { width: 1 }, { width: 2 }, null);
+        commitUpdate(instance('b'), null, 'view', { top: 1 }, { top: 2 }, null);
+        resetAfterCommit?.({});
+
+        expect(sorted(spy.calls()[0])).toEqual(['a', 'b']);
+    });
+
+    // A reorder renumbers the parent's whole child list, and captured paths
+    // resolve through those sibling indices. Scoping to the moved child alone
+    // would leave its former siblings holding another row's captured box --
+    // visibly wrong, and invisible to any operation count.
+    it('scopes a sibling reorder to the parent, not only the moved child', () => {
+        const spy = armScopeSpy();
+
+        reorderSiblings();
+        resetAfterCommit?.({});
+
+        expect(sorted(spy.calls()[0])).toEqual(['p', 'y']);
+    });
+
+    // Root-level children have no captured parent to scope through: their
+    // paths resolve against the registry's parentless roots, so a
+    // container-level mutation can renumber any of them.
+    it('falls back to an unscoped re-apply for a container-level mutation', () => {
+        const spy = armScopeSpy();
+        const clearContainer = PulpHostConfig.clearContainer as
+            (container: unknown) => void;
+        const commitUpdate = PulpHostConfig.commitUpdate as
+            (...args: unknown[]) => void;
+
+        clearContainer({});
+        resetAfterCommit?.({});
+        expect(spy.calls()[0]).toBeNull();
+
+        // CONTROL: the same instrument must produce a real scope for an
+        // ordinary commit, or `null` above proves nothing about the fallback.
+        commitUpdate(instance('a'), null, 'view', { width: 1 }, { width: 2 }, null);
+        resetAfterCommit?.({});
+        expect(sorted(spy.calls()[1])).toEqual(['a']);
+    });
+
+    // Ordering hazard: an unscoped mark and a scoped one can land in the same
+    // commit. The unscoped one has to win -- narrowing it would drop every
+    // binding the container-level mutation renumbered.
+    it('does not narrow an unscoped mutation with a later scoped one', () => {
+        const spy = armScopeSpy();
+        const clearContainer = PulpHostConfig.clearContainer as
+            (container: unknown) => void;
+        const commitUpdate = PulpHostConfig.commitUpdate as
+            (...args: unknown[]) => void;
+
+        clearContainer({});
+        commitUpdate(instance('a'), null, 'view', { width: 1 }, { width: 2 }, null);
+        resetAfterCommit?.({});
+
+        expect(spy.calls()[0]).toBeNull();
+    });
+
+    // A root resize moves the metrics every captured inset is derived from,
+    // for every node -- not only the ones this commit touched.
+    it('falls back to an unscoped re-apply when the root box changed', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let size = { width: 400, height: 300 };
+        host.getRootSize = () => size;
+        const spy = armScopeSpy();
+        const commitUpdate = PulpHostConfig.commitUpdate as
+            (...args: unknown[]) => void;
+
+        size = { width: 800, height: 300 };
+        commitUpdate(instance('a'), null, 'view', { width: 1 }, { width: 2 }, null);
+        resetAfterCommit?.({});
+
+        expect(spy.calls()[0]).toBeNull();
+    });
+
+    // ── Event handlers ─────────────────────────────────────────────
+    //
+    // React recreates every inline closure on each render, so a component
+    // rendering `onPointerMove={(e) => ...}` emits a changed handler on every
+    // pointer sample. That alone used to disqualify the commit and re-apply
+    // the whole captured document.
+    it('does not re-apply for a commit that only recreated an inline handler', () => {
+        const spy = armSpy();
+        const commitUpdate = PulpHostConfig.commitUpdate as
+            (...args: unknown[]) => void;
+
+        commitUpdate(instance('a'), null, 'view',
+            { onPointerMove: () => {}, onClick: () => {} },
+            { onPointerMove: () => {}, onClick: () => {} }, null);
+        resetAfterCommit?.({});
+        expect(spy.count()).toBe(0);
+
+        // CONTROL: a geometric change on the same instrument must still
+        // re-apply. If this reads 0 the spy is broken, not the gate.
+        commitUpdate(instance('a'), null, 'view',
+            { width: 10 }, { width: 20 }, null);
+        resetAfterCommit?.({});
+        expect(spy.count()).toBe(1);
+    });
+
+    // The exemption is about the handler's payload being a function identity,
+    // not about `on`-prefixed keys being ignorable. A real geometry change
+    // riding alongside one must still re-apply.
+    it('re-applies when a handler changes alongside geometry', () => {
+        const spy = armSpy();
+        const commitUpdate = PulpHostConfig.commitUpdate as
+            (...args: unknown[]) => void;
+
+        commitUpdate(instance('a'), null, 'view',
+            { onClick: () => {}, width: 10 },
+            { onClick: () => {}, width: 20 }, null);
+        resetAfterCommit?.({});
+
+        expect(spy.count()).toBe(1);
+    });
+
+    // A prop that merely starts with "on" is not a handler. `onlyChild` fails
+    // the capitalised-third-character test and must take the ordinary path.
+    it('does not treat a lowercase on-prefixed prop as a handler', () => {
+        const spy = armSpy();
+        const commitUpdate = PulpHostConfig.commitUpdate as
+            (...args: unknown[]) => void;
+
+        commitUpdate(instance('a'), null, 'view',
+            { onlyChild: 1 }, { onlyChild: 2 }, null);
+        resetAfterCommit?.({});
+
+        expect(spy.count()).toBe(1);
+    });
+
+    // The fixed-text gate walks every non-text prop and bails on any change.
+    // A recreated handler was enough to push a one-word status readout back
+    // onto the full re-apply path on every keystroke.
+    it('keeps a fixed text-only update exempt despite a recreated handler', () => {
+        const spy = armSpy();
+        const commitUpdate = PulpHostConfig.commitUpdate as
+            (...args: unknown[]) => void;
+
+        commitUpdate(instance('status'), null, 'span',
+            { children: 'BAND 1/64', width: 240, height: 26,
+              whiteSpace: 'nowrap', onClick: () => {} },
+            { children: 'BAND 2/64', width: 240, height: 26,
+              whiteSpace: 'nowrap', onClick: () => {} }, null);
+        resetAfterCommit?.({});
+        expect(spy.count()).toBe(0);
+
+        // CONTROL: the same update with a real non-text prop change must
+        // still re-apply.
+        commitUpdate(instance('status'), null, 'span',
+            { children: 'BAND 2/64', width: 240, height: 26,
+              whiteSpace: 'nowrap', opacity: 0.5 },
+            { children: 'BAND 3/64', width: 240, height: 26,
+              whiteSpace: 'nowrap', opacity: 1 }, null);
+        resetAfterCommit?.({});
+        expect(spy.count()).toBe(1);
+    });
+
+    it('publishes mixed-content text renderer targets on the owning DOM node', () => {
+        const parent = {
+            id: 'button', type: 'button', props: {}, childIds: [],
+            onBridge: false, pendingChildren: [],
+            _dom: { _children: [] },
+        } as never;
+        const createText = PulpHostConfig.createTextInstance as
+            (text: string, root: unknown, context: unknown, handle: unknown) => unknown;
+        const append = PulpHostConfig.appendInitialChild as
+            (parent: unknown, child: unknown) => void;
+        const text = createText('FLAT', { rootId: '', nextId: 0 }, {}, {});
+        append(parent, text);
+
+        const targets = (parent as unknown as { _dom: {
+            __pulpAnonymousTextTargets: unknown[];
+        } })._dom.__pulpAnonymousTextTargets as Array<{
+            id: string; text: string;
+        }>;
+        expect(targets).toHaveLength(1);
+        expect(targets[0].id).toMatch(/^pr_[0-9]+$/);
+        expect(targets[0].text).toBe('FLAT');
+    });
+
+    it('publishes pure host text on the DOM shim used by materialized metadata', () => {
+        class ElementShim {
+            _textContent = '';
+            _nativeCreated = false;
+            __pulpId = '';
+            id = '';
+            setAttribute() {}
+            removeAttribute() {}
+            constructor(_tag: string, _id: string) {}
+        }
+        const host = globalThis as unknown as Record<string, unknown>;
+        const oldElement = host.Element;
+        host.Element = ElementShim;
+        try {
+            const create = PulpHostConfig.createInstance as
+                (type: string, props: unknown, root: unknown,
+                 context: unknown, handle: unknown) => unknown;
+            const initial = { children: 'Theme', style: { position: 'fixed', width: '80%' } };
+            const instance = create('div', initial,
+                { rootId: '', nextId: 0 }, {}, {}) as {
+                    _dom: { _textContent: string; __pulpAuthoredLayout__: Record<string, unknown> };
+                };
+            expect(instance._dom._textContent).toBe('Theme');
+            expect(instance._dom.__pulpAuthoredLayout__).toMatchObject({
+                position: 'fixed', width: '80%',
+            });
+            const update = PulpHostConfig.commitUpdate as (...args: unknown[]) => void;
+            update(instance, null, 'div', initial,
+                { children: 'Theme', style: { position: 'fixed', width: 230 } }, null);
+            expect(instance._dom.__pulpAuthoredLayout__.width).toBe(230);
+        } finally {
+            host.Element = oldElement;
+        }
+    });
+
+    // A pointer crossing a hover target rewrites a tint and a cursor. Without
+    // a gate that commit re-applies captured metadata across the whole
+    // document, once per pointer sample of a drag.
+    //
+    // `resetAfterCommit` also re-applies when the hook identity itself
+    // changed, so installing a fresh spy arms one unconditional application.
+    // Every test here drains that with a priming call before it counts.
+    function armSpy(): { count: () => number } {
+        const host = globalThis as unknown as Record<string, unknown>;
+        let applications = 0;
+        host.__pulpApplyMaterializedImportMetadata__ = () => ++applications;
+        const resetAfterCommit = PulpHostConfig.resetAfterCommit as
+            ((c: unknown) => void) | undefined;
+        resetAfterCommit?.({});
+        // CONTROL: the priming call must itself have applied. If it did not,
+        // the spy was never installed and every count below is vacuous.
+        expect(applications).toBe(1);
+        applications = 0;
+        return { count: () => applications };
+    }
+
+    it('does not re-apply metadata for a paint-only commit', () => {
+        const spy = armSpy();
+        const commitUpdate = PulpHostConfig.commitUpdate as
+            (...args: unknown[]) => void;
+        const resetAfterCommit = PulpHostConfig.resetAfterCommit as
+            ((c: unknown) => void) | undefined;
+
+        commitUpdate(instance('a'), null, 'view',
+            { style: { cursor: 'default' } },
+            { style: { cursor: 'pointer' } }, null);
+        resetAfterCommit?.({});
+        expect(spy.count()).toBe(0);
+
+        commitUpdate(instance('a'), null, 'view',
+            { background: '#111', boxShadow: 'none' },
+            { background: '#222', boxShadow: '0 0 2px #000' }, null);
+        resetAfterCommit?.({});
+        expect(spy.count()).toBe(0);
+
+        // CONTROL: a geometric change on the same instrument must still
+        // re-apply. If this reads 0 the spy is broken, not the gate.
+        commitUpdate(instance('a'), null, 'view',
+            { width: 10 }, { width: 20 }, null);
+        resetAfterCommit?.({});
+        expect(spy.count()).toBe(1);
+    });
+
+    // prop-applier-paint.ts also owns `border` and `borderWidth`, which carry
+    // a width. Module membership must never be mistaken for paint-only.
+    it('re-applies metadata when a border width changes', () => {
+        const spy = armSpy();
+        const commitUpdate = PulpHostConfig.commitUpdate as
+            (...args: unknown[]) => void;
+        const resetAfterCommit = PulpHostConfig.resetAfterCommit as
+            ((c: unknown) => void) | undefined;
+
+        commitUpdate(instance('a'), null, 'view',
+            { borderWidth: 1 }, { borderWidth: 4 }, null);
+        resetAfterCommit?.({});
+        expect(spy.count()).toBe(1);
+
+        // A colour-only border change is safe and must be suppressed.
+        commitUpdate(instance('a'), null, 'view',
+            { borderColor: '#111' }, { borderColor: '#222' }, null);
+        resetAfterCommit?.({});
+        expect(spy.count()).toBe(1);
+    });
+
+    // `opacity` and `color` are written by the captured-metadata pass itself.
+    // A runtime that cannot put the captured value back per node (no
+    // `__pulpReconcileMaterializedPaint__`) must keep the ordinary path, or
+    // React's value would stand until some later structural commit restored
+    // the captured one.
+    it('re-applies metadata for owned channels when the runtime cannot reconcile them', () => {
+        const spy = armSpy();
+        const commitUpdate = PulpHostConfig.commitUpdate as
+            (...args: unknown[]) => void;
+        const resetAfterCommit = PulpHostConfig.resetAfterCommit as
+            ((c: unknown) => void) | undefined;
+
+        commitUpdate(instance('a'), null, 'view',
+            { opacity: 0.5 }, { opacity: 1 }, null);
+        resetAfterCommit?.({});
+        expect(spy.count()).toBe(1);
+
+        commitUpdate(instance('a'), null, 'view',
+            { color: '#111' }, { color: '#222' }, null);
+        resetAfterCommit?.({});
+        expect(spy.count()).toBe(2);
+    });
+
+    describe('with an importer runtime that publishes what it reads', () => {
+        const host = globalThis as unknown as Record<string, unknown>;
+        afterEach(() => {
+            delete host.__pulpMaterializedSelectorAttributes__;
+            delete host.__pulpReconcileMaterializedPaint__;
+        });
+        const commitUpdate = PulpHostConfig.commitUpdate as
+            (...args: unknown[]) => void;
+        const commit = (oldProps: Record<string, unknown>,
+                        newProps: Record<string, unknown>) => {
+            commitUpdate(instance('a'), null, 'view', oldProps, newProps, null);
+            resetAfterCommit?.({});
+        };
+
+        it('treats a data-* change no selector names as paint-only', () => {
+            const spy = armSpy();
+            host.__pulpMaterializedSelectorAttributes__ = new Set(['data-open']);
+            commit({ 'data-hover': 'no' }, { 'data-hover': 'yes' });
+            expect(spy.count()).toBe(0);
+            // CONTROL: the named attribute on the same instrument re-applies.
+            commit({ 'data-open': 'no' }, { 'data-open': 'yes' });
+            expect(spy.count()).toBe(1);
+        });
+
+        it('keeps data-* geometric when the runtime publishes no vocabulary', () => {
+            const spy = armSpy();
+            commit({ 'data-hover': 'no' }, { 'data-hover': 'yes' });
+            expect(spy.count()).toBe(1);
+        });
+
+        it('reconciles an owned colour instead of re-applying', () => {
+            const spy = armSpy();
+            const reconciled: unknown[] = [];
+            host.__pulpMaterializedSelectorAttributes__ = new Set<string>();
+            host.__pulpReconcileMaterializedPaint__ =
+                (id: string, changes: unknown) => { reconciled.push([id, changes]); };
+            commit({ color: '#111', opacity: 1, cursor: 'a' },
+                { color: '#222', opacity: 0.5, cursor: 'b' });
+            expect(spy.count()).toBe(0);
+            expect(reconciled).toEqual([['a', { color: '#222', opacity: 0.5 }]]);
+            // A geometric commit takes the pass, which rewrites captured paint
+            // itself, so it is not reconciled separately.
+            commit({ color: '#222', width: 1 }, { color: '#333', width: 2 });
+            expect(spy.count()).toBe(1);
+            expect(reconciled).toHaveLength(1);
+        });
+
+        it('keeps a colour geometric when a selector names its attribute', () => {
+            const spy = armSpy();
+            host.__pulpMaterializedSelectorAttributes__ = new Set(['fill']);
+            host.__pulpReconcileMaterializedPaint__ = () => 0;
+            commit({ fill: '#111' }, { fill: '#222' });
+            expect(spy.count()).toBe(1);
+            commit({ color: '#111' }, { color: '#222' });
+            expect(spy.count()).toBe(1);
+        });
+    });
+});

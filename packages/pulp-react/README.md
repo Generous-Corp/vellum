@@ -1,0 +1,129 @@
+# @pulp/react
+
+React reconciler host config targeting `pulp::view::WidgetBridge`. Render React JSX natively through Pulp's Skia + Dawn + Yoga stack, **no DOM, no browser, no Babel-standalone runtime**.
+
+Same architectural pattern as [Ink](https://github.com/vadimdemedes/ink) (terminal), [react-three-fiber](https://github.com/pmndrs/react-three-fiber) (Three.js), and [react-native-skia](https://github.com/Shopify/react-native-skia) (Skia draws), translated to Pulp's WidgetBridge.
+
+## Status
+
+`@pulp/react` is the in-tree React host for Pulp view trees. It supports the
+core intrinsic widgets, Yoga layout props, bridge-backed visual props, keyboard
+shortcuts, and mock-bridge tests used by the package build lane.
+
+## Install
+
+```bash
+npm install @pulp/react
+# peer deps: react ^18.2.0
+```
+
+## Quick start
+
+```tsx
+// my-plugin.tsx
+import { render, View, Row, Label, Button, Spectrum } from '@pulp/react';
+
+function App({ analyzerData }) {
+  return (
+    <View flexGrow={1} background="#0a0e14">
+      <Row gap={10} paddingLeft={20} paddingRight={20} alignItems="center" height={44}>
+        <Label textColor="#ffffff">ANALYZER</Label>
+        <Button>LIVE</Button>
+        <Button>PRECISION</Button>
+      </Row>
+      <Spectrum data={analyzerData} flexGrow={1} />
+    </View>
+  );
+}
+
+render(<App analyzerData={[0.1, 0.3, 0.5, 0.7, 0.9, 0.6, 0.2]} />);
+```
+
+Pre-compile JSX with esbuild/Babel at your plugin's build step. The compiled bundle runs in Pulp's JS engine (QuickJS / JSC / V8) and emits `createCol` / `createRow` / `createPanel` / etc. calls to the bridge, which lays out via Yoga, paints via Skia, composites via Dawn.
+
+## Keyboard shortcuts
+
+```tsx
+import { useShortcut } from '@pulp/react';
+
+function SettingsButton({ onOpen }) {
+  useShortcut('cmd+,', onOpen);
+  return <Button onClick={onOpen}>Settings…</Button>;
+}
+```
+
+`useShortcut(spec, handler, deps?, source?)` wires the chord through Pulp's platform key path (`window_host_mac.mm performKeyEquivalent:` → `WidgetBridge::dispatch_global_key`) so it fires even when no widget is focused. Specs: `'escape'`, `'s'`, `'cmd+,'`, `'shift+cmd+s'`. Recognized modifiers: `cmd` / `meta` / `ctrl` / `shift` / `alt` (or `opt`). Two components registering the same chord from different `source` labels emit a `console.warn` clash diagnostic; same-source re-registration (remount) stays quiet. See [`src/shortcuts.ts`](src/shortcuts.ts) for the full primitive surface (`registerShortcut`, `parseShortcut`).
+
+## Intrinsic primitives
+
+| Component | Bridge call | Use for |
+|---|---|---|
+| `<View>` / `<Col>` | `createCol` | Vertical container |
+| `<Row>` | `createRow` | Horizontal container |
+| `<Panel>` | `createPanel` | Styled container (background, border) |
+| `<ScrollView>` | `createScrollView` | Scrollable container |
+| `<Modal>` | `createModal` | Overlay panel |
+| `<Label>` | `createLabel` | Static text |
+| `<Button>` | `createButton` | Clickable text |
+| `<TextEditor>` | `createTextEditor` | Editable text |
+| `<Spectrum data={...}>` | `createSpectrum` + `setSpectrumData` | FFT analyzer |
+| `<Waveform data={...}>` | `createWaveform` + `setWaveformData` | Waveform display |
+| `<Knob value={...}>` | `createKnob` | Rotary control |
+| `<Fader value={...}>` | `createFader` | Slider |
+| `<Meter level={...}>` | `createMeter` | Audio meter |
+| `<Progress value={...}>` | `createProgress` | Progress bar |
+| `<XYPad>` | `createXYPad` | 2D control |
+| `<Checkbox>` / `<Toggle>` | `createCheckbox` / `createToggle` | Boolean control |
+| `<Combo>` / `<ListBox>` | `createCombo` / `createListBox` | Selection |
+| `<Canvas>` | `createCanvas` | Custom 2D drawing (Skia ops) |
+| `<Image src={...}>` | `createImage` | Bitmap/asset |
+| `<Icon name={...}>` | `createIcon` | Glyph |
+
+## Style props (any container)
+
+All flex / Yoga properties: `direction`, `gap`, `padding`, `paddingLeft`, `paddingRight`, `paddingTop`, `paddingBottom`, `margin*`, `flexGrow`, `flexShrink`, `flexBasis`, `flexWrap`, `width`, `height`, `minWidth`, `minHeight`, `maxWidth`, `maxHeight`, `alignItems`, `alignSelf`, `justifyContent`, `order`.
+
+Visual: `background`, `backgroundGradient`, `border={{ color, width, radius }}`, `borderTop`/`borderRight`/`borderBottom`/`borderLeft`, `opacity`, `visible`.
+
+Text (Label/Button/TextEditor): `text`, `textColor`, `textAlign`.
+
+Typography lengths (`fontSize`, `letterSpacing`, `lineHeight`) accept numbers
+and `px`, `em`, `rem` and `%` strings, plus `normal` where CSS allows it, and
+reach the native setters as pixels. `em` and `%` resolve against the element's
+own `fontSize` (Pulp's default Label size, 14, when it has none; `fontSize`
+itself resolves against that default), and `rem` against 16. A bare
+`lineHeight` number follows `setLengthDialect`: `'dom'` reads it as a
+font-size multiplier, `'native'` as pixels, and the default `'auto'` reads
+values up to 8 as multipliers and larger ones as pixels. A value it cannot
+resolve, such as `calc()`, leaves the native value unchanged.
+
+## Architecture
+
+- Mutation mode (Ink/R3F pattern), `isPrimaryRenderer: true`
+- `shouldSetTextContent` selectively for `Label` / `Button` / `TextEditor` so `<Label>hello</Label>` lowers to `setText(id, "hello")` instead of a child node
+- Ink-style scheduler: `supportsMicrotasks: true` + `queueMicrotask`
+- Synchronous rendering only; concurrent mode is not enabled
+- Single commit-time layout flush owned by `resetAfterCommit` (calls `layout()` once per React commit)
+
+## Testing
+
+`createMockBridge()` swaps the bridge globals for call recorders so unit tests can assert `setX` sequences without spinning up the Pulp runtime:
+
+```ts
+import { createMockBridge } from '@pulp/react';
+import { render, View, Label } from '@pulp/react';
+
+const bridge = createMockBridge();
+bridge.install();
+render(<View><Label>Hello</Label></View>);
+expect(bridge.calls.find(c => c.fn === 'createLabel').args[1]).toBe('Hello');
+bridge.uninstall();
+```
+
+## References
+
+- Reference implementations: `ink/src/reconciler.ts`, `react-three-fiber/packages/fiber/src/core/reconciler.tsx`, `react-native-skia/packages/skia/src/sksg/HostConfig.ts`
+
+## License
+
+MIT (matches Pulp).
