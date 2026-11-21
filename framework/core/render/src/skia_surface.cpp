@@ -10,6 +10,7 @@
 #include <vellum/runtime/trace.hpp>
 
 #include "graphite_image_provider.hpp"
+#include "graphite_raster_options.hpp"
 
 // Dawn C++ API (from Skia's bundled Dawn)
 #include "webgpu/webgpu_cpp.h"
@@ -17,7 +18,6 @@
 // Skia Graphite headers
 #include "include/gpu/GpuTypes.h"            // GpuStats, GpuStatsFlags
 #include "include/gpu/graphite/Context.h"
-#include "include/gpu/graphite/ContextOptions.h"
 #include "include/gpu/graphite/Recorder.h"
 #include "include/gpu/graphite/Recording.h"
 #include "include/gpu/graphite/Surface.h"
@@ -165,8 +165,8 @@ class SkiaSurfaceImpl : public SkiaSurface {
         backend_ctx.fDevice = *device_ptr;
         backend_ctx.fQueue = *queue_ptr;
 
-        skgpu::graphite::ContextOptions ctx_options;
-        context_ = skgpu::graphite::ContextFactory::MakeDawn(backend_ctx, ctx_options);
+        context_ = skgpu::graphite::ContextFactory::MakeDawn(
+            backend_ctx, detail::graphite_raster_options());
 
         if (!context_) {
             runtime::log_error("SkiaSurface: failed to create Skia Graphite context");
