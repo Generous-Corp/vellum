@@ -178,9 +178,9 @@ describe('@pulp/react prop-applier — overlay routing', () => {
 
     it('explicit overlay={false} alongside role still releases (override wins)', () => {
         // role auto-claims, explicit overlay={false} releases.
-        // Net: one claim + one release.
+        // The complete prop bag emits no claim and one release.
         applyAllProps(withProps('m9', { role: 'dialog', overlay: false }));
-        expect(bridge.calls.filter((c) => c.fn === 'claimOverlay').length).toBe(1);
+        expect(bridge.calls.filter((c) => c.fn === 'claimOverlay').length).toBe(0);
         expect(bridge.calls.filter((c) => c.fn === 'releaseOverlay').length).toBe(1);
     });
 });
