@@ -30,7 +30,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = "gpu-runtime/renderer-lock.json"
-SCHEMA = "gpu-runtime.renderer-lock.v1"
+SCHEMA = "gpu-runtime.renderer-lock.v2"
 PLATFORM = "macos-arm64"
 HEX_64 = re.compile(r"\b[0-9a-f]{64}\b")
 # Any-case digests in other files: an UPPERCASE hand copy is still a copy.
@@ -41,6 +41,7 @@ def digests_in(text: str) -> set[str]:
     return {match.lower() for match in ANY_HEX_64.findall(text)}
 HEX_40 = re.compile(r"^[0-9a-f]{40}$")
 MILESTONE = re.compile(r"\bchrome/m[0-9]+\b")
+RELEASE_TAG = re.compile(r"^chrome/m[0-9]+-[A-Za-z0-9][A-Za-z0-9.-]*$")
 
 # Build inputs that must read the lock rather than restate it.
 READERS = {
@@ -68,6 +69,11 @@ def load_lock(root: Path, problems: list[str]) -> dict | None:
         problems.append(f"{LOCK}: schema is {lock.get('schema')!r}, expected {SCHEMA}")
     if not isinstance(lock.get("milestone"), str) or not MILESTONE.fullmatch(lock["milestone"]):
         problems.append(f"{LOCK}: milestone is not chrome/mNNN")
+    if not isinstance(lock.get("release_tag"), str) or not RELEASE_TAG.fullmatch(lock["release_tag"]):
+        problems.append(f"{LOCK}: release_tag is not an immutable chrome/mNNN-* tag")
+    elif isinstance(lock.get("milestone"), str) and \
+            not lock["release_tag"].startswith(lock["milestone"] + "-"):
+        problems.append(f"{LOCK}: release_tag {lock['release_tag']} is not a tag of milestone {lock['milestone']}")
     builder = lock.get("builder") or {}
     sources = lock.get("sources") or {}
     for label, value in (("builder.commit", builder.get("commit")),
@@ -89,7 +95,7 @@ def load_lock(root: Path, problems: list[str]) -> dict | None:
 def asset_url(lock: dict) -> str:
     platform = lock["platforms"][PLATFORM]
     return "/".join((lock["builder"]["repository"], "releases/download",
-                     lock["milestone"], platform["asset"]))
+                     lock["release_tag"], platform["asset"]))
 
 
 def locked_digests(lock: dict) -> set[str]:
@@ -124,7 +130,7 @@ def check_third_party_lock(root: Path, lock: dict, problems: list[str]) -> None:
     platform = lock["platforms"][PLATFORM]
     expected = {
         "repository": lock["builder"]["repository"],
-        "release_tag": lock["milestone"],
+        "release_tag": lock["release_tag"],
         "name": platform["asset"],
         "url": asset_url(lock),
         "sha256": platform["sha256"],
@@ -149,9 +155,17 @@ def check_third_party_lock(root: Path, lock: dict, problems: list[str]) -> None:
             problems.append(f"{relative}: {name} source commit differs from the lock")
     if identities.get("skia", {}).get("ref") != f"refs/heads/{lock['milestone']}":
         problems.append(f"{relative}: skia source ref is not refs/heads/{lock['milestone']}")
+    try:
+        attested = json.loads((root / RECORDS[1]).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        attested = {}  # check_attestation reports the unreadable record
+    run_id = str(attested.get("build_provenance", {}).get("run", {}).get("run_id"))
+    evidence = identities.get("builder", {}).get("evidence", "")
+    if not re.search(rf"\brun {re.escape(run_id)}\b", evidence):
+        problems.append(f"{relative}: builder evidence does not name attestation run {run_id}")
     rows = [row for row in data["dependencies"]
             if row.get("name") == "Skia Graphite and Dawn renderer toolchain"]
-    if len(rows) != 1 or rows[0].get("version") != lock["milestone"] \
+    if len(rows) != 1 or rows[0].get("version") != lock["release_tag"] \
             or rows[0].get("sha256") != platform["sha256"]:
         problems.append(f"{relative}: the renderer dependency row differs from the lock")
 
@@ -162,7 +176,7 @@ def check_attestation(root: Path, lock: dict, problems: list[str]) -> None:
     artifact = record.get("artifact") or {}
     platform = lock["platforms"][PLATFORM]
     for field, value in (("repository", lock["builder"]["repository"]),
-                         ("release_tag", lock["milestone"]),
+                         ("release_tag", lock["release_tag"]),
                          ("name", platform["asset"]),
                          ("sha256", platform["sha256"])):
         if artifact.get(field) != value:
@@ -175,7 +189,7 @@ def check_attestation(root: Path, lock: dict, problems: list[str]) -> None:
             problems.append(f"{relative}: {name} source commit differs from the lock")
     if record.get("build_identity", {}).get("target") != PLATFORM:
         problems.append(f"{relative}: build target is not {PLATFORM}")
-    release = "/".join((lock["builder"]["repository"], "releases/download", lock["milestone"], ""))
+    release = "/".join((lock["builder"]["repository"], "releases/download", lock["release_tag"], ""))
     for url in re.findall(r'"url":\s*"([^"]+)"', json.dumps(record)):
         if not url.startswith(release):
             problems.append(f"{relative}: record {url} is not an asset of the locked release")
@@ -190,8 +204,11 @@ def check_documents(root: Path, lock: dict, problems: list[str]) -> None:
         text = path.read_text(encoding="utf-8")
         for milestone in sorted(set(MILESTONE.findall(text)) - {lock["milestone"]}):
             problems.append(f"{relative}: names {milestone}; the lock is {lock['milestone']}")
-        if relative in DOCUMENTS_WITH_DIGEST and platform["sha256"] not in text:
-            problems.append(f"{relative}: quotes {platform['asset']} without the lock's digest")
+        if relative in DOCUMENTS_WITH_DIGEST:
+            if platform["sha256"] not in text:
+                problems.append(f"{relative}: quotes {platform['asset']} without the lock's digest")
+            if lock["release_tag"] not in text:
+                problems.append(f"{relative}: quotes {platform['asset']} without the lock's release tag")
         for digest in sorted(digests_in(text)):
             if digest in locked_digests(lock):
                 continue

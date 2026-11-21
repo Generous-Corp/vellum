@@ -1006,11 +1006,15 @@ def renderer_pin_errors(
     exported under; it keeps its identity, origin and blob checks.
     """
     lock = json.loads((root / "provenance/third-party-lock.json").read_text(encoding="utf-8"))
+    renderer_lock = json.loads((root / "gpu-runtime/renderer-lock.json").read_text(encoding="utf-8"))
     renderer = lock["runtime_toolchain_dependencies"]["renderer"]
     artifact = renderer["artifact"]
     identities = renderer["source_identities"]
     expected = {
-        "skia_branch": artifact["release_tag"],
+        # Pulp's source pin names the Skia milestone/ref.  The builder release
+        # tag may carry an attestation suffix (for example -attested.1), so
+        # keep that immutable release identity separate from the source ref.
+        "skia_branch": renderer_lock["milestone"],
         "skia_commit": identities["skia"]["commit"],
         "built_dawn": identities["dawn"]["commit"],
         "skia_builder_ref": identities["builder"]["commit"],
@@ -1052,6 +1056,9 @@ def mirror_renderer_pin_check(
 ) -> tuple[list[str], list[dict[str, object]]]:
     """Check the current receipt's renderer pin; report older receipts as unchecked."""
     current, older, errors = current_mirror_receipts(root, receipts)
+    # A transferred framework freezes source files, but it does not freeze the
+    # renderer pin. The current receipt must still agree with the lock so a
+    # transferred tree cannot hide a renderer change from provenance checks.
     pin_errors, rows = renderer_pin_errors(root, pulp_root, current) if not errors else ([], [])
     rows += [{"receipt": path, "matches_lock": None, "checked": "older export, not HEAD:mirror"}
              for path in older]

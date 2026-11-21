@@ -3533,10 +3533,15 @@ class RendererPinTests(unittest.TestCase):
         (self.root / "provenance/mirror/receipts").mkdir(parents=True)
         lock = json.loads((MODULE_PATH.parents[2] / "provenance/third-party-lock.json").read_text())
         (self.root / "provenance/third-party-lock.json").write_text(json.dumps(lock))
+        renderer_lock_path = MODULE_PATH.parents[2] / "gpu-runtime/renderer-lock.json"
+        (self.root / "gpu-runtime").mkdir(parents=True, exist_ok=True)
+        (self.root / "gpu-runtime/renderer-lock.json").write_text(renderer_lock_path.read_text())
         renderer = lock["runtime_toolchain_dependencies"]["renderer"]
         artifact, identities = renderer["artifact"], renderer["source_identities"]
         self.matching_pin = {
-            "skia_branch": artifact["release_tag"],
+            "skia_branch": json.loads(
+                (MODULE_PATH.parents[2] / "gpu-runtime/renderer-lock.json").read_text()
+            )["milestone"],
             "skia_commit": identities["skia"]["commit"],
             "built_dawn": identities["dawn"]["commit"],
             "skia_builder_ref": identities["builder"]["commit"],
@@ -3661,9 +3666,9 @@ class RendererPinTests(unittest.TestCase):
 
     def test_transferred_receipt_is_current_after_mirror_is_gone(self) -> None:
         old_tree = self.commit_mirror(b"old\n")
-        older = self.landed("older", self.pulp_commit(self.other_milestone()), old_tree)
+        older = self.landed("older", self.pulp_commit(self.matching_pin), old_tree)
         new_tree = self.commit_mirror(b"new\n")
-        newest = self.landed("newest", self.pulp_commit(self.matching_pin), new_tree)
+        newest = self.landed("newest", self.pulp_commit(self.other_milestone()), new_tree)
         git = ["git", "-C", str(self.root), "-c", "user.name=t", "-c", "user.email=t@t"]
         subprocess.run(git + ["rm", "-q", "-r", "mirror"], check=True)
         (self.root / "framework").mkdir()
@@ -3677,8 +3682,9 @@ class RendererPinTests(unittest.TestCase):
         record.parent.mkdir(parents=True, exist_ok=True)
         record.write_text(json.dumps({"export_receipt": newest, "mirror_tree": new_tree}), encoding="utf-8")
         errors, rows = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
-        self.assertEqual(errors, [])
-        self.assertEqual({row["receipt"]: row["matches_lock"] for row in rows}, {newest: True, older: None})
+        self.assertEqual(len(errors), 1)
+        self.assertIn("skia_branch", errors[0])
+        self.assertEqual({row["receipt"]: row["matches_lock"] for row in rows}, {newest: False, older: None})
         # The record must name a landed receipt.
         record.write_text(json.dumps({"export_receipt": "provenance/mirror/receipts/x.json",
                                       "mirror_tree": new_tree}), encoding="utf-8")

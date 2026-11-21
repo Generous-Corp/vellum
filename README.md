@@ -285,10 +285,10 @@ root:
 <!-- readme-exec: id=source-sdk-build manual=source-build-not-release-quick-start -->
 ```sh
 curl -fL \
-  https://github.com/danielraffel/skia-builder/releases/download/chrome/m158/skia-build-mac-universal-gpu-release.zip \
+  https://github.com/danielraffel/skia-builder/releases/download/chrome/m158-attested.1/skia-build-mac-universal-gpu-release.zip \
   -o /tmp/vellum-skia-m158.zip
 printf '%s  %s\n' \
-  dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250 \
+  1779c7d1ba5c73a0d6a1f33b77fbf30774bbd9f7542c1c42cc5129f57e99fbd4 \
   /tmp/vellum-skia-m158.zip | shasum -a 256 -c -
 cmake -S . -B build-gpu \
   -DCMAKE_BUILD_TYPE=Release \

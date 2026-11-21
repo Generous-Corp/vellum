@@ -653,6 +653,8 @@ jobs:
             > "$lock_root/third-party-lock.json"
           git show "$SOURCE_COMMIT:provenance/renderer-attestation.json" \
             > "$lock_root/renderer-attestation.json"
+          git show "$SOURCE_COMMIT:gpu-runtime/renderer-lock.json" \
+            > "$lock_root/renderer-lock.json"
           # Every asset a builder-attested record names is fetched from the
           # locked release: the archive, its legal manifest, toolchain receipt
           # and provenance bundle, plus GitHub's release JSON for their asset
@@ -667,8 +669,11 @@ jobs:
           if record.get("state") == "builder-attested":
               artifact = record["artifact"]
               tag = artifact.get("release_tag")
-              if artifact.get("repository") != builder or not re.fullmatch(r"chrome/m[0-9]+", str(tag)):
-                  sys.exit("the renderer record does not name a danielraffel/skia-builder chrome/mNNN release")
+              if artifact.get("repository") != builder or not re.fullmatch(r"chrome/m[0-9]+-[A-Za-z0-9][A-Za-z0-9.-]*", str(tag)):
+                  sys.exit("the renderer record does not name a danielraffel/skia-builder chrome/mNNN-* release")
+              milestone = json.load(open(f"{root}/renderer-lock.json", encoding="utf-8"))["milestone"]
+              if not str(tag).startswith(milestone + "-"):
+                  sys.exit("the renderer record release tag is not a tag of the locked milestone")
               names = [("archive", artifact.get("name")),
                        ("legal-manifest", ((record.get("legal_inventory") or {}).get("manifest") or {}).get("name")),
                        ("toolchain-receipt", ((record.get("build_identity") or {}).get("toolchain_receipt") or {}).get("name")),

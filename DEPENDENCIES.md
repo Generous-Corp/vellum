@@ -38,7 +38,7 @@ The macOS arm64 GPU proof uses one byte-locked prebuilt renderer artifact:
 
 | Artifact | Locked identity | Use |
 |---|---|---|
-| `skia-build-mac-universal-gpu-release.zip` | `danielraffel/skia-builder` release `chrome/m158`; SHA-256 `dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250` | Build-time Skia Graphite and Dawn/Metal static libraries and headers |
+| `skia-build-mac-universal-gpu-release.zip` | `danielraffel/skia-builder` milestone `chrome/m158`, immutable release `chrome/m158-attested.1`; SHA-256 `1779c7d1ba5c73a0d6a1f33b77fbf30774bbd9f7542c1c42cc5129f57e99fbd4` | Build-time Skia Graphite and Dawn/Metal static libraries and headers |
 
 The pin itself is written once, in `gpu-runtime/renderer-lock.json`; this
 table, `provenance/third-party-lock.json` and the attestation must agree with
@@ -48,8 +48,8 @@ artifact's `libdawn_combined.a` unchanged, with the Dawn and Tint, Abseil and
 PartitionAlloc notices the legal inventory places in it.
 
 The artifact was built by skia-builder's `build-skia.yml` on `refs/heads/main`
-at builder commit `312f05e24a5d5a45d4a3e70ca70ff3ccff1b4d97` (run
-40626447857, attempt 1, GitHub-hosted). Its source tuple is Skia commit
+at builder commit `1b97010d2f025b4331a9c0db9481c440d1f33042` (run
+44427178277, attempt 1, GitHub-hosted). Its source tuple is Skia commit
 `be7d7c3e996e567eda7dc9774274f7a0103cdb8c` and Dawn commit
 `1716e88cc9e58398fab5d4473f7f2e858667b677`, as recorded by the release's legal
 manifest. The Dawn commit is also embedded in

@@ -2524,6 +2524,13 @@ class DependencyPreparationRefusalTest(unittest.TestCase):
             with self.assertRaisesRegex(mp.PlanError, f"exported against skia archive {'c' * 64}, but Vellum locks {'d' * 64}"):
                 mp.prepare_dependencies({"skia": entry}, Path(tmp), Path(tmp), "d" * 64)
 
+    def test_transferred_framework_may_use_a_recorded_historical_skia_asset(self) -> None:
+        entry = {"pin": "a" * 40, "source": "s", "asset_sha256": "c" * 64, "root": "a" * 40, "files": {}}
+        with tempfile.TemporaryDirectory() as tmp:
+            roots = mp.prepare_dependencies({"skia": entry}, Path(tmp), Path(tmp), "d" * 64,
+                                            accepted_skia_assets={"c" * 64})
+            self.assertEqual(roots["skia"], Path(tmp))
+
     def test_a_recorded_file_the_dependency_lacks_is_refused(self) -> None:
         entry = {"pin": "a" * 40, "source": "s", "asset_sha256": "c" * 64, "root": "a" * 40,
                  "files": {"include/absent.h": "d" * 64}}
