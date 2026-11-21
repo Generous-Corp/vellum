@@ -1,3 +1,4 @@
+import { isRendererChange } from './programmatic-events.js';
 // prop-applier, turns React prop names into bridge setX calls.
 //
 // Used by both:
@@ -403,6 +404,7 @@ function armNativeEvent(id: string, eventName: string): void {
 function syntheticEventCallback(id: string, eventName: string,
                                 handler: (e: unknown) => void): (...rawArgs: unknown[]) => unknown {
     return (...rawArgs: unknown[]) => {
+        if (isRendererChange(id, eventName)) return { __pulpEventPropagation: 0 };
         const evt = makeSyntheticEvent(id, eventName, rawArgs);
         handler(evt);
         // The native pointer router walks registered View ancestors after the
