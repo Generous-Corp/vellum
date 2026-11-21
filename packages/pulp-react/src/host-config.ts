@@ -307,6 +307,15 @@ function applyButtonCaptionLayout(textId: string, hasText: boolean): void {
     call('setLeft', textId, 0);
 }
 
+// HTML container intrinsics are initially lowered to a native Col/Row when
+// they contain nested markup (or no children). Keep a stable caption target so
+// a later update to plain text can paint through a Label instead of sending
+// setText to the container itself, which has no text surface.
+const DYNAMIC_TEXT_CONTAINERS: ReadonlySet<string> = new Set([
+    'div', 'section', 'article', 'aside', 'header', 'footer', 'nav', 'main',
+    'figure', 'figcaption', 'form', 'ul', 'ol', 'li', 'dl', 'dt', 'dd',
+]);
+
 /// Lower an HTML text element to a Label carrying CSS's default
 /// `white-space: normal`. A native Label defaults to a single line and clips
 /// mid-word, whereas the browser box this markup was imported from wraps. An
@@ -403,6 +412,12 @@ function createWidget(type: Type, id: string, parentId: string, props: Props): v
                         createHtmlLabel(id, txt, parentId);
                     } else {
                         call('createCol', id, parentId);
+                        if (txt === undefined) {
+                            const textId = id + '__text';
+                            call('createLabel', textId, '', id);
+                            applyStyleProps(textId, 'label', TEXT_CREATION_STYLE);
+                            applyButtonCaptionLayout(textId, false);
+                        }
                     }
                     return;
                 }
@@ -976,7 +991,10 @@ export const PulpHostConfig: HostConfig<
             pendingChildren: [],
             _dom: domShim,
             textTargetId: String(type) === 'button'
-                ? id + '__text' : undefined,
+                ? id + '__text'
+                : (DYNAMIC_TEXT_CONTAINERS.has(String(type))
+                    && asText(normalizedProps.children) === undefined)
+                    ? id + '__text' : undefined,
             autoFocusRequested: wantsAutoFocus(props as Record<string, unknown>),
         };
     },
@@ -1156,6 +1174,10 @@ export const PulpHostConfig: HostConfig<
                 if (typeof g.setText === 'function') {
                     call('setText', instance.textTargetId ?? instance.id, newText ?? '');
                 }
+                if (instance.textTargetId
+                    && DYNAMIC_TEXT_CONTAINERS.has(String(instance.type))) {
+                    applyButtonCaptionLayout(instance.textTargetId, (newText ?? '').length > 0);
+                }
                 // A caption that gains or loses text changes whether it may
                 // size its owner. Re-resolve its box on the same commit.
                 if (instance.textTargetId && String(instance.type) === 'button') {
@@ -1189,6 +1211,10 @@ export const PulpHostConfig: HostConfig<
         markMaterializedTreeDirty(instance.id);
         if (typeof g.setText === 'function') {
             call('setText', instance.textTargetId ?? instance.id, '');
+        }
+        if (instance.textTargetId
+            && DYNAMIC_TEXT_CONTAINERS.has(String(instance.type))) {
+            applyButtonCaptionLayout(instance.textTargetId, false);
         }
         // Nested markup is mounting in place of the caption. Return it to a
         // zero-contribution overlay so it takes no flex slot beside them.

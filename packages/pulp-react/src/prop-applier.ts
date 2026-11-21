@@ -14,6 +14,7 @@ import { call, _resolveVar } from './prop-applier-internal.js';
 import { applyLayoutProp } from './prop-applier-layout.js';
 import { applyPaintProp } from './prop-applier-paint.js';
 import { applyTypographyProp } from './prop-applier-typography.js';
+import { resolveTypographyLength } from './prop-applier-typography.js';
 import { applyTransformProp } from './prop-applier-transform.js';
 import { applyEventProp, reclaimOverlayForMovedParent } from './prop-applier-events.js';
 import { resetRemovedStyleKeys } from './prop-applier-reset.js';
@@ -485,6 +486,54 @@ function emitSvgLineGeometry(id: string, props: Record<string, unknown>): void {
 
 const shaderUniformSnapshots = new Map<string, string>();
 
+const scrollOffsetSnapshots = new Map<string, { x: number; y: number }>();
+
+function scrollNumber(value: unknown): number {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+}
+
+/// ScrollView's native scrollTo replaces both axes. Coalesce the two React
+/// props into one call and retain the last authored value for the axis that a
+/// later render leaves unchanged, so updating scrollTop cannot reset
+/// scrollLeft (or vice versa).
+function applyScrollOffsets(
+    id: string,
+    type: string,
+    props: Record<string, unknown>,
+    previous?: Record<string, unknown>,
+): boolean {
+    if (type !== 'ScrollView') return false;
+    const hasTop = Object.prototype.hasOwnProperty.call(props, 'scrollTop')
+        && props.scrollTop !== null && props.scrollTop !== undefined;
+    const hasLeft = Object.prototype.hasOwnProperty.call(props, 'scrollLeft')
+        && props.scrollLeft !== null && props.scrollLeft !== undefined;
+    const changed = previous
+        ? previous.scrollTop !== props.scrollTop || previous.scrollLeft !== props.scrollLeft
+        : hasTop || hasLeft;
+    if (!changed || (!hasTop && !hasLeft && previous)) return false;
+    const prior = scrollOffsetSnapshots.get(id) ?? { x: 0, y: 0 };
+    const next = {
+        x: hasLeft ? scrollNumber(props.scrollLeft) : prior.x,
+        y: hasTop ? scrollNumber(props.scrollTop) : prior.y,
+    };
+    scrollOffsetSnapshots.set(id, next);
+    call('scrollTo', id, next.x, next.y);
+    return true;
+}
+
+function isFontSizeDependentTypography(
+    key: string,
+    oldValue: unknown,
+    newValue: unknown,
+    oldProps: Record<string, unknown>,
+    newProps: Record<string, unknown>,
+): boolean {
+    if (oldValue !== newValue || (key !== 'lineHeight' && key !== 'letterSpacing')) return false;
+    return resolveTypographyLength(key, oldValue, oldProps)
+        !== resolveTypographyLength(key, newValue, newProps);
+}
+
 function applyShaderProp(id: string, type: string, value: unknown): boolean {
     if (type !== 'Knob' && type !== 'Fader' && type !== 'Toggle') return false;
     if (value === null || value === undefined) {
@@ -843,6 +892,7 @@ export function applyAllProps(instance: PulpInstance): void {
     const { id, type, props } = instance;
     logApply('applyAll', id, type, Object.keys(props).length);
     applyWidgetValues(id, type, props);
+    const scrollOffsetsApplied = applyScrollOffsets(id, type, props);
     // A first attach is a new native widget: nothing is installed on it yet,
     // whatever an earlier widget under this id had.
     forgetNativeListeners(id);
@@ -867,6 +917,8 @@ export function applyAllProps(instance: PulpInstance): void {
         if (isReactInternal(key)) continue;
         if (isWidgetValueProp(type, key)) continue;
         if (key === 'children') continue;  // text children handled by caller
+        if (scrollOffsetsApplied && type === 'ScrollView'
+            && (key === 'scrollTop' || key === 'scrollLeft')) continue;
         if (isSvgPathType(type) && (key === 'stroke' || key === 'strokeGradient')) continue;
         if (isEventHandler(key)) {
             applyEventHandler(id, key, props[key]);
@@ -893,6 +945,8 @@ export function applyChangedProps(
 ): boolean {
     const { id, type } = instance;
     let mutated = applyWidgetValues(id, type, newProps, oldProps);
+    const scrollOffsetsApplied = applyScrollOffsets(id, type, newProps, oldProps);
+    mutated = scrollOffsetsApplied || mutated;
     noteControlledProps(id, newProps);
     const selectionModeChanged = isVirtualListType(type) &&
         oldProps.selectionMode !== newProps.selectionMode;
@@ -933,6 +987,8 @@ export function applyChangedProps(
         if (isReactInternal(key)) continue;
         if (isWidgetValueProp(type, key)) continue;
         if (key === 'children') continue;
+        if (scrollOffsetsApplied && type === 'ScrollView'
+            && (key === 'scrollTop' || key === 'scrollLeft')) continue;
         if (svgPathStrokeChanged && (key === 'stroke' || key === 'strokeGradient')) continue;
         // SvgRect / SvgLine geometry already emitted above; skip the
         // per-prop dispatch so we don't double-fire bridge calls.
@@ -945,6 +1001,16 @@ export function applyChangedProps(
                 applyOne(id, type, key, newProps[key], newProps);
             }
             mutated = true;
+        }
+    }
+    if (oldProps.fontSize !== newProps.fontSize) {
+        for (const key of ['lineHeight', 'letterSpacing']) {
+            if (Object.prototype.hasOwnProperty.call(newProps, key)
+                && isFontSizeDependentTypography(
+                    key, oldProps[key], newProps[key], oldProps, newProps)) {
+                applyOne(id, type, key, newProps[key], newProps);
+                mutated = true;
+            }
         }
     }
     if (svgPathStrokeChanged) {
@@ -977,6 +1043,8 @@ export function applyChangedProps(
         if (isReactInternal(key)) continue;
         if (isWidgetValueProp(type, key)) continue;
         if (key === 'children') continue;
+        if (scrollOffsetsApplied && type === 'ScrollView'
+            && (key === 'scrollTop' || key === 'scrollLeft')) continue;
         if (svgPathStrokeChanged && (key === 'stroke' || key === 'strokeGradient')) continue;
         if (derivedShapeChanged && isDerivedKey(oldProps, key)) continue;
         if (isEventHandler(key)) {

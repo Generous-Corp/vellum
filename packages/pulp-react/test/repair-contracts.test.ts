@@ -37,11 +37,16 @@ beforeEach(() => {
         insert(parent, id); captions.set(id, text);
     });
     vi.stubGlobal('createPanel', (id: string, parent: string) => insert(parent, id));
+    vi.stubGlobal('createCol', (id: string, parent: string) => insert(parent, id));
+    vi.stubGlobal('createRow', (id: string, parent: string) => insert(parent, id));
     vi.stubGlobal('createButton', undefined);
     vi.stubGlobal('insertChild', (parent: string, id: string, index: number) => insert(parent, id, index));
     vi.stubGlobal('moveWidget', (id: string, parent: string, index: number) => insert(parent, id, index));
     vi.stubGlobal('removeWidget', remove);
     vi.stubGlobal('setText', (id: string, text: string) => captions.set(id, text));
+    for (const name of ['setPosition', 'setTop', 'setRight', 'setBottom', 'setLeft']) {
+        vi.stubGlobal(name, () => {});
+    }
     vi.stubGlobal('on', (id: string, event: string, fn: (...args: unknown[]) => unknown) => listeners.set(`${id}:${event}`, fn));
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -160,6 +165,15 @@ it('updates and clears the capital Button fallback caption', () => {
     expect(captions.get('button_l')).toBe('new');
     update(node, { id: 'button' });
     expect(captions.get('button_l')).toBe('');
+});
+
+it('keeps a caption target when an HTML container changes from nested markup to text', () => {
+    const root = { rootId: '', nextId: 0 };
+    const node = instance('div', { id: 'container', children: { type: 'span' } }, root);
+    host.appendChildToContainer(root, node);
+    expect(captions.has('container__text')).toBe(true);
+    update(node, { id: 'container', children: 'ready' });
+    expect(captions.get('container__text')).toBe('ready');
 });
 
 it('uses moveWidget when the indexed insert function is unavailable', () => {
@@ -304,4 +318,38 @@ it('updates XYPad coordinates together and restores removed axes to native defau
     setXY.mockClear();
     applyChangedProps(node, { id: 'xy', y: 0.7 }, { id: 'xy' });
     expect(setXY).toHaveBeenCalledExactlyOnceWith('xy', 0.5, 0.5);
+});
+
+it('recalculates font-relative typography when fontSize changes or is removed', () => {
+    const setLineHeight = vi.fn();
+    const setLetterSpacing = vi.fn();
+    vi.stubGlobal('setLineHeight', setLineHeight);
+    vi.stubGlobal('setLetterSpacing', setLetterSpacing);
+    const root = createRoot();
+    const initial = { id: 'type', fontSize: 10, lineHeight: 1.5, letterSpacing: '0.1em' };
+    const node = instance('Label', initial, root);
+    applyAllProps(node);
+    setLineHeight.mockClear(); setLetterSpacing.mockClear();
+    applyChangedProps(node, initial, { ...initial, fontSize: 20 });
+    expect(setLineHeight).toHaveBeenCalledWith('type', 30);
+    expect(setLetterSpacing).toHaveBeenCalledWith('type', 2);
+    setLineHeight.mockClear(); setLetterSpacing.mockClear();
+    applyChangedProps(node, { ...initial, fontSize: 20 }, {
+        id: 'type', lineHeight: 1.5, letterSpacing: '0.1em',
+    });
+    expect(setLineHeight).toHaveBeenCalledWith('type', 21);
+    expect(setLetterSpacing).toHaveBeenCalledWith('type', 1.4000000000000001);
+});
+
+it('coalesces ScrollView offsets so changing one axis preserves the other', () => {
+    const scrollTo = vi.fn();
+    vi.stubGlobal('scrollTo', scrollTo);
+    const root = createRoot();
+    const initial = { id: 'scroll', scrollTop: 10, scrollLeft: 20 };
+    const node = instance('ScrollView', initial, root);
+    applyAllProps(node);
+    expect(scrollTo).toHaveBeenCalledExactlyOnceWith('scroll', 20, 10);
+    scrollTo.mockClear();
+    applyChangedProps(node, initial, { ...initial, scrollTop: 30 });
+    expect(scrollTo).toHaveBeenCalledExactlyOnceWith('scroll', 20, 30);
 });
