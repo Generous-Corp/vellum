@@ -1,17 +1,17 @@
 {
   "name": "@pulp/react",
   "version": "0.0.3",
-  "description": "React reconciler host config targeting Vellum WidgetBridge — render React JSX natively through Yoga + Skia + Dawn, no DOM, no browser",
+  "description": "React reconciler host config targeting Vellum WidgetBridge \u2014 render React JSX natively through Yoga + Skia + Dawn, no DOM, no browser",
   "license": "MIT",
   "type": "module",
-  "main": "./dist/index.js",
+  "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "require": "./dist/index.js"
+      "require": "./dist/index.cjs"
     }
   },
   "files": [
@@ -20,10 +20,12 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node -e \"require('fs').copyFileSync('src/bridge-globals.generated.d.ts','dist/bridge-globals.generated.d.ts')\" && esbuild src/index.ts --bundle --format=esm --outfile=dist/index.mjs --platform=neutral --external:react --external:react-reconciler --external:react-reconciler/constants.js --external:scheduler",
+    "build": "tsc -p tsconfig.json && node -e \"require('fs').copyFileSync('src/bridge-globals.generated.d.ts','dist/bridge-globals.generated.d.ts')\" && esbuild src/index.ts --bundle --format=esm --outfile=dist/index.mjs --platform=neutral --external:react --external:react-reconciler --external:react-reconciler/constants.js --external:scheduler && esbuild src/index.ts --bundle --format=cjs --outfile=dist/index.cjs --platform=neutral --external:react --external:react-reconciler --external:react-reconciler/constants.js --external:scheduler",
     "build:embed": "esbuild src/index.ts --bundle --format=iife --global-name=pulpReact --outfile=dist/pulp-react.embed.js --platform=neutral",
     "test": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "pretest": "npm run build",
+    "pretest:coverage": "npm run build"
   },
   "peerDependencies": {
     "react": "^18.3.1"

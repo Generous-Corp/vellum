@@ -271,3 +271,37 @@ it('keeps nested DOM children in native order after insertBefore', () => {
     expect(tree.get('parent')).toEqual(['b', 'a', 'c']);
     expect((parent._dom as any)._children.map((child: any) => child.id)).toEqual(['b', 'a', 'c']);
 });
+
+it.each(['Combo', 'ListBox'])('applies %s options before selection and resets removed props', type => {
+    const state = { options: [] as string[], selected: -1 };
+    vi.stubGlobal(type === 'Combo' ? 'setItems' : 'setListItems', (_: string, values: string[]) => {
+        state.options = values; state.selected = -1;
+    });
+    vi.stubGlobal(type === 'Combo' ? 'setSelected' : 'setListSelected', (_: string, value: number) => state.selected = value);
+    const root = createRoot();
+    const initial = { id: 'select', selected: 1, options: ['A', 'B'] };
+    const node = instance(type, initial, root);
+    applyAllProps(node);
+    expect(state).toEqual({ options: ['A', 'B'], selected: 1 });
+    const changed = { ...initial, options: ['C', 'D'] };
+    applyChangedProps(node, initial, changed);
+    expect(state).toEqual({ options: ['C', 'D'], selected: 1 });
+    applyChangedProps(node, changed, { id: 'select' });
+    expect(state).toEqual({ options: [], selected: type === 'Combo' ? 0 : -1 });
+});
+
+it('updates XYPad coordinates together and restores removed axes to native defaults', () => {
+    const setXY = vi.fn();
+    vi.stubGlobal('setXY', setXY);
+    const root = createRoot();
+    const initial = { id: 'xy', x: 0.2, y: 0.8 };
+    const node = instance('XYPad', initial, root);
+    applyAllProps(node);
+    expect(setXY).toHaveBeenCalledExactlyOnceWith('xy', 0.2, 0.8);
+    setXY.mockClear();
+    applyChangedProps(node, initial, { id: 'xy', y: 0.7 });
+    expect(setXY).toHaveBeenCalledExactlyOnceWith('xy', 0.5, 0.7);
+    setXY.mockClear();
+    applyChangedProps(node, { id: 'xy', y: 0.7 }, { id: 'xy' });
+    expect(setXY).toHaveBeenCalledExactlyOnceWith('xy', 0.5, 0.5);
+});

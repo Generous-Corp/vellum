@@ -813,11 +813,36 @@ export function applyStyleProps(id: string, type: string, style: Record<string, 
     for (const key of Object.keys(style)) applyOne(id, type, key, style[key], style);
 }
 
+// These native values are compound state, independent of layout x/y or
+// generic style resets. Apply options before selection and both pad axes at once.
+function isWidgetValueProp(type: string, key: string): boolean {
+    return ((type === 'Combo' || type === 'ListBox') && (key === 'options' || key === 'selected'))
+        || (type === 'XYPad' && (key === 'x' || key === 'y'));
+}
+
+function applyWidgetValues(id: string, type: string, props: Record<string, unknown>,
+                           previous: Record<string, unknown> = {}): boolean {
+    if (type === 'XYPad' && (props.x !== previous.x || props.y !== previous.y)) {
+        call('setXY', id, props.x ?? 0.5, props.y ?? 0.5);
+        return true;
+    }
+    if (type !== 'Combo' && type !== 'ListBox') return false;
+    const optionsChanged = props.options !== previous.options;
+    const selectionChanged = props.selected !== previous.selected;
+    if (optionsChanged) call(type === 'Combo' ? 'setItems' : 'setListItems', id, props.options ?? []);
+    if (selectionChanged || (optionsChanged && props.selected != null)) {
+        call(type === 'Combo' ? 'setSelected' : 'setListSelected', id,
+            props.selected ?? (type === 'Combo' ? 0 : -1));
+    }
+    return optionsChanged || selectionChanged;
+}
+
 /// Apply ALL props for first-attach. Called from appendInitialChild /
 /// appendChild after the instance lands on the bridge.
 export function applyAllProps(instance: PulpInstance): void {
     const { id, type, props } = instance;
     logApply('applyAll', id, type, Object.keys(props).length);
+    applyWidgetValues(id, type, props);
     // A first attach is a new native widget: nothing is installed on it yet,
     // whatever an earlier widget under this id had.
     forgetNativeListeners(id);
@@ -840,6 +865,7 @@ export function applyAllProps(instance: PulpInstance): void {
     }
     for (const key of orderedPropKeys(type, props)) {
         if (isReactInternal(key)) continue;
+        if (isWidgetValueProp(type, key)) continue;
         if (key === 'children') continue;  // text children handled by caller
         if (isSvgPathType(type) && (key === 'stroke' || key === 'strokeGradient')) continue;
         if (isEventHandler(key)) {
@@ -866,7 +892,7 @@ export function applyChangedProps(
     newProps: Record<string, unknown>,
 ): boolean {
     const { id, type } = instance;
-    let mutated = false;
+    let mutated = applyWidgetValues(id, type, newProps, oldProps);
     noteControlledProps(id, newProps);
     const selectionModeChanged = isVirtualListType(type) &&
         oldProps.selectionMode !== newProps.selectionMode;
@@ -905,6 +931,7 @@ export function applyChangedProps(
     // Walk new props, set anything that changed value
     for (const key of orderedPropKeys(type, newProps)) {
         if (isReactInternal(key)) continue;
+        if (isWidgetValueProp(type, key)) continue;
         if (key === 'children') continue;
         if (svgPathStrokeChanged && (key === 'stroke' || key === 'strokeGradient')) continue;
         // SvgRect / SvgLine geometry already emitted above; skip the
@@ -948,6 +975,7 @@ export function applyChangedProps(
     const removed: Array<{ key: string; oldValue: unknown }> = [];
     for (const key of Object.keys(oldProps)) {
         if (isReactInternal(key)) continue;
+        if (isWidgetValueProp(type, key)) continue;
         if (key === 'children') continue;
         if (svgPathStrokeChanged && (key === 'stroke' || key === 'strokeGradient')) continue;
         if (derivedShapeChanged && isDerivedKey(oldProps, key)) continue;
