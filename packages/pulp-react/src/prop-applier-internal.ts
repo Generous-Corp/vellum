@@ -42,10 +42,7 @@ export function call(name: string, ...args: unknown[]): void {
     if (_pa_count <= 100) {
         const lg = (g as Record<string, AnyFn | undefined>).__spectrLog;
         if (typeof lg === 'function') {
-            const a0 = args[0] !== undefined ? String(args[0]).slice(0, 25) : '';
-            const a1 = args[1] !== undefined ? String(args[1]).slice(0, 25) : '';
-            const a2 = args[2] !== undefined ? String(args[2]).slice(0, 25) : '';
-            lg('[pa#' + _pa_count + '] ' + name + '(' + a0 + ',' + a1 + (args.length > 2 ? ',' + a2 : '') + ')');
+            lg('[pa#' + _pa_count + '] ' + name + '(' + String(args[0] ?? '') + ')');
         }
     }
     if (queueBridgeCall(name, fn, args)) return;
