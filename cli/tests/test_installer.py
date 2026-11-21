@@ -68,6 +68,7 @@ def _build_verified_fixture(
     payload = root / f"{fixture_name}-payload"
     payload.mkdir()
     shutil.copy2(REPO / "cli/vellum_cli.py", payload / "vellum_cli.py")
+    shutil.copy2(REPO / "cli/vellum_illustrator.py", payload / "vellum_illustrator.py")
     shutil.copy2(REPO / "cli/vellum_dev.py", payload / "vellum_dev.py")
     shutil.copy2(REPO / "cli/vellum_backend.py", payload / "vellum_backend.py")
     shutil.copy2(REPO / "cli/vellum_manifest.py", payload / "vellum_manifest.py")
@@ -379,6 +380,52 @@ class InstallerTests(unittest.TestCase):
                 rejected.stderr,
             )
             self.assertNotIn("GH_RELEASE_ACQUISITION_REACHED", rejected.stderr)
+
+    def _assert_installed_illustrator(self, root: Path, prefix: Path) -> None:
+        from test_illustrator_cli import FAKE_CONVERTER
+        converter = root / "pdftocairo-fake"
+        converter.write_text(FAKE_CONVERTER, encoding="utf-8")
+        converter.chmod(0o755)
+        source = root / "sample.ai"
+        source.write_bytes(b"%PDF-1.7 fixture")
+        completed = subprocess.run(
+            [str(prefix / "bin/vellum"), "--json", "import", "illustrator", str(source)],
+            cwd=root, capture_output=True, text=True,
+            env={**os.environ, "VELLUM_PDF_TO_SVG": str(converter)},
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout)["status"], "converted")
+        self.assertIn(b"<svg", source.with_suffix(".svg").read_bytes())
+
+    def test_local_install_includes_illustrator(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prefix = root / "prefix"
+            installed = _run_installer(prefix, "--local", str(REPO))
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            self._assert_installed_illustrator(root, prefix)
+
+    def test_built_artifact_installs_illustrator_with_integrity(self) -> None:
+        sys.path.insert(0, str(REPO / "scripts"))
+        try:
+            import build_sdk_artifact as builder
+        finally:
+            sys.path.pop(0)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payload = root / "payload"
+            payload.mkdir()
+            sdk = root / "sdk"
+            sdk.mkdir()
+            builder.copy_payload(REPO, sdk, payload, "a" * 40, True, "test", include_ui=False)
+            archive = root / "vellum-test.tar.gz"
+            _write_fixture_archive(payload, archive)
+            sums = root / "SHA256SUMS"
+            sums.write_text(f"{_sha256(archive)}  {archive.name}\n", encoding="utf-8")
+            prefix = root / "prefix"
+            installed = _run_installer(prefix, "--archive", str(archive), "--checksums", str(sums))
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            self._assert_installed_illustrator(root, prefix)
 
     def test_local_install_runs_and_creates_project_outside_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -44,6 +44,13 @@ struct DawnBootstrap final {
     const DawnBootstrap& bootstrap, std::string_view expected_dawn_revision,
     std::string* error = nullptr);
 
+/// Registers the host bootstrap for one plug-in bundle and this SDK's
+/// gpu-runtime version. A later bundle built against a different runtime is
+/// rejected before it can touch Dawn's process-global proc table.
+[[nodiscard]] bool register_dawn_bootstrap_for_bundle(
+    std::string_view bundle, const DawnBootstrap& bootstrap,
+    std::string_view expected_dawn_revision, std::string* error = nullptr);
+
 /// Returns whether a versioned host bootstrap has completed in this process.
 /// `SkiaDawnSurface::create` fails closed until this returns true.
 [[nodiscard]] bool dawn_bootstrap_is_registered(std::string* error = nullptr);

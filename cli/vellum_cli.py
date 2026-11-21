@@ -1304,6 +1304,41 @@ def compare_command(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def illustrator_command(args: argparse.Namespace) -> dict[str, Any]:
+    """Convert a PDF-compatible Illustrator file without requiring the SDK backend."""
+    if args.source != "illustrator" or not getattr(args, "illustrator_input", None):
+        raise CliFailure(
+            "import illustrator requires an .ai or .pdf input.",
+            status="invalid_arguments", exit_code=EXIT_USAGE,
+        )
+    from vellum_illustrator import ConversionError, convert
+
+    try:
+        receipt = convert(
+            Path(args.illustrator_input),
+            Path(args.output) if args.output else None,
+            Path(args.provenance) if args.provenance else None,
+            page=args.page,
+            timeout=args.timeout,
+        )
+    except ConversionError as error:
+        raise CliFailure(
+            f"illustrator import refused: {error}",
+            status="illustrator_import_refused", exit_code=EXIT_PROJECT,
+        ) from error
+    output = receipt["output"]["path"]
+    provenance = str(
+        Path(args.provenance).expanduser().resolve()
+        if args.provenance
+        else Path(output + ".provenance.json")
+    )
+    return result(
+        "import illustrator", ok=True, status="converted",
+        message=f"SVG: {output}\nProvenance: {provenance}",
+        data={"svg": output, "provenance": provenance, "receipt": receipt},
+    )
+
+
 def invoke_backend(
     command: str, root: Path, lock: dict[str, Any], forwarded: list[str]
 ) -> tuple[dict[str, Any], int]:
@@ -1441,10 +1476,14 @@ def parser() -> argparse.ArgumentParser:
 
     backend_specs = {
         "import": [
-            ("source", {}),
+            ("source", {"nargs": "+"}),
             ("--source-type", {"choices": ["fig", "figma", "design-ir", "html", "claude-design"], "default": "figma"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
+            ("--out", {"dest": "output", "metavar": "SVG"}),
+            ("--provenance", {}),
+            ("--page", {"type": int, "default": 1}),
+            ("--timeout", {"type": int, "default": 60}),
         ],
         "reimport": [
             ("--source", {"required": True}),
@@ -1479,6 +1518,8 @@ def parser() -> argparse.ArgumentParser:
 
 def forwarded_arguments(args: argparse.Namespace) -> list[str]:
     ignored = {"json", "command", "project"}
+    if args.command == "import":
+        ignored.update({"output", "provenance", "page", "timeout", "illustrator_input"})
     forwarded: list[str] = []
     for key, value in vars(args).items():
         if key in ignored or value is None or value is False:
@@ -1502,6 +1543,16 @@ def main(argv: Iterable[str] | None = None) -> int:
     command = next((item for item in raw if not item.startswith("-")), "unknown")
     try:
         args = parser().parse_args(raw)
+        if args.command == "import" and isinstance(args.source, list):
+            if len(args.source) == 2 and args.source[0] == "illustrator":
+                args.source, args.illustrator_input = args.source
+            elif len(args.source) == 1:
+                args.source = args.source[0]
+            else:
+                raise CliFailure(
+                    "import accepts one source path, or 'illustrator INPUT'.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
         if args.command == "create":
             payload = create_project(args)
         elif args.command == "doctor":
@@ -1537,7 +1588,14 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = design_command(args)
         elif args.command == "compare":
             payload = compare_command(args)
+        elif args.command == "import" and args.source == "illustrator":
+            payload = illustrator_command(args)
         else:
+            if args.command == "import" and not args.source:
+                raise CliFailure(
+                    "import requires a source path.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
+                )
             payload = backend_command(args, forwarded_arguments(args))
         emit(payload, json_output=args.json)
         if payload["ok"]:

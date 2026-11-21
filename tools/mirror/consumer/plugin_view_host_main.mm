@@ -9,13 +9,15 @@
 // whose signatures carry the GpuSurface pointer.
 
 #include <vellum/graphics/dawn_native_bootstrap.hpp>
+#include <vellum/view/input_events.hpp>
 #include <vellum/view/plugin_view_host.hpp>
 #include <vellum/view/view.hpp>
 #import <Cocoa/Cocoa.h>
 
 #include <cstdio>
-#include <cmath>
+#include <cstdlib>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -47,7 +49,7 @@ int fail(const char* what) {
 }
 
 bool png_pixel_matches(const std::vector<uint8_t>& png, NSInteger x, NSInteger y,
-                       uint32_t rgb) {
+                       uint32_t rgb, NSInteger logical_width = 0) {
     // Compare the raw samples the host wrote: converting through NSColor
     // colour-manages them and shifts every channel.
     // A negative coordinate counts back from the far edge, so a corner probe
@@ -55,6 +57,10 @@ bool png_pixel_matches(const std::vector<uint8_t>& png, NSInteger x, NSInteger y
     // surface doubles the painted rect to 64 pixels).
     NSData* data = [NSData dataWithBytes:png.data() length:png.size()];
     NSBitmapImageRep* image = [[NSBitmapImageRep alloc] initWithData:data];
+    if (image && logical_width > 0) {
+        x = x * image.pixelsWide / logical_width;
+        y = y * image.pixelsWide / logical_width;
+    }
     if (image && x < 0) x += image.pixelsWide;
     if (image && y < 0) y += image.pixelsHigh;
     if (!image || x < 0 || y < 0 || x >= image.pixelsWide || y >= image.pixelsHigh || image.bitsPerSample != 8 ||
@@ -75,7 +81,10 @@ bool png_pixel_matches(const std::vector<uint8_t>& png, NSInteger x, NSInteger y
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc != 1 && !(argc == 2 && std::string_view(argv[1]) == "--live-gpu"))
+        return fail("usage: vellum-plugin-view-host-consumer [--live-gpu]");
+    const bool live_gpu = argc == 2;
     if (std::getenv("VELLUM_MIRROR_PLUGIN_VIEW_HOST_BREAK"))
         return fail("planted break");
     struct Probe final : vellum::view::View {
@@ -84,31 +93,47 @@ int main() {
             c.fill_rect(0, 0, 32, 32);
         }
         bool on_key_event(const vellum::view::KeyEvent&) override { ++keys; return true; }
+        void on_mouse_event(const vellum::view::MouseEvent& event) override {
+            if (event.phase == vellum::view::MousePhase::press) {
+                ++presses;
+                last_press = event.position;
+            }
+        }
         int keys = 0;
+        int presses = 0;
+        vellum::view::Point last_press{};
     } probe;
     probe.set_bounds({0, 0, 64, 64});
-    // The process owns Dawn's proc table: a plug-in registers the native
-    // bootstrap before its editor creates a GPU host, as this consumer does.
+    // The plug-in owns a bundle registration. This records the gpu-runtime
+    // version alongside the process-wide Dawn identity before creating a GPU
+    // host, so another bundle built against a different runtime is refused.
     std::string bootstrap_error;
-    if (!vellum::app_host::register_native_dawn_bootstrap(&bootstrap_error))
+    if (!vellum::app_host::register_native_dawn_bootstrap_for_bundle(
+            "com.example.vellum.plugin-view-host", &bootstrap_error))
         return fail(("Dawn bootstrap registration failed: " + bootstrap_error).c_str());
+    if (!vellum::app_host::register_native_dawn_bootstrap_for_bundle(
+            "com.example.vellum.plugin-view-host-second", &bootstrap_error))
+        return fail(("same-runtime bundle registration failed: " + bootstrap_error).c_str());
     constexpr uint32_t background_rgb = 0x2359A1;
     Host::Options options;
     options.size = {64, 64};
     options.use_gpu = true;
     options.background_rgb = background_rgb;
     auto gpu = Host::create(probe, options);
-    if (!gpu || !gpu->is_gpu_backed()) return fail("GPU host factory returned no GPU host");
+    if (!gpu || (live_gpu && !gpu->is_gpu_backed()))
+        return fail("GPU host factory returned no GPU host");
     if (probe.plugin_view_host() != gpu.get()) return fail("root did not retain its GPU host");
     NSView* parent = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 64, 64)];
     gpu->attach_to_parent((void*)parent);
-    if (!gpu->present_first_frame()) return fail("offscreen GPU paint failed");
-    const auto png = gpu->capture_back_buffer_png();
-    if (png.empty()) return fail("GPU readback was empty");
-    if (!png_pixel_matches(png, -4, -4, background_rgb))
-        return fail("unpainted readback corner did not use the requested background");
-    if (!png_pixel_matches(png, 8, 8, 0x2878DC))
-        return fail("GPU readback did not contain the View paint");
+    if (live_gpu) {
+        if (!gpu->present_first_frame()) return fail("offscreen GPU paint failed");
+        const auto png = gpu->capture_back_buffer_png();
+        if (png.empty()) return fail("GPU readback was empty");
+        if (!png_pixel_matches(png, -4, -4, background_rgb))
+            return fail("unpainted readback corner did not use the requested background");
+        if (!png_pixel_matches(png, 8, 8, 0x2878DC))
+            return fail("GPU readback did not contain the View paint");
+    }
     // A real AppKit key event sent to the host's own view must reach the
     // View tree (calling the View's handler directly would prove nothing).
     int global_keys = 0;
@@ -120,14 +145,77 @@ int main() {
                 charactersIgnoringModifiers:@"\r" isARepeat:NO keyCode:36];
     [host_view keyDown:ev];
     if (probe.keys + global_keys < 1) return fail("an AppKit key event did not reach the View");
+
+    using vellum::view::Point;
+    using vellum::view::Rect;
+    constexpr uint32_t paint_rgb = 0x2878DC;
+    gpu->set_size(400, 400);
+    if (live_gpu && !png_pixel_matches(gpu->capture_back_buffer_png(), 50, 150, background_rgb, 400))
+        return fail("the scaled probe location was not background with the viewport disabled");
+
+    gpu->set_fixed_aspect_ratio(2);
+    if (gpu->get_size().width != 400 || gpu->get_size().height != 400)
+        return fail("the aspect hint changed the DAW-owned editor size");
+    gpu->set_design_viewport(200, 100);
+    float sx = 0, sy = 0, tx = 0, ty = 0;
+    if (!gpu->design_viewport_transform(sx, sy, tx, ty) || sx != 2 || sy != 2 || tx != 0 || ty != 100)
+        return fail("expected a 2x viewport with a 100-point vertical letterbox");
+    if (probe.bounds() != Rect{0, 0, 200, 100})
+        return fail("root did not keep its design bounds");
+    if (gpu->window_to_root_point({80, 140}) != Point{40, 20})
+        return fail("viewport inverse did not account for the scale and letterbox");
+
+    // AppKit points count up from the bottom edge.
+    for (auto type : {NSEventTypeLeftMouseDown, NSEventTypeLeftMouseUp}) {
+        NSEvent* click = [NSEvent mouseEventWithType:type location:NSMakePoint(80, 260)
+                                    modifierFlags:0 timestamp:0 windowNumber:0 context:nil
+                                      eventNumber:0 clickCount:1 pressure:1];
+        if (type == NSEventTypeLeftMouseDown)
+            [host_view mouseDown:click];
+        else
+            [host_view mouseUp:click];
+    }
+    if (probe.presses != 1 || probe.last_press != Point{40, 20})
+        return fail("AppKit mouse press did not hit-test in design coordinates");
+
+    if (live_gpu) {
+        const auto png = gpu->capture_back_buffer_png();
+        if (!png_pixel_matches(png, 50, 150, paint_rgb, 400) ||
+            !png_pixel_matches(png, 50, 50, background_rgb, 400))
+            return fail("centered capture did not show scaled paint and a background letterbox");
+    }
+
+    gpu->set_design_viewport_top_align(true);
+    if (!gpu->design_viewport_transform(sx, sy, tx, ty) || sx != 2 || sy != 2 || tx != 0 || ty != 0 ||
+        gpu->window_to_root_point({80, 40}) != Point{40, 20})
+        return fail("top alignment did not remove the vertical offset from both maps");
+    if (live_gpu) {
+        const auto png = gpu->capture_back_buffer_png();
+        if (!png_pixel_matches(png, 50, 50, paint_rgb, 400) ||
+            !png_pixel_matches(png, 50, 150, background_rgb, 400))
+            return fail("top-aligned capture did not move the scaled paint to the top");
+    } else {
+        std::puts("plugin view host consumer: GPU paint and readback SKIP, needs a GPU run by the lead");
+    }
+
+    gpu->set_size(600, 200);
+    if (!gpu->design_viewport_transform(sx, sy, tx, ty) || sx != 2 || sy != 2 || tx != 100 || ty != 0 ||
+        probe.bounds() != Rect{0, 0, 200, 100})
+        return fail("resizing did not center the design horizontally and preserve its bounds");
+    gpu->set_design_viewport(0, 0);
+    if (gpu->design_viewport_transform(sx, sy, tx, ty) || sx != 2 || sy != 2 || tx != 100 || ty != 0 ||
+        gpu->window_to_root_point({80, 140}) != Point{80, 140} || probe.bounds() != Rect{0, 0, 600, 200})
+        return fail("disabling the viewport did not restore host coordinates and bounds");
+
     gpu->detach();
     gpu.reset();
     if (probe.plugin_view_host() != nullptr)
         return fail("destroyed GPU host remained on the root");
+    probe.set_bounds({0, 0, 64, 64});
     gpu = Host::create(probe, options);
-    if (!gpu || !gpu->is_gpu_backed() || probe.plugin_view_host() != gpu.get())
+    if (!gpu || (live_gpu && !gpu->is_gpu_backed()) || probe.plugin_view_host() != gpu.get())
         return fail("reopened GPU host was not installed");
-    if (!gpu->present_first_frame()) return fail("reopened GPU host did not paint");
+    if (live_gpu && !gpu->present_first_frame()) return fail("reopened GPU host did not paint");
     gpu.reset();
     if (probe.plugin_view_host() != nullptr)
         return fail("reopened GPU host remained on the root after destruction");

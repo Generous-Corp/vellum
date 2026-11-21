@@ -1,0 +1,45 @@
+{
+  "class": "rendering",
+  "contract_keys": [
+    "canvas-kernel"
+  ],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "direction": "framework-to-Pulp",
+  "discovered_at": "2026-11-20T12:57:18Z",
+  "disposition": "pending",
+  "effort_minutes": 0,
+  "event_id": "vellum-f076bd67f60bed60b358d7f0366e0e40c07d931b",
+  "include_dependency_deltas": [
+    "graphics/include/vellum/graphics/dawn_bootstrap.hpp",
+    "graphics/include/vellum/graphics/dawn_native_bootstrap.hpp"
+  ],
+  "kind": "observation",
+  "linked_commits": [],
+  "linked_pull_requests": [],
+  "mapped_contracts": [
+    "canvas-kernel"
+  ],
+  "mapped_paths": [
+    "graphics/include/vellum/graphics/dawn_bootstrap.hpp",
+    "graphics/include/vellum/graphics/dawn_native_bootstrap.hpp",
+    "graphics/src/dawn_bootstrap.cpp"
+  ],
+  "owner": "@danielraffel",
+  "patch_id": "5f221f69e17bf2e08affa970fea524eb2df8911b",
+  "rationale": "Human classification required; discovery is not a port decision.",
+  "rename_candidates": [],
+  "scan_cursor": {
+    "from_commit": "0392a99a548a045974e43187243fccd52246f236",
+    "to_commit": "2eafd562cbe3605e14f31700c4d28e5bc9664b9c"
+  },
+  "schema_api_deltas": [],
+  "schema_version": 1,
+  "severity": null,
+  "shared_contract_release_blocker": false,
+  "source_commit": "f076bd67f60bed60b358d7f0366e0e40c07d931b",
+  "source_repository": "Generous-Corp/vellum",
+  "transitive_paths": []
+}

@@ -1,0 +1,22 @@
+{
+  "contract_tests": [
+    "vellum.mirror-export-unit",
+    "vellum.mirror-package-unit"
+  ],
+  "created_at": "2026-11-21T00:04:51Z",
+  "disposition": "framework-only",
+  "effort_minutes": 5,
+  "event_id": "resolution-vellum-8303689e145fd7bccc0740029819d2c52554ee21",
+  "kind": "resolution",
+  "linked_commits": [
+    "8303689e145fd7bccc0740029819d2c52554ee21"
+  ],
+  "linked_pull_requests": [
+    "https://github.com/Generous-Corp/vellum/pull/552"
+  ],
+  "owner": "@danielraffel",
+  "rationale": "Merge of main into the mirror dylib exports branch (#552, merged). Its own change is the conflict resolution in tools/mirror/test_symbol_census.py, part of Vellum's mirror image tooling that keeps third-party and vendored names unexported. Pulp main has no tools/mirror directory (0 files; the control core/view/src/view.cpp is present), so no port is owed.",
+  "resolves": "vellum-8303689e145fd7bccc0740029819d2c52554ee21",
+  "schema_version": 1,
+  "shared_contract_release_blocker": false
+}
