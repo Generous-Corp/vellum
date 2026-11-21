@@ -24,6 +24,7 @@
 #include <string>
 #include <string_view>
 
+
 namespace gpu_runtime {
 
 inline constexpr std::uint32_t kDawnBootstrapAbiVersion = 1;
@@ -80,10 +81,9 @@ struct DawnBundleIdentity final {
 /// recorded one, the same gpu-runtime version, whatever its bundle. Any other
 /// combination is refused, naming both bundles, and leaves the table
 /// untouched. The bundle and runtime version must be non-empty.
-[[nodiscard]] bool register_dawn_bootstrap_for_bundle(const DawnBundleIdentity& bundle,
-                                                      const DawnBootstrap& bootstrap,
-                                                      std::string_view expected_dawn_revision,
-                                                      std::string* error = nullptr);
+[[nodiscard]] bool register_dawn_bootstrap_for_bundle(
+    const DawnBundleIdentity& bundle, const DawnBootstrap& bootstrap,
+    std::string_view expected_dawn_revision, std::string* error = nullptr);
 
 /// What the coordinator has recorded once a bootstrap completed. An ABI v1
 /// registration records no bundle and no runtime version.

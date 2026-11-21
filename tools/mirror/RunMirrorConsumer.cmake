@@ -29,7 +29,7 @@ file(REMOVE_RECURSE "${_work}")
 function(_run label)
     execute_process(COMMAND ${ARGN}
         RESULT_VARIABLE _result OUTPUT_VARIABLE _stdout ERROR_VARIABLE _stderr)
-    if(NOT _result EQUAL 0)
+    if(NOT _result STREQUAL "0")
         message(FATAL_ERROR "${label} failed (${_result})\n${_stdout}\n${_stderr}")
     endif()
     message(STATUS "${label}: ok")
@@ -203,6 +203,54 @@ if(DEFINED ENV{VELLUM_MIRROR_LIVE_GPU})
     endif()
 endif()
 
+set(_provider "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib")
+find_program(_nm nm REQUIRED)
+set(_provider_census "${Python3_EXECUTABLE}" -I
+    "${VELLUM_SOURCE_DIR}/tools/mirror/provider_symbol_census.py"
+    "${_provider}" "${VELLUM_SOURCE_DIR}/cmake/skia_dawn_provider.exports")
+_run("provider export and bind census" ${_provider_census})
+execute_process(COMMAND ${_provider_census} --plant
+    RESULT_VARIABLE _plant_result OUTPUT_VARIABLE _plant_stdout ERROR_VARIABLE _plant_stderr)
+if(NOT _plant_result EQUAL 1 OR NOT _plant_stderr MATCHES "provider has 5 unexpected exports:")
+    message(FATAL_ERROR "provider census did not catch the planted exports:\n${_plant_stdout}\n${_plant_stderr}")
+endif()
+message(STATUS "provider export census negative control: ok")
+
+set(_weak_tint_dir "${_work}/weak-tint")
+file(MAKE_DIRECTORY "${_weak_tint_dir}")
+file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/weak_tint_main.cpp"
+    DESTINATION "${_weak_tint_dir}")
+file(WRITE "${_weak_tint_dir}/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.24)
+project(VellumWeakTintConsumer LANGUAGES CXX)
+find_package(Vellum CONFIG REQUIRED)
+add_executable(vellum-weak-tint-consumer weak_tint_main.cpp)
+target_compile_features(vellum-weak-tint-consumer PRIVATE cxx_std_20)
+target_link_options(vellum-weak-tint-consumer PRIVATE "LINKER:-export_dynamic")
+target_link_libraries(vellum-weak-tint-consumer PRIVATE Vellum::SkiaDawnProvider)
+]=])
+_run("weak Tint consumer configure" "${CMAKE_COMMAND}"
+    -S "${_weak_tint_dir}" -B "${_weak_tint_dir}/build" ${_generator}
+    -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=${_prefix}"
+    -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+    -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
+_run("weak Tint consumer build" "${CMAKE_COMMAND}" --build "${_weak_tint_dir}/build")
+set(_weak_tint_host "${_weak_tint_dir}/build/vellum-weak-tint-consumer")
+_run("weak Tint consumer symbol table" "${_nm}" -m "${_weak_tint_host}")
+string(REGEX MATCH "weak external (__ZN4tint[^ \n]+)" _host_match "${_last_stdout}")
+if(NOT _host_match)
+    message(FATAL_ERROR "weak Tint consumer did not export its conflicting definition")
+endif()
+set(_weak_tint_name "${CMAKE_MATCH_1}")
+_run("provider symbol table" "${_nm}" -jU "${_provider}")
+if(NOT _last_stdout MATCHES "(^|\n)${_weak_tint_name}(\n|$)")
+    message(FATAL_ERROR "provider does not define the Tint matcher planted in the consumer")
+endif()
+_run("weak Tint consumer using Dawn Null" "${_weak_tint_host}")
+if(_run_live_gpu)
+    _run("weak Tint consumer using Metal" "${_weak_tint_host}" --live-gpu)
+endif()
+
 # A plug-in editor's view of the host: plugin_view_host.hpp reaches the GPU
 # device type only through platform/gpu_fwd.hpp, so it builds, links and runs
 # against the installed package without VELLUM_MIRROR_BUILD.
@@ -244,8 +292,6 @@ message(STATUS "${_last_stdout}")
 # cannot link a second pinned Dawn archive through this package boundary. The
 # no-proc-reference check below is the strongest installed-consumer proof, while
 # the provider's own whole-archive link remains the sole Dawn definition.
-set(_provider "${_prefix}/${VELLUM_INSTALL_LIBDIR}/libvellum-skia-dawn-provider.dylib")
-find_program(_nm nm REQUIRED)
 execute_process(COMMAND "${_nm}" -gU "${_provider}"
     RESULT_VARIABLE _provider_nm_result OUTPUT_VARIABLE _provider_nm ERROR_VARIABLE _provider_nm_error)
 if(NOT _provider_nm_result EQUAL 0 OR

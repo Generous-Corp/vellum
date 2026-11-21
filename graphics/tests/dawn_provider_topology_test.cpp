@@ -26,13 +26,18 @@ const std::uint8_t* header_version() {
                                         : dawn::kDawnVersion.data();
 }
 
+// Use the provider's callbacks so the test does not import Dawn internals.
+const NativeDawnBindings& provider_bindings() {
+    return *static_cast<const NativeDawnBindings*>(vellum::app_host::native_dawn_bootstrap().context);
+}
+
 const std::uint8_t* proc_version() {
-    return mismatch == Mismatch::proc ? wrong_revision.data() : dawnProcGetVersion();
+    return mismatch == Mismatch::proc ? wrong_revision.data() : provider_bindings().proc_version();
 }
 
 const DawnProcTable& native_procs() {
     static DawnProcTable procedures{};
-    procedures = dawn::native::GetProcs();
+    procedures = provider_bindings().native_procs();
     if (mismatch == Mismatch::native) {
         std::copy(wrong_revision.begin(), wrong_revision.end(), procedures.version);
     }
