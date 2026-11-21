@@ -16,7 +16,7 @@ import { applyPaintProp } from './prop-applier-paint.js';
 import { applyTypographyProp } from './prop-applier-typography.js';
 import { resolveTypographyLength } from './prop-applier-typography.js';
 import { applyTransformProp } from './prop-applier-transform.js';
-import { applyEventProp, reclaimOverlayForMovedParent, releaseLostOverlayClaim } from './prop-applier-events.js';
+import { applyEventProp, applyOverlayTransition } from './prop-applier-events.js';
 import { resetRemovedStyleKeys } from './prop-applier-reset.js';
 import {
     forgetControlled,
@@ -486,6 +486,14 @@ function emitSvgLineGeometry(id: string, props: Record<string, unknown>): void {
 
 const shaderUniformSnapshots = new Map<string, string>();
 
+const TRANSPARENT_IMAGE_SOURCE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=';
+
+function isTextValueWidget(type: string, props?: Record<string, unknown>): boolean {
+    const inputType = String(props?.type ?? 'text').toLowerCase();
+    return type === 'TextEditor' || type === 'textarea'
+        || (type === 'input' && inputType !== 'range' && inputType !== 'checkbox');
+}
+
 function scrollNumber(value: unknown): number {
     const n = Number(value);
     return Number.isFinite(n) ? n : 0;
@@ -620,7 +628,7 @@ function applyOne(id: string, type: string, key: string, value: unknown, props?:
     // setImageSource -> ImageView::set_image_path resolves the rest,
     // exactly as the web-compat path does.
     if ((type === 'img' || type === 'Image') && key === 'src') {
-        call('setImageSource', id, String(value));
+        call('setImageSource', id, value === '' ? TRANSPARENT_IMAGE_SOURCE : String(value));
         return;
     }
 
@@ -669,8 +677,7 @@ function applyOne(id: string, type: string, key: string, value: unknown, props?:
             // widget type. setValue only handles knob/fader/toggle/
             // checkbox; Progress wants setProgress, and Spectrum /
             // Waveform use the 'data' prop handled above.
-            if (type === 'TextEditor' || type === 'textarea'
-                || (type === 'input' && props?.type !== 'range' && props?.type !== 'checkbox')) {
+            if (isTextValueWidget(type, props)) {
                 return call('setText', id, String(value));
             }
             if (type === 'Progress')   return call('setProgress', id, value as number);
@@ -895,6 +902,7 @@ export function applyAllProps(instance: PulpInstance): void {
     shaderUniformSnapshots.delete(id);
     applyWidgetValues(id, type, props);
     const scrollOffsetsApplied = applyScrollOffsets(id, type, props);
+    applyOverlayTransition(id, {}, props);
     // A first attach is a new native widget: nothing is installed on it yet,
     // whatever an earlier widget under this id had.
     forgetNativeListeners(id);
@@ -918,6 +926,7 @@ export function applyAllProps(instance: PulpInstance): void {
     for (const key of orderedPropKeys(type, props)) {
         if (isReactInternal(key)) continue;
         if (isWidgetValueProp(type, key)) continue;
+        if (key === 'role' || key === 'aria-modal' || key === 'overlay') continue;
         if (key === 'children') continue;  // text children handled by caller
         if (scrollOffsetsApplied && type === 'ScrollView'
             && (key === 'scrollTop' || key === 'scrollLeft')) continue;
@@ -949,7 +958,7 @@ export function applyChangedProps(
     const { id, type } = instance;
     let mutated = applyWidgetValues(id, type, newProps, oldProps);
     const scrollOffsetsApplied = applyScrollOffsets(id, type, newProps, oldProps);
-    mutated = scrollOffsetsApplied || mutated;
+    mutated = applyOverlayTransition(id, oldProps, newProps) || scrollOffsetsApplied || mutated;
     noteControlledProps(id, newProps);
     const selectionModeChanged = isVirtualListType(type) &&
         oldProps.selectionMode !== newProps.selectionMode;
@@ -989,6 +998,7 @@ export function applyChangedProps(
     for (const key of orderedPropKeys(type, newProps)) {
         if (isReactInternal(key)) continue;
         if (isWidgetValueProp(type, key)) continue;
+        if (key === 'role' || key === 'aria-modal' || key === 'overlay') continue;
         if (key === 'children') continue;
         if (scrollOffsetsApplied && type === 'ScrollView'
             && (key === 'scrollTop' || key === 'scrollLeft')) continue;
@@ -1021,18 +1031,12 @@ export function applyChangedProps(
         mutated = true;
     }
 
-    // An overlay's declared parent and the props that claim it are one
-    // compound state, and only the claim reaches the bridge. A re-pointed
-    // declaration whose claiming key did not move would otherwise change
-    // nothing, leaving a lifted submenu nested on the menu it just left.
-    if (reclaimOverlayForMovedParent(id, oldProps, newProps)) mutated = true;
-
     // Props hoisted out of `style`/`className` are DERIVED, not authored.
-    // When a render arrives with no style source at all, the derived keys
-    // are ABSENT rather than deleted, so resetting them here erases the
+    // Partial materialization updates can arrive with no style source. Their keys
+    // are absent rather than deleted, so resetting them here erases the
     // element (a chip loses fill, border, padding and text in one frame and
     // reads as "disappeared on hover"). Only honour a removal when both prop
-    // sets came from the same shape. An author-removed style, a key dropped
+    // sets came from the same shape, or React supplies a complete snapshot. An author-removed style, a key dropped
     // from a style object, or a style prop set to undefined, still resets.
     const derivedShapeChanged =
         !fullSnapshot && isDerivedStyleProps(oldProps) && !isDerivedStyleProps(newProps);
@@ -1045,6 +1049,7 @@ export function applyChangedProps(
     for (const key of Object.keys(oldProps)) {
         if (isReactInternal(key)) continue;
         if (isWidgetValueProp(type, key)) continue;
+        if (key === 'role' || key === 'aria-modal' || key === 'overlay') continue;
         if (key === 'children') continue;
         if (scrollOffsetsApplied && type === 'ScrollView'
             && (key === 'scrollTop' || key === 'scrollLeft')) continue;
@@ -1057,6 +1062,11 @@ export function applyChangedProps(
             continue;
         }
         if (!isAbsent(newProps, key) || isAbsent(oldProps, key)) continue;
+        if (key === 'value' && isTextValueWidget(type, newProps)) {
+            call('setText', id, '');
+            mutated = true;
+            continue;
+        }
         // `<Image>` whose `src` is removed clears the ImageView back to the
         // empty placeholder, matching the web-compat removeAttribute('src')
         // reset semantics. The bridge ignores empty paths, so a transparent
@@ -1065,7 +1075,7 @@ export function applyChangedProps(
         // compare so the clear-on-removal seam matches the set seam.
         if (key === 'src' && ((type as string) === 'img' || type === 'Image')) {
             // The bridge ignores empty paths; a transparent pixel actually retires the bitmap.
-            call('setImageSource', id, 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=');
+            call('setImageSource', id, TRANSPARENT_IMAGE_SOURCE);
             mutated = true;
             continue;
         }
@@ -1087,6 +1097,7 @@ export function applyChangedProps(
     if (removed.length > 0) {
         const survivors = orderedPropKeys(type, newProps).filter((key) =>
             !isReactInternal(key) && key !== 'children' && !isEventHandler(key)
+            && key !== 'role' && key !== 'aria-modal' && key !== 'overlay'
             && !isAbsent(newProps, key));
         const creationStyle = instance.creationStyle;
         if (resetRemovedStyleKeys(id, type, removed, survivors, creationStyle,
@@ -1103,5 +1114,5 @@ export function applyChangedProps(
         mutated = true;
     }
 
-    return releaseLostOverlayClaim(id, oldProps, newProps) || mutated;
+    return mutated;
 }

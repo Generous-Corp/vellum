@@ -90,12 +90,8 @@ export function applyEventProp(
         // "listbox"`) or sets `aria-modal="true"`, claim the overlay so
         // Esc-dismiss + outside-click routing fire automatically.
         //
-        // Override semantics: an explicit `overlay={false}` still wins
-        // because applyChangedProps emits that case AFTER the role case
-        // (object iteration order is insertion order, and JSX collects
-        // props left-to-right; `overlay` typically appears after `role`).
-        // For defensive parity, an explicit overlay={true} is a no-op on
-        // top of the auto-claim (idempotent on the bridge side).
+        // Complete prop bags determine the claim. An explicit overlay=false
+        // wins regardless of JSX key order.
         case 'role': {
             const r = typeof value === 'string' ? value.toLowerCase() : '';
             if (claimsOverlay(props) && (r === 'dialog' || r === 'alertdialog' || r === 'menu' || r === 'listbox')) {
@@ -188,8 +184,16 @@ export function reclaimOverlayForMovedParent(
     return true;
 }
 
-export function releaseLostOverlayClaim(id: string, oldProps: Record<string, unknown>, newProps: Record<string, unknown>): boolean {
-    if (!claimsOverlay(oldProps) || claimsOverlay(newProps)) return false;
-    call('releaseOverlay', id);
-    return true;
+export function applyOverlayTransition(id: string, oldProps: Record<string, unknown>, newProps: Record<string, unknown>): boolean {
+    const before = claimsOverlay(oldProps);
+    const after = claimsOverlay(newProps);
+    if (after && (!before || oldProps.overlayParent !== newProps.overlayParent)) {
+        emitOverlayClaim(id, newProps);
+        return true;
+    }
+    if ((!after && before) || (newProps.overlay === false && oldProps.overlay !== false)) {
+        call('releaseOverlay', id);
+        return true;
+    }
+    return false;
 }
