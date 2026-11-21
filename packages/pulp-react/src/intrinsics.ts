@@ -26,6 +26,20 @@ let anonymousCanvasId = 0;
 // its lowercase-stringly type. The host config's createWidget switch is
 // the single source of truth for how each maps to a bridge createX call.
 
+// Host elements receive synthetic events. Typed widget facades expose the
+// native payload promised by their public props; HTML elements keep events.
+function valueWidget(type: string, props: object, nativeProp = 'onChange', booleanValue = false): ReactElement {
+    const { onChange, ...rest } = props as Record<string, unknown>;
+    if (typeof onChange === 'function') {
+        rest[nativeProp] = (event: unknown) => {
+            const args = (event as { nativeEvent?: { rawArgs?: unknown[] } })?.nativeEvent?.rawArgs ?? [];
+            if (booleanValue) onChange(Boolean(args[0]));
+            else onChange(...args);
+        };
+    }
+    return createElement(type as unknown as 'div', rest);
+}
+
 export const View = (props: ViewProps): ReactElement => createElement('View' as unknown as 'div', props as unknown as object);
 export const Row = (props: RowProps): ReactElement => createElement('Row' as unknown as 'div', props as unknown as object);
 export const Col = (props: ColProps): ReactElement => createElement('Col' as unknown as 'div', props as unknown as object);
@@ -39,24 +53,24 @@ export const NativeView = (props: ViewProps): ReactElement => createElement('Nat
 
 export const Label = (props: LabelProps): ReactElement => createElement('Label' as unknown as 'div', props as unknown as object);
 export const Button = (props: ButtonProps): ReactElement => createElement('Button' as unknown as 'div', props as unknown as object);
-export const TextEditor = (props: TextEditorProps): ReactElement => createElement('TextEditor' as unknown as 'div', props as unknown as object);
+export const TextEditor = (props: TextEditorProps): ReactElement => valueWidget('TextEditor', props);
 
-export const Knob = (props: KnobProps): ReactElement => createElement('Knob' as unknown as 'div', props as unknown as object);
-export const Fader = (props: FaderProps): ReactElement => createElement('Fader' as unknown as 'div', props as unknown as object);
+export const Knob = (props: KnobProps): ReactElement => valueWidget('Knob', props);
+export const Fader = (props: FaderProps): ReactElement => valueWidget('Fader', props);
 export const Spectrum = (props: SpectrumProps): ReactElement => createElement('Spectrum' as unknown as 'div', props as unknown as object);
 export const Waveform = (props: WaveformProps): ReactElement => createElement('Waveform' as unknown as 'div', props as unknown as object);
 export const Meter = (props: MeterProps): ReactElement => createElement('Meter' as unknown as 'div', props as unknown as object);
 export const Progress = (props: ProgressProps): ReactElement => createElement('Progress' as unknown as 'div', props as unknown as object);
-export const XYPad = (props: XYPadProps): ReactElement => createElement('XYPad' as unknown as 'div', props as unknown as object);
-export const Checkbox = (props: CheckboxProps): ReactElement => createElement('Checkbox' as unknown as 'div', props as unknown as object);
-export const Toggle = (props: ToggleProps): ReactElement => createElement('Toggle' as unknown as 'div', props as unknown as object);
-export const Combo = (props: ComboProps): ReactElement => createElement('Combo' as unknown as 'div', props as unknown as object);
+export const XYPad = (props: XYPadProps): ReactElement => valueWidget('XYPad', props);
+export const Checkbox = (props: CheckboxProps): ReactElement => valueWidget('Checkbox', props, 'onChange', true);
+export const Toggle = (props: ToggleProps): ReactElement => valueWidget('Toggle', props, 'onToggle', true);
+export const Combo = (props: ComboProps): ReactElement => valueWidget('Combo', props, 'onSelect');
 
 // Ink & Signal design-system widgets.
 export const Badge = (props: BadgeProps): ReactElement => createElement('Badge' as unknown as 'div', props as unknown as object);
-export const Stepper = (props: StepperProps): ReactElement => createElement('Stepper' as unknown as 'div', props as unknown as object);
-export const Pan = (props: PanProps): ReactElement => createElement('Pan' as unknown as 'div', props as unknown as object);
-export const ListBox = (props: ListBoxProps): ReactElement => createElement('ListBox' as unknown as 'div', props as unknown as object);
+export const Stepper = (props: StepperProps): ReactElement => valueWidget('Stepper', props);
+export const Pan = (props: PanProps): ReactElement => valueWidget('Pan', props);
+export const ListBox = (props: ListBoxProps): ReactElement => valueWidget('ListBox', props, 'onSelect');
 
 function firstRawArg(event: unknown): unknown {
     return (event as { nativeEvent?: { rawArgs?: unknown[] } })?.nativeEvent?.rawArgs?.[0];

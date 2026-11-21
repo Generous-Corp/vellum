@@ -1063,14 +1063,16 @@ export const PulpHostConfig: HostConfig<
         // contains.
         markMaterializedTreeDirty(parentInstance.id);
         markMaterializedTreeDirty(child.id);
-        const beforeIdx = parentInstance.childIds.indexOf(beforeChild.id);
+        let beforeIdx = parentInstance.childIds.indexOf(beforeChild.id);
         const sameParent = child.parentId === parentInstance.id && child.onBridge;
         if (sameParent) {
             // Same-parent reorder: React shuffled keyed siblings. Update
             // childIds and use the bridge's indexed insert path to keep
             // native order in sync.
             const oldIdx = parentInstance.childIds.indexOf(child.id);
+            if (child === beforeChild) return;
             if (oldIdx >= 0) parentInstance.childIds.splice(oldIdx, 1);
+            beforeIdx = parentInstance.childIds.indexOf(beforeChild.id);
             const insertIdx = beforeIdx >= 0 ? beforeIdx : parentInstance.childIds.length;
             parentInstance.childIds.splice(insertIdx, 0, child.id);
             if (typeof g.insertChild === 'function') {
@@ -1085,11 +1087,7 @@ export const PulpHostConfig: HostConfig<
     },
     insertInContainerBefore(container, child, beforeChild) {
         markMaterializedTreeDirty();
-        // Root container ordering is append-only on this path today:
-        // attachToRoot materializes under the bridge root and does not
-        // consult beforeChild. Non-root insertions preserve order via
-        // insertBefore's insertChild / moveWidget path above.
-        attachToRoot(container, child, /* index */ -1, beforeChild);
+        attachToRoot(container, child, beforeChild);
     },
 
     removeChild(parentInstance, child) {
@@ -1097,18 +1095,16 @@ export const PulpHostConfig: HostConfig<
         markMaterializedTreeDirty(parentInstance.id);
         detach(parentInstance, child);
     },
-    removeChildFromContainer(_container, child) {
+    removeChildFromContainer(container, child) {
         markMaterializedTreeDirty();
-        // Detach from root and let the bridge clean up the subtree.
-        if (typeof g.removeWidget === 'function') call('removeWidget', child.id);
-        unregisterDomSubtree(child);
-        child.parentId = undefined;
+        removeRootChild(container, child);
     },
 
-    clearContainer(_container) {
+    clearContainer(container) {
         markMaterializedTreeDirty();
-        // No-op for v0, React always issues per-child removals.
-        // Could be optimized later by tracking a list of root children.
+        for (const child of [...(rootChildren.get(container) ?? [])]) {
+            removeRootChild(container, child);
+        }
     },
 
     // ── Suspense visibility ────────────────────────────────────────
@@ -1164,7 +1160,7 @@ export const PulpHostConfig: HostConfig<
             dom.__pulpAuthoredLayout__ = newN;
             const committedText = asText(newN.children)
                 ?? (newN.text as string | undefined);
-            if (committedText !== undefined) dom._textContent = committedText;
+            dom._textContent = committedText ?? '';
             if (instance.textTargetId) dom.__pulpTextTargetId = instance.textTargetId;
             else delete dom.__pulpTextTargetId;
         }
@@ -1172,15 +1168,15 @@ export const PulpHostConfig: HostConfig<
         if (TEXT_BEARING.has(instance.type)) {
             const oldText = asText(oldN.children) ?? (oldN.text as string | undefined);
             const newText = asText(newN.children) ?? (newN.text as string | undefined);
-            if (oldText !== newText && newText !== undefined) {
+            if (oldText !== newText) {
                 if (typeof g.setText === 'function') {
-                    call('setText', instance.textTargetId ?? instance.id, newText);
+                    call('setText', instance.textTargetId ?? instance.id, newText ?? '');
                 }
                 // A caption that gains or loses text changes whether it may
                 // size its owner. Re-resolve its box on the same commit.
-                if (instance.textTargetId) {
+                if (instance.textTargetId && String(instance.type) === 'button') {
                     applyButtonCaptionLayout(
-                        instance.textTargetId, newText.length > 0);
+                        instance.textTargetId, (newText ?? '').length > 0);
                 }
             }
         }
@@ -1203,7 +1199,7 @@ export const PulpHostConfig: HostConfig<
         }
         // Nested markup is mounting in place of the caption. Return it to a
         // zero-contribution overlay so it takes no flex slot beside them.
-        if (instance.textTargetId) {
+        if (instance.textTargetId && String(instance.type) === 'button') {
             applyButtonCaptionLayout(instance.textTargetId, false);
         }
     },
@@ -1400,11 +1396,38 @@ function attach(parent: Instance, child: Instance, index?: number): void {
     }
 }
 
-function attachToRoot(container: Container, child: Instance, _index = -1, _before?: Instance): void {
+// Keep ordering per React container, including portal containers.
+const rootChildren = new WeakMap<Container, Instance[]>();
+
+function removeRootChild(container: Container, child: Instance): void {
+    const children = rootChildren.get(container);
+    const index = children?.indexOf(child) ?? -1;
+    if (index >= 0) children!.splice(index, 1);
+    if (typeof g.removeWidget === 'function') call('removeWidget', child.id);
+    unregisterDomSubtree(child);
+    child.parentId = undefined;
+    child.onBridge = false;
+}
+
+function attachToRoot(container: Container, child: Instance, before?: Instance): void {
+    if (child === before) return;
+    const children = rootChildren.get(container) ?? [];
+    rootChildren.set(container, children);
+    const oldIndex = children.indexOf(child);
+    if (oldIndex >= 0) children.splice(oldIndex, 1);
+    const beforeIndex = before ? children.indexOf(before) : -1;
+    const index = beforeIndex >= 0 ? beforeIndex : children.length;
+    children.splice(index, 0, child);
     child.parentId = container.rootId;
-    // The bridge's root is always on the bridge, materialize immediately
-    // and flush the entire deferred subtree.
-    materializeUnder(container.rootId, child);
+    if (child.onBridge) {
+        if (typeof g.insertChild === 'function') {
+            call('insertChild', container.rootId, child.id, index);
+        } else if (typeof g.moveWidget === 'function') {
+            call('moveWidget', child.id, container.rootId, index);
+        }
+    } else {
+        materializeUnder(container.rootId, child, index);
+    }
 }
 
 /// Emit createX + applyAllProps for a single child whose parent is on
@@ -1472,12 +1495,18 @@ function bindSourceLocation(child: Instance): void {
 function materializeUnder(parentId: string, child: Instance, index?: number): void {
     if (child.onBridge) return;
     creationStyleSink = undefined;
+    // Resolve the fallback when materializing, when native capabilities are known.
+    if (child.type === 'Button') {
+        child.textTargetId = typeof g.createButton === 'function' ? undefined : child.id + '_l';
+    }
     createWidget(child.type, child.id, parentId, child.props);
     // An older native host has no indexed insert and can only append. Ordering
     // then degrades exactly as it did before this call existed, rather than
     // throwing, so one renderer bundle still runs on both.
     if (index !== undefined && index >= 0 && typeof g.insertChild === 'function') {
         call('insertChild', parentId, child.id, index);
+    } else if (index !== undefined && index >= 0 && typeof g.moveWidget === 'function') {
+        call('moveWidget', child.id, parentId, index);
     }
     // A loose text node wraps by default in CSS (`white-space: normal`), but a
     // native Label defaults to one line and clips mid-word instead. Synthetic

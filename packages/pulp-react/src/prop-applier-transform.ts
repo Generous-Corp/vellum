@@ -93,9 +93,7 @@ function _parseTransformOrigin(s: string): { x: number; y: number } {
     return { x, y };
 }
 
-// Walk the RN-style transform array. Returns a snapshot with `have*`
-// flags so the caller can dispatch only the operations the user
-// actually specified (translate dispatch is gated on haveTranslate, etc.).
+// Walk the RN-style transform array into a complete identity-based snapshot.
 function _walkTransformArray(arr: ReadonlyArray<unknown>): _TransformSnapshot {
     const snap: _TransformSnapshot = {
         tx: 0, ty: 0,
@@ -192,7 +190,7 @@ export function applyTransformProp(
         // Walk-once accumulates the snapshot in one pass (so
         // {translateX:10} and {translateY:20} as separate entries
         // produce ONE setTranslate(10,20), not two clobbering calls),
-        // then emits only the operations the user specified.
+        // then emits every component, including identity for omitted operations.
         // Within-array semantics: each render's array is a complete
         // description; absent fields reset to identity. No cross-
         // render state is maintained, passing `transform: undefined`
@@ -203,12 +201,12 @@ export function applyTransformProp(
             if (value == null) return true;
             if (!Array.isArray(value)) return true;  // CSS string form deferred
             const snap = _walkTransformArray(value as ReadonlyArray<unknown>);
-            if (snap.haveTranslate) call('setTranslate', id, snap.tx, snap.ty);
-            if (snap.haveRotate)    call('setRotation', id, snap.rotateDeg);
-            if (snap.haveScale)     call('setScale', id, snap.scale);
+            call('setTranslate', id, snap.tx, snap.ty);
+            call('setRotation', id, snap.rotateDeg);
+            call('setScale', id, snap.scale);
             // Emit one consolidated bridge call that captures both skew axes
             // accumulated in the walker.
-            if (snap.haveSkew)      call('setSkew', id, snap.skewX, snap.skewY);
+            call('setSkew', id, snap.skewX, snap.skewY);
             return true;
         }
 
