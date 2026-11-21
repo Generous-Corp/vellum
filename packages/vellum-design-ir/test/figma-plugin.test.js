@@ -114,6 +114,19 @@ test('decodes a generic Figma plugin export into deterministic DesignIR input', 
     ));
 });
 
+test('lowers Figma layer blend modes into native compositing', () => {
+    const input = genericExport();
+    input.root.children[1].style.mix_blend_mode = 'multiply';
+    const document = normalizeImport(decodeFigmaPluginExport(input, {
+        sourceHash: `sha256:${'c'.repeat(64)}`,
+        sourceKey: 'main',
+    }));
+    const button = document.root.children[1];
+    assert.deepEqual(button.compositing, { blendMode: 'multiply' });
+    assert.equal(document.diagnostics.some((diagnostic) =>
+        diagnostic.property === 'mix_blend_mode'), false);
+});
+
 test('retains flex wrapping and grid placement in the native style contract', () => {
     const input = genericExport();
     input.root.layout = {

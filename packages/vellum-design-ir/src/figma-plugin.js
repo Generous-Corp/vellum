@@ -325,7 +325,15 @@ function decodeNode(value, path, diagnostics, pngAssets) {
     };
     if (typeof node.content === 'string') output.text = node.content;
     const opacity = node.style?.opacity;
-    if (Number.isFinite(opacity) && opacity >= 0 && opacity <= 1) output.compositing = { opacity };
+    const blendMode = node.style?.mix_blend_mode;
+    const compositing = {};
+    if (Number.isFinite(opacity) && opacity >= 0 && opacity <= 1) {
+        compositing.opacity = opacity;
+    }
+    if (typeof blendMode === 'string' && blendMode !== 'normal') {
+        compositing.blendMode = blendMode;
+    }
+    if (Object.keys(compositing).length > 0) output.compositing = compositing;
     if (rule.kind === 'button') output.role = 'button';
     return output;
 }
@@ -338,6 +346,7 @@ function decodeProperties(node, path, diagnostics, imageAsset) {
     if (Number.isFinite(style.opacity) && style.opacity >= 0 && style.opacity <= 1) {
         consumedStyle.add('opacity');
     }
+    if (typeof style.mix_blend_mode === 'string') consumedStyle.add('mix_blend_mode');
     for (const [source, rule] of Object.entries(MATERIALIZED_STYLE_FIELDS)) {
         if (style[source] !== undefined) {
             properties[rule.group][rule.target] = style[source];
