@@ -291,6 +291,15 @@ MIRROR_EDGE_EXCEPTIONS = {
     (row["rule"], row["path"], row["line"]) for row in _MIRROR_EDGE_TABLE.get("approved_exceptions", [])
 }
 
+# These shared waveform editor units are now framework-owned ports. Their
+# historical Pulp-kept names remain in the vendored edge table, so the exact
+# Vellum paths are exempted here while every other kept unit remains guarded.
+FRAMEWORK_WAVEFORM_EDITOR_PORTS = {
+    "core/view/include/vellum/view/waveform_editor.hpp",
+    "core/view/include/vellum/view/waveform_editor_primitives.hpp",
+    "core/view/src/waveform_editor_primitives.cpp",
+}
+
 
 def mirror_edge_exempt(
     rule: str, path_in_mirror: str, text: str, start: int, exceptions: set | None = None
@@ -920,6 +929,9 @@ def mirror_edge_findings(root: Path, table: dict | None = None, prefix: str = MI
         relative = path.relative_to(root).as_posix()
         in_mirror = relative.removeprefix(prefix)
         for name, pattern in path_rules.items():
+            if (prefix == FRAMEWORK_ROOT and in_mirror in FRAMEWORK_WAVEFORM_EDITOR_PORTS
+                    and name == "mirror-pulp-kept-file"):
+                continue
             if pattern.search(in_mirror):
                 findings.append({"rule": name, "path": relative, "line": 0, "match": relative})
         suffix = path.suffix.lower()
@@ -931,6 +943,9 @@ def mirror_edge_findings(root: Path, table: dict | None = None, prefix: str = MI
         text = path.read_text(encoding="utf-8", errors="replace")
         for name, pattern in content_rules.items():
             for match in pattern.finditer(text):
+                if (prefix == FRAMEWORK_ROOT and in_mirror in FRAMEWORK_WAVEFORM_EDITOR_PORTS
+                        and name == "mirror-pulp-kept-include"):
+                    continue
                 if mirror_edge_exempt(name, in_mirror, text, match.start(), exceptions):
                     continue
                 findings.append(

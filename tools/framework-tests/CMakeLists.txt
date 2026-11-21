@@ -221,6 +221,10 @@ vellum_add_framework_test(widget-bridge-param-model
     SOURCES widget_bridge_param_model_test.cpp
     UNITS Vellum::MirrorView_script Vellum::Value)
 
+vellum_add_framework_test(waveform-editor
+    SOURCES waveform_editor_test.cpp
+    UNITS Vellum::MirrorView_core)
+
 # Linux host tests: the SDL window host on an X server and the AT-SPI tree over
 # a D-Bus session. They need the framework units compiled for Linux, so they
 # register only there; their sources count as registered everywhere. Run them

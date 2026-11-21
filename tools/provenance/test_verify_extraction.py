@@ -313,6 +313,24 @@ class VerifyExtractionTests(unittest.TestCase):
                 sum(finding["path"].endswith("meter.cpp") for finding in findings), 3
             )
 
+    def test_framework_allows_vellum_waveform_editor_ports(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.write_mirror(root, "framework/core/view/include/vellum/view/waveform_editor.hpp",
+                              b"#include <vellum/view/waveform_editor_primitives.hpp>\n")
+            self.write_mirror(root, "framework/core/view/include/vellum/view/waveform_editor_primitives.hpp",
+                              b"#pragma once\n")
+            self.write_mirror(root, "framework/core/view/src/waveform_editor_primitives.cpp",
+                              b"#include <vellum/view/waveform_editor_primitives.hpp>\n")
+            self.assertEqual(
+                verify_extraction.mirror_edge_findings(root, prefix=verify_extraction.FRAMEWORK_ROOT), []
+            )
+            self.write_mirror(root, "framework/core/view/src/other_waveform_editor_primitives.cpp",
+                              b"#include <vellum/view/waveform_editor_primitives.hpp>\n")
+            self.assertTrue(verify_extraction.mirror_edge_findings(
+                root, prefix=verify_extraction.FRAMEWORK_ROOT
+            ))
+
     def test_framework_rejects_renamed_product_edges(self) -> None:
         # framework/ keeps the mirror-edge rules, in the renamed spelling.
         with tempfile.TemporaryDirectory() as temporary:
