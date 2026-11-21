@@ -5,6 +5,7 @@
 #include <vellum/graphics/skia_dawn_surface.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <string>
@@ -115,7 +116,7 @@ void fallback_checks() {
         compare("different colors", scene, 1.0F, 0U);
     }
     for (const std::string variant : {"fractional", "rounded", "corners", "transform",
-                                     "alpha", "opacity", "gradient", "shadow"}) {
+                                     "alpha", "opacity", "gradient", "shadow", "border"}) {
         auto scene = base;
         for (auto& node : scene.root.children) {
             if (variant == "fractional") node.bounds.x += 0.25F;
@@ -128,6 +129,10 @@ void fallback_checks() {
                 node.fill_gradients = {{.angle_degrees = 90.0F,
                     .stops = {{.position = 0.0F, .color = Color::hex(0xFA3377)},
                               {.position = 1.0F, .color = Color::hex(0x33AAFF)}}}};
+            }
+            if (variant == "border") {
+                node.border_width = 2.0F;
+                node.border_color = Color::hex(0xF07A45);
             }
             if (variant == "shadow") {
                 node.box_shadows = {{.offset_x = 2.0F, .offset_y = 1.0F,
@@ -152,6 +157,51 @@ void fallback_checks() {
         compare("isolated layer", scene, 1.0F, 0U);
         compare("cached layer", scene, 1.0F, 0U, true);
     }
+}
+
+// A border lies inside its box: the pixel just outside stays background and
+// the box's own edge pixel takes the border colour.
+void border_inside_box() {
+    Scene scene;
+    scene.width = 64.0F;
+    scene.height = 64.0F;
+    scene.background = Color::hex(0x000000);
+    scene.root = {.id = "root", .kind = SceneNode::Kind::group,
+                  .bounds = {0.0F, 0.0F, scene.width, scene.height}};
+    scene.root.children.push_back({
+        .id = "box", .kind = SceneNode::Kind::rectangle,
+        .bounds = {16.0F, 16.0F, 32.0F, 32.0F},
+        .fill = Color::hex(0x0000FF),
+    });
+    scene.root.children[0].border_width = 4.0F;
+    scene.root.children[0].border_color = Color::hex(0xFF0000);
+    auto created = harness::create_gpu_surface({.width = 64U, .height = 64U, .scale = 1.0F});
+    if (!created.surface) {
+        expect(false, "border surface", created.status.message);
+        return;
+    }
+    created.surface->set_layer_cache_policy({.enabled = false});
+    std::string error;
+    harness::CaptureResult result;
+    if (!created.surface->render(scene, &error) || !capture(*created.surface, result, error)) {
+        expect(false, "border render", error);
+        return;
+    }
+    const auto at = [&](std::uint32_t x, std::uint32_t y) {
+        const std::size_t offset = (static_cast<std::size_t>(y) * result.pixel_width + x) * 4U;
+        return std::array<std::uint8_t, 3>{result.rgba[offset], result.rgba[offset + 1U],
+                                           result.rgba[offset + 2U]};
+    };
+    const auto outside = at(14U, 32U);
+    const auto edge = at(16U, 32U);
+    const auto inner_edge = at(19U, 32U);
+    const auto fill = at(20U, 32U);
+    expect(outside[0] == 0U && outside[1] == 0U && outside[2] == 0U, "border stays inside box",
+           "outside pixel red=" + std::to_string(outside[0]));
+    expect(edge[0] == 255U && edge[2] == 0U, "border reaches box edge",
+           "edge pixel red=" + std::to_string(edge[0]));
+    expect(inner_edge[0] == 255U && inner_edge[2] == 0U, "border covers its full width");
+    expect(fill[0] == 0U && fill[2] == 255U, "fill inside border");
 }
 
 void benchmark() {
@@ -221,6 +271,7 @@ int rectangle_batch_checks(bool run_benchmark) {
         compare("half pixels scale 2", scene, 2.0F, 2U);
     }
     fallback_checks();
+    border_inside_box();
     if (failures == 0 && run_benchmark) benchmark();
     return failures == 0 ? 0 : 1;
 }
