@@ -39,13 +39,13 @@ describe('parseShortcut', () => {
     });
 
     it('parses escape', () => {
-        expect(parseShortcut('escape').keyCode).toBe(27);
-        expect(parseShortcut('esc').keyCode).toBe(27);
+        expect(parseShortcut('escape').keyCode).toBe(274);
+        expect(parseShortcut('esc').keyCode).toBe(274);
     });
 
     it('parses function keys', () => {
-        expect(parseShortcut('f1').keyCode).toBe(0x70);
-        expect(parseShortcut('f12').keyCode).toBe(0x7B);
+        expect(parseShortcut('f1').keyCode).toBe(290);
+        expect(parseShortcut('f12').keyCode).toBe(301);
     });
 
     it('parses multi-modifier chords (canonical sort)', () => {
@@ -88,8 +88,8 @@ describe('registerShortcut', () => {
                 `__pulpShortcutDispatcher_${','.charCodeAt(0)}_${MOD_CMD}__`,
             ]);
             expect(calls[1].args).toEqual([
-                27, 0,
-                `__pulpShortcutDispatcher_27_0__`,
+                274, 0,
+                `__pulpShortcutDispatcher_274_0__`,
             ]);
         } finally {
             bridge.uninstall();
@@ -106,7 +106,7 @@ describe('registerShortcut', () => {
             registerShortcut('escape', second, 'second');
 
             const dispatcher = (globalThis as Record<string, unknown>)[
-                `__pulpShortcutDispatcher_27_0__`
+                `__pulpShortcutDispatcher_274_0__`
             ] as (() => void) | undefined;
             expect(dispatcher).toBeDefined();
             dispatcher!();
@@ -129,7 +129,7 @@ describe('registerShortcut', () => {
             off();
 
             const dispatcher = (globalThis as Record<string, unknown>)[
-                `__pulpShortcutDispatcher_27_0__`
+                `__pulpShortcutDispatcher_274_0__`
             ] as (() => void) | undefined;
             dispatcher!();
             expect(first).toHaveBeenCalledTimes(1);

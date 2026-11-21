@@ -2,8 +2,8 @@
 // dispatches consolidated setTranslate / setRotation / setScale bridge calls.
 //
 // The walker accumulates a {tx, ty, rotateDeg, scale} snapshot in one
-// pass, then emits ONE call per axis-of-transform that the user
-// specified. Within-array merging means [{translateX:10},{translateY:20}]
+// pass, then emits ONE call per axis-of-transform, resetting omitted axes
+// to identity. Within-array merging means [{translateX:10},{translateY:20}]
 // produces ONE setTranslate(10, 20), not two clobbering calls.
 //
 // Unsupported 3D transforms silently no-op because Pulp's View is a 2D
@@ -46,8 +46,8 @@ describe('React prop forwarding for transform arrays', () => {
         const calls = callsOf(bridge, 'setTranslate');
         expect(calls).toHaveLength(1);
         expect(calls[0].args).toEqual(['k', 10, 0]);
-        expect(callsOf(bridge, 'setRotation')).toHaveLength(0);
-        expect(callsOf(bridge, 'setScale')).toHaveLength(0);
+        expect(callsOf(bridge, 'setRotation').map(c => c.args)).toEqual([['k', 0]]);
+        expect(callsOf(bridge, 'setScale').map(c => c.args)).toEqual([['k', 1]]);
     });
 
     it('translateY-only dispatches one setTranslate(0, y)', () => {
@@ -162,11 +162,11 @@ describe('React prop forwarding for transform arrays', () => {
         expect(callsOf(bridge, 'setScale')).toHaveLength(0);
     });
 
-    it('empty array is a no-op', () => {
+    it('empty array resets every component to identity', () => {
         applyChangedProps(makeInstance(), {}, { transform: [] });
-        expect(callsOf(bridge, 'setTranslate')).toHaveLength(0);
-        expect(callsOf(bridge, 'setRotation')).toHaveLength(0);
-        expect(callsOf(bridge, 'setScale')).toHaveLength(0);
+        expect(callsOf(bridge, 'setTranslate').map(c => c.args)).toEqual([['k', 0, 0]]);
+        expect(callsOf(bridge, 'setRotation').map(c => c.args)).toEqual([['k', 0]]);
+        expect(callsOf(bridge, 'setScale').map(c => c.args)).toEqual([['k', 1]]);
     });
 
     it('skewX + skewY accumulate into ONE setSkew call', () => {
@@ -179,10 +179,10 @@ describe('React prop forwarding for transform arrays', () => {
         const skewCalls = bcalls(bridge, 'setSkew');
         expect(skewCalls).toHaveLength(1);
         expect(skewCalls[0].args).toEqual(['k', 10, 5]);
-        // Other axes are not touched.
-        expect(callsOf(bridge, 'setTranslate')).toHaveLength(0);
-        expect(callsOf(bridge, 'setRotation')).toHaveLength(0);
-        expect(callsOf(bridge, 'setScale')).toHaveLength(0);
+        // Omitted axes reset to identity.
+        expect(callsOf(bridge, 'setTranslate').map(c => c.args)).toEqual([['k', 0, 0]]);
+        expect(callsOf(bridge, 'setRotation').map(c => c.args)).toEqual([['k', 0]]);
+        expect(callsOf(bridge, 'setScale').map(c => c.args)).toEqual([['k', 1]]);
     });
 
     it('skewX with rad unit converts to degrees', () => {
@@ -223,9 +223,9 @@ describe('React prop forwarding for transform arrays', () => {
                 { matrix: [1, 0, 0, 1, 0, 0] },
             ],
         });
-        expect(callsOf(bridge, 'setTranslate')).toHaveLength(0);
-        expect(callsOf(bridge, 'setRotation')).toHaveLength(0);
-        expect(callsOf(bridge, 'setScale')).toHaveLength(0);
+        expect(callsOf(bridge, 'setTranslate').map(c => c.args)).toEqual([['k', 0, 0]]);
+        expect(callsOf(bridge, 'setRotation').map(c => c.args)).toEqual([['k', 0]]);
+        expect(callsOf(bridge, 'setScale').map(c => c.args)).toEqual([['k', 1]]);
     });
 
     it('null / undefined transform is a no-op', () => {
