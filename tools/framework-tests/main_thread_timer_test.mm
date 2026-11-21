@@ -79,11 +79,13 @@ FRAMEWORK_TEST(one_shot_after_repeating_fires_once) {
     std::atomic<int> fires{0};
     MainThreadTimer timer(scope, [&] { ++fires; });
     timer.fire_every(10ms);
-    CHECK(pump_until([&] { return fires.load() >= 2; }, 2s));
+    // A run-loop pump can deliver more than the minimum number of callbacks.
+    CHECK(pump_until([&] { return fires.load() >= 5; }, 2s));
+    const int before_one_shot = fires.load();
     timer.fire_after(10ms);
-    CHECK(pump_until([&] { return fires.load() >= 3; }, 2s));
+    CHECK(pump_until([&] { return fires.load() > before_one_shot; }, 2s));
     pump_for(50ms);
-    CHECK(fires == 3);
+    CHECK(fires == before_one_shot + 1);
     CHECK(!timer.pending());
 }
 
