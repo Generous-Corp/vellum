@@ -54,6 +54,7 @@ function emitOverlayClaim(id: string, props?: Record<string, unknown>): void {
 ///, so a change to it re-emits the claim only for a view that has one.
 function claimsOverlay(props?: Record<string, unknown>): boolean {
     if (!props) return false;
+    if (props.overlay === false) return false;
     if (props.overlay) return true;
     const r = typeof props.role === 'string' ? props.role.toLowerCase() : '';
     if (r === 'dialog' || r === 'alertdialog' || r === 'menu' || r === 'listbox')
@@ -97,7 +98,7 @@ export function applyEventProp(
         // top of the auto-claim (idempotent on the bridge side).
         case 'role': {
             const r = typeof value === 'string' ? value.toLowerCase() : '';
-            if (r === 'dialog' || r === 'alertdialog' || r === 'menu' || r === 'listbox') {
+            if (claimsOverlay(props) && (r === 'dialog' || r === 'alertdialog' || r === 'menu' || r === 'listbox')) {
                 emitOverlayClaim(id, props);
                 return true;
             }
@@ -105,7 +106,7 @@ export function applyEventProp(
         }
         case 'aria-modal': {
             const truthy = value === true || value === 'true' || value === '';
-            if (truthy) { emitOverlayClaim(id, props); return true; }
+            if (truthy && claimsOverlay(props)) { emitOverlayClaim(id, props); return true; }
             return true;
         }
 
@@ -184,5 +185,11 @@ export function reclaimOverlayForMovedParent(
     if (oldProps.role !== newProps.role) return false;
     if (oldProps['aria-modal'] !== newProps['aria-modal']) return false;
     emitOverlayClaim(id, newProps);
+    return true;
+}
+
+export function releaseLostOverlayClaim(id: string, oldProps: Record<string, unknown>, newProps: Record<string, unknown>): boolean {
+    if (!claimsOverlay(oldProps) || claimsOverlay(newProps)) return false;
+    call('releaseOverlay', id);
     return true;
 }
