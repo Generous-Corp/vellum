@@ -97,6 +97,9 @@ font-size multiplier, `'native'` as pixels, and the default `'auto'` reads
 values up to 8 as multipliers and larger ones as pixels. A value it cannot
 resolve, such as `calc()`, leaves the native value unchanged.
 
+Password inputs are rejected because this bridge has no secure native text
+control. They never fall back to a plaintext editor.
+
 ## Scrolling
 
 `ScrollView` coalesces React `scrollTop` and `scrollLeft` props into one native
