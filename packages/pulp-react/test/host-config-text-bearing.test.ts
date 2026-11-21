@@ -1,0 +1,108 @@
+// Verify host-config's shouldSetTextContent recognizes HTML-intrinsic
+// text-bearing tags. These aliases keep React from materializing an extra
+// synthetic Label child on top of the Label created by createWidget.
+
+import { describe, it, expect } from 'vitest';
+import { PulpHostConfig } from '../src/host-config.js';
+
+describe('host-config shouldSetTextContent (TEXT_BEARING)', () => {
+    const fn = PulpHostConfig.shouldSetTextContent as
+        (type: string, props: Record<string, unknown>) => boolean;
+
+    it('Label / Button / TextEditor (native pulp types) bear text', () => {
+        expect(fn('Label', {})).toBe(true);
+        expect(fn('Button', {})).toBe(true);
+        expect(fn('TextEditor', {})).toBe(true);
+    });
+
+    it.each([
+        'span', 'p', 'label', 'b', 'i', 'em', 'strong', 'code', 'pre',
+        'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+        'li', 'td', 'th', 'button', 'text', 'tspan', 'title', 'desc',
+    ])('HTML intrinsic <%s> is text-bearing', (tag) => {
+        expect(fn(tag, {})).toBe(true);
+    });
+
+    it('user-named components (View, Panel) are NOT text-bearing', () => {
+        // Container tags can be text-bearing for pure text content, but
+        // shouldSetTextContent still gates on actual string/number children
+        // so element-bearing containers route through createCol.
+        //
+        // Non-HTML user components (uppercase names like View, Panel)
+        // remain non-text-bearing regardless of children, since they
+        // represent component references not intrinsic elements.
+        expect(fn('View', {})).toBe(false);
+        expect(fn('Panel', {})).toBe(false);
+    });
+
+    it('HTML container tags (div, section, article) are text-bearing when children are pure text', () => {
+        // Imported designs with `<div>section title</div>` render the text
+        // as a Label rather than an empty Col plus a separate text Label.
+        // Empty children also short-circuit to true because there is no
+        // element to mount.
+        expect(fn('div', {})).toBe(true);
+        expect(fn('section', {})).toBe(true);
+        expect(fn('article', {})).toBe(true);
+        expect(fn('header', {})).toBe(true);
+        expect(fn('footer', {})).toBe(true);
+    });
+
+    it('uppercase variants do NOT match (HTML tags are lowercase by JSX convention)', () => {
+        // React lowercases intrinsic tag names; uppercase indicates a
+        // component reference, not an HTML element. Don't accidentally
+        // mark a user component named "Span" as text-bearing.
+        expect(fn('SPAN', {})).toBe(false);
+        expect(fn('Span', {})).toBe(false);
+    });
+
+    // TEXT_BEARING marks a type as capable of bearing text, but children
+    // must actually be string/number for React to skip the child-node path.
+    // Nested markup must not short-circuit or the inner element gets dropped.
+    describe('children-aware short-circuit', () => {
+        it('plain string child returns true', () => {
+            expect(fn('span', { children: 'hello' })).toBe(true);
+            expect(fn('p', { children: 'paragraph' })).toBe(true);
+            expect(fn('h1', { children: 'heading' })).toBe(true);
+        });
+
+        it('numeric child returns true (React renders numbers as text)', () => {
+            expect(fn('span', { children: 42 })).toBe(true);
+            expect(fn('span', { children: 0 })).toBe(true);
+        });
+
+        it('null / undefined children returns true (empty container is text-able)', () => {
+            expect(fn('span', { children: null })).toBe(true);
+            expect(fn('span', { children: undefined })).toBe(true);
+            expect(fn('span', {})).toBe(true);
+        });
+
+        it('array of only string/number scalars returns true', () => {
+            expect(fn('span', { children: ['hello', ' ', 'world'] })).toBe(true);
+            expect(fn('span', { children: ['count: ', 42] })).toBe(true);
+            expect(fn('span', { children: [null, 'x', null] })).toBe(true);
+        });
+
+        it('nested element child returns false — React must descend into the child', () => {
+            // The regression: <span><em>x</em></span>. children is an
+            // object (React element). If we returned true, React would
+            // skip mounting <em> and the inner text gets dropped.
+            const reactElement = { type: 'em', props: { children: 'x' }, key: null, ref: null };
+            expect(fn('span', { children: reactElement })).toBe(false);
+            expect(fn('p', { children: reactElement })).toBe(false);
+            expect(fn('button', { children: reactElement })).toBe(false);
+        });
+
+        it('mixed array with string + element returns false', () => {
+            const el = { type: 'em', props: {}, key: null, ref: null };
+            expect(fn('p', { children: ['prefix ', el, ' suffix'] })).toBe(false);
+        });
+
+        it('boolean children (React skips them at render time) returns false', () => {
+            // Strictly speaking React treats true/false children as no-op
+            // mount, but they aren't text scalars either. Returning false
+            // makes React take the (cheap) child-mount path that no-ops.
+            expect(fn('span', { children: true })).toBe(false);
+            expect(fn('span', { children: false })).toBe(false);
+        });
+    });
+});
