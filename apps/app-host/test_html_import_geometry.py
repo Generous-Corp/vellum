@@ -30,6 +30,7 @@ Controls:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -44,6 +45,7 @@ sys.path.insert(0, str(REPO / "cli/tests"))
 from live_browser import live_browser_skip_reason  # noqa: E402
 from vellum_cli import default_html_interaction_plan  # noqa: E402
 from vellum_html_source import stage_html_source  # noqa: E402
+from vellum_png import RgbaImage, encode_png, read_png  # noqa: E402
 from vellum_web_backend import BackendFailure, chrome_path  # noqa: E402
 from vellum_web_backend import run_chrome_interaction_capture  # noqa: E402
 sys.path.pop(0)
@@ -292,6 +294,89 @@ def stripped_layout(design: Path) -> Path:
     return target
 
 
+def check_canvas(host: str, node: str, work: Path) -> None:
+    # Start at the imported design boundary with the same asset table and
+    # reference emitted by HTML capture. The pixels are synthetic so this
+    # test can exercise bundling and native paint without starting Chrome.
+    red = (255, 0, 0, 255)
+    row = bytes(red) * 32 + bytes(32 * 4)
+    png = encode_png(RgbaImage(64, 64, row * 64))
+    digest = hashlib.sha256(png).hexdigest()
+    uri = f"assets/{digest}.png"
+    asset = {
+        "id": f"data-{digest[:12]}", "contentHash": f"sha256:{digest}",
+        "mimeType": "image/png", "uri": uri,
+    }
+    project = work / "project"
+    generated = project / "ui" / "generated"
+    generated.mkdir(parents=True)
+    source_png = project / "assets" / "generated" / "main" / "files" / uri
+    source_png.parent.mkdir(parents=True)
+    source_png.write_bytes(png)
+
+    def box(node_id, x, y, width, height, color, *, children=()):
+        return {
+            "id": node_id, "kind": "view", "children": list(children),
+            "properties": {"layout": {"x": x, "y": y, "width": width, "height": height},
+                           "paint": {"backgroundColor": color}},
+        }
+
+    canvas = {
+        "id": "main/canvas", "kind": "image", "children": [],
+        "properties": {"tagName": "canvas", "assetRefs": [uri],
+                       "layout": {"x": 40, "y": 40, "width": 64, "height": 64},
+                       "image": {"source": uri, "fit": "fill"}},
+    }
+    design = generated / "main.materialized.json"
+    design.write_text(json.dumps({
+        "schemaVersion": 6, "source": {"key": "main", "revision": "canvas"},
+        "assets": [asset],
+        "root": box("main/root", 0, 0, 800, 600, "#101010", children=[
+            box("main/white", 200, 0, 200, 600, "#ffffff"),
+            box("main/light", 400, 0, 200, 600, "#888888"),
+            box("main/dark", 600, 0, 200, 600, "#444444"),
+            canvas,
+        ]),
+    }), encoding="utf-8")
+    (generated / "main.bindings.json").write_text(json.dumps({
+        "schema": "vellum.generated-bindings.v1", "sourceKey": "main",
+        "revision": "canvas", "bindings": [],
+    }), encoding="utf-8")
+    entry = work / "entry.jsx"
+    entry.write_text(ENTRY, encoding="utf-8")
+    bundle = work / "bundle.js"
+    run([node, str(BUILD), str(entry), str(bundle), str(design)], cwd=BUILD.parents[1])
+
+    packaged = Path(f"{bundle}.images") / f"{digest}.png"
+    assert packaged.is_file(), "the native bundle omitted the captured canvas PNG"
+    assert hashlib.sha256(packaged.read_bytes()).hexdigest() == digest
+
+    def sample(path: Path, x: int, y: int) -> tuple[int, ...]:
+        image = read_png(path)
+        offset = (y * image.width + x) * 4
+        return tuple(image.pixels[offset:offset + 4])
+
+    assert sample(packaged, 16, 32) == red
+    assert sample(packaged, 48, 32)[3] == 0
+    print("canvas: known opaque and transparent pixels survived native bundle packaging")
+    if host == "--canvas-package-only":
+        return
+
+    painted = work / "painted.png"
+    run([host, "--bundle", str(bundle), "--capture", str(painted)])
+    assert sample(painted, 56, 72) == red, "the native host did not paint the canvas PNG"
+    assert sample(painted, 88, 72) == sample(painted, 120, 72)
+
+    # Run the same bundle without the packaged PNG. The canvas background
+    # must show through at the pixel that previously held opaque red.
+    packaged.unlink()
+    control = work / "missing-asset.png"
+    run([host, "--bundle", str(bundle), "--capture", str(control)])
+    assert sample(control, 56, 72) == sample(control, 120, 72)
+    assert sample(control, 56, 72) != red
+    print("canvas: native pixels matched and the missing-file control exposed the background")
+
+
 def report(name: str, result: dict) -> None:
     print(f"{name}: compared={result['compared']} maxDelta={result['maxDelta']} mismatches={len(result['mismatches'])} "
           f"origins={len(result['origins'])} missing={len(result['missing'])} "
@@ -302,7 +387,12 @@ def report(name: str, result: dict) -> None:
 def main() -> int:
     host = sys.argv[1]
     material_only = host == "--material-only"
+    canvas_only = host == "--canvas-package-only" or "--canvas-only" in sys.argv[3:]
     node = sys.argv[2] if len(sys.argv) > 2 else "node"
+    if canvas_only:
+        with tempfile.TemporaryDirectory(prefix="vellum-canvas-asset-") as temporary:
+            check_canvas(host, node, Path(temporary))
+        return 0
     reason = live_browser_skip_reason()
     if reason is not None:
         print(f"SKIP: {reason}")

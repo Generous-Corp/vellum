@@ -48,6 +48,17 @@ if(VELLUM_BUILD_TESTS)
     find_program(VELLUM_NODE_EXECUTABLE NAMES node)
     if(VELLUM_NODE_EXECUTABLE AND
        EXISTS "${PROJECT_SOURCE_DIR}/packages/vellum-ui/node_modules/esbuild")
+        add_test(NAME vellum.app-host-canvas-asset
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/test_html_import_geometry.py"
+                "$<TARGET_FILE:vellum-app-host>"
+                "${VELLUM_NODE_EXECUTABLE}" --canvas-only)
+        set_tests_properties(vellum.app-host-canvas-asset PROPERTIES
+            ENVIRONMENT "MTL_DEBUG_LAYER=0")
+        add_test(NAME vellum.app-host-canvas-package
+            COMMAND "${Python3_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/test_html_import_geometry.py"
+                --canvas-package-only "${VELLUM_NODE_EXECUTABLE}")
         add_test(NAME vellum.app-host-design-anchor-dump
             COMMAND "${Python3_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/test_design_anchor_dump.py"

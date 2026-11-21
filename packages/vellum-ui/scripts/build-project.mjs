@@ -1,5 +1,6 @@
-import { access, mkdir, readFile } from 'node:fs/promises';
-import { basename, dirname, join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { access, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
@@ -24,10 +25,10 @@ if (portability.status !== 'passed') {
     process.stderr.write(`${JSON.stringify(portability)}\n`);
     process.exit(1);
 }
+const importedDesignPath = process.argv[4] ? resolve(process.argv[4]) : null;
 let importedDesign = null;
 let importedBindings = null;
-if (process.argv[4]) {
-    const importedDesignPath = resolve(process.argv[4]);
+if (importedDesignPath) {
     importedDesign = JSON.parse(await readFile(importedDesignPath, 'utf8'));
     const bindingName = basename(importedDesignPath).replace(
         /\.materialized\.json$/, '.bindings.json',
@@ -38,6 +39,42 @@ if (process.argv[4]) {
     importedBindings = JSON.parse(
         await readFile(join(dirname(importedDesignPath), bindingName), 'utf8'),
     );
+}
+
+async function packageImportedPngs() {
+    const generated = dirname(importedDesignPath);
+    const ui = dirname(generated);
+    const key = importedDesign.source?.key;
+    if (basename(generated) !== 'generated' || basename(ui) !== 'ui' ||
+        typeof key !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(key)) return;
+
+    const project = await realpath(dirname(ui));
+    const files = join(project, 'assets', 'generated', key, 'files');
+    for (const asset of importedDesign.assets ?? []) {
+        if (asset.mimeType !== 'image/png') continue;
+        const hash = /^sha256:([0-9a-f]{64})$/.exec(asset.contentHash)?.[1];
+        if (!hash || asset.uri !== `assets/${hash}.png`) continue;
+
+        const source = await realpath(join(files, asset.uri)).catch((error) => {
+            if (error.code === 'ENOENT') return null;
+            throw error;
+        });
+        if (!source) continue;
+        if (!source.startsWith(files + sep)) {
+            throw new Error(`Imported PNG escapes its generated asset directory: ${asset.uri}`);
+        }
+        const info = await stat(source);
+        if (!info.isFile() || info.size > 64 * 1024 * 1024) {
+            throw new Error(`Imported PNG is not a file within the image byte limit: ${asset.uri}`);
+        }
+        const bytes = await readFile(source);
+        if (createHash('sha256').update(bytes).digest('hex') !== hash) {
+            throw new Error(`Imported PNG does not match its content hash: ${asset.uri}`);
+        }
+        const directory = `${output}.images`;
+        await mkdir(directory, { recursive: true });
+        await writeFile(join(directory, `${hash}.png`), bytes);
+    }
 }
 
 async function findProjectRoot(start) {
@@ -90,6 +127,7 @@ await build({
     }],
     logLevel: 'warning',
 });
+if (format === 'iife' && importedDesign) await packageImportedPngs();
 await finalizeBundleSourceMap({
     bundlePath: output,
     projectRoot: process.env.VELLUM_PROJECT_ROOT ?? await findProjectRoot(entry),
