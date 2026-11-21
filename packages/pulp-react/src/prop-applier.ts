@@ -16,7 +16,7 @@ import { applyPaintProp } from './prop-applier-paint.js';
 import { applyTypographyProp } from './prop-applier-typography.js';
 import { resolveTypographyLength } from './prop-applier-typography.js';
 import { applyTransformProp } from './prop-applier-transform.js';
-import { applyEventProp, reclaimOverlayForMovedParent } from './prop-applier-events.js';
+import { applyEventProp, reclaimOverlayForMovedParent, releaseLostOverlayClaim } from './prop-applier-events.js';
 import { resetRemovedStyleKeys } from './prop-applier-reset.js';
 import {
     forgetControlled,
@@ -57,13 +57,13 @@ function eventCallbackRegistry(): EventCallbackRegistry {
 }
 
 export function clearMaterializedEventCallbacks(id: string): void {
-    const prefix = `${id}:`;
     const registry = eventCallbackRegistry();
     for (const key of registry.keys()) {
-        if (key.startsWith(prefix)) registry.delete(key);
+        if (key.slice(0, key.lastIndexOf(':')) === id) registry.delete(key);
     }
     forgetNativeListeners(id);
     forgetControlled(id);
+    shaderUniformSnapshots.delete(id);
 }
 
 /// Native listeners this module has armed and installed, per widget id, by
@@ -669,6 +669,10 @@ function applyOne(id: string, type: string, key: string, value: unknown, props?:
             // widget type. setValue only handles knob/fader/toggle/
             // checkbox; Progress wants setProgress, and Spectrum /
             // Waveform use the 'data' prop handled above.
+            if (type === 'TextEditor' || type === 'textarea'
+                || (type === 'input' && props?.type !== 'range' && props?.type !== 'checkbox')) {
+                return call('setText', id, String(value));
+            }
             if (type === 'Progress')   return call('setProgress', id, value as number);
             if (type === 'Meter')      return call('setMeterLevel', id, value as number);
             return writeControlledValue(id, value as number);
@@ -888,6 +892,7 @@ function applyWidgetValues(id: string, type: string, props: Record<string, unkno
 export function applyAllProps(instance: PulpInstance): void {
     const { id, type, props } = instance;
     logApply('applyAll', id, type, Object.keys(props).length);
+    shaderUniformSnapshots.delete(id);
     applyWidgetValues(id, type, props);
     const scrollOffsetsApplied = applyScrollOffsets(id, type, props);
     // A first attach is a new native widget: nothing is installed on it yet,
@@ -1098,5 +1103,5 @@ export function applyChangedProps(
         mutated = true;
     }
 
-    return mutated;
+    return releaseLostOverlayClaim(id, oldProps, newProps) || mutated;
 }
