@@ -585,19 +585,6 @@ target_link_libraries(vellum-v8-consumer PRIVATE Vellum::MirrorView_script)
 ]=])
     file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/v8_main.cpp"
         DESTINATION "${_work}/v8-consumer")
-    if(VELLUM_INSTALL_THREEJS)
-    file(COPY "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/threejs_v8_main.cpp"
-        DESTINATION "${_work}/v8-consumer")
-    file(APPEND "${_work}/v8-consumer/CMakeLists.txt" [=[
-add_executable(vellum-threejs-v8-consumer threejs_v8_main.cpp)
-target_link_libraries(vellum-threejs-v8-consumer PRIVATE Vellum::MirrorView_script)
-if(VELLUM_THREEJS_ROOT STREQUAL "")
-    message(FATAL_ERROR "find_package(Vellum) did not export VELLUM_THREEJS_ROOT")
-endif()
-target_compile_definitions(vellum-threejs-v8-consumer PRIVATE
-    "VELLUM_THREEJS_ROOT=\"${VELLUM_THREEJS_ROOT}\"")
-]=])
-    endif()
     _run("V8 consumer configure" "${CMAKE_COMMAND}"
         -S "${_work}/v8-consumer" -B "${_work}/v8-consumer-build"
         ${_generator} -DCMAKE_BUILD_TYPE=Release
@@ -608,8 +595,15 @@ target_compile_definitions(vellum-threejs-v8-consumer PRIVATE
     _run("V8 consumer run" "${_work}/v8-consumer-build/vellum-v8-consumer" "${VELLUM_V8_VERSION}")
     message(STATUS "${_last_stdout}")
     if(VELLUM_INSTALL_THREEJS)
-        _run("installed Three.js payload consumer run"
-            "${_work}/v8-consumer-build/vellum-threejs-v8-consumer")
+        _run("Three.js demo configure" "${CMAKE_COMMAND}"
+            -S "${VELLUM_SOURCE_DIR}/tools/mirror/consumer/threejs-demo"
+            -B "${_work}/threejs-demo" ${_generator} -DCMAKE_BUILD_TYPE=Release
+            "-DVellum_DIR=${_prefix}/${VELLUM_INSTALL_LIBDIR}/cmake/Vellum"
+            -DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE
+            -DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE)
+        _run("Three.js demo build" "${CMAKE_COMMAND}" --build "${_work}/threejs-demo")
+        _run("Three.js demo tests" "${CMAKE_CTEST_COMMAND}"
+            --test-dir "${_work}/threejs-demo" --no-tests=error --verbose)
         message(STATUS "${_last_stdout}")
     endif()
 endif()

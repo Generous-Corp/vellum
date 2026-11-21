@@ -111,6 +111,8 @@
       "vellum.swift-host-proof-prefix",
       "vellum.swift-host-proof-unit",
       "vellum.text-layout",
+      "vellum.threejs-native-demo-module",
+      "vellum.threejs-native-demo-v8-identity",
       "vellum.threejs-payload",
       "vellum.threejs-payload-unit",
       "vellum.token-receipts",
@@ -231,6 +233,8 @@
       "vellum.smoke-native",
       "vellum.swift-host-proof",
       "vellum.swift-host-proof-native",
+      "vellum.threejs-native-demo-cube-capture",
+      "vellum.threejs-native-demo-gltf-box-capture",
       "vellum.web.vector-canvas-oracle"
     ],
     "slow": [
