@@ -80,7 +80,7 @@ describe('@pulp/react prop-applier - <Image src> to setImageSource', () => {
         expect(imageSourceCalls(bridge)).toHaveLength(0);
     });
 
-    it('clears the ImageView (empty-string sentinel) when src is removed', () => {
+    it('replaces the removed image with a supported transparent PNG', () => {
         const mutated = applyChangedProps(
             instance('img7', 'img', {}),
             { src: '/abs/gone.png' },
@@ -89,7 +89,8 @@ describe('@pulp/react prop-applier - <Image src> to setImageSource', () => {
         expect(mutated).toBe(true);
         const calls = imageSourceCalls(bridge);
         expect(calls).toHaveLength(1);
-        expect(calls[0].args).toEqual(['img7', '']);
+        expect(calls[0].args[0]).toBe('img7');
+        expect(calls[0].args[1]).toMatch(/^data:image\/png;base64,/);
     });
 
     it('ignores src on a non-Image widget (type gate)', () => {
