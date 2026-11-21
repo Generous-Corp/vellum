@@ -415,16 +415,23 @@ const CSS_LENGTH = '-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?px';
 
 function decodeBorder(value) {
     if (typeof value !== 'string') return null;
-    return new RegExp(`^(?:${CSS_LENGTH}) (?:solid|dashed|dotted|double) ${CSS_COLOR.source}$`, 'i').test(value)
-        ? value : null;
+    const match = new RegExp(`^(${CSS_LENGTH}) (solid) (${CSS_COLOR.source})$`, 'i').exec(value);
+    return match ? { width: Number.parseFloat(match[1]), style: match[2], color: match[3] } : null;
 }
 
 function decodeBoxShadow(value) {
     if (typeof value !== 'string' || value === '' || value === 'none') return null;
-    const layers = value.split(', ');
+    const layers = value.split(/,\s*/);
     if (layers.length > 8) return null;
-    const layer = new RegExp(`^(?:inset )?${CSS_LENGTH} ${CSS_LENGTH}(?: ${CSS_LENGTH})?(?: ${CSS_LENGTH})? ${CSS_COLOR.source}$`, 'i');
-    return layers.length > 0 && layers.every((item) => layer.test(item)) ? value : null;
+    const layer = new RegExp(`^(${CSS_LENGTH}) (${CSS_LENGTH})(?: (${CSS_LENGTH}))?(?: (${CSS_LENGTH}))? (${CSS_COLOR.source})$`, 'i');
+    const decoded = layers.map((item) => {
+        const match = layer.exec(item);
+        if (!match) return null;
+        return { offsetX: Number.parseFloat(match[1]), offsetY: Number.parseFloat(match[2]),
+            blurRadius: match[3] === undefined ? 0 : Number.parseFloat(match[3]),
+            spreadRadius: match[4] === undefined ? 0 : Number.parseFloat(match[4]), color: match[5] };
+    });
+    return decoded.every((item) => item !== null) ? decoded : null;
 }
 
 function decodeFontWeight(value) {
@@ -452,15 +459,21 @@ function decodeRadialGradient(value) {
     if (typeof value !== 'string') return null;
     const match = /^radial-gradient\(circle at ([0-9]+(?:\.[0-9]+)?)% ([0-9]+(?:\.[0-9]+)?)%, (.+)\)$/.exec(value);
     if (!match || Number(match[1]) > 100 || Number(match[2]) > 100) return null;
-    const stops = match[3].split(', ');
+    const stops = match[3].split(/,\s*/);
     if (stops.length < 2 || stops.length > 32) return null;
     let previous = -1;
+    const decoded = [];
     for (const item of stops) {
         const stop = new RegExp(`^(${CSS_COLOR.source}) ([0-9]+(?:\\.[0-9]+)?)%$`, 'i').exec(item);
         if (!stop || Number(stop[2]) < 0 || Number(stop[2]) > 100 || Number(stop[2]) <= previous) return null;
         previous = Number(stop[2]);
+        decoded.push({ color: stop[1], position: Number(stop[2]) / 100 });
     }
-    return value;
+    const centerX = Number(match[1]) / 100;
+    const centerY = Number(match[2]) / 100;
+    return { kind: 'radial', centerX, centerY,
+        radiusX: Math.max(centerX, 1 - centerX), radiusY: Math.max(centerY, 1 - centerY),
+        stops: decoded };
 }
 
 // The extractor emits explicit angles and percent-positioned hex stops.

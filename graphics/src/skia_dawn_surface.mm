@@ -580,6 +580,18 @@ bool draw_rectangle(SkCanvas& canvas, const PaintCommand& command, float opacity
             return false;
         }
     }
+    if (command.border_width > 0.0F && command.border_color.alpha > 0.0F) {
+        SkPaint border;
+        border.setAntiAlias(true);
+        border.setStyle(SkPaint::kStroke_Style);
+        border.setStrokeWidth(command.border_width);
+        border.setColor4f(sk_color(command.border_color, opacity));
+        if (is_rounded(command.corner_radii)) {
+            canvas.drawRRect(rounded_rect(rect, command.corner_radii), border);
+        } else {
+            canvas.drawRect(rect, border);
+        }
+    }
     return true;
 }
 

@@ -2036,6 +2036,26 @@ bool token_kind_audit() {
     return ok;
 }
 
+bool structured_box_paint() {
+    constexpr std::string_view tree = R"JSON({"protocol":"vellum.authoring-host.v2","kind":"render-result","tree":{
+      "type":"view","id":"paint","style":{"width":40,"height":30,
+      "border":{"width":2,"style":"solid","color":"#112233"},"borderTopLeftRadius":3,
+      "borderTopRightRadius":5,"borderBottomRightRadius":7,"borderBottomLeftRadius":9,
+      "boxShadow":[{"offsetX":1,"offsetY":2,"blurRadius":3,"color":"#00000080"},
+      {"offsetX":-1,"offsetY":-2,"blurRadius":1,"color":"#ffffff40"}]},"children":[]}})JSON";
+    vellum::authoring::RenderedApplication rendered;
+    std::string error;
+    std::vector<vellum::graphics::LoweringDiagnostic> diagnostics;
+    if (!vellum::authoring::materialize_rendered_tree(tree, rendered, &error, &diagnostics)) {
+        std::cerr << error << '\n';
+        return false;
+    }
+    const auto* node = vellum::graphics::find_node(rendered.scene.root, "paint");
+    return node && node->border_width == 2.0F && node->box_shadows.size() == 2U &&
+           node->corner_radii && node->corner_radii->top_left == 3.0F &&
+           node->corner_radii->bottom_left == 9.0F;
+}
+
 int main() {
     if (!vector_nodes()) return 1;
     if (!gradient_parity()) return 1;
@@ -2487,7 +2507,7 @@ int main() {
            image_nodes() && path_nodes() && plot_nodes() && grouping_keys() &&
            animation_tracks() && blend_mode_key() && token_receipts() && token_slots() &&
            scene_version_protocol() && protocol_numbers() && root_background_receipts() &&
-           token_kind_audit()
+           token_kind_audit() && structured_box_paint()
                ? 0
                : 1;
 }

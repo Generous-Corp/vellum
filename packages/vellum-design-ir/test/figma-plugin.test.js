@@ -147,14 +147,20 @@ test('materializes native paint and text fields with strict decoding', () => {
         sourceKey: 'main',
     }));
     const { paint, text } = document.root.properties;
-    assert.equal(paint.border, '1px solid #313234');
+    assert.deepEqual(paint.border, { width: 1, style: 'solid', color: '#313234' });
     assert.deepEqual(
         [paint.borderTopLeftRadius, paint.borderTopRightRadius,
             paint.borderBottomLeftRadius, paint.borderBottomRightRadius],
         [5, 6, 3, 4],
     );
-    assert.equal(paint.boxShadow, '0px 16px 6px 0px #0000001a, 0px 4px 4px 0px #00000040');
-    assert.equal(paint.backgroundGradient, input.root.style.background_gradient);
+    assert.deepEqual(paint.boxShadow, [
+        { offsetX: 0, offsetY: 16, blurRadius: 6, spreadRadius: 0, color: '#0000001a' },
+        { offsetX: 0, offsetY: 4, blurRadius: 4, spreadRadius: 0, color: '#00000040' },
+    ]);
+    assert.deepEqual(paint.backgroundGradient, {
+        kind: 'radial', centerX: 0.5, centerY: 0.5, radiusX: 0.5, radiusY: 0.5,
+        stops: [{ color: '#00000000', position: 0 }, { color: '#0000003d', position: 1 }],
+    });
     assert.equal(text.fontWeight, 400);
     assert.equal(text.fontStyle, 'italic');
     assert.equal(text.textAlign, 'center');
