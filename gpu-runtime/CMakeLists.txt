@@ -61,6 +61,11 @@ include(CMakePackageConfigHelpers)
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/GpuRuntimeRendererLock.cmake")
 
 option(GPU_RUNTIME_BUILD_TESTS "Build the gpu-runtime tests" ${BUILD_TESTING})
+option(GPU_RUNTIME_BUILD_GRAPHITE_HOST_TESTS
+    "Opt-in physical Intel Graphite pixel qualification in older-SDK hosts" OFF)
+if(GPU_RUNTIME_BUILD_GRAPHITE_HOST_TESTS AND NOT GPU_RUNTIME_BUILD_TESTS)
+    message(FATAL_ERROR "Graphite host qualification requires GPU_RUNTIME_BUILD_TESTS=ON")
+endif()
 option(GPU_RUNTIME_INSTALL "Install the VellumGpuRuntime CMake package" ${PROJECT_IS_TOP_LEVEL})
 option(GPU_RUNTIME_BENCHMARK
     "Expose the benchmark perf-counter hooks in the device API" OFF)
@@ -192,6 +197,38 @@ if(GPU_RUNTIME_BUILD_TESTS)
                 GPU_RUNTIME_HOST_OWNS_DAWN_PROCS=1)
         endif()
         add_test(NAME gpu-runtime.device COMMAND gpu-runtime-device-test)
+    endif()
+    if(GPU_RUNTIME_BUILD_GRAPHITE_HOST_TESTS)
+        if(NOT APPLE OR NOT GPU_RUNTIME_HAS_DEVICE)
+            message(FATAL_ERROR "Graphite host qualification requires the macOS device library")
+        endif()
+        # The device runtime itself does not link Skia. This opt-in renderer
+        # consumer uses the Skia archive beside the already-verified Dawn.
+        get_target_property(_gpu_runtime_dawn_library VellumGpuRuntime::Dawn IMPORTED_LOCATION)
+        get_filename_component(_gpu_runtime_renderer_libdir "${_gpu_runtime_dawn_library}" DIRECTORY)
+        if(NOT EXISTS "${_gpu_runtime_renderer_libdir}/libskia.a")
+            message(FATAL_ERROR "Graphite host qualification needs the full renderer provider")
+        endif()
+        gpu_runtime_read_renderer_lock(PLATFORM macos-arm64 PREFIX _gpu_runtime_graphite)
+        file(SHA256 "${_gpu_runtime_renderer_libdir}/libskia.a" _gpu_runtime_graphite_actual)
+        if(NOT _gpu_runtime_graphite_actual STREQUAL _gpu_runtime_graphite_SHA256_libskia.a)
+            message(FATAL_ERROR "Graphite host qualification Skia library differs from renderer lock")
+        endif()
+        # Recheck identities before relinking if a provider is replaced in place.
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${_gpu_runtime_dawn_library}" "${_gpu_runtime_renderer_libdir}/libskia.a")
+        add_executable(gpu-runtime-graphite-host-probe tests/graphite_host_smoke.cpp)
+        target_compile_definitions(gpu-runtime-graphite-host-probe PRIVATE SK_GRAPHITE SK_DAWN)
+        target_link_libraries(gpu-runtime-graphite-host-probe PRIVATE
+            VellumGpuRuntime::Device "${_gpu_runtime_renderer_libdir}/libskia.a"
+            VellumGpuRuntime::Dawn "-framework CoreText" "-framework CoreGraphics")
+        add_test(NAME gpu-runtime.graphite-old-sdk-host
+            COMMAND "${Python3_EXECUTABLE}" -I
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_graphite_host.py"
+                --probe "$<TARGET_FILE:gpu-runtime-graphite-host-probe>"
+                --output "${CMAKE_CURRENT_BINARY_DIR}/graphite-host-proof")
+        set_tests_properties(gpu-runtime.graphite-old-sdk-host PROPERTIES
+            LABELS "hardware;intel;graphite" TIMEOUT 120)
     endif()
     add_executable(gpu-runtime-device-api-consumer tests/device_api_consumer.cpp)
     target_link_libraries(gpu-runtime-device-api-consumer

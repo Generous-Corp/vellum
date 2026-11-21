@@ -64,3 +64,26 @@ record that still has to follow.
   `GpuCompute`.
 - `gpu-runtime.install-consumer` (standalone builds) installs the package and
   builds a consumer that finds it by exact version and reads the shipped lock.
+
+### Intel host shader qualification
+
+`GPU_RUNTIME_BUILD_GRAPHITE_HOST_TESTS=ON`, together with
+`GPU_RUNTIME_BUILD_TESTS=ON`, builds an opt-in renderer consumer and registers
+`gpu-runtime.graphite-old-sdk-host`. It needs the full locked renderer provider,
+including Skia, rather than the device-only package. Both linked provider archives
+are configure dependencies, so replacing either one in place reruns its digest
+check before an incremental relink. This adds no Skia dependency
+to the production device library.
+
+Run this test on physical Intel macOS with a hardware Metal adapter. It rejects
+Rosetta, missing adapters, CPU adapters and the Null backend. The test draws an
+antialiased circle through Graphite and reads back its green center and black
+corner pixels. It runs both a modern test executable and a disposable copy whose
+linked SDK is 10.12. Older DAW hosts can otherwise make Metal select a language
+version that cannot compile the arrays in Graphite's generated shaders. Device
+initialization alone does not exercise this failure.
+
+The helper writes a fresh result under `graphite-host-proof/` with executable
+hashes, exit codes and diagnostics. It changes only a copy of the test executable;
+it does not patch a host application or plug-in. Passing this renderer test is a
+prerequisite, not proof of installed product editors, audio or installer behavior.
