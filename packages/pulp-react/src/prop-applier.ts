@@ -939,6 +939,7 @@ export function applyChangedProps(
     instance: PulpInstance,
     oldProps: Record<string, unknown>,
     newProps: Record<string, unknown>,
+    fullSnapshot = false,
 ): boolean {
     const { id, type } = instance;
     let mutated = applyWidgetValues(id, type, newProps, oldProps);
@@ -1029,7 +1030,7 @@ export function applyChangedProps(
     // sets came from the same shape. An author-removed style, a key dropped
     // from a style object, or a style prop set to undefined, still resets.
     const derivedShapeChanged =
-        isDerivedStyleProps(oldProps) && !isDerivedStyleProps(newProps);
+        !fullSnapshot && isDerivedStyleProps(oldProps) && !isDerivedStyleProps(newProps);
 
     // Walk old props, every key that disappeared hands its native slots back
     // to the widget's starting value (prop-applier-reset.ts). A key whose
@@ -1053,12 +1054,13 @@ export function applyChangedProps(
         if (!isAbsent(newProps, key) || isAbsent(oldProps, key)) continue;
         // `<Image>` whose `src` is removed clears the ImageView back to the
         // empty placeholder, matching the web-compat removeAttribute('src')
-        // reset semantics. Empty string is the bridge-side "no source"
-        // sentinel. `type` is typed as keyof IntrinsicElementMap (which lists
+        // reset semantics. The bridge ignores empty paths, so a transparent
+        // image replaces the old bitmap. `type` is typed as keyof IntrinsicElementMap (which lists
         // 'Image' but not the lowercase 'img' intrinsic); cast for the 'img'
         // compare so the clear-on-removal seam matches the set seam.
         if (key === 'src' && ((type as string) === 'img' || type === 'Image')) {
-            call('setImageSource', id, '');
+            // The bridge ignores empty paths; a transparent pixel actually retires the bitmap.
+            call('setImageSource', id, 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=');
             mutated = true;
             continue;
         }
