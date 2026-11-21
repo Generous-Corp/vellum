@@ -1,0 +1,399 @@
+// Prop-applier must wrap JSX event handlers in a synthetic-event factory so
+// consumers see a React-DOM-shaped event object (with `currentTarget`,
+// `target`, `preventDefault`, etc.) and event-type-specific fields
+// (`clientX/Y`, `e.target.value`, `key`) instead of the bridge's raw
+// positional args.
+//
+// The bridge dispatches `__dispatch__('btn1', 'mouseenter', 0)` for
+// hover; idiomatic JSX handlers (`e => e.currentTarget.style.background = ...`)
+// expect an event object, getting `e === 0` crashes them.
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createMockBridge, type MockBridge } from '../src/bridge.js';
+import {
+    applyAllProps,
+    applyChangedProps,
+    clearMaterializedEventCallbacks,
+} from '../src/prop-applier.js';
+import { makeSyntheticEvent } from '../src/synthetic-event.js';
+import type { PulpInstance } from '../src/types.js';
+
+function instance(id: string, type: string, props: Record<string, unknown>): PulpInstance {
+    return { id, type, props } as PulpInstance;
+}
+
+/// Pull the wrapper that prop-applier registered with the bridge's `on()`
+/// for a given (id, eventName) and invoke it with the supplied raw bridge
+/// args. Mirrors what the C++ side does in `__dispatch__`.
+function dispatch(bridge: MockBridge, id: string, eventName: string, ...rawArgs: unknown[]): unknown {
+    const onCall = bridge.calls.find(
+        (c) => c.fn === 'on' && c.args[0] === id && c.args[1] === eventName,
+    );
+    if (!onCall) throw new Error(`no on() registration for ${id}/${eventName}`);
+    const wrapper = onCall.args[2] as (...a: unknown[]) => unknown;
+    return wrapper(...rawArgs);
+}
+
+describe('@pulp/react prop-applier — synthetic event factory', () => {
+    let bridge: MockBridge;
+    beforeEach(() => {
+        bridge = createMockBridge();
+        bridge.install();
+    });
+    afterEach(() => {
+        const host = globalThis as Record<string, unknown>;
+        delete host.__pulpReactEventCallbacks__;
+        delete host.__pulpReactDomRegistry__;
+        bridge.uninstall();
+    });
+
+    it('exposes layout dimensions and pointer capture on currentTarget', () => {
+        const host = globalThis as Record<string, unknown>;
+        const getLayoutRect = vi.fn(() => ({
+            x: 10, y: 20, left: 10, top: 20,
+            width: 240, height: 135, right: 250, bottom: 155,
+        }));
+        const getLayoutBoxMetrics = vi.fn(() => ({
+            offsetWidth: 324, offsetHeight: 184,
+            clientWidth: 320, clientHeight: 180,
+        }));
+        const capture = vi.fn();
+        const release = vi.fn();
+        host.getLayoutRect = getLayoutRect;
+        host.getLayoutBoxMetrics = getLayoutBoxMetrics;
+        host.nativeSetPointerCapture = capture;
+        host.nativeReleasePointerCapture = release;
+        try {
+            const evt = makeSyntheticEvent('canvas1', 'pointerdown', [{ pointerId: 7 }]);
+            expect(evt.currentTarget.clientWidth).toBe(320);
+            expect(evt.currentTarget.clientHeight).toBe(180);
+            expect(evt.currentTarget.offsetWidth).toBe(324);
+            expect(evt.currentTarget.offsetHeight).toBe(184);
+            expect(evt.currentTarget.getBoundingClientRect().width).toBe(240);
+            evt.currentTarget.setPointerCapture(7);
+            evt.currentTarget.releasePointerCapture(7);
+            expect(capture).toHaveBeenCalledWith('canvas1', 7);
+            expect(release).toHaveBeenCalledWith('canvas1', 7);
+        } finally {
+            delete host.getLayoutRect;
+            delete host.getLayoutBoxMetrics;
+            delete host.nativeSetPointerCapture;
+            delete host.nativeReleasePointerCapture;
+        }
+    });
+
+    it('uses the materialized public element as the event target', () => {
+        const host = globalThis as Record<string, unknown>;
+        const publicElement = {
+            id: 'canvas-public',
+            _id: 'canvas-public',
+            style: {},
+            setAttribute: vi.fn(),
+            getAttribute: vi.fn(() => null),
+            getBoundingClientRect: vi.fn(() => ({
+                x: 4, y: 8, left: 4, top: 8,
+                width: 640, height: 360, right: 644, bottom: 368,
+            })),
+            get clientWidth() { return 640; },
+            get clientHeight() { return 360; },
+            setPointerCapture: vi.fn(),
+            releasePointerCapture: vi.fn(),
+        };
+        host.__pulpReactDomRegistry__ = new Map([['canvas-public', publicElement]]);
+
+        const evt = makeSyntheticEvent('canvas-public', 'pointerdown', [{ pointerId: 9 }]);
+        expect(evt.currentTarget).toBe(publicElement);
+        expect(evt.target).toBe(publicElement);
+        expect(evt.currentTarget.clientWidth).toBe(640);
+        evt.currentTarget.setPointerCapture(9);
+        expect(publicElement.setPointerCapture).toHaveBeenCalledWith(9);
+    });
+
+    it('shares current handlers with materialized semantic activation', () => {
+        const first = vi.fn();
+        const second = vi.fn();
+        const item = instance('dynamic-action', 'Button', { onClick: first });
+        applyAllProps(item);
+        const callbacks = (globalThis as Record<string, unknown>)
+            .__pulpReactEventCallbacks__ as Map<string, (...args: unknown[]) => unknown>;
+        expect(callbacks.get('dynamic-action:click')).toBeTypeOf('function');
+        callbacks.get('dynamic-action:click')!(0);
+        expect(first).toHaveBeenCalledTimes(1);
+
+        applyChangedProps(item, { onClick: first }, { onClick: second });
+        callbacks.get('dynamic-action:click')!(0);
+        expect(first).toHaveBeenCalledTimes(1);
+        expect(second).toHaveBeenCalledTimes(1);
+    });
+
+    it('removing and detaching a handler cannot execute its stale closure', () => {
+        const handler = vi.fn();
+        const item = instance('conditional-action', 'Button', { onClick: handler });
+        applyAllProps(item);
+        const callbacks = (globalThis as Record<string, unknown>)
+            .__pulpReactEventCallbacks__ as Map<string, (...args: unknown[]) => unknown>;
+
+        applyChangedProps(item, { onClick: handler }, {});
+        expect(callbacks.has('conditional-action:click')).toBe(false);
+        const registrations = bridge.calls.filter(
+            (call) => call.fn === 'on' && call.args[0] === 'conditional-action' &&
+                call.args[1] === 'click',
+        );
+        const inert = registrations.at(-1)!.args[2] as (...args: unknown[]) => unknown;
+        inert(0);
+        expect(handler).not.toHaveBeenCalled();
+
+        applyChangedProps(item, {}, { onClick: handler });
+        expect(callbacks.has('conditional-action:click')).toBe(true);
+        clearMaterializedEventCallbacks('conditional-action');
+        expect(callbacks.has('conditional-action:click')).toBe(false);
+    });
+
+    it('onMouseEnter handler receives an event object (not literal 0)', () => {
+        const handler = vi.fn();
+        applyAllProps(instance('btn1', 'Button', { onMouseEnter: handler }));
+        // Bridge fires mouseenter with a literal placeholder; the synthetic
+        // event still provides currentTarget / target.
+        dispatch(bridge, 'btn1', 'mouseenter', 0);
+        expect(handler).toHaveBeenCalledTimes(1);
+        const evt = handler.mock.calls[0][0];
+        expect(evt).not.toBe(0);
+        expect(typeof evt).toBe('object');
+        expect(evt.currentTarget).toBeDefined();
+        expect(evt.target).toBeDefined();
+        expect(evt.type).toBe('mouseenter');
+    });
+
+    it('e.currentTarget.style.background = "..." routes to setBackground', () => {
+        const handler = vi.fn((e: { currentTarget: { style: Record<string, unknown> } }) => {
+            e.currentTarget.style.background = 'rgba(120,180,255,0.14)';
+        });
+        applyAllProps(instance('btn2', 'Button', { onMouseEnter: handler }));
+        dispatch(bridge, 'btn2', 'mouseenter', 0);
+        expect(handler).toHaveBeenCalledTimes(1);
+        const setBg = bridge.calls.filter((c) => c.fn === 'setBackground');
+        expect(setBg.length).toBe(1);
+        expect(setBg[0].args).toEqual(['btn2', 'rgba(120,180,255,0.14)']);
+    });
+
+    it('synthetic event has type === "click" for onClick', () => {
+        const handler = vi.fn();
+        applyAllProps(instance('btn3', 'Button', { onClick: handler }));
+        dispatch(bridge, 'btn3', 'click', 0);
+        expect(handler).toHaveBeenCalledTimes(1);
+        const evt = handler.mock.calls[0][0];
+        expect(evt.type).toBe('click');
+        expect(evt.currentTarget.id).toBe('btn3');
+    });
+
+    it('onChange exposes e.target.value from the bridge string arg', () => {
+        const handler = vi.fn();
+        applyAllProps(instance('te1', 'TextEditor', { onChange: handler }));
+        // Bridge fires change with the new text value; expose it on
+        // target.value for React-style handlers.
+        dispatch(bridge, 'te1', 'change', 'hello');
+        expect(handler).toHaveBeenCalledTimes(1);
+        const evt = handler.mock.calls[0][0];
+        expect(evt.target.value).toBe('hello');
+        expect(evt.type).toBe('change');
+    });
+
+    it('onPointerDown lifts clientX/clientY from the bridge data object', () => {
+        const handler = vi.fn();
+        applyAllProps(instance('p1', 'View', { onPointerDown: handler }));
+        // Bridge data shape: object payload with client coordinates.
+        dispatch(bridge, 'p1', 'pointerdown', {
+            clientX: 142,
+            clientY: 87,
+            offsetX: 12,
+            offsetY: 5,
+            button: 0,
+            pointerId: 1,
+            pointerType: 'mouse',
+            isPrimary: true,
+            pressure: 0.5,
+            ctrlKey: false,
+            shiftKey: false,
+            altKey: false,
+            metaKey: false,
+        });
+        expect(handler).toHaveBeenCalledTimes(1);
+        const evt = handler.mock.calls[0][0];
+        expect(evt.clientX).toBe(142);
+        expect(evt.clientY).toBe(87);
+        expect(evt.offsetX).toBe(12);
+        expect(evt.offsetY).toBe(5);
+        expect(evt.pointerId).toBe(1);
+        expect(evt.pointerType).toBe('mouse');
+    });
+
+    it('preventDefault marks defaultPrevented without throwing', () => {
+        const handler = vi.fn((e: { preventDefault: () => void; defaultPrevented: boolean }) => {
+            e.preventDefault();
+            expect(e.defaultPrevented).toBe(true);
+        });
+        applyAllProps(instance('btn4', 'Button', { onClick: handler }));
+        dispatch(bridge, 'btn4', 'click', 0);
+        expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('stopPropagation returns the native ancestor-cancellation marker', () => {
+        const handler = vi.fn((e: { stopPropagation: () => void }) => {
+            e.stopPropagation();
+        });
+        applyAllProps(instance('btn5', 'Button', { onClick: handler }));
+        expect(dispatch(bridge, 'btn5', 'click', 0)).toEqual({
+            __pulpEventPropagation: 1,
+        });
+        expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('stopImmediatePropagation returns the same-target cancellation marker', () => {
+        const handler = vi.fn((e: {
+            stopImmediatePropagation: () => void;
+            isPropagationStopped: () => boolean;
+            isImmediatePropagationStopped: () => boolean;
+        }) => {
+            e.stopImmediatePropagation();
+            expect(e.isPropagationStopped()).toBe(true);
+            expect(e.isImmediatePropagationStopped()).toBe(true);
+        });
+        applyAllProps(instance('btn5-immediate', 'Button', { onClick: handler }));
+        expect(dispatch(bridge, 'btn5-immediate', 'click', 0)).toEqual({
+            __pulpEventPropagation: 2,
+        });
+    });
+
+    it('an uncancelled handler returns the continue marker', () => {
+        applyAllProps(instance('btn5-continue', 'Button', { onClick: vi.fn() }));
+        expect(dispatch(bridge, 'btn5-continue', 'click', 0)).toEqual({
+            __pulpEventPropagation: 0,
+        });
+    });
+
+    it('nativeEvent.rawArgs preserves the original bridge args (debug escape hatch)', () => {
+        const handler = vi.fn();
+        applyAllProps(instance('p2', 'View', { onPointerMove: handler }));
+        const rawData = { clientX: 5, clientY: 7, pointerId: 2, pointerType: 'pen' };
+        dispatch(bridge, 'p2', 'pointermove', rawData);
+        const evt = handler.mock.calls[0][0];
+        expect(evt.nativeEvent.rawArgs).toEqual([rawData]);
+    });
+
+    it('onMouseLeave receives a synthetic event with currentTarget set', () => {
+        const handler = vi.fn();
+        applyAllProps(instance('btn6', 'Button', { onMouseLeave: handler }));
+        dispatch(bridge, 'btn6', 'mouseleave', 0);
+        const evt = handler.mock.calls[0][0];
+        expect(evt.type).toBe('mouseleave');
+        expect(evt.currentTarget.id).toBe('btn6');
+    });
+
+    it('keydown lifts key/keyCode from the bridge data object', () => {
+        // The current bridge keydown path dispatches to '__global__' not
+        // a per-element handler, but the synthetic-event factory should
+        // still lift key fields from any handler that does receive a
+        // keydown-shaped object. Test the factory directly.
+        const evt = makeSyntheticEvent('btn7', 'keydown', [{ key: 'Enter', keyCode: 13 }]);
+        expect(evt.key).toBe('Enter');
+        expect(evt.keyCode).toBe(13);
+    });
+
+    it('toggle event exposes e.target.checked from the numeric bridge arg', () => {
+        const evt = makeSyntheticEvent('tg1', 'toggle', [1]);
+        expect((evt.target as unknown as { checked: boolean }).checked).toBe(true);
+        const evtOff = makeSyntheticEvent('tg1', 'toggle', [0]);
+        expect((evtOff.target as unknown as { checked: boolean }).checked).toBe(false);
+    });
+
+    it('gesture events lift native gesture payload fields', () => {
+        const evt = makeSyntheticEvent('pad1', 'panchange', [{
+            scale: 1.25,
+            deltaScale: 0.05,
+            rotation: 0.75,
+            deltaRotation: 0.1,
+            translationX: 12,
+            translationY: -8,
+            velocityX: 320,
+            velocityY: -140,
+            tapCount: 2,
+        }]);
+        expect(evt.scale).toBe(1.25);
+        expect(evt.deltaScale).toBe(0.05);
+        expect(evt.rotation).toBe(0.75);
+        expect(evt.deltaRotation).toBe(0.1);
+        expect(evt.translationX).toBe(12);
+        expect(evt.translationY).toBe(-8);
+        expect(evt.velocityX).toBe(320);
+        expect(evt.velocityY).toBe(-140);
+        expect(evt.tapCount).toBe(2);
+    });
+
+    it('multiple style writes route to the matching bridge setters', () => {
+        const handler = vi.fn((e: { currentTarget: { style: Record<string, unknown> } }) => {
+            e.currentTarget.style.background = '#112233';
+            e.currentTarget.style.opacity = 0.5;
+            e.currentTarget.style.borderRadius = 8;
+        });
+        applyAllProps(instance('v1', 'View', { onClick: handler }));
+        dispatch(bridge, 'v1', 'click', 0);
+        const fns = bridge.calls.map((c) => c.fn);
+        expect(fns).toContain('setBackground');
+        expect(fns).toContain('setOpacity');
+        expect(fns).toContain('setBorderRadius');
+        const bg = bridge.calls.find((c) => c.fn === 'setBackground');
+        expect(bg?.args).toEqual(['v1', '#112233']);
+        const op = bridge.calls.find((c) => c.fn === 'setOpacity');
+        expect(op?.args).toEqual(['v1', 0.5]);
+        const br = bridge.calls.find((c) => c.fn === 'setBorderRadius');
+        expect(br?.args).toEqual(['v1', 8]);
+    });
+
+    it('currentTarget exposes setAttribute / getAttribute as DOM-shaped no-ops', () => {
+        const handler = vi.fn((e: {
+            currentTarget: {
+                setAttribute: (n: string, v: string) => void;
+                getAttribute: (n: string) => string | null;
+            };
+        }) => {
+            // Should not throw, DOM-shaped code may touch these.
+            e.currentTarget.setAttribute('aria-pressed', 'true');
+            expect(e.currentTarget.getAttribute('aria-pressed')).toBeNull();
+        });
+        applyAllProps(instance('btn8', 'Button', { onClick: handler }));
+        dispatch(bridge, 'btn8', 'click', 0);
+        expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('currentTarget getBoundingClientRect uses the native layout bridge', () => {
+        const getLayoutRect = vi.fn(() => ({
+            x: 12, y: 34, width: 320, height: 180,
+            top: 34, right: 332, bottom: 214, left: 12,
+        }));
+        (globalThis as unknown as Record<string, unknown>).getLayoutRect = getLayoutRect;
+        try {
+            const evt = makeSyntheticEvent('canvas1', 'pointermove', [{ clientX: 40, clientY: 80 }]);
+            expect(evt.currentTarget.getBoundingClientRect()).toEqual({
+                x: 12, y: 34, width: 320, height: 180,
+                top: 34, right: 332, bottom: 214, left: 12,
+            });
+            expect(getLayoutRect).toHaveBeenCalledOnce();
+            expect(getLayoutRect).toHaveBeenCalledWith('canvas1');
+        } finally {
+            delete (globalThis as unknown as Record<string, unknown>).getLayoutRect;
+        }
+    });
+
+    it('pointerType from a stylus dispatch is preserved on the synthetic event', () => {
+        const handler = vi.fn();
+        applyAllProps(instance('p3', 'View', { onPointerDown: handler }));
+        dispatch(bridge, 'p3', 'pointerdown', {
+            clientX: 0, clientY: 0,
+            pointerId: 99, pointerType: 'pen',
+            pressure: 0.92, isPrimary: true,
+        });
+        const evt = handler.mock.calls[0][0];
+        expect(evt.pointerType).toBe('pen');
+        expect(evt.pressure).toBe(0.92);
+    });
+});
