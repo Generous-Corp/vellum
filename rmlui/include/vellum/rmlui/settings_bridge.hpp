@@ -210,7 +210,7 @@ class SettingsBridge final {
             return HostStatus::rejected;
         if (!model_.state(row_id).enabled)
             return HostStatus::missing_capability;
-        if (!detail::is_finite_setting(value))
+        if (!std::isfinite(value))
             return HostStatus::rejected;
         ModelValue next;
         switch (row->kind) {

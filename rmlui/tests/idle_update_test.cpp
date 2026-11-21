@@ -2,8 +2,7 @@
 
 #include <RmlUi/Core.h>
 
-#include <bit>
-#include <cstdint>
+#include <limits>
 
 namespace {
 
@@ -39,9 +38,7 @@ int main() {
 
     VELLUM_RMLUI_CHECK(context->Update());
     const auto delay = context->GetNextUpdateDelay();
-    // Check the IEEE 754 encoding of positive infinity under finite-math flags.
-    constexpr std::uint64_t infinity = 0x7ff0000000000000;
-    if (std::bit_cast<std::uint64_t>(delay) != infinity) {
+    if (delay != std::numeric_limits<double>::infinity()) {
         std::fprintf(stderr, "Idle document requested another update in %g seconds\n", delay);
         return 1;
     }
