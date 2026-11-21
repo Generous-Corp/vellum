@@ -31,6 +31,7 @@ struct Options final {
     std::vector<ComponentModuleSpec> components;
     std::optional<std::uint32_t> expected_width;
     std::optional<std::uint32_t> expected_height;
+    std::uint32_t capture_scale = 1;
     bool no_window = false;
     /// Script time moves only through `advance` steps.
     bool manual_clock = false;

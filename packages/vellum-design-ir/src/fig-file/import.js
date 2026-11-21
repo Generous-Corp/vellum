@@ -25,6 +25,7 @@ export function decodeFigSource(bytes, { sourceKey = 'main', frame, page } = {})
     if (!selected) throw new TypeError(`frame not found: ${frame ?? '(first frame)'}`);
     const { envelope } = materializeFrame(scene, selected, {
         images: container.images,
+        solvedLayout: true,
         fileKey: null,
         parserVersion: FIG_FILE_PARSER_VERSION,
         compatSchemaVersion: FIG_FILE_COMPAT_SCHEMA_VERSION,
@@ -37,10 +38,14 @@ export function decodeFigSource(bytes, { sourceKey = 'main', frame, page } = {})
         kind: 'capture_partial',
         message: detail || diagnostic.code,
     }));
+    const embeddedAssets = new Map();
+    for (const asset of envelope.asset_manifest.assets) {
+        const bytes = container.images.get(asset.hash);
+        if (!bytes) continue;
+        embeddedAssets.set(asset.local_path, bytes);
+        asset.content_hash = `sha256:${sha256(bytes)}`;
+    }
     const document = normalizeImport(decodeFigmaPluginExport(envelope, { sourceHash, sourceKey }));
-    const embeddedAssets = new Map(envelope.asset_manifest.assets
-        .filter((asset) => container.images.has(asset.hash))
-        .map((asset) => [asset.local_path, container.images.get(asset.hash)]));
     return { document, embeddedAssets };
 }
 

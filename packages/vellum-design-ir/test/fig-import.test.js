@@ -81,3 +81,24 @@ test('offline loss diagnostics keep the source code and message', async () => {
     assert.equal(diagnostic?.disposition, 'unsupported');
     assert.match(diagnostic.message, /VIDEO/);
 });
+
+test('offline layout preserves solved positions across grid and wrapped rows', () => {
+    for (const layoutMode of ['grid', 'wrap']) {
+        const document = decodeFigFile(makeSyntheticFig({ layoutMode }));
+        const row = document.root.children.find(({ identity }) => identity.sourceId === '0:6');
+        assert.equal(row.properties.layout.display, layoutMode === 'grid' ? 'grid' : 'flex');
+        assert.deepEqual(row.children.map(({ properties: { layout } }) => [layout.x, layout.y]),
+            [[4, 8], [36, 8], [4, 40]]);
+    }
+});
+
+test('offline PNG paint references the hash of its embedded bytes', async () => {
+    const bytes = await readFile(fixture);
+    const document = decodeFigFile(bytes, { frame: '0:10' });
+    const image = document.root.children.find(({ identity }) => identity.sourceId === '0:12');
+    assert.equal(image.kind, 'image');
+    assert.match(image.properties.image.source, /^sha256:[0-9a-f]{64}$/);
+    assert.equal(image.properties.image.source, document.assets[0].contentHash);
+    assert.equal(image.properties.image.fit, 'contain');
+    assert.equal(image.compositing.opacity, 0.5);
+});

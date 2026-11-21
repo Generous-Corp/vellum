@@ -121,7 +121,10 @@ function fmt(v) {
 
 /** Serialize a command list to an SVG path `d` string. */
 export function toPathData(commands) {
-  return commands
+  // A baked outline can start with a close before any contour has opened.
+  const first = commands.findIndex(({ op }) => op !== 'Z');
+  if (first === -1) return '';
+  return commands.slice(first)
     .map(({ op, coords }) => (coords.length ? op + coords.map(fmt).join(' ') : op))
     .join(' ');
 }
