@@ -38,16 +38,16 @@ describe('HTML button materialization', () => {
                 ['action', 'justify_content', 'center'],
             ]);
         expect(bridge.calls.find(c => c.fn === 'createLabel')?.args)
-            .toEqual(['action__text', 'PRECISION', 'action']);
+            .toEqual([instance.textTargetId, 'PRECISION', 'action']);
         // In flow, and with no insets pinning it to the owner box, so the
         // caption's measured text width still sizes the button.
         expect(bridge.calls.filter(c => c.fn === 'setPosition' ||
             c.fn === 'setTop' || c.fn === 'setRight' ||
             c.fn === 'setBottom' || c.fn === 'setLeft').map(c => c.args))
-            .toEqual([['action__text', 'static']]);
+            .toEqual([[instance.textTargetId, 'static']]);
         expect(bridge.calls.find(c => c.fn === 'setPointerEvents')?.args)
-            .toEqual(['action__text', 'none']);
-        expect(instance.textTargetId).toBe('action__text');
+            .toEqual([instance.textTargetId, 'none']);
+        expect(instance.textTargetId).toMatch(/^__pulpReactCaption_/);
     });
 
     it('treats React conditional sentinels plus text as one owning caption', () => {
@@ -56,10 +56,10 @@ describe('HTML button materialization', () => {
             children,
         } as never)).toBe(true);
 
-        lower('button', children);
+        const instance = lower('button', children);
         expect(bridge.calls.filter(c => c.fn === 'createLabel')).toHaveLength(1);
         expect(bridge.calls.find(c => c.fn === 'createLabel')?.args)
-            .toEqual(['action__text', 'HARMONIC SERIES', 'action']);
+            .toEqual([instance.textTargetId, 'HARMONIC SERIES', 'action']);
     });
 
     it('still materializes genuine nested button markup', () => {
@@ -68,7 +68,7 @@ describe('HTML button materialization', () => {
             children: [element, 'FLAT'],
         } as never)).toBe(false);
 
-        lower('button', [element, 'FLAT']);
+        const instance = lower('button', [element, 'FLAT']);
         expect(bridge.calls.find(c => c.fn === 'createRow')?.args)
             .toEqual(['action', 'root']);
         expect(bridge.calls.filter(c => c.fn === 'setFlex').map(c => c.args))
@@ -82,11 +82,11 @@ describe('HTML button materialization', () => {
             c.fn === 'setTop' || c.fn === 'setRight' ||
             c.fn === 'setBottom' || c.fn === 'setLeft').map(c => c.args))
             .toEqual([
-                ['action__text', 'absolute'],
-                ['action__text', 0],
-                ['action__text', 0],
-                ['action__text', 0],
-                ['action__text', 0],
+                [instance.textTargetId, 'absolute'],
+                [instance.textTargetId, 0],
+                [instance.textTargetId, 0],
+                [instance.textTargetId, 0],
+                [instance.textTargetId, 0],
             ]);
     });
 
