@@ -653,6 +653,45 @@ def _localize_snapshot_data_urls(snapshot: dict[str, Any]) -> tuple[dict[str, di
     return records, observed_urls
 
 
+def _localize_canvas_screenshots(
+    captures: dict[int, dict[str, Any]] | None,
+    records: dict[str, dict[str, Any]],
+) -> dict[int, str]:
+    """Turn clipped canvas PNGs into the same bounded asset records as data URLs."""
+    localized: dict[int, str] = {}
+    if captures is None:
+        return localized
+    if len(captures) > MAX_CAPTURE_ASSETS:
+        raise BackendFailure("captured canvas assets exceed the bounded count", status="test_failed")
+    for node_index, screenshot in captures.items():
+        if not isinstance(node_index, int) or node_index < 0 or not isinstance(screenshot, dict):
+            raise BackendFailure("captured canvas asset is malformed", status="test_failed")
+        encoded = screenshot.get("data")
+        if not isinstance(encoded, str) or screenshot.get("mimeType") != "image/png":
+            raise BackendFailure("captured canvas asset is not a PNG", status="test_failed")
+        try:
+            payload = base64.b64decode(encoded, validate=True)
+        except (ValueError, base64.binascii.Error) as error:
+            raise BackendFailure("captured canvas asset is not valid base64", status="test_failed") from error
+        if not payload.startswith(PNG_SIGNATURE) or len(payload) > MAX_CAPTURE_ASSET_BYTES:
+            raise BackendFailure("captured canvas asset is oversized or not a PNG", status="test_failed")
+        digest = hashlib.sha256(payload).hexdigest()
+        content_hash = f"sha256:{digest}"
+        record = records.get(content_hash)
+        if record is None:
+            uri = f"assets/{digest}.png"
+            record = {
+                "asset": {
+                    "id": f"data-{digest[:12]}", "contentHash": content_hash,
+                    "uri": uri, "mimeType": "image/png", "byteLength": len(payload),
+                },
+                "bytes": encoded, "raw": None,
+            }
+            records[content_hash] = record
+        localized[node_index] = record["asset"]["uri"]
+    return localized
+
+
 def _replace_data_urls(value: str, records: dict[str, dict[str, Any]]) -> tuple[str, list[str]]:
     references: list[str] = []
 
@@ -963,6 +1002,7 @@ def _promote_page_background(root: dict[str, Any]) -> None:
 def lower_dom_snapshot(
     snapshot: dict[str, Any], *, settled_snapshot: dict[str, Any], screenshot: dict[str, Any],
     interaction_evidence: list[dict[str, Any]] | None = None,
+    canvas_captures: dict[int, dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
     """Lower Chrome's bounded DOMSnapshot into the browser capture source model."""
     documents = snapshot.get("documents")
@@ -979,6 +1019,7 @@ def lower_dom_snapshot(
     if not node_types or len(node_types) > MAX_CAPTURE_NODES:
         raise BackendFailure("DOMSnapshot node count is outside the bounded range", status="test_failed")
     records, observed_urls = _localize_snapshot_data_urls(snapshot)
+    canvas_assets = _localize_canvas_screenshots(canvas_captures, records)
     layout = document.get("layout")
     layout_indices = layout.get("nodeIndex") if isinstance(layout, dict) else None
     laid_out_nodes = (
@@ -1024,9 +1065,10 @@ def lower_dom_snapshot(
                 properties["assetRefs"] = sorted(set(refs))
         elif node_type == 3 and value:
             properties["domNodeIndex"] = index
+        canvas_asset = canvas_assets.get(index) if node_type == 1 and name.lower() == "canvas" else None
         raw: dict[str, Any] = {
             "sourceId": f"dom-{index}",
-            "kind": "text" if node_type == 3 else "view",
+            "kind": "image" if canvas_asset else ("text" if node_type == 3 else "view"),
             "name": name.lower() if name else ("Document" if node_type == 9 else "node"),
             "properties": properties,
             "children": [],
@@ -1046,6 +1088,9 @@ def lower_dom_snapshot(
                 raw.pop("sourceId", None)
             else:
                 raw["sourceId"] = f"dom-{index}"
+            if canvas_asset:
+                properties["assetRefs"] = [canvas_asset]
+                properties["image"] = {"source": canvas_asset, "fit": "fill"}
         source_nodes[index] = raw
         included.add(index)
     if isinstance(layout, dict):
@@ -1230,6 +1275,31 @@ def run_chrome_interaction_capture(
                         settled_snapshot = client.settle_idle()
                         screenshot = client.capture_screenshot()
                         viewport = client.viewport()
+                        canvas_captures = {}
+                        capture_documents = settled_snapshot.get("documents", [])
+                        capture_document = capture_documents[0] if capture_documents else {}
+                        capture_nodes = capture_document.get("nodes", {})
+                        capture_types = capture_nodes.get("nodeType", [])
+                        capture_names = capture_nodes.get("nodeName", [])
+                        capture_layout = capture_document.get("layout", {})
+                        capture_indices = capture_layout.get("nodeIndex", [])
+                        capture_boxes = capture_layout.get("bounds", [])
+                        capture_boxes_by_node = dict(zip(capture_indices, capture_boxes))
+                        for node_index, node_type in enumerate(capture_types):
+                            if node_type != 1 or node_index >= len(capture_names):
+                                continue
+                            node_name = _snapshot_string(
+                                settled_snapshot, capture_names[node_index],
+                                f"nodeName[{node_index}]", allow_absent=True,
+                            ).lower()
+                            box = capture_boxes_by_node.get(node_index)
+                            if node_name != "canvas" or not isinstance(box, list) or len(box) != 4:
+                                continue
+                            if not all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                                       and math.isfinite(value) for value in box):
+                                raise BackendFailure("canvas layout bounds are malformed", status="test_failed")
+                            if box[2] > 0 and box[3] > 0:
+                                canvas_captures[node_index] = client.capture_screenshot_clip(*box)
                     except CdpClientError as error:
                         raise BackendFailure(
                             f"Browser capture failed: {error}", status="test_failed",
@@ -1239,6 +1309,7 @@ def run_chrome_interaction_capture(
                         settled_snapshot=settled_snapshot,
                         screenshot=screenshot,
                         interaction_evidence=evidence,
+                        canvas_captures=canvas_captures,
                     )
                     browser = discovery.get("Browser")
                     if not isinstance(browser, str) or not browser:

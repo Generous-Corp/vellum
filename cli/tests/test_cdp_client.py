@@ -306,6 +306,23 @@ class CdpClientTests(unittest.TestCase):
         with self.assertRaisesRegex(CdpClientError, "not a PNG"):
             client.capture_screenshot()
 
+    def test_screenshot_clip_uses_a_bounded_css_box(self) -> None:
+        client = object.__new__(CdpClient)
+        calls = []
+        client.command = lambda method, params=None: (
+            calls.append((method, params)) or {
+                "data": base64.b64encode(b"\x89PNG\r\n\x1a\n").decode("ascii"),
+            }
+        )  # type: ignore[method-assign]
+        capture = client.capture_screenshot_clip(10, 20, 30, 40)
+        self.assertEqual(capture["mimeType"], "image/png")
+        self.assertEqual(calls[0], ("Page.captureScreenshot", {
+            "format": "png", "fromSurface": True, "captureBeyondViewport": False,
+            "clip": {"x": 10, "y": 20, "width": 30, "height": 40, "scale": 1},
+        }))
+        with self.assertRaisesRegex(CdpClientError, "positive dimensions"):
+            client.capture_screenshot_clip(0, 0, 0, 10)
+
     def test_settle_idle_uses_real_time_and_returns_stable_snapshot(self) -> None:
         client = object.__new__(CdpClient)
         client._events = []

@@ -303,9 +303,25 @@ class CdpClient:
 
     def capture_screenshot(self) -> dict[str, Any]:
         """Capture one bounded PNG from the current browser surface."""
-        result = self.command("Page.captureScreenshot", {
+        return self._decode_screenshot(self.command("Page.captureScreenshot", {
             "format": "png", "fromSurface": True, "captureBeyondViewport": False,
-        })
+        }))
+
+    def capture_screenshot_clip(self, x: float, y: float, width: float, height: float) -> dict[str, Any]:
+        """Capture one bounded CSS-pixel box from the current browser surface."""
+        values = (x, y, width, height)
+        if not all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                   and value == value and abs(value) < 16384 for value in values):
+            raise CdpClientError("CDP screenshot clip is malformed or unbounded")
+        if width <= 0 or height <= 0:
+            raise CdpClientError("CDP screenshot clip must have positive dimensions")
+        return self._decode_screenshot(self.command("Page.captureScreenshot", {
+            "format": "png", "fromSurface": True, "captureBeyondViewport": False,
+            "clip": {"x": x, "y": y, "width": width, "height": height, "scale": 1},
+        }))
+
+    @staticmethod
+    def _decode_screenshot(result: dict[str, Any]) -> dict[str, Any]:
         encoded = result.get("data")
         if not isinstance(encoded, str) or not encoded:
             raise CdpClientError("CDP screenshot response omitted PNG data")
