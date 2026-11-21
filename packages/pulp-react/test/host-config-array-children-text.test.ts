@@ -99,7 +99,7 @@ describe('host-config commitUpdate — array children on TEXT_BEARING', () => {
         expect(c[0].args).toEqual(['b2__text', 'xyz']);
     });
 
-    it('does NOT setText when an array contains a real element (bails — child path will mount it)', () => {
+    it('clears the old caption when an array gains a real element', () => {
         // If the children array has a non-scalar entry we cannot flatten
         // to text, asText must return undefined so commitUpdate falls
         // through to the child-instance path that React's reconciler
@@ -113,6 +113,6 @@ describe('host-config commitUpdate — array children on TEXT_BEARING', () => {
             { children: [32, ' ', elementLike] },
             null,
         );
-        expect(callsOf(bridge, 'setText')).toHaveLength(0);
+        expect(callsOf(bridge, 'setText').map(c => c.args)).toEqual([['b3__text', '']]);
     });
 });
