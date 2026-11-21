@@ -100,6 +100,13 @@ class LiveBrowserGateTests(unittest.TestCase):
         self.assertIsNotNone(live_browser.live_browser_skip_reason({}))
         self.assertIsNotNone(live_browser.live_browser_skip_reason({"VELLUM_CHROME_PATH": ""}))
 
+    def test_the_escape_hatch_does_not_reach_the_installed_browser_in_a_sandbox(self) -> None:
+        sandboxed = {"VELLUM_TEST_ALLOW_SYSTEM_CHROME": "1", "CODEX_SANDBOX": "seatbelt"}
+        self.assertIsNotNone(live_browser.live_browser_skip_reason(sandboxed))
+        result, popen, run, launched = self.run_live_capture_test(sandboxed)
+        self.assertEqual((len(result.skipped), len(result.failures), len(result.errors)), (1, 0, 0))
+        self.assertEqual(launched, [])
+
     def test_a_pinned_executable_browser_may_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             browser = Path(directory) / "chrome"
@@ -167,6 +174,22 @@ class ChromeDiscoveryTests(unittest.TestCase):
         with mock.patch.dict("os.environ", environment, clear=True), \
                 mock.patch.object(shutil, "which", return_value="/usr/bin/google-chrome"):
             self.assertEqual(chrome_path(), "/usr/bin/google-chrome")
+
+    def test_discovery_refuses_the_installed_app_inside_a_sandbox(self) -> None:
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in ("VELLUM_CHROME_PATH", "CODEX_SANDBOX")}
+        application = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        real_is_file = Path.is_file
+        def is_file(path: Path) -> bool:
+            return str(path) == application or real_is_file(path)
+        with mock.patch.object(shutil, "which", return_value=None), \
+                mock.patch.object(Path, "is_file", is_file):
+            with mock.patch.dict("os.environ", environment, clear=True):
+                self.assertEqual(chrome_path(), application)
+            with mock.patch.dict("os.environ", {**environment, "CODEX_SANDBOX": "seatbelt"},
+                                 clear=True):
+                with self.assertRaisesRegex(BackendFailure, "sandbox"):
+                    chrome_path()
 
 
 class BrowserCaptureLoweringTests(unittest.TestCase):
