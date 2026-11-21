@@ -5,16 +5,21 @@
 // .getContext do not exist, and bundle effects can enter a re-render loop.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { createMockBridge, type MockBridge } from '../src/bridge.js';
 import { PulpHostConfig } from '../src/host-config.js';
 
 describe('getPublicInstance returns DOM-shim Element', () => {
     const g = globalThis as Record<string, unknown>;
     let savedElement: unknown;
+    let bridge: MockBridge;
 
     beforeEach(() => {
         savedElement = g.Element;
+        bridge = createMockBridge();
+        bridge.install();
     });
     afterEach(() => {
+        bridge.uninstall();
         g.Element = savedElement;
         delete g.__pulpReactDomRegistry__;
         delete g.__pulpReactDomRegistryValues__;
@@ -63,6 +68,10 @@ describe('getPublicInstance returns DOM-shim Element', () => {
         expect(calls[0].tag).toBe('canvas');
         expect(calls[0].nativeId).toBe('k1');
         expect(inst._dom).toBeDefined();
+        expect((inst._dom as Record<string, unknown>)._nativeCreated).toBe(false);
+        expect((inst._dom as Record<string, unknown>).id).toBeUndefined();
+        const container = { rootId: 'public-root', nextId: 0 };
+        PulpHostConfig.appendChildToContainer!(container as any, inst as any);
         expect((inst._dom as Record<string, unknown>)._nativeCreated).toBe(true);
         expect((inst._dom as Record<string, unknown>).__pulpId).toBe('k1');
         // The public .id property must be set on the shim. Element constructor
@@ -70,6 +79,7 @@ describe('getPublicInstance returns DOM-shim Element', () => {
         // `_userIdSet`, which only flips through the setter. ref.current.id
         // should match the native id.
         expect((inst._dom as Record<string, unknown>).id).toBe('k1');
+        PulpHostConfig.clearContainer!(container as any);
     });
 
     it('preserves imported semantic attributes on the public DOM shim', () => {
@@ -166,6 +176,7 @@ describe('getPublicInstance returns DOM-shim Element', () => {
             parent,
             child,
         );
+        PulpHostConfig.appendChildToContainer!(root, parent);
         const registry = g.__pulpReactDomRegistry__ as Map<string, unknown>;
         expect([...registry.keys()]).toEqual(
             expect.arrayContaining(['modal', 'modal-panel', 'modal-close']));
