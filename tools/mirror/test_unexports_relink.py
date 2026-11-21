@@ -17,11 +17,16 @@ class UnexportsRelinkTest(unittest.TestCase):
     def test_mirror_consumers_track_generated_unexport_list(self) -> None:
         cmake = (Path(__file__).resolve().parent / "VellumMirror.cmake").read_text(encoding="utf-8")
         self.assertIn(
-            'set_property(TARGET vellum-skia-dawn-provider APPEND PROPERTY LINK_DEPENDS\n'
-            '            "${VELLUM_MIRROR_UNEXPORTS}")', cmake)
-        self.assertIn(
             'set_property(TARGET "${_library}" APPEND PROPERTY LINK_DEPENDS\n'
             '            "${VELLUM_MIRROR_UNEXPORTS}")', cmake)
+
+    def test_provider_tracks_its_export_list(self) -> None:
+        repo = Path(__file__).resolve().parents[2]
+        cmake = (repo / "cmake/VellumSkiaDawn.cmake").read_text(encoding="utf-8")
+        self.assertIn('"LINKER:-exported_symbols_list,${_vellum_provider_exports}"', cmake)
+        self.assertIn(
+            'set_property(TARGET vellum-skia-dawn-provider APPEND PROPERTY LINK_DEPENDS\n'
+            '    "${_vellum_provider_exports}")', cmake)
 
     def test_pattern_only_change_relinks_and_changes_exports(self) -> None:
         repo = Path(__file__).resolve().parents[2]

@@ -516,11 +516,6 @@ foreach(_vellum_mirror_unit IN LISTS VELLUM_MIRROR_UNITS)
         list(REMOVE_DUPLICATES _provider_unit_links)
         target_link_libraries(vellum-skia-dawn-provider PRIVATE
             "$<LINK_LIBRARY:WHOLE_ARCHIVE,${_provider_whole}>")
-        target_link_options(vellum-skia-dawn-provider PRIVATE
-            "LINKER:-unexported_symbols_list,${VELLUM_MIRROR_UNEXPORTS}")
-        set_property(TARGET vellum-skia-dawn-provider APPEND PROPERTY LINK_DEPENDS
-            "${VELLUM_MIRROR_UNEXPORTS}")
-        add_dependencies(vellum-skia-dawn-provider vellum-mirror-third-party-unexports)
         if(_provider_unit_links)
             target_link_libraries(vellum-skia-dawn-provider PRIVATE
                 ${_provider_unit_links})
