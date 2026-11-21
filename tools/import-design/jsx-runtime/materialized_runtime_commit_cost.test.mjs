@@ -1,0 +1,958 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import vm from 'node:vm';
+import { evaluateEntry } from './materialized_runtime_test_helpers.mjs';
+
+// The generated entry reapplies captured metadata from `resetAfterCommit`, so
+// every cost inside one application is multiplied by the React commit rate.
+// These cases pin the two costs that are shared across an application — the
+// registry path index and a selector's parse — to work that scales with the
+// registry snapshot rather than with the number of bindings or nodes scanned.
+// Counting operations keeps the assertions deterministic; a wall-clock budget
+// would flake on a shared runner and could not say which cost regressed.
+
+// Roots are found by reading each registry node's parent, so one read per node
+// is one index build. Counting through a getter attributes the reads to the
+// index rather than to a timer.
+function countingRegistry(count, onRead) {
+  const nodes = [];
+  for (let index = 0; index < count; ++index) {
+    const node = {
+      tagName: 'DIV', __pulpId: `n${index}`, id: `n${index}`, _children: [],
+    };
+    Object.defineProperty(node, 'parentElement', {
+      get() { onRead(); return null; }, configurable: true,
+    });
+    nodes.push(node);
+  }
+  return nodes;
+}
+
+function flatLayoutBindings(count, registrySize) {
+  const bindings = [];
+  for (let index = 0; index < count; ++index) {
+    bindings.push({
+      index, tag: 'div', path: [{ index: index % registrySize, tag: 'div' }],
+      box: { width: 10, height: 10, left: 0, top: 0 },
+    });
+  }
+  return bindings;
+}
+
+test('explicit state resolver selects and paints a captured reference state', () => {
+  const calls = [];
+  const sandbox = evaluateEntry({
+    visualAuthority: 'reference',
+    stateAtlas: [{ id: 'home', image: 'home.png', match: null, activate: [] }],
+    productPrelude: "globalThis.__pulpMaterializedStateResolver__ = () => 'home';",
+    bridge: {
+      setImageSource: (id, image) => calls.push(['image', id, image]),
+      setVisible: (id, visible) => calls.push(['visible', id, visible]),
+    },
+  });
+
+  assert.equal(sandbox.__pulpRefreshMaterializedState__(), 'home');
+  assert.deepEqual(calls, [
+    ['visible', '__pulp_materialized_behavior__', true],
+    ['visible', '__pulp_materialized_state_home', false],
+    ['image', '__pulp_materialized_state_home', 'home.png'],
+    ['visible', '__pulp_materialized_state_home', true],
+  ]);
+});
+
+// One application reads each registry node's parent once for the shared index,
+// plus once per resolved binding when translating that node's coordinate space.
+function applyAndCountParentReads(registrySize, bindingCount) {
+  let reads = 0;
+  const registryNodes = countingRegistry(registrySize, () => { ++reads; });
+  const sandbox = evaluateEntry({
+    registryNodes,
+    layoutBindings: flatLayoutBindings(bindingCount, registrySize),
+  });
+  reads = 0;
+  const applied = sandbox.__pulpApplyMaterializedImportMetadata__();
+  assert.equal(applied, bindingCount, 'fixture did not resolve every binding');
+  return reads;
+}
+
+test('builds the registry path index once per application, not per binding',
+  () => {
+    const registrySize = 40;
+    const bindingCount = 25;
+    const reads = applyAndCountParentReads(registrySize, bindingCount);
+
+    // Rebuilding the index per binding costs registrySize reads each time.
+    const perBindingRebuild = registrySize * bindingCount + bindingCount;
+    assert.equal(reads, registrySize + bindingCount);
+    assert.ok(reads < perBindingRebuild / 4,
+      `expected a shared index, saw ${reads} of ${perBindingRebuild} reads`);
+  });
+
+test('index cost stays additive as the binding count grows', () => {
+  const registrySize = 40;
+  const base = applyAndCountParentReads(registrySize, 25);
+  const doubled = applyAndCountParentReads(registrySize, 50);
+
+  // A shared index adds one read per extra binding. Rebuilding per binding
+  // would add registrySize reads for each of them.
+  assert.equal(doubled - base, 25);
+  assert.ok(doubled - base < registrySize,
+    'per-binding growth scales with the registry, so the index is rebuilt');
+});
+
+test('resolves nested captured paths through the shared index', () => {
+  // Perf counters alone would stay green if resolution broke, so pin the
+  // traversal the index feeds: roots, then registry-filtered children.
+  const parent = { tagName: 'DIV', __pulpId: 'p', id: 'p', parentElement: null };
+  const first = { tagName: 'DIV', __pulpId: 'c0', id: 'c0', _children: [] };
+  const second = { tagName: 'SPAN', __pulpId: 'c1', id: 'c1', _children: [] };
+  first.parentElement = parent;
+  second.parentElement = parent;
+  parent._children = [first, second];
+
+  const sandbox = evaluateEntry({
+    registryNodes: [parent, first, second],
+    layoutBindings: [{
+      index: 0, tag: 'span',
+      path: [{ index: 0, tag: 'div' }, { index: 1, tag: 'span' }],
+      box: { width: 10, height: 10, left: 0, top: 0 },
+    }],
+  });
+
+  const applied = sandbox.__pulpApplyMaterializedImportMetadata__();
+  assert.equal(applied, 1, 'nested path did not resolve through the index');
+});
+
+test('parses a selector once per scan rather than once per candidate node', () => {
+  // Every registry scan tests one selector against every node. Counting the
+  // parse's own regex passes shows whether that work follows the selector
+  // vocabulary or the registry size.
+  const scan = (nodeCount) => {
+    const registryNodes = [];
+    for (let index = 0; index < nodeCount; ++index) {
+      const last = index === nodeCount - 1;
+      registryNodes.push({
+        tagName: 'DIV', __pulpId: `n${index}`, id: `n${index}`, _children: [],
+        className: '', parentElement: null,
+        getAttribute: (name) => (name === 'data-x' && last ? '1' : null),
+      });
+    }
+    const sandbox = evaluateEntry({ registryNodes });
+    const sandboxString = vm.runInContext('String', sandbox);
+    const original = sandboxString.prototype.replace;
+    let passes = 0;
+    sandboxString.prototype.replace = function (...args) {
+      ++passes;
+      return original.apply(this, args);
+    };
+    try {
+      const found = sandbox.__pulpFindMaterializedElement__('div[data-x="1"]');
+      assert.equal(found && found.__pulpId, `n${nodeCount - 1}`,
+        'selector scan did not find the matching node');
+    } finally {
+      sandboxString.prototype.replace = original;
+    }
+    return passes;
+  };
+
+  const small = scan(20);
+  const large = scan(200);
+  assert.ok(small > 0, 'no parse observed, so the counter is not wired');
+  assert.equal(large, small,
+    `selector re-parsed per node: ${small} passes at 20 nodes, ${large} at 200`);
+});
+
+// Captured-state resolution runs one selector per state on every React commit
+// and takes the first that answers, so every state ahead of the live one costs
+// a scan that match-tests the whole registry before returning null. These cases
+// pin that a miss is paid once per mutation epoch rather than once per commit,
+// and that a runtime with no epoch published declines to cache at all.
+function scanCountingRegistry(count, onTest) {
+  const nodes = [];
+  for (let index = 0; index < count; ++index) {
+    const node = {
+      __pulpId: `n${index}`, id: `n${index}`, _children: [],
+      className: '', parentElement: null,
+      getAttribute: () => null,
+    };
+    Object.defineProperty(node, 'tagName', {
+      get() { onTest(); return 'DIV'; }, configurable: true,
+    });
+    nodes.push(node);
+  }
+  return nodes;
+}
+
+test('a registry miss is rescanned once per mutation epoch, not per commit',
+  () => {
+    let tests = 0;
+    const registryNodes = scanCountingRegistry(50, () => { ++tests; });
+    const sandbox = evaluateEntry({ registryNodes });
+    sandbox.__pulpMaterializedTreeEpoch__ = 1;
+
+    tests = 0;
+    assert.equal(sandbox.__pulpFindMaterializedElement__('span.absent'), null);
+    const firstScan = tests;
+    assert.ok(firstScan > 0, 'no match test observed, so the counter is dead');
+
+    // Ten further commits with no host mutation: the epoch is unchanged, so the
+    // answer cannot have changed and nothing should be rescanned.
+    for (let commit = 0; commit < 10; ++commit) {
+      assert.equal(sandbox.__pulpFindMaterializedElement__('span.absent'), null);
+    }
+    assert.equal(tests, firstScan,
+      `miss rescanned without a mutation: ${tests} tests vs ${firstScan}`);
+
+    // A host mutation bumps the epoch, and the answer must be recomputed --
+    // a cache that never invalidates is a stale answer, not a cheap one.
+    sandbox.__pulpMaterializedTreeEpoch__ = 2;
+    assert.equal(sandbox.__pulpFindMaterializedElement__('span.absent'), null);
+    assert.equal(tests, firstScan * 2,
+      'a bumped epoch did not invalidate the retained miss');
+  });
+
+test('declines to cache a miss when no mutation epoch is published', () => {
+  // A plain importer runtime with no @pulp/react host has nothing to invalidate
+  // a retained miss, so it must keep scanning rather than answer from a cache
+  // it can never clear.
+  let tests = 0;
+  const registryNodes = scanCountingRegistry(20, () => { ++tests; });
+  const sandbox = evaluateEntry({ registryNodes });
+  assert.equal(sandbox.__pulpMaterializedTreeEpoch__, undefined,
+    'fixture published an epoch, so this case proves nothing');
+
+  tests = 0;
+  assert.equal(sandbox.__pulpFindMaterializedElement__('span.absent'), null);
+  const firstScan = tests;
+  assert.ok(firstScan > 0, 'no match test observed, so the counter is dead');
+  assert.equal(sandbox.__pulpFindMaterializedElement__('span.absent'), null);
+  assert.equal(tests, firstScan * 2,
+    'a miss was cached with no epoch to invalidate it');
+});
+
+test('a positive match is not served from the miss cache', () => {
+  // Only negative answers are retained. A node that once matched can have its
+  // attributes rewritten, so the hit path must stay live.
+  const node = {
+    tagName: 'SPAN', __pulpId: 'hit', id: 'hit', _children: [],
+    className: 'live', parentElement: null, getAttribute: () => null,
+  };
+  const sandbox = evaluateEntry({ registryNodes: [node] });
+  sandbox.__pulpMaterializedTreeEpoch__ = 1;
+
+  assert.equal(sandbox.__pulpFindMaterializedElement__('span.live'), node);
+  node.className = 'changed';
+  assert.equal(sandbox.__pulpFindMaterializedElement__('span.live'), null,
+    'a stale hit was served after the node stopped matching');
+});
+
+// ── Scoped re-apply ────────────────────────────────────────────────
+//
+// The applier is called once per qualifying React commit, so its cost is
+// multiplied by the commit rate; a drag emits hundreds. The host config now
+// hands it the ids whose subtrees the commit actually touched, and a binding
+// outside that scope keeps the geometry it already has.
+//
+// Two directions have to hold, and only one of them is a perf number. A scope
+// that skips too MUCH renders visibly wrong -- captured nodes keep stale
+// boxes -- and no operation count would notice, so every case below pairs the
+// saving with an explicit claim about what still got applied.
+
+// A small captured document with two sibling subtrees. Bindings cover every
+// node, so "the scope worked" and "the scope dropped work it owed" are both
+// observable from which ids received bridge calls.
+function twoSubtreeDocument() {
+  const make = (id, tag = 'div') => ({
+    tagName: tag.toUpperCase(), __pulpId: id, id, _children: [],
+    parentElement: null, className: '', getAttribute: () => null,
+  });
+  const root = make('root');
+  const a = make('a');
+  const b = make('b');
+  const a0 = make('a0');
+  const a1 = make('a1');
+  const b0 = make('b0');
+  const b1 = make('b1');
+  const link = (parent, children) => {
+    parent._children = children;
+    for (const child of children) child.parentElement = parent;
+  };
+  link(root, [a, b]);
+  link(a, [a0, a1]);
+  link(b, [b0, b1]);
+  const nodes = [root, a, b, a0, a1, b0, b1];
+  const step = { index: 0, tag: 'div' };
+  const path = (...indices) =>
+    [step, ...indices.map((index) => ({ index, tag: 'div' }))];
+  const layoutBindings = [
+    { index: 0, tag: 'div', path: path(), box: box(0) },
+    { index: 1, tag: 'div', path: path(0), box: box(1) },
+    { index: 2, tag: 'div', path: path(1), box: box(2) },
+    { index: 3, tag: 'div', path: path(0, 0), box: box(3) },
+    { index: 4, tag: 'div', path: path(0, 1), box: box(4) },
+    { index: 5, tag: 'div', path: path(1, 0), box: box(5) },
+    { index: 6, tag: 'div', path: path(1, 1), box: box(6) },
+  ];
+  // Binding order matches `nodes` order, which is what the id assertions read.
+  const expectedIds = ['root', 'a', 'b', 'a0', 'a1', 'b0', 'b1'];
+  return { nodes, layoutBindings, expectedIds };
+}
+
+function box(seed) {
+  return { width: 10 + seed, height: 10 + seed, left: seed, top: seed };
+}
+
+// Records which ids the applier actually wrote geometry to. An operation count
+// alone cannot distinguish "skipped the right nodes" from "skipped the wrong
+// ones", and the wrong one is invisible in every green perf assertion.
+function applyWithRecorder(sandbox, scope) {
+  const writes = [];
+  let metricReads = 0;
+  for (const name of ['setPosition', 'setLeft', 'setTop']) {
+    sandbox[name] = (id) => { writes.push(`${name}:${id}`); };
+  }
+  sandbox.setFlex = (id, axis) => { writes.push(`setFlex.${axis}:${id}`); };
+  sandbox.getLayoutBoxMetrics = () => { ++metricReads; return null; };
+  // The applier returns before publishing diagnostics when the text bridge is
+  // absent, so a document with no text bindings still needs the stub present.
+  sandbox.setCapturedLineBoxes = () => {};
+  const applied = scope === undefined
+    ? sandbox.__pulpApplyMaterializedImportMetadata__()
+    : sandbox.__pulpApplyMaterializedImportMetadata__(scope);
+  const ids = new Set(writes.map((write) => write.split(':')[1]));
+  return { applied, writes, ids, metricReads };
+}
+
+test('an unscoped application still writes every captured binding', () => {
+  // The control for every scoped case below. If this ever reads short, the
+  // fixture is broken and the savings measured against it mean nothing.
+  const doc = twoSubtreeDocument();
+  const sandbox = evaluateEntry({
+    registryNodes: doc.nodes, layoutBindings: doc.layoutBindings,
+  });
+  const full = applyWithRecorder(sandbox, undefined);
+
+  assert.equal(full.applied, doc.layoutBindings.length);
+  assert.deepEqual([...full.ids].sort(), [...doc.expectedIds].sort());
+});
+
+test('a scoped application skips bindings outside the changed subtree', () => {
+  const doc = twoSubtreeDocument();
+  const sandbox = evaluateEntry({
+    registryNodes: doc.nodes, layoutBindings: doc.layoutBindings,
+  });
+  const full = applyWithRecorder(sandbox, undefined);
+  const scoped = applyWithRecorder(sandbox, ['a']);
+
+  // The saving. Every write and every forced layout read the applier avoids is
+  // paid once per qualifying commit in production.
+  assert.ok(scoped.writes.length < full.writes.length,
+    `scope saved nothing: ${scoped.writes.length} of ${full.writes.length}`);
+  assert.ok(scoped.metricReads < full.metricReads,
+    'scope did not reduce forced layout metric reads');
+
+  // The correctness half: a scope naming `a` owes `a` AND its descendants, and
+  // owes nothing for `b`'s subtree or the untouched root.
+  assert.deepEqual([...scoped.ids].sort(), ['a', 'a0', 'a1']);
+  assert.equal(scoped.applied, 3);
+});
+
+test('a scope naming a parent still re-applies its whole subtree', () => {
+  // The failure this guards is silent and visual: a scope that resolved only
+  // the named node would leave freshly reordered children with stale captured
+  // boxes, and every operation count would look better for it.
+  const doc = twoSubtreeDocument();
+  const sandbox = evaluateEntry({
+    registryNodes: doc.nodes, layoutBindings: doc.layoutBindings,
+  });
+  const scoped = applyWithRecorder(sandbox, ['root']);
+
+  assert.deepEqual([...scoped.ids].sort(), [...doc.expectedIds].sort());
+  assert.equal(scoped.applied, doc.layoutBindings.length);
+});
+
+test('several scoped ids from one commit are applied together', () => {
+  const doc = twoSubtreeDocument();
+  const sandbox = evaluateEntry({
+    registryNodes: doc.nodes, layoutBindings: doc.layoutBindings,
+  });
+  const scoped = applyWithRecorder(sandbox, ['a1', 'b0']);
+
+  assert.deepEqual([...scoped.ids].sort(), ['a1', 'b0']);
+});
+
+test('an absent or empty scope falls back to applying everything', () => {
+  // A runtime that predates the scope argument, and a commit whose blast
+  // radius the host config could not name, both arrive here as nothing. The
+  // fallback has to be the slow-but-correct direction.
+  const doc = twoSubtreeDocument();
+  const sandbox = evaluateEntry({
+    registryNodes: doc.nodes, layoutBindings: doc.layoutBindings,
+  });
+
+  for (const scope of [null, [], undefined]) {
+    const result = applyWithRecorder(sandbox, scope);
+    assert.equal(result.applied, doc.layoutBindings.length,
+      `scope ${JSON.stringify(scope)} did not fall back to a full pass`);
+  }
+});
+
+test('a scope naming an id that is not in the registry applies nothing', () => {
+  // Deliberately pinned rather than left undefined. An unknown id must not
+  // degrade to "apply everything" -- that would hide a host-config regression
+  // that stopped publishing real ids behind a permanently full re-apply.
+  const doc = twoSubtreeDocument();
+  const sandbox = evaluateEntry({
+    registryNodes: doc.nodes, layoutBindings: doc.layoutBindings,
+  });
+  const scoped = applyWithRecorder(sandbox, ['not-a-node']);
+
+  assert.equal(scoped.applied, 0);
+  assert.equal(scoped.writes.length, 0);
+});
+
+test('a scoped pass does not overwrite the full-application diagnostics', () => {
+  // Import validators read `__pulpMaterializedMetadataDiagnostics__` and
+  // compare applied against expected. A scoped pass legitimately applies a
+  // fraction of the document, so publishing its counts under that key would
+  // report a mass miss on a pass that was correct by construction.
+  const doc = twoSubtreeDocument();
+  const sandbox = evaluateEntry({
+    registryNodes: doc.nodes, layoutBindings: doc.layoutBindings,
+  });
+  applyWithRecorder(sandbox, undefined);
+  const full = sandbox.__pulpMaterializedMetadataDiagnostics__;
+  assert.equal(full.layout_applied, doc.layoutBindings.length,
+    'full diagnostics were not published, so this case proves nothing');
+
+  applyWithRecorder(sandbox, ['a']);
+  assert.equal(sandbox.__pulpMaterializedMetadataDiagnostics__.layout_applied,
+    doc.layoutBindings.length, 'a scoped pass clobbered the full diagnostics');
+  const scoped = sandbox.__pulpMaterializedScopedApplyDiagnostics__;
+  assert.equal(scoped.scoped, true);
+  assert.equal(scoped.layout_applied, 3);
+  assert.equal(scoped.layout_out_of_scope, 4);
+});
+
+// ── Per-pass path memo ──────────────────────────────────────────────────
+// Captured paths share prefixes: every control in a row walks through the
+// row. Counting reads of `_children` measures how often the pass filters a
+// node's children against the registry.
+function rowDocument(rows, onChildrenRead) {
+  const make = (tag, id, parent) => {
+    const kids = [];
+    const node = { tagName: tag.toUpperCase(), __pulpId: id, id,
+      parentElement: parent, textContent: '' };
+    Object.defineProperty(node, '_children', {
+      get() { onChildrenRead(); return kids; },
+    });
+    if (parent) parent.__kids.push(node);
+    Object.defineProperty(node, '__kids', { value: kids });
+    return node;
+  };
+  const root = make('div', 'root', null);
+  const nodes = [root];
+  const layout = [{ index: 0, tag: 'div', path: [{ index: 0, tag: 'div' }],
+    box: { left: 0, top: 0, width: 10, height: 10 } }];
+  for (let r = 0; r < rows; ++r) {
+    const row = make('div', `row${r}`, root);
+    nodes.push(row);
+    for (let c = 0; c < 4; ++c) {
+      nodes.push(make('span', `cell${r}-${c}`, row));
+      layout.push({ index: layout.length, tag: 'span',
+        path: [{ index: 0, tag: 'div' }, { index: r, tag: 'div' },
+          { index: c, tag: 'span' }],
+        box: { left: 0, top: 0, width: 10, height: 10 } });
+    }
+  }
+  return { nodes, layout };
+}
+
+test('a pass filters each node\'s children once, however many paths cross it',
+  () => {
+    let reads = 0;
+    const rows = 10;
+    const { nodes, layout } = rowDocument(rows, () => { ++reads; });
+    const sandbox = evaluateEntry({ registryNodes: nodes, layoutBindings: layout });
+    reads = 0;
+    const applied = sandbox.__pulpApplyMaterializedImportMetadata__();
+    // CONTROL: resolution still works, or zero reads would mean nothing ran.
+    assert.equal(applied, layout.length);
+    // root + 10 rows + 40 cells: each read once. Walking every path from the
+    // root re-filters the root and a row for each of the 41 bindings (~123).
+    assert.equal(reads, 1 + rows + rows * 4);
+  });
+
+test('the path memo lives for one pass, so a reparent resolves freshly', () => {
+  const { nodes, layout } = rowDocument(2, () => {});
+  const sandbox = evaluateEntry({ registryNodes: nodes, layoutBindings: layout });
+  const positions = [];
+  sandbox.setLeft = (id) => positions.push(id);
+  sandbox.__pulpApplyMaterializedImportMetadata__();
+  // Swap the two rows: paths now resolve to the other row's cells.
+  const root = nodes[0];
+  root.__kids.reverse();
+  positions.length = 0;
+  sandbox.__pulpApplyMaterializedImportMetadata__();
+  assert.equal(positions[1], 'cell1-0');
+  assert.equal(positions[5], 'cell0-0');
+});
+
+// ── Typography once per Label per pass ─────────────────────────────────
+function textDocument(duplicates) {
+  const root = { tagName: 'DIV', __pulpId: 'root', id: 'root', parentElement: null,
+    textContent: '' };
+  const label = { tagName: 'SPAN', __pulpId: 'l', id: 'l', parentElement: root,
+    textContent: 'Theme', _children: [] };
+  root._children = [label];
+  const binding = { text: 'Theme', path: [{ index: 0, tag: 'div' },
+    { index: 0, tag: 'span' }], boxes: [{ left: 0, top: 0, width: 5, height: 5 }],
+    basis: { width: 5, resolved_face: 'Mono', requested: { font_family: 'Mono',
+      font_size: 11, font_weight: 400, font_slant: 0, letter_spacing: 0 } } };
+  return { nodes: [root, label],
+    text: Array.from({ length: 1 + duplicates }, () => ({ ...binding })) };
+}
+
+test('applies a Label\'s face once per pass however many bindings reach it', () => {
+  const { nodes, text } = textDocument(56);
+  const fonts = [];
+  const lineBoxes = [];
+  const sandbox = evaluateEntry({ registryNodes: nodes, textBindings: text,
+    bridge: {
+      setCapturedLineBoxes: (id) => lineBoxes.push(id),
+      setFontFamily: (id, face) => fonts.push([id, face]),
+      setFontSize: () => {}, setFontWeight: () => {}, setFontStyle: () => {},
+      setLetterSpacing: () => {},
+    } });
+  fonts.length = 0;
+  lineBoxes.length = 0;
+  sandbox.__pulpApplyMaterializedImportMetadata__();
+  // CONTROL: every binding was still applied (57 line-box writes).
+  assert.equal(lineBoxes.length, 57);
+  assert.deepEqual(fonts, [['l', 'Mono']]);
+  // A second pass applies it again: the dedup is per pass, not forever.
+  sandbox.__pulpApplyMaterializedImportMetadata__();
+  assert.equal(fonts.length, 2);
+});
+
+test('a different face for the same Label in one pass is still applied', () => {
+  const { nodes, text } = textDocument(1);
+  text[1] = { ...text[1], basis: { ...text[1].basis,
+    requested: { ...text[1].basis.requested, font_size: 14 } } };
+  const sizes = [];
+  const sandbox = evaluateEntry({ registryNodes: nodes, textBindings: text,
+    bridge: { setCapturedLineBoxes: () => {}, setFontFamily: () => {},
+      setFontSize: (id, size) => sizes.push(size) } });
+  sizes.length = 0;
+  sandbox.__pulpApplyMaterializedImportMetadata__();
+  assert.deepEqual(sizes, [11, 14]);
+});
+
+// ── Captured paint ownership and per-node reconcile ─────────────────────
+function paintDocument() {
+  const root = { tagName: 'DIV', __pulpId: 'root', id: 'root', parentElement: null };
+  const icon = { tagName: 'PATH', __pulpId: 'icon', id: 'icon', parentElement: root,
+    _children: [] };
+  const plain = { tagName: 'PATH', __pulpId: 'plain', id: 'plain',
+    parentElement: root, _children: [] };
+  root._children = [icon, plain];
+  const paint = [{ index: 0, tag: 'path', path: [{ index: 0, tag: 'div' },
+    { index: 0, tag: 'path' }], paint: { opacity: 0.5, color: 'rgb(1, 1, 1)',
+    fill: 'rgb(2, 2, 2)', stroke: 'none', stroke_width: 1,
+    stroke_dasharray: 'none' } }];
+  return { nodes: [root, icon, plain], paint };
+}
+
+function paintRecorder() {
+  const writes = [];
+  const bridge = {};
+  for (const verb of ['setOpacity', 'setTextColor', 'setSvgFill', 'setSvgStroke',
+    'setSvgStrokeWidth']) bridge[verb] = (id, value) => writes.push([verb, id, value]);
+  return { writes, bridge };
+}
+
+test('reconciles only a captured channel whose React value differs', () => {
+  const { nodes, paint } = paintDocument();
+  const { writes, bridge } = paintRecorder();
+  const sandbox = evaluateEntry({ registryNodes: nodes, paintBindings: paint, bridge });
+  sandbox.__pulpApplyMaterializedImportMetadata__();
+  writes.length = 0;
+  const reconcile = sandbox.__pulpReconcileMaterializedPaint__;
+  assert.equal(reconcile('icon', { fill: '#fff', color: 'rgb(1, 1, 1)' }), 1);
+  assert.deepEqual(writes, [['setSvgFill', 'icon', 'rgb(2, 2, 2)']]);
+  // textColor and color land on one channel: written once.
+  writes.length = 0;
+  assert.equal(reconcile('icon', { color: '#f00', textColor: '#f00' }), 1);
+  // A node the capture does not own is left to React.
+  assert.equal(reconcile('plain', { fill: '#fff', opacity: 0 }), 0);
+  assert.equal(writes.length, 1);
+});
+
+test('a full pass forgets ownership the new metadata no longer carries', () => {
+  const { nodes, paint } = paintDocument();
+  const { writes, bridge } = paintRecorder();
+  const state = { id: 'bare', match: { selector: '[data-bare]' },
+    metadata: { layout_bindings: [], text_bindings: [], paint_bindings: [] } };
+  const sandbox = evaluateEntry({ registryNodes: nodes, paintBindings: paint,
+    stateAtlas: [state], bridge });
+  sandbox.__pulpApplyMaterializedImportMetadata__();
+  const reconcile = sandbox.__pulpReconcileMaterializedPaint__;
+  assert.equal(reconcile('icon', { fill: '#fff' }), 1);
+  nodes[1].getAttribute = (name) => name === 'data-bare' ? '' : null;
+  assert.equal(sandbox.__pulpRefreshMaterializedState__(), 'bare');
+  writes.length = 0;
+  assert.equal(reconcile('icon', { fill: '#fff' }), 0);
+  assert.deepEqual(writes, []);
+});
+
+test('publishes every attribute a captured-state selector names up front', () => {
+  const states = ['[data-a="1"]', 'div[ data-b ] span', '#x.y'].map((selector, i) =>
+    ({ id: `s${i}`, match: { selector, ancestor: i === 0 ? '[aria-expanded]' : '' },
+      metadata: { layout_bindings: [], text_bindings: [], paint_bindings: [] } }));
+  // The last state matches, so resolution never asks about the others: their
+  // attributes are published only because they are recorded up front.
+  const matched = { tagName: 'DIV', __pulpId: 'x', id: 'x', className: 'y',
+    parentElement: null, _children: [], getAttribute: () => null };
+  const sandbox = evaluateEntry({ stateAtlas: states, registryNodes: [matched] });
+  assert.equal(sandbox.__pulpRefreshMaterializedState__(), 's2');
+  assert.deepEqual([...sandbox.__pulpMaterializedSelectorAttributes__].sort(),
+    ['aria-expanded', 'data-a', 'data-b']);
+  sandbox.__pulpFindMaterializedElement__('[data-late]');
+  assert.ok(sandbox.__pulpMaterializedSelectorAttributes__.has('data-late'));
+});
+
+// ── Batched lookups (captured-state resolution) ─────────────────────────
+//
+// Resolution asks one selector per atlas state on every qualifying React
+// commit. Answered one by one, every state that is not open was a miss that
+// match-tested the whole registry, so a commit paid states x nodes match
+// tests. Answered together, the registry is walked once and a node is
+// match-tested against a state only when it carries the attributes that
+// state's selector names.
+
+function atlasStates(count) {
+  const states = [];
+  for (let index = 0; index < count; ++index) {
+    states.push({ id: `s${index}`, match: { selector: `[data-open-${index}]` },
+      metadata: { layout_bindings: [], text_bindings: [], paint_bindings: [] } });
+  }
+  return states;
+}
+
+test('captured-state resolution walks the registry once for every state', () => {
+  let tests = 0;
+  const registryNodes = scanCountingRegistry(100, () => { ++tests; });
+  const sandbox = evaluateEntry({ registryNodes, stateAtlas: atlasStates(10) });
+  sandbox.__pulpMaterializedTreeEpoch__ = 1;
+  const stats = sandbox.__pulpMaterializedFindBatchStats__;
+  assert.ok(stats, 'resolution did not go through the batched lookup');
+  const before = { ...stats };
+  tests = 0;
+  assert.equal(sandbox.__pulpRefreshMaterializedState__(), '');
+  // Ten states, all closed: one pass, and no node carries any of their
+  // attributes, so nothing is match-tested at all (one by one this was
+  // 10 x 100 match tests).
+  assert.equal(stats.passes - before.passes, 1);
+  assert.equal(stats.matchTests - before.matchTests, 0);
+  assert.equal(tests, 0, `${tests} match tests for ten closed states`);
+  assert.ok(stats.attributeReads - before.attributeReads <= 100 * 10);
+  // Positive control: the same counter sees a single unbatched miss.
+  sandbox.__pulpMaterializedTreeEpoch__ = 2;
+  assert.equal(sandbox.__pulpFindMaterializedElement__('span.absent'), null);
+  assert.ok(tests >= 100, 'the match-test counter is dead');
+});
+
+test('resolution still answers with the last state whose selector matches', () => {
+  const make = (id, attrs = {}) => ({ tagName: 'DIV', __pulpId: id, id,
+    _children: [], className: '', parentElement: null,
+    getAttribute: (name) => (name in attrs ? attrs[name] : null) });
+  const registryNodes = [make('a'), make('b', { 'data-open-3': '' }),
+    make('c', { 'data-open-7': 'yes' })];
+  const sandbox = evaluateEntry({ registryNodes, stateAtlas: atlasStates(10) });
+  sandbox.__pulpMaterializedTreeEpoch__ = 1;
+  assert.equal(sandbox.__pulpRefreshMaterializedState__(), 's7');
+  sandbox.__pulpMaterializedTreeEpoch__ = 2;
+  registryNodes[2].getAttribute = () => null;
+  assert.equal(sandbox.__pulpRefreshMaterializedState__(), 's3');
+});
+
+test('a batched lookup answers exactly as each single lookup does', () => {
+  // A small tree with ancestors, direct parents, value-matched attributes and
+  // a class-only selector the attribute prefilter cannot narrow.
+  const node = (id, tag, attrs, parent, className = '') => {
+    const element = { tagName: tag, __pulpId: id, id, _children: [], className,
+      parentElement: parent || null,
+      getAttribute: (name) => (name in attrs ? attrs[name] : null) };
+    if (parent) parent._children.push(element);
+    return element;
+  };
+  const root = node('root', 'DIV', { 'data-root': '' }, null);
+  const menuA = node('menuA', 'DIV', { 'data-menu': 'a' }, root);
+  const menuB = node('menuB', 'DIV', { 'data-menu': 'b' }, root);
+  const optA = node('optA', 'UL', { 'data-options': '' }, menuA, 'list');
+  const optB = node('optB', 'UL', { 'data-options': '' }, menuB, 'list');
+  const item = node('item', 'LI', { 'data-item': '1', role: 'option' }, optB);
+  const registryNodes = [root, menuA, menuB, optA, optB, item];
+  const queries = [
+    { selector: '[data-options]', ancestor: '[data-menu="b"]' },
+    { selector: '[data-options]', ancestor: '[data-menu="a"]' },
+    { selector: '[data-options]', ancestor: '[data-menu="c"]' },
+    { selector: '[data-menu="b"] > [data-options]' },
+    { selector: '[data-menu="a"] [data-item]' },
+    { selector: '[data-root] [data-item="1"]' },
+    { selector: 'li[role="option"]' },
+    { selector: 'ul.list' },
+    { selector: '.list' },
+    { selector: '[data-missing]' },
+    null,
+    { selector: '' },
+  ];
+  for (const epoch of [undefined, 7]) {
+    const sandbox = evaluateEntry({ registryNodes });
+    if (epoch !== undefined) sandbox.__pulpMaterializedTreeEpoch__ = epoch;
+    const batched = sandbox.__pulpFindMaterializedElements__(queries);
+    const single = queries.map((query) => query
+      ? sandbox.__pulpFindMaterializedElement__(query.selector, query.ancestor)
+      : null);
+    // Copied out of the sandbox realm so deepEqual compares values only.
+    const ids = Array.from(batched, (found) => found && found.__pulpId);
+    assert.deepEqual(ids, single.map((found) => found && found.__pulpId),
+      `epoch ${epoch}`);
+    assert.deepEqual(ids,
+      ['optB', 'optA', null, 'optB', null, 'item', 'item', 'optA', 'optA',
+        null, null, null]);
+  }
+});
+
+test('a batched miss is retained for the epoch like a single lookup\'s', () => {
+  let tests = 0;
+  const registryNodes = scanCountingRegistry(40, () => { ++tests; });
+  const sandbox = evaluateEntry({ registryNodes });
+  sandbox.__pulpMaterializedTreeEpoch__ = 1;
+  tests = 0;
+  // A tag-only selector cannot be prefiltered, so the pass tests every node.
+  assert.deepEqual(Array.from(sandbox.__pulpFindMaterializedElements__(
+    [{ selector: 'span.absent' }])), [null]);
+  const firstScan = tests;
+  assert.ok(firstScan >= 40, 'no match test observed, so the counter is dead');
+  assert.equal(sandbox.__pulpFindMaterializedElement__('span.absent'), null);
+  assert.equal(tests, firstScan, 'the batched miss was not retained');
+  sandbox.__pulpMaterializedTreeEpoch__ = 2;
+  assert.equal(sandbox.__pulpFindMaterializedElement__('span.absent'), null);
+  assert.ok(tests > firstScan, 'a bumped epoch did not invalidate the miss');
+});
+
+
+test('materialized pseudo gradient creates an inert absolute plane', () => {
+  const calls = [];
+  const sandbox = evaluateEntry({
+    pseudoBindings: [{ index: 0, anchor: 'body', path: [], pseudo: 'before',
+      box: { left: 2, top: 3, width: 20, height: 10 },
+      background_gradient: 'radial-gradient(circle, #0ff, transparent)',
+      background_color: 'rgba(1, 2, 3, 0.4)',
+      opacity: 0.5, z_index: 0, pointer_events: 'none' },
+    { index: 1, anchor: 'body', path: [], pseudo: 'after',
+      box: { left: 4, top: 5, width: 12, height: 8 },
+      background_color: 'rgba(0, 0, 0, 0.2)',
+      opacity: 0.25, z_index: 1, pointer_events: 'none' }],
+    bridge: {
+      createCol: (id, parent) => calls.push(['createCol', id, parent]),
+      setBackground: (id, value) => calls.push(['background', id, value]),
+      setBackgroundGradient: (id, value) => calls.push(['gradient', id, value]),
+      setLeft: (id, value) => calls.push(['left', id, value]),
+      setTop: (id, value) => calls.push(['top', id, value]),
+      setFlex: (id, axis, value) => calls.push(['flex', id, axis, value]),
+      setOpacity: (id, value) => calls.push(['opacity', id, value]),
+      setPointerEvents: (id, value) => calls.push(['pointer', id, value]),
+      setZIndex: (id, value) => calls.push(['z', id, value]),
+    },
+  });
+  assert.ok(calls.some(call => call[0] === 'createCol' &&
+    call[1] === '__pulp_materialized_pseudo_root__' && call[2] === ''),
+    'pseudo planes have a sibling visual root');
+  assert.ok(calls.some(call => call[0] === 'opacity' &&
+    call[1] === '__pulp_materialized_pseudo_root__' && call[2] === 1),
+    'pseudo root stays visible when behavior root is hidden');
+  assert.ok(calls.some(call => call[0] === 'opacity' &&
+    call[1] === '__pulp_materialized_behavior__' && call[2] === 0),
+    'reference behavior root remains transparent');
+  assert.deepEqual(calls.filter(call => call[1] === '__pulp_materialized_pseudo_0'), [
+    ['createCol', '__pulp_materialized_pseudo_0', '__pulp_materialized_pseudo_root__'],
+    ['left', '__pulp_materialized_pseudo_0', 2],
+    ['top', '__pulp_materialized_pseudo_0', 3],
+    ['flex', '__pulp_materialized_pseudo_0', 'width', 20],
+    ['flex', '__pulp_materialized_pseudo_0', 'height', 10],
+    ['background', '__pulp_materialized_pseudo_0', 'rgba(1, 2, 3, 0.4)'],
+    ['gradient', '__pulp_materialized_pseudo_0', 'radial-gradient(circle, #0ff, transparent)'],
+    ['opacity', '__pulp_materialized_pseudo_0', 0.5],
+    ['pointer', '__pulp_materialized_pseudo_0', 'none'],
+    ['z', '__pulp_materialized_pseudo_0', 19000],
+  ]);
+  const planeIds = new Set(calls.filter(call => call[0] === 'createCol' &&
+    /^__pulp_materialized_pseudo_[0-9]+$/.test(call[1])).map(call => call[1]));
+  assert.deepEqual(planeIds, new Set([
+    '__pulp_materialized_pseudo_0', '__pulp_materialized_pseudo_1',
+  ]));
+  assert.ok(sandbox);
+});
+
+test('state switches reconcile pseudo planes and hide stale bindings', () => {
+  const calls = [];
+  const sandbox = evaluateEntry({
+    productPrelude: "globalThis.__wantState__ = ''; globalThis.__pulpMaterializedStateResolver__ = () => globalThis.__wantState__;",
+    stateAtlas: [{ id: 'alt', image: '', match: null, activate: [], metadata: {
+      layout_bindings: [], text_bindings: [], paint_bindings: [],
+      pseudo_bindings: [{ index: 0, anchor: 'body', path: [], pseudo: 'before',
+        box: { left: 0, top: 0, width: 10, height: 10 },
+        background_gradient: 'linear-gradient(#fff, transparent)',
+        opacity: 1, z_index: 0, pointer_events: 'none' }],
+    } }],
+    bridge: {
+      createCol: (id, parent) => calls.push(['create', id, parent]),
+      setVisible: (id, value) => calls.push(['visible', id, value]),
+      setBackground: (id, value) => calls.push(['background', id, value]),
+      setBackgroundGradient: (id, value) => calls.push(['gradient', id, value]),
+    },
+  });
+  sandbox.__wantState__ = 'alt';
+  assert.equal(sandbox.__pulpRefreshMaterializedState__(), 'alt');
+  sandbox.__wantState__ = '';
+  assert.equal(sandbox.__pulpRefreshMaterializedState__(), '');
+  const id = '__pulp_materialized_pseudo_0';
+  assert.ok(calls.some(call => call[0] === 'create' && call[1] === id));
+  assert.ok(calls.some(call => call[0] === 'visible' && call[1] === id && call[2] === false));
+});
+
+// ── Layout reads batched ahead of layout writes ─────────────────────────
+// getLayoutBoxMetrics runs a whole-root layout pass whenever any geometry or
+// typography write has landed since the previous read. A pass that alternates
+// read, write, read, write therefore lays the whole tree out once per binding.
+// The trace model below counts exactly those flushes: a read is a flush when a
+// write precedes it with no read in between.
+const LAYOUT_READS = new Set(['getLayoutBoxMetrics']);
+const LAYOUT_WRITES = new Set(['setPosition', 'setLeft', 'setTop', 'setFlex',
+  'setFontFamily', 'setFontSize', 'setFontWeight', 'setFontStyle',
+  'setLetterSpacing', 'setCapturedLineBoxes', 'clearCapturedLineBoxes']);
+
+function layoutFlushes(trace) {
+  let dirty = false;
+  let flushes = 0;
+  for (const verb of trace) {
+    if (LAYOUT_WRITES.has(verb)) dirty = true;
+    else if (LAYOUT_READS.has(verb) && dirty) {
+      ++flushes;
+      dirty = false;
+    }
+  }
+  return flushes;
+}
+
+// `count` captured buttons, each an absolute layout binding whose text paints
+// through a generated Label child, so the pass reads metrics for both the
+// layout binding and the text target.
+function buttonDocument(count) {
+  const root = { tagName: 'DIV', __pulpId: 'root', id: 'root', parentElement: null,
+    textContent: '', _children: [] };
+  const nodes = [root];
+  const layoutBindings = [];
+  const textBindings = [];
+  for (let index = 0; index < count; ++index) {
+    const button = { tagName: 'BUTTON', __pulpId: `b${index}`, id: `b${index}`,
+      parentElement: root, textContent: `Button ${index}`, _children: [],
+      __pulpTextTargetId: `b${index}-text` };
+    root._children.push(button);
+    nodes.push(button);
+    const path = [{ index: 0, tag: 'div' }, { index, tag: 'button' }];
+    layoutBindings.push({ index, tag: 'button', path,
+      box: { left: index * 30, top: 0, width: 28, height: 20 } });
+    textBindings.push({ text: `Button ${index}`, path,
+      boxes: [{ left: 4, top: 2, width: 20, height: 14 }],
+      basis: { width: 28, resolved_face: 'Mono', requested: {
+        font_family: 'Mono', font_size: 11, font_weight: 400, font_slant: 0,
+        letter_spacing: 0 } } });
+  }
+  return { nodes, layoutBindings, textBindings };
+}
+
+function traceApply(doc) {
+  const trace = [];
+  const metrics = { localX: 4, localY: 2, offsetWidth: 20, offsetHeight: 14,
+    borderLeftWidth: 1, borderTopWidth: 1, borderRightWidth: 1,
+    marginLeft: 0, marginTop: 0 };
+  const bridge = {};
+  for (const verb of LAYOUT_WRITES) bridge[verb] = () => { trace.push(verb); };
+  bridge.getLayoutBoxMetrics = () => { trace.push('getLayoutBoxMetrics'); return metrics; };
+  const sandbox = evaluateEntry({ registryNodes: doc.nodes,
+    layoutBindings: doc.layoutBindings, textBindings: doc.textBindings, bridge });
+  trace.length = 0;
+  const applied = sandbox.__pulpApplyMaterializedImportMetadata__();
+  return { trace, applied, sandbox };
+}
+
+test('the trace model counts one flush per read that follows a write', () => {
+  // The planted negative for the model itself: an interleaved pass must read
+  // as N flushes, and a phased one as one, or the cases below prove nothing.
+  const interleaved = [];
+  for (let index = 0; index < 8; ++index)
+    interleaved.push('getLayoutBoxMetrics', 'setLeft', 'setTop');
+  assert.equal(layoutFlushes(interleaved), 7);
+  const phased = [...Array(8).fill('getLayoutBoxMetrics'),
+    ...Array(8).fill('setLeft'), 'getLayoutBoxMetrics'];
+  assert.equal(layoutFlushes(phased), 1);
+});
+
+test('one application flushes layout a bounded number of times', () => {
+  const small = traceApply(buttonDocument(4));
+  const large = traceApply(buttonDocument(40));
+  // CONTROL: every layout and text binding was applied, and each one read
+  // metrics, so the flush count below is measured over a full pass.
+  assert.equal(small.applied, 8);
+  assert.equal(large.applied, 80);
+  assert.equal(large.trace.filter(verb => verb === 'getLayoutBoxMetrics').length,
+    40 * 2 + 40 * 2);
+  // Metrics for layout bindings are read before any of their writes, and text
+  // targets are measured once after every geometry and typography write.
+  assert.ok(layoutFlushes(large.trace) <= 1,
+    `saw ${layoutFlushes(large.trace)} layout flushes for 40 bindings`);
+  assert.equal(layoutFlushes(large.trace), layoutFlushes(small.trace),
+    'layout flushes grow with the binding count');
+});
+
+test('no layout metric read follows a captured-geometry write', () => {
+  const { trace } = traceApply(buttonDocument(6));
+  const firstLineBoxes = trace.indexOf('setCapturedLineBoxes');
+  const lastRead = trace.lastIndexOf('getLayoutBoxMetrics');
+  assert.ok(firstLineBoxes > 0 && lastRead > 0, 'trace is missing a phase');
+  assert.ok(lastRead < firstLineBoxes,
+    'a text metric read follows a captured line-box write');
+  const firstLeft = trace.indexOf('setLeft');
+  const layoutReads = trace.slice(0, firstLeft)
+    .filter(verb => verb === 'getLayoutBoxMetrics').length;
+  assert.equal(layoutReads, 6 * 2,
+    'a layout-binding metric read follows a layout write');
+});
+
+test('phased reads translate every binding by its own parent and margins', () => {
+  // Batching reads must not shift which metrics feed which binding.
+  const doc = buttonDocument(3);
+  const lefts = [];
+  const lineBoxes = [];
+  const sandbox = evaluateEntry({ registryNodes: doc.nodes,
+    layoutBindings: doc.layoutBindings, textBindings: doc.textBindings,
+    bridge: {
+      setLeft: (id, value) => lefts.push([id, value]),
+      setCapturedLineBoxes: (id, boxes, width) => lineBoxes.push([id, boxes[0].left, width]),
+      getLayoutBoxMetrics: (id) => ({
+        localX: id.endsWith('-text') ? 3 : 0, localY: 1, offsetWidth: 20,
+        borderLeftWidth: id === 'root' ? 2 : 1, borderTopWidth: 0,
+        borderRightWidth: 1, marginLeft: Number(id.slice(1, 2)) || 0,
+        marginTop: 0 }),
+    } });
+  lefts.length = 0;
+  sandbox.__pulpApplyMaterializedImportMetadata__();
+  // left = captured - parent border (root: 2) - own margin (index).
+  assert.deepEqual(lefts, [['b0', -2], ['b1', 27], ['b2', 56]]);
+  // Text boxes move by the target's local offset; basis drops owner borders.
+  assert.deepEqual(lineBoxes, [['b0-text', 1, 26], ['b1-text', 1, 26],
+    ['b2-text', 1, 26]]);
+});
