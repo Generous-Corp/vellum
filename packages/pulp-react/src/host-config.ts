@@ -283,9 +283,7 @@ function call(name: string, ...args: unknown[]): unknown {
     if (_hc_count <= 200) {
         const lg = (g as Record<string, AnyFn | undefined>).__spectrLog;
         if (typeof lg === 'function') {
-            const a0 = args[0] !== undefined ? String(args[0]).slice(0, 30) : '';
-            const a1 = args[1] !== undefined ? String(args[1]).slice(0, 30) : '';
-            lg('[hc#' + _hc_count + '] ' + name + '(' + a0 + (args.length > 1 ? ',' + a1 : '') + ')');
+            lg('[hc#' + _hc_count + '] ' + name + '(' + String(args[0] ?? '') + ')');
         }
     }
     if (queueBridgeCall(name, fn, args)) return;
@@ -315,6 +313,8 @@ function applyButtonCaptionLayout(textId: string, hasText: boolean): void {
 const DYNAMIC_TEXT_CONTAINERS: ReadonlySet<string> = new Set([
     'div', 'section', 'article', 'aside', 'header', 'footer', 'nav', 'main',
     'figure', 'figcaption', 'form', 'ul', 'ol', 'li', 'dl', 'dt', 'dd',
+    'span', 'p', 'label', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'b', 'i', 'em',
+    'strong', 'small', 'code', 'pre', 'a', 'td', 'th', 'title', 'text', 'tspan', 'desc',
 ]);
 
 /// Lower an HTML text element to a Label carrying CSS's default
@@ -440,6 +440,10 @@ function createWidget(type: Type, id: string, parentId: string, props: Props): v
                         // text. Span/p/label semantics expect inline; div
                         // would default to column layout.
                         call('createRow', id, parentId);
+                        const textId = id + '__text';
+                        call('createLabel', textId, '', id);
+                        applyStyleProps(textId, 'label', TEXT_CREATION_STYLE);
+                        applyButtonCaptionLayout(textId, false);
                     }
                     return;
                 }
@@ -1143,7 +1147,7 @@ export const PulpHostConfig: HostConfig<
         }
         const oldN = normalizeHostProps(type, oldProps as Record<string, unknown>);
         const newN = normalizeHostProps(type, newProps as Record<string, unknown>);
-        return shallowDiff(oldN, newN);
+        return oldProps.className !== newProps.className || shallowDiff(oldN, newN);
     },
 
     commitUpdate(instance, _updatePayload, type, oldProps, newProps, _internalHandle) {
@@ -1404,7 +1408,12 @@ function attach(parent: Instance, child: Instance, index?: number): void {
         const children = parentDom._children as unknown[];
         const existing = children.indexOf(childDom);
         if (existing >= 0) children.splice(existing, 1);
-        children.splice(Math.min(insertIdx, children.length), 0, childDom);
+        const precedingIds = new Set(parent.childIds.slice(0, insertIdx));
+        const domIndex = children.filter(node => {
+            const element = node as Record<string, unknown>;
+            return precedingIds.has(String(element.__pulpId ?? element.id ?? element._id));
+        }).length;
+        children.splice(domIndex, 0, childDom);
     }
 
     if (!wasAttachedElsewhere && child.onBridge) {
@@ -1611,6 +1620,10 @@ function detach(parent: Instance, child: Instance): void {
     parent.pendingChildren = parent.pendingChildren.filter(entry => entry.child !== child);
     const parentDom = parent._dom as Record<string, unknown> | null | undefined;
     const childDom = child._dom as Record<string, unknown> | null | undefined;
+    if (parentDom && Array.isArray(parentDom.__pulpAnonymousTextTargets)) {
+        parentDom.__pulpAnonymousTextTargets = (parentDom.__pulpAnonymousTextTargets as Array<{ id: string }>)
+            .filter(target => target.id !== child.id);
+    }
     if (parentDom && childDom && Array.isArray(parentDom._children)) {
         const domIndex = parentDom._children.indexOf(childDom);
         if (domIndex >= 0) parentDom._children.splice(domIndex, 1);
@@ -1631,6 +1644,8 @@ function retireNativeSubtree(instance: Instance): void {
             if (child && child.parentId === node.id) forget(child);
         }
         nativeOwners.delete(node.id);
+        clearMaterializedEventCallbacks(node.id);
+        forgetVisibility(node.id);
         node.onBridge = false;
     };
     forget(instance);
