@@ -378,3 +378,28 @@ it('does not claim to preserve native wheel movement on an uncontrolled scroll a
     applyChangedProps(node, initial, { ...initial, scrollTop: 30 });
     expect(native).toEqual({ x: 0, y: 30 });
 });
+
+it.each(['remount', 'reparent'])('creates new native subtrees for a React %s', (mode) => {
+    // Deleted host instances are terminal in React 18. Keyed reuse searches
+    // siblings of the same parent; moving across parents creates a new subtree.
+    const createLabel = vi.fn((id: string, text: string, parent: string) => {
+        insert(parent, id); captions.set(id, text);
+    });
+    vi.stubGlobal('createLabel', createLabel);
+    vi.stubGlobal('moveWidget', undefined);
+    const root = createRoot();
+    const child = () => createElement(widgets.Col, { id: 'moving', key: 'same-key' },
+        createElement(widgets.Label, { id: 'moving-caption' }, 'caption'));
+    const view = (side: 'left' | 'right' | 'none') => createElement(widgets.Col, { id: 'outer' },
+        createElement(widgets.Col, { id: 'left' }, side === 'left' ? child() : null),
+        createElement(widgets.Col, { id: 'right' }, side === 'right' ? child() : null));
+    render(view('left'), root);
+    expect(createLabel).toHaveBeenCalledTimes(1);
+    if (mode === 'remount') render(view('none'), root);
+    render(view(mode === 'remount' ? 'left' : 'right'), root);
+    expect(createLabel).toHaveBeenCalledTimes(2);
+    expect(tree.get(mode === 'remount' ? 'left' : 'right')).toEqual(['moving']);
+    expect(tree.get('moving')).toEqual(['moving-caption']);
+    expect(captions.get('moving-caption')).toBe('caption');
+    unmount(root);
+});
