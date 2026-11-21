@@ -1,3 +1,4 @@
+import { rendererWrite } from './programmatic-events.js';
 // host-config.ts, react-reconciler HostConfig targeting pulp::view::WidgetBridge.
 //
 // Design choices:
@@ -287,8 +288,9 @@ function call(name: string, ...args: unknown[]): unknown {
             lg('[hc#' + _hc_count + '] ' + name + '(' + String(args[0] ?? '') + ')');
         }
     }
-    if (queueBridgeCall(name, fn, args)) return;
-    return fn(...args);
+    const invoke = (...values: unknown[]) => rendererWrite(name, values[0], () => fn(...values));
+    if (queueBridgeCall(name, invoke, args)) return;
+    return invoke(...args);
 }
 
 // A lowercase HTML <button> is sized by its caption, exactly like the browser
@@ -311,6 +313,8 @@ function applyButtonCaptionLayout(textId: string, hasText: boolean): void {
 // they contain nested markup (or no children). Keep a stable caption target so
 // a later update to plain text can paint through a Label instead of sending
 // setText to the container itself, which has no text surface.
+const INTERNAL_CAPTION_PREFIX = '__pulpReactCaption_';
+let nextCaptionId = 0;
 const BLOCK_TEXT_CONTAINERS: ReadonlySet<string> = new Set([
     'div', 'section', 'article', 'aside', 'header', 'footer', 'nav', 'main',
     'figure', 'figcaption', 'form', 'ul', 'ol', 'li', 'dl', 'dt', 'dd',
@@ -354,7 +358,7 @@ function applyCreationStyle(id: string, type: string, style: Props): void {
 }
 
 // ── element-name → bridge createX dispatch ──────────────────────────
-function createWidget(type: Type, id: string, parentId: string, props: Props): void {
+function createWidget(type: Type, id: string, parentId: string, props: Props, captionTarget?: string): void {
     switch (type) {
         case 'View':
         case 'Col':         call('createCol', id, parentId); return;
@@ -367,7 +371,7 @@ function createWidget(type: Type, id: string, parentId: string, props: Props): v
                 call('createButton', id, text, parentId);
             } else {
                 call('createPanel', id, parentId);
-                call('createLabel', id + '_l', text, id);
+                call('createLabel', captionTarget ?? id + '_l', text, id);
             }
             return;
         }
@@ -419,7 +423,7 @@ function createWidget(type: Type, id: string, parentId: string, props: Props): v
                     } else {
                         call('createCol', id, parentId);
                         if (txt === undefined || txt.length === 0) {
-                            const textId = id + '__text';
+                            const textId = captionTarget ?? id + '__text';
                             call('createLabel', textId, '', id);
                             applyStyleProps(textId, 'label', TEXT_CREATION_STYLE);
                             applyButtonCaptionLayout(textId, false);
@@ -445,7 +449,7 @@ function createWidget(type: Type, id: string, parentId: string, props: Props): v
                         // text. Span/p/label semantics expect inline; div
                         // would default to column layout.
                         call('createRow', id, parentId);
-                        const textId = id + '__text';
+                        const textId = captionTarget ?? id + '__text';
                         call('createLabel', textId, '', id);
                         applyStyleProps(textId, 'label', TEXT_CREATION_STYLE);
                         applyButtonCaptionLayout(textId, false);
@@ -467,7 +471,7 @@ function createWidget(type: Type, id: string, parentId: string, props: Props): v
                     // styles remain free to override it afterwards.
                     call('createRow', id, parentId);
                     applyCreationStyle(id, type, { alignItems: 'center', justifyContent: 'center' });
-                    const textId = id + '__text';
+                    const textId = captionTarget ?? id + '__text';
                     // Always create the caption,even for nested markup,so a
                     // dynamic nested↔plain-text React update has a stable
                     // target. Captured line boxes are owner-relative and are
@@ -951,6 +955,7 @@ export const PulpHostConfig: HostConfig<
         }
         const normalizedProps = normalizeHostProps(type, props as Record<string, unknown>);
         const id = (normalizedProps.id as string) ?? autoId(rootContainer);
+        if (id.startsWith(INTERNAL_CAPTION_PREFIX)) throw new Error('Widget ID uses the reserved React caption namespace');
         // A new widget starts visible. An authored id can come back after its
         // previous widget left while a boundary held it hidden.
         forgetVisibility(id);
@@ -1002,12 +1007,12 @@ export const PulpHostConfig: HostConfig<
             onBridge: false,
             pendingChildren: [],
             _dom: domShim,
-            textTargetId: String(type) === 'button'
-                ? id + '__text'
+            textTargetId: String(type) === 'button' || String(type) === 'Button'
+                ? INTERNAL_CAPTION_PREFIX + (++nextCaptionId)
                 : (DYNAMIC_TEXT_CONTAINERS.has(String(type))
                     && (asText(normalizedProps.children) === undefined
                         || (asText(normalizedProps.children) === '' && BLOCK_TEXT_CONTAINERS.has(String(type)))))
-                    ? id + '__text' : undefined,
+                    ? INTERNAL_CAPTION_PREFIX + (++nextCaptionId) : undefined,
             autoFocusRequested: wantsAutoFocus(props as Record<string, unknown>),
         };
     },
@@ -1557,9 +1562,10 @@ function materializeUnder(parentId: string, child: Instance, index?: number): vo
     creationStyleSink = undefined;
     // Resolve the fallback when materializing, when native capabilities are known.
     if (child.type === 'Button') {
-        child.textTargetId = typeof g.createButton === 'function' ? undefined : child.id + '_l';
+        child.textTargetId = typeof g.createButton === 'function' ? undefined
+            : child.textTargetId ?? INTERNAL_CAPTION_PREFIX + (++nextCaptionId);
     }
-    createWidget(child.type, child.id, parentId, child.props);
+    createWidget(child.type, child.id, parentId, child.props, child.textTargetId);
     nativeOwners.set(child.id, child);
     if (child._dom && typeof child._dom === 'object') {
         const shim = child._dom as Record<string, unknown>;

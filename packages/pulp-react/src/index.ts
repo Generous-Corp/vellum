@@ -96,8 +96,22 @@ export function render(element: ReactElement, container?: PulpContainer): PulpCo
     return c;
 }
 
+const portalContainers = new WeakMap<PulpContainer, PulpContainer>();
+
 export function createPortal(children: ReactNode, container: PulpContainer, key?: string | null): ReactPortal {
-    return reconciler.createPortal(children, container, null, key) as unknown as ReactPortal;
+    let target = portalContainers.get(container);
+    if (!target) {
+        // Portal children belong to their source root, even when the native
+        // destination later becomes a rendered root of its own.
+        target = {
+            rootId: container.rootId,
+            idPrefix: container.idPrefix,
+            get nextId() { return container.nextId; },
+            set nextId(value: number) { container.nextId = value; },
+        };
+        portalContainers.set(container, target);
+    }
+    return reconciler.createPortal(children, target, null, key) as unknown as ReactPortal;
 }
 
 /// Unmount and clear the container.
