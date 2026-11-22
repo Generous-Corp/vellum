@@ -1801,6 +1801,11 @@ class PlatformRecordPlanTest(unittest.TestCase):
             self.plan("linux-x64")
         self.assertIn("does not match the record's digest", str(caught.exception))
 
+    def test_windows_closure_accepts_runner_absolute_dependency_sources(self) -> None:
+        self.assertTrue(mp.platform_closures._source_strings(
+            ["C:/Users/runneradmin/AppData/Local/Pulp/fetchcontent-src/brotli-v1.2.1/c/common/constants.c"],
+            "windows-x64"))
+
     def test_platform_closure_sources_cannot_escape_the_landed_mirror(self) -> None:
         for source in ("../outside.cpp", "/tmp/outside.cpp", "core/../outside.cpp", "core//outside.cpp"):
             with self.subTest(source=source):
