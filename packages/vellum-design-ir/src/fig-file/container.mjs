@@ -20,6 +20,12 @@ const MAX_DECOMPRESSED_BYTES = 512 * 1024 * 1024;
 // add up to gigabytes of retained buffers.
 export const MAX_TOTAL_DECOMPRESSED_BYTES = 512 * 1024 * 1024;
 
+function chargeStored(raw, budget) {
+  if (raw.length > budget.remaining) throw new RangeError('cumulative decompression budget exceeded');
+  budget.remaining -= raw.length;
+  return Buffer.from(raw);
+}
+
 function inflateEntry(raw, budget) {
   const out = inflateRawSync(raw, { maxOutputLength: Math.min(MAX_DECOMPRESSED_BYTES, budget.remaining) });
   budget.remaining -= out.length;
@@ -61,7 +67,7 @@ export function unzip(buffer, budget = { remaining: MAX_TOTAL_DECOMPRESSED_BYTES
     const name = buffer.toString('utf8', cursor + 30, cursor + 30 + nameLen);
     const dataStart = cursor + 30 + nameLen + extraLen;
     const raw = buffer.subarray(dataStart, dataStart + compSize);
-    streamed[name] = method === 8 ? inflateEntry(raw, budget) : Buffer.from(raw);
+    streamed[name] = method === 8 ? inflateEntry(raw, budget) : chargeStored(raw, budget);
     cursor = dataStart + compSize;
   }
   if (!needsCentral) return streamed;
@@ -95,7 +101,7 @@ function unzipViaCentralDirectory(buffer, budget) {
     const localExtraLen = buffer.readUInt16LE(localOffset + 28);
     const dataStart = localOffset + 30 + localNameLen + localExtraLen;
     const raw = buffer.subarray(dataStart, dataStart + compSize);
-    entries[name] = method === 8 ? inflateEntry(raw, budget) : Buffer.from(raw);
+    entries[name] = method === 8 ? inflateEntry(raw, budget) : chargeStored(raw, budget);
     cd += 46 + nameLen + extraLen + commentLen;
   }
   return entries;
