@@ -164,16 +164,18 @@ if(GPU_RUNTIME_HAS_DEVICE)
 
     # The installed provider is the one image that intentionally exposes the
     # gpu_runtime surface ABI. Keep the standalone static archive hidden so
-    # plug-ins retain their private runtime copy, while the provider variant
-    # gives its exported GpuSurface declarations real default visibility.
+    # plug-ins retain their private runtime copy. The pinned headers carry no
+    # export attributes, so this variant compiles with default visibility and
+    # the provider's Mach-O export allowlist (cmake/skia_dawn_provider.exports)
+    # is what limits the image to the gpu_runtime and Vellum namespaces.
     if(GPU_RUNTIME_BUILD_PROVIDER)
         add_library(gpu-runtime-device-provider STATIC ${_gpu_runtime_device_sources})
         add_library(VellumGpuRuntime::DeviceProvider ALIAS gpu-runtime-device-provider)
         set_target_properties(gpu-runtime-device-provider PROPERTIES
             OUTPUT_NAME gpu-runtime-device-provider
-            CXX_VISIBILITY_PRESET hidden
-            OBJCXX_VISIBILITY_PRESET hidden
-            VISIBILITY_INLINES_HIDDEN ON
+            CXX_VISIBILITY_PRESET default
+            OBJCXX_VISIBILITY_PRESET default
+            VISIBILITY_INLINES_HIDDEN OFF
             POSITION_INDEPENDENT_CODE ON)
         if(APPLE AND NOT IOS)
             target_sources(gpu-runtime-device-provider PRIVATE src/metal_surface_mac.mm)
@@ -183,7 +185,6 @@ if(GPU_RUNTIME_HAS_DEVICE)
         target_include_directories(gpu-runtime-device-provider PRIVATE src)
         target_compile_definitions(gpu-runtime-device-provider PRIVATE
             GPU_RUNTIME_HAS_DAWN=1
-            GPU_RUNTIME_EXPORT_ABI=1
             GPU_RUNTIME_SKIA_MILESTONE=${GPU_RUNTIME_SKIA_MILESTONE})
         if(GPU_RUNTIME_HOST_OWNS_DAWN_PROCS)
             target_compile_definitions(gpu-runtime-device-provider PRIVATE
