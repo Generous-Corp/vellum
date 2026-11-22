@@ -1,8 +1,8 @@
 #pragma once
 #import <TargetConditionals.h>
 #if TARGET_OS_IOS
-#import <AudioToolbox/AudioToolbox.h>
 #import <UIKit/UIKit.h>
+@class AUAudioUnit;
 typedef BOOL (^VellumAUv3ResizeRequest)(CGSize size);
 @protocol VellumAUv3EditorSession <NSObject>
 - (CGSize)editorSize;
