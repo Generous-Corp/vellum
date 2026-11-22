@@ -14,7 +14,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit f5383ce989fb2d1573d492b11b26f5c5858130f6 maps graphics/src/skia_dawn_surface.mm, graphics/src/utf8_text.hpp, graphics/tests/utf8_text_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Merge commit that brings Vellum main (108a70959d) into a feature branch. On every mapped path its tree equals that main parent, so it adds no change of its own; the mapped content comes from 843fcf84eb, each already resolved framework-only (Vellum-owned graphics/GPU work; Pulp carries its own malformed-UTF-8 repair under change event 20260830-malformed-utf8-text-shaping). Same disposition as the precedent resolution for merge d216ad1732.",
   "resolves": "vellum-f5383ce989fb2d1573d492b11b26f5c5858130f6",
   "schema_version": 1,
   "shared_contract_release_blocker": false

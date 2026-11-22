@@ -15,7 +15,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit d279589187be3619608fac7b2364d93cadc29fbe maps apps/app-host/main.mm, graphics/include/vellum/graphics/frame_driver.hpp, graphics/src/frame_driver.cpp, graphics/tests/frame_driver_test.cpp; contract tests: vellum.authoring, vellum.capture-stats, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-native graphics change with no Pulp consumer; owner-approved agent classification 2026-11-10",
   "resolves": "vellum-d279589187be3619608fac7b2364d93cadc29fbe",
   "schema_version": 1,
   "shared_contract_release_blocker": false

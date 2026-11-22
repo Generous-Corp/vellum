@@ -16,7 +16,7 @@
     "Generous-Corp/vellum#102"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit fd26edde34e3f93e3f271b1dd2b7f55915a5cdf4 maps cli/vellum_native_backend.py, graphics/CMakeLists.txt, graphics/src/gpu_frontend_anchor.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/test_dawn_bootstrap_source.py, graphics/tests/test_dawn_provider_topology.py; contract tests: vellum.capture-stats, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Merge of main into the verifier hardening branch (vellum#102): mirror re-export and renderer-dependency verifier work. Vellum-owned verification and packaging tooling; the contributing commits carry their own dispositions and the merge adds no Pulp obligation. Same disposition as the earlier merges of main resolved as framework-only.",
   "resolves": "vellum-fd26edde34e3f93e3f271b1dd2b7f55915a5cdf4",
   "schema_version": 1,
   "shared_contract_release_blocker": false

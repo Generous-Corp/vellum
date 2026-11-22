@@ -15,7 +15,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@claude-observatory-agent",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 64d58e1003dc65e6fe758b2a1e8d13afff7f4511 maps apps/app-host/CMakeLists.txt, apps/app-host/test_html_import_geometry.py, packages/vellum-ui/src/design.js, packages/vellum-ui/test/design.test.js; contract tests: vellum-ui, vellum.authoring, vellum.capture-stats, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum's HTML import backend (vellum_web_backend) now lowers Chrome's DOMSnapshot layout boxes into Vellum design nodes. Pulp's importer already consumes DOMSnapshot layout bounds in tools/import-design/browser_capture and has no counterpart of the Vellum backend, so nothing is missing in Pulp. Pulp search at origin/main ced536cbc56b (git grep -w over core tools test examples apple ship inspect) for vellum_web_backend, html_import and layout_boxes returns 0; control SkiaSurface on the same search returns 288 in 64 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-10 and 2026-11-13); no schema or API delta. Any later resolution overrides it.",
   "resolves": "vellum-64d58e1003dc65e6fe758b2a1e8d13afff7f4511",
   "schema_version": 1,
   "shared_contract_release_blocker": false

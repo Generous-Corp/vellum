@@ -15,7 +15,7 @@
     "Generous-Corp/vellum#92"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 59252037d5010e822ad8043ed45ae413ce1e6b60 maps graphics/CMakeLists.txt; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "G2f V-package (vellum#92): Vellum's native SDK packages the landed mirror's foundation and canvas units built from mirror/ only (graphics/CMakeLists.txt adds the mirror build). It is Vellum release packaging of code whose source of truth is Pulp; Pulp consumes nothing from it in Phase 4 and no Pulp change follows.",
   "resolves": "vellum-59252037d5010e822ad8043ed45ae413ce1e6b60",
   "schema_version": 1,
   "shared_contract_release_blocker": false

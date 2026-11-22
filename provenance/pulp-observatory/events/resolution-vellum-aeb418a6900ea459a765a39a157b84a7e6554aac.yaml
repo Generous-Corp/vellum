@@ -15,7 +15,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit aeb418a6900ea459a765a39a157b84a7e6554aac maps apps/app-host/CMakeLists.txt, apps/gpu-native/CMakeLists.txt, graphics/CMakeLists.txt, graphics/tests/test_dawn_provider_topology.py; contract tests: vellum.authoring, vellum.capture-stats, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Integration merge (Merge remote-tracking branch 'origin/main' into fix/inertness-plugin-view-host-debt). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
   "resolves": "vellum-aeb418a6900ea459a765a39a157b84a7e6554aac",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -11,7 +11,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 668b696600683c9ebd7d0d4b95350577009124e9 maps packages/vellum-design-ir/bin/import-operation-lock.js; contract tests: vellum-design-ir, vellum-design-ir-sterile-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-owned concurrent import correctness. Pulp remains on its existing implementation until a later dependency migration, so this must reach Pulp through a pinned Vellum release rather than a synchronized source copy.",
   "resolves": "vellum-668b696600683c9ebd7d0d4b95350577009124e9",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 062dac3ebacb18e5222bc9e22004bd48cc1a4065 maps authoring/CMakeLists.txt, authoring/design_pipeline/CMakeLists.txt, authoring/design_pipeline/include/vellum/authoring/design_pipeline.hpp, authoring/design_pipeline/src/design_pipeline.cpp, authoring/design_pipeline/tests/design_pipeline_test.cpp; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-native authoring change with no Pulp consumer; owner-approved agent classification 2026-11-10",
   "resolves": "vellum-062dac3ebacb18e5222bc9e22004bd48cc1a4065",
   "schema_version": 1,
   "shared_contract_release_blocker": false

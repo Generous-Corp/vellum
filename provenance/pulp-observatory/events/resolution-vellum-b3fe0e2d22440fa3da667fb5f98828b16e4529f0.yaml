@@ -17,7 +17,7 @@
     "https://github.com/Generous-Corp/vellum/pull/156"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit b3fe0e2d22440fa3da667fb5f98828b16e4529f0 maps authoring/adapters/illustrator/illustrator_to_svg.py, authoring/adapters/illustrator/test_illustrator_to_svg.py; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Hardens the Illustrator adapter's destination checks: file identity instead of resolved path strings, a private converter directory, and the receipt written through its mkstemp descriptor. The same fix is in Pulp's copy of the helper (pulp#11443, merged as 87797002), so nothing remains to port.",
   "resolves": "vellum-b3fe0e2d22440fa3da667fb5f98828b16e4529f0",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -15,7 +15,7 @@
     "Generous-Corp/vellum#587"
   ],
   "owner": "@claude-observatory-agent",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 834614e4c96add6a256601241f8cbfbabd5cb4b1 maps authoring/src/rendered_tree_materializer.mm, packages/vellum-ui/src/runtime.js, packages/vellum-ui/src/utf8.js, packages/vellum-ui/test/runtime.test.js, packages/vellum-ui/test/vector-assets.test.js; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "vellum-ui's JavaScript validators now measure the shared byte limits (path data, vector path data, text input, anchor and source file) in UTF-8 bytes through a new utf8ByteLength helper, matching the native checks that already count UTF-8 bytes; before this, JavaScript counted UTF-16 code units, so a value could pass JavaScript and fail natively. The rendered-tree materializer's native diagnostics now read their numbers from the shared limits constants instead of repeating them. No limit value changes. vellum-ui and the rendered-tree materializer exist only in Vellum, so no port is owed. Classified by the Vellum lead.",
   "resolves": "vellum-834614e4c96add6a256601241f8cbfbabd5cb4b1",
   "schema_version": 1,
   "shared_contract_release_blocker": false

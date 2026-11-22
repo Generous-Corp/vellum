@@ -15,7 +15,7 @@
     "Generous-Corp/vellum#546"
   ],
   "owner": "@claude-observatory-agent",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 8108789552958e6a55e38113a4dd16e7177cfb80 maps graphics/include/vellum/graphics/damage.hpp, graphics/include/vellum/graphics/lowering_diagnostic.hpp, graphics/include/vellum/graphics/paint_command.hpp, graphics/include/vellum/graphics/scene.hpp, graphics/include/vellum/graphics/scene_acceptance.hpp, graphics/include/vellum/graphics/skia_dawn_surface.hpp, graphics/src/damage.cpp, graphics/src/layer_cache.cpp, graphics/src/paint_command.cpp, graphics/src/render_cache.hpp, graphics/src/scene_acceptance.cpp, graphics/src/skia_dawn_surface.mm, graphics/src/skia_dawn_surface_test_access.hpp, graphics/src/skia_resource_caches.hpp, graphics/tests/CMakeLists.txt, graphics/tests/layer_cache_test.cpp, graphics/tests/partial_present_test.cpp, graphics/tests/plot_test.cpp, graphics/tests/render_cache_test.cpp, graphics/tests/text_layout_gpu_test.cpp, graphics/tests/text_layout_test.cpp, graphics/tests/text_shaping_concurrency_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-native scene text layout (scene version 13) confined to graphics/; the receiver recorded no schema or API delta and no framework/ or mirror/ path. Pulp has no scene consumer; Pulp apps receive this API from Vellum after the cutover (the owner's 2026-11-16 04:45Z precedent). Classified by the Vellum lead.",
   "resolves": "vellum-8108789552958e6a55e38113a4dd16e7177cfb80",
   "schema_version": 1,
   "shared_contract_release_blocker": false

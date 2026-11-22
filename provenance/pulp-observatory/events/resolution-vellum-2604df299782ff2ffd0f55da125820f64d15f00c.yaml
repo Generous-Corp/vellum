@@ -16,7 +16,7 @@
     "https://github.com/Generous-Corp/vellum/pull/504"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 2604df299782ff2ffd0f55da125820f64d15f00c maps apps/app-host/CMakeLists.txt; contract tests: vellum.authoring, vellum.capture-stats, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "A pinned browser that is named but unusable now fails the Vellum live-browser tests instead of skipping them. The helper, tests and app-host CMake are Vellum-only, so no port is owed.",
   "resolves": "vellum-2604df299782ff2ffd0f55da125820f64d15f00c",
   "schema_version": 1,
   "shared_contract_release_blocker": false

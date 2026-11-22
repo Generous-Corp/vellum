@@ -15,7 +15,7 @@
     "Generous-Corp/vellum#102"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 229e65a719e944f3a57df040f5988f4a370c5f6e maps cli/vellum_native_backend.py; contract tests: vellum.capture-stats, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "cli/vellum_native_backend.py bundles every installed libvellum-mirror-*.dylib into native apps, because the provider links the mirrored unit libraries by @rpath. Vellum app packaging only; Pulp has no counterpart and no Pulp change follows.",
   "resolves": "vellum-229e65a719e944f3a57df040f5988f4a370c5f6e",
   "schema_version": 1,
   "shared_contract_release_blocker": false

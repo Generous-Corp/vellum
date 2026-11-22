@@ -1,21 +1,14 @@
 {
-  "contract_tests": [
-    "vellum-ui",
-    "vellum.authoring",
-    "vellum.gpu-native",
-    "vellum.install-consumer"
-  ],
+  "contract_tests": ["vellum-ui", "vellum.authoring", "vellum.gpu-native", "vellum.install-consumer"],
   "created_at": "2026-08-13T21:15:00Z",
   "disposition": "framework-only",
   "effort_minutes": 20,
   "event_id": "resolution-vellum-ce443317ff7edfb256f7fcb4e5cecc6796d98400",
   "kind": "resolution",
-  "linked_commits": [
-    "ce443317ff7edfb256f7fcb4e5cecc6796d98400"
-  ],
+  "linked_commits": ["ce443317ff7edfb256f7fcb4e5cecc6796d98400"],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit ce443317ff7edfb256f7fcb4e5cecc6796d98400 maps apps/minimal-scene/README.md, apps/minimal-scene/main.cpp, authoring/src/rendered_tree_materializer.mm, authoring/tests/rendered_tree_materializer_test.cpp, cli/vellum_native_backend.py, graphics/CMakeLists.txt, graphics/include/vellum/graphics/paint_command.hpp, graphics/include/vellum/graphics/scene.hpp, graphics/include/vellum/graphics/skia_dawn_surface.hpp, graphics/src/paint_command.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/gpu_style_test.cpp, graphics/tests/paint_command_test.cpp, packages/vellum-ui/src/index.d.ts, packages/vellum-ui/src/index.js, packages/vellum-ui/src/runtime.js, packages/vellum-ui/test/runtime.test.js, packages/vellum-ui/test/types/application.tsx; contract tests: vellum-ui, vellum.authoring, vellum.capture-stats, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "This is Vellum's independently implemented native rendering/text convergence slice. It is covered by the Vellum parity and installed-consumer proofs, but it does not authorize Pulp consumption or copy a Pulp implementation.",
   "resolves": "vellum-ce443317ff7edfb256f7fcb4e5cecc6796d98400",
   "schema_version": 1,
   "shared_contract_release_blocker": false

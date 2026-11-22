@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit f782d44286254099436a53aa76e460635cfa1f8d maps graphics/include/vellum/graphics/paint_command.hpp, graphics/include/vellum/graphics/scene.hpp, graphics/src/paint_command.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/gpu_style_test.cpp, graphics/tests/paint_command_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Integration merge (Merge pull request #165 from Generous-Corp/feature/rmlui-vellum-mesh-renderer). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
   "resolves": "vellum-f782d44286254099436a53aa76e460635cfa1f8d",
   "schema_version": 1,
   "shared_contract_release_blocker": false

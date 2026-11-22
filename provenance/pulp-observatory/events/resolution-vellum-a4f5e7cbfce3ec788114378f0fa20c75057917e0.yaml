@@ -15,7 +15,7 @@
     "Generous-Corp/vellum#546"
   ],
   "owner": "@graphics-lead-gfxtext",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit a4f5e7cbfce3ec788114378f0fa20c75057917e0 maps graphics/CMakeLists.txt, graphics/src/skia_dawn_surface.mm, graphics/src/text_paragraph.cpp, graphics/src/text_paragraph.hpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Moves Vellum's paragraph shaping and packaged-font fallback into graphics/src/text_paragraph (internal detail:: code, no public header, no schema or API delta, capture-identical to before). git grep -w at Pulp aa630815 finds 0 files for shape_paragraph, find_missing_glyphs, ParagraphRequest, ShapedParagraph and GlyphQuery; the control FontCollection finds 18. No Pulp consumer.",
   "resolves": "vellum-a4f5e7cbfce3ec788114378f0fa20c75057917e0",
   "schema_version": 1,
   "shared_contract_release_blocker": false

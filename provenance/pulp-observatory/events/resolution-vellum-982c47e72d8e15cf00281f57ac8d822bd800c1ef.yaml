@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 982c47e72d8e15cf00281f57ac8d822bd800c1ef maps graphics/tests/CMakeLists.txt, graphics/tests/partial_present_bench.mm, graphics/tests/partial_present_test.cpp, graphics/tests/scene_capture_harness_test.cpp, graphics/tests/support/scene_capture_harness.cpp, graphics/tests/support/scene_capture_harness.hpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Test-only. It proves Vellum's partial presentation is byte-identical to a full redraw across a scripted scene sequence, and checks native CAMetalLayer frames. It tests Vellum's retained surface, which has no Pulp counterpart.",
   "resolves": "vellum-982c47e72d8e15cf00281f57ac8d822bd800c1ef",
   "schema_version": 1,
   "shared_contract_release_blocker": false

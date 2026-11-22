@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 29610e58f7cb75045b62fbba988a1c9147bd6376 maps authoring/adapters/illustrator/illustrator_to_svg.py, authoring/adapters/illustrator/test_illustrator_to_svg.py; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Integration merge (Merge pull request #156 from Generous-Corp/feature/illustrator-adapter-20261103). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
   "resolves": "vellum-29610e58f7cb75045b62fbba988a1c9147bd6376",
   "schema_version": 1,
   "shared_contract_release_blocker": false

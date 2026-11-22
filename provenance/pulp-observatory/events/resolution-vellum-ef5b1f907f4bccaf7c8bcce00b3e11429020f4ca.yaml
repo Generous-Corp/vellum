@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit ef5b1f907f4bccaf7c8bcce00b3e11429020f4ca maps graphics/CMakeLists.txt, graphics/src/dawn_bootstrap.cpp, graphics/tests/test_dawn_bootstrap_source.py; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Integration merge (Merge remote-tracking branch 'origin/main' into fix/html-import-cdp-timeout). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
   "resolves": "vellum-ef5b1f907f4bccaf7c8bcce00b3e11429020f4ca",
   "schema_version": 1,
   "shared_contract_release_blocker": false

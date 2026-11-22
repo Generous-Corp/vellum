@@ -15,7 +15,7 @@
     "https://github.com/Generous-Corp/vellum/pull/28"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 5cba7611ba032f3a5b670d1740ff153dd5e91a72 maps graphics/include/vellum/graphics/dawn_native_bootstrap.hpp, graphics/src/dawn_bootstrap.cpp, graphics/tests/dawn_bootstrap_test.cpp, graphics/tests/dawn_provider_topology_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "The clean-checkout Pulp/Vellum router classified this as Vellum-owned generic work with a framework-only observatory disposition and no affected Pulp counterpart. It is retained with its Vellum contract proofs; any future Pulp use must adopt a pinned Vellum SDK through an adapter rather than copy framework source.",
   "resolves": "vellum-5cba7611ba032f3a5b670d1740ff153dd5e91a72",
   "schema_version": 1,
   "shared_contract_release_blocker": false

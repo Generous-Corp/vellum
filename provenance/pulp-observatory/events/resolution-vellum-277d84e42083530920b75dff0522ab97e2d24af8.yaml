@@ -15,7 +15,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 277d84e42083530920b75dff0522ab97e2d24af8 maps authoring/src/rendered_tree_materializer.mm, authoring/tests/rendered_tree_materializer_test.cpp, packages/vellum-design-ir/src/index.d.ts, packages/vellum-design-ir/src/svg-asset.js, packages/vellum-design-ir/test/svg-asset.test.js; contract tests: vellum-design-ir, vellum-design-ir-sterile-consumer, vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-native graphics change with no Pulp consumer; owner-approved agent classification 2026-11-10",
   "resolves": "vellum-277d84e42083530920b75dff0522ab97e2d24af8",
   "schema_version": 1,
   "shared_contract_release_blocker": false

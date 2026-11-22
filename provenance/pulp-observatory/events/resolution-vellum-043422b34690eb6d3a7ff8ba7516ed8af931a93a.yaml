@@ -13,7 +13,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 043422b34690eb6d3a7ff8ba7516ed8af931a93a maps authoring/schema/dev-transcript-v1.schema.json, authoring/tests/test_phase3_contracts.py, cli/vellum_native_backend.py; contract tests: vellum-ui, vellum.authoring, vellum.capture-stats, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-owned deterministic development loop and reload transcript contract. Any later Pulp adoption must consume the released Vellum behavior through adapter and contract tests, not synchronized source copies.",
   "resolves": "vellum-043422b34690eb6d3a7ff8ba7516ed8af931a93a",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -15,7 +15,7 @@
     "Generous-Corp/vellum#568"
   ],
   "owner": "@claude-observatory-agent",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit b88d929b9b13d5193125fd2350ecf464f56dcfe0 maps packages/vellum-design-ir/test/limits-drift.test.js; contract tests: vellum-design-ir, vellum-design-ir-sterile-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Test-only: an independent committed limits oracle (tools/limits/limits.fixture.json) that the drift test checks the production header against. No limit value, schema or DesignIR version changes; Pulp consumes these packages from Vellum (the owner's 2026-11-16 04:45Z criterion for schema-class events). Classified by the Vellum lead.",
   "resolves": "vellum-b88d929b9b13d5193125fd2350ecf464f56dcfe0",
   "schema_version": 1,
   "shared_contract_release_blocker": false

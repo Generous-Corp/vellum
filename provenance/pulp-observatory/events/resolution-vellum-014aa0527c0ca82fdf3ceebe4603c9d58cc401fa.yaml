@@ -11,7 +11,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 014aa0527c0ca82fdf3ceebe4603c9d58cc401fa maps authoring/CMakeLists.txt, authoring/include/vellum/authoring/service_bridge.hpp, authoring/src/service_bridge.cpp, authoring/tests/service_bridge_test.cpp, packages/vellum-ui/src/index.d.ts, packages/vellum-ui/src/index.js, packages/vellum-ui/src/services.js, packages/vellum-ui/test/services.test.js, packages/vellum-ui/test/types/application.tsx; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-owned standalone framework behavior. Any later Pulp adoption must consume it through a pinned Vellum dependency and adapter tests, not synchronized source copies.",
   "resolves": "vellum-014aa0527c0ca82fdf3ceebe4603c9d58cc401fa",
   "schema_version": 1,
   "shared_contract_release_blocker": false

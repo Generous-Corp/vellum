@@ -17,7 +17,7 @@
     "https://github.com/Generous-Corp/vellum/pull/28"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 1e01b69bc22151aa8920aba073bda327fee52552 maps apps/app-host/CMakeLists.txt, apps/app-host/main.mm, apps/dawn_native_bootstrap.hpp, apps/gpu-native/CMakeLists.txt, apps/gpu-native/main.mm, apps/minimal-scene/CMakeLists.txt, apps/minimal-scene/README.md, apps/minimal-scene/main.cpp, graphics/CMakeLists.txt, graphics/include/vellum/graphics/dawn_native_bootstrap.hpp, graphics/include/vellum/graphics/skia_dawn_surface.hpp, graphics/src/dawn_bootstrap.cpp, graphics/tests/dawn_bootstrap_test.cpp, graphics/tests/dawn_provider_topology_test.cpp, graphics/tests/gpu_style_test.cpp, graphics/tests/test_dawn_bootstrap_source.py, graphics/tests/test_dawn_provider_topology.py; contract tests: vellum.authoring, vellum.capture-stats, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "The clean-checkout Pulp/Vellum router classified this as Vellum-owned generic work with a framework-only observatory disposition and no affected Pulp counterpart. It is retained with its Vellum contract proofs; any future Pulp use must adopt a pinned Vellum SDK through an adapter rather than copy framework source.",
   "resolves": "vellum-1e01b69bc22151aa8920aba073bda327fee52552",
   "schema_version": 1,
   "shared_contract_release_blocker": false

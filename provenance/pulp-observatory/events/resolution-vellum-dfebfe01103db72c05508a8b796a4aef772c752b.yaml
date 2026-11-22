@@ -17,7 +17,7 @@
     "https://github.com/Generous-Corp/vellum/pull/490"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit dfebfe01103db72c05508a8b796a4aef772c752b maps packages/vellum-design-ir/src/index.d.ts, packages/vellum-design-ir/src/versions.js, packages/vellum-design-ir/test/schema-version.test.js, packages/vellum-ui/src/design.js, packages/vellum-ui/test/types/design-ir-versions.ts, packages/vellum-ui/test/types/tsconfig.json, packages/vellum-ui/test/vector-assets.test.js; contract tests: vellum-design-ir, vellum-design-ir-sterile-consumer, vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-native graphics change with no Pulp consumer; owner-approved agent classification 2026-11-10",
   "resolves": "vellum-dfebfe01103db72c05508a8b796a4aef772c752b",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -15,7 +15,7 @@
     "https://github.com/Generous-Corp/vellum/pull/262"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 728e2ff713c07353c0d8c8895e7917ab1d0d68f7 maps graphics/CMakeLists.txt, graphics/include/vellum/graphics/damage.hpp, graphics/src/damage.cpp, graphics/tests/damage_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Adds a renderer-independent damage model to Vellum's graphics layer (device-pixel damage regions, a scene diff keyed by node id, host invalidation hooks, telemetry). The renderer does not consume it yet. Vellum-native code with no Pulp counterpart; nothing to port.",
   "resolves": "vellum-728e2ff713c07353c0d8c8895e7917ab1d0d68f7",
   "schema_version": 1,
   "shared_contract_release_blocker": false

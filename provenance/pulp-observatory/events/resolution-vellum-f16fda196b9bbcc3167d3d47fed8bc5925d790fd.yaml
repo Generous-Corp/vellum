@@ -15,7 +15,7 @@
     "Generous-Corp/vellum#549"
   ],
   "owner": "@claude-observatory-agent",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit f16fda196b9bbcc3167d3d47fed8bc5925d790fd maps graphics/src/skia_dawn_surface.mm, graphics/src/skia_dawn_surface_testing.hpp, graphics/tests/plot_gpu_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum graphics plot GPU test reports render failures instead of skipping its pixel oracles, via a non-installed test hook; no API, schema or version change, no Pulp counterpart. Classified by the Vellum lead.",
   "resolves": "vellum-f16fda196b9bbcc3167d3d47fed8bc5925d790fd",
   "schema_version": 1,
   "shared_contract_release_blocker": false

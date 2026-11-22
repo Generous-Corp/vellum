@@ -11,7 +11,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit c9864460811381f5552652b8ba4f408c1b13e235 maps authoring/schema/authoring-host-v2.schema.json, authoring/schema/events-v2.schema.json, authoring/schema/scenario-v2.schema.json, authoring/schema/services-v1.schema.json, authoring/tests/test_phase3_contracts.py; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-owned standalone framework behavior. Any later Pulp adoption must consume it through a pinned Vellum dependency and adapter tests, not synchronized source copies.",
   "resolves": "vellum-c9864460811381f5552652b8ba4f408c1b13e235",
   "schema_version": 1,
   "shared_contract_release_blocker": false

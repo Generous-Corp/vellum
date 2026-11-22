@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 0a13df17f96b124dde4f73dbc69fe4b9957ef163 maps authoring/CMakeLists.txt; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-native observation; every mapped path is absent from Pulp main and the event declares no schema/API delta or shared-contract release blocker. Framework-only classification by the Vellum lead based on the recorded path and contract evidence.",
   "resolves": "vellum-0a13df17f96b124dde4f73dbc69fe4b9957ef163",
   "schema_version": 1,
   "shared_contract_release_blocker": false

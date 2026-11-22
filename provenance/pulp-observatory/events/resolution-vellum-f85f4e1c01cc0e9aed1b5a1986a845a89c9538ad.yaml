@@ -12,7 +12,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit f85f4e1c01cc0e9aed1b5a1986a845a89c9538ad maps authoring/CMakeLists.txt, authoring/schema/scenario-v2.schema.json, authoring/src/js_application.mm, authoring/src/rendered_tree_materializer.hpp, authoring/src/rendered_tree_materializer.mm, authoring/tests/rendered_tree_materializer_test.cpp, packages/vellum-ui/README.md; contract tests: vellum-ui, vellum.authoring, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "The materializer extraction, scenario-host parity repair, C++ template fallback, SDK packaging boundary, and repository routing policy are Vellum-owned standalone framework work. The clean Pulp authority projection and corresponding implementation surfaces were reviewed; no Pulp source port is required. Any later Pulp SDK adoption must use a reviewed immutable dependency contract rather than synchronized source copies.",
   "resolves": "vellum-f85f4e1c01cc0e9aed1b5a1986a845a89c9538ad",
   "schema_version": 1,
   "shared_contract_release_blocker": false

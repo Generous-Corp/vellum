@@ -15,7 +15,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 09a2d63a6fd930af8df5cd73dd185d27fdccda7b maps authoring/src/rendered_tree_materializer.hpp, authoring/src/rendered_tree_materializer.mm, authoring/tests/rendered_tree_materializer_test.cpp, graphics/include/vellum/graphics/lowering_diagnostic.hpp; contract tests: vellum-ui, vellum.authoring, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Integration merge (Merge pull request #260 from Generous-Corp/fix/materializer-text-run-validation-20261109). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
   "resolves": "vellum-09a2d63a6fd930af8df5cd73dd185d27fdccda7b",
   "schema_version": 1,
   "shared_contract_release_blocker": false

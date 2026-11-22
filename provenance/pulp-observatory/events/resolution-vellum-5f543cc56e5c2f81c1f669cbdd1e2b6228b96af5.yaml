@@ -11,7 +11,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 5f543cc56e5c2f81c1f669cbdd1e2b6228b96af5 maps authoring/tests/phase3_fixture_test.cpp, packages/vellum-ui/README.md, packages/vellum-ui/package-lock.json, packages/vellum-ui/package.json, packages/vellum-ui/src/index.d.ts, packages/vellum-ui/src/index.js, packages/vellum-ui/src/runtime.js, packages/vellum-ui/src/services.js, packages/vellum-ui/test/phase3-installed.test.js, packages/vellum-ui/test/runtime.test.js, packages/vellum-ui/test/services.test.js; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-owned independent application fixture execution and authoring semantics. Any later Pulp adoption must consume the released Vellum behavior through adapter and contract tests, not synchronized source copies.",
   "resolves": "vellum-5f543cc56e5c2f81c1f669cbdd1e2b6228b96af5",
   "schema_version": 1,
   "shared_contract_release_blocker": false

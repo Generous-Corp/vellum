@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@claude-observatory-agent",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 3e55cfa74ddc01a1e6106c8a383eed86816f26a0 maps graphics/CMakeLists.txt, graphics/src/damage.cpp, graphics/tests/damage_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum mirror-lane test registration and the transformed-blur damage reach in Vellum's graphics damage model; Pulp's damage tracking (pending_damage, repaint_damage) is separate code that does not use that constant. Pulp search at origin/main ced536cbc56b (git grep -w over core tools test examples apple ship inspect) for kDefaultTransformedBlurSigmas and VellumMirror returns 0; control SkiaSurface on the same search returns 288 in 64 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-10 and 2026-11-13); no schema or API delta. Any later resolution overrides it.",
   "resolves": "vellum-3e55cfa74ddc01a1e6106c8a383eed86816f26a0",
   "schema_version": 1,
   "shared_contract_release_blocker": false

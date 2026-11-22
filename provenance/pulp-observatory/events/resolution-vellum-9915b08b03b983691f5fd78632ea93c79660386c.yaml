@@ -13,7 +13,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 9915b08b03b983691f5fd78632ea93c79660386c maps authoring/include/vellum/authoring/js_application.hpp, authoring/src/js_application.mm, authoring/tests/js_application_test.cpp, cli/vellum_native_backend.py, packages/vellum-ui/README.md, packages/vellum-ui/scripts/build-project.mjs, packages/vellum-ui/scripts/source-map.mjs, packages/vellum-ui/test/source-map.test.js; contract tests: vellum-ui, vellum.authoring, vellum.capture-stats, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-owned source-mapped authoring diagnostics. Any later Pulp adoption must consume the released Vellum behavior through adapter and contract tests, not synchronized source copies.",
   "resolves": "vellum-9915b08b03b983691f5fd78632ea93c79660386c",
   "schema_version": 1,
   "shared_contract_release_blocker": false

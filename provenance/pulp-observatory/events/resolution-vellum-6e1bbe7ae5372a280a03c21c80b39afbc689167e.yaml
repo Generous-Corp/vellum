@@ -15,7 +15,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@claude-observatory-agent",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 6e1bbe7ae5372a280a03c21c80b39afbc689167e maps graphics/tests/partial_present_test.cpp, packages/vellum-ui/src/index.d.ts, packages/vellum-ui/test/types/explicit-undefined.tsx, packages/vellum-ui/test/types/tsconfig.json; contract tests: vellum-ui, vellum.authoring, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Merge carrying the explicit-undefined @vellum/ui prop typing (see bb930214b) and a graphics partial-present test. Type-only API change; Pulp has no copy of @vellum/ui. Owner decision 2026-11-16 04:45Z, recorded in pulp-planning vellum-move/DECISIONS.md (framework-only for the 8 pending schema events, on the condition that each changes only API or schema Pulp consumers get from Vellum after the cutover), is the owner's sign-off for this schema-class observation; recorded here by an agent. Pulp search at origin/main ced536cbc56b (git grep -w over core tools test examples apple ship inspect) for ImageProps and vellum-ui returns 0; control SkiaSurface on the same search returns 288 in 64 files. Any later resolution overrides this.",
   "resolves": "vellum-6e1bbe7ae5372a280a03c21c80b39afbc689167e",
   "schema_version": 1,
   "shared_contract_release_blocker": false

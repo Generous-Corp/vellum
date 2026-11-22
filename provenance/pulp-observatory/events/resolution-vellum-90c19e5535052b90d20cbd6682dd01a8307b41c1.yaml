@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 90c19e5535052b90d20cbd6682dd01a8307b41c1 maps packages/vellum-design-ir/bin/backend-commands.js, packages/vellum-design-ir/bin/backend-filesystem.js, packages/vellum-design-ir/bin/backend-materialization.js, packages/vellum-design-ir/bin/backend-source.js, packages/vellum-design-ir/src/browser-capture.js, packages/vellum-design-ir/test/browser-capture.test.js; contract tests: vellum-design-ir, vellum-design-ir-sterile-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "The clean-checkout Pulp/Vellum router classified this as Vellum-owned generic work with a framework-only observatory disposition and no affected Pulp counterpart. It is retained with its Vellum contract proofs; any future Pulp use must adopt a pinned Vellum SDK through an adapter rather than copy framework source.",
   "resolves": "vellum-90c19e5535052b90d20cbd6682dd01a8307b41c1",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@claude-observatory-agent",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit aee88b9a51a3279bf9eb36d98e727c4416acc0de maps graphics/include/vellum/graphics/damage.hpp, graphics/src/damage.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/damage_test.cpp, graphics/tests/image_node_test.cpp, graphics/tests/partial_present_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Merge commit with a non-empty combined diff (git show --cc): conflict-resolution content in Vellum-native damage model, image node tests and Skia/Dawn surface; classified from that content, which has no Pulp counterpart. Pulp search at aa630815 for LayerCache, NodeClip, clips_own_paint, SceneAcceptance, PaintCommand, damage_testing, RenderedTreeMaterializer, vellum::graphics returns 0; control SkiaSurface returns 43. Agent classification under the owner's delegation; any later resolution overrides it.",
   "resolves": "vellum-aee88b9a51a3279bf9eb36d98e727c4416acc0de",
   "schema_version": 1,
   "shared_contract_release_blocker": false

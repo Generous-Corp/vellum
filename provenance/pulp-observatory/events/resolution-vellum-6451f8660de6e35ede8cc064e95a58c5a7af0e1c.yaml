@@ -15,7 +15,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 6451f8660de6e35ede8cc064e95a58c5a7af0e1c maps apps/app-host/CMakeLists.txt, apps/gpu-native/CMakeLists.txt, graphics/CMakeLists.txt; contract tests: vellum.authoring, vellum.capture-stats, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Integration merge (Merge remote-tracking branch 'origin/main' into r114). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
   "resolves": "vellum-6451f8660de6e35ede8cc064e95a58c5a7af0e1c",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit bdb2682532556911c7a331058382a5e4f08f80b1 maps graphics/tests/test_dawn_provider_topology.py; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Integration merge (Merge pull request #126 from Generous-Corp/fix/provider-deterministic-link). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
   "resolves": "vellum-bdb2682532556911c7a331058382a5e4f08f80b1",
   "schema_version": 1,
   "shared_contract_release_blocker": false

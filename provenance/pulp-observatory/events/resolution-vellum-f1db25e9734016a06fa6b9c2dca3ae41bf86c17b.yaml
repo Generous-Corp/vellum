@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit f1db25e9734016a06fa6b9c2dca3ae41bf86c17b maps graphics/CMakeLists.txt, graphics/include/vellum/graphics/frame_trace.hpp, graphics/include/vellum/graphics/skia_dawn_surface.hpp, graphics/src/frame_trace.cpp, graphics/src/frame_trace.hpp, graphics/src/skia_dawn_surface.mm, graphics/src/skia_dawn_surface_test_access.hpp, graphics/tests/CMakeLists.txt, graphics/tests/frame_debug_test.mm; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-native graphics change with no Pulp consumer; owner-approved agent classification 2026-11-10",
   "resolves": "vellum-f1db25e9734016a06fa6b9c2dca3ae41bf86c17b",
   "schema_version": 1,
   "shared_contract_release_blocker": false

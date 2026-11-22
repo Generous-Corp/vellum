@@ -15,7 +15,7 @@
     "https://github.com/Generous-Corp/vellum/pull/295"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 646091499a4b21026c019e6f0e24ca1988983af4 maps graphics/CMakeLists.txt, graphics/include/vellum/graphics/render_telemetry.hpp, graphics/include/vellum/graphics/skia_dawn_surface.hpp, graphics/src/render_cache.hpp, graphics/src/render_telemetry.cpp, graphics/src/skia_dawn_surface.mm, graphics/src/skia_resource_caches.hpp, graphics/tests/CMakeLists.txt, graphics/tests/render_cache_gpu_test.cpp, graphics/tests/render_cache_test.cpp, graphics/tests/scene_capture_harness_test.cpp, graphics/tests/support/scene_capture_harness.cpp, graphics/tests/support/scene_capture_harness.hpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Integration merge of origin/main into the vellum#295 branch. The main commits it brings carry their own observations on main, and its conflict resolution only reconciles this PR's layer cache with main's render cache in Vellum's graphics backend, which the framework-only resolutions of fb79b94a, e470a72b and da06a394 cover. No separate port decision remains.",
   "resolves": "vellum-646091499a4b21026c019e6f0e24ca1988983af4",
   "schema_version": 1,
   "shared_contract_release_blocker": false

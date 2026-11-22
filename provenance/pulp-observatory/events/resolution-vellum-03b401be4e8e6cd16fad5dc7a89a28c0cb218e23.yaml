@@ -16,7 +16,7 @@
     "Generous-Corp/vellum#102"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 03b401be4e8e6cd16fad5dc7a89a28c0cb218e23 maps cli/vellum_native_backend.py, graphics/CMakeLists.txt, graphics/src/gpu_frontend_anchor.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/test_dawn_bootstrap_source.py, graphics/tests/test_dawn_provider_topology.py; contract tests: vellum.capture-stats, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "vellum#102 lands the Pulp 46cee5e4 mirror export together with the shared Vellum::SkiaDawnProvider: graphics/ and cli/vellum_native_backend.py now build and bundle the mirrored canvas, render and gpu-device units through one provider image. It is Vellum packaging of code whose source of truth is Pulp at the export commit; Pulp consumes nothing from Vellum in Phase 4 and no Pulp change follows.",
   "resolves": "vellum-03b401be4e8e6cd16fad5dc7a89a28c0cb218e23",
   "schema_version": 1,
   "shared_contract_release_blocker": false

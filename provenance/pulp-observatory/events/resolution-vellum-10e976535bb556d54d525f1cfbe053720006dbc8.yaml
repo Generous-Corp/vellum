@@ -15,7 +15,7 @@
     "https://github.com/Generous-Corp/vellum/pull/261"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 10e976535bb556d54d525f1cfbe053720006dbc8 maps graphics/tests/CMakeLists.txt, graphics/tests/scene_capture_harness_test.cpp, graphics/tests/support/scene_capture_harness.cpp, graphics/tests/support/scene_capture_harness.hpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Confines golden updates in Vellum's scene capture harness to the configured golden roots. Vellum test infrastructure only; no Pulp counterpart and nothing to port.",
   "resolves": "vellum-10e976535bb556d54d525f1cfbe053720006dbc8",
   "schema_version": 1,
   "shared_contract_release_blocker": false

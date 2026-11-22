@@ -12,7 +12,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit f8d063aa6a87dbedab4db8f57152321d3349218b maps graphics/src/capture_stats.cpp, graphics/tests/capture_stats_test.cpp; contract tests: vellum.capture-stats, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-owned standalone framework behavior. Any later Pulp adoption must consume it through a pinned Vellum dependency and adapter tests, not synchronized source copies.",
   "resolves": "vellum-f8d063aa6a87dbedab4db8f57152321d3349218b",
   "schema_version": 1,
   "shared_contract_release_blocker": false

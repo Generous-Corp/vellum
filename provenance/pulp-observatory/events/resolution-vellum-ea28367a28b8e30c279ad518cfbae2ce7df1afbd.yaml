@@ -15,7 +15,7 @@
     "Generous-Corp/vellum#549"
   ],
   "owner": "@claude-observatory-agent",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit ea28367a28b8e30c279ad518cfbae2ce7df1afbd maps graphics/tests/gpu_test_environment_test.cpp, graphics/tests/support/gpu_test_environment.cpp, graphics/tests/support/gpu_test_environment.hpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Null-safe Dawn string conversion in a Vellum graphics GPU test support file; test-only, no public API, schema or runtime change, no Pulp counterpart. Classified by the Vellum lead.",
   "resolves": "vellum-ea28367a28b8e30c279ad518cfbae2ce7df1afbd",
   "schema_version": 1,
   "shared_contract_release_blocker": false

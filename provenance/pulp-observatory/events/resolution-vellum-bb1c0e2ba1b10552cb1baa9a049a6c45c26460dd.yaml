@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit bb1c0e2ba1b10552cb1baa9a049a6c45c26460dd maps graphics/include/vellum/graphics/damage.hpp, graphics/include/vellum/graphics/layer_cache.hpp, graphics/include/vellum/graphics/scene.hpp, graphics/include/vellum/graphics/token_receipts.hpp, graphics/src/layer_cache.cpp, graphics/src/paint_command.cpp, graphics/src/scene_acceptance.cpp, graphics/src/skia_dawn_surface.mm, graphics/src/skia_dawn_surface_test_access.hpp, graphics/src/token_receipts.cpp, graphics/tests/layer_cache_gpu_test.cpp, graphics/tests/partial_present_test.cpp, graphics/tests/token_receipts_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-native graphics change with no Pulp consumer; owner-approved agent classification 2026-11-10",
   "resolves": "vellum-bb1c0e2ba1b10552cb1baa9a049a6c45c26460dd",
   "schema_version": 1,
   "shared_contract_release_blocker": false

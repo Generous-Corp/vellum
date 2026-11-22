@@ -15,7 +15,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 6abf705c2bad96d8df69f1ed31c0bfd3d2107bcd maps authoring/src/rendered_tree_materializer.hpp, authoring/src/rendered_tree_materializer.mm, authoring/tests/rendered_tree_materializer_test.cpp, graphics/include/vellum/graphics/core_graphics_canvas.hpp, graphics/include/vellum/graphics/paint_command.hpp, graphics/include/vellum/graphics/scene.hpp, graphics/src/paint_command.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/gpu_style_test.cpp, graphics/tests/paint_command_test.cpp, graphics/tests/partial_present_bench.mm, graphics/tests/partial_present_test.cpp, graphics/tests/support/scene_capture_harness.cpp, graphics/tests/support/scene_capture_harness.hpp, packages/vellum-ui/src/index.d.ts; contract tests: vellum-ui, vellum.authoring, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Merge of main into the partial presentation branch. Its own conflict resolution touches only Vellum-native files (graphics/src/skia_dawn_surface.mm, graphics/tests/partial_present_bench.mm, graphics/tests/partial_present_test.cpp, graphics/tests/support/scene_capture_harness.cpp, graphics/tests/support/scene_capture_harness.hpp), combining both sides' retained-scene and surface work. Pulp has no counterpart to those files, so nothing is owed to Pulp.",
   "resolves": "vellum-6abf705c2bad96d8df69f1ed31c0bfd3d2107bcd",
   "schema_version": 1,
   "shared_contract_release_blocker": false

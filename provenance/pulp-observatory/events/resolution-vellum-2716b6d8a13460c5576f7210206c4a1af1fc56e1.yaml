@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 2716b6d8a13460c5576f7210206c4a1af1fc56e1 maps graphics/include/vellum/graphics/paint_command.hpp, graphics/include/vellum/graphics/scene.hpp, graphics/src/paint_command.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/gpu_style_test.cpp, graphics/tests/paint_command_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Integration merge (Merge remote-tracking branch 'origin/main' into feat/release-dry-run). It brings main's commits into a branch; their own observations are classified separately in this ledger. Its conflict resolution touches only .github/workflows/gpu-macos.yml, scripts/test_release_dry_run.py, which map to no contract, so it has no independent contract.",
   "resolves": "vellum-2716b6d8a13460c5576f7210206c4a1af1fc56e1",
   "schema_version": 1,
   "shared_contract_release_blocker": false

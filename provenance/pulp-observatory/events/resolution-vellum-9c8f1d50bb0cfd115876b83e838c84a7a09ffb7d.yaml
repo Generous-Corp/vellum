@@ -14,7 +14,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 9c8f1d50bb0cfd115876b83e838c84a7a09ffb7d maps apps/app-host/main.mm; contract tests: vellum.authoring, vellum.capture-stats, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Documents Vellum's retained surface (docs/architecture/gpu-boundary.md) and switches Vellum's own app-host sample to render_incremental, a one-line change. apps/app-host is Vellum's sample host; Pulp's macOS shell has no counterpart to the incremental API.",
   "resolves": "vellum-9c8f1d50bb0cfd115876b83e838c84a7a09ffb7d",
   "schema_version": 1,
   "shared_contract_release_blocker": false

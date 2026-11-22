@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 5390998e00df3c8e257df9a66692fd5d496c962e maps graphics/include/vellum/graphics/skia_dawn_surface.hpp, graphics/src/skia_dawn_surface.mm, graphics/tests/partial_present_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Makes Vellum's SkiaDawnSurface capture fail closed on device loss (Dawn device-lost callback and Graphite) and repaint the whole frame when a damage region belongs to another frame size or scale. Both fix Vellum-only surface code. Pulp's own GPU device-loss handling lives in its separate render and view layers, which this commit does not touch.",
   "resolves": "vellum-5390998e00df3c8e257df9a66692fd5d496c962e",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@claude-observatory-agent",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit b58a307b7b46ae85cd366b66b2c4e6b5f8e94660 maps graphics/CMakeLists.txt, graphics/include/vellum/graphics/layer_cache.hpp, graphics/include/vellum/graphics/paint_command.hpp, graphics/include/vellum/graphics/skia_dawn_surface.hpp, graphics/src/layer_cache.cpp, graphics/src/paint_command.cpp, graphics/src/skia_dawn_surface.mm, graphics/src/skia_dawn_surface_test_access.hpp, graphics/tests/CMakeLists.txt, graphics/tests/gpu_grouping_test.cpp, graphics/tests/layer_cache_gpu_test.cpp, graphics/tests/layer_cache_test.cpp, graphics/tests/layer_text_extent_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Merge commit with a non-empty combined diff (git show --cc): conflict-resolution content in Vellum-native layer cache, Skia/Dawn surface and cache tests; classified from that content, which has no Pulp counterpart. Pulp search at aa630815 for LayerCache, NodeClip, clips_own_paint, SceneAcceptance, PaintCommand, damage_testing, RenderedTreeMaterializer, vellum::graphics returns 0; control SkiaSurface returns 43. Agent classification under the owner's delegation; any later resolution overrides it.",
   "resolves": "vellum-b58a307b7b46ae85cd366b66b2c4e6b5f8e94660",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -20,7 +20,7 @@
     "Generous-Corp/vellum#102"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit e010cb239efcc2951e4e2dfc2cd88e3b73d435fe maps cli/vellum_native_backend.py, graphics/CMakeLists.txt, graphics/src/gpu_frontend_anchor.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/test_dawn_bootstrap_source.py, graphics/tests/test_dawn_provider_topology.py; contract tests: vellum.capture-stats, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Merge of vellum#102 into main. On every mapped path the merge tree equals its second parent 65f81f1e, and the mapped content comes only from 03b401be, 229e65a7 and 068e2bde (each resolved framework-only) plus the mirror-import merge 00b71144, which carries no Vellum-authored change. No Pulp change follows.",
   "resolves": "vellum-e010cb239efcc2951e4e2dfc2cd88e3b73d435fe",
   "schema_version": 1,
   "shared_contract_release_blocker": false

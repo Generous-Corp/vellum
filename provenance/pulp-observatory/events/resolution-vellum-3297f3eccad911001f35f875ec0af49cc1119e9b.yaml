@@ -17,7 +17,7 @@
     "Generous-Corp/vellum#549"
   ],
   "owner": "@claude-observatory-agent",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 3297f3eccad911001f35f875ec0af49cc1119e9b maps authoring/tests/token_theme_gpu_test.cpp, graphics/src/skia_dawn_surface.mm, graphics/src/skia_dawn_surface_testing.hpp, graphics/tests/CMakeLists.txt, graphics/tests/frame_driver_gpu_test.cpp, graphics/tests/gpu_test_environment_test.cpp, graphics/tests/layer_cache_gpu_test.cpp, graphics/tests/partial_present_bench.mm, graphics/tests/plot_gpu_test.cpp, graphics/tests/support/gpu_test_environment.cpp, graphics/tests/support/gpu_test_environment.hpp; contract tests: vellum-ui, vellum.authoring, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum graphics GPU tests now skip only when no adapter exists; test code plus a non-installed test hook in graphics/src. No public API, schema or version change, no Pulp counterpart. Classified by the Vellum lead.",
   "resolves": "vellum-3297f3eccad911001f35f875ec0af49cc1119e9b",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -15,7 +15,7 @@
     "Generous-Corp/vellum#549"
   ],
   "owner": "@claude-observatory-agent",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 6c96c2faa2c514af490a518a50753e2babe50381 maps graphics/tests/text_layout_gpu_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum graphics text-layout GPU test moved onto the shared skip helper (skip only without an adapter); test-only, no API, schema or version change, no Pulp counterpart. Classified by the Vellum lead.",
   "resolves": "vellum-6c96c2faa2c514af490a518a50753e2babe50381",
   "schema_version": 1,
   "shared_contract_release_blocker": false

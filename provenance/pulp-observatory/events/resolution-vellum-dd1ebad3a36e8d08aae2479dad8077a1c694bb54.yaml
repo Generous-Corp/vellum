@@ -12,7 +12,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit dd1ebad3a36e8d08aae2479dad8077a1c694bb54 maps apps/app-host/CMakeLists.txt, apps/app-host/main.mm, apps/app-host/options.cpp, apps/app-host/options.hpp, apps/app-host/test_phase3_scenario.py, apps/app-host/text_semantics.hpp, apps/app-host/text_semantics.mm, authoring/include/vellum/authoring/js_application.hpp, authoring/src/js_application.mm, cli/vellum_native_backend.py; contract tests: vellum-ui, vellum.authoring, vellum.capture-stats, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-owned standalone framework behavior. Any later Pulp adoption must consume it through a pinned Vellum dependency and adapter tests, not synchronized source copies.",
   "resolves": "vellum-dd1ebad3a36e8d08aae2479dad8077a1c694bb54",
   "schema_version": 1,
   "shared_contract_release_blocker": false

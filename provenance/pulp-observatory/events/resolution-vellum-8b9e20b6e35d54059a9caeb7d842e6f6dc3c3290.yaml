@@ -15,7 +15,7 @@
     "https://github.com/Generous-Corp/vellum/pull/156"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 8b9e20b6e35d54059a9caeb7d842e6f6dc3c3290 maps authoring/adapters/illustrator/illustrator_to_svg.py, authoring/adapters/illustrator/test_illustrator_to_svg.py; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Adds Vellum's own Illustrator PDF-to-SVG adapter under authoring/adapters/illustrator, the Vellum route the owner chose on 2026-11-01. It is a rewrite under Vellum's native rules, not a byte copy, and creates no obligation for Pulp.",
   "resolves": "vellum-8b9e20b6e35d54059a9caeb7d842e6f6dc3c3290",
   "schema_version": 1,
   "shared_contract_release_blocker": false

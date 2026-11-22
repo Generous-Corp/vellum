@@ -1,20 +1,14 @@
 {
-  "contract_tests": [
-    "vellum-ui",
-    "vellum.gpu-native",
-    "vellum.install-consumer"
-  ],
+  "contract_tests": ["vellum-ui", "vellum.gpu-native", "vellum.install-consumer"],
   "created_at": "2026-08-13T21:15:00Z",
   "disposition": "framework-only",
   "effort_minutes": 10,
   "event_id": "resolution-vellum-c41e065e791b2735b94606b06af86816b53a9641",
   "kind": "resolution",
-  "linked_commits": [
-    "c41e065e791b2735b94606b06af86816b53a9641"
-  ],
+  "linked_commits": ["c41e065e791b2735b94606b06af86816b53a9641"],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit c41e065e791b2735b94606b06af86816b53a9641 maps packages/vellum-ui/package.json, packages/vellum-ui/scripts/prepare-pack.mjs, packages/vellum-ui/test/phase3-installed.test.js; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "This release-packaging repair preserves Vellum's bundled browser tool in the immutable consumer artifact. It has no Pulp implementation or downstream adoption effect.",
   "resolves": "vellum-c41e065e791b2735b94606b06af86816b53a9641",
   "schema_version": 1,
   "shared_contract_release_blocker": false

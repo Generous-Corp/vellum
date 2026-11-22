@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 6013a1e6e658e66ab60ed6370a820f8051d2579a maps graphics/include/vellum/graphics/damage.hpp, graphics/src/damage.cpp, graphics/src/skia_dawn_surface.mm, graphics/tests/damage_test.cpp, graphics/tests/partial_present_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-native damage-model change on PR #301 (vellum::graphics damage tracking: transforms, opacity, corner radii, fold-to-layer, path bounds) and its partial-present wiring in skia_dawn_surface.mm. Pulp main has no consumer of vellum::graphics::Scene or its damage model; it consumes gpu-runtime only through its pinned dependency (pulp#11596). Same classification as the earlier damage model commit in 5a50ff0c6.",
   "resolves": "vellum-6013a1e6e658e66ab60ed6370a820f8051d2579a",
   "schema_version": 1,
   "shared_contract_release_blocker": false

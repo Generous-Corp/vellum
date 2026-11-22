@@ -11,7 +11,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 98ecbc1c71bc748920f76dc5130ee9b8fa142387 maps apps/minimal-scene/CMakeLists.txt, apps/minimal-scene/README.md, apps/minimal-scene/main.cpp, apps/smoke-native/install-consumer/CMakeLists.txt, apps/smoke-native/install-consumer/main.cpp; contract tests: vellum.capture-stats, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-owned standalone framework behavior. Any later Pulp adoption must consume it through a pinned Vellum dependency and adapter tests, not synchronized source copies.",
   "resolves": "vellum-98ecbc1c71bc748920f76dc5130ee9b8fa142387",
   "schema_version": 1,
   "shared_contract_release_blocker": false

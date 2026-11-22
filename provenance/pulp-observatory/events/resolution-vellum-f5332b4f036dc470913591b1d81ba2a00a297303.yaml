@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit f5332b4f036dc470913591b1d81ba2a00a297303 maps graphics/tests/CMakeLists.txt, graphics/tests/partial_present_bench.mm; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Test-only. It skips Vellum's native partial-present check when no drawable is available. Vellum test infrastructure only.",
   "resolves": "vellum-f5332b4f036dc470913591b1d81ba2a00a297303",
   "schema_version": 1,
   "shared_contract_release_blocker": false

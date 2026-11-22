@@ -17,7 +17,7 @@
     "Generous-Corp/vellum#116"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit b97f3601de7003ec034b8591981fc427f6b14c9a maps apps/app-host/CMakeLists.txt, apps/gpu-native/CMakeLists.txt, graphics/CMakeLists.txt; contract tests: vellum.authoring, vellum.capture-stats, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum#116 raises the deployment floor of Vellum's mirrored runtime build to macOS 13.3 (VELLUM_MACOS_DEPLOYMENT_TARGET), drops the libc++ availability suppression, and adds a libc++ availability check for the mirrored libraries and Skia/Dawn provider. This is Vellum-owned mirror build and packaging configuration with no counterpart in Pulp's own build at the frozen observation boundary, so nothing is ported. Same disposition as the earlier mirror-unit packaging work (vellum#92).",
   "resolves": "vellum-b97f3601de7003ec034b8591981fc427f6b14c9a",
   "schema_version": 1,
   "shared_contract_release_blocker": false

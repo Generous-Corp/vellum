@@ -15,7 +15,7 @@
     "https://github.com/Generous-Corp/vellum/pull/490"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit b584d42ec9f2272c57703f876e2ccceb3332dd50 maps packages/vellum-design-ir/src/svg-asset.js, packages/vellum-design-ir/test/svg-asset.test.js; contract tests: vellum-design-ir, vellum-design-ir-sterile-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Closes SVG importer gaps in vellum-design-ir: a <style> element may not contain a CSS escape, a root with display none draws nothing, the viewport group id cannot collide with an authored id, and <use> and nested <svg> children are clipped to their viewport. vellum-design-ir and its SVG asset importer exist only in Vellum; Pulp's design import is a separate implementation with no svg-asset importer, so no port is owed.",
   "resolves": "vellum-b584d42ec9f2272c57703f876e2ccceb3332dd50",
   "schema_version": 1,
   "shared_contract_release_blocker": false

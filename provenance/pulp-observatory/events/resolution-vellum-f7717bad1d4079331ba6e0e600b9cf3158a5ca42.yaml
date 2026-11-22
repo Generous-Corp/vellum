@@ -17,7 +17,7 @@
     "Generous-Corp/vellum#88"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit f7717bad1d4079331ba6e0e600b9cf3158a5ca42 maps packages/vellum-ui/README.md, packages/vellum-ui/src/effects.js, packages/vellum-ui/src/runtime.js, packages/vellum-ui/test/runtime.test.js; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Merge of vellum#88 (fix/restore-effect-lifecycle-75), landing 2cfb7250a4 and 31ad0a1cfd. Vellum-owned retained-ui-kernel effect lifecycle (packages/vellum-ui): state restore now transplants live effect instances and cleanups instead of rebuilding hooks blank (issue #75, vellum#88). Pulp has no hook runtime of its own: @pulp/react delegates effects to React through react-reconciler, so the defect and its fix have no Pulp counterpart. Same disposition as the precedent for the effect-lifecycle refactor 304795e8b4.",
   "resolves": "vellum-f7717bad1d4079331ba6e0e600b9cf3158a5ca42",
   "schema_version": 1,
   "shared_contract_release_blocker": false

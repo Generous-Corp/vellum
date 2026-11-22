@@ -16,7 +16,7 @@
     "https://github.com/Generous-Corp/vellum/pull/504"
   ],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit ddcbc99c4ad397b95d2f44949eebb6ba6ca346c7 maps apps/app-host/CMakeLists.txt, apps/app-host/test_agent_workflow.py, apps/app-host/test_html_import_geometry.py; contract tests: vellum.authoring, vellum.capture-stats, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum's CLI and app-host tests skip their live-browser cases unless a pinned Chrome is named. The live_browser helper, the web backend tests and the app-host geometry test exist only in Vellum, so no port is owed.",
   "resolves": "vellum-ddcbc99c4ad397b95d2f44949eebb6ba6ca346c7",
   "schema_version": 1,
   "shared_contract_release_blocker": false

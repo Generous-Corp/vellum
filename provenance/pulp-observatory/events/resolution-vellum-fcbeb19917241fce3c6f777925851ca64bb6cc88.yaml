@@ -15,7 +15,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit fcbeb19917241fce3c6f777925851ca64bb6cc88 maps authoring/src/js_application.mm, authoring/src/rendered_tree_materializer.mm, authoring/tests/js_application_test.cpp; contract tests: vellum-ui, vellum.authoring, vellum.gpu-native. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "The original cross-repository diagnosis does not apply: JSON.stringify escapes U+0000, so Pulp's serialized JSON text was not vulnerable to C-string truncation. The review did uncover a separate adjacent defect in Pulp's direct JavaScriptCore string boundary, which now rejects CHOC-unrepresentable embedded NUL values and fails closed for callback, serialization, exception, array accessor, length, and cycle errors. Vellum keeps its full-length NSString conversion because its rendered-JSON boundary has different ownership and representation requirements.",
   "resolves": "vellum-fcbeb19917241fce3c6f777925851ca64bb6cc88",
   "schema_version": 1,
   "shared_contract_release_blocker": false

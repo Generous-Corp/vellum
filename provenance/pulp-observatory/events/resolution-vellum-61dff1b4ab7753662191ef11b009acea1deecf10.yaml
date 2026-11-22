@@ -15,7 +15,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 61dff1b4ab7753662191ef11b009acea1deecf10 maps authoring/src/rendered_tree_materializer.mm, authoring/tests/rendered_tree_materializer_test.cpp, packages/vellum-design-ir/bin/backend-commands.js, packages/vellum-design-ir/bin/backend-filesystem.js, packages/vellum-design-ir/bin/backend-materialization.js, packages/vellum-design-ir/bin/backend-protocol.js, packages/vellum-design-ir/bin/backend-source.js, packages/vellum-design-ir/bin/vellum-backend.js, packages/vellum-design-ir/test/backend-protocol.test.js, packages/vellum-ui/src/design.js, packages/vellum-ui/src/index.js, packages/vellum-ui/src/runtime.js, packages/vellum-ui/test/bundle.test.js, packages/vellum-ui/test/design.test.js, packages/vellum-ui/test/runtime.test.js; contract tests: vellum-design-ir, vellum-design-ir-sterile-consumer, vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "The backend and observatory module extractions, canonical Vellum UI materializer, native-browser layout contract, and Vellum authoring skill metadata are framework-owned maintenance. They preserve Pulp-facing DesignIR and retained-tree contracts through executable compatibility tests; no synchronized Pulp source copy or second implementation is required.",
   "resolves": "vellum-61dff1b4ab7753662191ef11b009acea1deecf10",
   "schema_version": 1,
   "shared_contract_release_blocker": false

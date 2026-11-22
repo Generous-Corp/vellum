@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit def0dce46015b5808e25f60f15c2463a6bb77859 maps graphics/CMakeLists.txt, graphics/src/dawn_bootstrap.cpp, graphics/tests/test_dawn_bootstrap_source.py; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Integration merge (Merge remote-tracking branch 'origin/main' into feat/release-dry-run). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
   "resolves": "vellum-def0dce46015b5808e25f60f15c2463a6bb77859",
   "schema_version": 1,
   "shared_contract_release_blocker": false

@@ -11,7 +11,7 @@
   "linked_commits": [],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 304795e8b47f43ec0f4df6e7fbd89afca75f73eb maps packages/vellum-ui/src/effects.js, packages/vellum-ui/src/runtime.js; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-owned component effect lifecycle implementation. Any later Pulp adoption must consume the released Vellum behavior through adapter and contract tests, not synchronized source copies.",
   "resolves": "vellum-304795e8b47f43ec0f4df6e7fbd89afca75f73eb",
   "schema_version": 1,
   "shared_contract_release_blocker": false

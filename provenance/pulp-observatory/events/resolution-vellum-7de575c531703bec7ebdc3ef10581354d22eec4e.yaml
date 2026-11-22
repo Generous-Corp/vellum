@@ -19,7 +19,7 @@
     "Generous-Corp/vellum#568"
   ],
   "owner": "@claude-observatory-agent",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 7de575c531703bec7ebdc3ef10581354d22eec4e maps graphics/include/vellum/graphics/damage.hpp, graphics/include/vellum/graphics/feature_versions.hpp, graphics/include/vellum/graphics/scene.hpp, graphics/tests/feature_versions_test.cpp, packages/vellum-design-ir/src/constants.js, packages/vellum-design-ir/src/feature-versions.generated.js, packages/vellum-design-ir/test/feature-versions.test.js, packages/vellum-ui/src/design.js, packages/vellum-ui/src/feature-versions.generated.js; contract tests: vellum-design-ir, vellum-design-ir-sterile-consumer, vellum-ui, vellum.authoring, vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Merge of main into the shared limits branch. The paths it maps are main's landed feature version table: the graphics feature_versions header and its generated DesignIR and vellum-ui tables. Those packages are Vellum's, and Pulp consumes them from Vellum (the owner's 2026-11-16 04:45Z criterion for schema-class events). Classified by the Vellum lead.",
   "resolves": "vellum-7de575c531703bec7ebdc3ef10581354d22eec4e",
   "schema_version": 1,
   "shared_contract_release_blocker": false

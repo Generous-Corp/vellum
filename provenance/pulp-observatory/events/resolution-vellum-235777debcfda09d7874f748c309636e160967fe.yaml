@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 235777debcfda09d7874f748c309636e160967fe maps authoring/adapters/illustrator/illustrator_to_svg.py, authoring/adapters/illustrator/test_illustrator_to_svg.py; contract tests: vellum-ui, vellum.authoring. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Integration merge (Merge origin/main into perf/merge-queue-proof-reuse). It carries no change beyond the commits it merges, whose own observations are classified separately in this ledger, so it has no independent contract.",
   "resolves": "vellum-235777debcfda09d7874f748c309636e160967fe",
   "schema_version": 1,
   "shared_contract_release_blocker": false

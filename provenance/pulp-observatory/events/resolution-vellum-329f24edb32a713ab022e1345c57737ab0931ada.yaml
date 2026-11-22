@@ -13,7 +13,7 @@
   ],
   "linked_pull_requests": [],
   "owner": "@danielraffel",
-  "rationale": "Framework-only classification by the Vellum lead. Source commit 329f24edb32a713ab022e1345c57737ab0931ada maps graphics/include/vellum/graphics/path_geometry.hpp, graphics/src/damage.cpp, graphics/src/paint_command.cpp, graphics/src/skia_dawn_surface.mm, graphics/src/skia_dawn_surface_testing.hpp, graphics/tests/damage_test.cpp, graphics/tests/gpu_style_test.cpp, graphics/tests/partial_present_bench.mm, graphics/tests/partial_present_test.cpp; contract tests: vellum.gpu-native, vellum.install-consumer. Pulp main has no counterpart for any mapped path; the event has no schema/API delta or shared-contract release blocker.",
+  "rationale": "Vellum-native partial-present change in skia_dawn_surface.mm (whole-command enclosure of gradient and vertex-coloured fills, the repaint threshold re-applied after enclosure, an internal test hook) and the damage model's non-finite stroke reach guard. Pulp main has no consumer of vellum::graphics::Scene, its damage model or SkiaDawnSurface partial presentation; it consumes gpu-runtime only through its pinned dependency. Rule: Vellum-native graphics change with no Pulp consumer; owner-approved agent classification 2026-11-10.",
   "resolves": "vellum-329f24edb32a713ab022e1345c57737ab0931ada",
   "schema_version": 1,
   "shared_contract_release_blocker": false
