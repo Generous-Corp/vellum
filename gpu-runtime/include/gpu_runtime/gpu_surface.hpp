@@ -4,8 +4,6 @@
 #include <memory>
 #include <string>
 
-#include <gpu_runtime/export.h>
-
 namespace gpu_runtime {
 
 /// Decides when a presentable swapchain has to be (re)configured.
@@ -99,7 +97,7 @@ class SwapchainResizeState {
 ///   ... draw ...
 ///   skia.end_frame()    → submits Graphite recording to the shared device/queue
 ///   gpu.end_frame()     → presents to native surface
-class GPU_RUNTIME_API GpuSurface {
+class GpuSurface {
 public:
     /// Native adapter type reported by Dawn/WebGPU. This is independent of the
     /// backend API: Metal, D3D12, or Vulkan can each expose hardware, fallback,

@@ -9,21 +9,20 @@
 // VellumGpuRuntime::Device.
 
 #include <gpu_runtime/dawn_bootstrap.hpp>
-#include <gpu_runtime/export.h>
 
 #include <string>
 
 namespace gpu_runtime {
 
 /// The Dawn revision this library was compiled against, as lowercase hex.
-[[nodiscard]] GPU_RUNTIME_API std::string native_dawn_revision();
+[[nodiscard]] std::string native_dawn_revision();
 
 /// The native bootstrap as an ABI v1 contract, for register_dawn_bootstrap().
-[[nodiscard]] GPU_RUNTIME_API DawnBootstrap native_dawn_bootstrap();
+[[nodiscard]] DawnBootstrap native_dawn_bootstrap();
 
 /// Register the native bootstrap for `bundle` (empty: an ABI v1 registration)
 /// at this library's revision and runtime version.
-[[nodiscard]] GPU_RUNTIME_API bool register_native_dawn_bootstrap(
-    std::string_view bundle = {}, std::string* error = nullptr);
+[[nodiscard]] bool register_native_dawn_bootstrap(std::string_view bundle = {},
+                                                  std::string* error = nullptr);
 
 }  // namespace gpu_runtime
