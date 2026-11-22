@@ -36,6 +36,10 @@ if(VELLUM_BUILD_TESTS)
     # baked-C++, and SwiftUI lowerings.
     add_executable(vellum-emitter-conformance-gen
         tests/emitter_conformance_gen.cpp)
+    target_include_directories(vellum-emitter-conformance-gen PRIVATE
+        ${_vellum_mirror_public_includes}
+        "${VELLUM_MIRROR_BUILD_INFO_DIR}"
+        "${VELLUM_MIRROR_CHOC_ROOT}")
     target_link_libraries(vellum-emitter-conformance-gen PRIVATE Vellum::MirrorDesign_import)
     set(_vellum_conformance_dir "${CMAKE_CURRENT_BINARY_DIR}/emitter_conformance")
     set(_vellum_conformance_sources)
