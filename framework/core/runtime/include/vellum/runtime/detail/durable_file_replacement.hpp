@@ -15,19 +15,6 @@ enum class DurableFileCommitOutcome : std::uint8_t {
     ReplacedButDirectorySyncFailed,
 };
 
-/// How hard commit() pushes the new bytes toward media.
-///   full:    flush through the drive cache (F_FULLFSYNC on Apple platforms).
-///            Survives power loss; costs tens of milliseconds on a small file.
-///   relaxed: fsync the file and the parent directory, without the drive-cache
-///            flush. The replacement is still atomic (a reader sees the old or
-///            the new bytes, never a torn file) and ordered (data reaches the
-///            OS before the rename). Only the last write can be lost on power
-///            loss. Intended for settings files saved from a UI thread.
-enum class DurableFileDurability : std::uint8_t {
-    full,
-    relaxed,
-};
-
 struct DurableFileReplacementTestAccess;
 
 class DurableFileReplacement {
@@ -46,8 +33,7 @@ class DurableFileReplacement {
     int native_descriptor() const noexcept;
     const std::filesystem::path& temporary_path() const noexcept;
     bool write_all(std::span<const std::uint8_t> bytes) noexcept;
-    DurableFileCommitOutcome
-    commit(DurableFileDurability durability = DurableFileDurability::full) noexcept;
+    DurableFileCommitOutcome commit() noexcept;
     void cancel() noexcept;
 
   private:

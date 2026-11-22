@@ -175,22 +175,7 @@ class StateStore {
 
     /// Register a parameter. Call during initialization only.
     /// @param info  Immutable metadata for this parameter.
-    ///
-    /// An ID may be registered once. A second registration under an ID that is
-    /// already in use is refused: the first registration is kept, nothing is
-    /// added (so hosts never see two parameters with one ID), an error is
-    /// logged naming both, and `duplicate_registrations()` counts it. There is
-    /// deliberately no assert: a debug abort inside a host that is only
-    /// scanning the plug-in is worse than a logged refusal, and the counter
-    /// lets a test fail loudly instead. To change a parameter's range or texts,
-    /// compute them before registering it.
-    /// @return true when the parameter was added, false when the ID was taken.
-    bool add_parameter(const ParamInfo& info);
-
-    /// Registrations refused because the ID was already in use, for this store.
-    std::size_t duplicate_registrations() const noexcept {
-        return duplicate_registrations_;
-    }
+    void add_parameter(const ParamInfo& info);
 
     /// Register a parameter group. Call during initialization only.
     void add_group(const ParamGroup& group);
@@ -207,23 +192,6 @@ class StateStore {
     /// audio thread (e.g. in prepare()); the returned handle's get() is
     /// cheaper than get_value() because the ID lookup is already done.
     /// An unknown ID yields an unbound handle that reads 0.0f.
-    ///
-    /// Reading many parameters every block (for example to find host writes):
-    /// get_value(id) for an id at or above the dense table limit (1 << 14,
-    /// typical of four-character-code ids) is a hash lookup per call, so a
-    /// loop over all_params() pays one per parameter per block. Instead
-    ///   1. resolve a ParamReader per parameter once, in prepare();
-    ///   2. gate the scan on the store generation with StateScanGate, so a
-    ///      block in which no writer (UI, audio, modulation, restore, gesture)
-    ///      has landed reads nothing:
-    /// @code
-    /// gate_.scan_if_changed(state(), [&] {
-    ///     for (std::size_t i = 0; i < readers_.size(); ++i)
-    ///         values_[i] = readers_[i].get();
-    /// });
-    /// @endcode
-    /// The generation answers "did anything change", not which parameter or
-    /// which writer; compare against the previous values inside the scan.
     ParamReader param_reader(ParamID id) const;
 
     /// Read a parameter's modulated value: base + mod_offset (lock-free).
@@ -396,10 +364,8 @@ class StateStore {
     /// The set of trigger indices is cached at registration, so this is O(number
     /// of trigger params), and a store with no triggers does no work.
     ///
-    /// If supplied, captured_values uses all_params() order. Only entries for
-    /// successfully reset triggers are updated, using the value written here.
     /// @return true if any trigger parameter was reset this call.
-    bool reset_triggers_rt(std::span<float> captured_values = {});
+    bool reset_triggers_rt();
 
     /// True when at least one registered parameter is a trigger / momentary
     /// control. Adapters can skip calling `reset_triggers_rt()` when false.
@@ -525,12 +491,6 @@ class StateStore {
     /// Number of parameters with an open gesture (begin without a matching
     /// end). Observability for tests and adapters.
     std::size_t open_gesture_count() const noexcept { return open_gestures_.size(); }
-
-    /// Whether @p id has an open gesture. **Main-thread only**, like the
-    /// gesture entry points that mutate the set.
-    bool gesture_open(ParamID id) const noexcept {
-        return open_gestures_.count(id) != 0;
-    }
 
     /// Run a complete parameter gesture (begin_gesture → value writes →
     /// end_gesture) on the host's main thread, from ANY thread.
@@ -727,7 +687,6 @@ class StateStore {
     // `this` and reads id_to_index_/values_ during drain_main_listeners;
     // destroying registry_ before that storage guarantees the getter can
     // never run after the storage it reads is gone. Do not reorder.
-    std::size_t duplicate_registrations_ = 0;
     std::vector<ParamInfo> params_;
     std::vector<ParamGroup> groups_;
     std::unordered_map<ParamID, std::size_t> id_to_index_;
@@ -902,43 +861,5 @@ std::array<float, N> StateStore::snapshot_modulated(
     }
     return out;
 }
-
-/// Skips a per-block scan of parameter values while the store has not moved.
-///
-/// Every writer (base-value writes from the UI or audio thread, modulation,
-/// trigger resets, state restore, gestures) advances StateStore::state_generation(),
-/// so an unchanged generation with no writer in flight means every value is the
-/// one the last scan saw. The scan is accepted as complete only when the store
-/// was quiet and at the same generation both before and after it, the same
-/// rule format::boundary::refresh_param_snapshot applies; a scan that
-/// overlapped a writer is repeated on the next call.
-///
-/// One gate per consumer and store; not thread-safe (call from one thread,
-/// normally the audio thread). Allocation-free and lock-free.
-class StateScanGate {
-  public:
-    /// Runs @p scan when a writer may have landed since the last complete scan
-    /// (always on the first call) and returns true; returns false without
-    /// running it otherwise. @p scan must read values only.
-    template <typename Scan> bool scan_if_changed(const StateStore& store, Scan&& scan) {
-        if (valid_ && store.state_snapshot_is_current(generation_))
-            return false;
-        const std::uint64_t before = store.state_generation();
-        const bool quiet_before = store.state_snapshot_is_current(before);
-        scan();
-        valid_ = quiet_before && store.state_snapshot_is_current(before);
-        generation_ = before;
-        return true;
-    }
-
-    /// Forget the last scan so the next scan_if_changed() runs.
-    void invalidate() noexcept {
-        valid_ = false;
-    }
-
-  private:
-    std::uint64_t generation_ = 0;
-    bool valid_ = false;
-};
 
 } // namespace vellum::state

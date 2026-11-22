@@ -63,6 +63,7 @@ MIRROR_ROOT = "mirror/"
 # own content regime (verify_framework below).
 FRAMEWORK_ROOT = "framework/"
 FRAMEWORK_TRANSFER_RECORD = "provenance/framework/transfer.json"
+FRAMEWORK_TRANSFER_SUCCESSOR = "provenance/framework/transfer-successor.json"
 # framework/external/ is third-party source: the census and the name-debt
 # ratchet skip it, so its bytes are pinned instead. A file there must hold its
 # transfer-record blob, or the to_blob of the last entry for it in this
@@ -973,7 +974,13 @@ def current_mirror_receipts(
             transfer = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return [], [], ["HEAD has no mirror/ tree to name the current export receipt"]
-        named = transfer.get("export_receipt") if isinstance(transfer, dict) else None
+        successor_path = root / FRAMEWORK_TRANSFER_SUCCESSOR
+        try:
+            successor = json.loads(successor_path.read_text(encoding="utf-8")) if successor_path.is_file() else None
+        except (OSError, ValueError):
+            successor = None
+        named = (successor.get("export_receipt") if isinstance(successor, dict)
+                 else transfer.get("export_receipt") if isinstance(transfer, dict) else None)
         if named not in receipts:
             return [], receipts, [f"{FRAMEWORK_TRANSFER_RECORD} names {named!r}, which is not a landed receipt"]
         head_tree = transfer.get("mirror_tree")

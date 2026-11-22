@@ -44,5 +44,6 @@
 #define VellumMirrorAccessibilityHostLifetime  PULP_VIEW_OBJC_NAME(VellumMirrorAccessibilityHostLifetime)
 #define VellumMirrorTextAccessibilityElement   PULP_VIEW_OBJC_NAME(VellumMirrorTextAccessibilityElement)
 // Drag-and-drop source (drag_drop_mac.mm).
+#define VellumMirrorFileDragSource             PULP_VIEW_OBJC_NAME(VellumMirrorFileDragSource)
 
 #endif  // PULP_VIEW_OBJC_SUFFIX

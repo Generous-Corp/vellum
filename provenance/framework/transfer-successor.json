@@ -1,0 +1,9 @@
+{
+  "schema": "vellum.framework-transfer-successor.v1",
+  "transfer_record": "provenance/framework/transfer.json",
+  "predecessor_receipt": "provenance/mirror/receipts/20261107-f0ac0a4ff392.json",
+  "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json",
+  "pulp_repository": "Generous-Corp/pulp",
+  "pulp_sha": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+  "mirror_tree": "569e11dd3bd881a868453faacadadf271517f218"
+}

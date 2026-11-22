@@ -31,7 +31,6 @@
 /// thread.
 
 #include <cstddef>
-#include <memory>
 #include <new>
 #include <type_traits>
 #include <utility>
@@ -161,9 +160,9 @@ class FixedFunction<R(Args...), Capacity, Alignment> {
         },
         [](void* dst, void* src) noexcept {
             ::new (dst) D(std::move(*static_cast<D*>(src)));
-            std::destroy_at(static_cast<D*>(src));
+            static_cast<D*>(src)->~D();
         },
-        [](void* target) noexcept { std::destroy_at(static_cast<D*>(target)); },
+        [](void* target) noexcept { static_cast<D*>(target)->~D(); },
     };
 
     void take(FixedFunction& other) noexcept {

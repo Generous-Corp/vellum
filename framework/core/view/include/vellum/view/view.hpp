@@ -47,15 +47,6 @@ enum class RuntimeViewKind : std::uint8_t {
     generic, knob, fader, toggle, scroll, eq_curve, design_frame
 };
 
-/// Why a view gained or lost focus. `:focus-visible` is true only for
-/// `keyboard` and `programmatic`; a pointer press that focuses a control does
-/// not show its focus ring.
-enum class FocusCause : std::uint8_t {
-    pointer,      ///< A mouse, touch or pen press focused the view.
-    keyboard,     ///< Tab, Shift+Tab or another key moved focus.
-    programmatic, ///< Code moved focus (focus(), setFocus, autofocus).
-};
-
 /// Identity-safe reference to a View captured across native event boundaries.
 /// Capturing records the root and current structure generation while the View
 /// is known-live. `live_in()` is therefore O(1) until a detach invalidates that
@@ -482,58 +473,11 @@ public:
     /// Key event with modifiers and up/down state.
     /// Return true if handled (prevents propagation to parent).
     virtual bool on_key_event(const KeyEvent& event) { (void)event; return false; }
-    /// The set of held modifier keys changed (Shift, Ctrl, Alt, Meta/Cmd
-    /// pressed or released) with no other key involved. `modifiers` is the full
-    /// set now held, not a delta. Delivered to the focused view and to any view
-    /// currently captured by a pointer press, so a drag can switch to fine
-    /// adjustment when Shift goes down after the drag began. Disabled views are
-    /// skipped. Hosts report changes through `deliver_modifier_keys_changed`
-    /// in pointer_dispatch.hpp.
-    virtual void on_modifier_keys_changed(Modifiers modifiers) {
-        (void)modifiers;
-    }
     /// Text input from keyboard/IME (separate from key events).
     virtual void on_text_input(const TextInputEvent& event) { (void)event; }
     /// Called when this view gains or loses focus.
     /// Default implementation updates has_focus_ state. Subclasses should call base.
     virtual void on_focus_changed(bool gained) { has_focus_ = gained; }
-
-    /// As above, with the reason focus moved. Hosts and the focus-transfer
-    /// functions call this overload. The default records the cause (see
-    /// `focus_cause()` and `focus_visible()`) and forwards to the overload
-    /// above, so a widget that overrides only that one keeps working.
-    virtual void on_focus_changed(bool gained, FocusCause cause) {
-        focus_cause_ = cause;
-        focus_visible_ = gained && cause != FocusCause::pointer;
-        on_focus_changed(gained);
-    }
-
-    /// Called on every ancestor of a view whose focus changed, nearest first,
-    /// after that view's own `on_focus_changed`. `child` is the view that
-    /// gained or lost focus, not the ancestor's direct child.
-    virtual void on_descendant_focus_changed(View& child, bool gained, FocusCause cause) {
-        (void)child;
-        (void)gained;
-        (void)cause;
-    }
-
-    /// Cause of the most recent focus change delivered to this view.
-    FocusCause focus_cause() const {
-        return focus_cause_;
-    }
-    /// CSS `:focus-visible`: this view has focus and got it from the keyboard
-    /// or from code, so a focus ring should show.
-    bool focus_visible() const {
-        return has_focus_ && focus_visible_;
-    }
-    /// CSS `:focus-within`: this view or any descendant holds input focus.
-    bool focus_within() const;
-
-    /// Observers of focus changes, set by the script bridge. `on_focus_event`
-    /// fires for this view's own gain or loss, `on_descendant_focus_event` for
-    /// a descendant's.
-    std::function<void(bool gained, FocusCause cause)> on_focus_event;
-    std::function<void(View& child, bool gained, FocusCause cause)> on_descendant_focus_event;
 
     /// Gesture event (pinch/rotate from multi-touch or trackpad).
     virtual void on_gesture_event(const GestureEvent& event) {
@@ -695,10 +639,6 @@ public:
         int pointer_id = 0;
     };
 
-    /// Headless equivalent of a platform modifier-key notification. `this`
-    /// must be the tree root. See `deliver_modifier_keys_changed`.
-    bool simulate_modifier_keys(Modifiers modifiers);
-
     // Dispatch a synthetic click to the deepest view at the given point
     void simulate_click(Point root_pos);
 
@@ -810,11 +750,9 @@ public:
         }
         DisabledHitTestScope(const DisabledHitTestScope&) = delete;
         DisabledHitTestScope& operator=(const DisabledHitTestScope&) = delete;
-        static bool active() {
-            return depth() > 0;
-        }
+        static bool active() { return depth() > 0; }
 
-      private:
+    private:
         static int& depth() {
             static thread_local int d = 0;
             return d;
@@ -1747,20 +1685,6 @@ public:
         /// time. Which claims nest and which replace is decided in
         /// `claim_overlay()`.
         std::vector<View*> overlay_stack;
-        /// View each pointer's press landed on, keyed by pointer id, from the
-        /// press until its release or cancel. Lets modifier-key changes reach
-        /// the view a drag is captured by without every host tracking it.
-        std::vector<std::pair<int, ViewCapture>> pressed_targets;
-        /// Where the buttonless pointer last was (root coordinates), whether it
-        /// is over the surface, the modifiers it carried, the view hover state
-        /// was last brought up to date for, and the pointer's position in that
-        /// view. `simulate_hover` keeps these current; they let a later frame
-        /// notice that content moved under a pointer that did not.
-        Point hover_pointer{};
-        bool hover_pointer_valid = false;
-        std::uint16_t hover_modifiers = 0;
-        ViewCapture hover_target;
-        Point hover_local{};
         /// Instance id of the trigger the latest press reached (0: none); a
         /// claim with no anchor of its own adopts it. See `set_overlay_anchor`.
         std::uint64_t pending_overlay_opener = 0;
@@ -3008,7 +2932,7 @@ private:
     // EXCEPT push_effect_layers / pop_effect_layers, which own the imbalance by
     // contract — push returns the exact count/flag it opened and pop consumes
     // it, so the push/pop pair is auditable in isolation. Splitting the monolith
-    // this way also gives FU-3's subtree cache a clean "content" seam
+    // this way also gives the subtree scene cache a clean "content" seam
     // (paint_content) that excludes the effect/opacity layer wrappers.
     struct EffectLayerState {
         int  layers_pushed   = 0;      ///< compositing layers opened (an effect can open >1)
@@ -3017,12 +2941,12 @@ private:
     void apply_canvas_transforms(canvas::Canvas& canvas);
     EffectLayerState push_effect_layers(canvas::Canvas& canvas);
     void pop_effect_layers(canvas::Canvas& canvas, const EffectLayerState& layers);
-    // The FU-3 cache-capture unit: everything painted INSIDE the effect layers
+    // What the subtree scene cache records: everything painted INSIDE the effect layers
     // (shadows, clip, background/border, paint(), children, decorations).
     // children_ns receives the recursive child-paint time for self-time attrib.
     void paint_content(canvas::Canvas& canvas, const EffectLayerState& layers,
                        std::int64_t& children_ns);
-    // FU-3 wrapper around paint_content: replays the cached scene when caching
+    // Subtree-cache wrapper around paint_content: replays the cached scene when caching
     // is on, the backend supports it, and the cache is valid; otherwise records
     // (on a miss) or paints directly. Called from the paint_all orchestrator in
     // place of paint_content so the effect/opacity layers stay outside the cache.
@@ -3144,8 +3068,6 @@ private:
     bool visible_after_quarantine_ = true;
     bool focusable_ = false;
     bool enabled_ = true;
-    bool focus_visible_ = false;
-    FocusCause focus_cause_ = FocusCause::programmatic;
     bool layout_dirty_ = false;
     std::uint64_t applied_layout_generation_ = 0;
     std::uint64_t tree_layout_generation_ = 1;
@@ -3350,7 +3272,7 @@ private:
     float       text_shadow_dy_ = 0.0f;
     float       text_shadow_radius_ = 0.0f;
     bool needs_layer_ = false;
-    // FU-3 subtree scene cache. `subtree_cached_` is the opt-in flag;
+    // Subtree scene cache. `subtree_cached_` is the opt-in flag;
     // `scene_cache_` holds the recorded scene (shared_ptr so it survives across
     // frames until invalidated); `scene_cache_valid_` gates replay vs re-record.
     bool subtree_cached_ = false;

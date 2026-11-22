@@ -913,10 +913,69 @@ def link_closure_findings(
 
 
 FRAMEWORK_TRANSFER_RECORD = "provenance/framework/transfer.json"
+FRAMEWORK_TRANSFER_SUCCESSOR = "provenance/framework/transfer-successor.json"
+TRANSFER_SUCCESSOR_SCHEMA = "vellum.framework-transfer-successor.v1"
+
+
+def transfer_successor(root: Path) -> dict[str, Any] | None:
+    """Read the reviewed receipt binding that follows an immutable transfer."""
+    try:
+        value = strict_json(root / FRAMEWORK_TRANSFER_SUCCESSOR)
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def transfer_successor_errors(root: Path, receipts: list[str]) -> list[str]:
+    """Validate a post-transfer incremental export binding."""
+    path = root / FRAMEWORK_TRANSFER_SUCCESSOR
+    if not path.exists():
+        return []
+    try:
+        successor = strict_json(path)
+        transfer = strict_json(root / FRAMEWORK_TRANSFER_RECORD)
+    except (OSError, ValueError) as exc:
+        return [f"{FRAMEWORK_TRANSFER_SUCCESSOR}: unreadable: {exc}"]
+    required = {"schema", "transfer_record", "predecessor_receipt", "export_receipt",
+                "pulp_repository", "pulp_sha", "mirror_tree"}
+    errors: list[str] = []
+    base, base_error = history_base(root)
+    if base_error:
+        errors.append(f"{FRAMEWORK_TRANSFER_SUCCESSOR}: {base_error}")
+    elif base is not None:
+        before = git_try(root, "show", f"{base}:{FRAMEWORK_TRANSFER_SUCCESSOR}")
+        if before is not None and before.encode() != path.read_bytes():
+            errors.append(f"{FRAMEWORK_TRANSFER_SUCCESSOR}: changed from the merge base; it is immutable")
+    if set(successor) != required or successor.get("schema") != TRANSFER_SUCCESSOR_SCHEMA:
+        errors.append(f"{FRAMEWORK_TRANSFER_SUCCESSOR}: malformed successor record")
+        return errors
+    predecessor = transfer.get("export_receipt") if isinstance(transfer, dict) else None
+    if successor["transfer_record"] != FRAMEWORK_TRANSFER_RECORD:
+        errors.append(f"{FRAMEWORK_TRANSFER_SUCCESSOR}: transfer_record is not {FRAMEWORK_TRANSFER_RECORD}")
+    if successor["predecessor_receipt"] != predecessor:
+        errors.append(f"{FRAMEWORK_TRANSFER_SUCCESSOR}: predecessor_receipt does not name the immutable transfer")
+    if successor["predecessor_receipt"] not in receipts:
+        errors.append(f"{FRAMEWORK_TRANSFER_SUCCESSOR}: predecessor receipt is not landed")
+    receipt_path = successor["export_receipt"]
+    if receipt_path not in receipts or receipts[-1] != receipt_path:
+        errors.append(f"{FRAMEWORK_TRANSFER_SUCCESSOR}: export_receipt must be the newest landed receipt")
+    try:
+        receipt = strict_json(root / receipt_path)
+    except (OSError, ValueError) as exc:
+        return errors + [f"{FRAMEWORK_TRANSFER_SUCCESSOR}: export receipt unreadable: {exc}"]
+    for key in ("pulp_repository", "pulp_sha", "mirror_tree"):
+        if successor[key] != receipt.get(key):
+            errors.append(f"{FRAMEWORK_TRANSFER_SUCCESSOR}: {key} differs from {receipt_path}")
+    if successor["pulp_repository"] != PULP_REPOSITORY:
+        errors.append(f"{FRAMEWORK_TRANSFER_SUCCESSOR}: unexpected Pulp repository")
+    return errors
 
 
 def transferred_receipt(root: Path) -> str | None:
     """The export receipt the framework transfer record names, if the units were transferred."""
+    successor = transfer_successor(root)
+    if successor is not None and isinstance(successor.get("export_receipt"), str):
+        return successor["export_receipt"]
     try:
         record = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -1048,14 +1107,15 @@ def verify_receipt(
         if policy is not None:
             errors.extend(f"{label}: {f}" for f in link_closure_findings(closures, policy, enforce_stale=True))
 
+    landed_paths = set(landed_receipts(root))
     recorded_origins = {
-        (o.get("mirror_path"), o.get("git_blob_sha"))
+        (o.get("mirror_path"), o.get("git_blob_sha"), o.get("pulp_path"))
         for o in origins
-        if o.get("pulp_commit") == receipt["pulp_sha"] and o.get("export_receipt") == receipt_path
+        if o.get("pulp_path") is not None and o.get("export_receipt") in landed_paths
     }
     missing_origins = [
         f["mirror_path"] for f in receipt["files"]
-        if (f["mirror_path"], f["blob"]) not in recorded_origins
+        if (f["mirror_path"], f["blob"], f["pulp_path"]) not in recorded_origins
     ]
     if missing_origins:
         errors.append(
@@ -1358,6 +1418,7 @@ def verify(root: Path, pulp_root: Path | None = None) -> dict[str, Any]:
     if stored != sorted(receipts):
         errors.append("receipt files on disk differ from the receipt index")
     errors.extend(receipt_history_errors(root, receipts, stored))
+    errors.extend(transfer_successor_errors(root, receipts))
     has_mirror = git_ok(root, "cat-file", "-e", f"{head}:{MIRROR_DIR}")
     if not receipts and has_mirror:
         errors.append("mirror/ exists at HEAD without an export receipt")

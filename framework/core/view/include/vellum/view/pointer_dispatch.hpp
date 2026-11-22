@@ -93,13 +93,6 @@ bool yield_to_gesture_with_handoff(View& root, View*& drag_target,
 /// of truth; the process-global focus shim is never consulted.
 bool transfer_input_focus(View& root, View* target);
 
-/// As above, recording why focus moved. The previous holder's loss and the
-/// target's gain both carry `cause`; every ancestor of each is then told
-/// through `on_descendant_focus_changed`. A disabled target (or one inside a
-/// disabled ancestor) is not focusable here. The overload without a cause
-/// reports `FocusCause::programmatic`.
-bool transfer_input_focus(View& root, View* target, FocusCause cause);
-
 /// Return this root's live focused input. Uses RootInteractionState rather than
 /// the process-global compatibility shim.
 View* focused_input_under_root(View& root);
@@ -179,20 +172,6 @@ bool deliver_key_event(View& target, const KeyEvent& event);
 /// disabled-input contract. Returns true when the text was delivered.
 bool deliver_text_input(View& target, const TextInputEvent& event);
 
-/// Report that the set of held modifier keys changed. Call it from the
-/// platform's modifier notification (macOS flagsChanged, a Windows modifier
-/// virtual-key press or release, X11 or Wayland modifier key events, an Android
-/// meta-state change, a DOM `keydown`/`keyup` of a modifier key) with the full
-/// set now held.
-///
-/// The change reaches `View::on_modifier_keys_changed` on the view holding
-/// input focus and on every view a pointer press is currently captured by,
-/// each at most once, skipping disabled views. A drag therefore sees Shift go
-/// down or up mid-drag with no pointer movement. Returns true when at least
-/// one view was notified. The call does not de-duplicate; a host should not
-/// report key auto-repeat as a change.
-bool deliver_modifier_keys_changed(View& root, Modifiers modifiers);
-
 /// Deliver one BUTTONLESS pointer move — a hover — to the view under
 /// `root_pt`, which is in root-view space.
 ///
@@ -225,41 +204,6 @@ void deliver_hover_move(View& root, Point root_pt, uint16_t modifiers = 0);
 /// (a trackpad/stylus hover) or reports movement deltas.
 void deliver_hover_move(View& root, Point root_pt, uint16_t modifiers,
                         const PointerAttributes& pointer);
-
-/// What a frame repainted, in root coordinates, as far as a host knows it.
-/// `full` is the safe default: assume anything may have moved.
-struct HoverDamage {
-    bool full = true;
-    bool has_bounds = false;
-    Rect bounds{};
-
-    static HoverDamage everything() {
-        return {};
-    }
-    static HoverDamage region(Rect r) {
-        return {false, true, r};
-    }
-};
-
-/// Bring hover state back in line with what is on screen after a frame in
-/// which content may have moved under a pointer that did not.
-///
-/// Scrolling, an animation or a list reorder can slide a different view under
-/// a stationary pointer, and no pointer event arrives to say so. Call this once
-/// per presented frame, after layout and animation have run. It does nothing
-/// unless the frame's damage covers the last pointer position, so a frame that
-/// repainted somewhere else costs one comparison. When it does run it hit-tests
-/// the pointer position once and:
-///   - if the view under the pointer changed, runs the full hover pass
-///     (`deliver_hover_move`): the old view sees its exit, the new view its
-///     enter, positioned move and script pointermove;
-///   - if it is the same view but the pointer's position inside it changed
-///     (the view moved), delivers a positioned `on_hover_move` only;
-///   - otherwise does nothing.
-/// It does nothing while a pointer button is held, when no hover pass has run
-/// yet, and after the pointer has left the surface. Returns true when anything
-/// was delivered.
-bool reevaluate_stationary_hover(View& root, const HoverDamage& damage = HoverDamage{});
 
 /// The open ComboBox dropdown in `root` while its combo is effectively enabled,
 /// else null. Hosts route press, wheel and hover straight to an open dropdown
@@ -310,20 +254,6 @@ void deliver_mouse_wheel(View& root, Point root_pt,
 void deliver_mouse_wheel(View& root, Point root_pt,
                          float scroll_delta_x, float scroll_delta_y,
                          uint16_t modifiers, const WheelHost& host);
-
-/// What a host knows about a wheel event beyond its deltas. Every MouseEvent
-/// the routing builds carries these (`MouseEvent::modifiers`,
-/// `MouseEvent::scroll_precise`).
-struct WheelAttributes {
-    uint16_t modifiers = 0;
-    /// False when the deltas count discrete wheel lines rather than points.
-    bool precise = true;
-};
-
-/// Wheel delivery with every attribute the host knows; the overloads above
-/// forward here with `precise = true`.
-void deliver_mouse_wheel(View& root, Point root_pt, float scroll_delta_x, float scroll_delta_y,
-                         const WheelAttributes& attributes, const WheelHost& host);
 
 /// Deliver a press to an already-resolved `target` (the host has done the
 /// hit_test, any combo/overlay pre-routing, and the focus protocol before

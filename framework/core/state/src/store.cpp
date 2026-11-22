@@ -394,15 +394,7 @@ StateStore::~StateStore() {
     permanent_listener_tokens_.clear();
 }
 
-bool StateStore::add_parameter(const ParamInfo& info) {
-    if (const auto taken = id_to_index_.find(info.id); taken != id_to_index_.end()) {
-        ++duplicate_registrations_;
-        runtime::log_error(
-            "StateStore: parameter id {} is already registered as '{}'; ignoring the second "
-            "registration '{}'. Every parameter needs its own ID.",
-            info.id, params_[taken->second].name, info.name);
-        return false;
-    }
+void StateStore::add_parameter(const ParamInfo& info) {
     auto index = params_.size();
     // Clamp the declared default into [min, max] so the stored default is
     // consistent with set_value()/reset_to_default() (both clamp). Without this,
@@ -448,7 +440,6 @@ bool StateStore::add_parameter(const ParamInfo& info) {
     if (info.auto_resets()) {
         trigger_indices_.push_back(index);
     }
-    return true;
 }
 
 void StateStore::add_group(const ParamGroup& group) {
@@ -843,14 +834,14 @@ void StateStore::reset_all_to_defaults() {
     }
 }
 
-bool StateStore::reset_triggers_rt(std::span<float> captured_values) {
-    bool writing = false;
+bool StateStore::reset_triggers_rt() {
     bool any = false;
     for (auto index : trigger_indices_) {
-        // add_parameter refuses a repeated ID (see duplicate_registrations()), so
-        // every cached trigger index is the one live slot for its ID. The lookup
-        // below is purely defensive: it keeps a stale index from writing to a
-        // slot no reader resolves if that invariant is ever broken.
+        // Duplicate-ParamID contract: add_parameter keeps every registration in
+        // params_/values_ but id_to_index_ resolves an ID to its LATEST slot, so
+        // get_value/set_value only ever touch that slot. Skip a cached trigger
+        // index that a later same-ID registration has superseded — resetting a
+        // dead slot would be a hidden write to a value no reader sees.
         const auto live = id_to_index_.find(params_[index].id);
         if (live == id_to_index_.end() || live->second != index) continue;
         // Write straight to the lock-free atomic: RT-safe, no allocation, no
@@ -858,22 +849,17 @@ bool StateStore::reset_triggers_rt(std::span<float> captured_values) {
         // during the block; this returns the control to its resting default.
         const auto default_value = params_[index].range.default_value;
         if (values_[index].get() != default_value) {
-            if (!writing) {
+            if (!any) {
                 active_state_writers_.fetch_add(1, std::memory_order_acq_rel);
-                writing = true;
             }
             const auto generation = advance_state_generation();
-            if (values_[index].set_packed_revisioned(
-                    default_value, generation,
-                    active_state_writers_.load(std::memory_order_acquire) + 1)) {
-                if (index < captured_values.size())
-                    captured_values[index] = default_value;
-                any = true;
-            }
+            values_[index].set_packed_revisioned(
+                default_value, generation,
+                active_state_writers_.load(std::memory_order_acquire) + 1);
+            any = true;
         }
     }
-    if (writing)
-        active_state_writers_.fetch_sub(1, std::memory_order_release);
+    if (any) active_state_writers_.fetch_sub(1, std::memory_order_release);
     return any;
 }
 

@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
-#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -209,17 +208,10 @@ bool apply_replacement_metadata(int descriptor, const ReplacementMetadata& metad
     struct stat temporary_status{};
     if (::fstat(descriptor, &temporary_status) != 0)
         return false;
-#if !defined(__wasi__)
     if ((temporary_status.st_uid != metadata.status.st_uid ||
          temporary_status.st_gid != metadata.status.st_gid) &&
         ::fchown(descriptor, metadata.status.st_uid, metadata.status.st_gid) != 0)
         return false;
-#else
-    // WASI does not expose file ownership or fchown. The temporary file is
-    // created in the same virtual filesystem, so preserve the mode bits below
-    // and leave ownership at the runtime's default.
-    (void)temporary_status;
-#endif
     if (::fchmod(descriptor, metadata.status.st_mode & static_cast<mode_t>(07777)) != 0)
         return false;
 #if defined(__APPLE__)
@@ -312,26 +304,16 @@ bool descriptor_matches_path(int descriptor, const std::filesystem::path& path) 
 #endif
 }
 
-// Flushes that went through the drive cache; read by tests.
-std::atomic<std::uint64_t> g_full_sync_count{0};
-
-bool sync_descriptor(int descriptor, DurableFileDurability durability) noexcept {
+bool sync_descriptor(int descriptor) noexcept {
 #if defined(_WIN32)
-    if (durability == DurableFileDurability::full)
-        g_full_sync_count.fetch_add(1, std::memory_order_relaxed);
     return _commit(descriptor) == 0;
 #elif defined(__APPLE__) && defined(F_FULLFSYNC)
-    if (durability == DurableFileDurability::relaxed)
-        return ::fsync(descriptor) == 0;
-    g_full_sync_count.fetch_add(1, std::memory_order_relaxed);
     if (::fcntl(descriptor, F_FULLFSYNC) == 0)
         return true;
     if (errno != ENOTSUP)
         return false;
     return ::fsync(descriptor) == 0;
 #else
-    if (durability == DurableFileDurability::full)
-        g_full_sync_count.fetch_add(1, std::memory_order_relaxed);
     return ::fsync(descriptor) == 0;
 #endif
 }
@@ -418,10 +400,6 @@ struct DurableFileReplacement::Impl {
     bool fail_parent_directory_sync = false;
 };
 
-std::uint64_t DurableFileReplacementTestAccess::full_sync_count() noexcept {
-    return g_full_sync_count.load(std::memory_order_relaxed);
-}
-
 void DurableFileReplacementTestAccess::fail_parent_directory_sync(
     DurableFileReplacement& replacement) noexcept {
     if (replacement.impl_)
@@ -500,7 +478,7 @@ bool DurableFileReplacement::write_all(std::span<const std::uint8_t> bytes) noex
     return true;
 }
 
-DurableFileCommitOutcome DurableFileReplacement::commit(DurableFileDurability durability) noexcept {
+DurableFileCommitOutcome DurableFileReplacement::commit() noexcept {
     bool replaced = false;
     try {
         if (!valid())
@@ -508,7 +486,7 @@ DurableFileCommitOutcome DurableFileReplacement::commit(DurableFileDurability du
         if (!descriptor_matches_path(impl_->descriptor, impl_->temporary) ||
             !destination_matches_metadata(impl_->destination, impl_->metadata) ||
             !apply_replacement_metadata(impl_->descriptor, impl_->metadata) ||
-            !sync_descriptor(impl_->descriptor, durability)) {
+            !sync_descriptor(impl_->descriptor)) {
             cancel();
             return DurableFileCommitOutcome::NotReplaced;
         }
