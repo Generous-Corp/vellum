@@ -3722,9 +3722,9 @@ class RendererPinTests(unittest.TestCase):
         subprocess.run(git + ["commit", "-q", "-m", "transfer"], check=True)
         record = self.root / verify_extraction.FRAMEWORK_TRANSFER_RECORD
         record.parent.mkdir(parents=True, exist_ok=True)
-        record.write_text(json.dumps({"export_receipt": "provenance/mirror/receipts/legacy.json", "mirror_tree": new_tree}), encoding="utf-8")
+        record.write_text(json.dumps({"export_receipt": "provenance/mirror/receipts/legacy.json", "mirror_tree": old_tree}), encoding="utf-8")
         successor = self.root / "provenance/framework/transfer-successor.json"
-        successor.write_text(json.dumps({"export_receipt": newest}), encoding="utf-8")
+        successor.write_text(json.dumps({"export_receipt": newest, "mirror_tree": new_tree}), encoding="utf-8")
         errors, rows = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
         self.assertEqual(errors, [])
         self.assertEqual({row["receipt"]: row["matches_lock"] for row in rows}, {newest: True, older: None})
