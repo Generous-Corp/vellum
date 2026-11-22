@@ -168,6 +168,7 @@ defs[D.NodeChange] = { name: 'NodeChange', kind: 2, fields: [
   { name: 'stackVerticalPadding', type: T.FLOAT, isArray: false, value: 16 },
   { name: 'fontSize', type: T.FLOAT, isArray: false, value: 17 },
   { name: 'symbolData', type: D.SymbolData, isArray: false, value: 18 },
+  { name: 'stackWrap', type: T.STRING, isArray: false, value: 19 },
 ]};
 defs[D.Message] = { name: 'Message', kind: 2, fields: [
   { name: 'nodeChanges', type: D.NodeChange, isArray: true, value: 1 },
@@ -185,13 +186,14 @@ defs[D.SymbolData] = { name: 'SymbolData', kind: 2, fields: [
   { name: 'symbolOverrides', type: D.SymbolOverride, isArray: true, value: 2 },
 ]};
 
-function writeSchema(w) {
+function writeSchema(w, includeWrap) {
   w.varUint(defs.length);
   for (const def of defs) {
     w.string(def.name);
     w.byte(def.kind);
-    w.varUint(def.fields.length);
-    for (const f of def.fields) {
+    const fields = includeWrap ? def.fields : def.fields.filter(({ name }) => name !== 'stackWrap');
+    w.varUint(fields.length);
+    for (const f of fields) {
       w.string(f.name);
       w.varInt(f.type);
       w.byte(f.isArray ? 1 : 0);
@@ -273,6 +275,7 @@ function writeNode(w, n) {
     w.varUint(0); // end SymbolOverride
     w.varUint(0); // end SymbolData
   }
+  if (n.wrap) { w.varUint(19); w.string(n.wrap); }
   w.varUint(0); // end NodeChange
 }
 
@@ -349,7 +352,7 @@ const INSTANCE_NODES = [
 
 function buildCanvasFig(compression, nodes) {
   const schemaW = new Writer();
-  writeSchema(schemaW);
+  writeSchema(schemaW, nodes.some((node) => node.wrap));
   const msgW = new Writer();
   msgW.varUint(1); // Message.nodeChanges field id
   msgW.varUint(nodes.length);
@@ -430,9 +433,19 @@ function zip(entries) {
 }
 
 /** A tiny, format-faithful .fig. `compression` is 'deflate' (any Node) or 'zstd'. */
-export function makeSyntheticFig({ compression = 'deflate', instance = false, paddingBytes = 0 } = {}) {
+export function makeSyntheticFig({ compression = 'deflate', instance = false, paddingBytes = 0,
+  layoutMode } = {}) {
+  const nodes = NODES.map((node) => {
+    if (!layoutMode) return node;
+    if (node.l === 6) {
+      return { ...node, size: [64, 64], stack: layoutMode === 'grid' ? 'GRID' : 'HORIZONTAL',
+        wrap: layoutMode === 'wrap' ? 'WRAP' : undefined };
+    }
+    if (node.l === 9) return { ...node, at: [4, 40] };
+    return node;
+  });
   return zip([
-    ['canvas.fig', buildCanvasFig(compression, instance ? [...NODES, ...INSTANCE_NODES] : NODES)],
+    ['canvas.fig', buildCanvasFig(compression, instance ? [...nodes, ...INSTANCE_NODES] : nodes)],
     ['meta.json', Buffer.from(JSON.stringify({ file_name: 'Synthetic Fixture' }))],
     [`images/${IMAGE_HASH}`, PNG_1x1],
     ...(paddingBytes ? [['padding', Buffer.alloc(paddingBytes)]] : []),
