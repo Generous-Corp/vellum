@@ -404,11 +404,8 @@ if(VELLUM_RMLUI_INSTALL)
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         COMPONENT VellumRmlUi
         ${_vellum_rmlui_native_header_excludes})
-    if(TARGET vellum-rmlui-plugin-view)
-        install(FILES plugin_view/include/vellum/rmlui/plugin_view.hpp
-            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/vellum/rmlui
-            COMPONENT VellumRmlUi)
-    endif()
+    # plugin_view.hpp stays in-tree: it includes vellum/view headers, which the
+    # SDK payload scan refuses outside the mirror scope.
     install(FILES assets/midi-learn.rcss assets/midi-panic.rcss
         DESTINATION ${CMAKE_INSTALL_DATADIR}/VellumRmlUi
         COMPONENT VellumRmlUi)
