@@ -3533,10 +3533,13 @@ class RendererPinTests(unittest.TestCase):
         (self.root / "provenance/mirror/receipts").mkdir(parents=True)
         lock = json.loads((MODULE_PATH.parents[2] / "provenance/third-party-lock.json").read_text())
         (self.root / "provenance/third-party-lock.json").write_text(json.dumps(lock))
+        (self.root / "gpu-runtime").mkdir()
+        (self.root / "gpu-runtime/renderer-lock.json").write_bytes(
+            (MODULE_PATH.parents[2] / "gpu-runtime/renderer-lock.json").read_bytes())
         renderer = lock["runtime_toolchain_dependencies"]["renderer"]
         artifact, identities = renderer["artifact"], renderer["source_identities"]
         self.matching_pin = {
-            "skia_branch": artifact["release_tag"],
+            "skia_branch": identities["skia"]["ref"].removeprefix("refs/heads/"),
             "skia_commit": identities["skia"]["commit"],
             "built_dawn": identities["dawn"]["commit"],
             "skia_builder_ref": identities["builder"]["commit"],
@@ -3567,6 +3570,22 @@ class RendererPinTests(unittest.TestCase):
         errors, rows = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
         self.assertEqual(errors, [])
         self.assertTrue(rows[0]["matches_lock"])
+
+    def test_reexported_receipt_with_recorded_builder_change_passes(self) -> None:
+        pin = json.loads(json.dumps(self.matching_pin))
+        pin["skia_builder_ref"] = "312f05e24a5d5a45d4a3e70ca70ff3ccff1b4d97"
+        receipt = self.receipt(self.pulp_commit(pin))
+        errors, rows = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
+        self.assertEqual(errors, [])
+        self.assertTrue(rows[0]["matches_lock"])
+
+    def test_an_unrecorded_builder_change_is_refused(self) -> None:
+        pin = json.loads(json.dumps(self.matching_pin))
+        pin["skia_builder_ref"] = "9" * 40
+        receipt = self.receipt(self.pulp_commit(pin))
+        errors, rows = verify_extraction.renderer_pin_errors(self.root, self.pulp, [receipt])
+        self.assertFalse(rows[0]["matches_lock"])
+        self.assertIn("skia_builder_ref", errors[0])
 
     def test_export_against_another_milestone_fails(self) -> None:
         # The case this check exists for: an export from a Pulp commit that
@@ -3632,6 +3651,11 @@ class RendererPinTests(unittest.TestCase):
         errors, rows = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
         self.assertEqual(errors, [])
         self.assertEqual({row["receipt"]: row["matches_lock"] for row in rows}, {newest: True, older: None})
+        self.landed("newest", self.pulp_commit(self.other_milestone()), new_tree)
+        errors, rows = verify_extraction.mirror_renderer_pin_check(self.root, self.pulp, [older, newest])
+        self.assertEqual(len(errors), 1)
+        self.assertIn("skia_branch", errors[0])
+        self.assertEqual({row["receipt"]: row["matches_lock"] for row in rows}, {newest: False, older: None})
 
     def test_current_receipt_must_match_the_lock(self) -> None:
         old_tree = self.commit_mirror(b"old\n")

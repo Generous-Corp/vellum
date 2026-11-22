@@ -63,6 +63,7 @@ MIRROR_ROOT = "mirror/"
 # own content regime (verify_framework below).
 FRAMEWORK_ROOT = "framework/"
 FRAMEWORK_TRANSFER_RECORD = "provenance/framework/transfer.json"
+FRAMEWORK_TRANSFER_SUCCESSOR = "provenance/framework/transfer-successor.json"
 # framework/external/ is third-party source: the census and the name-debt
 # ratchet skip it, so its bytes are pinned instead. A file there must hold its
 # transfer-record blob, or the to_blob of the last entry for it in this
@@ -973,7 +974,13 @@ def current_mirror_receipts(
             transfer = json.loads((root / FRAMEWORK_TRANSFER_RECORD).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return [], [], ["HEAD has no mirror/ tree to name the current export receipt"]
-        named = transfer.get("export_receipt") if isinstance(transfer, dict) else None
+        successor_path = root / FRAMEWORK_TRANSFER_SUCCESSOR
+        try:
+            successor = json.loads(successor_path.read_text(encoding="utf-8")) if successor_path.is_file() else None
+        except (OSError, ValueError):
+            successor = None
+        named = (successor.get("export_receipt") if isinstance(successor, dict)
+                 else transfer.get("export_receipt") if isinstance(transfer, dict) else None)
         if named not in receipts:
             return [], receipts, [f"{FRAMEWORK_TRANSFER_RECORD} names {named!r}, which is not a landed receipt"]
         head_tree = transfer.get("mirror_tree")
@@ -1006,11 +1013,12 @@ def renderer_pin_errors(
     exported under; it keeps its identity, origin and blob checks.
     """
     lock = json.loads((root / "provenance/third-party-lock.json").read_text(encoding="utf-8"))
+    renderer_lock = json.loads((root / "gpu-runtime/renderer-lock.json").read_text(encoding="utf-8"))
     renderer = lock["runtime_toolchain_dependencies"]["renderer"]
     artifact = renderer["artifact"]
     identities = renderer["source_identities"]
     expected = {
-        "skia_branch": artifact["release_tag"],
+        "skia_branch": renderer_lock["milestone"],
         "skia_commit": identities["skia"]["commit"],
         "built_dawn": identities["dawn"]["commit"],
         "skia_builder_ref": identities["builder"]["commit"],
@@ -1039,6 +1047,13 @@ def renderer_pin_errors(
         actual = {key: pin.get(key) for key in ("skia_branch", "skia_commit", "built_dawn", "skia_builder_ref")}
         actual.update(archive_url=asset.get("url"), archive_sha256=asset.get("sha256"))
         mismatched = sorted(key for key in expected if actual[key] != expected[key])
+        exception = renderer_lock.get("builder_change_exception")
+        if "skia_builder_ref" in mismatched and isinstance(exception, dict):
+            if (actual["skia_builder_ref"] == exception.get("from")
+                    and expected["skia_builder_ref"] == exception.get("to")
+                    and expected["skia_commit"] == exception.get("skia")
+                    and expected["built_dawn"] == exception.get("dawn")):
+                mismatched.remove("skia_builder_ref")
         rows.append({"receipt": receipt_path, "pulp_sha": pulp_sha, "matches_lock": not mismatched})
         if mismatched:
             errors.append(
