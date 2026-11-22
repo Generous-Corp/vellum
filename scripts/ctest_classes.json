@@ -25,6 +25,7 @@
       "vellum.dawn-bootstrap-source-audit",
       "vellum.dawn-provider-bootstrap",
       "vellum.dawn-provider-topology",
+      "vellum.design-emitter-conformance",
       "vellum.design-pipeline",
       "vellum.downstream-consumer-registry",
       "vellum.downstream-consumer-registry-unit",
