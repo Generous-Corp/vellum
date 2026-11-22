@@ -242,6 +242,16 @@ void check_command_mapping(vellum::graphics::SkiaDawnSurface& surface) {
     cached.submit(raw_as_image);
     cached.end_frame();
     VELLUM_RMLUI_CHECK(cached.skipped_draws() == 1);
+    // A texture whose bytes RmlUi has released is evicted at the next frame.
+    auto released = cached_image;
+    released.texture_bytes = std::make_shared<const std::string>("replaced");
+    cached.begin_frame(width, height);
+    cached.submit(released);
+    cached.end_frame();
+    const auto before_release = cached.cached_texture_count();
+    released = {};
+    cached.begin_frame(width, height);
+    VELLUM_RMLUI_CHECK(cached.cached_texture_count() == before_release - 1);
     cached.on_close();
     VELLUM_RMLUI_CHECK(cached.cached_texture_count() == 0);
 }

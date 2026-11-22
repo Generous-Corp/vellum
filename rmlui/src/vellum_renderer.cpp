@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <string>
 #include <utility>
 
@@ -100,6 +101,10 @@ void VellumRenderer::begin_frame(std::uint32_t width, std::uint32_t height) {
     frame_ok_ = false;
     error_.clear();
     collect_expired_textures();
+    // A texture whose source bytes only this cache still holds has been
+    // released by RmlUi; drop it so replaced resources do not accumulate.
+    for (auto it = textures_.begin(); it != textures_.end();)
+        it = it->second.source.use_count() == 1 ? textures_.erase(it) : std::next(it);
     scene_ = {};
     scene_.width = static_cast<float>(width);
     scene_.height = static_cast<float>(height);

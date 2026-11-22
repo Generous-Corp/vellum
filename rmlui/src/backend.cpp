@@ -683,7 +683,8 @@ bool Backend::needs_render() const noexcept {
         return false;
     if (content_changed_.load(std::memory_order_acquire))
         return true;
-    return runtime_->context->GetNextUpdateDelay() != std::numeric_limits<double>::infinity();
+    // A finite positive delay is a future deadline (a caret blink), not work now.
+    return runtime_->context->GetNextUpdateDelay() <= 0.0;
 }
 
 void Backend::render() {
