@@ -25,7 +25,6 @@
       "vellum.dawn-bootstrap-source-audit",
       "vellum.dawn-provider-bootstrap",
       "vellum.dawn-provider-topology",
-      "vellum.design-emitter-conformance",
       "vellum.design-pipeline",
       "vellum.downstream-consumer-registry",
       "vellum.downstream-consumer-registry-unit",
@@ -251,6 +250,7 @@
     ],
     "slow": [
       "gpu-runtime.install-consumer",
+      "vellum.design-emitter-conformance",
       "vellum.framework.threejs-modules",
       "vellum.framework.v8-engine",
       "vellum.install-consumer-nested-libdir",
@@ -265,5 +265,5 @@
       "vellum.web.text-ime-accessibility"
     ]
   },
-  "note": "slow also covers tests that need an input only the GPU lane provides: vellum.mirror-install-consumer needs VELLUM_VIEW_AUDIO_ARCHIVE, fetched from a Pulp release by tools/mirror/fetch_view_audio_archive.py; vellum.framework.threejs-modules needs V8, which only the GPU lane configures."
+  "note": "slow also covers tests that need an input only the GPU lane provides: vellum.mirror-install-consumer and vellum.design-emitter-conformance need VELLUM_VIEW_AUDIO_ARCHIVE, fetched from a Pulp release by tools/mirror/fetch_view_audio_archive.py; vellum.framework.threejs-modules needs V8, which only the GPU lane configures."
 }
