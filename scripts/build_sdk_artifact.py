@@ -524,10 +524,10 @@ def canonicalize_macho_temp_root(path: Path) -> None:
 
 
 def normalize_macho_executable(path: Path, commit: str, target: str) -> None:
-    """Give the installed host a deterministic launchable UUID and ad-hoc signature."""
+    """Give an installed executable a deterministic UUID and ad-hoc signature."""
 
     identity = bytearray(hashlib.sha256(
-        f"vellum-app-host\0{commit}\0{target}".encode("utf-8")
+        f"{path.name}\0{commit}\0{target}".encode("utf-8")
     ).digest()[:16])
     identity[6] = (identity[6] & 0x0F) | 0x50
     identity[8] = (identity[8] & 0x3F) | 0x80
@@ -538,7 +538,7 @@ def normalize_macho_executable(path: Path, commit: str, target: str) -> None:
     canonicalize_macho_temp_root(path)
     run([
         codesign, "--force", "--sign", "-", "--identifier",
-        "org.generous.vellum.app-host", str(path),
+        f"org.generous.vellum.{path.name.removeprefix('vellum-')}", str(path),
     ])
     run([codesign, "--verify", "--strict", str(path)])
 
@@ -850,7 +850,8 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             normalize_static_archive(archive)
         if skia_archive and target == "darwin-arm64":
             normalize_macho_dylibs(install_tree, commit, target)
-            normalize_macho_executable(install_tree / "bin/vellum-app-host", commit, target)
+            for name in ("vellum-app-host", "vellum-source-adapter"):
+                normalize_macho_executable(install_tree / "bin" / name, commit, target)
         if skia_archive:
             images = installed_runtime_images(install_tree, required=True)
             if not (

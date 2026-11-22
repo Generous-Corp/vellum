@@ -256,9 +256,13 @@ bool NativeParentHost::attach(const NativeParent& parent) {
                 userInfo:nil]];
     }
     if (impl_->view.superview != p) { [impl_->view removeFromSuperview]; [p addSubview:impl_->view]; }
+    impl_->backend.on_attach();
     return true;
 }
-void NativeParentHost::detach() { [impl_->view removeFromSuperview]; }
+void NativeParentHost::detach() {
+    impl_->backend.on_detach();
+    [impl_->view removeFromSuperview];
+}
 void NativeParentHost::invalidate() {
     if (!impl_) return;
     detach();
@@ -284,11 +288,17 @@ bool NativeParentHost::set_size(const NativeHostSize& s) {
     return true;
 }
 void NativeParentHost::idle() {
+    impl_->backend.on_idle();
     if (!impl_->backend.is_open() || !impl_->visible) return;
+    if (!impl_->backend.needs_render()) return;
     impl_->backend.render();
     if (soft_) impl_->present(*soft_, size_.scale);
 }
-void NativeParentHost::visibility_changed(bool visible) { impl_->visible = visible; if (impl_->view) impl_->view.hidden = !visible; }
+void NativeParentHost::visibility_changed(bool visible) {
+    impl_->visible = visible;
+    impl_->backend.on_visibility_changed(visible);
+    if (impl_->view) impl_->view.hidden = !visible;
+}
 void NativeParentHost::focus_changed(bool focused) { impl_->focused = focused; }
 Status NativeParentHost::process_mouse_move(int x, int y, int modifiers) { return impl_->backend.process_mouse_move(x, y, modifiers); }
 Status NativeParentHost::process_mouse_button_down(int button, int modifiers) { return impl_->backend.process_mouse_button_down(button, modifiers); }

@@ -1352,11 +1352,18 @@ def illustrator_command(args: argparse.Namespace) -> dict[str, Any]:
     from vellum_illustrator import ConversionError, convert
 
     try:
+        page = int(args.page) if args.page is not None else 1
+    except ValueError as error:
+        raise CliFailure(
+            "Illustrator --page must be an integer.",
+            status="invalid_arguments", exit_code=EXIT_USAGE,
+        ) from error
+    try:
         receipt = convert(
             Path(args.illustrator_input),
             Path(args.output) if args.output else None,
             Path(args.provenance) if args.provenance else None,
-            page=args.page,
+            page=page,
             timeout=args.timeout,
         )
     except ConversionError as error:
@@ -1378,7 +1385,7 @@ def illustrator_command(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def invoke_backend(
-    command: str, root: Path, lock: dict[str, Any], forwarded: list[str]
+    command: str, root: Path | None, lock: dict[str, Any], forwarded: list[str]
 ) -> tuple[dict[str, Any], int]:
     backend = locate_backend()
     if backend is None:
@@ -1394,7 +1401,7 @@ def invoke_backend(
         )
     invocation = [
         str(backend), command,
-        "--project", str(root),
+        *(["--project", str(root)] if root is not None else []),
         "--json",
         "--framework-version", lock["framework"]["version"],
         "--cli-api", str(CLI_API_VERSION),
@@ -1519,13 +1526,14 @@ def parser() -> argparse.ArgumentParser:
     backend_specs = {
         "import": [
             ("source", {"nargs": "+"}),
-            ("--source-type", {"choices": ["fig", "figma", "design-ir", "html", "claude-design"], "default": "figma"}),
+            ("--source-type", {"choices": ["fig", "figma", "design-ir", "html", "claude-design", "pencil", "designmd"], "default": "figma"}),
             ("--as", {"dest": "source_key", "default": "main"}),
             ("--interaction-plan", {}),
-            ("--frame", {"help": "select a local Figma frame by GUID"}),
+            ("--frame", {"help": "select a local Figma frame by GUID or name"}),
+            ("--outline", {"action": "store_true", "help": "list pages and frames in a local .fig file"}),
             ("--out", {"dest": "output", "metavar": "SVG"}),
             ("--provenance", {}),
-            ("--page", {"type": int, "default": 1}),
+            ("--page", {"help": "Figma page name for frame lookup, or Illustrator page number"}),
             ("--timeout", {"type": int, "default": 60}),
         ],
         "reimport": [
@@ -1562,7 +1570,7 @@ def parser() -> argparse.ArgumentParser:
 def forwarded_arguments(args: argparse.Namespace) -> list[str]:
     ignored = {"json", "command", "project"}
     if args.command == "import":
-        ignored.update({"output", "provenance", "page", "timeout", "illustrator_input"})
+        ignored.update({"output", "provenance", "timeout", "illustrator_input"})
     forwarded: list[str] = []
     for key, value in vars(args).items():
         if key in ignored or value is None or value is False:
@@ -1589,21 +1597,37 @@ def main(argv: Iterable[str] | None = None) -> int:
         if args.command == "import" and isinstance(args.source, list):
             if len(args.source) == 2 and args.source[0] == "illustrator":
                 args.source, args.illustrator_input = args.source
+            elif len(args.source) == 2 and args.source[0] in {"pencil", "designmd"}:
+                args.source_type, args.source = args.source
             elif len(args.source) == 1:
                 args.source = args.source[0]
             else:
                 raise CliFailure(
-                    "import accepts one source path, or 'illustrator INPUT'.",
+                    "import accepts one source path, or 'illustrator INPUT', 'pencil FILE', or 'designmd FILE'.",
                     status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
-        if args.command == "import" and args.frame is not None:
+        if args.command == "import":
+            is_illustrator = args.source == "illustrator" and (
+                hasattr(args, "illustrator_input") or args.source_type not in {"pencil", "designmd"}
+            )
             is_fig = args.source_type == "fig" or (
                 args.source_type == "figma" and Path(args.source).suffix.lower() == ".fig"
             )
-            if args.source == "illustrator" or not is_fig:
+            if args.frame is not None and (is_illustrator or not is_fig):
                 raise CliFailure(
                     "--frame requires a local Figma .fig source.",
                     status="invalid_fig_frame", exit_code=EXIT_USAGE,
+                )
+            if args.outline and (not is_fig or is_illustrator or
+                                 args.frame is not None or args.page is not None):
+                raise CliFailure(
+                    "--outline requires a local Figma .fig source and takes no frame or page selector.",
+                    status="invalid_fig_outline", exit_code=EXIT_USAGE,
+                )
+            if args.page is not None and not is_illustrator and (not is_fig or args.frame is None):
+                raise CliFailure(
+                    "--page requires a local Figma .fig frame selector or an Illustrator input.",
+                    status="invalid_arguments", exit_code=EXIT_USAGE,
                 )
         if args.command == "create":
             payload = create_project(args)
@@ -1642,8 +1666,23 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = design_command(args)
         elif args.command == "compare":
             payload = compare_command(args)
-        elif args.command == "import" and args.source == "illustrator":
+        elif args.command == "import" and is_illustrator:
             payload = illustrator_command(args)
+        elif args.command == "import" and args.outline:
+            sdk = load_sdk_metadata()
+            if args.project:
+                root, lock = load_project(args.project)
+                validate_project_sdk(lock, sdk)
+            else:
+                root = None
+                lock = {"framework": {"version": sdk[1]["framework_version"] if sdk else FRAMEWORK_VERSION}}
+            backend, return_code = invoke_backend("import", root, lock, forwarded_arguments(args))
+            payload = result(
+                "import", ok=return_code == 0 and bool(backend.get("ok")),
+                status=str(backend.get("status", "backend_failed")),
+                message=str(backend.get("message", "Backend completed import outline.")),
+                data=backend.get("data"), diagnostics=backend.get("diagnostics"),
+            )
         else:
             if args.command == "import" and not args.source:
                 raise CliFailure(

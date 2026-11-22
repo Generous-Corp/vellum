@@ -434,8 +434,9 @@ function zip(entries) {
 
 /** A tiny, format-faithful .fig. `compression` is 'deflate' (any Node) or 'zstd'. */
 export function makeSyntheticFig({ compression = 'deflate', instance = false, paddingBytes = 0,
-  layoutMode } = {}) {
+  duplicateFrameName = false, layoutMode } = {}) {
   const nodes = NODES.map((node) => {
+    if (duplicateFrameName && node.l === 2) return { ...node, name: 'Paint Lab', parent: [0, 5] };
     if (!layoutMode) return node;
     if (node.l === 6) {
       return { ...node, size: [64, 64], stack: layoutMode === 'grid' ? 'GRID' : 'HORIZONTAL',

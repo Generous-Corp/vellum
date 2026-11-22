@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-f9d6a68bffa21eb9e4329b27816f7b9db1fcd908",
+  "kind": "resolution",
+  "created_at": "2026-11-22T15:02:08Z",
+  "resolves": "vellum-f9d6a68bffa21eb9e4329b27816f7b9db1fcd908",
+  "disposition": "framework-only",
+  "rationale": "Vellum provider link fix: links VellumGpuRuntime::DeviceProvider into vellum-skia-dawn-provider as a whole archive and stops gpu-runtime-skia-log-bridge linking Device publicly (it keeps the include path). Pulp's core/render links VellumGpuRuntime::Device PUBLIC and SkiaLogBridge PRIVATE itself, so the dropped transitive link changes nothing for Pulp. Pulp search at origin/main a4921f08e632 (git grep -F over core tools test examples apple ship inspect packages CMakeLists.txt cmake) for VellumGpuRuntime::DeviceProvider and gpu-runtime-device-provider returns 0; control VellumGpuRuntime returns 57 in 18 files. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "f9d6a68bffa21eb9e4329b27816f7b9db1fcd908"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}

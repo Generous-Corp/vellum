@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "event_id": "resolution-vellum-5f4660d358badd2ec5d5e58311edede59164d0f6",
+  "kind": "resolution",
+  "created_at": "2026-11-22T15:02:08Z",
+  "resolves": "vellum-5f4660d358badd2ec5d5e58311edede59164d0f6",
+  "disposition": "framework-only",
+  "rationale": "Vellum SkiaDawnSurface draw_rectangle now strokes a CSS border half a width inside the box, and keeps bordered rectangles out of the solid-rectangle batch. Pulp already draws borders inside the border box: core/view/src/view_paint.cpp View::paint_border (origin/main a4921f08e632) strokes at half-width inset (stroke_rect/stroke_rounded_rect at (half, half, w - bw, h - bw)) and documents that rule, and Pulp has no rectangle batch. Pulp search at origin/main a4921f08e632 (git grep -w over core tools test examples apple ship inspect packages) for draw_rectangle, batchable_rectangle and PaintCommand returns 0; control SkiaSurface on the same search returns 288 in 64 files. Nothing to port. Agent classification under the owner's delegation of Vellum-side calls (DECISIONS 2026-11-09, 'Classify the pending Vellum observatory events instead of raising the budget'); no schema or API delta recorded on the event. Any later resolution overrides this.",
+  "owner": "@danielraffel",
+  "linked_commits": [
+    "5f4660d358badd2ec5d5e58311edede59164d0f6"
+  ],
+  "linked_pull_requests": [],
+  "contract_tests": [
+    "vellum.gpu-native",
+    "vellum.install-consumer"
+  ],
+  "shared_contract_release_blocker": false,
+  "effort_minutes": 5
+}
