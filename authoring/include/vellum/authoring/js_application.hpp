@@ -115,6 +115,8 @@ struct JsApplicationOptions final {
     /// clock, which moves only when the host pumps it, so script-visible time
     /// is a function of the pump calls alone.
     bool manual_clock = false;
+    /// Decoded content-addressed images available to every rendered scene.
+    std::vector<std::shared_ptr<const vellum::graphics::ImageAsset>> images;
 };
 
 /// Executes a bundled Vellum JavaScript/TypeScript application through the

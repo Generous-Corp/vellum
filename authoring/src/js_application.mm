@@ -73,6 +73,7 @@ public:
             set_error(error, "JavaScript bundle is not valid UTF-8");
             return false;
         }
+        images_ = options.images;
         context_ = [[JSContext alloc] init];
         context_[@"setTimeout"] = ^NSNumber*(JSValue* callback, double delay) {
             return @(schedule_timer(callback, delay));
@@ -294,7 +295,7 @@ public:
             set_error(error, "command result does not record its handler running");
             return false;
         }
-        if (!materialize_rendered_tree(cpp_string(result), output, error)) return false;
+        if (!materialize(cpp_string(result), output, error)) return false;
         changed = [changed_value boolValue];
         return true;
     }
@@ -544,9 +545,16 @@ private:
                    RenderedApplication& output, std::string* error) {
         NSString* result = call_string(method, arguments, error);
         return result != nil &&
-            materialize_rendered_tree(cpp_string(result), output, error);
+            materialize(cpp_string(result), output, error);
     }
 
+    bool materialize(std::string_view json, RenderedApplication& output, std::string* error) {
+        if (!materialize_rendered_tree(json, output, error)) return false;
+        output.scene.images = images_;
+        return true;
+    }
+
+    std::vector<std::shared_ptr<const vellum::graphics::ImageAsset>> images_;
     __strong JSContext* context_ = nil;
     std::vector<Timer> timers_;
     std::uint64_t clock_milliseconds_ = 0;
