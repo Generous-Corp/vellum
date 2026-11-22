@@ -74,6 +74,44 @@ TEMPLATE_TOKENS = {
 TEMPLATE_TOKEN_RE = re.compile(r"{{([A-Z][A-Z0-9_]*)}}")
 
 
+def rmlui_renderer_catalog() -> dict[str, Any]:
+    catalog_path = Path(__file__).resolve().parent.parent / "rmlui" / "renderers.json"
+    try:
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise CliFailure(
+            f"Could not read the RmlUi renderer catalog: {error}",
+            status="renderer_catalog_unavailable", exit_code=EXIT_UNAVAILABLE,
+        ) from error
+    if not isinstance(catalog, dict) or not isinstance(catalog.get("renderers"), list):
+        raise CliFailure(
+            "The RmlUi renderer catalog is invalid.",
+            status="renderer_catalog_invalid", exit_code=EXIT_PROJECT,
+        )
+    return catalog
+
+
+def rmlui_renderers_command() -> dict[str, Any]:
+    catalog = rmlui_renderer_catalog()
+    rows = catalog["renderers"]
+    lines = ["ID       KIND         API              PLATFORMS                 STATUS"]
+    lines.append("-" * len(lines[0]))
+    for renderer in rows:
+        statuses = ", ".join(
+            f"{platform}:{status}" for platform, status in renderer["status"].items()
+        )
+        lines.append(
+            f"{renderer['id']:<8} {renderer['kind']:<12} {renderer['graphics_api']:<16} "
+            f"{', '.join(renderer['platforms']):<25} {statuses}"
+        )
+    lines.append(f"Community: {catalog['community']['url']}")
+    lines.append(catalog["community"]["note"])
+    return result(
+        "rmlui.renderers", ok=True, status="ok", message="\n".join(lines),
+        data=catalog,
+    )
+
+
 class CliFailure(RuntimeError):
     def __init__(self, message: str, *, status: str, exit_code: int, diagnostics: list[dict[str, Any]] | None = None):
         super().__init__(message)
@@ -1424,6 +1462,10 @@ def parser() -> argparse.ArgumentParser:
         help="fail unless the installed SDK provides the complete requested application lane",
     )
 
+    rmlui = commands.add_parser("rmlui", help="inspect the RmlUi integration")
+    rmlui_actions = rmlui.add_subparsers(dest="rmlui_command", required=True)
+    rmlui_actions.add_parser("renderers", help="list supported RmlUi renderers")
+
     dev = commands.add_parser("dev", help="watch portable app sources and reload a native or web app")
     dev.add_argument("--project")
     dev.add_argument("--target", choices=["macos", "web"], default="macos")
@@ -1567,6 +1609,8 @@ def main(argv: Iterable[str] | None = None) -> int:
             payload = create_project(args)
         elif args.command == "doctor":
             payload = doctor(args)
+        elif args.command == "rmlui":
+            payload = rmlui_renderers_command()
         elif args.command == "dev":
             if args.poll_interval <= 0 or args.debounce < 0:
                 raise CliFailure(
