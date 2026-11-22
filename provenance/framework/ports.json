@@ -917,16 +917,6 @@
       "reason": "The macOS plug-in view host: a per-image Metal view that renders the View tree with Skia on Dawn into its CAMetalLayer and routes mouse, wheel, key and focus input. Written for Vellum on its own Metal view, not taken from Pulp's plugin_view_host_mac sources."
     },
     {
-      "framework_path": "framework/core/view/platform/linux/gpu_plugin_editor_host_x11.cpp",
-      "change": "added",
-      "target": "pulp-view-core",
-      "origin": "native",
-      "pulp_path": null,
-      "pulp_commits": [],
-      "framework_blob": null,
-      "reason": "The Linux X11 plug-in editor host: a reparented child window that renders the View tree with Skia Graphite on Dawn/Vulkan. Written for Vellum, not taken from Pulp plugin-view-host sources."
-    },
-    {
       "framework_path": "framework/core/view/js/web-compat.js",
       "change": "added",
       "target": null,
@@ -965,6 +955,16 @@
       "pulp_commits": [],
       "framework_blob": null,
       "reason": "Pulp's Three.js web-compat shim, with its print markers renamed from PULP_THREE_SHIM / PULP_THREEJS to VELLUM_THREE_SHIM / VELLUM_THREEJS to match Vellum's smoke tests. The bytes are Pulp's file put through the transfer rename plus those markers."
+    },
+    {
+      "framework_path": "framework/core/view/platform/linux/gpu_plugin_editor_host_x11.cpp",
+      "change": "added",
+      "target": "pulp-view-core",
+      "origin": "native",
+      "pulp_path": null,
+      "pulp_commits": [],
+      "framework_blob": null,
+      "reason": "The Linux X11 plug-in editor host: a reparented child window that renders the View tree with Skia Graphite on Dawn/Vulkan. Written for Vellum, not taken from Pulp plugin-view-host sources."
     }
   ]
 }
