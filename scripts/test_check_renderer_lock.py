@@ -53,10 +53,32 @@ class RendererLockDriftTest(unittest.TestCase):
         self.assertEqual(drift.check(self.root), [])
 
     def test_bumping_the_lock_alone_is_drift(self) -> None:
-        self.edit_json(drift.LOCK, lambda lock: lock.update(milestone="chrome/m159"))
+        self.edit_json(drift.LOCK, lambda lock: lock.update(milestone="chrome/m159", release_tag="chrome/m159-attested.1"))
+        self.assert_drift("third-party-lock.json: skia source ref is not refs/heads/chrome/m159")
         self.assert_drift("third-party-lock.json: renderer artifact release_tag")
         self.assert_drift("renderer-attestation.json: artifact release_tag")
         self.assert_drift("README.md: names chrome/m158")
+
+    def test_release_tag_is_required_and_propagated(self) -> None:
+        self.edit_json(drift.LOCK, lambda lock: lock.update(release_tag="chrome/m158"))
+        self.assert_drift("release_tag is not an immutable chrome/mNNN-attested.N tag")
+
+    def test_release_tag_of_another_milestone_is_drift(self) -> None:
+        self.edit_json(drift.LOCK, lambda lock: lock.update(release_tag="chrome/m157-attested.1"))
+        self.assert_drift("is not a tag of milestone")
+
+    def test_an_unrecorded_builder_change_is_refused(self) -> None:
+        self.edit_json(drift.LOCK, lambda lock: lock["builder"].update(commit="2" * 40))
+        self.assert_drift("builder commit is not the recorded attested exception target")
+
+    def test_the_recorded_builder_exception_binds_skia_and_dawn(self) -> None:
+        self.edit_json(drift.LOCK, lambda lock: lock["builder_change_exception"].update(skia="3" * 40))
+        self.assert_drift("builder change is not the recorded attested exception")
+
+    def test_stale_builder_run_evidence_is_drift(self) -> None:
+        self.edit_json(drift.RECORDS[0], lambda data: data["runtime_toolchain_dependencies"]["renderer"]
+                       ["source_identities"]["builder"].update(evidence="run 40626447857, attempt 1"))
+        self.assert_drift("builder evidence does not name attestation run")
 
     def test_one_changed_archive_digest_is_drift(self) -> None:
         self.edit_json(drift.LOCK, lambda lock: lock["platforms"][drift.PLATFORM]["archives"]

@@ -1,11 +1,11 @@
 {
   "schema": "vellum.pulp-view-audio-archive.v1",
   "pulp_repository": "Generous-Corp/pulp",
-  "source_sha": "f0ac0a4ff3927c50edf0e4e8a1c6ed1e8dd8e1e2",
-  "export_receipt": "provenance/mirror/receipts/20261107-f0ac0a4ff392.json",
-  "release_tag": "artifact/pulp-view-audio/f0ac0a4ff3927c50edf0e4e8a1c6ed1e8dd8e1e2",
+  "source_sha": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+  "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json",
+  "release_tag": "artifact/pulp-view-audio/f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
   "workflow_run_id": 42398882150,
-  "workflow_sha": "f0ac0a4ff3927c50edf0e4e8a1c6ed1e8dd8e1e2",
+  "workflow_sha": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
   "archive": {
     "name": "libpulp-view-audio.a",
     "sha256": "101cd665761c9c6e7081c24dd13688a40ab4ce23be104961282286b9198882d3",

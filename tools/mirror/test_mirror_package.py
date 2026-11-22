@@ -1403,6 +1403,27 @@ class FrameworkPortsPlanTest(unittest.TestCase):
         self.assertIn(self.planned(self.OLD), self.sources(plan))
         self.assertEqual(plan["framework_native_edits"], [])
 
+    def test_a_transferred_closure_cannot_record_its_own_historical_skia_asset(self) -> None:
+        for dependency in self.fixture.closure["external_inputs"]:
+            dependency["asset_sha256"] = "0" * 64
+        self.fixture.closure["targets"][0]["external_link_inputs"][0]["asset_sha256"] = "0" * 64
+        self.fixture.write_receipt()
+        self.assertRefused("closure was exported against skia archive")
+
+    def test_the_recorded_historical_skia_asset_passes(self) -> None:
+        historical = "dca73c0eee5b0f6d129fe357d0754f7165c6b436051e0de947aeedd3e1bde250"
+        self.fixture.skia_asset = historical
+        for dependency in self.fixture.closure["external_inputs"]:
+            dependency["asset_sha256"] = historical
+        self.fixture.closure["targets"][0]["external_link_inputs"][0]["asset_sha256"] = historical
+        lock = self.fixture.repo / "gpu-runtime/renderer-lock.json"
+        lock.parent.mkdir(parents=True)
+        lock.write_text(json.dumps({"historical_skia_assets": [historical]}), encoding="utf-8")
+        self.fixture.write_receipt()
+        with mock.patch.object(mp, "recorded_historical_skia_assets", wraps=mp.recorded_historical_skia_assets) as recorded:
+            self.fixture.plan()
+        recorded.assert_called_once_with(self.fixture.repo.resolve())
+
     def test_an_unrecorded_file_is_refused_until_a_ledger_row_adds_it(self) -> None:
         self.fixture.write(self.NEW, b"int ported() { return 2; }\n")
         self.assertRefused("does not list")
@@ -2523,6 +2544,13 @@ class DependencyPreparationRefusalTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(mp.PlanError, f"exported against skia archive {'c' * 64}, but Vellum locks {'d' * 64}"):
                 mp.prepare_dependencies({"skia": entry}, Path(tmp), Path(tmp), "d" * 64)
+
+    def test_transferred_framework_may_use_a_recorded_historical_skia_asset(self) -> None:
+        entry = {"pin": "a" * 40, "source": "s", "asset_sha256": "c" * 64, "root": "a" * 40, "files": {}}
+        with tempfile.TemporaryDirectory() as tmp:
+            roots = mp.prepare_dependencies({"skia": entry}, Path(tmp), Path(tmp), "d" * 64,
+                                            accepted_skia_assets={"c" * 64})
+            self.assertEqual(roots["skia"], Path(tmp))
 
     def test_a_recorded_file_the_dependency_lacks_is_refused(self) -> None:
         entry = {"pin": "a" * 40, "source": "s", "asset_sha256": "c" * 64, "root": "a" * 40,

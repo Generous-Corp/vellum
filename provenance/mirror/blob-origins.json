@@ -20798,6 +20798,349 @@
       "pulp_commit": "f0ac0a4ff3927c50edf0e4e8a1c6ed1e8dd8e1e2",
       "pulp_path": "tools/cmake/scripts/encode_binary_data.py",
       "export_receipt": "provenance/mirror/receipts/20261107-f0ac0a4ff392.json"
+    },
+    {
+      "mirror_path": "mirror/core/platform/include/pulp/platform/child_process.hpp",
+      "git_blob_sha": "1f2fc416f2ae98608f3fd7ba870b67f8e5f1021b",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/platform/include/pulp/platform/child_process.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/platform/include/pulp/platform/file_dialog.hpp",
+      "git_blob_sha": "93e8f3a28532fd6eafb9537488701501461d5768",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/platform/include/pulp/platform/file_dialog.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/platform/include/pulp/platform/popup_menu.hpp",
+      "git_blob_sha": "b9fcd43d0e1492fbee151df9d7bcad51296e8b0b",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/platform/include/pulp/platform/popup_menu.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/platform/platform/mac/popup_menu_mac.mm",
+      "git_blob_sha": "844195ada9fb56478f249e4976744896b25cb3ff",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/platform/platform/mac/popup_menu_mac.mm",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/platform/platform/posix/child_process_posix.cpp",
+      "git_blob_sha": "60b483c083b61048e510972dcacb77f69a59313b",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/platform/platform/posix/child_process_posix.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/render/src/skia_surface.cpp",
+      "git_blob_sha": "87613a66d9a266a06c58cc12bcd365255b1d53d6",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/render/src/skia_surface.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/runtime/include/pulp/runtime/detail/durable_file_replacement.hpp",
+      "git_blob_sha": "03eeec6e65855b2d873eb36c9cfa98b5fd117792",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/runtime/include/pulp/runtime/detail/durable_file_replacement.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/runtime/include/pulp/runtime/fixed_function.hpp",
+      "git_blob_sha": "45f7c2a9f44185e33b3864c0052cb74636f7b3e1",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/runtime/include/pulp/runtime/fixed_function.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/runtime/include/pulp/runtime/slot.hpp",
+      "git_blob_sha": "6f1f4bb150316b64e1b96c74043acbb413767fd6",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/runtime/include/pulp/runtime/slot.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/runtime/include/pulp/runtime/triple_buffer.hpp",
+      "git_blob_sha": "3079385e2a7f1cd41c8bc9322b9fa68384fd8541",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/runtime/include/pulp/runtime/triple_buffer.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/runtime/src/durable_file_replacement.cpp",
+      "git_blob_sha": "dbd22bec05c61daaef4fc6021dfcd20746c25c8d",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/runtime/src/durable_file_replacement.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/runtime/src/durable_file_replacement_test_access.hpp",
+      "git_blob_sha": "1cd3451095032c09dc8f4b6ba2326a326acc2fb5",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/runtime/src/durable_file_replacement_test_access.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/simd/include/pulp/simd/scalar_kernels.hpp",
+      "git_blob_sha": "bca8049049e3198e64d1ea8391d187bfb9767a1f",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/simd/include/pulp/simd/scalar_kernels.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/simd/include/pulp/simd/simd.hpp",
+      "git_blob_sha": "31e584fefcb2d27f1ebcd76e0008a413f3ba5dd8",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/simd/include/pulp/simd/simd.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/simd/src/accelerate.cpp",
+      "git_blob_sha": "d62d5b67bc14173369bd7c3b90fce6bfe5dced9d",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/simd/src/accelerate.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/simd/src/highway.cpp",
+      "git_blob_sha": "ed5e6c36bee8da784a29ec5d8b788c4f2eb784fc",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/simd/src/highway.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/simd/src/scalar.cpp",
+      "git_blob_sha": "2fdcdeb9d9b7c5a7cd4b1b412d4054fb0d116b57",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/simd/src/scalar.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/state/include/pulp/state/parameter.hpp",
+      "git_blob_sha": "8b7072aad830fa8b0f39de48a2107d375dd06726",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/state/include/pulp/state/parameter.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/state/include/pulp/state/preset_manager.hpp",
+      "git_blob_sha": "0e44ce8e6f4055b20371d7fccdbc038e5c53b43b",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/state/include/pulp/state/preset_manager.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/state/include/pulp/state/store.hpp",
+      "git_blob_sha": "6c7da28452cd1acde33c8a44a99c2ef045ebe829",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/state/include/pulp/state/store.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/state/src/preset_manager.cpp",
+      "git_blob_sha": "18dcc785ec5d9d887dbaa687df2ce9bfd5082bc8",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/state/src/preset_manager.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/state/src/store.cpp",
+      "git_blob_sha": "3c3a771258ca21c73e11ad423646641b100b6240",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/state/src/store.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/include/pulp/view/drag_drop.hpp",
+      "git_blob_sha": "e10d4706621d275ec887533832ef3cd4aca54c9f",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/include/pulp/view/drag_drop.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/include/pulp/view/hover_cursor.hpp",
+      "git_blob_sha": "d65c089d960caf175d2aa3c4d51e45de8ae6c105",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/include/pulp/view/hover_cursor.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/include/pulp/view/input_events.hpp",
+      "git_blob_sha": "731065a3a086df3ae72a55079d00e52100dd1148",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/include/pulp/view/input_events.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/include/pulp/view/pointer_dispatch.hpp",
+      "git_blob_sha": "baa939c3559f8dfcf231f294c3fcce695236ad93",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/include/pulp/view/pointer_dispatch.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/include/pulp/view/view.hpp",
+      "git_blob_sha": "8522d24864b48d32a75e901ece601105b20fab62",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/include/pulp/view/view.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/js/web-compat-document-selectors.js",
+      "git_blob_sha": "af79bd53146f2e22e61a0dfd233a9958f6b0b671",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/js/web-compat-document-selectors.js",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/js/web-compat-document.js",
+      "git_blob_sha": "53fba7ddba6ae67a652913e1111306fc74cd1cd5",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/js/web-compat-document.js",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/js/web-compat-element-events.js",
+      "git_blob_sha": "cddac44fed0174da5a8b9fef1afe7a3afd79be09",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/js/web-compat-element-events.js",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/platform/mac/drag_drop_mac.mm",
+      "git_blob_sha": "48097cba11791cff55dedcddc8a290a94a14f885",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/platform/mac/drag_drop_mac.mm",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/platform/mac/pulp_mac_objc_names.h",
+      "git_blob_sha": "aae2d06d1a6f5348f7afc59fa0d7abecb44a72ba",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/platform/mac/pulp_mac_objc_names.h",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/platform/mac/window_host_mac.mm",
+      "git_blob_sha": "7a22dc64f747e34f5b1bf29c3b33c6be10b5b654",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/platform/mac/window_host_mac.mm",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/platform/mac/window_host_mac_geometry.mm",
+      "git_blob_sha": "e45b36e57f1d54ad042a4cbf445edd0e2dba5d2b",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/platform/mac/window_host_mac_geometry.mm",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/platform/mac/window_host_mac_internal.hpp",
+      "git_blob_sha": "b899c8e8096ca8fb61cc603271871ed78a01df86",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/platform/mac/window_host_mac_internal.hpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/platform/mac/window_host_mac_text_input.mm",
+      "git_blob_sha": "56ce0e286b3e1f85016e5e311cd30a42e0552777",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/platform/mac/window_host_mac_text_input.mm",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/src/context_menu.cpp",
+      "git_blob_sha": "e1095bbf03eb116d40517ba9733c1741bf118c69",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/src/context_menu.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/src/design_fit_view.cpp",
+      "git_blob_sha": "0bd6a9bb25d769530d2b9b1e167b5b4fcfd6fc60",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/src/design_fit_view.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/src/gesture.cpp",
+      "git_blob_sha": "6ad9926cd9faa0acbda2319e4b8aac670d5bb55f",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/src/gesture.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/src/hover_cursor.cpp",
+      "git_blob_sha": "a7508c7fec53516f2b80c1cc1e869d07707e79fa",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/src/hover_cursor.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/src/plugin_key_routing.cpp",
+      "git_blob_sha": "7f59a08265adab7d0f42708c8548708c518e0451",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/src/plugin_key_routing.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/src/pointer_dispatch.cpp",
+      "git_blob_sha": "4a088bf2d84ca914437d3126549f563c0bd08a69",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/src/pointer_dispatch.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/src/script_bytecode_blob.cpp",
+      "git_blob_sha": "6fda15c49f2558707b7843f18c3dd3a4ecae3621",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/src/script_bytecode_blob.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/src/sdl_window_host.cpp",
+      "git_blob_sha": "5a9ef32c83754f3b0c5655d2652608dbe7573bb9",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/src/sdl_window_host.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/src/ui_components.cpp",
+      "git_blob_sha": "7ad8aa0663c5cc2028edb0d284add12779702205",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/src/ui_components.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/src/view.cpp",
+      "git_blob_sha": "f351ba66019df6847a1a5717d7a89265c111b160",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/src/view.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/src/widget_bridge.cpp",
+      "git_blob_sha": "f4f86d0710ee0b4f93c8faad16c640a0e16534bf",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/src/widget_bridge.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/src/widget_bridge/bridge_dispatch.cpp",
+      "git_blob_sha": "8b12981e1f189a1fd4778248a7979a78ddf7ffcc",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/src/widget_bridge/bridge_dispatch.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
+    },
+    {
+      "mirror_path": "mirror/core/view/src/widget_bridge/event_api.cpp",
+      "git_blob_sha": "c29441df111e83f7ad5586130e164a8710a8b34b",
+      "pulp_commit": "f0c9b30a3ac2b45168cfdc3aec7cf3777d5b93eb",
+      "pulp_path": "core/view/src/widget_bridge/event_api.cpp",
+      "export_receipt": "provenance/mirror/receipts/20261122-f0c9b30a3ac2.json"
     }
   ]
 }

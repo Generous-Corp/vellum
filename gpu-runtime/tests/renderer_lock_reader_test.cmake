@@ -18,12 +18,14 @@ endif()
 gpu_runtime_read_renderer_lock(PLATFORM macos-arm64 PREFIX R LOCK "${LOCK}")
 file(READ "${LOCK}" _json)
 string(JSON _milestone GET "${_json}" milestone)
+string(JSON _release_tag GET "${_json}" release_tag)
 string(JSON _repository GET "${_json}" builder repository)
 string(JSON _asset GET "${_json}" platforms macos-arm64 asset)
 string(JSON _count LENGTH "${_json}" platforms macos-arm64 archives)
 list(LENGTH R_ARCHIVES _read_count)
 if(NOT R_MILESTONE STREQUAL _milestone OR
-   NOT R_URL STREQUAL "${_repository}/releases/download/${_milestone}/${_asset}" OR
+   NOT R_RELEASE_TAG STREQUAL _release_tag OR
+   NOT R_URL STREQUAL "${_repository}/releases/download/${_release_tag}/${_asset}" OR
    NOT _read_count EQUAL _count OR
    NOT R_SHA256_libskia.a MATCHES "^[0-9a-f]+$" OR
    NOT R_SHA256_libdawn_combined.a MATCHES "^[0-9a-f]+$")
@@ -34,7 +36,8 @@ file(MAKE_DIRECTORY "${WORK_DIR}")
 set(_digest_skia "${R_SHA256_libskia.a}")
 string(TOUPPER "${_digest_skia}" _digest_skia_upper)
 set(_cases
-    "schema|\"gpu-runtime.renderer-lock.v1\"|\"gpu-runtime.renderer-lock.v0\""
+    "schema|\"gpu-runtime.renderer-lock.v2\"|\"gpu-runtime.renderer-lock.v0\""
+    "release-tag-milestone|\"${_release_tag}\"|\"chrome/m1-attested.1\""
     "milestone|\"${_milestone}\"|\"main\""
     "digest|\"${_digest_skia}\"|\"${_digest_skia}0\""
     "uppercase|\"${_digest_skia}\"|\"${_digest_skia_upper}\""

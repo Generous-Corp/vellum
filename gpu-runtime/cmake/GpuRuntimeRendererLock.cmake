@@ -8,7 +8,8 @@
 #       [LOCK    <path>])        # defaults to this module's renderer-lock.json
 #
 # Sets, in the caller's scope:
-#   <prefix>_MILESTONE          the skia-builder release tag (chrome/mNNN)
+#   <prefix>_MILESTONE          the source milestone (chrome/mNNN)
+#   <prefix>_RELEASE_TAG        the immutable skia-builder release tag (chrome/mNNN-attested.N)
 #   <prefix>_ASSET              the release asset's file name
 #   <prefix>_URL                the asset's download URL
 #   <prefix>_SHA256             the asset's SHA-256
@@ -26,7 +27,7 @@ if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/renderer-lock.json")
 else()
     set(_GPU_RUNTIME_RENDERER_LOCK_DEFAULT "${CMAKE_CURRENT_LIST_DIR}/../renderer-lock.json")
 endif()
-set(_GPU_RUNTIME_RENDERER_LOCK_SCHEMA "gpu-runtime.renderer-lock.v1")
+set(_GPU_RUNTIME_RENDERER_LOCK_SCHEMA "gpu-runtime.renderer-lock.v2")
 
 function(_gpu_runtime_lock_get out json)
     string(JSON _value ERROR_VARIABLE _error GET "${json}" ${ARGN})
@@ -78,6 +79,16 @@ function(gpu_runtime_read_renderer_lock)
         message(FATAL_ERROR
             "gpu-runtime: renderer lock milestone is not chrome/mNNN: ${_milestone}")
     endif()
+    _gpu_runtime_lock_get(_release_tag "${_json}" release_tag)
+    if(NOT _release_tag MATCHES "^chrome/m[0-9]+-attested[.][0-9]+$")
+        message(FATAL_ERROR
+            "gpu-runtime: renderer lock release tag is malformed: ${_release_tag}")
+    endif()
+    string(FIND "${_release_tag}" "${_milestone}-" _tag_prefix_at)
+    if(NOT _tag_prefix_at EQUAL 0)
+        message(FATAL_ERROR
+            "gpu-runtime: renderer lock release tag ${_release_tag} is not a tag of milestone ${_milestone}")
+    endif()
     _gpu_runtime_lock_get(_repository "${_json}" builder repository)
     if(NOT _repository MATCHES "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
         message(FATAL_ERROR
@@ -122,9 +133,10 @@ function(gpu_runtime_read_renderer_lock)
     endforeach()
 
     set(${ARG_PREFIX}_MILESTONE "${_milestone}" PARENT_SCOPE)
+    set(${ARG_PREFIX}_RELEASE_TAG "${_release_tag}" PARENT_SCOPE)
     set(${ARG_PREFIX}_ASSET "${_asset}" PARENT_SCOPE)
     set(${ARG_PREFIX}_URL
-        "${_repository}/releases/download/${_milestone}/${_asset}" PARENT_SCOPE)
+        "${_repository}/releases/download/${_release_tag}/${_asset}" PARENT_SCOPE)
     set(${ARG_PREFIX}_SHA256 "${_sha256}" PARENT_SCOPE)
     set(${ARG_PREFIX}_ARCHIVE_ROOT "${_archive_root}" PARENT_SCOPE)
     set(${ARG_PREFIX}_ARCHIVES "${_names}" PARENT_SCOPE)

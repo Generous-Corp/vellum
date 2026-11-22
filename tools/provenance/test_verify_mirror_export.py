@@ -376,6 +376,44 @@ class VerifyMirrorExportTests(unittest.TestCase):
         self.assertEqual(report["errors"], [])
         self.assertTrue(report["pulp_identity_checked"])
 
+    def test_transfer_successor_rejects_stale_ambiguous_and_unrelated_bindings(self) -> None:
+        root = self.base / "successor"
+        (root / "provenance/framework").mkdir(parents=True)
+        (root / "provenance/mirror/receipts").mkdir(parents=True)
+        predecessor = "provenance/mirror/receipts/old.json"
+        current = "provenance/mirror/receipts/new.json"
+        transfer = {
+            "export_receipt": predecessor,
+            "pulp_repository": "Generous-Corp/pulp",
+        }
+        receipt = {
+            "pulp_repository": "Generous-Corp/pulp",
+            "pulp_sha": "a" * 40,
+            "mirror_tree": "b" * 40,
+        }
+        write(root, "provenance/framework/transfer.json", dump(transfer))
+        write(root, predecessor, dump({"pulp_sha": "c" * 40}))
+        write(root, current, dump(receipt))
+        successor = {
+            "schema": "vellum.framework-transfer-successor.v1",
+            "transfer_record": "provenance/framework/transfer.json",
+            "predecessor_receipt": predecessor,
+            "export_receipt": current,
+            "pulp_repository": receipt["pulp_repository"],
+            "pulp_sha": receipt["pulp_sha"],
+            "mirror_tree": receipt["mirror_tree"],
+        }
+        write(root, "provenance/framework/transfer-successor.json", dump(successor))
+        landed = [predecessor, current]
+        self.assertEqual(verify_mirror_export.transfer_successor_errors(root, landed), [])
+        for key, value in (("predecessor_receipt", current),
+                           ("export_receipt", predecessor),
+                           ("mirror_tree", "d" * 40)):
+            mutated = dict(successor, **{key: value})
+            write(root, "provenance/framework/transfer-successor.json", dump(mutated))
+            self.assertTrue(verify_mirror_export.transfer_successor_errors(root, landed), key)
+        write(root, "provenance/framework/transfer-successor.json", dump(successor))
+
     def test_hand_edit_under_mirror_breaks_tree_equality(self) -> None:
         fixture = Fixture(self.base)
         write(fixture.vellum, "mirror/core/canvas/src/canvas.cpp", b"edited\n")
@@ -454,6 +492,23 @@ class VerifyMirrorExportTests(unittest.TestCase):
         errors = fixture.errors()
         self.assertError(errors, "commit map lacks the row")
         self.assertError(errors, "1 files lack a blob-origin record for this receipt")
+
+    def base_for(self, name: str) -> Path:
+        path = self.base / f"case-{name}"
+        path.mkdir()
+        return path
+
+    def test_origin_records_must_come_from_a_landed_receipt_for_the_same_pulp_path(self) -> None:
+        # recorded_origins accepts an origin carried by any LANDED receipt
+        # (incremental exports), but never one from an unlanded receipt, and
+        # never one that names a different Pulp path for the same blob.
+        for field, value in (("export_receipt", "provenance/mirror/receipts/unlanded.json"),
+                             ("pulp_path", "core/other/elsewhere.cpp")):
+            fixture = Fixture(self.base_for(field))
+            fixture.origins["records"][0][field] = value
+            fixture.reland()
+            self.assertError(fixture.errors(),
+                             "1 files lack a blob-origin record for this receipt")
 
     def test_receipt_shape_is_strict(self) -> None:
         fixture = Fixture(self.base)

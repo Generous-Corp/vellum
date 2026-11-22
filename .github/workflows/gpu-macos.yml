@@ -412,20 +412,23 @@ jobs:
           import json, re, sys
           lock = json.load(open("gpu-runtime/renderer-lock.json", encoding="utf-8"))
           platform = lock["platforms"]["macos-arm64"]
-          repository, milestone = lock["builder"]["repository"], lock["milestone"]
+          repository = lock["builder"]["repository"]
+          milestone, release_tag = lock["milestone"], lock["release_tag"]
           asset, sha256 = platform["asset"], platform["sha256"]
           # Fail closed on anything but the pinned builder's chrome/mNNN asset,
           # so no lock field can reach curl as an option or another path.
           if (repository != "https://github.com/danielraffel/skia-builder"
                   or not re.fullmatch(r"chrome/m[0-9]+", milestone)
+                  or not re.fullmatch(r"chrome/m[0-9]+-attested[.][0-9]+", release_tag)
+                  or not release_tag.startswith(milestone + "-")
                   or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", asset)
                   or not re.fullmatch(r"[0-9a-f]{64}", sha256)):
               sys.exit("renderer lock names an unexpected skia-builder asset")
-          print("/".join((repository, "releases/download", milestone, asset)), asset, sha256)
+          print("/".join((repository, "releases/download", release_tag, asset)), asset, sha256)
           PY
           python3 -I "$reader" > "$RUNNER_TEMP/renderer-lock-asset.txt"
           read -r url asset sha256 < "$RUNNER_TEMP/renderer-lock-asset.txt"
-          [[ "$url" =~ ^https://github\.com/danielraffel/skia-builder/releases/download/chrome/m[0-9]+/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
+          [[ "$url" =~ ^https://github\.com/danielraffel/skia-builder/releases/download/chrome/m[0-9]+-attested[.][0-9]+/[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
           [[ "$sha256" =~ ^[0-9a-f]{64}$ && "$asset" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
           archive="$RUNNER_TEMP/$asset"
           # Resumable, with curl's own exponential backoff (a fixed retry

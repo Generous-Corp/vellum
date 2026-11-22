@@ -152,6 +152,7 @@
     ],
     "gpu": [
       "gpu-runtime.device",
+      "gpu-runtime.graphite-old-sdk-host",
       "vellum.app-host",
       "vellum.app-host-agent-workflow",
       "vellum.app-host-design-anchor-dump",

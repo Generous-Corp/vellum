@@ -6,7 +6,7 @@ installed `vellum-gpu` library. Apple system frameworks and developer-supplied
 build tools are not redistributed.
 
 The renderer inventory comes from the builder's content-addressed legal
-manifest for the byte-locked `chrome/m158` macOS universal artifact. The
+manifest for the byte-locked `chrome/m158-attested.1` macOS universal artifact. The
 manifest maps every zip member and every object member of every static
 archive to the license files it resolves to, and the verifier re-derives that
 inventory from the archive bytes; the builder's build-provenance attestation
